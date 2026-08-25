@@ -1,6 +1,6 @@
 # 1070 eye-test / object-spawning screenshots — 2026-06-24
 
-Captured headless on the GTX 1070 (real ANGLE/NVIDIA D3D11), Holtburg, quality=low, phase4demo.
+Captured headless on the GTX 1070 (real ANGLE/NVIDIA D3D11), Holtburg, quality=low, `<test-account>`.
 
 - **01-holtburg-barren-render.png** — outdoor Holtburg after full bake. Scene-graph DATA says
   populated: **169 LBs baked, 47 buildings, 984 statics, 62 entities, 3527 mesh nodes** — yet the

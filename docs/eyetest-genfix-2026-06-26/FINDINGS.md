@@ -1,8 +1,8 @@
 # 1070 Headless Validation — genfix (Fix 1/2/3) — 2026-06-26
 
 Headless real-GPU validation of the per-landblock-faithful data fixes (generator children,
-orientation, world events) on the GTX 1070 (`young@100.127.215.75`), via Playwright over a
-reverse tunnel to the laptop's serve.py (live-ACE path, account `phase4demo`).
+orientation, world events) on the GTX 1070 (`<user>@<gpu-box-ip>`), via Playwright over a
+reverse tunnel to the laptop's serve.py (live-ACE path, account `<test-account>`).
 
 ## v1 run (01:46) — SUCCESS, real GPU. The headline evidence.
 
@@ -55,8 +55,8 @@ not our bug**. Per `1070-tests-never-on-screen`, we did not fight it.
 
 Re-run when the 1070's interactive session is active/unlocked:
 ```
-ssh -R 18765:127.0.0.1:8765 young@100.127.215.75 '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-v2-1070.mjs'
-# then: scp young@100.127.215.75:'C:/Temp/genfix-v2-report.json' . ; scp ...:'C:/Temp/gf2-*.png' .
+ssh -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip> '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-v2-1070.mjs'
+# then: scp <user>@<gpu-box-ip>:'C:/Temp/genfix-v2-report.json' . ; scp ...:'C:/Temp/gf2-*.png' .
 ```
 Expected if the data fixes render: `arena-0x00B4` → `curLbCells>0`, `entRoots`≈hundreds of
 Creatures (the 810 monsters, PVS-limited from one drop point); `holtdungeon-0x01F6` similar;
@@ -72,7 +72,7 @@ Chosen path (b): local headless chromium (installed to `/mnt/wbterminal2/ms-play
 (SwiftShader), `?nullRender=1` (streaming builds the scene graph regardless of render → counts are
 GPU-independent), small PVS ring to bound 8GB memory. Uses the wire-agent's built-in
 `__diag.placements.walk(lbId)` (cheat-free scene walk) + `cellContainers3d` per-LB count. Live-ACE
-session (account `phase4demo`). Harness: `genfix-verify-laptop.mjs`; report: `genfix-laptop-report.json`.
+session (account `<test-account>`). Harness: `genfix-verify-laptop.mjs`; report: `genfix-laptop-report.json`.
 
 | Location | indoor | interior cells loaded | vs oracle cellCount | `__diag.walk` (statics/buildings/entities) | err |
 |---|---|---|---|---|---|

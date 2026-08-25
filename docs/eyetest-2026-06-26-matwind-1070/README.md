@@ -2,7 +2,7 @@
 
 Real **GTX 1070** (`ANGLE … GeForce GTX 1070 … Direct3D11`), headless via ANGLE/D3D11, off-screen.
 App over the laptop reverse tunnel (`box:18765 → serve.py:8765`); wsbridge over tailscale
-(`ws://100.116.47.66:8080`); account `phase4demo`, deterministic spawn at the **Holtburg lifestone**
+(`ws://<server-ip>:8080`); account `<test-account>`, deterministic spawn at the **Holtburg lifestone**
 (cell `0xa9b40019`, pose 84,7.1). Harness: `harness-matwind-ab-1070.mjs` (adapted from `cloud-ab-1070.mjs`).
 All arms: in-world reached, **0 console errors**, real GPU confirmed.
 
@@ -144,7 +144,7 @@ Answers the user's observation directly. The console summary line — **identica
 ## Harness notes (for re-runs)
 - `harness-matwind-ab-1070.mjs` on the box at `C:\Temp\`. Run: `node C:\Temp\matwind-ab-1070.mjs`
   (or `--arms=mat-off,mat-on,wind-synth,wind-bake`).
-- Reverse tunnel must be up: `ssh -N -R 18765:127.0.0.1:8765 young@100.127.215.75` (laptop stack: serve.py
+- Reverse tunnel must be up: `ssh -N -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip>` (laptop stack: serve.py
   :8765, wsbridge :8080, ACE 9000 — all up this session).
 - **init3D + terrain stream over the tunnel takes ~60s** after in-world → the harness polls scene-ready
   (children + advancing frames + geometry) before capturing. A fixed sleep < 60s gives a **black frame** (the

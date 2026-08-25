@@ -161,7 +161,7 @@ ownership + the ONE batched 1070 A/B) is the next session's work order.**
    sequence-A/B/F key scripts replayed live (ADJ-15 Q3: does a turn-tap
    reclaim visually evict the gesture? Q5: real cast-gesture ids). Session-2
    bot lore applies (ghost-wait 95-100s AFTER dropping, continuous
-   evaluates, tailnet1/+Tester2 = `autoSpawn=%2BTester2`, drudges parked at
+   evaluates, `<account>/+Tester2` = `autoSpawn=%2BTester2`, drudges parked at
    the academy).
 7. **Default flip = its own commit AFTER the A/B** (house default-ON bar).
 8. Cleanups riding along: ADJ-10 (refactor `execute_jump_release` onto

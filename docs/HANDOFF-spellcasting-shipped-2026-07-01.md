@@ -3,7 +3,7 @@
 **Scope:** Task C of `HANDOFF-combat-movement-spellcasting-2026-07-01.md` — spellcasting
 end-to-end, sole focus. All items below were **live-verified headless** against the
 laptop ACE stack (serve.py :8765 + wsbridge :8080 + vanilla ACE UDP 9000/9001,
-account `phase4demo`, wand wcid 2472, drudge wcid 7). Anchors read-verified today;
+account `<test-account>`, wand wcid 2472, drudge wcid 7). Anchors read-verified today;
 re-anchor by symbol.
 
 ## What was broken → fixed (all live-verified)
@@ -109,7 +109,7 @@ spells with just the wand — right for demo/testing. To restore retail behavior
 `echo 'modifybool require_spell_comps true' > <ace_stdin.fifo>` (FIFO path:
 `readlink /proc/$(pgrep -f ACE.Server.dll)/fd/0`). The components ERROR path was
 verified with it re-enabled ("You don't have all the components for this spell.").
-phase4demo also gained: Wand (wielded), spells 1/2/6/75/77/80/5349 in the
+`<test-account>` also gained: Wand (wielded), spells 1/2/6/75/77/80/5349 in the
 spellbook.
 
 ## Known caveats / notes for the next session

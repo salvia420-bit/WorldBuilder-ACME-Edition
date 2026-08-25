@@ -425,7 +425,7 @@ For each candidate you decide to prototype:
    the user's 1070 at `127.0.0.1:9333` (see
    [[reference_local_inworld_hud_verify]]). Scripts at `C:\Temp\cdp-*.cjs`.
    - Reload with `?blendMode=<name>` (60s ghost-drop wait first to avoid
-     the `tailnet1` "Account In Use" recycle).
+     the `<account>` "Account In Use" recycle).
    - Probe terrain meshes: confirm uniforms wired, confirm shader compiled
      (terrain not black — silent compile failures are why
      `feedback_check_console_after_shader_edits.md` exists).

@@ -1,4 +1,4 @@
-// cloud-ab-1070.mjs — RUNS ON THE GTX 1070 (young@desktop). Headless, REAL GPU via ANGLE/D3D11.
+// cloud-ab-1070.mjs — RUNS ON THE GTX 1070 (<user>@<gpu-box>). Headless, REAL GPU via ANGLE/D3D11.
 //
 // Steady-state cloud-cost A/B: holds scene quality at `mid` (the tier the 1070
 // auto-resolves to — it is NOT on the GPU_HIGH allowlist), teleports to OUTDOOR
@@ -12,7 +12,7 @@
 //   halfres  clouds=on + runtime resolutionScale 0.5 (high preset, half-res raymarch)
 //
 // App via laptop reverse tunnel 127.0.0.1:18765 -> serve.py:8765; wsbridge over
-// tailscale ws://100.116.47.66:8080. Fresh browser per arm = no GPU state leak;
+// tailscale ws://<server-ip>:8080. Fresh browser per arm = no GPU state leak;
 // we measure the STEADY-STATE window AFTER warm-up, so cold shader compile is
 // excluded by design.
 //
@@ -26,14 +26,14 @@ import { chromium } from "playwright-core";
 import { spawnSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
-const EXE = "C:\\Users\\young\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
+const EXE = "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
 const OUT = "C:\\Temp";
 const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "mid",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
   renderDiag: "on",
-  server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://100.116.47.66:8080/",
+  server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://<server-ip>:8080/",
 };
 const ARMS = [
   { key: "off",     label: "clouds OFF (baseline, mid)",          extra: {} },

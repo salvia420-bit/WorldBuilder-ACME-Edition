@@ -65,7 +65,7 @@ Gates on the final artifacts, all PASS:
 - Patcher-table gate (check_ps1_table.py): PASS at kit assembly.
 - **1070 in-client gate (2026-08-20 20:33): GREEN.** DDD accepted, survived
   char-select (both prior crashing dats died in ≤20 s at the same offset),
-  entered the world at ~2 min (`tailnet1 … entered the world`, ACE log),
+  entered the world at ~2 min (`<account> … entered the world`, ACE log),
   rendered stably to the full 420 s watcher lifetime, 21 shots, no exit.
   In-world captures show the upscaled surfaces live.
 

@@ -67,7 +67,7 @@ What still needs eye-test (deferred — not automatable):
 - Workstream C live test: walk into a Holtburg building and verify the camera pulls in rather than clipping through the wall. Needs a Developer-promoted account (test-character accounts cannot get the C-collision-against-building test set up reliably without dev-spawn tools).
 - Workstream D live test: pan the mouse and verify standard FPS feel; the auto-turn math is unit-tested in `test_workstream_d_camera_relative.mjs` 11/11 but a real human eye-test of mouse-look feel hasn't run.
 - Workstream E live test: backtick (`\``) keypress to cycle combat stance — the underlying rig-side capability is wired (Phase 6 baseline) but a real backtick keypress reaching the 3D path's stance update hasn't been verified end-to-end in this push.
-- Cross-continent `@telepoi Yaraq` after `@telepoi Holtburg`: F capture's per-run character lacks `@telepoi` privileges (fresh accounts can only reach the dev-`teleport-button`'s Holtburg destination). Cross-continent eye-test needs the dev-promoted `tailnet1/tailnet1` account.
+- Cross-continent `@telepoi Yaraq` after `@telepoi Holtburg`: F capture's per-run character lacks `@telepoi` privileges (fresh accounts can only reach the dev-`teleport-button`'s Holtburg destination). Cross-continent eye-test needs the dev-promoted `<account>/<account>` account.
 
 ## Skybox push — Workstreams Sky-A–Sky-G (2026-05-11)
 
@@ -105,7 +105,7 @@ via `CalcPresentDayGroup`'s deterministic LCG hash on
 
 What still needs eye-test (deferred — not automatable):
 
-- Live retail-screenshot comparison for celestial-body altitude. `sin(p·π)·(π/2)` is a derived pitch curve, not a DAT-supplied keyframe. Sky-D's eye-test on tailnet1 looks sensible at dawn; a side-by-side with retail AC at a known time-of-day would catch any altitude bias.
+- Live retail-screenshot comparison for celestial-body altitude. `sin(p·π)·(π/2)` is a derived pitch curve, not a DAT-supplied keyframe. Sky-D's eye-test on `<account>` looks sensible at dawn; a side-by-side with retail AC at a known time-of-day would catch any altitude bias.
 - Properties bits `0x01 ADDITIVE_BLEND` (LOW confidence) and `0x04 WEATHER_STREAK` (MED confidence) — refine if visible artifacts surface on rainy / clear / cloudy DayGroups under headed-browser eye-test.
 
 ## Skybox correction — Workstreams Sky-I-A/B/C (2026-05-11)
@@ -187,7 +187,7 @@ scripts:
    Replaced with a `getCurrentCellId() > 0 && !isCurrentCellIndoor()`
    poll. The `cellId > 0` guard rejects the pre-snapshot vacuous
    `is_indoor=false` default. Outdoor confirmation lands in
-   typically <300 ms on tailnet1.
+   typically <300 ms on `<account>`.
 
 2. **Sky-pass render-order bug.** Sky-I-B's design described the
    sky cell as rendering AFTER the world with `clearDepth() +
@@ -309,7 +309,7 @@ the dome's color stuck on the cached pre-LB-transition state.
 
 **Note:** the live 3D path is currently NOT visually rendering Holtburg because of the camera-rotation bug discovered in Phase 7.7 (see follow-on #0 below). The data pipeline, scene graph, animation, lighting, and frustum culling are all correct AND verified — the camera simply points 90° wrong. Earlier-phase captures pass because they verify scene-graph membership counts and module-export shape, not pixel output. The list below is the scene-graph state that init3D produces.
 
-Driving `?renderer=3d` against tailnet1's live ACE (Tailscale 100.116.47.66, port 8765) AND under capture-script mode-1 (mock SessionHandle + real wasm DAT exports):
+Driving `?renderer=3d` against `<account>`'s live ACE (Tailscale `<server-ip>`, port 8765) AND under capture-script mode-1 (mock SessionHandle + real wasm DAT exports):
 
 - **Terrain.** 9-LB Holtburg neighbourhood mesh built via `fetch_landblock_heightmaps([9 cell ids])` → `landblockMeshToGeometry`. Each LB is a `THREE.Mesh` with a custom `ShaderMaterial` running the bilinear-blend GLSL ES 3.00 shader from the 2D path. Atlas + road textures uploaded as `CanvasTexture` (sRGB). Per-LB world position is `(lbX*192, lbY*192, 0)`.
 - **Buildings.** 16 Holtburg buildings via `fetchBuildingPlacement(modelId)`. Per-part `Object3D` tree mirrors the SetupModel hierarchy. Per-part hinge wrappers retained so door rotation can drive `Object3D.rotation.z` on the named wrapper. Per-surface `THREE.Mesh` leaves grouped by surface_did, materials cached in `MaterialCache: Map<surfaceDid, MeshStandardMaterial>`.
@@ -429,7 +429,7 @@ The pre-Phase-7.7 follow-ons documented across earlier phases:
 
 2. **Full mouse-look turn-to-align (Phase 7.5 incomplete).** `PointerLockControls` is wired in `scene3d/camera.js` but the implementation is only correct when `playerHeading == followYaw`. When the player has not aligned their heading to the camera's yaw, WASD → `setMovementInput` produces drift. **Impact:** mouse-look + WASD together can rubberband against the ACE-server-authoritative position.
 
-3. **Live ACE end-to-end against tailnet1.** Phase 7.4b+ capture scripts time out at ~60 s on the live-ACE login round-trip and fall back to mode-1 standalone. The 2D path round-trips fine, so this is a 3D-specific timing or event-binding issue. **Impact:** the 3D path is not currently live-validated against a real ACE world session; capture coverage is real-DAT-data-only.
+3. **Live ACE end-to-end against `<account>`.** Phase 7.4b+ capture scripts time out at ~60 s on the live-ACE login round-trip and fall back to mode-1 standalone. The 2D path round-trips fine, so this is a 3D-specific timing or event-binding issue. **Impact:** the 3D path is not currently live-validated against a real ACE world session; capture coverage is real-DAT-data-only.
 
 4. **`fetchEntityAnimationKeyframes` returns 0 parts for some setup ids — RESOLVED 2026-05-10 (false alarm; capture-script labels were stale).** ROOT CAUSE: the original Phase 7.4b capture script used **fabricated setup IDs**, not real ones. Setup `0x02000099` is a synthetic in-memory SetupModel ID used inside the `triangulate_setup_model_with_substitutions_*` unit tests in `lib.rs:11696-11814`; it does NOT exist in the real DAT (cross-referenced against `pipeline_data/enrichment/ace_world_setup_names.json` — wcid_count = 0). `0x020001ED` is also not in any wcid. `0x0200013D` exists but is used by wcid 322 (Jo), wcid 338 (Quarter Staff) — a 1-part weapon model, not Drudge. REAL IDs from the LSD-Partial weenie JSON `didStats` (key 1 = SetupId, key 2 = MotionTableId): Sparring Golem (wcid 12698) → setup 0x020007CC, mtable 0x09000081 → **21 parts / 60 frames / 30 fps**; Drudge Toiler (wcid 30649) → setup 0x020007DD, mtable 0x09000008 → **17 parts / 40 frames / 30 fps**; Mite Sentry (wcid 945) → setup 0x02001080, mtable 0x0900000B → **18 parts / 0 frames** (mtable legitimately has no WALK_FORWARD cycle — only the Ready idle resolves; mites in retail AC walked via mtable links/modifiers, a different dispatch path entirely; renderer correctly falls back to rest pose). The wasm walk in `lib.rs:fetch_entity_animation_keyframes` (line 5595) is correct in all cases — Drudge returning 1 part was the wasm faithfully reporting a 1-part Quarter Staff; Golem/Mite throwing "triangulate failed" was the wasm faithfully reporting that those IDs aren't valid SetupModels in the DAT. Fix landed: `capture_phase7_4_entities.cjs` setup table updated with real `didStats` IDs; smoke check added (`F#4: 0-parts setups investigation`). Investigation scripts preserved at `apps/holtburger-web/investigate_followon4.cjs` + `probe_mite_mtable.cjs` for any future agent that wants to retrace the diagnosis. NO Rust code changes were required.
 
@@ -468,7 +468,7 @@ End-to-end recipe to confirm the 3D path is healthy after a code change:
    ```
    Expect: 138 OK + 1 SKIP = 139 total. The SKIP is `start_session live round-trip`.
 
-3. **Per-phase captures (Playwright; needs the live HTTP server on 100.116.47.66:8765):**
+3. **Per-phase captures (Playwright; needs the live HTTP server on `<server-ip>:8765`):**
    ```bash
    for phase in 7_0 7_1 7_2 7_3 7_4 7_5 7_6 7_7; do
      for f in apps/holtburger-web/capture_phase${phase}*.cjs; do

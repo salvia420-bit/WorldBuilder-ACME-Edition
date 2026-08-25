@@ -55,7 +55,7 @@ no re-research needed; implement per §5. To resume, paste:
     (cross-portal multi-hop + sphere-vs-portal gate) per HANDOFF §5, then E3.5 (SLERP — HIGH-RISK, confirm scope
     first), then E3.6 (water — needs the WS8 data feed). capped-build, ground in acclient.c, ACE reference-only,
     keep drift (27) + transition:: (256) green, checkpoint-commit each sub-item. After the code lands: rebuild
-    wasm + off-screen 1070 live A/B of C/D/E (account phase4demo; 1070 had full GPU headroom but a person's
+    wasm + off-screen 1070 live A/B of C/D/E (account `<test-account>`; 1070 had full GPU headroom but a person's
     Roblox is running → off-screen only, never browser.close the live session), then ship.
 
 A fresh session should first read this doc + the three PLAN docs (§6) to reload context.
@@ -202,8 +202,8 @@ load. (3) `SceneObjCell::{water_type,get_block_water_type,get_water_depth}` retu
 - `capped-build wasm-pack build --target web --out-dir pkg --dev` (pkg/ gitignored).
 - **Off-screen 1070 live A/B of C/D/E** (1070 pinged this session: **0% GPU, 183 MiB used — full headroom**, but
   `RobloxPlayerBeta.exe` is running → MODE2i off-screen ONLY; kill test chrome by `--user-data-dir` match, NEVER
-  `browser.close()` / `taskkill /IM chrome.exe` the person's session). Account **`phase4demo`/`phase4demo`** (NOT
-  `tailnet1`). Collision is CPU-side so the laptop SwiftShader/drift path validates logic; 1070 is for render
+  `browser.close()` / `taskkill /IM chrome.exe` the person's session). Account **`<test-account>`/`<test-account>`** (NOT
+  `<account>`). Collision is CPU-side so the laptop SwiftShader/drift path validates logic; 1070 is for render
   fidelity. Confirm in-world: outdoor walk grounded, indoor/outdoor curbs climb, off-center building stops,
   cross-portal wall stops, 0 errors.
 - **Ship** the wasm so default-ON (C/D/E) is live (`pkg/` gitignored → per the deploy mechanism). Confirm with the

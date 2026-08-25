@@ -103,12 +103,12 @@ The user plays on the GTX 1070 (real GPU). Their Chrome exposes **CDP on
 LIVE outdoor real-GPU session:
 
 1. Reverse tunnel from the laptop (serve.py is loopback-only on :8765):
-   `ssh -fN -R 18765:127.0.0.1:8765 -R 18080:127.0.0.1:8080 young@100.127.215.75`
+   `ssh -fN -R 18765:127.0.0.1:8765 -R 18080:127.0.0.1:8080 <user>@<gpu-box-ip>`
 2. Run a node script **ON the 1070** (`C:\Temp`, Playwright at
    `C:\Temp\node_modules\playwright`): `chromium.connectOverCDP("http://127.0.0.1:9333")`,
    find the holtburger page, `page.evaluate(...)` / `page.screenshot({path:"C:/Temp/x.png"})`.
    **DO NOT `browser.close()`** — it kills the user's session. Invoke via
-   `ssh young@100.127.215.75 'node C:\Temp\<script>.cjs'`; pull PNGs with `scp`.
+   `ssh <user>@<gpu-box-ip> 'node C:\Temp\<script>.cjs'`; pull PNGs with `scp`.
 3. Renderer must read `ANGLE (NVIDIA … Direct3D11)`. Headless or SSH-launched headed
    chromium does NOT work (SwiftShader / no WebGL context); only the user's own
    debug Chrome on :9333 gives the real GPU. (Earlier full saga: `schtasks` into the

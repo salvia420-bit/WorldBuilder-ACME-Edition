@@ -15,7 +15,7 @@ const OUT = "/tmp/claude-1000/-home-wbterminal/34fa34ff-29fc-4c04-a325-d3ad7e660
 const APP = "http://127.0.0.1:8765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "low", nosw: "1", nullRender: "1", pvsRingRadius: "1",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
   server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://127.0.0.1:8080/",
 };
 const LOCS = [

@@ -165,7 +165,7 @@ lane (user-confirm first), M3/M4/M7, legacy deletion after soak.
   `snaptap-dump.mjs`, `postflip-legs.mjs` (the local zero-GPU A/B legs,
   Bug-11-gated boot + 200 s ghost waits + stance toggle before casts).
   Round-2 evidence dump: `harness/snaptap-round2-2026-07-03.json`.
-- Tunnels: `ssh -fN -L 9334:127.0.0.1:9334 young@100.127.215.75` (their
+- Tunnels: `ssh -fN -L 9334:127.0.0.1:9334 <user>@<gpu-box-ip>` (their
   capture chrome); 9333 = the off-screen test chrome; reverse 18765 →
   laptop serve.py :8765 was already live.
 - serve.py running on :8765 (`--allow-missing`); ACE alive (see

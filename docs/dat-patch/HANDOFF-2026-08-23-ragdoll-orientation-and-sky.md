@@ -262,8 +262,8 @@ in a diagnostic gradient mode, not the real cloud rendering. Start there.
 
 - **Access:** `gcloud compute ssh buildbox --zone=us-east1-c`. Real GPU: Tesla T4, Xorg on
   **DISPLAY :1**. Spot instance (~$0.15/hr) — can be preempted (STOP; disk safe, new IP on restart).
-- **ACE server** runs on the LAPTOP (not the box): ports 9000/9001, account `tailnet1`/`tailnet1`
-  (level-999 tester). The box client connects to it over tailscale (`-h 100.116.47.66 -p 9000`,
+- **ACE server** runs on the LAPTOP (not the box): ports 9000/9001, account `<account>`/`<account>`
+  (level-999 tester). The box client connects to it over tailscale (`-h <server-ip> -p 9000`,
   baked into the Chorizite injector config, `D:\ac-dat-test\acclient.exe`).
 - **Launch:** `bash ~/inject-dxvk.sh` (Chorizite injector → acclient under DXVK v2.4.1; sets
   `d3d9=n`, DXVK HUD). Then `bash ~/prep-outdoor.sh` (clicks char-select **Tester ≈ (1000,935)** +
@@ -272,7 +272,7 @@ in a diagnostic gradient mode, not the real cloud rendering. Start there.
   Confirm in-world via `xdotool getwindowgeometry` == `1920x1080`.
 - **DXVK outdoor fix:** `D:\ac-dat-test\dxvk.conf` has `d3d9.textureMemory = 0` — REQUIRED or the
   outdoors crashes (32-bit texture-paging tmpfs exhaustion). Don't remove it.
-- **Account-in-use ghost:** ACE holds the `tailnet1` session ~150 s after the client dies. After
+- **Account-in-use ghost:** ACE holds the `<account>` session ~150 s after the client dies. After
   `pkill acclient`, **wait ~150 s** before relaunching or you get kicked back to char-select.
 - **Live cfg:** `~/acwine/drive_c/Temp/acdt/ragdoll.cfg` == `C:\Temp\acdt\ragdoll.cfg`. Keys:
   `livemotion=1`, `deathvariety=1`, `deathvarietystrength=0.7` (0–1.5), `deathorientgain=1.4` (0–4). Hot-reloaded by the config
@@ -284,7 +284,7 @@ in a diagnostic gradient mode, not the real cloud rendering. Start there.
   ffmpeg capture region is `:1+320,270` (the game window is offset within the display).
 - **Encoding for phone:** `-c:v libx264/h264_nvenc -pix_fmt yuv420p -profile:v main -movflags
   +faststart` (Android can't decode yuv444p — that caused black videos earlier).
-- **Taildrop to owner's phone:** `tailscale file cp <file> redmi-note-13-5g:` (100.123.121.86).
+- **Taildrop to owner's phone:** `tailscale file cp <file> redmi-note-13-5g:` (`<tailnet-ip>`).
 - **Plugins dir:** `~/acwine/drive_c/Games/Chorizite/plugins/`. Deploy by copying the built DLL
   over `AcmeRagdoll/AcmeRagdoll.dll` (curated layout: dll + manifest.json + Chorizite.ACBindings.dll
   + FASM*.DLL + Reloaded.Assembler.targets + ragdoll_profiles.json). AcmeSky mirrors this plus its

@@ -94,7 +94,7 @@ count or concurrency. The stress-arm-B symptom (1,465 fetches, 35 s main-thread 
 ## Baseline caveat (re-probe before/after)
 
 The 1,465-fetch / 35 s / 0.2 fps numbers are from stress arm B only; **arms A & C never
-logged in** (tailnet1 "Account In Use" ghost) so there is no clean vanilla baseline, and the
+logged in** (`<account>` "Account In Use" ghost) so there is no clean vanilla baseline, and the
 "worker-message churn" phrasing in the handoff is spurious — the bake worker is **default-off**
 (`bake_worker_client.js:45-55`, zero `configureBakeWorker` callers), so there is no worker
 traffic in the baseline. Re-run the 3-arm probe (with the ghost-login guard) to anchor a
@@ -294,7 +294,7 @@ no-AbortController fetch. Failure-mode fixes: `terrain.js:3439-3452`/`:2809` (A1
 
 Headless Chrome on the GTX 1070 (real GPU: `ANGLE NVIDIA GeForce GTX 1070 D3D11`,
 off-screen per the never-on-screen rule), app served live from the laptop via the
-`-R 18765` reverse tunnel (so the running edits were under test). Account `tailnet1`,
+`-R 18765` reverse tunnel (so the running edits were under test). Account `<account>`,
 `quality=high`, all three arms spawned **outdoor** at cell `0xA9B40019` (so the
 `pvsRingRadius=10` ring genuinely expands). All arms share `pvsRingRadius=10&lbCap=600`;
 the **only** variable is `pvsStreamQueue`. Metrics sampled over a 35 s window starting at

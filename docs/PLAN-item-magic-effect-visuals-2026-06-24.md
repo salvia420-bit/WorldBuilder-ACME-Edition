@@ -84,7 +84,7 @@ Live source root: `external/holtburger/apps/holtburger-web/`  (NOT `~/holtburger
   still spawned and not already attached, mark `_particleChainsAttached.add(guid)` and
   `this._attachParticleChainForEntity(guid, root, did)` (fail-soft). Reuses the exact walker the
   other arms use; anchors to `root` so wield carries it for free.
-- **Acceptance:** `node --check`; headless `@create 44265` (via `__sessionHandle.sendChat`, phase4demo
+- **Acceptance:** `node --check`; headless `@create 44265` (via `__sessionHandle.sendChat`, `<test-account>`
   GM) spawns with 0 errors both flag-off and `?setupDefaultScript=on`; with flag on, console/diag shows
   the chain attaching emitters (best-effort — visual is 1070).
 

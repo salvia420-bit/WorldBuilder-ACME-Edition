@@ -16,7 +16,7 @@ from a mountain peak (z=206) to the coast (z=0) — did **not** happen because:
 1. **`@teleloc` never relocated the player.** Every teleport this run was a no-op
    (the player stayed at `0x7d64010e` for all 20 stages; cross-landblock teleports
    reported `landed=false`). Cause TBD — likely the GM `@teleloc` cell/coord frame
-   or an account/access issue (`phase4demo` is accessLevel 4). The academy capture
+   or an account/access issue (`<test-account>` is accessLevel 4). The academy capture
    moved the player only *within* one landblock, so cross-landblock `@teleloc` is
    unproven here.
 2. **Interior camera framing** sits too close in the small EnvCell (followDistance

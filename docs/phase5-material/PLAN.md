@@ -177,7 +177,7 @@ channels.** No new vocabulary, no per-material knobs (strength-only, reusing the
 ## 3. Boot-smoke recipe (local SwiftShader — structural only)
 Laptop stack must be up: `serve.py` :8765, wsbridge :8080, ACE 9000/9001 (ACE flaky → reload-retry).
 Headless chromium (≤3 instances, SwiftShader):
-`http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&nullRender=1&netDrainHz=30&material=on`
+`http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&nullRender=1&netDrainHz=30&material=on`
 → poll `window.__bootState=='in-world'` → read `/console?n=500` for **0 errors** → assert `__diag` surfaces
 (program count, maps bound, `suite_cache_size`). **NOT** pixel fidelity — that's the owed 1070 eye-test.
 

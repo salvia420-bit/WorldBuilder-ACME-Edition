@@ -49,7 +49,7 @@ On the 1070, with a COLD Playwright `newContext` (= cold GPU cache = the first-l
   hit)? If yes, **B is the real fix**.
 
 Repro + tunnels + accounts: handoff §4 of `…/2026-06-20-busted-world-load-freeze-handoff.md`
-(`repro-busted-world-1070.mjs`; reverse `-R 18765`, account `phase4demo` GM, `?nosw=1`,
+(`repro-busted-world-1070.mjs`; reverse `-R 18765`, account `<test-account>` GM, `?nosw=1`,
 `renderDiag=on`). The genfix harnesses in `docs/eyetest-genfix-2026-06-26/` are a working
 boot+teleport+`__diag` template to adapt (note: `bootInWorld` must accept boot state `"ready"`, and
 the box's GPU session must be unlocked or new headless WebGL contexts fail with `renderer:err`).

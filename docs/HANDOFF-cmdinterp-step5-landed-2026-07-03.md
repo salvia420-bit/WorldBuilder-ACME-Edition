@@ -66,7 +66,7 @@ the post-flip wave, below.
 ## A/B state (the half already run — local zero-GPU bot vs live ACE)
 
 Recipe: chrome-devtools MCP page →
-`http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&renderer=3d&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=%2BTester2&agent=1[&cmdInterp=on…]`
+`http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&renderer=3d&autoLogin=1&account=<account>&password=<account>&autoSpawn=%2BTester2&agent=1[&cmdInterp=on…]`
 — Tester2 = parked god mage at LIGHT academy (A9B40016 spawn), knows 1708
 (Wedding Bliss, 3 windups) + 85; self-cast via
 `window.__sessionHandle.castTargetedSpell(guid, 1708)`; keys via

@@ -288,7 +288,7 @@ Six workstreams. Recommended parallelism: **A, C, and F start immediately**. **B
 **The capture should:**
 1. Boot Chromium with `?renderer=3d`.
 2. Fill the login form using selector `input[name="server_host"]` (NOT `server_ip` — that selector was renamed in commit `3954289`).
-3. Log in as a test character (PK on tailnet `100.116.47.66`; coordinate with whoever holds creds).
+3. Log in as a test character (PK on tailnet `<server-ip>`; coordinate with whoever holds creds).
 4. Wait for `window.getLocalPlayerGuid()` to return non-null (≤ 5 s after spawn).
 5. Assert `window.liveScene3d.entityManager.entityMap.has(playerGuid) === true`.
 6. Dispatch real `keydown` for W; hold for 3 seconds.
@@ -338,7 +338,7 @@ Six workstreams. Recommended parallelism: **A, C, and F start immediately**. **B
 - **wsbridge:** `apps/holtburger-wsbridge` — `holtburger-wsbridge --listen 0.0.0.0:8080`. Forwards WS → UDP 127.0.0.1:9000.
 - **cloudflared:** quick tunnel `--url http://127.0.0.1:7080`. URL changes per restart; pull current from `HANDOFF.md` or whoever last restarted.
 - **Web app:** node proxy `/tmp/holtburger_proxy.cjs` listening on 127.0.0.1:7080; serves the static `apps/holtburger-web/` files from a `python3 -m http.server 8765` backend.
-- **Tailscale direct:** `100.116.47.66` (tailnet1 / Developer-promoted). Bypasses cloudflared.
+- **Tailscale direct:** `<server-ip>` (`<account>` / Developer-promoted). Bypasses cloudflared.
 
 ### Memory & feedback discipline (load-bearing — read before deviating)
 

@@ -61,7 +61,7 @@ Per [`feedback_three_source_cross_reference`], in oracle precedence order:
 1. **ACE server source** — `~/ace-server/Source/ACE.Server/Network/GameMessages/*.cs`
    for what an authoritative server emits today. **Not exercised in Wave 1**
    (would need a live capture loop). Wave 3 brings this in via live ACE on
-   `100.116.47.66:9000`.
+   `<server-ip>:9000`.
 
 2. **Retail decomp** — `~/ac-headers/acclient.c` for what the retail client
    parsed (the binary's actual behavior). Used as the dispute resolver
@@ -206,7 +206,7 @@ What this method explicitly does NOT cover:
 - **Network jitter / packet loss** — wire-conformance is payload correctness
   only. Transport-layer (fragmentation, retransmit, checksums) is orthogonal
   and untested here.
-- **Live capture fixtures from `100.116.47.66:9000`** — Wave 1 uses only
+- **Live capture fixtures from `<server-ip>:9000`** — Wave 1 uses only
   baked `.bin` and Rust-side hex. Live captures land via Wave 3 physics-replay
   infrastructure.
 - **Encrypted / compressed wire** — Chorizite operates on already-decrypted

@@ -160,7 +160,7 @@ Verdict headlines for the rest (details + recipes in the parts):
   ⚠ The RUNNING ACE binary predates the source tree: `@createcreature`
   (DeveloperCommands.cs) is NOT registered — ACE masks it as "Unknown
   command"; use `@create <wcid>` (AdminCommands.cs:2175). @telepoi /
-  @teleloc / @acehelp fine. tailnet1 accessLevel=4 (Developer) in
+  @teleloc / @acehelp fine. `<account>` accessLevel=4 (Developer) in
   ace_auth (creds in $ACERT/Config.js).
 - Harness (untracked by convention, apps/holtburger-web/harness/):
   snaptap-install now samples `le:` (leashEchoDiag) and freshness-gates

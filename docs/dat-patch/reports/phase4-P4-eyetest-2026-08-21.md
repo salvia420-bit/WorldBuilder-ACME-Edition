@@ -35,7 +35,7 @@ GPU/OS/driver stack validating the r9 kit end-to-end.
   identical file.
 - Driving: xdotool on the owned :1 display — click ENTER at char select, then
   `key Return` / `type "@telepoi Holtburg"` / `type "@create 6"` straight into
-  retail chat. tailnet1 is Developer, so the retail client admin-drives
+  retail chat. `<account>` is Developer, so the retail client admin-drives
   itself; no second client needed. ffmpeg x11grab for frames.
 - The 1070-side equivalent (unused tonight, deployed and ready):
   `C:\Temp\acdt-chat.ps1` + schtask `acdtchat` types one line from

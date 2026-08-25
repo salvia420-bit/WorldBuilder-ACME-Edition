@@ -38,7 +38,7 @@ examined contains NO 3D-flame source.** The dramatic in-hand flame is therefore 
 - **Weapon mesh renders.** The earlier "no mesh" was a framing artifact — the nameplate floats
   ~2.2 m above the object, so a close-up aimed at the nameplate put the weapon below frame. Aimed
   at the rig root, the katar (4 surface meshes) is visible. (Runtime-verified on the 1070.)
-- **Spawn works.** `@create 44265` via `__sessionHandle.sendChat` (phase4demo has GM) drops it on
+- **Spawn works.** `@create 44265` via `__sessionHandle.sendChat` (`<test-account>` has GM) drops it on
   the ground; entity count +1, nameplate "Burning Sands Katar" in-world, 0 console errors.
 - **`UI_EFFECTS_INT (18) = 32` = `UI_EFFECT_FIRE` (0x20).** Full enum (acclient.h:7550):
   Magical 0x1 · Poisoned 0x2 · BoostHealth 0x4 · BoostMana 0x8 · BoostStamina 0x10 · **Fire 0x20**

@@ -12,7 +12,7 @@ Commits `fa9e09e1..3c6a7655` + this handoff. **The announce candidate is now
 
 Shipped `AcmeInject.dll` had UTF-16LE-embedded dev defaults
 (`AcmeInject/Program.cs` DefClient/DefArgs): `D:\ac-dat-test\acclient.exe` +
-`-h 100.116.47.66 -p 9000 -a tailnet1 -v tailnet1 -rodat off`. Running the
+`-h <server-ip> -p 9000 -a <account> -v <account> -rodat off`. Running the
 shipped injector with no args launched the dev rig path against the dev
 tailscale IP with test creds — and appended `-rodat off`, the exact flag the
 install guide forbids with the injector. The assembler leak grep only scanned

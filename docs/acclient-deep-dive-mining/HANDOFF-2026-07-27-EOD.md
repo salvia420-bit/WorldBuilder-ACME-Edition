@@ -93,7 +93,7 @@ jump/stamina spec, sticky/turn spec, slope/slide spec, P6.1 vtable + design.
   rule). Chrome at Program Files (registry App Paths lies — use
   StartMenuInternet reg key to enumerate). MODE2i works: schtasks /it +
   connectOverCDP :9333 tunnel; ALSO tunnel `-R 8080:127.0.0.1:8080` (ws bridge)
-  or start_session fails. GTX-1070 D3D11 confirmed. tailnet1/tailnet1 works;
+  or start_session fails. GTX-1070 D3D11 confirmed. `<account>/<account>` works;
   first char +Tester2 (admin). ACE session linger ≈40-90s between logins of the
   same account. ACE has NO "@loc" (use @myloc); interior-cell @teleloc gets
   relocated outdoors (z guess wrong?) — unresolved.

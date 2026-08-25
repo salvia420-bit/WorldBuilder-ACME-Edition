@@ -122,7 +122,7 @@ wasm-pack build --target web --out-dir pkg --release` from apps/holtburger-web
 --replace!). Decomp greps need `-a`. Live tests: serve.py :8765 is up,
 `?nosw=1` always; ACE ghost = wait 95-100 s AFTER dropping a session, then log
 in; keep browser work inside continuous evaluates (background tabs starve the
-net drain at ~2m50s); test char = tailnet1/`+Tester2` (autoSpawn=%2BTester2 —
+net drain at ~2m50s); test char = `<account>/``+Tester2` (autoSpawn=%2BTester2 —
 the + prefix matters), @god'd with Wand + spells 1708 (3-windup self) and 85
 (war bolt); two 10k-hp target drudges are parked at the academy spot
 (`@create 24888` makes more). keep-ACE-vanilla: never edit/rebuild the server.

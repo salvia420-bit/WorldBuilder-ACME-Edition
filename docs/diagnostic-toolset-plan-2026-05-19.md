@@ -90,7 +90,7 @@ A diagnostic suite launchable from **`WorldBuilder.Terminal --stdin`** that, for
    - `client_cell_1.dat`   `6db0abf00fbceed62c3f1ee842ee7c1f423d732bed77a5b7c102ee89a52ab99e`  (332 MB)
    - `client_local_English.dat`  `e85c820280c88fac7df6c8043f5e24596e9c8774193af4123d756546f78fb2bb`  (1 MB)
    - `acclient.exe`        (4.6 MB)
-5. **Live ACE on Tailscale** — `100.116.47.66:9000` (per
+5. **Live ACE on Tailscale** — `<server-ip>:9000` (per
    `project_emit_dynamic_site` memory; reproducible test fixtures land into
    `/mnt/wbterminal1/holtburger-captures/`).
 
@@ -330,7 +330,7 @@ documented as ~70 LOC of "missing wiring" per [[project_holtburger_motion_table_
 
 **Prerequisite (W3 setup) — SHIPPED 2026-05-19** (see [[project_wave3_prereq_2026-05-19]]):
 - ACE.Server is **local on this box** at UDP `0.0.0.0:9000/9001` (pid 10540).
-  `100.116.47.66` is the local Tailscale (`tailscale0`) interface, not a
+  `<server-ip>` is the local Tailscale (`tailscale0`) interface, not a
   remote host. holtburger-wsbridge is running on `127.0.0.1:8080`.
 - `phaseN_diag` account auto-created at accessLevel = 4 (Developer);
   `Config.js` `DefaultAccessLevel: 4` makes fresh accounts Developer at
@@ -448,7 +448,7 @@ Following CHORIZITE_PORTING_PLAN §10's pattern, what this plan explicitly does 
    full pack/unpack works for Wave 1. If RmlUi.Net / Lua / Autofac creep in,
    fall back to the regex-parse pattern (`CommandEngine.Chorizite.cs:147-150`)
    or vendor a slim subset.
-2. **Wave 3 physics replay → Live ACE on Tailscale `100.116.47.66:9000`.**
+2. **Wave 3 physics replay → Live ACE on Tailscale `<server-ip>:9000`.**
    Use a dedicated `phaseN_diag` account; wire PingRequest keepalive (cli
    pattern: `crates/holtburger-core/src/client/runtime.rs::should_send_keepalive_ping`)
    to prevent ghost-session pile-up (per [[project_emit_dynamic_site]]

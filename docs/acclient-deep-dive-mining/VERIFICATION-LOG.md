@@ -1480,7 +1480,7 @@ without the rotated-footprint over-bound (up to 4.9 m). `?camAabbSweep=on`
 escape + `window.__setCamAabbSweep` live toggle. R9 290 eye-test queued
 (grocer walls).
 
-## NEW BUG (user live report 2026-07-28, phase4demo @ Neydisa Castle `0x9EE50039`)
+## NEW BUG (user live report 2026-07-28, `<test-account>` @ Neydisa Castle `0x9EE50039`)
 
 Long-tour session: `[terrain_batch] slot capacity exhausted (256 LBs live in
 batch)` + terrain flickering in/out + slow partial castle load (on a --dev

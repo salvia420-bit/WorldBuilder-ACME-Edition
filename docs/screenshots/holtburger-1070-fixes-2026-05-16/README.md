@@ -46,10 +46,10 @@ cloudDepthWired:  true            ← cloud overlay samples scene depth + discar
 Per the project memories:
 
 1. `wbterminal` machine: dev server on `0.0.0.0:8137` (the staged dist v2 mounts at `/dist/...`).
-2. Reverse SSH tunnel: `ssh -fN -R 7080:127.0.0.1:8137 young@100.127.215.75`.
+2. Reverse SSH tunnel: `ssh -fN -R 7080:127.0.0.1:8137 <user>@<gpu-box-ip>`.
 3. Chrome on the 1070 box auto-launches at logon via `C:\Temp\holtburger-chrome-debug.ps1`
    with `--remote-debugging-port=9222`. URL it opens: `http://localhost:7080/apps/holtburger-web/index.html?renderer=3d&clouds=on`.
-4. Login: account `tailnet1`, password `tailnet1`, server `127.0.0.1:9000`, bridge `ws://127.0.0.1:8080/`.
+4. Login: account `<account>`, password `<account>`, server `127.0.0.1:9000`, bridge `ws://127.0.0.1:8080/`.
 5. Double-Connect dance (memory: `project_holtburger_login_double_connect`):
    first Connect kicks any prior session; wait 10 s; click Connect again to actually log in.
 6. Click Spawn on the `+Tester` character.

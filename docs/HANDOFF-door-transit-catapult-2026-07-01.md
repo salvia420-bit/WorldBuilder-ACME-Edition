@@ -125,7 +125,7 @@ matches the faithful-transition default-on flip exactly.
    may not adopt (§0.3) — WALK from the outdoor spawn (`a9b40019/a9b4001a` area, z=94)
    using `setMovementInput` + heading calibration (calibrate empirically: try headings,
    keep the one that moves the intended axis; walls interfere — calibrate in the open).
-   Account `phase4demo/phase4demo` (Developer). Single-login ~40 s cooldown.
+   Account `<test-account>/<test-account>` (Developer). Single-login ~40 s cooldown.
    Harness patterns: `scratchpad/repro-catapult.mjs`, `watch-fall.mjs`,
    `session-hold.mjs`+`poke.mjs` (CDP-held session) from session scratchpad
    `/tmp/claude-1000/-home-wbterminal/3dcb35b7-*/scratchpad/`.
@@ -146,9 +146,9 @@ matches the faithful-transition default-on flip exactly.
 serve.py :8765 + wsbridge :8080 + vanilla ACE (all on this laptop; see the 06-29
 handoff §4). 1070 vistest: desktop shortcut "Holtburg (Chrome)" → Chrome CDP :9333,
 URL 127.0.0.1:18765 via reverse tunnel
-(`ssh -fN -R 18765:127.0.0.1:8765 young@100.127.215.75`), bridge direct via tailnet
-`ws://100.116.47.66:8080/`, account `tailnet1` (Developer). Drive it:
-`ssh -fN -L 9333:127.0.0.1:9333 young@…` + playwright `connectOverCDP` (never
+(`ssh -fN -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip>`), bridge direct via tailnet
+`ws://<server-ip>:8080/`, account `<account>` (Developer). Drive it:
+`ssh -fN -L 9333:127.0.0.1:9333 <user>@…` + playwright `connectOverCDP` (never
 `browser.close()` the user's session — disconnect only). GM rescue for a wedged player:
 second account + `@teletome <name>` (bypasses the airborne refusal).
 Test char `+Tester` has full weapon kit (bows/xbows/atlatl+ammo, swords, buckler,

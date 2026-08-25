@@ -39,7 +39,7 @@ ONLY about runtime observability.
 Stack up (serve.py :8765, wsbridge :8080, ACE 9000/9001), then:
 ```
 node /…/scratchpad/smoke_inworld.mjs   # playwright-core in ~/.npm/_npx/<hash>/node_modules
-# (URL: …/index.html?nosw=1&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&nullRender=1&netDrainHz=30&material=on)
+# (URL: …/index.html?nosw=1&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&nullRender=1&netDrainHz=30&material=on)
 ```
 The script polls `window.__bootState` to `in-world`, then evals `window.liveScene3d?.materialCache` → null.
 

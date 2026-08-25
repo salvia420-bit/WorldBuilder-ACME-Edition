@@ -271,7 +271,7 @@ model to solve every scale of the problem.
 
 Investigated:
 
-- `C:\Users\Andrew\Desktop\GitHubCleanup\vendored_repos\ACE-master`
+- `C:\Users\<user>\Desktop\GitHubCleanup\vendored_repos\ACE-master`
 
 Relevant observations:
 
@@ -291,7 +291,7 @@ further evidence that our pipeline should do the same.
 
 Investigated:
 
-- `C:\Users\Andrew\Desktop\GitHubCleanup\vanquishkit`
+- `C:\Users\<user>\Desktop\GitHubCleanup\vanquishkit`
 
 Key included assets:
 

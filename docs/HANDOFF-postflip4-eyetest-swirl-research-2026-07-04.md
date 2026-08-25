@@ -27,7 +27,7 @@ ingestMotionLengths + both self-pickup KIND_REMOVE lanes).
 
 Evidence JSONs: `~/.claude/jobs/333ff13e/tmp/s7-verify.json` (leg 1),
 `s7-leg2.json` … `s7-leg7.json` — real-render wireframe
-SwiftShader legs against live ACE (tailnet1/+Tester2, Holtburg).
+SwiftShader legs against live ACE (`<account>/+Tester2`, Holtburg).
 
 1. **P11 Dead-bake — ROOT-CAUSED + FIXED (the big one).** The user's
    "most monsters show no dying animation" = **164/296 creature
@@ -205,7 +205,7 @@ SwiftShader legs against live ACE (tailnet1/+Tester2, Holtburg).
 - buildbox: still POWERED OFF (unchanged). OAuth-expiry bot-lore in
   postflip3 doc still applies for any future fleet launch.
 - serve.py :8765 up (`--allow-missing`), ACE up (same pid, 9+ days),
-  tailnet1/+Tester2 returned to its login spot (leg 1 courtesy
+  `<account>/+Tester2` returned to its login spot (leg 1 courtesy
   teleloc; legs 2-4 ended in Holtburg — a pile of smited-creature
   corpses NE of the meeting hall will decay on their own).
 - pkg/ carries the session-7 RELEASE wasm (frame clamp +

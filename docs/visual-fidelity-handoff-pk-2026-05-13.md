@@ -1,6 +1,6 @@
 # Visual-fidelity push — hand-off to PK (2026-05-13)
 
-**Audience:** PK on live-ACE box (Tailscale `100.116.47.66`, Developer account, phone for mobile perf).
+**Audience:** PK on live-ACE box (Tailscale `<server-ip>`, Developer account, phone for mobile perf).
 
 **State:** 12 of 14 phases shipped to `origin/master`. The renderer compiles and ships clean (cargo 1352/0/1, all Node tests green). What remains is **on-hardware visual validation, perf measurement, and Phase 2.3 (hand-authored hero PBR maps)** which an agent cannot do.
 
@@ -39,7 +39,7 @@ Master is at `origin/master` HEAD. Last commit: `ede4122`. Fresh `wasm-pack` bui
 
 ```bash
 # On live-ACE box
-ssh tailnet1@100.116.47.66
+ssh <account>@<server-ip>
 cd /path/to/holtburger
 git pull origin master
 
@@ -54,7 +54,7 @@ wasm-pack build --target web --dev   # or --release for prod perf testing
 
 ### Verify the deploy
 
-Load `http://100.116.47.66:<port>/apps/holtburger-web/index.html?renderer=3d&quality=high` in a desktop browser. Check `window.__quality` in devtools — should show `{ preset: 'high', flags: { shadows: true, csm: true, ssao: true, pom: true, terrainDetailNormal: true, triplanar: true, subdivLevel: 4, ... } }`.
+Load `http://<server-ip>:<port>/apps/holtburger-web/index.html?renderer=3d&quality=high` in a desktop browser. Check `window.__quality` in devtools — should show `{ preset: 'high', flags: { shadows: true, csm: true, ssao: true, pom: true, terrainDetailNormal: true, triplanar: true, subdivLevel: 4, ... } }`.
 
 ---
 

@@ -1,6 +1,6 @@
 # Phase 3 particle/aura — 1070 eye-test frames (2026-06-24)
 
-Real **GTX 1070** (ANGLE / D3D11 / NVIDIA), Holtburg, `phase4demo`, the Visual-Behavior
+Real **GTX 1070** (ANGLE / D3D11 / NVIDIA), Holtburg, `<test-account>`, the Visual-Behavior
 Suite shipped DEFAULT-ON (master `f3942a95`). Captured headless via
 `phase3-1070b.mjs`; recipe: `~/from-vm/phase3-workflow-2026-06-24/PHASE3-EYETEST-RECIPE.md`.
 

@@ -114,7 +114,7 @@ AcmeSky heartbeat + reload gated. No visual/light-math changes.
 Full details: `docs/lights-port/P3-GLOWLIGHTS-2026-08-23.md` §9–§10, `P4-SELECTION-2026-08-23.md`.
 
 ## Deploy state at handoff
-- Client RUNNING (relaunched after a ghost-session "Account In Use"; ACE dropped tailnet1 20:29:19).
+- Client RUNNING (relaunched after a ghost-session "Account In Use"; ACE dropped `<account>` 20:29:19).
 - Exe = LFA-fixed. Plugins = the merged followup build. Prefs = mitigated. `-rodat 1`.
 - All knobs hot-reload via `C:\Temp\acdt\lights.cfg` (glowlog now default 0; `loglights=2` restores
   the 1 Hz heartbeat).

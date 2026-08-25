@@ -68,7 +68,7 @@ match spec. cargo workspace 1352/0/1.
 shipped). The visual delta on Holtburg is real but subtle for the
 reasons above. Real "AAA-adjacent stylized realism" eye-tests need PK
 on live-ACE in steeper / stonier landblocks, with the freshly-built
-wasm bundle deployed to `100.116.47.66`. The road z-fight at
+wasm bundle deployed to `<server-ip>`. The road z-fight at
 subdiv=4 is the one *visible regression* worth treating as a
 near-term fix candidate.
 

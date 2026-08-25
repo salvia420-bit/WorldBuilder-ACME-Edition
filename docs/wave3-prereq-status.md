@@ -12,13 +12,13 @@ Owner: open. Status: SHIPPED.
 
 `ACE.Server` (pid 10540) listening on UDP `0.0.0.0:9000` (login) and
 `0.0.0.0:9001` (world) on this box. Tailscale local interface
-`100.116.47.66` confirmed bound on `tailscale0`; `wbterminal` itself in
-`tailscale status` is `100.116.47.66`. The spec's "live ACE on Tailscale
-`100.116.47.66:9000`" is in fact this host — no SSH required.
+`<server-ip>` confirmed bound on `tailscale0`; `wbterminal` itself in
+`tailscale status` is `<server-ip>`. The spec's "live ACE on Tailscale
+`<server-ip>:9000`" is in fact this host — no SSH required.
 
 Probe: `ss -tunlp | grep -E '9000|9001'` shows `ACE.Server`. Connection
 flow: holtburger-wsbridge on `127.0.0.1:8080` (running, pid 8012) → UDP
-`100.116.47.66:9000`. End-to-end login round-trip exercised by the smoke
+`<server-ip>:9000`. End-to-end login round-trip exercised by the smoke
 script below.
 
 ## 2. `phaseN_diag` account state
@@ -40,7 +40,7 @@ later via the smoke script logging in and creating
 `+KeepaliveDiagd96tp5` character. Developer-only commands (`/god`,
 `/telepoi`) usable.
 
-Credentials: `phaseN_diag` / `phaseN_diag` on `100.116.47.66:9000` (also
+Credentials: `phaseN_diag` / `phaseN_diag` on `<server-ip>:9000` (also
 `127.0.0.1:9000` directly).
 
 ## 3. PingRequest keepalive — wasm bundle
@@ -146,7 +146,7 @@ runs.
 
 ## 7. Wave 3 starting checklist
 
-- [x] ACE on `100.116.47.66:9000` reachable.
+- [x] ACE on `<server-ip>:9000` reachable.
 - [x] `phaseN_diag` exists with accessLevel = 4 (DefaultAccessLevel
       auto-promotion).
 - [x] Wasm bundle sends `PingRequest` every 5 s when InWorld (`recv_loop`

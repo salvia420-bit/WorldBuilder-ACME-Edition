@@ -18,8 +18,8 @@ const OUT = "C:\\Temp\\shader-manifest-full.json";
 
 const BASE =
   "http://127.0.0.1:18765/apps/holtburger-web/index.html" +
-  "?quality=high&clouds=on&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&maxRetries=2" +
-  "&nosw=1&bridge_url=ws://100.116.47.66:8080/&server_host=127.0.0.1&server_port=9000" +
+  "?quality=high&clouds=on&autoLogin=1&account=<account>&password=<account>&autoSpawn=first&maxRetries=2" +
+  "&nosw=1&bridge_url=ws://<server-ip>:8080/&server_host=127.0.0.1&server_port=9000" +
   "&pvsRingRadius=10&lbCap=600";
 
 const INWORLD_DEADLINE_MS = 95000;

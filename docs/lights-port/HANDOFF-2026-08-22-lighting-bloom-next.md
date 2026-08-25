@@ -110,7 +110,7 @@ Live session on the freed 1070 produced key findings (folded into the sections b
   `@loc`; cell hex ±0x). `@telepoi <POI|list>` for named towns/dungeons. Driven via the chat rig:
   write the line to `C:\Temp\acdt\chat.txt`, refresh `C:\Temp\acdt\pid.txt` with the live acclient
   PID (schat reads it; it goes stale across sessions — this bit us), then `schtasks /run /tn acdtschat`
-  (focus + SendInput). tailnet1 = Developer so admin commands work.
+  (focus + SendInput). `<account>` = Developer so admin commands work.
 - **First-person camera**: the `.` key toggles first person — send it via a key-hold task
   (`C:\Temp\acdt-tilt.ps1` pattern, or a one-shot SendInput of VK_OEM_PERIOD 0xBE). Reason about
   where the character stands relative to the phenomenon (torch on a wall, portal, caster) and

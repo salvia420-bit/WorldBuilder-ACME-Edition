@@ -118,11 +118,11 @@ Estimated wall-clock: 8-15 hours of agent work. Phasing: Cohere-A + Cohere-C + C
 
 ### Session 2 — Live eye-tests under Developer-promoted account
 
-The deferred-eye-test bullets that need `tailnet1/tailnet1`. Headed-browser path-(a) verification on F capture. **3-4 workstreams.**
+The deferred-eye-test bullets that need `<account>/<account>`. Headed-browser path-(a) verification on F capture. **3-4 workstreams.**
 
 | | Workstream | Touches | Deps | Effort |
 |---|---|---|---|---|
-| **Eye-A** | Developer-account live session orchestrator | Single capture (or manual + screenshot pack) that logs in as `tailnet1/tailnet1`, drives the deferred eye-tests in one continuous session: (i) C-prime hillside camera pull-in; (ii) D mouse-look pan + auto-turn feel; (iii) Cross-continent `@telepoi Yaraq` after `@telepoi Holtburg`. Output: 1-page report + screenshot pack. | Cohere-D (so WASD works for the walking part) | medium |
+| **Eye-A** | Developer-account live session orchestrator | Single capture (or manual + screenshot pack) that logs in as `<account>/<account>`, drives the deferred eye-tests in one continuous session: (i) C-prime hillside camera pull-in; (ii) D mouse-look pan + auto-turn feel; (iii) Cross-continent `@telepoi Yaraq` after `@telepoi Holtburg`. Output: 1-page report + screenshot pack. | Cohere-D (so WASD works for the walking part) | medium |
 | **Eye-B** | F headed-browser path-(a) | `capture_3d_movement_e2e.cjs` bullet 7 path-(a) verification. xvfb/VNC-based or actual desktop. Confirms wasm tick rate is 60 Hz when not Playwright-headless-throttled. | — | small |
 | **Eye-C** | Skybox properties bit refinement | `setGameDayOverride(day, year)` to force Rainy / Clear / Cloudy DayGroups; eye-test `0x01 ADDITIVE_BLEND` (LOW conf) + `0x04 WEATHER_STREAK` (MED conf) under headed browser. Update memory entry `project_holtburger_skybox_properties_flags` with refined confidences. | Cohere-E (sun visible needed) | small |
 | **Eye-D** | Backtick stance keypress live | Verify `` ` `` keypress reaching 3D path's stance handler. May need keybinding plumbing fix in `loop.js` keyboard listener. | Cohere-D | small |
@@ -280,11 +280,11 @@ Same as prior pushes — see `docs/3d-port-state-2026-05-10.md`'s "Architecture"
 
 ### Live stack
 
-ACE on UDP 9000; wsbridge on 8080; cloudflared tunnel; web proxy on 7080; Tailscale `100.116.47.66:7080`. See HANDOFF.md.
+ACE on UDP 9000; wsbridge on 8080; cloudflared tunnel; web proxy on 7080; Tailscale `<server-ip>:7080`. See HANDOFF.md.
 
 ### Test character
 
-Fresh per-run timestamped accounts per `capture_academy_rubberband.cjs` pattern. `tailnet1/tailnet1` (dev-promoted) reserved for Session 2's eye-tests.
+Fresh per-run timestamped accounts per `capture_academy_rubberband.cjs` pattern. `<account>/<account>` (dev-promoted) reserved for Session 2's eye-tests.
 
 ### Memory & feedback discipline (load-bearing — read before deviating)
 

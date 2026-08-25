@@ -207,7 +207,7 @@ The combined effect: the 11 misdispatched-to-WorldObject entries from the pre-fi
 
 ```bash
 # Pre-reqs (existing capture infrastructure):
-#   - Live ACE on 100.116.47.66:9000
+#   - Live ACE on <server-ip>:9000
 #   - holtburger-wsbridge on ws://127.0.0.1:8080/
 #   - python3 -m http.server 8765 from external/holtburger/
 #   - Manifest + shards baked under dist/

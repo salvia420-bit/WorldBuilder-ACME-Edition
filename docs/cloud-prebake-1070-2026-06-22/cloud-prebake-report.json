@@ -5,7 +5,7 @@
   "arms": [
     {
       "key": "procedural",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&clouds=on&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&cloudProcedural=on",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&clouds=on&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F&cloudProcedural=on",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
       "outdoorSpawn": true,
@@ -50,7 +50,7 @@
     },
     {
       "key": "prebaked",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&clouds=on&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&clouds=on&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
       "outdoorSpawn": true,

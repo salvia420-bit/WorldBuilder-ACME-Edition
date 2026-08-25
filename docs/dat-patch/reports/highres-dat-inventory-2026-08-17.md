@@ -272,7 +272,7 @@ Ranked by friction. All corpus citations are real rows in
 `/mnt/wbterminal2/ac-discord-archive/_indextest/ac.db`.
 
 1. **The 1070 box's own AC install — zero download, highest confidence.**
-   The 1070 (`young@100.127.215.75`) is a Windows box a person actually plays
+   The 1070 (`<user>@<gpu-box-ip>`) is a Windows box a person actually plays
    AC on; a stock install keeps `C:\Turbine\Asheron's Call\client_highres.dat`
    (path form confirmed by two corpus rows: trevis 2024-05-15
    `Writing C:\Turbine\Asheron's Call\client_highres.dat to …`; Super Nerd Cam

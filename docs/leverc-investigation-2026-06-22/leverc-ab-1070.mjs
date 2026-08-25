@@ -13,14 +13,14 @@ import { chromium } from "playwright-core";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
-const EXE = "C:\\Users\\young\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
+const EXE = "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
 const OUT = "C:\\Temp";
 const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "high", clouds: "off",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
   renderDiag: "on", nosw: "1",
-  server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://100.116.47.66:8080/",
+  server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://<server-ip>:8080/",
 };
 // Run logdepth-off FIRST and -on twice (bracketing) to expose run-to-run drift in the
 // GPU-power proxy — if off sits between two on runs, there's no real saving.

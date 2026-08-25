@@ -175,7 +175,7 @@ Each phase is **independent enough to be a single parallel team-agent workstream
 6. **Indoor toggle**: `sky_dome.js:1541-1543` already short-circuits `renderSkyPass` when `_lastIsIndoor === true`. Free.
 7. **Coexistence with `SCROLLING_CLOUD` SkyObjects (0x02 bit)**: keep them rendering as-is. They're parametric quads at fixed AC altitude; the volume sits behind/in front of them depending on z-depth. Decide visually whether to fade the quads' opacity when the volume is fully covering — open question #3.
 
-**Gate**: `apps/holtburger-web/capture_volumetric_clouds_e2e.cjs` (new) — Playwright + Chromium with `--use-gl=swiftshader`. Capture screenshots at 4 reference times against live ACE at Tailscale `100.116.47.66` (tailnet1/tailnet1 promoted to Developer; tester is PK). Save under `/mnt/wbterminal1/tmp/claude-scratch/volumetric-clouds/` per memory `feedback_use_external_drives_for_scratch`.
+**Gate**: `apps/holtburger-web/capture_volumetric_clouds_e2e.cjs` (new) — Playwright + Chromium with `--use-gl=swiftshader`. Capture screenshots at 4 reference times against live ACE at Tailscale `<server-ip>` (`<account>/<account>` promoted to Developer; tester is PK). Save under `/mnt/wbterminal1/tmp/claude-scratch/volumetric-clouds/` per memory `feedback_use_external_drives_for_scratch`.
 
 ### Clouds-E — Layer config tuned for AC retail aesthetics (2-3 days)
 
@@ -244,7 +244,7 @@ Each phase is **independent enough to be a single parallel team-agent workstream
 
 - **Gates**: `cargo test --workspace` 1352/0/1 (current baseline, do not regress), `node smoke_test.cjs` 173/0/1, `wasm-pack build --target {nodejs,web}` both green.
 - **Capture suite**: `capture_skybox_e2e.cjs` bullets 4-16 + new `capture_volumetric_clouds_e2e.cjs` bullets above. Run with `--use-gl=swiftshader` under Playwright + Chromium.
-- **Live-server validation**: ACE on Tailscale `100.116.47.66` (tailnet1/tailnet1, Developer-promoted). Tester is PK. Account access-level promotion if needed:
+- **Live-server validation**: ACE on Tailscale `<server-ip>` (`<account>/<account>`, Developer-promoted). Tester is PK. Account access-level promotion if needed:
   ```bash
   mariadb -uace -pace -e "UPDATE ace_auth.account SET accessLevel = 4 WHERE accountName LIKE 'phaseN%';"
   ```

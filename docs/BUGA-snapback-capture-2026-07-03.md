@@ -95,7 +95,7 @@ serves the melee/missile click branches. One targeting-family review.
 
 - The user's chrome had NO CDP; relaunch via `C:\Temp\launch-capture.bat`
   (schtasks /it) — visible, `--remote-debugging-port=9334`, profile
-  `wb-eyetest`; tunnel `ssh -fN -L 9334:127.0.0.1:9334 young@...`.
+  `wb-eyetest`; tunnel `ssh -fN -L 9334:127.0.0.1:9334 <user>@...`.
 - Gate tap installs on the NEW build being loaded
   (`window.__hbWasm.localPoseSnapDiag` present), not just page presence —
   an F5 that hasn't happened yet leaves the old tap answering.

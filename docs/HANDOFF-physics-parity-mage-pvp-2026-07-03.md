@@ -130,7 +130,7 @@ such boundary — even retail clients on ACE live this).
 - MCP/background-tab sessions die ~2m50s after login (Network Timeout) if you
   leave gaps between evaluate calls — background throttling starves the
   net-drain keepalive. Run each leg as ONE continuous evaluate.
-- Tester2 (tailnet1) is now a parked mage kit at the LIGHT academy LB
+- Tester2 (`<account>`) is now a parked mage kit at the LIGHT academy LB
   (A9B40024): @god'd, Wand wielded, knows 1708 + 85. The Rithwic wall char
   (Tester, autoSpawn=first) was NEVER touched — use Tester2 for mage smokes.
 - `@create 24888` = pyreal target drudge, 10k hp (user-provided target wcid);
@@ -208,7 +208,7 @@ FU1-FU9 + F10 offset chain + F17 rustPose + default flips). Specs that drove it:
   `env PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin" capped-build wasm-pack build
   --target web --out-dir pkg --release` from apps/holtburger-web; NEVER bare wasm-pack on this box).
 - Headless smokes vs live ACE (serve.py :8765, wsbridge :8080, zero-GPU bot
-  `?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=tailnet1&…`):
+  `?nosw=1&nullRender=1&renderOnDemand=1&netDrainHz=30&autoLogin=1&account=<account>&…`):
   defaults arm = in-world, @telepoi teleport through the leash arm, 41.6 m walk, 0 console
   errors; escape arm + all-on-incl-rustPose arm = in-world, streaming healthy, 0 errors (walk
   probes blocked by the Rithwic town decode wall — see gotchas).
@@ -240,7 +240,7 @@ FU1-FU9 + F10 offset chain + F17 rustPose + default flips). Specs that drove it:
 - **ACE ghost sessions**: closing a connected tab ghosts the account ~60-90 s → next login gets
   `[character-error] Logon (0x1)`. Schedule relogins +95 s. ACE runs on THIS laptop (dies on
   reboot — restart recipe in memory/ace-live.md).
-- **The demo char (+WasmDemou8wvi3, account tailnet1) now lives in RITHWIC** — a town landblock
+- **The demo char (+WasmDemou8wvi3, account `<account>`) now lives in RITHWIC** — a town landblock
   whose decode pegs the main thread for many minutes under SwiftShader/nullRender, blocking
   evaluate probes after spawn. Park the char somewhere light (@telepoi to a wilderness POI) to
   speed future headless smokes.

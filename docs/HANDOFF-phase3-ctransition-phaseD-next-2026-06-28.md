@@ -158,9 +158,9 @@ PATH="$HOME/.cargo/bin:$PATH" capped-build wasm-pack build --target web --out-di
 Collision is position-based (CPU-side) → GPU-independent; the laptop SwiftShader bot is the
 right tool. Raw `chrome --headless` botches the WS upgrade to the bridge; **use Playwright**.
 Local stack is up: serve.py `:8765`, `holtburger-wsbridge :8080`, ACE (UDP `:9000/:9001`),
-MariaDB. Safe account: **`phase4demo`/`phase4demo`** (NOT the owner's `tailnet1`).
+MariaDB. Safe account: **`<test-account>`/`<test-account>`** (NOT the owner's `<account>`).
 - Turnkey: `harness/lib/boot.mjs#launchAndEnter({query, timeoutMs})` (env `HARNESS_ACCOUNT`/
-  `HARNESS_PASSWORD` override the default tailnet1). Or the scratch drivers used this session.
+  `HARNESS_PASSWORD` override the default `<account>`). Or the scratch drivers used this session.
 - 1070 real-GPU render eye-test (only for render fidelity, NOT collision): MODE2i off-screen
   per `MEMORY.md` — Roblox is light (~22% GPU) so the box has headroom, but never browser.close()
   the person's session.

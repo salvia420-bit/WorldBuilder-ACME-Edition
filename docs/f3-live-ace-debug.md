@@ -1,7 +1,7 @@
 # F#3 — Live ACE End-to-End Debug (2026-05-10)
 
 Investigation log for follow-on #3 from `docs/3d-port-state-2026-05-10.md`:
-> "Live ACE end-to-end against tailnet1. Phase 7.4b+ capture scripts time
+> "Live ACE end-to-end against `<account>`. Phase 7.4b+ capture scripts time
 > out at ~60 s on the live-ACE login round-trip and fall back to mode-1
 > standalone. The 2D path round-trips fine, so this is a 3D-specific
 > timing or event-binding issue."
@@ -24,10 +24,10 @@ holtburger-wsbridge.
 ## Network probe results
 
 ```
-HTTP 200             curl http://100.116.47.66:8765/...    page server up
-HTTP 000 / WS 101    curl http://100.116.47.66:8080/ ...   wsbridge up; WS upgrade accepted
-TCP 8080 OPEN        nc -z 100.116.47.66 8080              wsbridge listening
-TCP 9000 CLOSED      nc -z 100.116.47.66 9000              ACE is UDP-only, not TCP
+HTTP 200             curl http://<server-ip>:8765/...    page server up
+HTTP 000 / WS 101    curl http://<server-ip>:8080/ ...   wsbridge up; WS upgrade accepted
+TCP 8080 OPEN        nc -z <server-ip> 8080              wsbridge listening
+TCP 9000 CLOSED      nc -z <server-ip> 9000              ACE is UDP-only, not TCP
 UDP 9000 OPEN        ss -unp                               ACE.Server.dll fd=183 listening 0.0.0.0:9000
 UDP 9001 OPEN        ss -unp                               ACE.Server.dll fd=182 listening 0.0.0.0:9001
 ```
@@ -56,7 +56,7 @@ the login form just hangs forever, and the capture's 20 s wait for
 `#selection:not([hidden])` times out.
 
 Running a fresh Playwright session against `?renderer=2d` (= no flag):
-- WS opens to `ws://100.116.47.66:8080/` (confirmed via
+- WS opens to `ws://<server-ip>:8080/` (confirmed via
   `page.on('websocket')`)
 - One 44-byte WS frame is sent client→bridge (the JSON handshake)
 - **Zero WS frames are received bridge→client during the 20 s timeout**
@@ -69,17 +69,17 @@ Same flow with `?renderer=3d` → identical behaviour.
 `/tmp/wsbridge.log` shows every login attempt over the last hour:
 
 ```
-[100.116.47.66:xxxxx] accepted; upgrading to ws
-[100.116.47.66:xxxxx] routing to 127.0.0.1 (127.0.0.1:9000 login, :9001 world)
-[100.116.47.66:xxxxx] udp socket bound to Some(0.0.0.0:nnnnn)
-[100.116.47.66:xxxxx] connection closed         <-- ~17 s later
+[<server-ip>:xxxxx] accepted; upgrading to ws
+[<server-ip>:xxxxx] routing to 127.0.0.1 (127.0.0.1:9000 login, :9001 world)
+[<server-ip>:xxxxx] udp socket bound to Some(0.0.0.0:nnnnn)
+[<server-ip>:xxxxx] connection closed         <-- ~17 s later
 ```
 
 `/tmp/ace.log` shows the corresponding ACE-side view:
 
 ```
-21:32:29 INFO : client tailnet1 connected with verified password
-21:32:46 INFO : Session 0\127.0.0.1:54080 dropped. Account: tailnet1, Player: , Reason: Network Timeout
+21:32:29 INFO : client <account> connected with verified password
+21:32:46 INFO : Session 0\127.0.0.1:54080 dropped. Account: <account>, Player: , Reason: Network Timeout
 ```
 
 That repeats for **every** login over the last 3 hours. ACE accepts the
@@ -139,7 +139,7 @@ correctly to `window.__sessionHandle`, and the EntityManager pipeline
 What I changed:
 
 - **`apps/holtburger-web/smoke_test.cjs`** — added an F#3 infra-probe
-  check that HEADs `http://100.116.47.66:8765/` with a 3 s timeout. The
+  check that HEADs `http://<server-ip>:8765/` with a 3 s timeout. The
   check SKIPs (does not FAIL) on any unreachable result, so the smoke
   stays green when the dev box is offline.
 - **This document** — captures the diagnosis for the next agent so the

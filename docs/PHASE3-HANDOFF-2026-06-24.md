@@ -220,9 +220,9 @@ additive fill within budget + off=byte-identical). Then foliage / breath-fog, th
   on-box chromium-1223, `npm install playwright-core` in `C:\Temp` first;
   `chromium.launch({executablePath:"...chromium-1223\\chrome-win64\\chrome.exe", headless:true,
   args:["--use-angle=d3d11","--use-gl=angle","--ignore-gpu-blocklist"]})` (headless still gets real NVIDIA
-  GPU). Login `?renderer=3d&quality=low&clouds=off&autoLogin=1&account=phase4demo&password=phase4demo&
-  autoSpawn=first&server_host=127.0.0.1&server_port=9000&bridge_url=ws://100.116.47.66:8080/&visual=on&<flag>=on`
-  (quality=low — ultra blocks entity spawn; bridge_url MANDATORY). phase4demo has GM →
+  GPU). Login `?renderer=3d&quality=low&clouds=off&autoLogin=1&account=<test-account>&password=<test-account>&
+  `autoSpawn=first&server_host=127.0.0.1&server_port=9000&bridge_url=ws://<server-ip>:8080/&visual=on&<flag>=on``
+  (quality=low — ultra blocks entity spawn; bridge_url MANDATORY). `<test-account>` has GM →
   `__sessionHandle.sendChat('@create <wcid>')`. Gate on `__diag.render.sceneNodes>80` + settle. ~40 s ACE
   grace between runs. Reverse tunnel `-R 18765:127.0.0.1:8765`; serve.py + wsbridge + ACE run on the laptop.
 - **Worked-reference DIDs (pick via DAT probe, like the atlan spear):** a magic gem/crystal item for

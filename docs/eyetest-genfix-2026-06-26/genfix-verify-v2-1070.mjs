@@ -3,19 +3,19 @@
 // (2) 30s settle for EnvCell + entity streaming; (3) confirm teleport landed in the TARGET LB, retry once
 // (v1 arena drop y=-1560 was rejected by ACE → drifted); (4) per-current-LB cell counting via cellContainers3d
 // to isolate each location's interior from resident geometry.
-//   ssh -R 18765:127.0.0.1:8765 young@100.127.215.75 '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-v2-1070.mjs'
+//   ssh -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip> '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-v2-1070.mjs'
 // Artifacts: C:\Temp\genfix-v2-report.json + C:\Temp\gf2-<loc>.png
 
 import { chromium } from "playwright-core";
 import { writeFileSync } from "node:fs";
 
-const EXE = "C:\\Users\\young\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
+const EXE = "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
 const OUT = "C:\\Temp";
 const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "mid", nosw: "1",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
-  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://100.116.47.66:8080/",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
+  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://<server-ip>:8080/",
 };
 const LOCS = [
   { key: "town-holtburg",   how: "telepoi", arg: "Holtburg",   expect: "portals(oriented)+NPCs+buildings+ambient" },

@@ -180,7 +180,7 @@ These were the hard-won unlocks; re-use them for any future acclient plugin:
 ### The 1070 injection/test rig (owner's GTX-1070; owner powers it on)
 - Headless inject: `C:\Temp\acdt-inject.bat` runs `AcmeInject.exe` (x86 net8 console P/Invoking
   `LaunchInjected` from `Chorizite.Injector.dll`), launching `D:\ac-dat-test\acclient.exe -h
-  100.116.47.66 -p 9000 -a tailnet1 -v tailnet1 -rodat off` with the plugins. Task `acdtinject`.
+  `<server-ip>` -p 9000 -a `<account>` -v `<account>` -rodat off` with the plugins. Task `acdtinject`.
 - **Single-login**: kill acclient/AcmeInject, wait ~40–70 s for the ACE session to clear BEFORE
   re-injecting, or you get a double-login "Account In Use" → crash/kick.
 - Enter world: client auto-authenticates to char-select; task `acdtvclick2` clicks ENTER

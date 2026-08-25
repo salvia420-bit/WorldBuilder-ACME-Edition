@@ -31,7 +31,7 @@ Headless (session-0, real GPU) Playwright probe, three arms by URL flag. Verifie
   WebGL hook missed the real context because **rendering + decode run in a Web Worker +
   OffscreenCanvas** (`scene3d/bake_worker.js`, `scene3d/index.js:762`). VRAM is
   therefore *unmeasured*; see Re-probe.
-- Arms A & C never logged in (tailnet1 "Account In Use" ghost from a prior run) — so the
+- Arms A & C never logged in (`<account>` "Account In Use" ghost from a prior run) — so the
   vanilla-vs-cut-VRAM comparison did not actually run. Only B reached the world.
 
 ---
@@ -132,7 +132,7 @@ trustworthy texture-VRAM/draw-call reading:
    three.js `renderer.info.memory.textures` / `render.calls` from inside the worker and
    postMessage it out.
 2. **Ghost-login guard** — between arms, navigate to `about:blank` and wait ~18 s (or
-   detect "Account In Use" and retry) so each arm actually logs in `tailnet1`.
+   detect "Account In Use" and retry) so each arm actually logs in `<account>`.
 
 Arms to use: A `pvsRingRadius=6&lbCap=225` (vanilla), B `pvsRingRadius=10&lbCap=600`
 (stress draw distance), C `textureScale=2&atlasTilePx=256` (cut-VRAM A/B). Keep it

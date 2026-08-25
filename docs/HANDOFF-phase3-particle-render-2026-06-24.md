@@ -93,7 +93,7 @@ residual remains after billboard, run `__diag.probeNearestParticle()` and read t
 ## To resume Bug 3
 1. Bring up the stack: serve.py(8765) + wsbridge(8080) (nohup from `external/holtburger`); ACE via a
    `exec 3<>fifo; dotnet ACE.Server.dll <fifo` launcher (setsid-nohup) then `echo "world open" > fifo`;
-   reverse tunnel `ssh -N -R 18765:127.0.0.1:8765 young@100.127.215.75`. DB creds `ace`/`ace`. ACE
+   reverse tunnel `ssh -N -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip>`. DB creds `ace`/`ace`. ACE
    first-login races — the driver needs a login retry.
 2. The diagnostic (was wired, reverted from the committed tree to keep it clean): add a
    `window.__diag.probeNearestParticle()` to the `__diag.particles` bridge that returns, for the visible

@@ -144,7 +144,7 @@ atlan spear (`@create 6253`) at both seams; `=off` byte-identical; harness green
 - 1070 batch headless: ONE session per account (two contexts = "Account In Use"); examine panel needs
   `window.__mainPanel` (absent headless) → drive via getters/probes; use `playwright-core` +
   `executablePath` chromium-1223; quality=low (ultra blocks entity spawn). Tunnel:
-  `ssh -fN -R 18765:127.0.0.1:8765 young@100.127.215.75`.
+  `ssh -fN -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip>`.
 - LSD weenies on the laptop = repo-root `external/LSD-Partial-2025-02-23_16-15/weenies` (NOT under
   `external/holtburger`); JSON has `didStats`/`intStats` `[{key,value}]`, no name field → use the filename.
 - Reusable DAT walker for archetype hunts: `crates/holtburger-dat/examples/find_luminous_dyed.rs`

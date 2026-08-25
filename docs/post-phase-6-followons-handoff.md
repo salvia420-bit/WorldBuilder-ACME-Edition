@@ -68,11 +68,11 @@ live captures should be added back once 6A + 6C are fixed.
 
 ### Live-server stack (for browser-side validation)
 
-- **Tailscale:** the server is on `100.116.47.66`. Phone or laptop
-  on the tailnet hits `http://100.116.47.66:8765/apps/holtburger-web/index.html`.
-- **Login form:** Bridge URL `ws://100.116.47.66:8080/`, Server host
+- **Tailscale:** the server is on `<server-ip>`. Phone or laptop
+  on the tailnet hits `http://<server-ip>:8765/apps/holtburger-web/index.html`.
+- **Login form:** Bridge URL `ws://<server-ip>:8080/`, Server host
   field uses `input[name="server_host"]` (NOT `server_ip` — that's
-  stale per memory). Account/password is `tailnet1`/`tailnet1`,
+  stale per memory). Account/password is `<account>`/`<account>`,
   promoted to Developer access level so `@telepoi` and similar
   admin commands work.
 - **Tester:** PK (the user). When asking for a live verification,

@@ -157,7 +157,7 @@ JS-only (BAND-A had already shipped the Rust 6-tuple) — **no wasm rebuild**.
   Specialized→Trained→Untrained→Unusable (R15). character-info tierOrder already OK.
 - **S3** (`index.html`): removed the standalone `registerView`; KEPT import/plugin-map/
   modulepreload (pure helpers still imported); F11 → `showView('character',{tab:'skills'})`.
-- **In-world verified** (Playwright auto-login `phase4demo` vs live ACE/wsbridge/serve,
+- **In-world verified** (Playwright auto-login `<test-account>` vs live ACE/wsbridge/serve,
   driver at `/mnt/wbterminal1/tmp/claude-scratch/bandb-verify/`): F11→Skills tab;
   default footer credits+disabled; Arcane Lore (Trained)→"Cost to Raise: 178 XP";
   Untrained→"Train"/"Cost to Train: 10 credits"; Attributes keeps 9 per-row buttons +

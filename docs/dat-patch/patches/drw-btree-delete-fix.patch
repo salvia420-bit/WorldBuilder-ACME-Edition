@@ -1,5 +1,5 @@
 From 694c4ac927537afdee59d11537b8fa145d3d7a92 Mon Sep 17 00:00:00 2001
-From: wbterminal <salvia420@gmail.com>
+From: wbterminal <<owner-email>>
 Date: Wed, 19 Aug 2026 22:39:03 -0230
 Subject: [PATCH] Fix b-tree delete: left-sibling separator off-by-one +
  successor pulled from the wrong child

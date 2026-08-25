@@ -6,7 +6,7 @@ Real-GPU headless (GTX 1070, ANGLE/NVIDIA/D3D11), one session, all flags on
 ## Results (see uieffects-batch-report.json)
 - **#13 real icons — VALIDATED.** Fire ordinal 6 → `0x06001B2E` (from DataIDMapper `0x25000009`)
   loads a real **32×32** icon via `fetch_icon_pixels`. The icon-resolution + load path works.
-  (The examine-panel DATA path needs a *successful* Identify — phase4demo's skill failed on the
+  (The examine-panel DATA path needs a *successful* Identify — `<test-account>`'s skill failed on the
   katar → `appraisalUiEffects:null`; a skill/content nuance, not a code bug. Inventory badges
   source `InventoryItem.uiEffects`, not the appraisal.)
 - **#16 itemFx aura — PLUMBING VALIDATED, VISUAL SUBTLE.** `entityUiEffects(katar)=32` (the wasm

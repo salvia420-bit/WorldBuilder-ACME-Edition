@@ -1,6 +1,6 @@
 {
   "ts": "2026-06-24T12:48:27.771Z",
-  "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=low&clouds=off&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&setupDefaultScript=on&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws://100.116.47.66:8080/",
+  "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=low&clouds=off&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&setupDefaultScript=on&renderDiag=on&nosw=1&server_host=127.0.0.1&server_port=9000&bridge_url=ws://<server-ip>:8080/",
   "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
   "spawnCell": "0xa9b40019",
   "inWorld": true,

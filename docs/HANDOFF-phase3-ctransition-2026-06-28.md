@@ -248,11 +248,11 @@ portal-spanning cross-cell with real handles, EnvCell `water_type`.
 
 ## 7. The 1070 GPU box (for the eventual eye-test)
 
-- `young@100.127.215.75` (tailscale, pubkey). Reachable; GTX 1070 healthy.
+- `<user>@<gpu-box-ip>` (tailscale, pubkey). Reachable; GTX 1070 healthy.
 - **A person uses it — as of this handoff, Roblox is running.** The eye-test must
   be **truly headless** (software render, no GPU contention) OR wait for the box
   to be free. Re-probe first:
-  `ssh young@100.127.215.75 "tasklist /FI \"IMAGENAME eq RobloxPlayerBeta.exe\" /NH & tasklist /FI \"IMAGENAME eq chrome.exe\" /NH"`.
+  `ssh <user>@<gpu-box-ip> "tasklist /FI \"IMAGENAME eq RobloxPlayerBeta.exe\" /NH & tasklist /FI \"IMAGENAME eq chrome.exe\" /NH"`.
   If free → off-screen MODE2i (`--use-angle=d3d11`, off-screen window, CDP :9333)
   per `~/.claude/.../memory/MEMORY.md`. NEVER kill the person's chrome; clean up by
   `--user-data-dir` match only.

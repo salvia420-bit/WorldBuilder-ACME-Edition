@@ -121,8 +121,8 @@ pipeline (OBJ software rasterizer): session scratchpad `build_cards.py`
   QUICK tunnels: URLs die with the processes; mint new ones next session and
   re-issue the play URL (index.html + `bridge_url=wss://…` + autoLogin +
   weather-off flags). 1070 was OFFLINE all day; user vistested on their R9 290
-  and later mobile. User plays account `phase4demo` (+WasmDemou8wvi3, PK'd via
-  `@pk pk`); `tailnet1` also theirs. Agents must use throwaway accounts (ACE
+  and later mobile. User plays account `<test-account>` (+WasmDemou8wvi3, PK'd via
+  `@pk pk`); `<account>` also theirs. Agents must use throwaway accounts (ACE
   auto-creates on first login).
 - pkg/ holds a RELEASE wasm (~4.99 MB, through `3b22938d`). Multiple `pkg-X/`
   scratch out-dirs are gitignored leftovers; safe to delete.

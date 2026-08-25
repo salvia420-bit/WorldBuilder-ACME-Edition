@@ -7,7 +7,7 @@
     {
       "key": "off",
       "label": "clouds OFF (baseline, mid)",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F",
       "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
@@ -75,7 +75,7 @@
     {
       "key": "high",
       "label": "clouds ON - high (current default)",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F&clouds=on",
       "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
@@ -153,7 +153,7 @@
     {
       "key": "medium",
       "label": "clouds ON - medium preset",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on&cloudQuality=medium",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F&clouds=on&cloudQuality=medium",
       "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
@@ -231,7 +231,7 @@
     {
       "key": "low",
       "label": "clouds ON - low preset",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on&cloudQuality=low",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F&clouds=on&cloudQuality=low",
       "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
       "spawnCell": "0xa9b40019",
       "inWorld": true,
@@ -309,7 +309,7 @@
     {
       "key": "halfres",
       "label": "clouds ON - high @ resScale 0.5",
-      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=phase4demo&password=phase4demo&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F100.116.47.66%3A8080%2F&clouds=on",
+      "url": "http://127.0.0.1:18765/apps/holtburger-web/index.html?renderer=3d&quality=mid&autoLogin=1&account=<test-account>&password=<test-account>&autoSpawn=first&renderDiag=on&server_host=127.0.0.1&server_port=9000&bridge_url=ws%3A%2F%2F<server-ip>%3A8080%2F&clouds=on",
       "renderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)",
       "spawnCell": "0xa9b40019",
       "inWorld": true,

@@ -232,7 +232,7 @@ Emitted exactly as specified, verified by validating every sample line against
 `schema_v1.json #/definitions/entry`:
 
 ```json
-{"id":"rl-20260820-104500-a1b2","v":1,"createdAt":"2026-08-20T10:45:00.000Z","author":"tailnet1",
+{"id":"rl-20260820-104500-a1b2","v":1,"createdAt":"2026-08-20T10:45:00.000Z","author":"sample-author",
  "clientRelease":{"kitTag":"acme-r9","portalSha256":"aa","highresSha256":null},
  "world":{"landblock":"0x016C0107","pos":[12.5,33.25,6],"heading":180},
  "camera":{"pos":[1,2,3],"lookAt":[1,3,3],"fovDeg":60},

@@ -163,7 +163,7 @@ raises the mover via the terrain height/validate_walkable path, confirm holtburg
 - `capped-build wasm-pack build --target web --out-dir pkg --dev`
 - **Headline proof:** indoor ledge AND outdoor slope — climb-ON ascends, climb-OFF stops at base; print feet-z
   start/end for both. Plus a too-tall-wall test proving the threshold gate.
-- Live headless (deferred to E3 with C/D): `phase4demo` harness; not required to land E1.
+- Live headless (deferred to E3 with C/D): `<test-account>` harness; not required to land E1.
 
 ## 7. Risks & gotchas (Discord-sourced — bake into tests)
 - **Jitter / "magnetism" at step edges** (bosh scranson, Hells "jitter is our enemy") — assert no per-step

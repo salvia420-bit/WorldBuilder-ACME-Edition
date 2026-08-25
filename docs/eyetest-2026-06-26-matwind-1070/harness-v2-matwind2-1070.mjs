@@ -8,7 +8,7 @@
 //  • WIND: v1 measured motion only by screenshot diff at a bad frame cadence + likely framed FROZEN trees.
 //    Now: IN-PAGE motion verification (sample an anim-scenery node's deep-child world pos across RAF ticks)
 //    + frame ONE near anim-scenery node up close + tight 5-frame burst @450ms (sway period ~1.33s).
-//  • @create spawns IN THE WORLD (InFrontOf+EnterWorld), Developer access (phase4demo has it — @telepoi worked).
+//  • @create spawns IN THE WORLD (InFrontOf+EnterWorld), Developer access (<test-account> has it — @telepoi worked).
 //  • No global THREE assumed (use matrixWorld.elements + Vector3 methods on existing objects).
 //
 //   node C:\Temp\matwind2-1070.mjs   (or --arms=staff-off,staff-on,wind-verify)
@@ -17,13 +17,13 @@
 import { chromium } from "playwright-core";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
-const EXE = "C:\\Users\\young\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
+const EXE = "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
 const OUT = "C:\\Temp";
 const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "mid",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
-  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://100.116.47.66:8080/",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
+  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://<server-ip>:8080/",
 };
 const ARMS = [
   { key: "staff-off", kind: "item", wcid: 24205, itemName: "Weeping Staff (unpaletted)", extra: { material: "off", windBake: "off" } },

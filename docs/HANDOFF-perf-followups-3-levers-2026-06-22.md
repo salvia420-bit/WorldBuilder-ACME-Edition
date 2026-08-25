@@ -119,7 +119,7 @@ those without touching world z-precision. Small win, modest effort.
 
 - **1070 tests headless / off-screen only** (`[[feedback_1070_tests_never_on_screen]]`); the app is
   served live by laptop `serve.py:8765` over a reverse tunnel to the 1070's `:18765` (re-establish
-  with `ssh -fN -R 18765:127.0.0.1:8765 young@100.127.215.75` if down — it serves the live working
+  with `ssh -fN -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip>` if down — it serves the live working
   tree, so JS edits are live with no build).
 - **Fresh Chrome profile per A/B arm; continuous full-fill profile; run-to-plateau** — the
   cache-disambiguation method that survived the shader work.

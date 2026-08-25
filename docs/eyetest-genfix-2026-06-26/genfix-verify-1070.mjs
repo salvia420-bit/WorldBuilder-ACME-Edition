@@ -6,19 +6,19 @@
 //
 //   "C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-1070.mjs
 // Run from the laptop with a reverse tunnel so the box's chromium reaches laptop serve.py:
-//   ssh -R 18765:127.0.0.1:8765 young@100.127.215.75 '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-1070.mjs'
+//   ssh -R 18765:127.0.0.1:8765 <user>@<gpu-box-ip> '"C:\Program Files\nodejs\node.exe" C:\Temp\genfix-verify-1070.mjs'
 // Artifacts: C:\Temp\genfix-report.json + C:\Temp\gf-<loc>.png
 
 import { chromium } from "playwright-core";
 import { writeFileSync } from "node:fs";
 
-const EXE = "C:\\Users\\young\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
+const EXE = "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe";
 const OUT = "C:\\Temp";
 const APP = "http://127.0.0.1:18765/apps/holtburger-web/index.html";
 const COMMON = {
   renderer: "3d", quality: "mid", nosw: "1",
-  autoLogin: "1", account: "phase4demo", password: "phase4demo", autoSpawn: "first",
-  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://100.116.47.66:8080/",
+  autoLogin: "1", account: "<test-account>", password: "<test-account>", autoSpawn: "first",
+  renderDiag: "on", server_host: "127.0.0.1", server_port: "9000", bridge_url: "ws://<server-ip>:8080/",
 };
 // Each location: teleport via @telepoi (POI) or @teleloc <cellHex> <x> <y> <z>, then capture.
 const LOCS = [

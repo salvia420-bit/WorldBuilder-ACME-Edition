@@ -113,7 +113,7 @@ the porting target. It's `holtburger-dat::transition::*` for the driver internal
   JS + `pkg/` from disk; fail-loud on missing baked layers, `--allow-missing` to bypass).
 - **holtburger-wsbridge** on **:8080** = the game-server proxy (client → bridge → ACE). Required
   for login. WS-only (closes non-WS connections).
-- **Account:** `phase4demo` / `phase4demo`. **SINGLE-LOGIN** — one session at a time; a 2nd login
+- **Account:** `<test-account>` / `<test-account>`. **SINGLE-LOGIN** — one session at a time; a 2nd login
   within ~25s = "Account In Use" boots both. Stay off it while a human is testing.
 
 ### Remote vistest via cloudflared (CURRENTLY UP — user asked to keep these running)

@@ -98,7 +98,7 @@ SessionHandle.populateTerrain wasm method; JS prefetches the
 heights via fetch_landblock_heightmaps. The integrator
 snaps pose Z to terrain at every tick, so heartbeats carry
 terrain-correct Z and ACE physics no longer applies false
-gravity. Live-validated against tailnet1's Tester (PK status,
+gravity. Live-validated against `<account>`'s Tester (PK status,
 FastTick on): walking 12 s from Holtburg @telepoi spawn used
 to kill the player ("5 → 10 points crushing/massive impact
 damage → You died!" with corpse at Z=77 vs landing Z=94);
@@ -463,15 +463,15 @@ on-device validation; recipe in
 - ACE on UDP `127.0.0.1:9000` / `:9001` (built from
   `~/ace-server/`; recipe in
   [`ace-local-setup.md`](ace-local-setup.md)).
-- Tailscale at `100.116.47.66`. Phone or laptop hits
-  `http://100.116.47.66:8765/apps/holtburger-web/index.html`.
+- Tailscale at `<server-ip>`. Phone or laptop hits
+  `http://<server-ip>:8765/apps/holtburger-web/index.html`.
   ACE's `Config.js` ships with `DefaultAccessLevel: 4`, so any
   fresh account gets Developer access on first login — no SQL
   promotion needed for `@telepoi` / `@pk pk` etc.
 - **Bind wsbridge externally for tailnet access**: the live
   default is `--listen 0.0.0.0:8080` (NOT `127.0.0.1:8080`),
   otherwise the laptop's browser can't reach it. Login form's
-  Bridge URL field is `ws://100.116.47.66:8080/`, Server IP is
+  Bridge URL field is `ws://<server-ip>:8080/`, Server IP is
   `127.0.0.1` (the bridge resolves ACE locally on this host),
   Server port is `9000`.
 
@@ -1099,7 +1099,7 @@ hit and resolved. Pay the 5 minutes of reading time; each saved
 7. **The wsbridge needs `--listen 0.0.0.0:8080`** for
    tailnet-laptop browsers to reach it. The default is
    localhost-only. The user's flow is: laptop on Tailscale →
-   `http://100.116.47.66:8765/...` → page → `ws://100.116.47.66
+   `http://<server-ip>:8765/...` → page → `ws://<server-ip>
    :8080/` → wsbridge (running on the dev box) → ACE on UDP
    `127.0.0.1:9000`. Bind external on the WS hop or the page
    gets stuck at "connecting…".
@@ -2093,7 +2093,7 @@ Step ledger:
   Teleport-to-Holtburg button unhides on kind=7; click sends
   `@telepoi Holtburg` to skip the Training Academy tutorial. Dev
   recipe documented: `UPDATE ace_auth.account SET accessLevel = 4
-  WHERE accountName LIKE 'phase4demo%'` to promote test accounts.
+  WHERE accountName LIKE '`<test-account>%`'` to promote test accounts.
   Smoke 47 → 48 (sendChat symbol). Deliverable at
   `docs/images/phase-4-step-2a-spawned.png` re-captured with
   Teleport button + post-teleport status.

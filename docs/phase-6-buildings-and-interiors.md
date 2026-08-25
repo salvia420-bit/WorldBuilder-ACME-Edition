@@ -25,7 +25,7 @@ Bring building rendering and traversal to a level where:
 1. **Geometry is retail-correct.** Doors render at the right size. Interior walls, floors, tables, chairs, shelves are visible. Buildings look like buildings, not flat shells.
 2. **The player physically can't walk through buildings.** Closed doors block. Walls block. Movement clamps at first contact, mirroring ACE's authoritative physics.
 3. **The visible cell set auto-tracks the player.** Walking up stairs swaps the rendered cell set: the floor below drops out, the floor above pops in. No buttons, no manual toggles. Same logic generalizes to N-floor dungeons.
-4. **Live-server validated.** Each phase ships with a Playwright capture against `100.116.47.66` that asserts the new behavior end-to-end.
+4. **Live-server validated.** Each phase ships with a Playwright capture against `<server-ip>` that asserts the new behavior end-to-end.
 
 Single-source physics + cell-graph-driven culling. The expandability for arbitrarily vertical dungeons falls out of phase D for free.
 
@@ -141,7 +141,7 @@ ACE reference: `external/ACE/Source/ACE.Server/WorldObjects/Door.cs` for the sta
 - Pre/post entity snapshot pattern at lines 196-206, 327-373.
 - Threshold delta check at line 367 — adapt for "should NOT move" inversion in collision tests.
 - `__sessionHandle.sendChat` at line 182 — issues `@pk pk`, `@telepoi`, `@teleloc`, `@create`.
-- Env vars: `PHASE4_TEST_ACCOUNT`, `PHASE4_TEST_PASSWORD`, `PHASE4_BRIDGE_URL`, `PHASE4_SERVER_IP=100.116.47.66`, `PHASE4_SERVER_PORT=9000`.
+- Env vars: `PHASE4_TEST_ACCOUNT`, `PHASE4_TEST_PASSWORD`, `PHASE4_BRIDGE_URL`, `PHASE4_SERVER_IP=<server-ip>`, `PHASE4_SERVER_PORT=9000`.
 
 `apps/holtburger-web/smoke_test.cjs`:
 - `check(name, ok, detail)` pattern (line 38).
@@ -324,7 +324,7 @@ Tests that MUST pass after every phase:
 | Test | Asserts | Runs against |
 |---|---|---|
 | `smoke_test.cjs` 102/102 + 1 SKIP | No regression in baseline | Local fixtures |
-| `capture_phase4_step3.cjs` | WASD movement still works | Live ACE `100.116.47.66` |
+| `capture_phase4_step3.cjs` | WASD movement still works | Live ACE `<server-ip>` |
 | `capture_phase4_step5.cjs` | Click-to-use still works | Live ACE |
 | `capture_step6_monster_walking.cjs` | Walk-cycle bake unchanged | Local fixtures |
 | `capture_phase6_step_a_geometry.cjs` (Phase A+) | Holtburg town hall geometry | Live ACE |

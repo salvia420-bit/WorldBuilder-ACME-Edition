@@ -98,7 +98,7 @@ headless; never `browser.close()` a live session.
 #   (b) a dungeon interior — e.g. 0x00B4 (94.6%-generator dungeon) via @teleloc into an interior cell
 #   (c) combat area 0xAB94 (the white-box-monster site)
 # On the 1070 (MODE3 on-box headless Playwright-chromium = real GPU via ANGLE):
-ssh young@100.127.215.75 'node C:\Temp\cloud-ab-1070.mjs'   # adapt target LB + teleport
+ssh <user>@<gpu-box-ip> 'node C:\Temp\cloud-ab-1070.mjs'   # adapt target LB + teleport
 # capture: window.__diag walk of cellsGroup/entitiesGroup/staticsGroup + a screenshot per site.
 ```
 Also read the scene-graph (works even on the no-GPU laptop via SwiftShader + serve.py, scene

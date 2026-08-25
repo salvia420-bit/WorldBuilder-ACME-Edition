@@ -250,7 +250,7 @@ exactly, (c) terrain triangle planes agree with `terrain_height_at`.
   both split directions. Non-negotiable.
 - **Live headless in-world (no 1070 needed — collision is CPU-side):** Playwright (raw
   `chrome --headless` botches the WS bridge upgrade). Stack: serve.py `:8765`, wsbridge `:8080`,
-  ACE UDP `:9000/:9001`, MariaDB. Account **`phase4demo`/`phase4demo`** (NOT the owner's `tailnet1`).
+  ACE UDP `:9000/:9001`, MariaDB. Account **`<test-account>`/`<test-account>`** (NOT the owner's `<account>`).
   Harness: `harness/lib/boot.mjs#launchAndEnter({query,timeoutMs})` (env `HARNESS_ACCOUNT`/`HARNESS_PASSWORD`).
   Bot URL flags: `?nullRender=1&renderOnDemand=1&netDrainHz=30&nosw=1`. Confirm outdoor walk stays
   grounded, 0 errors, the outdoor populate log appears, and overlap-ON stops at an off-center building.

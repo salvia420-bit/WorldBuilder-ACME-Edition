@@ -18,8 +18,20 @@ using NJsonSchema;
 // Values are realistic and DAT-DERIVED: the GfxObj/Surface/RenderSurface ids and triangle indices
 // are read out of client_portal.dat; positions, camera poses, author and prompt are invented.
 
-const string Portal = "/home/wbterminal/ac_base_dats/client_portal.dat";
-const string SchemaPath = "/home/wbterminal/WorldBuilder-ACME-Edition/tools/dat-patch/redline/schema_v1.json";
+// Inputs come from the environment, with repo-relative defaults. These were
+// absolute paths into one developer's home directory, which is both a leak (this
+// file is public) and unusable on anyone else's machine.
+//   ACME_BASE_DATS  - directory holding client_portal.dat  (default: ac_base_dats)
+//   ACME_REPO       - this repository's root               (default: four levels up)
+static string Env(string name, string fallback) {
+    // System.Environment, spelled out: DatReaderWriter.DBObjs also has an Environment.
+    var v = System.Environment.GetEnvironmentVariable(name);
+    return string.IsNullOrWhiteSpace(v) ? fallback : v.Trim();
+}
+string repoRoot = Env("ACME_REPO", Path.GetFullPath(
+    Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..")));
+string Portal = Path.Combine(Env("ACME_BASE_DATS", "ac_base_dats"), "client_portal.dat");
+string SchemaPath = Path.Combine(repoRoot, "tools", "dat-patch", "redline", "schema_v1.json");
 string outDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 string outFile = Path.Combine(outDir, "redline.jsonl");
 
@@ -91,7 +103,7 @@ var entries = new List<RedlineEntry>();
         Id = "rl-20260820-141500-a1b2",
         V = 1,
         CreatedAt = "2026-08-20T14:15:00.000Z",
-        Author = "tailnet1",
+        Author = "sample-author",
         ClientRelease = release,
         World = new WorldContext { Landblock = "0x016C0107", Pos = new[] { 84.3f, 22.1f, 6.02f }, Heading = 137.5f },
         Camera = new CameraContext { Pos = new[] { 82.0f, 20.4f, 7.5f }, LookAt = new[] { 84.3f, 22.1f, 6.2f }, FovDeg = 55f },
@@ -127,7 +139,7 @@ var entries = new List<RedlineEntry>();
         Id = "rl-20260820-141530-c7d9",
         V = 1,
         CreatedAt = "2026-08-20T14:15:30.000Z",
-        Author = "tailnet1",
+        Author = "sample-author",
         ClientRelease = release,
         World = new WorldContext { Landblock = "0x016C0107", Pos = new[] { 84.3f, 22.1f, 6.02f }, Heading = 137.5f },
         Camera = new CameraContext { Pos = new[] { 82.0f, 20.4f, 7.5f }, LookAt = new[] { 84.3f, 22.1f, 6.2f }, FovDeg = 55f },
@@ -158,7 +170,7 @@ var entries = new List<RedlineEntry>();
         Id = "rl-20260820-141600-4e0f",
         V = 1,
         CreatedAt = "2026-08-20T14:16:00.000Z",
-        Author = "tailnet1",
+        Author = "sample-author",
         ClientRelease = release,
         World = new WorldContext { Landblock = "0x016C0107", Pos = new[] { 84.3f, 22.1f, 6.02f }, Heading = 137.5f },
         Camera = new CameraContext { Pos = new[] { 82.0f, 20.4f, 7.5f }, LookAt = new[] { 84.3f, 22.1f, 6.2f }, FovDeg = 55f },

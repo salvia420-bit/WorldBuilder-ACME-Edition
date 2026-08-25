@@ -26,10 +26,10 @@ by symbol, not line.
 - Live stack: serve.py :8765 (`--allow-missing` — beware silent partial world),
   wsbridge :8080, vanilla ACE on this laptop (UDP 9000/9001). 1070 vistest: desktop
   shortcut "Holtburg (Chrome)", CDP :9333, serve via reverse tunnel :18765, bridge via
-  tailnet `ws://100.116.47.66:8080/`, account `tailnet1` (now **Developer**).
-  `phase4demo` is also **Developer** now (was Player; elevated via ACE console FIFO
-  `set-accountaccess phase4demo 4`; FIFO path in `docs/HANDOFF-door-…`/ace-live memory).
-- Test char `+Tester` (tailnet1) has: Longbow+100 Arrows, Light Crossbow+100 Quarrels,
+  tailnet `ws://<server-ip>:8080/`, account `<account>` (now **Developer**).
+  `<test-account>` is also **Developer** now (was Player; elevated via ACE console FIFO
+  `set-accountaccess <test-account> 4`; FIFO path in `docs/HANDOFF-door-…`/ace-live memory).
+- Test char `+Tester` (`<account>`) has: Longbow+100 Arrows, Light Crossbow+100 Quarrels,
   Atlatl+100 Darts, Short Sword, 2× Long Sword, Buckler, Spadone, Quarter Staff, Wand
   (wcids 306/300/312/305/12463/12464/352/351/44/29975/338/2472; drudge target wcid 7).
 - Headless harness patterns live in the session scratchpad
@@ -182,7 +182,7 @@ exists in context.rs:735). Casters can't be held with a shield (CheckWeaponColli
 our NEW auto-unequip already pulls the shield when wielding a caster).
 
 **Ordered work plan:**
-1. **Live baseline (headless):** equip Wand (`+Tester` has one; phase4demo can
+1. **Live baseline (headless):** equip Wand (`+Tester` has one; `<test-account>` can
    `@ci 2472`), toggle → verify Magic stance 0x49 confirms; learn a spell
    (`@addspell <id>`? check ACE handler — or grant scroll; spell 1 = Strength Other I
    per spells.json; Developer has `@learnspells`?); `castUntargetedSpell` on a

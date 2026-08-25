@@ -55,10 +55,10 @@ math means only load/arming was at risk, but the fleet-video session should show
   SPAWN a client), new `AcmeRagdoll.dll`, and `ragdoll_profiles.json`** (the old rig ran
   0 profiles!). The deployed Chorizite runtime still predates the per-pid-log patch (logs
   go to shared `data/logs/log.txt`) — refresh it when convenient.
-- **9 injected clients** (D:\ac-dat-test, tailnet1) launched 13:45–13:47 — the owner's
+- **9 injected clients** (D:\ac-dat-test, `<account>`) launched 13:45–13:47 — the owner's
   burst, right as the session started; last human input 13:47. They carry the OLD
   AcmeRagdoll loaded at launch; idempotency (exit 23) protects them. One session sits at
-  char select on tailnet1. Left untouched.
+  char select on `<account>`. Left untouched.
 - ssh quirks (cost this session real time): cmd `dir`/compound `schtasks` chains silently
   fail over this ssh — **PowerShell for everything**; run `schtasks /run /tn acdtidle` as
   its own clean command, then read `C:\Temp\acdt\idle.txt`. `D:\Temp` recreated for scratch.

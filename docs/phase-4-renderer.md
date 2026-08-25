@@ -72,13 +72,13 @@
 ![Phase 4 step 1 — wasm bundle reaches Selection page against live ACE](images/phase-4-step-1-character-list.png)
 
 The screenshot shows the Phase 4 step 1 deliverable: smoke checks all
-green at the top, Phase 4 login form filled in (`phase4demo3` /
-`phase4demo3` / `ws://127.0.0.1:8080/` / `127.0.0.1` / `9000`), the
-green-status line `[OK] Logged in as phase4demo3. 0 characters on
+green at the top, Phase 4 login form filled in (`<test-account>3` /
+`<test-account>3` / `ws://127.0.0.1:8080/` / `127.0.0.1` / `9000`), the
+green-status line `[OK] Logged in as <test-account>3. 0 characters on
 this account; CharacterListReceived event drained.`, and the
 "Select a character" header with the no-characters fallback message.
 
-The list is empty because `phase4demo3` is a fresh auto-created ACE
+The list is empty because `<test-account>3` is a fresh auto-created ACE
 account; populating characters is step 2 scope (the actual
 `ClientCommand::SelectCharacter` → `EnterWorldRequest` → spawn flow).
 The point of step 1's deliverable is the **page transition** —
@@ -313,7 +313,7 @@ The Playwright capture script at
 for headless screenshot regeneration; it writes
 `docs/images/phase-4-step-1-character-list.png`.
 
-The 2026-05-04 capture used a fresh `phase4demo3` account on a
+The 2026-05-04 capture used a fresh `<test-account>3` account on a
 local ACE backed by a default fresh shard DB; the resulting list
 is empty (no characters yet). To populate the list for a richer
 screenshot, drive `holtburger-cli` against the same account between
@@ -403,7 +403,7 @@ What "done" looks like at the end of step 2a:
 
 ![Phase 4 step 2a — wasm bundle reaches the spawn-ready state](images/phase-4-step-2a-spawned.png)
 
-The 2026-05-04 capture used a fresh `phase4demo_step2b` account on
+The 2026-05-04 capture used a fresh `<test-account>_step2b` account on
 a local ACE backed by a default fresh shard DB. That account has
 zero characters (auto-create gives an empty list), so the
 screenshot shows the post-login state without a Spawn button to
@@ -416,7 +416,7 @@ interactive Create Character flow:
 ```bash
 cd external/holtburger
 cargo run -p holtburger-cli --bin tui --release -- \
-  --account phase4demo --password phase4demo \
+  --account <test-account> --password <test-account> \
   --host 127.0.0.1 --port 9000 \
   --dats dats
 # In the TUI:
@@ -631,7 +631,7 @@ What "done" looks like at the end of step 2a.5:
 
 ![Phase 4 step 2a.5 — wasm bundle creates + spawns a character end-to-end](images/phase-4-step-2a-spawned.png)
 
-Captured against a live ACE on a fresh `phase4demo_2a5f` account.
+Captured against a live ACE on a fresh `<test-account>_2a5f` account.
 The screenshot shows the full create + spawn flow in one shot:
 Spawned status line at top, populated Selection list with
 PhaseyTwoFiveF (Spawned button greyed out), Create form below
@@ -918,7 +918,7 @@ account:
 mariadb -uace -pace -e "
   UPDATE ace_auth.account
   SET accessLevel = 4
-  WHERE accountName LIKE 'phase4demo%';
+  WHERE accountName LIKE '<test-account>%';
 "
 ```
 
@@ -965,7 +965,7 @@ chat round-trip is browser-side via the extended
 
 ### Live-ACE manual validation
 
-Captured against `phase4demo_2a6` (SQL-promoted to `accessLevel
+Captured against `<test-account>_2a6` (SQL-promoted to `accessLevel
 = 4`) on a local ACE: login → Spawn `+PhaseyTwoSix` → InWorld
 status → click Teleport → status flips to "Sent @telepoi
 Holtburg".
@@ -1711,7 +1711,7 @@ No Rust changes; same wasm-bindgen surface as step 3, 1121
 ### Live-stack testing
 
 Same recipe as step 3 — open
-`http://100.116.47.66:8765/apps/holtburger-web/index.html`
+`http://<server-ip>:8765/apps/holtburger-web/index.html`
 on the tailnet, log in, spawn, Teleport to Holtburg, click
 the canvas to focus, then press W. The local sprite slides
 at 1.0 m/s (run with Shift held → ~4.5 m/s). Q / E to turn,

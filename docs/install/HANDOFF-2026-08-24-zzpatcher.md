@@ -122,7 +122,7 @@ investing in completing spring modes + more skeletons + framing.
   (no real meshes/DAT textures, no volumetric port, no MonoGame).
 
 ## Fleet / ops notes (memory/fleet-runbooks.md is the canonical rig doc)
-- 1070 = `young@100.127.215.75`. **CHECK IDLE FIRST** (`schtasks /run /tn acdtidle` →
+- 1070 = `<user>@<gpu-box-ip>`. **CHECK IDLE FIRST** (`schtasks /run /tn acdtidle` →
   `type C:\Temp\acdt\idle.txt`); a HUMAN uses it intermittently — at handoff an `acclient.exe`
   (pid 10512, not ours) appeared → human likely back, so DON'T run box tests until clear.
   Off-screen/headless discipline; D:\Temp for scratch; never taskkill their chrome/client.

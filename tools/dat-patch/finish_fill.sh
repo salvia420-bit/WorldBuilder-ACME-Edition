@@ -145,7 +145,10 @@ log "== results =="
 
 cd "$REPO"
 git add docs/dat-patch/reports/phase4-fill-RESULTS.md docs/dat-patch/reports/phase4-coverage-fill-2026-08-20.md
-git -c user.email=salvia420@gmail.com -c user.name=wbterminal commit -q -m "dat-patch: Phase-4 fill finisher results (detached run)
+# No -c user.email/-c user.name: a personal address hard-coded in a committed
+# script is a leak, and git already has the right identity from the ambient
+# config on whichever box runs this.
+git commit -q -m "dat-patch: Phase-4 fill finisher results (detached run)
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>" || true
 git push origin integ/all-20260813 || log "PUSH FAILED - results are committed locally"

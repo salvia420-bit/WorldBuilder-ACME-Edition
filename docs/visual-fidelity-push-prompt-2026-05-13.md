@@ -114,7 +114,7 @@ Apply to every phase:
 3. **Visual deltas are bounded.** Procedural displacement amplitudes must be small enough (≤ ±0.3m on terrain) to never push the visible mesh away from the collision mesh in a way the player notices.
 4. **Laptop OOM safety.** The local development laptop is **not** the perf test environment for heavy phases. The team agent for any tier-2 or tier-3 phase must:
    - Build and validate **correctness** (unit tests, shader compilation, small headless smoke) locally.
-   - Defer **perf validation** (FPS measurement under load, mobile testing, full 9-LB ring with POM+SSAO+CSM enabled) to the live-ACE box at Tailscale `100.116.47.66` or a hardware-test artifact.
+   - Defer **perf validation** (FPS measurement under load, mobile testing, full 9-LB ring with POM+SSAO+CSM enabled) to the live-ACE box at Tailscale `<server-ip>` or a hardware-test artifact.
    - Never launch a local capture script that loads the full Dereth bake while POM+SSAO+CSM are simultaneously active.
    - If unsure whether a local run will OOM: don't run it. Produce the capture script, ship it, and document the expected run conditions for PK or whoever's on hardware.
 5. **Artifacts go on external drives.** Goldens, captures, profiler outputs, screenshot baselines under `/mnt/wbterminal1/tmp/claude-scratch/visual-fidelity/` or similar; system disk is ~96% full.
@@ -1115,7 +1115,7 @@ This is sustainable: heuristic is cheap and universal, overrides are precise and
 - Phase X.1 (quality presets) — pure plumbing
 - Phase X.2 setup (capture script authoring) — fine
 
-### Defer to live-ACE box (Tailscale 100.116.47.66, PK on hardware)
+### Defer to live-ACE box (Tailscale `<server-ip>`, PK on hardware)
 
 - Phase 2.1 at subdivLevel=4+ — perf measurement only
 - Phase 2.2 — full LB animation perf

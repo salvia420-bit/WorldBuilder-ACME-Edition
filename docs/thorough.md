@@ -41,9 +41,9 @@ sits at:
 
 Everything from Phase 1 through 4 step 2a.6 ships at
 `docs/phase-4-renderer.md`. Live ACE manual validation works at
-`http://100.116.47.66:8765/apps/holtburger-web/index.html` over
-Tailscale (UFW port 8765 + 8080 opened) with `tailnet1` /
-`tailnet1` (Developer-promoted in `ace_auth.account`).
+`http://<server-ip>:8765/apps/holtburger-web/index.html` over
+Tailscale (UFW port 8765 + 8080 opened) with `<account>` /
+`<account>` (Developer-promoted in `ace_auth.account`).
 
 ### The wall
 
