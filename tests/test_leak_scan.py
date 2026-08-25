@@ -91,12 +91,12 @@ class TestExistingLiterals(ScanCase):
         self.assertLeaks("TAILNET1")
 
     def test_dev_server_address(self):
-        self.assertLeaks("http://100.116.47.66:9000/")
+        self.assertLeaks("http://100.71.203.9:9000/")
 
     def test_cgnat_sweep_bounds(self):
         # 100.64.0.0/10 is 100.64.x.x through 100.127.x.x, inclusive.
         self.assertLeaks("100.64.0.1")
-        self.assertLeaks("100.127.215.75")
+        self.assertLeaks("100.126.4.201")
         self.assertLeaks("100.100.1.2")
         # Just outside the range on both sides: public addresses, not ours.
         self.assertClean("100.63.255.254")
@@ -137,7 +137,7 @@ class TestFileClasses(ScanCase):
 class TestHomeDirectoryLiterals(ScanCase):
 
     def test_windows_user_path(self):
-        self.assertLeaks(r"C:\Users\young\AppData\Local\WorldBuilder")
+        self.assertLeaks(r"C:\Users\devuser\AppData\Local\WorldBuilder")
 
     def test_windows_user_path_is_drive_letter_agnostic(self):
         self.assertLeaks(r"D:\Users\someone\src")
@@ -145,7 +145,7 @@ class TestHomeDirectoryLiterals(ScanCase):
 
     def test_windows_user_path_in_utf16le(self):
         """The form it takes inside a .NET assembly."""
-        h = self.assertLeaks(r"C:\Users\young\src", encoding="utf-16-le",
+        h = self.assertLeaks(r"C:\Users\devuser\src", encoding="utf-16-le",
                              name="AcmeLauncher.dll")
         self.assertTrue(any(enc == "utf-16le" for enc, _, _ in h))
 
@@ -176,7 +176,7 @@ class TestHomeDirectoryLiterals(ScanCase):
 class TestEmailSweep(ScanCase):
 
     def test_real_address_is_caught(self):
-        self.assertLeaks("git config user.email salvia420@gmail.com")
+        self.assertLeaks("git config user.email dev.person@example.com")
 
     def test_address_in_a_patch_or_script(self):
         self.assertLeaks('AUTHOR="Some One <someone@example.com>"')
@@ -252,10 +252,10 @@ class TestShippedGameDataIsNotPII(ScanCase):
         self.assertClean("a young drudge slinker")
 
     def test_the_same_word_as_an_account_still_leaks(self):
-        self.assertLeaks("young@100.127.215.75")           # user@host
-        self.assertLeaks(r"C:\Users\young\Desktop")        # windows home
-        self.assertLeaks("/home/young/checkout")           # posix home
-        self.assertLeaks("young@example.com")              # e-mail
+        self.assertLeaks("devuser@100.126.4.201")           # user@host
+        self.assertLeaks(r"C:\Users\devuser\Desktop")        # windows home
+        self.assertLeaks("/home/devuser/checkout")           # posix home
+        self.assertLeaks("devuser@example.com")              # e-mail
 
 
 # ─────────────────────────────────────────────────────────────
@@ -308,10 +308,10 @@ class TestThirdPartyNoiseSuppression(ScanCase):
         self.assertClean("C:\\Users\\\x00\\AppData\\Local\\Temp\\SymbolCache")
 
     def test_users_prefix_with_a_real_name_still_leaks(self):
-        self.assertLeaks("C:\\Users\\young\\Desktop\\notes.txt")
+        self.assertLeaks("C:\\Users\\devuser\\Desktop\\notes.txt")
 
     def test_users_prefix_with_a_name_in_utf16_still_leaks(self):
-        self.assertLeaks("C:\\Users\\young\\AppData", encoding="utf-16-le")
+        self.assertLeaks("C:\\Users\\devuser\\AppData", encoding="utf-16-le")
 
     def test_bare_users_template_in_utf16_is_clean(self):
         self.assertClean("C:\\Users\\\x00", encoding="utf-16-le")
@@ -344,11 +344,11 @@ class TestThirdPartyNoiseSuppression(ScanCase):
                          name="dotnet-THIRD-PARTY-NOTICES.TXT")
 
     def test_notices_file_still_fails_on_our_tailnet_address(self):
-        self.assertLeaks("server 100.116.47.66",
+        self.assertLeaks("server 100.71.203.9",
                          name="dotnet-THIRD-PARTY-NOTICES.TXT")
 
     def test_notices_file_still_fails_on_a_windows_home_path(self):
-        self.assertLeaks("C:\\Users\\young\\build",
+        self.assertLeaks("C:\\Users\\devuser\\build",
                          name="dotnet-THIRD-PARTY-NOTICES.TXT")
 
     def test_the_exemption_does_not_generalise_to_other_filenames(self):
@@ -380,7 +380,7 @@ class TestMangledNamesAreNotAddresses(ScanCase):
     # --- the paired must-still-fail cases, one per real-world shape ---
 
     def test_address_after_whitespace_still_leaks(self):
-        self.assertLeaks("contact salvia420@gmail.com today")
+        self.assertLeaks("contact dev.person@example.com today")
 
     def test_address_in_angle_brackets_still_leaks(self):
         self.assertLeaks("write to <bob.smith@example.co.uk> please")
@@ -392,7 +392,7 @@ class TestMangledNamesAreNotAddresses(ScanCase):
         self.assertLeaks("owner@example.com is the owner")
 
     def test_address_in_utf16_still_leaks(self):
-        self.assertLeaks("contact salvia420@gmail.com", encoding="utf-16-le")
+        self.assertLeaks("contact dev.person@example.com", encoding="utf-16-le")
 
 
 class TestScannerFileHygiene(unittest.TestCase):
