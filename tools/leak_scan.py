@@ -151,6 +151,13 @@ ALLOWLIST = [
     "/home/kekekeks/Projects/",
     #   NAudio.dll, NAudio.Asio/Core/Midi/Wasapi/WinMM.dll  (audio stack)
     "C:\\Users\\markh\\",
+    #   HtmlAgilityPack.dll 1.5.1, shipped inside the stock Chorizite RmlUi plugin
+    #   release (external/chorizite-plugins/RmlUi/, fetched and digest-verified by
+    #   tools/plugin-pack/fetch_stock_plugins.sh). Its RSDS debug-directory entry names
+    #   the package author's own build path. This is the ONE hit in either stock plugin
+    #   folder -- verified by scanning both trees in both encodings -- and it is as
+    #   narrow as an allowlist entry can be: the full directory prefix, not ":\\Users\\".
+    "C:\\Users\\Jonathan\\Desktop\\Z\\zzzproject\\",
 ]
 
 BINARY_EXT = {".dll", ".exe", ".so", ".dylib", ".node", ".bin"}

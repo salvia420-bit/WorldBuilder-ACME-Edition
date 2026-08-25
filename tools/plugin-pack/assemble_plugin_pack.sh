@@ -4,7 +4,8 @@
 # Produces  <out>/acme-plugins-<tag>/  ready to drop into the release archive next
 # to the dat kit (assemble_kit.sh builds that half). The pack is the OPTIONAL,
 # injection-based half: zzpatcher (the control panel/tuner/patcher-front-end), the
-# vendored Chorizite plugin runtime + AcmeInject, the three Acme plugins, and the
+# vendored Chorizite plugin runtime + AcmeInject, the four Acme plugins, the two
+# STOCK upstream plugins one of them needs (RmlUi and its Lua dependency), and the
 # full licence/provenance set the audit requires (LICENSE-AUDIT-2026-08-24.md).
 #
 # WHAT THIS PACK DOES (and does NOT) w.r.t. "patching":
@@ -32,6 +33,8 @@ REPO="$(cd "$HERE/../.." && pwd)"
 CHORIZITE="$REPO/external/chorizite"
 CZ_BIN="$CHORIZITE/Chorizite/bin/net8.0"
 NUGET="$HOME/.nuget/packages"
+# Stock upstream plugin releases, fetched + digest-verified by fetch_stock_plugins.sh.
+STOCK_PLUGINS="$REPO/external/chorizite-plugins"
 COMMON_LIC="/usr/share/common-licenses"
 DOTNET_RT_VER="8.0.26"
 export PATH="$HOME/.local/bin:$PATH"
@@ -65,6 +68,19 @@ grep -q '_didInit' "$DXH" || die "dx-attach-init.patch NOT applied (no _didInit 
 grep -q 'EndScene' "$DXH" || die "dx-attach-init.patch NOT applied (no EndScene drive in DirectXHooks.cs)"
 grep -q 'log-{System.Environment.ProcessId}' "$LOGF" || die "per-pid-log.patch NOT applied (ChoriziteLogger.cs still writes shared log.txt)"
 echo "   dx-attach-init + per-pid-log signatures present in vendored source"
+
+# 1a2. stock upstream plugins. AcmeRedline's panel is an RmlUi document, and RmlUi in
+# turn needs Lua; without both folders PluginManager.cs:196-203 refuses to start
+# AcmeRedline at all (or, now that the dependency is optional, silently drops it to
+# HUD-only). These are UNMODIFIED upstream releases with upstream's own manifest.json —
+# never hand-authored here, because the licence audit needs real provenance.
+if ! bash "$HERE/fetch_stock_plugins.sh" --verify-only >/dev/null 2>&1; then
+  die "stock plugin folders missing or malformed under $STOCK_PLUGINS
+   Run:  tools/plugin-pack/fetch_stock_plugins.sh
+   (downloads RmlUi 0.0.10 + Lua 0.0.13 from the Chorizite plugin index and verifies
+    them against the SHA-256s that index publishes)"
+fi
+echo "   stock plugins present: RmlUi 0.0.10 + Lua 0.0.13 (upstream manifests verified)"
 
 # 1b. knob metadata gate (fail-loud counts 84/35/28)
 python3 "$REPO/AcmeLauncher/tools/gen_knobs.py" >/dev/null || die "gen_knobs.py gate failed"
@@ -189,10 +205,20 @@ for f in AcmeInject.exe AcmeInject.dll AcmeInject.deps.json AcmeInject.runtimeco
 done
 echo "   Chorizite/: runtime ($(find "$PACK/Chorizite" -maxdepth 1 -type f | wc -l) files) + AcmeInject"
 
-# 3c. the three plugins (minus exclusions; assets + profiles ride along via mirror_dir)
+# 3c. our four plugins (minus exclusions; assets + profiles ride along via mirror_dir)
 for pl in AcmeLights AcmeSky AcmeRagdoll AcmeRedline; do
   mirror_dir "$REPO/$pl/bin/net8.0" "$PACK/Chorizite/plugins/$pl"
   echo "   plugins/$pl/: $(find "$PACK/Chorizite/plugins/$pl" -type f | wc -l) files"
+done
+
+# 3c1. the two STOCK upstream plugins AcmeRedline's panel needs. RmlUi provides the
+# RML/RCSS document host (Redline.rml); RmlUi's own manifest declares Lua@0.0.13, and
+# RmlUiPlugin.cs:81 takes LuaPluginCore by constructor injection, so Lua is not optional
+# for RmlUi even though RmlUi is optional for us. Same mirror_dir, so the same pdb/xml
+# exclusion applies to upstream's RmlUi.pdb / Lua.pdb / *.xml.
+for pl in RmlUi Lua; do
+  mirror_dir "$STOCK_PLUGINS/$pl" "$PACK/Chorizite/plugins/$pl"
+  echo "   plugins/$pl/: $(find "$PACK/Chorizite/plugins/$pl" -type f | wc -l) files (stock upstream)"
 done
 
 # 3c2. published Chorizite patches (S2): the provenance/NOTICES docs promise the
@@ -277,7 +303,120 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 ZLIB
-echo "   licenses/: LICENSE-ACME, LGPL-3.0, GPL-3.0, Apache-2.0, MIT, Zlib, FASM, dotnet LICENSE + THIRD-PARTY-NOTICES"
+# FreeType: RmlUiNative.dll STATICALLY links FreeType 2 -- verified by string-scanning the
+# shipped x86 blob (FREETYPE_PROPERTIES present, no freetype.dll import). FreeType is dual
+# FTL / GPLv2 and we take the FTL branch.
+#
+# We do NOT ship licenses/FTL.TXT, and that is a determination, not an omission. FTL section
+# 1 requires, for redistribution in BINARY form, only "a disclaimer that states that the
+# software is based in part of the work of the FreeType Team, in the distribution
+# documentation" (an upstream URL is encouraged, not mandatory); it is section 2, source
+# redistribution, that requires the licence file itself to travel, and we ship no FreeType
+# source. NOTICES.txt carries the mandatory disclaimer and the URL. (Contrast the SIL OFL
+# below, which DOES require its text to accompany the font -- so that one ships.)
+# SIL OFL 1.1: the Lato font shipped in plugins/RmlUi/assets, and the Courier Prime Code
+# face embedded inside RmlUiNative.dll (its OFL text travels inside that binary; this is
+# the standalone copy the licence's "must be distributed with" clause wants).
+cat > "$PACK/licenses/OFL-1.1.txt" <<'OFLEOF'
+Copyright (c) <dates>, <Copyright Holder> (<URL|email>),
+with Reserved Font Name <Reserved Font Name>.
+Copyright (c) <dates>, <additional Copyright Holder> (<URL|email>),
+with Reserved Font Name <additional Reserved Font Name>.
+Copyright (c) <dates>, <additional Copyright Holder> (<URL|email>).
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+OFLEOF
+echo "   licenses/: LICENSE-ACME, LGPL-3.0, GPL-3.0, Apache-2.0, MIT, Zlib, FASM, OFL-1.1, dotnet LICENSE + THIRD-PARTY-NOTICES"
 
 # 3e. NOTICES.txt  (per audit §5 rows 1-8 + §7 asset credits)
 cat > "$PACK/NOTICES.txt" <<'NOTICES'
@@ -298,6 +437,16 @@ libraries are unmodified and ship as separate DLLs; you may replace them.
 Full texts: licenses/LGPL-3.0.txt and licenses/GPL-3.0.txt (LGPLv3 incorporates
 GPLv3 by reference). Reloaded.Assembler carries the FASM flat assembler
 (FASM.DLL / FASMX64.DLL) into every plugin folder — see FASM below.
+
+--------------------------------------------------------------------------------
+Fizzler, Fizzler.Systems.HtmlAgilityPack  —  LGPL-3.0-or-later
+--------------------------------------------------------------------------------
+This product uses Fizzler (CSS selector engine) and Fizzler.Systems.HtmlAgilityPack
+© 2009 Atif Aziz, Colin Ramsay; portions © 2008 Novell, Inc. Licensed
+LGPL-3.0-or-later; sources at github.com/atifaziz/Fizzler and
+github.com/atifaziz/Hazz. Both are unmodified and ship as separate DLLs inside
+plugins/RmlUi/; you may replace them. Full texts: licenses/LGPL-3.0.txt and
+licenses/GPL-3.0.txt.
 
 --------------------------------------------------------------------------------
 SixLabors.ImageSharp, SixLabors.ImageSharp.Drawing, SixLabors.Fonts  —  Apache-2.0
@@ -323,7 +472,16 @@ The following ship under the MIT License (licenses/MIT.txt):
     Vortice.* (D3DCompiler/Direct3D11/DXGI/Mathematics/DirectX), Cyotek.Drawing.
     BitmapFont, Iced, Medo.PcapRW, DatReaderWriter, Microsoft.Extensions.* (9.x),
     Microsoft.Bcl.AsyncInterfaces, Microsoft.Diagnostics.*, and the System.*
-    facade assemblies.
+    facade assemblies (including System.Drawing.Common, System.Private.Windows.Core,
+    Microsoft.Win32.SystemEvents and System.Xml.XPath.XmlDocument),
+  the stock Chorizite plugins in plugins/RmlUi and plugins/Lua (Chorizite.Plugins.RmlUi
+    0.0.10 and Chorizite.Plugins.Lua 0.0.13, © Chorizite) together with RmlUi.Net 1.0.1
+    (© Chorizite), Cortex.Net 0.4.1 (© 2019 Michel Weststrate, Jan-Willem Spuij) and
+    HtmlAgilityPack 1.5.1 (© ZZZ Projects Inc.),
+  the RmlUi C++ library compiled into plugins/RmlUi/runtimes/*/native/RmlUiNative.dll
+    (© 2008-2014 Nuno Silva, © 2019- Michael R. P. Ragazzon), and
+  xLua (© 2016 THL A29 Limited, a Tencent company) with the Lua 5.4.1 interpreter it
+    embeds (© 1994-2020 Lua.org, PUC-Rio), in plugins/Lua/runtimes/win-x86/native/xlua.dll.
 Each is © its respective authors; the MIT permission notice above applies to all.
 
 --------------------------------------------------------------------------------
@@ -344,6 +502,27 @@ StbImageSharp, StbTrueTypeSharp — Public Domain or MIT (recipient's choice)
 Ports by the StbSharp project of Sean Barrett's public-domain stb libraries. The
 NuGet packages carry no licence metadata; terms are dual Public-Domain/MIT per
 the upstream StbSharp repositories.
+
+--------------------------------------------------------------------------------
+FreeType 2 — The FreeType Project LICENSE (FTL)
+--------------------------------------------------------------------------------
+Portions of this software are copyright © The FreeType Project
+(www.freetype.org). All rights reserved. FreeType is statically linked into
+plugins/RmlUi/runtimes/win-x86/native/RmlUiNative.dll and its win-x64 sibling; it
+is dual-licensed FTL / GPLv2 and we take the FTL branch. This software is based in
+part on the work of the FreeType Team. Licence text: https://www.freetype.org
+(docs/FTL.TXT). FTL section 1 asks a binary redistribution for exactly this
+disclaimer; section 2's requirement to carry FTL.TXT applies to source
+redistribution, and no FreeType source ships here.
+
+--------------------------------------------------------------------------------
+Fonts — SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+  Lato (plugins/RmlUi/assets/LatoLatin-Regular.ttf) — © 2011-2015 tyPoland Lukasz
+    Dziedzic (www.typoland.com), with Reserved Font Name "Lato".
+  Courier Prime Code — © 2015 Quote-Unquote Apps, embedded inside RmlUiNative.dll
+    (RmlUi's built-in debugger font); its OFL text travels inside that binary.
+Full text: licenses/OFL-1.1.txt.
 
 --------------------------------------------------------------------------------
 SigScan.dll — prebuilt native helper
@@ -421,7 +600,7 @@ if find "$PACK" -name acclient.map | grep -q .; then echo "   ✗ acclient.map p
 # no pdb/xml
 if find "$PACK" \( -name '*.pdb' -o -name '*.xml' \) | grep -q .; then echo "   ✗ pdb/xml leaked into pack"; FAIL=1; fi
 # the audit's full licenses/ file set (LICENSE-AUDIT §"Minimum notice set")
-for lic in LICENSE-ACME.md LGPL-3.0.txt GPL-3.0.txt Apache-2.0.txt MIT.txt Zlib.txt FASM-LICENSE.TXT dotnet-LICENSE.TXT dotnet-THIRD-PARTY-NOTICES.TXT; do
+for lic in LICENSE-ACME.md LGPL-3.0.txt GPL-3.0.txt Apache-2.0.txt MIT.txt Zlib.txt OFL-1.1.txt FASM-LICENSE.TXT dotnet-LICENSE.TXT dotnet-THIRD-PARTY-NOTICES.TXT; do
   [ -f "$PACK/licenses/$lic" ] || { echo "   ✗ licenses/$lic missing (audit minimum set)"; FAIL=1; }
 done
 # the split-licence wording rule applies to BOTH shipped text docs
@@ -429,6 +608,23 @@ if grep -qi 'Split License' "$PACK/THIRD-PARTY-PROVENANCE.md"; then echo "   ✗
 # NOTICES names Apache-2.0 and NEVER the split licence
 grep -q 'Apache-2.0' "$PACK/NOTICES.txt" || { echo "   ✗ NOTICES.txt does not name Apache-2.0"; FAIL=1; }
 if grep -qi 'Split License' "$PACK/NOTICES.txt"; then echo "   ✗ NOTICES.txt names the Six Labors Split License (must reference Apache-2.0 only)"; FAIL=1; fi
+# The stock plugins AcmeRedline's panel needs must ship, with upstream's own manifest.
+# Without them the panel can never appear -- which is exactly the bug this pack shipped
+# for four releases -- so it is a verify-pass invariant, not a nice-to-have.
+for pl in RmlUi Lua; do
+  [ -f "$PACK/Chorizite/plugins/$pl/manifest.json" ] \
+    || { echo "   ✗ plugins/$pl/manifest.json missing (AcmeRedline's panel needs RmlUi, which needs Lua)"; FAIL=1; }
+done
+[ -f "$PACK/Chorizite/plugins/RmlUi/runtimes/win-x86/native/RmlUiNative.dll" ] \
+  || { echo "   ✗ plugins/RmlUi native blob missing (win-x86 is the retail client's bitness)"; FAIL=1; }
+[ -f "$PACK/Chorizite/plugins/Lua/runtimes/win-x86/native/xlua.dll" ] \
+  || { echo "   ✗ plugins/Lua native blob missing (win-x86)"; FAIL=1; }
+# NOTICES must carry the obligations those two folders bring in: an LGPL notice for
+# Fizzler, the FreeType credit the FTL requires, and the OFL fonts.
+for tok in 'Fizzler' 'FreeType' 'Open Font License'; do
+  grep -q "$tok" "$PACK/NOTICES.txt" || { echo "   ✗ NOTICES.txt does not name $tok (shipped inside plugins/RmlUi)"; FAIL=1; }
+done
+
 # S2: the published patches must ship
 for f in README.md dx-attach-init.patch per-pid-log.patch; do
   [ -f "$PACK/chorizite-patches/$f" ] || { echo "   ✗ chorizite-patches/$f missing"; FAIL=1; }
