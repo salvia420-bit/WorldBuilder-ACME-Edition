@@ -58,7 +58,7 @@ Microsoft's runtime and carries its own (trivially satisfiable) notice duty.
 files (`.exe`, `.dll`, `.deps.json`, `.runtimeconfig.json`). **No third-party
 code ships here.**
 
-### 1c. The three ACME plugins
+### 1c. The ACME plugins
 
 Verified contents of `Acme{Lights,Sky,Ragdoll}/bin/net8.0/`. All three reference
 `Chorizite.Core`, `Reloaded.Hooks`, `Autofac` and `Logging.Abstractions` with
@@ -82,6 +82,59 @@ is pre-satisfied by the build.
 
 `Reloaded.Assembler.targets` is an MSBuild build asset that leaks into the output
 folder. Harmless, but it is dead weight in a player archive — see §5 housekeeping.
+
+### 1c2. The two STOCK Chorizite plugins (added 2026-08-25) — `plugins/RmlUi`, `plugins/Lua`
+
+**Not ours, and not built here.** These are the unmodified upstream release
+archives, fetched and SHA-256-verified by
+`tools/plugin-pack/fetch_stock_plugins.sh` against the digests the Chorizite
+plugin index itself publishes:
+
+| Folder | Package | Version | Archive SHA-256 (index-published, verified on download) |
+|---|---|---|---|
+| `plugins/RmlUi` | `Chorizite.Plugins.RmlUi` | 0.0.10 | `44cbc9a7006278502d28276533c6fceaef2d79fd563d181cc90b3a0301441850` |
+| `plugins/Lua` | `Chorizite.Plugins.Lua` | 0.0.13 | `885e7530edc07539365fa97fffb72b8fd1fb3f809d77b83f768980cf5e25a9c8` |
+
+They ship because **AcmeRedline's panel is an RmlUi document**, and RmlUi's own
+manifest declares `Lua@0.0.13` non-optionally. Both `Chorizite.Plugins.*` nuspecs
+carry `<license type="expression">MIT</license>`; note that neither GitHub repo
+(`Chorizite/RmlUiPlugin`, `Chorizite/LuaPlugin`) contains a `LICENSE` file, so the
+MIT determination rests on the publisher's package metadata plus the
+repository-wide MIT of the parent `Chorizite/Chorizite` project. Recorded rather
+than smoothed over.
+
+What those two folders drag in — this is where the interesting findings are, and
+**not all of it is MIT**:
+
+| File in the folder | Component | Version | License | How determined |
+|---|---|---|---|---|
+| `RmlUi/RmlUi.Net.dll` | RmlUi.Net | 1.0.1 | MIT | nuspec SPDX expression |
+| `RmlUi/runtimes/win-{x86,x64}/native/RmlUiNative.dll` | RmlUi (C++) | bundled | MIT | upstream `mikke89/RmlUi` |
+| ↳ **statically linked into that blob** | **FreeType 2** | bundled | **FTL** (dual FTL/GPLv2) | string scan of the shipped x86 blob: `FREETYPE_PROPERTIES` present, **no** `freetype.dll` import ⇒ static link |
+| ↳ **embedded font in that blob** | Courier Prime Code | bundled | **SIL OFL 1.1** | the OFL text is embedded in the binary beside the font; © 2015 Quote-Unquote Apps |
+| `RmlUi/Cortex.Net.dll` | Cortex.Net | 0.4.1 | MIT | package `LICENSE.txt`, © 2019 Michel Weststrate, Jan-Willem Spuij |
+| `RmlUi/Fizzler.dll` | Fizzler | 1.3.1 | ⚠ **LGPL-3.0-or-later** | nuspec `<license type="expression">LGPL-3.0-or-later</license>` **and** package `COPYING.txt` = verbatim LGPLv3 |
+| `RmlUi/Fizzler.Systems.HtmlAgilityPack.dll` | Fizzler.Systems.HtmlAgilityPack | 1.2.1 | ⚠ **LGPL-3.0-or-later** | package `COPYING.txt` = verbatim LGPLv3 (nuspec is `type="file"`) |
+| `RmlUi/HtmlAgilityPack.dll` | HtmlAgilityPack | 1.5.1 | MIT | `licenseUrl` → `zzzprojects/html-agility-pack/LICENSE`, fetched: MIT |
+| `RmlUi/System.Drawing.Common.dll`, `System.Private.Windows.Core.dll` | System.Drawing.Common | 9.0.2 | MIT | nuspec SPDX expression (dotnet/winforms) |
+| `RmlUi/Microsoft.Win32.SystemEvents.dll` (+ `runtimes/win/lib/`) | Microsoft.Win32.SystemEvents | 9.0.2 | MIT | nuspec SPDX expression |
+| `RmlUi/System.Xml.XPath.XmlDocument.dll` | System.Xml.XPath.XmlDocument | 4.3.0 | MIT | same 4.x `System.*` family as §2's consolidated row |
+| `RmlUi/assets/LatoLatin-Regular.ttf` | Lato | 2.015 | **SIL OFL 1.1** | font `name` table: © 2011-2015 tyPoland Lukasz Dziedzic, Reserved Font Name "Lato" |
+| `Lua/runtimes/win-x86/native/xlua.dll` | Tencent xLua | bundled | MIT | `Tencent/xLua` `LICENSE.TXT`, © 2016 THL A29 Limited |
+| ↳ **embedded in that blob** | Lua interpreter | **5.4.1** | MIT | version banner in the blob: `Lua 5.4.1 Copyright (C) 1994-2020 Lua.org, PUC-Rio` |
+
+**Correction to the working brief this section was written from,** which asserted
+all of the above were MIT: the two Fizzler packages are **LGPL-3.0-or-later**.
+That is not a new blocker — it is the same posture as `Reloaded.*` in §3a
+(unmodified, separate, replaceable DLLs; LGPL-3.0 is compatible with our
+AGPL-3.0) and the LGPL/GPL texts already ship — but the NOTICES entry is a real
+obligation and the audit must not record them as MIT.
+
+The RmlUi folder also carries upstream's **sample content** (`Breakout.rml`,
+`Test.rml`, `Logs.rml`, `pizza.png`, `coin.png`, `acsprites.png`). Shipping the
+release archive byte-for-byte is the provenance-clean choice and is what we do;
+pruning the samples would be housekeeping only, at the cost of no longer matching
+the published SHA-256.
 
 ### 1d. The vendored Chorizite host — where all the risk lives
 
@@ -344,6 +397,11 @@ decision. Not a license finding.
 | 9 | `acclient.map` (retail client link map) | **not an OSS question** — third-party proprietary derivative | **SHIP-WITH-NOTICE ⚠ owner judgement** | Not clearable by any license file. Either drop it if the host does not read it at runtime, or record it as a knowing acceptance alongside the project's existing decomp posture. |
 | 10 | `SigScan.dll` (prebuilt native, no source) | MIT by Chorizite repo license; **no upstream source located** | **SHIP-WITH-NOTICE** | List explicitly in the provenance manifest as a prebuilt native helper with no located source, rather than shipping it anonymously. |
 | 11 | AcmeLauncher / AcmeInject own code | AGPL-3.0 (ours) | **SHIP-OK** | Ship root `LICENSE.md`. Zero third-party NuGet surface in either — verified via both `.deps.json` (0 packages each). |
+| 12 | **Fizzler 1.3.1, Fizzler.Systems.HtmlAgilityPack 1.2.1** (inside `plugins/RmlUi`) | **LGPL-3.0-or-later** | **SHIP-WITH-NOTICE** | Same treatment as row 1. NOTICES must name them, state LGPL-3.0-or-later, point at `github.com/atifaziz/Fizzler` and `github.com/atifaziz/Hazz`, and record that they are unmodified separate DLLs the user may replace. LGPL/GPL texts already ship for row 1 — one copy serves both. **Do not record these as MIT.** |
+| 13 | **FreeType 2**, statically linked into `RmlUiNative.dll` | **FTL** (dual FTL/GPLv2; FTL branch taken) | **SHIP-WITH-NOTICE** | FTL §1 requires, for redistribution **in binary form**, "a disclaimer that states that the software is based in part of the work of the FreeType Team, in the distribution documentation"; a URL is encouraged, not required. §2's duty to carry `FTL.TXT` applies to **source** redistribution, and no FreeType source ships. ⇒ NOTICES disclaimer + `https://www.freetype.org`; **no** `licenses/FTL.TXT`. |
+| 14 | **Lato** (`plugins/RmlUi/assets/LatoLatin-Regular.ttf`) and **Courier Prime Code** (embedded in `RmlUiNative.dll`) | **SIL OFL 1.1** | **SHIP-WITH-NOTICE** | Unlike the FTL, the OFL *does* require its text to accompany the fonts ⇒ ship `licenses/OFL-1.1.txt` and credit both copyright holders in NOTICES. Neither font is sold on its own and neither uses a Reserved Font Name in a modified form, so no other clause bites. |
+| 15 | **Tencent xLua** + the **Lua 5.4.1** interpreter inside `plugins/Lua/runtimes/win-x86/native/xlua.dll` | MIT / MIT | **SHIP-WITH-NOTICE** | Name both in the consolidated MIT section rather than shipping a native blob anonymously (same principle as row 10). © 2016 THL A29 Limited; © 1994-2020 Lua.org, PUC-Rio. |
+| 16 | **Chorizite.Plugins.RmlUi 0.0.10, Chorizite.Plugins.Lua 0.0.13, RmlUi.Net 1.0.1, RmlUi (C++), Cortex.Net 0.4.1, HtmlAgilityPack 1.5.1, System.Drawing.Common 9.0.2, System.Private.Windows.Core, Microsoft.Win32.SystemEvents 9.0.2, System.Xml.XPath.XmlDocument 4.3.0** | MIT | **SHIP-WITH-NOTICE** | Fold into the consolidated MIT section (row 4). ⚠ The two `Chorizite.Plugins.*` **repos carry no LICENSE file**; the MIT determination is the publisher's nuspec SPDX expression plus the parent project's repo-wide MIT. Recorded as a metadata note, not a gap. |
 
 ### BLOCKERS
 
@@ -369,6 +427,8 @@ licenses/
   Apache-2.0.txt                   # SixLabors (granted branch) + MS.Extensions 2.1.1
   MIT.txt                          # consolidated MIT text
   Zlib.txt                         # FontStashSharp family
+  OFL-1.1.txt                      # Lato + Courier Prime Code (rows 14) — the OFL
+                                   #   REQUIRES its text to travel with the fonts
   FASM-LICENSE.TXT                 # already emitted by the build
   dotnet-LICENSE.TXT               # .NET 8.0.26 runtime
   dotnet-THIRD-PARTY-NOTICES.TXT   # .NET 8.0.26 runtime
@@ -418,3 +478,65 @@ plugin folders — an MSBuild build asset with no runtime role in a player archi
     MIT text for takram, BSD-3 attribution for Bruneton.
 - These close §6's "Owner decision on acclient.map" and the audit's sky-assets open
   item; the remaining unchecked boxes are the packaging-time mechanical steps.
+
+---
+
+## 8. Addendum — the two stock Chorizite plugins (2026-08-25)
+
+`plugins/RmlUi` and `plugins/Lua` were added to the pack so AcmeRedline's panel
+can exist at all (before this the plugin could not start: `PluginManager.cs:196-203`
+aborts a plugin whose declared dependency has no manifest in `plugins/`). Full
+component table in §1c2; verdict rows 12–16 in §5.
+
+**Verdict: still no BLOCKER.** One correction and two additions to the obligation
+set:
+
+1. **Fizzler and Fizzler.Systems.HtmlAgilityPack are LGPL-3.0-or-later, not MIT.**
+   No new licence text is needed — `LGPL-3.0.txt` and `GPL-3.0.txt` already ship
+   for `Reloaded.*` — but they must be named in NOTICES with the same
+   unmodified/separate/replaceable statement.
+2. **FreeType 2 is statically linked into `RmlUiNative.dll`.** Binary
+   redistribution under the FTL needs the disclaimer in the documentation, which
+   NOTICES now carries; the licence file itself is a source-redistribution duty
+   and does not apply.
+3. **Two OFL-1.1 fonts ship**, one loose and one embedded. `licenses/OFL-1.1.txt`
+   is new and is enforced by the assembler's verify pass.
+
+**Enforcement.** These are not prose promises. `tools/plugin-pack/assemble_plugin_pack.sh`
+fails its verify pass if `licenses/OFL-1.1.txt` is missing, if either stock plugin
+folder or its `win-x86` native blob is absent, or if `NOTICES.txt` stops naming
+`Fizzler`, `FreeType` or the `Open Font License`.
+
+**Provenance mechanism.** The two folders are *not* committed. They are fetched by
+`tools/plugin-pack/fetch_stock_plugins.sh`, which pins the URL and version and
+verifies each archive against the SHA-256 published by the Chorizite plugin index
+— the same index the runtime reads at `PluginManager.cs:108,126`. Re-running the
+script is the reproduction step; a per-file digest manifest lands beside the
+folders as `STOCK-PLUGINS.sha256`.
+
+### 8a. Open item for the owner — the leak gate now fails on PRE-EXISTING files
+
+Not caused by this work, but found by it, and it blocks cutting a pack. The
+widened `tools/leak_scan.py` (commits `ffb8e324`, `f467da35`, 2026-08-24) had not
+been run end-to-end against a full pack. It now fails with **18 hits, none of them
+in anything added here** — the stock plugin folders, `AcmeRedline` and
+`licenses/OFL-1.1.txt` all scan clean, in both encodings, with `--all-files`:
+
+| File | Hits | What it is |
+|---|---|---|
+| `licenses/dotnet-THIRD-PARTY-NOTICES.TXT` | 9 | attribution e-mail addresses inside **Microsoft's own** notices file (`dotnet@microsoft.com`, `jloup@gzip.org`, …). Required by row 8; cannot be edited. |
+| `AcmeLauncher/…/System.Printing.dll` (pre-bundle scan) | 7 | **false positives**: the e-mail regex matching C++/CLI mangled names such as `?A0x132e1b53@vc.cppcli.attributes@SA_Yes@@YMXXZ`. |
+| `Chorizite/SigScan.dll` | 1 | `Aikar@Windower.net` in the prebuilt native helper's VERSIONINFO `LegalCopyright` (row 10). |
+| `Chorizite/Chorizite.Injector.dll` | 1 | upstream's `C:\Users\…\AppData\Local\Temp\SymbolCache` string. |
+
+All four are third-party content or scanner false positives; none discloses
+anything about this project or its users, and each falls in the allowlist
+category the scanner already documents ("paths belonging to the AUTHORS of
+packages we consume"). Fixing them means adding allowlist entries (or a
+licence-text file class) to a gate that was deliberately hardened the day before,
+so it is left as an **owner decision** rather than taken unilaterally.
+
+One thing that is *not* an open item: the `/home/wbterminal/...` RSDS hits seen on
+a first `--no-build` run were stale build output only. Rebuilding every shipped
+project with the assembler's own `-p:PathMap` removes all of them, confirming
+`f467da35` works as intended.
