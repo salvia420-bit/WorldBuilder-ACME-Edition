@@ -32,7 +32,7 @@ namespace AcmeRedline.UI {
     /// Event.Parameters["value"] carries the new value. That is RmlUi's own convention and needs
     /// no cast; it is a deliberate choice, not an oversight.
     /// </summary>
-    public sealed class RedlinePanel : IDisposable {
+    public sealed class RedlinePanel : IRedlinePanel {
         /// <summary>The quick tags offered in the panel, in display order.</summary>
         public static readonly string[] QuickTags = [
             "too-blurry", "wrong-material", "seam", "silhouette", "remove-detail", "recolor", "other"
@@ -52,11 +52,14 @@ namespace AcmeRedline.UI {
         private int _severity;
         private string _prompt = "";
 
-        /// <summary>Raised when the user hits submit. The plugin owns what happens next.</summary>
+        /// <inheritdoc/>
         public event EventHandler<SubmitRequestedEventArgs>? OnSubmitRequested;
 
-        /// <summary>Raised when the user toggles the status-tint overlay.</summary>
+        /// <inheritdoc/>
         public event EventHandler<bool>? OnStatusOverlayToggled;
+
+        /// <inheritdoc/>
+        public event EventHandler<bool>? OnMasterEnableRequested;
 
         private readonly Func<string?> _authorProvider;
 
@@ -75,7 +78,7 @@ namespace AcmeRedline.UI {
             _severity = Math.Clamp(settings.DefaultSeverity, 1, 3);
         }
 
-        /// <summary>Create (or re-show) the panel.</summary>
+        /// <inheritdoc/>
         public void Show() {
             if (_panel is null) {
                 if (!File.Exists(_rmlPath)) {
@@ -97,18 +100,12 @@ namespace AcmeRedline.UI {
         /// True only while the panel exists AND is actually shown. Picking is modal to this
         /// (finding 2): existence alone is not enough, because the panel is created once in
         /// Initialize and lives until Dispose, so gating on existence left picking armed during
-        /// ordinary play. Mirrors the same _panel.IsVisible check <see cref="Toggle"/> uses.
+        /// ordinary play.
         /// </summary>
         public bool IsOpen => _panel is not null && _panel.IsVisible;
 
-        /// <summary>Hide the panel without destroying it.</summary>
+        /// <inheritdoc/>
         public void Hide() => _panel?.Hide();
-
-        /// <summary>Show if hidden, hide if shown.</summary>
-        public void Toggle() {
-            if (_panel is not null && _panel.IsVisible) Hide();
-            else Show();
-        }
 
         public void Dispose() {
             _panel?.Dispose();
@@ -169,6 +166,20 @@ namespace AcmeRedline.UI {
                     SetVisible("guard-warning", true);
                 }
                 RefreshSelectionUi();
+            });
+
+            // Title bar. The close cross is the discoverable way out: before this the panel
+            // could ONLY be dismissed with the undocumented F8, which is also the only reason
+            // a user ever had to know F8 existed.
+            panel.GetElementById("close")?.AddEventListener("click", _ => Hide());
+
+            // Master enable/disable. The panel only ASKS; the plugin applies it, because
+            // turning the tool off has to tear down the input hooks and the IDirect3DDevice9
+            // vtable detours, and neither of those is the panel's to touch.
+            panel.GetElementById("master-toggle")?.AddEventListener("click", _ => {
+                bool want = !_settings.OverlayEnabled;
+                OnMasterEnableRequested?.Invoke(this, want);
+                RefreshMasterUi();
             });
 
             panel.GetElementById("toggle-status")?.AddEventListener("click", _ => {
@@ -232,8 +243,9 @@ namespace AcmeRedline.UI {
         // Rendering the panel state
         // ------------------------------------------------------------------
 
-        /// <summary>Refresh every part of the panel. Cheap; called on show and after a submit.</summary>
+        /// <inheritdoc/>
         public void RefreshAll() {
+            RefreshMasterUi();
             RefreshSelectionUi();
             RefreshTagUi();
             RefreshSeverityUi();
@@ -342,10 +354,24 @@ namespace AcmeRedline.UI {
             _panel.GetElementById("reports")?.SetInnerRml(sb.ToString());
         }
 
+        /// <summary>
+        /// Reflect the master enable state on the title-bar control. Purely presentational —
+        /// <see cref="RedlineSettings.OverlayEnabled"/> is written by the plugin, never here.
+        /// </summary>
+        private void RefreshMasterUi() {
+            var el = _panel?.GetElementById("master-toggle");
+            if (el is null) return;
+            bool on = _settings.OverlayEnabled;
+            el.SetInnerRml(on ? "on" : "off");
+            if (on) el.AddClass("on"); else el.RemoveClass("on");
+        }
+
         private void RefreshFooter() {
             string kit = _kit.Meta?.KitTag ?? "no kit meta";
             string overlay = _settings.StatusOverlayEnabled ? "status overlay ON" : "status overlay off";
-            SetText("footer", $"{kit} - queue {_queue.QueueDir} - {overlay}");
+            // F8 and /redline are the only two ways back in once the panel is closed, so the
+            // panel itself is where a user should learn them.
+            SetText("footer", $"{kit} - queue {_queue.QueueDir} - {overlay} - F8 or /redline");
         }
 
         private void SetText(string id, string text) =>

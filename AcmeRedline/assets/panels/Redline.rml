@@ -11,12 +11,34 @@
       padding: 8px 8px 8px 8px;
     }
 
-    h1 {
+    /* Title bar. RmlUi supports flex, but this panel deliberately stays on the same
+       block/inline vocabulary the rest of the sheet uses, so the row is a float pair. */
+    #titlebar {
+      display: block;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px #2a2a35;
+    }
+    #title {
+      display: inline-block;
       font-size: 14px;
       font-weight: bold;
       color: #ff6a6a;
-      margin-bottom: 6px;
     }
+    #titlebar .ctl {
+      float: right;
+      display: inline-block;
+      margin-left: 4px;
+      padding: 1px 6px 1px 6px;
+      background-color: #23232e;
+      color: #b9b9c4;
+      border: 1px #33333f;
+    }
+    /* The master switch reads as its STATE, not as an action: "on" lit means the tool is
+       live. Off is the resting grey the rest of the panel uses. */
+    #master-toggle.on { background-color: #204a20; color: #ffffff; border: 1px #40b040; }
+    #close { color: #e0a0a0; }
+    #close:hover { background-color: #7a2020; color: #ffffff; }
 
     .row { display: block; margin-bottom: 6px; }
     .muted { color: #8a8a95; font-size: 11px; }
@@ -102,7 +124,17 @@
   this panel does not claim one.
 -->
 <body>
-  <h1>Redline</h1>
+  <!--
+    Title bar: a name, a master on/off switch, and a close cross.
+    Both controls are wired in RedlinePanel.Wire(); the master switch only RAISES
+    OnMasterEnableRequested — the plugin applies it, because turning the tool off tears
+    down input hooks and IDirect3DDevice9 vtable detours the panel must not touch.
+  -->
+  <div id="titlebar">
+    <span id="title">Redline</span>
+    <button class="ctl" id="close">x</button>
+    <button class="ctl" id="master-toggle">on</button>
+  </div>
 
   <!-- Live selection, refreshed by RedlinePanel.RefreshSelectionUi -->
   <div id="selection-summary" class="muted">nothing selected</div>

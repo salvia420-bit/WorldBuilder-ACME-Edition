@@ -58,8 +58,21 @@
     DatReaderWriter.dll identities and break the Portal/Cell types. See README.
   -->
   <ItemGroup>
+    <!--
+      RmlUi is a compile-only reference AND an OPTIONAL runtime dependency (manifest.json
+      declares "RmlUi@0.0.10?"). ExcludeAssets="runtime" keeps RmlUi.dll out of this plugin's
+      folder; at run time the plugin ALC finds the copy the RmlUi plugin itself loaded, via
+      AssemblyPluginLoadContext.Load's AppDomain fallback
+      (Chorizite.Core/Plugins/AssemblyLoader/AssemblyPluginLoadContext.cs:56). If RmlUi is not
+      installed, nothing resolves it and nothing needs to — every RmlUi type reference in this
+      assembly is behind UI/RedlinePanelFactory.Create, which the plugin calls inside a
+      try/catch. Version 0.0.10 is what tools/plugin-pack/fetch_stock_plugins.sh ships.
+
+      Chorizite.Plugins.AC was REMOVED: it was used at exactly one site (the reporter's account
+      name, now RedlineSettings.Author) and the AC plugin takes over the retail client's own UI
+      (external/chorizite/ACPlugin/ACPlugin.cs:78-93,104-110).
+    -->
     <PackageReference Include="Chorizite.Plugins.RmlUi" Version="0.0.10" ExcludeAssets="runtime" />
-    <PackageReference Include="Chorizite.Plugins.AC" Version="0.0.5" ExcludeAssets="runtime" />
     <!-- "native" as well as "runtime": otherwise RmlUiNative.dll is copied here, duplicating
          the copy the RmlUi plugin itself ships (external/chorizite/RmlUiPlugin/RmlUi.csproj). -->
     <PackageReference Include="RmlUi.Net" Version="1.0.1" ExcludeAssets="runtime;native" />

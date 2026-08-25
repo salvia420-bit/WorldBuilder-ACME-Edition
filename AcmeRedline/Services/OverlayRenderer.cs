@@ -114,6 +114,13 @@ namespace AcmeRedline.Services {
             return _hudFont;
         }
 
+        /// <summary>
+        /// True while the frame callbacks are subscribed. Lets the plugin's master switch skip a
+        /// teardown that has nothing to tear down — which matters at startup, where a persisted
+        /// "disabled" would otherwise marshal a no-op onto the render thread before there is one.
+        /// </summary>
+        public bool IsAttached => _subscribed;
+
         /// <summary>Attach to the renderer's frame callbacks.</summary>
         public void Attach() {
             if (_subscribed) return;

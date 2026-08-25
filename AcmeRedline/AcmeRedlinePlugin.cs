@@ -14,7 +14,6 @@ using Chorizite.Core.Input;
 using Chorizite.Core.Plugins;
 using Chorizite.Core.Plugins.AssemblyLoader;
 using Microsoft.Extensions.Logging;
-using RmlUi;
 
 namespace AcmeRedline {
     /// <summary>
@@ -40,9 +39,19 @@ namespace AcmeRedline {
     ///    (Chorizite.Core/Plugins/AssemblyLoader/ISerializeSettings.cs), which needs a
     ///    JsonTypeInfo&lt;T&gt; - supplied here by <see cref="RedlineJsonContext"/>.
     ///
-    /// Dependencies (RmlUi for the panel, AC for the account name) are declared in manifest.json
-    /// and delivered by constructor injection through the Autofac scope, the same way ACPlugin
-    /// receives RmlUiPlugin.
+    /// DEPENDENCIES — deliberately NOT constructor-injected plugin instances.
+    ///  - The stock <c>AC</c> plugin is gone entirely. It was used at exactly one site (the
+    ///    reporter's account name) and in exchange it takes over the retail client's own UI:
+    ///    ACPlugin.cs:78-93 registers its own CharSelect + DatPatch screens and hooks tooltips,
+    ///    and :104-110 claims the client's `Indicators` root element. The account name is now a
+    ///    plain setting (<see cref="RedlineSettings.Author"/>).
+    ///  - <c>RmlUi</c> is OPTIONAL (manifest.json declares "RmlUi@0.0.10?"; PluginManager.cs:191-193
+    ///    is what gives the "?" suffix meaning). It is resolved LATE, in Initialize, through
+    ///    IPluginManager.GetPlugin("RmlUi") — never as a constructor parameter, because
+    ///    AssemblyPluginInstance.ResolveParameter:236-243 THROWS for an IPluginCore parameter it
+    ///    cannot satisfy, which would abort the whole plugin rather than degrade it.
+    ///    With no RmlUi installed the plugin runs HUD-only: the IDrawList overlay, picking and
+    ///    the queue all still work; only the RML panel is absent.
     /// </summary>
     public class AcmeRedlinePlugin : IPluginCore, ISerializeSettings<RedlineSettings> {
         internal static AcmeRedlinePlugin? Instance;
@@ -50,8 +59,7 @@ namespace AcmeRedline {
         private readonly IChoriziteBackend _backend;
         private readonly IClientBackend _client;
         private readonly IDatReaderInterface _dat;
-        private readonly RmlUiPlugin _rmlUi;
-        private readonly AC.ACPlugin _ac;
+        private readonly IPluginManager _plugins;
         private readonly ILogger _log;
 
         private RedlineSettings _settings = new();
@@ -62,34 +70,54 @@ namespace AcmeRedline {
         private SelectionService? _selection;
         private OverlayRenderer? _overlay;
         private CaptureService? _capture;
-        private RedlinePanel? _panel;
+        // Held through the interface, never as the concrete RedlinePanel: that type has RmlUi
+        // fields, and the CLR resolves a type's field types when it lays the type out, so even
+        // `_panel?.Hide()` on a null RedlinePanel would load RmlUi.dll or die. See IRedlinePanel.
+        private IRedlinePanel? _panel;
         private TextureRegistry? _textures;
         private DeviceHooks? _hooks;
 
         // Input wiring
         private bool _inputHooked;
+        private bool _chatHooked;
         private bool _lassoDragging;
+
+        /// <summary>
+        /// Whether the user currently has the tool "open" for picking. With a panel this tracks
+        /// the panel's visibility; with no panel (HUD-only, no RmlUi installed) it IS the state,
+        /// which is why picking cannot be gated on the panel any more.
+        /// </summary>
+        private bool _pickingArmed;
+
+        /// <summary>Log the "no RmlUi" explanation once, not once per attempt.</summary>
+        private bool _noRmlUiLogged;
 
         JsonTypeInfo<RedlineSettings> ISerializeSettings<RedlineSettings>.TypeInfo =>
             RedlineJsonContext.Default.RedlineSettings;
 
         /// <summary>
         /// Constructor injection. Every parameter after the manifest is resolved from the plugin
-        /// lifetime scope; the shape mirrors external/chorizite/ACPlugin/ACPlugin.cs's constructor.
+        /// lifetime scope.
+        ///
+        /// NOTE what is NOT here: any other plugin's type. AssemblyPluginInstance.ResolveParameter
+        /// (Chorizite.Core/Plugins/AssemblyLoader/AssemblyPluginInstance.cs:236-243) throws
+        /// InvalidOperationException for an IPluginCore-derived parameter whose plugin is not
+        /// loaded — so a plugin that takes one by constructor can only ever be all-or-nothing.
+        /// IPluginManager itself resolves through the plain Autofac fallback on the last line of
+        /// that method (it is registered in Chorizite.cs:170-172), which is how RmlUiPlugin's own
+        /// constructor gets it.
         /// </summary>
         protected AcmeRedlinePlugin(AssemblyPluginManifest manifest,
                                     IChoriziteBackend choriziteBackend,
                                     IClientBackend clientBackend,
                                     IDatReaderInterface dat,
-                                    RmlUiPlugin rmlUi,
-                                    AC.ACPlugin ac,
+                                    IPluginManager plugins,
                                     ILogger log) : base(manifest) {
             Instance = this;
             _backend = choriziteBackend;
             _client = clientBackend;
             _dat = dat;
-            _rmlUi = rmlUi;
-            _ac = ac;
+            _plugins = plugins;
             _log = log;
         }
 
@@ -124,25 +152,83 @@ namespace AcmeRedline {
 
             _overlay = new OverlayRenderer(_backend, _dat, _selection, _status, _queue,
                                            _textures, _hooks, _settings, AuthorName, _log);
-            _overlay.Attach();
 
-            _panel = new RedlinePanel(
-                _rmlUi, _selection, _status, _queue, _kit, _settings,
-                Path.Combine(AssemblyDirectory, "assets", "panels", "Redline.rml"),
-                AuthorName, _log);
-            _panel.OnSubmitRequested += HandleSubmit;
-            _panel.OnStatusOverlayToggled += (_, on) =>
-                _log.LogInformation("redline: status overlay {State}", on ? "on" : "off");
+            _panel = TryCreatePanel();
+            if (_panel is not null) {
+                _panel.OnSubmitRequested += HandleSubmit;
+                _panel.OnStatusOverlayToggled += (_, on) =>
+                    _log.LogInformation("redline: status overlay {State}", on ? "on" : "off");
+                _panel.OnMasterEnableRequested += (_, on) => SetEnabled(on, "panel");
+            }
 
-            HookInput();
+            // The chat command is hooked UNCONDITIONALLY and is never torn down by SetEnabled.
+            // It is the re-entry path: a user who switches the tool off — or who has no RmlUi
+            // installed and so has no panel at all — must always be able to type /redline on.
+            HookChat();
 
-            _log.LogInformation("redline: ready. queue={Queue} kit={Kit}",
+            // Everything else follows the persisted master switch.
+            ApplyEnabled(_settings.OverlayEnabled);
+
+            _log.LogInformation("redline: ready ({State}, {Ui}). queue={Queue} kit={Kit}. F8 or /redline",
+                _settings.OverlayEnabled ? "enabled" : "DISABLED",
+                _panel is null ? "HUD only, no RmlUi" : "panel",
                 queueDir, _kit.Meta?.KitTag ?? "(none)");
+        }
+
+        /// <summary>
+        /// Build the RML panel if — and only if — the optional RmlUi plugin is actually loaded.
+        ///
+        /// Two separate things can go wrong and both must degrade rather than throw:
+        ///  (a) no RmlUi plugin folder installed at all, so GetPlugin returns null;
+        ///  (b) a folder that is present but unloadable/incompatible, in which case the JIT of
+        ///      <see cref="RedlinePanelFactory.Create"/> throws when we first call it. That call
+        ///      is the ONLY place this assembly mentions an RmlUi type outside RedlinePanel, and
+        ///      it is [MethodImpl(NoInlining)] so the failure cannot escape into this frame.
+        /// </summary>
+        private IRedlinePanel? TryCreatePanel() {
+            if (_selection is null || _status is null || _queue is null || _kit is null) return null;
+
+            object? rmlUi = null;
+            try {
+                // Case-insensitive id match, same as PluginManager.GetPlugin does internally.
+                rmlUi = _plugins.GetPlugin("RmlUi")?.Instance;
+            }
+            catch (Exception ex) {
+                _log.LogDebug(ex, "redline: could not query the plugin manager for RmlUi");
+            }
+
+            if (rmlUi is null) {
+                LogNoRmlUiOnce();
+                return null;
+            }
+
+            try {
+                return RedlinePanelFactory.Create(
+                    rmlUi, _selection, _status, _queue, _kit, _settings,
+                    Path.Combine(AssemblyDirectory, "assets", "panels", "Redline.rml"),
+                    AuthorName, _log);
+            }
+            catch (Exception ex) {
+                _log.LogWarning(ex, "redline: the RmlUi plugin is installed but its panel API could " +
+                                    "not be bound; running HUD-only");
+                return null;
+            }
+        }
+
+        private void LogNoRmlUiOnce() {
+            if (_noRmlUiLogged) return;
+            _noRmlUiLogged = true;
+            _log.LogInformation(
+                "redline: the optional RmlUi plugin is not loaded, so there is no panel. " +
+                "Picking, the HUD overlay and the report queue all still work; use /redline on|off " +
+                "to control the tool. Install plugins/RmlUi (and its plugins/Lua dependency) to " +
+                "get the panel back.");
         }
 
         /// <inheritdoc/>
         protected override void Dispose() {
             UnhookInput();
+            UnhookChat();
 
             if (_panel is not null) _panel.OnSubmitRequested -= HandleSubmit;
             _panel?.Dispose();
@@ -214,16 +300,119 @@ namespace AcmeRedline {
         }
 
         /// <summary>
-        /// Redline picking is modal: it only steals the mouse while the panel is open, so normal
-        /// play is untouched when the tool is closed.
+        /// Redline picking is modal: it only steals the mouse while the tool is OPEN, so normal
+        /// play is untouched the rest of the time.
         ///
-        /// FINDING 2: gate on the panel's actual VISIBILITY, not merely on it existing. The panel is
-        /// created unconditionally in Initialize and only nulled in Dispose, and OverlayEnabled
-        /// defaults true — so the old "_panel is not null" test left picking armed for every click
-        /// during ordinary play. RedlinePanel.IsOpen reflects _panel.IsVisible.
+        /// FINDING 2 (kept): gating on "a panel object exists" left picking armed for every click
+        /// during ordinary play, because the panel is built in Initialize and lives until Dispose.
+        ///
+        /// It can no longer gate on panel VISIBILITY either: with RmlUi optional there may be no
+        /// panel at all, and gating on one would make the HUD-only build permanently unable to
+        /// pick anything. <see cref="_pickingArmed"/> is the single source of truth; when a panel
+        /// exists <see cref="SetToolOpen"/> keeps the two in step.
         /// </summary>
-        private bool PickingActive =>
-            _panel is not null && _panel.IsOpen && _settings.OverlayEnabled;
+        private bool PickingActive => _settings.OverlayEnabled && _pickingArmed;
+
+        /// <summary>Is the tool open for picking right now?</summary>
+        private bool ToolOpen => _pickingArmed;
+
+        /// <summary>
+        /// Open or close the tool. Shows/hides the panel when there is one, and always moves
+        /// <see cref="_pickingArmed"/>, which is what actually arms the mouse handlers.
+        /// </summary>
+        private void SetToolOpen(bool open) {
+            if (open && !_settings.OverlayEnabled) {
+                // Refuse rather than half-open: a disabled tool has no overlay and no hooks, so
+                // an "open" panel over it would be a lie.
+                _log.LogInformation("redline: ignoring open request — the tool is disabled (/redline on)");
+                return;
+            }
+
+            _pickingArmed = open;
+            if (open) _panel?.Show();
+            else _panel?.Hide();
+
+            if (!open) {
+                _lassoDragging = false;
+                _selection?.Clear();
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Master enable / disable
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The master switch. Writes <see cref="RedlineSettings.OverlayEnabled"/> — which
+        /// round-trips through ISerializeSettings, so the choice survives a restart — and then
+        /// actually attaches or tears down the machinery.
+        /// </summary>
+        /// <param name="on">Requested state.</param>
+        /// <param name="source">Who asked, for the log line only.</param>
+        internal void SetEnabled(bool on, string source) {
+            if (_settings.OverlayEnabled == on) return;
+            _settings.OverlayEnabled = on;
+            ApplyEnabled(on);
+            _log.LogInformation("redline: {State} by {Source}", on ? "enabled" : "disabled", source);
+        }
+
+        /// <summary>
+        /// Make the world match <see cref="RedlineSettings.OverlayEnabled"/>. Idempotent, and
+        /// called once at startup so a persisted "off" is honoured from the first frame instead
+        /// of being armed and then torn down.
+        /// </summary>
+        private void ApplyEnabled(bool on) {
+            if (on) {
+                _overlay?.Attach();
+                HookInput();
+            }
+            else {
+                SetToolOpen(false);
+                UnhookInput();
+                DisarmAndDetach();
+            }
+            _panel?.RefreshAll();
+        }
+
+        /// <summary>
+        /// Stop drawing and drop the IDirect3DDevice9 vtable detours.
+        ///
+        /// ORDER AND THREAD BOTH MATTER. DeviceHooks.Disarm rewrites vtable slots and is render
+        /// -thread-only (DeviceHooks.cs:288), and the only thing that would otherwise disarm them
+        /// is OverlayRenderer's own per-frame tick — which detaching stops. So the disarm is
+        /// marshalled onto the render thread via IChoriziteBackend.Invoke and the detach happens
+        /// in the SAME callback, after it: never detach first, or the hooks stay installed with
+        /// nothing left to drop them.
+        ///
+        /// This is NOT DeviceHooks.Dispose: disposing would pin the hooks permanently and make
+        /// /redline on unable to re-arm. Disarm is the reversible half.
+        /// </summary>
+        private void DisarmAndDetach() {
+            var overlay = _overlay;
+            var hooks = _hooks;
+            if (overlay is null) return;
+
+            // Nothing attached and nothing armed => nothing to do. This is the startup case for
+            // a persisted "disabled": bouncing a no-op off the render thread before the client
+            // has even reached its first frame is pointless and needlessly risky.
+            if (!overlay.IsAttached && hooks?.IsArmed != true) return;
+
+            void Teardown() {
+                try { hooks?.Disarm("redline disabled"); }
+                catch (Exception ex) { _log.LogDebug(ex, "redline: disarm during disable failed"); }
+                overlay.Detach();
+            }
+
+            try {
+                _backend.Invoke(Teardown);
+            }
+            catch (Exception ex) {
+                // No render thread to marshal onto (unloading, or a headless environment). Detach
+                // anyway so we at least stop drawing; the hooks are handled by Dispose.
+                _log.LogWarning(ex, "redline: could not marshal the disable onto the render thread");
+                overlay.Detach();
+            }
+        }
 
         private void HandleMouseDown(object? sender, MouseDownEventArgs e) {
             if (!PickingActive || _selection is null) return;
@@ -260,7 +449,9 @@ namespace AcmeRedline {
         }
 
         /// <summary>
-        /// F8 toggles the panel.
+        /// F8 opens and closes the tool — the panel when there is one, and the picking mode
+        /// either way. <c>/redline</c> does the same thing and is the discoverable version;
+        /// F8 stays because it needs no chat box and no server round trip.
         ///
         /// TODO(acme-redline): make the hotkey configurable. Chorizite has no keybinding registry
         /// for plugins - searched Chorizite.Core/Input/* (raw key events only),
@@ -270,8 +461,133 @@ namespace AcmeRedline {
         /// </summary>
         private void HandleKeyDown(object? sender, KeyDownEventArgs e) {
             if (e.Key == Key.F8) {
-                _panel?.Toggle();
+                SetToolOpen(!ToolOpen);
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Chat command  —  /redline
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The tool's always-available control surface.
+        ///
+        /// WHY THIS EXISTS. Before it, the only ways to reach AcmeRedline were an undocumented
+        /// F8 and the launcher's Plugins tab (AcmeLauncher/Plugins.cs:40-53,67-77), and the
+        /// latter only moves folders between plugins\ and plugins-disabled\ — it takes effect on
+        /// the NEXT injection, so it is not a control at all once you are in game. Adding a
+        /// master off switch without a way back in would have been strictly worse than no
+        /// switch, so the way back in is wired first and never torn down.
+        ///
+        /// IClientBackend.OnChatInput (Chorizite.Core/Backend/Client/IClientBackend.cs:42) fires
+        /// for text typed into the client's chat box, with ChatInputEventArgs : EatableEventArgs
+        /// — setting Eat stops the client passing it on, which is what keeps "/redline" from
+        /// being sent to the server as speech.
+        ///
+        /// This path never touches RmlUi, so it works identically on a HUD-only install.
+        /// </summary>
+        private void HookChat() {
+            if (_chatHooked) return;
+            try {
+                _client.OnChatInput += HandleChatInput;
+                _chatHooked = true;
+            }
+            catch (Exception ex) {
+                _log.LogWarning(ex, "redline: could not hook chat input; /redline is unavailable");
+            }
+        }
+
+        private void UnhookChat() {
+            if (!_chatHooked) return;
+            try { _client.OnChatInput -= HandleChatInput; }
+            catch (Exception ex) { _log.LogDebug(ex, "redline: unhooking chat input failed"); }
+            _chatHooked = false;
+        }
+
+        private const string ChatCommand = "/redline";
+
+        private void HandleChatInput(object? sender, ChatInputEventArgs e) {
+            string text = e.Text?.Trim() ?? "";
+            if (text.Length < ChatCommand.Length) return;
+            if (!text.StartsWith(ChatCommand, StringComparison.OrdinalIgnoreCase)) return;
+
+            // "/redlinefoo" is somebody else's command, not a malformed one of ours. Only a
+            // bare "/redline" or "/redline <args>" is claimed.
+            string rest = text[ChatCommand.Length..];
+            if (rest.Length > 0 && !char.IsWhiteSpace(rest[0])) return;
+
+            e.Eat = true;
+            try { RunChatCommand(rest.Trim()); }
+            catch (Exception ex) {
+                _log.LogWarning(ex, "redline: /redline handler threw");
+                Say("redline: that failed — see the Chorizite log.");
+            }
+        }
+
+        private void RunChatCommand(string args) {
+            var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            string verb = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+            string rest = parts.Length > 1 ? parts[1].Trim() : "";
+
+            switch (verb) {
+                // Bare "/redline" = the F8 gesture, for anyone who does not know about F8.
+                case "":
+                    if (!_settings.OverlayEnabled) {
+                        Say("redline is disabled. Type /redline on to enable it.");
+                        return;
+                    }
+                    SetToolOpen(!ToolOpen);
+                    Say(ToolOpen ? "redline: open." : "redline: closed.");
+                    return;
+
+                case "on":
+                    SetEnabled(true, "chat");
+                    Say("redline: enabled. /redline opens it, or press F8.");
+                    return;
+
+                case "off":
+                    SetToolOpen(false);
+                    SetEnabled(false, "chat");
+                    Say("redline: disabled. Type /redline on to bring it back.");
+                    return;
+
+                case "toggle":
+                    SetEnabled(!_settings.OverlayEnabled, "chat");
+                    Say(_settings.OverlayEnabled
+                        ? "redline: enabled. /redline opens it, or press F8."
+                        : "redline: disabled. Type /redline on to bring it back.");
+                    return;
+
+                case "author":
+                    if (rest.Length == 0) {
+                        Say($"redline: reports are filed as \"{AuthorName() ?? "unknown"}\". " +
+                            "Set it with /redline author <name>.");
+                        return;
+                    }
+                    _settings.Author = rest;
+                    _panel?.RefreshAll();
+                    Say($"redline: reports will be filed as \"{rest}\".");
+                    return;
+
+                case "status":
+                    Say($"redline: {(_settings.OverlayEnabled ? "enabled" : "disabled")}, " +
+                        $"{(ToolOpen ? "open" : "closed")}, " +
+                        $"{(_panel is null ? "HUD only (no RmlUi plugin)" : "panel available")}, " +
+                        $"author \"{AuthorName() ?? "unknown"}\", " +
+                        $"queue {_queue?.QueueDir ?? "(none)"}.");
+                    return;
+
+                default:
+                    Say("redline: /redline [on|off|toggle|status|author <name>|help] — " +
+                        "bare /redline (or F8) opens and closes the panel.");
+                    return;
+            }
+        }
+
+        /// <summary>Reply into the client's chat window. Never throws at the caller.</summary>
+        private void Say(string message) {
+            try { _client.AddChatText(message, ChatType.Default); }
+            catch (Exception ex) { _log.LogDebug(ex, "redline: AddChatText failed: {Message}", message); }
         }
 
         // ------------------------------------------------------------------
@@ -389,19 +705,18 @@ namespace AcmeRedline {
         }
 
         /// <summary>
-        /// Reporter identity. AC.ACPlugin.Game.AccountName
-        /// (external/chorizite/ACPlugin/API/Game.cs:30) is the account the client logged in with;
-        /// the character name (Game.Character.Name) is a poor key because it changes per alt.
-        /// Null when not logged in - the schema allows it.
+        /// Reporter identity, from <see cref="RedlineSettings.Author"/>.
+        ///
+        /// This used to be AC.ACPlugin.Game.AccountName (external/chorizite/ACPlugin/API/Game.cs:30).
+        /// One string is not worth the AC plugin, which replaces the retail client's CharSelect and
+        /// DatPatch screens and claims its `Indicators` root element (ACPlugin.cs:78-93,104-110) —
+        /// so AcmeRedline no longer depends on it at all. Set the name with /redline author &lt;name&gt;.
+        ///
+        /// Null when unset, which the schema allows; HandleSubmit substitutes "unknown".
         /// </summary>
         private string? AuthorName() {
-            try {
-                var name = _ac.Game?.AccountName;
-                return string.IsNullOrWhiteSpace(name) ? null : name;
-            }
-            catch (Exception) {
-                return null;
-            }
+            var name = _settings.Author;
+            return string.IsNullOrWhiteSpace(name) ? null : name.Trim();
         }
 
         /// <summary>
