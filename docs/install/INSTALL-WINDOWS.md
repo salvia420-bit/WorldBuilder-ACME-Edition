@@ -93,6 +93,9 @@ that if something breaks, you can diagnose and fix it yourself.
 | `kit-manifest.txt` | exact file sizes `play.bat` verifies |
 | `SHA256SUMS.txt` | checksums for everything |
 | `README.txt` | short version of this document |
+| `INSTALL-WINDOWS.md` | this document |
+| `INSTALL-LINUX-WINE.md` | the same install for Linux/wine users |
+| `acme-plugins/` | the OPTIONAL plugin pack (§4) — does **not** go in the game folder |
 
 Exact sizes and sha256s vary per release — trust `SHA256SUMS.txt` in *your*
 archive, and verify the archive checksum from the release post before unpacking.
@@ -129,6 +132,11 @@ shape below mirrors the reference machine — and note zzpatcher's dat-side
 commands (`--check-dats`, `--rollback`, `--verify-exe`, `--patch-exe`) operate
 on the INSTALL folder where the kit files landed: point the tool at it once via
 the Install tab or `--set-install-dir <path>`.
+
+If you put the runtime somewhere other than `C:\Games\Chorizite`, tell the tool
+once with `--set-chorizite-dir <path>` (or the Paths tab). That is the folder
+`--status` reads the client logs from; left unset it looks in the default location
+and reports `injected · no log yet` even though the client is healthy.
 
 Install shape (this mirrors the reference machine the pack was developed on):
 
@@ -191,6 +199,11 @@ restarts. Full command list:
 `RmlUi` and `Lua` folders, so you can never lock yourself out. Without `RmlUi` there
 is no window, but the on-screen overlay, the picking and the report queue all still
 work — the plugin says so once in the log when it starts.
+
+One hotkey comes from the stock `RmlUi` plugin rather than from us: **Ctrl+D**
+toggles RmlUi's own developer debugger overlay. It is harmless — press it again to
+dismiss it — but it is not an ACME feature, and it exists only while the `RmlUi`
+folder is installed.
 
 ---
 ---
@@ -355,7 +368,16 @@ A full dump is ~2.5 GB and contains the whole story of the crash.
 ## 10. Reading the log
 
 `C:\Games\Chorizite\data\logs\log.txt` (rotates per session to
-`log.prevclient.txt`). The lines that matter when something feels wrong:
+`log.prevclient.txt`).
+
+If you run **more than one client at once**, the plugin runtime also writes a
+per-client `log-<pid>.txt` beside it, so each client's startup and hook lines stay
+separate. Two exceptions worth knowing before you go looking: AcmeRagdoll's
+`livemotion HIT` and `ragdoll ARM` lines still go to the shared `log.txt`, so with
+two clients running those particular lines interleave; and `--status` reads these
+logs out of the runtime folder it has been told about (below).
+
+The lines that matter when something feels wrong:
 
 ```
 acmelights: frametime lb=0xA9B4 n=277 avg=18.0ms p99=49ms max=51.4ms >33ms=5 >100ms=0 | cum n=538 ...
@@ -456,7 +478,8 @@ zzpatcher.exe --check-dats > report.txt     rem output redirects like any consol
 Exit codes are script-friendly: `0` ok, `1` a check found problems, `2` bad
 arguments, `4` a destructive command (`--rollback`, `--uninstall-plugin`) was
 run without `--yes`, plus the injector's own statuses (23 = already injected,
-24 = no clients). Profiles (`.zzp`) are interchangeable between the GUI's
+24 = no clients, 25 = partial, 26 = unknown state refused, 27 = enumerate
+failed). Profiles (`.zzp`) are interchangeable between the GUI's
 Save/Load buttons and `--save-profile`/`--load-profile`.
 
 ## 13. Appendix — developer/reference values
