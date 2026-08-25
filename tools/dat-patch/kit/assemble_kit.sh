@@ -209,7 +209,10 @@ bad = sorted({c for c in d if ord(c) > 127})
 assert not bad, f"non-ASCII left in README: {bad}"
 open(p, "wb").write(d.replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii"))
 PY
-sed 's/^/   | /' "$KIT/README.txt" | head -12
+# NOTE: head must READ the file, not terminate a pipe - `sed ... | head -12`
+# under `set -euo pipefail` kills sed with SIGPIPE and aborts the whole
+# assembly at exit 141, after the gates but before packaging (seen 2026-08-25).
+head -12 "$KIT/README.txt" | sed 's/^/   | /'
 
 echo "== SHA256SUMS.txt"
 ( cd "$KIT" && sha256sum client_portal.dat \
