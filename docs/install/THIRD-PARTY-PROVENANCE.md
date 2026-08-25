@@ -306,10 +306,11 @@ Added 2026-08-25 with the two stock plugin folders (audit §1c2, §8):
 - [x] Stock plugin archives pinned by URL + index-published SHA-256, fetched by
       `tools/plugin-pack/fetch_stock_plugins.sh` (§2b2).
 - [ ] **Owner decision** — `tools/leak_scan.py` now fails the pack's verify pass on
-      **pre-existing** third-party content and one scanner false positive
-      (Microsoft's `dotnet-THIRD-PARTY-NOTICES.TXT` e-mail addresses,
-      `SigScan.dll`'s `Aikar@Windower.net`, `Chorizite.Injector.dll`'s
-      `C:\Users\…\Temp\SymbolCache`, and the e-mail regex matching C++/CLI
-      mangled names in `System.Printing.dll`). Nothing added on 2026-08-25 trips
-      it. See audit §8a — fixing it means touching a gate that was hardened the
-      day before, so it is left to the owner.
+      **pre-existing** third-party content plus one scanner false positive, across
+      four files: Microsoft's own runtime notices file, the prebuilt `SigScan.dll`,
+      the upstream `Chorizite.Injector.dll`, and a WPF runtime assembly whose
+      C++/CLI mangled names look like e-mail addresses to the regex. Nothing added
+      on 2026-08-25 trips it. Specifics (deliberately not quoted here — this
+      document ships, and quoting the matched strings would itself trip the gate)
+      are in the internal audit, §8a. Fixing it means touching a gate that was
+      hardened the day before, so it is left to the owner.
