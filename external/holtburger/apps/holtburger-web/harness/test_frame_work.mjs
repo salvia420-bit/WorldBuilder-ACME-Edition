@@ -41,6 +41,8 @@ import {
   workBudgetMs,
   workShrinkEnabled,
   workCrossingEnabled,
+  workBytesBudget,
+  workAllocBudget,
 } from "../scene3d/frame_work.js";
 import { getSurface } from "./lib/diag_schema.mjs";
 
@@ -401,6 +403,161 @@ await (async () => {
   on.frameWorkP4({});
   await p;
   check(resumed === true, "ON: yield resumed by the slot");
+  delete globalThis.window;
+})();
+
+// ── PART 13 — T4 byte/alloc caps (OpenAC StreamingWorkBudgetOptions) ──────
+console.log("PART 13 — byte / allocation caps");
+{
+  check(workBytesBudget("") === 8 * 1024 * 1024, "workBytesMb defaults to 8 MiB");
+  check(workBytesBudget("?workBytesMb=2") === 2 * 1024 * 1024, "workBytesMb=2");
+  check(workBytesBudget("?workBytesMb=x") === 8 * 1024 * 1024, "workBytesMb garbage -> default");
+  check(workAllocBudget("") === 2 && workAllocBudget("?workAllocs=1") === 1, "workAllocs default 2, settable");
+  check(workAllocBudget("?workAllocs=0") === 1, "workAllocs clamps to >= 1");
+
+  const clock = mockClock();
+  const s = mkSched(clock, { allocBudget: 1, byteBudget: 100 });
+  const ran = [];
+  const mk = (id, extra) => ({ kind: id, fn: () => ran.push(id), ...extra });
+  s.enqueue("W3", mk("a", { allocs: 1 }));
+  s.enqueue("W3", mk("b", { allocs: 1 }));
+  s.enqueue("W3", mk("c"));
+  s.run({});
+  check(ran.join() === "a", `the second allocating item waits a slot; FIFO holds c behind it (ran=${ran})`);
+  check(s.capStats.allocDeferrals === 1 && s.capStats.allocsLastSlot === 1, "alloc deferral + last-slot count");
+  s.run({});
+  check(ran.join() === "a,b,c", `next slot serves b then c (ran=${ran})`);
+
+  ran.length = 0;
+  s.enqueue("W2", mk("big", { bytes: 80 }));
+  s.enqueue("W2", mk("big2", { bytes: 80 }));
+  s.run({});
+  check(ran.join() === "big" && s.capStats.byteDeferrals === 1, "bytes cap defers the second 80-byte item");
+  s.run({});
+  check(ran.join() === "big,big2", "...which runs next slot");
+
+  ran.length = 0;
+  const huge = mkSched(clock, { byteBudget: 10 });
+  huge.enqueue("W2", { kind: "h", bytes: 1000, fn: () => ran.push("h") });
+  huge.run({});
+  check(ran.join() === "h", "always-run-one: an over-cap FIRST item still runs");
+
+  // Debt: a charge outside a slot counts against the next one.
+  ran.length = 0;
+  const d = mkSched(clock, { allocBudget: 2 });
+  d.charge({ allocs: 2 });
+  d.enqueue("W6", { kind: "x", fn: () => ran.push("x") });
+  d.enqueue("W3", { kind: "y", allocs: 1, fn: () => ran.push("y") });
+  d.run({});
+  check(ran.join() === "y,x" && d.capStats.allocsLastSlot === 3,
+    `debt is charged to the next slot; the first item still runs, undeclared work is not capped (ran=${ran}, allocs=${d.capStats.allocsLastSlot})`);
+  ran.length = 0;
+  d.charge({ allocs: 2 });
+  d.enqueue("W6", { kind: "x2", fn: () => ran.push("x2") });
+  d.enqueue("W6", { kind: "y2", allocs: 1, fn: () => ran.push("y2") });
+  d.run({});
+  check(ran.join() === "x2" && d.capStats.allocDeferrals >= 1,
+    `with debt at the cap, a declared allocation after the first item waits (ran=${ran})`);
+  // In-slot charge from a running item.
+  ran.length = 0;
+  const c2 = mkSched(clock, { allocBudget: 1 });
+  c2.enqueue("W3", { kind: "p", fn: () => { ran.push("p"); c2.charge({ allocs: 1 }); } });
+  c2.enqueue("W3", { kind: "q", allocs: 1, fn: () => ran.push("q") });
+  c2.run({});
+  check(ran.join() === "p", "a charge made while running blocks the next declared allocation");
+
+  // Bursts are exempt.
+  ran.length = 0;
+  const b = new FrameWorkScheduler({ now: clock.now, isInWorld: () => false, allocBudget: 1 });
+  b.enqueue("W3", { kind: "1", allocs: 1, fn: () => ran.push(1) });
+  b.enqueue("W3", { kind: "2", allocs: 1, fn: () => ran.push(2) });
+  b.run({});
+  check(b.mode === "BOOT" && ran.length === 2, "BOOT bursts ignore the allocation cap");
+}
+
+// ── PART 14 — T4 slot remaining (split-able items) ─────────────────────────
+console.log("PART 14 — slotRemainingMs");
+{
+  const clock = mockClock();
+  const s = mkSched(clock, { budgetMs: 6 });
+  check(s.slotRemainingMs() === Infinity, "outside a slot: Infinity");
+  const seen = [];
+  s.enqueue("W3", { kind: "a", fn: () => { clock.advance(2); } });
+  s.w6Run("split", () => {
+    seen.push(s.slotRemainingMs());
+    clock.advance(3);
+    seen.push(s.slotRemainingMs());
+  });
+  s.run({});
+  check(seen[0] === 4 && seen[1] === 1, `remaining tracks the slot (${seen})`);
+  check(s.slotRemainingMs() === Infinity, "Infinity again after the slot");
+  s.noteSlotYield();
+  check(s.capStats.slotYields === 1, "slot yields counted");
+  // A forced (stale) item reads a bounded slice, not Infinity.
+  const f = mkSched(clock, { budgetMs: 6, maxDeferFrames: 1 });
+  let forcedSeen = null;
+  f.enqueue("W1", { kind: "hog", fn: () => clock.advance(50) });
+  f.w6Run("late", () => { forcedSeen = f.slotRemainingMs(); });
+  f.run({});
+  f.enqueue("W1", { kind: "hog2", fn: () => clock.advance(50) });
+  f.run({});
+  check(Number.isFinite(forcedSeen) && forcedSeen > 0, `forced item reads a finite slice (${forcedSeen})`);
+}
+
+// ── PART 15 — T4 TELEPORT destination reserve ──────────────────────────────
+console.log("PART 15 — destination reserve");
+{
+  const clock = mockClock();
+  const s = mkSched(clock, { budgetMs: 100, teleportBudgetMs: 100, destinationReserve: 0.75 });
+  s.noteLbKey(0x01010000);
+  s.noteLbKey(0x20200000); // jump -> TELEPORT armed
+  const ran = [];
+  let evictSaw = null;
+  s.enqueue("W4", { kind: "rel1", fn: () => { ran.push("rel1"); clock.advance(30); } });
+  s.enqueue("W4", { kind: "rel2", fn: () => { ran.push("rel2"); clock.advance(30); } });
+  s.w6Run("lruEviction", () => { ran.push("evict"); }, { release: true });
+  s.w6Run("feed", () => { ran.push("feed"); clock.advance(10); });
+  s.run({});
+  check(s.mode === "TELEPORT", "teleport burst");
+  check(ran.join() === "rel1,feed", `release work stops at 25 ms; the destination feed still runs (ran=${ran})`);
+  check(s.capStats.releaseDeferrals === 2, `two release items held (${s.capStats.releaseDeferrals})`);
+  check(s._queues.W4.length === 1 && s._queues.W6.length === 1 && s._queues.W6[0].name === "lruEviction",
+    "held items keep their place in their queues");
+  s.run({});
+  check(ran.join() === "rel1,feed,rel2,evict", `NORMAL next slot drains them (ran=${ran})`);
+
+  // A release item reading the slot sees the RELEASE limit.
+  const r = mkSched(clock, { teleportBudgetMs: 100, destinationReserve: 0.75 });
+  r.noteLbKey(0x01010000);
+  r.noteLbKey(0x20200000);
+  r.w6Run("lruEviction", () => { evictSaw = r.slotRemainingMs(); }, { release: true });
+  r.run({});
+  check(evictSaw === 25, `release item reads 25 ms of a 100 ms burst (${evictSaw})`);
+  // Outside TELEPORT the reserve does not apply.
+  const n = mkSched(clock, { budgetMs: 6 });
+  let nSaw = null;
+  n.w6Run("lruEviction", () => { nSaw = n.slotRemainingMs(); }, { release: true });
+  n.run({});
+  check(nSaw === 6, `NORMAL: release reads the full budget (${nSaw})`);
+}
+
+// ── PART 16 — T4 singleton seams ───────────────────────────────────────────
+console.log("PART 16 — T4 singleton seams");
+await (async () => {
+  const off = await import("../scene3d/frame_work.js");
+  check(off.frameWorkSlotRemainingMs() === Infinity, "OFF: slot remaining is Infinity (callers keep private budgets)");
+  off.frameWorkCharge({ allocs: 5 }); // no-op, no throw
+  off.frameWorkNoteSlotYield();
+  check(off.getFrameWorkScheduler()._debtAllocs === 0, "OFF: charge is a no-op");
+  globalThis.window = { location: { search: "?frameWork=on" }, __bootState: "in-world" };
+  const on = await import("../scene3d/frame_work.js?t4-arm");
+  let seen = null;
+  on.frameWorkW6Run("x", () => { seen = on.frameWorkSlotRemainingMs(); }, { release: true });
+  on.frameWorkP4({});
+  check(Number.isFinite(seen) && seen > 0, `ON: an item reads its slot (${seen})`);
+  on.frameWorkCharge({ allocs: 1, bytes: 64 });
+  on.frameWorkP4({});
+  check(globalThis.window.__frameWork.caps.allocsLastSlot === 1, "ON: out-of-slot charge lands on the next slot's surface");
   delete globalThis.window;
 })();
 

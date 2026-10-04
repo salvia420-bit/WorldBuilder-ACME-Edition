@@ -122,6 +122,8 @@ import { heightTexForMaterial } from "./materials.js";
 // 2026-08-05 (task 2) — pixel source of last resort for atlas staging, so a
 // texture's CPU copy stops being the only place a surface's pixels live.
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
+// Perf T4 — report new GPU arrays to the `?frameWork` slot (no-op when OFF).
+import { frameWorkCharge } from "./frame_work.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -1310,6 +1312,10 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   // OOM-killed the renderer — see _ATLAS_NRA_MAX_LAYERS). X7 grows them TOGETHER,
   // in one `_growBucketLayers` call, so the two depths can never diverge.
   const nraArray = statNraEnabled() ? buildNraArray(w, h, alloc) : null;
+  // Perf T4 — one texStorage3D per array, the indivisible spike the slot's
+  // allocation cap is for. Counted against the next slot when this feed runs
+  // as a W6 continuation (outside the slot).
+  frameWorkCharge({ allocs: nraArray ? 2 : 1, bytes: alloc * _perLayerBytesFor(w, h, bc7) });
   // X7 — the mutable holder the material's onBeforeCompile closure reads. Owned
   // by the bucket record so a grow-swap is visible to a later RECOMPILE.
   const arrays = { diff: diffArray, nra: nraArray };
@@ -1501,6 +1507,7 @@ function _growBucketLayers(b, needed) {
   try { oldNra && oldNra.dispose && oldNra.dispose(); } catch (_) {}
   _atlasStats.layerGrows++;
   _atlasStats.layerGrowUploads += ud.nextLayer;
+  frameWorkCharge({ allocs: newNra ? 2 : 1, bytes: target * _perLayerBytesFor(w, h, ud.bc7) }); // perf T4
   return true;
 }
 

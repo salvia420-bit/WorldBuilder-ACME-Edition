@@ -276,7 +276,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.wasmMem",
     status: "current",
     reads: "async-function",
-    evidence: "scene3d/index.js:4825",
+    evidence: "scene3d/index.js:4832",
     availability: "in-world",
     note: "Sums main + bake-worker hb_mem_census (src/lib.rs:11469-11593; "
       + "summarizeMemCensus in scene3d/mem_census.js:30-68). `missing` names "
@@ -606,7 +606,7 @@ export const REGISTRY = Object.freeze([
     name: "__framePhase",
     status: "current",
     reads: "object",
-    evidence: "scene3d/frame_work.js:657",
+    evidence: "scene3d/frame_work.js:815",
     availability: "flag:?framePhase=on",
     note: "T21 (ST8 stage A) — the GATE-PHASE census instrument, stamped by "
       + "index.js via framePhaseBegin/Cut/Commit into the pass-08 S1 "
@@ -635,7 +635,7 @@ export const REGISTRY = Object.freeze([
     name: "__frameWork",
     status: "current",
     reads: "object",
-    evidence: "scene3d/frame_work.js:591",
+    evidence: "scene3d/frame_work.js:729",
     availability: "boot",
     note: "T21 (ST8 stage A) — FrameWorkScheduler surface, installed at "
       + "module scope so a flag-OFF run reads {enabled:false, zeros} instead "
@@ -661,6 +661,15 @@ export const REGISTRY = Object.freeze([
       "uploads.stagedBytesByClass": C("bytes", ["staged"]),
       "uploads.initTextureCalls": C("count"),
       "uploads.exclusive": L("json", null, { note: "ring 16" }),
+      // Perf T4 (OpenAC comparison 2026-10-04) — the non-ms budget halves.
+      "caps.bytesLastSlot": L("bytes", ["allocated"]),
+      "caps.allocsLastSlot": L("count"),
+      "caps.maxBytesPerSlot": L("bytes", ["allocated"]),
+      "caps.maxAllocsPerSlot": L("count"),
+      "caps.byteDeferrals": C("count"),
+      "caps.allocDeferrals": C("count"),
+      "caps.releaseDeferrals": C("count", null, { note: "TELEPORT destination reserve held release work back" }),
+      "caps.slotYields": C("count", null, { note: "a splitting item (LRU reclaim/dispose) stopped on an exhausted slot" }),
     },
   },
 

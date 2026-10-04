@@ -2467,7 +2467,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // from the one site that already holds the fresh LB key.
         if (_frameWorkOn) {
           frameWorkNoteLbKey(currentLbKey);
-          frameWorkW6Run("lruEviction", () => lru.tickEviction(currentLbKey, sealedKeepLbKey));
+          // Perf T4 — tagged RELEASE: in a TELEPORT burst it gets only the
+          // share the destination reserve leaves, and its loops stop on an
+          // exhausted slot (landblock_lru.js frameWorkSlotRemainingMs).
+          frameWorkW6Run("lruEviction", () => lru.tickEviction(currentLbKey, sealedKeepLbKey), { release: true });
         } else {
           lru.tickEviction(currentLbKey, sealedKeepLbKey);
         }

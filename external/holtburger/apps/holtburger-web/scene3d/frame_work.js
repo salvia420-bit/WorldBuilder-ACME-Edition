@@ -193,6 +193,32 @@ export function workCrossingEnabled(search) {
   }
 }
 
+/** `?workBytesMb=N` — per-slot cap on DECLARED/CHARGED bytes (perf T4,
+ *  OpenAC `StreamingWorkBudgetOptions` 8 MiB GPU upload). Default 8,
+ *  clamped [0.25, 256]. NORMAL/CROSSING/EMERGENCY only. */
+export function workBytesBudget(search) {
+  try {
+    const raw = new URLSearchParams(_search(search)).get("workBytesMb");
+    const n = raw === null ? 8 : Number.parseFloat(raw);
+    return Math.round((Number.isFinite(n) ? Math.min(256, Math.max(0.25, n)) : 8) * 1024 * 1024);
+  } catch (_) {
+    return 8 * 1024 * 1024;
+  }
+}
+
+/** `?workAllocs=N` — per-slot cap on NEW GPU allocations (texStorage /
+ *  buffer creation; OpenAC: 1 new array + 1 new buffer per frame). Default 2,
+ *  clamped [1, 64]. NORMAL/CROSSING/EMERGENCY only. */
+export function workAllocBudget(search) {
+  try {
+    const raw = new URLSearchParams(_search(search)).get("workAllocs");
+    const n = raw === null ? 2 : Number.parseInt(raw, 10);
+    return Number.isFinite(n) ? Math.min(64, Math.max(1, n)) : 2;
+  } catch (_) {
+    return 2;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // the scheduler core (node-testable; no window/rAF dependency)
 // ---------------------------------------------------------------------------
@@ -231,6 +257,9 @@ export class FrameWorkScheduler {
    * @param {boolean} [opts.crossing]       CROSSING lever armed (default false)
    * @param {() => boolean} [opts.isInWorld] BOOT-mode exit predicate
    * @param {() => void} [opts.onPending]   called when work is enqueued
+   * @param {number} [opts.byteBudget]      per-slot bytes cap (default 8 MiB) [T4]
+   * @param {number} [opts.allocBudget]     per-slot new-GPU-allocation cap (default 2) [T4]
+   * @param {number} [opts.destinationReserve] TELEPORT share kept from release work (default 0.75) [T4]
    */
   constructor(opts = {}) {
     this._now = opts.now || _defaultNow;
@@ -243,6 +272,9 @@ export class FrameWorkScheduler {
       maxDeferFrames: opts.maxDeferFrames ?? 3,
       shrink: opts.shrink ?? true,
       crossing: opts.crossing ?? false,
+      byteBudget: opts.byteBudget ?? 8 * 1024 * 1024,
+      allocBudget: opts.allocBudget ?? 2,
+      destinationReserve: opts.destinationReserve ?? 0.75,
     };
     this._isInWorld = opts.isInWorld
       || (() => {
@@ -279,6 +311,24 @@ export class FrameWorkScheduler {
     // serve-pass scratch
     this._t0 = 0;
     this._estCharge = 0;
+    // Perf T4 (OpenAC comparison) — the non-ms halves of the budget. A single
+    // texStorage3D or buffer creation is an indivisible spike that a ms check
+    // between items cannot split, so bytes and allocation COUNT are capped per
+    // slot too. Items DECLARE {bytes, allocs} at enqueue; code that discovers
+    // its cost while running calls `charge()`. A charge made OUTSIDE a slot (a
+    // W6 continuation runs in the microtask drain after run() returns) is DEBT
+    // carried into the next slot, so the following frame admits less.
+    this._inSlot = false;
+    this._limit = Infinity;      // ms limit of the item being served
+    this._bytes = 0;             // spent this slot (declared + charged + debt)
+    this._allocs = 0;
+    this._debtBytes = 0;
+    this._debtAllocs = 0;
+    this._capsOn = false;        // caps armed for the current slot's mode
+    this.capStats = {
+      bytesLastSlot: 0, allocsLastSlot: 0, maxBytesPerSlot: 0, maxAllocsPerSlot: 0,
+      byteDeferrals: 0, allocDeferrals: 0, releaseDeferrals: 0, slotYields: 0,
+    };
   }
 
   /** Generic item enqueue (S2.1) — W1..W5 producers (T22) and tests. Items
@@ -291,6 +341,8 @@ export class FrameWorkScheduler {
       kind: item?.kind ?? "anon",
       fn: item?.fn ?? (typeof item === "function" ? item : null),
       bytes: item?.bytes ?? 0,
+      allocs: item?.allocs ?? 0,
+      release: item?.release ?? classId === "W4",
       tileKey: item?.tileKey,
       frameEnqueued: this._frameIdx,
     };
@@ -317,14 +369,15 @@ export class FrameWorkScheduler {
     return purged;
   }
 
-  /** W6 coalesced sync drain (latest fn per name wins). */
-  w6Run(name, fn) {
+  /** W6 coalesced sync drain (latest fn per name wins). `opts.release` marks
+   *  RELEASE work (eviction/dispose) for the TELEPORT destination reserve. */
+  w6Run(name, fn, opts) {
     const existing = this._w6RunPending.get(name);
     if (existing) {
       existing.fn = fn;
       return;
     }
-    const item = { type: "run", name, fn, frameEnqueued: this._frameIdx };
+    const item = { type: "run", name, fn, release: !!opts?.release, frameEnqueued: this._frameIdx };
     this._w6RunPending.set(name, item);
     this._queues.W6.push(item);
     if (this._onPending) this._onPending();
@@ -374,6 +427,45 @@ export class FrameWorkScheduler {
     return (this._now() - this._t0) + this._estCharge;
   }
 
+  /** Perf T4 — report cost discovered while running (a page allocation, a
+   *  buffer grow). Inside a slot it counts against this slot; outside, it is
+   *  debt the next slot starts with. */
+  charge(c) {
+    const b = Number.isFinite(c?.bytes) && c.bytes > 0 ? c.bytes : 0;
+    const a = Number.isFinite(c?.allocs) && c.allocs > 0 ? c.allocs : 0;
+    if (this._inSlot) { this._bytes += b; this._allocs += a; }
+    else { this._debtBytes += b; this._debtAllocs += a; }
+  }
+
+  /** Perf T4 — ms left for the item being served (its class limit, or the
+   *  release limit under the TELEPORT reserve). Infinity outside a slot, so a
+   *  caller that splits its work on this read is unchanged when unscheduled. */
+  slotRemainingMs() {
+    if (!this._inSlot) return Infinity;
+    return this._limit - this._spentMs();
+  }
+
+  /** Perf T4 — a long item that stops early because the slot ran out says so,
+   *  for the diag surface. */
+  noteSlotYield() {
+    this.capStats.slotYields += 1;
+  }
+
+  /** Would serving `item` now break a byte/alloc cap? The FIRST item of the
+   *  slot is exempt (always-run-one), as are BOOT/TELEPORT bursts. */
+  _capBlocks(item) {
+    if (!this._capsOn) return false;
+    if ((item.allocs || 0) > 0 && this._allocs + item.allocs > this.cfg.allocBudget) {
+      this.capStats.allocDeferrals += 1;
+      return true;
+    }
+    if ((item.bytes || 0) > 0 && this._bytes + item.bytes > this.cfg.byteBudget) {
+      this.capStats.byteDeferrals += 1;
+      return true;
+    }
+    return false;
+  }
+
   _resolveMode(frameStartMs, targetPeriodMs, t0) {
     if (!this._inWorldSeen) {
       if (this._isInWorld()) this._inWorldSeen = true;
@@ -414,6 +506,8 @@ export class FrameWorkScheduler {
       } catch (_) { /* fail-soft */ }
     } else {
       if (item.type === "run") this._w6RunPending.delete(item.name);
+      this._bytes += item.bytes || 0;
+      this._allocs += item.allocs || 0;
       const t = this._now();
       try {
         item.fn();
@@ -457,22 +551,53 @@ export class FrameWorkScheduler {
     }
     this.mode = mode;
     this.lastBudgetMs = budget;
+    // T4 — byte/alloc caps. Bursts (BOOT/TELEPORT) are design-accepted long
+    // frames; capping their allocations would only stretch the load.
+    this._capsOn = mode !== "BOOT" && mode !== "TELEPORT";
+    this._bytes = this._debtBytes;
+    this._allocs = this._debtAllocs;
+    this._debtBytes = 0;
+    this._debtAllocs = 0;
+    this._inSlot = true;
+    // T4 — destination reserve (OpenAC's 0.75 destination-reserve fraction):
+    // in a TELEPORT burst, RELEASE work (W4 and release-tagged W6 runs —
+    // eviction, dispose) may spend only (1 − reserve) of the burst, so the
+    // arriving ring's feeds get the rest. Release items over that line are
+    // skipped in place, never reordered, and run on later slots.
+    const releaseLimit = mode === "TELEPORT"
+      ? budget * (1 - Math.min(1, Math.max(0, this.cfg.destinationReserve)))
+      : Infinity;
 
     for (const c of WORK_CLASSES) this._rows[c].itemsThisFrame = 0;
     let ranAny = false;
-    // main pass — priority order, budget checked BETWEEN items, first item of
-    // the highest non-empty class unconditional (always-run-one).
-    for (const cls of WORK_CLASSES) {
-      if (mode === "EMERGENCY" && cls === "W2") continue; // uploads paused (R4)
-      const q = this._queues[cls];
-      const limit = (mode === "EMERGENCY" && (cls === "W4" || cls === "W5"))
-        ? budget * 2 // R4 reweight: drains/demotes get double allowance
-        : budget;
-      while (q.length > 0) {
-        if (ranAny && this._spentMs() >= limit) break;
-        this._serveOne(cls, q.shift(), false);
-        ranAny = true;
+    try {
+      // main pass — priority order, budget checked BETWEEN items, first item
+      // of the highest non-empty class unconditional (always-run-one).
+      for (const cls of WORK_CLASSES) {
+        if (mode === "EMERGENCY" && cls === "W2") continue; // uploads paused (R4)
+        const q = this._queues[cls];
+        const limit = (mode === "EMERGENCY" && (cls === "W4" || cls === "W5"))
+          ? budget * 2 // R4 reweight: drains/demotes get double allowance
+          : budget;
+        const held = [];
+        while (q.length > 0) {
+          if (ranAny && this._spentMs() >= limit) break;
+          const item = q[0];
+          if (ranAny && item.release && this._spentMs() >= Math.min(limit, releaseLimit)) {
+            held.push(q.shift());
+            this.capStats.releaseDeferrals += 1;
+            continue;
+          }
+          // A capped item ends this class for the slot (FIFO: nothing jumps it).
+          if (ranAny && this._capBlocks(item)) break;
+          this._limit = item.release ? Math.min(limit, releaseLimit) : limit;
+          this._serveOne(cls, q.shift(), false);
+          ranAny = true;
+        }
+        if (held.length > 0) q.unshift(...held);
       }
+    } finally {
+      this._limit = Infinity;
     }
     // staleness ceiling — a class that got NOTHING this frame but whose
     // oldest item has waited >= maxDeferFrames force-runs one item. The
@@ -483,9 +608,19 @@ export class FrameWorkScheduler {
       const q = this._queues[cls];
       if (q.length === 0 || this._rows[cls].itemsThisFrame > 0) continue;
       if (this._frameIdx - q[0].frameEnqueued >= this.cfg.maxDeferFrames) {
+        // Forced: runs regardless of every cap, but a splitting item still
+        // reads a bounded slice (the mode budget), not Infinity.
+        this._limit = this._spentMs() + budget;
         this._serveOne(cls, q.shift(), true);
+        this._limit = Infinity;
       }
     }
+    this._inSlot = false;
+    const cs = this.capStats;
+    cs.bytesLastSlot = this._bytes;
+    cs.allocsLastSlot = this._allocs;
+    if (this._bytes > cs.maxBytesPerSlot) cs.maxBytesPerSlot = this._bytes;
+    if (this._allocs > cs.maxAllocsPerSlot) cs.maxAllocsPerSlot = this._allocs;
     // starvation counters — engaged classes that got zero service this frame.
     for (const cls of WORK_CLASSES) {
       if (this._queues[cls].length > 0 && this._rows[cls].itemsThisFrame === 0) {
@@ -514,6 +649,7 @@ export class FrameWorkScheduler {
     t.budgetMs = this.lastBudgetMs;
     t.teleports = this.teleports;
     t.uploads = this.uploads;
+    t.caps = this.capStats; // T4: bytes/allocs per slot + deferral counters
     return t;
   }
 }
@@ -572,6 +708,8 @@ function _guardFire() {
 
 const _scheduler = new FrameWorkScheduler({
   budgetMs: workBudgetMs(),
+  byteBudget: workBytesBudget(),
+  allocBudget: workAllocBudget(),
   shrink: workShrinkEnabled(),
   crossing: workCrossingEnabled(),
   onPending: _armGuard,
@@ -612,10 +750,30 @@ export function frameWorkP4(opts) {
 
 /** W6 sync-drain adapter. Returns true when the scheduler owns the callback
  *  (flag ON); false = caller keeps its legacy scheduling (flag OFF). */
-export function frameWorkW6Run(name, fn) {
+export function frameWorkW6Run(name, fn, opts) {
   if (!_FW_ON) return false;
-  _scheduler.w6Run(name, fn);
+  _scheduler.w6Run(name, fn, opts);
   return true;
+}
+
+/** Perf T4 — ms left in the stream slot for the item now running; Infinity
+ *  when the flag is OFF or nothing is being served (callers then keep their
+ *  own private budgets — byte-identical). */
+export function frameWorkSlotRemainingMs() {
+  if (!_FW_ON) return Infinity;
+  return _scheduler.slotRemainingMs();
+}
+
+/** Perf T4 — report bytes / new GPU allocations. No-op when OFF. */
+export function frameWorkCharge(c) {
+  if (!_FW_ON) return;
+  _scheduler.charge(c);
+}
+
+/** Perf T4 — an item stopped early on an exhausted slot. No-op when OFF. */
+export function frameWorkNoteSlotYield() {
+  if (!_FW_ON) return;
+  _scheduler.noteSlotYield();
 }
 
 /** W6 chunk-yield adapter. Flag OFF: EXACTLY today's macrotask yield. */

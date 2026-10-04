@@ -37,6 +37,13 @@
 // etc.) — the bake's idempotency Sets are cleared on eviction so the
 // re-entry actually re-runs the bake.
 
+// Perf T4 (OpenAC comparison 2026-10-04) — under `?frameWork=on` the
+// eviction tick runs inside the stream slot, and its multi-LB loops stop when
+// the slot is spent instead of running whole (one LB is one stage; the rest
+// stay candidates and go next tick). Flag OFF the read is Infinity and every
+// loop below keeps its own private budget — byte-identical.
+import { frameWorkSlotRemainingMs, frameWorkNoteSlotYield } from "./frame_work.js";
+
 const LB_KEY_MASK = 0xffff_0000 >>> 0;
 
 // Sealed-dungeon purge budget (2026-07-08): max LBs evicted per frame when
@@ -628,6 +635,7 @@ export class LandblockLRU {
     // victims deferred because a guarded bake was still in flight.
     this._trackMergedWhileParked = 0;
     this._reclaimDeferredInFlight = 0;
+    this._reclaimSlotDeferred = 0; // perf T4: victims left for the next slot
     // Dual-state pool records dropped by park()'s non-destructive recovery
     // (_discardStalePoolCopy). Must stay 0 in a healthy session.
     this._stalePoolCopiesDropped = 0;
@@ -1213,9 +1221,14 @@ export class LandblockLRU {
       if (this.warmParkEnabled) {
         victims.sort((a, b) => lbChebyshev(keep, b) - lbChebyshev(keep, a));
       }
-      const budgetMs = this._sealedDrainActive
-        ? SEALED_STEADY_BUDGET_MS
-        : SEALED_FIRST_BURST_MS;
+      // Perf T4 — inside the `?frameWork` slot the SCHEDULER owns this
+      // budget (a sealed entry is normally a portal jump, i.e. the TELEPORT
+      // burst, minus the destination reserve); the private 250/6 ms pair is
+      // the flag-OFF path. At least one LB still goes per tick.
+      const slotLeft = frameWorkSlotRemainingMs();
+      const budgetMs = Number.isFinite(slotLeft)
+        ? Math.max(0, slotLeft)
+        : (this._sealedDrainActive ? SEALED_STEADY_BUDGET_MS : SEALED_FIRST_BURST_MS);
       this._sealedDrainActive = true;
       // O5 (A11): bucket the four scene groups' children by lb-key in ONE
       // pass for the whole tick — the per-victim rescans were K×4 full
@@ -1407,7 +1420,16 @@ export class LandblockLRU {
     }
     if (victims.length > this._parksPerTickMax) this._parksPerTickMax = victims.length;
     const buckets = victims.length > 1 ? this._bucketGroupChildren(victims) : null;
-    for (const key of victims) this._reclaim(key, buckets);
+    for (let i = 0; i < victims.length; i++) {
+      // Perf T4 — one LB per stage; an exhausted slot leaves the rest as
+      // candidates for the next tick (they are still tracked, still oldest).
+      if (i > 0 && frameWorkSlotRemainingMs() <= 0) {
+        this._reclaimSlotDeferred += victims.length - i;
+        frameWorkNoteSlotYield();
+        break;
+      }
+      this._reclaim(victims[i], buckets);
+    }
     this._tickParkPoolPressure(currentLbKey);
   }
 
@@ -1547,6 +1569,11 @@ export class LandblockLRU {
       if (useTimeBudget) {
         if (disposed >= 1 && (nowPerf() - t0) > PARK_DISPOSE_BUDGET_MS) break;
       } else if (disposed >= WARM_PARK_MAX_DISPOSE_PER_TICK) {
+        break;
+      }
+      // Perf T4 — the private cap above AND the shared slot (flag OFF: Infinity).
+      if (disposed >= 1 && frameWorkSlotRemainingMs() <= 0) {
+        frameWorkNoteSlotYield();
         break;
       }
       // UseTime floor: keep a recently-parked slot re-adoptable (unpark =
@@ -2499,6 +2526,7 @@ export class LandblockLRU {
       // TN-storm fix telemetry (session 7): dual-state near-misses.
       trackMergedWhileParked: this._trackMergedWhileParked,
       reclaimDeferredInFlight: this._reclaimDeferredInFlight,
+      reclaimSlotDeferred: this._reclaimSlotDeferred,
       stalePoolCopiesDropped: this._stalePoolCopiesDropped,
       // PHY-25 dungeon stream gate: outdoor load-point evaluations suppressed
       // because the player was indoors (see noteStreamGateHold). The richer
