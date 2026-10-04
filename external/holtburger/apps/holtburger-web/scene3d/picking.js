@@ -1436,7 +1436,12 @@ export function setupClickPicking({
           }
         } catch (_) { /* never block the swing on prediction faults */ }
         sessionHandle.missileAttack(targetGuid, safeHeight, slider);
-        if (localGuid !== 0) {
+        // OpenAC comparison 2026-10-04 (combat P0-5): same gate as melee.
+        // Retail `ExecuteAttack` (acclient.c:408626) only sends; ACE plays the
+        // aim as a persisted CYCLE (`Player_Missile.cs:227`) after its Rotate,
+        // so the old click-time prediction double-played the draw (the
+        // 500 ms swing-echo dedup never sees a cycle).
+        if (localGuid !== 0 && !SERVER_SWING) {
           if (finalMotion && typeof em?.setSwingMotion === "function") {
             em.setSwingMotion(localGuid, finalMotion);
             // F6-2 — suppress the server's matching swing echo.
