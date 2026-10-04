@@ -9307,7 +9307,11 @@ export class EntityManager {
   _promoteUnifiedHead(inst) {
     const q = inst._unifiedQueue;
     if (!q || inst._unifiedSeq) return;
-    while (q.list.length > 0 && !q.list[0].payload) animationsDone(q, 1);
+    // A record whose wasm sequence was already freed (`__wbg_ptr === 0`) can
+    // never finish; retire it like an empty node rather than promote it.
+    while (q.list.length > 0 && (!q.list[0].payload || q.list[0].payload.seq?.__wbg_ptr === 0)) {
+      animationsDone(q, q.list[0].payload?.numAnims || 1);
+    }
     const head = headMotion(q);
     if (head?.payload) {
       inst._unifiedSeq = head.payload;
@@ -9322,6 +9326,19 @@ export class EntityManager {
     if (!q) return;
     if (headMotion(q)?.payload === rec) animationsDone(q, rec?.numAnims || 1);
     this._promoteUnifiedHead(inst);
+  }
+
+  // setMotion's preamble (see the comment at its call site): a gesture over a
+  // finishing one-shot appends; anything else pre-empts the playhead AND drops
+  // the pending tail, so a freed record is never left in the queue.
+  _preemptUnifiedForMotion(inst, motionCommand) {
+    if (!inst._unifiedSeq) return;
+    const incoming = classifyMotionCommand(motionCommand >>> 0);
+    if ((incoming === "attack" || incoming === "cast") && inst._unifiedSeq.clearOnDone) return;
+    const ua = inst._unifiedSeq;
+    this._clearUnifiedQueue(inst); // frees every pending record except `ua`
+    try { ua.seq.free(); } catch (_) { /* already freed */ }
+    inst._unifiedSeq = null;
   }
 
   // Anything that pre-empts the playhead outright (death, despawn, a new
@@ -10087,10 +10104,18 @@ export class EntityManager {
     // A new locomotion/stance/motion command ends any in-progress unified
     // sequence (swing override, or a death hold on resurrect/correction) so
     // movement stays responsive. No-op when ?unifiedMotion is off (never set).
-    if (inst._unifiedSeq) {
-      try { inst._unifiedSeq.seq.free(); } catch (_) { /* already freed */ }
-      inst._unifiedSeq = null;
-    }
+    //
+    // OpenAC comparison 2026-10-04 (combat P0-1): this used to free the
+    // playhead for EVERY command — including the next swing/cast gesture — but
+    // left the freed record at the head of `_unifiedQueue`. The gesture routed
+    // below then queued behind it, `_promoteUnifiedHead` promoted the freed
+    // record, its `advance()` threw every tick, and the entity's gestures were
+    // wedged until the next locomotion command. Now:
+    //   * a gesture over a finishing (clearOnDone) one-shot APPENDS — retail
+    //     `add_to_queue`, the J5 design — instead of cutting it;
+    //   * anything that does pre-empt drops the pending tail with it, so no
+    //     freed record can ever be promoted.
+    this._preemptUnifiedForMotion(inst, motionCommand);
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.

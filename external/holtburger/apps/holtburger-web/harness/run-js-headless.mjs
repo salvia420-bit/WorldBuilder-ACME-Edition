@@ -150,6 +150,7 @@ const TIER4 = [
   { flag: "killImpulse", file: "tests/kill_impulse.test.mjs" },
   { flag: "gfxRelief", file: "tests/gfx_relief.test.mjs" },
   { flag: "combatInstallGiveup", file: "tests/combat_install_giveup.test.mjs" },
+  { flag: "unifiedQueuePreempt", file: "tests/unified_queue_preempt.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 
