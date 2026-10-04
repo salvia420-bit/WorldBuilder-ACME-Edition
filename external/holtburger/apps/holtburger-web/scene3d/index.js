@@ -157,6 +157,7 @@ import { PVS_RING_RADIUS, LRU_SIZING_RADIUS } from "./residency.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
+import { installDrawSortProgram } from "./draw_sort_program.js";
 import {
   adaptiveResEnabled,
   adaptiveResSettleEnabled,
@@ -1120,6 +1121,9 @@ export async function preInit3D(canvas) {
   // (the walk-stall score; see shader_prewarm.js). No-op with the flag off.
   try {
     installLinkProbe(renderer);
+    // Perf T10 — program-grouped opaque sort (`?drawSortProgram=on`) and the
+    // `window.__drawSort` live A/B seam (always installed; sort off by default).
+    installDrawSortProgram(renderer);
     if (SHADER_PREWARM_ON) {
       // eslint-disable-next-line no-console
       console.log(

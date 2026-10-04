@@ -1,0 +1,129 @@
+// scene3d/draw_sort_program.js — group opaque draws by shader PROGRAM (perf T10).
+//
+// OpenAC comparison 2026-10-04 (docs/openac-comparison-2026-10-04/5-perf.md T10):
+// OpenAC sorts its groups for state locality and elides redundant binds
+// (commit b5b01a89, CPU p50 7.2 -> 6.4 ms). three r184's default opaque sort,
+// `painterSortStable` (three.module.js:8107), orders by groupOrder, renderOrder,
+// then `material.id` — creation order, which interleaves materials that share a
+// program. The frame-cost doc measured 160 program switches per frame against
+// 79 distinct programs (2026-08-06-frame-cost-structure-measured.md:69); the
+// glue census (§4b) notes that figure PREDATES the BatchedMesh colorTexture fix,
+// so whether the interleave still costs anything is UNMEASURED. Hence opt-in,
+// with a live A/B probe in the same page load:
+//
+//   await window.__drawSort.probe(240)   // { switchesPerFrame, distinctPrograms, sortOn, ... }
+//   window.__drawSort.set(true)          // program sort on (no reload, no recompile)
+//   await window.__drawSort.probe(240)
+//   window.__drawSort.set(false)         // back to three's painterSortStable
+//
+// The comparator is three's own with ONE key inserted after renderOrder: the
+// material's compiled program id. Everything else — groupOrder, renderOrder
+// (sky, terrain overlays, decals all rely on it), material.id, materialVariant,
+// front-to-back z, the stable id tie-break — keeps its place, so only the
+// relative order of DIFFERENT materials at equal renderOrder changes. That is
+// already arbitrary (creation order) under the default sort, and opaque draws
+// resolve by depth test. The transparent sort is untouched.
+//
+// Cost: the program id is read through `renderer.properties` (a WeakMap) at most
+// once per material per render() call — memoized on a frame stamp — not twice
+// per comparison. An uncompiled material sorts last within its renderOrder.
+
+let _flag;
+/** `?drawSortProgram=on` arms the program-grouped opaque sort at boot.
+ *  DEFAULT-OFF (only `on` arms it): the win is unmeasured — see the header. */
+export function drawSortProgramEnabled() {
+  if (_flag !== undefined) return _flag;
+  let on = false;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      on = new URLSearchParams(window.location.search).get("drawSortProgram") === "on";
+    }
+  } catch (_) { on = false; }
+  return (_flag = on);
+}
+
+/** The opaque comparator for `renderer`. Exported for the regression suite. */
+export function makeProgramSort(renderer) {
+  const props = renderer.properties;
+  const info = renderer.info;
+  const memo = new WeakMap(); // material -> { frame, key }
+  function programKey(material) {
+    const frame = info.render.frame;
+    let m = memo.get(material);
+    if (m && m.frame === frame) return m.key;
+    const p = props.get(material).currentProgram;
+    const key = p ? p.id : Number.MAX_SAFE_INTEGER;
+    if (m) { m.frame = frame; m.key = key; }
+    else memo.set(material, { frame, key });
+    return key;
+  }
+  return function programSortStable(a, b) {
+    if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
+    if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
+    if (a.material.id !== b.material.id) {
+      const pa = programKey(a.material), pb = programKey(b.material);
+      if (pa !== pb) return pa - pb;
+      return a.material.id - b.material.id;
+    }
+    if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
+    if (a.z !== b.z) return a.z - b.z;
+    return a.id - b.id;
+  };
+}
+
+/**
+ * Install the sort (when armed) and the `window.__drawSort` A/B seam. Never
+ * throws: a diag/perf install must not break boot.
+ */
+export function installDrawSortProgram(renderer) {
+  let sort = null;
+  let on = false;
+  const set = (v) => {
+    on = !!v;
+    if (on && !sort) sort = makeProgramSort(renderer);
+    renderer.setOpaqueSort(on ? sort : null); // null => three's painterSortStable
+    return on;
+  };
+  try { set(drawSortProgramEnabled()); } catch (_) { /* fail-soft */ }
+
+  /**
+   * Count real program binds for `frames` render() calls. three already elides
+   * a bind of the current program (WebGLState.useProgram), so every
+   * `gl.useProgram` that reaches the context is a switch.
+   */
+  const probe = (frames = 240) => new Promise((resolve) => {
+    const gl = renderer.getContext();
+    const orig = gl.useProgram;
+    let switches = 0;
+    const seen = new Set();
+    gl.useProgram = function (program) {
+      switches++;
+      seen.add(program);
+      return orig.call(this, program);
+    };
+    const f0 = renderer.info.render.frame;
+    const t0 = performance.now();
+    const tick = () => {
+      const df = renderer.info.render.frame - f0;
+      if (df >= frames || performance.now() - t0 > 60000) {
+        gl.useProgram = orig;
+        resolve({
+          sortOn: on,
+          renderCalls: df,
+          switches,
+          switchesPerFrame: df > 0 ? +(switches / df).toFixed(1) : null,
+          distinctPrograms: seen.size,
+          ms: Math.round(performance.now() - t0),
+        });
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  if (typeof window !== "undefined") {
+    window.__drawSort = { set, get: () => on, probe };
+  }
+  return on;
+}
