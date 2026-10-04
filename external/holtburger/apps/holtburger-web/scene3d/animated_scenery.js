@@ -511,6 +511,21 @@ const _geomList = [];           // resolved shared geometries (for dispose)
 const _buckets = new Map();     // "setup:part:group" -> Promise<bucket|null>
 const _bucketList = [];         // resolved buckets (for dispose/diag)
 const _dirtyBuckets = new Set();
+// OpenAC comparison 2026-10-04 (perf T9): the dirty slot SPAN per bucket this
+// frame, so the flush uploads [min, max] instead of the whole instanceMatrix
+// (OpenAC hands the scene only the owners written since the last handover).
+const _dirtySpan = new Map(); // bucket -> { min, max } slot indices
+
+function _markDirty(bucket, index) {
+  _dirtyBuckets.add(bucket);
+  const span = _dirtySpan.get(bucket);
+  if (span) {
+    if (index < span.min) span.min = index;
+    if (index > span.max) span.max = index;
+  } else {
+    _dirtySpan.set(bucket, { min: index, max: index });
+  }
+}
 let _poseFrame = 0;             // stamps per-DID template pose recompute + bucket dirtying
 
 /** Decode a setup's part geometry ONCE (legacy decodes per placement). */
@@ -671,6 +686,10 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
       const index = _registerSlot(bucket, inst);
       _instScratch.multiplyMatrices(inst.nodeMat, shared.hingeMats[i]); // rest pose until first tick
       bucket.mesh.setMatrixAt(index, _instScratch);
+      // Record the span too, so a same-frame span flush on this bucket still
+      // covers the new slot (perf T9); needsUpdate stays for an immediate
+      // whole-buffer upload if a render lands before the next flush.
+      _markDirty(bucket, index);
       bucket.mesh.instanceMatrix.needsUpdate = true;
       inst.slots.push({ bucket, index, partIdx: i });
     }
@@ -693,7 +712,7 @@ function _writeInstancedPose(inst, g) {
     if (!pm) continue;
     _instScratch.multiplyMatrices(inst.nodeMat, pm);
     s.bucket.mesh.setMatrixAt(s.index, _instScratch);
-    _dirtyBuckets.add(s.bucket);
+    _markDirty(s.bucket, s.index);
   }
 }
 
@@ -716,14 +735,26 @@ function _reclaimInstancedSlots(inst) {
     }
     m.pop();
     b.mesh.count = m.length;
-    _dirtyBuckets.add(b);
+    _markDirty(b, s.index);
   }
   inst.slots.length = 0;
 }
 
 function _flushDirtyBuckets() {
-  for (const b of _dirtyBuckets) b.mesh.instanceMatrix.needsUpdate = true;
+  for (const b of _dirtyBuckets) {
+    const attr = b.mesh.instanceMatrix;
+    const span = _dirtySpan.get(b);
+    // One contiguous range per bucket (16 floats per matrix). three uploads
+    // only the registered ranges and clears them after the upload; with no
+    // span recorded it falls back to the whole buffer as before.
+    if (span && typeof attr.addUpdateRange === "function") {
+      attr.clearUpdateRanges?.();
+      attr.addUpdateRange(span.min * 16, (span.max - span.min + 1) * 16);
+    }
+    attr.needsUpdate = true;
+  }
   _dirtyBuckets.clear();
+  _dirtySpan.clear();
 }
 
 // ===========================================================================
@@ -1159,6 +1190,7 @@ export function disposeAnimatedScenery(_scene3d) {
   _bucketList.length = 0;
   _buckets.clear();
   _dirtyBuckets.clear();
+  _dirtySpan.clear();
   for (const g of _geomList) {
     try { g.dispose?.(); } catch (_) {}
   }
