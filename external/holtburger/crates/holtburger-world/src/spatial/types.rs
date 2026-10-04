@@ -1,4 +1,5 @@
 use crate::entity::EntityMotionSnapshot;
+use holtburger_protocol::messages::movement::InterpretedMotionCommand;
 use crate::spatial::position_manager::PositionManager;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Guid, Vector3};
@@ -285,6 +286,11 @@ pub struct SpatialBody {
     /// managers aren't permanently frozen (S8 OPEN Q6, documented
     /// deviation). Only written on the `?remoteInterp=on` ingest path.
     pub last_wire_contact: Option<bool>,
+    /// Retail `CMotionInterp::my_run_rate` for a remote body: latched from
+    /// every interpreted state whose forward command is RunForward
+    /// (acclient.c:344163) and persisting across later non-running states.
+    /// Default 1.0. Feeds [`SpatialBody::adjusted_max_speed`].
+    pub my_run_rate: f32,
 }
 
 impl SpatialBody {
@@ -300,6 +306,7 @@ impl SpatialBody {
             sampling: SpatialSamplingState::authoritative(now),
             position_manager: PositionManager::default(),
             last_wire_contact: None,
+            my_run_rate: 1.0,
         }
     }
 
@@ -315,7 +322,38 @@ impl SpatialBody {
             sampling: SpatialSamplingState::authoritative(now),
             position_manager: PositionManager::default(),
             last_wire_contact: None,
+            my_run_rate: 1.0,
         }
+    }
+
+    /// Install a new interpreted motion snapshot, latching `my_run_rate`
+    /// the way retail does on a RunForward state (acclient.c:344163).
+    pub fn set_motion_state(&mut self, motion_state: Option<EntityMotionSnapshot>) {
+        if let Some(ms) = motion_state {
+            if ms.forward_command == Some(InterpretedMotionCommand::RUN_FORWARD) {
+                if let Some(speed) = ms.forward_speed.map(|s| s.to_f32()) {
+                    if speed.is_finite() && speed > 0.0 {
+                        self.my_run_rate = speed;
+                    }
+                }
+            }
+        }
+        self.motion_state = motion_state;
+    }
+
+    /// Retail `CMotionInterp::get_adjusted_max_speed` (acclient.c:343512)
+    /// for a remote: RunForward → `forward_speed / current_speed_factor`
+    /// (the factor is 1.0 for a remote), else `my_run_rate` (a remote's
+    /// weenie has no InqRunRate); both × 4.0.
+    pub fn adjusted_max_speed(&self) -> f32 {
+        let rate = self
+            .motion_state
+            .filter(|ms| ms.forward_command == Some(InterpretedMotionCommand::RUN_FORWARD))
+            .and_then(|ms| ms.forward_speed)
+            .map(|s| s.to_f32())
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(self.my_run_rate);
+        rate * 4.0
     }
 
     pub fn spatial_sample(&self) -> Option<SpatialEntitySample> {

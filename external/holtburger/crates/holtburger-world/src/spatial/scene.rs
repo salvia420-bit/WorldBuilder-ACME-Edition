@@ -4823,10 +4823,9 @@ impl SpatialScene {
     /// `CPhysicsObj::update_object` runs after MovementManager/PartArray
     /// (acclient.c:322884-322886, 320029-320032), brought to every
     /// remote `Entity` body with an active node queue. `quantum` is one
-    /// solver slice (≤ MAX_QUANTUM). `max_speed` is passed as `0.0` →
-    /// the manager floors to `MAX_INTERPOLATED_VELOCITY` (7.5 m/s,
-    /// acclient.c:389239-389240; S8 OPEN Q5 — no Rust-side per-entity
-    /// motion speed yet). Contact gates per the body's last wire flag
+    /// solver slice (≤ MAX_QUANTUM). `max_speed` is the retail
+    /// `get_adjusted_max_speed() * 2` from the body's interpreted motion
+    /// ([`SpatialBody::adjusted_max_speed`]; S8 OPEN Q5 closed 2026-10-04). Contact gates per the body's last wire flag
     /// (`None` → contact, S8 OPEN Q6). Stepped poses land in the
     /// [`Self::take_remote_stepped_poses`] ledger for the JS export.
     /// Flag off (default) = zero work, byte-identical.
@@ -4864,9 +4863,17 @@ impl SpatialScene {
             let mut stepped = false;
             if body.position_manager.queue_active() {
                 let on_contact = body.last_wire_contact.unwrap_or(true);
+                // Retail `adjust_offset` (acclient.c:389228-389240):
+                // `my_max_speed = get_adjusted_max_speed() * 2.0`, the
+                // 7.5 m/s MAX_INTERPOLATED_VELOCITY floor only when that is
+                // ~0. Was a hard 0.0 here, so every remote caught up at
+                // 7.5 m/s — below even a run-rate-1.0 runner's 8 m/s — and
+                // fast mobs fell further behind each update (OpenAC
+                // comparison 2026-10-04, remote motion D2).
+                let max_speed = body.adjusted_max_speed() * 2.0;
                 let (outcome, commands) =
                     body.position_manager
-                        .step_remote(body.pose, quantum, 0.0, on_contact);
+                        .step_remote(body.pose, quantum, max_speed, on_contact);
                 // Apply the drain's physics side effects (retail UseTime
                 // calls SetPositionSimple/set_velocity directly,
                 // acclient.c:389320-389368).
@@ -5213,7 +5220,7 @@ impl SpatialScene {
         body.pose = pose;
         body.velocity = velocity;
         body.omega = omega;
-        body.motion_state = motion_state;
+        body.set_motion_state(motion_state);
         body.sampling.mode = SpatialSampleMode::AuthoritativeOnly;
         body.sampling.last_authoritative_update = now;
         body.sampling.last_derived_at = now;
@@ -5243,7 +5250,7 @@ impl SpatialScene {
             return;
         };
 
-        body.motion_state = motion_state;
+        body.set_motion_state(motion_state);
     }
 
     pub fn update_runtime_body_motion_state(

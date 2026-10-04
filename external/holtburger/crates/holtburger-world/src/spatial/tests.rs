@@ -3172,6 +3172,52 @@ mod remote_pose_driver {
         );
     }
 
+    fn run_snapshot(cmd: InterpretedMotionCommand, speed: f32) -> crate::entity::EntityMotionSnapshot {
+        crate::entity::EntityMotionSnapshot {
+            forward_command: Some(cmd),
+            forward_speed: crate::entity::OrderedMotionSpeed::from_f32(speed),
+            ..Default::default()
+        }
+    }
+
+    /// OpenAC comparison 2026-10-04 (remote motion D2): retail
+    /// `get_adjusted_max_speed` (acclient.c:343512) — RunForward uses the
+    /// state's forward_speed, anything else the latched `my_run_rate`
+    /// (:344163), both × 4.0; default rate 1.0.
+    #[test]
+    fn adjusted_max_speed_follows_retail_run_rate_latch() {
+        let mut body = SpatialBody::new(SpatialBodyId::Entity(GUID), outdoor_pose(0.0, 0.0), Instant::now());
+        assert_eq!(body.adjusted_max_speed(), 4.0, "default my_run_rate 1.0");
+        body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 2.5)));
+        assert_eq!(body.my_run_rate, 2.5, "RunForward latches my_run_rate");
+        assert_eq!(body.adjusted_max_speed(), 10.0);
+        body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::WALK_FORWARD, 1.0)));
+        assert_eq!(body.adjusted_max_speed(), 10.0, "a non-running state keeps the latched rate");
+        body.set_motion_state(None);
+        assert_eq!(body.my_run_rate, 2.5);
+    }
+
+    /// The remote catch-up now runs at `adjusted_max_speed * 2`
+    /// (acclient.c:389228-389240), not the 7.5 m/s floor.
+    #[test]
+    fn remote_catch_up_uses_adjusted_speed_not_floor() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene
+            .body_mut(body_id)
+            .unwrap()
+            .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 2.0)));
+        let target = outdoor_pose(80.0, 50.0);
+        reconcile(&mut scene, body_id, target, AuthoritativeBodySync::Snapshot, ctx(Some(true), Some(start)));
+        assert!(scene.body(body_id).unwrap().position_manager.queue_active());
+        let quantum = 0.1;
+        scene.step_remote_position_managers(quantum);
+        let moved = scene.body(body_id).unwrap().pose.coords.x - start.coords.x;
+        // run rate 2.0 → 2.0 * 4 * 2 = 16 m/s → 1.6 m in 0.1 s; the old
+        // floor capped it at 0.75 m.
+        assert!(moved > 1.5 && moved <= 1.6 + 1e-3, "moved {moved} m in one 0.1 s slice");
+    }
+
     /// Near + contact → `InterpolateTo` queues a node and the leash is
     /// armed on the object's OWN pose; the working pose is NOT snapped
     /// (acclient.c:323492-323495, :145223-145227).

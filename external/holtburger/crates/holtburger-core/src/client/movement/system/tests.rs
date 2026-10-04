@@ -6034,9 +6034,13 @@ fn simulation_tick_steps_remote_managers_once_per_slice() {
     };
 
     let (advanced_on, rows_on) = run(true);
+    // Retail `adjust_offset` max speed = get_adjusted_max_speed() × 2 =
+    // (default run rate 1.0 × 4.0) × 2 = 8 m/s (acclient.c:389228-389240,
+    // :343512) — not the 7.5 m/s floor, which only applies when that is ~0
+    // (OpenAC comparison 2026-10-04, remote motion D2).
     assert!(
-        (advanced_on - 1.875).abs() < 1e-3,
-        "3 slices × 7.5 m/s floor must advance 1.875 m, got {advanced_on}"
+        (advanced_on - 2.0).abs() < 1e-3,
+        "3 slices × 8 m/s (retail adjusted max speed) must advance 2.0 m, got {advanced_on}"
     );
     assert_eq!(rows_on, 1, "stepped body lands in the export ledger once");
 
