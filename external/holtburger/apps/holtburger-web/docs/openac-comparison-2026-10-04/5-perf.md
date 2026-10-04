@@ -46,6 +46,13 @@ exact-set rather than run-granular; the `?drawPools` pools still turn culling of
 T2 landed opt-in in its narrow form (`?statBatchMemoSlots=N`): one memo slot per camera so CSM cascades
 stop evicting the colour pass's answer; the bucket epoch is the per-record stamp. A per-LB stamp for
 the light rescans is not built.
+T3 landed its Rust/decode half: the triangulation memo hands out shared `Arc`s (hits stopped
+deep-cloning every model's triangles once per prefetch dry-run round plus once per final decode, per
+LB bake), `did_degrade` is memoized behind the same miss gate (it re-parsed the Setup/GfxObj records
+on every bake), `pack_model_mesh` packs from a slice, and the bulk `ModelMesh` getters copy once into
+JS instead of twice. Re-entering an LB therefore no longer decodes or parses anything on the statics
+path. NOT done: the GPU half (geometry keyed by content id with a refcount, so re-entry also skips
+the per-LB `BufferGeometry` build and atlas re-upload); that is JS-side ownership work.
 
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.

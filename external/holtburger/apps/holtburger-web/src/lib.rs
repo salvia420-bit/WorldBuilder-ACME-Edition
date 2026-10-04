@@ -6207,12 +6207,16 @@ pub struct ModelMesh {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl ModelMesh {
+    // Perf T3: the three bulk planes copy STRAIGHT into a JS typed array. A
+    // `Vec<f32>` return cloned the plane in Rust and wasm-bindgen then copied
+    // that clone out — two copies and a transient allocation per read. Same JS
+    // type (`Float32Array`), same contents, one copy.
     #[wasm_bindgen(getter)]
-    pub fn positions(&self) -> Vec<f32> { self.positions.clone() }
+    pub fn positions(&self) -> js_sys::Float32Array { js_sys::Float32Array::from(self.positions.as_slice()) }
     #[wasm_bindgen(getter)]
-    pub fn uvs(&self) -> Vec<f32> { self.uvs.clone() }
+    pub fn uvs(&self) -> js_sys::Float32Array { js_sys::Float32Array::from(self.uvs.as_slice()) }
     #[wasm_bindgen(getter)]
-    pub fn normals(&self) -> Vec<f32> { self.normals.clone() }
+    pub fn normals(&self) -> js_sys::Float32Array { js_sys::Float32Array::from(self.normals.as_slice()) }
     #[wasm_bindgen(getter, js_name = surfaceIndices)]
     pub fn surface_indices(&self) -> Vec<u8> { self.surface_indices.clone() }
     /// T2: per-triangle `sides_type` (cull bit). Length = `tri_count`.
@@ -9319,6 +9323,9 @@ fn model_tri_bytes(tris: &[Tri]) -> usize {
 /// survived re-init, a latent staleness hole) and available to probes.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn model_tri_cache_clear_all() -> u32 {
+    if let Ok(mut m) = DID_DEGRADE_MEMO.lock() {
+        m.clear();
+    }
     model_tri_cache().clear()
 }
 
@@ -9568,12 +9575,12 @@ mod a15_s2_shared_read_gate {
 fn triangulate_model_counted<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
-) -> (Option<Vec<Tri>>, u32) {
+) -> (Option<std::sync::Arc<Vec<Tri>>>, u32) {
     let counting = MissCountingSource {
         inner: source,
         misses: std::sync::atomic::AtomicU32::new(0),
     };
-    let tris = triangulate_model(&counting, model_id);
+    let tris = triangulate_model_shared(&counting, model_id);
     let misses = counting.misses.load(std::sync::atomic::Ordering::Relaxed);
     (tris, misses)
 }
@@ -9586,18 +9593,65 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     texture_changes: &[(u8, u32, u32)],
     mtable_override: Option<u32>,
 ) -> Option<Vec<Tri>> {
-    use holtburger_dat::file_type::GfxObj;
-    use holtburger_dat::ResourceKey;
-    use holtburger_dat::ResourceSource as _; // trait method on `counting`
     // Substitution-free triangulations are fully keyed by `model_id` → memoize.
     // (Character equipment/clothing use substitutions; static scenery does not.)
     let subst_free =
         model_changes.is_empty() && texture_changes.is_empty() && mtable_override.is_none();
     if subst_free {
-        if let Some(cached) = model_tri_cache().get(&model_id) {
-            return Some((*cached).clone());
-        }
+        // Perf T3: the memo hands out `Arc`s. This entry point returns an
+        // OWNED Vec, so a hit still pays one clone here; the hot callers use
+        // `triangulate_model_shared` and pay none.
+        return triangulate_model_shared(source, model_id).map(|a| {
+            std::sync::Arc::try_unwrap(a).unwrap_or_else(|a| (*a).clone())
+        });
     }
+    triangulate_model_uncached(source, model_id, model_changes, texture_changes, mtable_override)
+        .map(|(tris, _complete)| tris)
+}
+
+/// Perf T3 (OpenAC comparison 2026-10-04, `ObjectMeshManager` refcount): the
+/// substitution-free triangulation of `model_id` as a SHARED view of the memo
+/// entry. A hit is a refcount bump — no copy of the triangles — which is what
+/// every landblock re-entry and every prefetch dry-run pass used to pay in
+/// full (`(*cached).clone()`), once per walk round plus once for the final
+/// decode, per model, per LB. Insert rules are unchanged: only FULLY-RESIDENT
+/// decodes memoize (see `MissCountingSource`); a partial decode is returned
+/// to this caller and never cached.
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_model_shared<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> Option<std::sync::Arc<Vec<Tri>>> {
+    if let Some(cached) = model_tri_cache().get(&model_id) {
+        return Some(cached);
+    }
+    let (tris, complete) = triangulate_model_uncached(source, model_id, &[], &[], None)?;
+    let tris = std::sync::Arc::new(tris);
+    if complete {
+        let bytes = model_tri_bytes(&tris);
+        model_tri_cache().insert(
+            model_id,
+            std::sync::Arc::clone(&tris),
+            bytes,
+            |v| std::sync::Arc::strong_count(v) == 1,
+        );
+    }
+    Some(tris)
+}
+
+/// The decode itself, never memoized. `complete` = no record was missing
+/// during the walk (the memo-insert gate).
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_model_uncached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+    mtable_override: Option<u32>,
+) -> Option<(Vec<Tri>, bool)> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::ResourceSource as _; // trait method on `counting`
     let counting = MissCountingSource {
         inner: source,
         misses: std::sync::atomic::AtomicU32::new(0),
@@ -9637,16 +9691,7 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     // or mis-posed — legitimate mid-prefetch dry-run states that must be
     // re-decoded once the records land, never cached.
     let complete = counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0;
-    if subst_free && complete {
-        let bytes = model_tri_bytes(&tris);
-        model_tri_cache().insert(
-            model_id,
-            std::sync::Arc::new(tris.clone()),
-            bytes,
-            |v| std::sync::Arc::strong_count(v) == 1,
-        );
-    }
-    Some(tris)
+    Some((tris, complete))
 }
 
 /// Follow-on #5 (LOD) — resolve a model_id's `did_degrade` chain entry.
@@ -9733,12 +9778,59 @@ fn resolve_did_degrade<S: holtburger_dat::ResourceSource + ?Sized>(
     }
 }
 
-/// Pack a `Vec<Tri>` into the wasm-bindgen-friendly [`ModelMesh`]
+/// Perf T3: memo of [`resolve_did_degrade`]. It re-read and re-parsed the
+/// model's GfxObj (and, for a Setup, the Setup AND its first part's GfxObj) on
+/// every `fetch_model_meshes` call, i.e. once per model per landblock bake,
+/// with the triangles themselves already memoized — the last per-re-entry
+/// DECODE on the statics path. The answer is a pure function of `model_id`
+/// against the immutable DAT, so it is stored once, but ONLY when the lookup
+/// read every record it needed: `resolve_did_degrade` folds a missing record
+/// into the same `0` as "no degrade chain", and caching that would hide the
+/// LOD for the session (the same poisoning the tri memo's gate exists for).
+/// 8 bytes per distinct model id; cleared with the tri memo.
+#[cfg(any(target_arch = "wasm32", test))]
+static DID_DEGRADE_MEMO: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u32, u32>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Bound on [`DID_DEGRADE_MEMO`]: far above the distinct static model ids a
+/// session meets; past it the map is dropped and refilled (8 B per entry, so
+/// this caps it at ~0.5 MiB of linear memory).
+#[cfg(any(target_arch = "wasm32", test))]
+const DID_DEGRADE_MEMO_CAP: usize = 65_536;
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_did_degrade_cached<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> u32 {
+    if let Ok(m) = DID_DEGRADE_MEMO.lock() {
+        if let Some(&v) = m.get(&model_id) {
+            return v;
+        }
+    }
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
+    let v = resolve_did_degrade(&counting, model_id);
+    if counting.misses.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        if let Ok(mut m) = DID_DEGRADE_MEMO.lock() {
+            if m.len() >= DID_DEGRADE_MEMO_CAP {
+                m.clear();
+            }
+            m.insert(model_id, v);
+        }
+    }
+    v
+}
+
+/// Pack a triangle slice into the wasm-bindgen-friendly [`ModelMesh`]
 /// shape: dedupe surface_dids into the `surfaces` array, replace each
 /// triangle's `surface_did` with a u8 index, flatten per-triangle
 /// vertex data into typed-array buffers, compute the world bbox.
 #[cfg(target_arch = "wasm32")]
-fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
+fn pack_model_mesh(tris: &[Tri]) -> ModelMesh {
     // Surface dedupe + index map (insertion-order preserved for
     // determinism). u8 cap = 255 unique surfaces per model — fine
     // for AC (most models use ≤8).
@@ -9761,7 +9853,7 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     let mut bbox_min = [f32::INFINITY; 3];
     let mut bbox_max = [f32::NEG_INFINITY; 3];
 
-    for tri in &tris {
+    for tri in tris {
         let sidx: u8 = if tri.surface_did == 0 {
             0xFF // sentinel "no surface"
         } else if let Some(&idx) = sidx_lookup.get(&tri.surface_did) {
@@ -15340,15 +15432,15 @@ pub async fn fetch_model_mesh(model_id: u32) -> Result<ModelMesh, JsValue> {
     let source = global_source::global_source();
     let initial = [ResourceKey::new("eor/portal", model_id)];
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-        let _ = triangulate_model(s, model_id);
+        let _ = triangulate_model_shared(s, model_id);
     })
     .await?;
-    let tris = triangulate_model(source.as_ref(), model_id)
+    let tris = triangulate_model_shared(source.as_ref(), model_id)
         .ok_or_else(|| JsValue::from_str(&format!("triangulate_model 0x{model_id:08X}: failed")))?;
-    let mut mesh = pack_model_mesh(tris);
+    let mut mesh = pack_model_mesh(&tris);
     // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
     // variant; JS uses plain Mesh in that case.
-    mesh.did_degrade = resolve_did_degrade(source.as_ref(), model_id);
+    mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), model_id);
     Ok(mesh)
 }
 
@@ -15377,13 +15469,13 @@ pub async fn fetch_model_did_degrades(
     let ids_for_walk = model_ids.clone();
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
         for &id in &ids_for_walk {
-            let _ = resolve_did_degrade(s, id);
+            let _ = resolve_did_degrade_cached(s, id);
         }
     })
     .await?;
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
-        out.push(resolve_did_degrade(source.as_ref(), id));
+        out.push(resolve_did_degrade_cached(source.as_ref(), id));
     }
     Ok(out)
 }
@@ -15421,9 +15513,11 @@ pub async fn fetch_model_meshes(
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     let ids_for_walk = model_ids.clone();
+    // Perf T3: the dry-run passes take shared views — a memo hit is a refcount
+    // bump, not a copy of every model's triangles per round.
     let walk = |s: &dyn holtburger_dat::ResourceSource| {
         for &id in &ids_for_walk {
-            let _ = triangulate_model(s, id);
+            let _ = triangulate_model_shared(s, id);
         }
     };
     if urgent {
@@ -15445,7 +15539,7 @@ pub async fn fetch_model_meshes(
             let retry_keys = [ResourceKey::new("eor/portal", id)];
             // streamFix (2026-07-02): the per-id retry keeps the caller's lane.
             let retry_walk = move |s: &dyn holtburger_dat::ResourceSource| {
-                let _ = triangulate_model(s, id);
+                let _ = triangulate_model_shared(s, id);
             };
             let _ = if urgent {
                 prefetch::ensure_walk_prefetched_urgent(&source, &retry_keys, retry_walk).await
@@ -15466,11 +15560,11 @@ pub async fn fetch_model_meshes(
             );
         }
         let tris = tris_opt.unwrap_or_default();
-        let mut mesh = pack_model_mesh(tris);
+        let mut mesh = pack_model_mesh(&tris);
         mesh.decode_misses = misses;
         // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
         // variant; JS uses plain Mesh in that case.
-        mesh.did_degrade = resolve_did_degrade(source.as_ref(), id);
+        mesh.did_degrade = resolve_did_degrade_cached(source.as_ref(), id);
         out.push(mesh);
     }
     Ok(out)
@@ -15709,7 +15803,7 @@ pub async fn fetch_building_placement(
         );
     }
     let part_count = parts_tris.len();
-    let parts: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
+    let parts: Vec<ModelMesh> = parts_tris.iter().map(|t| pack_model_mesh(t)).collect();
     let hinge_frames = compute_hinge_frames(source.as_ref(), model_id, part_count);
     Ok(BuildingPlacement {
         setup_id: model_id,
@@ -20132,7 +20226,7 @@ fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
             log::warn!(
                 "[geom-audit] fetch_environment_mesh 0x{environment_id:08X}: record unavailable — cell mesh will be EMPTY"
             );
-            return pack_model_mesh(Vec::new());
+            return pack_model_mesh(&[]);
         }
     };
     let env = match Environment::unpack(&mut std::io::Cursor::new(&bytes)) {
@@ -20141,12 +20235,12 @@ fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
             log::warn!(
                 "[geom-audit] fetch_environment_mesh 0x{environment_id:08X}: parse failed ({e}) — cell mesh will be EMPTY"
             );
-            return pack_model_mesh(Vec::new());
+            return pack_model_mesh(&[]);
         }
     };
     let mut tris = Vec::new();
     append_environment_tris(&mut tris, &env, surfaces, cell_structure);
-    pack_model_mesh(tris)
+    pack_model_mesh(&tris)
 }
 
 /// Phase 6 step C: synthesize a fixture EnvCell + Environment pair in
@@ -20349,7 +20443,7 @@ pub fn holtburg_envcell_synthetic_textured_mesh_surface() -> u32 {
     // G16 fix-1: the fixture's single CellStruct is keyed `0`
     // (`cell_struct_id = 0` above), so select cellstruct 0.
     append_environment_tris(&mut tris, &env, &surfaces, 0);
-    let mesh = pack_model_mesh(tris);
+    let mesh = pack_model_mesh(&tris);
     mesh.surfaces.first().copied().unwrap_or(0)
 }
 
@@ -22460,7 +22554,7 @@ pub async fn fetch_entity_model_render(
         }
     }
 
-    Ok(pack_model_mesh(tris))
+    Ok(pack_model_mesh(&tris))
 }
 
 /// Phase 4 step 6 Tier 2 + walk-cycle polish: bundle of walk + run
@@ -22694,7 +22788,7 @@ pub async fn fetch_entity_cycle_frames(
                         Some(f),
                         &mut tris,
                     );
-                    out.push(pack_model_mesh(tris));
+                    out.push(pack_model_mesh(&tris));
                 }
                 // 2D sprite path plays meshes at a single uniform framerate.
                 // Derive it from the total clip duration so multi-segment
@@ -24324,7 +24418,7 @@ async fn build_entity_animation_counted(
 #[cfg(target_arch = "wasm32")]
 fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityAnimationData {
     let part_meshes: Vec<ModelMesh> =
-        inner.part_tris.into_iter().map(pack_model_mesh).collect();
+        inner.part_tris.iter().map(|t| pack_model_mesh(t)).collect();
     let hooks: Vec<AnimationHookJs> = inner
         .hooks
         .into_iter()
@@ -57730,6 +57824,76 @@ mod tests_animation_keyframes_batch {
         let empty_again = MockSource { files: HashMap::new() };
         let tris = triangulate_model(&empty_again, setup_id).expect("memoized decode");
         assert!(!tris.is_empty(), "complete decode should be served from the memo");
+    }
+
+    /// Perf T3: a memo hit is a SHARED view of the cached entry — the same
+    /// allocation every time, never a copy. Before, every hit deep-cloned the
+    /// whole `Vec<Tri>` (once per prefetch dry-run round and once more for the
+    /// final decode, per model, per landblock bake).
+    #[test]
+    fn triangulation_memo_hits_share_one_allocation() {
+        let setup_id: u32 = 0x02F0_0307;
+        let part_id: u32 = 0x01F0_0307;
+        let mut files = HashMap::new();
+        files.insert(("eor/portal".to_string(), setup_id), synth_setup_no_mt(setup_id, &[part_id]));
+        files.insert(("eor/portal".to_string(), part_id), synth_gfx(part_id, 0xAAF0_0307, 0.0));
+        let src = MockSource { files };
+        let a = triangulate_model_shared(&src, setup_id).expect("decode");
+        let b = triangulate_model_shared(&src, setup_id).expect("memo hit");
+        assert!(!a.is_empty());
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "a memo hit must not copy the triangles");
+        let (c, misses) = triangulate_model_counted(&MockSource { files: HashMap::new() }, setup_id);
+        assert_eq!(misses, 0, "a hit reads no records");
+        assert!(std::sync::Arc::ptr_eq(&a, &c.expect("served from memo")));
+        // The owned entry point still hands back equal triangles.
+        let owned = triangulate_model(&src, setup_id).expect("owned");
+        assert_eq!(owned.len(), a.len());
+    }
+
+    /// Perf T3: an INCOMPLETE decode is returned to its caller but is not the
+    /// memo's entry — the next complete decode replaces it.
+    #[test]
+    fn triangulation_shared_partial_is_not_memoized() {
+        let setup_id: u32 = 0x02F0_0308;
+        let part_id: u32 = 0x01F0_0308;
+        let mut files = HashMap::new();
+        files.insert(("eor/portal".to_string(), setup_id), synth_setup_no_mt(setup_id, &[part_id]));
+        let partial = triangulate_model_shared(&MockSource { files: files.clone() }, setup_id)
+            .expect("soft-tolerated decode");
+        assert!(partial.is_empty());
+        files.insert(("eor/portal".to_string(), part_id), synth_gfx(part_id, 0xAAF0_0308, 0.0));
+        let full = triangulate_model_shared(&MockSource { files }, setup_id).expect("full");
+        assert!(!full.is_empty(), "the partial result was memoized");
+    }
+
+    /// Perf T3: `resolve_did_degrade_cached` stores the answer once, and only
+    /// when every record it needed was present — a missing part reads as "no
+    /// degrade" and must not be cached as that for the session.
+    #[test]
+    fn did_degrade_memo_skips_incomplete_lookups() {
+        let setup_id: u32 = 0x02F0_0309;
+        let part_id: u32 = 0x01F0_0309;
+        let degrade: u32 = 0x01F0_1309;
+        let mut files = HashMap::new();
+        files.insert(("eor/portal".to_string(), setup_id), synth_setup_no_mt(setup_id, &[part_id]));
+        let mid = MockSource { files: files.clone() };
+        assert_eq!(resolve_did_degrade_cached(&mid, setup_id), 0, "part missing -> 0");
+
+        let mut gfx = GfxObj::unpack(&mut Cursor::new(synth_gfx(part_id, 0xAAF0_0309, 0.0)))
+            .expect("synth gfx parses");
+        gfx.did_degrade = Some(degrade);
+        let mut bytes = Vec::new();
+        gfx.pack(&mut Cursor::new(&mut bytes)).unwrap();
+        files.insert(("eor/portal".to_string(), part_id), bytes);
+        let full = MockSource { files };
+        assert_eq!(
+            resolve_did_degrade_cached(&full, setup_id),
+            degrade,
+            "the incomplete lookup's 0 was memoized"
+        );
+        // Complete answers ARE memoized: no records needed any more.
+        let none = MockSource { files: HashMap::new() };
+        assert_eq!(resolve_did_degrade_cached(&none, setup_id), degrade);
     }
 
     /// **T5 — SetupModel per-part default_scale (flag 0x02).** ACE applies
