@@ -140,6 +140,15 @@ pub trait CellWorld {
     /// `LandDefs::get_block_offset(base, other)` — landblock delta between two
     /// cell ids (zero within one landblock).
     fn block_offset(&self, base_cell: u32, other_cell: u32) -> Vector3;
+    /// `LandDefs::adjust_to_outside` (acclient.c:467434) for
+    /// `check_other_cells`' outdoor tail: the outdoor cell that actually
+    /// contains `point` (in the driver's frame), starting from the outdoor
+    /// id `cell_id`; `None` when there is none. The default is the old
+    /// deterministic stub (snap to the landblock's `…0000` id), kept for
+    /// test worlds; the scene bridge overrides it with the real grid walk.
+    fn adjust_to_outside(&self, cell_id: u32, _point: Vector3) -> Option<u32> {
+        (cell_id >> 16 != 0).then_some(cell_id & 0xFFFF_0000)
+    }
 }
 
 // ─── The CObjCell abstraction ────────────────────────────────────────────────

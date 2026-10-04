@@ -437,6 +437,16 @@ impl CObjCell for SceneObjCell {
         if let Some(m) = &self.membership {
             return m.tree.point_inside_cell(&m.world_to_local(point));
         }
+        // Outdoor land cell: retail `CLandCell::point_in_cell` is
+        // `find_terrain_poly(point) != 0` (acclient.c:354881) — an XY
+        // footprint test at ANY height. The AABB's ±64 m z band made a pick
+        // fail when falling from height or when ringed from a deep dungeon
+        // (OpenAC comparison 2026-10-04, collision F7).
+        if (self.cell_id & 0xFFFF) < 0x100 {
+            return self.aabb.is_some_and(|a| {
+                point.x >= a.min.x && point.x <= a.max.x && point.y >= a.min.y && point.y <= a.max.y
+            });
+        }
         match self.aabb {
             Some(a) => {
                 point.x >= a.min.x
@@ -841,6 +851,16 @@ impl CellWorld for SceneWorld<'_> {
     fn block_offset(&self, base_cell: u32, other_cell: u32) -> Vector3 {
         LandDefs::get_block_offset(base_cell, other_cell)
     }
+
+    /// The real `LandDefs::adjust_to_outside` grid walk: localize the WORLD
+    /// point by `cell_id`'s landblock origin (the ACE ring math is
+    /// block-local, as in [`Self::add_all_outside_cells`]) and return the
+    /// outdoor cell that contains it — in a neighbouring landblock when the
+    /// point has crossed an edge.
+    fn adjust_to_outside(&self, cell_id: u32, point: Vector3) -> Option<u32> {
+        let mut local = point - landblock_world_origin(cell_id);
+        LandDefsSeam::adjust_to_outside(self.scene, cell_id, &mut local)
+    }
 }
 
 // ─── Landscape + LandDefsSeam for SpatialScene (Phase D / WS1) ────────────────
@@ -1213,7 +1233,10 @@ fn faithful_terrain_normal(scene: &SpatialScene, pose: &WorldPosition) -> Option
 /// resident terrain, or when no floor poly is found / the plane is vertical.
 /// Used only by the settle-land EPS hover-snap in
 /// [`faithful_find_transitional_position`] (FINDING #2, 2026-07-23).
-fn faithful_terrain_floor(scene: &SpatialScene, pose: &WorldPosition) -> Option<(f32, Vector3)> {
+pub(super) fn faithful_terrain_floor(
+    scene: &SpatialScene,
+    pose: &WorldPosition,
+) -> Option<(f32, Vector3)> {
     let cell_id = scene.current_cell(pose);
     let heights = scene.terrain_cell_heights(cell_id)?;
     let (lb_x, lb_y) = pose.landblock_coords();
@@ -1294,6 +1317,9 @@ pub fn faithful_find_transitional_position(
     let radius = input.object.radius;
     let spheres = capsule_spheres(&input.object);
 
+    // The scene driver runs in WORLD coordinates: zero retail's ±192 m
+    // landblock offsets for the whole call (collision F5).
+    let _world_frame = holtburger_dat::transition::types::WorldFrameGuard::enter();
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
     t.object_info.state = input.object.state; // bit layout matches dat's
@@ -1953,6 +1979,9 @@ pub fn faithful_find_placement_position(
 
     let spheres = capsule_spheres(object);
 
+    // The scene driver runs in WORLD coordinates: zero retail's ±192 m
+    // landblock offsets for the whole call (collision F5).
+    let _world_frame = holtburger_dat::transition::types::WorldFrameGuard::enter();
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
     // A freshly-teleported mover enters placement with contact state CLEARED —
@@ -2100,6 +2129,9 @@ pub(crate) fn faithful_diag_step(
     let radius = input.object.radius;
     let spheres = capsule_spheres(&input.object);
 
+    // The scene driver runs in WORLD coordinates: zero retail's ±192 m
+    // landblock offsets for the whole call (collision F5).
+    let _world_frame = holtburger_dat::transition::types::WorldFrameGuard::enter();
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
     t.object_info.state = input.object.state;
@@ -2218,6 +2250,7 @@ mod drift {
         classify_cell_water, faithful_diag_step, faithful_find_transitional_position,
         FaithfulMover, SceneWorld, WaterType,
     };
+    use holtburger_dat::transition::objcell::CellWorld;
     use crate::spatial::entity_collision::EntityCollider;
     use crate::spatial::scene::{CellMembership, CellPhysicsBsp, SpatialScene};
     use crate::spatial::types::CellPortalPolygon;
@@ -2576,6 +2609,100 @@ mod drift {
             "sank below the terrain over a tunnel: z={} < {terrain}",
             out.pose.coords.z
         );
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F4/F5): walking across a
+    /// landblock line on flat terrain stays grounded and lands in the next
+    /// landblock (a guard on the world-frame driver at landblock edges).
+    #[test]
+    fn walking_across_a_landblock_line_stays_on_the_terrain() {
+        let terrain = 20.0;
+        let lb_a = 0x1234_0000u32;
+        let lb_b = 0x1334_0000u32; // x + 1
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(lb_a, [terrain; 81]);
+        scene.populate_terrain_heights(lb_b, [terrain; 81]);
+        let env = DriftEnv { scene };
+        let mut cur = WorldPosition {
+            landblock_id: Guid(lb_a | 0x0039),
+            coords: v(190.6, 100.0, terrain),
+            rotation: Quaternion::identity(),
+        };
+        for _ in 0..6 {
+            let mut end = cur;
+            end.coords.x += 0.5;
+            end.coords.z -= SINK;
+            let out = faithful_find_transitional_position(&env, &input_for(cur, end), true, true);
+            assert!(
+                (out.pose.coords.z - terrain).abs() < 0.05,
+                "left the terrain crossing the landblock line: z={} at lb 0x{:08X} x={}",
+                out.pose.coords.z,
+                out.pose.landblock_id.0,
+                out.pose.coords.x
+            );
+            cur = out.pose;
+        }
+        assert_eq!(cur.landblock_id.0 & 0xFFFF_0000, lb_b, "ended in the next landblock");
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F4): the outdoor tail of
+    /// `check_other_cells` resolves the cell that really contains the point —
+    /// across a landblock edge too — instead of the old stub's `…0000` id,
+    /// which the next outdoor ring rejected (no terrain for the rest of the
+    /// transition).
+    #[test]
+    fn scene_adjust_to_outside_walks_the_real_grid() {
+        let scene = SpatialScene::new();
+        let world = SceneWorld { scene: &scene };
+        let lb_a = 0x1234_0000u32;
+        let origin = v(18.0 * 192.0, 52.0 * 192.0, 0.0);
+        // Inside landblock A, cell column 0 / row 4 → low word 5.
+        assert_eq!(
+            CellWorld::adjust_to_outside(&world, lb_a | 0x0001, origin + v(1.0, 100.0, 7.0)),
+            Some(lb_a | 0x0005)
+        );
+        // 1 m past A's +x edge → landblock x+1 (0x1334), column 0 / row 4.
+        assert_eq!(
+            CellWorld::adjust_to_outside(&world, lb_a | 0x0039, origin + v(193.0, 100.0, 7.0)),
+            Some(0x1334_0005)
+        );
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F7 + F4): a long fall from
+    /// more than 64 m above the terrain lands on it. The outdoor cell's
+    /// `point_in_cell` used an AABB with a ±64 m z band, so the pick failed up
+    /// there and the stub `adjust_to_outside` left the step with no terrain.
+    #[test]
+    fn a_fall_from_high_above_lands_on_the_terrain() {
+        let terrain = 20.0;
+        let lb = 0x1234_0000u32;
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(lb, [terrain; 81]);
+        let env = DriftEnv { scene };
+        let mut cur = WorldPosition {
+            landblock_id: Guid(lb | 0x0013),
+            coords: v(60.0, 60.0, terrain + 100.0),
+            rotation: Quaternion::identity(),
+        };
+        let mut landed = false;
+        for _ in 0..80 {
+            let mut end = cur;
+            end.coords.z -= 4.0;
+            let mut input = input_for(cur, end);
+            input.airborne = true;
+            let out = faithful_find_transitional_position(&env, &input, true, true);
+            assert!(
+                out.pose.coords.z >= terrain - 0.05,
+                "fell through the terrain from a high fall: z={}",
+                out.pose.coords.z
+            );
+            if (out.pose.coords.z - terrain).abs() < 0.05 {
+                landed = true;
+                break;
+            }
+            cur = out.pose;
+        }
+        assert!(landed, "never reached the terrain");
     }
 
     /// The predicate itself, against the decomp's `-r < d < r` band

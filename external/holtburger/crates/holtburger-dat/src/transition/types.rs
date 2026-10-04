@@ -89,6 +89,35 @@ pub fn normalize_check_small(v: &mut Vector3) -> bool {
 /// `LandDefs` static helpers (decomp `LandDefs::` namespace).
 pub struct LandDefs;
 
+thread_local! {
+    /// See [`WorldFrameGuard`].
+    static WORLD_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII switch: while alive, [`LandDefs::get_block_offset`] returns zero on
+/// this thread. Retail runs the transition in landblock-LOCAL coordinates and
+/// re-expresses points across a landblock edge with ±192 m block offsets. The
+/// world-crate bridge runs the same driver in WORLD coordinates, where those
+/// offsets are wrong at every landblock edge (cross-block `point_in_cell`
+/// picks fail, `adjust_check_pos` / slide / contact-plane rebasing shift by
+/// 192 m). OpenAC's world-space port has no block offset in `AdjustOffset`
+/// either. The bridge holds one of these around each driver call (OpenAC
+/// comparison 2026-10-04, collision F5); block-local callers (the unit tests)
+/// are unaffected.
+pub struct WorldFrameGuard(bool);
+
+impl WorldFrameGuard {
+    pub fn enter() -> Self {
+        Self(WORLD_FRAME.with(|w| w.replace(true)))
+    }
+}
+
+impl Drop for WorldFrameGuard {
+    fn drop(&mut self) {
+        WORLD_FRAME.with(|w| w.set(self.0));
+    }
+}
+
 impl LandDefs {
     /// `LandDefs::get_block_offset` (`acclient.c:123110`). The world offset of
     /// `cell_to`'s landblock origin relative to `cell_from`'s:
@@ -102,6 +131,9 @@ impl LandDefs {
     /// (A08/A15).
     // acclient.c:123110
     pub fn get_block_offset(cell_from: u32, cell_to: u32) -> Vector3 {
+        if WORLD_FRAME.with(|w| w.get()) {
+            return Vector3::zero();
+        }
         // Same landblock (high 16 bits equal) → zero (acclient.c:123121).
         if cell_from >> 16 == cell_to >> 16 {
             return Vector3::zero();
@@ -722,6 +754,25 @@ mod tests {
         // Pure +Y: (5,5)→(5,6): +192 Y.
         let o = LandDefs::get_block_offset(0x0505_0000, 0x0506_0000);
         assert!(approx_v(o, Vector3::new(0.0, 192.0, 0.0)), "got {o:?}");
+    }
+
+    #[test]
+    fn world_frame_guard_zeroes_block_offset_and_restores() {
+        let cross = LandDefs::get_block_offset(0x0102_0001, 0x0302_0001);
+        assert_ne!(cross, Vector3::zero());
+        {
+            let _g = WorldFrameGuard::enter();
+            assert_eq!(LandDefs::get_block_offset(0x0102_0001, 0x0302_0001), Vector3::zero());
+            {
+                let _nested = WorldFrameGuard::enter();
+            }
+            assert_eq!(
+                LandDefs::get_block_offset(0x0102_0001, 0x0302_0001),
+                Vector3::zero(),
+                "a nested guard restores the outer state, not false"
+            );
+        }
+        assert_eq!(LandDefs::get_block_offset(0x0102_0001, 0x0302_0001), cross);
     }
 
     #[test]

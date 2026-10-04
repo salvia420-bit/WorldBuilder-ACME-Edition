@@ -21,33 +21,12 @@
 
 use super::objcell::{find_cell_list, CObjCell, CellWorld};
 use super::types::{CTransition, InsertType, ObjCellHandle, Position, TransitionState};
-use holtburger_common::Vector3;
 
 /// SEAM (B3 / A13): `CPhysicsObj::FindObjCollisions` (`acclient.c:316159`) — the
 /// object-level collision driver `check_collisions` delegates to. `check_collisions`
 /// reports a collision when this is `!= 1` (anything other than OK).
 pub trait FindObjCollisions {
     fn find_obj_collisions(&self, t: &mut CTransition) -> i32;
-}
-
-/// SEAM (B3 — `LandDefs`/landscape): `LandDefs::adjust_to_outside`
-/// (`acclient.c:467434`). Snaps a landblock-relative / indoor id to its
-/// enclosing OUTDOOR landcell, rewriting `cell_id` (and, in the real client, the
-/// block-local point). Returns `true` when an outside cell exists.
-///
-/// NOT a faithful landblock-grid walk: this deterministic stub snaps to
-/// `id & 0xFFFF_0000` (the landblock's `…0000` landcell) and zeroes a blockless
-/// id, which is enough to exercise both `check_other_cells` outdoor-reentry tail
-/// branches. Interior sweeps (low `u16 >= 0x100`) never reach it. B3 swaps in the
-/// real `LandDefs::adjust_to_outside` before relying on outdoor cell re-entry.
-fn adjust_to_outside_seam(cell_id: &mut u32, _loc: &mut Vector3) -> bool {
-    if *cell_id >> 16 == 0 {
-        *cell_id = 0;
-        false
-    } else {
-        *cell_id &= 0xFFFF_0000;
-        true
-    }
 }
 
 impl CTransition {
@@ -249,7 +228,14 @@ impl CTransition {
             frame: self.sphere_path.check_pos.frame, // Frame::operator=
         };
         if (p.objcell_id & 0xFFFF) < 0x100 {
-            adjust_to_outside_seam(&mut p.objcell_id, &mut p.frame.origin); // SEAM(B3)
+            // `LandDefs::adjust_to_outside` through the world (OpenAC
+            // comparison 2026-10-04, collision F4). Was a stub that snapped
+            // to the landblock's `…0000` id, which the next
+            // `find_cell_list`'s real ring rejected (`cell_in_range`) — so
+            // every failed outdoor pick (landblock seams, the z band) left
+            // the rest of the transition with no terrain at all. The point
+            // is not rewritten: the scene driver runs in WORLD coordinates.
+            p.objcell_id = world.adjust_to_outside(p.objcell_id, p.frame.origin).unwrap_or(0);
         }
         if p.objcell_id != 0 {
             // v11 != 0 — reparent into the enclosing outside cell.
