@@ -64,6 +64,7 @@ export function __resetStatBatchXForTest() {
   for (const k of Object.keys(_mergeStats)) _mergeStats[k] = 0;
   for (const k of Object.keys(_memoStats)) _memoStats[k] = 0;
   for (const k of Object.keys(_sphereStats)) _sphereStats[k] = 0;
+  for (const k of Object.keys(_runsStats)) _runsStats[k] = 0;
   _camPose.camera = null;
   _warned.clear();
 }
@@ -1116,9 +1117,294 @@ function _trySphereBuild(bm, camera, geometry, material, transLocal, rotSlack) {
 function _sphereOnBeforeRender(renderer, scene, camera, geometry, material, group) {
   if (camera && material && geometry) {
     _sphereStats.calls += 1;
+    if (_tryRunsBuild(this, camera, geometry, material, 0, 0) !== null) return undefined;
     if (_trySphereBuild(this, camera, geometry, material, 0, 0) !== null) return undefined;
   }
   return THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+}
+
+// ---------------------------------------------------------------------------
+// ?statBatchRuns — CELL-RUN SELECTION (perf T1, OpenAC comparison 2026-10-04)
+//
+// OpenAC's `FarLandscapeDrawCache` keeps each entry's draw commands as a block
+// that does NOT depend on the camera ("every batch has a slot, visible or not")
+// and per frame only picks RUNS of visible slots; that removed 22.5k per-frame
+// command rebuilds (Sawato CPU p50 5.11 -> 4.42 ms). Here: the live slots of a
+// bucket are grouped by a ~48 m cell, and each cell owns a contiguous run of
+// prebuilt (start, count, instance id) triples plus the AABB of its members'
+// local-frame spheres. A rebuild tests CELLS, not instances, and copies each
+// visible cell's run with `TypedArray.set`: O(cells + drawn) instead of
+// O(slots). It slots in AHEAD of the sphere-cache / slack loops in the memo's
+// rebuild path, so it only works on memo MISSES — the moving camera, exactly
+// where `?statBatchMemo` measured +0.5 ms worse.
+//
+// SAME SET AS THE SPHERE LOOP. A cell box encloses its members' spheres. A
+// box outside a plane (p-vertex, with the dilation margin taken at the box
+// centre distance + half its diagonal, which bounds every member's own
+// distance) holds no member that could pass, so it is skipped whole. A box
+// fully inside every plane (n-vertex) holds only members that pass, so its run
+// is copied with no test. Only STRADDLING cells test their members, with the
+// sphere loop's exact arithmetic. So the emitted instance set equals
+// `_buildFromSphereCache`'s (three's, at zero margins) — no over-inclusion,
+// unlike OpenAC's run granularity — and per-member work is limited to cells
+// on the frustum boundary.
+// Order inside the bucket changes to cell order; this tier is restricted to
+// `sortObjects === false` buckets (`_slackEligible`), whose ranges are
+// order-independent by construction (`_shouldSortBucket`).
+//
+// INVALIDATION is the sphere cache's (`st.epoch`, slot high-water mark) plus
+// three's own `_visibilityChanged` — visibility is baked into the runs, and
+// `setVisibleAt` moves only that flag. Like the sphere cache, a 1-LB feed
+// rebuilds the whole bucket's runs (bucket-granular), so the payback reads
+// `runs.slotsBuilt` against `runs.slotsCovered`.
+//
+// DEFAULT-OFF, exact-match opt-in (`on`, or `on:<cellMetres>`). Unmeasured on a
+// GPU, and five estimates on this walk have collapsed under measurement.
+// Node bench (test_stat_batch_runs.mjs §7, warmed, moving camera): 60 slots
+// ~2.0 us vs sphere cache ~1.8 vs three ~7.4; 2,000 slots ~10 vs ~49 vs ~228.
+// ---------------------------------------------------------------------------
+let _runsMode;
+let _runsCellM = 48;
+/** `?statBatchRuns=on[:<cellMetres>]` — "on" or "off". */
+export function statBatchRunsMode() {
+  if (_runsMode !== undefined) return _runsMode;
+  let mode = "off";
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const raw = (new URLSearchParams(globalThis.location.search).get("statBatchRuns") || "").toLowerCase();
+      const parts = raw.split(":");
+      if (parts[0] === "on") {
+        mode = "on";
+        const c = Number(parts[1]);
+        if (Number.isFinite(c) && c >= 4 && c <= 1000) _runsCellM = c;
+      }
+    }
+  } catch (_) { mode = "off"; }
+  _runsMode = mode;
+  return mode;
+}
+/** Test seam. */
+export function __setStatBatchRunsForTest(mode, cellM) {
+  _runsMode = mode;
+  if (Number.isFinite(cellM)) _runsCellM = cellM;
+}
+
+const _runsStats = {
+  walks: 0,          // rebuilds served from runs
+  builds: 0,         // run-cache (re)builds — one per bucket per epoch/visibility change
+  slotsBuilt: 0,     // slots scanned by those builds (cumulative)
+  slotsCovered: 0,   // live slots the walks answered for without visiting (cumulative)
+  cellsTested: 0,    // cumulative
+  cellsDrawn: 0,     // cumulative (inside + straddling)
+  cellsInside: 0,    // cumulative — copied whole, no per-member test
+  membersTested: 0,  // cumulative — members of straddling cells tested exactly
+  drawn: 0,          // instances emitted (cumulative) — compare with an off arm for over-inclusion
+  ineligible: 0,
+  errors: 0,
+  bytes: 0,
+};
+const _runsKeyScratch = { keys: new Float64Array(0), order: [] };
+const _runsPlanes = new Float64Array(24);
+
+function _runsCacheEnsure(bm, st, bytesPerElement, multiplier) {
+  const info = bm._instanceInfo;
+  const n = info.length;
+  const ud = bm.userData;
+  const old = ud.__runsCache;
+  if (old && old.epoch === st.epoch && old.n === n && !bm._visibilityChanged
+    && old.bpe === bytesPerElement && old.mult === multiplier && old.cellM === _runsCellM) return old;
+  const sph = _sphereCacheEnsure(bm, st); // shared spheres, same epoch key
+  if (sph === null) return null;
+  const arr = sph.arr;
+  const geometryInfoList = bm._geometryInfo;
+  const inv = 1 / _runsCellM;
+  if (_runsKeyScratch.keys.length < n) _runsKeyScratch.keys = new Float64Array(Math.max(16, n));
+  const keys = _runsKeyScratch.keys;
+  const order = _runsKeyScratch.order;
+  order.length = 0;
+  for (let i = 0; i < n; i++) {
+    const inf = info[i];
+    if (!inf || !inf.active || !inf.visible) continue;
+    const b = i * 4;
+    if (arr[b + 3] < 0) continue; // stale geometryIndex — never drawn (sphere cache note)
+    // 16 bits per axis, offset so negative cells stay positive; < 2^48 is exact.
+    const kx = (Math.floor(arr[b] * inv) + 32768) & 0xffff;
+    const ky = (Math.floor(arr[b + 1] * inv) + 32768) & 0xffff;
+    const kz = (Math.floor(arr[b + 2] * inv) + 32768) & 0xffff;
+    keys[i] = (kx * 65536 + ky) * 65536 + kz;
+    order.push(i);
+  }
+  order.sort((a, c) => keys[a] - keys[c] || a - c);
+  const m = order.length;
+  const starts = new Int32Array(m);
+  const counts = new Int32Array(m);
+  const ids = new Uint32Array(m);
+  let cellCount = 0;
+  for (let j = 0; j < m; j++) if (j === 0 || keys[order[j]] !== keys[order[j - 1]]) cellCount++;
+  const box = new Float64Array(cellCount * 6);
+  const off = new Int32Array(cellCount);
+  const len = new Int32Array(cellCount);
+  let cell = -1;
+  for (let j = 0; j < m; j++) {
+    const i = order[j];
+    if (j === 0 || keys[i] !== keys[order[j - 1]]) {
+      cell++;
+      off[cell] = j;
+      const q = cell * 6;
+      box[q] = box[q + 1] = box[q + 2] = Infinity;
+      box[q + 3] = box[q + 4] = box[q + 5] = -Infinity;
+    }
+    len[cell]++;
+    const b = i * 4;
+    const r = arr[b + 3];
+    const q = cell * 6;
+    if (arr[b] - r < box[q]) box[q] = arr[b] - r;
+    if (arr[b + 1] - r < box[q + 1]) box[q + 1] = arr[b + 1] - r;
+    if (arr[b + 2] - r < box[q + 2]) box[q + 2] = arr[b + 2] - r;
+    if (arr[b] + r > box[q + 3]) box[q + 3] = arr[b] + r;
+    if (arr[b + 1] + r > box[q + 4]) box[q + 4] = arr[b + 1] + r;
+    if (arr[b + 2] + r > box[q + 5]) box[q + 5] = arr[b + 2] + r;
+    const gi = geometryInfoList[info[i].geometryIndex];
+    starts[j] = gi.start * bytesPerElement * multiplier;
+    counts[j] = gi.count * multiplier;
+    ids[j] = i;
+  }
+  const c = { epoch: st.epoch, n, bpe: bytesPerElement, mult: multiplier, cellM: _runsCellM,
+    starts, counts, ids, box, off, len, cells: cellCount, live: m, sph };
+  if (old) _runsStats.bytes -= old.bytes;
+  c.bytes = starts.byteLength + counts.byteLength + ids.byteLength + box.byteLength + off.byteLength + len.byteLength;
+  _runsStats.bytes += c.bytes;
+  ud.__runsCache = c;
+  _runsStats.builds += 1;
+  _runsStats.slotsBuilt += n;
+  return c;
+}
+
+function _buildFromRuns(bm, camera, geometry, material, transLocal, rotSlack, st) {
+  const index = geometry.getIndex();
+  let bytesPerElement = index === null ? 1 : index.array.BYTES_PER_ELEMENT;
+  let multiDrawMultiplier = 1;
+  if (material.wireframe) {
+    multiDrawMultiplier = 2;
+    bytesPerElement = geometry.attributes.position.count > 65535 ? 4 : 2;
+  }
+  const c = _runsCacheEnsure(bm, st, bytesPerElement, multiDrawMultiplier);
+  if (c === null) return null;
+  const multiDrawStarts = bm._multiDrawStarts;
+  const multiDrawCounts = bm._multiDrawCounts;
+  const indirectTexture = bm._indirectTexture;
+  const indirectArray = indirectTexture.image.data;
+
+  _memoM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(bm.matrixWorld);
+  _memoFrustum.setFromProjectionMatrix(_memoM, camera.coordinateSystem, camera.reversedDepth);
+  const dilate = transLocal > 0 || rotSlack > 0;
+  let camX = 0, camY = 0, camZ = 0;
+  if (dilate) {
+    _memoM.copy(bm.matrixWorld).invert();
+    _memoCamLocal.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(_memoM);
+    camX = _memoCamLocal.x; camY = _memoCamLocal.y; camZ = _memoCamLocal.z;
+  }
+  const rotTrans = rotSlack * transLocal;
+  const pl = _memoFrustum.planes;
+  const P = _runsPlanes;
+  for (let p = 0; p < 6; p++) {
+    P[p * 4] = pl[p].normal.x; P[p * 4 + 1] = pl[p].normal.y;
+    P[p * 4 + 2] = pl[p].normal.z; P[p * 4 + 3] = pl[p].constant;
+  }
+  const box = c.box;
+  const starts = c.starts, counts = c.counts, ids = c.ids;
+  const sa = c.sph.arr; // the sphere cache this run cache was built from
+  let multiDrawCount = 0;
+  let cellsDrawn = 0;
+  let cellsInside = 0;
+  let membersTested = 0;
+  for (let k = 0; k < c.cells; k++) {
+    const q = k * 6;
+    const x0 = box[q], y0 = box[q + 1], z0 = box[q + 2];
+    const x1 = box[q + 3], y1 = box[q + 4], z1 = box[q + 5];
+    let negMargin = 0;
+    if (dilate) {
+      const hx = (x1 - x0) * 0.5, hy = (y1 - y0) * 0.5, hz = (z1 - z0) * 0.5;
+      const dx = x0 + hx - camX, dy = y0 + hy - camY, dz = z0 + hz - camZ;
+      const r = Math.sqrt(dx * dx + dy * dy + dz * dz) + Math.sqrt(hx * hx + hy * hy + hz * hz);
+      negMargin = -(transLocal + rotSlack * r + rotTrans);
+    }
+    // p-vertex (farthest corner along the normal) decides OUTSIDE; n-vertex
+    // (nearest corner) decides FULLY INSIDE. A box fully inside every plane
+    // holds only spheres that pass every plane, so its run is copied with no
+    // per-member test; a straddling box tests its members exactly.
+    let culled = false;
+    let inside = true;
+    for (let p = 0; p < 24; p += 4) {
+      const a = P[p], b = P[p + 1], cc = P[p + 2], d = P[p + 3];
+      if (a * (a >= 0 ? x1 : x0) + b * (b >= 0 ? y1 : y0) + cc * (cc >= 0 ? z1 : z0) + d < negMargin) {
+        culled = true;
+        break;
+      }
+      if (inside && a * (a >= 0 ? x0 : x1) + b * (b >= 0 ? y0 : y1) + cc * (cc >= 0 ? z0 : z1) + d < 0) inside = false;
+    }
+    if (culled) continue;
+    const o = c.off[k], end = o + c.len[k];
+    if (inside) {
+      // Plain copy: runs are short (tens of slots), and `subarray().set()`
+      // would allocate three views per visible cell per call.
+      for (let j = o; j < end; j++) {
+        multiDrawStarts[multiDrawCount] = starts[j];
+        multiDrawCounts[multiDrawCount] = counts[j];
+        indirectArray[multiDrawCount] = ids[j];
+        multiDrawCount++;
+      }
+      cellsInside++;
+    } else {
+      // The sphere loop's exact test (same arithmetic as
+      // `_buildFromSphereCache`), on this cell's members only.
+      for (let j = o; j < end; j++) {
+        const sb = ids[j] * 4;
+        const cx = sa[sb], cy = sa[sb + 1], cz = sa[sb + 2];
+        let negRadius = -sa[sb + 3];
+        if (dilate) {
+          const dx = cx - camX, dy = cy - camY, dz = cz - camZ;
+          negRadius -= transLocal + rotSlack * Math.sqrt(dx * dx + dy * dy + dz * dz) + rotTrans;
+        }
+        let out = false;
+        for (let p = 0; p < 24; p += 4) {
+          if (P[p] * cx + P[p + 1] * cy + P[p + 2] * cz + P[p + 3] < negRadius) { out = true; break; }
+        }
+        if (out) continue;
+        multiDrawStarts[multiDrawCount] = starts[j];
+        multiDrawCounts[multiDrawCount] = counts[j];
+        indirectArray[multiDrawCount] = ids[j];
+        multiDrawCount++;
+      }
+      membersTested += end - o;
+    }
+    cellsDrawn++;
+  }
+  indirectTexture.needsUpdate = true;
+  bm._multiDrawCount = multiDrawCount;
+  bm._visibilityChanged = false;
+  _runsStats.walks += 1;
+  _runsStats.slotsCovered += c.live;
+  _runsStats.cellsTested += c.cells;
+  _runsStats.cellsDrawn += cellsDrawn;
+  _runsStats.cellsInside += cellsInside;
+  _runsStats.membersTested += membersTested;
+  _runsStats.drawn += multiDrawCount;
+  return { walked: c.live, drawn: multiDrawCount };
+}
+
+/** Build through the cell runs, or null to fall through to the next tier. */
+function _tryRunsBuild(bm, camera, geometry, material, transLocal, rotSlack) {
+  if (statBatchRunsMode() === "off") return null;
+  const st = bm.userData && bm.userData.__memo;
+  if (!st) return null;
+  if (!_slackEligible(bm, camera)) { _runsStats.ineligible += 1; return null; }
+  try {
+    return _buildFromRuns(bm, camera, geometry, material, transLocal, rotSlack, st);
+  } catch (_) {
+    _runsStats.errors += 1;
+    return null;
+  }
 }
 
 /** Can this call take the dilated path at all? (fail-soft ⇒ three's own loop) */
@@ -1199,7 +1485,8 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
           // carry the identical margin arithmetic and the cached spheres are
           // bit-identical to three's, so this changes what a rebuild COSTS and
           // never what it answers (§7/§17 assert that byte for byte).
-          const r = _trySphereBuild(this, camera, geometry, material, _memoTransM / s, _memoRotRad)
+          const r = _tryRunsBuild(this, camera, geometry, material, _memoTransM / s, _memoRotRad)
+            || _trySphereBuild(this, camera, geometry, material, _memoTransM / s, _memoRotRad)
             || _memoBuildSlack(this, camera, geometry, material, _memoTransM / s, _memoRotRad);
           walked = r.walked; drawn = r.drawn;
           slackTrans = _memoTransM; slackRot = _memoRotRad;
@@ -1209,11 +1496,14 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
       }
     } catch (_) { built = false; _memoStats.errors += 1; }
   }
-  if (!built && statBatchSphereMode() !== "off") {
+  if (!built && (statBatchSphereMode() !== "off" || statBatchRunsMode() !== "off")) {
     // ?statBatchSphere composes with the memo: a MISS rebuilds through the
     // cached spheres rather than three's loop. Zero margins ⇒ byte-identical to
     // three, so this changes only what the rebuild costs, never its answer.
-    const r = _trySphereBuild(this, camera, geometry, material, 0, 0);
+    // ?statBatchRuns goes first when on — a cell-granular SUPERSET, so with it
+    // the exact tier is no longer output-identical (see its header).
+    const r = _tryRunsBuild(this, camera, geometry, material, 0, 0)
+      || _trySphereBuild(this, camera, geometry, material, 0, 0);
     if (r !== null) {
       walked = r.walked; drawn = r.drawn;
       built = true;
@@ -1285,7 +1575,8 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
 function _installMemo(bm) {
   const memo = statBatchMemoMode() !== "off";
   const sphere = statBatchSphereMode() !== "off";
-  if (!memo && !sphere) return;
+  const runs = statBatchRunsMode() !== "off";
+  if (!memo && !sphere && !runs) return;
   // The epoch lives on `__memo` and is bumped by `_memoInvalidate` regardless of
   // which flag is on, so the sphere cache needs this state even with memo off.
   bm.userData.__memo = _memoStateFor();
@@ -2147,6 +2438,10 @@ export function getStatBatchXStats() {
     // wrong, only worthless, but a nonzero count wants explaining.
     walk: {
       mode: statBatchMemoMode(),
+      // ?statBatchRuns (perf T1). `cellsInside / cellsDrawn` is the share
+      // copied without per-member tests; `membersTested / slotsCovered` is the
+      // per-instance work left; `slotsCovered / slotsBuilt` is the payback.
+      runs: { mode: statBatchRunsMode(), cellM: _runsCellM, ..._runsStats },
       noSort: statBatchNoSortEnabled(),
       installed: _memoStats.installed,
       calls: _memoStats.calls,

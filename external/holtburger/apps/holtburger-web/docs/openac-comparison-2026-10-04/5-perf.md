@@ -37,6 +37,13 @@ differences are the real lessons.
 
 ## 2. Most transferable techniques (ranked by fit to holtburger's measured walls)
 
+**Status (2026-10-04, same day; none of it measured on a GPU yet):**
+T9 landed (`animated_scenery.js` dirty-span upload). T5 landed ARMED (`?statAtlasPages`).
+T10 landed opt-in (`?drawSortProgram`, with the `__drawSort.probe` A/B). T4 landed inside the
+DEV `?frameWork` (byte/alloc caps, destination reserve, slot-bounded LRU loops). T6 measured and
+NOT built (see its note). T1 landed opt-in for the default static batch path (`?statBatchRuns`),
+exact-set rather than run-granular; the `?drawPools` pools still turn culling off.
+
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.
 - **holtburger:** `static_batch_x.js:1451` sets `perObjectFrustumCulled = true` on every bucket, which costs 5.72 ms of per-instance rebuild. The SPEC answer at `pool_registry.js:377-378` sets `perObjectFrustumCulled=false` and relies on 768 m sector node culling. The frame-cost doc §3d measured that trade at **+420k tris/frame (+81%)** on buckets, and the trade "would invert on weaker hardware".
