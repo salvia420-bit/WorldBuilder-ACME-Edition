@@ -505,6 +505,55 @@ export function statBatchMemoMode() {
   _memoMode = mode;
   return mode;
 }
+
+// ---------------------------------------------------------------------------
+// ?statBatchMemoSlots — ONE MEMO SLOT PER CAMERA (perf T2, OpenAC comparison
+// 2026-10-04)
+//
+// The memo above is a single slot keyed on camera identity. `onBeforeShadow`
+// (three.core.js r184 :27370) routes through `this.onBeforeRender` with the
+// SHADOW camera, so with CSM on (quality `high`/`ultra`, `csm: true`) every
+// shadow-casting bucket sees the colour camera and each cascade camera in turn
+// every frame. Each one evicts the last, so the memo never hits for any of them:
+// it is worth zero exactly on the presets that draw the most.
+//
+// `=N` (2..8) keeps up to N slots per bucket, keyed by camera object, LRU on
+// use. Each slot keeps its own recorded inputs (the same list `_memoDecide`
+// reads) and a COPY of the multidraw arrays it built, because the bucket has
+// only one set of live arrays and the next camera overwrites them. A hit on a
+// slot whose arrays are not the live ones copies them back (O(drawn) memcpy,
+// plus the indirect-texture upload the single slot gets to skip); a hit on the
+// live slot is the old zero-work hit.
+//
+// INVALIDATION stays shared. The epoch on `__memo` is the per-bucket write
+// revision (OpenAC's per-record stamp) and every slot compares against it. The
+// one input three tracks for us, `_visibilityChanged`, is CONSUMED by whichever
+// camera rebuilds first, so with slots on a set flag also moves `visRev` on
+// `__memo` before that rebuild — otherwise the other slots would never see it.
+//
+// OFF (absent, `1`, anything unparsed) = the single slot, byte-identical: `st`
+// itself is the slot and no copy is ever taken. Not measured on a GPU.
+// ---------------------------------------------------------------------------
+const _MEMO_SLOTS_MAX = 8;
+let _memoSlotsN;
+/** `?statBatchMemoSlots=N` — 2..8 per-camera memo slots; anything else ⇒ 1 (off). */
+export function statBatchMemoSlots() {
+  if (_memoSlotsN !== undefined) return _memoSlotsN;
+  let n = 1;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const raw = new URLSearchParams(globalThis.location.search).get("statBatchMemoSlots") || "";
+      if (/^[0-9]+$/.test(raw)) {
+        const v = Number(raw);
+        if (v >= 2 && v <= _MEMO_SLOTS_MAX) n = v;
+      }
+    }
+  } catch (_) { n = 1; }
+  _memoSlotsN = n;
+  return n;
+}
+/** Test seam. `undefined` re-reads the URL. */
+export function __setStatBatchMemoSlotsForTest(n) { _memoSlotsN = n; }
 // ---------------------------------------------------------------------------
 // ?statBatchSphere — CACHE THE PER-INSTANCE BOUNDING SPHERE (2026-08-06)
 //
@@ -659,6 +708,9 @@ const _memoStats = {
   instancesSkipped: 0,  // instance SLOTS a hit did not visit (cumulative)
   errors: 0,         // fail-soft fallbacks to three's own path
   installed: 0,
+  slotRestores: 0,   // ?statBatchMemoSlots: hits that copied a slot's arrays back
+  slotEvicts: 0,     // ?statBatchMemoSlots: LRU slot replacements (camera churn)
+  slotBytes: 0,      // ?statBatchMemoSlots: live array-copy bytes across buckets
 };
 
 /**
@@ -740,6 +792,8 @@ function _memoStateFor() {
     valid: false,
     epoch: 0,        // bumped by every membership/matrix change (see _memoInvalidate)
     builtEpoch: -1,
+    visRev: 0,       // ?statBatchMemoSlots: count of `_visibilityChanged` seen
+    builtVis: -1,    // ?statBatchMemoSlots: `visRev` a slot was built at
     camera: null,
     material: null,
     camMw: new Float64Array(16),   // camera.matrixWorld at build (exact tier)
@@ -787,11 +841,11 @@ function _memoDirtyBounds(bm) {
  * silent image bug, so the list is deliberately exhaustive and mirrors
  * three.core.js :27214-27368 line for line.
  */
-function _memoDecide(bm, st, camera, material, geometry, mode) {
+function _memoDecide(bm, st, camera, material, geometry, mode, epoch = st.epoch) {
   if (!st.valid) return 0;
   if (st.camera !== camera || st.material !== material) return 0;
   if (bm._visibilityChanged) return 0;
-  if (st.builtEpoch !== st.epoch) return 0;
+  if (st.builtEpoch !== epoch) return 0;
   if (st.sortObjects !== bm.sortObjects || st.pOFC !== bm.perObjectFrustumCulled) return 0;
   if (st.wireframe !== !!material.wireframe) return 0;
   const index = geometry.getIndex();
@@ -1428,8 +1482,103 @@ function _slackEligible(bm, camera) {
  * single slot, so a shadow pass and the colour pass alternating cameras simply
  * miss each other — correct, but worth zero. Shadows are off at quality `mid`
  * (quality.js `csm: false`, `?shadows` opt-in), which is where the 5.72 ms was
- * measured; a shadowed preset wants a per-camera slot and does not have one.
+ * measured; a shadowed preset wants a per-camera slot, which is what
+ * `?statBatchMemoSlots=N` (2026-10-04, opt-in) adds.
  */
+// --- ?statBatchMemoSlots: per-camera slots --------------------------------
+
+/** The slot recorded for `camera`, moved to the front (most recent), or null. */
+function _memoSlotFind(st, camera) {
+  const slots = st.slots;
+  if (!slots) return null;
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    if (slot.camera !== camera) continue;
+    if (i > 0) { slots.splice(i, 1); slots.unshift(slot); }
+    return slot;
+  }
+  return null;
+}
+
+/** A slot to record `camera`'s rebuild into: its own, a new one, or the LRU one. */
+function _memoSlotClaim(st, camera, n) {
+  const found = _memoSlotFind(st, camera);
+  if (found) return found;
+  if (!st.slots) st.slots = [];
+  const slots = st.slots;
+  let slot;
+  if (slots.length >= n) {
+    slot = slots.pop();
+    _memoStats.slotEvicts += 1;
+    slot.valid = false;
+  } else {
+    slot = _memoStateFor();
+    slot.snap = null;
+  }
+  slots.unshift(slot);
+  return slot;
+}
+
+/** Copy the bucket's live multidraw arrays into `slot` (after a rebuild). */
+function _memoSlotSave(bm, slot) {
+  const n = bm._multiDrawCount | 0;
+  const starts = bm._multiDrawStarts;
+  const counts = bm._multiDrawCounts;
+  const ids = bm._indirectTexture.image.data;
+  let snap = slot.snap;
+  if (!snap || snap.starts.length < n
+    || snap.starts.constructor !== starts.constructor
+    || snap.counts.constructor !== counts.constructor
+    || snap.ids.constructor !== ids.constructor) {
+    if (snap) _memoStats.slotBytes -= snap.bytes;
+    const cap = Math.max(16, n + (n >> 1));
+    const a = new starts.constructor(cap);
+    const b = new counts.constructor(cap);
+    const c = new ids.constructor(cap);
+    snap = { starts: a, counts: b, ids: c, n: 0, bytes: a.byteLength + b.byteLength + c.byteLength };
+    slot.snap = snap;
+    _memoStats.slotBytes += snap.bytes;
+  }
+  snap.starts.set(starts.subarray(0, n));
+  snap.counts.set(counts.subarray(0, n));
+  snap.ids.set(ids.subarray(0, n));
+  snap.n = n;
+}
+
+/**
+ * Put `slot`'s arrays back into the bucket. False when they no longer fit (the
+ * bucket's arrays were reallocated smaller than the answer), which the caller
+ * treats as a miss — never draw a truncated answer.
+ */
+function _memoSlotRestore(bm, slot) {
+  const snap = slot.snap;
+  if (!snap) return false;
+  const n = snap.n;
+  const starts = bm._multiDrawStarts;
+  const counts = bm._multiDrawCounts;
+  const tex = bm._indirectTexture;
+  const ids = tex && tex.image && tex.image.data;
+  if (!starts || !counts || !ids) return false;
+  if (starts.length < n || counts.length < n || ids.length < n) return false;
+  starts.set(snap.starts.subarray(0, n));
+  counts.set(snap.counts.subarray(0, n));
+  ids.set(snap.ids.subarray(0, n));
+  tex.needsUpdate = true;
+  bm._multiDrawCount = n;
+  return true;
+}
+
+/** Bucket reaped: release the slots' array copies from the byte count. */
+function _memoSlotsRelease(st) {
+  if (!st || !st.slots) return;
+  for (const slot of st.slots) {
+    if (slot.snap) _memoStats.slotBytes -= slot.snap.bytes;
+    slot.snap = null;
+  }
+  st.slots = null;
+  st.arrSlot = null;
+}
+
 function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group) {
   const st = this.userData && this.userData.__memo;
   const mode = statBatchMemoMode();
@@ -1437,13 +1586,36 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
     return THREE.BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
   }
   _memoStats.calls += 1;
+  // `rec` is the slot this call reads and records: `st` itself with one slot
+  // (the shipped path, unchanged), else this camera's own slot.
+  const nSlots = statBatchMemoSlots();
+  let rec = st;
   let decision = 0;
   try {
-    decision = _memoDecide(this, st, camera, material, geometry, mode);
+    if (nSlots > 1) {
+      // Three's flag is consumed by whichever camera rebuilds first; count it so
+      // every OTHER slot sees it too. A revision of its own rather than an epoch
+      // move, which would also throw away the sphere and run caches.
+      if (this._visibilityChanged) st.visRev = (st.visRev + 1) | 0;
+      rec = _memoSlotFind(st, camera);
+      decision = rec && rec.builtVis === st.visRev
+        ? _memoDecide(this, rec, camera, material, geometry, mode, st.epoch)
+        : 0;
+      if (decision !== 0 && st.arrSlot !== rec) {
+        if (_memoSlotRestore(this, rec)) {
+          st.arrSlot = rec;
+          _memoStats.slotRestores += 1;
+        } else {
+          decision = 0;
+        }
+      }
+    } else {
+      decision = _memoDecide(this, st, camera, material, geometry, mode);
+    }
   } catch (_) { decision = 0; _memoStats.errors += 1; }
   if (decision !== 0) {
     if (decision === 1) _memoStats.hitsExact += 1; else _memoStats.hitsSlack += 1;
-    _memoStats.instancesSkipped += st.walked;
+    _memoStats.instancesSkipped += rec.walked;
     // Everything the renderer reads next — `_multiDrawStarts`, `_multiDrawCounts`,
     // `_multiDrawCount` and the indirect texture — still holds this bucket's
     // last answer, and `_visibilityChanged` is already false. Deliberately do
@@ -1520,31 +1692,46 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
   _memoStats.instancesWalked += walked;
 
   // ---- record the inputs this answer was built from --------------------
+  // `out` is the slot: `st` itself with one slot, else this camera's own (its
+  // own, a fresh one, or the least-recently-used camera's). The epoch stamped is
+  // always the shared one on `__memo`.
+  let out = st;
+  try {
+    if (nSlots > 1) {
+      out = _memoSlotClaim(st, camera, nSlots);
+      out.valid = false; // until the array copy below has landed
+      st.arrSlot = out;
+    }
+  } catch (_) { st.arrSlot = null; _memoStats.errors += 1; return undefined; }
   try {
     const index = geometry.getIndex();
-    st.camera = camera;
-    st.material = material;
-    _elemsCopy(st.camMw, camera.matrixWorld.elements);
-    _elemsCopy(st.proj, camera.projectionMatrix.elements);
-    _elemsCopy(st.mw, this.matrixWorld.elements);
+    out.camera = camera;
+    out.material = material;
+    _elemsCopy(out.camMw, camera.matrixWorld.elements);
+    _elemsCopy(out.proj, camera.projectionMatrix.elements);
+    _elemsCopy(out.mw, this.matrixWorld.elements);
     if (slackTrans > 0 || slackRot > 0) {
       const pose = _cameraPose(camera);
-      st.camPos.copy(pose.pos);
-      st.camQuat.copy(pose.quat);
+      out.camPos.copy(pose.pos);
+      out.camQuat.copy(pose.quat);
     }
-    st.slackTrans = slackTrans;
+    out.slackTrans = slackTrans;
     // cos(theta/2) — compared against |dot(q0,q1)| in `_memoDecide`.
-    st.slackDotMin = slackRot > 0 ? Math.cos(slackRot / 2) : 2;
-    st.sortObjects = this.sortObjects;
-    st.pOFC = this.perObjectFrustumCulled;
-    st.wireframe = !!material.wireframe;
-    st.idxBytes = index === null ? 0 : index.array.BYTES_PER_ELEMENT;
-    st.walked = walked;
-    st.drawn = drawn;
-    st.builtEpoch = st.epoch;
-    st.valid = true;
+    out.slackDotMin = slackRot > 0 ? Math.cos(slackRot / 2) : 2;
+    out.sortObjects = this.sortObjects;
+    out.pOFC = this.perObjectFrustumCulled;
+    out.wireframe = !!material.wireframe;
+    out.idxBytes = index === null ? 0 : index.array.BYTES_PER_ELEMENT;
+    out.walked = walked;
+    out.drawn = drawn;
+    if (out !== st) {
+      _memoSlotSave(this, out);
+      out.builtVis = st.visRev;
+    }
+    out.builtEpoch = st.epoch;
+    out.valid = true;
   } catch (_) {
-    st.valid = false; // never cache a state we could not fully capture
+    out.valid = false; // never cache a state we could not fully capture
     _memoStats.errors += 1;
   }
   return undefined;
@@ -1843,6 +2030,8 @@ function _reapBucketIfEmpty(bm) {
     _sphereStats.bytes -= ud.__sphereCache.arr.byteLength;
     ud.__sphereCache = null;
   }
+  // ?statBatchMemoSlots — same for the per-camera array copies.
+  _memoSlotsRelease(ud.__memo);
   _stats.bucketsReaped += 1;
   // ?statArrayMerge — hand the GLOBAL pool back its bucket reference. The pool
   // disposes its arrays + shared material only when it has neither a live layer
@@ -2452,6 +2641,13 @@ export function getStatBatchXStats() {
       instancesWalked: _memoStats.instancesWalked,
       instancesSkipped: _memoStats.instancesSkipped,
       errors: _memoStats.errors,
+      // ?statBatchMemoSlots (perf T2). With shadows on, `slotRestores` climbing
+      // while `rebuilds*` stay flat is the win; `slotEvicts` climbing every frame
+      // means more cameras than slots (raise N).
+      memoSlots: statBatchMemoSlots(),
+      slotRestores: _memoStats.slotRestores,
+      slotEvicts: _memoStats.slotEvicts,
+      slotBytes: _memoStats.slotBytes,
       slackTransM: _memoTransM,
       slackRotDeg: (_memoRotRad * 180) / Math.PI,
       // Live population, split the way three's two loops split it.

@@ -43,6 +43,9 @@ T10 landed opt-in (`?drawSortProgram`, with the `__drawSort.probe` A/B). T4 land
 DEV `?frameWork` (byte/alloc caps, destination reserve, slot-bounded LRU loops). T6 measured and
 NOT built (see its note). T1 landed opt-in for the default static batch path (`?statBatchRuns`),
 exact-set rather than run-granular; the `?drawPools` pools still turn culling off.
+T2 landed opt-in in its narrow form (`?statBatchMemoSlots=N`): one memo slot per camera so CSM cascades
+stop evicting the colour pass's answer; the bucket epoch is the per-record stamp. A per-LB stamp for
+the light rescans is not built.
 
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.
