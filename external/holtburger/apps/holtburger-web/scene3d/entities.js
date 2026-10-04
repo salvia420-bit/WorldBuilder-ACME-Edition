@@ -6196,6 +6196,9 @@ export class EntityManager {
     if (!inst || !inst.root) return;
     if (inst._ballistic) return;
     if (inst._stickyTarget) return;
+    // OpenAC comparison 2026-10-04 (remote motion D10): a queue still draining
+    // at death must not drag the collapsed body — the corpse holds where it fell.
+    if (inst._deadFrozen) return;
     // HELD-ITEM (2026-08-02) — a parented object has no world position of its
     // own; its root transform is the hand-local holding frame. Retail refuses
     // to integrate it at all (`CPhysicsObj::update_position` acclient.c:321671

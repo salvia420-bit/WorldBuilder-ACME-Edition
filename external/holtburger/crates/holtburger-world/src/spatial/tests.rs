@@ -3197,6 +3197,81 @@ mod remote_pose_driver {
         assert_eq!(body.my_run_rate, 2.5);
     }
 
+    /// OpenAC comparison 2026-10-04 (remote motion D1): retail
+    /// `get_state_velocity` constants and the run-rate clamp.
+    #[test]
+    fn state_velocity_local_matches_retail_constants() {
+        let mut body = SpatialBody::new(SpatialBodyId::Entity(GUID), outdoor_pose(0.0, 0.0), Instant::now());
+        body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::WALK_FORWARD, 1.0)));
+        assert!((body.state_velocity_local().y - 3.12).abs() < 1e-4);
+        body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.5)));
+        assert!((body.state_velocity_local().y - 6.0).abs() < 1e-4, "4.0 × 1.5");
+        // Clamp: run at 2.0 with a latched rate of 2.0 → 8 ≤ 2*4.
+        body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 2.0)));
+        assert!((body.state_velocity_local().y - 8.0).abs() < 1e-4);
+        body.my_run_rate = 1.0;
+        assert!((body.state_velocity_local().y - 4.0).abs() < 1e-4, "clamped to my_run_rate × 4");
+        body.set_motion_state(None);
+        assert_eq!(body.state_velocity_local(), Vector3::zero());
+    }
+
+    /// OpenAC comparison 2026-10-04 (remote motion D4): a teleport-stamped
+    /// hard set of an EXISTING remote body is exported as a managed row (JS
+    /// ignores wire positions while a body is wasm-driven, so an unexported
+    /// snap — ACE's at a monster's first melee swing — was lost).
+    #[test]
+    fn remote_hard_snap_is_exported_as_a_managed_row() {
+        let start = outdoor_pose(50.0, 50.0);
+        let (mut scene, _body_id) = scene_with_remote_body(start);
+        assert!(scene.take_remote_stepped_poses().is_empty(), "the spawn seed is not exported");
+        let snap = outdoor_pose(53.0, 50.0);
+        reconcile(&mut scene, SpatialBodyId::Entity(GUID), snap, AuthoritativeBodySync::Reset, ctx(Some(true), Some(start)));
+        let rows = scene.take_remote_stepped_poses();
+        assert_eq!(rows, vec![(GUID, snap)], "the snap reaches the JS export");
+    }
+
+    /// D1: an idle outdoor remote running forward keeps moving between
+    /// UpdatePositions, on the terrain; indoors, or over unloaded terrain, it
+    /// does not; `?remoteRootMotion=off` restores the old stop.
+    #[test]
+    fn idle_outdoor_remote_advances_by_state_velocity_on_terrain() {
+        let terrain = 12.0;
+        let start = WorldPosition {
+            landblock_id: Guid(0x0102_0011),
+            coords: Vector3::new(50.0, 50.0, terrain),
+            rotation: Quaternion::from_heading(0.0),
+        };
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.populate_terrain_heights(0x0102_0000, [terrain; 81]);
+        scene
+            .body_mut(body_id)
+            .unwrap()
+            .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
+        assert!(!scene.body(body_id).unwrap().position_manager.queue_active());
+        scene.step_remote_position_managers(0.1);
+        let after = scene.body(body_id).unwrap().pose;
+        let moved = after.global_coords() - start.global_coords();
+        let horiz = (moved.x * moved.x + moved.y * moved.y).sqrt();
+        assert!((horiz - 0.4).abs() < 1e-3, "4 m/s × 0.1 s, moved {horiz}");
+        assert!((after.coords.z - terrain).abs() < 1e-3, "on the terrain: {}", after.coords.z);
+        let rows = scene.take_remote_stepped_poses();
+        assert!(rows.iter().any(|(g, _)| *g == GUID), "exported as a managed row");
+
+        // Escape hatch.
+        scene.set_remote_root_motion_enabled(false);
+        let before = scene.body(body_id).unwrap().pose;
+        scene.step_remote_position_managers(0.1);
+        assert_eq!(scene.body(body_id).unwrap().pose, before, "?remoteRootMotion=off: no advance");
+
+        // Unloaded terrain: no advance.
+        let (mut bare, bare_id) = scene_with_remote_body(start);
+        bare.body_mut(bare_id)
+            .unwrap()
+            .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
+        bare.step_remote_position_managers(0.1);
+        assert_eq!(bare.body(bare_id).unwrap().pose, start, "no resident terrain: holds");
+    }
+
     /// The remote catch-up now runs at `adjusted_max_speed * 2`
     /// (acclient.c:389228-389240), not the 7.5 m/s floor.
     #[test]
@@ -3515,7 +3590,7 @@ mod remote_pose_driver {
             Instant::now(),
         );
 
-        scene.stick_remote_entity_to(GUID, player_guid);
+        scene.stick_remote_entity_to(GUID, player_guid, 0.0, 0.0);
         assert_eq!(scene.remote_sticky_target(GUID), Some(player_guid));
 
         // Gap 10 m, speed floor 15 m/s (no Rust-side per-entity motion
@@ -3577,7 +3652,7 @@ mod remote_pose_driver {
         let target_guid = Guid(0x8000_0001);
         scene.update_entity(target_guid, Guid(0x0102_0000), outdoor_pose(60.0, 50.0));
 
-        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
         assert_eq!(scene.remote_sticky_target(GUID), None, "install inert");
         scene.step_remote_position_managers(0.016);
         assert!(scene.take_remote_stepped_poses().is_empty());
@@ -3597,7 +3672,7 @@ mod remote_pose_driver {
         let target_guid = Guid(0x8000_0001);
         scene.update_entity(target_guid, Guid(0x0102_0000), outdoor_pose(60.0, 50.0));
 
-        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
         scene.step_remote_position_managers(0.016);
         assert!(!scene.take_remote_sticky_stepped().is_empty());
         scene.unstick_remote_entity(GUID);
@@ -3608,12 +3683,12 @@ mod remote_pose_driver {
 
         // Re-stick, run 0.48 s, re-stick (re-arm), then run another
         // 0.8 s: total 1.28 s > 1.0 s, but the re-arm keeps it alive.
-        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
         for _ in 0..30 {
             scene.step_remote_position_managers(0.016);
         }
         assert_eq!(scene.remote_sticky_target(GUID), Some(target_guid));
-        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
         for _ in 0..50 {
             scene.step_remote_position_managers(0.016);
         }
@@ -3641,7 +3716,7 @@ mod remote_pose_driver {
 
         // No holder body yet → install records the index only; step is
         // a no-op (nothing steppable).
-        scene.stick_remote_entity_to(GUID, target_guid);
+        scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
         assert_eq!(scene.remote_sticky_target(GUID), Some(target_guid));
         scene.step_remote_position_managers(0.016);
         assert!(scene.take_remote_sticky_stepped().is_empty());

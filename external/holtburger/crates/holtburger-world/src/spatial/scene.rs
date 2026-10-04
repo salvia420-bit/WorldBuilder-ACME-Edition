@@ -1102,6 +1102,10 @@ pub struct SpatialScene {
     /// bodies never appear (the JS legacy dead-reckon path keeps owning
     /// them between corrections — S8 §5 risk 2).
     remote_stepped_poses: HashMap<Guid, WorldPosition>,
+    /// OpenAC comparison 2026-10-04 (remote motion D1): advance idle OUTDOOR
+    /// remote bodies by their interpreted-state velocity every slice (see
+    /// [`Self::step_remote_position_managers`]). `?remoteRootMotion=off`.
+    remote_root_motion_enabled: bool,
     /// A2-P3 (2026-06-12, W3+ S9) — O(1) mirror of the LOCAL player
     /// body's sticky target ([`PositionManager::sticky_object_id`]),
     /// kept in sync by [`Self::stick_local_player_to`] /
@@ -1134,7 +1138,10 @@ pub struct SpatialScene {
     /// target-pose resolution don't scan every body). Entries are
     /// removed on unstick, on the 1.0 s retail timeout
     /// (acclient.c:388605-388620), and on entity removal.
-    remote_sticky_targets: HashMap<Guid, Guid>,
+    /// holder → (target, holder radius, target radius). The radii are the
+    /// retail `cylinder_distance_no_z` inputs of `StickyManager::adjust_offset`
+    /// (OpenAC comparison 2026-10-04, remote motion D6; were both 0.0).
+    remote_sticky_targets: HashMap<Guid, (Guid, f32, f32)>,
     /// A2-P3 R2 — per-tick set of remote bodies whose pose was
     /// sticky-stepped this frame; drained next to
     /// [`Self::take_remote_stepped_poses`] so the wasm export can flag
@@ -1286,6 +1293,7 @@ impl SpatialScene {
             sky_desc: None,
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
+            remote_root_motion_enabled: true,
             local_sticky_target: None,
             remote_sticky_enabled: false,
             remote_sticky_targets: HashMap::new(),
@@ -1539,6 +1547,11 @@ impl SpatialScene {
     /// A2-P3 R2: the REMOTE sticky runtime switch.
     pub fn remote_sticky_enabled(&self) -> bool {
         self.remote_sticky_enabled
+    }
+
+    /// `?remoteRootMotion=off` escape for the D1 per-slice remote root motion.
+    pub fn set_remote_root_motion_enabled(&mut self, enabled: bool) {
+        self.remote_root_motion_enabled = enabled;
     }
 
     /// A2-P3 R2: drain the per-tick sticky-stepped guid set (drained by
@@ -4697,6 +4710,17 @@ impl SpatialScene {
                     body.position_manager.stop();
                     body.pose = pose;
                     body.sampling.mode = mode;
+                    // Export the hard set as a managed row (OpenAC
+                    // comparison 2026-10-04, remote motion D4): JS ignores
+                    // wire positions while a body is wasm-driven, so an
+                    // unexported snap — ACE's teleport-stamped position at a
+                    // monster's first melee swing — was simply lost and the
+                    // mob kept swinging from its lagged interp spot.
+                    // (Only for an EXISTING body: a first seed is the spawn,
+                    // which the renderer places itself.)
+                    if body_existed && let SpatialBodyId::Entity(guid) = body_id {
+                        self.remote_stepped_poses.insert(guid, pose);
+                    }
                 } else if ctx.contact == Some(false) {
                     // `!contact` → return 0: working pose untouched, no
                     // constrain; entity bookkeeping (authoritative_pose,
@@ -4714,6 +4738,9 @@ impl SpatialScene {
                         body.position_manager.stop();
                         body.pose = pose;
                         body.sampling.mode = mode;
+                        if let SpatialBodyId::Entity(guid) = body_id {
+                            self.remote_stepped_poses.insert(guid, pose); // D4
+                        }
                     } else {
                         // Near + contact: InterpolateTo with the NON-player
                         // blip radius (20/100, acclient.c:315872-315878),
@@ -4842,25 +4869,78 @@ impl SpatialScene {
         // the F3-4 kiting case — is tracked at full rate). Empty (zero
         // work) unless `?stickyRetail=on` armed the switch AND a sticky
         // install landed.
-        let sticky_feeds: HashMap<Guid, (Guid, Option<WorldPosition>)> =
+        let sticky_feeds: HashMap<Guid, (Guid, f32, f32, Option<WorldPosition>)> =
             if self.remote_sticky_enabled && !self.remote_sticky_targets.is_empty() {
                 self.remote_sticky_targets
                     .iter()
-                    .map(|(&holder, &target)| {
+                    .map(|(&holder, &(target, my_radius, target_radius))| {
                         (
                             holder,
-                            (target, self.resolve_remote_sticky_target_pose(target)),
+                            (
+                                target,
+                                my_radius,
+                                target_radius,
+                                self.resolve_remote_sticky_target_pose(target),
+                            ),
                         )
                     })
                     .collect()
             } else {
                 HashMap::new()
             };
+        // OpenAC comparison 2026-10-04 (remote motion D1). Retail moves every
+        // remote object EVERY frame by its motion (`UpdatePositionInternal`:
+        // the part array's root motion, then `PositionManager::adjust_offset`
+        // REPLACES it only while an interpolation node is active); the
+        // interp queue is a correction, not the locomotion. We only stepped
+        // bodies with an active queue, so between UpdatePositions a running
+        // mob stopped dead while its run cycle kept playing — stop-go
+        // sliding, worst for other players (~1 position/s). Idle OUTDOOR
+        // bodies on contact now advance by the retail state velocity
+        // (`get_state_velocity`) with Z on the terrain collision surface.
+        // Indoor bodies stay queue-only: remotes run no wall collision here,
+        // and a 0.2–1 s dead-reckon could cut through a wall. A body over
+        // non-resident terrain does not move.
+        let root_motion: HashMap<Guid, WorldPosition> = if self.remote_root_motion_enabled {
+            self.body_store
+                .bodies
+                .values()
+                .filter_map(|body| {
+                    let SpatialBodyId::Entity(guid) = body.id else {
+                        return None;
+                    };
+                    if body.position_manager.queue_active()
+                        || body.pose.is_indoors()
+                        || !body.last_wire_contact.unwrap_or(true)
+                        || self.remote_sticky_targets.contains_key(&guid)
+                    {
+                        return None;
+                    }
+                    let v = body.state_velocity_local();
+                    if v.x == 0.0 && v.y == 0.0 {
+                        return None;
+                    }
+                    let step = body.pose.rotation.rotate_vector(v) * quantum;
+                    let mut next = body.pose;
+                    next.coords = next.coords + Vector3::new(step.x, step.y, 0.0);
+                    let mut next = next.rebucket_outdoor_landblock().normalize_outdoor_cell();
+                    let (z, _) = super::faithful_bridge::faithful_terrain_floor(self, &next)?;
+                    next.coords.z = z;
+                    Some((guid, next))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
         for body in self.body_store.bodies.values_mut() {
             let SpatialBodyId::Entity(guid) = body.id else {
                 continue;
             };
             let mut stepped = false;
+            if let Some(&next) = root_motion.get(&guid) {
+                body.pose = next;
+                stepped = true;
+            }
             if body.position_manager.queue_active() {
                 let on_contact = body.last_wire_contact.unwrap_or(true);
                 // Retail `adjust_offset` (acclient.c:389228-389240):
@@ -4901,13 +4981,13 @@ impl SpatialScene {
             // constraint-after-sticky half is the same documented
             // deviation as Stage L3). No contact gate — retail sticky
             // has none (acclient.c:388519-388601).
-            if let Some(&(target, feed)) = sticky_feeds.get(&guid) {
+            if let Some(&(target, my_radius, target_radius, feed)) = sticky_feeds.get(&guid) {
                 // Lazy install: the wire install may have arrived
                 // before this body existed (KIND_MOTION before the
                 // first routed UpdatePosition) — arm the manager the
                 // first slice the body is steppable.
                 if body.position_manager.sticky_object_id() != Some(target) {
-                    body.position_manager.stick_to(target, 0.0);
+                    body.position_manager.stick_to(target, target_radius);
                 }
                 if let Some(pose) = feed {
                     body.position_manager.sticky_handle_update_target(target, pose);
@@ -4919,7 +4999,7 @@ impl SpatialScene {
                     // entry so no re-install fires.
                     self.remote_sticky_targets.remove(&guid);
                 } else if let Some(pose) = body.position_manager.step_sticky_pose(
-                    body.pose, /* my_radius (OPEN Q3 fallback) */ 0.0,
+                    body.pose, my_radius,
                     /* max_speed → retail floor 15.0 */ 0.0, quantum,
                 ) {
                     body.pose = pose;
@@ -4959,14 +5039,21 @@ impl SpatialScene {
     /// Radius `0.0` fallback per spec S9 OPEN Q3 (standoff degrades to
     /// the −0.3-clamped cylinder distance; no Rust-side per-entity
     /// physics radius yet). Inert unless the runtime switch is armed.
-    pub fn stick_remote_entity_to(&mut self, holder: Guid, target: Guid) {
+    pub fn stick_remote_entity_to(
+        &mut self,
+        holder: Guid,
+        target: Guid,
+        holder_radius: f32,
+        target_radius: f32,
+    ) {
         if !self.remote_sticky_enabled {
             return;
         }
-        self.remote_sticky_targets.insert(holder, target);
+        self.remote_sticky_targets
+            .insert(holder, (target, holder_radius, target_radius));
         let known_pose = self.resolve_remote_sticky_target_pose(target);
         if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(holder)) {
-            body.position_manager.stick_to(target, 0.0);
+            body.position_manager.stick_to(target, target_radius);
             if let Some(pose) = known_pose {
                 body.position_manager.sticky_handle_update_target(target, pose);
             }
@@ -4988,9 +5075,22 @@ impl SpatialScene {
         }
     }
 
+    /// Retail stores a MoveTo envelope's `run_rate` into the mover's
+    /// `motion_interpreter->my_run_rate` (acclient.c:339571 / :339583) —
+    /// the rate [`SpatialBody::adjusted_max_speed`] falls back to when the
+    /// body is not in RunForward (OpenAC comparison 2026-10-04, D2).
+    pub fn set_remote_run_rate(&mut self, guid: Guid, run_rate: f32) {
+        if !(run_rate.is_finite() && run_rate > 0.0) {
+            return;
+        }
+        if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
+            body.my_run_rate = run_rate;
+        }
+    }
+
     /// A2-P3 R2 — a REMOTE entity's current sticky target (diag/tests).
     pub fn remote_sticky_target(&self, holder: Guid) -> Option<Guid> {
-        self.remote_sticky_targets.get(&holder).copied()
+        self.remote_sticky_targets.get(&holder).map(|&(target, _, _)| target)
     }
 
     // === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky surface. =======

@@ -1008,6 +1008,15 @@ fn parse_wire_state_packs_flag(search: &str) -> bool {
 /// everywhere (the F3-2 re-home; remote bodies keep the hard-snap +
 /// JS-ease legacy path).
 #[cfg(any(target_arch = "wasm32", test))]
+/// OpenAC comparison 2026-10-04 (remote motion D1): `?remoteRootMotion=off`
+/// disables the per-slice state-velocity advance of idle outdoor remote
+/// bodies (`SpatialScene::step_remote_position_managers`). DEFAULT-ON; only
+/// rides the effective `remoteInterp` composite (no remote bodies otherwise).
+fn parse_remote_root_motion_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteRootMotion=off")
+}
+
 fn parse_remote_interp_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     // F-2026-06-27: DEFAULT-ON (was `== "remoteInterp=on"`); only `=off` disables.
@@ -43383,6 +43392,7 @@ async fn recv_loop(
     // REMOTE sticky parity on the A2-P2 remote bodies. COMPOSES on the
     // effective remoteInterp composite AND the USE_STICKY_MANAGER
     // const; see `parse_sticky_retail_flag` for the full compose rule.
+    let remote_root_motion_on: bool = parse_remote_root_motion_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -45380,6 +45390,7 @@ async fn recv_loop(
                                 // (stickyRetail × remoteInterp ×
                                 // USE_STICKY_MANAGER compose rule).
                                 new_world.set_remote_sticky_enabled(remote_sticky_on);
+                                new_world.scene.set_remote_root_motion_enabled(remote_root_motion_on);
                                 // COMBAT-RADII (2026-07-28): size-aware
                                 // standoffs (?combatRadii, default ON).
                                 new_world.set_combat_radii_enabled(combat_radii_on);
@@ -45801,6 +45812,24 @@ async fn recv_loop(
                                     publish_local_player_pose(w, &local_player_pose);
                                 }
                             }
+                            // OpenAC comparison 2026-10-04 (remote motion D3):
+                            // retail drops a stale / reordered remote position
+                            // entirely (`SmartBox::HandleReceivedPosition`,
+                            // acclient.c:145125-145240). The routed world
+                            // handler already ran that gate
+                            // (`apply_entity_position_pack`); when it REJECTED
+                            // this frame the entity still holds its previous
+                            // pose — don't hand the stale pose to JS, whose
+                            // setPose would retarget the heading, drop the
+                            // sticky glue and ease toward it.
+                            let remote_rejected = wire_state_packs_stage1_on
+                                && !matches!(&state, LoopState::InWorld { player_guid } if data.guid == *player_guid)
+                                && world.borrow().as_ref().is_some_and(|w| {
+                                    w.entities
+                                        .get(data.guid)
+                                        .is_some_and(|e| e.position != *pos)
+                                });
+                            if !remote_rejected {
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
                                 guid: u32::from(data.guid),
@@ -45841,6 +45870,7 @@ async fn recv_loop(
                                 physics_translucency: 0.0,
                                 is_autonomous: false,
                             });
+                            }
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
                             // PrivateUpdatePosition has no guid in the
@@ -47466,9 +47496,18 @@ async fn recv_loop(
                                 && data.guid != w.player.guid
                             {
                                 if sticky_target != 0 {
+                                    // Retail sticky keeps cylinder distance
+                                    // between the two BODIES (radius each,
+                                    // remote motion D6); same radius source
+                                    // as the local lane's `?combatRadii`.
+                                    let target = holtburger_common::Guid(sticky_target);
+                                    let holder_radius = w.combat_part_dims(data.guid).0;
+                                    let target_radius = w.combat_sticky_radius(target);
                                     w.scene.stick_remote_entity_to(
                                         data.guid,
-                                        holtburger_common::Guid(sticky_target),
+                                        target,
+                                        holder_radius,
+                                        target_radius,
                                     );
                                 } else {
                                     w.scene.unstick_remote_entity(data.guid);
@@ -47496,6 +47535,11 @@ async fn recv_loop(
                                 _ => 0.0,
                             }
                             .max(0.0);
+                            if entity_run_rate > 0.0
+                                && let Some(w) = world.borrow_mut().as_mut()
+                            {
+                                w.scene.set_remote_run_rate(data.guid, entity_run_rate);
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_MOTION,
                                 guid: u32::from(data.guid),
@@ -49907,6 +49951,7 @@ async fn recv_loop(
                             // (stickyRetail × remoteInterp ×
                             // USE_STICKY_MANAGER compose rule).
                             new_world.set_remote_sticky_enabled(remote_sticky_on);
+                            new_world.scene.set_remote_root_motion_enabled(remote_root_motion_on);
                             // COMBAT-RADII (2026-07-28): size-aware
                             // standoffs (?combatRadii, default ON).
                             new_world.set_combat_radii_enabled(combat_radii_on);

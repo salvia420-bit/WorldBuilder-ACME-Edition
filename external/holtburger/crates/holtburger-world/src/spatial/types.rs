@@ -341,6 +341,39 @@ impl SpatialBody {
         self.motion_state = motion_state;
     }
 
+    /// Retail `CMotionInterp::get_state_velocity` (acclient.c:343440-ish,
+    /// `CMotionInterp::get_state_velocity`) for a remote body, in the body's
+    /// LOCAL frame (x = right, y = forward): SideStepRight × 1.25,
+    /// WalkForward × 3.12, RunForward × 4.0 of the state speeds (walk-back
+    /// and strafe-left arrive as the forward command with a negative speed),
+    /// magnitude clamped to `my_run_rate × 4`.
+    pub fn state_velocity_local(&self) -> Vector3 {
+        let Some(ms) = self.motion_state else {
+            return Vector3::zero();
+        };
+        let speed = |s: Option<crate::entity::OrderedMotionSpeed>| {
+            s.map(|v| v.to_f32()).filter(|v| v.is_finite()).unwrap_or(1.0)
+        };
+        let x = if ms.sidestep_command == Some(InterpretedMotionCommand::SIDESTEP_RIGHT) {
+            1.25 * speed(ms.sidestep_speed)
+        } else {
+            0.0
+        };
+        let y = match ms.forward_command {
+            Some(c) if c == InterpretedMotionCommand::WALK_FORWARD => 3.12 * speed(ms.forward_speed),
+            Some(c) if c == InterpretedMotionCommand::RUN_FORWARD => 4.0 * speed(ms.forward_speed),
+            _ => 0.0,
+        };
+        let v = Vector3::new(x, y, 0.0);
+        let max = self.my_run_rate * 4.0;
+        let len = (x * x + y * y).sqrt();
+        if len > max && len > 0.0 {
+            v * (max / len)
+        } else {
+            v
+        }
+    }
+
     /// Retail `CMotionInterp::get_adjusted_max_speed` (acclient.c:343512)
     /// for a remote: RunForward → `forward_speed / current_speed_factor`
     /// (the factor is 1.0 for a remote), else `my_run_rate` (a remote's
