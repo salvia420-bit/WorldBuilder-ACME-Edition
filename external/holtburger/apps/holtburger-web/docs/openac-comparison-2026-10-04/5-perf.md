@@ -68,6 +68,23 @@ differences are the real lessons.
 - **holtburger:** no s3tc path exists. Every surface is decoded to RGBA8, uploaded with driver mipgen, then re-fetched as BC7/XU7 and transcoded on the main thread at ~32 ms per 1024² (p99 #2), leaving ~1.3 GB of CPU mirrors (survey §2). A clip-map census at `materials.js:2077-2079` shows DXT is the majority of non-paletted surfaces (DXT5 97, DXT1 27, DXT3 5 of 203).
 - **Expected:** for DXT-native surfaces, frame-1 is 4-8 bpp with **zero** decode or transcode. That makes it an ideal preview/base tier in place of RGBA8 (the I3 fix), and the CPU mirror becomes the raw DAT bytes. s3tc is available on desktop Chrome/ANGLE (both owner GPUs) but not on mobile, so keep RGBA8 as the fallback. The Remacri hi-res tier stays BC7/XU7. **Effort S-M.**
 
+- **Measured 2026-10-04 (before building it) — the premise does not hold as written.**
+  `crates/holtburger-dat/examples/surface_mip_census.rs` over `client_portal.dat`: 2,130
+  textured surfaces are DXT at the top level (DXT1 1,987, DXT5 138, DXT3 5; all power-of-two;
+  129 ClipMap; none recoloured). **None carries a mip chain**: the SurfaceTexture level list
+  holds 1 entry (1,085) or 2 (1,045), and the second entry is the SAME size
+  (`256x256:Dxt1 > 256x256:Dxt1`), never a halving chain; the smallest level is never below 8 px.
+  WebGL cannot generate mips for a compressed texture, so "upload the DAT bytes, zero decode"
+  means no mipmaps (minification shimmer) unless the client decodes, downsamples and
+  re-encodes the lower levels itself. Sizes: 74.7 MiB of DXT blocks vs 507 MiB of RGBA8 top
+  levels today (before driver mips). The wasm decode also cannot be skipped today: the
+  normal/height planes are derived from the decoded RGBA (`normal_and_height_pixels`), and the
+  statics atlas copies RGBA8 layers from those planes. And the frame-1 role is already designed
+  in, BC7-shaped: survey I3's fix, the baked preview tier in place of RGBA8, is
+  `?texCompressedOnly` (ST5, DEV). Both owner GPUs have BPTC. DXT would only add a third path
+  for GPUs with s3tc but no BPTC. **Status: not built**; finishing the `?texCompressedOnly` gate
+  covers the same wall.
+
 ### T7. Separate near (object) radius from far (terrain) radius
 - **OpenAC:** `QualityPreset.cs:22-26` (High = 4 for objects / 12 for terrain; Medium 3/8) and `LandblockStreamTier.cs:12-16`.
 - **holtburger:** objects use the full radius 5 (`residency.js:51`): 26,586 resident static instances, 381-677 ktris. The FCR already covers the far terrain look.
