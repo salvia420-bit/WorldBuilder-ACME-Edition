@@ -992,6 +992,9 @@ pub struct Entity {
 pub const USE_ETHEREAL_RECHECK: bool = false;
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
+/// `ObjectMovement` stamp — retail `CPhysicsObj::update_times[1]`, gated by
+/// `CPhysics::SetObjectMovement` (acclient.c:144810-ish).
+const OBJECT_MOVEMENT_SEQUENCE_INDEX: usize = 1;
 /// `ObjectState` stamp — retail `CPhysicsObj::update_times[2]`, gated by
 /// `SmartBox::DoSetState` (acclient.c:143396).
 const OBJECT_STATE_SEQUENCE_INDEX: usize = 2;
@@ -1028,6 +1031,38 @@ impl Entity {
     pub fn motion_command(&self) -> Option<InterpretedMotionCommand> {
         self.motion_snapshot
             .and_then(EntityMotionSnapshot::motion_command)
+    }
+
+    /// Retail `CPhysics::SetObjectMovement` gating for a REMOTE object's
+    /// UpdateMotion: the movement stamp must be strictly newer (wrap-aware)
+    /// and is then recorded; a server-control stamp OLDER than the stored one
+    /// rejects (after the movement stamp was recorded, exactly as retail);
+    /// otherwise the control stamp is recorded too. Returns whether to apply.
+    /// (OpenAC comparison 2026-10-04, remote motion D8 — every UpdateMotion
+    /// used to apply, so a duplicated / reordered stale one could replay an
+    /// attack or snap a running mob back to Ready.)
+    pub(crate) fn accept_movement_sequences(
+        &mut self,
+        movement_sequence: u16,
+        server_control_sequence: u16,
+    ) -> bool {
+        if !is_newer_u16(movement_sequence, self.sequences[OBJECT_MOVEMENT_SEQUENCE_INDEX]) {
+            return false;
+        }
+        self.sequences[OBJECT_MOVEMENT_SEQUENCE_INDEX] = movement_sequence;
+        if is_newer_u16(
+            self.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX],
+            server_control_sequence,
+        ) {
+            return false;
+        }
+        self.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX] = server_control_sequence;
+        true
+    }
+
+    /// The last accepted UpdateMotion stamp (`update_times[1]`).
+    pub fn movement_sequence(&self) -> u16 {
+        self.sequences[OBJECT_MOVEMENT_SEQUENCE_INDEX]
     }
 
     /// Retail `SmartBox::HandleSetState` + `DoSetState` gating
@@ -1514,6 +1549,25 @@ mod physics_state_predicates_tests {
         assert!(
             !fixture(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS).is_collidable()
         );
+    }
+
+    /// OpenAC comparison 2026-10-04 (remote motion D8): retail
+    /// `CPhysics::SetObjectMovement` — strictly newer movement stamp, and a
+    /// server-control stamp that is not older.
+    #[test]
+    fn movement_stamp_gate_matches_retail() {
+        let mut e = fixture(PhysicsState::NONE);
+        assert!(e.accept_movement_sequences(5, 2));
+        assert!(!e.accept_movement_sequences(5, 2), "duplicate stamp");
+        assert!(!e.accept_movement_sequences(4, 2), "older stamp");
+        assert!(e.accept_movement_sequences(6, 3));
+        // Newer movement but an OLDER server-control stamp: rejected, yet
+        // the movement stamp is recorded (retail order).
+        assert!(!e.accept_movement_sequences(7, 1));
+        assert_eq!(e.movement_sequence(), 7);
+        // Wrap-aware.
+        e.sequences[1] = 0xFFFF;
+        assert!(e.accept_movement_sequences(0, 3));
     }
 
     /// A7-R6: an overlapped ethereal→solid transition DEFERS — the

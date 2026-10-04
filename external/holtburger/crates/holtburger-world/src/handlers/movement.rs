@@ -122,6 +122,18 @@ pub(crate) fn handle_message(
         }
         GameMessage::UpdateMotion(data) => {
             let guid = data.guid;
+            // Retail CPhysics::SetObjectMovement stamp gate for REMOTE
+            // objects (the local player's own gate lives in
+            // player/mutations.rs). Remote motion D8.
+            if guid != state.player.guid
+                && let Some(entity) = state.entities.get_mut(guid)
+                && !entity.accept_movement_sequences(
+                    data.movement_sequence,
+                    data.server_control_sequence,
+                )
+            {
+                return false;
+            }
             // A3-D3: per-message, before any change gate / early return.
             emit_entity_movement_event(state, guid, data, events);
             let snapshot = EntityMotionSnapshot::from_movement_event(data);
@@ -280,10 +292,15 @@ mod tests {
         guid: holtburger_common::Guid,
         target: holtburger_common::Guid,
     ) -> GameMessage {
+        // A fresh, increasing movement stamp per message, as ACE sends: the
+        // remote UpdateMotion gate (retail CPhysics::SetObjectMovement)
+        // drops a repeated stamp as a duplicate.
+        static NEXT_SEQ: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(2);
+        let movement_sequence = NEXT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GameMessage::UpdateMotion(Box::new(MovementEventData {
             guid,
             object_instance_sequence: 1,
-            movement_sequence: 2,
+            movement_sequence,
             server_control_sequence: 3,
             is_autonomous: false,
             movement_type: MovementType::MoveToObject,

@@ -47256,6 +47256,21 @@ async fn recv_loop(
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
+                            // OpenAC comparison 2026-10-04 (remote motion D8):
+                            // the routed world handler applies retail's
+                            // CPhysics::SetObjectMovement stamp gate and
+                            // records an accepted stamp. A REMOTE UpdateMotion
+                            // whose stamp it did not record was stale or
+                            // reordered — don't animate it (a replayed swing,
+                            // a snap back to Ready mid-run).
+                            let remote_motion_stale = wire_state_packs_stage1_on
+                                && !matches!(&state, LoopState::InWorld { player_guid } if data.guid == *player_guid)
+                                && world.borrow().as_ref().is_some_and(|w| {
+                                    w.entities
+                                        .get(data.guid)
+                                        .is_some_and(|e| e.movement_sequence() != data.movement_sequence)
+                                });
+                            if !remote_motion_stale {
                             // Phase 4 step 3 wire validation: ACE
                             // broadcasts UpdateMotion in response to
                             // our outbound MoveToState (see
@@ -47814,6 +47829,7 @@ async fn recv_loop(
                                         });
                                     }
                                 }
+                            }
                             }
                         }
                         GameMessage::VectorUpdate(data) => {
