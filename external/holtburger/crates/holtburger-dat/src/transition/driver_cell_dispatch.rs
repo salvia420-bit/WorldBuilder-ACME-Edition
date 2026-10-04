@@ -221,6 +221,28 @@ impl CTransition {
             return 2;
         }
 
+        // DELIBERATE DEVIATION (OpenAC comparison 2026-10-04, collision F2;
+        // OpenAC `CellTransit.BuildCellSetAndPickContaining` keeps its seed
+        // cell, pinned by `A9B3Cottage_GapBeyondStraddleDistance_KeepsCurrCell`).
+        // Retail leaves `check_cell` NULL here for an INDOOR check_pos with no
+        // `point_in_cell` winner, and `transitional_insert` then returns OK
+        // with ZERO collision (acclient.c:312859). Retail can afford that —
+        // its cell membership never disagrees with geometry. Ours can (a
+        // cell flipped from outside the driver, a cell not yet streamed), and
+        // the result was a free-fall corridor at tunnel and dungeon mouths.
+        // For ordinary movement keep the cell we came from, so walls and
+        // floors still collide; placement inserts keep the retail rule
+        // (they must be able to reject a pose that is in no cell).
+        if (self.sphere_path.check_pos.objcell_id & 0xFFFF) >= 0x100
+            && self.sphere_path.insert_type == InsertType::Transition
+        {
+            if let Some(prev) = curr_cell.filter(|&id| world.get_visible(id).is_some()) {
+                self.sphere_path.check_cell = Some(prev);
+                self.sphere_path.adjust_check_pos(prev);
+                return v5;
+            }
+        }
+
         // Position p = { check_pos.objcell_id, check_pos.frame }.
         let mut p = Position {
             objcell_id: self.sphere_path.check_pos.objcell_id,
@@ -269,6 +291,7 @@ mod tests {
         codes: Vec<i32>,
         calls: Cell<usize>,
         objects: Vec<Rc<dyn PhysicsObjRef>>,
+        contains_point: bool,
     }
     impl ScriptCell {
         fn new(id: u32, codes: Vec<i32>) -> Self {
@@ -278,7 +301,12 @@ mod tests {
                 codes,
                 calls: Cell::new(0),
                 objects: Vec::new(),
+                contains_point: true,
             }
+        }
+        /// A cell whose `point_in_cell` is false (the mover is outside it).
+        fn not_containing(id: u32) -> Self {
+            Self { contains_point: false, ..Self::new(id, vec![1]) }
         }
     }
     impl CObjCell for ScriptCell {
@@ -318,7 +346,7 @@ mod tests {
             self.codes[i.min(self.codes.len() - 1)]
         }
         fn point_in_cell(&self, _point: Vector3) -> bool {
-            true
+            self.contains_point
         }
     }
 
@@ -498,6 +526,30 @@ mod tests {
         assert_eq!(t.sphere_path.check_pos.objcell_id, 0x5678_0000);
         assert_eq!(t.sphere_path.check_cell, None);
         assert!(t.sphere_path.cell_array_valid);
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F2): an INDOOR check_pos with
+    /// no containing cell keeps the cell it came from during a Transition,
+    /// instead of going cell-less (which disables all collision); a
+    /// Placement insert keeps the retail NULL.
+    #[test]
+    fn check_other_cells_indoor_no_winner_keeps_previous_cell() {
+        let mut t = CTransition::default();
+        one_sphere_path(&mut t);
+        t.sphere_path.check_pos.objcell_id = 0x1234_0105; // indoor
+        let c = Rc::new(ScriptCell::not_containing(0x1234_0105)) as Rc<dyn CObjCell>;
+        let world = RingWorld { cells: vec![c], ring: vec![] };
+        assert_eq!(t.check_other_cells(&world, Some(0x1234_0105)), 1);
+        assert_eq!(t.sphere_path.check_cell, Some(0x1234_0105));
+
+        let mut p = CTransition::default();
+        one_sphere_path(&mut p);
+        p.sphere_path.insert_type = InsertType::Placement;
+        p.sphere_path.check_pos.objcell_id = 0x1234_0105;
+        let c = Rc::new(ScriptCell::not_containing(0x1234_0105)) as Rc<dyn CObjCell>;
+        let world = RingWorld { cells: vec![c], ring: vec![] };
+        p.check_other_cells(&world, Some(0x1234_0105));
+        assert_eq!(p.sphere_path.check_cell, None, "placement keeps the retail rule");
     }
 
     #[test]

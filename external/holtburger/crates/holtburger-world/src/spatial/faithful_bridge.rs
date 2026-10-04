@@ -1617,10 +1617,22 @@ pub fn faithful_find_transitional_position(
     // stayed hidden while standing inside the shell. Same gate + capsule
     // radius as the sibling paths (entry/exit MUST move together).
     if input.gates.local_envcell_entry {
+        // OpenAC comparison 2026-10-04 (collision F1/F3): retail decides
+        // membership with `point_in_cell(sphere[0].center)` (acclient.c
+        // `CObjCell::find_cell_list` ~347030-347060), not with the feet and
+        // not with "the sphere touches the hull". The old test sat a 0.48 m
+        // sphere on the FEET, so on terrain above a shallow tunnel it reached
+        // ~0.5 m underground, flipped the player into a tunnel EnvCell they
+        // were not inside, and the next step had no terrain and no
+        // containing cell: free fall. ENTRY is now the sphere CENTRE inside
+        // the cell (radius 0). Exit and indoor→indoor tracking keep their
+        // feet-sphere tests (tuned around `current_cell`'s seam continuity):
+        // a centre inside a cell implies the feet sphere touches it, so the
+        // stricter entry cannot flicker against the looser exit.
+        let mut centre = pose;
+        centre.coords.z += input.object.capsule[0].0;
         if !pose.is_indoors() {
-            if let Some(entered) =
-                scene.entered_envcell_for_outdoor_pose(&pose, input.object.radius)
-            {
+            if let Some(entered) = scene.entered_envcell_for_outdoor_pose(&centre, 0.0) {
                 pose.landblock_id = holtburger_common::Guid(entered);
             }
         } else if let Some(outdoor_cell) =
@@ -2207,7 +2219,7 @@ mod drift {
         FaithfulMover, SceneWorld, WaterType,
     };
     use crate::spatial::entity_collision::EntityCollider;
-    use crate::spatial::scene::{CellPhysicsBsp, SpatialScene};
+    use crate::spatial::scene::{CellMembership, CellPhysicsBsp, SpatialScene};
     use crate::spatial::types::CellPortalPolygon;
     use crate::spatial::transition::{
         find_transitional_position, ObjectInfo, TransitionEnv, TransitionGates, TransitionInput,
@@ -2501,6 +2513,68 @@ mod drift {
             "fell through the landblock terrain at a dungeon mouth: z={} < terrain {}",
             out.pose.coords.z,
             MOUTH_TERRAIN_Z
+        );
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F1/F3): walking on terrain a
+    /// few tenths of a metre above a tunnel EnvCell's ceiling must stay
+    /// OUTDOORS and on the ground. The old entry test put a 0.48 m sphere on
+    /// the FEET, so it reached under the terrain, "entered" the tunnel cell
+    /// the player was not inside, and the next step had no terrain and no
+    /// containing cell — the fall-through-the-map at tunnel mouths. Retail
+    /// tests `point_in_cell(sphere[0].center)`.
+    #[test]
+    fn walking_on_terrain_over_a_shallow_tunnel_stays_outdoors() {
+        use holtburger_dat::physics::InternalNode;
+        let tunnel_ceiling = FLOOR_WZ;
+        let terrain = tunnel_ceiling + 0.3;
+        let o = cell_origin();
+        let mut scene = SpatialScene::new();
+        // Membership: inside ⇔ cell-local z <= 0 (below the ceiling plane).
+        scene.insert_cell_membership(
+            CELL_ID,
+            CellMembership {
+                tree: BspNode::Internal(InternalNode {
+                    tag: [0u8; 4],
+                    plane: Plane { normal: v(0.0, 0.0, -1.0), d: 0.0 },
+                    pos: Some(Box::new(BspNode::Leaf(BspLeaf {
+                        index: 0,
+                        solid: 0,
+                        sphere: None,
+                        poly_ids: vec![],
+                    }))),
+                    neg: None,
+                    sphere: None,
+                    poly_ids: vec![],
+                }),
+                origin: o,
+                orientation: Quaternion::identity(),
+            },
+        );
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(v(o.x - HE, o.y - HE, tunnel_ceiling - 4.0), v(o.x + HE, o.y + HE, tunnel_ceiling)),
+        );
+        scene.populate_terrain_heights(LB_ID, [terrain; 81]);
+        let env = DriftEnv { scene };
+
+        let outdoor = |x: f32| WorldPosition {
+            landblock_id: Guid((LB_ID & 0xFFFF_0000) | 0x0001),
+            coords: v(x, FCY, terrain),
+            rotation: Quaternion::identity(),
+        };
+        let input = input_for(outdoor(FCX - 0.5), outdoor(FCX + 0.5));
+        let out = faithful_find_transitional_position(&env, &input, true, true);
+
+        assert!(
+            !out.pose.is_indoors(),
+            "flipped into the tunnel cell 0x{:08X} from the terrain above it",
+            out.pose.landblock_id.0
+        );
+        assert!(
+            out.pose.coords.z >= terrain - 0.05,
+            "sank below the terrain over a tunnel: z={} < {terrain}",
+            out.pose.coords.z
         );
     }
 
@@ -3694,6 +3768,14 @@ mod drift {
         for t in floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ) {
             scene.insert_cell_triangle(CELL_ID, t);
         }
+        // The two rooms are portal-linked, as every real adjoining pair is.
+        // (Before 2026-10-04 this fixture had NO portal and only "passed"
+        // because the driver went cell-less at the seam and lost all
+        // collision — the walk sank below the floor, grounded=false. With the
+        // keep-previous-cell fallback the mover stays on the floor, so the
+        // transit has to happen the retail way: through a portal.)
+        scene.insert_cell_portal(CELL_ID, NEXT_ID);
+        scene.insert_cell_portal(NEXT_ID, CELL_ID);
         let env = DriftEnv { scene };
         let begin = pose_at(FCX, FCY, FLOOR_WZ);
         let end = pose_at(FCX + 1.3, FCY, FLOOR_WZ - SINK);
