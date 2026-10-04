@@ -465,7 +465,7 @@ pub(crate) struct CommandInterpreter {
     // ── holtburger configs — NOT retail fields (verdict §3.3 flag
     // migration; QUALITY-integration §3.3 flag-gate map). Seeded from
     // the `?castMove`/`?slideCast` runtime carriers at construction
-    // (`MovementSystem::ingest_key_edge`) — the URL flags are ALIASES
+    // (`MovementSystem::ingest_interp_op`) — the URL flags are ALIASES
     // for these; the legacy carriers stay the `?cmdInterp=off`
     // predicates. ────────────────────────────────────────────────────
     /// `?castMove` alias: honor the server-control autonomy latch in
@@ -1165,7 +1165,6 @@ impl CommandInterpreter {
 
     /// `MaybeStopCompletely` — acclient.c:717557: under server control the
     /// stop is SILENTLY suppressed (true, nothing touched); else delegate.
-    #[allow(dead_code)] // staged: step-4 stop wiring
     pub(crate) fn maybe_stop_completely(&mut self, seams: &mut dyn InterpreterSeams) -> bool {
         if self.controlled_by_server {
             return true;

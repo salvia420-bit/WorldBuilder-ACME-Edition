@@ -398,6 +398,12 @@ impl MovementSystemHandle {
         self.inner.enqueue_key_action(action, down);
     }
 
+    /// Retail `MaybeStopCompletely` before a cast / attack request
+    /// (acclient.c:403775, :408917). Interpreter lane only.
+    pub fn enqueue_maybe_stop_completely(&mut self) {
+        self.inner.enqueue_maybe_stop_completely();
+    }
+
     /// Wave-1 step 5 (rows 12-13): drain the interpreter lane's
     /// JS-facing event stream — interpreter effects (forward-slot
     /// eviction, FU-A reclaims), the installed drive per dispatched

@@ -2024,6 +2024,14 @@ pub(crate) struct MovementSystem {
     auto_run: bool,
 }
 
+/// One operation for the interpreter lane's shared ingest
+/// ([`MovementSystem::ingest_interp_op`]).
+#[derive(Debug, Clone, Copy)]
+enum InterpOp {
+    KeyEdge { action: u32, down: bool },
+    MaybeStopCompletely,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum QueuedDriveCommand {
     ManualSet(MotionState),
@@ -2038,6 +2046,15 @@ enum QueuedDriveCommand {
     /// `down` = press vs release. The legacy `ManualSet` lane never
     /// carries keyboard edges while the flag is on (ownership row 4).
     KeyEdge { action: u32, down: bool },
+    /// Retail `CommandInterpreter::MaybeStopCompletely` (acclient.c:717557),
+    /// which `ClientMagicSystem::FreeHandsAndCastSpell` (:403775), the
+    /// untargeted `CastSpell` arm and `ClientCombatSystem::StartAttackRequest`
+    /// (:408917) all call BEFORE sending the request: clear every held
+    /// command, drop autorun, stop the body, send the movement event. A
+    /// held key does not count again until it is re-pressed — which is why
+    /// retail slidecasting needs re-tapping (PARITY-LEDGER H2 / R1).
+    /// Interpreter lane only; ingested beside KeyEdge (needs world access).
+    MaybeStopCompletely,
     Autonomous(AutonomousDriveIntent),
     Transient(TransientMotionIntent),
     ArriveAtPose {
@@ -2567,6 +2584,17 @@ impl MovementSystem {
             .push(QueuedDriveCommand::KeyEdge { action, down });
     }
 
+    /// Queue retail `MaybeStopCompletely` (see
+    /// [`QueuedDriveCommand::MaybeStopCompletely`]). The cast / attack
+    /// request paths call this before their wire send. No-op on the legacy
+    /// (`?cmdInterp=off`) lane, which has no command lists to clear.
+    pub(crate) fn enqueue_maybe_stop_completely(&mut self) {
+        if self.cmd_interp_enabled() {
+            self.queued_drive_commands
+                .push(QueuedDriveCommand::MaybeStopCompletely);
+        }
+    }
+
     /// Retail wire-latch write — `SmartBox::SetObjectMovement`
     /// (acclient.c:311185-311193) stamps `last_move_was_autonomous` with
     /// the message's autonomous flag on every accepted self motion that
@@ -2699,11 +2727,11 @@ impl MovementSystem {
     ///   seam's send methods are deferred no-ops, so the A/B has identical
     ///   send cadence; step 5 flips send ownership onto the interpreter's
     ///   `SendMovementEvent` + the M1 converter.
-    fn ingest_key_edge(&mut self, action: u32, down: bool, now: Instant, world: &mut WorldState) {
+    fn ingest_interp_op(&mut self, op: InterpOp, now: Instant, world: &mut WorldState) {
         if !self.cmd_interp_enabled() {
             // JS only forwards actions under ?cmdInterp=on; a stray edge
             // here means the gate leaked.
-            debug_assert!(false, "KeyEdge queued while ?cmdInterp off");
+            debug_assert!(false, "interpreter-lane command queued while ?cmdInterp off");
             return;
         }
         // F3: normally already attached at world entry
@@ -2746,11 +2774,19 @@ impl MovementSystem {
             drive: base,
             dispatched: false,
         };
-        let handled = interp.on_action(&mut seams, action, down);
+        let handled = match op {
+            InterpOp::KeyEdge { action, down } => interp.on_action(&mut seams, action, down),
+            InterpOp::MaybeStopCompletely => {
+                interp.maybe_stop_completely(&mut seams);
+                true
+            }
+        };
         let dispatched = seams.dispatched;
         let drive = seams.drive;
         if !handled {
-            log::warn!("cmdInterp: unhandled input action {action:#x} (emote hash dark, M3)");
+            if let InterpOp::KeyEdge { action, .. } = op {
+                log::warn!("cmdInterp: unhandled input action {action:#x} (emote hash dark, M3)");
+            }
         }
         if dispatched {
             // Install the composed drive (the per-axis DoMotion/StopMotion
@@ -3764,11 +3800,11 @@ impl MovementSystem {
                         restore_manual: true,
                     });
             }
-            QueuedDriveCommand::KeyEdge { .. } => {
+            QueuedDriveCommand::KeyEdge { .. } | QueuedDriveCommand::MaybeStopCompletely => {
                 // Extracted by the tick's drain loop BEFORE this dispatch
                 // (the interpreter lane needs world access); unreachable
                 // here.
-                debug_assert!(false, "KeyEdge reached ingest_drive_command");
+                debug_assert!(false, "interpreter-lane command reached ingest_drive_command");
             }
         }
     }
@@ -3923,13 +3959,17 @@ impl MovementSystem {
         // finds an enabled interpreter.
         self.attach_command_interpreter_at_world_entry(now, world);
         for command in queued {
-            if let QueuedDriveCommand::KeyEdge { action, down } = command {
+            match command {
                 // Interpreter lane — needs world access (TakeControl's
                 // leash drop), so it ingests here rather than in
                 // ingest_drive_command.
-                self.ingest_key_edge(action, down, now, world);
-            } else {
-                self.ingest_drive_command(command, now, local_guid);
+                QueuedDriveCommand::KeyEdge { action, down } => {
+                    self.ingest_interp_op(InterpOp::KeyEdge { action, down }, now, world);
+                }
+                QueuedDriveCommand::MaybeStopCompletely => {
+                    self.ingest_interp_op(InterpOp::MaybeStopCompletely, now, world);
+                }
+                command => self.ingest_drive_command(command, now, local_guid),
             }
         }
         self.consume_pending_take_control(world);

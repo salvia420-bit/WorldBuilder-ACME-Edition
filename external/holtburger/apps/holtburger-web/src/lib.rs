@@ -50703,6 +50703,14 @@ async fn recv_loop(
                         target_guid,
                         spell_id,
                     }) => {
+                        // Retail stops the player BEFORE every cast / attack
+                        // request: `FreeHandsAndCastSpell` (acclient.c:403775),
+                        // untargeted `CastSpell`, `StartAttackRequest`
+                        // (:408917) all call `MaybeStopCompletely` — held keys
+                        // stop counting until re-pressed (the slidecast
+                        // re-tap, PARITY-LEDGER H2/R1). Every JS cast/attack
+                        // path funnels through this arm, so it lives here.
+                        movement.enqueue_maybe_stop_completely();
                         // Phase F (combat-magic): build and send a
                         // GameAction::CastTargetedSpell. ACE validates
                         // everything server-side (mana cost, spell
@@ -50737,6 +50745,8 @@ async fn recv_loop(
                         ));
                     }
                     Some(SessionCommand::CastUntargetedSpell { spell_id }) => {
+                        // Retail MaybeStopCompletely first (see CastTargetedSpell).
+                        movement.enqueue_maybe_stop_completely();
                         use holtburger_protocol::messages::{
                             CastUntargetedSpellActionData, GameAction,
                         };
@@ -52712,6 +52722,8 @@ async fn recv_loop(
                         attack_height,
                         accuracy_level,
                     }) => {
+                        // Retail MaybeStopCompletely first (see CastTargetedSpell).
+                        movement.enqueue_maybe_stop_completely();
                         // Phase E (combat-missile): mirror of the
                         // melee arm — ACE owns target liveness,
                         // ammo check, range, stance check, etc.
@@ -52749,6 +52761,8 @@ async fn recv_loop(
                         attack_height,
                         power_level,
                     }) => {
+                        // Retail MaybeStopCompletely first (see CastTargetedSpell).
+                        movement.enqueue_maybe_stop_completely();
                         // Phase B (combat-melee): build a
                         // GameAction::TargetedMeleeAttack (sub-opcode 0x0008)
                         // and dispatch. ACE's HandleActionTargetedMeleeAttack

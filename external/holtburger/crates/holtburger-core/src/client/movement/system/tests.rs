@@ -8120,6 +8120,66 @@ fn take_control_on_input_edge_clears_server_control_and_stops_interp() {
     );
 }
 
+/// OpenAC comparison 2026-10-04 (combat P0-4) — retail stops the player
+/// BEFORE a cast / attack request (`FreeHandsAndCastSpell` acclient.c:403775,
+/// `StartAttackRequest` :408917 → `MaybeStopCompletely` :717557). Held keys
+/// stop counting until they are pressed again; the legacy lane is untouched.
+#[tokio::test]
+async fn cmd_interp_maybe_stop_completely_clears_held_keys_until_repressed() {
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0123),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut session = Session::new_test();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+
+    movement.enqueue_key_action(0x29, true); // W held
+    movement.enqueue_key_action(0x2C, true); // strafe right held
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+
+    // The cast press.
+    movement.enqueue_maybe_stop_completely();
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected the stop to install a manual drive, got {other:?}"),
+    };
+    assert_eq!(drive.forward, None, "the cast press stops forward motion");
+    assert_eq!(drive.sidestep, None, "the cast press stops the strafe");
+    let raw = movement.last_manual_drive.expect("mirror populated");
+    assert_eq!(raw.forward, None, "ClearAllCommands emptied the held lists");
+    assert_eq!(raw.sidestep, None);
+
+    // Re-pressing W (a fresh edge) moves again — the slidecast re-tap.
+    movement.enqueue_key_action(0x29, true);
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(drive.forward, Some(ForwardLocomotion::Forward));
+    assert_eq!(drive.sidestep, None, "the strafe stays stopped until re-pressed");
+
+    // Legacy lane: the request queues nothing.
+    let mut legacy = MovementSystem::new();
+    legacy.set_cmd_interp(false);
+    legacy.enqueue_maybe_stop_completely();
+    assert!(legacy.queued_drive_commands.is_empty());
+}
+
 /// Wave-1 step 4 (`?cmdInterp=on`) — the interpreter lane end-to-end
 /// through the tick: input-action edges compose the per-axis drive, raise
 /// the latch, mirror the held-keys truth from the CommandLists, and the
