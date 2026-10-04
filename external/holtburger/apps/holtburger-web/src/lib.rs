@@ -32023,6 +32023,10 @@ fn apply_inventory_object_create(
             PROJECTILE_GRAVITY_GUIDS
                 .with(|g| g.borrow_mut().insert(u32::from(guid)));
         }
+        if entity.physics_state.contains(PhysicsState::ALIGN_PATH) {
+            PROJECTILE_ALIGN_PATH_GUIDS
+                .with(|g| g.borrow_mut().insert(u32::from(guid)));
+        }
     }
 
     // Direct insert via the public EntityManager — skips the
@@ -32226,6 +32230,9 @@ fn maintain_bridge_indexes_on_routed_create(
             if entity.physics_state.contains(PhysicsState::GRAVITY) {
                 PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow_mut().insert(g_u32));
             }
+            if entity.physics_state.contains(PhysicsState::ALIGN_PATH) {
+                PROJECTILE_ALIGN_PATH_GUIDS.with(|g| g.borrow_mut().insert(g_u32));
+            }
         }
     }
     upsert_wielder_index(world, guid, wielder_index);
@@ -32349,6 +32356,9 @@ impl PerGuidBridgeIndexes<'_> {
         // so without a reuse-side prune they also carried a previous
         // session's GUIDs across a relog.
         PROJECTILE_GRAVITY_GUIDS.with(|s| {
+            s.borrow_mut().remove(&g);
+        });
+        PROJECTILE_ALIGN_PATH_GUIDS.with(|s| {
             s.borrow_mut().remove(&g);
         });
         DEFAULT_SCRIPT_INDEX.with(|m| {
@@ -34769,6 +34779,15 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityProjectileHasGravity)]
     pub fn entity_projectile_has_gravity(&self, guid: u32) -> bool {
         PROJECTILE_GRAVITY_GUIDS.with(|g| g.borrow().contains(&guid))
+    }
+
+    /// OpenAC comparison 2026-10-04 (combat M-2b): `true` when the
+    /// projectile carried `PhysicsState::ALIGN_PATH` — the JS ballistic
+    /// integrator then faces it along its velocity each frame (retail
+    /// `Frame::set_vector_heading` in `UpdatePhysicsInternal`).
+    #[wasm_bindgen(js_name = entityProjectileAlignsPath)]
+    pub fn entity_projectile_aligns_path(&self, guid: u32) -> bool {
+        PROJECTILE_ALIGN_PATH_GUIDS.with(|g| g.borrow().contains(&guid))
     }
 
     /// **CMT Wave 16 / Phase 50 (2026-05-26).** Cached
@@ -40926,6 +40945,18 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static PROJECTILE_GRAVITY_GUIDS: std::cell::RefCell<std::collections::HashSet<u32>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+// OpenAC comparison 2026-10-04 (combat M-2b): projectiles whose ObjectCreate
+// carried `PhysicsState::ALIGN_PATH` (0x100). ACE sets it on every missile
+// without a RotationSpeed (Creature_Missile.cs SetProjectilePhysicsState);
+// retail `UpdatePhysicsInternal` then turns the object to face its velocity
+// each frame (`Frame::set_vector_heading`), so an arrow noses over along its
+// gravity arc. Same lifecycle as `PROJECTILE_GRAVITY_GUIDS`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PROJECTILE_ALIGN_PATH_GUIDS: std::cell::RefCell<std::collections::HashSet<u32>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
 

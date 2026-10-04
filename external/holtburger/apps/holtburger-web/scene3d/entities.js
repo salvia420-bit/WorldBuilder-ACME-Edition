@@ -5215,6 +5215,9 @@ export class EntityManager {
         // missiles. Sampled once at spawn (classification is spawn-static).
         inst._ballisticGravity =
           PROJECTILE_GRAVITY_ON && this.projectileHasGravity(guid);
+        // OpenAC comparison 2026-10-04 (combat M-2b): ALIGN_PATH missiles
+        // face their velocity every frame (retail set_vector_heading).
+        inst._ballisticAlignPath = this.projectileAlignsPath(guid);
       }
     }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
@@ -7431,6 +7434,18 @@ export class EntityManager {
    * @param {number} guid — entity GUID to query
    * @returns {boolean}
    */
+  projectileAlignsPath(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return false;
+    try {
+      const h = typeof window !== "undefined" ? window.__sessionHandle : null;
+      if (h && typeof h.entityProjectileAlignsPath === "function") {
+        return !!h.entityProjectileAlignsPath(g);
+      }
+    } catch (_) { /* never break callers */ }
+    return false;
+  }
+
   projectileHasGravity(guid) {
     const g = (guid >>> 0) || 0;
     if (g === 0) return false;
@@ -14619,7 +14634,28 @@ export class EntityManager {
         pos.z += lv.vz * step;
         remaining -= step;
       }
+      if (inst._ballisticAlignPath) this._alignToVelocity(inst, lv);
     }
+  }
+
+  /**
+   * Retail `Frame::set_vector_heading(velocity)` for an ALIGN_PATH missile:
+   * yaw so AC-forward (+Y) points along the horizontal velocity, then pitch
+   * about the local X axis by the climb angle — an arrow on a gravity arc
+   * noses over. AC heading convention as elsewhere here: forward =
+   * (-sin h, cos h, 0) ⇒ h = atan2(-vx, vy); world Z-up, same frame as
+   * root.position.
+   */
+  _alignToVelocity(inst, lv) {
+    const horiz = Math.hypot(lv.vx, lv.vy);
+    if (!(horiz + Math.abs(lv.vz) > 1e-4)) return;
+    const h = Math.atan2(-lv.vx, lv.vy);
+    const p = Math.atan2(lv.vz, horiz);
+    const q = inst.root.quaternion;
+    // q = Rz(h) * Rx(p)
+    const ch = Math.cos(h / 2), sh = Math.sin(h / 2);
+    const cp = Math.cos(p / 2), sp = Math.sin(p / 2);
+    q.set(ch * sp, sh * sp, sh * cp, ch * cp);
   }
 
   /**
