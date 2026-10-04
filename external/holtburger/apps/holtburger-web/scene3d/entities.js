@@ -1352,6 +1352,21 @@ const STICKY_GROUND_Z = (() => {
 // sticky glue never re-faces ("documented follow-on"), so a mob can visibly
 // swing while angled off. Mirrors the server's facing guarantee. `=off` =
 // byte-identical (swing plays at the eased heading).
+// OpenAC comparison 2026-10-04 (doors F5): `?etherealGhost=on` — opt-in.
+// Retail `EtherealHook::Execute` → `CPhysicsObj::set_ethereal`
+// (acclient.c:319047) flips only collision bits and never touches opacity;
+// door On/Off animations carry the hook (ACE Door.cs), so the old default
+// turned every opening door 40% see-through mid-swing. OpenAC ignores the hook
+// visually too (TranslucencyHookSinkTests). Default = retail (no visual).
+const ETHEREAL_GHOST = (() => {
+  try {
+    return typeof window !== "undefined" && window.location &&
+      new URLSearchParams(window.location.search).get("etherealGhost")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
 const MELEE_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" && window.location &&
@@ -16461,7 +16476,8 @@ export class EntityManager {
       // visualize via reduced opacity (server is collision-authoritative
       // so the visual is purely a hint). `0` restores prior opacity.
       const wantEthereal = (hook.etherealValue | 0) !== 0;
-      this._applyEtherealToEntity(inst, wantEthereal);
+      if (ETHEREAL_GHOST) this._applyEtherealToEntity(inst, wantEthereal);
+      else inst._ethereal = wantEthereal; // retail: state only, no visual
       this._etherealHookFires = (this._etherealHookFires | 0) + 1;
       return;
     }

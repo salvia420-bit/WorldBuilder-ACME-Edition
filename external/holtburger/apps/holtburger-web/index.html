@@ -9799,10 +9799,14 @@
                     // panel parts swing correctly instead of the instant
                     // root-rotation snap (which spins centred-origin doors in
                     // place). Default-off → unchanged snap.
+                    // OpenAC comparison 2026-10-04 (doors F9): the escape
+                    // mode used to snap the WHOLE entity ±90° here — not
+                    // retail (it spun centred-origin doors in place). With
+                    // unified door motion off, the server's door
+                    // UpdateMotion (ACE Door.cs Open/Close broadcast it)
+                    // drives the swing; this state event is visual-free.
                     if (em3d.usesUnifiedDoor?.()) {
                       em3d.playDoorMotion(doorGuid >>> 0, doorState === "open");
-                    } else {
-                      inst.root.rotation.z = doorState === "open" ? -Math.PI / 2 : 0;
                     }
                     inst.__doorState = doorState;
                   }
