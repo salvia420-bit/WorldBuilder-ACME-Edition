@@ -8177,6 +8177,27 @@ async fn cmd_interp_maybe_stop_completely_clears_held_keys_until_repressed() {
     assert_eq!(drive.forward, Some(ForwardLocomotion::Forward));
     assert_eq!(drive.sidestep, None, "the strafe stays stopped until re-pressed");
 
+    // Live sequence (smoke test 2026-10-04): stop, RELEASE the held key,
+    // then press it again — must move.
+    movement.enqueue_key_action(0x29, false);
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    movement.enqueue_maybe_stop_completely();
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    movement.enqueue_key_action(0x29, true);
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    movement.enqueue_key_action(0x29, false);
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    movement.enqueue_key_action(0x29, true);
+    movement.tick(now, &mut world, &mut session).await.expect("tick");
+    let drive = match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => state,
+        other => panic!("expected manual drive, got {other:?}"),
+    };
+    assert_eq!(drive.forward, Some(ForwardLocomotion::Forward), "release + re-press after a stop moves");
+
     // Legacy lane: the request queues nothing.
     let mut legacy = MovementSystem::new();
     legacy.set_cmd_interp(false);
