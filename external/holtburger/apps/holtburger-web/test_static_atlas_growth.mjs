@@ -217,7 +217,7 @@ function onlyBucket() {
 console.log("PART 3 — the live feed grows, and carries its layers over intact");
 // ---------------------------------------------------------------------------
 {
-  _resetStatAtlasForTest({ grow: true, nra: true });
+  _resetStatAtlasForTest({ grow: true, nra: true, pages: false });
   // First feed: fewer nodes than the start depth ⇒ no growth at all.
   let r = addSingletonsToCrossLbAtlas([makeNode(1), makeNode(2)], fakeScene3d);
   const b = onlyBucket();
@@ -284,7 +284,7 @@ console.log("PART 3 — the live feed grows, and carries its layers over intact"
 console.log("PART 4 — the material samples the NEW array");
 // ---------------------------------------------------------------------------
 {
-  _resetStatAtlasForTest({ grow: true, nra: true });
+  _resetStatAtlasForTest({ grow: true, nra: true, pages: false });
   addSingletonsToCrossLbAtlas([makeNode(1), makeNode(2)], fakeScene3d);
   const b = onlyBucket();
   const ud = b.bm.userData;
@@ -352,7 +352,7 @@ console.log("PART 4 — the material samples the NEW array");
 console.log("PART 5 — overflow past the CEILING still fails soft");
 // ---------------------------------------------------------------------------
 {
-  _resetStatAtlasForTest({ grow: true, nra: true });
+  _resetStatAtlasForTest({ grow: true, nra: true, pages: false });
   const cap = _layerCapacityFor(TW, TH, false);
   const shared = makeTex(1);
   const nodes = [makeNode(1, 0xaabb0000, shared)];
@@ -401,7 +401,7 @@ console.log("PART 6 — flag grammar, and `off` is the pre-X7 allocation");
   check("case-insensitive off-form", withSearch("?statAtlasGrow=OFF") === false);
 
   // Disarmed: allocate at the ceiling, exactly as HEAD did.
-  _resetStatAtlasForTest({ grow: false, nra: true });
+  _resetStatAtlasForTest({ grow: false, nra: true, pages: false });
   addSingletonsToCrossLbAtlas([makeNode(1), makeNode(2)], fakeScene3d);
   const b = onlyBucket();
   const ud = b.bm.userData;
@@ -437,7 +437,7 @@ console.log("PART 7 — the BC7 arm grows too, with no bc7_textures.js change");
   // re-fetched and no per-layer source reference is retained — which is what
   // lets the compressed bucket grow from static_atlas.js alone.
   _setBc7SupportForTest(true, "forced (growth test)");
-  _resetStatAtlasForTest({ grow: true, nra: true });
+  _resetStatAtlasForTest({ grow: true, nra: true, pages: false });
   const LAYER_BYTES = bc7LevelBytes(TW, TH);
 
   const makeBc7Node = (seed) => {

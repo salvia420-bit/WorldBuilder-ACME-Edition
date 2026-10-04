@@ -190,6 +190,37 @@ export function statAtlasGrowEnabled() {
   return (_growFlag = on);
 }
 
+// OpenAC comparison 2026-10-04 (perf T5, `?statAtlasPages`, DEFAULT-ON) — FIXED
+// PAGES instead of growth. X7 grows a full bucket by allocating a deeper array
+// and re-uploading the live prefix: a texStorage3D + a CPU copy + N layer
+// uploads in one synchronous feed, 20-250 ms per grow on the p99 doc (#4).
+// OpenAC never resizes a texture array (`TextureAtlasManager.cs:97-98`): a full
+// array stays as it is and the next surface opens a NEW one. Here a full bucket
+// opens a sibling PAGE — its own arrays, material and BatchedMesh, same program
+// (`customProgramCacheKey` is per class, so no new link) — and nothing already
+// resident is copied or re-uploaded. Page depths follow X7's schedule exactly
+// (each new page brings the family total to `_atlasGrowTargetFor(total)`, so
+// 4, +4, +8, +16 ... clamped to `_layerCapacityFor`): the same bytes X7 would
+// hold at every step, never more than the pre-X7 ceiling. The price is one draw
+// per extra page (log2-bounded; 21 of the 29 measured buckets never pass 8
+// layers, i.e. at most 2 pages). Page 0's key is the X7 bucket key unchanged,
+// later pages append `#p<n>`. `?statAtlasPages=off` restores X7 growth.
+let _pagesFlag;
+export function statAtlasPagesEnabled() {
+  if (_pagesFlag !== undefined) return _pagesFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = new URLSearchParams(window.location.search).get("statAtlasPages");
+      if (v != null) {
+        const s = String(v).toLowerCase();
+        on = !(s === "off" || s === "0" || s === "false" || s === "no");
+      }
+    }
+  } catch (_) { on = true; }
+  return (_pagesFlag = on);
+}
+
 // === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
 // The nra ALPHA channel now carries the per-surface seam height (255 = proud
 // face, grooves dip toward 0 — height_seam.rs, the operator that won the
@@ -973,6 +1004,10 @@ const _ATLAS_OPTIMIZE_FRAC = 0.30; // compact a bucket once >30% of its buffer i
 const _buckets = new Map();        // bucketKey -> { bm, w, h, stateKey }
 const _lbMembership = new Map();   // lbKey -> Array<{ bucketKey, gid, texUuid }>
 const _atlasBakedLbs = new Set();  // lbKeys whose singletons are live in the buckets
+// Perf T5 — familyKey (the `_bucketKeyFor` key) -> { keys: page bucketKeys, seq }.
+// `seq` only ever counts up, so a page torn down by the ST5 empty-bucket GC
+// never has its key reused while rows could still name it.
+const _families = new Map();
 
 // ST5 (`?texCompressedOnly`) — re-home bookkeeping, THE CONSCIOUS THROWAWAY
 // (F-11.17: this atlas-side implementation retires at ST9 with the atlas;
@@ -1007,6 +1042,9 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   // non-zero means an allocation was refused and that bucket is now capped
   // below its ceiling (props route to `ptLayerFull`, never vanish).
   layerGrows: 0, layerGrowUploads: 0, layerGrowFails: 0,
+  // Perf T5 — pages opened (family's first page included). With pages armed
+  // `layerGrows` stays 0: a full page is never reallocated.
+  atlasPages: 0,
   // X5 nra pack tally (all zero unless ?statNra=on).
   nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0,
   nraWithHeight: 0, // S3: layers whose alpha carries the seam-height field
@@ -1042,6 +1080,7 @@ if (typeof window !== "undefined") {
       allocLayers,
       capLayers,
       growEnabled: statAtlasGrowEnabled(),
+      pagesEnabled: statAtlasPagesEnabled(),
       // X5 — the before/after dedup headline. `surfaceRefs` in, `uniqueSurfacesEver`
       // distinct textures out; `liveLayers` is what is resident right now.
       uniqueSurfacesEver: _uniqueTexUuids.size,
@@ -1235,15 +1274,19 @@ export function hasAtlasLb(lbKey) {
   return _atlasBakedLbs.has((lbKey >>> 0));
 }
 
-function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
+function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth = 0) {
   let b = _buckets.get(bucketKey);
   if (b) return b;
-  const capacity = _layerCapacityFor(w, h, bc7);
+  // Perf T5 — a PAGE is allocated at its final depth and is its own ceiling,
+  // which makes `_growBucketLayers` unreachable for it (`nextLayer < capacity`
+  // fails once `nextLayer === allocLayers`).
+  const capacity = pageDepth > 0 ? pageDepth : _layerCapacityFor(w, h, bc7);
   // X7 — `capacity` is the CEILING; `alloc` is what is actually allocated now.
   // Disarmed (`?statAtlasGrow=off`) the two are equal, which both restores the
   // pre-X7 allocation byte for byte AND makes `_growBucketLayers` unreachable
   // (the feed's `nextLayer < allocLayers` branch then spans the whole range).
-  const alloc = statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity;
+  const alloc = pageDepth > 0 ? pageDepth
+    : statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity;
   // X6 — a BC7 bucket's array is a CompressedArrayTexture allocated EMPTY at the
   // bucket's fixed (w, h, depth); layers are written with
   // `compressedTexSubImage3D` via `addLayerUpdate` (bc7_textures.js). That is
@@ -1311,6 +1354,43 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7) {
   _buckets.set(bucketKey, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
   return b;
+}
+
+/**
+ * Perf T5 — the page of family `familyKey` that should take surface `uuid`, or
+ * null when the family is at its ceiling (the caller passthroughs, `ptLayerFull`).
+ * Order: the page already holding `uuid` (refcount dedup must stay family-wide,
+ * or a shared surface would cut a second layer on a later page); then the first
+ * page with a free or never-used layer; then a NEW page, sized so the family
+ * total lands where X7's growth would have put it. Nothing resident moves.
+ */
+function _pickAtlasPage(familyKey, w, h, stateKey, scene3d, bc7, uuid) {
+  let fam = _families.get(familyKey);
+  if (!fam) { fam = { keys: [], seq: 0 }; _families.set(familyKey, fam); }
+  let total = 0;
+  let open = null;
+  for (let i = 0; i < fam.keys.length; i++) {
+    const b = _buckets.get(fam.keys[i]);
+    if (!b) { fam.keys.splice(i--, 1); continue; } // torn down by the ST5 GC
+    const ud = b.bm.userData;
+    if (ud.layerOf.has(uuid)) return { key: fam.keys[i], b };
+    total += ud.allocLayers;
+    if (!open && (ud.freeLayers.length > 0 || ud.nextLayer < ud.allocLayers)) {
+      open = { key: fam.keys[i], b };
+    }
+  }
+  if (open) return open;
+  const capacity = _layerCapacityFor(w, h, bc7);
+  const depth = total === 0
+    ? (statAtlasGrowEnabled() ? _atlasStartLayersFor(w, h, bc7, capacity) : capacity)
+    : _atlasGrowTargetFor(total, total + 1, capacity) - total;
+  if (depth <= 0) return null;
+  const key = fam.seq === 0 ? familyKey : `${familyKey}#p${fam.seq}`;
+  fam.seq += 1;
+  const b = _getOrCreateBucket(key, w, h, stateKey, scene3d, bc7, depth);
+  fam.keys.push(key);
+  _atlasStats.atlasPages++;
+  return { key, b };
 }
 
 /**
@@ -1561,11 +1641,19 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       const w = img.width | 0, h = img.height | 0;
       if (!w || !h) { _atlasStats.ptNoWH++; passthrough.push(n); continue; }
       const stateKey = _stateKeyOf(mat);
-      const bucketKey = _bucketKeyFor(w, h, stateKey, bc7Tex);
-      const b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7Tex);
+      const uuid = tex.uuid;
+      let bucketKey = _bucketKeyFor(w, h, stateKey, bc7Tex);
+      let b;
+      if (statAtlasPagesEnabled()) {
+        const page = _pickAtlasPage(bucketKey, w, h, stateKey, scene3d, bc7Tex, uuid);
+        if (!page) { _atlasStats.ptLayerFull++; passthrough.push(n); continue; } // family at its ceiling
+        bucketKey = page.key;
+        b = page.b;
+      } else {
+        b = _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7Tex);
+      }
       const bm = b.bm;
       const ud = bm.userData;
-      const uuid = tex.uuid;
       _atlasStats.surfaceRefs++; // X5 dedup census: one per atlas-able member (pre-dedup)
       // refcounted layer (dedup shared textures across LBs)
       let entry = ud.layerOf.get(uuid);
@@ -2519,6 +2607,7 @@ export function _resetStatAtlasForTest(opts = {}) {
     try { ud?.nraArray?.dispose?.(); } catch (_) {}
   }
   _buckets.clear();
+  _families.clear();
   _lbMembership.clear();
   _atlasBakedLbs.clear();
   _dirtyBuckets.clear();
@@ -2528,6 +2617,7 @@ export function _resetStatAtlasForTest(opts = {}) {
   _lastScene3d = null;
   for (const k of Object.keys(_atlasStats)) _atlasStats[k] = 0;
   _growFlag = typeof opts.grow === "boolean" ? opts.grow : undefined;
+  _pagesFlag = typeof opts.pages === "boolean" ? opts.pages : undefined;
   _nraFlag = typeof opts.nra === "boolean" ? opts.nra : undefined;
 }
 
