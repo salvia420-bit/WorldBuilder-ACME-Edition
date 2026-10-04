@@ -366,14 +366,22 @@ impl TransitionEnv for WorldState {
                 let g = e.position.global_coords();
                 let dx = g.x - player_global.x;
                 let dy = g.y - player_global.y;
-                if dx * dx + dy * dy >= prefilter_sq {
+                let d2 = dx * dx + dy * dy;
+                let bsp = self.entity_physics_bsp(e);
+                // The origin-distance prefilter is measured from the entity
+                // ORIGIN — a door's hinge. Widen it by the geometry's own
+                // bound so the far end of a wide gate / double door is
+                // still gathered (OpenAC comparison 2026-10-04, doors F7;
+                // retail and OpenAC gather by cell shadow lists instead).
+                let reach = prefilter_dist + bsp.as_ref().map_or(0.0, |b| b.geometry.bound_radius);
+                if d2 >= prefilter_sq && d2 >= reach * reach {
                     return None;
                 }
                 Some(EntityCollider {
                     center_xy: (g.x, g.y),
                     radius: self.entity_collision_radius(e),
                     has_physics_bsp: e.has_physics_bsp(),
-                    bsp: self.entity_physics_bsp(e),
+                    bsp,
                 })
             })
             .collect()

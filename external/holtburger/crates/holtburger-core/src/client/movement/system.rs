@@ -5778,14 +5778,19 @@ impl MovementSystem {
                     let g = e.position.global_coords();
                     let dx = g.x - player_global.x;
                     let dy = g.y - player_global.y;
-                    if dx * dx + dy * dy >= prefilter_sq {
+                    let d2 = dx * dx + dy * dy;
+                    let bsp = world.entity_physics_bsp(e);
+                    // Widen by the geometry bound: the origin is a door's
+                    // hinge (doors F7, same rule as transition.rs's gather).
+                    let reach = prefilter_dist + bsp.as_ref().map_or(0.0, |b| b.geometry.bound_radius);
+                    if d2 >= prefilter_sq && d2 >= reach * reach {
                         return None;
                     }
                     Some(holtburger_world::spatial::EntityCollider {
                         center_xy: (g.x, g.y),
                         radius: world.entity_collision_radius(e),
                         has_physics_bsp: e.has_physics_bsp(),
-                        bsp: world.entity_physics_bsp(e),
+                        bsp,
                     })
                 })
                 .collect();
@@ -7434,6 +7439,29 @@ impl MovementSystem {
                 // realized pose's local coords without a rebucket. Z untouched.
                 pose.coords.x += clamped.x - lateral.x;
                 pose.coords.y += clamped.y - lateral.y;
+                // OpenAC comparison 2026-10-04 (doors F1, stopgap): retail
+                // collides doors INSIDE the transition, so the cell always
+                // matches the final pose. This correction runs after it: a
+                // mover the transition carried across a doorway threshold and
+                // the door leaf then pulled back would keep the wrong cell id
+                // (indoor/outdoor flicker, wrong-cell walls). Re-derive the
+                // cell for the corrected pose. The full fix moves entity
+                // collision into the driver (report F1).
+                let corrected = (clamped.x - lateral.x).abs() > 1e-6
+                    || (clamped.y - lateral.y).abs() > 1e-6;
+                if corrected {
+                    if pose.is_indoors() {
+                        pose.landblock_id = match world
+                            .scene
+                            .exited_envcell_to_outdoor(&pose, object.radius)
+                        {
+                            Some(outdoor) => holtburger_common::Guid(outdoor),
+                            None => holtburger_common::Guid(world.scene.current_cell(&pose)),
+                        };
+                    } else {
+                        pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
+                    }
+                }
             }
         }
         // DAT-01 phase 2d (2026-07-27) — BAKED PROCEDURAL SCENERY collision

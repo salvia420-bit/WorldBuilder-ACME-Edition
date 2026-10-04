@@ -998,7 +998,12 @@ impl WorldState {
     pub fn entity_physics_setup_ids_wanted(&self) -> Vec<u32> {
         self.entities
             .iter()
-            .filter(|e| e.is_collidable() && e.has_physics_bsp())
+            // Every HAS_PHYSICS_BSP entity, ethereal or not (OpenAC
+            // comparison 2026-10-04, doors F6): filtering on
+            // `is_collidable()` meant a door that SPAWNED open never had its
+            // geometry requested, so right after its first close it collided
+            // as the circle-at-the-hinge fallback.
+            .filter(|e| e.has_physics_bsp())
             .filter_map(Self::entity_setup_did)
             .filter(|id| !self.setup_physics_geometry.contains_key(id))
             .collect()
