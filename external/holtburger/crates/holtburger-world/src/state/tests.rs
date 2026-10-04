@@ -4458,6 +4458,46 @@ fn apply_set_state_emits_door_state_changed_closed_for_clear_ethereal() {
     )));
 }
 
+/// OpenAC comparison 2026-10-04 (doors F3) — retail `DoSetState`
+/// (acclient.c:143396) applies a SetState only when its state stamp is
+/// strictly newer; `HandleSetState` drops an older instance. A reordered
+/// "open" arriving after the "close" must not flip the door back open.
+#[test]
+fn apply_set_state_drops_stale_and_old_instance_updates() {
+    use holtburger_common::properties::ObjectDescriptionFlag;
+    use holtburger_protocol::messages::object::messages::properties::SetStateData;
+
+    let mut state = WorldState::synthetic();
+    let door_guid = Guid(0x5000_DEB0);
+    let mut door = Entity::new(door_guid, "Door".into(), WorldPosition::default());
+    door.flags = ObjectDescriptionFlag::DOOR;
+    door.sequences[8] = 7; // instance
+    state.entities.insert(door);
+    let set = |physics_state, instance_sequence, state_sequence| SetStateData {
+        guid: door_guid,
+        physics_state,
+        instance_sequence,
+        state_sequence,
+    };
+    let mut events = Vec::new();
+
+    assert!(state.apply_set_state_update(&set(PhysicsState::ETHEREAL, 7, 5), &mut events));
+    assert!(state.apply_set_state_update(&set(PhysicsState::NONE, 7, 6), &mut events));
+    // The stale "open" (stamp 5) arrives late: dropped, door stays closed.
+    events.clear();
+    assert!(!state.apply_set_state_update(&set(PhysicsState::ETHEREAL, 7, 5), &mut events));
+    assert!(events.is_empty());
+    assert_eq!(state.entities.get(door_guid).unwrap().physics_state, PhysicsState::NONE);
+    // A duplicate stamp is not newer either.
+    assert!(!state.apply_set_state_update(&set(PhysicsState::ETHEREAL, 7, 6), &mut events));
+    // An older instance is dropped.
+    assert!(!state.apply_set_state_update(&set(PhysicsState::ETHEREAL, 6, 9), &mut events));
+    // Wrap-aware: 0xFFFF → 0x0000 is newer.
+    state.entities.get_mut(door_guid).unwrap().sequences[2] = 0xFFFF;
+    assert!(state.apply_set_state_update(&set(PhysicsState::ETHEREAL, 7, 0), &mut events));
+    assert!(state.entities.get(door_guid).unwrap().physics_state.contains(PhysicsState::ETHEREAL));
+}
+
 /// Phase 6 step E: a SetState update on a non-door entity must NOT
 /// emit `DoorStateChanged`. Guards against a future refactor that
 /// loses the `ObjectDescriptionFlag::DOOR` gate and starts emitting

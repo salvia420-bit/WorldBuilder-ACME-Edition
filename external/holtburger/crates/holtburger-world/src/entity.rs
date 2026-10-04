@@ -992,6 +992,9 @@ pub struct Entity {
 pub const USE_ETHEREAL_RECHECK: bool = false;
 
 const OBJECT_POSITION_SEQUENCE_INDEX: usize = 0;
+/// `ObjectState` stamp — retail `CPhysicsObj::update_times[2]`, gated by
+/// `SmartBox::DoSetState` (acclient.c:143396).
+const OBJECT_STATE_SEQUENCE_INDEX: usize = 2;
 /// `ObjectVector` stamp — retail `CPhysicsObj::update_times[3]`, the
 /// VectorUpdate (velocity/omega) sequence gated by
 /// `SmartBox::DoVectorUpdate` (acclient.c:143459-143480). Lives in
@@ -1025,6 +1028,32 @@ impl Entity {
     pub fn motion_command(&self) -> Option<InterpretedMotionCommand> {
         self.motion_snapshot
             .and_then(EntityMotionSnapshot::motion_command)
+    }
+
+    /// Retail `SmartBox::HandleSetState` + `DoSetState` gating
+    /// (acclient.c:143396-143420, :144395): an older instance is dropped; a
+    /// same-instance state stamp must be strictly newer (wrap-aware) to
+    /// apply, and is then recorded. A NEWER instance means the object was
+    /// re-created and retail queues the blob until its ObjectCreate lands;
+    /// we have no blob queue, so it applies (and adopts the stamp) rather
+    /// than losing the state. Returns whether the update should apply.
+    /// (OpenAC comparison 2026-10-04, doors F3 — previously every SetState
+    /// applied, so a stale or reordered one could flip a door backwards.)
+    pub(crate) fn accept_set_state_sequence(
+        &mut self,
+        instance_sequence: u16,
+        state_sequence: u16,
+    ) -> bool {
+        let current_instance = self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX];
+        if instance_sequence == current_instance {
+            if !is_newer_u16(state_sequence, self.sequences[OBJECT_STATE_SEQUENCE_INDEX]) {
+                return false;
+            }
+        } else if !is_newer_u16(instance_sequence, current_instance) {
+            return false;
+        }
+        self.sequences[OBJECT_STATE_SEQUENCE_INDEX] = state_sequence;
+        true
     }
 
     /// The entity's last-applied `ObjectVector` (VectorUpdate) stamp —
@@ -1232,16 +1261,18 @@ impl Entity {
         self.physics_state.contains(PhysicsState::HAS_PHYSICS_BSP)
     }
 
-    /// Whether collision logic should run against this entity.
+    /// Whether this entity blocks a mover.
     ///
-    /// `ETHEREAL` (pass-through, e.g. open doors and ghosts) and
-    /// `IGNORE_COLLISIONS` both disable collision; either skips
-    /// physics interaction. ACE's `Door.cs` flips `Ethereal` on
-    /// open/close.
+    /// Retail `CPhysicsObj::FindObjCollisions` (acclient.c:316193-316209):
+    /// it returns early only when the object is `ETHEREAL` **and**
+    /// `IGNORE_COLLISIONS`; an `ETHEREAL` object alone is tested but marked
+    /// `obstruction_ethereal` and passes; `IGNORE_COLLISIONS` alone still
+    /// BLOCKS. So "passable" is exactly "has `ETHEREAL`". ACE's `Door.cs`
+    /// flips `Ethereal` on open/close. (Was `ETHEREAL | IGNORE_COLLISIONS`,
+    /// which made IGNORE_COLLISIONS-only objects walk-through — OpenAC
+    /// comparison 2026-10-04, doors F2; OpenAC `CollisionExemption.cs` agrees.)
     pub fn is_collidable(&self) -> bool {
-        !self
-            .physics_state
-            .intersects(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS)
+        !self.physics_state.contains(PhysicsState::ETHEREAL)
     }
 
     /// A7-R6 — apply a wire physics-state update with retail
@@ -1478,7 +1509,11 @@ mod physics_state_predicates_tests {
         assert!(fixture(PhysicsState::NONE).is_collidable());
         assert!(fixture(PhysicsState::REPORT_COLLISIONS).is_collidable());
         assert!(!fixture(PhysicsState::ETHEREAL).is_collidable());
-        assert!(!fixture(PhysicsState::IGNORE_COLLISIONS).is_collidable());
+        // Retail: IGNORE_COLLISIONS alone still blocks (acclient.c:316193).
+        assert!(fixture(PhysicsState::IGNORE_COLLISIONS).is_collidable());
+        assert!(
+            !fixture(PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS).is_collidable()
+        );
     }
 
     /// A7-R6: an overlapped ethereal→solid transition DEFERS — the

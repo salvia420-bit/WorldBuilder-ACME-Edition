@@ -1820,6 +1820,9 @@ impl WorldState {
         let recheck_overlap = crate::entity::USE_ETHEREAL_RECHECK
             && self.player_overlaps_entity_cylinder(data.guid);
         if let Some(entity) = self.entities.get_mut(data.guid) {
+            if !entity.accept_set_state_sequence(data.instance_sequence, data.state_sequence) {
+                return false;
+            }
             let is_door = entity.flags.contains(ObjectDescriptionFlag::DOOR);
             // Capture pre-mutation should_draw so we can detect a flip
             // on the HIDDEN/NO_DRAW/CLOAKED gate after applying the new

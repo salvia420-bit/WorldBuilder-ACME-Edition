@@ -17,9 +17,10 @@
 //!   entity's GfxObj BSP tree (precise).
 //! - Absence of `HAS_PHYSICS_BSP` falls back to cylsphere/sphere
 //!   bounds derived from the entity's setup model (approximate).
-//! - `ETHEREAL` or `IGNORE_COLLISIONS` skip collision entirely; the
-//!   caller is expected to filter via [`crate::entity::Entity::
-//!   is_collidable`] before building [`EntityCollider`] records.
+//! - `ETHEREAL` entities are passable (retail acclient.c:316193-316209;
+//!   `IGNORE_COLLISIONS` alone still blocks); the caller is expected to
+//!   filter via [`crate::entity::Entity::is_collidable`] before building
+//!   [`EntityCollider`] records.
 //! - `MISSILE` triggers a separate branch in ACE (missile-vs-target
 //!   semantics differ from creature-vs-environment); not modelled
 //!   here yet.
@@ -186,7 +187,7 @@ pub fn spheres_overlap_xy(
 /// are expected to have:
 /// 1. Filtered the entity list via
 ///    [`crate::entity::Entity::is_collidable`] so this function never
-///    sees `ETHEREAL` or `IGNORE_COLLISIONS` entities.
+///    sees `ETHEREAL` (passable) entities.
 /// 2. Skipped self-collision (the player's own GUID).
 /// 3. Resolved per-entity `radius` from the gfx_obj sorting sphere
 ///    or a default for headless test paths.
