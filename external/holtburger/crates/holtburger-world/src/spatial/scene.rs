@@ -3047,9 +3047,38 @@ impl SpatialScene {
             return None;
         }
         let global = pos.global_coords();
-        let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
-        for (&cell_id, aabb) in self.cell_aabbs.iter() {
-            if (cell_id & 0xFFFF_0000) != lb_high || aabb.is_empty() {
+        // Collision round 2 (critic issue 3): retail can only reach an
+        // EnvCell from outdoors through the building portals of the landcells
+        // the sphere overlaps (`CLandCell::find_transit_cells`
+        // acclient.c:355423 → `CBuildingObj::find_building_transit_cells`
+        // :719068 → `CEnvCell::check_building_transit` :348110). The old scan
+        // took EVERY EnvCell hull in the landblock — tunnel and dungeon rooms
+        // no door leads to. Candidates are now exactly those building-portal
+        // cells; before the landblock's buildings are registered there are
+        // none (retail builds a landblock's buildings with the landblock,
+        // `CLandBlock::init_buildings` :352114, so it has no such window).
+        if !self.building_portals_resident(pos.landblock_id.0) {
+            return None;
+        }
+        let mut candidates: Vec<u32> = Vec::new();
+        let gx0 = ((global.x - radius) / CELL_SIZE).floor() as i32;
+        let gx1 = ((global.x + radius) / CELL_SIZE).floor() as i32;
+        let gy0 = ((global.y - radius) / CELL_SIZE).floor() as i32;
+        let gy1 = ((global.y + radius) / CELL_SIZE).floor() as i32;
+        for gx in gx0.max(0)..=gx1.min(2039) {
+            for gy in gy0.max(0)..=gy1.min(2039) {
+                for &env in self.building_transit_cells(lcoord_to_cellid(gx, gy)) {
+                    if !candidates.contains(&env) {
+                        candidates.push(env);
+                    }
+                }
+            }
+        }
+        for cell_id in candidates {
+            let Some(aabb) = self.cell_aabbs.get(&cell_id).copied() else {
+                continue;
+            };
+            if aabb.is_empty() {
                 continue;
             }
             // Broad-phase: capsule centre within the AABB padded by the

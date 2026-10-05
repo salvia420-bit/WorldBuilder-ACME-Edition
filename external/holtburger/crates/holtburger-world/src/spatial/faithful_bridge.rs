@@ -1727,76 +1727,45 @@ pub fn faithful_find_transitional_position(
     // saw; the next frame then started in that cell with no terrain in its
     // cell array.
     //
-    // The legacy heuristics remain ONLY as the fallback when the driver's
-    // answer cannot be trusted:
-    //   * an EnvCell that does not contain the sphere centre (the F2
-    //     keep-previous-cell deviation in `check_other_cells`, or a
-    //     zero-step transition that never ran `find_cell_list`);
-    //   * an outdoor answer from an outdoor start whose landblock's building
-    //     portals are not registered yet — without them the driver cannot
-    //     see an EnvCell from outdoors at all.
-    // Both legacy tests now take the sphere centre too (F3).
+    // Round 2 (critic issues 2/3): there is NO fallback to scene heuristics
+    // any more — retail has none.
+    //   * An EnvCell answer is kept even when the sphere centre is not inside
+    //     it. That is exactly what retail commits: with no `point_in_cell`
+    //     winner and an INDOOR check_pos, `check_other_cells` re-seats
+    //     check_pos into its own (indoor) id (acclient.c:312452-312459) and
+    //     `validate_transition` commits check_pos.objcell_id to curr_pos
+    //     (:312259). The legacy exit/current_cell re-derive used to relabel
+    //     that case.
+    //   * An outdoor answer from an outdoor start is kept whether or not the
+    //     landblock's building portals are registered yet. Retail builds the
+    //     landblock's buildings with the landblock (`CLandBlock::
+    //     init_buildings`, :352114); before registration our driver simply
+    //     sees no building door, and the old fallback entry test (any EnvCell
+    //     hull in the landblock) was the one window where you could still be
+    //     put inside a room no door leads to.
     if input.gates.local_envcell_entry {
-        let centre_world = Vector3::new(
-            curr.frame.origin.x,
-            curr.frame.origin.y,
-            curr.frame.origin.z + input.object.capsule[0].0,
-        );
         let driver_cell = curr.objcell_id;
-        let driver_pick = if driver_cell == 0 {
-            None
-        } else if (driver_cell & 0xFFFF) >= 0x100 {
-            world
-                .get_visible(driver_cell)
-                .filter(|cell| cell.point_in_cell(centre_world))
-                .map(|_| driver_cell)
-        } else if !outdoor || scene.building_portals_resident(begin_cell) {
-            Some(driver_cell)
-        } else {
-            None
-        };
-        match driver_pick {
-            Some(cell) if (cell & 0xFFFF) >= 0x100 => {
-                // Indoor: the committed EnvCell, coords in ITS landblock.
-                let o = landblock_world_origin(cell);
-                pose.landblock_id = holtburger_common::Guid(cell);
+        if (driver_cell & 0xFFFF) >= 0x100 {
+            // Indoor: the committed EnvCell (when resident), coords in ITS
+            // landblock.
+            if world.get_visible(driver_cell).is_some() {
+                let o = landblock_world_origin(driver_cell);
+                pose.landblock_id = holtburger_common::Guid(driver_cell);
                 pose.coords = Vector3::new(
                     curr.frame.origin.x - o.x,
                     curr.frame.origin.y - o.y,
                     curr.frame.origin.z,
                 );
             }
-            Some(_) => {
-                // Outdoor. From an outdoor start the pose is already the
-                // rebucketed outdoor cell above. From an EnvCell (left
-                // through an exterior portal: `check_other_cells` picked an
-                // outdoor cell of the straddle ring) turn the begin-relative
-                // pose outdoor and re-derive the landcell from its coords.
-                if !outdoor {
-                    pose.landblock_id = holtburger_common::Guid(
-                        (input.begin.landblock_id.0 & 0xFFFF_0000) | 0x0001,
-                    );
-                    pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
-                }
-            }
-            None => {
-                let centre = sphere_centre_pose(&pose, &input.object);
-                if !pose.is_indoors() {
-                    // 2abe9511: entry = the sphere CENTRE inside the cell.
-                    if let Some(entered) = scene.entered_envcell_for_outdoor_pose(&centre, 0.0) {
-                        pose.landblock_id = holtburger_common::Guid(entered);
-                    }
-                } else if let Some(outdoor_cell) =
-                    scene.exited_envcell_to_outdoor(&centre, input.object.radius)
-                {
-                    pose.landblock_id = holtburger_common::Guid(outdoor_cell);
-                } else {
-                    // Indoor→indoor cell transit (2026-07-18): re-derive from
-                    // geometry; `current_cell` falls back to the unchanged id
-                    // when no loaded cell contains the point.
-                    pose.landblock_id = holtburger_common::Guid(scene.current_cell(&centre));
-                }
-            }
+        } else if driver_cell != 0 && !outdoor {
+            // Outdoor from an EnvCell (left through an exterior portal:
+            // `check_other_cells` picked an outdoor cell of the straddle
+            // ring). Turn the begin-relative pose outdoor and re-derive the
+            // landcell from its coords. From an outdoor start the pose is
+            // already the rebucketed outdoor cell above.
+            pose.landblock_id =
+                holtburger_common::Guid((input.begin.landblock_id.0 & 0xFFFF_0000) | 0x0001);
+            pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
         }
     }
 
@@ -2776,17 +2745,38 @@ mod drift {
     /// `building_portals`: `None` ⇒ the landblock's buildings are not
     /// registered at all; `Some(list)` ⇒ registered with that list.
     fn building_env(building_portals: Option<Vec<(Vector3, Vec<(u16, u16)>)>>) -> DriftEnv {
-        let o = cell_origin();
+        door_env(FCX, building_portals)
+    }
+
+    /// [`building_env`] with the door plane at landblock-local x = `door_x`.
+    fn door_env(
+        door_x: f32,
+        building_portals: Option<Vec<(Vector3, Vec<(u16, u16)>)>>,
+    ) -> DriftEnv {
+        let o = v(LB_BASE_X + door_x, LB_BASE_Y + FCY, FLOOR_WZ);
         let mut polys = HashMap::new();
         polys.insert(1u16, floor_poly_local(0.0, HE, 0.0));
         let mut scene = SpatialScene::new();
-        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        scene.insert_cell_physics_bsp(
+            CELL_ID,
+            CellPhysicsBsp {
+                tree: one_leaf(&polys),
+                polys,
+                origin: o,
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+            },
+        );
         scene.insert_cell_membership(
             CELL_ID,
-            membership_at_cell_origin(&[
-                (v(1.0, 0.0, 0.0), 0.0),  // x >= 0 (inside the door)
-                (v(0.0, 0.0, -1.0), 4.0), // z <= 4 (under the ceiling)
-            ]),
+            CellMembership {
+                tree: hull(&[
+                    (v(1.0, 0.0, 0.0), 0.0),  // x >= 0 (inside the door)
+                    (v(0.0, 0.0, -1.0), 4.0), // z <= 4 (under the ceiling)
+                ]),
+                origin: o,
+                orientation: Quaternion::identity(),
+            },
         );
         scene.insert_cell_aabb(
             CELL_ID,
@@ -2801,12 +2791,17 @@ mod drift {
 
     /// Walk from 0.8 m outside the door to 0.6 m inside it.
     fn walk_through_the_door(env: &DriftEnv) -> TransitionOutcome {
+        walk_through_door_at(env, FCX)
+    }
+
+    fn walk_through_door_at(env: &DriftEnv, door_x: f32) -> TransitionOutcome {
         let outdoor = |x: f32, z: f32| WorldPosition {
             landblock_id: Guid((LB_ID & 0xFFFF_0000) | 0x0001),
             coords: v(x, FCY, z),
             rotation: Quaternion::identity(),
         };
-        let input = input_for(outdoor(FCX - 0.8, FLOOR_WZ), outdoor(FCX + 0.6, FLOOR_WZ - SINK));
+        let input =
+            input_for(outdoor(door_x - 0.8, FLOOR_WZ), outdoor(door_x + 0.6, FLOOR_WZ - SINK));
         faithful_find_transitional_position(env, &input, true, true)
     }
 
@@ -2943,6 +2938,95 @@ mod drift {
             out.pose.coords.z >= FLOOR_WZ - 0.05,
             "sank below the terrain: z={}",
             out.pose.coords.z
+        );
+    }
+
+    /// Round 2 (critic issue 3): before a landblock's buildings are
+    /// registered, NO EnvCell can be entered from outdoors — retail builds a
+    /// landblock's buildings with the landblock (`CLandBlock::init_buildings`,
+    /// acclient.c:352114), so it has no window where a room is reachable
+    /// without its door. The old marshal fell back to the any-hull entry
+    /// test in that window and put the player inside the room.
+    #[test]
+    fn no_envcell_is_entered_before_the_landblocks_buildings_are_registered() {
+        let env = building_env(None);
+        let out = walk_through_the_door(&env);
+        assert!(
+            !out.pose.is_indoors(),
+            "entered 0x{:08X} before any building portal was registered",
+            out.pose.landblock_id.0
+        );
+        assert!(out.pose.coords.z >= FLOOR_WZ - 0.05, "sank: z={}", out.pose.coords.z);
+    }
+
+    /// The scene's own outdoor-entry test (still used by the approximate
+    /// pipeline's `step_cell_transit_flips` and the legacy manual-drive
+    /// slice) obeys the same rule: only building-portal cells of the
+    /// landcells the sphere overlaps (acclient.c:355423 → :719068 →
+    /// :348110), and nothing before registration.
+    #[test]
+    fn the_scene_entry_test_only_considers_building_portal_cells() {
+        let pose = WorldPosition {
+            landblock_id: Guid((LB_ID & 0xFFFF_0000) | 0x0001),
+            coords: v(FCX + 0.6, FCY, FLOOR_WZ + 0.475),
+            rotation: Quaternion::identity(),
+        };
+        // Not registered: no candidate at all (old code: Some(CELL_ID)).
+        let env = building_env(None);
+        assert_eq!(env.scene.entered_envcell_for_outdoor_pose(&pose, 0.0), None);
+        // Registered, but no door leads to the cell (old code: Some).
+        let env = building_env(Some(Vec::new()));
+        assert_eq!(env.scene.entered_envcell_for_outdoor_pose(&pose, 0.0), None);
+        // Registered with the door on this landcell.
+        let env = building_env(Some(vec![(v(FCX, FCY, 0.0), vec![(0x0100, 0)])]));
+        assert_eq!(env.scene.entered_envcell_for_outdoor_pose(&pose, 0.0), Some(CELL_ID));
+    }
+
+    /// The building is registered on the NEIGHBOURING landcell (its origin
+    /// is past the 24 m line); the mover walks in from the landcell next
+    /// door. The outdoor ring includes that landcell once the sphere
+    /// overlaps it (`CLandCell::add_all_outside_cells`), and its building's
+    /// portal admits the room (`CBuildingObj::find_building_transit_cells`,
+    /// acclient.c:719068).
+    #[test]
+    fn a_building_on_the_neighbouring_landcell_is_entered_through_its_portal() {
+        // Door at landblock-local x = 24.2 (landcell column 1); building
+        // origin (30, FCY) → landcell (1,0), low word 9. The walk starts at
+        // x = 23.4, on landcell (0,0).
+        let env = door_env(24.2, Some(vec![(v(30.0, FCY, 0.0), vec![(0x0100, 0)])]));
+        let out = walk_through_door_at(&env, 24.2);
+        assert_eq!(
+            out.pose.landblock_id,
+            Guid(CELL_ID),
+            "did not enter through the neighbouring landcell's building"
+        );
+    }
+
+    /// Round 2 (critic issue 2): when the sphere centre leaves every hull
+    /// and no cell claims it, retail KEEPS the EnvCell: `check_other_cells`
+    /// re-seats an INDOOR check_pos into its own id (acclient.c:312452-312459)
+    /// and `validate_transition` commits it (:312259). The old marshal
+    /// treated that as "untrusted" and ran the legacy exit test, which
+    /// ejected the player to an outdoor cell id from inside a dungeon room.
+    #[test]
+    fn the_driver_keeps_its_envcell_when_the_centre_leaves_every_hull() {
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        // Hull: cell-local x <= 2 (a room whose membership ends 2 m east of
+        // its origin, while its floor runs on). No portal, no exterior portal.
+        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(-1.0, 0.0, 0.0), 2.0)]));
+        let env = DriftEnv { scene };
+        let begin = pose_at(FCX + 1.5, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 2.8, FCY, FLOOR_WZ - SINK);
+        let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
+        assert!(out.pose.coords.x > FCX + 2.5, "walk advanced: x={}", out.pose.coords.x);
+        assert_eq!(
+            out.pose.landblock_id,
+            Guid(CELL_ID),
+            "relabelled away from the driver's cell (0x{:08X})",
+            out.pose.landblock_id.0
         );
     }
 
