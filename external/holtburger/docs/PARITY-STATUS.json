@@ -86,8 +86,8 @@
     },
     {
       "id": "render.sky_clouds_fog",
-      "score": 4.0,
-      "provisional": false,
+      "score": null,
+      "provisional": true,
       "files": [
         "apps/holtburger-web/scene3d/atmosphere_*.js",
         "apps/holtburger-web/scene3d/cloud_*.js",
@@ -106,12 +106,11 @@
         "date": "2026-10-05",
         "by": "critic (wave 1)",
         "score": 4.0,
-        "round": 1
+        "round": 1,
+        "note": "Critic scored 4.0 against retail resemblance; superseded by the owner policy. Needs a re-score on correctness: fog/haze consistency, night readability, cloud occlusion, ?cloudsMainPass smoke test, perf."
       },
       "open": [
-        "HIGH default sky is takram Bruneton physical sky + star catalog, not retail: GameSky::Draw (acclient.c:308475) draws the DayGroup DAT SkyObjects (dome GfxObjs, textured cloud bands, sun/moon) with depth ALWAYS, zfar x4; K.6 removed our DAT sky (sky_dome.js:1-20). Default build draws NO clouds; retail always shows cloud bands",
-        "Night-ramp hack exists because the physical sky cannot produce Dereth's authored nights (DayGroup sun never below horizon)",
-        "Volumetric clouds (?clouds=on, ?cloudsMainPass) are a divergence from retail",
+        "Re-score under the owner policy (keep volumetric clouds + physical sky): correctness, perf, indoor/doorway consistency",
         "LOW sky_dome.js:54-60 mislabels SkyObject property bits (0x01 = draw after world, 0x04 weather, 0x02 hide under fog override; acclient.c 308687-308827)"
       ],
       "evidence": [
@@ -484,5 +483,6 @@
       ]
     }
   ],
-  "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified."
+  "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
+  "policy": "Owner 2026-10-05: not complete parity. Behaviour and feel (movement, collision, animation, combat, protocol, sound behaviour, HUD/UI) target retail. KEPT as deliberate upgrades, scored on correctness/robustness/perf rather than retail resemblance: volumetric clouds + physical atmosphere sky, lighting, post effects (bloom, aerial perspective, heat haze, tone mapping, terrain grass/dirt/snow particles), gore/ragdoll (blood decals, dismemberment, ragdoll deaths), higher-res textures (BC7/upscaled sets), HRTF 3D audio (retail stereo pan opt-in). NOT exempt: HUD conveniences - UI targets retail. Retail still governs what is visible where (e.g. outdoor objects through doorways) and anything affecting gameplay readability."
 }
