@@ -1325,6 +1325,12 @@ mod world_bootstrap_cache;
 #[cfg(any(target_arch = "wasm32", test))]
 mod walk_dedup;
 
+// latency (2026-10-05): retail-style local combat-mode toggle bookkeeping
+// (the toggle reads the REQUESTED mode until the server's echo lands). Same
+// `wasm32 OR test` gate so the predicate is unit-tested natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod combat_toggle;
+
 // §2.1a (SCOPE-2.1 §1c) — the pool-facing decode handle that keeps the
 // `!Send` fetch machinery unreachable from worker threads. Same
 // `wasm32 OR test` gate so the cross-thread property is testable natively,

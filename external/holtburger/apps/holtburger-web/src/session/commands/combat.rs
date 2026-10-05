@@ -6,6 +6,28 @@
 
 use crate::*;
 use crate::session::{LoopCtx, LoopFlow};
+use crate::combat_toggle::{effective_combat_mode, PendingCombatRequest};
+
+thread_local! {
+    /// latency (2026-10-05): the last un-echoed ChangeCombatMode request and
+    /// when it was sent — retail's locally-written `combatMode` (see
+    /// `crate::combat_toggle`). The recv loop is the only writer/reader.
+    static PENDING_COMBAT_REQUEST: std::cell::Cell<
+        Option<(PendingCombatRequest, web_time::Instant)>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+fn note_combat_request(
+    requested: holtburger_protocol::messages::CombatMode,
+    confirmed_at_request: holtburger_protocol::messages::CombatMode,
+) {
+    PENDING_COMBAT_REQUEST.with(|c| {
+        c.set(Some((
+            PendingCombatRequest { requested, confirmed_at_request },
+            web_time::Instant::now(),
+        )))
+    });
+}
 
 pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
     let LoopCtx { session, queued_events, world, movement, entity_seeded, .. } = &mut *ctx;
@@ -40,7 +62,19 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 );
                 return LoopFlow::Continue;
             }
-            let current = w.player_combat_mode();
+            // latency (2026-10-05): toggle from the REQUESTED mode while
+            // its echo is in flight (retail writes combatMode locally at
+            // request time, acclient.c:408855), so a second press inside one
+            // round trip toggles back instead of re-sending the same target.
+            let confirmed = w.player_combat_mode();
+            let current = PENDING_COMBAT_REQUEST.with(|c| match c.get() {
+                Some((p, at)) => effective_combat_mode(
+                    confirmed,
+                    Some(p),
+                    at.elapsed().as_secs_f64() * 1000.0,
+                ),
+                None => confirmed,
+            });
             // Pre-2026-05-17 the toggle only fired the
             // suggested-mode path on `NonCombat`. But
             // `WorldState.player.combat_mode` is `Undef`
@@ -109,6 +143,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "toggle_combat_mode: {e}",
                 LoopFlow::Exit
             );
+            note_combat_request(target_mode, confirmed);
             console_log_str(&format!(
                 "[combat-mode] toggle: {current:?} → {target_mode:?}",
             ));
@@ -174,6 +209,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 });
                 return LoopFlow::Continue;
             }
+            let confirmed = world.borrow().as_ref().map(|w| w.player_combat_mode());
             let action = GameAction::ChangeCombatMode(Box::new(
                 ChangeCombatModeActionData { mode },
             ));
@@ -185,6 +221,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "set_combat_mode: {e}",
                 LoopFlow::Exit
             );
+            // latency (2026-10-05): a keyboard toggle right after a
+            // combat-bar request toggles from THIS request (see above).
+            if let Some(confirmed) = confirmed {
+                note_combat_request(mode, confirmed);
+            }
             console_log_str(&format!(
                 "[combat-mode] set: → {mode:?}",
             ));
