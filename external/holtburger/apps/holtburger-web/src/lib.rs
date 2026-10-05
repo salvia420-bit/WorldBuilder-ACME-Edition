@@ -43056,12 +43056,12 @@ async fn recv_loop(
     // Direct `Session` (default) or a `RemoteSessionProxy` bridging to the
     // net_worker (`?netWorker=1`). Same `recv_message`/`send_action`/
     // `send_message` surface either way, so the loop body is unchanged.
-    mut session: net_worker::LoopSession,
+    session: net_worker::LoopSession,
     mut cmd_rx: futures::channel::mpsc::UnboundedReceiver<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
     entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
-    mut charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
+    charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
     world_bootstrap: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
     >,
@@ -43183,8 +43183,8 @@ async fn recv_loop(
     use holtburger_protocol::traits::ProtocolUnpack;
     use holtburger_session::SessionEvent;
 
-    let mut state = LoopState::Idle;
-    let mut account_name = String::new();
+    let state = LoopState::Idle;
+    let account_name = String::new();
     // (A13-W1 2026-06-11: the `LocalPlayerSnapshot` quartet copy that
     // lived here was a write-only dead third copy — removed; see the
     // tombstone comment at its former struct site.)
@@ -43281,23 +43281,23 @@ async fn recv_loop(
     // the `ClientSimulationSystem` this recv loop otherwise lacks.
     // Constructed unconditionally (cheap empty Vec); driven ONLY when
     // `?unifiedTick=on` (see the TickMovement arm).
-    let mut tick_spine = holtburger_core::TickSpineHandle::new();
-    let mut entity_seeded = false;
-    let mut heartbeat_armed = false;
+    let tick_spine = holtburger_core::TickSpineHandle::new();
+    let entity_seeded = false;
+    let heartbeat_armed = false;
     // F2-3 (movement bughunt 2026-06-09): set when a `PlayerTeleport`
     // arrived while `holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`
     // is on. The deferred `LoginComplete` (which clears ACE's `Teleporting`
     // flag) is sent on the first post-teleport local-player `UpdatePosition`
     // (the destination pose), then this clears. See the const's doc-comment
     // and the `PlayerTeleport` / `UpdatePosition` recv arms below.
-    let mut pending_post_teleport_login_complete = false;
+    let pending_post_teleport_login_complete = false;
     // Academy-rubberband diagnostic — when set, holds the last
     // observed `world.player.force_position_sequence`. Any tick where
     // it changes emits a `[acad-diag rubberband]` console line so the
     // capture script can correlate server-forced repositions against
     // the client's predicted pose. Removed once the indoor floor-Z
     // diagnosis is complete.
-    let mut last_diag_force_seq: Option<u16> = None;
+    let last_diag_force_seq: Option<u16> = None;
 
     // Workstream A (3D camera/game-feel fix): idempotency flags for
     // the local-player's lifecycle signals to JS. Pre-Workstream-A the
@@ -43313,8 +43313,8 @@ async fn recv_loop(
     // `handleEntitySpawn` is itself idempotent on the GUID (re-spawns
     // just reuse the existing entry), but quieting the wasm side
     // keeps the queue clean.
-    let mut local_player_kind1_emitted = false;
-    let mut local_player_spawn_emitted = false;
+    let local_player_kind1_emitted = false;
+    let local_player_spawn_emitted = false;
     // Workstream A: throttle clock for the per-TickMovement local-
     // player Position fan-out. Pre-A the only local-player KIND_POSITION
     // updates came from ACE's ~1Hz UpdatePosition broadcast; that's too
@@ -43323,7 +43323,7 @@ async fn recv_loop(
     // `world.player_position()` after each integrator step, throttled
     // to ≤30Hz (one emit per ≥33.3 ms) to keep the entity-update queue
     // from flooding under high-rAF cadence. `None` until first emit.
-    let mut last_local_player_position_emit: Option<web_time::Instant> = None;
+    let last_local_player_position_emit: Option<web_time::Instant> = None;
 
     // Run-skill plumbing backstop (2026-06-02): cache the most-recent
     // `GameEvent::PlayerDescription` message so a late-constructed
@@ -43348,7 +43348,7 @@ async fn recv_loop(
     // Run/Quickness-correct run rate (≈1.0–2.7 m/s at low skill) instead
     // of the 4.5 fallback. `GameMessage` is `Clone`, so we cache the
     // typed message rather than raw bytes (no re-unpack on replay).
-    let mut cached_player_description: Option<
+    let cached_player_description: Option<
         holtburger_protocol::messages::GameMessage,
     > = None;
 
@@ -43363,7 +43363,7 @@ async fn recv_loop(
     // either world-construction arm has built the WorldState; both arms
     // seed the new world from this cache (same pattern as
     // `cached_player_description`).
-    let mut cached_time_sync: Option<(f64, web_time::Instant)> = None;
+    let cached_time_sync: Option<(f64, web_time::Instant)> = None;
 
     // Sequence-gap observability (2026-05-25). Gated by `?seqDebug=1`
     // — read once here and stashed; the flag is checked before every
@@ -43573,7 +43573,7 @@ async fn recv_loop(
     // unconditionally (cheap set ops at the existing emission sites), but
     // only consulted by the flag-gated ParentEvent synthesis above so a
     // ground-pickup→wield or re-equip (rig already live) never double-spawns.
-    let mut js_spawned_guids: std::collections::HashSet<u32> =
+    let js_spawned_guids: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     let seq_tracker: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>,
@@ -43613,7 +43613,195 @@ async fn recv_loop(
     // DEBUG. The keepalive arm below now reaps it.
     let loop_started_at = web_time::Instant::now();
 
+    // recv_loop split (2026-10-05): the shared loop state, see `session::LoopCtx`.
+    let mut ctx = session::LoopCtx {
+        session,
+        queued_events,
+        character_list,
+        entity_updates,
+        charlist_tx,
+        world_bootstrap,
+        latest_stats,
+        latest_inventory,
+        latest_vendor_state,
+        latest_container_contents,
+        latest_object_icons,
+        latest_inscriptions,
+        latest_appraisals,
+        latest_enchantments,
+        latest_fellowship,
+        latest_trade,
+        latest_book,
+        latest_allegiance,
+        latest_allegiance_info,
+        latest_friends,
+        latest_squelch,
+        latest_title,
+        latest_house_status,
+        latest_house_data,
+        latest_house_profile,
+        latest_house_restrictions,
+        latest_contracts,
+        latest_known_spells,
+        wielder_index,
+        projectile_index,
+        physics_script_table_index,
+        entity_enchantments_index,
+        identify_meta_index,
+        latest_server_info,
+        latest_sanctuary,
+        latest_localization,
+        cell_scene_snapshot,
+        door_part_snapshot,
+        local_player_pose,
+        local_player_can_jump,
+        local_player_jump_charge_level,
+        local_player_pursuit_status,
+        rynth_use_done_seq,
+        rynth_busy,
+        rynth_id_times,
+        rynth_ground_container,
+        last_recv_instant,
+        last_ping_rtt_ms,
+        collision_scene,
+        terrain_heights_shadow,
+        turbine_chat_state,
+        pending_confirmations,
+        plugin_list,
+        world,
+        state,
+        account_name,
+        movement,
+        tick_spine,
+        entity_seeded,
+        heartbeat_armed,
+        pending_post_teleport_login_complete,
+        last_diag_force_seq,
+        local_player_kind1_emitted,
+        local_player_spawn_emitted,
+        last_local_player_position_emit,
+        cached_player_description,
+        cached_time_sync,
+        js_spawned_guids,
+        seq_tracker,
+        flags: session::LoopFlags {
+            seq_debug,
+            spawn_motion_state_on,
+            spawn_door_collision_on,
+            skip_contained_spawn_on,
+            spawn_hidden_state_on,
+            wielded_spawn_on,
+            world_lifecycle_on,
+            unified_tick_on,
+            maint_prune_on,
+            pose_publish_post_tick_on,
+            wire_state_packs_stage1_on,
+            routine_pos_guard_on,
+            remote_interp_on,
+            remote_root_motion_on,
+            remote_sticky_on,
+            combat_radii_on,
+            server_run_rate_on,
+            retail_leash_on,
+            leash_echo_gate_on,
+        },
+    };
     loop {
+        // Re-bind the shared state under its original names for this
+        // iteration (released before `handle_*` takes `&mut ctx`).
+        let session::LoopFlags {
+            seq_debug,
+            spawn_motion_state_on,
+            spawn_door_collision_on,
+            skip_contained_spawn_on,
+            spawn_hidden_state_on,
+            wielded_spawn_on,
+            world_lifecycle_on,
+            unified_tick_on,
+            maint_prune_on,
+            pose_publish_post_tick_on,
+            wire_state_packs_stage1_on,
+            routine_pos_guard_on,
+            remote_interp_on,
+            remote_root_motion_on,
+            remote_sticky_on,
+            combat_radii_on,
+            server_run_rate_on,
+            retail_leash_on,
+            leash_echo_gate_on,
+        } = ctx.flags;
+        let session::LoopCtx {
+            session,
+            queued_events,
+            character_list,
+            entity_updates,
+            charlist_tx,
+            world_bootstrap,
+            latest_stats,
+            latest_inventory,
+            latest_vendor_state,
+            latest_container_contents,
+            latest_object_icons,
+            latest_inscriptions,
+            latest_appraisals,
+            latest_enchantments,
+            latest_fellowship,
+            latest_trade,
+            latest_book,
+            latest_allegiance,
+            latest_allegiance_info,
+            latest_friends,
+            latest_squelch,
+            latest_title,
+            latest_house_status,
+            latest_house_data,
+            latest_house_profile,
+            latest_house_restrictions,
+            latest_contracts,
+            latest_known_spells,
+            wielder_index,
+            projectile_index,
+            physics_script_table_index,
+            entity_enchantments_index,
+            identify_meta_index,
+            latest_server_info,
+            latest_sanctuary,
+            latest_localization,
+            cell_scene_snapshot,
+            door_part_snapshot,
+            local_player_pose,
+            local_player_can_jump,
+            local_player_jump_charge_level,
+            local_player_pursuit_status,
+            rynth_use_done_seq,
+            rynth_busy,
+            rynth_id_times,
+            rynth_ground_container,
+            last_recv_instant,
+            last_ping_rtt_ms,
+            collision_scene,
+            terrain_heights_shadow,
+            turbine_chat_state,
+            pending_confirmations,
+            plugin_list,
+            world,
+            state,
+            account_name,
+            movement,
+            tick_spine,
+            entity_seeded,
+            heartbeat_armed,
+            pending_post_teleport_login_complete,
+            last_diag_force_seq,
+            local_player_kind1_emitted,
+            local_player_spawn_emitted,
+            last_local_player_position_emit,
+            cached_player_description,
+            cached_time_sync,
+            js_spawned_guids,
+            seq_tracker,
+            ..
+        } = &mut ctx;
         tokio::select! {
             recv = session.recv_message() => {
                 let events = match recv {
@@ -43644,7 +43832,7 @@ async fn recv_loop(
                         // acclient.c:75365) — snap, no slewing.
                         SessionEvent::TimeSync(server_time) => {
                             let stamped_at = web_time::Instant::now();
-                            cached_time_sync = Some((server_time, stamped_at));
+                            *cached_time_sync = Some((server_time, stamped_at));
                             if let Some(w) = world.borrow_mut().as_mut() {
                                 let _ = w.set_server_time_sync(server_time, stamped_at);
                             }
@@ -43680,7 +43868,7 @@ async fn recv_loop(
                             holtburger_protocol::messages::GameEvent::PlayerDescription(_)
                         )
                     {
-                        cached_player_description = Some(message.clone());
+                        *cached_player_description = Some(message.clone());
                     }
 
                     // Phase 4 step 4 follow-on (vitals + inventory panels):
@@ -45125,7 +45313,7 @@ async fn recv_loop(
 
                     match message {
                         GameMessage::CharacterList(data) => {
-                            account_name = data.account_name.clone();
+                            *account_name = data.account_name.clone();
                             let new_list: Vec<CharacterSummary> = data
                                 .characters
                                 .iter()
@@ -45355,7 +45543,7 @@ async fn recv_loop(
                             // in `Player_Location.Teleport`. Default-off; see
                             // `holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT`.
                             if holtburger_core::client::DEFER_LOGIN_COMPLETE_AFTER_TELEPORT {
-                                pending_post_teleport_login_complete = true;
+                                *pending_post_teleport_login_complete = true;
                                 console_log_str(
                                     "[F2-3] PlayerTeleport: deferring LoginComplete until first post-teleport UpdatePosition (destination applied)",
                                 );
@@ -45432,7 +45620,7 @@ async fn recv_loop(
                             // flash on a no-op event. The flag is set in
                             // whichever arm fires first; the other arm
                             // sees it set and skips.
-                            if !local_player_kind1_emitted {
+                            if !*local_player_kind1_emitted {
                                 queued_events.borrow_mut().push(ClientEvent {
                                     kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
                                     string_payload: None,
@@ -45440,7 +45628,7 @@ async fn recv_loop(
                                     u32_payload_2: None,
                                     f32_payload: None,
                                 });
-                                local_player_kind1_emitted = true;
+                                *local_player_kind1_emitted = true;
                             }
 
                             let login_complete = GameAction::LoginComplete(Box::new(
@@ -45454,7 +45642,7 @@ async fn recv_loop(
                                 "LoginComplete: {e}"
                             );
 
-                            state = LoopState::InWorld {
+                            *state = LoopState::InWorld {
                                 player_guid: data.guid,
                             };
                             queued_events.borrow_mut().push(ClientEvent {
@@ -45523,7 +45711,7 @@ async fn recv_loop(
                                 // (prune deadlines etc.) is ever taken in the
                                 // Unix wall-clock fallback domain and later
                                 // compared in the PortalYearTicks domain.
-                                if let Some((t, at)) = cached_time_sync {
+                                if let Some((t, at)) = *cached_time_sync {
                                     let _ = new_world.set_server_time_sync(t, at);
                                 }
                                 *world.borrow_mut() = Some(new_world);
@@ -45633,8 +45821,8 @@ async fn recv_loop(
                                 // `LoginComplete`, send it now — ACE clears
                                 // `Teleporting` and starts accepting our
                                 // AutonomousPosition from the correct landblock.
-                                if pending_post_teleport_login_complete {
-                                    pending_post_teleport_login_complete = false;
+                                if *pending_post_teleport_login_complete {
+                                    *pending_post_teleport_login_complete = false;
                                     let login_complete = GameAction::LoginComplete(Box::new(
                                         holtburger_protocol::messages::LoginCompleteActionData,
                                     ));
@@ -45656,7 +45844,7 @@ async fn recv_loop(
                                 // and sequences to work with.
                                 if let Some(w) = world.borrow_mut().as_mut() {
                                     let pose = data.pos.pos;
-                                    if !entity_seeded {
+                                    if !*entity_seeded {
                                         let entity =
                                             holtburger_world::entity::Entity::new(
                                                 *player_guid,
@@ -45665,7 +45853,7 @@ async fn recv_loop(
                                             );
                                         w.add_entity(entity);
                                         let _ = w.set_local_player_runtime_pose(pose);
-                                        entity_seeded = true;
+                                        *entity_seeded = true;
                                         console_log_str(&format!(
                                             "[step 3.6] WorldState player entity seeded via UpdatePosition at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
                                             u32::from(pose.landblock_id),
@@ -45905,10 +46093,10 @@ async fn recv_loop(
                                         w.player.force_position_sequence =
                                             data.pos.force_position_sequence;
                                     }
-                                    if !heartbeat_armed && entity_seeded {
+                                    if !*heartbeat_armed && *entity_seeded {
                                         let now = web_time::Instant::now();
                                         movement.arm_heartbeat_schedule(now, w);
-                                        heartbeat_armed = true;
+                                        *heartbeat_armed = true;
                                         console_log_str(
                                             "[step 3.6] AutonomousPosition heartbeat armed",
                                         );
@@ -46014,7 +46202,7 @@ async fn recv_loop(
                                 // outbound MovementSystem tick reads
                                 // current sequences + pose.
                                 if let Some(w) = world.borrow_mut().as_mut() {
-                                    if !entity_seeded {
+                                    if !*entity_seeded {
                                         let entity = holtburger_world::entity::Entity::new(
                                             guid,
                                             String::from("LocalPlayer"),
@@ -46022,7 +46210,7 @@ async fn recv_loop(
                                         );
                                         w.add_entity(entity);
                                         let _ = w.set_local_player_runtime_pose(*pos);
-                                        entity_seeded = true;
+                                        *entity_seeded = true;
                                         console_log_str(&format!(
                                             "[step 3.6] WorldState player entity seeded at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
                                             u32::from(pos.landblock_id),
@@ -46091,10 +46279,10 @@ async fn recv_loop(
                                             }
                                         }
                                     }
-                                    if !heartbeat_armed && entity_seeded {
+                                    if !*heartbeat_armed && *entity_seeded {
                                         let now = web_time::Instant::now();
                                         movement.arm_heartbeat_schedule(now, w);
-                                        heartbeat_armed = true;
+                                        *heartbeat_armed = true;
                                         console_log_str(
                                             "[step 3.6] AutonomousPosition heartbeat armed",
                                         );
@@ -46248,7 +46436,7 @@ async fn recv_loop(
                             // fires so the local-player sprite
                             // renders.
                             if let Some(w) = world.borrow_mut().as_mut()
-                                && !entity_seeded
+                                && !*entity_seeded
                                 && data.public_weenie_desc.guid == w.player.guid
                                 && w.player.guid != holtburger_common::Guid::NULL
                                 && let Some(pos) = data.pos
@@ -46298,16 +46486,16 @@ async fn recv_loop(
                                 }
                                 w.add_entity(entity);
                                 let _ = w.set_local_player_runtime_pose(pos);
-                                entity_seeded = true;
+                                *entity_seeded = true;
                                 console_log_str(&format!(
                                     "[step 3.7] WorldState player entity seeded via ObjectCreate at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
                                     u32::from(pos.landblock_id),
                                     pos.coords.x, pos.coords.y, pos.coords.z,
                                 ));
-                                if !heartbeat_armed {
+                                if !*heartbeat_armed {
                                     let now = web_time::Instant::now();
                                     movement.arm_heartbeat_schedule(now, w);
-                                    heartbeat_armed = true;
+                                    *heartbeat_armed = true;
                                     console_log_str(
                                         "[step 3.7] AutonomousPosition heartbeat armed",
                                     );
@@ -46327,7 +46515,7 @@ async fn recv_loop(
                             // can sanity-check the spawn cell without
                             // log spam.
                             if let Some(w) = world.borrow().as_ref()
-                                && entity_seeded
+                                && *entity_seeded
                                 && data.public_weenie_desc.guid == w.player.guid
                                 && let Some(seed_pos) = data.pos
                             {
@@ -46469,7 +46657,7 @@ async fn recv_loop(
                                 })
                                 .unwrap_or(false);
                             let skip_local_player_spawn =
-                                is_local_player && local_player_spawn_emitted;
+                                is_local_player && *local_player_spawn_emitted;
                             // F16-2 — origin-ghost cull. A contained pack item
                             // arrives with no world `pos` (renders at LB 0) and
                             // no `wielder_id` (won't be hand-attached, so no rig
@@ -46755,7 +46943,7 @@ async fn recv_loop(
                                     });
                                 }
                                 if is_local_player {
-                                    local_player_spawn_emitted = true;
+                                    *local_player_spawn_emitted = true;
                                     console_log_str(&format!(
                                         "[workstream-A] emitted KIND_SPAWN for local player on ObjectCreate (guid=0x{:08X}, pose lb=0x{:08X} ({:.1}, {:.1}, {:.1}))",
                                         u32::from(data.public_weenie_desc.guid),
@@ -48742,7 +48930,7 @@ async fn recv_loop(
                                         // `EnteringWorld`, but `w.player.
                                         // guid` already matches `data.guid`
                                         // for the local player.
-                                        if !entity_seeded
+                                        if !*entity_seeded
                                             && data.guid == w.player.guid
                                             && data.guid != holtburger_common::Guid::NULL
                                         {
@@ -48756,7 +48944,7 @@ async fn recv_loop(
                                                 w.add_entity(entity);
                                                 let _ = w
                                                     .set_local_player_runtime_pose(pos);
-                                                entity_seeded = true;
+                                                *entity_seeded = true;
                                                 console_log_str(&format!(
                                                     "[step 3.7] WorldState player entity seeded via PlayerDescription at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
                                                     u32::from(pos.landblock_id),
@@ -48764,11 +48952,11 @@ async fn recv_loop(
                                                     pos.coords.y,
                                                     pos.coords.z,
                                                 ));
-                                                if !heartbeat_armed {
+                                                if !*heartbeat_armed {
                                                     let now = web_time::Instant::now();
                                                     movement
                                                         .arm_heartbeat_schedule(now, w);
-                                                    heartbeat_armed = true;
+                                                    *heartbeat_armed = true;
                                                     console_log_str(
                                                         "[step 3.7] AutonomousPosition heartbeat armed",
                                                     );
@@ -50035,7 +50223,7 @@ async fn recv_loop(
                     }
                     Some(SessionCommand::SelectCharacter { guid }) => {
                         let guid = holtburger_common::Guid::from(guid);
-                        state = LoopState::EnteringWorld {
+                        *state = LoopState::EnteringWorld {
                             guid,
                             account: account_name.clone(),
                         };
@@ -50103,7 +50291,7 @@ async fn recv_loop(
                             // P4.2 TIMESYNC: seed the server clock before the
                             // world goes live (symmetric with the
                             // PlayerCreate arm above).
-                            if let Some((t, at)) = cached_time_sync {
+                            if let Some((t, at)) = *cached_time_sync {
                                 let _ = new_world.set_server_time_sync(t, at);
                             }
                             *world.borrow_mut() = Some(new_world);
@@ -50161,7 +50349,7 @@ async fn recv_loop(
                         // it lands on the first message that carries a pose
                         // for the local player (PlayerCreate /
                         // PrivateUpdatePosition / UpdatePosition / ObjectCreate).
-                        if !local_player_kind1_emitted {
+                        if !*local_player_kind1_emitted {
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
                                 string_payload: None,
@@ -50169,7 +50357,7 @@ async fn recv_loop(
                                 u32_payload_2: None,
                                 f32_payload: None,
                             });
-                            local_player_kind1_emitted = true;
+                            *local_player_kind1_emitted = true;
                             console_log_str(&format!(
                                 "[workstream-A] eagerly emitted kind=1 PlayerSpawned on SelectCharacter (guid=0x{:08X})",
                                 u32::from(guid),
@@ -50323,7 +50511,7 @@ async fn recv_loop(
                             );
                             continue;
                         };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             console_log_str(
                                 "[wave9.5] BroadcastEmoteMotion before player entity seeded — dropping",
                             );
@@ -50686,7 +50874,7 @@ async fn recv_loop(
                             );
                             continue;
                         };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             console_log_str(
                                 "[combat-mode] ToggleCombatMode before player entity seeded — dropping",
                             );
@@ -52619,7 +52807,7 @@ async fn recv_loop(
                         // grounded so a mid-air space press can't root the
                         // landing.
                         if let Some(w) = world.borrow_mut().as_mut()
-                            && entity_seeded
+                            && *entity_seeded
                             && !w.player.is_airborne
                         {
                             w.player.standing_long_jump_charge = true;
@@ -52641,7 +52829,7 @@ async fn recv_loop(
                         // acclient.c:408050-408059); the legacy arms
                         // above stay byte-untouched.
                         if let Some(w) = world.borrow_mut().as_mut()
-                            && entity_seeded
+                            && *entity_seeded
                             && let Err(code) =
                                 movement.jump_charge_commence(web_time::Instant::now(), w)
                         {
@@ -52669,14 +52857,14 @@ async fn recv_loop(
                             );
                             continue;
                         };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             console_log_str(
                                 "[jumpParity] release before player entity seeded — dropping",
                             );
                             continue;
                         }
                         match movement
-                            .execute_jump_release(web_time::Instant::now(), w, &mut session)
+                            .execute_jump_release(web_time::Instant::now(), w, &mut *session)
                             .await
                         {
                             Ok(JumpOutcome::NotCharging) => {}
@@ -52739,7 +52927,7 @@ async fn recv_loop(
                         // intent is applied (and the manager preamble
                         // CancelMoveTo(0x36) runs) on the next
                         // TickMovement.
-                        if world.borrow().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !*entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] PursueObject before player seeded — dropping",
                             );
@@ -52770,7 +52958,7 @@ async fn recv_loop(
                         // (retail PerformMovement case 7,
                         // acclient.c:346133-346135). Same WorldState /
                         // player-seeded guards as PursueObject.
-                        if world.borrow().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !*entity_seeded {
                             console_log_str(
                                 "[rynth] MoveToPosition before player seeded — dropping",
                             );
@@ -52791,7 +52979,7 @@ async fn recv_loop(
                     Some(SessionCommand::PursuitTurnToObject { target_guid }) => {
                         // A14-I2 — TurnToObject (retail case 8,
                         // acclient.c:346137-346139).
-                        if world.borrow().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !*entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] TurnToObject before player seeded — dropping",
                             );
@@ -52809,7 +52997,7 @@ async fn recv_loop(
                         // A14-I2 — TurnToHeading (retail case 9,
                         // acclient.c:346141-346143). RADIANS here;
                         // degrees at the core ingest boundary.
-                        if world.borrow().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !*entity_seeded {
                             console_log_str(
                                 "[wasmPursuit] TurnToHeading before player seeded — dropping",
                             );
@@ -52941,7 +53129,7 @@ async fn recv_loop(
                         // Empty-queue notifies no-op on both routes
                         // (acclient.c:329884 head-null guard).
                         if let Some(w) = world.borrow().as_ref()
-                            && entity_seeded
+                            && *entity_seeded
                         {
                             let is_local = w.player.guid.0 == guid;
                             movement.notify_animation_done_for(
@@ -52976,7 +53164,7 @@ async fn recv_loop(
                             );
                             continue;
                         };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             console_log_str(
                                 "[jump] before player entity seeded — dropping",
                             );
@@ -53178,7 +53366,7 @@ async fn recv_loop(
                             );
                             continue;
                         };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             console_log_str(
                                 "[step 3.6] SetMovementInput before player entity seeded — dropping",
                             );
@@ -53203,7 +53391,7 @@ async fn recv_loop(
                         // Wave-1 step 4 — the `?cmdInterp=on` interpreter
                         // lane: same readiness guards as SetMovementInput
                         // (the interpreter needs an in-world player).
-                        if world.borrow().is_none() || !entity_seeded {
+                        if world.borrow().is_none() || !*entity_seeded {
                             console_log_str(
                                 "[cmdInterp] KeyAction before world/player ready — dropping",
                             );
@@ -53223,7 +53411,7 @@ async fn recv_loop(
                         // ticks are no-ops (nothing to read poses from).
                         let mut world_guard = world.borrow_mut();
                         let Some(w) = world_guard.as_mut() else { continue };
-                        if !entity_seeded {
+                        if !*entity_seeded {
                             continue;
                         }
                         // Drain pending SetupModel collision radii
@@ -53638,7 +53826,7 @@ async fn recv_loop(
                         // the same time as the entry insert; without it
                         // the position handler's first lookup misses
                         // and silently drops the update).
-                        if local_player_spawn_emitted
+                        if *local_player_spawn_emitted
                             && let Some(pose) = w.local_player_runtime_pose()
                             && pose.landblock_id != holtburger_common::Guid::NULL
                         {
@@ -53649,7 +53837,7 @@ async fn recv_loop(
                             // the clock. `web_time::Instant::now()` is
                             // already in scope as the TickMovement arm's
                             // `now` parameter.
-                            let throttle_ok = match last_local_player_position_emit {
+                            let throttle_ok = match *last_local_player_position_emit {
                                 Some(prev) => {
                                     now.saturating_duration_since(prev)
                                         >= std::time::Duration::from_millis(33)
@@ -53657,7 +53845,7 @@ async fn recv_loop(
                                 None => true,
                             };
                             if throttle_ok {
-                                last_local_player_position_emit = Some(now);
+                                *last_local_player_position_emit = Some(now);
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_POSITION,
                                     guid: u32::from(w.player.guid),
@@ -53796,14 +53984,14 @@ async fn recv_loop(
                             Vec::new();
                         let tick_result: anyhow::Result<()> = if unified_tick_on {
                             tick_spine
-                                .tick_frame(now, w, &mut movement, &mut session)
+                                .tick_frame(now, w, &mut *movement, &mut *session)
                                 .await
                                 .map(|despawned| {
                                     spine_despawned = despawned;
                                 })
                         } else {
                             movement
-                                .tick(now, w, &mut session)
+                                .tick(now, w, &mut *session)
                                 .await
                                 .map(|_events| ())
                         };
@@ -54440,8 +54628,8 @@ async fn recv_loop(
                                 // direct console_log_str so the warn
                                 // surfaces in the browser console.
                                 let force_seq = w.player.force_position_sequence;
-                                if last_diag_force_seq != Some(force_seq) {
-                                    if let Some(prev) = last_diag_force_seq {
+                                if *last_diag_force_seq != Some(force_seq) {
+                                    if let Some(prev) = *last_diag_force_seq {
                                         if let Some(pose) = w.local_player_runtime_pose() {
                                             if DIAG_VERBOSE {
                                                 console_log_str(&format!(
@@ -54458,7 +54646,7 @@ async fn recv_loop(
                                             }
                                         }
                                     }
-                                    last_diag_force_seq = Some(force_seq);
+                                    *last_diag_force_seq = Some(force_seq);
                                 }
                             }
                             Err(e) => {
@@ -54481,6 +54669,10 @@ async fn recv_loop(
         }
     }
 }
+
+/// recv_loop split (2026-10-05): shared loop state + extracted handlers.
+#[cfg(target_arch = "wasm32")]
+mod session;
 
 // ============================================================
 // Sky-J P3 — wasm exports for ParticleEmitter (0x32) +
