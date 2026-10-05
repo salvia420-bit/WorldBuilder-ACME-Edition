@@ -16,7 +16,9 @@
 //        Bruneton lookup tables from AtmosphereRuntime
 //      - Dithering kills banding in the resulting gradients
 //
-// Cloud overlay coexistence: cloud overlay's `preRender` runs BEFORE
+// Cloud overlay coexistence (`?cloudsMainPass=on` instead puts the
+// CloudsEffect into fxPass ahead of AerialPerspective; see
+// cloudsMainPassEnabled below). Legacy: cloud overlay's `preRender` runs BEFORE
 // `composer.render`. Its overlay quad is attached to the SKY scene
 // (SkyDome.setCloudOverlay → attachToSkyScene), so it is composited by
 // the sky RenderPass BEFORE the world pass, which then overdraws it at
@@ -446,6 +448,21 @@ function punchPhaseOpaqueSort(a, b) {
   if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
   if (a.z !== b.z) return a.z - b.z;
   return a.id - b.id;
+}
+
+// `?cloudsMainPass=on` (2026-10-05, DEFAULT OFF, strict `=== "on"`) — run the
+// volumetric CloudsEffect (`?clouds=on`) inside THIS composer's post-chain
+// EffectPass, ahead of AerialPerspective, instead of in cloud_overlay.js's
+// private EffectComposer + sky-scene quad. takram's documented integration
+// (vendor/takram-three-clouds/README.md); see CloudOverlay.adoptMainPass.
+// Opt-in because nothing headless can judge it (SwiftShader zero-bakes the
+// cloud noise) and the legacy path is the one that has had real-GPU looks.
+export function cloudsMainPassEnabled() {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("cloudsMainPass") === "on";
+  } catch (_) {
+    return false;
+  }
 }
 
 export function createAtmospherePipeline(renderer, scene, camera, opts) {
@@ -1037,7 +1054,19 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     ...(typeof opts?.terrainHaze === "boolean" ? { enabled: opts.terrainHaze } : {}),
   });
 
-  // EffectPass composition order: HeatHaze → AerialPerspective → LensFlare →
+  // Clouds in the main pass (`?cloudsMainPass=on`). The CloudOverlay is built
+  // by index.js before this pipeline (its `?clouds=on` block runs first);
+  // `opts.cloudOverlay` wins, else the live scene handle. null → the slot is
+  // dropped by filter(Boolean) and the pass is byte-identical to before.
+  const cloudOverlayForMain = cloudsMainPassEnabled()
+    ? (opts?.cloudOverlay ?? globalThis.window?.liveScene3d?.cloudOverlay ?? null)
+    : null;
+  const cloudsMain =
+    cloudOverlayForMain && typeof cloudOverlayForMain.adoptMainPass === "function"
+      ? (cloudOverlayForMain.volume?.effect ?? null)
+      : null;
+
+  // EffectPass composition order: HeatHaze → [Clouds] → AerialPerspective → LensFlare →
   // Bloom → Vignette → ToneMapping → Dithering. Everything except ToneMapping +
   // Dithering operates in HDR space. `filter(Boolean)` drops the disabled
   // slots without leaving holes in the pass.
@@ -1053,7 +1082,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // lensFlare/bloom/vignette/toneMapping so the terrain→sky blend happens
     // in HDR (matching the captured sky's radiance space); null when
     // `?horizonFade=off` and dropped by filter(Boolean).
-    ...[heatHaze, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
+    // cloudsMain (null unless `?cloudsMainPass=on` + `?clouds=on`) sits
+    // between heatHaze and aerialPerspective: its update() must raymarch
+    // before AerialPerspective's update() reads the overlay map it produces
+    // (pmndrs updates effects in list order; all three carry DEPTH so the
+    // stable attribute sort keeps this order).
+    ...[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
   );
   // NaN/Inf scrub (2026-10-05, `?nanScrub=off` escape). One non-finite pixel
   // in the HDR scene buffer is smeared across the screen by the bloom mip-blur
@@ -1079,6 +1113,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     composer.addPass(new EffectPass(camera, scrub));
   }
   composer.addPass(fxPass);
+  // Hand the clouds over only once the pass that now owns them exists: the
+  // overlay retires its private composer + sky quad and points
+  // AerialPerspective's overlay/shadowLength at the cloud buffers.
+  const cloudsMainAdopted = !!(cloudsMain && cloudOverlayForMain.adoptMainPass({ aerialPerspective }));
 
   // Live tuning handle for the 1070 eye-test, mirroring `window.__horizonFade`:
   // `__heatHaze.strength = 0.012`, `.freq`, `.speed`, and `.state` for a
@@ -1125,6 +1163,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   return {
     composer,
     aerialPerspective,
+    // true when `?cloudsMainPass=on` moved the CloudsEffect into fxPass.
+    cloudsMainPass: cloudsMainAdopted,
     horizonDissolve,
     // null unless ?terrainVolcano=on&terrainHaze=on (wave 2B, plan §3.6).
     heatHaze,
@@ -1471,7 +1511,23 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     },
 
     dispose() {
-      composer.passes.forEach((p) => p.dispose?.());
+      // CloudVolume is the SOLE owner of the CloudsEffect (see
+      // test_cloud_overlay_dispose): hand it back and keep fxPass.dispose()
+      // from freeing it.
+      if (cloudsMainAdopted) {
+        try { cloudOverlayForMain.releaseMainPass?.(); } catch (_) {}
+        const hadOwn = Object.prototype.hasOwnProperty.call(cloudsMain, "dispose");
+        const effDispose = cloudsMain.dispose;
+        cloudsMain.dispose = () => {};
+        try {
+          composer.passes.forEach((p) => p.dispose?.());
+        } finally {
+          if (hadOwn) cloudsMain.dispose = effDispose;
+          else delete cloudsMain.dispose;
+        }
+      } else {
+        composer.passes.forEach((p) => p.dispose?.());
+      }
       aerialPerspective.dispose?.();
       lensFlare?.dispose?.();
       bloom?.dispose?.();

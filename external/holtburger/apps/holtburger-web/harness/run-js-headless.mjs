@@ -293,6 +293,7 @@ const TIER5 = [
   { tier: 5, flag: "cast_level8_windup", file: "test_cast_level8_windup.mjs" },
   { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
   { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
+  { tier: 5, flag: "cloudsMainPass", file: "tests/clouds_main_pass.test.mjs" },
   { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },

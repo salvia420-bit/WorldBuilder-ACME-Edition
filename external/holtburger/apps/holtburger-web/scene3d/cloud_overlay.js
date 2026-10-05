@@ -26,6 +26,14 @@
 // is invoked from inside renderSkyPass, dungeon cells skip clouds
 // for free.
 //
+// `?cloudsMainPass=on` (2026-10-05, opt-in): atmosphere_pipeline.js puts
+// the CloudsEffect into its one post-chain EffectPass ahead of
+// AerialPerspective and calls adoptMainPass(); the private composer and the
+// sky-scene quad are then retired, the raymarch reads the main composer's
+// scene depth, and AerialPerspective composites the clouds before
+// ToneMapping. Until a pipeline adopts it (pre-bake window, ?atmosphere=off)
+// the legacy path below runs unchanged.
+//
 // Visible-clouds eye-test requires a real GPU. Headless swiftshader
 // silently zero-bakes 3D textures (see Clouds-D-mini memory for
 // the diagnosis). CI / smoke runs can only validate plumbing.
@@ -301,6 +309,129 @@ export class CloudOverlay {
     this.frameCount = 0;
     this.lastError = null;
     this._cloudsBufferUniform = null;
+
+    // `?cloudsMainPass=on` state (see adoptMainPass). False = legacy path.
+    this._mainPass = false;
+    this._mainPassArmed = false;
+  }
+
+  /**
+   * `?cloudsMainPass=on` (2026-10-05, opt-in) — hand the CloudsEffect to the
+   * MAIN atmosphere composer instead of running it in this overlay's private
+   * EffectComposer + sky-scene quad. Called by atmosphere_pipeline.js AFTER it
+   * has put `this.volume.effect` into its one post-chain EffectPass, ahead of
+   * AerialPerspective.
+   *
+   * This is takram's documented integration (vendor/takram-three-clouds
+   * README: "Place Clouds inside EffectComposer before AerialPerspective";
+   * r3f/Clouds.tsx hands `effect.atmosphereOverlay` / `atmosphereShadowLength`
+   * to AerialPerspective). Consequences vs the legacy path:
+   *   - no private composer: its RenderPass clear + full-res EffectPass
+   *     composite (whose output nobody read) + its two ping-pong RTs are gone;
+   *   - the raymarch reads the main composer's REAL scene depth (log-depth
+   *     aware: CloudsMaterial sets USE_LOGARITHMIC_DEPTH_BUFFER from the
+   *     camera), so clouds stop behind terrain/buildings instead of relying on
+   *     draw order;
+   *   - AerialPerspective composites the clouds (skipRendering stays true, the
+   *     takram default), so clouds get aerial perspective and then go through
+   *     Bloom/Vignette/ToneMapping/Dithering with everything else.
+   *
+   * Indoor / sky-blocked frames: index.js only calls preRender() while the sky
+   * is visible, so preRender ARMS one raymarch; an unarmed frame skips the
+   * raymarch entirely and points AerialPerspective's overlay + shadow-length
+   * maps at a 1x1 transparent texture (composite = identity). The proxy
+   * objects keep a constant identity so the HAS_OVERLAY / HAS_SHADOW_LENGTH
+   * defines never flip — no compound-shader recompile on door crossings.
+   *
+   * @param {{ aerialPerspective: object }} target the pipeline's AP effect
+   * @returns {boolean} true if adopted
+   */
+  adoptMainPass({ aerialPerspective } = {}) {
+    const effect = this.volume?.effect;
+    if (this._mainPass || !effect || !aerialPerspective) return false;
+
+    // 1. Private composer down (single-owner rule: detach the EffectPass so
+    //    composer.dispose() never disposes the CloudsEffect — see dispose()).
+    if (this.composer) {
+      try {
+        if (this._cloudEffectPass) this.composer.removePass(this._cloudEffectPass);
+        this.composer.dispose?.();
+      } catch (_) { /* tear-down */ }
+    }
+    this.composer = null;
+    this._renderPass = null;
+    this._cloudEffectPass = null;
+    this._composerSized = false;
+
+    // 2. The sky-scene quad would now double-composite: take it out.
+    this._skySceneBeforeMainPass = this._attachedToSkyScene ?? null;
+    this.detachFromSkyScene();
+
+    // 3. Stable proxies for AerialPerspective.
+    const blank = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+    blank.needsUpdate = true;
+    this._mainPassBlank = blank;
+    const overlay = { map: blank };
+    const shadowLength = { map: blank };
+    this._apOverlay = overlay;
+    this._apShadowLength = shadowLength;
+    this._mainPassAP = aerialPerspective;
+    aerialPerspective.overlay = overlay;
+    aerialPerspective.shadowLength = shadowLength;
+    effect.skipRendering = true; // AerialPerspective composites (takram default)
+
+    // 4. Gate the raymarch on preRender's arm.
+    const ownUpdate = Object.prototype.hasOwnProperty.call(effect, 'update')
+      ? effect.update
+      : undefined;
+    const origUpdate = effect.update;
+    this._mainPassOwnUpdate = ownUpdate;
+    effect.update = (renderer, inputBuffer, deltaTime) => {
+      const armed = this._mainPassArmed;
+      this._mainPassArmed = false;
+      if (!armed) {
+        overlay.map = blank;
+        shadowLength.map = blank;
+        return;
+      }
+      origUpdate.call(effect, renderer, inputBuffer, deltaTime);
+      overlay.map = effect.cloudsPass?.outputBuffer ?? blank;
+      shadowLength.map = effect.cloudsPass?.shadowLengthBuffer ?? blank;
+    };
+
+    this._mainPass = true;
+    return true;
+  }
+
+  /**
+   * Undo adoptMainPass (the main pipeline is being disposed). The legacy
+   * private composer is lazily rebuilt by the next preRender().
+   */
+  releaseMainPass() {
+    if (!this._mainPass) return;
+    const effect = this.volume?.effect;
+    if (effect) {
+      if (this._mainPassOwnUpdate !== undefined) effect.update = this._mainPassOwnUpdate;
+      else delete effect.update;
+    }
+    if (this._mainPassAP) {
+      if (this._mainPassAP.overlay === this._apOverlay) this._mainPassAP.overlay = null;
+      if (this._mainPassAP.shadowLength === this._apShadowLength) this._mainPassAP.shadowLength = null;
+    }
+    this._mainPassBlank?.dispose?.();
+    this._mainPassBlank = null;
+    this._apOverlay = null;
+    this._apShadowLength = null;
+    this._mainPassAP = null;
+    this._mainPass = false;
+    this._mainPassArmed = false;
+    if (this._skySceneBeforeMainPass) this.attachToSkyScene(this._skySceneBeforeMainPass);
+    this._skySceneBeforeMainPass = null;
+  }
+
+  /** True while the CloudsEffect runs inside the main composer. */
+  get mainPassActive() {
+    return this._mainPass;
   }
 
   /**
@@ -542,6 +673,12 @@ export class CloudOverlay {
    */
   attachToSkyScene(skyScene, renderOrder = 999) {
     if (!skyScene || !this.overlayMesh) return;
+    if (this._mainPass) {
+      // Main-pass mode composites via AerialPerspective; remember the scene
+      // so releaseMainPass() can restore the legacy quad.
+      this._skySceneBeforeMainPass = skyScene;
+      return;
+    }
     if (this.overlayMesh.parent === skyScene) return;
     if (this.overlayMesh.parent) {
       this.overlayMesh.parent.remove(this.overlayMesh);
@@ -627,6 +764,20 @@ export class CloudOverlay {
    */
   preRender(renderer, dt = 0, activeCam = null) {
     if (!renderer) return;
+    if (this._mainPass) {
+      // `?cloudsMainPass=on`: the main composer's fxPass runs the raymarch
+      // (CloudsEffect.update) with the real scene depth; arm exactly one
+      // update for this frame. Camera swaps reach the effect through
+      // pipeline.setCamera/render -> fxPass.mainCamera fan-out.
+      this._mainPassArmed = true;
+      this._mainPassCam = activeCam ?? this.camera;
+      // Cloud shadows on terrain: the raymarch now runs AFTER the world pass
+      // (it is in the post chain), so this pushes LAST frame's cascades — a
+      // one-frame lag the legacy pre-world bake did not have. Eye-test item.
+      try { this.volume._pushCloudShadowsToTerrain(); } catch (_) {}
+      this.frameCount++;
+      return;
+    }
     try {
       const cam = activeCam ?? this.camera;
       const prevTarget = renderer.getRenderTarget();
@@ -751,6 +902,17 @@ export class CloudOverlay {
    */
   renderOverlay(renderer) {
     if (!renderer) return;
+    if (this._mainPass) {
+      // Runs after the main composer: same post-bake cameraHeight patch the
+      // legacy preRender applies after its private composer.render.
+      try {
+        const matUniforms = this.volume?.effect?.cloudsPass?.currentMaterial?.uniforms;
+        if (matUniforms?.cameraHeight) {
+          matUniforms.cameraHeight.value = Math.max(0, this._mainPassCam?.position?.y ?? 0);
+        }
+      } catch (_) {}
+      return; // AerialPerspective already composited the clouds.
+    }
     // 2026-05-18 — if the overlay quad is attached to the sky scene
     // (cf. attachToSkyScene), the sky pass renders it; calling
     // renderOverlay here would double-paint. No-op cleanly.
@@ -797,6 +959,8 @@ export class CloudOverlay {
    */
   dispose() {
     try {
+      this._skySceneBeforeMainPass = null; // tear-down: do not re-attach the quad
+      this.releaseMainPass();
       this.overlayMesh.geometry.dispose();
       this.overlayMaterial.dispose();
       this._stbnTex?.dispose?.();

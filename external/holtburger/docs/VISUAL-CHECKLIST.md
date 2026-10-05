@@ -27,6 +27,7 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 - [x] **Clouds drift:** over ~30 s the clouds visibly move and don't loop back every second. — **2026-10-05 owner:** clouds look good.
 - [ ] **Fog colour:** follows the horizon at dawn, noon and dusk (the async sky probe changed how it's read).
 - [ ] **Swamp ground fog:** hides correctly behind buildings and terrain (now log-depth correct).
+- [ ] **Clouds in the main pass (`&clouds=on&cloudsMainPass=on`, opt-in):** A/B against `&clouds=on` alone at noon and dusk. Clouds should look the same or better: same brightness and colour (now tone-mapped and aerial-perspective-hazed in the main chain), hidden behind hills and buildings, nothing painted over the world, no whole-screen dark tint. Walk into a cottage and back out: no clouds indoors and no hitch at the door. If the screen tints dark, try `__cloudOverlay.volume.effect.haze = false` in the console and note it. Read the console for shader compile errors in the post EffectPass.
 
 ## Terrain effects (opt-in families)
 - [ ] `?terrainDirt=on` / `terrainSnow` / `terrainSand` / `terrainRock`: particles hide behind geometry (log-depth fix). Rock pebbles write depth, so check nothing they overlap is corrupted.
