@@ -456,7 +456,7 @@ fn parse_world_lifecycle_flag(search: &str) -> bool {
 /// `SmartBox::UseTime`, acclient.c:146256–146316) instead of the bare
 /// `MovementSystemHandle::tick` — i.e. the liveness eviction sweep and
 /// the quantum-sliced spatial solver run in-browser for the first time.
-/// Default OFF = bare `movement.tick`, byte-identical to before.
+/// DEFAULT-ON since F-2026-06-27; `?unifiedTick=off` = bare `movement.tick`.
 #[cfg(target_arch = "wasm32")]
 fn parse_unified_tick_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
@@ -480,8 +480,8 @@ fn parse_unified_tick_flag(search: &str) -> bool {
 /// short of the door plane with lateral cylinder slide; opening set ETHEREAL
 /// 0x1000C on the wire). Off-escape shape mirrors
 /// `parse_faithful_outdoor_flag`: returns `true` UNLESS the literal `=off` is
-/// present. When on (and `?faithfulTransition` is also on) the live faithful
-/// slice clamps the realized lateral residual against collidable dynamic
+/// present. When on, the live faithful
+/// slice (always on — `?faithfulTransition` was retired 2026-10-05) clamps the realized lateral residual against collidable dynamic
 /// entities (doors/monsters/players), which the faithful driver otherwise
 /// never blocks; ethereal/IGNORE_COLLISIONS entities are exempt (NB: academy
 /// training doors carry IGNORE_COLLISIONS even closed — intentionally
@@ -512,9 +512,9 @@ fn parse_fu3_diag_flag(search: &str) -> bool {
 /// `parse_unified_tick_flag`): returns `true` UNLESS `faithfulOutdoor=off` is
 /// present. When on, the faithful `CTransition` driver also covers OUTDOOR
 /// terrain (land-cell triangles + buildings/statics + entities) instead of
-/// delegating outdoor poses to the heightfield pipeline; read ONLY when
-/// `?faithfulTransition` is also on (the outdoor branch lives inside the
-/// faithful bridge). `=off` rolls outdoor back to the heightfield (the Phase D
+/// delegating outdoor poses to the heightfield pipeline (the outdoor branch
+/// lives inside the faithful bridge, which is always on since
+/// `?faithfulTransition` was retired 2026-10-05). `=off` rolls outdoor back to the heightfield (the Phase D
 /// A/B rollback). Native carrier: `USE_FAITHFUL_OUTDOOR` (movement/system.rs).
 /// Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -527,8 +527,8 @@ fn parse_faithful_outdoor_flag(search: &str) -> bool {
 /// DEFAULT-ON, off-escape shape (mirrors `parse_faithful_outdoor_flag`): returns
 /// `true` UNLESS `stepUp=off` is present. When on, a grounded mover CLIMBS
 /// walkable up-slopes / ramps / stairs / ledges (the faithful
-/// `CSphere::step_sphere_up` → `CTransition::step_up` path); read ONLY when
-/// `?faithfulTransition` is also on (the climb lives inside the faithful driver).
+/// `CSphere::step_sphere_up` → `CTransition::step_up` path; the climb lives
+/// inside the faithful driver, always on since `?faithfulTransition` was retired).
 /// `=off` rolls climbing back to the pre-E1 stop-at-base behavior. Native
 /// carrier: `USE_FAITHFUL_STEPUP` (movement/system.rs). Needs a wasm rebuild; NO
 /// manifest bump.
@@ -542,8 +542,8 @@ fn parse_faithful_stepup_flag(search: &str) -> bool {
 /// DEFAULT-ON off-escape shape (mirrors `parse_faithful_stepup_flag`): returns
 /// `true` UNLESS `roofGrounding=off` is present. When on, a grounded mover
 /// standing on an outdoor static/building surface (e.g. a building ROOF) latches
-/// `ON_WALKABLE` and STAYS instead of sliding off + reverting; read ONLY when
-/// `?faithfulTransition` is also on (the latch lives in the faithful driver).
+/// `ON_WALKABLE` and STAYS instead of sliding off + reverting (the latch lives
+/// in the faithful driver, always on since `?faithfulTransition` was retired).
 /// `=off` rolls back to the pre-2026-06-30 indoor-only latch. Native carrier:
 /// `USE_OUTDOOR_STATIC_GROUNDING` (movement/system.rs). Needs a wasm rebuild; NO
 /// manifest bump.
@@ -561,7 +561,7 @@ fn parse_roof_grounding_flag(search: &str) -> bool {
 /// so cliffs steeper than FloorZ (cos 48.4°) refuse/slide instead of being
 /// climbable, downhill runs keep feet planted via the step-down snap, and
 /// cliff lips block or slide per retail `edge_slide` (jump still clears
-/// them). Read ONLY when `?faithfulTransition` is also on. `=off` rolls back
+/// them). Lives in the faithful driver (always on). `=off` rolls back
 /// to the pre-2026-07-02 behavior. Native carrier: `USE_RETAIL_GROUND`
 /// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -577,8 +577,8 @@ fn parse_retail_ground_flag(search: &str) -> bool {
 /// (`validate_transition` BRANCH-A), `adjust_offset`'s plane projection/push-out
 /// and the zero-offset contact echo all work outdoors — the shared root cause of
 /// COL-16's sustained-push edge leak, COL-17's jump climb-ratchet and the
-/// stationary `isOnGround` flicker. Read ONLY when `?faithfulTransition` is also
-/// on. Native carrier: `USE_WORLD_FRAME_TERRAIN_PLANE` (movement/system.rs).
+/// stationary `isOnGround` flicker. Lives in the faithful driver (always on).
+/// Native carrier: `USE_WORLD_FRAME_TERRAIN_PLANE` (movement/system.rs).
 /// Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_terrain_plane_frame_flag(search: &str) -> bool {
@@ -31163,8 +31163,8 @@ mod tests_player_enchantment_snapshot_shape {
 /// block below and `parse_wire_state_packs_flag`.
 ///
 /// **Lifecycle family (`ObjectCreate` / `ObjectDelete` / `ParentEvent`
-/// / `PickupEvent` / `InventoryRemoveObject`): routed ONLY under
-/// `?worldLifecycle=on` (A8-M1, default-off).** History: the original
+/// / `PickupEvent` / `InventoryRemoveObject`): routed ONLY when
+/// `worldLifecycle` is on (A8-M1; DEFAULT ON since F-2026-07-06, `=off` escape).** History: the original
 /// exclusion (commit f62877dc, 2026-05-08) blamed a wasm `unreachable`
 /// panic on "the spatial body store" (`scene.update_entity` +
 /// `reconcile_authoritative_body`). A8-M1's diagnosis (2026-06-11)
@@ -31216,9 +31216,9 @@ fn should_route_message_to_world(
     remote_interp_on: bool,
 ) -> bool {
     use holtburger_protocol::messages::GameMessage;
-    // A8-M1 (2026-06-11): canonical lifecycle routing, gated
-    // `?worldLifecycle=on` (default OFF — see the doc comment above
-    // for the diagnosis + the M2 tick dependency).
+    // A8-M1 (2026-06-11): canonical lifecycle routing, gated on
+    // `worldLifecycle` (DEFAULT ON, `=off` escape — see the doc comment
+    // above for the diagnosis + the M2 tick dependency).
     if world_lifecycle_on
         && matches!(
             message,
@@ -31231,8 +31231,8 @@ fn should_route_message_to_world(
     {
         return true;
     }
-    // A13-W1 (2026-06-11): canonical movement-message routing, gated
-    // `?wireStatePacks=stage1` (default OFF — see
+    // A13-W1 (2026-06-11): canonical movement-message routing, gated on
+    // `wireStatePacks` (DEFAULT ON, `=off` escape — see
     // `parse_wire_state_packs_flag` for the quartet/sequence rationale).
     // For the local player these land on `handlers/player.rs`
     // (`apply_position_from_server` / `apply_self_update_motion` /
@@ -43172,11 +43172,11 @@ async fn recv_loop(
     // the spawn pose); the AutonomousPosition heartbeat is armed at
     // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
     let mut movement = holtburger_core::MovementSystemHandle::new();
-    // FU-3 (2026-07-20): `?faithfulEntityCollision=on` — clamp the live faithful
+    // FU-3 (2026-07-20): `?faithfulEntityCollision` — clamp the live faithful
     // slice's realized lateral residual against collidable dynamic entities
     // (doors/monsters/players) the faithful driver otherwise never blocks.
-    // Default OFF (the pinned parity gap); ethereal/IGNORE_COLLISIONS entities
-    // are exempt. Read only when `?faithfulTransition` is also on; see
+    // DEFAULT ON (promoted 2026-07-20; `=off` restores the parity gap);
+    // ethereal/IGNORE_COLLISIONS entities are exempt. See
     // `parse_faithful_entity_collision_flag`.
     movement
         .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&flag_search()));
@@ -43192,18 +43192,15 @@ async fn recv_loop(
     );
     // Phase 3 Phase D (2026-06-28): `?faithfulOutdoor=off` — roll the faithful
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
-    // ON). Read only when `?faithfulTransition` is also on; see
-    // `parse_faithful_outdoor_flag`.
+    // ON); see `parse_faithful_outdoor_flag`.
     movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&flag_search()));
     // Phase 3 Phase E1 / WS-D (2026-06-29): `?stepUp=off` — roll walkable
     // step-up / slope & ledge climbing back to the pre-E1 stop-at-base behavior
-    // (default ON). Read only when `?faithfulTransition` is also on; see
-    // `parse_faithful_stepup_flag`.
+    // (default ON); see `parse_faithful_stepup_flag`.
     movement.set_faithful_stepup(parse_faithful_stepup_flag(&flag_search()));
     // (2026-06-30): `?roofGrounding=off` — roll the outdoor static/building roof
     // grounded-latch back to the pre-2026-06-30 indoor-only behavior (default ON,
-    // so jumping onto a building roof STAYS). Read only when `?faithfulTransition`
-    // is also on; see `parse_roof_grounding_flag`.
+    // so jumping onto a building roof STAYS); see `parse_roof_grounding_flag`.
     movement.set_outdoor_static_grounding(parse_roof_grounding_flag(&flag_search()));
     // Phase 3 Phase D (2026-06-28, Option C): `?buildingOverlap=off` — register
     // each outdoor building/static BSP into its HOME cell only (the retail
@@ -43213,8 +43210,7 @@ async fn recv_loop(
     // (2026-07-02): `?retailGround=off` — roll the retail outdoor ground
     // movement (FLOOR_Z cliff refusal + cliff_slide, step-down downhill
     // stick, lip block/slide) back to the pre-2026-07-02 behavior (default
-    // ON). Read only when `?faithfulTransition` is also on; see
-    // `parse_retail_ground_flag`.
+    // ON); see `parse_retail_ground_flag`.
     movement.set_retail_ground(parse_retail_ground_flag(&flag_search()));
     // TIER-3 (2026-07-28): `?terrainPlaneFrame=off` / `?airborneContact=off` /
     // `?walkableGround=off` — the three COL-16/COL-17/isOnGround escapes (all
@@ -43248,13 +43244,14 @@ async fn recv_loop(
     // OFF (authentic burst, user ruling); `=on` is the modern opt-in;
     // see `parse_slide_cast_flag`.
     movement.set_slide_cast(parse_slide_cast_flag(&flag_search()));
-    // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp=on` — the
-    // retail CommandInterpreter input lane (default OFF, dark; PENDING
-    // eye-test); see `parse_cmd_interp_flag`.
+    // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp` — the
+    // retail CommandInterpreter input lane (DEFAULT ON since step 5,
+    // 2026-07-03; `=off` restores the legacy lane); see `parse_cmd_interp_flag`.
     movement.set_cmd_interp(parse_cmd_interp_flag(&flag_search()));
-    // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum=on` —
+    // Physics-parity 2026-07-03 (dossier A F1/F2): `?retailQuantum` —
     // the retail update_object slice schedule in both integrator shapes
-    // (default OFF: ACE 0.1-slice shapes per DECISIONS-A1-O5); see
+    // (DEFAULT ON in the browser; `=off` = the ACE 0.1-slice shapes, which
+    // the native `USE_RETAIL_QUANTUM=false` carrier keeps for tests); see
     // `parse_retail_quantum_flag`.
     movement.set_retail_quantum(parse_retail_quantum_flag(&flag_search()));
     // A1-O1 (2026-06-11): the canonical tick spine's wasm facade — owns
@@ -43391,8 +43388,8 @@ async fn recv_loop(
     // a regression from this skip. See the eye-test follow-ups list.) Was the
     // default-OFF `?skipContainedSpawn=on` gate; kept as an always-true binding.
     let skip_contained_spawn_on: bool = true;
-    // F16-5 (bughunt 2026-06-09): `?spawnHiddenState=on` (default OFF).
-    // The wasm ObjectCreate arm pushes the KIND_SPAWN rig but never
+    // F16-5 (bughunt 2026-06-09): formerly `?spawnHiddenState=on`; now an
+    // always-true binding (see below — no URL flag). The wasm ObjectCreate arm pushes the KIND_SPAWN rig but never
     // surfaces the spawn-time `PhysicsState` (HIDDEN/NO_DRAW/CLOAKED) to
     // JS — so a player materializing nearby renders for the whole
     // login-bubble window instead of staying hidden until ACE clears the
@@ -43406,13 +43403,13 @@ async fn recv_loop(
     // when `data.physics_state` is non-drawable, ALSO push a kind=17
     // EntityVisibilityChanged{visible:false} (the existing SetState-driven
     // visibility path). The 3D rig builds async, so this event reaches JS
-    // before the EntityInstance exists — the JS side queues it in
-    // `_pendingVisibility` and drains on spawn (mirrors `_pendingAttach`).
-    // Default OFF pending a 1070 eye-test (changes what renders at spawn).
+    // before the EntityInstance exists — the JS side parks it in the
+    // pre-create buffer and replays it on spawn.
     // INTEGRATED always-on — 1070 eye-test PASSED 2026-06-10 (was the default-OFF
     // `?spawnHiddenState=on` gate; kept as an always-true binding).
     let spawn_hidden_state_on: bool = true;
-    // wieldedSpawn (2026-06-11): `?wieldedSpawn=on` (default OFF). A wielded
+    // wieldedSpawn (2026-06-11): `?wieldedSpawn` (DEFAULT ON; `=off` escape —
+    // see `parse_wielded_spawn_flag`). A wielded
     // item with no world presence never renders in-hand:
     //   (a) pack→wield — the item's only ObjectCreate (contained at login:
     //       no pos, no wielder) was culled by `skip_contained_spawn`, and the
@@ -43432,23 +43429,24 @@ async fn recv_loop(
     // (acclient.c:391955-391961). Under this flag, mirror that model: for
     // (a) synthesize the missing KIND_SPAWN from the cached world entity at
     // ParentEvent time, for (b) emit the kind=7 ATTACH from the ObjectCreate
-    // PhysicsDesc parent fields. Default OFF pending a 1070 eye-test.
+    // PhysicsDesc parent fields.
     let wielded_spawn_on: bool = parse_wielded_spawn_flag(&flag_search());
-    // A8-M1 (2026-06-11): `?worldLifecycle=on` — route the lifecycle
+    // A8-M1 (2026-06-11): `?worldLifecycle` — route the lifecycle
     // message family through the canonical world dispatcher (single
     // CObjectMaint-style owner) instead of the apply_inventory_object_*
-    // bypass copies. Default OFF; see should_route_message_to_world.
+    // bypass copies. DEFAULT ON (F-2026-07-06; `=off` escape); see
+    // should_route_message_to_world.
     let world_lifecycle_on: bool = parse_world_lifecycle_flag(&flag_search());
-    // A1-O1 (2026-06-11): `?unifiedTick=on` — drive the canonical
+    // A1-O1 (2026-06-11): `?unifiedTick` — drive the canonical
     // movement → world → simulation tick spine from the TickMovement arm
-    // instead of bare `movement.tick`. Default OFF; see
-    // `parse_unified_tick_flag` and the arm below.
+    // instead of bare `movement.tick`. DEFAULT ON (F-2026-06-27; `=off`
+    // escape); see `parse_unified_tick_flag` and the arm below.
     let unified_tick_on: bool = parse_unified_tick_flag(&flag_search());
     // A8-M2 (2026-06-11): `?maintPrune=on` — forward the unified
     // spine's despawn reports (25 s out-of-visibility prune + swept
     // explicit deletes, liveness.rs ↔ acclient.c:310666) to the JS rig
-    // layer as KIND_REMOVE. Requires `?unifiedTick=on` (the sweep only
-    // runs inside the unified spine) — inert without it. Default OFF;
+    // layer as KIND_REMOVE. Requires the unified spine (`?unifiedTick`,
+    // default ON) — inert under `unifiedTick=off`. Default OFF (strict `=on`);
     // see `parse_maint_prune_flag` and the TickMovement arm.
     let maint_prune_on: bool =
         unified_tick_on && parse_maint_prune_flag(&flag_search());
@@ -43458,11 +43456,12 @@ async fn recv_loop(
     // OFF; see `parse_pose_publish_post_tick_flag` and the arm below.
     let pose_publish_post_tick_on: bool =
         parse_pose_publish_post_tick_flag(&flag_search());
-    // A13-W1 (2026-06-11): `?wireStatePacks=stage1` — route the
+    // A13-W1 (2026-06-11): `?wireStatePacks` — route the
     // quartet-bearing movement messages (UpdatePosition / VectorUpdate /
     // UpdateMotion / PlayerTeleport) through the canonical world
     // dispatcher and retire the recv arms' hand-mirrored sequence
-    // writes. Default OFF; see `parse_wire_state_packs_flag` and
+    // writes. DEFAULT ON (F-2026-06-27; `=off` escape); see
+    // `parse_wire_state_packs_flag` and
     // `should_route_message_to_world`.
     let wire_state_packs_stage1_on: bool =
         parse_wire_state_packs_flag(&flag_search());
@@ -43476,12 +43475,13 @@ async fn recv_loop(
         "[movement] routinePosGuard {} (?routinePosGuard=off to disable)",
         if routine_pos_guard_on { "ON" } else { "OFF" },
     ));
-    // A2-P2 (2026-06-12, W3+ S8): `?remoteInterp=on` — the remote-pose
+    // A2-P2 (2026-06-12, W3+ S8): `?remoteInterp` — the remote-pose
     // driver (retail MoveOrTeleport lattice + per-slice manager step +
     // pollRemotePoses export + PublicUpdatePosition routing). COMPOSITE:
-    // effective only with `?unifiedTick=on` AND `?wireStatePacks=stage1`
+    // effective only with `unifiedTick` AND `wireStatePacks` also on
     // (manager step rides the spine's simulation phase; ingest rides the
-    // routed remote UpdatePosition arm). Default OFF; see
+    // routed remote UpdatePosition arm). All three DEFAULT ON
+    // (F-2026-06-27; each has an `=off` escape); see
     // `parse_remote_interp_flag`.
     let remote_interp_requested: bool = parse_remote_interp_flag(&flag_search());
     let remote_interp_on: bool =
