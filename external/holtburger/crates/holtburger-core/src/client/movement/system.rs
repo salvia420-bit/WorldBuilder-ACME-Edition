@@ -7493,18 +7493,17 @@ impl MovementSystem {
                 // collision into the driver (report F1).
                 let corrected = (clamped.x - lateral.x).abs() > 1e-6
                     || (clamped.y - lateral.y).abs() > 1e-6;
+                // Collision round 2 (critic issue 4): re-derive it the way
+                // the driver would — retail `find_cell_list` from the pose's
+                // cell, `point_in_cell` at the SPHERE CENTRE, kept when no
+                // cell claims it — instead of the legacy exit test and
+                // `current_cell` at the FEET, which undid F3 at doorways.
                 if corrected {
-                    if pose.is_indoors() {
-                        pose.landblock_id = match world
-                            .scene
-                            .exited_envcell_to_outdoor(&pose, object.radius)
-                        {
-                            Some(outdoor) => holtburger_common::Guid(outdoor),
-                            None => holtburger_common::Guid(world.scene.current_cell(&pose)),
-                        };
-                    } else {
-                        pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
-                    }
+                    pose = holtburger_world::spatial::faithful_bridge::faithful_cell_for_pose(
+                        &world.scene,
+                        &pose,
+                        &object,
+                    );
                 }
             }
         }

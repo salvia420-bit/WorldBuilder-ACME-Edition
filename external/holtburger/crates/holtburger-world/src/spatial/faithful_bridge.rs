@@ -1940,6 +1940,73 @@ pub fn faithful_find_transitional_position(
     }
 }
 
+// ─── Cell for a pose moved AFTER the transition ──────────────────────────────
+
+/// The cell retail's `CObjCell::find_cell_list` (acclient.c:346961-347060)
+/// would pick for `pose`, seeded from the pose's own cell: the CELLARRAY
+/// from that cell (portal flood, exterior-portal straddle ring, outdoor ring
+/// + building portals), then `point_in_cell(sphere[0].center)` with an
+/// interior winner first. With no winner the cell is kept as
+/// `check_other_cells` keeps it (acclient.c:312452-312459): an indoor id
+/// stays, an outdoor id goes through `LandDefs::adjust_to_outside`.
+///
+/// For callers that move the pose after the driver has run — the door
+/// stopgap in `finish_manual_slice_via_transition` (collision round 2,
+/// critic issue 4), which used to re-derive the cell at the FEET with the
+/// legacy exit test and `current_cell`. Returns the pose relabelled, coords
+/// rebased into the chosen cell's landblock; unchanged when the seed cell is
+/// not resident.
+pub fn faithful_cell_for_pose(
+    scene: &SpatialScene,
+    pose: &WorldPosition,
+    object: &super::transition::ObjectInfo,
+) -> WorldPosition {
+    use holtburger_dat::transition::objcell::find_cell_list;
+    let seed = pose.landblock_id.0;
+    if seed == 0 {
+        return *pose;
+    }
+    let _world_frame = holtburger_dat::transition::types::WorldFrameGuard::enter();
+    let world = SceneWorld::new(scene);
+    if world.get_visible(seed).is_none() {
+        return *pose;
+    }
+    let feet = pose.global_coords();
+    let mut frame = Frame::identity();
+    frame.origin = feet;
+    let p = Position {
+        objcell_id: seed,
+        frame,
+    };
+    let local = capsule_spheres(object);
+    let spheres = [
+        Sphere {
+            center: Vector3::new(feet.x, feet.y, feet.z + local[0].center.z),
+            radius: local[0].radius,
+        },
+        Sphere {
+            center: Vector3::new(feet.x, feet.y, feet.z + local[1].center.z),
+            radius: local[1].radius,
+        },
+    ];
+    let mut cells = CellArray::default();
+    let mut pick: Option<ObjCellHandle> = None;
+    find_cell_list(&world, &p, 2, &spheres, &mut cells, Some(&mut pick), None);
+    let cell = match pick {
+        Some(c) => c.id(),
+        None if (seed & 0xFFFF) < 0x100 => world.adjust_to_outside(seed, spheres[0].center).unwrap_or(seed),
+        None => seed,
+    };
+    let o = landblock_world_origin(cell);
+    let mut out = *pose;
+    out.landblock_id = holtburger_common::Guid(cell);
+    out.coords = Vector3::new(feet.x - o.x, feet.y - o.y, feet.z);
+    if (cell & 0xFFFF) < 0x100 {
+        out = out.normalize_outdoor_cell();
+    }
+    out
+}
+
 // ─── Arrival placement (retail SetPosition path) ─────────────────────────────
 
 /// Result of the retail placement search on an authoritative arrival — the
@@ -2125,11 +2192,23 @@ pub fn faithful_find_placement_position(
         ),
         rotation: pose.rotation,
     };
-    // Indoor→indoor cell re-derivation (mirrors the transitional fn's
-    // `find_cell_list` flip, faithful_bridge.rs:1263) so the low word tracks the
-    // cell the adjusted pose actually landed in.
+    // The cell is the placement's own answer (collision round 2, critic issue
+    // 4): `validate_placement_transition` commits `check_cell` /
+    // `check_pos.objcell_id` — `find_cell_list`'s `point_in_cell(sphere
+    // centre)` pick — to `curr_pos` (acclient.c:312355). The old re-derive
+    // ran `current_cell` at the FEET, which on a floor just under a room's
+    // hull labelled the cell below.
     if gates.local_envcell_entry && out_pose.is_indoors() {
-        out_pose.landblock_id = holtburger_common::Guid(scene.current_cell(&out_pose));
+        let cell = curr.objcell_id;
+        if (cell & 0xFFFF) >= 0x100 && world.get_visible(cell).is_some() {
+            let o = landblock_world_origin(cell);
+            out_pose.landblock_id = holtburger_common::Guid(cell);
+            out_pose.coords = Vector3::new(
+                curr.frame.origin.x - o.x,
+                curr.frame.origin.y - o.y,
+                curr.frame.origin.z,
+            );
+        }
     }
 
     // grounded / contact plane ← retail `SetPositionInternal` (acclient.c:322586-
@@ -3028,6 +3107,70 @@ mod drift {
             "relabelled away from the driver's cell (0x{:08X})",
             out.pose.landblock_id.0
         );
+    }
+
+    /// The room-over-basement fixture of
+    /// `standing_on_a_floor_just_under_the_room_hull_keeps_the_room`: room
+    /// hull starts 0.2 m above its floor, basement hull below, portal-linked.
+    fn room_over_basement_env() -> (DriftEnv, u32) {
+        const BASEMENT_ID: u32 = 0x1234_0101;
+        let mut room = HashMap::new();
+        room.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        let mut basement = HashMap::new();
+        basement.insert(1u16, floor_poly_local(-HE, HE, -3.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(room));
+        scene.insert_cell_physics_bsp(BASEMENT_ID, bsp_from(basement));
+        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(0.0, 0.0, 1.0), -0.2)]));
+        scene.insert_cell_membership(
+            BASEMENT_ID,
+            membership_at_cell_origin(&[(v(0.0, 0.0, -1.0), 0.2)]),
+        );
+        scene.insert_cell_portal(CELL_ID, BASEMENT_ID);
+        scene.insert_cell_portal(BASEMENT_ID, CELL_ID);
+        (DriftEnv { scene }, BASEMENT_ID)
+    }
+
+    /// Round 2 (critic issue 4): the arrival PLACEMENT path labels the pose
+    /// with the placement's own cell (`validate_placement_transition`
+    /// commits `check_cell`, acclient.c:312355), not `current_cell` at the
+    /// feet. Old code: feet on the room floor are in the basement's hull →
+    /// labelled basement.
+    #[test]
+    fn placement_on_a_floor_just_under_the_room_hull_keeps_the_room() {
+        let (env, basement) = room_over_basement_env();
+        let pose = pose_at(FCX, FCY, FLOOR_WZ + 0.005);
+        // What the old feet-based re-derive returned:
+        assert_eq!(env.scene.current_cell(&pose), basement, "fixture: feet are in the basement hull");
+        let out = super::faithful_find_placement_position(&env, &pose, &input_for(pose, pose).object, &gates())
+            .expect("placement succeeds");
+        assert_eq!(
+            out.pose.landblock_id,
+            Guid(CELL_ID),
+            "placement relabelled into 0x{:08X}",
+            out.pose.landblock_id.0
+        );
+    }
+
+    /// Round 2 (critic issue 4): the door stopgap re-derives the cell of a
+    /// pose moved AFTER the transition. It used the legacy exit test and
+    /// `current_cell` at the FEET (→ basement here); `faithful_cell_for_pose`
+    /// runs retail's `find_cell_list` pick at the sphere centre (→ room).
+    #[test]
+    fn a_pose_moved_after_the_transition_keeps_the_room_its_centre_is_in() {
+        let (env, basement) = room_over_basement_env();
+        let pose = pose_at(FCX + 0.5, FCY, FLOOR_WZ);
+        let object = input_for(pose, pose).object;
+        // The old stopgap: exit test (None — still touching), then current_cell.
+        assert_eq!(env.scene.exited_envcell_to_outdoor(&pose, object.radius), None);
+        assert_eq!(env.scene.current_cell(&pose), basement, "old feet-based answer");
+        let out = super::faithful_cell_for_pose(&env.scene, &pose, &object);
+        assert_eq!(out.landblock_id, Guid(CELL_ID));
+        assert!((out.global_coords().x - pose.global_coords().x).abs() < 1e-3, "pose unmoved");
+        // Seeded from the basement label, the centre still picks the room.
+        let mut from_basement = pose;
+        from_basement.landblock_id = Guid(basement);
+        assert_eq!(super::faithful_cell_for_pose(&env.scene, &from_basement, &object).landblock_id, Guid(CELL_ID));
     }
 
     /// F1(c): the cell a move ends in is the driver's. Walking out of a
