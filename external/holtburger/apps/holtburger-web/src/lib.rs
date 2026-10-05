@@ -8706,13 +8706,30 @@ fn classify_command_kind(cmd: u32) -> (&'static str, Option<&'static str>) {
     //   0x10000186..0x1000018E : AttackHigh/Med/Low {4,5,6}
     //   0x1000018F..0x1000019A : Punch{Fast,Slow} + OffhandPunch
     //   0x4000002B..0x40000039 : MagicGesture (Blast..Pray)
-    let high4 = cmd & 0xF000_0000;
-    if high4 == 0x4000_0000 {
-        // Magic gesture; no height bucket — return ("cast", None).
-        return ("cast", None);
-    }
-    if high4 != 0x1000_0000 {
-        return ("unknown", None);
+    //   0x4000001E..0x4000002A : AimLevel/AimHigh*/AimLow* (missile draw)
+    //
+    // Discriminate on the CLASS BYTE (`cmd >> 24`), not the high nibble:
+    // the old `cmd & 0xF000_0000 == 0x4000_0000` test also matched the
+    // 0x41 substate class (Ready 0x41000003), 0x44 RunForward 0x44000007 and
+    // 0x45 WalkForward 0x45000005, so locomotion read as "cast" while the JS
+    // coarse classifier (`classifyMotionCommand`) called them idle/run/walk.
+    match cmd >> 24 {
+        // 0x10 Action / 0x12 / 0x13 ChatEmote: one-shot link commands
+        // (swings, windups, emotes) — the height table below.
+        0x10..=0x1F => {}
+        0x40 => {
+            return match cmd {
+                // Magic gesture; no height bucket.
+                0x4000_002B..=0x4000_0039 => ("cast", None),
+                // Missile aim/draw: the ranged attack's one-shot link
+                // (picking.js / index.html play it via setSwingMotion).
+                0x4000_001E..=0x4000_002A => ("swing", None),
+                // Stop, Falling, Pickup, Eat, CastSpell, … — not a
+                // swing or cast gesture.
+                _ => ("unknown", None),
+            };
+        }
+        _ => return ("unknown", None),
     }
     let low12 = cmd & 0x0000_0FFF;
     // Spec §2.4 commands fall into three height ranges by the LOW 12 bits.
@@ -8763,6 +8780,37 @@ fn classify_command_kind(cmd: u32) -> (&'static str, Option<&'static str>) {
         _ => None,
     };
     ("swing", height)
+}
+
+#[cfg(test)]
+mod tests_classify_command_kind {
+    use super::classify_command_kind;
+
+    #[test]
+    fn locomotion_and_substates_are_not_cast() {
+        assert_eq!(classify_command_kind(0x4100_0003), ("unknown", None)); // Ready
+        assert_eq!(classify_command_kind(0x4500_0005), ("unknown", None)); // WalkForward
+        assert_eq!(classify_command_kind(0x4400_0007), ("unknown", None)); // RunForward
+        assert_eq!(classify_command_kind(0x4000_0004), ("unknown", None)); // Stop
+        assert_eq!(classify_command_kind(0x4000_00D3), ("unknown", None)); // CastSpell (not a gesture)
+    }
+
+    #[test]
+    fn magic_gestures_are_cast() {
+        assert_eq!(classify_command_kind(0x4000_002B), ("cast", None)); // MagicBlast
+        assert_eq!(classify_command_kind(0x4000_002C), ("cast", None)); // MagicSelfHead
+        assert_eq!(classify_command_kind(0x4000_0039), ("cast", None)); // MagicPray
+    }
+
+    #[test]
+    fn attacks_and_aims_are_swing() {
+        assert_eq!(classify_command_kind(0x1000_005B), ("swing", Some("High"))); // SlashHigh
+        assert_eq!(classify_command_kind(0x1000_0058), ("swing", Some("Medium"))); // ThrustMed
+        assert_eq!(classify_command_kind(0x1000_0078), ("swing", None)); // MagicPowerUp10
+        assert_eq!(classify_command_kind(0x1300_004C), ("swing", None)); // Cheer (emote one-shot)
+        assert_eq!(classify_command_kind(0x4000_001E), ("swing", None)); // AimLevel
+        assert_eq!(classify_command_kind(0x4000_002A), ("swing", None)); // AimLow90
+    }
 }
 
 /// Pure-Rust core of the swing classifier. Builds the outer link key per
