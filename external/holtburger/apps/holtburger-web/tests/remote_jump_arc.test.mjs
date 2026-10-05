@@ -130,7 +130,7 @@ test("jump detection and the wire contact bit", () => {
   assert.equal(decodeWireContact((WIRE_FLAGS_PRESENT | 0x01) >>> 0), false, "airborne frame");
   assert.equal(decodeWireContact(0), null, "stale pkg: unknown");
   assert.equal(decodeWireContact(undefined), null);
-  assert.equal(readRemoteJumpArcFlag(""), true, "default on");
+  assert.equal(readRemoteJumpArcFlag(""), false, "opt-in until the arc lives in the Rust body");
   assert.equal(readRemoteJumpArcFlag("?remoteJumpArc=off"), false);
   assert.equal(readRemoteJumpArcFlag("?remoteJumpArc=on"), true);
 });

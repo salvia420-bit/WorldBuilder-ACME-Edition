@@ -39,18 +39,21 @@ import * as THREE from "three";
 import { Pass } from "postprocessing";
 import { withLogDepthVertex, withLogDepthFragment } from "./shader_logdepth.js";
 
-// `?sealLogDepth` (DEFAULT ON since 2026-10-05; `?sealLogDepth=off` escape) —
-// log-depth encoding for the SEAL material (see makeSealMaterial). Default-on
-// because it is a correctness fix against the renderer's OWN depth space and is
-// the identical shader_logdepth.js patch (three r184's logdepthbuf chunks) that
-// portal_space / ground_fog / terrain_{dirt,sand} ship unconditionally. `=off`
-// restores the pre-fix perspective-depth seal byte-for-byte for A/B.
+// `?sealLogDepth` (opt-in, `?sealLogDepth=on`) — log-depth encoding for the
+// SEAL material (see makeSealMaterial). The encoding itself is three r184's
+// logdepthbuf chunks (shader_logdepth.js), but a CORRECT seal makes the depth
+// wall live for the first time, and the player-landblock outdoor content that
+// cells.js relayers into the cells pass (SPLIT_RELAYER_GROUPS) draws AFTER it —
+// so trees/statics/neighbour houses seen out a doorway from inside would fail
+// the wall. Retail PView::DrawCells (acclient.c:461450-461560) draws all
+// outdoor content before stamping the doorway. Back to opt-in (2026-10-05,
+// wave-1 critic) until the draw order matches retail.
 export function sealLogDepthEnabled() {
   try {
-    if (typeof window === "undefined" || !window.location) return true;
-    return new URLSearchParams(window.location.search || "").get("sealLogDepth") !== "off";
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search || "").get("sealLogDepth") === "on";
   } catch (_) {
-    return true;
+    return false;
   }
 }
 

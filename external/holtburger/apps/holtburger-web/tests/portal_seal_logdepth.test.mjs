@@ -31,14 +31,15 @@ const LOG_WRITE = /gl_FragDepth\s*=\s*vIsPerspective\s*==\s*0\.0\s*\?\s*gl_FragC
 
 console.log("portal seal log-depth");
 
-t("node / no window: sealLogDepthEnabled() defaults ON", () => {
+t("node / no window: sealLogDepthEnabled() defaults OFF (opt-in since the wave-1 critic)", () => {
   delete globalThis.window;
-  assert.equal(sealLogDepthEnabled(), true);
+  assert.equal(sealLogDepthEnabled(), false);
 });
 
-t("default seal writes the three r184 log gl_FragDepth, first in main()", () => {
-  delete globalThis.window;
+t("?sealLogDepth=on seal writes the three r184 log gl_FragDepth, first in main()", () => {
+  globalThis.window = { location: { search: "?sealLogDepth=on" } };
   const p = new PortalPunchPass(null, cam, "seal");
+  delete globalThis.window;
   const fs = p._punchMat.fragmentShader;
   const vs = p._punchMat.vertexShader;
   assert.match(fs, LOG_WRITE, "fragment must write log depth");
@@ -59,18 +60,18 @@ t("default seal writes the three r184 log gl_FragDepth, first in main()", () => 
     "must stay a non-raw ShaderMaterial (Raw gets no USE_LOGARITHMIC_DEPTH_BUFFER define)");
 });
 
-t("bare URL in a browser arms it; other values arm it; only =off disarms", () => {
-  for (const q of ["", "?sealLogDepth=on", "?sealLogDepth=1", "?foo=bar"]) {
+t("only ?sealLogDepth=on arms it; bare URL and other values leave it off", () => {
+  for (const q of ["", "?sealLogDepth=off", "?sealLogDepth=1", "?foo=bar"]) {
     globalThis.window = { location: { search: q } };
-    assert.equal(sealLogDepthEnabled(), true, `search ${JSON.stringify(q)}`);
+    assert.equal(sealLogDepthEnabled(), false, `search ${JSON.stringify(q)}`);
   }
-  globalThis.window = { location: { search: "?sealLogDepth=off" } };
-  assert.equal(sealLogDepthEnabled(), false);
+  globalThis.window = { location: { search: "?sealLogDepth=on" } };
+  assert.equal(sealLogDepthEnabled(), true);
   delete globalThis.window;
 });
 
-t("?sealLogDepth=off escape: the pre-fix seal (no gl_FragDepth write)", () => {
-  globalThis.window = { location: { search: "?sealLogDepth=off" } };
+t("default seal: the pre-fix perspective seal (no gl_FragDepth write)", () => {
+  delete globalThis.window;
   const p = new PortalPunchPass(null, cam, "seal");
   delete globalThis.window;
   assert.doesNotMatch(p._punchMat.fragmentShader, /gl_FragDepth/);

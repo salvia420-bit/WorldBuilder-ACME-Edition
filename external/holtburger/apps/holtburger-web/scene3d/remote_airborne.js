@@ -72,13 +72,17 @@ export const WIRE_FLAGS_PRESENT = 0x80000000;
 /** `UpdatePositionFlag::IS_GROUNDED` — ACE PositionPack.BuildFlags (OnWalkable). */
 export const WIRE_FLAG_IS_GROUNDED = 0x04;
 
-/** `?remoteJumpArc` reader — default ON, only `=off` disables. */
+/** `?remoteJumpArc` reader — opt-in (`=on`) since the wave-1 critic: with the
+ *  JS-only arc the wasm body stays at the take-off point (no root motion while
+ *  `!contact`), so a running jump likely snaps back on landing, and the remote
+ *  arms-up pose is never cleared. Default flips back once the arc lives in the
+ *  Rust body (one body, as retail). */
 export function readRemoteJumpArcFlag(search) {
   try {
     const v = new URLSearchParams(search ?? "").get("remoteJumpArc");
-    return v == null || v.toLowerCase() !== "off";
+    return v != null && v.toLowerCase() === "on";
   } catch (_) {
-    return true;
+    return false;
   }
 }
 

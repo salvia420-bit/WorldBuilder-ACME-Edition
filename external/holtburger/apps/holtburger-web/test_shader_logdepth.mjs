@@ -15,7 +15,7 @@
 //   L4  SCAN: every `new THREE.ShaderMaterial(` / `RawShaderMaterial(` in
 //       scene3d/*.js either has depthTest false, carries log-depth handling, or
 //       is ALLOWLISTED below with a reason.
-//   L5  the portal SEAL fix is DEFAULT ON (2026-10-05) with a `?sealLogDepth=off` escape.
+//   L5  the portal SEAL fix is opt-in (`?sealLogDepth=on`; default-on reverted 2026-10-05, wave-1 critic).
 //
 // Run: node test_shader_logdepth.mjs
 
@@ -156,7 +156,7 @@ console.log("\n-- L4 scan scene3d/*.js -----------------------------------------
 // file). Every entry needs a reason; a stale entry (no such site, or the site
 // is now compliant) fails so the list cannot rot.
 const ALLOW = {
-  "portal_punch.js#1": "SEAL — routes through withLogDepthVertex/Fragment behind the ?sealLogDepth=off escape (default ON); the conditional is invisible to this scan, L5 + tests/portal_seal_logdepth.test.mjs pin it",
+  "portal_punch.js#1": "SEAL — routes through withLogDepthVertex/Fragment behind the ?sealLogDepth=on opt-in (default OFF); the conditional is invisible to this scan, L5 + tests/portal_seal_logdepth.test.mjs pin it",
   "portal_punch.js#2": "PUNCH — depthFunc Always + constant gl_FragDepth FAR_DEPTH: endpoint-preserving under both encodings",
   "portal_stencil.js#1": "RESET — depthFunc Always + constant gl_FragDepth FAR_DEPTH: endpoint-preserving under both encodings",
   "terrain_batch.js#1": "clones terrain.js's TERRAIN_*_GLSL (glsl.vertexShader/fragmentShader), which carries the hand-rolled chunk",
@@ -210,19 +210,19 @@ for (const key of Object.keys(ALLOW)) {
 // ---------------------------------------------------------------------------
 console.log("\n-- L5 the SEAL gate -----------------------------------------------");
 const punchSrc = readFileSync(path.join(SCENE3D, "portal_punch.js"), "utf8");
-check("sealLogDepthEnabled reads ?sealLogDepth as a !== \"off\" opt-out (default ON)",
-  /get\("sealLogDepth"\)\s*!==\s*"off"/.test(punchSrc));
+check("sealLogDepthEnabled reads ?sealLogDepth as an === \"on\" opt-in (default OFF)",
+  /get\("sealLogDepth"\)\s*===\s*"on"/.test(punchSrc));
 check("makeSealMaterial defaults its logDepth arm from the flag",
   /function makeSealMaterial\(logDepth = sealLogDepthEnabled\(\)\)/.test(punchSrc));
 check("the seal routes BOTH stages through the helper when armed",
   /logDepth \? withLogDepthVertex\(vertexShader\) : vertexShader/.test(punchSrc) &&
   /logDepth \? withLogDepthFragment\(fragmentShader\) : fragmentShader/.test(punchSrc));
 const { sealLogDepthEnabled } = await import("./scene3d/portal_punch.js");
-check("default ON with no window (node)", sealLogDepthEnabled() === true);
+check("default OFF with no window (node)", sealLogDepthEnabled() === false);
 globalThis.window = { location: { search: "" } };
-check("bare URL arms it", sealLogDepthEnabled() === true);
-globalThis.window = { location: { search: "?sealLogDepth=off" } };
-check("?sealLogDepth=off is the escape", sealLogDepthEnabled() === false);
+check("bare URL leaves it off", sealLogDepthEnabled() === false);
+globalThis.window = { location: { search: "?sealLogDepth=on" } };
+check("?sealLogDepth=on arms it", sealLogDepthEnabled() === true);
 delete globalThis.window;
 const doc = readFileSync(path.join(HERE, "docs", "url-flags.md"), "utf8");
 check("docs/url-flags.md documents sealLogDepth as default-on (§2 row) and no longer lists it as default-OFF (§0)",

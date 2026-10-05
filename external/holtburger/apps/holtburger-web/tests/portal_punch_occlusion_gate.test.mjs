@@ -112,10 +112,13 @@ t("INVARIANT 3 — the SEAL pass never gates, even when asked to", () => {
   // The seal runs after PView::DrawCells' Z-wipe (acclient.c:461484), so there
   // is no world depth left to test against; it writes TRUE depth, not far Z.
   assert.equal(p._punchMat.name, "portal-seal");
-  // Since 2026-10-05 (?sealLogDepth default-on) that true depth is written in
-  // the buffer's LOG encoding — never the punch's constant far value.
+  // Never the punch's constant far value. With ?sealLogDepth=on (opt-in) the
+  // true depth is written in the buffer's LOG encoding.
   assert.doesNotMatch(p._punchMat.fragmentShader, /gl_FragDepth\s*=\s*0\.9/);
-  assert.match(p._punchMat.fragmentShader, /gl_FragDepth = vIsPerspective == 0\.0 \? gl_FragCoord\.z : log2\( vFragDepth \)/);
+  globalThis.window = { location: { search: "?sealLogDepth=on" } };
+  const q = new PortalPunchPass(null, cam, "seal", { stencil: true });
+  delete globalThis.window;
+  assert.match(q._punchMat.fragmentShader, /gl_FragDepth = vIsPerspective == 0\.0 \? gl_FragCoord\.z : log2\( vFragDepth \)/);
 });
 
 t("an armed pass with no apertures still reports hasApertures false", () => {
