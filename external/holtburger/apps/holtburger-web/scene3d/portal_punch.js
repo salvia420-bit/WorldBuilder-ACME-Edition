@@ -39,15 +39,18 @@ import * as THREE from "three";
 import { Pass } from "postprocessing";
 import { withLogDepthVertex, withLogDepthFragment } from "./shader_logdepth.js";
 
-// `?sealLogDepth=on` (DEFAULT OFF, 2026-10-05) — opt-in log-depth encoding for
-// the SEAL material (see makeSealMaterial). `=== "on"` only: a bare URL keeps
-// the shipped seal byte-identical until a real-GPU indoor eye-test signs off.
+// `?sealLogDepth` (DEFAULT ON since 2026-10-05; `?sealLogDepth=off` escape) —
+// log-depth encoding for the SEAL material (see makeSealMaterial). Default-on
+// because it is a correctness fix against the renderer's OWN depth space and is
+// the identical shader_logdepth.js patch (three r184's logdepthbuf chunks) that
+// portal_space / ground_fog / terrain_{dirt,sand} ship unconditionally. `=off`
+// restores the pre-fix perspective-depth seal byte-for-byte for A/B.
 export function sealLogDepthEnabled() {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search || "").get("sealLogDepth") === "on";
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search || "").get("sealLogDepth") !== "off";
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -182,21 +185,25 @@ function makeMarkMaterial() {
 // particles gone" ordering: both are layer-0 world-pass content whose depth the
 // wipe destroyed. The seal restores exactly the depth retail restores.
 //
-// LOG-DEPTH (2026-10-05, `?sealLogDepth=on`, default OFF): the renderer runs
-// `logarithmicDepthBuffer`, so every built-in material writes a LOG
-// gl_FragDepth while this seal (no chunk) writes PERSPECTIVE gl_FragCoord.z —
-// a different encoding, so the "true depth" wall it stamps is at the wrong
-// depth for everything that later tests against it. With the flag on the seal
-// writes the same log encoding (shader_logdepth.js). Opt-in because it changes
-// indoor rendering and needs a real-GPU look before it can ship default-on.
+// LOG-DEPTH (2026-10-05, `?sealLogDepth`, DEFAULT ON, `=off` escape): the
+// renderer runs `logarithmicDepthBuffer`, so every built-in material writes a
+// LOG gl_FragDepth, while a seal without the chunk writes PERSPECTIVE
+// gl_FragCoord.z — a different encoding, so the "true depth" wall it stamps is
+// at the wrong depth for everything that later tests against it (interior
+// cells, interior particles). Armed, the seal writes the same log encoding via
+// shader_logdepth.js: vFragDepth = 1 + clip.w in the vertex stage and
+// gl_FragDepth = log2(vFragDepth) * logDepthBufFC * 0.5 in the fragment stage,
+// guarded on USE_LOGARITHMIC_DEPTH_BUFFER (three defines it for every non-raw
+// ShaderMaterial and uploads logDepthBufFC for every program). Still a depth
+// WALL at the doorway's true depth — just in the buffer's own encoding.
 function makeSealMaterial(logDepth = sealLogDepthEnabled()) {
   const vertexShader = /* glsl */ `
       void main() {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }`;
-  // Flag OFF: NO gl_FragDepth write — the rasterizer's interpolated depth IS
-  // the polygon's true (perspective) depth, which is what retail's maxZ2 path
-  // writes.
+  // Flag OFF (escape): NO gl_FragDepth write — the rasterizer's interpolated
+  // PERSPECTIVE depth, i.e. the pre-2026-10-05 seal (wrong space vs the log
+  // buffer). Armed: the helper prepends the log gl_FragDepth write.
   const fragmentShader = /* glsl */ `
       precision highp float;
       out vec4 _c;
