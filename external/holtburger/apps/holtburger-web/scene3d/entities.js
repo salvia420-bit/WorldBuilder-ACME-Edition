@@ -12464,7 +12464,9 @@ export class EntityManager {
         const pos = rig?.position ?? { x: 0, y: 0, z: 0 };
         const a4t = acToThree(pos.x, pos.y, pos.z);
         audioMgr
-          .play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0) })
+          // Plain SoundHook (ht 1) applies the effect slider twice, as retail
+          // PlaySoundA(gid, obj) → GetAttenuation (acclient.c:342190, 383481, 383092-383095).
+          .play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0), sliderTwice: ht === 1 })
           .catch(() => {});
       }, delayMs);
       return;
@@ -12615,7 +12617,8 @@ export class EntityManager {
               // index.js updateFollowingPositions and must apply the same
               // transform there to stay corrected after frame 0.
               const a4t = acToThree(pos.x, pos.y, pos.z);
-              audioMgr.play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0) }).catch(() => {});
+              // SoundHook (1) applies the effect slider twice (acclient.c:342190, 383481, 383092-383095).
+              audioMgr.play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0), sliderTwice: e.hookType === 1 }).catch(() => {});
             }, delayMs);
             timeoutIds.push(tid);
           }
@@ -15023,7 +15026,8 @@ export class EntityManager {
       // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
       const sndT = acToThree(pos.x, pos.y, pos.z);
       audioMgr
-        .play(waveId, { x: sndT[0], y: sndT[1], z: sndT[2] })
+        // Retail applies the effect slider twice on SoundHook (acclient.c:342190, 383481, 383092-383095).
+        .play(waveId, { x: sndT[0], y: sndT[1], z: sndT[2] }, { sliderTwice: true })
         .catch(() => {});
       this._soundHookFires = (this._soundHookFires | 0) + 1;
       return;

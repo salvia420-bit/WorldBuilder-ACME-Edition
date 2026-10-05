@@ -300,6 +300,7 @@ const TIER5 = [
   { tier: 5, flag: "audio_ui_click", file: "tests/audio_ui_click.test.mjs" },
   { tier: 5, flag: "audio_portal_sounds", file: "tests/audio_portal_sounds.test.mjs" },
   { tier: 5, flag: "audio_volume_zero", file: "tests/audio_volume_zero.test.mjs" },
+  { tier: 5, flag: "audio_soundhook_slider_twice", file: "tests/audio_soundhook_slider_twice.test.mjs" },
   { tier: 5, flag: "audio_ambient_model", file: "tests/audio_ambient_model.test.mjs" },
   { tier: 5, flag: "audio_manager_retail+audioWhenInactive", file: "tests/audio_manager_retail.test.mjs" },
   { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
