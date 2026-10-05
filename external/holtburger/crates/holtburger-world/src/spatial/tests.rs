@@ -3792,7 +3792,7 @@ mod remote_pose_driver {
         let start = arc_pose(50.0, 50.0, ARC_TERRAIN);
         let (mut scene, body_id) = arc_scene(start);
         let _ = scene.take_remote_stepped_poses();
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 4.0, 5.0));
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 4.0, 5.0), true);
         assert!(scene.remote_arc(GUID).is_some(), "an upward VectorUpdate leaves the ground");
 
         scene.step_remote_position_managers(0.05);
@@ -3811,21 +3811,6 @@ mod remote_pose_driver {
         assert!((landed.coords.z - ARC_TERRAIN).abs() < 1e-4, "on the terrain, no sink: {}", landed.coords.z);
         let moved = landed.global_coords() - start.global_coords();
         assert!((moved.y - 4.0 * t).abs() < 0.25, "carried by its velocity: {} m", moved.y);
-    }
-
-    /// Issue 2: the airborne pose is driven by the body's own leave-ground
-    /// and hit-ground (retail LeaveGround :344457 / HitGround :344429), so it
-    /// is cleared on landing (ACE sends no landing VectorUpdate).
-    #[test]
-    fn remote_airborne_edges_follow_the_body() {
-        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, ARC_TERRAIN));
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 3.0));
-        assert_eq!(scene.take_remote_airborne_changes(), vec![(GUID, true)]);
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 3.0));
-        assert!(scene.take_remote_airborne_changes().is_empty(), "already airborne: no second edge");
-        fly(&mut scene, body_id, 0.05);
-        assert_eq!(scene.take_remote_airborne_changes(), vec![(GUID, false)], "hit-ground clears it");
-        assert_eq!(scene.body(body_id).unwrap().remote_velocity, Vector3::zero());
     }
 
     /// Issue 1: a running remote jumps and lands; the landing correction
@@ -3867,7 +3852,7 @@ mod remote_pose_driver {
             None,
         );
         assert_eq!(scene.body(body_id).unwrap().pose, takeoff, "DoVectorUpdate never relocates");
-        scene.remote_vector_update(GUID, jump_v);
+        scene.remote_vector_update(GUID, jump_v, true);
 
         // A mid-air wire frame is ignored (MoveOrTeleport !contact, :323481).
         let mut mid_air = takeoff;
@@ -3891,23 +3876,183 @@ mod remote_pose_driver {
         assert!(along(&after) > 2.0, "nowhere near the take-off");
     }
 
-    /// Issue 3 stopgap: a take-off from a structure (more than 0.3 m above
-    /// the terrain) lands at the take-off height, not on the terrain under
-    /// the deck; root motion on the structure keeps its height.
+    /// Issue 2: the airborne pose is driven by the body's own leave-ground
+    /// and hit-ground (retail LeaveGround :344457 / HitGround :344429), so it
+    /// is cleared on landing (ACE sends no landing VectorUpdate). Wave 3: a
+    /// straight-down landing keeps only the elastic bounce of its normal
+    /// component (handle_all_collisions :321865-321886), which the next
+    /// ground slice's friction projection removes (calc_friction :316091).
     #[test]
-    fn structure_takeoff_lands_at_takeoff_height() {
+    fn remote_airborne_edges_follow_the_body() {
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, ARC_TERRAIN));
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 3.0), true);
+        assert_eq!(scene.take_remote_airborne_changes(), vec![(GUID, true)]);
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 3.0), true);
+        assert!(scene.take_remote_airborne_changes().is_empty(), "already airborne: no second edge");
+        fly(&mut scene, body_id, 0.05);
+        assert_eq!(scene.take_remote_airborne_changes(), vec![(GUID, false)], "hit-ground clears it");
+        let v = scene.body(body_id).unwrap().remote_velocity;
+        assert_eq!((v.x, v.y), (0.0, 0.0), "no tangential velocity to slide");
+        assert!(v.z > 0.0 && v.z < 0.25, "the 5% elastic bounce of the normal component: {}", v.z);
+        scene.step_remote_position_managers(0.05);
+        assert_eq!(scene.body(body_id).unwrap().remote_velocity, Vector3::zero());
+        assert!((scene.body(body_id).unwrap().pose.coords.z - ARC_TERRAIN).abs() < 1e-4);
+    }
+
+    /// Wave 3, critic issue 2: a running jump does not stop dead on landing.
+    /// The tangential velocity survives the bounce and decays by
+    /// pow(1 - friction, q) per slice (calc_friction :316151, friction 0.95
+    /// :40377) until it drops under 0.25 m/s (:317750-317755).
+    #[test]
+    fn running_jump_slides_out_under_retail_friction() {
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, ARC_TERRAIN));
+        scene.remote_vector_update(GUID, Vector3::new(4.0, 0.0, 4.0), true);
+        fly(&mut scene, body_id, 0.05);
+        let landed = scene.body(body_id).unwrap().pose;
+        let v = scene.body(body_id).unwrap().remote_velocity;
+        assert!((v.x - 4.0).abs() < 1e-4, "tangential velocity kept: {}", v.x);
+
+        scene.step_remote_position_managers(0.05);
+        let k = 0.05_f32.powf(0.05);
+        let after = scene.body(body_id).unwrap();
+        assert!((after.remote_velocity.x - 4.0 * k).abs() < 1e-3, "{}", after.remote_velocity.x);
+        let first = after.pose.global_coords().x - landed.global_coords().x;
+        assert!((first - 4.0 * k * 0.05).abs() < 1e-3, "slid {first} m in the first slice");
+        assert!((after.pose.coords.z - ARC_TERRAIN).abs() < 1e-4, "on the ground");
+
+        let mut slices = 1;
+        while scene.body(body_id).unwrap().remote_velocity != Vector3::zero() {
+            scene.step_remote_position_managers(0.05);
+            slices += 1;
+            assert!(slices < 100, "the slide never stopped");
+        }
+        let total = scene.body(body_id).unwrap().pose.global_coords().x - landed.global_coords().x;
+        assert!(total > 1.0 && total < 1.5, "slid {total} m");
+        assert!(slices <= 22, "stopped within about a second ({slices} slices)");
+    }
+
+    /// Wave 3, critic issue 1: a hop up a slope meets the rising terrain
+    /// while still climbing — the old `v.z <= 0` gate let it dip into the
+    /// hillside until the apex.
+    #[test]
+    fn uphill_hop_lands_on_rising_terrain_while_climbing() {
+        let start_g = Vector3::new(192.0 + 50.0, 384.0 + 50.0, 0.0);
+        // A plane rising 0.25 m per metre along x AND y (symmetric, so the
+        // vertex layout does not matter).
+        let mut heights = [0.0_f32; 81];
+        for ix in 0..9 {
+            for iy in 0..9 {
+                heights[ix * 9 + iy] = 12.0 + 6.0 * ix as f32 + 6.0 * iy as f32;
+            }
+        }
+        let terrain_at = |gx: f32, gy: f32| 12.0 + 0.25 * (gx - 192.0) + 0.25 * (gy - 384.0);
+        let start = arc_pose(50.0, 50.0, terrain_at(start_g.x, start_g.y));
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.populate_terrain_heights(0x0102_0000, heights);
+        scene.remote_vector_update(GUID, Vector3::new(4.0, 0.0, 0.5), true);
+        for _ in 0..20 {
+            scene.step_remote_position_managers(0.05);
+            let p = scene.body(body_id).unwrap().pose;
+            let g = p.global_coords();
+            assert!(p.coords.z >= terrain_at(g.x, g.y) - 1e-3, "inside the hillside at x={}", g.x);
+            if scene.remote_arc(GUID).is_none() {
+                return;
+            }
+        }
+        panic!("never landed");
+    }
+
+    fn roof(scene: &mut SpatialScene, cx: f32, cy: f32, half: f32, z: f32) {
+        use holtburger_common::Triangle;
+        let (x0, x1, y0, y1) = (cx - half, cx + half, cy - half, cy + half);
+        scene.insert_building_triangle(
+            0x0102_0000,
+            Triangle::new(Vector3::new(x0, y0, z), Vector3::new(x1, y0, z), Vector3::new(x1, y1, z)),
+        );
+        scene.insert_building_triangle(
+            0x0102_0000,
+            Triangle::new(Vector3::new(x0, y0, z), Vector3::new(x1, y1, z), Vector3::new(x0, y1, z)),
+        );
+    }
+
+    /// Wave 3, critic issue 1: building floors (roofs, ledges) catch an arc;
+    /// a deck the body passes UNDER does not.
+    #[test]
+    fn jump_lands_on_a_building_floor() {
         let deck = ARC_TERRAIN + 3.0;
         let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, deck));
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 1.0, 3.0));
+        roof(&mut scene, 242.0, 434.0, 6.0, deck);
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 1.0, 3.0), true);
         fly(&mut scene, body_id, 0.05);
-        assert!((scene.body(body_id).unwrap().pose.coords.z - deck).abs() < 1e-4);
+        assert!((scene.body(body_id).unwrap().pose.coords.z - deck).abs() < 1e-4, "on the roof");
 
+        // From the ground beneath a deck 1.5 m up: the jump apex (0.46 m)
+        // stays under it and the body lands back on the terrain.
+        let (mut low, low_id) = arc_scene(arc_pose(50.0, 50.0, ARC_TERRAIN));
+        roof(&mut low, 242.0, 434.0, 6.0, ARC_TERRAIN + 1.5);
+        low.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 3.0), true);
+        fly(&mut low, low_id, 0.05);
+        assert!((low.body(low_id).unwrap().pose.coords.z - ARC_TERRAIN).abs() < 1e-4);
+    }
+
+    /// Wave 3, critic issue 1: running off a building ledge leaves the ground
+    /// (retail LeaveGround with the state velocity) and falls to the terrain;
+    /// on a floor we cannot sample (a static dock) the height is kept.
+    #[test]
+    fn running_off_a_ledge_falls_and_an_unknown_deck_holds() {
+        let deck = ARC_TERRAIN + 3.0;
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, deck));
+        roof(&mut scene, 242.0, 434.0, 1.0, deck);
         scene
             .body_mut(body_id)
             .unwrap()
             .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
-        scene.step_remote_position_managers(0.1);
-        assert!((scene.body(body_id).unwrap().pose.coords.z - deck).abs() < 1e-4, "stays on the deck");
+        let mut left = false;
+        for _ in 0..10 {
+            scene.step_remote_position_managers(0.1);
+            if scene.remote_arc(GUID).is_some() {
+                left = true;
+                break;
+            }
+        }
+        assert!(left, "ran off the 2 m roof");
+        assert_eq!(scene.take_remote_airborne_changes(), vec![(GUID, true)]);
+        fly(&mut scene, body_id, 0.05);
+        assert!((scene.body(body_id).unwrap().pose.coords.z - ARC_TERRAIN).abs() < 1e-4, "fell to the terrain");
+
+        let (mut dock, dock_id) = arc_scene(arc_pose(50.0, 50.0, deck));
+        dock.body_mut(dock_id)
+            .unwrap()
+            .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
+        dock.step_remote_position_managers(0.1);
+        assert!((dock.body(dock_id).unwrap().pose.coords.z - deck).abs() < 1e-4, "stays on the dock");
+        assert!(dock.remote_arc(GUID).is_none());
+    }
+
+    /// Wave 3, critic issue 5: only a GRAVITY body arcs (calc_acceleration
+    /// :317787); a relocating ctx-less reconcile ends an arc.
+    #[test]
+    fn gravity_gate_and_relocation_end_the_arc() {
+        let start = arc_pose(50.0, 50.0, ARC_TERRAIN);
+        let (mut scene, body_id) = arc_scene(start);
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 5.0), false);
+        assert!(scene.remote_arc(GUID).is_none(), "no GRAVITY_PS: no arc");
+
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 5.0), true);
+        scene.step_remote_position_managers(0.05);
+        let elsewhere = arc_pose(80.0, 50.0, ARC_TERRAIN);
+        scene.reconcile_authoritative_body_with_remote(
+            body_id,
+            elsewhere,
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            Instant::now(),
+            None,
+        );
+        assert!(scene.remote_arc(GUID).is_none(), "relocated: the arc is over");
+        assert_eq!(scene.body(body_id).unwrap().pose, elsewhere);
+        assert_eq!(scene.body(body_id).unwrap().remote_velocity, Vector3::zero());
     }
 
     /// Indoors there is no terrain sampler: the arc lands at the take-off
@@ -3916,7 +4061,7 @@ mod remote_pose_driver {
     fn indoor_remote_arc_lands_at_takeoff_height() {
         let start = WorldPosition { coords: Vector3::new(10.0, 10.0, 6.0), ..indoor_pose_at(10.0, 10.0) };
         let (mut scene, body_id) = scene_with_remote_body(start);
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 4.0));
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 4.0), true);
         fly(&mut scene, body_id, 0.05);
         assert!((scene.body(body_id).unwrap().pose.coords.z - 6.0).abs() < 1e-4);
     }
@@ -3927,7 +4072,7 @@ mod remote_pose_driver {
     fn small_hops_hard_sets_and_the_escape_hatch() {
         let start = arc_pose(50.0, 50.0, ARC_TERRAIN);
         let (mut scene, body_id) = arc_scene(start);
-        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 0.5));
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 0.5), true);
         assert!(scene.remote_arc(GUID).is_some(), "a 0.5 m/s hop leaves the ground");
         let snap = arc_pose(60.0, 50.0, ARC_TERRAIN);
         reconcile(&mut scene, body_id, snap, AuthoritativeBodySync::Reset, ctx(Some(true), Some(start)));
@@ -3936,7 +4081,7 @@ mod remote_pose_driver {
 
         let (mut off, _) = arc_scene(start);
         off.set_remote_jump_arc_enabled(false);
-        off.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 5.0));
+        off.remote_vector_update(GUID, Vector3::new(0.0, 0.0, 5.0), true);
         assert!(off.remote_arc(GUID).is_none(), "?remoteJumpArc=off");
         assert!(off.take_remote_airborne_changes().is_empty());
     }

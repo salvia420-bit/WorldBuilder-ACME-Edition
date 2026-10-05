@@ -312,11 +312,6 @@ pub struct SpatialBody {
 pub struct RemoteArc {
     /// Height the body left the ground at.
     pub takeoff_z: f32,
-    /// Stopgap floor for a take-off from a structure (bridge, dock, roof):
-    /// the take-off height when it was more than
-    /// `REMOTE_ARC_STRUCTURE_FLOOR_M` above the terrain. Remotes run no
-    /// transition sweep here, so this is the only non-terrain floor known.
-    pub structure_floor: Option<f32>,
     /// Seconds spent airborne (safety cap).
     pub elapsed: f32,
 }

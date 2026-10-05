@@ -30,7 +30,7 @@ test("the remote VectorUpdate feeds the wasm body's arc (DoVectorUpdate → set_
   const rs = src("../src/session/messages/position.rs");
   const arm = rs.slice(rs.indexOf("GameMessage::VectorUpdate(data) => {"));
   assert.match(arm.slice(0, 6000), /w\.scene\.remote_jump_arc_active\(\)/);
-  assert.match(arm.slice(0, 6000), /w\.scene\.remote_vector_update\(data\.guid, wire\)/);
+  assert.match(arm.slice(0, 6000), /w\.scene\.remote_vector_update\(data\.guid, wire, gravity\)/);
   // The legacy |vz| edge only runs when the body does NOT own the arc.
   assert.match(arm.slice(0, 6000), /if !arc_owned && remote_guid != local_guid/);
 });
@@ -56,8 +56,11 @@ test("the scene flies the arc in step_remote_position_managers (one body)", () =
   assert.match(scene, /const REMOTE_ARC_GRAVITY: f32 = -9\.8;/);
   assert.match(scene, /const REMOTE_ARC_MAX_VELOCITY: f32 = 50\.0;/);
   const step = scene.slice(scene.indexOf("pub fn step_remote_position_managers("));
-  assert.match(step.slice(0, 12000), /step_remote_arc\(self, &arc, body\.pose, body\.remote_velocity, quantum\)/);
-  assert.match(step.slice(0, 12000), /\|\| body\.remote_arc\.is_some\(\)/, "no root motion while airborne");
+  assert.match(step.slice(0, 16000), /step_remote_arc\(self, &arc, body\.pose, body\.remote_velocity, quantum\)/);
+  assert.match(step.slice(0, 16000), /if body\.remote_arc\.is_some\(\) \|\| body\.pose\.is_indoors\(\)/, "no root motion while airborne");
+  // Wave 3: retail landing bounce + friction slide constants.
+  assert.match(scene, /const REMOTE_FRICTION: f32 = 0\.95;/);
+  assert.match(scene, /const REMOTE_ELASTICITY: f32 = 0\.05;/);
 });
 
 test("the JS-only arc is gone (it was the second body that snapped back)", () => {

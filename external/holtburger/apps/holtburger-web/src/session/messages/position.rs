@@ -1446,12 +1446,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // (DoVectorUpdate :143459-143470); it stored the
                     // velocity only when it accepted the frame.
                     let wire = data.velocity.finite_or_zero();
+                    // `calc_acceleration` gravity needs GRAVITY_PS (0x400,
+                    // acclient.c:317787) — the arc only flies for such a body.
                     let accepted = w
                         .entities
                         .get(data.guid)
-                        .is_some_and(|e| e.velocity == wire);
-                    if accepted {
-                        w.scene.remote_vector_update(data.guid, wire);
+                        .filter(|e| e.velocity == wire)
+                        .map(|e| {
+                            e.physics_state
+                                .contains(holtburger_common::properties::PhysicsState::GRAVITY)
+                        });
+                    if let Some(gravity) = accepted {
+                        w.scene.remote_vector_update(data.guid, wire, gravity);
                     }
                     true
                 });
