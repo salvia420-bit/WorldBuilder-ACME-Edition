@@ -23,6 +23,8 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+import appSource from "./harness/app_source.cjs";
+import wasmSource from "./harness/wasm_source.cjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -215,8 +217,8 @@ function populateAll(idx, guid) {
 // =====================================================================
 console.log("PART 2 — static source wiring");
 
-const libRs = readFileSync(joinPath(__dirname, "src", "lib.rs"), "utf8");
-const indexHtml = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+const libRs = wasmSource.readWasmSource();
+const indexHtml = appSource.readAppSource();
 
 // The Rust field names behind the nine JS-facing store names.
 const RUST_FIELDS = [

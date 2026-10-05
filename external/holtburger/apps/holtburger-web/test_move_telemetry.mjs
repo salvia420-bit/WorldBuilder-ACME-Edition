@@ -15,6 +15,8 @@
 //   node test_move_telemetry.mjs
 
 import { readFileSync } from "node:fs";
+import appSource from "./harness/app_source.cjs";
+import wasmSource from "./harness/wasm_source.cjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -29,7 +31,7 @@ function check(name, ok, detail) {
   else passed += 1;
 }
 
-const libSrc = readFileSync(path.join(here, "src", "lib.rs"), "utf8");
+const libSrc = wasmSource.readWasmSource();
 const systemSrc = readFileSync(
   path.join(here, "..", "..", "crates", "holtburger-core", "src", "client", "movement", "system.rs"),
   "utf8",
@@ -38,7 +40,7 @@ const handleSrc = readFileSync(
   path.join(here, "..", "..", "crates", "holtburger-core", "src", "client", "movement", "handle.rs"),
   "utf8",
 );
-const indexSrc = readFileSync(path.join(here, "index.html"), "utf8");
+const indexSrc = appSource.readAppSource();
 const docsSrc = readFileSync(path.join(here, "docs", "url-flags.md"), "utf8");
 
 console.log("PART 1 — flag parse is a strict `=1` opt-in (default OFF)");
