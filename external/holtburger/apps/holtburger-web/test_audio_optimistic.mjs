@@ -19,6 +19,7 @@ const check = (name, cond, detail = "") => {
 // ── fake DOM/window ─────────────────────────────────────────────────────
 const listeners = new Map();
 const played = [];
+const resolved = [];
 let entityMap = new Map();
 
 const makeInst = (guid, x, y, z) => ({
@@ -35,8 +36,13 @@ globalThis.window = {
   },
   getLocalPlayerGuid: () => 0x5000_0001,
   liveScene3d: {
-    audioManager: { play: async (waveDid, pos) => { played.push({ waveDid, pos: { ...pos } }); } },
-    soundTableCache: { resolveSound: (...a) => resolveSoundImpl(...a) },
+    audioManager: {
+      play: async (waveDid, pos, opts) => { played.push({ waveDid, pos: { ...pos }, opts }); },
+      // 2026-10-05 — UI_* cues go through retail PlaySoundFromCenter.
+      playFromCenter: async (waveDid, vol) => { played.push({ waveDid, center: true, vol }); return {}; },
+    },
+    soundTableCache: { resolveSound: (...a) => { resolved.push(a[0] >>> 0); return resolveSoundImpl(...a); } },
+    wasmExports: { resolveClientEnumDid: async (e, c) => (e === 0x10000003 && c === 7 ? 0x2000004B : 0) },
     get entityManager() { return { entityMap }; },
   },
 };
@@ -132,6 +138,42 @@ console.log("\n=== suppression claim is rolled back when nothing played ===");
   check("a later successful claim survives an earlier fire's rollback",
     shouldSuppressEcho(SOUND.RECEIVE, LPG) === true,
     "the earlier failure revoked the later cue's suppression");
+}
+
+console.log("\n=== retail parity (2026-10-05) ===");
+{
+  // Old code: raw AC-frame position (10,20,30) at gain volume*0.5 — the
+  // listener lives in the three.js frame, so the cue was mis-placed and
+  // silent away from the origin.
+  entityMap = new Map();
+  entityMap.set(LPG, makeInst(LPG, 10, 20, 30));
+  resolveSoundImpl = async () => ({ waveDid: 0x0A00_0005, volume: 0.4, probability: 1 });
+  played.length = 0;
+  await playOptimistic(SOUND.PICKUP, 0x1);
+  await tick();
+  check("action cue plays in the three.js frame (acToThree: x, z, -y)",
+    played.length === 1 && played[0].pos.x === 10 && played[0].pos.y === 30 && played[0].pos.z === -20,
+    JSON.stringify(played));
+  check("action cue gain = ACE wire default 1.0 (not row volume x 0.5)",
+    played[0]?.opts?.gain === 1.0, JSON.stringify(played[0]?.opts));
+  shouldSuppressEcho(SOUND.PICKUP, LPG);
+
+  resolveSoundImpl = async () => ({ waveDid: 0x0A00_0006, volume: 1, probability: 0 });
+  played.length = 0;
+  await playOptimistic(SOUND.DROP, 0x1);
+  await tick();
+  check("probability-0 row is silent and does not suppress the echo",
+    played.length === 0 && shouldSuppressEcho(SOUND.DROP, LPG) === false);
+
+  resolveSoundImpl = async () => ({ waveDid: 0x0A00_0007, volume: 0.7, probability: 1 });
+  played.length = 0; resolved.length = 0;
+  await playOptimistic(SOUND.UI_ERROR, 0x1);
+  await tick();
+  check("UI_GeneralError resolves against the UI SoundTable 0x2000004B",
+    resolved.includes(0x2000004B) && !resolved.includes(0x20000001), JSON.stringify(resolved));
+  check("UI_GeneralError plays from the centre at the row volume",
+    played.length === 1 && played[0].center === true && played[0].vol === 0.7, JSON.stringify(played));
+  shouldSuppressEcho(SOUND.UI_ERROR, LPG);
 }
 
 console.log("\n=== slider held-set does not latch ===");

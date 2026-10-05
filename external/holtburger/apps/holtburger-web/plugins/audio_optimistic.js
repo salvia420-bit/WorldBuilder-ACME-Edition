@@ -7,6 +7,18 @@
 // the recent-fire ring here lets the server-broadcast consumer in
 // index.html suppress the echo to avoid double-playing.
 //
+// Retail parity (2026-10-05):
+//   - UI_* cues (error, slider grab/release) are UI sounds: retail
+//     PlaySoundFromCenter(stype, GetUISoundTable()) (acclient.c:383569-383589,
+//     401286) — UI SoundTable, no position, row probability + row volume.
+//   - inventory-action cues are the local prediction of the server's
+//     0xF750 on the PLAYER (ACE GameMessageSound default volume 1.0): the
+//     player's SoundTable row, probability rolled, gain = that wire 1.0,
+//     played positionally at the player in the three.js listener frame
+//     (acToThree) — exactly what the echo would have produced. The old code
+//     passed the raw AC-frame position (wrong frame: silent away from the
+//     origin) at row volume x a made-up 0.5.
+//
 // ACE Sound enum values (per ace-server/Source/ACE.Entity/Enum/Sound.cs):
 //   WieldObject   = 0x8C
 //   UnwieldObject = 0x8D
@@ -41,6 +53,11 @@ export const SOUND = Object.freeze({
 // preferences) are covered without re-registration. The seen-set
 // keys on the slider element so a single pointer interaction only
 // fires GRAB once even if a nested handler also dispatches it.
+import { playUiSound, rollProbability } from "../scene3d/audio/retail_sound_rules.js";
+
+// UI_* sounds go through the UI SoundTable from the centre (see header).
+const UI_SOUNDS = new Set([0x6D, 0x73, 0x74]);
+
 const _slidersHeld = new WeakSet();
 // The WeakSet alone cannot express "release whatever is held" — a WeakSet is
 // not iterable, which is why the recovery block below used to be an empty
@@ -161,7 +178,8 @@ export async function playOptimistic(soundId, itemGuid) {
     if (lpg === 0) return;
     const inst = em.entityMap?.get?.(lpg);
     const stbDid = (inst?.soundTableDid >>> 0) || 0;
-    if (stbDid === 0) return;
+    const isUi = UI_SOUNDS.has(soundId >>> 0);
+    if (stbDid === 0 && !isUi) return;
     // Record BEFORE the await so an echo arriving mid-resolution is
     // suppressed correctly. itemGuid is preserved on the call shape for
     // future debugging/telemetry; the ring key is (soundId, playerGuid)
@@ -176,6 +194,10 @@ export async function playOptimistic(soundId, itemGuid) {
     recentFire.set(key, expiresAt);
     let played = false;
     try {
+      if (isUi) {
+        played = !!(await playUiSound(live, soundId >>> 0));
+        return;
+      }
       const entry = await cache.resolveSound(stbDid, (soundId >>> 0));
       if (!entry) return;
       // The entity can be despawned and respawned across the await — relog,
@@ -188,13 +210,19 @@ export async function playOptimistic(soundId, itemGuid) {
       if (inst._disposed || em.entityMap?.get?.(lpg) !== inst) return;
       const pos = inst?.root?.position;
       if (!pos) return;
-      const baseVol = (entry.volume > 0) ? entry.volume : 1.0;
-      await audioMgr.play(
+      // Retail PlaySoundA(stype, obj, wireVolume) rolls the ROW probability
+      // (acclient.c:383655-383678); a missed roll is genuinely silent, so the
+      // echo must not be suppressed either (played stays false).
+      if (!rollProbability(entry.probability)) return;
+      // AC frame -> three.js listener frame (scene3d/adapter.js acToThree:
+      // (x, y, z) -> (x, z, -y)); inlined to keep this plugin free of three.
+      const tx = pos.x, ty = pos.z, tz = -pos.y;
+      const h = await audioMgr.play(
         entry.waveDid,
-        { x: pos.x, y: pos.y, z: pos.z },
-        { gain: baseVol * 0.5 },
+        { x: tx, y: ty, z: tz },
+        { gain: 1.0 }, // ACE GameMessageSound default wire volume
       );
-      played = true;
+      played = h !== null;
     } finally {
       // Nothing was heard, so nothing may be suppressed. Leaving the claim in
       // place makes the server's genuine 0xF750 echo get dropped by

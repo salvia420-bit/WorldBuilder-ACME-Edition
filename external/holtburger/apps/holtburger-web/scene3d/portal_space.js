@@ -52,6 +52,7 @@
 import * as THREE from "three";
 import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
 import { withLogDepth } from "./shader_logdepth.js";
+import { playUiSound } from "./audio/retail_sound_rules.js";
 
 // ── retail constants ───────────────────────────────────────────────────
 export const PORTAL_SETUP_ENUM = 0x10000001; // portalspace_background
@@ -89,12 +90,16 @@ const ARRIVAL_CELLS_WAIT_MAX = 6.0; // s after arrival before ignoring cell resi
 const TUNNEL_HOLD_MAX = 20.0; // s in TUNNEL before forcing the exit
 const POSE_MOVE_M = 5.0; // stale-pkg arrival fallback threshold
 export const NOTICE_TEXT = "In Portal Space - Please Wait...";
+// Sound_UI_EnterPortal / Sound_UI_ExitPortal (acclient.h SoundType).
+const SOUND_UI_ENTER_PORTAL = 0x6a;
+const SOUND_UI_EXIT_PORTAL = 0x6b;
 
-// Sounds — SoundTable 0x2000004B: UI_EnterPortal -> 0x0A000246,
-// UI_ExitPortal -> 0x0A000245 (dump_portal_sounds, verified earlier).
-const PORTAL_ENTER_WAVE = 0x0a000246;
-const PORTAL_EXIT_WAVE = 0x0a000245;
-const SOUND_REF_DISTANCE = 60;
+// Sounds — retail PlaySoundFromCenter(Sound_UI_EnterPortal / _ExitPortal,
+// GetUISoundTable()) (acclient.c:261845, 262562; 383569-383589): picked
+// through the UI SoundTable (row probability + volume), not fixed waves.
+// On the retail DAT these rows are 0x0A000246 / 0x0A000245.
+const PORTAL_ENTER_WAVE = SOUND_UI_ENTER_PORTAL; // sentinel: "via the SoundTable"
+const PORTAL_EXIT_WAVE = SOUND_UI_EXIT_PORTAL;
 const SOUND_FADE_S = 0.35;
 
 // UIGlobals::GetAnimLevel — the retail ease table (OpenAC
@@ -509,15 +514,16 @@ function setNotice(on) {
   } catch (_) {}
 }
 
-function listenerPos(scene3d) {
-  const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.cameraSwitcher?.persp;
-  const p = cam?.position;
-  return p ? { x: p.x, y: p.y, z: p.z } : { x: 0, y: 0, z: 0 };
-}
-
+// `did` is a SoundType (0x6A/0x6B: resolve through the UI SoundTable, the
+// retail path) or an explicit Wave DID override (?portalSound=<hex>), which
+// plays from the centre at volume 1.0 (retail PlaySoundFromCenter(gid, 1.0)).
 function playOneShot(scene3d, did) {
   if (!_audio || !did) return;
-  _audio.play(did >>> 0, listenerPos(scene3d), { refDistance: SOUND_REF_DISTANCE }).catch(() => {});
+  if (did === SOUND_UI_ENTER_PORTAL || did === SOUND_UI_EXIT_PORTAL) {
+    playUiSound(scene3d, did).catch(() => {});
+  } else if (typeof _audio.playFromCenter === "function") {
+    _audio.playFromCenter(did >>> 0, 1.0).catch(() => {});
+  }
 }
 
 function stopLoop() {
@@ -581,7 +587,7 @@ export function startPortalSpace(scene3d, opts = {}) {
   const loopDid = opts.loopDid ? opts.loopDid >>> 0 : 0;
   if (loopDid && !_loop && _audio) {
     _audio
-      .play(loopDid, listenerPos(scene3d), { loop: true, refDistance: SOUND_REF_DISTANCE })
+      .playFromCenter(loopDid, 1.0, { loop: true })
       .then((h) => { if (h && _seq.isActive()) _loop = h; else if (h) { _loop = h; stopLoop(); } })
       .catch(() => {});
   }
