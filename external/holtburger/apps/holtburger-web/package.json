@@ -1,0 +1,16 @@
+{
+  "name": "holtburger-web-tests",
+  "private": true,
+  "description": "Node-side dependencies for the headless JS test gate (harness/run-js-headless.mjs). The browser loads these from the import map in index.html, not from here.",
+  "scripts": {
+    "test": "node harness/run-js-headless.mjs --quiet"
+  },
+  "devDependencies": {
+    "@takram/three-atmosphere": "0.19.1",
+    "@takram/three-geospatial": "0.9.1",
+    "@takram/three-geospatial-effects": "0.6.4",
+    "astronomy-engine": "2.1.19",
+    "postprocessing": "6.39.1",
+    "three": "0.184.0"
+  }
+}

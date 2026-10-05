@@ -1,0 +1,67 @@
+# Holtburger test gate (2026-10-05).
+#
+# The workflows under external/holtburger/.github/ never run: GitHub only reads
+# .github/ at the repository root, and they target main/dev while work lands on
+# master. This is the gate that actually runs on every holtburger change.
+#
+# Scope is deliberately cheap and deterministic:
+#   - js:   the headless Node test gate (no browser, no wasm build) + the URL-flag lints
+#   - rust: unit tests of the crates that need no DAT files. DAT-backed tests
+#           SKIP without client_portal.dat etc., so they are not run here.
+name: holtburger-ci
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "external/holtburger/**"
+      - ".github/workflows/holtburger-ci.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "external/holtburger/**"
+      - ".github/workflows/holtburger-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: holtburger-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: external/holtburger/apps/holtburger-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: external/holtburger/apps/holtburger-web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Headless JS tests
+        run: node harness/run-js-headless.mjs --quiet
+      - name: ClientEvent kinds in sync with Rust
+        run: node ../../scripts/gen-client-event-kinds.mjs --check
+      - name: URL-flag lint
+        run: node ../../scripts/lint-url-flags.mjs
+      - name: URL-flag default audit
+        run: node ../../scripts/audit-flag-defaults.mjs
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: external/holtburger
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: external/holtburger
+      - name: Unit tests (no DAT fixtures needed)
+        run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib
