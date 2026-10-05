@@ -33,6 +33,9 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+// index.html's inline script was split into app/*.js (2026-10-05); text pins
+// read the whole boot orchestrator (index.html + app/*.js).
+import appSource from "./harness/app_source.cjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -169,7 +172,7 @@ withEnv({ search: "?retailRunKeys=on" }, () => {
 console.log("PART 4 — static wiring");
 // ---------------------------------------------------------------------
 
-const indexSrc = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+const indexSrc = appSource.readAppSource();
 const cameraSrc = readFileSync(joinPath(__dirname, "scene3d", "camera.js"), "utf8");
 const keymapSrc = readFileSync(joinPath(__dirname, "ui", "keymap.js"), "utf8");
 const libSrc = readFileSync(joinPath(__dirname, "src", "lib.rs"), "utf8");

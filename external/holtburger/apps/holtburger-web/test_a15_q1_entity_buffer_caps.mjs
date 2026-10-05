@@ -24,6 +24,9 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+// index.html's inline script was split into app/*.js (2026-10-05); text pins
+// read the whole boot orchestrator (index.html + app/*.js).
+import appSource from "./harness/app_source.cjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -230,7 +233,7 @@ function drainArm({ useRenderer3d, spawnDefer2dOnly, liveScene, spawnCount }) {
 // PART 2 — static: the caps/gate/comment are wired into index.html.
 // =====================================================================
 console.log("PART 2 — static source wiring");
-const src = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+const src = appSource.readAppSource();
 
 check(
   "index.html declares ENTITY_BUFFER_CAP = 512",

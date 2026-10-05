@@ -13,7 +13,9 @@ const check = (name, cond, detail = "") => {
 
 const director = fs.readFileSync(path.join(__dirname, "rynth/ai/director.js"), "utf8");
 const bot = fs.readFileSync(path.join(__dirname, "rynth/bot.js"), "utf8");
-const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+// index.html + the app/*.js modules split out of its inline script (2026-10-05);
+// the bot-boot arm (kind 7) now lives in app/client_events.js.
+const html = require("./harness/app_source.cjs").readAppSource(__dirname);
 
 check("EXPLORER_SYSTEM_PROMPT exported", /export const EXPLORER_SYSTEM_PROMPT/.test(director));
 

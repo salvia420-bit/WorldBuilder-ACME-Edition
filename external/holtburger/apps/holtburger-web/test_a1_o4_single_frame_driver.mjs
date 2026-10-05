@@ -153,7 +153,13 @@ check("index.html defines pumpNetFrame (extracted drainEvents body)",
 const pumpStart = htmlSrc.indexOf("function pumpNetFrame()");
 const wrapperStart = htmlSrc.indexOf("function drainEvents()", pumpStart);
 check("drainEvents wrapper defined AFTER pumpNetFrame", pumpStart > 0 && wrapperStart > pumpStart);
-const pumpBody = htmlSrc.slice(pumpStart, wrapperStart);
+// 2026-10-05: pumpNetFrame delegates its entity-drain / tickMovement / input
+// tail to app/frame_pump.js (moved verbatim out of index.html), so "the pump
+// body" is the index.html function plus that delegate.
+const framePumpSrc = readFileSync(`${__dirname}/app/frame_pump.js`, "utf8");
+check("pumpNetFrame delegates its tail to app/frame_pump.js",
+  htmlSrc.slice(pumpStart, wrapperStart).includes("pumpEntityUpdatesAndInput(__framePumpDeps);"));
+const pumpBody = htmlSrc.slice(pumpStart, wrapperStart) + "\n" + framePumpSrc;
 check("pumpNetFrame stamps the __lastPumpMs heartbeat",
   /window\.__lastPumpMs\s*=\s*performance\.now\(\)/.test(pumpBody));
 check("pumpNetFrame still owns the wasm-bindgen lifetime (upd.free())",

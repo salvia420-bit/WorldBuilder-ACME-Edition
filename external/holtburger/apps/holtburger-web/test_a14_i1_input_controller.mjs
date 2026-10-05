@@ -31,6 +31,9 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+// index.html's inline script was split into app/*.js (2026-10-05); text pins
+// read the whole boot orchestrator (index.html + app/*.js).
+import appSource from "./harness/app_source.cjs";
 import {
   InputController,
   clampSign,
@@ -226,7 +229,7 @@ function policyForMode(modeRef) {
 
 // =====================================================================
 console.log("PART 3 — static: exactly ONE funnel call site when flag on");
-const idx = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+const idx = appSource.readAppSource();
 const cam = readFileSync(joinPath(__dirname, "scene3d", "camera.js"), "utf8");
 const inputSrc = readFileSync(joinPath(__dirname, "scene3d", "input.js"), "utf8");
 const picking = readFileSync(joinPath(__dirname, "scene3d", "picking.js"), "utf8");

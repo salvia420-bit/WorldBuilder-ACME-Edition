@@ -7,7 +7,9 @@
 //   PART 1 — behavioral: import scene3d/client_event_dispatch.js directly
 //            (pure / dependency-free by construction) and exercise the
 //            hook contract against a recording EntityManager stub.
-//   PART 2 — static: read index.html + scene3d/loop.js + docs/url-flags.md
+//   PART 2 — static: read index.html + app/client_events.js (the ClientEvent
+//            dispatcher split out of index.html, 2026-10-05) + scene3d/loop.js +
+//            docs/url-flags.md
 //            as text and assert the delegation, the retained legacy body
 //            (rollback path), the hook install, and the flag doc are
 //            actually wired into the shipped source.
@@ -138,12 +140,14 @@ console.log("PART 2 — static source wiring");
 const indexHtml = readFileSync(joinPath(__dirname, "index.html"), "utf8");
 const loopJs = readFileSync(joinPath(__dirname, "scene3d", "loop.js"), "utf8");
 const urlFlags = readFileSync(joinPath(__dirname, "docs", "url-flags.md"), "utf8");
+// The ClientEvent dispatcher (the evt.kind arms) lives in app/client_events.js.
+const clientEventsJs = readFileSync(joinPath(__dirname, "app", "client_events.js"), "utf8");
 
 // (2.1) kind-17 arm: consumed-hook delegation gated on unifiedClientEvent
 // AND the retained legacy body (rollback path) as its else.
-const armStart = indexHtml.indexOf("evt.kind === 17");
-const armSlice = armStart >= 0 ? indexHtml.slice(armStart, armStart + 4000) : "";
-check("index.html still has the evt.kind === 17 arm", armStart >= 0);
+const armStart = clientEventsJs.indexOf("evt.kind === ClientEventKind.ENTITY_VISIBILITY_CHANGED");
+const armSlice = armStart >= 0 ? clientEventsJs.slice(armStart, armStart + 4000) : "";
+check("app/client_events.js still has the kind-17 (ENTITY_VISIBILITY_CHANGED) arm", armStart >= 0);
 check(
   "arm delegates via __unifiedClientEventOn && __scene3dClientEventHook",
   /__unifiedClientEventOn\s*&&\s*window\.__scene3dClientEventHook\?\.\(evt\)/.test(armSlice),

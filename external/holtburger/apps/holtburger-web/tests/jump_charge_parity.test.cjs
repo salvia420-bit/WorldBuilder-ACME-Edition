@@ -152,10 +152,9 @@ check('kind=56 refusal codes map to the ACE-style wording', () => {
 });
 
 // ─── static source assertions (pin the load-bearing index.html strings) ─
-const INDEX_SRC = fs.readFileSync(
-  path.join(__dirname, '..', 'index.html'),
-  'utf8'
-);
+// index.html + the app/*.js modules split out of its inline script (2026-10-05);
+// the ClientEvent arms now live in app/client_events.js.
+const INDEX_SRC = require('../harness/app_source.cjs').readAppSource();
 
 check('index.html parses the ?jumpParity flag (default-ON, ?jumpParity=off escape)', () => {
   assert.match(INDEX_SRC, /get\("jumpParity"\)\?\.toLowerCase\(\) !== "off"/);
@@ -192,7 +191,7 @@ check('index.html blur aborts the parity charge', () => {
 });
 
 check('index.html drains kind=56 into chat text', () => {
-  assert.match(INDEX_SRC, /evt\.kind === 56/);
+  assert.match(INDEX_SRC, /evt\.kind === ClientEventKind\.JUMP_REFUSED\b/);
   assert.match(INDEX_SRC, /You can't jump from this position!/);
 });
 

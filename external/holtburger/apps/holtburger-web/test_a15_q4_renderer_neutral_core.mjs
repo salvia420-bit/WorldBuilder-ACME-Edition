@@ -23,6 +23,9 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+// index.html's inline script was split into app/*.js (2026-10-05); text pins
+// read the whole boot orchestrator (index.html + app/*.js).
+import appSource from "./harness/app_source.cjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -544,7 +547,7 @@ check("KIND table is the wasm ENTITY_UPDATE_KIND_* map (0..9, frozen)",
 // ---------------------------------------------------------------------
 console.log("PART 2: static source checks");
 
-const indexHtml = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+const indexHtml = appSource.readAppSource();
 const loopJs = readFileSync(joinPath(__dirname, "scene3d", "loop.js"), "utf8");
 const worldStreamJs = readFileSync(joinPath(__dirname, "scene3d", "world_stream.js"), "utf8");
 
