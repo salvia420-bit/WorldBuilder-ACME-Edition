@@ -2708,8 +2708,9 @@ export function tickPortalStencil(scene3d, sessionHandle) {
   } catch (_) {}
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
   const worldRoot = scene3d.worldRoot ?? null;
-  // Keep the pass drawing with the ACTIVE camera (ortho/persp switch safe).
-  if (camera) pass.mainCamera = camera;
+  // (No `pass.mainCamera = camera` here: pmndrs Pass.mainCamera is an empty
+  // setter, so it was a no-op. atmosphere_pipeline.js assigns the pass's real
+  // `.camera` from the active camera every frame.)
 
   // Milestone: outdoor only. Indoor (or no camera) → clear + un-park all cells
   // so the world pass draws them normally again.
@@ -2833,7 +2834,13 @@ export function tickPortalPunch(scene3d, sessionHandle) {
   } catch (_) {}
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
   const worldRoot = scene3d.worldRoot ?? null;
-  if (camera) pass.mainCamera = camera;
+  // (No `pass.mainCamera = camera`: an empty pmndrs setter, i.e. a no-op. The
+  // composer path gets `.camera` from atmosphere_pipeline.js every frame, and
+  // the ?punchRetail in-scene path draws with the world pass's camera.)
+  // ?punchRetail: the punch mesh is drawn INSIDE the world pass and
+  // PortalPunchPass.render never runs, so the union scissor rect (its only
+  // reader) is not computed.
+  const wantRect = pass.inScene !== true;
 
   // Outdoor only. Indoor / no camera → clear apertures so the split disarms and
   // the shared world pass draws interiors normally again.
@@ -2954,6 +2961,7 @@ export function tickPortalPunch(scene3d, sessionHandle) {
         // stays a pure function for the unit tests.
         losCache: _punchLosCache,
         losSunkenExempt: PUNCH_LOS_SUNKEN,
+        wantRect,
       });
       if (res.kept > 0) {
         punchFlat = res.flat;

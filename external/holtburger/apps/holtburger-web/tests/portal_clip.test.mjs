@@ -746,4 +746,20 @@ t("the LOS cache returns the same verdicts as the uncached path", () => {
   assert.equal(cached.dropped.terrain, 0);
 });
 
+t("wantRect:false skips only the union rect (?punchRetail never reads it)", () => {
+  const flat = [1, 4, 20,-1,-1, 20,1,-1, 20,1,1, 20,-1,1];
+  const base = {
+    nearPlane: makeNearPlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }),
+    camAc: { x: 0, y: 0, z: 0 },
+  };
+  const withRect = clipAperturesForPunch(flat, MVP, base);
+  const noRect = clipAperturesForPunch(flat, MVP, { ...base, wantRect: false });
+  assert.equal(withRect.kept, 1);
+  assert.ok(withRect.rect, "default still returns the union rect");
+  assert.equal(noRect.rect, null);
+  assert.equal(noRect.kept, withRect.kept);
+  assert.deepEqual(noRect.flat, withRect.flat, "same surviving apertures");
+  assert.deepEqual(noRect.dropped, withRect.dropped);
+});
+
 console.log(`\nportal_clip.test.mjs — ${passed} assertions groups passed`);

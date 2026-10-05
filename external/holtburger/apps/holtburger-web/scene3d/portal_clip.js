@@ -770,6 +770,9 @@ export function nodeInLandblock(node, lbKey) {
  * @param {{x,y,z}} opts.camAc                 camera position, AC world
  * @param {Function} [opts.sampleHeight]       terrain sampler (optional)
  * @param {number} [opts.maxScreenFrac]
+ * @param {boolean} [opts.wantRect=true]  false → skip the union scissor rect
+ *        (`rect` comes back null). `?punchRetail` draws the punch in-scene and
+ *        never reads it; the per-aperture rect for the area clamp still runs.
  * @returns {{flat:number[], rect:{x0,y0,x1,y1}|null, kept:number, dropped:object}}
  */
 /**
@@ -807,6 +810,7 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
   // Caller-owned terrain-LOS memo (see `makeLosCache`). Absent → every gate
   // runs exactly as before, which is what the unit tests exercise.
   const losCache = opts.losCache ?? null;
+  const wantRect = opts.wantRect !== false;
   if (losCache && camAc) {
     const dx = camAc.x - losCache.camX;
     const dy = camAc.y - losCache.camY;
@@ -971,6 +975,7 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
     out.push(clipped.length / 3);
     for (let i = 0; i < clipped.length; i++) out.push(clipped[i]);
     kept++;
+    if (!wantRect) continue;
     if (rect.x0 < rx0) rx0 = rect.x0;
     if (rect.y0 < ry0) ry0 = rect.y0;
     if (rect.x1 > rx1) rx1 = rect.x1;
@@ -979,6 +984,7 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
 
   out[0] = kept;
   if (!kept) return { flat: [0], rect: null, kept: 0, dropped };
+  if (!wantRect) return { flat: out, rect: null, kept, dropped };
   return {
     flat: out,
     rect: {
