@@ -679,12 +679,15 @@ check("index.html: upd.free() unconditional at the entity drain-loop tail",
     const after = indexHtml.slice(tail + "upd.free();".length, tail + 200);
     return /^\s*\}/.test(after) && indexHtml.includes("__dispatch2d.dispatch(upd);");
   })());
-check("index.html: dispatch2dSpawn/neutralSpawn/neutralRemove extracted, no .free in them",
+check("index.html/app: dispatch2dSpawn/neutralSpawn/neutralRemove extracted, no .free in them",
   (() => {
     for (const fn of ["function dispatch2dSpawn(upd)", "function neutralSpawn(upd)", "function neutralRemove(upd)"]) {
       const i = indexHtml.indexOf(fn);
       if (i < 0) return false;
-      const body = indexHtml.slice(i, indexHtml.indexOf("\n      }", i));
+      // Body ends at the first line that is exactly <indent>} (the functions
+      // live in app/landblock_stream.js since 2026-10-05, at a shallower indent).
+      const indent = indexHtml.slice(indexHtml.lastIndexOf("\n", i) + 1, i);
+      const body = indexHtml.slice(i, indexHtml.indexOf(`\n${indent}}`, i));
       if (body.includes(".free(")) return false;
     }
     return true;
