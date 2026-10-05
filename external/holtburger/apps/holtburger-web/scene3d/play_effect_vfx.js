@@ -1730,14 +1730,14 @@ const _realVfxStats = {
  * @param {number} scriptId
  * @param {number} speed
  */
-function _tryResolveRealVfxBounded(targetGuid, scriptId, speed, t0, silent = false) {
+function _tryResolveRealVfxBounded(targetGuid, scriptId, speed, t0, silent = false, soundOnly = false) {
   const DEADLINE_MS = 300;
   let timer = null;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => resolve("timeout"), DEADLINE_MS);
   });
   Promise.race([
-    _tryResolveRealVfx(targetGuid, scriptId, speed, t0, silent),
+    _tryResolveRealVfx(targetGuid, scriptId, speed, t0, silent, soundOnly),
     deadline,
   ]).then((outcome) => {
     if (outcome === "timeout") {
@@ -1807,7 +1807,10 @@ function _isLiveInstance(em, guid, inst) {
 // castSyntheticCasterVfx) re-emits a script the wire ALSO delivers, and
 // retail plays that script once (one GameMessageScript, one set of hook
 // sounds). The wire copy keeps the sounds.
-async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = false) {
+// `soundOnly` = the reverse: fire the sound hooks and stop before the
+// particles (the castVfxDedup path when the audible wire copy follows a
+// silent synthetic copy whose visuals already played).
+async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = false, soundOnly = false) {
   _realVfxStats.attempts += 1;
   // `?castLat=on` stamp. Defaults to "now" so the exported
   // `tryResolveRealVfx` and any older caller still produce coherent (if
@@ -1962,6 +1965,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       em._firePlayEffectSoundHook(targetGuid >>> 0, desc);
     }
   }
+  if (soundOnly) return false;
 
   let particleHookCount = 0;
   for (const e of entriesJs) {
@@ -2581,7 +2585,7 @@ const BLOCKING_PARTICLE_PARITY_ON = (() => {
     return false;
   }
 })();
-// Map<`${guid}:${scriptId}`, lastDispatchMs>. Pruned lazily in _onPlayEffect.
+// Map<`${guid}:${scriptId}`, {t: lastDispatchMs, silent}>. Pruned lazily in _onPlayEffect.
 const _recentPlayEffects = new Map();
 
 // Map<guid:number, Array<{scriptId:number, speed:number, enqueuedMs:number}>>.
@@ -2798,13 +2802,21 @@ function _onPlayEffect(evt) {
   }
 
   // F9-3 — drop a duplicate (guid, scriptId) within the dedup window so the
-  // synthetic CasterEffect emit doesn't double-play the wire copy. First-wins.
+  // synthetic CasterEffect emit doesn't double-play the wire copy. First-wins
+  // for the VISUALS. The sounds must survive it: the synthetic copy is silent
+  // (`synthetic: true`), so if it won and the audible wire copy follows, the
+  // wire copy still fires the script's sound hooks (sound-only); a silent copy
+  // arriving after an audible one is simply dropped.
   if (CAST_VFX_DEDUP_ON) {
     const now = (typeof performance !== "undefined" && performance.now)
       ? performance.now() : Date.now();
     const key = `${targetGuid}:${scriptId}`;
-    const last = _recentPlayEffects.get(key);
-    if (last !== undefined && (now - last) <= _CAST_VFX_DEDUP_MS) {
+    const rec = _recentPlayEffects.get(key);
+    if (rec !== undefined && (now - rec.t) <= _CAST_VFX_DEDUP_MS) {
+      if (!silent && rec.silent) {
+        rec.silent = false;
+        _tryResolveRealVfxBounded(targetGuid, scriptId, speed, _t0, false, true);
+      }
       // eslint-disable-next-line no-console
       console.debug(
         `[play-effect-vfx] F9-3 deduped scriptId=0x${scriptId.toString(16)} ` +
@@ -2812,11 +2824,11 @@ function _onPlayEffect(evt) {
       );
       return;
     }
-    _recentPlayEffects.set(key, now);
+    _recentPlayEffects.set(key, { t: now, silent });
     // Lazy prune so the map can't grow unbounded.
     if (_recentPlayEffects.size > 256) {
-      for (const [k, t] of _recentPlayEffects) {
-        if ((now - t) > _CAST_VFX_DEDUP_MS) _recentPlayEffects.delete(k);
+      for (const [k, r] of _recentPlayEffects) {
+        if ((now - r.t) > _CAST_VFX_DEDUP_MS) _recentPlayEffects.delete(k);
       }
     }
   }

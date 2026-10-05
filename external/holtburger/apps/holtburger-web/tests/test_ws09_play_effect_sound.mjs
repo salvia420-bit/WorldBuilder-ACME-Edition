@@ -39,13 +39,16 @@ if (MODE === "") {
   console.log("=== WS09 play_effect_vfx sound-hook resolver ===");
   const on = runArm("worker-on");
   const off = runArm("worker-off");
-  process.exit(on && off ? 0 : 1);
+  // ?castVfxDedup=on: first-copy-wins for visuals must not drop the sounds.
+  const dedup = runArm("worker-dedup");
+  process.exit(on && off && dedup ? 0 : 1);
 }
 
 // ---------------------------------------------------------------- worker ----
 register(pathToFileURL(resolvePath(__dirname, "../_three_stub_loader.mjs")).href);
 
-const FLAG_ON = MODE === "worker-on";
+const DEDUP = MODE === "worker-dedup";
+const FLAG_ON = MODE === "worker-on" || DEDUP;
 
 // window scaffold BEFORE import (the flag IIFE + auto-bind read it).
 globalThis.window = {
@@ -55,7 +58,8 @@ globalThis.window = {
   liveScene3d: null,
   // castPlaceholder=off: the THREE stub cannot build placeholder bursts (case 6
   // drives the full _onPlayEffect path); irrelevant to the sound branch.
-  location: FLAG_ON ? { search: "?castPlaceholder=off" } : { search: "?playEffectSound=off&castPlaceholder=off" },
+  location: DEDUP ? { search: "?castPlaceholder=off&castVfxDedup=on" }
+    : FLAG_ON ? { search: "?castPlaceholder=off" } : { search: "?playEffectSound=off&castPlaceholder=off" },
 };
 
 // Recording sound sink — the real EntityManager._firePlayEffectSoundHook.
@@ -288,7 +292,7 @@ const SCRIPT_ID = 0x51; // Fizzle PScriptType (PlayScript.Fizzle)
     { hookType: 13, emitterDid: 0x32000091 },
     { hookType: 2, soundEnum: 0x76 },
   ])]]);
-  installScene({
+  const { particleManager } = installScene({
     tableDid: 0x34000009,
     table: { id: 0x34000009, scripts: { [String(SCRIPT_ID)]: [{ mod: 1.0, scriptDid: PES }] } },
     scriptByDid,
@@ -299,9 +303,14 @@ const SCRIPT_ID = 0x51; // Fizzle PScriptType (PlayScript.Fizzle)
   __test.onPlayEffect({ detail: { targetGuid: TARGET, scriptId: SCRIPT_ID, speed: 1.0 } });
   for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
   if (FLAG_ON) {
+    // With ?castVfxDedup=on the silent synthetic won the visual slot; the
+    // old first-wins dedup then DROPPED the audible wire copy -> 0 sounds.
     ok(soundCalls.length === 1, `CasterEffect synthetic + wire -> exactly one sound (got ${soundCalls.length})`);
   } else {
     ok(soundCalls.length === 0, "flag OFF: no CasterEffect sound");
+  }
+  if (DEDUP) {
+    ok(particleManager.calls.length === 1, `dedup: visuals still once (got ${particleManager.calls.length} emitters)`);
   }
   // The emit site must tag the synthetic copy.
   const { readFileSync } = await import("node:fs");
@@ -309,6 +318,27 @@ const SCRIPT_ID = 0x51; // Fizzle PScriptType (PlayScript.Fizzle)
   const emitAt = ent.indexOf('window.__pluginClient.events.emit("playEffect"');
   ok(emitAt > 0 && /synthetic:\s*true/.test(ent.slice(emitAt, emitAt + 600)),
     "entities.js chain-end CasterEffect emit is tagged synthetic:true");
+}
+
+// --- Case 7: wire copy FIRST, then the synthetic -> still one sound ----------
+{
+  _clearPhysicsScriptTableCache();
+  soundCalls.length = 0;
+  const PES = 0x33000074;
+  const scriptByDid = new Map([[PES, makePhysicsScript([
+    { hookType: 13, emitterDid: 0x32000074 },
+    { hookType: 2, soundEnum: 0x77 },
+  ])]]);
+  installScene({
+    tableDid: 0x3400000a,
+    table: { id: 0x3400000a, scripts: { [String(SCRIPT_ID + 1)]: [{ mod: 1.0, scriptDid: PES }] } },
+    scriptByDid,
+    particleEmitter: { emitterId: 0x32000074 },
+  });
+  __test.onPlayEffect({ detail: { targetGuid: TARGET, scriptId: SCRIPT_ID + 1, speed: 1.0 } });
+  __test.onPlayEffect({ detail: { targetGuid: TARGET, scriptId: SCRIPT_ID + 1, speed: 1.0, synthetic: true } });
+  for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+  ok(soundCalls.length === (FLAG_ON ? 1 : 0), `wire then synthetic -> ${FLAG_ON ? 1 : 0} sound (got ${soundCalls.length})`);
 }
 
 console.log(`WS09 sound-hook [${MODE}]: ${pass} passed, ${fail} failed`);
