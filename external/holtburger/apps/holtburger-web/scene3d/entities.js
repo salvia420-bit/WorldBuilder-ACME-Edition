@@ -2461,6 +2461,29 @@ function _applyEntityVisible(inst) {
   if (inst.root.visible !== want) inst.root.visible = want;
 }
 
+/**
+ * INDOOR-LAYER INVARIANT (2026-10-05 — "portaled into a dungeon, can't see my
+ * player rig, can see monsters"). Every node of an entity rig must sit on
+ * layer 1 (RENDER_LAYER_INDOOR). `_spawnImpl` stamps the subtree once at
+ * spawn, but the two in-place part rebuilds — the appearance hot-swap
+ * (`_applyAppearanceHotSwap`, DEFAULT-ON `?clothingHotSwap`, fired by the
+ * ObjDescEvent ACE broadcasts on EVERY equip) and the ReplaceObject hook —
+ * add fresh `THREE.Mesh`es whose layer mask defaults to layer 0. Outdoors
+ * that is invisible (the world pass draws both layers in one shared-depth
+ * pass). Indoors `?indoorDepthSplit` (default ON) arms on any EnvCell and
+ * splits the frame: layer 0 → world pass → FULL-SCREEN depth wipe → layer 1
+ * cells pass. A re-dressed local player therefore drew in the world pass and
+ * was overpainted by the room shell; monsters spawned inside the dungeon
+ * (stamped at spawn, never re-dressed) stayed visible. Re-stamp after every
+ * rebuild. Same no-op guard as the spawn stamp (`entitiesGroup` present).
+ */
+function _stampEntityIndoorLayer(scene3d, obj) {
+  if (!obj || !scene3d?.entitiesGroup) return;
+  try {
+    obj.traverse((o) => o.layers.set(1));
+  } catch (_) {}
+}
+
 /** Set the STATE-authoritative visibility (producer #1) + recompose. */
 function _setEntityStateVisible(inst, visible) {
   if (!inst) return;
@@ -7581,6 +7604,7 @@ export class EntityManager {
     ring.name = "selection-ring";
     inst._selectionRing = ring;
     inst.root.add(ring);
+    _stampEntityIndoorLayer(this.scene3d, ring);
   }
 
   // === C2 (2026-07-12) — retail keybind TARGET CYCLING ==================
@@ -10818,6 +10842,9 @@ export class EntityManager {
         }
       }
     }
+
+    // Indoor-layer invariant — the rebuilt part meshes default to layer 0.
+    _stampEntityIndoorLayer(this.scene3d, inst.root);
 
     // Commit new owned-asset registry; dispose old ones now that
     // nothing references them.
@@ -16182,6 +16209,8 @@ export class EntityManager {
       partGroup.add(m);
       inst.registerGeometry(g.geometry);
     }
+    // Indoor-layer invariant — the replacement meshes default to layer 0.
+    _stampEntityIndoorLayer(this.scene3d, partGroup);
   }
 
   /**
