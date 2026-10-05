@@ -251,6 +251,12 @@ export function mount(ctx) {
       unsubPortal = client.events.on("portalSpaceEntered", (ev) => {
         const d = ev?.detail ?? ev;
         show({ message: d?.zoneName ?? "Crossing portal space…" });
+        // 2026-10-05 failsafe: the only auto-hide edge is landblockChanged,
+        // which never fires on a SAME-landblock teleport (dungeon-internal
+        // portal, nearby recall/@teleloc) — the curtain then stayed up
+        // forever as a full-screen near-black box. Never strand the player.
+        clearTimeout(state.failsafeTimer);
+        state.failsafeTimer = setTimeout(() => hide(), 8000);
       });
       unsubLb = client.events.on("landblockChanged", () => {
         if (state.hideAfterNextLb) {
