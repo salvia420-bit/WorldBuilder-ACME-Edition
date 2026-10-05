@@ -80,7 +80,7 @@ check("entities.js defines CAST_CANCEL_STOPS (default-ON, `!=='off'` escape)",
 // P1 — cancelCastSequence stops the running cast/swing LoopOnce overlay under the flag,
 //      restricted to swing:/link: keys, routed through _completeOverlay then .stop().
 check("cancelCastSequence stops cast/swing overlays under CAST_CANCEL_STOPS",
-  /cancelCastSequence\(guid, cause\) \{[\s\S]{0,3200}if \(CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,600}action\.stop\(\)/.test(ent));
+  /cancelCastSequence\(guid, cause\) \{[\s\S]{0,4000}if \(CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,600}action\.stop\(\)/.test(ent));
 check("P1 loop is restricted to swing:/link: overlay keys",
   /CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,400}key\.startsWith\("swing:"\)\s*\|\|\s*key\.startsWith\("link:"\)/.test(ent));
 check("P1 routes the base-restore/cancel-notify through _completeOverlay",

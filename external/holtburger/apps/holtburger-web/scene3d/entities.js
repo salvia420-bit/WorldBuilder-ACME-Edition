@@ -10598,7 +10598,13 @@ export class EntityManager {
     ) {
       this._playStyleLink(inst, setupId, mtableId, prevStance, stance);
     }
-    if (cacheKey === inst.currentActionKey) return; // already playing
+    // 2026-10-05 (audit F1): once the Rust playhead owns the cycle
+    // (_unifiedLoco), dedupe against IT. `currentActionKey` is the mixer's
+    // key and is frozen at the spawn idle, so a later stop whose key matched
+    // the spawn key (bare 0x3 Ready) returned here and left the walk cycle
+    // playing on a standing entity.
+    const unifiedOwnsCycle = UNIFIED_LOCO && !!inst._unifiedLoco;
+    if (cacheKey === (unifiedOwnsCycle ? inst._unifiedLoco.cacheKey : inst.currentActionKey)) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
 
@@ -10625,7 +10631,10 @@ export class EntityManager {
     }
     inst.lastMotionCommand = cmd;
 
-    let action = inst.actions.get(cacheKey);
+    // A mixer action cached for this key (e.g. the spawn idle) must not route
+    // around the unified branch once the playhead owns the cycle — the mixer
+    // no longer advances, so playing it there is a silent no-op.
+    let action = unifiedOwnsCycle ? null : inst.actions.get(cacheKey);
     if (!action) {
       // Cache miss → fetch the clip. Substitutions reuse the spawn
       // meta's entries (NPC outfit doesn't change mid-walk).
