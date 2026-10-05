@@ -197,6 +197,20 @@ export class CloudVolume {
         const SPEED = 7.7e-5 * scale;
         this.effect.localWeatherVelocity.set(SPEED * 0.8, SPEED * 0.6);
       }
+      // 2026-10-05 "sky resets every second, never progresses": takram's
+      // shapeVelocity/shapeDetailVelocity default to ZERO, so the cloud
+      // shapes sat fixed in world space and the only frame-to-frame change
+      // was the shader's frame%64 STBN / frame%16 Bayer jitter cycle — a
+      // deterministic 64-frame loop (~1.07 s @60fps) that reads as "snaps
+      // back". Advect the shapes on the same ~7.7 m/s wind (offset units =
+      // m/s × repeat). `?cloudDrift=off` still freezes everything.
+      if (scale > 0) {
+        const WIND = 7.7 * scale; // m/s
+        const wx = -WIND * 0.8, wz = -WIND * 0.6;
+        const sr = this.effect.shapeRepeat.x, dr = this.effect.shapeDetailRepeat.x;
+        this.effect.shapeVelocity.set(wx * sr, 0, wz * sr);
+        this.effect.shapeDetailVelocity.set(wx * dr, 0, wz * dr);
+      }
     }
 
     // Scratch vec3 so tick() doesn't allocate per-frame.
