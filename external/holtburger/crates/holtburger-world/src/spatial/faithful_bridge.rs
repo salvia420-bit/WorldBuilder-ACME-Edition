@@ -3872,6 +3872,32 @@ mod drift {
             faithful_find_transitional_position(env, &input, true, true)
         }
 
+        /// [`walk`] the way the LIVE client walks: `retail_ground` on (the
+        /// shipped default, `USE_RETAIL_GROUND` / `?retailGround`) with the
+        /// floor contact plane carried in from the previous slice, so the
+        /// mover enters every sub-step CONTACT | ON_WALKABLE with a valid
+        /// contact plane (retail `get_object_info` → `init_contact_plane`,
+        /// acclient.c:319074-319099). The bare `gates()` fixture has neither:
+        /// after its first sub-step `validate_transition` finds no contact
+        /// plane and clears CONTACT | ON_WALKABLE (acclient.c:312330-312350),
+        /// so object responses that depend on contact — `step_sphere_up`
+        /// (only taken when CONTACT | ON_WALKABLE) and the slide's skid
+        /// direction (the contact plane's normal) — run their airborne /
+        /// skid-less arms instead.
+        fn walk_grounded(env: &ObjEnv, from_x: f32, to_x: f32, state_extra: u32) -> TransitionOutcome {
+            let mut input = input_for(pose_at(from_x, FCY, FLOOR_WZ), pose_at(to_x, FCY, FLOOR_WZ));
+            input.object.state |= state_extra;
+            input.gates.retail_ground = true;
+            input.last_contact_plane = Some((
+                Plane {
+                    normal: v(0.0, 0.0, 1.0),
+                    d: -FLOOR_WZ,
+                },
+                CELL_ID,
+            ));
+            faithful_find_transitional_position(env, &input, true, true)
+        }
+
         /// A closed door leaf stops the mover at its face and the mover
         /// SLIDES along it (retail: the door's part BSP through
         /// `CPartArray::FindObjCollisions`, acclient.c:325464).
@@ -4111,7 +4137,7 @@ mod drift {
                     },
                 )],
             };
-            let out = walk(&env, FCX - 0.6, FCY, FCX + 1.6, FCY, ois::IGNORE_CREATURES);
+            let out = walk_grounded(&env, FCX - 0.6, FCX + 1.6, ois::IGNORE_CREATURES);
             assert!(
                 out.pose.coords.x > FCX + 1.2,
                 "an IGNORE_CREATURES mover was blocked by a creature: x={}",
@@ -4180,7 +4206,7 @@ mod drift {
                 scene: floor_scene(),
                 objects: vec![cylinder_obj(v(o.x + 1.6, o.y, FLOOR_WZ), 1.0, 0.3)],
             };
-            let out = walk(&env, FCX - 0.4, FCY, FCX + 1.6, FCY, 0);
+            let out = walk_grounded(&env, FCX - 0.4, FCX + 1.6, 0);
             assert!(
                 out.pose.coords.z >= FLOOR_WZ + 0.2,
                 "did not step up onto the low object: z={} (x={})",
