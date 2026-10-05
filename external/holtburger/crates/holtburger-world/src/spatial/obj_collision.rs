@@ -236,10 +236,15 @@ impl ObjCollider {
                 .cylspheres
                 .iter()
                 .map(|c| {
+                    // The smallest sphere about the cylinder's mid-point that
+                    // ENCLOSES it reaches the rim of a cap: hypot(r, h/2).
+                    // (`max(r, h/2)` — the first version — leaves the cap
+                    // rims outside, so a cylinder could miss a cell it
+                    // crosses.)
                     let mid = Vector3::new(c.origin.x, c.origin.y, c.origin.z + c.height * 0.5) * s;
                     Sphere {
                         center: frame.localtoglobal(mid),
-                        radius: c.radius.max(c.height * 0.5) * s,
+                        radius: c.radius.hypot(c.height * 0.5) * s,
                     }
                 })
                 .collect();
@@ -952,6 +957,35 @@ fn cylsphere_collide_with_point(this: &WorldCylSphere, t: &mut CTransition, chec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cylsphere's shadow sphere must ENCLOSE it, cap rims included:
+    /// radius hypot(r, h/2) about the mid-point. Old code: max(r, h/2) — the
+    /// rim of a 0.3 m × 2 m cylinder sat 0.044 m outside.
+    #[test]
+    fn a_cylsphere_shadow_sphere_encloses_the_cap_rims() {
+        let obj = ObjCollider {
+            id: 1,
+            state: 0,
+            weenie: None,
+            cell_id: 0x1234_0001,
+            origin: Vector3::new(10.0, 10.0, 5.0),
+            orientation: Quaternion::identity(),
+            scale: 1.0,
+            bsp: None,
+            bsp_bound: 0.0,
+            cylspheres: vec![SetupCylSphere {
+                origin: Vector3::zero(),
+                radius: 0.3,
+                height: 2.0,
+            }],
+            spheres: Vec::new(),
+        };
+        let s = obj.shadow_spheres();
+        assert_eq!(s.len(), 1);
+        let rim = Vector3::new(10.3, 10.0, 7.0); // top cap rim
+        let d = (rim - s[0].center).length();
+        assert!(d <= s[0].radius + 1e-5, "cap rim {d} outside shadow radius {}", s[0].radius);
+    }
 
     #[test]
     fn switch_is_thread_local_and_default_off() {
