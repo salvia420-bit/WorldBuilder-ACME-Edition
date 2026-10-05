@@ -10377,6 +10377,7 @@ export class EntityManager {
     // flag is off this is skipped and Dead falls through to the legacy
     // STATIONARY_COMMANDS → cycle path below (untouched, no regression).
     if (UNIFIED_DEATH && cmdLow === CMD_LOW_DEAD) {
+      const deathToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
       const MS =
         (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
       const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
@@ -10404,6 +10405,7 @@ export class EntityManager {
           entry = await this.animationCache.get(setupId, mtableId, bakeCmd, stance, fetchKeyframes, bakeOpts);
         } catch (_) { entry = null; }
         if (!this.entityMap.has(guid >>> 0)) return; // despawned mid-resolve
+        if (inst._motionToken !== deathToken) return; // superseded mid-resolve (F6)
         const d = entry?.sequenceDescriptor;
         if (d) {
           const seq = MS.fromDescriptor(
@@ -10627,6 +10629,11 @@ export class EntityManager {
     // the spawn key (bare 0x3 Ready) returned here and left the walk cycle
     // playing on a standing entity.
     const unifiedOwnsCycle = UNIFIED_LOCO && !!inst._unifiedLoco;
+    // Audit F6: per-entity command token, bumped BEFORE the dedup so even a
+    // re-issue of the playing cycle supersedes an older fetch still in
+    // flight. Every await below re-checks it: last command issued wins, not
+    // last fetch finished.
+    const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
     if (cacheKey === (unifiedOwnsCycle ? inst._unifiedLoco.cacheKey : inst.currentActionKey)) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
@@ -10650,7 +10657,12 @@ export class EntityManager {
       // resolves we'll insert it as a quick overlay; if not (no
       // link entry for this transition) we just play the cycle as
       // before. Failure is silent — same visual as today.
-      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance);
+      // Audit F4: under UNIFIED_LOCO the mixer stops advancing once the
+      // cycle is unified, so a mixer link never plays. Play it as a unified
+      // one-shot instead; when it finishes the tick falls back to
+      // _unifiedLoco, which by then holds the new cycle (link → cycle).
+      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance,
+        UNIFIED_LOCO ? { forceUnified: true, motionToken } : { motionToken });
     }
     inst.lastMotionCommand = cmd;
 
@@ -10689,6 +10701,7 @@ export class EntityManager {
       // Re-check — the entity may have been removed between the
       // cache hit and now.
       if (!this.entityMap.has(guid >>> 0)) return;
+      if (inst._motionToken !== motionToken) return; // a newer setMotion won (F6)
       const clip = entry.clip;
       if (!clip) {
         // No animation resolved for this (cmd, stance). Treat as STOP
@@ -12564,6 +12577,8 @@ export class EntityManager {
       return false;
     }
     if (!this.entityMap.has(inst.guid >>> 0)) return false;
+    // A locomotion link whose setMotion was superseded mid-fetch is stale (F6).
+    if (opts?.motionToken !== undefined && inst._motionToken !== opts.motionToken) return false;
     const clip = entry?.clip;
     if (!clip) {
       // No link registered for this (stance, from→to) transition. For
