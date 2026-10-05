@@ -51,3 +51,13 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 ## Camera / movement feel
 - [x] **Running "jut back" — fix landed:** the run cycle drew the body up to 3.25 m ahead of its real position and snapped it back every cycle (measured headless; now 0.18 m of normal bob). Confirm it's gone. If any jut remains, it's a different cause: reproduce with `&moveTelemetry=1`, then paste `__hbWasm.localPoseSnapDiag()` and `__hbWasm.leashEchoDiag()`. — **2026-10-05 owner:** massive improvement, no sign of the jut.
 - [ ] **syncPhysicsTick pairing:** every load warns that `?posePublishPostTick` is off. Compare camera smoothness with `&posePublishPostTick=on` to decide whether to make it the default.
+
+## Audio (2026-10-05 retail sound parity — ears only)
+- [ ] **UI clicks:** clicking HUD buttons/inventory slots gives the retail UI click, at the same loudness wherever the character stands and whichever way the camera faces (it used to fade out away from the world origin). Moving the effects slider changes it.
+- [ ] **Inventory sounds:** wield / unwield / pick up / drop play once (no double-play when the server echo arrives), from the character, at full volume (they used to be halved).
+- [ ] **UI error / slider grab-release:** the "can't do that" buzz and slider clicks are centred and use the UI sound set.
+- [ ] **Portal whoosh:** entering and leaving portal space plays the enter/exit whoosh, centred. `&portalSound=0x0A000246` still overrides the enter sound.
+- [ ] **Server sounds (lifestone, doors, levers, spell sounds):** still heard; a creature's sound is quieter at range and silent beyond about 94 m. Sounds the server sends at volume 0 are now silent instead of loud.
+- [ ] **Crowded fights:** with many monsters, spells and footsteps at once, sounds already playing are not cut off; extra sounds beyond 16 at once are dropped (retail's 16-voice limit). Listen for missing important cues.
+- [ ] **Environment sounds (admin `@environ`/AdminEnvirons 101-123):** each plays centred; 117 is the squeal and 118-123 are thunder 1-6 (117-123 used to play the wrong sounds); 115 and 116 are silent.
+- [ ] **A/B `&audioRetailPan=on`** (owner product call 2026-10-05: HRTF stays the default): retail's flat left/right stereo pan — no front/back or height cue, no pan within 5 m, fixed when the sound starts. Note whether anything sounds wrong compared with the HRTF default.

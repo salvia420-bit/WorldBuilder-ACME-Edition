@@ -294,6 +294,13 @@ const TIER5 = [
   { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
   { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
   { tier: 5, flag: "cloudsMainPass", file: "tests/clouds_main_pass.test.mjs" },
+  // 2026-10-05 audio retail parity (voice pool, retail mixer, 0xF750, UI/portal sounds, volume 0).
+  { tier: 5, flag: "audio_voice_pool", file: "tests/audio_voice_pool.test.mjs" },
+  { tier: 5, flag: "audioRetailPan", file: "tests/audio_retail_mixer.test.mjs" },
+  { tier: 5, flag: "audio_server_sound", file: "tests/audio_server_sound.test.mjs" },
+  { tier: 5, flag: "audio_ui_click", file: "tests/audio_ui_click.test.mjs" },
+  { tier: 5, flag: "audio_portal_sounds", file: "tests/audio_portal_sounds.test.mjs" },
+  { tier: 5, flag: "audio_volume_zero", file: "tests/audio_volume_zero.test.mjs" },
   { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },

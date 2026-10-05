@@ -919,6 +919,7 @@ import {
   acQuatToThree,
   acToThree,
 } from "./adapter.js";
+import { retailVolume } from "./audio/retail_sound_rules.js";
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 // Routes the recolored/paletted entity-surface decode through the bake worker
 // (off the main thread) with a transparent main-thread fallback.
@@ -12555,7 +12556,9 @@ export class EntityManager {
       if (waveId === 0) return;
       const probability = Number.isFinite(desc.soundProbability)
         ? desc.soundProbability : 1.0;
-      const volume = desc.soundVolume > 0 ? desc.soundVolume : 1.0;
+      // SoundHook plays at 1.0, SoundTweaked at its vol — 0 is silent
+      // (acclient.c:342188-342209, 383079-383118).
+      const volume = ht === 21 ? retailVolume(desc.soundVolume) : 1.0;
       // Coin-flip on probability (only SoundTweaked carries != 1.0).
       if (!(probability >= 1.0 || Math.random() < probability)) return;
       setTimeout(() => {
@@ -12666,7 +12669,8 @@ export class EntityManager {
         const waveId = e.soundWaveId >>> 0;
         if (waveId !== 0) {
           const probability = e.soundProbability;
-          const volume = e.soundVolume > 0 ? e.soundVolume : 1.0;
+          // SoundHook 1.0 / SoundTweaked vol, 0 silent (acclient.c:342188-342209).
+          const volume = e.hookType === 21 ? retailVolume(e.soundVolume) : 1.0;
           const delayMs = Math.max(0, e.startTime * 1000);
           const hookStartTime = +e.startTime;
           // Coin-flip on probability (only SoundTweaked has !=1.0).
@@ -15218,7 +15222,7 @@ export class EntityManager {
             const r = (typeof cache?._rng === "function") ? cache._rng() : Math.random();
             if (r >= entry.probability) return;
           }
-          const gain = entry.volume > 0 ? entry.volume : 1.0;
+          const gain = retailVolume(entry.volume); // row volume 0 = silent (acclient.c:383096)
           // Snapshot pos again at await-resolution time so a moving
           // entity's audio lands at its current location, not where
           // it was at hook-fire time. (For instant-resolve from a
@@ -15414,7 +15418,7 @@ export class EntityManager {
         this._soundTweakedHookRollsMissed = (this._soundTweakedHookRollsMissed | 0) + 1;
         return;
       }
-      const gain = hook.soundVolume > 0 ? +hook.soundVolume : 1.0;
+      const gain = retailVolume(+hook.soundVolume); // vol 0 = silent (acclient.c:342209, 383096)
       if (pushEventRecord) {
         pushEventRecord({
           type: "sound",
