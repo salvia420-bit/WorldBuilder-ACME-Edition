@@ -6830,12 +6830,38 @@ impl MovementSystem {
         } else {
             None
         };
-        let object = holtburger_world::spatial::transition::ObjectInfo::for_local_player(
+        let mut object = holtburger_world::spatial::transition::ObjectInfo::for_local_player(
             step_up,
             step_down,
             USE_EDGE_SLIDE && world.player.allow_edge_slide,
             world.player.guid,
         );
+        // `OBJECTINFO::init` (acclient.c:314118-314143): the mover's weenie
+        // ORs in IS_IMPENETRABLE / IS_PLAYER / IS_PK / IS_PKLITE
+        // (`ACCWeenieObject::IsImpenetrable` etc., the object-description
+        // bitfield 437199-437217). Read by the in-transition object
+        // collision's player-vs-player pass-through (`obj_collision.rs`).
+        {
+            use holtburger_common::properties::ObjectDescriptionFlag as F;
+            use holtburger_world::spatial::transition::object_info_state as ois;
+            let flags = world
+                .entities
+                .get(world.player.guid)
+                .map(|e| e.flags)
+                .unwrap_or(F::PLAYER);
+            if flags.contains(F::PLAYER) {
+                object.state |= ois::IS_PLAYER;
+            }
+            if flags.contains(F::FREE_PK_STATUS) {
+                object.state |= ois::IS_IMPENETRABLE;
+            }
+            if flags.contains(F::PLAYER_KILLER) {
+                object.state |= ois::IS_PK;
+            }
+            if flags.contains(F::PK_LITE_STATUS) {
+                object.state |= ois::IS_PKLITE;
+            }
+        }
         let gates = holtburger_world::spatial::transition::TransitionGates {
             step_up_down: USE_STEP_UP_DOWN,
             walkable_step_down: USE_WALKABLE_STEP_DOWN,
@@ -7407,8 +7433,14 @@ impl MovementSystem {
         // cannot corrupt grounding. `Entity::is_collidable` already exempts
         // ETHEREAL|IGNORE_COLLISIONS (an open door passes for free); the
         // IGNORE_CREATURES object-state gate is honored like GeometryCaches.
+        //
+        // `?objCollideInTransition` (obj_collision.rs): the faithful driver
+        // collides these objects INSIDE the transition (retail
+        // `CObjCell::find_obj_collisions`), so this post-transition clamp —
+        // and the door-stopgap cell relabel it carries — stand down.
         if self.faithful_transition_enabled()
             && self.faithful_entity_collision_enabled()
+            && !holtburger_world::spatial::obj_collision::obj_collide_in_transition_enabled()
             && object.state
                 & holtburger_world::spatial::transition::object_info_state::IGNORE_CREATURES
                 == 0

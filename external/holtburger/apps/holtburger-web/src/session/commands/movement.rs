@@ -760,6 +760,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // `PhysicsObj.GetPhysicsRadius`) instead of
             // the PLAYER_CAPSULE_RADIUS fallback.
             let _drained_radii = drain_pending_setup_radii_into(w);
+            // Objects in the transition: the full CSetup cylsphere / sphere
+            // lists, same parse, same cadence.
+            let _drained_shapes = crate::drain_pending_setup_shapes_into(&mut w.scene);
             // COMBAT-RADII (2026-07-28): same cadence for
             // the raw CPartArray `(radius, height)` dims the
             // sticky standoff + MoveTo cylinder metric read.

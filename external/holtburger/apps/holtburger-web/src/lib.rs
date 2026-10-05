@@ -497,6 +497,15 @@ fn parse_faithful_entity_collision_flag(search: &str) -> bool {
         .any(|kv| kv == "faithfulEntityCollision=off")
 }
 
+/// Parse `?objCollideInTransition=on` (strict opt-in, DEFAULT OFF): collide
+/// doors / creatures / players inside the faithful transition
+/// (holtburger-world `spatial::obj_collision`). Needs a wasm rebuild.
+#[cfg(target_arch = "wasm32")]
+fn parse_obj_collide_in_transition_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "objCollideInTransition=on")
+}
+
 /// COL-DIAG (2026-08-04): parse `?fu3Diag=on`. DEFAULT-OFF, strict `=on`
 /// opt-in — a pure console diagnostic for the FU-3 entity clamp (one `[fu3] …`
 /// line per ~second: collider count, how many took the precise BSP arm,
@@ -17638,6 +17647,50 @@ fn record_setup_radius_pending(setup_id: u32, radius: f32) {
     });
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// Objects in the transition (holtburger-world `obj_collision.rs`): each
+    /// parsed SetupModel's FULL collision primitive lists (`CSetup`
+    /// cylspheres / spheres, setup-local, unscaled) — what retail's
+    /// `CPhysicsObj::FindObjCollisions` tests a non-BSP object with
+    /// (acclient.c:316229-316276). Staged beside `SETUP_RADIUS_PENDING`,
+    /// drained into `SpatialScene::register_setup_collision_shapes`.
+    static SETUP_SHAPES_PENDING: std::cell::RefCell<
+        Vec<(u32, holtburger_world::spatial::obj_collision::SetupCollisionShapes)>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Stage a parsed SetupModel's collision primitives for the next drain.
+#[cfg(target_arch = "wasm32")]
+fn record_setup_shapes_pending(setup_id: u32, setup: &holtburger_dat::file_type::SetupModel) {
+    let shapes = holtburger_world::spatial::obj_collision::SetupCollisionShapes {
+        cylspheres: setup
+            .cyl_spheres
+            .iter()
+            .map(|c| holtburger_world::spatial::SetupCylSphere {
+                origin: c.origin,
+                radius: c.radius,
+                height: c.height,
+            })
+            .collect(),
+        spheres: setup.spheres.clone(),
+    };
+    SETUP_SHAPES_PENDING.with(|cell| cell.borrow_mut().push((setup_id, shapes)));
+}
+
+/// Drain staged SetupModel collision primitives into the scene.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn drain_pending_setup_shapes_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    SETUP_SHAPES_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (setup_id, shapes) in buf.drain(..) {
+            scene.register_setup_collision_shapes(setup_id, shapes);
+        }
+        count
+    })
+}
+
 /// Drain pending SetupModel radii into `WorldState::setup_radii`.
 /// Returns the count inserted. Idempotent on an empty buffer.
 #[cfg(target_arch = "wasm32")]
@@ -22726,6 +22779,7 @@ pub async fn fetch_entity_model_render(
                 // `PhysicsObj.GetPhysicsRadius()`). Staged alongside, so
                 // one SetupModel fetch feeds both caches.
                 record_setup_part_dims_pending(setup_id, setup.radius, setup.height);
+                record_setup_shapes_pending(setup_id, &setup);
             }
         }
     }
@@ -24460,6 +24514,7 @@ pub async fn fetch_entity_animation_keyframes(
                         record_setup_radius_pending(setup_id, r);
                     }
                     record_setup_part_dims_pending(setup_id, setup.radius, setup.height);
+                    record_setup_shapes_pending(setup_id, &setup);
                 }
                 let _ = try_resolve_cycle_frames(s, &setup, mt_override, stance, motion_command);
                 // 2026-06-19: ALSO warm the LINK transition's anims (attack/cast/eat
@@ -24750,6 +24805,7 @@ pub async fn fetch_entity_animation_keyframes_batch(
                         record_setup_part_dims_pending(
                             setup_id, setup.radius, setup.height,
                         );
+                        record_setup_shapes_pending(setup_id, &setup);
                         // Stance=0 + motion_command=0 walks the
                         // default MotionTable's first cycle; that's
                         // sufficient to prefetch the Animation chain
@@ -43558,6 +43614,13 @@ async fn recv_loop(
     // `parse_faithful_entity_collision_flag`.
     movement
         .set_faithful_entity_collision(parse_faithful_entity_collision_flag(&flag_search()));
+    // `?objCollideInTransition=on` (default OFF): doors / creatures / players
+    // collided INSIDE the faithful transition (retail
+    // `CObjCell::find_obj_collisions`, holtburger-world `obj_collision.rs`);
+    // when on, the post-transition entity clamp above stands down.
+    holtburger_world::spatial::obj_collision::set_obj_collide_in_transition(
+        parse_obj_collide_in_transition_flag(&flag_search()),
+    );
     // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
     // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
     movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
