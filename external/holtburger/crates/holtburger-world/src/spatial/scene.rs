@@ -3255,7 +3255,9 @@ impl SpatialScene {
     ) -> bool {
         for (n, d) in super::faithful_bridge::exterior_portal_planes(self, cell_id) {
             let dist = n.x * global.x + n.y * global.y + n.z * global.z + d;
-            if dist > -radius && dist < radius {
+            // acclient.c:348313-348318: the band is `radius + 0.0002`.
+            let band = radius + super::faithful_bridge::STRADDLE_EPSILON;
+            if dist > -band && dist < band {
                 return true;
             }
         }

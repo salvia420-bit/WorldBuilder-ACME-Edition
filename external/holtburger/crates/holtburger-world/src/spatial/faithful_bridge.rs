@@ -136,6 +136,13 @@ fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
 
 // ─── SceneObjCell — the per-cell CObjCell adapter ───────────────────────────
 
+/// The pad retail adds to the sphere radius in `CEnvCell::find_transit_cells`'
+/// exterior-portal straddle test (`ia = radius + 0.00019999999`,
+/// acclient.c:348313). Note: the bridge tests in WORLD coordinates, where an
+/// f32 ulp (~0.0002–0.0005 m at landblock-scale coordinates) is the same
+/// order as this pad; retail tests in the cell's local frame.
+pub(crate) const STRADDLE_EPSILON: f32 = 0.000_199_999_99;
+
 /// How many portal levels [`SceneWorld::build_cell`] resolves ahead so the
 /// `find_cell_list` flood can reach multi-hop transit cells (E3.3). Retail's
 /// flood is self-terminating via the sphere-vs-cell gate; this is the build-time
@@ -597,8 +604,10 @@ impl CObjCell for SceneObjCell {
         for s in spheres.iter().take(num_sphere as usize) {
             for (n, d) in &self.exterior_portal_planes {
                 let dist = n.x * s.center.x + n.y * s.center.y + n.z * s.center.z + d;
-                // acclient.c:348320 — strict `-r < dist < r`.
-                if dist > -s.radius && dist < s.radius {
+                // acclient.c:348313-348318 — `ia = radius + 0.00019999999`,
+                // then strict `-ia < dist < ia`.
+                let band = s.radius + STRADDLE_EPSILON;
+                if dist > -band && dist < band {
                     return true;
                 }
             }
@@ -3408,8 +3417,13 @@ mod drift {
             !cell.wants_outside_cells(1, &[at(px - r * 2.0)]),
             "outside the band does not straddle"
         );
-        // Retail's band is STRICT: |d| == r is not a straddle.
-        assert!(!cell.wants_outside_cells(1, &[at(px - r)]), "|d| == r excluded");
+        // Retail's band is `r + 0.0002` (acclient.c:348313-348318): a sphere
+        // exactly one radius from the plane still straddles; 1 cm further
+        // does not. (Was: strict `|d| < r`, which excluded |d| == r.)
+        assert!(cell.wants_outside_cells(1, &[at(px - r)]), "|d| == r is inside the padded band");
+        assert!(!cell.wants_outside_cells(1, &[at(px - r - 0.01)]), "|d| = r + 1 cm excluded");
+        assert!(env.scene.cell_straddles_exterior_portal(CELL_ID, at(px - r).center, r));
+        assert!(!env.scene.cell_straddles_exterior_portal(CELL_ID, at(px - r - 0.01).center, r));
 
         let sealed = dungeon_mouth_env(false);
         let sealed_world = SceneWorld { scene: &sealed.scene };
