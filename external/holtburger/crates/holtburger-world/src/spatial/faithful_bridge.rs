@@ -3733,7 +3733,7 @@ mod drift {
         use super::*;
         use crate::spatial::obj_collision::{
             build_obj_overlay, physics_state, set_obj_collide_in_transition, ObjCollider,
-            ObjPhysicsBsp, WeenieTraits,
+            ObjPhysicsBsp, SetupCollisionShapes, WeenieTraits,
         };
         use crate::spatial::transition::object_info_state as ois;
         use std::sync::Arc;
@@ -3832,8 +3832,7 @@ mod drift {
                 scale: 1.0,
                 bsp: Some(Arc::new(ObjPhysicsBsp::from_triangles(&tris))),
                 bsp_bound: (LEAF * LEAF + 1.0 + 2.2 * 2.2).sqrt(),
-                cylspheres: Vec::new(),
-                spheres: Vec::new(),
+                shapes: Arc::new(SetupCollisionShapes::default()),
             }
         }
 
@@ -3849,11 +3848,13 @@ mod drift {
                 scale: 1.0,
                 bsp: None,
                 bsp_bound: 0.0,
-                cylspheres: Vec::new(),
-                spheres: vec![Sphere {
-                    center: v(0.0, 0.0, 0.5),
-                    radius: 0.5,
-                }],
+                shapes: Arc::new(SetupCollisionShapes {
+                    cylspheres: Vec::new(),
+                    spheres: vec![Sphere {
+                        center: v(0.0, 0.0, 0.5),
+                        radius: 0.5,
+                    }],
+                }),
             }
         }
 

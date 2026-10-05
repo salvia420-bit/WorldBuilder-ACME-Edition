@@ -145,11 +145,24 @@ impl ObjPhysicsBsp {
         }
         let mut ids: Vec<u16> = polys.keys().copied().collect();
         ids.sort_unstable();
+        // The leaf's bounding sphere — retail's leaf/`CGfxObj` physics
+        // sphere reject (`CGfxObj::find_obj_collisions` 356515 tests the
+        // localspace spheres against it first): every polygon vertex lies
+        // within `bound` of the setup origin, so a swept sphere that misses
+        // it skips the per-polygon walk.
+        let bound = polys
+            .values()
+            .flat_map(|p| p.vertices.iter())
+            .map(|v| v.length())
+            .fold(0.0f32, f32::max);
         Self {
             tree: BspNode::Leaf(BspLeaf {
                 index: 0,
                 solid: 0,
-                sphere: None,
+                sphere: Some(Sphere {
+                    center: Vector3::zero(),
+                    radius: bound,
+                }),
                 poly_ids: ids,
             }),
             polys,
@@ -205,10 +218,9 @@ pub struct ObjCollider {
     pub bsp: Option<Arc<ObjPhysicsBsp>>,
     /// Bounding radius of `bsp` about the object origin, unscaled.
     pub bsp_bound: f32,
-    /// `CPartArray::GetCylsphere`, setup-local, unscaled.
-    pub cylspheres: Vec<SetupCylSphere>,
-    /// `CPartArray::GetSphere`, setup-local, unscaled.
-    pub spheres: Vec<Sphere>,
+    /// `CPartArray::GetCylsphere` / `GetSphere`, setup-local, unscaled —
+    /// SHARED with the scene's per-SetupModel store (no per-transition copy).
+    pub shapes: Arc<SetupCollisionShapes>,
 }
 
 impl ObjCollider {
@@ -231,8 +243,9 @@ impl ObjCollider {
                 radius: self.bsp_bound * s,
             }];
         }
-        if !self.cylspheres.is_empty() {
+        if !self.shapes.cylspheres.is_empty() {
             return self
+                .shapes
                 .cylspheres
                 .iter()
                 .map(|c| {
@@ -249,7 +262,8 @@ impl ObjCollider {
                 })
                 .collect();
         }
-        self.spheres
+        self.shapes
+            .spheres
             .iter()
             .map(|sp| Sphere {
                 center: frame.localtoglobal(sp.center * s),
@@ -436,17 +450,17 @@ pub fn find_obj_collisions(obj: &ObjCollider, t: &mut CTransition) -> i32 {
                 &bsp.tree, t, obj.scale, &bsp.polys,
             );
         }
-    } else if !obj.cylspheres.is_empty() && !exempt && !ignore {
+    } else if !obj.shapes.cylspheres.is_empty() && !exempt && !ignore {
         // 316254-316276.
-        for c in &obj.cylspheres {
+        for c in &obj.shapes.cylspheres {
             result = cylsphere_intersects_sphere_at(c, &pos, obj.scale, t);
             if result != 1 {
                 break;
             }
         }
-    } else if !obj.spheres.is_empty() && !exempt && !ignore {
+    } else if !obj.shapes.spheres.is_empty() && !exempt && !ignore {
         // 316235-316252.
-        for s in &obj.spheres {
+        for s in &obj.shapes.spheres {
             result = sphere_intersects_sphere_at(s, &pos, obj.scale, t, is_creature);
             if result != 1 {
                 break;
@@ -973,12 +987,14 @@ mod tests {
             scale: 1.0,
             bsp: None,
             bsp_bound: 0.0,
-            cylspheres: vec![SetupCylSphere {
-                origin: Vector3::zero(),
-                radius: 0.3,
-                height: 2.0,
-            }],
-            spheres: Vec::new(),
+            shapes: Arc::new(SetupCollisionShapes {
+                cylspheres: vec![SetupCylSphere {
+                    origin: Vector3::zero(),
+                    radius: 0.3,
+                    height: 2.0,
+                }],
+                spheres: Vec::new(),
+            }),
         };
         let s = obj.shadow_spheres();
         assert_eq!(s.len(), 1);

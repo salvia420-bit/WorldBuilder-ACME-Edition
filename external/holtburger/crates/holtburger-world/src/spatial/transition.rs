@@ -417,76 +417,122 @@ impl TransitionEnv for WorldState {
         exclude: Guid,
         skip_parented: bool,
     ) -> Vec<super::obj_collision::ObjCollider> {
-        use super::obj_collision::{obj_bsp_for_geometry, ObjCollider, WeenieTraits};
-        use super::scenery::SetupCylSphere;
-        use holtburger_common::properties::{ItemType, ObjectDescriptionFlag as F, WorldObjectExt as _};
         let here = pose.global_coords();
         self.entities
             .iter()
             .filter(|e| e.guid != exclude && !(skip_parented && e.physics_parent_id.is_some()))
-            .filter_map(|e| {
-                let g = e.position.global_coords();
-                let scale = e
-                    .obj_scale()
-                    .map(|s| s as f32)
-                    .filter(|s| s.is_finite() && *s > 0.0)
-                    .unwrap_or(1.0);
-                let setup_id = WorldState::entity_setup_did(e);
-                // CSetup cylspheres / spheres (staged per SetupModel); before
-                // the Setup has streamed in, a humanoid cylinder of the cached
-                // radius stands in (the same residency fallback the clamp used).
-                let (cylspheres, spheres) =
-                    match setup_id.and_then(|id| self.scene.setup_collision_shapes(id)) {
-                        Some(s) => (s.cylspheres.clone(), s.spheres.clone()),
-                        None => {
-                            let r = setup_id
-                                .and_then(|id| self.setup_radii.get(&id).copied())
-                                .unwrap_or(PLAYER_SETUP_SPHERE_RADIUS);
-                            (
-                                vec![SetupCylSphere {
-                                    origin: Vector3::zero(),
-                                    radius: r,
-                                    height: PLAYER_SETUP_HEIGHT,
-                                }],
-                                Vec::new(),
-                            )
-                        }
-                    };
-                let geo = self.entity_physics_bsp(e);
-                let bsp_bound = geo.as_ref().map_or(0.0, |b| b.geometry.bound_radius);
-                let prim_extent = cylspheres
-                    .iter()
-                    .map(|c| c.origin.length() + c.radius.max(c.height))
-                    .chain(spheres.iter().map(|s| s.center.length() + s.radius))
-                    .fold(0.0f32, f32::max);
-                let reach = prefilter_dist + bsp_bound.max(prim_extent) * scale;
-                let dx = g.x - here.x;
-                let dy = g.y - here.y;
-                if dx * dx + dy * dy > reach * reach {
-                    return None;
-                }
-                Some(ObjCollider {
-                    id: e.guid.0,
-                    state: e.physics_state.bits(),
-                    weenie: Some(WeenieTraits {
-                        is_player: e.flags.contains(F::PLAYER),
-                        is_creature: e.item_type().is_some_and(|t| t.contains(ItemType::CREATURE)),
-                        is_impenetrable: e.flags.contains(F::FREE_PK_STATUS),
-                        is_pk: e.flags.contains(F::PLAYER_KILLER),
-                        is_pklite: e.flags.contains(F::PK_LITE_STATUS),
-                    }),
-                    cell_id: e.position.landblock_id.0,
-                    origin: g,
-                    orientation: e.position.rotation,
-                    scale,
-                    bsp: geo.as_ref().map(|b| obj_bsp_for_geometry(&b.geometry)),
-                    bsp_bound,
-                    cylspheres,
-                    spheres,
-                })
-            })
+            .filter_map(|e| obj_collider_for_entity(self, e, here, prefilter_dist))
             .collect()
     }
+}
+
+/// Coarse pre-filter bound on any object's collision extent (scaled), so far
+/// entities are rejected before any Setup / geometry lookup or allocation.
+const OBJ_PREFILTER_MAX_EXTENT_M: f32 = 30.0;
+
+/// One entity as `CPhysicsObj::FindObjCollisions` sees it, or `None` when it
+/// is out of reach of `here` (XY). Split out of
+/// [`TransitionEnv::obj_colliders_near`] for the tests.
+///
+/// * POSITION — retail collides against the CLIENT's physics object, i.e.
+///   where the client has moved it (`CPhysicsObj::m_position`, advanced
+///   every frame by the PositionManager / interpolation), not the last
+///   server packet. The scene's runtime body is that object when one exists
+///   (remote interpolation / root motion / MoveTo step it, and its pose is
+///   what the renderer draws); `Entity::position` is only the raw wire pose.
+/// * Distance first: the cheap XY test against a coarse extent bound runs
+///   before any lookup; the precise reach after the lookups but before
+///   anything is copied — the Setup shapes are SHARED (`Arc`), never cloned.
+/// * Residency fallbacks: a Setup not parsed yet, or a HAS_PHYSICS_BSP
+///   object (a door) whose physics geometry has not streamed in and whose
+///   Setup has no primitives, collides as a humanoid cylinder of the cached
+///   radius at its origin (the hinge) — never fully passable, as the old
+///   post-transition clamp's circle was not either. A Setup that IS parsed
+///   and genuinely has no primitives (a ground item) stays passable, as in
+///   retail.
+pub(crate) fn obj_collider_for_entity(
+    world: &WorldState,
+    e: &crate::entity::Entity,
+    here: Vector3,
+    prefilter_dist: f32,
+) -> Option<super::obj_collision::ObjCollider> {
+    use super::obj_collision::{obj_bsp_for_geometry, ObjCollider, SetupCollisionShapes, WeenieTraits};
+    use super::scenery::SetupCylSphere;
+    use holtburger_common::properties::{ItemType, ObjectDescriptionFlag as F, WorldObjectExt as _};
+    use std::sync::Arc;
+
+    let pos = world
+        .scene
+        .body_for_guid(e.guid)
+        .map(|b| b.pose)
+        .unwrap_or(e.position);
+    let g = pos.global_coords();
+    let dx = g.x - here.x;
+    let dy = g.y - here.y;
+    let d2 = dx * dx + dy * dy;
+    let scale = e
+        .obj_scale()
+        .map(|s| s as f32)
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or(1.0);
+    let coarse = prefilter_dist + OBJ_PREFILTER_MAX_EXTENT_M * scale;
+    if d2 > coarse * coarse {
+        return None;
+    }
+
+    let setup_id = WorldState::entity_setup_did(e);
+    let geo = world.entity_physics_bsp(e);
+    let shapes = setup_id.and_then(|id| world.scene.setup_collision_shapes(id));
+    let unresolved_bsp = e.has_physics_bsp()
+        && geo.is_none()
+        && shapes
+            .as_ref()
+            .is_none_or(|s| s.cylspheres.is_empty() && s.spheres.is_empty());
+    let shapes = match shapes {
+        Some(s) if !unresolved_bsp => s,
+        _ => {
+            let r = setup_id
+                .and_then(|id| world.setup_radii.get(&id).copied())
+                .unwrap_or(PLAYER_SETUP_SPHERE_RADIUS);
+            Arc::new(SetupCollisionShapes {
+                cylspheres: vec![SetupCylSphere {
+                    origin: Vector3::zero(),
+                    radius: r,
+                    height: PLAYER_SETUP_HEIGHT,
+                }],
+                spheres: Vec::new(),
+            })
+        }
+    };
+    let bsp_bound = geo.as_ref().map_or(0.0, |b| b.geometry.bound_radius);
+    let prim_extent = shapes
+        .cylspheres
+        .iter()
+        .map(|c| c.origin.length() + c.radius.max(c.height))
+        .chain(shapes.spheres.iter().map(|s| s.center.length() + s.radius))
+        .fold(0.0f32, f32::max);
+    let reach = prefilter_dist + bsp_bound.max(prim_extent) * scale;
+    if d2 > reach * reach {
+        return None;
+    }
+    Some(ObjCollider {
+        id: e.guid.0,
+        state: e.physics_state.bits(),
+        weenie: Some(WeenieTraits {
+            is_player: e.flags.contains(F::PLAYER),
+            is_creature: e.item_type().is_some_and(|t| t.contains(ItemType::CREATURE)),
+            is_impenetrable: e.flags.contains(F::FREE_PK_STATUS),
+            is_pk: e.flags.contains(F::PLAYER_KILLER),
+            is_pklite: e.flags.contains(F::PK_LITE_STATUS),
+        }),
+        cell_id: pos.landblock_id.0,
+        origin: g,
+        orientation: pos.rotation,
+        scale,
+        bsp: geo.as_ref().map(|b| obj_bsp_for_geometry(&b.geometry)),
+        bsp_bound,
+        shapes,
+    })
 }
 
 /// One transition request. `end` carries the FULL desired displacement —
@@ -2002,5 +2048,98 @@ mod tests {
         // Edge-slide refused ⇒ clamped only.
         let dead = refused_step_slide(lateral, clamped, Some(n), None, false);
         assert_eq!(dead, clamped);
+    }
+
+    // ── obj_collider_for_entity (objects inside the transition) ──
+
+    fn entity_at(guid: u32, pose: WorldPosition) -> crate::entity::Entity {
+        crate::entity::Entity::new(Guid(guid), "Obj".to_string(), pose)
+    }
+
+    /// The collider sits where the CLIENT has the object (the scene body the
+    /// interpolation / root motion steps and the renderer draws), not at
+    /// the last wire pose. Old code: `e.position` (3 m off here).
+    #[test]
+    fn an_object_collides_at_its_client_body_pose_not_the_wire_pose() {
+        let mut world = WorldState::synthetic();
+        let wire = pose_at(50.0, 50.0, 10.0);
+        world.entities.insert(entity_at(0x8000_0042, wire));
+        let mut stepped = wire;
+        stepped.coords.x += 3.0;
+        world.scene.register_body(crate::spatial::SpatialBody::new(
+            crate::spatial::SpatialBodyId::Entity(Guid(0x8000_0042)),
+            stepped,
+            web_time::Instant::now(),
+        ));
+        let e = world.entities.get(Guid(0x8000_0042)).unwrap();
+        let c = obj_collider_for_entity(&world, e, wire.global_coords(), 10.0).expect("in reach");
+        assert!(
+            (c.origin.x - stepped.global_coords().x).abs() < 1e-4,
+            "collider at x={} (wire {}, body {})",
+            c.origin.x,
+            wire.global_coords().x,
+            stepped.global_coords().x
+        );
+    }
+
+    /// Far entities are rejected before any lookup, and the Setup shapes
+    /// are SHARED with the scene's store, not cloned per transition.
+    #[test]
+    fn far_objects_are_skipped_and_setup_shapes_are_shared_not_cloned() {
+        use super::super::obj_collision::SetupCollisionShapes;
+        use super::super::scenery::SetupCylSphere;
+        let mut world = WorldState::synthetic();
+        let here = pose_at(50.0, 50.0, 10.0);
+        world.scene.register_setup_collision_shapes(
+            0x0200_0964,
+            SetupCollisionShapes {
+                cylspheres: vec![SetupCylSphere {
+                    origin: Vector3::zero(),
+                    radius: 1.0,
+                    height: 2.0,
+                }],
+                spheres: Vec::new(),
+            },
+        );
+        let mut near = entity_at(0x8000_0002, pose_at(51.0, 50.0, 10.0));
+        near.gfx_id = Some(0x0200_0964);
+        world.entities.insert(near);
+        let mut far = entity_at(0x8000_0001, pose_at(150.0, 50.0, 10.0));
+        far.gfx_id = Some(0x0200_0964);
+        world.entities.insert(far);
+
+        let far = world.entities.get(Guid(0x8000_0001)).unwrap();
+        assert!(obj_collider_for_entity(&world, far, here.global_coords(), 5.0).is_none());
+        let near = world.entities.get(Guid(0x8000_0002)).unwrap();
+        let c = obj_collider_for_entity(&world, near, here.global_coords(), 5.0).expect("in reach");
+        let stored = world.scene.setup_collision_shapes(0x0200_0964).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&c.shapes, &stored),
+            "the Setup shapes were copied per transition instead of shared"
+        );
+    }
+
+    /// A door (HAS_PHYSICS_BSP) whose physics geometry has not streamed in
+    /// and whose Setup has no primitives still blocks — as a hinge cylinder
+    /// of the cached radius — instead of being fully passable until the
+    /// geometry lands. Old code: the parsed-but-empty Setup shapes were used
+    /// as-is (no cylspheres, no spheres, no BSP ⇒ nothing to collide).
+    #[test]
+    fn an_unstreamed_door_collides_as_a_hinge_cylinder() {
+        use holtburger_common::properties::PhysicsState;
+        let mut world = WorldState::synthetic();
+        let p = pose_at(50.0, 50.0, 10.0);
+        let mut door = entity_at(0x7A9B_401F, p);
+        door.physics_state = PhysicsState::HAS_PHYSICS_BSP;
+        door.gfx_id = Some(0x0200_19FF);
+        world.entities.insert(door);
+        world.scene.register_setup_collision_shapes(
+            0x0200_19FF,
+            super::super::obj_collision::SetupCollisionShapes::default(),
+        );
+        let e = world.entities.get(Guid(0x7A9B_401F)).unwrap();
+        let c = obj_collider_for_entity(&world, e, p.global_coords(), 5.0).expect("in reach");
+        assert!(c.bsp.is_none(), "fixture: no resident geometry");
+        assert_eq!(c.shapes.cylspheres.len(), 1, "no stand-in cylinder: the door is passable");
     }
 }
