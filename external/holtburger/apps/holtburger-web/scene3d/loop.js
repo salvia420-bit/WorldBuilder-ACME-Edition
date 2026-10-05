@@ -3441,10 +3441,14 @@ function _armPosition(scene3d, em, upd) {
     // bound to (visual == collision), so no visual reconcile is needed —
     // pose the remote rig directly at the server Z. (Removed the
     // outdoor-only getTerrainVisualZ raycast + 0.3 m lift, 2026-06-26.)
+    // Remote motion D3/D7: the row's wire UpdatePositionFlag bits (contact)
+    // ride `weenieFlags` on KIND_POSITION; the cell index tells setPose's
+    // jump arc whether a terrain floor exists (scene3d/remote_airborne.js).
     em.setPose(
       g,
       wx, wy, wz,
-      upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
+      upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0,
+      upd.weenieFlags, lbId & 0xffff
     );
   }
 }

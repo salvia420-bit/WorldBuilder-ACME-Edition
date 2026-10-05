@@ -8,6 +8,13 @@ use crate::*;
 use crate::session::{LoopCtx, LoopFlags, LoopFlow};
 use holtburger_protocol::messages::{GameAction, GameMessage};
 
+/// Remote motion D3/D7 (OpenAC comparison 2026-10-04): marker bit OR'd into
+/// a KIND_POSITION row's `weenie_flags`, which then carries the wire
+/// `UpdatePositionFlag` bits (IS_GROUNDED = 0x04). A row without the marker
+/// came from a pkg that predates the field (JS treats contact as unknown).
+/// Mirrored by `WIRE_FLAGS_PRESENT` in scene3d/remote_airborne.js.
+const KIND_POSITION_WIRE_FLAGS_PRESENT: u32 = 0x8000_0000;
+
 pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow {
     let LoopFlags {
         wire_state_packs_stage1_on,
@@ -607,7 +614,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 physics_script_did: 0,
                 sound_table_did: 0,
                 obj_desc_flags: 0,
-                weenie_flags: 0,
+                // Remote motion D3/D7 (OpenAC comparison 2026-10-04):
+                // on KIND_POSITION this slot carries the raw wire
+                // `UpdatePositionFlag` bits, tagged with
+                // KIND_POSITION_WIRE_FLAGS_PRESENT so JS can tell
+                // "not grounded" (bit 0x04 clear) from a stale pkg
+                // (0). Retail ignores a remote's `!contact` position
+                // (`CPhysicsObj::MoveOrTeleport`, acclient.c:323481-
+                // 323482). JS uses the bit to keep such a frame from
+                // yanking a remote that is flying its own jump arc.
+                weenie_flags: KIND_POSITION_WIRE_FLAGS_PRESENT
+                    | data.pos.flags.bits(),
                 // A1 (2026-05-29): non-MOTION updates carry no
                 // playback speed — identity (no anim scaling).
                 motion_speed: 1.0,

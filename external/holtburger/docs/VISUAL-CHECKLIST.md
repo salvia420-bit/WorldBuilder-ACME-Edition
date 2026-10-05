@@ -44,6 +44,9 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 - [x] **Projectiles:** no grey squares. If a spell now looks *missing*, note which one: that's a texture-load bug. — **2026-10-05 owner:** no grey squares. But bolt motion while moving, the trail particles, the light, and visibility along the whole path are all weaker than retail. Being worked on.
 - [x] **Portal travel:** the loading curtain never sticks. It hides on arrival or after at most 8 s. — **2026-10-05 owner:** the curtain should go entirely (port OpenAC/retail portal space). Also: after portalling into a dungeon the player rig is invisible while monsters show. Being fixed.
 
+## Remote motion
+- [ ] **Remote jump arc** (needs a second character; `?remoteJumpArc` default on): watch another player jump, standing and running, on flat ground and down a slope. The body rises and falls in a smooth parabola and lands on the ground, with no linear rise followed by a pop, and no sink into or float above the terrain at landing. A/B with `&remoteJumpArc=off`. Note: the arms-up jump pose can stay up for several seconds after landing; that is a known, separate animation issue.
+
 ## Camera / movement feel
 - [x] **Running "jut back" — fix landed:** the run cycle drew the body up to 3.25 m ahead of its real position and snapped it back every cycle (measured headless; now 0.18 m of normal bob). Confirm it's gone. If any jut remains, it's a different cause: reproduce with `&moveTelemetry=1`, then paste `__hbWasm.localPoseSnapDiag()` and `__hbWasm.leashEchoDiag()`. — **2026-10-05 owner:** massive improvement, no sign of the jut.
 - [ ] **syncPhysicsTick pairing:** every load warns that `?posePublishPostTick` is off. Compare camera smoothness with `&posePublishPostTick=on` to decide whether to make it the default.
