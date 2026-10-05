@@ -6647,9 +6647,18 @@
           // pre-populated `handle.characterList()` rather than as a
           // queued event. Subsequent CharacterList re-fires (after a
           // CharacterCreate / CharacterDelete round-trip) DO arrive as
-          // kind=0 events through poll_events. Drain anything queued in
-          // the post-login pre-pump window for completeness.
-          handle.poll_events();
+          // kind=0 events through poll_events.
+          //
+          // There used to be a bare `handle.poll_events()` here that drained
+          // and DISCARDED whatever the recv loop queued while start_session
+          // was awaited (e.g. kind=57 ServerInfo from ServerName 0xF658, chat,
+          // a kind=0 re-fire). poll_events is a destructive take, so those
+          // events never reached a handler. It is gone on purpose: nothing
+          // below awaits before `requestAnimationFrame(drainEvents)`, so the
+          // queue simply stays in wasm and the FIRST pumpNetFrame dispatches
+          // it through the normal handlers (all defined by then; the kind=0 /
+          // kind=57 handlers are idempotent re-renders of what this block
+          // renders synchronously anyway).
 
           const chars = handle.characterList();
           // HUD rec #83 (2026-06-16): post-login banner mirrors retail
