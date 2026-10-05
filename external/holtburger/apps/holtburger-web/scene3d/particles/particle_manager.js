@@ -1194,7 +1194,7 @@ export class ParticleManager {
         // falling back to a fresh clone. Cuts the allocate/free churn that
         // drove the sustained-combat cast stutter.
         const poolKey = baseMaterial
-          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}`
+          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}|${baseMaterial.uuid}`
           : null;
         const mat = baseMaterial
           ? (this._takePooledMaterial(poolKey) || baseMaterial.clone())

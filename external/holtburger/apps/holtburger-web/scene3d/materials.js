@@ -4998,8 +4998,13 @@ export class MaterialCache {
    */
   async getParticleUnlit(surfaceDid, fetchSurfacesPixels) {
     const lit = await this.get(surfaceDid, fetchSurfacesPixels);
+    // 2026-10-05 "spell shows as a box/square": never hand a particle the
+    // grey opaque MeshStandard fallback — the alpha-test branch can't cut a
+    // fully-opaque colour, so every particle became a grey quad. null routes
+    // particle_manager to its invisible no-surface material instead.
+    if (!lit || lit === this.fallbackMaterial) return null;
     if (!readParticleUnlitFlag()) return lit;
-    if (!lit || lit === this.fallbackMaterial || this.wireframeMode) return lit;
+    if (this.wireframeMode) return lit;
     const did = surfaceDid >>> 0;
     const cached = this.particleUnlitMaterials.get(did);
     if (cached) return cached;
