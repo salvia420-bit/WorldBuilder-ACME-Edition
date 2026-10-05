@@ -271,8 +271,8 @@ function readPreCreateBufferFlag() {
 }
 
 // === Wave R3.A — remote-entity motion SMOOTHING (2026-05-28) ===
-// `?deadReckon=on` opt-in. Default OFF → remote entities snap to each
-// server-authoritative position exactly as before (byte-identical render).
+// `?deadReckon` — DEFAULT ON (B5/QW2/REMOTE-1; `=off` → remote entities snap
+// to each server-authoritative position, the old byte-identical render).
 // On → the manager-level `setPose(guid, …)` stashes the server pose as a
 // per-entity target and the per-frame `tick(dt)` critically-damps the
 // rendered `root.position` toward it, killing the inter-packet stutter on
@@ -294,10 +294,10 @@ function readDeadReckonFlag() {
   }
 }
 
-// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` opt-in (default OFF,
-// pending 1070 eye-test). COMPOSITE flag: only meaningful alongside
-// `?unifiedTick=on&wireStatePacks=stage1` (the wasm side warns + degrades
-// otherwise, and no pose rows ever arrive, so this stays inert). When rows DO
+// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp` (DEFAULT ON since
+// F-2026-06-27; `=off` escape). COMPOSITE flag: only meaningful alongside
+// `unifiedTick` + `wireStatePacks` (both also default-on; the wasm side warns
+// + degrades if either is `=off`, and no pose rows ever arrive). When rows DO
 // arrive (loop.js drainRemotePoses → applyManagedPose), the wasm-side retail
 // PositionManager owns each managed entity's POSITION (smoothing already
 // happened Rust-side, acclient.c:389258-389264) and the JS dead-reckon ease +
@@ -957,8 +957,8 @@ import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
 // half-blends into the "upper-body-only swing" bug. The wasm `MotionSequence`
 // class is read at runtime off `window.__hbWasm` (set during boot) so a stale
 // pkg/ soft-degrades to the mixer overlay. `poseRigAt` is the JS-only per-part
-// pose write (the one step that can't live in Rust). Default-OFF — enable with
-// ?unifiedMotion=attack (or =on).
+// pose write (the one step that can't live in Rust). DEFAULT ON (absent
+// `?unifiedMotion` = "default" = every class); `?unifiedMotion=off` disables.
 import { poseRigAt } from "./motion/motion_sequence.js";
 // J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
 // (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
@@ -987,11 +987,10 @@ const _finiteOr0 = (v) => (Number.isFinite(+v) ? +v : 0);
 // poseRigAt are referenced only inside the flag-on runtime branches, so
 // they're inert when off.
 // `?unifiedMotion=<class>` selects which motion classes route through the Rust
-// authority. W6 flip (2026-06-18, §9 class-by-class ruling): the bare default
-// enables every class EXCEPT locomotion — locomotion carries the open B-1
-// movement-integrator oscillation (Walk→Stop→Walk), so it stays behind explicit
-// `?unifiedMotion=locomotion` / `=on` until B-1 lands. `=off` = all off (escape);
-// `=on` = all incl. locomotion; `=<class>` = that class only.
+// authority. The bare default ("default") enables EVERY class, locomotion
+// included since DEC-18 (2026-08-13 — the W6 2026-06-18 "all except locomotion
+// until B-1" hold was lifted when B-1 was refuted; see the locomotion block
+// below). `=off` = all off (escape); `=on` = all; `=<class>` = that class only.
 const UNIFIED_MODE = (() => {
   try {
     const v = new URLSearchParams(
@@ -1000,7 +999,8 @@ const UNIFIED_MODE = (() => {
     return v == null ? "default" : String(v).toLowerCase();
   } catch (_) { return "default"; }
 })();
-// "default" = the W6 all-but-locomotion default; "on" = all classes incl. loco.
+// "default" = the shipped default (all classes, incl. locomotion since DEC-18);
+// "on" = all classes too.
 const UNIFIED_DEFAULT = UNIFIED_MODE === "default";
 const UNIFIED_ATTACK = UNIFIED_DEFAULT || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 const UNIFIED_DEATH = UNIFIED_DEFAULT || UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
@@ -1582,16 +1582,16 @@ const CAST_SYNTHETIC_CASTER_VFX = (() => {
   }
 })();
 
-// OMEGA (2026-06-06) — `?cycleOmega=on` gates applying a cycle's authored
-// MotionData.omega (continuous angular velocity) to the rig. Default OFF: a
-// behaviour change that needs a 1070 eye-test on a real authored spinner
-// (sign/fan) + a reachability scan (which in-scene MTs carry cycle omega).
+// OMEGA (2026-06-06) — `?cycleOmega` gates applying a cycle's authored
+// MotionData.omega (continuous angular velocity) to the rig. DEFAULT ON since
+// render-audit T1c (2026-06-09; `=off` opts out). Originally held off for a
+// 1070 eye-test on a real authored spinner (sign/fan) + a reachability scan.
 // EXCLUDES turn-in-place cycles — their omega is the turn rate already driven by
 // server heading / heading-ease, so applying it would double-count and break
 // turning (the player MT TurnRight cycle carries omega [0,0,-1.5], confirmed via
 // the wasm `cycleOmega` getter). Integrated in `_tickHookOmega` (summed with
-// SetOmega hook omega). Harmless while OFF: no `_cycleOmega` is ever set, so all
-// consumers see undefined and behaviour is byte-identical.
+// SetOmega hook omega). Under `=off` no `_cycleOmega` is ever set, so all
+// consumers see undefined (the pre-T1c behaviour).
 // default-ON flipped per render-audit T1c (2026-06-09), opt-out ?cycleOmega=off, pending 1070 eye-test
 const CYCLE_OMEGA_ON = (() => {
   try {
@@ -3735,17 +3735,17 @@ export class EntityManager {
     this._entityLightCount = 0;
     this._entityLightCapHitLogged = false;
     // === Wave R3.A (2026-05-28) — remote-entity motion smoothing.
-    // Read the `?deadReckon=on` opt-in HERE (constructor) so every consumer
+    // Read `?deadReckon` (DEFAULT ON) HERE (constructor) so every consumer
     // (`setPose`, `tick`) reads `this._deadReckonOn` — no cross-function flag
     // handoff (avoids the prior-wave ReferenceError where a flag was declared
-    // in one function and read in another). Default OFF → the snap path in
+    // in one function and read in another). `=off` → the snap path in
     // `setPose` runs exactly as before (byte-identical), no target stored, no
     // tick smoothing.
     this._deadReckonOn = readDeadReckonFlag();
     // (2026-07-06) `?deathAnim=off` escape — death-collapse + corpse handoff.
     this._deathAnimOn = readDeathAnimFlag();
-    // A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF). Read
-    // once HERE; consumed in `applyManagedPose` / `setPose` / `tick`.
+    // A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp` (DEFAULT ON, `=off`
+    // escape). Read once HERE; consumed in `applyManagedPose` / `setPose` / `tick`.
     this._remoteInterpOn = readRemoteInterpFlag();
     // CREATURE-SEPARATION (2026-07-28) — `?creatureSeparation=off`. Read once
     // HERE; consumed in `tick` (the prediction clamp + the contact-envelope
@@ -10026,15 +10026,14 @@ export class EntityManager {
     // Issue 4 (2026-06-03): _sidestepCommand is populated ONLY by
     // setSidestepLayer (the additive 0.5-weight sidestep blend). The local
     // player rig's camera-driven dispatch (scene3d/camera.js
-    // _dispatchLocalRigMotion) routes a PURE strafe through setMotion as the
-    // FORWARD command and never calls setSidestepLayer, so for a camera-
-    // dispatched pure strafe both fwdCmd (a SideStep* code, not a Run/Walk
-    // forward code) and sideCmd land here without a forward run/walk speed to
-    // scale, and this returns null → tick() falls back to the rig-XZ EMA. That
-    // fallback is intentional and HARMLESS: sidestep |velocity|≈0, so the
-    // EMA-derived cycleTimeScale no-ops. Routing strafe through setSidestepLayer
-    // would change the visible clip (additive blend vs. full swap) and is
-    // deliberately NOT done here.
+    // _dispatchLocalRigMotion) DOES call setSidestepLayer under the default-ON
+    // `?localRigCombo` (F15-3: independent forward + sidestep slots), so
+    // _sidestepCommand is set for a camera-dispatched strafe. Only the legacy
+    // `?localRigCombo=off` single-clip lane routes a PURE strafe through
+    // setMotion as the FORWARD command without calling setSidestepLayer; there
+    // fwdCmd is a SideStep* code with no forward run/walk speed to scale, this
+    // can return null and tick() falls back to the rig-XZ EMA — HARMLESS, since
+    // sidestep |velocity|≈0 makes the EMA-derived cycleTimeScale a no-op.
     if (fwdCmd === 0 && sideCmd === 0) return null;
     const fwdSpeed = Number.isFinite(inst._forwardSpeed) ? inst._forwardSpeed : 0;
     const sideSpeed = Number.isFinite(inst._sidestepSpeed) ? inst._sidestepSpeed : 0;

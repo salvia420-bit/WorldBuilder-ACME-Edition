@@ -603,9 +603,9 @@ function drainMotionAxes(scene3d, sessionHandle) {
   }
 }
 
-// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp=on` (default OFF, composite:
-// needs `?unifiedTick=on&wireStatePacks=stage1` or the wasm side degrades it
-// and no rows ever arrive). Drains the wasm `pollRemotePoses` side-channel —
+// A2-P2 (2026-06-12, W3+ S8) — `?remoteInterp` (DEFAULT ON since
+// F-2026-06-27, `=off` escape; composite: needs `unifiedTick` + `wireStatePacks`,
+// both default-on, or the wasm side degrades it and no rows ever arrive). Drains the wasm `pollRemotePoses` side-channel —
 // the per-frame poses the Rust PositionManager (retail InterpolateTo /
 // ConstrainTo remote driver) stepped this tick — and hands each row to
 // `EntityManager.applyManagedPose`. Same flag-reader shape as CAST_AXES_ON.
@@ -3184,7 +3184,7 @@ function _isWielderCapable(meta) {
 // pumped) so the wield re-sync still fires per spawned guid.
 function _doSpawn(em, meta) {
   em.spawn(meta);
-  // D2 (Q3.2, rides existing ?wieldHandAttach, default-off ⇒ inert):
+  // D2 (Q3.2, rides existing ?wieldHandAttach — DEFAULT ON, `=off` ⇒ inert):
   // FU-1 (2026-06-11) — LOGIN-time wielded items never get a kind=49
   // Wielder-transition event (the wield predates the session), so no attach
   // is ever requested and the weapon renders "dropped" at the feet. Nudge the
@@ -3581,8 +3581,8 @@ function _armMotionAction(scene3d, em, upd) {
     try { window.__diag?.cast?.onEchoConsume?.({ cmd: actionCmd, hit: true }); } catch (_) {}
   } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
     em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
-    // D4 (Q3.2, rides existing ?serverSwing, default-off ⇒ inert):
-    // FU-3 (2026-06-11) — under ?serverSwing=on the local rig has no
+    // D4 (Q3.2, rides existing ?serverSwing — DEFAULT ON, `=off` ⇒ inert):
+    // FU-3 (2026-06-11) — under ?serverSwing the local rig has no
     // click-time swing anymore, and setMotion's MT clip doesn't
     // animate the local rig. Fire the procedural shoulder pose at
     // this (server-timed, post-MoveTo) moment for attack-class
@@ -3847,7 +3847,7 @@ export function installSharedDrainHook(scene3d) {
     // name `dispatchOne` is kept so the `_prewarmFromBatch` / hook /
     // backlog blocks below are textually undisturbed.
     //
-    // A15-Q4 (`?unifiedDispatch=on`, default-off): dispatchOne delegates
+    // A15-Q4 (`?unifiedDispatch`, DEFAULT ON, `=off` escape): dispatchOne delegates
     // to a `createEntityDispatcher` "3d" backend table built once per
     // installSharedDrainHook call. Its handlers are the SAME `_arm*`
     // functions the flag-off `dispatchEntityUpdate` if-chain calls —
