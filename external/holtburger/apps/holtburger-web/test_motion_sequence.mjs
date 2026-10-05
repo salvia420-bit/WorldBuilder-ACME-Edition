@@ -15,7 +15,7 @@
 // Part B dynamic-imports `three` + animation.js (bare-specifier); if `three`
 // can't be located it SKIPs (not fails) — Part A still fully gates the poser.
 
-import { poseRigAt, unifiedMotionMode } from "./scene3d/motion/motion_sequence.js";
+import { poseRigAt } from "./scene3d/motion/motion_sequence.js";
 
 let passed = 0, failed = 0, skipped = 0;
 function check(name, ok, detail) {
@@ -91,11 +91,6 @@ console.log("=== Part A: poser correctness (exact authored keyframe) ===");
     approx(parts[0].position.x, 31.5) && approx(parts[0].position.y, 3),
     `(${parts[0].position.x},${parts[0].position.y})`);
 }
-
-// Flag parsing.
-check("unifiedMotion default off", unifiedMotionMode("") === "off");
-check("unifiedMotion=shadow parses", unifiedMotionMode("?unifiedMotion=shadow") === "shadow");
-check("unifiedMotion=attack parses", unifiedMotionMode("?x=1&unifiedMotion=attack") === "attack");
 
 // ---- Part B: real-mixer parity (skips if three not locatable) ----------------
 console.log("=== Part B: parity vs real THREE.AnimationMixer ===");

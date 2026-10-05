@@ -11,8 +11,10 @@
 //
 // What CANNOT move to Rust, and so stays here: the per-part POSE WRITE
 // (`poseRigAt`) — it touches `THREE.Object3D` `.position`/`.quaternion`, the
-// dumb `CPartArray::UpdateParts` step (acclient.c:326624) — and the URL-flag
-// parse (`unifiedMotionMode`). Rust hands JS one GLOBAL FRAME INDEX per entity
+// dumb `CPartArray::UpdateParts` step (acclient.c:326624). (The `?unifiedMotion`
+// flag is parsed by entities.js `UNIFIED_MODE` — the only reader; the unused
+// `unifiedMotionMode()` here was deleted 2026-10-05: it returned "off" by default,
+// contradicting the shipped reader.) Rust hands JS one GLOBAL FRAME INDEX per entity
 // per frame; this poser indexes the JS-cached keyframe buffer at that frame.
 
 export const FLOATS_PER_PART_PER_FRAME = 7; // (x,y,z, qw,qx,qy,qz) — quat W-FIRST
@@ -96,21 +98,5 @@ export function poseRigAt(globalFrame, desc, partGroups, inPlace = false) {
     if (g.quaternion && typeof g.quaternion.set === "function") {
       g.quaternion.set(partFrames[base + 4], partFrames[base + 5], partFrames[base + 6], partFrames[base + 3]);
     }
-  }
-}
-
-// `?unifiedMotion` capability flag (docs/url-flags.md): off | shadow | per-class
-// (attack/death/door/cast/locomotion) | on. Default off.
-export function unifiedMotionMode(search) {
-  try {
-    const s =
-      typeof search === "string"
-        ? search
-        : (typeof window !== "undefined" && window.location && window.location.search) || "";
-    const v = new URLSearchParams(s).get("unifiedMotion");
-    if (v == null) return "off";
-    return String(v).toLowerCase();
-  } catch (_) {
-    return "off";
   }
 }
