@@ -460,13 +460,13 @@ function punchPhaseOpaqueSort(a, b) {
 // EffectPass, ahead of AerialPerspective, instead of in cloud_overlay.js's
 // private EffectComposer + sky-scene quad. takram's documented integration
 // (vendor/takram-three-clouds/README.md); see CloudOverlay.adoptMainPass.
-// Opt-in because nothing headless can judge it (SwiftShader zero-bakes the
-// cloud noise) and the legacy path is the one that has had real-GPU looks.
+// Default ON since 2026-10-05 (owner policy: new behaviour ships on and is
+// switched off on report); `?cloudsMainPass=off` restores the private composer.
 export function cloudsMainPassEnabled() {
   try {
-    return new URLSearchParams(globalThis.location?.search || "").get("cloudsMainPass") === "on";
+    return new URLSearchParams(globalThis.location?.search || "").get("cloudsMainPass") !== "off";
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

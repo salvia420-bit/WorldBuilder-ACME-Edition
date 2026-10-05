@@ -63,8 +63,8 @@ function check(label, cond, extra = "") {
 // ---------------------------------------------------------------------------
 console.log("-- C1 pipeline source ---------------------------------------------");
 const PIPE = readFileSync(path.join(APP, "scene3d", "atmosphere_pipeline.js"), "utf8");
-check("cloudsMainPassEnabled is a strict === \"on\" opt-in",
-  /export function cloudsMainPassEnabled\(\)[\s\S]{0,200}get\("cloudsMainPass"\) === "on"/.test(PIPE));
+check("cloudsMainPassEnabled is default-on with an =off escape",
+  /export function cloudsMainPassEnabled\(\)[\s\S]{0,200}get\("cloudsMainPass"\) !== "off"/.test(PIPE));
 check("fxPass list: heatHaze, cloudsMain, aerialPerspective, ... toneMapping, dithering",
   /\.\.\.\[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering\]\.filter\(Boolean\)/.test(PIPE));
 check("cloudsMain is null unless the flag is on",

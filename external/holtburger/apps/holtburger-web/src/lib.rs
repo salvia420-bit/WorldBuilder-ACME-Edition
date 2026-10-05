@@ -497,13 +497,14 @@ fn parse_faithful_entity_collision_flag(search: &str) -> bool {
         .any(|kv| kv == "faithfulEntityCollision=off")
 }
 
-/// Parse `?objCollideInTransition=on` (strict opt-in, DEFAULT OFF): collide
-/// doors / creatures / players inside the faithful transition
+/// Parse `?objCollideInTransition` (DEFAULT ON since 2026-10-05, owner policy:
+/// new behaviour ships on; `=off` restores the post-transition entity clamp):
+/// collide doors / creatures / players inside the faithful transition
 /// (holtburger-world `spatial::obj_collision`). Needs a wasm rebuild.
 #[cfg(target_arch = "wasm32")]
 fn parse_obj_collide_in_transition_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "objCollideInTransition=on")
+    !trimmed.split('&').any(|kv| kv == "objCollideInTransition=off")
 }
 
 /// COL-DIAG (2026-08-04): parse `?fu3Diag=on`. DEFAULT-OFF, strict `=on`
