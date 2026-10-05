@@ -12,10 +12,9 @@
 //       broadcast clobbered it before the rig finished a single cycle.
 //
 // Both fail silently from outside. The hook lives at the END of
-// `setMotion()` immediately after `inst.crossFadeTo(action, cacheKey,
-// CROSSFADE_S)` lands. That crossFadeTo synchronously sets
-// `inst.currentAction` + `inst.currentActionKey` (entities.js L601-602),
-// so the snapshot we take reflects what the runtime *applied*, not
+// `setMotion()` immediately after the new cycle is installed on the Rust
+// playhead (`_installUnifiedLoco` sets `inst._unifiedLoco`, whose cacheKey
+// IS `inst.currentActionKey`), so the snapshot we take reflects what the runtime *applied*, not
 // what we *wanted*. Same "no cheating" stance as wire.js / events.js:
 // every read is of state the runtime already committed.
 //
@@ -47,10 +46,13 @@
 //                  Useful when scoping a capture window to a specific
 //                  input drill (e.g. "now press W+D, then dump").
 //   reset()      — zero all state (matrix, byGuid, history, link plays)
-//   authority(guid) — which driver owns the rig now (unifiedSeq / unifiedLoco /
-//                  mixer), the loco cache key, the one-shot head, gait scalars
-//   deadMixerStarts — mixer actions started on an entity whose mixer is frozen
-//                  (`_unifiedLoco` set); split per call site in deadMixerBySite
+//   authority(guid) — which playhead record owns the rig now (unifiedSeq /
+//                  unifiedLoco / rest), the loco cache key, the one-shot head,
+//                  gait scalars
+//   deadMixerStarts — RETIRED, hard-wired 0 (2026-10-05). It counted mixer
+//                  actions started on a frozen mixer; the AnimationMixer was
+//                  deleted, so the condition is impossible. Kept (with an empty
+//                  deadMixerBySite) so existing console scripts keep working.
 
 const MAX_GLOBAL_HISTORY = 200;
 const MAX_PER_GUID_HISTORY = 20;
@@ -85,16 +87,19 @@ function parseActionKey(key) {
 function buildCurrent(inst, now) {
   const key = inst.currentActionKey ?? null;
   const parsed = parseActionKey(key);
-  const act = inst.currentAction;
+  // The playhead's cycle record (the mixer action this used to read is gone).
+  const lo = inst._unifiedLoco ?? null;
+  let time = 0;
+  try { time = lo ? (+lo.seq.phase || 0) * (+lo.desc?.duration || 0) : 0; } catch (_) { time = 0; }
   return {
     actionKey: key,
     cmd: parsed.cmd,
     stance: parsed.stance,
     setupId: parsed.setupId,
     mtableId: parsed.mtableId,
-    time: act ? (+act.time || 0) : 0,
-    weight: act ? (+act.weight || 0) : 0,
-    enabled: act ? !!act.enabled : false,
+    time,
+    weight: lo ? 1 : 0,
+    enabled: !!lo,
     // COL-10 (2026-07-28) — playback DIRECTION. Retail resolves a backstep by
     // rewriting WalkBackwards → WalkForward and negating the speed
     // (`CMotionInterp::adjust_motion` acclient.c:343746, arm :343776), so a
@@ -107,7 +112,9 @@ function buildCurrent(inst, now) {
     // at hook time; `timeScale` is informational only — under the default-on
     // ?velScale the per-frame tick owns it and rewrites it next frame.
     sign: (inst._motionSpeedSign ?? 1) < 0 ? -1 : 1,
-    timeScale: act ? (+act.getEffectiveTimeScale() || 0) : 0,
+    // The server per-motion speed × direction (the gait EMA/getter scale is
+    // applied per tick by `_unifiedLocoGaitScale` and not snapshotted here).
+    timeScale: lo ? (inst._motionSpeed ?? 1) * ((inst._motionSpeedSign ?? 1) < 0 ? -1 : 1) : 0,
     appliedAt: now,
   };
 }
@@ -155,22 +162,14 @@ export function attachMotion(diag) {
     maxGlobalHistory: MAX_GLOBAL_HISTORY,
     maxPerGuidHistory: MAX_PER_GUID_HISTORY,
     maxLinkPlays: MAX_LINK_PLAYS,
-    // Mixer actions started on an entity whose mixer no longer advances
-    // (`_unifiedLoco` set → the tick never calls mixer.update again), i.e.
-    // animations that silently never play. Per-site split in deadMixerBySite.
+    // RETIRED (2026-10-05) — hard-wired 0: the AnimationMixer is gone, so no
+    // animation can start on a frozen driver any more. See the header.
     deadMixerStarts: 0,
-    deadMixerBySite: {},
-
-    /** Hook: entities.js started a mixer action under a frozen mixer. */
-    onDeadMixerStart(meta) {
-      motion.deadMixerStarts += 1;
-      const site = String(meta?.site ?? "unknown");
-      motion.deadMixerBySite[site] = (motion.deadMixerBySite[site] | 0) + 1;
-    },
+    deadMixerBySite: Object.freeze({}),
 
     /**
-     * Which animation authority drives `guid`'s rig this frame — mirrors the
-     * per-entity tick order (_unifiedSeq → _unifiedLoco → mixer). Returns
+     * Which playhead record drives `guid`'s rig this frame — mirrors the
+     * per-entity tick order (_unifiedSeq → _unifiedLoco → rest pose). Returns
      * null when the entity is unknown.
      */
     authority(guid) {
@@ -186,6 +185,7 @@ export function attachMotion(diag) {
           queued: Math.max(0, (inst._unifiedQueue?.list?.length ?? 1) - 1),
           clearOnDone: !!ua.clearOnDone,
           deathHold: ua.deathHold === true,
+          stateHold: ua.stateHold === true,
           speed: ua.speed ?? 1,
         };
         try {
@@ -194,12 +194,11 @@ export function attachMotion(diag) {
         } catch (_) { seqHead.freed = true; }
       }
       return {
-        driver: ua ? "unifiedSeq" : lo ? "unifiedLoco" : "mixer",
+        driver: ua ? "unifiedSeq" : lo ? "unifiedLoco" : "rest",
         locoKey: lo?.cacheKey ?? null,
+        locoHold: lo?.hold === true,
         seqHead,
         currentActionKey: inst.currentActionKey ?? null,
-        // true ⇒ mixer.update(dt) is NOT called for this entity this frame.
-        mixerFrozen: !!(ua || lo),
         gait: {
           forwardCommand: inst._forwardCommand ?? 0,
           forwardSpeed: inst._forwardSpeed ?? 0,
@@ -213,10 +212,9 @@ export function attachMotion(diag) {
     },
 
     /**
-     * Hook fired from entities.js::setMotion immediately after
-     * `inst.crossFadeTo(...)` lands. At this point the EntityInstance's
-     * `currentAction` + `currentActionKey` are the freshly applied
-     * values (crossFadeTo sets them synchronously). Records both the
+     * Hook fired from entities.js::setMotion immediately after the new
+     * cycle lands on the playhead (`inst._unifiedLoco` / its
+     * `currentActionKey` are the freshly applied values). Records both the
      * new "current" snapshot and a transition entry capturing the
      * old → new actionKey diff for replay.
      */
@@ -592,8 +590,6 @@ export function attachMotion(diag) {
       motion.globalHistory.length = 0;
       motion.linkPlays.length = 0;
       motion.coverage.clear();
-      motion.deadMixerStarts = 0;
-      motion.deadMixerBySite = {};
     },
   };
 

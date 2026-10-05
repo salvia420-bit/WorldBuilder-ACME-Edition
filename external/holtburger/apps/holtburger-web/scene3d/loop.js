@@ -342,25 +342,6 @@ const UNIFIED_CLONE_ON = (() => {
   }
 })();
 
-// FU-3 (2026-06-11) — `?serverSwing` (DEFAULT-ON — `!== "off"` reader;
-// `=off` escapes): picking.js suppresses its
-// optimistic click-time swing, so the server's KIND_MOTION_ACTION echo is
-// the ONLY swing trigger. setMotion's MT-link overlay doesn't animate the
-// LOCAL rig (the known local combat-anim gap), so for attack-class
-// commands on the local guid we also fire the procedural shoulder pose
-// (setSwingPose) — the visual that worked pre-FU-3 — now at the
-// server-timed (post-MoveTo) moment instead of at click.
-const SERVER_SWING_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return (
-      new URLSearchParams(window.location.search).get("serverSwing")?.toLowerCase() !== "off"
-    );
-  } catch (_) {
-    return false;
-  }
-})();
-
 // A15-Q3.2 (2026-06-12, SQ3 spec) — `?dispatchParity` (DEFAULT-ON —
 // `!== "off"` reader; `=off` escapes):
 // gates the F6-2 swing-echo dedup port into the unified dispatcher
@@ -3582,19 +3563,10 @@ function _armMotionAction(scene3d, em, upd) {
     try { window.__diag?.cast?.onEchoConsume?.({ cmd: actionCmd, hit: true }); } catch (_) {}
   } else if (actionCmd !== 0 && typeof em.setMotion === "function") {
     em.setMotion(actionGuid, actionCmd, actionStance, +(upd.motionSpeed ?? 1.0));
-    // D4 (Q3.2, rides existing ?serverSwing — DEFAULT ON, `=off` ⇒ inert):
-    // FU-3 (2026-06-11) — under ?serverSwing the local rig has no
-    // click-time swing anymore, and setMotion's MT clip doesn't
-    // animate the local rig. Fire the procedural shoulder pose at
-    // this (server-timed, post-MoveTo) moment for attack-class
-    // commands (0x51..0x6E per the swing-classification table;
-    // 0x50 FallDown excluded).
-    if (SERVER_SWING_ON && isLocalPlayerGuid(actionGuid)) {
-      const low = actionCmd & 0xFFFF;
-      if (low >= 0x51 && low <= 0x6E) {
-        try { em.setSwingPose?.(actionGuid); } catch (_) {}
-      }
-    }
+    // (The D4 local `setSwingPose` shoulder-pose call that rode ?serverSwing
+    // here was removed 2026-10-05: setSwingPose was retired with the WS-B
+    // teardown, and setMotion's swing now plays full-body on the Rust
+    // playhead for the local rig too.)
   }
 }
 

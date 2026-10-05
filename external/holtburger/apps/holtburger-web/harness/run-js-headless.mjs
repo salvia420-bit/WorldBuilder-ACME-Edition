@@ -288,7 +288,6 @@ const TIER5 = [
   { tier: 5, flag: "bm_colortexture_fix", file: "test_bm_colortexture_fix.mjs" },
   { tier: 5, flag: "brazier_emit", file: "test_brazier_emit.mjs" },
   { tier: 5, flag: "cast_level8_windup", file: "test_cast_level8_windup.mjs" },
-  { tier: 5, flag: "cast_overlay_guard", file: "test_cast_overlay_guard.mjs" },
   { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
   { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
   { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
@@ -497,7 +496,6 @@ const TIER5 = [
   { tier: 5, flag: "terrain_sand_sparkle", file: "test_terrain_sand_sparkle.mjs" },
   { tier: 5, flag: "terrain_snow", file: "test_terrain_snow.mjs" },
   { tier: 5, flag: "terrain_volcano_shader", file: "test_terrain_volcano_shader.mjs" },
-  { tier: 5, flag: "ws03_cast_overlay_guard", file: "tests/test_ws03_cast_overlay_guard.mjs" },
   // 2026-10-05 — appeared mid-session (concurrent shader work); executed, green.
   { tier: 5, flag: "shader_logdepth", file: "test_shader_logdepth.mjs" },
 ];

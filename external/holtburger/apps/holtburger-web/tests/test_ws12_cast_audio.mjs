@@ -6,8 +6,9 @@
 //           SoundTweaked wave 0x0A000390 @ frames 0/15/30/53/57,
 //           [gid, prob=1.0, prio=0.9, vol 0.2..0.6].
 //   PART 2 static: entities.js + url-flags.md carry the WS12 patch shapes —
-//           P1 (?castCancelStops, strict `=on`, stop the running cast/swing overlay
-//               in cancelCastSequence so trailing hum hooks don't fire post-cancel),
+//           P1 (cancelCastSequence frees the playhead one-shot so trailing hum
+//               hooks don't fire post-cancel; the ?castCancelStops mixer gate
+//               was removed with the mixer 2026-10-05),
 //           P2 (the SoundTable(2) executor backfills the LOCAL player's soundTableDid
 //               to the humanoid table 0x20000001 when it's 0 — default-ON, no flag).
 // Run: node tests/test_ws12_cast_audio.mjs   (from apps/holtburger-web/)
@@ -74,20 +75,15 @@ console.log("PART 1: windup-hum drain (real hook_windows.js planner)");
 console.log("PART 2: static source shape");
 const ent = readFileSync(join(ROOT, "scene3d/entities.js"), "utf8");
 
-// P1 — flag is DEFAULT-ON with a `!== "off"` escape (eye-tested GTX-1070 2026-07-12).
-check("entities.js defines CAST_CANCEL_STOPS (default-ON, `!=='off'` escape)",
-  /CAST_CANCEL_STOPS[\s\S]{0,400}get\("castCancelStops"\)\s*\?\.\s*toLowerCase\(\)\s*!==\s*"off"/.test(ent));
-// P1 — cancelCastSequence stops the running cast/swing LoopOnce overlay under the flag,
-//      restricted to swing:/link: keys, routed through _completeOverlay then .stop().
-check("cancelCastSequence stops cast/swing overlays under CAST_CANCEL_STOPS",
-  /cancelCastSequence\(guid, cause\) \{[\s\S]{0,4000}if \(CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,600}action\.stop\(\)/.test(ent));
-check("P1 loop is restricted to swing:/link: overlay keys",
-  /CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,400}key\.startsWith\("swing:"\)\s*\|\|\s*key\.startsWith\("link:"\)/.test(ent));
-check("P1 routes the base-restore/cancel-notify through _completeOverlay",
-  /CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)[\s\S]{0,500}this\._completeOverlay\(inst, key, action, false\)/.test(ent));
-// P1 — flag-OFF byte-identical: the whole stop loop sits behind the CAST_CANCEL_STOPS gate.
-check("P1 stop loop is entirely inside the CAST_CANCEL_STOPS gate (flag-OFF byte-identical)",
-  /if \(CAST_CANCEL_STOPS && inst\.actions && inst\.mixer\)\s*\{[\s\S]{0,700}\}\s*\n\s*try \{/.test(ent));
+// P1 — since the animation consolidation (2026-10-05) every cast/swing gesture is
+// a one-shot on the Rust playhead, and cancelCastSequence FREES it (plus its
+// pending queue) so its trailing windup-hum hooks can't fire post-cancel. The
+// mixer-overlay stop loop and its `?castCancelStops` gate were removed with the
+// mixer (there is nothing else to stop).
+check("cancelCastSequence frees the in-flight playhead one-shot (+ pending queue)",
+  /cancelCastSequence\(guid, cause\) \{[\s\S]{0,800}if \(inst\._unifiedSeq\?\.clearOnDone\) \{\s*this\._clearUnifiedQueue\(inst\);\s*try \{ inst\._unifiedSeq\.seq\.free\(\);[\s\S]{0,80}inst\._unifiedSeq = null;/.test(ent));
+check("CAST_CANCEL_STOPS mixer gate is gone (no second path)",
+  !/CAST_CANCEL_STOPS/.test(ent));
 
 // P2 — SoundTable(2) executor: `let stbDid` + local-player 0x20000001 backfill on 0.
 check("P2: type-2 executor uses `let stbDid` (rebindable for backfill)",
@@ -101,8 +97,8 @@ check("P2 backfill has NO flag gate (zero-risk audio backfill, default-ON)",
   !/if \([A-Z_]+\)[\s\S]{0,120}inst\.soundTableDid = 0x20000001;/.test(ent));
 
 const flags = readFileSync(join(ROOT, "docs/url-flags.md"), "utf8");
-check("url-flags.md documents ?castCancelStops with default on",
-  /\|\s*`castCancelStops`\s*\|[^|]*\|\s*\*\*on\*\*\s*\|/.test(flags));
+check("url-flags.md marks ?castCancelStops REMOVED",
+  /\|\s*~~`castCancelStops`~~\s*\|[^\n]*REMOVED/.test(flags));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

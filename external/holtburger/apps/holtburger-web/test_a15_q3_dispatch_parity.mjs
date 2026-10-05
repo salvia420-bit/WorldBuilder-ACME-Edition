@@ -256,25 +256,15 @@ console.log("PART 2 — D2/D4 fire only under their flags");
     emWield.calls.findIndex((c) => c[0] === "spawn") === 0 &&
     emWield.calls.some((c) => c[0] === "_markWielderDirty" && c[1] === REMOTE_GUID));
 
-  // D4 (FU-3): local guid + attack-class cmd (low16 0x51..0x6E) + flag on.
+  // D4 (FU-3) retired 2026-10-05: the local attack echo no longer fires the
+  // (long-deleted) setSwingPose — setMotion plays the swing on the Rust
+  // playhead for the local rig too. Assert the echo routes ONLY to setMotion.
   const atk = upd(8, { guid: LOCAL_GUID, motionCommand: 0x44000060 });
-  const emSwingOff = makeEm();
-  modOff.dispatchEntityUpdate({ entityManager: emSwingOff }, emSwingOff, { ...atk });
-  check("D4 inert with ?serverSwing off (setMotion still fires)",
-    !emSwingOff.calls.some((c) => c[0] === "setSwingPose") &&
-    emSwingOff.calls.some((c) => c[0] === "setMotion"));
   const emSwingOn = makeEm();
   modOn.dispatchEntityUpdate({ entityManager: emSwingOn }, emSwingOn, { ...atk });
-  check("D4 fires setSwingPose for local attack cmd under default-ON ?serverSwing",
-    emSwingOn.calls.some((c) => c[0] === "setSwingPose" && c[1] === LOCAL_GUID));
-  const emSwingRemote = makeEm();
-  modOn.dispatchEntityUpdate({ entityManager: emSwingRemote }, emSwingRemote, upd(8, { motionCommand: 0x44000060 }));
-  check("D4 stays local-only (remote guid → no setSwingPose)",
-    !emSwingRemote.calls.some((c) => c[0] === "setSwingPose"));
-  const emNotAttack = makeEm();
-  modOn.dispatchEntityUpdate({ entityManager: emNotAttack }, emNotAttack, upd(8, { guid: LOCAL_GUID, motionCommand: 0x44000050 }));
-  check("D4 excludes non-attack cmd 0x50 (FallDown)",
-    !emNotAttack.calls.some((c) => c[0] === "setSwingPose"));
+  check("local attack echo → setMotion only (no setSwingPose call)",
+    emSwingOn.calls.some((c) => c[0] === "setMotion") &&
+    !emSwingOn.calls.some((c) => c[0] === "setSwingPose"));
 }
 
 // =====================================================================

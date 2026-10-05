@@ -11,10 +11,9 @@
 //
 // What CANNOT move to Rust, and so stays here: the per-part POSE WRITE
 // (`poseRigAt`) — it touches `THREE.Object3D` `.position`/`.quaternion`, the
-// dumb `CPartArray::UpdateParts` step (acclient.c:326624). (The `?unifiedMotion`
-// flag is parsed by entities.js `UNIFIED_MODE` — the only reader; the unused
-// `unifiedMotionMode()` here was deleted 2026-10-05: it returned "off" by default,
-// contradicting the shipped reader.) Rust hands JS one GLOBAL FRAME INDEX per entity
+// dumb `CPartArray::UpdateParts` step (acclient.c:326624). (The
+// `?unifiedMotion` gate is gone, 2026-10-05: this playhead is the only
+// animation driver — the three.js AnimationMixer was retired.) Rust hands JS one GLOBAL FRAME INDEX per entity
 // per frame; this poser indexes the JS-cached keyframe buffer at that frame.
 
 export const FLOATS_PER_PART_PER_FRAME = 7; // (x,y,z, qw,qx,qy,qz) — quat W-FIRST

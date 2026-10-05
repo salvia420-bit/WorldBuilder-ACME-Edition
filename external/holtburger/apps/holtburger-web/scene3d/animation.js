@@ -60,20 +60,6 @@ const FLOATS_PER_PART_PER_FRAME = 7;
  * it later (the `AnimationCache.get` path stamps `${setupId}:${...}`
  * for debugger ergonomics).
  */
-// Step 1: only retain the raw sequence descriptor in the cache when the unified
-// motion interpreter is active (it carries ~17KB/clip of raw frames). Read once.
-// W6 flip (2026-06-18): unified motion is default-ON for all classes except
-// locomotion, so the descriptor is needed whenever the flag is absent or any
-// value other than `off` — `=off` is the only state that disables it.
-const UNIFIED_MOTION_ON = (() => {
-    try {
-        const v = new URLSearchParams(
-            (typeof window !== "undefined" && window.location && window.location.search) || "",
-        ).get("unifiedMotion");
-        return (v ?? "").toLowerCase() !== "off";
-    } catch (_) { return true; }
-})();
-
 // Step 0 of the animation consolidation (docs/animation-audit §5): extract the
 // raw frame data a `MotionSequence` consumes — the sequence structure that
 // buildAnimationClip flattens into an inert clip. Pure passthrough of the wasm
@@ -883,10 +869,10 @@ export class AnimationCache {
 
             return {
                 clip,
-                // Step 1: the raw sequence descriptor (per-segment AnimData) the
-                // MotionSequence consumes under ?unifiedMotion. null when the
-                // flag is off (avoids retaining the raw frame buffer).
-                sequenceDescriptor: UNIFIED_MOTION_ON ? buildSequenceDescriptor(animData) : null,
+                // The raw sequence descriptor (per-segment AnimData) the Rust
+                // MotionSequence playhead consumes — the ONLY animation driver
+                // since the mixer was retired (null when no frames resolved).
+                sequenceDescriptor: buildSequenceDescriptor(animData),
                 // Pre-converted three.js groups (one per part). Each
                 // entry: `{ groups: [{geometry, surfaceDid}], surfaceDids: [] }`.
                 // Shared across all consumers — see comment block above.

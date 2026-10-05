@@ -819,21 +819,14 @@ const ENTITY_LIGHT_CAP_BY_PRESET = Object.freeze({
 });
 const ENTITY_LIGHT_CAP_DEFAULT = 8;
 
-// Phase 7.4b — EntityManager: per-entity Object3D rig + AnimationMixer.
-//
-// Sister to the 2D path's `entityMap` + `tickEntityAnimations`
-// (`index.html:3354 + 4483-4644`). Where the 2D path bakes pre-
-// rasterized walk-cycle frames and swaps PIXI textures per rAF, the
-// 3D path holds keyframes as `THREE.AnimationClip`s and runs one
-// `AnimationMixer` per entity. Stance-keyed cycle map mirrors the 2D
-// `EntityCycleSet`; cap of 4 actions per setup matches
-// `MAX_BAKES_PER_SETUP = 4` (`index.html:2992`).
+// Phase 7.4b — EntityManager: per-entity Object3D rig, driven by the Rust
+// motion playhead (MotionSequence; the three.js AnimationMixer it started with
+// was retired 2026-10-05 — see the animation-consolidation note below).
 //
 // Animations are rigid-body per-part (NOT skinned). The rig is a
 // `THREE.Group` whose direct children are per-part `THREE.Group`s
-// named `part_0..part_N` — those names match
-// `AnimationCache.partNames` (Phase 7.4a) so each clip's
-// `${partName}.position` / `${partName}.quaternion` tracks resolve.
+// named `part_0..part_N`; `poseRigAt` writes each part's position +
+// quaternion from the cached keyframe buffer at the playhead's frame.
 // Per-part Mesh leaves (one per Surface DID, from
 // `meshToGeometryGroups`) hang off their part Group so the animation
 // translates the entire part as a unit — exactly how AC's wire format
@@ -841,29 +834,20 @@ const ENTITY_LIGHT_CAP_DEFAULT = 8;
 //
 // Spawn flow:
 //   1. spawn(meta) is async — kicks `fetchEntityAnimationKeyframes`
-//      via the AnimationCache. The cache returns rest-pose part
-//      meshes + (optional) AnimationClip for the requested
-//      (motionCommand, stance).
+//      via the AnimationCache, which returns rest-pose part meshes +
+//      the sequence descriptor for (motionCommand, stance).
 //   2. Build root Group at world coords (landblockId * 192 + meta.x);
 //      build per-part Groups with Mesh children; resolve materials
 //      via the shared MaterialCache. Stash on entityMap[guid].
-//   3. If a clip resolved, mixer.clipAction(clip).play() — first cycle
-//      starts immediately. STOP / 0 motion plays no clip (rest pose).
+//   3. The initial cycle goes onto `inst._unifiedLoco` (no clip → rest pose).
 //
 // Motion-switch flow (kind=5 UpdateMotion):
-//   1. setMotion(guid, cmd, stance) — fire-and-forget async cache
-//      lookup for the new (cmd, stance) key.
-//   2. When the new clip resolves: crossFadeTo(newAction, 0.2) on the
-//      currently playing action. If currentAction is null (was idle),
-//      newAction.play() with a fadeIn(0.2). STOP transitions stop the
-//      current action with a 0.2 s fade-out.
-//   3. If the cache hits the per-setup cap of 4, the oldest unused
-//      action is evicted (mixer.uncacheAction) before the new one
-//      installs.
+//   setMotion(guid, cmd, stance) — async cache lookup; a cycle replaces
+//   `_unifiedLoco` (phase carried), a one-shot (swing/cast/emote/link/death/
+//   door state link) goes onto `_unifiedSeq` (+ the J5 pending queue).
 //
-// Per-rAF tick(dt): walk every mixer, call mixer.update(dt). Cheap;
-// the heavy lifting is in the keyframe interpolators inside
-// AnimationMixer.
+// Per-rAF tick(dt): advance each entity's playhead (one-shot if present,
+// else the cycle) and pose the rig; drain the sequence's animation hooks.
 //
 // ──────────────────────────────────────────────────────────────────────
 // Perf B3 (2026-05-18) — `__disposable` material/geometry tag convention
@@ -951,14 +935,16 @@ import { gatePaletteId, gateSubPalettes } from "./recolor_flag.js";
 // A12 (S14): spawns.js pre-warms LOD degrade bands per wave; _spawnImpl
 // consults this memo before paying a per-entity wasm await.
 import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
-// Animation consolidation (docs/animation-audit §5): route attack swings through
-// the RUST MotionSequence interpreter (full-body, retail-faithful, cargo-tested —
-// src/motion_sequence.rs) instead of the mixer overlay that the locomotion cycle
-// half-blends into the "upper-body-only swing" bug. The wasm `MotionSequence`
-// class is read at runtime off `window.__hbWasm` (set during boot) so a stale
-// pkg/ soft-degrades to the mixer overlay. `poseRigAt` is the JS-only per-part
-// pose write (the one step that can't live in Rust). DEFAULT ON (absent
-// `?unifiedMotion` = "default" = every class); `?unifiedMotion=off` disables.
+// Animation consolidation (docs/animation-audit §5) — COMPLETE (2026-10-05):
+// every entity rig is driven by ONE authority, the RUST MotionSequence
+// interpreter (src/motion_sequence.rs, cargo-tested retail CSequence): a cyclic
+// `inst._unifiedLoco` (locomotion / idle / held door state) with one-shots on
+// `inst._unifiedSeq` (+ the J5 pending queue) in front of it. The three.js
+// AnimationMixer is gone, and so is the `?unifiedMotion` per-class gate — there
+// is no other path. The wasm class is read off `window.__hbWasm` (set during
+// boot); a stale pkg/ without it logs ONE loud console.error and leaves rigs at
+// the rest pose. `poseRigAt` is the JS-only per-part pose write (the one step
+// that can't live in Rust).
 import { poseRigAt } from "./motion/motion_sequence.js";
 // J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
 // (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
@@ -981,37 +967,9 @@ const EMPTY_U32 = new Uint32Array(0);
 // Infinity/NaN into the sequence clock. `+v || 0` passes Infinity (truthy);
 // this doesn't.
 const _finiteOr0 = (v) => (Number.isFinite(+v) ? +v : 0);
-// Inline flag read (NOT an imported helper) so module-load works in the
-// source-eval headless harness that doesn't resolve ESM imports — the same
-// inline-read pattern the other URL flags use. The wasm MotionSequence +
-// poseRigAt are referenced only inside the flag-on runtime branches, so
-// they're inert when off.
-// `?unifiedMotion=<class>` selects which motion classes route through the Rust
-// authority. The bare default ("default") enables EVERY class, locomotion
-// included since DEC-18 (2026-08-13 — the W6 2026-06-18 "all except locomotion
-// until B-1" hold was lifted when B-1 was refuted; see the locomotion block
-// below). `=off` = all off (escape); `=on` = all; `=<class>` = that class only.
-const UNIFIED_MODE = (() => {
-  try {
-    const v = new URLSearchParams(
-      (typeof window !== "undefined" && window.location && window.location.search) || "",
-    ).get("unifiedMotion");
-    return v == null ? "default" : String(v).toLowerCase();
-  } catch (_) { return "default"; }
-})();
-// "default" = the shipped default (all classes, incl. locomotion since DEC-18);
-// "on" = all classes too.
-const UNIFIED_DEFAULT = UNIFIED_MODE === "default";
-const UNIFIED_ATTACK = UNIFIED_DEFAULT || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
-const UNIFIED_DEATH = UNIFIED_DEFAULT || UNIFIED_MODE === "death" || UNIFIED_MODE === "on";
-// Cast gestures live in `MotionTable.links` like swings — same one-shot path.
-// Per-SPELL windup variation stays blocked (no prj_spell_id on the wire; ACE is
-// kept vanilla), so this animates the real full-body cast GESTURE, not per-spell.
-const UNIFIED_CAST = UNIFIED_DEFAULT || UNIFIED_MODE === "cast" || UNIFIED_MODE === "on";
 // Doors open/close via On (0x4000000b) / Off (0x4000000c) CYCLE commands — 63 of
 // 436 retail MTs carry them with hinge baked into the keyframes (no SetupModel
-// hinge extraction needed; probe_door_motions.rs). Same one-shot path as missile.
-const UNIFIED_DOOR = UNIFIED_DEFAULT || UNIFIED_MODE === "door" || UNIFIED_MODE === "on";
+// hinge extraction needed; probe_door_motions.rs).
 // MotionCommand.On / .Off (door open / close).
 const CMD_DOOR_ON = 0x4000000b;
 const CMD_DOOR_OFF = 0x4000000c;
@@ -1027,61 +985,29 @@ const CMD_DOOR_OFF = 0x4000000c;
 // LoopRepeat). Special-case the LOOP MODE at the play sites via this predicate.
 // The wasm `MotionSequence` class (the Rust CSequence playhead), read off the
 // boot-installed `window.__hbWasm` namespace. null = stale pkg/ or no window.
+// The class is the ONLY animation driver: when a browser boot's namespace lacks
+// it (a pkg/ built before src/motion_sequence.rs), say so ONCE, loudly — rigs
+// will sit at their rest pose (there is no mixer fallback any more).
+let _motionSequenceMissingReported = false;
 function _motionSequenceClass() {
-  return (typeof window !== "undefined" && window.__hbWasm?.MotionSequence) || null;
+  if (typeof window === "undefined") return null;
+  const MS = window.__hbWasm?.MotionSequence;
+  if (typeof MS === "function") return MS;
+  if (window.__hbWasm && !_motionSequenceMissingReported) {
+    _motionSequenceMissingReported = true;
+    // eslint-disable-next-line no-console
+    console.error(
+      "[entities] window.__hbWasm.MotionSequence is missing — stale pkg/? " +
+      "Rebuild the wasm (wasm-pack). The Rust MotionSequence is the only animation " +
+      "authority; entities will hold their rest pose until it is present.",
+    );
+  }
+  return null;
 }
 function isDoorStateMotion(cmd) {
   const low = (cmd >>> 0) & 0xffff;
   return low === (CMD_DOOR_ON & 0xffff) || low === (CMD_DOOR_OFF & 0xffff);
 }
-// Diag: a mixer action is being started on an entity whose mixer no longer
-// advances (the tick drives `_unifiedLoco` instead), so it never plays.
-// Counted in `__diag.motion.deadMixerStarts`; no behaviour change.
-function _noteDeadMixerStart(inst, site) {
-  if (!inst?._unifiedLoco) return;
-  try {
-    window.__diag?.motion?.onDeadMixerStart?.({ guid: inst.guid >>> 0, site });
-  } catch (_) { /* diag only */ }
-}
-// Locomotion (walk/run/idle cycles) — the WORKING oracle, migrated LAST. Drives
-// a CYCLIC MotionSequence with gait scaling + Rust phase carry across swaps.
-// A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
-// it on completion (single playhead — retail-faithful).
-//
-// DEC-18 (2026-08-13, PARITY-A) — PROMOTED TO THE DEFAULT SET, joining
-// attack/cast/death/door/missile. It was held back for ~2 months by the
-// 2026-06-18 "B-1" claim that this path made the movement integrator overshoot
-// the run target (25 m/s vs 4.5) and oscillate Walk->Stop->Walk sub-second.
-// That claim is REFUTED (ledger O5), two independent ways:
-//
-//  1. CATEGORY ERROR, by source. This flag selects an ANIMATION DRIVER, never a
-//     velocity. Its whole blast radius is the `_unifiedLoco` arm of the tick
-//     (see `else if (inst._unifiedLoco)` below), which is a peer of
-//     `inst.mixer.update(dt)` and does exactly three things: advance a playhead,
-//     `poseRigAt` the skeleton, drain footfall hooks. It writes no velocity, no
-//     `pose.coords`, nothing the integrator reads. `_unifiedLocoGaitScale` READS
-//     `_resolveStateGroundSpeed` to scale the clip rate; it never writes back.
-//     The integrator is Rust (`crates/holtburger-core/.../movement/system.rs`)
-//     and this flag is not in its inputs. So a movement-integrator overshoot is
-//     not a thing this switch can cause.
-//  2. LIVE A/B, laptop rig 2026-08-13, `harness/oracle-run.mjs --scenario
-//     strafe-diagonal --account agentp07`, default arm vs
-//     `--flags unifiedMotion=locomotion`. Velocity was IDENTICAL to four
-//     decimals: median 8.4830 m/s both arms, max 8.4830 both (the max IS the
-//     target — no 25 m/s anywhere), min 7.9032 both (the forward-only phase),
-//     and the moving samples take exactly TWO distinct values, {7.9032, 8.4830}
-//     — a clean step function, not an oscillation. Drive-state transitions while
-//     moving: 2 in both arms, which are the scenario's own keydown/keyup
-//     boundaries. gait "run (OK)", realized/intent 1.000, 197 records.
-//
-// Escape hatch is the existing flag, so this adds no new one (DEC-4):
-// `?unifiedMotion=off` disables every class, and the per-class strings
-// (`attack`, `cast`, ...) still select a single class.
-const UNIFIED_LOCO =
-  UNIFIED_DEFAULT || UNIFIED_MODE === "locomotion" || UNIFIED_MODE === "on";
-// Missile rides with attack (both Step 1): an aim-level fire is a CYCLE
-// (class 0x40, in MotionTable.cycles) the links-only swing resolver can't reach.
-const UNIFIED_MISSILE = UNIFIED_DEFAULT || UNIFIED_MODE === "missile" || UNIFIED_MODE === "attack" || UNIFIED_MODE === "on";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 // Retail target indicator (2026-08-02) — the four red corner brackets that
 // track the projected selection sphere, replacing the vibe-coded torus.
@@ -1476,90 +1402,10 @@ const CAST_BUSY_SCOPE = (() => {
     return new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
-// WS03 (2026-07-12, S2) — `?castOverlayGuard`. **DEFAULT-ON since 2026-08-01
-// (`?castOverlayGuard=off` escape restores the pre-flip behaviour byte-for-byte).**
-// Make mid-cast MOVEMENT stop breaking the cast VISUAL, mirroring retail's single-
-// playhead splice: (a) a locomotion base-cycle swap under an ACTIVE cast/swing overlay
-// installs the new base UNDER it (weight 0) instead of crossFadeTo-.stop()'ing the
-// overlay (= currentAction); (b) the base-weight restore is swap-safe (restores whatever
-// _locoCycleKey points at on completion, not the originally-captured baseAction); (c) a
-// forward-edge anim-break (cancelCastSequence) HARD-CUTS the overlay + restores the base,
-// instead of relying on the incidental crossFadeTo stop (which misses link-keyed
-// _tryPlayLink overlays). A FORWARD edge still breaks the cast (retail fastcast); a
-// slidecast / steady hold / pump reclaim keeps it playing full-body.
-//
-// WHY IT IS NOW DEFAULT-ON (owner report 2026-08-01: "the animation doesn't continue
-// when side-strafing … breaks the animation client side, on our own side"):
-//
-//   * The break was purely OURS. Every drive change — including a pure STRAFE, which
-//     leaves the forward axis at 0 and therefore re-issues Ready (0x41000003) — reaches
-//     `setMotion` (index.html kind-61 `DriveApplied` under the default-ON `?cmdInterp`,
-//     or the legacy sig-diff block when `?cmdInterp=off`). setMotion's tail calls
-//     `inst.crossFadeTo(action, key, 0)`, whose hard-cut branch does
-//     `this.currentAction.stop()` — and the local cast gesture IS `currentAction`
-//     (setSwingMotion stamps it). So strafing stopped our own windup.
-//
-//   * Retail does the opposite. `CMotionTable::GetObjectSequence`'s MOVEMENT branch
-//     calls `CSequence::clear_physics` + `remove_cyclic_anims` (acclient.c:337795-337796)
-//     and NEVER `clear_animations`; `remove_cyclic_anims` (:340154) starts at
-//     `first_cyclic`, so every one-shot link anim queued BEFORE it is untouched.
-//     `remove_redundant_links` (:330079) additionally aborts its backward truncation
-//     scan the moment it meets a queued action with anims. Sidestep specifically enters
-//     via `apply_interpreted_movement` (:344178) → `DoInterpretedMotion`, i.e. that same
-//     movement branch. Retail's strafe therefore cannot cancel an in-flight gesture.
-//     (Forward is different only because a cast gesture is a SubState-class command that
-//     OWNS the single forward slot — `InterpretedMotionState::ApplyMotion` :332759/:332890
-//     — which is the deliberate `?castMove` fastcast/anim-break we keep.)
-//
-// Every flag-off branch below is a verbatim copy of the pre-flip shipped path, so
-// `?castOverlayGuard=off` is a byte-identical rollback.
-const CAST_OVERLAY_GUARD = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return true;
-    return new URLSearchParams(window.location.search)
-      .get("castOverlayGuard")?.toLowerCase() !== "off";
-  } catch (_) { return true; }
-})();
-// WS12 (2026-07-12) — `?castCancelStops=off` to disable (DEFAULT-ON, `!== "off"`
-// escape per the flag footgun; feel/visual change, eye-tested GTX-1070
-// 2026-07-12). On cancelCastSequence (fizzle 0x0402 / UseDone / recast preempt),
-// STOP the running cast/swing LoopOnce overlay so its trailing windup-hum
-// SoundTweaked hooks (wave 0x0A000390, frames 53/57) don't keep firing AFTER the
-// cast was cancelled — retail REPLACES the spliced gesture on interrupt
-// (acclient.c GetObjectSequence remove_cyclic_anims), so the trailing 0.2→0.6
-// hum ramp should cut, not finish. Complements WS03's `?castOverlayGuard`
-// (which stops the suppressor + currentAction swing overlay); this covers the
-// link-keyed `_tryPlayLink` overlays that aren't currentAction. `=off` =
-// byte-identical to pre-WS12 (the trailing hum finishes its ramp on cancel).
-const CAST_CANCEL_STOPS = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search)
-      .get("castCancelStops")?.toLowerCase() !== "off";
-  } catch (_) { return false; }
-})();
 // WS01 — the only magic stance retail uses (low16; the wasm masks &0xFFFF, and the
 // DAT bake helpers mask &0xFFFF too, so low16 resolves the identical clip as the
 // full 0x80000049). index.html stance consts.
 const CAST_MAGIC_STANCE = 0x0049;
-
-// WS02 (2026-07-12) — `?castGestureParity` (default ON, `=off` = byte-identical).
-// Mirrors the loop.js flag of the same name (see CAST_GESTURE_PARITY_ON there for
-// the full rationale). Used only by the swing/cast Ready-restore timer below: the
-// clip plays at `swingSpeed` (CAST_SPEED=2.0 for casts) so it FINISHES at
-// dur/swingSpeed real seconds; restoring at the un-scaled `dur` held the clamped
-// final cast frame ~dur/2 too long. Behind the same flag so one toggle rolls both
-// the loop.js dedup and this timing fix back to byte-identical.
-const CAST_GESTURE_PARITY_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return true;
-    return (
-      new URLSearchParams(window.location.search).get("castGestureParity")?.toLowerCase() !== "off"
-    );
-  } catch (_) {
-    return true; // non-browser (headless source-eval harness): default ON
-  }
-})();
 
 // WS09 (2026-07-12) — `?castSyntheticCasterVfx=off` = the fix (DEFAULT ON =
 // today's behavior). ACE broadcasts the CasterEffect GameMessageScript to the
@@ -1964,46 +1810,12 @@ const SCRIPT_HOOK_TIME_ON = (() => {
 // inline executor, byte-identical. ScriptManager-fired hooks (PhysicsScript
 // chain, wall-clock-ordered) stay INLINE — merging the two queues is
 // explicitly out of P1 scope.
-import { planHookWindows } from "./hook_windows.js";
 const HOOK_DRAIN_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
         .get("hookDrain")?.toLowerCase() !== "off"
-    );
-  } catch (_) {
-    return false;
-  }
-})();
-
-// A4-Q2 (2026-06-12, W3+ S5) — `?mtQueue` (DEFAULT-ON — `!== "off"` reader;
-// `=off` disables) wires one-shot
-// overlay COMPLETION across the wasm boundary: when a tagged
-// (`mtQueued`-played, see `_tryPlayLink`) overlay ends, JS calls
-// `window.__notifyAnimationDone(guid, true)` → the wasm
-// `notifyAnimationDone` export → that entity's `MotionTableManager`
-// (A4/SA4F per-guid routing: local player → the A4-Q1 system queue,
-// every guid → its registry MovementManager; retail per-OBJECT chain
-// `AnimDoneHook::Execute` → `Hook_AnimDone` →
-// `CPartArray::AnimationDone` → `MotionTableManager::AnimationDone`,
-// acclient.c:342336 → :317087 → :325080 → :329873; success hard-coded 1
-// on the renderer path, :317093). Eviction/stop of a tagged,
-// not-yet-completed overlay notifies success=false (hang prevention —
-// the Rust num_anims=1 node would otherwise never complete; exit-world
-// drain analogy, acclient.c:329940-329947). NO current caller tags plays
-// (the enqueue sources arrive with Stage-2 `?interpRig` / A3-D2); the
-// tagging contract prevents counter poisoning (only pipeline-queued
-// overlays may notify — acclient.c:329885-329894 is positional).
-// Independently flippable from `?hookDrain` (a mixer `finished` listener
-// is the fallback completion detector); full retail ORDERING parity needs
-// both on. Typeof-guarded — a pre-v4 pkg soft-degrades to a no-op.
-const MT_QUEUE_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return (
-      new URLSearchParams(window.location.search)
-        .get("mtQueue")?.toLowerCase() !== "off"
     );
   } catch (_) {
     return false;
@@ -2080,28 +1892,6 @@ const SETUP_DEFAULT_SCRIPT_ON = (() => {
     return false;
   }
 })();
-
-// A4-Q2 — the ONE notify gate (shared by the EntityManager completion
-// path and EntityInstance eviction): only tagged keys, typeof-guarded
-// bridge (`index.html` installs `window.__notifyAnimationDone` next to
-// the SessionHandle). A4/SA4F (2026-06-12): the local-player guid gate
-// is LIFTED — the wasm recv arm routes per-guid (retail per-OBJECT
-// chain has no local filter, acclient.c:342336-342338). Counter
-// poisoning stays guarded by the `_mtQueuedKeys` tagging contract
-// (acclient.c:329885-329894 is positional); NO current caller tags
-// plays, so remote notifies stay inert until the A3-D2 / ?interpRig
-// enqueue-consumers land and tag remote one-shots.
-function notifyMtQueuedOverlayDone(inst, key, success) {
-  try {
-    if (!MT_QUEUE_ON || !inst || !inst._mtQueuedKeys) return;
-    if (!inst._mtQueuedKeys.has(key)) return;
-    inst._mtQueuedKeys.delete(key);
-    if (typeof window === "undefined") return;
-    if (typeof window.__notifyAnimationDone === "function") {
-      window.__notifyAnimationDone(inst.guid >>> 0, !!success);
-    }
-  } catch (_) { /* never block the tick on the notify */ }
-}
 
 // AC InterpretedMotionCommand low-16 constants — used for
 // category-agnostic classification. The wasm export returns the full
@@ -2494,25 +2284,6 @@ const CYCLE_HELD_COMMANDS = new Set([
 // in `setMotion` when `classifyMotionCommand` returns `"attack"`/`"cast"`.
 const READY_SUBSTATE = 0x0003;
 
-// Same 4-bake-per-setup ceiling the 2D path enforces
-// (`index.html:2992`). Without this, a creature flipping stances
-// rapidly would accrete unbounded mixer actions; the cap evicts
-// least-recently-used to bound memory.
-const MAX_ACTIONS_PER_SETUP = 4;
-
-// Cohere-B (2026-05-12): retail AC never crossfaded between motions.
-// Each motion command (stance change, walk/run cycle swap, attack
-// one-shot) was a hard cut — the next AnimSet's frame 0 replaced the
-// previous AnimSet's last frame on the very next tick. PhatSDK
-// PartArray.cpp:337-405 `advance_to_next_animation()` does an
-// unconditional pointer swap with no blend state. Setting this to 0
-// makes `crossFadeTo` and `fadeOutCurrent` short-circuit to a hard
-// stop+play swap below, matching that retail behaviour. Per the dev
-// dev chat 2026-05-12, "rotational interpolation never existed in
-// retail. not on release, not at end of retail." — and the same is
-// true of cycle-to-cycle blends.
-const CROSSFADE_S = 0;
-
 // Perf B1 (2026-05-18) — tick-radius gate for `entityManager.tick`.
 // Entities further than `MAX_TICK_DIST` metres from the active camera
 // (world-space, three.js frame) skip mixer.update / hook execution /
@@ -2576,26 +2347,6 @@ const ENTITY_SMOOTH_STRIDE = (() => {
 // visible, so they never get throttled. Squared to compare without a sqrt.
 const ENTITY_SMOOTH_NEAR_DIST = 40;
 const ENTITY_SMOOTH_NEAR_DIST_SQ = ENTITY_SMOOTH_NEAR_DIST * ENTITY_SMOOTH_NEAR_DIST;
-
-// RP2 (2026-06-08) — velocity-scale gait recompute throttle. The T11
-// anti-ice-skating gait already low-pass-filters ground speed through an
-// EMA (α=0.3), so recomputing `cycleTimeScale` + `setEffectiveTimeScale`
-// every render frame is wasteful — the EMA barely moves between 60/144 fps
-// frames. `?gaitHz=<hz>` caps the recompute to ~that rate (per entity, via
-// a last-recompute timestamp). Default 0 → recompute every frame
-// (byte-identical to pre-RP2: no timestamp is ever read). Only the gait
-// MATH is throttled; the per-frame EMA position-delta sampling still runs
-// every frame so the EMA stays accurate when a recompute does fire.
-const GAIT_RECOMPUTE_HZ = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return 0;
-    const v = new URLSearchParams(window.location.search).get("gaitHz");
-    const n = v == null ? NaN : parseFloat(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  } catch (_) { /* Node / no window → default */ }
-  return 0;
-})();
-const GAIT_RECOMPUTE_INTERVAL_MS = GAIT_RECOMPUTE_HZ > 0 ? 1000 / GAIT_RECOMPUTE_HZ : 0;
 
 // Module-private scratch Vector3 for entity world-position lookup in
 // `_shouldTickEntity`. Callers must NOT retain a reference — the next
@@ -3220,35 +2971,26 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Per-entity instance: one Object3D rig + one AnimationMixer.
+ * Per-entity instance: one Object3D rig driven by the Rust motion playhead.
  *
  * Owned by EntityManager.entityMap. Holds:
  *   - root: THREE.Group rooted at the entity's world position; named
  *     `entity_${guidHex}`.
  *   - parts: array of per-part Group children (length = setup.parts).
- *     Their `.position` / `.quaternion` are the channels animation
- *     clips drive.
- *   - mixer: THREE.AnimationMixer(root)
- *   - actions: Map<cacheKey, AnimationAction>. cacheKey is
- *     `AnimationCache.makeKey(setupId, mtableId, command, stance)`.
- *   - currentAction: the action currently playing (or null = rest).
- *   - currentActionKey: matching cacheKey, for crossfade lookup.
- *   - lastUseMs per actionKey for LRU eviction.
+ *     Their `.position` / `.quaternion` are written by `poseRigAt`.
+ *   - _unifiedLoco: the cyclic MotionSequence record (locomotion / idle /
+ *     held door state) `{ seq, desc, cacheKey, hooks, lastHookTime, hold }`.
+ *   - _unifiedSeq / _unifiedQueue: the one-shot on the playhead (swing, cast,
+ *     emote, link, death, door state link) + the J5 pending queue behind it.
+ *   - currentActionKey (accessor): the playhead's cycle key.
  *   - meta: original spawn meta (modelId, paletteId, etc.) so motion
  *     switches re-fetch with the same substitutions.
  */
 class EntityInstance {
-  constructor(guid, root, parts, mixer, meta) {
+  constructor(guid, root, parts, meta) {
     this.guid = guid;
     this.root = root;
     this.parts = parts;
-    this.mixer = mixer;
-    this.actions = new Map();
-    this.actionLastUsedMs = new Map();
-    this.currentAction = null;
-    // Mixer-side key (doors only until the mixer is retired); read through the
-    // `currentActionKey` accessor below, which prefers the Rust playhead's key.
-    this._mixerActionKey = null;
     this.meta = meta;
     // Render-completeness audit (2026-05-29) — wielded-item attach state.
     // When this entity is a held child (weapon/shield/bow), `_attachedParentGuid`
@@ -3267,41 +3009,12 @@ class EntityInstance {
     // were applied — fresh DataTextures, not shared with materialCache).
     this.ownedTextures = [];
     this.ownedMaterials = [];
-    // Task E (2026-05-12) — AnimationMixer hook execution state.
-    // The wasm `EntityAnimationData.takeHooks()` returns a
-    // sorted-by-time list of `(time_in_clip_s, hook_type, hook_data)`
-    // entries per resolved cycle (e.g. forge idle anim). We bake it on
-    // first cache-miss for an action and re-bake on cache eviction.
-    //
-    // `hookTimelines`: cacheKey → Array<{time, hookType, soundWaveId,
-    //   soundEnum, soundProbability, soundVolume, direction}>.
-    //   Hooks beyond Sound (1) and SoundTable (2) are kept in the
-    //   timeline so the per-frame executor can debug-log them, but
-    //   only Sound/SoundTable land audio playback today (Task E
-    //   scope — CreateParticle/SoundTweaked/etc. are follow-ons).
-    // `actionLastHookTime`: actionKey → seconds-into-clip the
-    //   per-tick executor last advanced past. Initialized to 0 on
-    //   first play; reset to 0 when an action is .reset()'d. On wrap
-    //   (currentTime < lastTime) the executor fires hooks in
-    //   `[lastTime, clipDuration)` AND `[0, currentTime]`.
-    /** @type {Map<string, Array<object>>} */
-    this.hookTimelines = new Map();
-    /** @type {Map<string, number>} */
-    this.actionLastHookTime = new Map();
     // A5-P1b (2026-06-12, ?hookDrain=on) — deferred hook-fire queue:
-    // `{kind:"hook", hook}` and `{kind:"animDone", key, action}` records
-    // pushed during `_tickAnimationHooks` and drained at the END of the
-    // per-instance tick body (retail add_anim_hook → process_hooks,
+    // `{kind:"hook", hook}` records pushed by `_fireHooksInRange` (the playhead
+    // hook drain) and drained at the END of the per-instance tick body (retail add_anim_hook → process_hooks,
     // acclient.c:322063/:320035). Empty + untouched when the flag is off.
     /** @type {Array<object>} */
     this._hookFireQueue = [];
-    // A4-Q2 (2026-06-12, ?mtQueue=on) — link-keys of overlays the wasm
-    // pipeline queued (`_tryPlayLink` `mtQueued` option). ONLY these may
-    // notify `notifyAnimationDone` (counter-poisoning guard); cleared on
-    // completion/eviction. No current caller tags — enqueue sources
-    // arrive with Stage-2 ?interpRig / A3-D2.
-    /** @type {Set<string>} */
-    this._mtQueuedKeys = new Set();
     // Cached SoundTable DID — read on spawn, used by every SoundTable
     // (hookType 2) hook fire. `0` when the entity has no SoundTable on
     // its weenie (most static placements + vanilla creatures). The
@@ -3319,22 +3032,6 @@ class EntityInstance {
     // setPose so the jump tilt survives across position updates. Cleared
     // by `_tickJumpPoseTween` on the final landing tick.
     this.airborneTilt = null;
-    // Wave 7 Phase 7.1 (2026-05-26): Walk-cycle phase preservation.
-    // When `crossFadeTo` swaps off a locomotion clip, we stash the
-    // departing action's `mixer.time` so a re-press within ~200ms can
-    // resume the same cycle from mid-stride instead of restarting at
-    // frame 0 (which makes the feet "pop").
-    //
-    // Key: cacheKey (the same string used by `actions` / `actionLastUsedMs`).
-    // Value: { time: number /* clip.time at swap-out, seconds */,
-    //          leftAt: number /* performance.now() ms */ }.
-    //
-    // Pruned in `tick(dt)` (entries older than 5s are dropped) and on
-    // dispose(). Gate at the read site to `classifyMotionCommand ===
-    // "walk"|"run"` — restart-from-mid-clip is wrong for swings/casts
-    // (LoopOnce one-shots) and for the stance-Ready pose swap.
-    /** @type {Map<string, { time: number, leftAt: number }>} */
-    this._recentLocomotionTime = new Map();
   }
 
   // The playhead's key: the locomotion cycle the Rust MotionSequence
@@ -3342,13 +3039,9 @@ class EntityInstance {
   // mixer used, so every reader (setMotion's re-issue dedup, the hook event
   // records, plugin `animationHookDone`, `__diag.motion`, index.html's
   // remote-swing dedup) keeps its key shape. One-shots on `_unifiedSeq` never
-  // change it, exactly like the mixer's link overlays never did.
+  // change it, exactly like the mixer's link overlays never did. Read-only.
   get currentActionKey() {
-    return this._unifiedLoco?.cacheKey ?? this._mixerActionKey ?? null;
-  }
-
-  set currentActionKey(v) {
-    this._mixerActionKey = v ?? null;
+    return this._unifiedLoco?.cacheKey ?? null;
   }
 
   registerGeometry(geom) {
@@ -3394,174 +3087,6 @@ class EntityInstance {
     }
   }
 
-  /**
-   * Promote `nextAction` to the currently-playing action with a
-   * crossFade. `nextActionKey` is stamped so subsequent setMotion
-   * calls can spot a no-op (same action already current).
-   */
-  crossFadeTo(nextAction, nextActionKey, durationS) {
-    if (this.currentAction === nextAction) return;
-    _noteDeadMixerStart(this, "crossFadeTo");
-    // Wave 7 Phase 7.1 (2026-05-26): stash the departing action's mixer
-    // time so a same-key re-fetch within 200 ms can resume mid-stride.
-    // We record ALL outgoing transitions (locomotion or otherwise) and
-    // gate at the read site in `setMotion` to locomotion-only. Doing
-    // both ends would scatter the gating logic; record cheap + filter
-    // cheap-read is the simplest contract.
-    if (this.currentAction && this.currentActionKey) {
-      try {
-        this._recentLocomotionTime.set(this.currentActionKey, {
-          time: this.currentAction.time,
-          leftAt: performance.now(),
-        });
-      } catch (_) {}
-    }
-    if (durationS <= 0) {
-      // Cohere-B (2026-05-12): hard-cut path — retail had no blend
-      // between motions. Stop the current action (drops it to weight 0
-      // immediately) and start `nextAction` from wherever it was when
-      // last stopped. Same shape as the catch-block fallback below,
-      // but unconditional.
-      //
-      // Cohere-B follow-on (2026-05-12, "cycle-rewind"): deliberately
-      // SKIP `nextAction.reset()`. three.js's `action.stop()`
-      // preserves `.time`; `.reset()` zeroes it. The wasm integrator
-      // currently overshoots the run target (Perf-B follow-on:
-      // "25 m/s vs 4.5 m/s") and emits motion oscillation —
-      // Walk → Stop → Walk → ... at sub-second cadence — even when
-      // the player is holding W steady. Each transition hits this
-      // hard-cut path; if we reset() the walk action's time on every
-      // re-entry, the visible rig keeps rewinding to walk-cycle
-      // frame 0, producing the "jutting back every 0.5-2 s" the user
-      // reported. By preserving `.time`, a re-played action resumes
-      // mid-cycle and the rig walks continuously across the
-      // integrator's stutter. Brand-new actions have `.time = 0` by
-      // construction so first-play is unaffected.
-      if (this.currentAction) {
-        try { this.currentAction.stop(); } catch (_) {}
-      }
-      nextAction.setEffectiveWeight(1.0);
-      nextAction.setEffectiveTimeScale(1.0);
-      nextAction.enabled = true;
-      nextAction.play();
-    } else if (this.currentAction) {
-      // Live crossfade — fades current → new over `durationS`. Both
-      // actions stay scheduled so the mixer interpolates between them
-      // until the fade completes; then `currentAction` is .stop()'d
-      // implicitly by its weight reaching 0. Retained for any future
-      // caller that overrides the duration; current production path
-      // uses `CROSSFADE_S = 0` and takes the hard-cut branch above.
-      try {
-        nextAction.reset();
-        nextAction.setEffectiveWeight(1.0);
-        nextAction.setEffectiveTimeScale(1.0);
-        nextAction.enabled = true;
-        nextAction.play();
-        this.currentAction.crossFadeTo(nextAction, durationS, false);
-      } catch (e) {
-        // Fall back to a hard swap if crossFade hits an internal
-        // assertion — usually means an action was uncached mid-flight.
-        this.currentAction.stop();
-        nextAction.reset();
-        nextAction.play();
-      }
-    } else {
-      // No action was playing — start fresh. Cohere-B follow-on:
-      // skip `.reset()` for the same reason as the hard-cut path
-      // above. Brand-new AnimationActions construct with `.time = 0`;
-      // re-played actions resume from where they stopped, preventing
-      // the walk-cycle rewind during integrator motion oscillation.
-      if (durationS > 0) {
-        nextAction.fadeIn(durationS);
-      }
-      nextAction.play();
-    }
-    this.currentAction = nextAction;
-    this.currentActionKey = nextActionKey;
-  }
-
-  /**
-   * Stop the current action with a fade-out. Sets `currentAction =
-   * null`. Used on STOP commands and on respawn to reset to rest pose.
-   */
-  fadeOutCurrent(durationS) {
-    if (!this.currentAction) return;
-    // Wave 7 Phase 7.1 (2026-05-26): same swap-out stash as `crossFadeTo`
-    // — STOP → re-press should also resume the previous walk cycle from
-    // where it left off (e.g. tap W → release → re-press within 200 ms).
-    if (this.currentActionKey) {
-      try {
-        this._recentLocomotionTime.set(this.currentActionKey, {
-          time: this.currentAction.time,
-          leftAt: performance.now(),
-        });
-      } catch (_) {}
-    }
-    if (durationS <= 0) {
-      // Cohere-B (2026-05-12): hard-cut stop. Retail STOP commands
-      // ended the current motion's cycle and held the rig at the
-      // next-applicable default pose immediately. The PhatSDK
-      // equivalent is to call `advance_to_next_animation()` to the
-      // default (no fade-out state).
-      try { this.currentAction.stop(); } catch (_) {}
-    } else {
-      try {
-        this.currentAction.fadeOut(durationS);
-        // Don't .stop() yet — fadeOut needs the mixer to keep the
-        // action scheduled until weight hits 0. The mixer's tick will
-        // implicitly stop it. Future reset() in crossFadeTo will reuse
-        // the action.
-      } catch (e) {
-        try {
-          this.currentAction.stop();
-        } catch (_) {}
-      }
-    }
-    this.currentAction = null;
-    this.currentActionKey = null;
-  }
-
-  /**
-   * Evict the least-recently-used cached action to keep the per-entity
-   * action count under `MAX_ACTIONS_PER_SETUP`. Never evicts the
-   * `currentActionKey` (mixer assertion would fire).
-   */
-  evictOldestUnused() {
-    if (this.actions.size < MAX_ACTIONS_PER_SETUP) return;
-    let oldestKey = null;
-    let oldestTs = Infinity;
-    for (const [key, ts] of this.actionLastUsedMs) {
-      if (key === this.currentActionKey) continue;
-      if (ts < oldestTs) {
-        oldestTs = ts;
-        oldestKey = key;
-      }
-    }
-    if (!oldestKey) return;
-    const action = this.actions.get(oldestKey);
-    if (action) {
-      try {
-        action.stop();
-        this.mixer.uncacheAction(action.getClip(), this.root);
-      } catch (_) {}
-    }
-    // A4-Q2 (?mtQueue=on) — CANCELLATION: evicting a tagged overlay that
-    // never completed must still complete its Rust-side num_anims=1 node
-    // (no JS→Rust truncation mirror exists; a missed completion is a
-    // hung node forever). success=false by analogy to the exit-world
-    // drain (acclient.c:329940-329947; spec S5 §6 OQ-2). A COMPLETED
-    // overlay already cleared its key, so this is a no-op for it; the
-    // whole call is a no-op when the flag is off / the set is empty.
-    notifyMtQueuedOverlayDone(this, oldestKey, false);
-    this.actions.delete(oldestKey);
-    this.actionLastUsedMs.delete(oldestKey);
-    // Task E (2026-05-12): drop the evicted action's hook timeline +
-    // last-fire state. If the same (cmd, stance) is re-fetched later,
-    // setMotion's cache-miss path will repopulate from the AnimationCache.
-    this.hookTimelines.delete(oldestKey);
-    this.actionLastHookTime.delete(oldestKey);
-  }
-
   dispose() {
     // 2026-05-30 — mark disposed + cancel any pending spawn-race surface
     // refresh (see EntityManager._scheduleEntitySurfaceRefresh) so a late
@@ -3576,11 +3101,7 @@ class EntityInstance {
       try { clearTimeout(this._recolorRefreshTimer); } catch (_) {}
       this._recolorRefreshTimer = null;
     }
-    try {
-      this.mixer.stopAllAction();
-      this.mixer.uncacheRoot(this.root);
-    } catch (_) {}
-    // Free in-flight wasm MotionSequences (?unifiedMotion) — the one-shot
+    // Free in-flight wasm MotionSequences — the one-shot
     // (_unifiedSeq) and the locomotion cycle (_unifiedLoco) — so a despawn
     // doesn't leak the Rust-side allocations.
     if (this._unifiedSeq) {
@@ -3640,16 +3161,6 @@ class EntityInstance {
       } catch (_) {}
     }
     entityOwnedTally.releaseOwner(this);
-    this.actions.clear();
-    this.actionLastUsedMs.clear();
-    // Task E (2026-05-12): drop hook timeline state alongside the
-    // mixer + actions.
-    this.hookTimelines.clear();
-    this.actionLastHookTime.clear();
-    // Wave 7 Phase 7.1 (2026-05-26): drop locomotion-phase cache too.
-    this._recentLocomotionTime.clear();
-    this.currentAction = null;
-    this.currentActionKey = null;
   }
 }
 
@@ -3957,8 +3468,7 @@ export class EntityManager {
     this._preCreateBufferOn = readPreCreateBufferFlag();
     this._preCreate = createPreCreateBuffer();
     // Rate-limit stamp for the once-per-second expiry sweep in tick(dt)
-    // (same pattern as `_lastRecentLocomotionPruneMs`, but Date.now()
-    // domain throughout — the buffer's enqueue stamps use its default
+    // (Date.now() domain throughout — the buffer's enqueue stamps use its default
     // Date.now() clock, so the sweep must compare in the same domain).
     this._preCreateLastSweepMs = 0;
     /** @type {Map<number, Map<number, object>>} */
@@ -3970,13 +3480,6 @@ export class EntityManager {
     // into the combat grip on attach (retail SetPlacementFrame).
     /** @type {Map<string, Map<number, object>>} */
     this._placementFrameCache = new Map();
-    // Wave 7 Phase 7.1 (2026-05-26): rate-limit the per-entity
-    // `_recentLocomotionTime` prune to once per second. Each entry is
-    // single-shot (deleted on consume), but if a player walks then
-    // stops permanently, the cycle's last swap-out entry would sit
-    // forever — the prune drops anything older than 5s. ms timestamp,
-    // checked at end of `tick(dt)`.
-    this._lastRecentLocomotionPruneMs = 0;
     // Batch 9 #2 (2026-06-07): per-spawn generation token. `spawn()`
     // bumps + captures a generation per GUID before any async work and
     // threads it into `_spawnImpl(meta, gen)`. A concurrent `remove(guid)`
@@ -4413,7 +3916,7 @@ export class EntityManager {
       }
     }
 
-    const inst = new EntityInstance(guid, root, parts, null, meta);
+    const inst = new EntityInstance(guid, root, parts, meta);
     // T9 — dynamic-LOD bookkeeping: the full-detail setup this entity spawned
     // from + the degrade band it currently renders (0 = full detail). The
     // tick recheck re-queries the band at the live distance and respawns when
@@ -5024,9 +4527,7 @@ export class EntityManager {
       root.scale.setScalar(inst._baseScale);
     }
 
-    // Step D: AnimationMixer + initial action.
-    const mixer = new THREE.AnimationMixer(root);
-    inst.mixer = mixer;
+    // Step D: SoundTable + the initial cycle on the motion playhead.
     // Task E (2026-05-12): cache the entity's SoundTable DID on the
     // instance. The wire field is `EntityUpdate.soundTableDid` (backed
     // by `ObjectDescription.stable_id` = `PropertyDataId::SoundTable`
@@ -5037,12 +4538,15 @@ export class EntityManager {
     // hooks fired on such an entity silently no-op (not an error;
     // many static placements have animation hooks but no SoundTable).
     inst.soundTableDid = (meta.soundTableDid ?? 0) >>> 0;
-    // Animation consolidation — the spawn's initial cycle goes straight onto the
-    // Rust playhead (`_unifiedLoco`), so every entity is on ONE authority from
-    // its first frame instead of breathing on the mixer until its first move.
-    // Same gate as the mixer auto-play below (walk/run/idle cycles only; one-shot
-    // classes and motion=0 stay at the rest pose). A door/chest spawning in a
-    // state (On/Off) is installed as a HELD cycle — its final open/closed frame.
+    // The spawn's initial cycle goes straight onto the Rust playhead
+    // (`_unifiedLoco`), so every entity is on ONE authority from its first
+    // frame. Auto-plays locomotion (walk/run) AND the Ready idle cycle — lib.rs
+    // defaults animatable spawns (mtable_id != 0) to Ready (0x41000003) →
+    // "idle", which is what makes standing NPCs/vendors/players breathe instead
+    // of standing frozen at the rest pose. One-shot classes are never the spawn
+    // motion; motion=0 (no MotionTable) → no clip → rest pose. A door/chest
+    // spawning in a state (On/Off) is installed as a HELD cycle — its final
+    // open/closed frame, no swing on spawn.
     let _spawnOnPlayhead = false;
     if (initialClip) {
       const _cls0 = classifyMotionCommand(initialMotion);
@@ -5062,67 +4566,6 @@ export class EntityManager {
         }
       }
     }
-    if (initialClip && !_spawnOnPlayhead) {
-      const cacheKey = AnimationCache.makeKey(
-        setupId,
-        mtableId,
-        initialMotion,
-        resolvedStance || initialStance
-      );
-      const action = mixer.clipAction(initialClip);
-      // Door/chest state motions (On/Off) HOLD their open/closed pose; idle/walk/
-      // run cycles loop. Without this, a chest/door spawning with Off(closed) /
-      // On(open) loops its open↔close cycle forever (see isDoorStateMotion).
-      const _holdState = isDoorStateMotion(initialMotion);
-      action.setLoop(_holdState ? THREE.LoopOnce : THREE.LoopRepeat, _holdState ? 1 : Infinity);
-      action.clampWhenFinished = _holdState;
-      action.enabled = true;
-      inst.actions.set(cacheKey, action);
-      inst.actionLastUsedMs.set(cacheKey, performance.now());
-      // Task E (2026-05-12): stash the cycle's hook timeline alongside
-      // the action. The animation cache already snapshotted hooks to
-      // plain POJOs and `animEntry.hooks` is sorted-by-time-asc.
-      // Reused across mixers (multiple entities sharing this clip see
-      // the same timeline array — safe, the executor's state lives
-      // per-entity in `actionLastHookTime`).
-      if (Array.isArray(animEntry.hooks) && animEntry.hooks.length > 0) {
-        inst.hookTimelines.set(cacheKey, animEntry.hooks);
-        // -1 epoch (2026-07-02): the range walker fires (last, cur] — a 0
-        // seed permanently skips hooks at t=0.0 (retail fires the entry
-        // frame's hooks on the first advance; door open sounds sit at t=0).
-        inst.actionLastHookTime.set(cacheKey, -1);
-      }
-      // Auto-play locomotion (walk/run) AND the Ready idle cycle at spawn.
-      // Render-completeness audit (2026-05-29): lib.rs now defaults
-      // animatable spawns (mtable_id != 0) to Ready (0x41000003), which
-      // classifyMotionCommand maps to "idle". The action above is already
-      // configured LoopRepeat, so idle just needs to start — this is what
-      // makes standing NPCs/vendors/players breathe and sway instead of
-      // standing frozen at the rest pose. One-shot attack/cast commands are
-      // never the spawn-initial motion and stay gated out. Entities with no
-      // MotionTable spawn with motion=0 → cls === null → no idle attempt.
-      const cls = classifyMotionCommand(initialMotion);
-      if (cls === "walk" || cls === "run" || cls === "idle") {
-        action.play();
-        if (_holdState) {
-          // Snap to the final (resting) frame so the door/chest shows its
-          // open/closed pose immediately, without a one-shot swing on spawn.
-          // clampWhenFinished holds it there. (Since the 2026-07-02 wasm
-          // hold-bake fix, a framerate-0 state cycle is a single-frame clip
-          // — Off holds the closed frame, On the open frame — so this snap
-          // is a no-op kept for pre-rebuild pkg/ compatibility.)
-          action.time = initialClip.duration || 0;
-          // Seed the motion-state memory with the spawn state so the FIRST
-          // server Motion broadcast (e.g. Use → On) resolves its MotionTable
-          // LINK (Off→On = the authored opening swing; On→Off = the same
-          // anim at negative framerate, baked reversed) instead of snapping.
-          inst.lastMotionCommand = initialMotion >>> 0;
-        }
-        inst.currentAction = action;
-        inst.currentActionKey = cacheKey;
-      }
-    }
-
     // P6/R-6 (net-fixwave 2026-07-10) — per-spawn rig program warm:
     // compileAsync the fully-built rig BEFORE it becomes visible. The
     // surface pixels resolved in Step B and the maps are already installed
@@ -9149,51 +8592,6 @@ export class EntityManager {
         casterGuid: guid >>> 0, reason: "cancelled",
       });
     } catch (_) {}
-    // WS03 (?castOverlayGuard): a forward-edge anim-break HARD-CUTS the overlay and
-    // restores the base I suppressed (retail splice-replacement), instead of relying
-    // on the setMotion(Ready) crossFadeTo below — which misses a link-keyed
-    // _tryPlayLink overlay (not currentAction) and leaves stale suppression
-    // bookkeeping. Mirrors _cancelOneShotOverlays' teardown.
-    if (CAST_OVERLAY_GUARD) {
-      const ov = inst._baseSuppressAction;
-      if (ov) {
-        if (typeof ov.isRunning === "function" && ov.isRunning()) { try { ov.stop(); } catch (_) {} }
-        inst._baseSuppressAction = null;
-        const saved = inst._baseSuppressSaved; inst._baseSuppressSaved = null;
-        const cur = inst.actions?.get(inst._locoCycleKey);
-        if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
-          try { cur.setEffectiveWeight(saved && saved.savedWeight > 0 ? saved.savedWeight : 1.0); } catch (_) {}
-        }
-      }
-      // also stop a currentAction swing overlay that wasn't the suppressor (defensive).
-      if (
-        inst.currentActionKey && inst.currentActionKey.startsWith("swing:") &&
-        inst.currentAction && inst.currentAction !== inst._baseSuppressAction &&
-        typeof inst.currentAction.isRunning === "function" && inst.currentAction.isRunning()
-      ) {
-        try { inst.currentAction.stop(); } catch (_) {}
-      }
-    }
-    // WS12 (?castCancelStops, default OFF): retail REPLACES the spliced gesture on
-    // interrupt; our overlay otherwise keeps running and its trailing SoundTweaked
-    // windup-hum hooks (0x0A000390, frames 53/57) fire AFTER the fizzle. Stop the
-    // running cast/swing LoopOnce overlays so their hooks stop draining. Unlike the
-    // WS03 block above (suppressor + currentAction only) this walks EVERY action so
-    // it also catches link-keyed `_tryPlayLink` overlays that aren't currentAction.
-    // The base-cycle weight restore + tagged cancel-notify ride `_completeOverlay`
-    // (same path hookDrain / _cancelOneShotOverlays use). Already-stopped actions
-    // are skipped, so double-running with the WS03 block is a no-op.
-    if (CAST_CANCEL_STOPS && inst.actions && inst.mixer) {
-      for (const [key, action] of inst.actions) {
-        try {
-          if (!action || action.loop !== THREE.LoopOnce) continue;
-          if (typeof action.isRunning === "function" && !action.isRunning()) continue;
-          if (!(key.startsWith("swing:") || key.startsWith("link:"))) continue; // cast/attack overlays only
-          this._completeOverlay(inst, key, action, false);
-          action.stop();
-        } catch (_) { /* never block the cancel on overlay teardown */ }
-      }
-    }
     try {
       const stance = ((inst.currentStance ?? inst.lastStance ??
         (typeof window !== "undefined" ? window.__getCurrentStanceLow?.() : 0)) ?? 0) >>> 0;
@@ -9223,71 +8621,9 @@ export class EntityManager {
   }
 
   /**
-   * Wave 4 / Phase 4.2 (2026-05-26) — release a held swing windup.
-   * Pairs with `setSwingMotion(guid, motionCmd, { holdAtPeak: true })`
-   * below. While held, the clip's mixer time is paused at the peak
-   * frame (`durationSec * 0.5`). Calling this resumes playback from
-   * that frame to clip end, then the usual `_swingRestoreTimer`
-   * fires `setMotion(Ready)`.
-   *
-   * No-op if no hold is in flight for `guid` — safe to call
-   * unconditionally on charge fire / hold release.
-   */
-  releaseSwingHold(guid) {
-    const g = guid >>> 0;
-    const inst = this.entityMap.get(g);
-    if (!inst) return;
-    const hold = inst._swingHold;
-    if (!hold) return;
-    // Cancel the pending pause-at-peak setTimeout if it hasn't fired yet.
-    if (hold.peakTimerId) {
-      clearTimeout(hold.peakTimerId);
-      hold.peakTimerId = 0;
-    }
-    const action = hold.action;
-    if (action) {
-      // Resume playback. Two cases:
-      //   1) Pause-at-peak already fired → action.paused = true. Flipping
-      //      false lets the mixer advance again.
-      //   2) Pause-at-peak hasn't fired yet (early release before peak):
-      //      action is still playing normally. paused=false is a no-op.
-      try { action.paused = false; } catch (_) {}
-    }
-    // Re-arm the Ready-restore for the REMAINING duration of the
-    // swing (from current mixer.time to clip end). Pre-fix the restore
-    // timer fired at `dur ms` after setSwingMotion started, so a
-    // long-held charge would prematurely revert to Ready while the
-    // swing was still paused at peak. Now we re-arm with the actual
-    // post-release runtime.
-    if (inst._swingRestoreTimer) {
-      clearTimeout(inst._swingRestoreTimer);
-      inst._swingRestoreTimer = null;
-    }
-    const swingKey = hold.swingKey;
-    const stance = hold.stance;
-    const clipDuration = (action?.getClip?.()?.duration ?? 0);
-    const currentTime = (action?.time ?? 0);
-    const remainingSec = Math.max(0.08, (clipDuration - currentTime) || 0.4);
-    const remainingMs = Math.round(remainingSec * 1000);
-    inst._swingRestoreTimer = setTimeout(() => {
-      inst._swingRestoreTimer = null;
-      if (!this.entityMap.has(g)) return;
-      if (inst.currentActionKey !== swingKey) return;
-      if (UNIFIED_LOCO && inst._unifiedLoco) return; // cycle owner unchanged (F3)
-      this.setMotion(g, CMD_LOW_READY, stance);
-    }, remainingMs);
-    inst._swingHold = null;
-    // eslint-disable-next-line no-console
-    console.log(
-      "[entities/swingHold] release guid=0x" + g.toString(16) +
-      " key=" + swingKey + " remaining=" + remainingSec.toFixed(2) + "s",
-    );
-  }
-
-  /**
    * Animation consolidation (docs/animation-audit §5 Step 1, missile): build a
    * one-shot Rust MotionSequence from the CYCLE bake for `cmd` and drive it
-   * full-body (hands back to the mixer on completion). The bake resolves cycles
+   * full-body (hands back to the `_unifiedLoco` cycle on completion). The bake resolves cycles
    * (lib.rs try_resolve_cycle_frames), so an aim-level fire (class 0x40, in
    * MotionTable.cycles) — which the links-only swing resolver structurally can't
    * reach (canPlayReal false → single-arm/non-human setSwingPose no-op = "missile
@@ -9300,8 +8636,7 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return false;
-    const MS =
-      (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
+    const MS = _motionSequenceClass();
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (!MS || typeof fetchKeyframes !== "function") return false;
     let entry = null;
@@ -9319,8 +8654,8 @@ export class EntityManager {
     const seq = MS.fromDescriptor(
       d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
       d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
-      false, // one-shot: play once. clearOnDone=true hands back to the mixer
-             // (swing/missile); false HOLDS the final frame (door open/closed).
+      false, // one-shot: play once. clearOnDone=true hands back to the cycle
+             // (swing/missile); false HOLDS the final frame.
     );
     if (!seq) return false;
     if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
@@ -9465,10 +8800,10 @@ export class EntityManager {
     inst._unifiedQueue = null;
   }
 
-  // Whether door open/close should route through the Rust authority
-  // (?unifiedMotion=door). index.html's kind=15 handler reads this to decide
-  // between playDoorMotion and the legacy instant root-rotation snap.
-  usesUnifiedDoor() { return UNIFIED_DOOR; }
+  // Door open/close always routes through the Rust authority (playDoorMotion).
+  // Kept because index.html's kind=15 handler asks before calling it (its
+  // false branch — the legacy instant root-rotation snap — is now unreachable).
+  usesUnifiedDoor() { return true; }
 
   // Animation consolidation (docs/animation-audit §5 Step 3) / rev 2026-07-02:
   // play a door's real swing. Open = On (0x4000000b), close = Off (0x4000000c).
@@ -9479,13 +8814,12 @@ export class EntityManager {
   // and the SetState/ethereal flip → kind=15 → here) funnel into that ONE
   // branch, whose lastMotionCommand dedup makes the second trigger a no-op —
   // previously this path played the On/Off CYCLE as a unified one-shot, which
-  // (a) raced the mixer link and (b) under the B5 full-range bake rendered a
+  // (a) raced the state link and (b) under the B5 full-range bake rendered a
   // closed door OPEN (the Off cycle baked the whole open anim; "stuck open").
   // stance 0 → the bake resolves default_style (doors key under NonCombat
   // 0x003D). @returns {Promise<boolean>} whether the door was handled (caller
   // falls back to the instant root-rotation snap on false).
   async playDoorMotion(guid, open) {
-    if (!UNIFIED_DOOR) return false;
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return false;
     const cmd = open ? CMD_DOOR_ON : CMD_DOOR_OFF;
@@ -9523,7 +8857,7 @@ export class EntityManager {
   }
 
   // The locomotion gait framerate scale (how fast to advance the cyclic
-  // playhead) — mirrors the mixer path's setEffectiveTimeScale math: the
+  // playhead) — the retired mixer path's setEffectiveTimeScale math: the
   // anti-ice-skating velScale (actual ground speed / authored cycle speed,
   // clamped [0.25,4.0]) composed with the server per-motion speed + backstep
   // sign. When no base speed (idle / velScale-absent), plays at motionSpeed.
@@ -9690,11 +9024,10 @@ export class EntityManager {
     } catch (_) {}
     if (!canPlayReal || typeof fetchKeyframes !== "function") {
       // Missile / aim-level fire is a CYCLE (class 0x40) the links-only gate
-      // above can't resolve. Under ?unifiedMotion, route it through the Rust
-      // authority on the cycle bake (full-body, retail-faithful) instead of the
-      // single-arm/non-human setSwingPose no-op. Only diverts when a real cycle
-      // resolves; otherwise falls through unchanged. Default-off.
-      if (UNIFIED_MISSILE && await this._tryUnifiedCycleOneShot(g, setupId, mtableId, motionCmd >>> 0, stance)) {
+      // above can't resolve: route it through the Rust authority on the cycle
+      // bake (full-body, retail-faithful). Only diverts when a real cycle
+      // resolves; otherwise no gesture plays.
+      if (await this._tryUnifiedCycleOneShot(g, setupId, mtableId, motionCmd >>> 0, stance)) {
         return;
       }
       // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
@@ -9867,16 +9200,14 @@ export class EntityManager {
       if (tween.isLanding) {
         if (tween.kind === "human") {
           inst._jumpPoseStash = null;
-          if (inst.currentAction) inst.currentAction.paused = false;
         } else {
           inst.airborneTilt = null;
         }
       } else {
-        // Tween-in complete. Lock the mixer for human path so the
-        // walk-cycle doesn't drift the parts while airborne.
-        if (tween.kind === "human") {
-          if (inst.currentAction) inst.currentAction.paused = true;
-        } else {
+        // Tween-in complete. (The human path used to pause the mixer
+        // action here; the playhead keeps cycling and the tween's per-part
+        // slerp — applied after the pose — owns the locked parts.)
+        if (tween.kind !== "human") {
           inst.airborneTilt = tween.toTilt.clone();
         }
         // Wave 3 / I6 fix (2026-05-28) — record when takeoff stabilised
@@ -10109,7 +9440,7 @@ export class EntityManager {
     }
     // A new locomotion/stance/motion command ends any in-progress unified
     // sequence (swing override, or a death hold on resurrect/correction) so
-    // movement stays responsive. No-op when ?unifiedMotion is off (never set).
+    // movement stays responsive.
     //
     // OpenAC comparison 2026-10-04 (combat P0-1): this used to free the
     // playhead for EVERY command — including the next swing/cast gesture — but
@@ -10297,30 +9628,23 @@ export class EntityManager {
       }
     }
     if (cls === "stop" || cls === null) {
-      inst.fadeOutCurrent(CROSSFADE_S);
-      // Remember the last non-stop command we played so a follow-up
-      // setMotion(...) can ask the wasm side for a link clip from
-      // the previous cycle into the next one.
-      // (`lastMotionCommand` stays sticky across STOP so e.g.
-      //  Walk → Stop → Walk replays the original link.)
+      // Unclassifiable command: the playhead keeps its current cycle (Stop /
+      // Invalid were already substituted to Ready above). `lastMotionCommand`
+      // stays sticky so e.g. Walk → ? → Walk replays the original link.
       return;
     }
     const setupId =
       (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
     const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
 
-    // Animation consolidation (docs/animation-audit §5 Step 2,
-    // ?unifiedMotion=death): route Dead (0x0011) through the Rust one-shot
-    // authority — play the collapse ONCE, then HOLD the final (prone) frame
-    // (a non-cyclic MotionSequence latches `done` and clamps its last frame).
-    // Replaces the held-LOOPING cycle pose + the racy separate collapse overlay
-    // (two unsequenced mixer actions) with ONE sequence. Default-off: when the
-    // flag is off this is skipped and Dead falls through to the legacy
-    // STATIONARY_COMMANDS → cycle path below (untouched, no regression).
-    if (UNIFIED_DEATH && cmdLow === CMD_LOW_DEAD) {
+    // Animation consolidation (docs/animation-audit §5 Step 2): route Dead
+    // (0x0011) through the Rust one-shot authority — play the collapse ONCE,
+    // then HOLD the final (prone) frame (a non-cyclic MotionSequence latches
+    // `done` and clamps its last frame). An empty bake falls through to the
+    // STATIONARY_COMMANDS → cycle path below.
+    if (cmdLow === CMD_LOW_DEAD) {
       const deathToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
-      const MS =
-        (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
+      const MS = _motionSequenceClass();
       const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
       if (MS && typeof fetchKeyframes === "function") {
         let entry = null;
@@ -10385,7 +9709,7 @@ export class EntityManager {
           }
         }
       }
-      // MS missing (stale pkg) / empty bake → fall through to the legacy path.
+      // MS missing (stale pkg) / empty bake → fall through to the cycle path.
     }
 
     // Swings + magic casts live in `MotionTable.links[(stance,
@@ -10395,21 +9719,14 @@ export class EntityManager {
     // `docs/swing-classification-spec-2026-05-19.md` §1, §8.
     //
     // Route attack/cast through `_tryPlayLink` with from = Ready =
-    // 0x0003 and OVERLAY the swing on top of the active locomotion
-    // cycle (no crossFadeTo). The walk/run continues to animate the
-    // legs while the swing animates the arms; when LoopOnce ends
-    // with `clampWhenFinished=false`, the swing weight drops to 0
-    // and the cycle resumes the affected parts.
+    // 0x0003: the swing plays as a full-body one-shot on the playhead
+    // (queued behind any in-flight gesture), and the locomotion cycle
+    // resumes when it completes.
     //
     // Stance-agnostic per spec §8.2 finding A — monster motion
     // tables put swings in `NonCombat`; the link lookup either has
     // an entry or it doesn't, we pass `stance` straight through.
     //
-    // Pre-fix: attack/cast went through the cycle path, which
-    // returned a null clip (swings aren't in cycles) and the
-    // `if (!clip) fadeOutCurrent` branch then silently faded out
-    // the underlying locomotion. Net effect: no swing visible AND
-    // the walk cycle stopped.
     if (cls === "attack" || cls === "cast") {
       // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
       // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
@@ -10518,17 +9835,6 @@ export class EntityManager {
     // playback to actual ground travel. Only walk/run-family cycles (sidestep
     // / turn-in-place / fall also classify "walk"; their |velocity| is ~0 →
     // cycleTimeScale no-ops). Gated by ?velScale=on.
-    // WS03 ordering fix (2026-08-01) — the `?castOverlayGuard` block far below
-    // decides "same base cycle" vs "genuine base SWAP" by comparing `cacheKey`
-    // against `_locoCycleKey`. The VEL_SCALE_ON stamp on the very next line
-    // repoints `_locoCycleKey` to `cacheKey` FIRST, so for every walk/run swap
-    // the guard saw them equal and took its "leave it suppressed" early return:
-    // the new gait cycle was never played, and `_completeOverlay`'s restore then
-    // targeted an action that had never run (`cur.isRunning()` false) so the legs
-    // stayed dead after the cast. Capture the PRE-stamp key here and let the
-    // guard compare against that. With `?velScale=off` (or a non-locomotion cls)
-    // nothing below reassigns `_locoCycleKey`, so this is identical either way.
-    const preLocoCycleKey = inst._locoCycleKey;
     if (VEL_SCALE_ON && (cls === "walk" || cls === "run")) {
       inst._locoCycleKey = cacheKey;
       // Seed from the memo so a gait swap never inherits the prior cycle's base.
@@ -10561,34 +9867,26 @@ export class EntityManager {
     // default style) before the new style's cycle. We only ever swapped the
     // Ready cycle, so the rig snapped.
     if (
-      UNIFIED_LOCO && (cmd & 0xffff) === CMD_LOW_READY &&
+      (cmd & 0xffff) === CMD_LOW_READY &&
       prevStance !== 0 && (stance & 0xffff) !== (prevStance & 0xffff)
     ) {
       this._playStyleLink(inst, setupId, mtableId, prevStance, stance);
     }
-    // 2026-10-05 (audit F1): once the Rust playhead owns the cycle
-    // (_unifiedLoco), dedupe against IT. `currentActionKey` is the mixer's
-    // key and is frozen at the spawn idle, so a later stop whose key matched
-    // the spawn key (bare 0x3 Ready) returned here and left the walk cycle
-    // playing on a standing entity.
-    const unifiedOwnsCycle = UNIFIED_LOCO && !!inst._unifiedLoco;
+    // Dedupe against the playhead's cycle (`currentActionKey` is its key).
     // Audit F6: per-entity command token, bumped BEFORE the dedup so even a
     // re-issue of the playing cycle supersedes an older fetch still in
     // flight. Every await below re-checks it: last command issued wins, not
     // last fetch finished.
     const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
-    // `currentActionKey` is the playhead's key whenever `_unifiedLoco` exists.
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
-    inst.actionLastUsedMs.set(cacheKey, performance.now());
 
-    // 2026-05-18 motion-link experiment. When we're transitioning
-    // from a known previous motion command (not the very first
-    // setMotion for this entity), ask the MotionTable for a link
-    // transition clip via `opts.fromMotion`. If one exists, play it
-    // once with LoopOnce + clampWhenFinished, then schedule the
-    // destination cycle as a follow-up so the rig flows
-    // (prev cycle frames) → (link clip frames once) → (next cycle).
+    // Locomotion transition LINK. When transitioning from a known previous
+    // motion command (not the very first setMotion for this entity), ask the
+    // MotionTable for a link via `opts.fromMotion`. If one exists it plays as
+    // a one-shot on the playhead; when it finishes the tick falls back to
+    // `_unifiedLoco`, which by then holds the new cycle
+    // (prev cycle) → (link once) → (next cycle).
     const fromMotion = (inst.lastMotionCommand ?? 0) >>> 0;
     if (
       fromMotion !== 0 &&
@@ -10596,238 +9894,58 @@ export class EntityManager {
       cls !== "attack" &&
       cls !== "cast"
     ) {
-      // Don't await — kick off the link fetch but immediately also
-      // start fetching the destination cycle below. If the link
-      // resolves we'll insert it as a quick overlay; if not (no
-      // link entry for this transition) we just play the cycle as
-      // before. Failure is silent — same visual as today.
-      // Audit F4: under UNIFIED_LOCO the mixer stops advancing once the
-      // cycle is unified, so a mixer link never plays. Play it as a unified
-      // one-shot instead; when it finishes the tick falls back to
-      // _unifiedLoco, which by then holds the new cycle (link → cycle).
-      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance,
-        UNIFIED_LOCO ? { forceUnified: true, motionToken } : { motionToken });
+      // Don't await — kick off the link fetch but immediately also start
+      // fetching the destination cycle below. No link entry for this
+      // transition (the common case) → just the cycle. Failure is silent.
+      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance, { motionToken });
     }
     inst.lastMotionCommand = cmd;
 
-    // A mixer action cached for this key (e.g. the spawn idle) must not route
-    // around the unified branch once the playhead owns the cycle — the mixer
-    // no longer advances, so playing it there is a silent no-op.
-    let action = unifiedOwnsCycle ? null : inst.actions.get(cacheKey);
-    if (!action) {
-      // Cache miss → fetch the clip. Substitutions reuse the spawn
-      // meta's entries (NPC outfit doesn't change mid-walk).
-      const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
-      if (typeof fetchKeyframes !== "function") return;
-      let entry;
-      try {
-        entry = await this.animationCache.get(
-          setupId,
-          mtableId,
-          cmd,
-          stance,
-          fetchKeyframes,
-          {
-            modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
-            textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
-            paletteId: (inst.meta.paletteId ?? 0) >>> 0,
-            paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
-          }
-        );
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[phase7.4b] setMotion fetch failed for entity ${guid.toString(16)}:`,
-          e
-        );
-        return;
-      }
-      // Re-check — the entity may have been removed between the
-      // cache hit and now.
-      if (!this.entityMap.has(guid >>> 0)) return;
-      if (inst._motionToken !== motionToken) return; // a newer setMotion won (F6)
-      const clip = entry.clip;
-      if (!clip) {
-        // No animation resolved for this (cmd, stance). Treat as STOP
-        // — fade out the current action.
-        inst.fadeOutCurrent(CROSSFADE_S);
-        return;
-      }
-      // Animation consolidation (docs/animation-audit §5 Step 5,
-      // ?unifiedMotion=locomotion): drive the locomotion CYCLE through the Rust
-      // authority instead of the mixer crossFadeTo. Phase is carried across a
-      // cycle swap (walk→run) via the Rust seekPhase so the feet don't pop.
-      // A one-shot (_unifiedSeq) suppresses this during a swing then resumes it.
-      // By here attack/cast/death/stop have already returned, so cls is a
-      // locomotion cycle (walk/run/idle/Ready). Default-off → unchanged below.
-      if (UNIFIED_LOCO &&
-          this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd)) {
-        try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
-        return; // the tick drives the loco cycle; skip the mixer crossFadeTo
-      }
-      // Don't exceed the per-entity action cap. Evict before install.
-      inst.evictOldestUnused();
-      action = inst.mixer.clipAction(clip);
-      // One-shot (attack / cast) — play once + return to the rest
-      // pose; the surrounding locomotion will re-resume on the next
-      // STOP / WalkForward / RunForward broadcast from ACE. Pre-2026-
-      // 05-17 these commands were dropped at `classifyMotionCommand`,
-      // so combat used a vibe-coded triangle-wave arm tween in
-      // `setSwingPose`. Now the real MotionTable clip plays for any
-      // attack-family or cast-family command. Clear the vibe-tween
-      // so the real clip wins (the tween's per-tick slerp runs AFTER
-      // mixer.update and would otherwise overwrite the clip's pose).
-      if (cls === "attack" || cls === "cast") {
-        action.setLoop(THREE.LoopOnce, 1);
-        action.clampWhenFinished = false;
-        // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
-      } else if (isDoorStateMotion(cmd)) {
-        // Door/chest open/close: play the transition ONCE and HOLD the final
-        // (open/closed) pose — these are state changes, not cyclic loops.
-        action.setLoop(THREE.LoopOnce, 1);
-        action.clampWhenFinished = true;
-      } else {
-        action.setLoop(THREE.LoopRepeat, Infinity);
-        action.clampWhenFinished = false;
-      }
-      action.enabled = true;
-      inst.actions.set(cacheKey, action);
-      // Task E (2026-05-12): same hook-timeline stash as the spawn
-      // path. The cache entry already has hooks drained + snapshotted
-      // to plain JS POJOs; multiple entities sharing this clip share
-      // the same timeline array (per-entity firing state in
-      // `actionLastHookTime` keeps them independent).
-      if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
-        inst.hookTimelines.set(cacheKey, entry.hooks);
-        inst.actionLastHookTime.set(cacheKey, -1);
-      }
-    }
-    // Wave 7 Phase 7.1 (2026-05-26): walk-cycle phase preservation.
-    //
-    // When the player rapidly taps W (release-then-re-press within
-    // ~200 ms), `setMotion` previously fetched the same `cacheKey`,
-    // saw `currentActionKey == null` (because `fadeOutCurrent` cleared
-    // it on the release), and the resulting `crossFadeTo(action, …)`
-    // played the cycle from `action.time` — which for a freshly-
-    // created clipAction is 0, and for a re-played existing action is
-    // wherever .stop() left it. The latter usually works (Cohere-B's
-    // "cycle-rewind" comment at L631–643 deliberately skipped
-    // `.reset()` to preserve `.time` across the integrator's motion
-    // oscillation), but it falls down when the LRU evicts the action
-    // mid-pause: cache-miss path creates a brand-new clipAction at
-    // .time = 0 and the foot "pops".
-    //
-    // Fix: after the action is resolved (cache hit OR miss), look up
-    // a recent same-key swap-out. If one exists within RESUME_WINDOW_MS,
-    // pin `action.time` to the saved phase. Locomotion-only — swings,
-    // casts, and stance-Ready get the existing hard-cut behaviour
-    // (their LoopOnce semantics + the 150 ms Ready crossfade rely on
-    // .time starting at 0).
-    if (cls === "walk" || cls === "run") {
-      const recent = inst._recentLocomotionTime.get(cacheKey);
-      if (recent) {
-        const RESUME_WINDOW_MS = 200;
-        const elapsed = performance.now() - recent.leftAt;
-        if (elapsed >= 0 && elapsed < RESUME_WINDOW_MS) {
-          // Defensive modulo: if the cached clip's duration differs
-          // from when the time was stashed (e.g. AnimationCache served
-          // a different setup/stance variant), wrap to clip duration.
-          // three.js's mixer already wraps internally on LoopRepeat,
-          // but a >duration starting offset would visibly snap.
-          let restored = recent.time;
-          try {
-            const clipDur = action.getClip()?.duration ?? 0;
-            if (clipDur > 0) {
-              restored = ((restored % clipDur) + clipDur) % clipDur;
-            }
-          } catch (_) {}
-          action.time = restored;
+    // Fetch the cycle (cache hit after the first bake). Substitutions reuse
+    // the spawn meta's entries (NPC outfit doesn't change mid-walk).
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return;
+    let entry;
+    try {
+      entry = await this.animationCache.get(
+        setupId,
+        mtableId,
+        cmd,
+        stance,
+        fetchKeyframes,
+        {
+          modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+          textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+          paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+          paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
         }
-        // Whether we used it or not, drop the entry — same-key swap-
-        // out + restore is single-shot per cycle. Subsequent rapid
-        // taps will get re-stashed by `crossFadeTo` on the next out.
-        inst._recentLocomotionTime.delete(cacheKey);
-      }
-    }
-    // Wave 3 / Phase 3.3 (2026-05-26): per-retail "modifier-stacking
-    // blend feel" on stance transitions. AC retail had no discrete
-    // DrawSword/SheathSword clip — the visual transition was done by
-    // swapping `current_style` atomically and letting the modifier
-    // stack blend it (per `~/ac-headers/acclient.c:332771-332786` /
-    // memory project_holtburger_combat_phase_g_done_2026-05-17). We
-    // approximate that feel with a 150 ms crossfade on the specific
-    // case of Ready-with-stance-change. All other locomotion swaps
-    // remain hard cuts (`CROSSFADE_S = 0` — see comment at L211)
-    // because retail's PhatSDK `advance_to_next_animation()` was an
-    // unconditional pointer swap with no blend state. Edge case:
-    // rapid stance toggles within <150 ms — three.js's
-    // `crossFadeTo` replaces the previous fade in flight so it
-    // self-heals; we don't need a guard.
-    const isStanceReadyChange =
-      (cmd & 0xFFFF) === CMD_LOW_READY
-      && prevStance !== 0
-      && stance !== prevStance;
-    const crossfadeDuration = isStanceReadyChange ? 0.15 : CROSSFADE_S;
-    // WS03 (?castOverlayGuard): a locomotion base swap must not STOP an in-flight
-    // cast/swing overlay (= movement breaks the cast). When an overlay is actively
-    // suppressing the base, install the new base UNDER it at weight 0 and keep the
-    // overlay (= currentAction) untouched, then return WITHOUT crossFadeTo (whose
-    // hard-cut would .stop() the overlay). A same-cycle re-issue (pump reclaim of
-    // the held gait) is a clean no-op. A forward-edge anim-break stops the overlay
-    // via cancelCastSequence (H3) BEFORE this runs (Rust evict-before-drive, F9), so
-    // by the time a real forward re-base reaches here the overlay is already gone.
-    if (
-      CAST_OVERLAY_GUARD &&
-      inst._baseSuppressAction &&
-      typeof inst._baseSuppressAction.isRunning === "function" &&
-      inst._baseSuppressAction.isRunning() &&
-      inst._baseSuppressAction !== action &&
-      (cls === "walk" || cls === "run" || cls === "idle")
-    ) {
-      // NB: `preLocoCycleKey`, not `inst._locoCycleKey` — the VEL_SCALE_ON block
-      // above already repointed the live field to `cacheKey` for walk/run, which
-      // would make every gait swap look like a same-cycle re-issue (2026-08-01
-      // ordering fix; see the comment at the capture site).
-      if (cacheKey === preLocoCycleKey) {
-        // same base cycle still driving under the overlay — leave it suppressed.
-        inst._locoCycleKey = preLocoCycleKey;
-        try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
-        return;
-      }
-      const prevKey = preLocoCycleKey;
-      if (prevKey && prevKey !== cacheKey) {
-        const prev = inst.actions?.get(prevKey);
-        if (prev && prev !== action) { try { prev.stop(); } catch (_) {} }
-      }
-      try { action.reset(); } catch (_) {}
-      action.enabled = true;
-      action.setEffectiveWeight(0);               // suppressed under the overlay
-      action.play();
-      inst._locoCycleKey = cacheKey;              // restore (H1) will target this
-      if (!VEL_SCALE_ON) {
-        const ms = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
-        if (ms !== 1.0) { try { action.setEffectiveTimeScale(ms); } catch (_) {} }
-      }
-      try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[phase7.4b] setMotion fetch failed for entity ${guid.toString(16)}:`,
+        e
+      );
       return;
     }
-    inst.crossFadeTo(action, cacheKey, crossfadeDuration);
-    // A1 (2026-05-29): apply the server's per-motion playback speed to the
-    // locomotion cycle. When ?velScale=on, the per-frame T11 tick owns
-    // setEffectiveTimeScale (it MULTIPLIES inst._motionSpeed in there —
-    // see tick() ~L6360), so setting it here would just be overwritten next
-    // frame; skip to avoid a one-frame double-apply. When velScale is OFF,
-    // the cycle otherwise plays at native rate (1.0), so set the playback
-    // speed directly here. Identity (1.0) is a no-op, so this is fail-soft.
-    if (!VEL_SCALE_ON) {
-      // F15-2 — multiply in the backstep direction (sign = +1 unless
-      // ?signedMotionSpeed flips it for a negative speed).
-      const ms = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
-      if (ms !== 1.0) {
-        try { action.setEffectiveTimeScale(ms); } catch (_) {}
-      }
+    // Re-check — the entity may have been removed between the cache hit and
+    // now; a newer setMotion may have superseded this one (audit F6).
+    if (!this.entityMap.has(guid >>> 0)) return;
+    if (inst._motionToken !== motionToken) return;
+    // No animation resolved for this (cmd, stance) → the playhead keeps its
+    // current cycle (the mixer used to fade to the rest pose here, which the
+    // playhead never did).
+    if (!entry.clip) return;
+    // Drive the cycle through the Rust authority. Phase is carried across a
+    // cycle swap (walk→run) via the Rust seekPhase so the feet don't pop — the
+    // reason the mixer-era band-aids (150 ms stance crossfade, 200 ms
+    // RESUME_WINDOW mid-stride restore) are gone. A one-shot (_unifiedSeq)
+    // suppresses this during a swing, then resumes it. By here
+    // attack/cast/death have already returned, so cls is a cycle
+    // (walk/run/idle/Ready/held door state).
+    if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd)) {
+      try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
     }
-    try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
   }
 
   /**
@@ -10937,33 +10055,6 @@ export class EntityManager {
     }
     inst._sidestepCommand = cmd;
     inst._sidestepSpeed = Number.isFinite(speed) ? Math.abs(speed) : 1.0;
-  }
-
-  /**
-   * Wave 2 Phase 2.2 (2026-05-26) — drive both forward + sidestep
-   * animation slots in one call.
-   *
-   * Used by the local-prediction path in `index.html` (mirrors the
-   * Phase 1.5 Jump local trigger) to keep the rig's diagonal walk
-   * visible while the wire packet is still in flight. ACE's
-   * UpdateMotion broadcast does eventually arrive carrying the same
-   * forward / sidestep pair; that path can call `setLocomotionPair`
-   * too (or rely on `setMotion` for the forward axis alone — both work).
-   *
-   * @param {number} guid
-   * @param {number} forwardCmd  Full u32; 0 = leave forward path
-   *                             alone (caller will call setMotion or
-   *                             clear separately).
-   * @param {number} sidestepCmd Full u32; 0 = clear sidestep layer.
-   * @param {number} motionStance
-   */
-  setLocomotionPair(guid, forwardCmd, sidestepCmd, motionStance) {
-    if (forwardCmd !== 0) {
-      // Fire-and-forget; setMotion handles its own async fetch.
-      this.setMotion(guid, forwardCmd, motionStance);
-    }
-    // Always run sidestep layer dispatch (handles both arm and clear).
-    this.setSidestepLayer(guid, sidestepCmd, motionStance);
   }
 
   /**
@@ -11261,14 +10352,11 @@ export class EntityManager {
 
   /**
    * Wave 7.5 (2026-05-24): hot-swap variant of applyAppearance.
-   * Preserves `inst.root` + `inst.mixer` + currently-playing
-   * `inst.currentAction` — only the child Mesh contents of each
-   * `inst.parts[p]` Group get replaced. The mixer continues driving
-   * `parts[p].position` / `parts[p].quaternion` against the same
-   * clip (cache returns a fresh animEntry post-W7.5 substitution-
-   * aware cache key fix, but the clip's track NAMES match the old
-   * one because partGroup naming `part_${p}` is identical for same
-   * setupId).
+   * Preserves `inst.root` + the motion playhead (`_unifiedLoco` /
+   * `_unifiedSeq`) — only the child Mesh contents of each
+   * `inst.parts[p]` Group get replaced. The playhead keeps posing
+   * `parts[p].position` / `parts[p].quaternion` (same part count for the
+   * same setupId).
    *
    * Returns true when the swap succeeded. Returns false when:
    *  - new animEntry.partGroups.length !== inst.parts.length
@@ -11283,7 +10371,7 @@ export class EntityManager {
     if (!setupId) return false;
     const mtableId = (newMeta.mtableId ?? 0) >>> 0;
     // Use the entity's CURRENT motion/stance (mid-animation continuity),
-    // falling back to spawn-time defaults if currentAction is null.
+    // falling back to spawn-time defaults.
     const motion = (inst.currentMotion ?? newMeta.motionCommand ?? 0) >>> 0;
     const stance = (inst.currentStance ?? newMeta.motionStance ?? 0) >>> 0;
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
@@ -12311,12 +11399,11 @@ export class EntityManager {
   async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
     const full = (s) => (((s >>> 0) & 0xffff) | 0x80000000) >>> 0;
     const from = full(fromStyle), to = full(toStyle);
-    const o = { forceUnified: true };
-    if (await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, from, o)) return;
+    if (await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, from)) return;
     const DEF = 0x8000003d; // NonCombat = the humanoid default_style
     if (from !== DEF && to !== DEF &&
-        await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, DEF, from, o)) {
-      await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, DEF, o);
+        await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, DEF, from)) {
+      await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, DEF);
     }
   }
 
@@ -12373,14 +11460,6 @@ export class EntityManager {
       }
       return false;
     }
-    // Step-1/4 (?unifiedMotion=attack|cast): drive an attack swing or a cast
-    // gesture as a FULL-BODY one-shot sequence (retail GetObjectSequence,
-    // acclient.c:337842) instead of a LoopOnce overlay the locomotion cycle
-    // half-blends ("upper-body-only swing") or the both-arms-up cast vibe tween.
-    // Casts, like swings, live in MotionTable.links — same one-shot mechanism.
-    // The tick loop advances inst._unifiedSeq + poses the rig and SUPPRESSES the
-    // mixer; on completion the stance cycle resumes. Default-off → unchanged
-    // mixer overlay path below.
     // Door/chest/lever state transitions (setMotion's isDoorStateMotion
     // branch): the link's final frame IS the destination hold pose (Off→On
     // ends open, On→Off ends closed), so the one-shot HOLDS it
@@ -12392,223 +11471,41 @@ export class EntityManager {
     if (opts?.stateHold && this._playStateHoldLink(inst, entry, fromCmd, toCmd, stance)) {
       return true;
     }
-    const _unifiedCls =
-      (entry?.sequenceDescriptor && typeof classifyMotionCommand === "function")
-        ? classifyMotionCommand(toCmd >>> 0)
-        : null;
-    if (
-      (UNIFIED_ATTACK && _unifiedCls === "attack") ||
-      (UNIFIED_CAST && _unifiedCls === "cast") ||
-      (UNIFIED_LOCO && opts?.forceUnified === true && entry?.sequenceDescriptor)
-    ) {
-      // Build the swing as a one-shot in the RUST MotionSequence interpreter.
-      // The class is read off window.__hbWasm (typeof-guarded): a stale pkg/
-      // without it falls through to the mixer overlay below (soft-degrade).
-      const MS =
-        (typeof window !== "undefined" && window.__hbWasm && window.__hbWasm.MotionSequence) || null;
-      const d = entry.sequenceDescriptor;
-      if (MS && d) {
-        const seq = MS.fromDescriptor(
-          d.numFrames >>> 0,
-          +d.framerate || 0,
-          +d.duration || 0,
-          d.frameTimes || EMPTY_F32,
-          d.segmentStarts || EMPTY_U32,
-          d.segmentCounts || EMPTY_U32,
-          false, // one-shot swing (no cyclic region) → latches `done`, holds last frame
-        );
-        if (seq) {
-          // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
-          // clearOnDone: the one-shot swing hands the rig back to the mixer
-          // (frozen cycle resumes) on completion.
-          const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
-            speed: this._unifiedOneShotSpeed(inst) };
-          // J5: APPEND to pending_animations rather than clobbering a gesture
-          // already on the playhead. `numAnims` is the link's AnimData segment
-          // count — retail's `num_anims` is exactly that (CMotionTable fills it
-          // in as it appends nodes to the CSequence).
-          this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
-          // Audit F3: stamp the server-swing time here too (the mixer branch
-          // below does), or index.html's guessed-swing dedup never sees a
-          // unified server swing and fires a second, guessed one.
-          if (_unifiedCls === "attack" || _unifiedCls === "cast") {
-            inst._lastServerSwingMs = performance.now();
-          }
-          return true; // skip the mixer overlay; the tick drives the rig
-        }
-      }
+    // Every other link — attack swings, cast gestures, emotes, locomotion
+    // transition links, stance (draw/sheathe) links — is a FULL-BODY one-shot
+    // in the Rust MotionSequence interpreter (retail GetObjectSequence,
+    // acclient.c:337842), APPENDED to pending_animations (J5) rather than
+    // clobbering a gesture already on the playhead. On completion the tick
+    // falls back to the `_unifiedLoco` cycle.
+    const MS = _motionSequenceClass();
+    const d = entry.sequenceDescriptor;
+    if (!MS || !d) return false;
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0,
+      +d.framerate || 0,
+      +d.duration || 0,
+      d.frameTimes || EMPTY_F32,
+      d.segmentStarts || EMPTY_U32,
+      d.segmentCounts || EMPTY_U32,
+      false, // one-shot (no cyclic region) → latches `done`, holds last frame
+    );
+    if (!seq) return false;
+    // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
+    const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
+      speed: this._unifiedOneShotSpeed(inst) };
+    // `numAnims` is the link's AnimData segment count — retail's `num_anims`
+    // is exactly that (CMotionTable fills it in as it appends nodes).
+    this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
+    // Audit C1/F3: stamp the server-swing time (attack/cast only — locomotion
+    // transition links must NOT suppress a later legitimate CMT swing) so
+    // index.html's guessed-swing dedup sees an in-flight server swing.
+    const tcls = classifyMotionCommand(toCmd >>> 0);
+    if (tcls === "attack" || tcls === "cast") {
+      inst._lastServerSwingMs = performance.now();
     }
-    // Use a stable cache key so repeated transitions reuse the same
-    // AnimationAction (mixer-bound bindings live per-entity).
-    const linkKey = `link:${fromCmd.toString(16)}->${toCmd.toString(16)}:${stance.toString(16)}`;
-    let action = inst.actions?.get(linkKey);
-    if (!action) {
-      inst.evictOldestUnused?.();
-      action = inst.mixer.clipAction(clip);
-      action.setLoop(THREE.LoopOnce, 1);
-      action.clampWhenFinished = false;
-      action.enabled = true;
-      inst.actions?.set(linkKey, action);
-    }
-    // Door-state transitions (setMotion's isDoorStateMotion branch): the
-    // link's final frame IS the destination hold pose (Off→On ends open,
-    // On→Off ends closed), so clamp it there — the clamped link is the held
-    // state, exactly retail's "play the link, then enter the framerate-0
-    // hold cycle". SOLO the rig first: a still-applied previous state (the
-    // spawn hold action or a prior clamped link) would otherwise weight-
-    // normalize ~50/50 against this overlay for its whole playback. Door/
-    // chest/lever rigs only ever carry state actions, so the blanket stop
-    // is safe — and it is scoped to opts.stateHold callers only.
-    if (opts?.stateHold) {
-      action.clampWhenFinished = true;
-      if (inst.actions) {
-        for (const a of inst.actions.values()) {
-          if (a !== action) {
-            try { a.stop(); } catch (_) { /* already unbound */ }
-          }
-        }
-      }
-      inst.currentAction = action;
-      inst.currentActionKey = linkKey;
-      inst.actionLastUsedMs?.set(linkKey, performance.now());
-    }
-    // Register / refresh the hook timeline for this overlay clip so
-    // `_tickAnimationHooks` fires Sound (sword swoosh, magic chime),
-    // SoundTable, CreateParticle, and AttackHook strike-frame events
-    // during the swing/cast. Without this the hook executor would
-    // skip the overlay (it walks every running action, but `get(key)`
-    // misses if no timeline was registered).
-    //
-    // Reset `actionLastHookTime` to 0 on every play() so a rapid
-    // replay (spam-click attack) fires hooks from the top — the
-    // following `action.reset()` rewinds `.time` to 0, and without
-    // matching the lastTime reset the first tick would see
-    // `currentTime=0 < lastTime=high` and trigger the wrap-around
-    // re-fire branch.
-    if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
-      inst.hookTimelines.set(linkKey, entry.hooks);
-    }
-    inst.actionLastHookTime.set(linkKey, -1);
-    // A4-Q2 (?mtQueue=on) — TAGGING CONTRACT: only overlays the wasm
-    // pipeline queued may notify `notifyAnimationDone` (counter
-    // poisoning guard — acclient.c:329885-329894 is positional). NO
-    // current caller passes `mtQueued: true`; the callers arrive with
-    // Stage-2 `?interpRig` consumption / A3-D2 — Q2 pins the plumb so
-    // D2 cannot fork it. Locomotion transition links and server-echo
-    // overlays NEVER notify.
-    if (MT_QUEUE_ON && opts?.mtQueued === true) {
-      inst._mtQueuedKeys?.add(linkKey);
-      if (!HOOK_DRAIN_ON && !action.__mtNotifyArmed) {
-        // Fallback completion detector when the drain executor is off
-        // (the flags stay independently flippable; full retail ORDERING
-        // parity only with both on — see url-flags.md). Caveat: three.js
-        // fires `finished` INSIDE `mixer.update`, i.e. before this
-        // frame's hooks (spec S5 §6 OQ-4) — accepted on the fallback.
-        // `__mtNotifyArmed` guards spam-replay duplicate listeners on
-        // the reused action (one finish = one notify).
-        action.__mtNotifyArmed = true;
-        const _mixer = inst.mixer;
-        const _overlayAction = action;
-        const onMtFinished = (e) => {
-          if (e.action !== _overlayAction) return;
-          try { _mixer.removeEventListener("finished", onMtFinished); } catch (_) {}
-          _overlayAction.__mtNotifyArmed = false;
-          notifyMtQueuedOverlayDone(inst, linkKey, true);
-        };
-        try { _mixer.addEventListener("finished", onMtFinished); } catch (_) {}
-      }
-    }
-    try {
-      // A3 (2026-05-29): attack/cast one-shots route here (from=Ready in
-      // setMotion); honor the server's per-motion speed so hasted/slowed
-      // casts play at the right tempo (retail `Framerate *= speed`). Link
-      // clips play at native rate otherwise, so identity (1.0) is a no-op
-      // and brief locomotion transition links are unaffected (fail-soft).
-      const linkSpeed = inst._motionSpeed ?? 1.0;
-      if (linkSpeed !== 1.0) {
-        try { action.setEffectiveTimeScale(linkSpeed); } catch (_) {}
-      }
-      _noteDeadMixerStart(inst, "tryPlayLink");
-      action.reset();
-      action.play();
-      // A5-P3 (?rootMotionObject=1) — arm the completion-time anchor
-      // apply for a one-shot overlay whose clip carries a significant
-      // net root displacement. Remote entities only (local-player anchor
-      // is the wasm integrator — P3-L deferred). The `finished` listener
-      // fires inside `mixer.update`, i.e. BEFORE this frame's
-      // per-instance hook drain at the end of the tick body — matching
-      // retail's position-resolve-before-process_hooks order
-      // (acclient.c:320031 before :320035) on BOTH ?hookDrain states,
-      // so no second owner is needed at the drain site (S13 §3 step 6).
-      if (
-        this._rootMotionObjectOn &&
-        hasRootMotion(entry.rootMotionNet) &&
-        !this._isLocalPlayerGuid(inst.guid >>> 0)
-      ) {
-        this._armRootMotionOnFinish(inst, action, entry.rootMotionNet);
-      }
-      // Audit C1 (CMT remote-swing double-play dedup): a SERVER
-      // KIND_MOTION_ACTION swing/cast routes through here (setMotion's
-      // `cls === "attack"|"cast"` branch) and raw-plays WITHOUT touching
-      // `inst.currentActionKey` (it stays on the locomotion key) — the
-      // overlay clip lives under a `link:` key, and we never stamp
-      // `actionLastUsedMs` for it either. The index.html damageTaken/CMT
-      // guessed-swing dedup guard keys on `currentActionKey.startsWith(
-      // "swing:")`, so it MISSES an in-flight server swing routed this way
-      // and the CMT guess fires a SECOND swing on top (double-play). Stamp
-      // a timestamp here (attack/cast classes only — locomotion transition
-      // links must NOT suppress a later legitimate CMT swing) so that guard
-      // can also recognize an active server swing for the same target
-      // within its STALE_SWING_MS window.
-      {
-        const _tcls = (typeof classifyMotionCommand === "function")
-          ? classifyMotionCommand(toCmd >>> 0)
-          : null;
-        if (_tcls === "attack" || _tcls === "cast") {
-          inst._lastServerSwingMs = performance.now();
-          // F15-1: make this one-shot full-body (ramp the base cycle to 0).
-          // Unconditional since the ?fullBodyOneShot flag was retired 2026-06-18.
-          this._suppressBaseCycleForOverlay(inst, action);
-        }
-      }
-      console.log(
-        `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played, ${entry.hooks?.length ?? 0} hooks)`,
-      );
-      // Follow-on hook for __diag.motion combat-swing observation.
-      // The locomotion crossFadeTo path at L~2005 already lands on
-      // onMotionApplied; this site is the link-clip path (attacks,
-      // casts, gesture loops) which raw-plays without touching
-      // inst.currentActionKey. Fires a SEPARATE link-played event so
-      // the diag surface can tell "swung" apart from "transitioned
-      // motion state" without one event blocking the other.
-      if (typeof window !== "undefined" && window.__diag?.motion?.onMotionLinkPlayed) {
-        try {
-          window.__diag.motion.onMotionLinkPlayed({
-            guid: inst.guid >>> 0,
-            name: inst.meta?.name ?? "",
-            fromCmd: fromCmd >>> 0,
-            toCmd: toCmd >>> 0,
-            stance: stance >>> 0,
-            hookCount: entry.hooks?.length ?? 0,
-            linkKey,
-          });
-        } catch (_) { /* never block the play path */ }
-      }
-    } catch (e) {
-      console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
-      return false;
-    }
-    return true;
+    return true; // the tick drives the rig
   }
 
-  // F15-1 — make a one-shot overlay (attack/cast/emote) FULL-BODY by ramping
-  // the base locomotion cycle's effectiveWeight to 0 for the overlay's
-  // duration, then restoring it on the overlay's 'finished' event. Without
-  // this, three.js normalizes the overlay + still-running base cycle to ~50/50,
-  // so swings play at half amplitude and pop to the base pose in one frame at
-  // clip end. Mirrors retail's remove_cyclic_anims-then-re-add. Gated by the
-  // caller on ?fullBodyOneShot; a same-overlay guard avoids duplicate
-  // listeners on rapid replay (spam-click).
   // Build + install a held state-transition one-shot (see the stateHold call
   // site in `_tryPlayLink`). Returns false when no sequence could be built.
   _playStateHoldLink(inst, entry, fromCmd, toCmd, stance) {
@@ -12674,114 +11571,6 @@ export class EntityManager {
     if (!rm || rm.applied || !rec.seq.done) return;
     rm.applied = true;
     this._applyRootMotionToAnchor(inst, rm.net, rm.poseTs);
-  }
-
-  _suppressBaseCycleForOverlay(inst, overlayAction) {
-    try {
-      if (!inst || !overlayAction || !inst.mixer) return;
-      if (inst._baseSuppressAction === overlayAction) return; // already suppressing this overlay
-      const baseKey = inst._locoCycleKey;
-      if (!baseKey) return;
-      const baseAction = inst.actions?.get(baseKey);
-      if (!baseAction || baseAction === overlayAction) return;
-      if (typeof baseAction.isRunning === "function" && !baseAction.isRunning()) return;
-      const savedWeight = (typeof baseAction.getEffectiveWeight === "function")
-        ? baseAction.getEffectiveWeight()
-        : 1.0;
-      baseAction.setEffectiveWeight(0);
-      inst._baseSuppressAction = overlayAction;
-      // A5-P1b (?hookDrain=on): do NOT register the mixer listener —
-      // the restore moves into `_completeOverlay`, reached via the
-      // drain queue's `animDone` record (the listener and the queue
-      // path must be mutually exclusive or the weight double-restores;
-      // spec S5 §5 risk 5). Record what the restore needs instead.
-      if (HOOK_DRAIN_ON) {
-        inst._baseSuppressSaved = { savedWeight, baseAction };
-        return;
-      }
-      const mixer = inst.mixer;
-      // 2026-08-03 — INVARIANT: at most ONE base-suppression 'finished' listener
-      // per rig. The closure below only unregisters itself from inside its own
-      // 'finished' handler, but an INTERRUPTED overlay (action.stop(), eviction's
-      // uncacheAction, a superseding overlay) never fires 'finished' — so without
-      // this the closures accumulate on the local player's session-long mixer,
-      // each pinning a dead action + clip. Retire the previous one here;
-      // `_completeOverlay` retires it on the cancellation paths.
-      if (inst._baseSuppressOff) { try { inst._baseSuppressOff(); } catch (_) {} }
-      const off = () => {
-        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
-        if (inst._baseSuppressOff === off) inst._baseSuppressOff = null;
-      };
-      const onFinished = (e) => {
-        if (e.action !== overlayAction) return;
-        off();
-        if (CAST_OVERLAY_GUARD) {
-          // WS03 (?castOverlayGuard): only THIS overlay's still-active suppression
-          // may restore — an anim-break or a superseding overlay already cleared
-          // the marker, so a late/stale `finished` is inert (no double-touch).
-          if (inst._baseSuppressAction !== overlayAction) return;
-          inst._baseSuppressAction = null;
-          // Swap-safe: restore whatever loco cycle is CURRENT (a mid-cast base
-          // swap repointed _locoCycleKey via H2), not the captured baseAction.
-          const cur = inst.actions?.get(inst._locoCycleKey);
-          if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
-            try { cur.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
-          }
-        } else {
-          if (inst._baseSuppressAction === overlayAction) inst._baseSuppressAction = null;
-          // Restore only if the loco cycle is still this same action (a motion
-          // change may have swapped it; the old action is then irrelevant and
-          // already faded out).
-          const cur = inst.actions?.get(inst._locoCycleKey);
-          if (cur === baseAction) {
-            try { baseAction.setEffectiveWeight(savedWeight > 0 ? savedWeight : 1.0); } catch (_) {}
-          }
-        }
-      };
-      mixer.addEventListener("finished", onFinished);
-      inst._baseSuppressOff = off;
-    } catch (_) { /* never block the swing on the weight-ramp */ }
-  }
-
-  // A5-P3 (2026-06-12, W3+ S13, `?rootMotionObject=1`) — register a
-  // one-shot `finished` listener that applies the overlay clip's net root
-  // displacement to the entity anchor when (and only when) the clip runs
-  // to natural completion. Pattern of `_suppressBaseCycleForOverlay`'s
-  // `onFinished`: same-action guard via `inst._pendingRootMotion ===
-  // action` so a spam-replay (reset/play on the reused action) REFRESHES
-  // the captured pose timestamp instead of stacking listeners — one
-  // completed play = at most one apply. `poseTs` is captured at play time
-  // from the per-guid KIND_POSITION stamp (loop.js `__lastEntityWorldPos`
-  // slot `.ts`); the apply-side freshness gate compares it.
-  // An INTERRUPTED overlay (action.stop()/motion swap before completion)
-  // never fires `finished` → applies NOTHING (accepted approximation gap
-  // vs retail's per-crossed-frame partial application,
-  // acclient.c:340713-340727; S13 spec §3 step 5 / §5).
-  _armRootMotionOnFinish(inst, action, net) {
-    try {
-      if (!inst || !action || !inst.mixer) return;
-      const g = inst.guid >>> 0;
-      let poseTs = 0;
-      if (typeof window !== "undefined" && window.__lastEntityWorldPos) {
-        poseTs = window.__lastEntityWorldPos.get(g)?.ts ?? 0;
-      }
-      if (inst._pendingRootMotion === action) {
-        // Re-arm (spam replay): refresh the captured timestamp only —
-        // the existing listener stays registered and applies once.
-        inst._pendingRootMotionPoseTs = poseTs;
-        return;
-      }
-      inst._pendingRootMotion = action;
-      inst._pendingRootMotionPoseTs = poseTs;
-      const mixer = inst.mixer;
-      const onFinished = (e) => {
-        if (e.action !== action) return;
-        try { mixer.removeEventListener("finished", onFinished); } catch (_) {}
-        if (inst._pendingRootMotion === action) inst._pendingRootMotion = null;
-        this._applyRootMotionToAnchor(inst, net, inst._pendingRootMotionPoseTs ?? 0);
-      };
-      mixer.addEventListener("finished", onFinished);
-    } catch (_) { /* never block the play path */ }
   }
 
   // A5-P3 — apply a completed overlay's net root displacement
@@ -12853,122 +11642,26 @@ export class EntityManager {
   }
 
   /**
-   * A5-P1b + A4-Q2 (2026-06-12, W3+ S5) — the ONE owner of overlay-end
-   * work, reached via the drain queue's `animDone` record (?hookDrain=on).
-   *
-   * 1. Base-cycle weight restore: the flag-path counterpart of
-   *    `_suppressBaseCycleForOverlay`'s `onFinished` listener (which is
-   *    NOT registered under ?hookDrain — mutually exclusive, no
-   *    double-restore). Restores only if the loco cycle is still the same
-   *    action (a motion change may have swapped it; the old action is
-   *    then irrelevant and already faded out) — same rule as the
-   *    listener.
-   * 2. The A4-Q2 notify (?mtQueue=on): tagged local-player overlays
-   *    report completion across the wasm boundary (retail success is
-   *    hard-coded 1 on the renderer path, CPartArray::AnimationDone(v1,
-   *    1), acclient.c:317093). A no-op until a caller tags plays AND
-   *    both the flag + the v4 pkg are live.
-   *
-   * `finished` is true for natural clip end (the only current caller);
-   * cancellation paths (eviction) notify `false` directly via
-   * `notifyMtQueuedOverlayDone` without the weight-restore step.
+   * A4-Q3 (2026-06-12) — exit-world overlay cancellation hook. Retail drains
+   * every pending one-shot across an enter/exit-world transition
+   * (`MotionTableManager::HandleExitWorld`, acclient.c:329940-329947;
+   * `HandleEnterWorld` → `remove_all_link_animations`, :329949-329957). The
+   * body that existed stopped running THREE.LoopOnce MIXER overlays only, so
+   * since the animation consolidation (every one-shot is on the Rust playhead)
+   * it had nothing left to stop. Kept as a NO-OP seam (index.html kind=33 and
+   * the dead-reckon teleport-snap branches call it): cutting playhead
+   * one-shots here would be a behaviour change for gestures that already ride
+   * the playhead, owed its own eye-test (portal mid-emote). The Rust half
+   * (`MovementSystem::handle_exit_world_for`) is unaffected.
    */
-  _completeOverlay(inst, key, action, finished) {
-    try {
-      if (inst && action && inst._baseSuppressAction === action) {
-        inst._baseSuppressAction = null;
-        // This overlay is done — retire any legacy (non-?hookDrain) 'finished'
-        // listener armed for it so it can't outlive the suppression.
-        if (inst._baseSuppressOff) { try { inst._baseSuppressOff(); } catch (_) {} }
-        const saved = inst._baseSuppressSaved;
-        inst._baseSuppressSaved = null;
-        if (saved && saved.baseAction) {
-          if (CAST_OVERLAY_GUARD) {
-            // WS03 (?castOverlayGuard): swap-safe — restore whatever loco cycle
-            // is CURRENT (H2 may have installed a new base under the overlay and
-            // repointed _locoCycleKey), not the originally-captured baseAction.
-            const cur = inst.actions?.get(inst._locoCycleKey);
-            if (cur && (typeof cur.isRunning !== "function" || cur.isRunning())) {
-              try {
-                cur.setEffectiveWeight(
-                  saved.savedWeight > 0 ? saved.savedWeight : 1.0
-                );
-              } catch (_) {}
-            }
-          } else {
-            const cur = inst.actions?.get(inst._locoCycleKey);
-            if (cur === saved.baseAction) {
-              try {
-                saved.baseAction.setEffectiveWeight(
-                  saved.savedWeight > 0 ? saved.savedWeight : 1.0
-                );
-              } catch (_) {}
-            }
-          }
-        }
-      }
-    } catch (_) { /* never block the drain on the weight-restore */ }
-    notifyMtQueuedOverlayDone(inst, key, !!finished);
-  }
-
-  /**
-   * A4-Q3 (2026-06-12, unification survey) — exit-world overlay
-   * cancellation: retail drains every pending one-shot with success=0
-   * across an enter/exit-world transition
-   * (`MotionTableManager::HandleExitWorld`, acclient.c:329940-329947)
-   * and enter-world additionally removes ALL sequence link animations
-   * (`HandleEnterWorld` → `CSequence::remove_all_link_animations`,
-   * acclient.c:329949-329957) — an emote/swing/cast must NOT carry
-   * across a teleport/portal transit. This is the renderer half of
-   * that pair: stop every RUNNING `THREE.LoopOnce` overlay action
-   * (one-shot links + transition links — retail removes link anims
-   * wholesale; NEVER the LoopRepeat base locomotion cycle), restore an
-   * F15-1-suppressed base-cycle weight, and cancellation-notify tagged
-   * keys success=false through `_completeOverlay`. The Rust half (the
-   * `PlayerTeleport` recv arms → `MovementSystem::handle_exit_world_for`)
-   * drains the pending queue independently — whichever lands second
-   * no-ops on the empty queue (acclient.c:329884 head-null guard).
-   *
-   * Gated by `?mtQueue=on` (A4 §4 stage Q3 "rollback: same flags") —
-   * default OFF; the portal-cancel visual is the 1070 eye-test
-   * acceptance.
-   */
-  _cancelOneShotOverlays(inst) {
-    if (!MT_QUEUE_ON || !inst || !inst.actions || !inst.mixer) return;
-    for (const [key, action] of inst.actions) {
-      try {
-        if (!action || action.loop !== THREE.LoopOnce) continue;
-        if (typeof action.isRunning === "function" && !action.isRunning()) continue;
-        // Legacy (non-?hookDrain) F15-1 suppression keeps its saved
-        // weight inside the mixer 'finished' closure, which never fires
-        // on stop() — capture before `_completeOverlay` clears the
-        // marker, then restore manually (the listener's own fallback is
-        // 1.0 for a non-positive saved weight, so 1.0 here matches).
-        const legacySuppressed =
-          inst._baseSuppressAction === action && !inst._baseSuppressSaved;
-        // ?hookDrain weight restore + tagged cancellation notify
-        // (success=false — the exit-world drain semantics; a COMPLETED
-        // overlay already cleared its tag, so the notify is a no-op for
-        // it).
-        this._completeOverlay(inst, key, action, false);
-        if (legacySuppressed) {
-          const base = inst.actions.get(inst._locoCycleKey);
-          if (base && base !== action) {
-            try { base.setEffectiveWeight(1.0); } catch (_) {}
-          }
-        }
-        action.stop();
-      } catch (_) { /* never block the teleport on overlay teardown */ }
-    }
-  }
+  _cancelOneShotOverlays(_inst) {}
 
   /**
    * A4-Q3 — public guid-keyed wrapper for `_cancelOneShotOverlays`;
    * called from the `index.html` kind=33 `PortalSpaceEntered` drain for
    * the LOCAL player (the portal-transit hook — the wasm recv arm fires
    * the matching Rust-side `handle_exit_world_for` from the same
-   * `PlayerTeleport` message). No-op when the guid is unknown or
-   * `?mtQueue` is off.
+   * `PlayerTeleport` message). Currently a no-op (see above).
    */
   cancelOneShotOverlaysForGuid(guid) {
     const inst = this.entityMap?.get(guid >>> 0);
@@ -14631,7 +13324,7 @@ export class EntityManager {
   }
 
   /**
-   * Per-rAF tick. Advances every entity's mixer by dt seconds.
+   * Per-rAF tick. Advances every entity's motion playhead by dt seconds.
    * Called from loop.js#tickPerFrame.
    */
   tick(dt) {
@@ -14676,10 +13369,6 @@ export class EntityManager {
       : null;
     if (_smoothStrideOn) this._smoothFrame = (this._smoothFrame | 0) + 1;
     const _smoothFrame = this._smoothFrame | 0;
-    const _gaitThrottleOn = GAIT_RECOMPUTE_INTERVAL_MS > 0;
-    const _gaitNowMs = _gaitThrottleOn
-      ? (typeof performance !== "undefined" ? performance.now() : 0)
-      : 0;
     // RP2 — resolve the local-player guid ONCE for the smoothing-stride
     // exclusion (the local player must never be throttled). Only needed when a
     // stride is configured. Same defensive resolution as `_shouldTickEntity`'s
@@ -15019,10 +13708,10 @@ export class EntityManager {
       }
       // T11 — velocity-scaled locomotion playback (anti-ice-skating). Derive
       // an EMA-smoothed ground speed from the rig's horizontal (XZ) world-
-      // position delta this frame, then scale the active loco cycle's
-      // playback rate by (actual / authored). Set BEFORE mixer.update so the
-      // rate applies this frame. cycleTimeScale clamps [0.25, 4.0], so a
-      // server-pose snap can't freeze or hyper-spin the rig. ?velScale=on only.
+      // position delta this frame — the fallback 'actual' speed
+      // `_unifiedLocoGaitScale` uses when the wasm stateGroundSpeed getter has
+      // nothing. Sampled BEFORE the playhead advance below so the rate applies
+      // this frame. ?velScale (default on).
       if (VEL_SCALE_ON) {
         const p = inst.root.position;
         // RP2 (2026-06-08) — EMA-sampler / smoothing-stride interaction guard.
@@ -15060,75 +13749,14 @@ export class EntityManager {
           inst._velPrevZ = p.z;
           inst._velAccumDt = 0;
         }
-        const base = inst._locoBaseSpeed;
-        // RP2 (2026-06-08) — gait recompute throttle. The EMA sampling above
-        // ran this frame regardless; the EXPENSIVE part (the wasm getter call,
-        // `cycleTimeScale`, `setEffectiveTimeScale`) is what we cap to ~gaitHz.
-        // When throttled, three.js retains the last `effectiveTimeScale` on the
-        // action, so the gait holds its previous (low-pass-EMA-derived) value —
-        // imperceptible since the EMA barely moves between frames. Default
-        // (`gaitHz` absent → interval 0) → `_gaitThrottleOn` false → recompute
-        // every frame, byte-identical to pre-RP2.
-        let _gaitRecompute = true;
-        if (_gaitThrottleOn) {
-          const last = inst._gaitLastRecomputeMs;
-          if (last !== undefined && _gaitNowMs - last < GAIT_RECOMPUTE_INTERVAL_MS) {
-            _gaitRecompute = false;
-          }
-        }
-        if (_gaitRecompute && base > 0 && inst._locoCycleKey) {
-          const locoAction = inst.actions.get(inst._locoCycleKey);
-          if (locoAction && locoAction.isRunning()) {
-            if (_gaitThrottleOn) inst._gaitLastRecomputeMs = _gaitNowMs;
-            // T1: prefer the wasm `stateGroundSpeed` getter (a mirror of retail
-            // CMotionInterp::get_state_velocity) for the 'actual' ground anim-
-            // speed instead of the rig XZ-position-delta EMA. The getter is pure
-            // math over the interpreted motion state (forward_command/_speed +
-            // sidestep_command/_speed) and a JS-supplied run_rate, returning the
-            // FINAL m/s with run_rate ALREADY applied internally (it clamps to
-            // run_rate*4.0) — so we feed the result straight into cycleTimeScale
-            // and DO NOT re-scale by run_rate. The EMA stays only as a fallback
-            // when the getter is absent (older wasm) or returns null/0 — e.g.
-            // when no forward/sidestep command is stashed yet — so server-pose
-            // snaps / teleports / rubber-banding (which the EMA reads as garbage)
-            // can't poison the gait once the getter is live.
-            // T1 fix (2026-06-03): track whether the speed came from the wasm
-            // getter. The getter's value ALREADY encodes UpdateMotion.forward_speed
-            // (== inst._motionSpeed) and run_rate, so velScaleComponent below is the
-            // COMPLETE framerate scale — re-multiplying by motionSpeed would
-            // double-count forward_speed (0.5 -> 0.25 at half speed).
-            let actualSpeed = this._resolveStateGroundSpeed(inst);
-            const speedFromGetter = Number.isFinite(actualSpeed) && actualSpeed > 0;
-            if (!speedFromGetter) {
-              actualSpeed = inst._emaSpeed ?? 0;
-            }
-            // A1 (2026-05-29): compose the server playback speed
-            // (`inst._motionSpeed`) WITH the T11 velocity-scale factor into
-            // ONE timeScale — multiply, do not clobber. velScaleComponent is
-            // the anti-ice-skating gait (actual/authored ground speed);
-            // motionSpeed is retail's `Framerate *= speed`. Identity (1.0)
-            // motionSpeed leaves T11 untouched (fail-soft).
-            const velScaleComponent = cycleTimeScale(actualSpeed, base);
-            const motionSpeed = inst._motionSpeed ?? 1.0;
-            // Getter path: velScaleComponent is the single, complete scale (retail
-            // applies the speed scalar ONCE). EMA-fallback path keeps the legacy
-            // compose-with-motionSpeed behavior unchanged. (Eye-test TODO: the EMA
-            // path likely double-counts too; revisit when flipping VEL_SCALE_ON on.)
-            // F15-2 — apply the backstep direction AFTER cycleTimeScale's
-            // positive [0.25,4.0] clamp, so a negative final timeScale (reverse
-            // playback) survives. Sign is +1 unless ?signedMotionSpeed flips it,
-            // so this is byte-identical when the flag is off.
-            const dir = inst._motionSpeedSign ?? 1;
-            locoAction.setEffectiveTimeScale(
-              (speedFromGetter ? velScaleComponent : velScaleComponent * motionSpeed) * dir,
-            );
-          }
-        }
+        // The gait itself (actual / authored ground speed × server
+        // motionSpeed × direction) is applied to the playhead's advance in
+        // `_unifiedLocoGaitScale`, which reads this EMA as its fallback.
       }
       try {
         if (inst._unifiedSeq) {
           // A one-shot Rust MotionSequence owns the rig (full-body, no blend) —
-          // SUPPRESS the mixer AND _unifiedLoco (single playhead). attack
+          // SUPPRESS _unifiedLoco (single playhead). attack
           // (clearOnDone:true) hands back on completion → the tick then falls to
           // _unifiedLoco below (locomotion resumes); death (clearOnDone:false)
           // holds the clamped prone frame.
@@ -15150,11 +13778,9 @@ export class EntityManager {
             this._unifiedOneShotFinished(inst, ua);
           }
         } else if (inst._unifiedLoco) {
-          // ?unifiedMotion=locomotion: drive the cyclic locomotion sequence with
-          // gait scaling (anti-ice-skating velScale × server motionSpeed — the
-          // same math the mixer path applied via setEffectiveTimeScale) by
-          // advancing the playhead faster/slower. frameNumber carries phase, so
-          // the swap band-aids (CROSSFADE_S=0, RESUME_WINDOW) aren't needed.
+          // The cyclic locomotion sequence, with gait scaling (anti-ice-skating
+          // velScale × server motionSpeed × direction) applied by advancing the
+          // playhead faster/slower. Rust phase carry makes swaps seamless.
           const lo = inst._unifiedLoco;
           const step = dt * this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0);
           if (step >= 0) {
@@ -15175,35 +13801,18 @@ export class EntityManager {
             poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
             lo.lastHookTime = -1; // no reverse footfall spam
           }
-        } else {
-          inst.mixer.update(dt);
         }
+        // Neither → no animation resolved for this entity (rest pose).
       } catch (e) {
-        // Don't let one bad mixer kill the whole tick.
+        // Don't let one bad sequence kill the whole tick.
         // eslint-disable-next-line no-console
-        if (!this._mixerWarned) {
-          this._mixerWarned = true;
-          console.warn("[phase7.4b] mixer.update threw:", e);
-        }
-      }
-      // Task E (2026-05-12): AnimationMixer hook execution.
-      // After advancing the mixer, fire any baked-cycle hooks whose
-      // time-in-clip we crossed this tick. Wrapped in try/catch so a
-      // bad single-entity hook doesn't tank the whole tick.
-      try {
-        this._tickAnimationHooks(inst);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        if (!this._hookTickWarned) {
-          this._hookTickWarned = true;
-          console.warn(
-            `[entities/task-E] hook tick failed for entity 0x${inst.guid.toString(16)}:`,
-            e
-          );
+        if (!this._playheadWarned) {
+          this._playheadWarned = true;
+          console.warn("[entities] motion playhead advance threw:", e);
         }
       }
       // Wave 1.7 (2026-05-26) — Jump-pose tween advance. Runs AFTER
-      // mixer.update so our per-part slerp wins on the locked-out
+      // the playhead pose so our per-part slerp wins on the locked-out
       // arm/leg quaternions for the duration of the airborne tween.
       // No-op when no tween is active.
       if (inst._jumpPoseTween) {
@@ -15343,8 +13952,6 @@ export class EntityManager {
           try {
             if (rec.kind === "hook") {
               this._fireHook(inst, rec.hook, _audioMgr, _stCache);
-            } else if (rec.kind === "animDone") {
-              this._completeOverlay(inst, rec.key, rec.action, true);
             }
           } catch (e) {
             // eslint-disable-next-line no-console
@@ -15432,25 +14039,6 @@ export class EntityManager {
       if (this._dynLodAccum >= DYN_LOD_INTERVAL_S) {
         this._dynLodAccum = 0;
         this._tickDynamicLod();
-      }
-    }
-    // Wave 7 Phase 7.1 (2026-05-26): periodic prune of stale entries in
-    // each entity's `_recentLocomotionTime` cache. The restore-window is
-    // 200 ms, so anything older than 5 s is dead weight. Rate-limited to
-    // once/second so the per-entity Map walk doesn't run every frame.
-    const nowMs = performance.now();
-    if (nowMs - this._lastRecentLocomotionPruneMs > 1000) {
-      this._lastRecentLocomotionPruneMs = nowMs;
-      const STALE_THRESHOLD_MS = 5000;
-      for (const inst of this.entityMap.values()) {
-        if (!inst._recentLocomotionTime || inst._recentLocomotionTime.size === 0) {
-          continue;
-        }
-        for (const [key, entry] of inst._recentLocomotionTime) {
-          if (nowMs - entry.leftAt > STALE_THRESHOLD_MS) {
-            inst._recentLocomotionTime.delete(key);
-          }
-        }
       }
     }
     // A8-M4 (2026-06-12, `?preCreateBuffer=on`) — retail 25 s pre-create
@@ -15733,155 +14321,13 @@ export class EntityManager {
   }
 
   /**
-   * Task E (2026-05-12) — fire any AnimationHook entries whose
-   * time-in-clip the current action just crossed.
-   *
-   * Algorithm:
-   *   1. Resolve the currently-playing action + its cacheKey.
-   *      Bail if no action (rest pose) or no timeline registered for
-   *      the current action.
-   *   2. Read `action.time` (three.js's per-action playback time,
-   *      seconds since the action started or was last `.reset()`'d;
-   *      monotonically increasing within a loop pass, wraps to 0
-   *      when the clip loops).
-   *   3. Read `lastTime = inst.actionLastHookTime.get(cacheKey)` —
-   *      where we left off last tick. Initialised to 0 in
-   *      `_spawnImpl` / `setMotion` when the timeline is first
-   *      stashed.
-   *   4. Walk the sorted hook list:
-   *      - Normal case (`currentTime >= lastTime`): fire each hook
-   *        with `lastTime < hook.time <= currentTime`.
-   *      - Wrap case (`currentTime < lastTime`): the clip looped.
-   *        Fire hooks in `(lastTime, clipDuration]` AND `[0, currentTime]`.
-   *        Both branches respect the sorted order; the wrap branch
-   *        walks the tail of the list then the head.
-   *   5. Save `currentTime` as the new `lastTime`.
-   *
-   * Hook handlers (this task lands Sound + SoundTable only):
-   *   - hookType 1 (Sound): hook.soundWaveId is the Wave DID to play.
-   *     Call `audioManager.play(waveId, entity.position)`.
-   *   - hookType 2 (SoundTable): hook.soundEnum is the Sound enum to
-   *     resolve through the entity's SoundTable.
-   *     `await soundTableCache.resolveSound(inst.soundTableDid,
-   *     soundEnum)` returns `{waveDid, ...}` or null. Fire-and-forget
-   *     — the prewarm in `_spawnImpl` makes the await effectively
-   *     synchronous after the first frame.
-   *   - hookType 13 (CreateParticle), 21 (SoundTweaked), others —
-   *     TODO debug-stub. Counts via `inst._unhandledHookFires` so
-   *     the diag script can verify the handler reaches them.
-   */
-  _tickAnimationHooks(inst) {
-    // Walk EVERY running action on the mixer — `inst.currentAction`
-    // (the locomotion cycle) AND any one-shot overlay actions like
-    // the swing/cast link clips played via `_tryPlayLink`. The
-    // pre-fix version only inspected `currentAction`, so combat
-    // overlays' hooks (sword swoosh on type=1 Sound, magic chime
-    // resolved through type=2 SoundTable, future AttackHook
-    // strike-frame events) never fired.
-    //
-    // For an action that finished (LoopOnce past duration,
-    // `isRunning() === false`) we skip — three.js stops advancing
-    // `.time` so re-firing trailing hooks would be a bug.
-    if (!inst.actions || inst.actions.size === 0) return;
-    const audioMgr = this.scene3d?.audioManager ?? null;
-    const cache = this.scene3d?.soundTableCache ?? null;
-    for (const [key, action] of inst.actions) {
-      // A5-P1 (?hookDrain=on) — finish-drain + completion-record path:
-      // window math via the pure planner (`hook_windows.js`), which adds
-      // exactly one behavior the legacy branch below lacks: a LoopOnce
-      // that crossed its end between two rAFs fires its trailing hooks in
-      // (lastTime, clipDuration] ONCE (retail clamp-at-high_frame,
-      // acclient.c:340697-340727) and then queues an `animDone` record
-      // AFTER them (retail order, :340725 → :340764-340774). The hooks
-      // themselves are QUEUED, not fired inline — `_fireHooksInRange`
-      // pushes records under this flag; the per-instance drain at the end
-      // of the tick body executes them. Legacy off-path below is
-      // byte-identical to pre-S5.
-      if (HOOK_DRAIN_ON) {
-        if (!action) continue;
-        // `has()` check BEFORE planning: an action that was never
-        // played/armed (no `actionLastHookTime` entry — every play site
-        // seeds 0) must not finish-drain.
-        const wasArmed = inst.actionLastHookTime.has(key);
-        let isRunning = false;
-        let isLoopOnce = false;
-        let currentTime = 0;
-        let clipDuration = 0;
-        try {
-          isRunning = !!action.isRunning();
-          isLoopOnce = action.loop === THREE.LoopOnce;
-          currentTime = +action.time;
-          const clip = action.getClip();
-          clipDuration = clip ? +clip.duration : 0;
-        } catch (_) {
-          continue;
-        }
-        if (!isRunning && !wasArmed) continue;
-        let lastTime = inst.actionLastHookTime.get(key);
-        if (lastTime === undefined) lastTime = 0;
-        const plan = planHookWindows({
-          lastTime,
-          currentTime,
-          clipDuration,
-          isRunning,
-          isLoopOnce,
-        });
-        const timeline = inst.hookTimelines.get(key);
-        if (timeline && timeline.length > 0) {
-          for (const w of plan.windows) {
-            this._fireHooksInRange(inst, timeline, w[0], w[1], audioMgr, cache);
-          }
-        }
-        if (plan.finished) {
-          // Completion record rides the SAME queue, after this overlay's
-          // trailing hook records — drained by `_completeOverlay`.
-          inst._hookFireQueue.push({ kind: "animDone", key, action });
-        }
-        if (isRunning) inst.actionLastHookTime.set(key, currentTime);
-        else if (plan.drainedTo !== null) inst.actionLastHookTime.set(key, plan.drainedTo);
-        continue;
-      }
-      if (!action || !action.isRunning()) continue;
-      const timeline = inst.hookTimelines.get(key);
-      if (!timeline || timeline.length === 0) continue;
-      // three.js exposes `AnimationAction.time` as time-in-clip
-      // (seconds within the action's clip; for LoopRepeat actions, it
-      // wraps to 0 at duration each pass).
-      let currentTime = 0;
-      let clipDuration = 0;
-      try {
-        currentTime = +action.time;
-        const clip = action.getClip();
-        clipDuration = clip ? +clip.duration : 0;
-      } catch (_) {
-        continue;
-      }
-      if (!(clipDuration > 0)) continue;
-      let lastTime = inst.actionLastHookTime.get(key);
-      if (lastTime === undefined) lastTime = 0;
-      if (currentTime >= lastTime) {
-        // Common case: monotonic advance within one loop pass.
-        this._fireHooksInRange(inst, timeline, lastTime, currentTime, audioMgr, cache);
-      } else {
-        // Wrap-around: a LoopRepeat cycle wrapped past clip end. Fire
-        // (lastTime, clipDuration] then (-Inf, currentTime]. LoopOnce
-        // overlays don't wrap, so this branch fires for locomotion only.
-        this._fireHooksInRange(inst, timeline, lastTime, clipDuration, audioMgr, cache);
-        this._fireHooksInRange(inst, timeline, -Infinity, currentTime, audioMgr, cache);
-      }
-      inst.actionLastHookTime.set(key, currentTime);
-    }
-  }
-
-  /**
    * Walk a sorted-by-time hook list and fire those in
    * `(lowExclusive, highInclusive]`. Sound (1) + SoundTable (2)
    * land audio playback; other hook types increment a debug counter
    * so the diag-script can assert the executor reached them.
    *
-   * Called by `_tickAnimationHooks` — split out so the wrap-around
-   * branch can reuse the same range walker for both halves of the
-   * looped range.
+   * Called by `_drainUnifiedHooks` (the playhead hook drain) — the
+   * wrap-around branch reuses it for both halves of a looped range.
    */
   _fireHooksInRange(inst, timeline, lowExclusive, highInclusive, audioMgr, cache) {
     // Binary search would be faster for very long timelines, but

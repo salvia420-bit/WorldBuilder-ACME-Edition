@@ -1401,9 +1401,8 @@ export function setupClickPicking({
       // CMT first (always misses for ranged today, but the layer is
       // wired so a future retail-data dump that adds ranged rows would
       // light up automatically); aim-level fallback whenever CMT fails.
-      // `setSwingPose` only fires for the impossible case where both
-      // lookups return 0 — the helper guarantees never (returns one of
-      // the 13 AimMotions for any finite input).
+      // The aim-level helper never returns 0 (one of the 13 AimMotions for
+      // any finite input), so `finalMotion` is always a real command.
       const finalMotion = motionCmd || aimMotion;
       try { window.__diag?.combat?.onAimLevel?.({ scope: "local", motion: aimMotion }); } catch (_) {}
       console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m attackType=0x${attackType.toString(16)} motionCmd=${motionCmd ? "0x" + motionCmd.toString(16) : "none"} aimMotion=0x${aimMotion.toString(16)}`);
@@ -1446,8 +1445,6 @@ export function setupClickPicking({
             em.setSwingMotion(localGuid, finalMotion);
             // F6-2 — suppress the server's matching swing echo.
             em.noteLocalSwingPrediction?.(finalMotion);
-          } else {
-            em?.setSwingPose?.(localGuid);
           }
         }
       });
@@ -1570,8 +1567,6 @@ export function setupClickPicking({
             // F6-2 — suppress the server's matching swing echo so it
             // doesn't double-play / restart this optimistic swing.
             em.noteLocalSwingPrediction?.(motionCmd);
-          } else {
-            em?.setSwingPose?.(localGuid);
           }
         }
       }, { swingDurationMs });

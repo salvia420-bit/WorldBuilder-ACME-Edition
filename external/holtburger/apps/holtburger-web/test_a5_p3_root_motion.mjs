@@ -8,8 +8,9 @@
 //      `d = R_root·(s·T)` + quat post-multiply; freshness gate (skip when
 //      a KIND_POSITION landed mid-clip); airborne gate (translation
 //      skipped, rotation applied); dead-reckon target co-move.
-//   4. `_armRootMotionOnFinish`: spam re-arm applies exactly once per
-//      completed play; interrupted (no `finished`) applies nothing.
+//   4. Playhead arm/apply (`_armUnifiedRootMotion` /
+//      `_applyUnifiedRootMotionIfDone`): applies exactly once on natural
+//      completion; interrupted (never done) applies nothing.
 //   5. Local-player guid is excluded by the `_tryPlayLink` arm gate
 //      (`_isLocalPlayerGuid` leg verified directly).
 //
@@ -197,24 +198,11 @@ console.log("[2] AnimationCache rootMotionNet snapshot");
 // ---- 3 + 4. apply unit + arm/finished ----------------------------------
 console.log("[3] _applyRootMotionToAnchor");
 
-function makeMixer() {
-    const listeners = new Set();
-    return {
-        addEventListener(type, fn) { if (type === "finished") listeners.add(fn); },
-        removeEventListener(type, fn) { listeners.delete(fn); },
-        dispatchFinished(action) {
-            for (const fn of [...listeners]) fn({ action });
-        },
-        listenerCount: () => listeners.size,
-    };
-}
-
 function makeInst(guid) {
     const root = new THREE.Object3D();
     return {
         guid,
         root,
-        mixer: makeMixer(),
         _isAirborne: false,
         airborneTilt: null,
         _serverTargetPos: new THREE.Vector3(0, 0, 0),
@@ -227,7 +215,8 @@ function makeCtx(inst) {
         _rootMotionObjectOn: true,
         entityMap: new Map([[inst.guid >>> 0, inst]]),
         _isLocalPlayerGuid: EntityManager.prototype._isLocalPlayerGuid,
-        _armRootMotionOnFinish: EntityManager.prototype._armRootMotionOnFinish,
+        _armUnifiedRootMotion: EntityManager.prototype._armUnifiedRootMotion,
+        _applyUnifiedRootMotionIfDone: EntityManager.prototype._applyUnifiedRootMotionIfDone,
         _applyRootMotionToAnchor: EntityManager.prototype._applyRootMotionToAnchor,
     };
 }
@@ -310,42 +299,42 @@ const yawZ = (rad) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(
     check("flag off bails", close(inst2.root.position.length(), 0));
 }
 
-console.log("[4] _armRootMotionOnFinish (spam re-arm, interrupt)");
+console.log("[4] playhead arm/apply (once on completion, interrupt = nothing)");
 {
+    // Since the mixer was retired (2026-10-05) the arm rides the one-shot
+    // MotionSequence RECORD: `_armUnifiedRootMotion` stamps {net, poseTs};
+    // the tick calls `_applyUnifiedRootMotionIfDone` each frame and it applies
+    // exactly once, when `rec.seq.done` latches. A record freed before it
+    // completes (interrupted) never applies.
     const inst = makeInst(GUID);
     const ctx = makeCtx(inst);
     fakeWindow.__lastEntityWorldPos.set(GUID, { x: 0, y: 0, z: 0, ts: 5 });
-    const action = { name: "fake-overlay" };
     const net = [1, 0, 0, 1, 0, 0, 0];
-    // Spam re-arm: three plays before one completion.
-    ctx._armRootMotionOnFinish(inst, action, net);
-    ctx._armRootMotionOnFinish(inst, action, net);
-    ctx._armRootMotionOnFinish(inst, action, net);
-    check("re-arm does not stack listeners", inst.mixer.listenerCount() === 1);
-    inst.mixer.dispatchFinished(action);
+    const rec = { seq: { done: false } };
+    ctx._armUnifiedRootMotion(inst, rec, net);
+    check("arm captures the play-time pose stamp", rec.rootMotion?.poseTs === 5);
+    ctx._applyUnifiedRootMotionIfDone(inst, rec);
+    check("nothing applied before completion", close(inst.root.position.x, 0));
+    rec.seq.done = true;
+    ctx._applyUnifiedRootMotionIfDone(inst, rec);
+    ctx._applyUnifiedRootMotionIfDone(inst, rec);
     check(
         "one completed play applies exactly once",
         close(inst.root.position.x, 1) && close(inst.root.position.y, 0),
         `got x=${inst.root.position.x}`,
     );
-    check("listener removed after finish", inst.mixer.listenerCount() === 0);
-    check("pending cleared", inst._pendingRootMotion === null);
-    // Other-action finished events don't trigger the apply.
-    ctx._armRootMotionOnFinish(inst, action, net);
-    inst.mixer.dispatchFinished({ name: "different" });
-    check(
-        "other action's finished ignored (interrupt = no apply)",
-        close(inst.root.position.x, 1) && inst.mixer.listenerCount() === 1,
-    );
-    // Re-arm REFRESHES poseTs: stamp moved, re-arm picks it up → applies.
+    // Interrupted: never reaches done → never applies.
+    const rec2 = { seq: { done: false } };
+    ctx._armUnifiedRootMotion(inst, rec2, net);
+    ctx._applyUnifiedRootMotionIfDone(inst, rec2);
+    check("interrupted record applies nothing", close(inst.root.position.x, 1));
+    // Freshness gate still applies: a KIND_POSITION mid-clip → skip.
+    const rec3 = { seq: { done: false } };
+    ctx._armUnifiedRootMotion(inst, rec3, net);
     fakeWindow.__lastEntityWorldPos.set(GUID, { x: 0, y: 0, z: 0, ts: 6 });
-    ctx._armRootMotionOnFinish(inst, action, net); // refresh path
-    inst.mixer.dispatchFinished(action);
-    check(
-        "re-arm refreshes captured poseTs",
-        close(inst.root.position.x, 2),
-        `got x=${inst.root.position.x}`,
-    );
+    rec3.seq.done = true;
+    ctx._applyUnifiedRootMotionIfDone(inst, rec3);
+    check("server pose mid-clip → skipped", close(inst.root.position.x, 1));
 }
 
 console.log("[5] local-player exclusion (arm-gate leg)");

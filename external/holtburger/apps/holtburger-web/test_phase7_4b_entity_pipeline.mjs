@@ -1,7 +1,6 @@
 // Phase 7.4b — synthetic end-to-end test for the EntityManager
 // pipeline, using mocked wasm exports so the JS-side rig builder +
-// AnimationMixer + crossFade flow can be exercised without a live
-// ACE session.
+// the motion-playhead flow can be exercised without a live ACE session.
 //
 // Run with:
 //   cd apps/holtburger-web/
@@ -108,6 +107,11 @@ const __animMod = await import("./scene3d/animation.js");
 const __adapterMod = await import("./scene3d/adapter.js");
 const factoryEnv = { ...__adapterMod, ...__animMod, ...__entMod };
 const { EntityManager, AnimationCache, buildAnimationClip } = factoryEnv;
+// The Rust MotionSequence playhead is the ONLY animation driver (the three.js
+// AnimationMixer was retired 2026-10-05); a pure-JS stand-in for the wasm class
+// lets the genuine spawn/setMotion/tick plumbing run headless.
+import { installFakeMotionSequence } from "./harness/lib/fake_motion_sequence.mjs";
+installFakeMotionSequence();
 
 // ---- Mock wasm exports ----------------------------------------------
 //
@@ -316,14 +320,14 @@ check(
 );
 
 check(
-    "AnimationMixer attached",
-    !!inst.mixer && typeof inst.mixer.update === "function",
-    `mixer=${!!inst.mixer}`
+    "no AnimationMixer on the rig (retired — the Rust playhead drives it)",
+    inst.mixer === undefined,
+    `mixer=${inst.mixer}`
 );
 check(
-    "currentAction null after idle spawn (no animation)",
-    inst.currentAction === null,
-    `currentAction=${inst.currentAction}`
+    "no playhead cycle after idle spawn (motion=0 → no clip → rest pose)",
+    inst._unifiedLoco == null && inst.currentActionKey === null,
+    `loco=${!!inst._unifiedLoco}, key=${inst.currentActionKey}`
 );
 
 // ---- Test 2: kind=4 VELOCITY ----------------------------------------
@@ -344,67 +348,53 @@ const STOP_CMD = 0x4500_0004;
 
 await em.setMotion(TEST_GUID, WALK_CMD, 0x003d); // NonCombat
 check(
-    "setMotion(WALK_FORWARD) installed walk action",
-    inst.currentAction != null && inst.actions.size >= 1,
-    `currentAction=${inst.currentAction != null}, actions.size=${inst.actions.size}`
+    "setMotion(WALK_FORWARD) installed the walk cycle on the playhead",
+    !!inst._unifiedLoco,
+    `loco=${!!inst._unifiedLoco}`
 );
 
 const walkActionKey = inst.currentActionKey;
-const walkAction = inst.currentAction;
+const walkLoco = inst._unifiedLoco;
 check(
     "walk currentActionKey carries WALK_CMD encoding",
-    typeof walkActionKey === "string" && walkActionKey.length > 0,
+    typeof walkActionKey === "string" && walkActionKey === `33554585:150994945:${WALK_CMD >>> 0}:61`,
     `walkActionKey=${walkActionKey}`
 );
 
-// Tick the mixer; mixer.time should advance.
+// Tick; the playhead should advance and pose the rig from the walk clip.
 em.tick(0.05);
 em.tick(0.05);
 em.tick(0.05);
 check(
-    "mixer.time advances after tick(dt) calls",
-    inst.mixer.time > 0,
-    `mixer.time=${inst.mixer.time}`
+    "walk playhead advances after tick(dt) calls",
+    walkLoco.seq.phase > 0,
+    `phase=${walkLoco.seq.phase}`
 );
-
-// walkAction.time should also advance once it's been ticked.
 check(
-    "walk action.time advances after ticks",
-    walkAction.time > 0,
-    `walkAction.time=${walkAction.time}`
+    "rig posed from the walk keyframes (part y in the walk band)",
+    inst.parts[0].position.y >= 50 && inst.parts[0].position.y < 51,
+    `y=${inst.parts[0].position.y}`
 );
 
-// ---- Test 4: kind=5 MOTION = RUN_FORWARD (crossFade) ------------------
+// ---- Test 4: kind=5 MOTION = RUN_FORWARD (cycle swap) ----------------
 await em.setMotion(TEST_GUID, RUN_CMD, 0x003d);
 check(
-    "setMotion(RUN_FORWARD) installed run action",
-    inst.actions.size >= 2,
-    `actions.size=${inst.actions.size}`
+    "setMotion(RUN_FORWARD) swapped the playhead cycle",
+    inst._unifiedLoco && inst._unifiedLoco !== walkLoco,
+    `same=${inst._unifiedLoco === walkLoco}`
 );
-check(
-    "currentAction switched to run (different from walk)",
-    inst.currentAction !== walkAction,
-    `currentAction === walkAction? ${inst.currentAction === walkAction}`
-);
-const runAction = inst.currentAction;
+check("previous cycle's sequence freed", walkLoco.seq.__wbg_ptr === 0);
 const runActionKey = inst.currentActionKey;
 check(
     "run currentActionKey != walk currentActionKey",
     runActionKey !== walkActionKey,
     `runKey=${runActionKey}, walkKey=${walkActionKey}`
 );
-
-// Drive a few more ticks for the crossfade to progress.
 em.tick(0.1);
-em.tick(0.1);
-em.tick(0.1);
-
-// During crossFade, both actions are scheduled (walk fading out, run
-// fading in). After the fade duration (0.2s) walk effectively stops.
 check(
-    "after crossfade window, run action is the active one",
-    inst.currentAction === runAction,
-    `currentAction === runAction? ${inst.currentAction === runAction}`
+    "rig posed from the run keyframes",
+    inst.parts[0].position.y >= 100,
+    `y=${inst.parts[0].position.y}`
 );
 
 // ---- Test 5: idempotent setMotion (same cmd) ------------------------
@@ -417,37 +407,24 @@ check(
 );
 
 // ---- Test 6: kind=5 MOTION = STOP ------------------------------------
-// Waves 1-6 (421f82f2, 2026-05-26): STOP (cmdLow 0x0004) / Invalid (0x0000)
-// is SUBSTITUTED to Ready (0x0003) so the stance-aware idle cycle plays
-// (combat pose survives releasing W) instead of fading to bare rest pose.
-// So currentAction is NOT cleared — it becomes the Ready idle action.
+// STOP (cmdLow 0x0004) / Invalid (0x0000) is SUBSTITUTED to Ready (0x0003) so
+// the stance-aware idle cycle plays (combat pose survives releasing W) instead
+// of a bare rest pose.
 await em.setMotion(TEST_GUID, STOP_CMD, 0x003d);
-em.tick(0.3); // run the crossfade
-em.tick(0.3);
 const READY_CMD = (STOP_CMD & 0xFFFF0000) | 0x0003;
 check(
-    "setMotion(STOP) substitutes the stance Ready idle (not a bare fade-out)",
-    inst.currentAction !== null &&
-        inst.currentActionKey === `33554585:150994945:${READY_CMD >>> 0}:61`,
-    `currentAction=${inst.currentAction ? "set" : "null"}, key=${inst.currentActionKey}`
+    "setMotion(STOP) substitutes the stance Ready idle cycle",
+    inst.currentActionKey === `33554585:150994945:${READY_CMD >>> 0}:61`,
+    `key=${inst.currentActionKey}`
 );
 
-// ---- Test 7: motion → walk → run → stop → walk re-cycles cache ------
-// Motion-link transition clips share the bounded per-instance action cache,
-// so the ORIGINAL walk action may have been LRU-evicted by now; re-entering
-// WALK must still land on the walk cycle and keep currentAction consistent
-// with the cache entry under its key.
+// ---- Test 7: re-entering WALK lands on the walk cycle again ---------
 await em.setMotion(TEST_GUID, WALK_CMD, 0x003d);
 const walkKey = `33554585:150994945:${WALK_CMD >>> 0}:61`;
 check(
-    "re-entering WALK after STOP plays the walk cycle again",
+    "re-entering WALK plays the walk cycle again",
     inst.currentActionKey === walkKey,
     `currentActionKey=${inst.currentActionKey}`
-);
-check(
-    "currentAction is the cache entry under the walk key",
-    inst.currentAction === inst.actions.get(walkKey),
-    `currentAction === actions.get(walkKey)? ${inst.currentAction === inst.actions.get(walkKey)}`
 );
 
 // ---- Test 8: kind=2 REMOVE -------------------------------------------
@@ -471,9 +448,9 @@ check(
     `inst2=${!!inst2}, sameAsOld=${inst2 === inst}`
 );
 check(
-    "respawn auto-plays walk action when spawn motion=WALK",
-    inst2.currentAction != null,
-    `currentAction=${!!inst2.currentAction}`
+    "respawn puts the WALK spawn motion straight onto the playhead",
+    !!inst2._unifiedLoco && inst2.currentActionKey === `33554585:150994945:${WALK_CMD >>> 0}:61`,
+    `loco=${!!inst2._unifiedLoco}, key=${inst2.currentActionKey}`
 );
 em.remove(TEST_GUID);
 

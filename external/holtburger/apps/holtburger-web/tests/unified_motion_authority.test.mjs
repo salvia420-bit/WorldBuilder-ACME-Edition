@@ -123,7 +123,7 @@ test("spawn puts the initial cycle on the Rust playhead", async () => {
   const inst = await spawn(em, READY);
   assert.ok(inst._unifiedLoco, "_unifiedLoco installed at spawn");
   assert.equal(inst._unifiedLoco.hold, false);
-  assert.equal(inst.currentAction, null, "no mixer action started for the spawn cycle");
+  assert.equal(inst.mixer, undefined, "no AnimationMixer on the rig");
   assert.equal(inst.currentActionKey, inst._unifiedLoco.cacheKey,
     "currentActionKey is the playhead's key");
   em.tick(0.1);
@@ -182,7 +182,7 @@ test("doors: spawn holds the state, links play as HELD one-shots, re-broadcasts 
   assert.equal(open.seq.__wbg_ptr, 0, "previous hold freed");
   for (let i = 0; i < 20; i += 1) em.tick(0.05);
   assert.equal(partY(door), 803, "held closed");
-  assert.equal(door.currentAction, null, "no mixer action anywhere");
+  assert.equal(door.mixer, undefined, "no mixer anywhere");
   em.dispose();
 });
 
@@ -259,9 +259,31 @@ test("setSwingMotion always plays a full-body one-shot on the playhead (never-mo
     assert.equal(inst._unifiedLoco, loco, "cycle resumes");
     em.tick(0.01);
     assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "back on the Ready cycle");
-    assert.equal(inst.currentAction, null);
+    assert.equal(inst.mixer, undefined);
   } finally {
     delete window.__sessionHandle;
+    em.dispose();
+  }
+});
+
+test("stale pkg (no MotionSequence) → ONE loud console.error, rest pose, no throw", async () => {
+  const em = makeManager();
+  const saved = window.__hbWasm.MotionSequence;
+  const errs = [];
+  const origErr = console.error;
+  console.error = (...a) => errs.push(a.join(" "));
+  try {
+    delete window.__hbWasm.MotionSequence;
+    const a = await spawn(em, READY);
+    const b = await spawn(em, WALK);
+    em.tick(0.05);
+    assert.equal(a._unifiedLoco ?? null, null);
+    assert.equal(b._unifiedLoco ?? null, null);
+    const hits = errs.filter((m) => m.includes("MotionSequence is missing"));
+    assert.equal(hits.length, 1, "reported exactly once");
+  } finally {
+    console.error = origErr;
+    window.__hbWasm.MotionSequence = saved;
     em.dispose();
   }
 });
