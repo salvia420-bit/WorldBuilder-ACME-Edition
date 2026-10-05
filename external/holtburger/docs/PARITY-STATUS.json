@@ -272,7 +272,7 @@
         "round": 3
       },
       "open": [
-        "Wave 3 (doors/NPCs in transition) merged behind ?objCollideInTransition=on; critic pending before any default flip",
+        "Doors/NPCs in transition (?objCollideInTransition) DEFAULT-ON since 073dd21a; critic 7.5: logic matches retail line-for-line; to do: live check of NPC/monster collision (collider uses e.position - interpolated or raw server pose?), unstreamed Setup -> 1.8 m humanoid cylinder, flattened BSP leaf has no bounding sphere (obj_collision.rs:149-154), obj_colliders_near clones before the distance filter, cylsphere shadow radius should be hypot(r,h/2) (obj_collision.rs:239-242), PK flag refresh mid-session, tests one-sided (no lower bound on stop distance)",
         "MED-HIGH doors/NPCs clamped after the transition (entity_collision.rs:205). Next wave plan: per-transition object overlay bucketed by CROSS-CELL shadows (add_obj_to_cell 322897 -> calc_cross_cells_static 322405 / calc_cross_cells 322447 -> add_shadows_to_cells 321978); port the outer intersect overloads CSphere::intersects_sphere 359390 / CCylSphere::intersects_sphere 362244 incl. step-up/slide/land bodies; FindObjCollisions dispatch order 316159-316290 (ETHEREAL+IGNORE_COLLISIONS skip, obstruction_ethereal, HAS_PHYSICS_BSP 0x10000 -> part BSP else cylspheres else spheres, missile_ignore, non-PK players pass through each other); post-hit STATIC -> collided_with_environment, ethereal/IGNORE_CREATURES -> OK + add_object; skip insert_type 2, parented, self; statics and overlay share one ordered pass; door open state from live PhysicsState; flag-gated, then drop clamp_delta_against_entities + door stopgap",
         "MED pre-existing: physics runs in world-space f32 (landblock*192 + local; ~2-4 mm resolution at Holtburg), below retail's 0.0002 epsilons; run transitions landblock-local or subtract cell origin in f64",
         "MED-LOW buildings registered in every overlapped landcell (scene.rs:2579) and all Setup parts staged; retail: origin landcell only (init_buildings 352114 -> add_to_cell 719262), part 0 only",
@@ -359,7 +359,7 @@
     },
     {
       "id": "audio",
-      "score": 8.0,
+      "score": 8.5,
       "provisional": false,
       "files": [
         "apps/holtburger-web/scene3d/audio/**",
@@ -371,19 +371,23 @@
       ],
       "audit": {
         "date": "2026-10-05",
-        "by": "critic round 2",
-        "score": 8.0,
-        "round": 2
+        "by": "critic round 3 (final)",
+        "score": 8.5,
+        "round": 3
       },
       "open": [
-        "Round 3 merged (CasterEffect sound once, focus-loss mute, 3D ambient distances, per-object queued-sound deadline + synchronous replay, ambient fast-forward, indoor drain): critic pending",
-        "capture_audio_leak.cjs reads removed continuousStartCount"
+        "LOW queued server-sound deadline should slide to now+25 s on every add (GetObjectA never returns the null object, so AddObjectToBeDestroyed re-arms; 310650-310672, 310246-310270); test pins the fixed deadline",
+        "LOW ?castVfxDedup=on can keep the silent synthetic copy and drop the audible wire copy",
+        "NIT 100 ms mute ramp vs instant DirectSound mute",
+        "NIT unloaded neighbour terrain falls back to z=0 until next cell crossing",
+        "Visual (not audio): CasterEffect particles still drawn twice while castSyntheticCasterVfx is default-on"
       ],
       "evidence": [
         "Voice pool, server 0xF750 wire volume + probability, environment option mapping, centred UI/portal sounds via the UI SoundTable, table-row pick quirk, SoundTweaked layout all confirmed against acclient.c (383004-383067, 143333/316424/383655, 396430-396545, 383569-383589, 383447-383449, 343123)",
         "HRTF kept as default by owner decision",
         "Round 2: ambient_model.js faithful port of retail ambience (352444-352509, 383789-383990, 384200-384652) via OpenAC; PlayScript sounds default-on; inactive gate; saved sliders at load; slider double application; queued server sounds"
-      ]
+      ],
+      "status": "PASS (round 3 critic 8.5)"
     },
     {
       "id": "streaming_residency_perf",
@@ -560,5 +564,5 @@
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
-  "policy": "Owner 2026-10-05: not complete parity. Behaviour and feel (movement, collision, animation, combat, protocol, sound behaviour, HUD/UI) target retail. KEPT as deliberate upgrades, scored on correctness/robustness/perf rather than retail resemblance: volumetric clouds + physical atmosphere sky, lighting, post effects (bloom, aerial perspective, heat haze, tone mapping, terrain grass/dirt/snow particles), gore/ragdoll (blood decals, dismemberment, ragdoll deaths), higher-res textures (BC7/upscaled sets), HRTF 3D audio (retail stereo pan opt-in). NOT exempt: HUD conveniences - UI targets retail. Retail still governs what is visible where (e.g. outdoor objects through doorways) and anything affecting gameplay readability."
+  "policy": "Owner 2026-10-05: not complete parity. Behaviour and feel (movement, collision, animation, combat, protocol, sound behaviour, HUD/UI) target retail. KEPT as deliberate upgrades, scored on correctness/robustness/perf rather than retail resemblance: volumetric clouds + physical atmosphere sky, lighting, post effects (bloom, aerial perspective, heat haze, tone mapping, terrain grass/dirt/snow particles), gore/ragdoll (blood decals, dismemberment, ragdoll deaths), higher-res textures (BC7/upscaled sets), HRTF 3D audio (retail stereo pan opt-in). NOT exempt: HUD conveniences - UI targets retail. Retail still governs what is visible where (e.g. outdoor objects through doorways) and anything affecting gameplay readability. FLAGS (owner 2026-10-05): flags for behaviour WE build in this effort ship DEFAULT-ON with an =off escape; the owner reports problems and they are switched off or fixed. Pre-existing default-off flags stay OFF (many are dead/garbage) - no sweep. Owner product calls (audioRetailPan off) and escape/debug/harness params stay off."
 }
