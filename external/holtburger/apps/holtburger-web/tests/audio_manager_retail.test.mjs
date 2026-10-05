@@ -65,17 +65,33 @@ await test("hidden tab refuses new sounds; visible again plays", async () => {
   doc.hidden = false; doc.fire("visibilitychange");
   assert.ok(await am.playFromCenter(0x0a000003, 1));
 });
-await test("window blur refuses new sounds but does not stop playing ones", async () => {
+await test("window blur: new sounds refused, playing ones MUTED (not stopped), restored on focus", async () => {
+  // Round 3: retail buffers lack DSBCAPS_GLOBALFOCUS (acclient.c:385878-
+  // 385928), so DirectSound mutes them on focus loss. Old code left the
+  // playing tail audible (master gain stayed 1).
   const doc = fakeDoc();
   const win = fakeWin();
   const am = mk({ document: doc, window: win });
+  am.setMasterGain(0.8);
   const h = await am.playFromCenter(0x0a000004, 1);
   assert.ok(h);
   win.fire("blur");
   assert.equal(await am.playFromCenter(0x0a000005, 1), null);
-  assert.equal(h.source.stopped, false, "playing voice not cut");
+  assert.equal(h.source.stopped, false, "playing voice keeps running");
+  near(am._master.gain.value, 0, 1e-9, "master muted while inactive");
+  am.setMasterGain(0.6);
+  near(am._master.gain.value, 0, 1e-9, "slider change while inactive stays muted");
   win.fire("focus");
+  near(am._master.gain.value, 0.6, 1e-9, "master restored on focus");
   assert.ok(await am.playFromCenter(0x0a000006, 1));
+});
+await test("hidden tab mutes the master bus too", async () => {
+  const doc = fakeDoc();
+  const am = mk({ document: doc, window: fakeWin() });
+  doc.hidden = true; doc.fire("visibilitychange");
+  near(am._master.gain.value, 0, 1e-9);
+  doc.hidden = false; doc.fire("visibilitychange");
+  near(am._master.gain.value, 1, 1e-9);
 });
 
 await test("saved sliders are applied at construction", async () => {

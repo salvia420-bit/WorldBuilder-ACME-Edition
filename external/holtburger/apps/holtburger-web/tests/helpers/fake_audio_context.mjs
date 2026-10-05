@@ -4,7 +4,12 @@
 export function installFakeAudio() {
   const sources = [];
   const nodes = [];
-  const param = (v = 0) => ({ value: v, setTargetAtTime() {} });
+  // setTargetAtTime lands the target at once (tests read .value).
+  const param = (v = 0) => ({
+    value: v,
+    setTargetAtTime(target) { this.value = target; },
+    cancelScheduledValues() {},
+  });
   const node = (kind, extra = {}) => {
     const n = {
       kind,

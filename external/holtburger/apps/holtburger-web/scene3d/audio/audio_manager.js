@@ -188,7 +188,28 @@ export class AudioManager {
 
   /** Retail Device::m_bIsActiveApp: false refuses new sounds. */
   setActive(active) {
+    const was = this._active;
     this._active = !!active;
+    if (was !== this._active) this._applyFocusMute();
+  }
+
+  // Retail creates its DirectSound buffers WITHOUT DSBCAPS_GLOBALFOCUS /
+  // STICKYFOCUS (dwFlags 0x100B0 / 0x100E0, acclient.c:385878-385928), so
+  // DirectSound silences every playing buffer while the client is not the
+  // focused app — on top of the new-sound gate (45633). Mirror it on the
+  // master bus: ramp to 0 when inactive and back on return. The context
+  // keeps running, so muted voices advance and end as they would in retail.
+  _applyFocusMute() {
+    const g = this._master?.gain;
+    if (!g) return;
+    const target = this._active ? this._masterGainValue : 0;
+    const t = this._ctx?.currentTime ?? 0;
+    try { g.cancelScheduledValues?.(t); } catch (_) {}
+    if (typeof g.setTargetAtTime === "function") {
+      try { g.setTargetAtTime(target, t, 0.02); } catch (_) { g.value = target; }
+    } else {
+      g.value = target;
+    }
   }
 
   isActive() {
@@ -202,12 +223,12 @@ export class AudioManager {
       const hidden = !!d?.hidden;
       let focused = true;
       try { if (typeof d?.hasFocus === "function") focused = !!d.hasFocus(); } catch (_) {}
-      this._active = !hidden && focused;
+      this.setActive(!hidden && focused);
     };
     try {
       d?.addEventListener?.("visibilitychange", recompute);
-      w?.addEventListener?.("focus", () => { this._active = !d?.hidden; });
-      w?.addEventListener?.("blur", () => { this._active = false; });
+      w?.addEventListener?.("focus", () => { this.setActive(!d?.hidden); });
+      w?.addEventListener?.("blur", () => { this.setActive(false); });
       recompute();
     } catch (_) { /* no DOM: stay active */ }
   }
@@ -222,7 +243,7 @@ export class AudioManager {
       // eslint-disable-next-line no-undef
       this._ctx = new (window.AudioContext || window.webkitAudioContext)();
       this._master = this._ctx.createGain();
-      this._master.gain.value = this._masterGainValue;
+      this._master.gain.value = this._active ? this._masterGainValue : 0;
       this._master.connect(this._ctx.destination);
       // Phase 3 (2026-06-04) — retail category master buses. Sounds route
       // through a per-category bus (effect/ambient) into the global master,
@@ -270,7 +291,8 @@ export class AudioManager {
    */
   setMasterGain(value) {
     this._masterGainValue = Math.max(0.0, Math.min(1.0, value));
-    if (this._master) this._master.gain.value = this._masterGainValue;
+    // While inactive the bus stays muted; the new level applies on return.
+    if (this._master && this._active) this._master.gain.value = this._masterGainValue;
   }
 
   /**
