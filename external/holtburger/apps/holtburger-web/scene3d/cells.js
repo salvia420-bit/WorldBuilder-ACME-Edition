@@ -3087,13 +3087,32 @@ function resolveSealPass(scene3d) {
  * outdoor-facing portal of the cells it draws, unconditionally. Only the
  * near-plane clip and the straddle drop apply (a doorway the camera is standing
  * in has no meaningful plane to seal).
+ *
+ * WHICH portals (2026-10-05 round 2). Retail stamps only the `other_cell_id ==
+ * -1` portals of the cells in `cell_draw_list` — the cells the PView walk
+ * reached — and only when `outside_view.view_count != 0` (acclient.c:461483).
+ * `getVisiblePortalApertures` has no reachability: it returns the
+ * outdoor-facing portals of EVERY frustum-visible EnvCell of every loaded
+ * landblock, which is how the seal had apertures while the player stood in
+ * dungeon cell 0x01D90100 (the frustum reaches the surface buildings of the
+ * loaded neighbour landblocks; retail stamps nothing there). The seal now
+ * reads wasm `getPViewOutsidePortals` — the same walk as the cells pass's
+ * portal set, emitting each reached cell's outdoor portals that survive that
+ * cell's view clip. A stale `pkg/` without the export falls back to the
+ * unrestricted export (`_portalSealDiag.source` says which).
+ *
+ * Also publishes the OUTDOOR REMAINDER the seal pass draws before stamping
+ * (retail draws all outdoor content before the stamp; see portal_punch.js
+ * drawOutdoorRemainder) and flags entities standing in outdoor landcells.
  */
 export function tickPortalSeal(scene3d, sessionHandle) {
   const pass = resolveSealPass(scene3d);
   if (!pass || !sessionHandle) return;
-  if (typeof sessionHandle.getVisiblePortalApertures !== "function") return;
+  const hasOutside = typeof sessionHandle.getPViewOutsidePortals === "function";
+  if (!hasOutside && typeof sessionHandle.getVisiblePortalApertures !== "function") return;
   if (pass._errored || !scene3d._indoorSplitArmed) {
     pass.setApertures(null, null);
+    pass.outdoorRemainder = null;
     return;
   }
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
@@ -3106,7 +3125,9 @@ export function tickPortalSeal(scene3d, sessionHandle) {
     _psMvp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _psMvp.multiply(worldRoot.matrixWorld);
     for (let i = 0; i < 16; i++) _psMvpArr[i] = _psMvp.elements[i];
-    const flat = sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
+    const flat = hasOutside
+      ? sessionHandle.getPViewOutsidePortals(_psMvpArr, 0)
+      : sessionHandle.getVisiblePortalApertures(_psMvpArr, 0);
     const nearPlane = acCameraFrame(camera, worldRoot)
       ? makeNearPlane(_acCamVec, _acFwdVec)
       : null;
@@ -3124,10 +3145,69 @@ export function tickPortalSeal(scene3d, sessionHandle) {
     // aperture rects would be harmless but pointless, and a wrong rect would
     // silently drop part of the wall.
     pass.setApertures(res.kept > 0 ? res.flat : null, null);
-    scene3d._portalSealDiag = { kept: res.kept, dropped: res.dropped };
+    if (res.kept > 0) {
+      markOutdoorEntities(scene3d);
+      pass.outdoorRemainder = sealOutdoorRemainder(scene3d);
+    } else {
+      pass.outdoorRemainder = null;
+    }
+    scene3d._portalSealDiag = {
+      kept: res.kept,
+      dropped: res.dropped,
+      source: hasOutside ? "pview-outside" : "frustum-unrestricted",
+      remainderDraws: pass.remainderDraws ?? 0,
+    };
   } catch (_) {
     pass.setApertures(null, null);
+    pass.outdoorRemainder = null;
   }
+}
+
+/**
+ * The groups the seal pass's outdoor-remainder pre-draw needs (portal_punch.js
+ * collectOutdoorRemainderHidden). null when the scene is not wired.
+ */
+export function sealOutdoorRemainder(scene3d) {
+  if (!scene3d?.scene || !scene3d.worldRoot) return null;
+  return {
+    scene: scene3d.scene,
+    worldRoot: scene3d.worldRoot,
+    buildingsGroup: scene3d.buildingsGroup ?? null,
+    staticsGroup: scene3d.staticsGroup ?? null,
+    entitiesGroup: scene3d.entitiesGroup ?? null,
+  };
+}
+
+/**
+ * Flag each entity root standing in an OUTDOOR landcell (`cell & 0xFFFF <
+ * 0x100`) with `userData.__splitOutdoor = true`, so the seal's pre-draw paints
+ * it before the doorway wall — retail draws landcell objects in LScape::draw,
+ * before the stamp, and only EnvCell objects after it (DrawObjCellForDummies,
+ * acclient.c:461597). Cell index: the last wire position's landcell
+ * (`_wireCellIdx`, entities.js setPose) or the spawn cell (`_outdoorCellIdx`).
+ * An entity with no known cell stays unflagged = drawn after the wall (the
+ * pre-round-2 behaviour).
+ */
+export function markOutdoorEntities(scene3d) {
+  const em = scene3d?.entityManager;
+  const map = em?.entityMap;
+  if (!map || typeof map.forEach !== "function") return 0;
+  // The split is armed because the player is INSIDE: never treat the local
+  // player as outdoor, whatever its (spawn-time) cell index says.
+  let self = 0;
+  try { self = (em._localPlayerGuid?.() ?? 0) >>> 0; } catch (_) { self = 0; }
+  let n = 0;
+  map.forEach((inst, guid) => {
+    const root = inst?.root;
+    if (!root || !root.userData) return;
+    const ci = inst._wireCellIdx ?? inst._outdoorCellIdx;
+    const outdoor =
+      (self === 0 || (guid >>> 0) !== self) &&
+      ci != null && Number.isFinite(ci) && (ci & 0xffff) < 0x0100;
+    root.userData.__splitOutdoor = outdoor;
+    if (outdoor) n++;
+  });
+  return n;
 }
 
 /**

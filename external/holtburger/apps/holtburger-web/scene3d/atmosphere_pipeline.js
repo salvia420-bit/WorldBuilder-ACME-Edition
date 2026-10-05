@@ -1386,21 +1386,30 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //     longer occlude the room the camera is standing in. Retail's
         //     `DrawBuilding` + `DrawEnvCell` loop at :461606.
         //
-        // KNOWN GAPS vs retail, deliberately not attempted this round:
-        //   · retail re-stamps each exterior portal plane at its true depth
-        //     between (2) and (3) (`DrawPortalPolyInternal(portal, 0)`,
-        //     acclient.c:461536), stopping interior content from overpainting
-        //     the landscape colour seen through a doorway;
-        //   · terrain depth is far after the wipe, so depth-reading effects
-        //     (aerial perspective, ground fog, cloud overlay) over-apply on the
-        //     terrain seen through the doorway. Retail draws no atmosphere
-        //     indoors at all, so there is no retail answer to copy; this needs
-        //     a real-GPU look before deciding.
-        // Both are tracked in the `indoorDepthSplit` docs row.
+        // KNOWN GAP vs retail: terrain depth is gone after the wipe, so the
+        // depth-reading post effects (aerial perspective, heat haze, clouds;
+        // horizonDissolve is switched off above while armed) read the doorway
+        // seal's depth for terrain and sky seen through a doorway, never the
+        // terrain's own distance. The old PERSPECTIVE seal (`?sealLogDepth=
+        // off`) writes ~0.98 at a 5 m doorway, which these effects decode as
+        // LOG depth, i.e. ~4 km: heavy aerial-perspective haze through every
+        // doorway. The log seal decodes as the wall distance: almost no haze
+        // (AerialPerspective here has sky:false). Outdoors, the same terrain
+        // gets distance haze between the two. Matching the outdoor look
+        // exactly would need the pre-wipe depth copied aside and restored
+        // under the sealed pixels after the cells pass (an extra depth copy + two fullscreen passes). Retail draws no
+        // atmosphere indoors, so there is no retail answer to copy. Tracked in
+        // the `sealLogDepth` docs row.
         // (2b) retail step 3 — seal the doorway planes at TRUE depth so the
         //      cells pass cannot overpaint the world-pass colour (terrain AND
         //      the layer-0 outdoor particles drawn with it) that is legitimately
-        //      visible through the aperture.
+        //      visible through the aperture. With `?sealLogDepth` (default on)
+        //      the seal pass FIRST draws the outdoor remainder — the player
+        //      landblock's relayered shells/statics and outdoor entities, which
+        //      sit on layer 1 — so they are painted before the wall, as retail
+        //      paints all outdoor content (LScape::draw) before the stamp
+        //      (PortalPunchPass.drawOutdoorRemainder; fed by cells.js
+        //      tickPortalSeal from the PView walk's outside view).
         if (portalSealPass) portalSealPass.enabled = portalSealPass.hasApertures;
         cellsMaskPass.enabled = true;
         cellsRenderPass.enabled = true;

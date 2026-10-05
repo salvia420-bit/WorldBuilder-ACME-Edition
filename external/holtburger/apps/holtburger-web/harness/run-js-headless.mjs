@@ -357,6 +357,7 @@ const TIER5 = [
   { tier: 5, flag: "portal_punch_occlusion_gate", file: "tests/portal_punch_occlusion_gate.test.mjs" },
   { tier: 5, flag: "portal_punch_occlusion_flag", file: "tests/portal_punch_occlusion_flag.test.mjs" },
   { tier: 5, flag: "sealLogDepth", file: "tests/portal_seal_logdepth.test.mjs" },
+  { tier: 5, flag: "sealLogDepth(retailOrder)", file: "tests/portal_seal_retail_order.test.mjs" },
   // …and the clip suite the punch FEED calls every frame (`clipAperturesForPunch`),
   // unregistered since it was written. 59 assertion groups, green.
   { tier: 5, flag: "portal_clip", file: "tests/portal_clip.test.mjs" },

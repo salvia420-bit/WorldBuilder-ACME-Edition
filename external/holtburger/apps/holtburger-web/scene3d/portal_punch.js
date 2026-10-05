@@ -39,28 +39,91 @@ import * as THREE from "three";
 import { Pass } from "postprocessing";
 import { withLogDepthVertex, withLogDepthFragment } from "./shader_logdepth.js";
 
-// `?sealLogDepth` (opt-in, `?sealLogDepth=on`) — log-depth encoding for the
-// SEAL material (see makeSealMaterial). The encoding itself is three r184's
-// logdepthbuf chunks (shader_logdepth.js), but a CORRECT seal makes the depth
-// wall live for the first time, and the player-landblock outdoor content that
-// cells.js relayers into the cells pass (SPLIT_RELAYER_GROUPS) draws AFTER it —
-// so trees/statics/neighbour houses seen out a doorway from inside would fail
-// the wall. Retail PView::DrawCells (acclient.c:461450-461560) draws all
-// outdoor content before stamping the doorway. Back to opt-in (2026-10-05,
-// wave-1 critic) until the draw order matches retail.
+// `?sealLogDepth` (DEFAULT ON since 2026-10-05 round 2; `?sealLogDepth=off`
+// escape) — log-depth encoding for the SEAL material (see makeSealMaterial),
+// three r184's logdepthbuf chunks via shader_logdepth.js. A CORRECT seal makes
+// the doorway depth wall live for the first time, so it ships together with
+// the two retail-order fixes it depends on:
+//   1. OUTDOOR REMAINDER BEFORE THE STAMP. Retail PView::DrawCells
+//      (acclient.c:461450-461560) draws ALL outdoor content (LScape::draw) before
+//      the Z wipe and the stamp. cells.js relayers the player landblock's
+//      buildings + statics onto layer 1 so terrain cannot occlude the room after
+//      the wipe; that content, plus outdoor entities, is now drawn by this pass
+//      immediately BEFORE it stamps (see drawOutdoorRemainder), so a tree or a
+//      neighbour house seen out of the doorway keeps its colour.
+//   2. REACHED CELLS ONLY. cells.js feeds the seal from the PView walk's
+//      outside view (wasm getPViewOutsidePortals), not from every
+//      frustum-visible EnvCell.
+// `=off` restores the old perspective seal AND skips the remainder pre-pass,
+// i.e. the pre-2026-10-05 indoor frame exactly.
 export function sealLogDepthEnabled() {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search || "").get("sealLogDepth") === "on";
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search || "").get("sealLogDepth") !== "off";
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
+// Layer bits, mirrored from index.js (RENDER_LAYER_WORLD = 0, _INDOOR = 1).
+const LAYER_INDOOR_BIT = 1 << 1;
+
+/**
+ * Which children to HIDE so that one render with the camera on the INDOOR layer
+ * draws exactly the "outdoor remainder" — the outdoor content that the armed
+ * indoor split moved past the depth wipe:
+ *   - buildingsGroup / staticsGroup children cells.js relayered
+ *     (`userData.__splitLayer === 1`: the player landblock's building shells
+ *     and outdoor statics). Their OTHER layer-1 children are interior-anchored
+ *     particles (statics.js stamps them at emission) and are hidden.
+ *   - entitiesGroup children flagged `userData.__splitOutdoor === true` by
+ *     cells.js (entities standing in an outdoor landcell). Everything else in
+ *     entitiesGroup is hidden.
+ *   - every other worldRoot child (cellsGroup = the EnvCells, decoration
+ *     groups) is hidden.
+ * Only currently-visible nodes are returned, so restoring them is exact.
+ * Pure (no GL) — the node test drives it directly.
+ *
+ * @param {{worldRoot, buildingsGroup, staticsGroup, entitiesGroup}} rem
+ * @param {object[]} [out] reused scratch array
+ * @returns {object[]}
+ */
+export function collectOutdoorRemainderHidden(rem, out = []) {
+  out.length = 0;
+  if (!rem || !rem.worldRoot) return out;
+  const { worldRoot, buildingsGroup, staticsGroup, entitiesGroup } = rem;
+  for (const c of worldRoot.children) {
+    if (!c.visible) continue;
+    if (c === buildingsGroup || c === staticsGroup || c === entitiesGroup) continue;
+    out.push(c);
+  }
+  for (const g of [buildingsGroup, staticsGroup]) {
+    if (!g || !Array.isArray(g.children)) continue;
+    for (const c of g.children) {
+      if (!c.visible) continue;
+      if (c.userData && c.userData.__splitLayer === 1) continue;
+      // Only layer-1 nodes could draw under the INDOOR mask; leave the rest.
+      if ((c.layers.mask & LAYER_INDOOR_BIT) === 0) continue;
+      out.push(c);
+    }
+  }
+  if (entitiesGroup && Array.isArray(entitiesGroup.children)) {
+    for (const c of entitiesGroup.children) {
+      if (!c.visible) continue;
+      if (c.userData && c.userData.__splitOutdoor === true) continue;
+      out.push(c);
+    }
+  }
+  return out;
+}
+
 // Retail's DrawPortalPolyInternal writes 0.99999899 (just shy of the far plane).
-// Under logarithmicDepthBuffer the depth encoding preserves the endpoints
-// (near→0, far→1), so this literal is a valid "far" written straight to
-// gl_FragDepth — any real interior geometry has a smaller gl_FragDepth and wins.
+// Under logarithmicDepthBuffer the encoding is log2(1 + w) / log2(1 + far), so
+// far maps to exactly 1 and the near plane maps to log2(1 + near) / log2(1 +
+// far) — about 0.011 for this renderer (near 0.1, far 5000), not 0. The literal
+// is therefore still a valid "far" written straight to gl_FragDepth: any real
+// geometry has a smaller gl_FragDepth and wins.
+
 const FAR_DEPTH = 0.99999899;
 
 // Single stencil ref for the occlusion gate (same value portal_stencil.js used).
@@ -188,7 +251,7 @@ function makeMarkMaterial() {
 // particles gone" ordering: both are layer-0 world-pass content whose depth the
 // wipe destroyed. The seal restores exactly the depth retail restores.
 //
-// LOG-DEPTH (2026-10-05, `?sealLogDepth`, DEFAULT ON, `=off` escape): the
+// LOG-DEPTH (2026-10-05, `?sealLogDepth`, DEFAULT ON since round 2, `=off` escape): the
 // renderer runs `logarithmicDepthBuffer`, so every built-in material writes a
 // LOG gl_FragDepth, while a seal without the chunk writes PERSPECTIVE
 // gl_FragCoord.z — a different encoding, so the "true depth" wall it stamps is
@@ -297,8 +360,17 @@ export class PortalPunchPass extends Pass {
     this.apertureGroup.rotation.x = -Math.PI / 2;
     this.apertureScene.add(this.apertureGroup);
 
+    // SEAL only: whether the stamp is a live (log-depth) wall, and the
+    // outdoor-remainder pre-draw that must precede it (see render()). Both are
+    // decided once at construction from `?sealLogDepth`.
+    this._sealLogDepth = mode === "seal" && (opts.logDepth ?? sealLogDepthEnabled());
     this._punchMat =
-      mode === "seal" ? makeSealMaterial() : makePunchMaterial(this._stencilGate);
+      mode === "seal" ? makeSealMaterial(this._sealLogDepth) : makePunchMaterial(this._stencilGate);
+    // `{ scene, worldRoot, buildingsGroup, staticsGroup, entitiesGroup }`, set
+    // per tick by cells.js `tickPortalSeal`. null = no pre-draw.
+    this.outdoorRemainder = null;
+    this._remainderHidden = [];
+    this.remainderDraws = 0; // diag: frames the pre-draw ran
     this._markMat = this._stencilGate ? makeMarkMaterial() : null;
     // PERSISTENT aperture mesh (2026-08-04 perf). `setApertures` runs EVERY
     // frame the punch is armed; the original implementation disposed the
@@ -518,6 +590,14 @@ export class PortalPunchPass extends Pass {
         this._apertureMesh.material = this._punchMat;
         renderer.render(this.apertureScene, cam);
       } else {
+        // SEAL: retail draws all outdoor content BEFORE the stamp
+        // (PView::DrawCells, LScape::draw at acclient.c:461480 precedes the
+        // Clear + DrawPortalPolyInternal at :461484/:461536). The outdoor
+        // content our split moved past the wipe is drawn here, into the same
+        // target, so the wall below protects its colour like terrain's.
+        if (this._sealLogDepth && this.outdoorRemainder) {
+          this.drawOutdoorRemainder(renderer, cam);
+        }
         // Legacy unconditional punch (no stencil attachment available).
         // Draw the aperture polygons: colorWrite off, depthFunc Always, write
         // FAR. Punches the doorway depth to far in the shared buffer the cells
@@ -541,6 +621,49 @@ export class PortalPunchPass extends Pass {
       // from that target (or the renderer, for the canvas) — so the restore
       // above is what the composer's next pass actually observes.
       renderer.setRenderTarget(prevTarget);
+    }
+  }
+
+  /**
+   * Draw the outdoor remainder (see collectOutdoorRemainderHidden) into the
+   * currently bound target with the camera on the INDOOR layer. Everything it
+   * touches — node visibility, camera mask, scene background, shadow-map auto
+   * update — is restored before returning, also on a throw.
+   *
+   * Shadow maps are NOT re-rendered here (they were rendered by the world pass
+   * and are rendered again by the cells pass). The cells pass that follows
+   * redraws these nodes too: wherever they are nearer than the doorway wall the
+   * redraw lands at identical depth (LessEqual) and wins with identical colour;
+   * where they are beyond the wall it fails and this draw's colour stays —
+   * which is the point. Cost: these nodes draw twice on armed indoor frames
+   * that have a doorway in view.
+   */
+  drawOutdoorRemainder(renderer, cam) {
+    const rem = this.outdoorRemainder;
+    const scene = rem && rem.scene;
+    if (!scene || !rem.worldRoot || !cam || !cam.layers) return false;
+    const hidden = collectOutdoorRemainderHidden(rem, this._remainderHidden);
+    const prevMask = cam.layers.mask;
+    const prevBg = scene.background;
+    const shadowMap = renderer.shadowMap;
+    const prevShadowAuto = shadowMap ? shadowMap.autoUpdate : undefined;
+    let n = 0;
+    try {
+      for (; n < hidden.length; n++) hidden[n].visible = false;
+      cam.layers.mask = LAYER_INDOOR_BIT;
+      // three repaints scene.background on every render() — it would wipe the
+      // world pass's colour.
+      scene.background = null;
+      if (shadowMap) shadowMap.autoUpdate = false;
+      renderer.render(scene, cam);
+      this.remainderDraws++;
+      return true;
+    } finally {
+      for (let i = 0; i < n; i++) hidden[i].visible = true;
+      hidden.length = 0;
+      cam.layers.mask = prevMask;
+      scene.background = prevBg;
+      if (shadowMap) shadowMap.autoUpdate = prevShadowAuto;
     }
   }
 
