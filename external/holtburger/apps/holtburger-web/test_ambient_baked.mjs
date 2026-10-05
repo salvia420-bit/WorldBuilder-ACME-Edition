@@ -28,27 +28,9 @@ function check(name, ok, detail) {
   else passed += 1;
 }
 
-// ---- load ambient_runtime.js (strip the adapter import + exports) ----
-function loadAmbientRuntime() {
-  const full = resolvePath(__dirname, "scene3d/audio/ambient_runtime.js");
-  let src = readFileSync(full, "utf8");
-  src = src.replace(
-    /^\s*import\s+\{\s*acToThree\s*\}\s+from\s+["']\.\.\/adapter\.js["'];?\s*$/m,
-    "const acToThree = (ax, ay, az) => [ax, az, -ay];"
-  );
-  src = src
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ")
-    .replace(/^\s*export\s+const\s+/gm, "const ")
-    .replace(/^\s*export\s+default\s+/gm, "")
-    .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
-  const composite =
-    "// === ambient_runtime.js ===\n" + src + "\n; return { AmbientRuntime };";
-  const factory = new Function("performance", "console", composite);
-  return factory(globalThis.performance ?? { now: () => Date.now() }, console)
-    .AmbientRuntime;
-}
-const AmbientRuntime = loadAmbientRuntime();
+// 2026-10-05: ambient_runtime.js is a plain ESM adapter over
+// ambient_model.js now — import it directly.
+const { AmbientRuntime } = await import("./scene3d/audio/ambient_runtime.js");
 
 // eslint-disable-next-line no-console
 console.log("2026-06-23 — baked-events ambient path test");
@@ -141,106 +123,81 @@ console.log("=========================");
 }
 
 // ===================================================================
-// 3. AmbientRuntime baked branch — per-vertex STB selection + play
+// 3. AmbientRuntime baked branch — retail gather over baked per-vertex STBs
 // ===================================================================
-function makeBakedRuntime(triggersByLb, playerPos, vertexCode = 1) {
-  const playCalls = [];
+function makeBakedRuntime(triggersByLb, playerPos) {
+  const calls = [];
   const state = { clockMs: 0 };
   const audioManager = {
-    async play(did, worldPos, opts) {
-      playCalls.push({ did, worldPos, opts });
-      return { source: { stop() {} }, panner: {}, gain: {} };
-    },
+    async play(did, worldPos, opts) { calls.push({ fn: "play", did, worldPos, opts }); return {}; },
+    async playFromCenter(did, vol, opts) { calls.push({ fn: "center", did, vol, opts }); return {}; },
   };
-  // resolveSound encodes the sType into the waveDid so we can assert
-  // which Sound enum slot resolved: waveDid = 0x0A000000 + sType.
+  // waveDid = 0x0A000000 + sType so assertions can tell which slot resolved.
   const soundTableCache = {
     async resolveSound(_stbId, sType) {
-      return { waveDid: (0x0a000000 + (sType >>> 0)) >>> 0, volume: 1.0 };
+      return { waveDid: (0x0a000000 + (sType >>> 0)) >>> 0, volume: 1.0, probability: 1.0 };
     },
   };
-  // One terrain mesh covering lb (0,0) with a uniform code grid.
-  const codes = new Uint8Array(81).fill(vertexCode);
-  const mesh = { userData: { lbX: 0, lbY: 0, terrainCodes: codes } };
   const rt = new AmbientRuntime({
     soundTableCache,
     audioManager,
     getPlayerPos: () => playerPos,
-    // getRegion THROWS — proves baked mode never touches the live chain.
-    getRegion: () => {
-      throw new Error("getRegion must not be called in baked mode");
-    },
+    getRegion: () => { throw new Error("getRegion must not be called in baked mode"); },
     getBakedAmbientTriggers: (lbX, lbY) => triggersByLb(lbX, lbY),
-    getTerrainMeshes: () => [mesh],
     rng: () => 0.0,
     clock: () => state.clockMs,
   });
-  return { rt, playCalls, state };
+  return { rt, calls, state };
 }
+const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
-// Player at LB (0,0) local (0,0) → col=0,row=0 → vertexIndex 0.
-const TRIGGERS = [
-  {
-    stbId: 0x20000017,
-    vertexIndices: [0, 1, 2],
-    ambientSounds: [
-      { sType: 70, volume: 0.6, baseChance: 0.0, minRate: 0, maxRate: 0, isContinuous: true },
-      { sType: 71, volume: 0.5, baseChance: 1.0, minRate: 1, maxRate: 1, isContinuous: false },
-    ],
-  },
-];
-
+// Every vertex of every landblock is STB 0x20000017: a continuous bed (70)
+// and an always-on intermittent (71, base_chance 1, every 1 s).
+const ALL_VERTS = Array.from({ length: 81 }, (_, i) => i);
+const TRIGGERS = [{
+  stbId: 0x20000017,
+  vertexIndices: ALL_VERTS,
+  ambientSounds: [
+    { sType: 70, volume: 0.6, baseChance: 0.0, minRate: 5, maxRate: 5, isContinuous: true },
+    { sType: 71, volume: 0.5, baseChance: 1.0, minRate: 1, maxRate: 1, isContinuous: false },
+  ],
+}];
 {
-  const { rt, playCalls, state } = makeBakedRuntime(
-    () => TRIGGERS,
-    { x: 0.1, y: 0.1, z: 50 }
-  );
-  // Tick 1: clock baseline (dt=0). Continuous loop starts (dt-independent);
-  // probabilistic timer for sType 71 seeds at 1s.
+  const { rt, calls, state } = makeBakedRuntime(() => TRIGGERS, { x: 96, y: 96, z: 50 });
   rt.tick(0);
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-
-  check("baked: activeStbId resolved to 0x20000017 from vertex 0", rt.stats().activeStbId === 0x20000017, "0x" + (rt.stats().activeStbId || 0).toString(16));
-  const cont = playCalls.find((c) => c.did === 0x0a000000 + 70);
-  check("baked: continuous sType 70 played (waveDid 0x0A000046)", !!cont, JSON.stringify(playCalls.map((c) => "0x" + c.did.toString(16))));
-  check("baked: continuous opts.loop === true + category ambient", !!cont && cont.opts.loop === true && cont.opts.category === "ambient", cont && JSON.stringify({ loop: cont.opts.loop, cat: cont.opts.category }));
-
-  // Tick 2: advance wall clock +1.0s → probabilistic sType 71 timer
-  // expires; rng()=0 < baseChance 1.0 → fires.
-  state.clockMs = 1000;
+  await flush();
+  check("baked: activeStbId 0x20000017", rt.stats().activeStbId === 0x20000017, "0x" + (rt.stats().activeStbId || 0).toString(16));
+  const cont = calls.find((c) => c.did === 0x0a000000 + 70);
+  check("baked: continuous bed plays at once from the centre (no loop)", !!cont && cont.fn === "center" && !cont.opts.loop,
+    JSON.stringify(calls.map((c) => [c.fn, c.did.toString(16)])));
+  check("baked: continuous volume = authored 0.6 x full share (one STB everywhere)", !!cont && Math.abs(cont.vol - 0.6) < 1e-6, cont && String(cont.vol));
+  check("baked: ambient slider twice requested", !!cont && cont.opts.sliderTwice === true && cont.opts.category === "ambient");
+  const chirp = calls.find((c) => c.did === 0x0a000000 + 71);
+  check("baked: intermittent is positional (play with a worldPos)", !!chirp && chirp.fn === "play" && !!chirp.worldPos, chirp && chirp.fn);
+  calls.length = 0;
+  state.clockMs = 5100;
   rt.tick(0);
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  const prob = playCalls.find((c) => c.did === 0x0a000000 + 71);
-  check("baked: probabilistic sType 71 fired after +1s (waveDid 0x0A000047)", !!prob, JSON.stringify(playCalls.map((c) => "0x" + c.did.toString(16))));
-  check("baked: probabilistic opts.loop === false", !!prob && prob.opts.loop === false, prob && String(prob.opts.loop));
+  await flush();
+  check("baked: the continuous bed re-triggers as a one-shot after min_rate",
+    calls.some((c) => c.did === 0x0a000000 + 70 && c.fn === "center"), JSON.stringify(calls.map((c) => c.did.toString(16))));
 }
-
-// Vertex NOT covered by any trigger → no STB → no play.
+// Uncovered vertices -> no instances, no plays.
 {
-  const { rt, playCalls } = makeBakedRuntime(
-    () => [{ stbId: 0x20000099, vertexIndices: [5, 6, 7], ambientSounds: [{ sType: 70, volume: 1, baseChance: 0, minRate: 0, maxRate: 0, isContinuous: true }] }],
-    { x: 0.1, y: 0.1, z: 50 } // vertexIndex 0, not in [5,6,7]
+  const { rt, calls } = makeBakedRuntime(
+    () => [{ stbId: 0x20000099, vertexIndices: [80], ambientSounds: [{ sType: 70, volume: 1, baseChance: 0, minRate: 5, maxRate: 5, isContinuous: true }] }],
+    { x: 96, y: 96, z: 50 },
   );
   rt.tick(0);
-  await Promise.resolve();
-  await Promise.resolve();
-  check("baked: uncovered vertex → no STB, no play, activeStbId null", playCalls.length === 0 && rt.stats().activeStbId === null, JSON.stringify({ plays: playCalls.length, stb: rt.stats().activeStbId }));
+  await flush();
+  check("baked: STB only on unused vertex 80 (8x8 cells use x,y<8) -> silence", calls.length === 0 && rt.stats().activeStbId === null,
+    JSON.stringify({ plays: calls.length, stb: rt.stats().activeStbId }));
 }
-
-// Triggers pending (null) → transient miss, getRegion NOT called (no throw).
+// Triggers pending (null) -> no throw, region untouched, counted as missing.
 {
   let threw = false;
-  const { rt } = makeBakedRuntime(() => null, { x: 0.1, y: 0.1, z: 50 });
-  try {
-    rt.tick(0);
-  } catch (e) {
-    threw = true;
-  }
-  check("baked: pending triggers (null) → no throw, region untouched", threw === false, "threw=" + threw);
+  const { rt } = makeBakedRuntime(() => null, { x: 96, y: 96, z: 50 });
+  try { rt.tick(0); } catch (_) { threw = true; }
+  check("baked: pending triggers (null) -> no throw, region untouched", threw === false);
   check("baked: pending counted as terrainSampleMiss", rt.stats().terrainSampleMisses >= 1, String(rt.stats().terrainSampleMisses));
 }
 
