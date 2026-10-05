@@ -1103,6 +1103,9 @@ export function initFarTerrain(scene3d, { parent, renderer } = {}) {
   // SIBLING of terrainGroup under worldRoot: identical AC transform, and the
   // terrain LRU's `terrainGroup.children` park/evict scans, the LOD-rebake
   // dispose walker and cullTerrainGroup never see far patches.
+  // ?punchRetail: terrain draws BEFORE the doorway punch (phase 0) — this
+  // group hangs off worldRoot, which defaults to the after-punch phase.
+  group.userData.__punchPhase = 0;
   (parent ?? scene3d.terrainGroup.parent ?? scene3d.terrainGroup).add(group);
 
   _state = {

@@ -1443,12 +1443,15 @@ export async function preInit3D(canvas) {
   const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
   // ?punchRetail (2026-10-05) draw-order phase tags, read by the opaque sort in
-  // atmosphere_pipeline.js: everything that must draw AFTER the doorway punch
-  // (shells, statics, interior cells, entities) is phase 2; the terrain family
-  // stays phase 0 and the punch mesh is phase 1. Inert without the flag.
-  for (const g of [buildingsGroup, staticsGroup, cellsGroup, entitiesGroup]) {
-    g.userData.__punchPhase = 2;
-  }
+  // atmosphere_pipeline.js (nearest tag up the parent chain wins). ONLY the
+  // terrain surface draws before the doorway punch (phase 0) — it is the one
+  // thing the punch exists to erase. Everything else under worldRoot (shells,
+  // statics, cells, entities, AND sibling decoration groups such as grass,
+  // scatter, pebbles that hang straight off worldRoot) is phase 2, so it
+  // depth-tests normally over a punched doorway instead of being painted
+  // over by the interior. The punch mesh is phase 1. Inert without the flag.
+  worldRoot.userData.__punchPhase = 2;
+  terrainGroup.userData.__punchPhase = 0;
 
   // Phase 5 PView render-order fix (2026-05-25) — mirrors WB.GameScene.cs:1610.
   // Two-layer split so the renderer can interleave a depth-clear between
