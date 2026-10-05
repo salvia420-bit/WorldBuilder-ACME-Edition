@@ -1481,6 +1481,8 @@
       // main thread — the case the keepalive heartbeat above cannot cover.
       // Default OFF; transparently falls back to the direct `start_session`.
       import { startNetWorkerSession, netWorkerEnabled } from "./scene3d/net_worker_client.js";
+      // Generated from the CLIENT_EVENT_KIND_* constants in src/lib.rs.
+      import { ClientEventKind } from "./scene3d/client_event_kinds.js";
       import { createClient, API_VERSION as CLIENT_API_VERSION } from "./plugins/api.js";
       // P6.1 promotion (2026-07-28): capability probe for the plugin
       // loader's manifest `capabilities` gate. The loader runs long before
@@ -9722,11 +9724,9 @@
                 // eslint-disable-next-line no-console
                 console.log(`[step 5] UseFailed ${errLabel} code=${errCode}`);
                 // Wave D / PR13 (2026-06-06): re-emit on the plugin
-                // bus so rejection_feedback.js can correlate this
-                // WeenieError with its recent-action ring and
-                // synthesize an 'inventoryActionFailed' (kind:48)
-                // event. Mirrors the playerInventoryChanged /
-                // containerOpened emit pattern above.
+                // bus. rejection_feedback.js uses it only as a FALLBACK
+                // (UseDone failures carry no item GUID); the authoritative
+                // inventory rejection is kind=48 below.
                 if (window.__pluginClient?.events?.emit) {
                   try {
                     window.__pluginClient.events.emit("kind:13", evt);
@@ -9787,6 +9787,24 @@
                     }
                   } catch (_) {}
                 }
+              } else if (evt.kind === ClientEventKind.INVENTORY_ACTION_FAILED) {
+                // kind=48 InventoryActionFailed — the server's own rejection
+                // of an inventory mutation (GameEvent InventoryServerSaveFailed
+                // 0x00A0): u32Payload = item GUID, u32Payload2 = WeenieError,
+                // stringPayload = Debug label. Forward the authoritative event
+                // to the plugin bus (raw + semantic name); rejection_feedback.js
+                // renders the slot flash + toast. The paired transient chat line
+                // is pushed separately by the same recv arm.
+                const payload = {
+                  kind: ClientEventKind.INVENTORY_ACTION_FAILED,
+                  u32Payload: (evt.u32Payload ?? 0) >>> 0,
+                  u32Payload2: (evt.u32Payload2 ?? 0) >>> 0,
+                  stringPayload: evt.stringPayload || "",
+                };
+                try {
+                  window.__pluginClient?.events?.emit?.("kind:48", payload);
+                  window.__pluginClient?.events?.emit?.("inventoryActionFailed", payload);
+                } catch (_) {}
               } else if (evt.kind === 14) {
                 // Phase 4 step 5: UseDone OK — door opened, container
                 // approached, lifestone touched. The visible reaction

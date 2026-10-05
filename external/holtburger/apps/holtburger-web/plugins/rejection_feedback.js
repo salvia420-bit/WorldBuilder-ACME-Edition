@@ -1,11 +1,20 @@
 // rejection_feedback — Wave D / PR13 (2026-06-06): server-side
-// inventory-action rejection UX. Wraps window.__sessionHandle's
-// inventory methods to record a 2s-TTL ring of recent actions keyed by
-// item GUID; subscribes to kind:13 UseFailed (WeenieError producer) on
-// the plugin bus; when a WeenieError lands within the TTL window for an
-// item we just acted on, synthesizes an INVENTORY_ACTION_FAILED event
-// (semantic name 'inventoryActionFailed' + raw 'kind:48') so plugins
-// can subscribe either way. The toast renderer + DOM flash run here.
+// inventory-action rejection UX.
+//
+// PRIMARY path: index.html forwards the wasm's authoritative kind=48
+// InventoryActionFailed (GameEvent InventoryServerSaveFailed 0x00A0 —
+// item GUID + WeenieError straight off the wire) to the plugin bus as
+// 'kind:48' + 'inventoryActionFailed'. We render the toast + slot flash
+// from it; no guessing.
+//
+// FALLBACK path (demoted): kind:13 UseFailed carries a WeenieError but
+// NO item GUID (UseDone(error) failures). For those only, a Proxy on
+// window.__sessionHandle records a 2s-TTL ring of recent inventory
+// actions and attributes the error to the most recent one, then emits a
+// synthetic 'inventoryActionFailed' / 'kind:48' (marked
+// `synthetic: true`). A kind:13 that DOES carry an item GUID in
+// u32Payload2 (pre-kind-48 wasm builds routed 0x00A0 that way) is
+// treated as authoritative.
 //
 // Also exposes window.__isBusy() — a derived boolean that
 // radial-menu.js's Drop/Give/Split rows pre-emptively disable on. The
@@ -18,6 +27,7 @@
 // init time.
 
 import { weenieErrorMessage } from "./weenie_error_messages.js";
+import { ClientEventKind } from "../scene3d/client_event_kinds.js";
 
 const STYLE_ID = "hb-rejection-feedback-style";
 const RECENT_ACTION_TTL_MS = 2000;
@@ -238,11 +248,12 @@ function _renderToast(message) {
 }
 
 // === Event wiring ==========================================================
-// We consume kind:13 (UseFailed / WeenieError) on the plugin bus.
-// When a WeenieError fires AND there's a recent recorded action within
-// the 2s ring, synthesize 'inventoryActionFailed' + 'kind:48' so any
-// plugin can subscribe either way. The toast + flash also fire here.
-// Inventory-only WeenieError codes from weenie_error_messages.js — others
+// PRIMARY: kind:48 (authoritative, item GUID on the wire) → toast + flash.
+// FALLBACK: kind:13 (UseFailed, no item GUID) — when a WeenieError fires
+// AND there's a recent recorded action within the 2s ring, synthesize
+// 'inventoryActionFailed' + 'kind:48' (synthetic: true).
+// Fallback filter — inventory-only WeenieError codes from
+// weenie_error_messages.js — others
 // (e.g. movement, casting, tells) are dropped on the floor so a cast
 // failure 1s after an unrelated moveItem doesn't poison the toast path.
 const INVENTORY_RELATED_CODES = new Set([
@@ -251,27 +262,58 @@ const INVENTORY_RELATED_CODES = new Set([
   0x0510, 0x0514, 0x0515, 0x054D, 0x058A, 0x0594,
 ]);
 
+// The 0x00A0 recv arm also pushes a TRANSIENT chat line ("[Wield failed]
+// <Label>") right after kind=48 in the same poll batch; _onChatReceived
+// would toast it a second time. Suppress exactly that one follow-up.
+const PAIRED_CHAT_SUPPRESS_MS = 250;
+let _suppressTransientUntil = 0;
+
+function _renderRejection(itemGuid, code) {
+  const message = weenieErrorMessage(code >>> 0).replace(/_/g, "that item");
+  _renderToast(message);
+  if (itemGuid >>> 0) _flashSlotForGuid(itemGuid >>> 0);
+}
+
+// PRIMARY — authoritative kind=48 from index.html.
+function _onInventoryActionFailed(evt) {
+  const payload = evt?.detail ?? evt ?? {};
+  if (payload.synthetic) return; // our own fallback re-emit; already rendered
+  const itemGuid = (payload.u32Payload >>> 0) || 0;
+  const code = (payload.u32Payload2 >>> 0) || 0;
+  // The server attributed this failure; don't let the fallback ring
+  // attribute a later GUID-less kind:13 to the same action.
+  if (itemGuid) _recent.delete(itemGuid);
+  _renderRejection(itemGuid, code);
+  _suppressTransientUntil = Date.now() + PAIRED_CHAT_SUPPRESS_MS;
+}
+
+// FALLBACK — kind:13 has no item GUID; guess from the recent-action ring.
 function _onWeenieError(evt) {
   // Plugin facade wraps the ClientEvent payload in CustomEvent.detail.
   // Mirror the existing consumer pattern (container-panel.js:460,
   // examine-target.js:986) so the code field reaches us populated.
   const payload = evt?.detail ?? evt ?? {};
   const code = (payload.u32Payload >>> 0) || 0;
+  // Pre-kind-48 wasm builds sent 0x00A0 InventoryServerSaveFailed as
+  // kind=13 with the item GUID in u32Payload2 — that IS authoritative.
+  const wireGuid = (payload.u32Payload2 >>> 0) || 0;
+  if (wireGuid) {
+    _onInventoryActionFailed({ u32Payload: wireGuid, u32Payload2: code });
+    return;
+  }
   if (!INVENTORY_RELATED_CODES.has(code)) return;
   const recent = _consumeAnyRecent();
   if (!recent) return;
-  const substitute = payload.stringPayload || (recent.action ? "that item" : "_");
-  const message = weenieErrorMessage(code).replace(/_/g, substitute);
-  _renderToast(message);
-  _flashSlotForGuid(recent.itemGuid);
+  _renderRejection(recent.itemGuid, code);
   try {
     const client = window.__pluginClient;
     if (client?.events?.emit) {
       const synthetic = {
-        kind: 48,
+        kind: ClientEventKind.INVENTORY_ACTION_FAILED,
         u32Payload: recent.itemGuid >>> 0,
         u32Payload2: code >>> 0,
         stringPayload: recent.action || "",
+        synthetic: true,
       };
       client.events.emit("inventoryActionFailed", synthetic);
       client.events.emit("kind:48", synthetic);
@@ -319,6 +361,10 @@ const CHAT_CATEGORY_TRANSIENT = 9;
 function _onChatReceived(evt) {
   const payload = evt?.detail ?? evt ?? {};
   if (((payload.u32Payload2 >>> 0) || 0) !== CHAT_CATEGORY_TRANSIENT) return;
+  if (Date.now() < _suppressTransientUntil) {
+    _suppressTransientUntil = 0; // the kind=48 toast already covered it
+    return;
+  }
   const msg = payload.stringPayload;
   if (msg) _renderToast(msg);
 }
@@ -327,6 +373,7 @@ function _attachSubscription() {
   try {
     const client = window.__pluginClient;
     if (!client?.events?.on) return false;
+    client.events.on("kind:48", _onInventoryActionFailed);
     client.events.on("kind:13", _onWeenieError);
     client.events.on("clientActionRejected", _onClientActionRejected);
     client.events.on("attackDone", _onAttackDone);

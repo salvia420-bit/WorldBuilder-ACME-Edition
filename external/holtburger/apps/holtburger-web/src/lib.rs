@@ -25744,20 +25744,20 @@ const CLIENT_EVENT_KIND_ENTITY_DETACHED: u32 = 47;
 
 /// `kind = 48` — InventoryActionFailed. Wave A / PR1 (2026-06-06):
 /// ACE rejected an inventory mutation (move, split, merge, wield) with
-/// a `WeenieError` code. PR13 owns the producer: it adds an
-/// inventory-action-context tracker that classifies an incoming
-/// `WorldEvent::WeenieError` as belonging to a recent inventory
-/// SessionCommand and converts it to `WorldEvent::InventoryActionFailed`
-/// before this dispatch arm runs. Wave A stages the variant + dispatch
-/// arm + the `plugins/weenie_error_messages.js` lookup module so that
-/// PR13 only has to add the converter.
+/// a `WeenieError` code. Producer: the `GameEvent::InventoryServerSaveFailed`
+/// (0x00A0) recv arm, which carries the item GUID on the wire. (The
+/// `WorldEvent::InventoryActionFailed` arm is also wired but nothing in
+/// holtburger-world constructs that variant yet.) index.html forwards it
+/// to the plugin bus as `kind:48` + `inventoryActionFailed`;
+/// `plugins/rejection_feedback.js` renders the flash/toast.
 ///
 /// `u32_payload` = item GUID the failed action targeted (0 if not
 /// resolvable from the ACE rejection).
 /// `u32_payload_2` = `WeenieError` discriminant; JS callers resolve to
 /// English via `weenieErrorMessage(u32_payload_2)` from
 /// `plugins/weenie_error_messages.js`.
-/// `string_payload` = None (lookup happens JS-side).
+/// `string_payload` = the `WeenieError` Debug label (diagnostic only;
+/// the user-facing lookup happens JS-side), or None.
 /// `f32_payload` = None.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED: u32 = 48;
@@ -49047,17 +49047,22 @@ async fn recv_loop(
                                     // mismatch — Player_Inventory.cs
                                     // CheckWeaponCollision). Previously
                                     // UNHANDLED → silent paperdoll no-ops.
-                                    // kind=13 lets rejection_feedback.js
-                                    // attribute it to the recent inventory
-                                    // action; the transient chat line
-                                    // renders a toast regardless.
+                                    // The wire event names the item, so
+                                    // emit the AUTHORITATIVE kind=48
+                                    // InventoryActionFailed (item GUID +
+                                    // WeenieError) — NOT kind=13, which made
+                                    // rejection_feedback.js guess the item
+                                    // from a 2 s recent-action ring and
+                                    // could trip the kind=13 cast-reject
+                                    // hooks. The transient chat line still
+                                    // renders the toast/chat-log copy.
                                     let code = data.error as u32;
                                     let label = format!("{:?}", data.error);
                                     queued_events.borrow_mut().push(ClientEvent {
-                                        kind: CLIENT_EVENT_KIND_USE_FAILED,
+                                        kind: CLIENT_EVENT_KIND_INVENTORY_ACTION_FAILED,
                                         string_payload: Some(label.clone()),
-                                        u32_payload: Some(code),
-                                        u32_payload_2: Some(data.item_guid.0),
+                                        u32_payload: Some(data.item_guid.0),
+                                        u32_payload_2: Some(code),
                                         f32_payload: None,
                                     });
                                     let message = if code == 0 {
