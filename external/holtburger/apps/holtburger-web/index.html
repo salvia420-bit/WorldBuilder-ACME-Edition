@@ -3624,15 +3624,18 @@
       // hotkey-press "pending" italic styling and shows the
       // server-confirmed label.
       function applyConfirmedStance(motionStance) {
-        if (!stanceLabelEl) return;
         const low = motionStance & 0xFFFF;
-        // ACE emits motion-only updates with stance=0; preserve last confirmed label.
+        // ACE emits motion-only updates with stance=0; preserve last confirmed stance.
         if (low === 0) return;
+        // State FIRST: isInMeleeStance/isInRangedStance/isInMagicStance read
+        // currentStanceLow, so it must track the server even headless or when
+        // the #player-stance label is absent. The label is only a view.
         const changed = currentStanceLow !== low;
         currentStanceLow = low;
-        const label = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
-        stanceLabelEl.textContent = label;
-        stanceLabelEl.classList.remove("pending");
+        if (stanceLabelEl) {
+          stanceLabelEl.textContent = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
+          stanceLabelEl.classList.remove("pending");
+        }
         // Notify plugins (stance-toggle, combat-bar) that the
         // server-confirmed stance has changed. Without this the
         // stance-toggle plugin's "Current stance: NonCombat" label
