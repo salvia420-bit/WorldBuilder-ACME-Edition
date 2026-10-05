@@ -36356,20 +36356,33 @@ impl SessionHandle {
         let mut visible: std::collections::HashSet<u32> =
             std::collections::HashSet::new();
         visible.insert(snap.current_cell);
-        let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
+        // Retail keeps EVERY view a cell is seen through (`num_view` /
+        // `portal_view`, merged per cell) and stamps its outdoor portals once
+        // per view. The render-set walk keeps only the first view; here a cell
+        // reached AGAIN through another portal is re-queued with
+        // `explore = false`: its outdoor portals are tested against that
+        // second view too, but it does not walk on (the first visit did), so
+        // the queue stays bounded by the portal count. Each outdoor portal is
+        // emitted at most once (`emitted`).
+        let mut emitted: std::collections::HashSet<(u32, usize)> =
+            std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8, bool)> =
             std::collections::VecDeque::new();
-        queue.push_back((snap.current_cell, initial_view, 0));
+        queue.push_back((snap.current_cell, initial_view, 0, true));
         let mut count: u32 = 0;
-        while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
+        while let Some((cell_id, view_poly, depth, explore)) = queue.pop_front() {
             let Some(portals) = portal_map.get(&cell_id) else {
                 continue;
             };
-            for (neighbour, verts) in portals {
+            for (portal_idx, (neighbour, verts)) in portals.iter().enumerate() {
                 let outdoor = (*neighbour & 0xFFFF) >= 0xFFFE;
-                // Interior neighbours past the depth cap are not walked
-                // (same rule as the render-set walk); outdoor portals of a
-                // reached cell are always considered.
-                if !outdoor && (depth >= effective_max_depth || visible.contains(neighbour)) {
+                if outdoor {
+                    if emitted.contains(&(cell_id, portal_idx)) {
+                        continue;
+                    }
+                } else if !explore || depth >= effective_max_depth {
+                    // Interior neighbours past the depth cap are not walked
+                    // (same rule as the render-set walk), nor from a re-visit.
                     continue;
                 }
                 let projected = holtburger_world::pview_project_polygon(verts, &mvp_arr);
@@ -36382,6 +36395,7 @@ impl SessionHandle {
                     continue;
                 }
                 if outdoor {
+                    emitted.insert((cell_id, portal_idx));
                     out.push(verts.len() as f32);
                     for v in verts {
                         out.push(v.x);
@@ -36391,8 +36405,8 @@ impl SessionHandle {
                     count += 1;
                     continue;
                 }
-                visible.insert(*neighbour);
-                queue.push_back((*neighbour, clipped, depth + 1));
+                let first_visit = visible.insert(*neighbour);
+                queue.push_back((*neighbour, clipped, depth + 1, first_visit));
             }
         }
         out[0] = count as f32;
