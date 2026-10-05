@@ -881,6 +881,16 @@ export class LandblockLRU {
     if (parked && !this.entries.has(key)) {
       this._trackMergedWhileParked += 1;
       this._appendDisposables(parked.disposables, options);
+      // A late statics bake feeds the shared atlas / chunk buckets with
+      // VISIBLE instances; re-apply park's hide (idempotent per instance)
+      // so the parked LB doesn't paint from them until unpark shows them.
+      const s = this.scene3d;
+      if (s && typeof s._parkStaticAtlasForLb === "function") {
+        try { s._parkStaticAtlasForLb(key); } catch (_) {}
+      }
+      if (s && typeof s._parkStaticBatchXForLb === "function") {
+        try { s._parkStaticBatchXForLb(key); } catch (_) {}
+      }
       return;
     }
     let entry = this.entries.get(key);
@@ -2244,6 +2254,13 @@ export class LandblockLRU {
     if (typeof s._parkStaticAtlasForLb === "function") {
       try { s._parkStaticAtlasForLb(lbKey); } catch (_) {}
     }
+    // ?statBatchChunk (default-ON) members: same hide/keep-membership seam.
+    // The region buckets carry no landblockId, so step ③ never detaches them
+    // and without this a parked LB kept drawing from them. Facade installed
+    // by index.js and by each feed.
+    if (typeof s._parkStaticBatchXForLb === "function") {
+      try { s._parkStaticBatchXForLb(lbKey); } catch (_) {}
+    }
 
     // KEPT deliberately (the whole point of park): baked marks (step ⑥),
     // spawns idempotency, wasm collision (`_onEvictLandblock` NOT fired).
@@ -2355,6 +2372,9 @@ export class LandblockLRU {
     }
     if (typeof s._unparkStaticAtlasForLb === "function") {
       try { s._unparkStaticAtlasForLb(lbKey); } catch (_) {}
+    }
+    if (typeof s._unparkStaticBatchXForLb === "function") {
+      try { s._unparkStaticBatchXForLb(lbKey); } catch (_) {}
     }
     // Rebuild the static script emitters from the stashed anchors (statics
     // children AND interior anchors inside cell containers — both stamp

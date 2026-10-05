@@ -56,7 +56,7 @@ import {
 // ?statBatchCrossLb (default-OFF) — same deterministic-wiring story as
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
-import { evictStaticBatchXForLb } from "./static_batch_x.js";
+import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
@@ -6160,6 +6160,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // for an LB with no membership, so this is safe with the flag off (default —
     // nothing was ever fed → nothing to excise).
     liveScene3d._evictStaticBatchXForLb = evictStaticBatchXForLb;
+    // Warm-park hide/show seam for the same buckets (setVisibleAt; membership
+    // retained — see static_batch_x.js parkStaticBatchXForLb).
+    liveScene3d._parkStaticBatchXForLb = parkStaticBatchXForLb;
+    liveScene3d._unparkStaticBatchXForLb = unparkStaticBatchXForLb;
     // ?statGeomCache (default-OFF, perf T3) — the shared statics geometry's two
     // LRU seams: release an evicted LB's lease, and trim the unowned set (to
     // its budget, or harder while the live-geometry governor is engaged).

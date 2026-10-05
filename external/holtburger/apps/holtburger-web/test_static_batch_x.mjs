@@ -42,7 +42,8 @@ const factory = new Function(
   stripped +
     "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
     "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
-    "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats };"
+    "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, " +
+    "tickStatBatchXOptimize, getStatBatchXStats };"
 );
 const M = factory(THREE);
 
@@ -371,6 +372,64 @@ console.log("=========================");
     warns.filter((w) => w.includes("_geometryInfo")).length === 1,
     `warns=${warns.length}`);
 }
+
+// ===== WARM-PARK HIDE/SHOW (2026-10-05 ghost fix) =====
+// Park detaches an LB's per-LB nodes, but its consolidated members live in a
+// region bucket with no landblockId, so a parked LB kept drawing from it.
+// park must hide exactly THIS LB's instances (legacy AND dedup records),
+// leave the same-region neighbour visible, delete nothing, and unpark must
+// restore them; evicting a parked LB must still excise it cleanly.
+for (const dedup of [false, true]) {
+  M.__resetStatBatchXForTest();
+  M.__setStatGeomDedupForTest(dedup);
+  const tag = dedup ? "dedup" : "legacy";
+  const sc = { staticsGroup: new THREE.Group() };
+  const mat = new THREE.MeshBasicMaterial();
+  const LBa = 0x4B500000 >>> 0, LBb = 0x4C500000 >>> 0; // same 3x3 region (75/3 = 76/3 = 25)
+  const mk = (lbId, x0) => {
+    const g = triGeom(1);
+    if (dedup) g.userData = { __statContentKey: "cafef00d|0a00|0|3|0|1" };
+    return [singleton(0x0A00, x0, lbId, g, mat), singleton(0x0A00, x0 + 1, lbId, g, mat), singleton(0x0A00, x0 + 2, lbId, g, mat)];
+  };
+  M.consolidateStaticSingletonsCrossLb(mk(LBa, 0), sc, LBa);
+  M.consolidateStaticSingletonsCrossLb(mk(LBb, 10), sc, LBb);
+  const bm = sc.staticsGroup.children[0];
+  const visibleXs = () => {
+    const xs = [];
+    const mtx = new THREE.Matrix4(), v = new THREE.Vector3();
+    bm._instanceInfo.forEach((inst, i) => {
+      if (!inst.active || !inst.visible) return;
+      bm.getMatrixAt(i, mtx); v.setFromMatrixPosition(mtx); xs.push(v.x);
+    });
+    return xs.sort((a, b) => a - b).join(",");
+  };
+  check(`P1[${tag}]: both LBs share one bucket, 6 visible instances`,
+    sc.staticsGroup.children.length === 1 && visibleXs() === "0,1,2,10,11,12", visibleXs());
+  check(`P2[${tag}]: park hook installed on scene3d by the feed`,
+    typeof sc._parkStaticBatchXForLb === "function" && typeof sc._unparkStaticBatchXForLb === "function");
+  bm._visibilityChanged = false;
+  const hidden = M.parkStaticBatchXForLb(LBa);
+  check(`P3[${tag}]: park(LBa) hides exactly LBa's 3 instances; LBb still draws`,
+    hidden === 3 && visibleXs() === "10,11,12", `hidden=${hidden} visible=${visibleXs()}`);
+  check(`P4[${tag}]: park flags visibility (memo invalidation) and deletes nothing`,
+    bm._visibilityChanged === true && bm.userData.instances === 6 &&
+    bm._instanceInfo.filter((i) => i.active).length === 6);
+  M.parkStaticBatchXForLb(LBa); // idempotent
+  const shown = M.unparkStaticBatchXForLb(LBa);
+  check(`P5[${tag}]: unpark restores LBa (6 visible again)`,
+    shown === 3 && visibleXs() === "0,1,2,10,11,12", `shown=${shown} visible=${visibleXs()}`);
+  M.parkStaticBatchXForLb(LBa);
+  M.evictStaticBatchXForLb(LBa); // disposeParked → evict of a parked LB
+  check(`P6[${tag}]: evicting a parked LB excises it; neighbour intact`,
+    bm.userData.instances === 3 && visibleXs() === "10,11,12" &&
+    M.unparkStaticBatchXForLb(LBa) === 0, visibleXs());
+  const st = M.getStatBatchXStats();
+  check(`P7[${tag}]: stats count the hides/shows`, st.parkHidden === 9 && st.unparkShown === 3,
+    `parkHidden=${st.parkHidden} unparkShown=${st.unparkShown}`);
+  check(`P8[${tag}]: park/unpark of an unfed LB is a no-op`,
+    M.parkStaticBatchXForLb(0x12340000) === 0 && M.unparkStaticBatchXForLb(0x12340000) === 0);
+}
+M.__setStatGeomDedupForTest(false);
 
 console.log(`static-batch-x test: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

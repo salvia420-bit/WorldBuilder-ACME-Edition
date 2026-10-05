@@ -57,6 +57,8 @@ export function __resetStatBatchXForTest() {
   _dedupStats.keyed = 0;
   _stats.bucketsCreated = 0;
   _stats.bucketsReaped = 0;
+  _stats.parkHidden = 0;
+  _stats.unparkShown = 0;
   _stats.gidProbeFailures = 0;
   _stats.deadMarked = 0;
   _stats.deadUnmarked = 0;
@@ -152,6 +154,9 @@ const _dedupStats = { hits: 0, adds: 0, keyed: 0 };
 const _stats = {
   bucketsCreated: 0,
   bucketsReaped: 0,
+  // Warm-park instance hides/shows (parkStaticBatchXForLb). Cumulative.
+  parkHidden: 0,
+  unparkShown: 0,
   gidProbeFailures: 0,
   // ?skipDeadBatch lifecycle: transitions, not a level. `deadUnmarked > 0` is
   // the interesting one — it means a bucket material stopped being provably
@@ -2155,6 +2160,10 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
     if (scene3d && scene3d._evictStaticBatchXForLb !== evictStaticBatchXForLb) {
       scene3d._evictStaticBatchXForLb = evictStaticBatchXForLb;
     }
+    if (scene3d && scene3d._parkStaticBatchXForLb !== parkStaticBatchXForLb) {
+      scene3d._parkStaticBatchXForLb = parkStaticBatchXForLb;
+      scene3d._unparkStaticBatchXForLb = unparkStaticBatchXForLb;
+    }
     const lbKey = _lbKeyOfId(lbId);
     const regionKey = _regionKeyOfId(lbId);
     const touched = new Set();
@@ -2238,10 +2247,11 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       // Within one feed all placements of a model share ONE BufferGeometry
       // object — add it once, instance it per placement.
       const gidOf = new Map(); // BufferGeometry -> gid (this feed only)
-      // ?statGeomDedup: gid -> this LB's membership record in THIS bucket, so
-      // the instance ids a shared geometry receives from THIS feed can be
-      // evicted without touching another LB's instances of the same id.
-      const recOf = dedupOn ? new Map() : null;
+      // gid -> this LB's membership record in THIS bucket, so the instance ids
+      // a geometry receives from THIS feed are known per LB: ?statGeomDedup
+      // evicts them without touching another LB's instances of a shared id,
+      // and warm-park hides/shows them (parkStaticBatchXForLb) on every path.
+      const recOf = new Map();
       let groupAdded = 0;
       for (const m of group) {
         try {
@@ -2289,7 +2299,11 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
               pushed = rec;
               recOf.set(gid, rec);
             } else {
-              pushed = { bm, gid }; // legacy record: deleteGeometry cascades
+              // legacy record: evict's deleteGeometry cascades; `iids` is only
+              // for the park hide/show seam.
+              rec = { bm, gid, iids: [] };
+              pushed = rec;
+              recOf.set(gid, rec);
             }
             // ?statArrayMerge — the ONE layer ref this group took rides on the
             // FIRST record it produces. That is what makes the two refcounts a
@@ -2299,7 +2313,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
             // surface while a live geometry still addresses it.
             if (layerHeld) { pushed.poolRef = poolRef; layerHeld = false; }
             list.push(pushed);
-          } else if (recOf) {
+          } else {
             rec = recOf.get(gid) || null;
           }
           const iid = _addInstanceGrow(bm, gid);
@@ -2418,6 +2432,41 @@ export function evictStaticBatchXForLb(lbKey) {
   // that caused it (and so it cannot be missed when the bucket never becomes
   // fragmented enough for optimize() to look at it).
   for (const bm of touched) _reapBucketIfEmpty(bm);
+}
+
+/**
+ * Warm-park hook (installed as scene3d._parkStaticBatchXForLb; called by
+ * landblock_lru.park next to _parkStaticAtlasForLb). Park detaches the LB's
+ * per-LB nodes, but its consolidated members live in ring-spanning region
+ * buckets the LRU scan skips (no userData.landblockId), so before this hook a
+ * parked LB kept DRAWING from its chunk buckets for as long as it sat in the
+ * pool (found by the 2026-10-04 T3 geometry census). Hides this LB's own
+ * instances with `setVisibleAt(iid, false)`: membership, gids and dedup refs
+ * are untouched, nothing is marked dirty, and three's `_visibilityChanged`
+ * invalidates the multidraw memo. Records fed before iids were tracked on the
+ * legacy path are skipped fail-soft (visible while parked, never the reverse).
+ */
+export function parkStaticBatchXForLb(lbKey) {
+  return _setLbVisible(lbKey, false);
+}
+
+/** Warm-park re-attach: show a parked LB's bucket instances again. */
+export function unparkStaticBatchXForLb(lbKey) {
+  return _setLbVisible(lbKey, true);
+}
+
+function _setLbVisible(lbKey, visible) {
+  const list = _lbMembership.get(_lbKeyOfId(lbKey));
+  if (!list) return 0;
+  let n = 0;
+  for (const m of list) {
+    if (!m.iids) continue;
+    for (const iid of m.iids) {
+      try { m.bm.setVisibleAt(iid, visible); n += 1; } catch (_) { /* fail-soft: deleted id */ }
+    }
+  }
+  if (visible) _stats.unparkShown += n; else _stats.parkHidden += n;
+  return n;
 }
 
 /**
@@ -2597,6 +2646,8 @@ export function getStatBatchXStats() {
     // the 3x3 region granularity is thrashing and wants a hysteresis pass.
     bucketsCreated: _stats.bucketsCreated,
     bucketsReaped: _stats.bucketsReaped,
+    parkHidden: _stats.parkHidden,
+    unparkShown: _stats.unparkShown,
     // ?skipDeadBatch census. `armed: false` means statics.js never installed the
     // predicate (both escapes off, or a non-statics harness) — a 0 here then
     // means "not measured", never "nothing to hide".
