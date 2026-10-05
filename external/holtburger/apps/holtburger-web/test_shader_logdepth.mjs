@@ -225,8 +225,8 @@ globalThis.window = { location: { search: "?sealLogDepth=on" } };
 check("?sealLogDepth=on arms it", sealLogDepthEnabled() === true);
 delete globalThis.window;
 const doc = readFileSync(path.join(HERE, "docs", "url-flags.md"), "utf8");
-check("docs/url-flags.md documents sealLogDepth as default-on (§2 row) and no longer lists it as default-OFF (§0)",
-  /^\| `sealLogDepth` \| `off` escape \| \*\*on\*\*/m.test(doc) && !/^> \| `sealLogDepth` \|/m.test(doc));
+check("docs/url-flags.md documents sealLogDepth as opt-in (§2 row) and lists it as deliberately OFF (§0)",
+  /^\| `sealLogDepth` \| `on` \| off/m.test(doc) && /^> \| `sealLogDepth` \|/m.test(doc));
 
 console.log(`\nshader logdepth: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
