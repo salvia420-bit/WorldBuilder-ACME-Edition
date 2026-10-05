@@ -6040,6 +6040,46 @@
           .replace(/'/g, "&#39;");
       }
 
+      // Unmissable in-world "session dead" banner (login-boot diagnosis
+      // 2026-06-11 fix 9: the zombie state — world rendered, dead socket —
+      // was indistinguishable from connected because loginStatus is hidden
+      // in agent mode). Shared by the kind-4 Disconnected handler and the
+      // wasm panic hook below.
+      function showDisconnectBanner(text) {
+        try {
+          if (window.__bootState === "in-world" || window.__bootState === "ready") {
+            let b = document.getElementById("hbDisconnectBanner");
+            if (!b) {
+              b = document.createElement("div");
+              b.id = "hbDisconnectBanner";
+              b.style.cssText =
+                "position:fixed;top:0;left:0;right:0;z-index:99999;" +
+                "background:#a00;color:#fff;font:bold 16px/1.6 monospace;" +
+                "text-align:center;padding:6px;";
+              document.body.appendChild(b);
+            }
+            b.textContent = text;
+          }
+        } catch (_) { /* banner is best-effort */ }
+      }
+
+      // 2026-10-05 — a wasm panic traps the instance (any RefCell held at the
+      // time stays borrowed), after which the world kept rendering with
+      // nothing updating and nothing said so. The panic hook in src/lib.rs
+      // `start()` calls this, so a crash surfaces exactly like a kind-4
+      // Disconnected event. (The bake worker's own wasm finds no such global
+      // and stays silent.)
+      window.__hbWasmPanicked = (msg) => {
+        const reason = `client crashed (wasm panic): ${String(msg ?? "").split("\n")[0]}`;
+        window.__lastDisconnect = { ts: Date.now(), reason, panic: true };
+        try {
+          loginStatus.innerHTML =
+            `<span class="fail">[FAIL]</span> ${escapeHtml(reason)}` +
+            ` <span class="hint">Reload the page to retry.</span>`;
+        } catch (_) {}
+        showDisconnectBanner(`DISCONNECTED — ${reason}, reload to reconnect`);
+      };
+
       let activeHandle = null;
 
       // Server picker — fed by the acresources/serverslist
@@ -6297,7 +6337,23 @@
         const acctInput = loginForm.querySelector('[name="account"]');
         const passInput = loginForm.querySelector('[name="password"]');
         const acctUrl = bootParams.get("account");
-        const passUrl = bootParams.get("password");
+        // 2026-10-05 — keep an auto-login password out of the address bar,
+        // history and any server/tunnel access log. It moves into this tab's
+        // sessionStorage (survives the reloads the auto-reload / retry paths
+        // rely on; gone when the tab closes) and `password=` is stripped
+        // from the visible URL.
+        const PASS_STASH_KEY = "hbAutoLoginPassword";
+        let passUrl = bootParams.get("password");
+        if (passUrl != null) {
+          try { sessionStorage.setItem(PASS_STASH_KEY, passUrl); } catch (_) {}
+          try {
+            const u = new URL(location.href);
+            u.searchParams.delete("password");
+            history.replaceState(history.state, "", u.toString());
+          } catch (_) {}
+        } else {
+          try { passUrl = sessionStorage.getItem(PASS_STASH_KEY); } catch (_) {}
+        }
         if (acctInput) {
           acctInput.value = acctUrl ?? lsAcct ?? acctInput.value ?? "";
         }
@@ -8940,28 +8996,10 @@
                   ts: Date.now(),
                   reason: evt.stringPayload || "",
                 };
-                // Login-boot diagnosis 2026-06-11 (fix 9): the zombie
-                // state — world rendered, dead socket, wields/chat
-                // silently dropped — was indistinguishable from
-                // connected because loginStatus is hidden in agent
-                // mode. Surface an unmissable in-world banner.
-                try {
-                  if (window.__bootState === "in-world" || window.__bootState === "ready") {
-                    let b = document.getElementById("hbDisconnectBanner");
-                    if (!b) {
-                      b = document.createElement("div");
-                      b.id = "hbDisconnectBanner";
-                      b.style.cssText =
-                        "position:fixed;top:0;left:0;right:0;z-index:99999;" +
-                        "background:#a00;color:#fff;font:bold 16px/1.6 monospace;" +
-                        "text-align:center;padding:6px;";
-                      document.body.appendChild(b);
-                    }
-                    b.textContent =
-                      "DISCONNECTED — session dead, reload to reconnect" +
-                      (evt.stringPayload ? ` (${evt.stringPayload})` : "");
-                  }
-                } catch (_) { /* banner is best-effort */ }
+                showDisconnectBanner(
+                  "DISCONNECTED — session dead, reload to reconnect" +
+                    (evt.stringPayload ? ` (${evt.stringPayload})` : ""),
+                );
                 // Entity reaping (2026-06-15): the dead session's entity
                 // guids are all invalid now. Clear them so an in-page
                 // reconnect (e.g. the autoLogin kick-dance, or any future

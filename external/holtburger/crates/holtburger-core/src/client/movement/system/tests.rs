@@ -8205,6 +8205,74 @@ async fn cmd_interp_maybe_stop_completely_clears_held_keys_until_repressed() {
     assert!(legacy.queued_drive_commands.is_empty());
 }
 
+/// Records every action handed to the wire, in order.
+#[derive(Default)]
+struct RecordingSink {
+    sent: Vec<GameAction>,
+}
+
+#[async_trait::async_trait]
+impl holtburger_session::ActionSink for RecordingSink {
+    async fn send_action(&mut self, action: GameAction) -> anyhow::Result<()> {
+        self.sent.push(action);
+        Ok(())
+    }
+}
+
+/// 2026-10-05 — outbound wire order. 457f9de1 sent the attack BEFORE the
+/// MaybeStopCompletely MoveToState, and ACE's MoveToState handler cancels a
+/// pending MoveTo chain, so an out-of-reach melee swing was silently dropped.
+/// The request now rides behind its stop; and anything sent while it waits
+/// (here a peace toggle) queues behind it rather than overtaking it.
+#[tokio::test]
+async fn combat_request_reaches_the_wire_after_its_stop_and_before_later_actions() {
+    use holtburger_protocol::messages::combat::{
+        AttackHeight, ChangeCombatModeActionData, CombatMode, TargetedMeleeAttackActionData,
+    };
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        Guid(0x5000_0123),
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+    movement.enqueue_key_action(0x29, true); // W held
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    sink.sent.clear();
+
+    let attack = GameAction::TargetedMeleeAttack(Box::new(TargetedMeleeAttackActionData {
+        target_guid: Guid(0x8000_0001),
+        attack_height: AttackHeight::Medium,
+        power_level: 0.5,
+    }));
+    assert!(movement.enqueue_stop_then_action(attack).is_none(), "attack waits for its stop");
+    let peace = GameAction::ChangeCombatMode(Box::new(ChangeCombatModeActionData {
+        mode: CombatMode::NonCombat,
+    }));
+    assert!(movement.defer_if_ordered(peace).is_none(), "a later action queues behind it");
+    assert!(sink.sent.is_empty(), "nothing reaches the wire before the tick");
+
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    let pos = |pred: fn(&GameAction) -> bool| sink.sent.iter().position(pred);
+    let stop = pos(|a| matches!(a, GameAction::MoveToState(_))).expect("stop MoveToState sent");
+    let atk = pos(|a| matches!(a, GameAction::TargetedMeleeAttack(_))).expect("attack sent");
+    let mode = pos(|a| matches!(a, GameAction::ChangeCombatMode(_))).expect("peace toggle sent");
+    assert!(stop < atk, "stop before attack: {:?}", sink.sent);
+    assert!(atk < mode, "attack before the later peace toggle: {:?}", sink.sent);
+
+    // Nothing waiting → immediate (handed straight back).
+    let again = GameAction::ChangeCombatMode(Box::new(ChangeCombatModeActionData {
+        mode: CombatMode::Melee,
+    }));
+    assert!(movement.defer_if_ordered(again).is_some());
+}
+
 /// Wave-1 step 4 (`?cmdInterp=on`) — the interpreter lane end-to-end
 /// through the tick: input-action edges compose the per-axis drive, raise
 /// the latch, mirror the held-keys truth from the CommandLists, and the

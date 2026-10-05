@@ -2618,6 +2618,22 @@ impl MovementSystem {
         None
     }
 
+    /// The ONE outbound ordering rule for actions the recv loop sends
+    /// outside the tick. While a combat request is waiting behind its
+    /// MaybeStopCompletely (see `pending_post_stop_actions`), any later
+    /// action queues BEHIND it instead of overtaking it on the wire — e.g. a
+    /// peace-mode toggle pressed in the same frame as an attack must reach
+    /// ACE after the attack, as it would in retail. With nothing waiting the
+    /// action is handed straight back for an immediate send (the common
+    /// case, byte-identical to before).
+    pub(crate) fn defer_if_ordered(&mut self, action: GameAction) -> Option<GameAction> {
+        if self.pending_post_stop_actions.is_empty() {
+            return Some(action);
+        }
+        self.pending_post_stop_actions.push(action);
+        None
+    }
+
     /// Retail wire-latch write — `SmartBox::SetObjectMovement`
     /// (acclient.c:311185-311193) stamps `last_move_was_autonomous` with
     /// the message's autonomous flag on every accepted self motion that

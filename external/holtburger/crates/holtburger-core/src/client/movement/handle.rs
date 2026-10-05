@@ -414,6 +414,16 @@ impl MovementSystemHandle {
         self.inner.enqueue_stop_then_action(action)
     }
 
+    /// Outbound FIFO rule (see `MovementSystem::defer_if_ordered`): returns
+    /// the action for an immediate send, or `None` when it was queued behind
+    /// a pending stop-then-action request.
+    pub fn defer_if_ordered(
+        &mut self,
+        action: holtburger_protocol::messages::GameAction,
+    ) -> Option<holtburger_protocol::messages::GameAction> {
+        self.inner.defer_if_ordered(action)
+    }
+
     /// Wave-1 step 5 (rows 12-13): drain the interpreter lane's
     /// JS-facing event stream — interpreter effects (forward-slot
     /// eviction, FU-A reclaims), the installed drive per dispatched

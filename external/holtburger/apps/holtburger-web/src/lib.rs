@@ -464,44 +464,10 @@ fn parse_unified_tick_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "unifiedTick=off")
 }
 
-/// A6-T1/T2 (2026-06-12, W3+ S7): parse `?unifiedTransition=on` (or
-/// `&unifiedTransition=on`). Same shape as `parse_unified_tick_flag`.
-/// When on, the local player's movement resolves through the retail
-/// transition pipeline (`CPhysicsObj::transition` →
-/// `find_transitional_position`, acclient.c:320061/313171; ours
-/// `holtburger_world::spatial::transition`) on BOTH solver paths: the
-/// legacy handle path (T1 — the manual-drive slice swaps its
-/// single-pass clamp chain for the substep pipeline) and the canonical
-/// spine's simulation solve (T2 — kills the P2b hole where
-/// `?unifiedTick=on` manual movement had ZERO collision). INDEPENDENT
-/// of `?unifiedTick=on`: the flag does something useful in all four
-/// cells of the {unifiedTick}×{unifiedTransition} matrix. Default OFF =
-/// every legacy path is untouched code, byte-identical. Native carrier:
-/// `USE_UNIFIED_TRANSITION` (movement/system.rs). Needs a wasm rebuild;
-/// NO manifest bump (no new JS-visible export).
-#[cfg(any(target_arch = "wasm32", test))]
-fn parse_unified_transition_flag(search: &str) -> bool {
-    let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "unifiedTransition=on")
-}
-
-/// Phase 3 B4 Phase B (2026-06-28): parse `?faithfulTransition=on` (or
-/// `&faithfulTransition=on`). Same shape as `parse_unified_transition_flag`.
-/// When on, the local player's INDOOR (env-cell) collision routes through
-/// the decomp-faithful `CTransition` BSP driver
-/// (`holtburger_world::spatial::faithful_bridge::faithful_find_transitional_position`,
-/// via the `find_transitional_position_dispatch` seam) instead of the
-/// approximate flat-triangle pipeline. Statics are identity (Phase C) and
-/// outdoor poses delegate to the existing heightfield pipeline (Phase D).
-/// Default OFF = the dispatcher routes to the unchanged approximate path,
-/// byte-identical. Native carrier: `USE_FAITHFUL_TRANSITION`
-/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump (no new
-/// JS-visible export).
-#[cfg(any(target_arch = "wasm32", test))]
-fn parse_faithful_transition_flag(search: &str) -> bool {
-    let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "faithfulTransition=on")
-}
+// `?unifiedTransition` / `?faithfulTransition` were REMOVED 2026-10-05: both
+// native carriers (`USE_UNIFIED_TRANSITION`, `USE_FAITHFUL_TRANSITION`,
+// movement/system.rs) are `true`, so the flags could neither enable nor
+// disable anything.
 
 /// FU-3 (2026-07-20): parse `?faithfulEntityCollision=off` (or
 /// `&faithfulEntityCollision=off`). PROMOTED DEFAULT-ON later the same day
@@ -1438,8 +1404,21 @@ static CONSOLE_WARN_LOGGER: ConsoleWarnLogger = ConsoleWarnLogger;
 
 #[wasm_bindgen(start)]
 pub fn start() {
+    // 2026-10-05: log the panic (console_error_panic_hook) AND tell the page,
+    // so a trapped instance surfaces as a disconnect instead of a silently
+    // frozen session. `__hbWasmPanicked` is defined by index.html; the bake
+    // worker's instance has no such global and the call is skipped.
     #[cfg(target_arch = "wasm32")]
-    console_error_panic_hook::set_once();
+    std::panic::set_hook(Box::new(|info| {
+        use wasm_bindgen::JsCast;
+        console_error_panic_hook::hook(info);
+        let global = js_sys::global();
+        if let Ok(f) = js_sys::Reflect::get(&global, &JsValue::from_str("__hbWasmPanicked")) {
+            if let Some(f) = f.dyn_ref::<js_sys::Function>() {
+                let _ = f.call1(&JsValue::NULL, &JsValue::from_str(&info.to_string()));
+            }
+        }
+    }));
     #[cfg(target_arch = "wasm32")]
     {
         let _ = log::set_logger(&CONSOLE_WARN_LOGGER)
@@ -31600,32 +31579,6 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
-    /// A6-T1/T2 (W3+ S7): `?unifiedTransition=on` parse shape.
-    #[test]
-    fn unified_transition_flag_parses_only_exact_on_value() {
-        use super::parse_unified_transition_flag;
-        assert!(parse_unified_transition_flag("?unifiedTransition=on"));
-        assert!(parse_unified_transition_flag(
-            "?renderer=3d&unifiedTick=on&unifiedTransition=on"
-        ));
-        assert!(!parse_unified_transition_flag("?unifiedTransition=off"));
-        assert!(!parse_unified_transition_flag("?unifiedTick=on"));
-        assert!(!parse_unified_transition_flag(""));
-    }
-
-    /// Phase 3 B4 Phase B: `?faithfulTransition=on` parse shape.
-    #[test]
-    fn faithful_transition_flag_parses_only_exact_on_value() {
-        use super::parse_faithful_transition_flag;
-        assert!(parse_faithful_transition_flag("?faithfulTransition=on"));
-        assert!(parse_faithful_transition_flag(
-            "?renderer=3d&unifiedTransition=on&faithfulTransition=on"
-        ));
-        assert!(!parse_faithful_transition_flag("?faithfulTransition=off"));
-        assert!(!parse_faithful_transition_flag("?unifiedTransition=on"));
-        assert!(!parse_faithful_transition_flag(""));
-    }
-
     /// FU-3 (promoted DEFAULT-ON 2026-07-20): `?faithfulEntityCollision=off`
     /// off-escape shape — true unless the literal `=off` is present.
     #[test]
@@ -43010,6 +42963,23 @@ fn publish_local_player_can_jump(
     *cell.borrow_mut() = allowed;
 }
 
+/// Outbound FIFO (2026-10-05). Every action the command arm sends goes
+/// through the movement system's ordering rule: while a combat request waits
+/// behind its MaybeStopCompletely MoveToState, anything sent later queues
+/// behind it instead of overtaking it on the wire (457f9de1 sent attack-then-
+/// stop; the first fix inverted it so a same-frame peace toggle overtook the
+/// attack). With nothing waiting it sends immediately. Evaluates to
+/// `anyhow::Result<()>`.
+#[cfg(target_arch = "wasm32")]
+macro_rules! send_ordered {
+    ($movement:expr, $session:expr, $action:expr) => {
+        match $movement.defer_if_ordered($action) {
+            Some(__ordered) => $session.send_action(__ordered).await.map(|_| ()),
+            None => Ok(()),
+        }
+    };
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     // Direct `Session` (default) or a `RemoteSessionProxy` bridging to the
@@ -43154,18 +43124,6 @@ async fn recv_loop(
     // the spawn pose); the AutonomousPosition heartbeat is armed at
     // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
     let mut movement = holtburger_core::MovementSystemHandle::new();
-    // A6-T1/T2 (2026-06-12, W3+ S7): `?unifiedTransition=on` — route the
-    // local player's movement (legacy handle slices AND the unified
-    // spine's simulation solve) through the retail transition pipeline.
-    // Default OFF = byte-identical legacy paths; see
-    // `parse_unified_transition_flag`.
-    movement.set_unified_transition(parse_unified_transition_flag(&flag_search()));
-    // Phase 3 B4 Phase B (2026-06-28): `?faithfulTransition=on` — route the
-    // local player's INDOOR collision through the decomp-faithful CTransition
-    // BSP driver (via `find_transitional_position_dispatch`). Default OFF =
-    // the approximate flat-triangle pipeline, byte-identical; see
-    // `parse_faithful_transition_flag`.
-    movement.set_faithful_transition(parse_faithful_transition_flag(&flag_search()));
     // FU-3 (2026-07-20): `?faithfulEntityCollision=on` — clamp the live faithful
     // slice's realized lateral residual against collidable dynamic entities
     // (doors/monsters/players) the faithful driver otherwise never blocks.
@@ -50245,7 +50203,7 @@ async fn recv_loop(
                         // sendChannel instead (see `plugins/chat-panel.js`
                         // submitChat).
                         let action = GameAction::Talk(Box::new(TalkActionData { message }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Talk): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50265,7 +50223,7 @@ async fn recv_loop(
                         // players to see; no motion is played.
                         use holtburger_protocol::messages::chat::actions::EmoteActionData;
                         let action = GameAction::Emote(Box::new(EmoteActionData { message }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Emote): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50292,7 +50250,7 @@ async fn recv_loop(
                         let action = GameAction::SoulEmote(Box::new(SoulEmoteActionData {
                             message,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(SoulEmote): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50369,7 +50327,7 @@ async fn recv_loop(
                             target,
                             message,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Tell): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50388,7 +50346,7 @@ async fn recv_loop(
                             channel: ChatChannelId::from_raw(channel),
                             message,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(ChatChannel): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50529,7 +50487,7 @@ async fn recv_loop(
                                 guid: holtburger_common::Guid::from(guid),
                             }),
                         );
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Use): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50557,7 +50515,7 @@ async fn recv_loop(
                                 guid: holtburger_common::Guid::from(guid),
                             }),
                         );
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(IdentifyObject guid=0x{guid:08X}): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50598,7 +50556,7 @@ async fn recv_loop(
                                     target_guid: holtburger_common::Guid::from(target_guid),
                                 },
                             ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(UseWithTarget): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50625,7 +50583,7 @@ async fn recv_loop(
                                         .collect(),
                                 },
                             ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(SalvageItemsWith): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50792,7 +50750,7 @@ async fn recv_loop(
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode: target_mode },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(ChangeCombatMode): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -50871,7 +50829,7 @@ async fn recv_loop(
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(ChangeCombatMode {mode:?}): {e}"
                             );
@@ -50982,7 +50940,7 @@ async fn recv_loop(
                         let action = GameAction::RemoveSpellFromBook(Box::new(
                             RemoveSpellFromBookActionData { spell_id },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RemoveSpellFromBook): {e}"
                             );
@@ -51022,7 +50980,7 @@ async fn recv_loop(
                         let action = GameAction::RaiseSkill(Box::new(
                             RaiseSkillActionData { skill_type, xp_spent },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RaiseSkill): {e}"
                             );
@@ -51051,7 +51009,7 @@ async fn recv_loop(
                                 credits_spent: credits as i32,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(TrainSkill): {e}"
                             );
@@ -51080,7 +51038,7 @@ async fn recv_loop(
                         let action = GameAction::RaiseAttribute(Box::new(
                             RaiseAttributeActionData { attribute_type, xp_spent },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RaiseAttribute): {e}"
                             );
@@ -51106,7 +51064,7 @@ async fn recv_loop(
                         let action = GameAction::RaiseVital(Box::new(
                             RaiseVitalActionData { vital_type, xp_spent },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RaiseVital): {e}"
                             );
@@ -51149,7 +51107,7 @@ async fn recv_loop(
                         let action = GameAction::SetSingleCharacterOption(Box::new(
                             SetSingleCharacterOptionActionData { option, value },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(SetSingleCharacterOption {option:?} = {value}): {e}"
                             );
@@ -51193,7 +51151,7 @@ async fn recv_loop(
                                 layer,
                             },
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(AddShortcut idx={index} guid=0x{object_guid:08X}): {e}"
                             );
@@ -51217,7 +51175,7 @@ async fn recv_loop(
                         let action = GameAction::RemoveShortcut(Box::new(RemoveShortcutActionData {
                             index,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RemoveShortcut idx={index}): {e}"
                             );
@@ -51248,7 +51206,7 @@ async fn recv_loop(
                                 amount,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(GiveObject): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51286,7 +51244,7 @@ async fn recv_loop(
                             vendor_guid: Guid(vendor_guid),
                             items: profiles,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Buy): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51324,7 +51282,7 @@ async fn recv_loop(
                             vendor_guid: Guid(vendor_guid),
                             items: profiles,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Sell): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51347,7 +51305,7 @@ async fn recv_loop(
                         let action = GameAction::FellowshipCreate(Box::new(
                             FellowshipCreateActionData { name, share_xp },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(FellowshipCreate): {e}"
                             );
@@ -51373,7 +51331,7 @@ async fn recv_loop(
                         let action = GameAction::FellowshipQuit(Box::new(
                             FellowshipQuitActionData { disband },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(FellowshipQuit): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51398,7 +51356,7 @@ async fn recv_loop(
                                 player_guid: Guid(member_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(FellowshipDismiss): {e}"
                             );
@@ -51427,7 +51385,7 @@ async fn recv_loop(
                                 player_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(FellowshipRecruit): {e}"
                             );
@@ -51455,7 +51413,7 @@ async fn recv_loop(
                                 panel_open: want_updates,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(FellowshipUpdateRequest): {e}"
                             );
@@ -51486,7 +51444,7 @@ async fn recv_loop(
                                 new_leader_guid: Guid(new_leader_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(FellowshipAssignNewLeader): {e}"
                             );
@@ -51524,7 +51482,7 @@ async fn recv_loop(
                             slumlord_guid: Guid(slumlord_guid),
                             item_guids: item_guids.into_iter().map(Guid).collect(),
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BuyHouse): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51546,7 +51504,7 @@ async fn recv_loop(
                         let action = GameAction::HouseQuery(Box::new(
                             HouseQueryActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(HouseQuery): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51566,7 +51524,7 @@ async fn recv_loop(
                         let action = GameAction::AbandonHouse(Box::new(
                             AbandonHouseActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(AbandonHouse): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51598,7 +51556,7 @@ async fn recv_loop(
                             slumlord_guid: Guid(slumlord_guid),
                             item_guids: item_guids.into_iter().map(Guid).collect(),
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(RentHouse): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51621,7 +51579,7 @@ async fn recv_loop(
                         let action = GameAction::AddPermanentGuest(Box::new(
                             AddPermanentGuestActionData { target_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(AddPermanentGuest): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51642,7 +51600,7 @@ async fn recv_loop(
                         let action = GameAction::BootSpecificHouseGuest(Box::new(
                             BootSpecificHouseGuestActionData { target_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BootSpecificHouseGuest): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51662,7 +51620,7 @@ async fn recv_loop(
                         let action = GameAction::RemoveAllPermanentGuests(Box::new(
                             RemoveAllPermanentGuestsActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(RemoveAllPermanentGuests): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51685,7 +51643,7 @@ async fn recv_loop(
                                 trade_partner_guid: Guid(partner_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(OpenTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51707,7 +51665,7 @@ async fn recv_loop(
                         let action = GameAction::CloseTradeNegotiations(Box::new(
                             CloseTradeNegotiationsActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(CloseTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51732,7 +51690,7 @@ async fn recv_loop(
                             item_guid: Guid(item_guid),
                             trade_slot,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(AddToTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51783,7 +51741,7 @@ async fn recv_loop(
                             initiator_accepts,
                             partner_accepts,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(AcceptTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51806,7 +51764,7 @@ async fn recv_loop(
                         let action = GameAction::DeclineTrade(Box::new(
                             DeclineTradeActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(DeclineTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51826,7 +51784,7 @@ async fn recv_loop(
                         let action = GameAction::ResetTrade(Box::new(
                             ResetTradeActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(ResetTrade): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51849,7 +51807,7 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(SwearAllegiance): {e}"
                             );
@@ -51889,7 +51847,7 @@ async fn recv_loop(
                                         accepted,
                                     },
                                 ));
-                                if let Err(e) = session.send_action(action).await {
+                                if let Err(e) = send_ordered!(movement, session, action) {
                                     log::warn!(
                                         "recv_loop: send_action(ConfirmationResponse): {e}"
                                     );
@@ -51920,7 +51878,7 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(BreakAllegiance): {e}"
                             );
@@ -51947,7 +51905,7 @@ async fn recv_loop(
                         let action = GameAction::AddFriend(Box::new(AddFriendActionData {
                             friend_name,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(AddFriend): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -51970,7 +51928,7 @@ async fn recv_loop(
                                 friend_guid: Guid(friend_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(RemoveFriend): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52003,7 +51961,7 @@ async fn recv_loop(
                                 message_type,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(ModifyCharacterSquelch): {e}"
                             );
@@ -52034,7 +51992,7 @@ async fn recv_loop(
                         let action = GameAction::ModifyAccountSquelch(Box::new(
                             ModifyAccountSquelchActionData { add, account_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(ModifyAccountSquelch): {e}"
                             );
@@ -52062,7 +52020,7 @@ async fn recv_loop(
                         let action = GameAction::ModifyGlobalSquelch(Box::new(
                             ModifyGlobalSquelchActionData { add, message_type },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(ModifyGlobalSquelch): {e}"
                             );
@@ -52085,7 +52043,7 @@ async fn recv_loop(
                         use holtburger_protocol::messages::{GameAction, TitleSetActionData};
                         let action =
                             GameAction::TitleSet(Box::new(TitleSetActionData { title_id }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(TitleSet): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52106,7 +52064,7 @@ async fn recv_loop(
                         let action = GameAction::SetAllegianceName(Box::new(
                             SetAllegianceNameActionData { new_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(SetAllegianceName): {e}"
                             );
@@ -52139,7 +52097,7 @@ async fn recv_loop(
                                 officer_level,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(SetAllegianceOfficer): {e}"
                             );
@@ -52172,7 +52130,7 @@ async fn recv_loop(
                                 gag_on,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(AllegianceChatGag): {e}"
                             );
@@ -52198,7 +52156,7 @@ async fn recv_loop(
                         let action = GameAction::RecallAllegianceHometown(Box::new(
                             RecallAllegianceHometownActionData {},
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RecallAllegianceHometown): {e}"
                             );
@@ -52223,7 +52181,7 @@ async fn recv_loop(
                         let action = GameAction::TeleToLifestone(Box::new(
                             TeleToLifestoneActionData,
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(TeleToLifestone): {e}"
                             );
@@ -52248,7 +52206,7 @@ async fn recv_loop(
                         let action = GameAction::AddAllegianceBan(Box::new(
                             AddAllegianceBanActionData { target_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(AddAllegianceBan): {e}"
                             );
@@ -52275,7 +52233,7 @@ async fn recv_loop(
                         let action = GameAction::RemoveAllegianceBan(Box::new(
                             RemoveAllegianceBanActionData { target_name },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(RemoveAllegianceBan): {e}"
                             );
@@ -52308,7 +52266,7 @@ async fn recv_loop(
                                 account_boot,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(BreakAllegianceBoot): {e}"
                             );
@@ -52334,7 +52292,7 @@ async fn recv_loop(
                         let action = GameAction::DoAllegianceLockAction(Box::new(
                             DoAllegianceLockActionActionData { lock_action },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(DoAllegianceLockAction): {e}"
                             );
@@ -52357,7 +52315,7 @@ async fn recv_loop(
                         let action = GameAction::BookData(Box::new(BookDataActionData {
                             object_guid: Guid(object_guid),
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BookData): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52378,7 +52336,7 @@ async fn recv_loop(
                         let action = GameAction::BookAddPage(Box::new(BookAddPageActionData {
                             object_guid: Guid(object_guid),
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BookAddPage): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52410,7 +52368,7 @@ async fn recv_loop(
                                 text,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BookModifyPage): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52439,7 +52397,7 @@ async fn recv_loop(
                                 page_num,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(BookDeletePage): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52469,7 +52427,7 @@ async fn recv_loop(
                                 inscription,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(SetInscription): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52585,7 +52543,7 @@ async fn recv_loop(
                                         placement: 0,
                                     }),
                                 );
-                                if let Err(e) = session.send_action(act).await
+                                if let Err(e) = send_ordered!(movement, session, act)
                                 {
                                     log::warn!(
                                         "recv_loop: wield auto-unequip: {e}"
@@ -52600,7 +52558,7 @@ async fn recv_loop(
                                 equip_mask: EquipMask::from_bits_truncate(equip_mask),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(GetAndWieldItem): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52629,7 +52587,7 @@ async fn recv_loop(
                                 item_guid: Guid(item_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(DropItem): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52660,7 +52618,7 @@ async fn recv_loop(
                                 placement,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(PutItemInContainer): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52708,7 +52666,7 @@ async fn recv_loop(
                                 placement: 0,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(PutItemInContainer/Unwield): {e}"
                             );
@@ -52742,7 +52700,7 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(StackableSplitToWield): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52775,7 +52733,7 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(StackableSplitToContainer): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52804,7 +52762,7 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(StackableSplitTo3D): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52835,7 +52793,7 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(StackableMerge): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -52865,7 +52823,7 @@ async fn recv_loop(
                         let action = GameAction::AbandonContract(Box::new(
                             AbandonContractActionData { contract_id },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(AbandonContract): {e}"
                             );
@@ -52901,7 +52859,7 @@ async fn recv_loop(
                                 target_name: target_name.clone(),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!(
                                 "recv_loop: send_action(AllegianceInfoRequest): {e}"
                             );
@@ -53029,7 +52987,7 @@ async fn recv_loop(
                         };
                         let action =
                             GameAction::CancelAttack(Box::new(CancelAttackActionData {}));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(CancelAttack): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -53056,7 +53014,7 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(QueryHealth): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -53601,7 +53559,7 @@ async fn recv_loop(
                             object_guid: player_guid,
                             spell_id: 0,
                         }));
-                        if let Err(e) = session.send_action(action).await {
+                        if let Err(e) = send_ordered!(movement, session, action) {
                             log::warn!("recv_loop: send_action(Jump): {e}");
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
