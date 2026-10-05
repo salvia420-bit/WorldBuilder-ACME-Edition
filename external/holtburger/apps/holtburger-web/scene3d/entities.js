@@ -2931,6 +2931,26 @@ function expandActionCommandLow16(cmd) {
   return low >>> 0;
 }
 
+// 2026-10-05: the FINAL cast gesture (MagicBlast..MagicPray 0x4000002B-39,
+// CastSpell 0x400000D3, UseMagicStaff/Wand 0x400000E0/E1) is a class-0x40
+// SUBSTATE, not a 0x10 action. ACE sends it in the forward_command slot at
+// CastSpeed 2.0 and follows it with Ready at 1.0 (Player_Magic.cs
+// DoCastGesture / DoCastSpell). Retail GetObjectSequence's substate branch
+// (acclient.c:337748; OpenAC CMotionTable.cs:215-286) plays link(Ready→
+// gesture) and then the gesture CYCLE, which is a framerate-0 HOLD of the
+// arms-out frame (player MT 0x09000001: cycles[(Magic,0x2B)] = 0x0300059B
+// frame 16, fr 0). The next Ready then plays link(gesture→Ready), frames
+// 16..end of that same anim: the recoil, the "second half of the cast
+// gesture". The 0x10-class windups (MagicPowerUp*) stay one-shot actions.
+function isSubstateCastGesture(cmd) {
+  const c = cmd >>> 0;
+  const low = c & 0xffff;
+  const inBand = (low >= 0x002b && low <= 0x0039) || low === 0x00d3 || low === 0x00e0 || low === 0x00e1;
+  if (!inBand) return false;
+  const cls = c >>> 24;
+  return cls === 0 || cls === 0x40;
+}
+
 // Wave 3.E (2026-05-19) — typed widening of `classifyMotionCommand`.
 //
 // **Purpose.** When the renderer plays a swing (`setMotion(guid, cmd,
@@ -8804,7 +8824,7 @@ export class EntityManager {
   // a state must not replay its swing sounds). Returns false when no sequence
   // could be built (no wasm class / no descriptor) — the caller keeps its
   // previous state.
-  _installUnifiedLoco(inst, d, cacheKey, hooks, cmd) {
+  _installUnifiedLoco(inst, d, cacheKey, hooks, cmd, carryPhase = true) {
     const MS = _motionSequenceClass();
     if (!MS || !d) return false;
     const hold = isDoorStateMotion(cmd >>> 0);
@@ -8815,7 +8835,7 @@ export class EntityManager {
     );
     if (!seq) return false;
     const prev = inst._unifiedLoco;
-    if (!hold && prev?.seq && !prev.hold && typeof seq.seekPhase === "function") {
+    if (carryPhase && !hold && prev?.seq && !prev.hold && typeof seq.seekPhase === "function") {
       try { seq.seekPhase(prev.seq.phase); } catch (_) {}
     }
     if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
@@ -9579,10 +9599,24 @@ export class EntityManager {
     //   * anything that does pre-empt drops the pending tail with it, so no
     //     freed record can ever be promoted.
     this._preemptUnifiedForMotion(inst, motionCommand);
+    // 2026-10-05: an ACTION's speed (a 0x10-class swing or windup, e.g. ACE
+    // CastSpeed 2.0) scales only that action's link. Retail AddMotion(link,
+    // speed) re-adds the base cycle at the unchanged substate speed
+    // (acclient.c:337803; OpenAC CMotionTable.cs:296-298). Stashing it in
+    // `_motionSpeed` sped up the Ready idle that followed (2x breathing
+    // between windups) until the next locomotion command reset it.
+    let actionSpeed = 0;
+    {
+      const c0 = classifyMotionCommand(motionCommand >>> 0);
+      if ((c0 === "attack" || c0 === "cast") && !isSubstateCastGesture(motionCommand)) {
+        const s0 = +motionSpeed;
+        actionSpeed = Number.isFinite(s0) && s0 > 0 ? s0 : 1.0;
+      }
+    }
     // A1: stash the playback speed (fail-soft to 1.0 for non-finite /
     // non-positive). Read by the locomotion timeScale composition below
     // and by the per-frame T11 velScale tick.
-    {
+    if (!actionSpeed) {
       const ms = +motionSpeed;
       // COL-10 clip half — keep the backstep MAGNITUDE. The old
       // `ms > 0 ? ms : 1.0` clamp threw |−0.65| away for negative speeds, so
@@ -9705,6 +9739,14 @@ export class EntityManager {
           }
         });
       }
+    }
+    // A final cast gesture is a SUBSTATE (see isSubstateCastGesture): it takes
+    // the generic link + cycle path below, not the action branch. KIND_MOTION
+    // delivers it as a bare low16, and the link's inner key is the FULL
+    // command (C3), so expand it here.
+    const castGestureSubstate = isSubstateCastGesture(cmd);
+    if (castGestureSubstate && (cmd >>> 16) === 0) {
+      cmd = (0x40000000 | cmd) >>> 0;
     }
     let cls = classifyMotionCommand(cmd);
     // === COL-20 / F4 — turn-phase gate. A MoveTo* envelope arrives as a bare
@@ -9853,7 +9895,7 @@ export class EntityManager {
     // tables put swings in `NonCombat`; the link lookup either has
     // an entry or it doesn't, we pass `stance` straight through.
     //
-    if (cls === "attack" || cls === "cast") {
+    if ((cls === "attack" || cls === "cast") && !castGestureSubstate) {
       // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
       // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
       // F3-6 (?meleeFaceTarget=on): orient a swinging mob toward its melee
@@ -9883,7 +9925,8 @@ export class EntityManager {
       // bare low-16 from the side-channel / legacy caller is expanded here
       // so the link still resolves (no-op when already full-32bit).
       const linkCmd = expandActionCommandLow16(cmd);
-      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, linkCmd, stance);
+      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, linkCmd, stance,
+        { speed: actionSpeed || 1.0 });
       // Don't update `lastMotionCommand` — the next locomotion
       // broadcast should resolve its link transition from the
       // PREVIOUS locomotion cmd, not from this swing.
@@ -9992,11 +10035,21 @@ export class EntityManager {
     // plays links[(oldStyle, Ready)][newStyle] (or the two-hop via the
     // default style) before the new style's cycle. We only ever swapped the
     // Ready cycle, so the rig snapped.
+    //
+    // The style link's FETCH starts here, but it is only PLAYED at the commit
+    // below, in the same synchronous step that installs the new cycle. When
+    // the two raced independently (owner report 2026-10-05: draw/sheathe "very
+    // good but slight frame freeze"), the cached new-stance cycle could land
+    // first and pop the rig into the new stance before the link pulled it back.
+    // Or the link could finish before the cycle bake did and drop back to the
+    // OLD stance's cycle. The pending fetch is parked on the instance, so a
+    // newer setMotion that supersedes this one (the predictor's Ready re-issue)
+    // inherits it instead of losing the draw animation.
     if (
       (cmd & 0xffff) === CMD_LOW_READY &&
       prevStance !== 0 && (stance & 0xffff) !== (prevStance & 0xffff)
     ) {
-      this._playStyleLink(inst, setupId, mtableId, prevStance, stance);
+      inst._pendingStyleLinks = this._resolveStyleLinks(inst, setupId, mtableId, prevStance, stance);
     }
     // Dedupe against the playhead's cycle (`currentActionKey` is its key).
     // Audit F6: per-entity command token, bumped BEFORE the dedup so even a
@@ -10004,7 +10057,8 @@ export class EntityManager {
     // flight. Every await below re-checks it: last command issued wins, not
     // last fetch finished.
     const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
-    if (cacheKey === inst.currentActionKey) return; // already playing
+    const styleLinksP = inst._pendingStyleLinks || null;
+    if (cacheKey === inst.currentActionKey && !styleLinksP) return; // already playing
     this.motionSwitchCount += 1;
 
     // Locomotion transition LINK. When transitioning from a known previous
@@ -10012,18 +10066,23 @@ export class EntityManager {
     // MotionTable for a link via `opts.fromMotion`. If one exists it plays as
     // a one-shot on the playhead; when it finishes the tick falls back to
     // `_unifiedLoco`, which by then holds the new cycle
-    // (prev cycle) → (link once) → (next cycle).
-    const fromMotion = (inst.lastMotionCommand ?? 0) >>> 0;
+    // (prev cycle) → (link once) → (next cycle). Like the style link, it is
+    // fetched in parallel with the cycle and played at the commit below. A
+    // substate cast gesture takes this path too: Ready→gesture on the way in,
+    // gesture→Ready (the recoil) on the next Ready.
+    // A cast gesture always links out of Ready, the substate ACE leaves the
+    // caster in (it stops the caster first). Retail would hop through the
+    // style default from any other substate; from a never-moved spawn
+    // `lastMotionCommand` is 0, which would otherwise skip the gesture link.
+    const fromMotion = castGestureSubstate ? READY_SUBSTATE : ((inst.lastMotionCommand ?? 0) >>> 0);
+    let linkP = null;
     if (
       fromMotion !== 0 &&
       fromMotion !== cmd &&
-      cls !== "attack" &&
-      cls !== "cast"
+      cacheKey !== inst.currentActionKey &&
+      ((cls !== "attack" && cls !== "cast") || castGestureSubstate)
     ) {
-      // Don't await — kick off the link fetch but immediately also start
-      // fetching the destination cycle below. No link entry for this
-      // transition (the common case) → just the cycle. Failure is silent.
-      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance, { motionToken });
+      linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, cmd, stance);
     }
     inst.lastMotionCommand = cmd;
 
@@ -10031,45 +10090,62 @@ export class EntityManager {
     // the spawn meta's entries (NPC outfit doesn't change mid-walk).
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (typeof fetchKeyframes !== "function") return;
-    let entry;
-    try {
-      entry = await this.animationCache.get(
-        setupId,
-        mtableId,
-        cmd,
-        stance,
-        fetchKeyframes,
-        {
-          modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
-          textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
-          paletteId: (inst.meta.paletteId ?? 0) >>> 0,
-          paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
-        }
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[phase7.4b] setMotion fetch failed for entity ${guid.toString(16)}:`,
-        e
-      );
-      return;
+    let entry = null;
+    if (cacheKey !== inst.currentActionKey) {
+      try {
+        entry = await this.animationCache.get(
+          setupId,
+          mtableId,
+          cmd,
+          stance,
+          fetchKeyframes,
+          {
+            modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+            textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+            paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+            paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
+          }
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[phase7.4b] setMotion fetch failed for entity ${guid.toString(16)}:`,
+          e
+        );
+        entry = null; // the links below still play
+      }
     }
+    const linkEntry = linkP ? await linkP : null;
+    const styleLinks = styleLinksP ? await styleLinksP : null;
     // Re-check — the entity may have been removed between the cache hit and
-    // now; a newer setMotion may have superseded this one (audit F6).
+    // now; a newer setMotion may have superseded this one (audit F6). A
+    // superseded call leaves `_pendingStyleLinks` for the newer one.
     if (!this.entityMap.has(guid >>> 0)) return;
     if (inst._motionToken !== motionToken) return;
+    if (inst._pendingStyleLinks === styleLinksP) inst._pendingStyleLinks = null;
+    // ---- commit: links + cycle in ONE synchronous step (no tick between) ----
+    // Order matches retail's sequence build: the transition (exit) link, the
+    // style link(s), then the destination cycle (acclient.c:337726-745).
+    let linked = false;
+    if (linkEntry && this._playLinkEntry(inst, linkEntry, fromMotion, cmd, stance)) linked = true;
+    for (const l of (styleLinks || [])) {
+      if (this._playLinkEntry(inst, l.entry, READY_SUBSTATE, l.toCmd, l.stance)) linked = true;
+    }
     // No animation resolved for this (cmd, stance) → the playhead keeps its
     // current cycle (the mixer used to fade to the rest pose here, which the
     // playhead never did).
-    if (!entry.clip) return;
+    if (!entry?.clip) return;
     // Drive the cycle through the Rust authority. Phase is carried across a
     // cycle swap (walk→run) via the Rust seekPhase so the feet don't pop — the
     // reason the mixer-era band-aids (150 ms stance crossfade, 200 ms
-    // RESUME_WINDOW mid-stride restore) are gone. A one-shot (_unifiedSeq)
-    // suppresses this during a swing, then resumes it. By here
-    // attack/cast/death have already returned, so cls is a cycle
-    // (walk/run/idle/Ready/held door state).
-    if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd)) {
+    // RESUME_WINDOW mid-stride restore) are gone. After a link the cycle
+    // starts at its first frame instead: retail appends the cycle node behind
+    // the link, and the link's last frame is authored to meet the cycle's
+    // first. A carried phase popped the pose at the hand-off. A one-shot
+    // (_unifiedSeq) suppresses this during a swing, then resumes it. By here
+    // attack/cast actions and death have already returned, so cls is a cycle
+    // (walk/run/idle/Ready/held door state/held cast gesture).
+    if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd, !linked)) {
       try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
     }
   }
@@ -10131,6 +10207,16 @@ export class EntityManager {
     const lastCmd = (inst.lastMotionCommand ?? 0) >>> 0;
     const lastCls = lastCmd ? classifyMotionCommand(lastCmd) : null;
     const moving = lastCls === "walk" || lastCls === "run";
+    // 2026-10-05: the local rig is HOLDING a cast gesture (arms out, the
+    // gesture's framerate-0 cycle). ACE ends every cast with Ready at 1.0
+    // (Player_Magic.cs DoCastSpell), but loop.js skips the local Ready echo
+    // (predictor-owned locomotion) and hands us only its stance. Without this
+    // the arms stay out until the next keypress. Issue the Ready ourselves so
+    // the gesture→Ready recoil link plays.
+    if (isSubstateCastGesture(lastCmd) && (lastCmd >>> 24) === 0x40) {
+      this.setMotion(g, CMD_LOW_READY, stance);
+      return;
+    }
     if (!changed || moving) {
       // No pose swap: just record the confirmed stance so getStance()
       // and the next predictor tick pick it up. (Always safe.)
@@ -11570,25 +11656,43 @@ export class EntityManager {
    * Intra-link multi-segment chaining (windup→strike→recover within ONE link
    * record) IS already handled by try_resolve_link_frames (T4, lib.rs).
    */
-  // Stance-change link (see setMotion): direct links[(from, Ready)][to], else
+  // Stance-change links (see setMotion): direct links[(from, Ready)][to], else
   // the retail two-hop through the default style (acclient.c:337726).
-  async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
+  // FETCH ONLY: resolves to `[{ entry, toCmd, stance }]` in play order (empty
+  // when no link exists). setMotion plays them together with the new cycle.
+  async _resolveStyleLinks(inst, setupId, mtableId, fromStyle, toStyle) {
     const full = (s) => (((s >>> 0) & 0xffff) | 0x80000000) >>> 0;
     const from = full(fromStyle), to = full(toStyle);
-    if (await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, from)) return;
+    const direct = await this._fetchLinkEntry(inst, setupId, mtableId, READY_SUBSTATE, to, from);
+    if (direct) return [{ entry: direct, toCmd: to, stance: from }];
     const DEF = 0x8000003d; // NonCombat = the humanoid default_style
-    if (from !== DEF && to !== DEF &&
-        await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, DEF, from)) {
-      await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, DEF);
-    }
+    if (from === DEF || to === DEF) return [];
+    // Both hops in parallel (the second only plays if the first exists).
+    const [a, b] = await Promise.all([
+      this._fetchLinkEntry(inst, setupId, mtableId, READY_SUBSTATE, DEF, from),
+      this._fetchLinkEntry(inst, setupId, mtableId, READY_SUBSTATE, to, DEF),
+    ]);
+    if (!a) return [];
+    const out = [{ entry: a, toCmd: DEF, stance: from }];
+    if (b) out.push({ entry: b, toCmd: to, stance: DEF });
+    return out;
   }
 
-  async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance, opts = undefined) {
-    // Returns true when a clip was resolved and played (or handed to the
-    // unified one-shot), false otherwise — the door-state caller falls back
-    // to its 1-frame cycle hold on false. Legacy callers ignore the value.
+  // Fetch + play the stance-change links on their own (kept for callers
+  // outside setMotion; setMotion commits them with the cycle instead).
+  async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
+    const links = await this._resolveStyleLinks(inst, setupId, mtableId, fromStyle, toStyle);
+    if (!this.entityMap.has(inst.guid >>> 0)) return;
+    for (const l of links) this._playLinkEntry(inst, l.entry, READY_SUBSTATE, l.toCmd, l.stance);
+  }
+
+  // Resolve a MotionTable link `links[(stance, fromCmd)][toCmd]` through the
+  // animation cache. Returns the cache entry, or null when no link exists, the
+  // bake failed, or the entity was removed meanwhile. No side effects on the
+  // playhead.
+  async _fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance) {
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
-    if (typeof fetchKeyframes !== "function") return false;
+    if (typeof fetchKeyframes !== "function") return null;
     let entry;
     try {
       entry = await this.animationCache.get(
@@ -11606,13 +11710,60 @@ export class EntityManager {
         },
       );
     } catch (_) {
-      return false;
+      return null;
     }
+    if (!this.entityMap.has(inst.guid >>> 0)) return null;
+    return entry?.clip ? entry : null;
+  }
+
+  // Play an already-resolved link entry as a FULL-BODY one-shot in the Rust
+  // MotionSequence interpreter (retail GetObjectSequence, acclient.c:337842),
+  // APPENDED to pending_animations (J5) rather than clobbering a gesture
+  // already on the playhead. Synchronous. On completion the tick falls back
+  // to the `_unifiedLoco` cycle. `speed` (optional) is the link's own
+  // framerate multiplier (retail AddMotion(link, speed)); it defaults to the
+  // entity's motion speed.
+  _playLinkEntry(inst, entry, fromCmd, toCmd, stance, speed = undefined) {
+    const MS = _motionSequenceClass();
+    const d = entry?.sequenceDescriptor;
+    if (!MS || !d) return false;
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0,
+      +d.framerate || 0,
+      +d.duration || 0,
+      d.frameTimes || EMPTY_F32,
+      d.segmentStarts || EMPTY_U32,
+      d.segmentCounts || EMPTY_U32,
+      false, // one-shot (no cyclic region) → latches `done`, holds last frame
+    );
+    if (!seq) return false;
+    const sp = (Number.isFinite(+speed) && +speed > 0) ? +speed : this._unifiedOneShotSpeed(inst);
+    // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
+    const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
+      speed: sp };
+    // `numAnims` is the link's AnimData segment count — retail's `num_anims`
+    // is exactly that (CMotionTable fills it in as it appends nodes).
+    this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
+    // Audit C1/F3: stamp the server-swing time (attack/cast only — locomotion
+    // transition links must NOT suppress a later legitimate CMT swing) so
+    // index.html's guessed-swing dedup sees an in-flight server swing.
+    const tcls = classifyMotionCommand(toCmd >>> 0);
+    if (tcls === "attack" || tcls === "cast") {
+      inst._lastServerSwingMs = performance.now();
+    }
+    return true; // the tick drives the rig
+  }
+
+  async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance, opts = undefined) {
+    // Returns true when a clip was resolved and played (or handed to the
+    // unified one-shot), false otherwise — the door-state caller falls back
+    // to its 1-frame cycle hold on false. Legacy callers ignore the value.
+    if (typeof this.wasmExports?.fetchEntityAnimationKeyframes !== "function") return false;
+    const entry = await this._fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance);
     if (!this.entityMap.has(inst.guid >>> 0)) return false;
     // A locomotion link whose setMotion was superseded mid-fetch is stale (F6).
     if (opts?.motionToken !== undefined && inst._motionToken !== opts.motionToken) return false;
-    const clip = entry?.clip;
-    if (!clip) {
+    if (!entry) {
       // No link registered for this (stance, from→to) transition. For
       // locomotion transition links this is the common/expected case
       // (most cycles have no explicit link clip), but for an Action-class
@@ -11647,39 +11798,9 @@ export class EntityManager {
     if (opts?.stateHold && this._playStateHoldLink(inst, entry, fromCmd, toCmd, stance)) {
       return true;
     }
-    // Every other link — attack swings, cast gestures, emotes, locomotion
-    // transition links, stance (draw/sheathe) links — is a FULL-BODY one-shot
-    // in the Rust MotionSequence interpreter (retail GetObjectSequence,
-    // acclient.c:337842), APPENDED to pending_animations (J5) rather than
-    // clobbering a gesture already on the playhead. On completion the tick
-    // falls back to the `_unifiedLoco` cycle.
-    const MS = _motionSequenceClass();
-    const d = entry.sequenceDescriptor;
-    if (!MS || !d) return false;
-    const seq = MS.fromDescriptor(
-      d.numFrames >>> 0,
-      +d.framerate || 0,
-      +d.duration || 0,
-      d.frameTimes || EMPTY_F32,
-      d.segmentStarts || EMPTY_U32,
-      d.segmentCounts || EMPTY_U32,
-      false, // one-shot (no cyclic region) → latches `done`, holds last frame
-    );
-    if (!seq) return false;
-    // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
-    const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
-      speed: this._unifiedOneShotSpeed(inst) };
-    // `numAnims` is the link's AnimData segment count — retail's `num_anims`
-    // is exactly that (CMotionTable fills it in as it appends nodes).
-    this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
-    // Audit C1/F3: stamp the server-swing time (attack/cast only — locomotion
-    // transition links must NOT suppress a later legitimate CMT swing) so
-    // index.html's guessed-swing dedup sees an in-flight server swing.
-    const tcls = classifyMotionCommand(toCmd >>> 0);
-    if (tcls === "attack" || tcls === "cast") {
-      inst._lastServerSwingMs = performance.now();
-    }
-    return true; // the tick drives the rig
+    // Every other link — attack swings, cast windups, emotes, locomotion
+    // transition links, stance (draw/sheathe) links.
+    return this._playLinkEntry(inst, entry, fromCmd, toCmd, stance, opts?.speed);
   }
 
   // Build + install a held state-transition one-shot (see the stateHold call

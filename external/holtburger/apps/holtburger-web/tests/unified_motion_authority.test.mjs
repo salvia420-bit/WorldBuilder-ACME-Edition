@@ -59,16 +59,27 @@ function partMesh(p) {
 }
 
 // (motion, fromMotion) → y offset of the baked clip; 0 frames = no clip.
-function yFor(cmd, from) {
+const SWORD = 0x8000003e;
+const MAGIC_BLAST = 0x4000002b;
+const POWERUP1 = 0x1000006f;
+let linkDelayMs = 0; // delay for style-link bakes (stance-switch race test)
+function yFor(cmd, from, stance = 0) {
   const low = cmd & 0xffff;
   if (from) {
+    // Stance (draw/sheathe) link: links[(oldStyle, Ready)][newStyle].
+    if ((from & 0xffff) === 0x03 && (cmd >>> 24) === 0x80) return 400;
+    // Cast gesture substate: Ready→MagicBlast (raise) / MagicBlast→Ready (recoil).
+    if ((from & 0xffff) === 0x03 && low === 0x2b) return 200;
+    if ((from & 0xffff) === 0x2b && low === 0x03) return 250;
+    if ((from & 0xffff) === 0x03 && low === 0x6f) return 950; // windup action
     // MotionTable links: door Off→On / On→Off, and Ready→gesture.
     if ((from & 0xffff) === 0x0c && low === 0x0b) return 700;
     if ((from & 0xffff) === 0x0b && low === 0x0c) return 800;
     if (low === 0x87) return 900; // a gesture link (e.g. an emote/swing)
     return null; // no link
   }
-  if (low === 0x03) return 10;
+  if (low === 0x03) return (stance & 0xffff) === (SWORD & 0xffff) ? 20 : 10;
+  if (low === 0x2b) return 150; // the gesture's held (framerate-0) cycle
   if (low === 0x05) return 50;
   if (low === 0x07) return 100;
   if (low === 0x0b) return 500;
@@ -81,9 +92,10 @@ const fetches = [];
 const wasmExports = {
   async fetchEntityAnimationKeyframes(setupId, mc, tc, pal, subs, mtableId, cmd, stance, fromMotion) {
     fetches.push({ cmd: cmd >>> 0, from: fromMotion >>> 0 });
-    const y = yFor(cmd >>> 0, fromMotion >>> 0);
+    const y = yFor(cmd >>> 0, fromMotion >>> 0, stance >>> 0);
+    if (y === 400 && linkDelayMs) await new Promise((r) => setTimeout(r, linkDelayMs));
     const meshes = Array.from({ length: PART_COUNT }, (_, p) => partMesh(p));
-    const n = y == null ? 0 : (fromMotion ? 4 : NUM_FRAMES);
+    const n = y == null ? 0 : (fromMotion ? 4 : (y === 150 ? 1 : NUM_FRAMES));
     return {
       partCount: PART_COUNT,
       numFrames: n,
@@ -296,4 +308,69 @@ test("stale pkg (no MotionSequence) → ONE loud console.error, rest pose, no th
     window.__hbWasm.MotionSequence = saved;
     em.dispose();
   }
+});
+
+test("stance switch: the draw link and the new stance cycle commit together", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY);
+  await em.setMotion(inst.guid, READY, NONCOMBAT); // seed lastStance
+  em.tick(0.05);
+  const oldLoco = inst._unifiedLoco;
+  linkDelayMs = 30; // the link bake is slower than the cycle bake
+  try {
+    const p = em.setMotion(inst.guid, READY, SWORD);
+    // While the link is still baking, the OLD stance's cycle keeps animating:
+    // no early pop into the sword stance and no frozen frame.
+    await new Promise((r) => setTimeout(r, 5));
+    em.tick(0.05);
+    assert.equal(inst._unifiedLoco, oldLoco, "old cycle still installed during the link fetch");
+    assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "old stance still posed");
+    await p;
+  } finally {
+    linkDelayMs = 0;
+  }
+  assert.ok(inst._unifiedSeq && inst._unifiedSeq.clearOnDone, "draw link on the playhead");
+  assert.notEqual(inst._unifiedLoco, oldLoco, "new stance cycle installed in the same step");
+  assert.equal(inst._unifiedLoco.seq.phase, 0, "cycle starts at its first frame after a link");
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 400 && partY(inst) < 404, "draw link owns the rig");
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.equal(inst._unifiedSeq, null);
+  assert.ok(partY(inst) >= 20 && partY(inst) < 20 + NUM_FRAMES, "lands on the sword Ready cycle");
+  em.dispose();
+});
+
+test("cast gesture is a substate: raise link, held arms-out cycle, recoil link on Ready", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY); // never moved: lastMotionCommand unset
+  await em.setMotion(inst.guid, MAGIC_BLAST & 0xffff, 0x49, 2.0); // bare low16, CastSpeed 2
+  assert.equal(inst.lastMotionCommand, MAGIC_BLAST, "gesture expanded + remembered as the substate");
+  const raise = inst._unifiedSeq;
+  assert.ok(raise && raise.clearOnDone, "Ready→gesture link playing");
+  assert.equal(raise.speed, 2.0, "raise plays at the gesture's speed");
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 200 && partY(inst) < 204);
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.equal(inst._unifiedSeq, null);
+  assert.equal(partY(inst), 150, "HOLDS the gesture cycle (arms out), not Ready");
+  await em.setMotion(inst.guid, READY, 0x49, 1.0);
+  assert.ok(inst._unifiedSeq, "gesture→Ready recoil link playing");
+  assert.equal(inst._unifiedSeq.speed, 1.0);
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 250 && partY(inst) < 254);
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "back on Ready");
+  em.dispose();
+});
+
+test("an action's speed scales its link only, not the following cycle", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY);
+  await em.setMotion(inst.guid, READY, NONCOMBAT, 1.0);
+  await em.setMotion(inst.guid, POWERUP1, 0x49, 2.0);
+  // setMotion's action branch does not await the link; let it land.
+  for (let i = 0; i < 5 && !inst._unifiedSeq; i += 1) await new Promise((r) => setTimeout(r, 1));
+  assert.equal(inst._unifiedSeq?.speed, 2.0, "windup link at CastSpeed");
+  assert.equal(inst._motionSpeed, 1.0, "cycle speed untouched");
+  em.dispose();
 });
