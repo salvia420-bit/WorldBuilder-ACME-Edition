@@ -32206,6 +32206,10 @@ fn apply_inventory_object_create(
             PROJECTILE_ALIGN_PATH_GUIDS
                 .with(|g| g.borrow_mut().insert(u32::from(guid)));
         }
+        // PROJ-SPIN: RotationSpeed missiles carry a PhysicsDesc omega.
+        if let Some(o) = projectile_spawn_omega(&entity.omega) {
+            PROJECTILE_OMEGA.with(|m| m.borrow_mut().insert(u32::from(guid), o));
+        }
     }
 
     // Direct insert via the public EntityManager — skips the
@@ -32412,6 +32416,9 @@ fn maintain_bridge_indexes_on_routed_create(
             if entity.physics_state.contains(PhysicsState::ALIGN_PATH) {
                 PROJECTILE_ALIGN_PATH_GUIDS.with(|g| g.borrow_mut().insert(g_u32));
             }
+            if let Some(o) = projectile_spawn_omega(&entity.omega) {
+                PROJECTILE_OMEGA.with(|m| m.borrow_mut().insert(g_u32, o));
+            }
         }
     }
     upsert_wielder_index(world, guid, wielder_index);
@@ -32539,6 +32546,9 @@ impl PerGuidBridgeIndexes<'_> {
         });
         PROJECTILE_ALIGN_PATH_GUIDS.with(|s| {
             s.borrow_mut().remove(&g);
+        });
+        PROJECTILE_OMEGA.with(|m| {
+            m.borrow_mut().remove(&g);
         });
         DEFAULT_SCRIPT_INDEX.with(|m| {
             m.borrow_mut().remove(&g);
@@ -34967,6 +34977,16 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = entityProjectileAlignsPath)]
     pub fn entity_projectile_aligns_path(&self, guid: u32) -> bool {
         PROJECTILE_ALIGN_PATH_GUIDS.with(|g| g.borrow().contains(&guid))
+    }
+
+    /// PROJ-SPIN (2026-10-05): the missile's ObjectCreate PhysicsDesc omega
+    /// `[x, y, z]` (rad/s, AC world frame — retail `UpdatePhysicsInternal`
+    /// `Frame::grotate(omega·quantum)`). Empty when the projectile does not
+    /// spin (no RotationSpeed). The JS ballistic integrator applies it per
+    /// frame. Soft-guarded in JS (`typeof === "function"`).
+    #[wasm_bindgen(js_name = entityProjectileOmega)]
+    pub fn entity_projectile_omega(&self, guid: u32) -> Vec<f32> {
+        PROJECTILE_OMEGA.with(|m| m.borrow().get(&guid).map(|o| o.to_vec()).unwrap_or_default())
     }
 
     /// **CMT Wave 16 / Phase 50 (2026-05-26).** Cached
@@ -41137,6 +41157,48 @@ thread_local! {
 thread_local! {
     static PROJECTILE_ALIGN_PATH_GUIDS: std::cell::RefCell<std::collections::HashSet<u32>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+// PROJ-SPIN (2026-10-05): a missile's ObjectCreate PhysicsDesc omega
+// (`PhysicsDescriptionFlag::OMEGA`, rad/s, AC world frame). ACE sets it on
+// every projectile with a RotationSpeed — `Omega = (2π·RotationSpeed, 0, 0)`
+// with ALIGN_PATH cleared (SpellProjectile.cs:120-126 Whirling Blade /
+// Elemental Fury; Creature_Missile.cs:378-384 thrown weapons). Retail copies
+// it through `SmartBox::DoVectorUpdate` → `CPhysicsObj::set_omega`
+// (acclient.c:146075, :143477) and `UpdatePhysicsInternal` spins the frame by
+// `Frame::grotate(omega·quantum)` every tick (acclient.c:317777-317783).
+// Same lifecycle as `PROJECTILE_GRAVITY_GUIDS`.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PROJECTILE_OMEGA: std::cell::RefCell<std::collections::HashMap<u32, [f32; 3]>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// PROJ-SPIN: the omega worth handing to the JS ballistic integrator — `None`
+/// for an absent/zero/non-finite vector (the common, non-spinning missile).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn projectile_spawn_omega(omega: &holtburger_common::math::Vector3) -> Option<[f32; 3]> {
+    let o = [omega.x, omega.y, omega.z];
+    if o.iter().all(|c| c.is_finite()) && o.iter().any(|c| *c != 0.0) {
+        Some(o)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod projectile_spawn_omega_tests {
+    use super::projectile_spawn_omega;
+    use holtburger_common::math::Vector3;
+
+    #[test]
+    fn whirling_blade_omega_passes_through_and_zero_is_none() {
+        // ACE RotationSpeed 2.0 → Omega = (2π·2, 0, 0).
+        let spin = Vector3 { x: std::f32::consts::PI * 4.0, y: 0.0, z: 0.0 };
+        assert_eq!(projectile_spawn_omega(&spin), Some([std::f32::consts::PI * 4.0, 0.0, 0.0]));
+        assert_eq!(projectile_spawn_omega(&Vector3 { x: 0.0, y: 0.0, z: 0.0 }), None);
+        assert_eq!(projectile_spawn_omega(&Vector3 { x: f32::NAN, y: 1.0, z: 0.0 }), None);
+    }
 }
 
 // A11-S5 / G14 (2026-06-12, `?defaultScriptSpawn=on`): per-GUID

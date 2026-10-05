@@ -1595,6 +1595,15 @@ const PROJECTILE_LIGHTS_ON = _projFlagOn("projectileLights");
 const PROJECTILE_LAUNCH_CLOCK_ON = _projFlagOn("projectileLaunchClock");
 const PROJECTILE_TERRAIN_STOP_ON = _projFlagOn("projectileTerrainStop");
 const PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON = _projFlagOn("projectileDefaultScriptSpawn");
+// PROJ-SPIN (2026-10-05, `?projectileOmega=off` escape, default ON): spin a
+// ballistic missile by its ObjectCreate PhysicsDesc omega (wasm
+// `entityProjectileOmega`). ACE sends Omega = (2π·RotationSpeed, 0, 0) and
+// clears ALIGN_PATH for RotationSpeed projectiles (Whirling Blade, Elemental
+// Fury, thrown weapons — SpellProjectile.cs:120-126, Creature_Missile.cs:378);
+// retail `UpdatePhysicsInternal` applies it every quantum as a WORLD-frame
+// `Frame::grotate(omega·quantum)` (acclient.c:317777-317783, grotate =
+// pre-multiply, acclient.c:357422). Off = legacy (no spin).
+const PROJECTILE_OMEGA_ON = _projFlagOn("projectileOmega");
 /** PhysicsState::LIGHTING_ON (acclient.c:322181 `BYTE1(new_state) & 8`). */
 const PHYSICS_STATE_LIGHTING_ON = 0x800;
 /** Below-terrain tolerance (m) before the client-side terrain stop fires. */
@@ -4855,6 +4864,8 @@ export class EntityManager {
         // OpenAC comparison 2026-10-04 (combat M-2b): ALIGN_PATH missiles
         // face their velocity every frame (retail set_vector_heading).
         inst._ballisticAlignPath = this.projectileAlignsPath(guid);
+        // PROJ-SPIN: RotationSpeed missiles carry a PhysicsDesc omega.
+        inst._ballisticOmega = PROJECTILE_OMEGA_ON ? this.projectileOmega(guid) : null;
       }
     }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
@@ -7095,6 +7106,33 @@ export class EntityManager {
       }
     } catch (_) { /* never break callers */ }
     return false;
+  }
+
+  /**
+   * PROJ-SPIN (2026-10-05): the missile's ObjectCreate PhysicsDesc omega as
+   * `{x, y, z}` (rad/s, AC world frame), or `null` when it does not spin or
+   * the pkg/ predates the `entityProjectileOmega` export.
+   *
+   * @param {number} guid — entity GUID to query
+   * @returns {{x:number,y:number,z:number}|null}
+   */
+  projectileOmega(guid) {
+    const g = (guid >>> 0) || 0;
+    if (g === 0) return null;
+    try {
+      const h = typeof window !== "undefined" ? window.__sessionHandle : null;
+      if (h && typeof h.entityProjectileOmega === "function") {
+        const o = h.entityProjectileOmega(g);
+        if (o && o.length >= 3) {
+          const x = +o[0], y = +o[1], z = +o[2];
+          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+              && x * x + y * y + z * z > 0) {
+            return { x, y, z };
+          }
+        }
+      }
+    } catch (_) { /* never break callers */ }
+    return null;
   }
 
   projectileHasGravity(guid) {
@@ -13646,6 +13684,9 @@ export class EntityManager {
         pos.z += lv.vz * step;
         remaining -= step;
       }
+      // PROJ-SPIN: retail order — omega spin (grotate) first, then the
+      // ALIGN_PATH heading (ACE never sets both on one missile).
+      if (inst._ballisticOmega) this._spinProjectile(inst, rdt);
       if (inst._ballisticAlignPath) this._alignToVelocity(inst, lv);
       // PROJ-VIS: client-side terrain collision (retail collides missiles
       // locally; ACE's zero-velocity impact arrives a round-trip later). Only
@@ -13675,6 +13716,7 @@ export class EntityManager {
     inst._ballistic = false;
     inst._ballisticGravity = false;
     inst._ballisticStopMs = null;
+    inst._ballisticOmega = null;
     inst._projectileImpacted = true;
     if (inst.lastVel) {
       inst.lastVel.vx = 0;
@@ -13715,6 +13757,38 @@ export class EntityManager {
         light.intensity = 0;
       }
     }
+  }
+
+  /**
+   * PROJ-SPIN (2026-10-05): advance a spinning missile's orientation by its
+   * PhysicsDesc omega over `dtSec` — retail `UpdatePhysicsInternal`'s
+   * `Frame::grotate(omega·quantum)` (acclient.c:317777-317783). grotate builds
+   * the axis-angle quaternion of `w = omega·dt` and PRE-multiplies it
+   * (`new = dq ⊗ q`, acclient.c:357422-357456): a WORLD-frame rotation, so a
+   * Whirling Blade's (4π, 0, 0) spins about world X (east) whatever its
+   * heading — what ACE's data makes retail do. Constant world axis ⇒ the
+   * substeps compose into one exact rotation, so a single step over the whole
+   * elapsed gap is exact. Skips |w| < 2e-4 like grotate. The scene is AC Z-up
+   * with a pure w-reorder quaternion mapping (adapter.js acQuatToThree), so the
+   * AC vector is used as-is.
+   */
+  _spinProjectile(inst, dtSec) {
+    const o = inst && inst._ballisticOmega;
+    if (!o || !inst.root || !(dtSec > 0)) return;
+    const wx = o.x * dtSec, wy = o.y * dtSec, wz = o.z * dtSec;
+    const theta2 = wx * wx + wy * wy + wz * wz;
+    if (!(theta2 >= 0.0002 * 0.0002)) return;
+    const theta = Math.sqrt(theta2);
+    const s = Math.sin(theta * 0.5) / theta;
+    const dx = wx * s, dy = wy * s, dz = wz * s, dw = Math.cos(theta * 0.5);
+    const q = inst.root.quaternion;
+    const qx = q.x, qy = q.y, qz = q.z, qw = q.w;
+    let nx = dw * qx + dx * qw + dy * qz - dz * qy;
+    let ny = dw * qy - dx * qz + dy * qw + dz * qx;
+    let nz = dw * qz + dx * qy - dy * qx + dz * qw;
+    let nw = dw * qw - dx * qx - dy * qy - dz * qz;
+    const n = Math.hypot(nx, ny, nz, nw) || 1;
+    q.set(nx / n, ny / n, nz / n, nw / n);
   }
 
   /**

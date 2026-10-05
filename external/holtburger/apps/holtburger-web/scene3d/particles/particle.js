@@ -73,6 +73,44 @@ const PARTICLE_INIT_ACE_LEGACY = (() => {
   }
 })();
 
+// GR particle rotation escape (2026-10-05). Default = retail axis-angle
+// (`Frame::rotate(c·t)`, acclient.c:330490-330497). `?particleRotAce=on`
+// restores the legacy Euler(YXZ) read of c·t. Strict `=== "on"`.
+const PARTICLE_ROT_EULER_LEGACY = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search)
+      .get("particleRotAce")?.toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+})();
+
+const _scratchAxis = new THREE.Vector3();
+
+/**
+ * The LOCAL rotation a ParabolicLVGAGR / LVLALR / GVGAGR particle carries at
+ * lifetime `t`: retail `Frame::rotate(frame, c·t)` = post-multiply by the
+ * axis-angle quaternion of the vector `w = c·t` (axis ŵ, angle |w|). Below
+ * grotate's 2e-4 rad threshold the frame is left unrotated (identity).
+ *
+ * @param {{x:number,y:number,z:number}} c — angular velocity (rad/s, local)
+ * @param {number} t — particle lifetime (s)
+ * @param {THREE.Quaternion} out — receives the rotation
+ * @returns {THREE.Quaternion} `out`
+ */
+export function particleSpinQuat(c, t, out) {
+  if (PARTICLE_ROT_EULER_LEGACY) {
+    _scratchEuler.set(t * c.x, t * c.y, t * c.z, "YXZ");
+    return out.setFromEuler(_scratchEuler);
+  }
+  const wx = t * c.x, wy = t * c.y, wz = t * c.z;
+  const theta = Math.sqrt(wx * wx + wy * wy + wz * wz);
+  if (!(theta >= 0.0002)) return out.set(0, 0, 0, 1);
+  _scratchAxis.set(wx / theta, wy / theta, wz / theta);
+  return out.setFromAxisAngle(_scratchAxis, theta);
+}
+
 /**
  * `ACE.Entity.Enum.ParticleType` — frozen enum mirror.
  * Source: external/ACE/Source/ACE.Entity/Enum/ParticleType.cs
@@ -457,12 +495,17 @@ export class Particle {
           py + halfT2 * this.b.y + lt * this.a.y + oy,
           pz + halfT2 * this.b.z + lt * this.a.z + oz,
         );
-        // ACE Rotate(rotation): orientation *= CreateFromYawPitchRoll(
-        //   rotation.X, rotation.Y, rotation.Z); then normalize.
-        // YawPitchRoll in System.Numerics is (yaw=Y, pitch=X, roll=Z) per
-        // .NET docs. three.js Euler default order is "XYZ".
-        _scratchEuler.set(lt * this.c.x, lt * this.c.y, lt * this.c.z, "YXZ");
-        _scratchQuat.setFromEuler(_scratchEuler);
+        // PROJ-SPIN (2026-10-05): retail CParticle::Update case 4/9/11
+        // (acclient.c:330490-330497) calls `Frame::rotate(&new_frame, c·t)`:
+        // `c·t` is a LOCAL axis-angle vector (rotate = l2g + grotate,
+        // acclient.c:143691), i.e. new_q = parent_q ⊗ AxisAngle(ĉ, |c|·t) —
+        // a steady spin about the authored axis. The old Euler(YXZ) read of
+        // the three components only agrees for a single-axis C; 78 of the 371
+        // GR emitters in client_portal.dat author a multi-axis C (e.g.
+        // 0x3200002C (1.2, 3, 168)), which an Euler composes into a chaotic
+        // tumble instead of the retail twist. `?particleRotAce=on` restores
+        // the legacy Euler read for an A/B eye-test.
+        particleSpinQuat(this.c, lt, _scratchQuat);
         // Start from parent's orientation each tick (ACE: `new AFrame(parent)`
         // copies the orientation, then Rotate multiplies into it).
         mesh.quaternion.copy(parent.quaternion).multiply(_scratchQuat).normalize();

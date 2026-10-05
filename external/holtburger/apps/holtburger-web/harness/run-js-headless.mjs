@@ -165,6 +165,7 @@ const TIER4 = [
   { flag: "unifiedQueuePreempt", file: "tests/unified_queue_preempt.test.mjs" },
   { flag: "unifiedMotionAuthority", file: "tests/unified_motion_authority.test.mjs" },
   { flag: "projectileAlignPath", file: "tests/projectile_align_path.test.mjs" },
+  { flag: "projectileOmega+particleRotAce", file: "tests/projectile_spin.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 
