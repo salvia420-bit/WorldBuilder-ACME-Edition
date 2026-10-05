@@ -121,6 +121,7 @@ import {
   terrainTrailFadeSource,
   TRAIL_FAMILY_FADE_SEC,
 } from "./vfx_flags.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 /** Provider ids — also the `VFX_EFFECT_FLAGS` router rows. */
 export const FOOTFALL_PROVIDER_ID = "terrain.footfall";
@@ -731,7 +732,7 @@ export function createPuffField(opts = {}) {
       geometry.setAttribute("aPuffCfg", attrCfg);
       geometry.setAttribute("aPuffColour", attrColour);
       uniforms.uWindAc.value = new THREE.Vector2(1, 0);
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: DIRT_PUFF_VERTEX_GLSL,
         fragmentShader: DIRT_PUFF_FRAGMENT_GLSL,
         uniforms,
@@ -743,7 +744,7 @@ export function createPuffField(opts = {}) {
         blending: THREE.NormalBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = "terrain-dirt-puff";
       mesh = new THREE.InstancedMesh(geometry, material, capacity);
       mesh.name = "terrain-dirt-puff";
@@ -936,7 +937,7 @@ export function createDustHazeField(opts = {}) {
         tuning.hazeColour[0], tuning.hazeColour[1], tuning.hazeColour[2],
       );
       uniforms.uScatterCenter.value = new THREE.Vector3(0, 0, 0);
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: DIRT_HAZE_VERTEX_GLSL,
         fragmentShader: DIRT_HAZE_FRAGMENT_GLSL,
         uniforms,
@@ -947,7 +948,7 @@ export function createDustHazeField(opts = {}) {
         blending: THREE.NormalBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = "terrain-dirt-haze";
     } catch (_) {
       geometry = null;

@@ -74,6 +74,7 @@
 // inside `terrainGroup`. Do not run coordinates through `acToThree`.
 
 import { createScatterPool, SCATTER_FADE_GLSL } from "./terrain_scatter.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 // ---------------------------------------------------------------------------
 // Defaults + pure helpers (no THREE — the directly tested surface).
@@ -361,7 +362,7 @@ export function createGroundFog(opts = {}) {
       uniforms.uColour.value = new THREE.Color(
         tuning.colour[0], tuning.colour[1], tuning.colour[2],
       );
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: GROUND_FOG_VERTEX_GLSL,
         fragmentShader: GROUND_FOG_FRAGMENT_GLSL,
         uniforms,
@@ -374,7 +375,7 @@ export function createGroundFog(opts = {}) {
         blending: THREE.NormalBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = name;
     } catch (_) {
       geometry = null;

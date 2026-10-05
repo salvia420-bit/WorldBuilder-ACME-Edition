@@ -247,9 +247,11 @@ console.log("\n== L6  effect-agnostic (no swamp anywhere in the module)");
 // ---------------------------------------------------------------------------
 check("module CODE never mentions swamp/marsh (prose may name its first caller)",
   !/swamp|marsh/i.test(CODE));
-check("module imports only the scatter pool", (() => {
-  const imports = [...SRC.matchAll(/^import .*from "(.*)";$/gm)].map((m) => m[1]);
-  return imports.length === 1 && imports[0] === "./terrain_scatter.js";
+// shader_logdepth.js (2026-10-05) is effect-agnostic plumbing: the shared
+// log-depth patch every depth-testing custom ShaderMaterial needs.
+check("module imports only the scatter pool (+ the shared log-depth patch)", (() => {
+  const imports = [...SRC.matchAll(/^import .*from "(.*)";$/gm)].map((m) => m[1]).sort();
+  return imports.length === 2 && imports[0] === "./shader_logdepth.js" && imports[1] === "./terrain_scatter.js";
 })());
 check("colour / opacity / card size / lift band are all in-parameters", (() => {
   const d = GROUND_FOG_DEFAULTS;

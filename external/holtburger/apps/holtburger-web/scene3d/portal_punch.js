@@ -37,6 +37,19 @@
 
 import * as THREE from "three";
 import { Pass } from "postprocessing";
+import { withLogDepthVertex, withLogDepthFragment } from "./shader_logdepth.js";
+
+// `?sealLogDepth=on` (DEFAULT OFF, 2026-10-05) — opt-in log-depth encoding for
+// the SEAL material (see makeSealMaterial). `=== "on"` only: a bare URL keeps
+// the shipped seal byte-identical until a real-GPU indoor eye-test signs off.
+export function sealLogDepthEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search || "").get("sealLogDepth") === "on";
+  } catch (_) {
+    return false;
+  }
+}
 
 // Retail's DrawPortalPolyInternal writes 0.99999899 (just shy of the far plane).
 // Under logarithmicDepthBuffer the depth encoding preserves the endpoints
@@ -168,21 +181,32 @@ function makeMarkMaterial() {
 // That is the reported "doorway filled with outdoor fountain blobs / interior
 // particles gone" ordering: both are layer-0 world-pass content whose depth the
 // wipe destroyed. The seal restores exactly the depth retail restores.
-function makeSealMaterial() {
-  const m = new THREE.ShaderMaterial({
-    glslVersion: THREE.GLSL3,
-    vertexShader: /* glsl */ `
+//
+// LOG-DEPTH (2026-10-05, `?sealLogDepth=on`, default OFF): the renderer runs
+// `logarithmicDepthBuffer`, so every built-in material writes a LOG
+// gl_FragDepth while this seal (no chunk) writes PERSPECTIVE gl_FragCoord.z —
+// a different encoding, so the "true depth" wall it stamps is at the wrong
+// depth for everything that later tests against it. With the flag on the seal
+// writes the same log encoding (shader_logdepth.js). Opt-in because it changes
+// indoor rendering and needs a real-GPU look before it can ship default-on.
+function makeSealMaterial(logDepth = sealLogDepthEnabled()) {
+  const vertexShader = /* glsl */ `
       void main() {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    // NO gl_FragDepth write — the rasterizer's interpolated depth IS the
-    // polygon's true depth, which is what retail's maxZ2 path writes.
-    fragmentShader: /* glsl */ `
+      }`;
+  // Flag OFF: NO gl_FragDepth write — the rasterizer's interpolated depth IS
+  // the polygon's true (perspective) depth, which is what retail's maxZ2 path
+  // writes.
+  const fragmentShader = /* glsl */ `
       precision highp float;
       out vec4 _c;
       void main() {
         _c = vec4(0.0);
-      }`,
+      }`;
+  const m = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    vertexShader: logDepth ? withLogDepthVertex(vertexShader) : vertexShader,
+    fragmentShader: logDepth ? withLogDepthFragment(fragmentShader) : fragmentShader,
   });
   m.name = "portal-seal";
   m.colorWrite = false;

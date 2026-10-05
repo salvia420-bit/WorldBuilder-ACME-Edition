@@ -100,6 +100,7 @@ import {
   terrainRockRadiusM,
   terrainRockDensity,
 } from "./vfx_flags.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 export const METERS_PER_LANDBLOCK = 192;
 export const VERTEX_GRID = 9;
@@ -881,7 +882,7 @@ export function createPebbleField(opts = {}) {
         OLTHOI_EMISSIVE_COLOUR[0], OLTHOI_EMISSIVE_COLOUR[1], OLTHOI_EMISSIVE_COLOUR[2],
       );
       uniforms.uScatterCenter.value = new THREE.Vector3(0, 0, 0);
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: ROCK_PEBBLE_VERTEX_GLSL,
         fragmentShader: ROCK_PEBBLE_FRAGMENT_GLSL,
         // The SAME objects the pool will publish into — no spread, no copy.
@@ -890,7 +891,7 @@ export function createPebbleField(opts = {}) {
         depthWrite: true,
         depthTest: true,
         side: THREE.FrontSide,
-      });
+      }));
       material.name = "terrain-rock-pebbles";
     } catch (_) {
       geometry = null;
@@ -1091,7 +1092,7 @@ export function createGritField(opts = {}) {
         tuning.colour[0], tuning.colour[1], tuning.colour[2],
       );
       uniforms.uScatterCenter.value = new THREE.Vector3(0, 0, 0);
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: ROCK_GRIT_VERTEX_GLSL,
         fragmentShader: ROCK_GRIT_FRAGMENT_GLSL,
         uniforms,
@@ -1101,7 +1102,7 @@ export function createGritField(opts = {}) {
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = "terrain-rock-grit";
     } catch (_) {
       geometry = null;

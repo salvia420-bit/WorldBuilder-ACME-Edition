@@ -116,6 +116,7 @@ import {
   terrainTrailFadeSource,
   TRAIL_FAMILY_FADE_SEC,
 } from "./vfx_flags.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 /** Provider ids — also the `VFX_EFFECT_FLAGS` router rows. */
 export const SPINDRIFT_PROVIDER_ID = "terrain.snowSpindrift";
@@ -614,7 +615,7 @@ export function createSpindriftField(opts = {}) {
         tuning.colour[0], tuning.colour[1], tuning.colour[2],
       );
       uniforms.uScatterCenter.value = new THREE.Vector3(0, 0, 0);
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: SNOW_SPINDRIFT_VERTEX_GLSL,
         fragmentShader: SNOW_SPINDRIFT_FRAGMENT_GLSL,
         // The SAME objects the pool will publish into — no spread, no copy.
@@ -625,7 +626,7 @@ export function createSpindriftField(opts = {}) {
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = "terrain-snow-spindrift";
     } catch (_) {
       geometry = null;

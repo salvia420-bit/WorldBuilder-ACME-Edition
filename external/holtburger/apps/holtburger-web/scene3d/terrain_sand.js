@@ -68,6 +68,7 @@ import {
 import { staticOwnerKeyForLb } from "./vfx/particle_attach.js";
 import { ownerRegistry as defaultOwnerRegistry } from "./particles/owner_registry.js";
 import { terrainDustDevil } from "./vfx/components/terrainDustDevil.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 export const METERS_PER_LANDBLOCK = 192;
 export const VERTEX_GRID = 9;
@@ -491,7 +492,7 @@ export function createSandStreamerField(opts = {}) {
       uniforms.uColour.value = new THREE.Color(
         tuning.colour[0], tuning.colour[1], tuning.colour[2],
       );
-      material = new THREE.ShaderMaterial({
+      material = new THREE.ShaderMaterial(withLogDepth({
         vertexShader: SAND_STREAMER_VERTEX_GLSL,
         fragmentShader: SAND_STREAMER_FRAGMENT_GLSL,
         uniforms: {
@@ -508,7 +509,7 @@ export function createSandStreamerField(opts = {}) {
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         toneMapped: false,
-      });
+      }));
       material.name = "terrain-sand-streamers";
     } catch (_) {
       geometry = null;
