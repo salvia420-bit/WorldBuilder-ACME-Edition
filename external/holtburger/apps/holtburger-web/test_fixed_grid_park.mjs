@@ -208,11 +208,21 @@ function makeWired({ hysteresisMs = 2000, park } = {}) {
     g2.update(0x30, 0x30); // crossing at t=0
     // Baked includes an off-block key so offBlock fires, all within grace.
     const baked = new Set(g2.residentKeys);
-    // Force an offBlock resident by injecting a stale key.
-    g2.residentKeys.add(lbKeyFromXY(0x99, 0x99));
-    g2.assertResidency({ baked, inFlight: null, graceMs: 3000, nowMs: 10 });
+    // Force an offBlock resident by injecting a stale key INTO THE SLOT TABLE.
+    // F8 (2026-08-03, fixed_grid.js assertResidency) derives the resident set
+    // from `slots`, not the `_resident` cache, so the old injection into
+    // `residentKeys` now surfaces as a slot/cache desync instead of offBlock.
+    // Keep the cache in lockstep so this case isolates offBlock (+ the
+    // positional misplacement it necessarily implies).
+    const stale = lbKeyFromXY(0x99, 0x99);
+    const evicted = g2.slots[0];
+    g2.slots[0] = stale;
+    g2.residentKeys.delete(evicted);
+    g2.residentKeys.add(stale);
+    const d = g2.assertResidency({ baked, inFlight: null, graceMs: 3000, nowMs: 10 });
     check("(e) offBlock is NOT graced — warns even inside the window",
-      warns2.length === 1 && warns2[0][1].offBlock.length === 1);
+      warns2.length === 1 && warns2[0][1].offBlock.length === 1 && d.offBlock.length === 1 &&
+      d.slotDesync === false);
   }
   // graceMs default 0 = no grace (byte-identical to pre-S15c / existing tests).
   {

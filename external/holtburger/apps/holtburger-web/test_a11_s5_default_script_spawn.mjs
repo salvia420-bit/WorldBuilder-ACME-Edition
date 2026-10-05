@@ -53,6 +53,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath, join as joinPath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { stripStaticImports } from "./harness/lib/splice_module.mjs";
+import { entitiesToplevelPrelude } from "./harness/lib/scene3d_stubs.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -126,12 +128,10 @@ function loadModule(relPath) {
   const full = resolvePath(__dirname, relPath);
   if (!existsSync(full)) throw new Error(`module not found: ${full}`);
   let src = readFileSync(full, "utf8");
-  src = src
-    .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-    // Strip relative `import { … } from "./X.js"` / "../ui/X.js" lines — we
-    // splice / shim the few symbols we actually touch by hand.
-    .replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
-  return src;
+  // Shared tolerant stripper (harness/lib/splice_module.mjs): the old
+  // hand-rolled regex missed `import {…} from "…"; // trailing comment`
+  // (entities.js's vfx/particle_env.js import) and died in new Function().
+  return stripStaticImports(src).replace(/import\.meta\.url/g, '"file:///__spliced__"');
 }
 
 function stripExports(src) {
@@ -178,7 +178,8 @@ function buildFactory() {
   const composite =
     // setup_rig.js flag reader (the splice omits that module; flags read
     // false in the Node harness anyway). test_a5_p3 shim.
-    "function readRigModuleFlag() { return false; }\n" +
+    // + the other module-top-level reader calls (shared list).
+    entitiesToplevelPrelude() +
     // The chain-walk table fetch the resolver calls — routed to a per-test
     // stub on globalThis so each case controls the returned PhysicsScriptTable.
     "async function fetchPhysicsScriptTable(did) {\n" +
@@ -212,35 +213,36 @@ console.log("PART 1 — ?defaultScriptSpawn flag parse (genuine DEFAULT_SCRIPT_S
 // that gates on it (the spawn-arm path), but simplest: probe via a tiny
 // helper we add — expose the const indirectly by re-deriving it the same way
 // the source does, AND pin the source parse.
-function deriveFlag(search) {
-  // Character-identical to entities.js DEFAULT_SCRIPT_SPAWN_ON body.
-  try {
-    return (
-      new URLSearchParams(search ?? "")
-        .get("defaultScriptSpawn")?.toLowerCase() === "on"
-    );
-  } catch (_) {
-    return false;
-  }
+// Evaluate the GENUINE module-scope reader (the `const DEFAULT_SCRIPT_SPAWN_ON
+// = (() => {...})();` IIFE, sliced verbatim out of entities.js) under a
+// chosen window — no hand replica to drift. 2026-10-05: the reader was
+// promoted to DEFAULT-ON (`!== "off"`, docs/url-flags.md "Now default-ON"
+// list); the old replica + regex pinned the retired `=== "on"` opt-in.
+const READER_MATCH = entitiesSrc.match(
+  /const DEFAULT_SCRIPT_SPAWN_ON = (\(\(\) => \{[\s\S]*?\n\}\)\(\));/,
+);
+check("genuine DEFAULT_SCRIPT_SPAWN_ON reader found in entities.js", !!READER_MATCH);
+function deriveFlag(win) {
+  return new Function("window", `return ${READER_MATCH[1]};`)(win);
 }
+const W = (search) => ({ location: { search } });
 
-check("'on' parses true", deriveFlag("?defaultScriptSpawn=on") === true);
-check("'ON' parses true (case-fold)", deriveFlag("?defaultScriptSpawn=ON") === true);
-check("'On' parses true (case-fold)", deriveFlag("?defaultScriptSpawn=On") === true);
-check("'off' parses false", deriveFlag("?defaultScriptSpawn=off") === false);
-check("'1' parses false (only the literal 'on')", deriveFlag("?defaultScriptSpawn=1") === false);
-check("absent parses false (default-OFF)", deriveFlag("?foo=1") === false);
-check("empty parses false", deriveFlag("") === false);
-check("malformed search never throws → false", deriveFlag(null) === false);
+check("'on' parses true", deriveFlag(W("?defaultScriptSpawn=on")) === true);
+check("'off' parses false (the escape)", deriveFlag(W("?defaultScriptSpawn=off")) === false);
+check("'OFF' parses false (case-fold)", deriveFlag(W("?defaultScriptSpawn=OFF")) === false);
+check("'1' parses true (anything but off)", deriveFlag(W("?defaultScriptSpawn=1")) === true);
+check("absent parses true (DEFAULT-ON)", deriveFlag(W("?foo=1")) === true);
+check("empty parses true (DEFAULT-ON)", deriveFlag(W("")) === true);
+check("no window → false (never throws)", deriveFlag(undefined) === false);
+check("window without location → false", deriveFlag({}) === false);
 
-// Pin the replica to source: entities.js ships the identical parse.
 check(
-  'entities.js parses defaultScriptSpawn?.toLowerCase()==="on"',
-  /\.get\("defaultScriptSpawn"\)\s*\?\.toLowerCase\(\)\s*===\s*"on"/.test(entitiesSrc),
+  'entities.js parses defaultScriptSpawn?.toLowerCase()!=="off" (default-on idiom)',
+  /\.get\("defaultScriptSpawn"\)\s*\?\.toLowerCase\(\)\s*!==\s*"off"/.test(entitiesSrc),
 );
 check(
-  "url-flags.md documents the default-off ?defaultScriptSpawn=on row",
-  /`\?defaultScriptSpawn=on`/.test(urlFlagsSrc),
+  "url-flags.md lists defaultScriptSpawn as default-ON",
+  /Now default-ON[^\n]*`defaultScriptSpawn`/.test(urlFlagsSrc),
 );
 
 // =====================================================================
@@ -303,7 +305,8 @@ function buildResolverWorld(search) {
   let entSrc = stripExports(loadModule("scene3d/entities.js"))
     .replace('await import("./play_effect_vfx.js")', "await __importPlayEffectVfx()");
   const composite =
-    "function readRigModuleFlag() { return false; }\n" +
+    // + the other module-top-level reader calls (shared list).
+    entitiesToplevelPrelude() +
     "async function fetchPhysicsScriptTable(did) {\n" +
     "  return (typeof globalThis.__A11S5_FETCH_PST === 'function') ? globalThis.__A11S5_FETCH_PST(did) : null;\n" +
     "}\n" +

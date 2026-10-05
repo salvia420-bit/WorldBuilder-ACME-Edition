@@ -11,6 +11,9 @@
 // a permissive catch-all proxy: a truthy catch-all silently makes any
 // assertion that touches it unfalsifiable.
 
+import { readFileSync } from "node:fs";
+import { stripExports } from "./splice_module.mjs";
+
 /** Stubs for every module `scene3d/materials.js` statically imports. */
 export const MATERIALS_JS_STUBS = Object.freeze({
   // ./adapter.js — pixel→texture uploads. Suites that need a real texture
@@ -46,6 +49,15 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   bc7Source: "() => null",
   _bumpBc7Stat: "() => {}",
   atlasRefeed: "() => 0",
+  // ./bc7_textures.js — CTX-LOSS-MIRRORS lane-T fetch-miss counter (imported
+  // as `noteFullTierFetchMiss as _noteFullFetchMiss`); only reachable with
+  // texCompressedOnly active, and the real one only bumps a stats counter.
+  _noteFullFetchMiss: "() => {}",
+  // ./bc7_textures.js — RSID-MARKER. Called on EVERY surface-backed material
+  // build (flag-independent), so this mirrors the real stamp exactly (minus
+  // the module-private stats bump): a suite reading `userData.__texRsId`
+  // sees the production value.
+  stampRsId: "(mat, rsId) => { const rs = rsId >>> 0; if (!mat || !rs) return 0; const ud = (mat.userData = mat.userData || {}); ud.__texRsId = rs; return rs; }",
   // ./bc7_textures.js — T15R rehydrate-v3 mirror seam. Only the ST5 upgrade
   // arms one and only the demote/evict paths unregister, so both are
   // unreachable with the flag off; the return values match the real
@@ -64,3 +76,49 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   // should see the production string.
   PLANE: '{ ALBEDO: "albedo", NORMAL: "normal", HEIGHT: "height", ROUGHNESS: "roughness", AO: "ao" }',
 });
+
+/**
+ * Stubs for the imported symbols `scene3d/entities.js` CALLS AT MODULE TOP
+ * LEVEL (a `const X = reader();` at file scope). Every other entities.js
+ * import is only referenced inside method bodies, so a splice that never
+ * reaches those methods needs no stub for it; these four are evaluated the
+ * moment the spliced body runs and throw a bare ReferenceError without one.
+ *
+ * Measured 2026-10-05 by loading adapter+animation+entities with only these
+ * names defined. Values are each reader's own answer when `window` is absent /
+ * carries no query flag — which is exactly what the Node harness has:
+ *   - readSelectionIndicatorMode  (selection_brackets.js) → "brackets"
+ *   - limbDamageEnabled / ragdollEnabled (limbs.js / ragdoll.js) → false
+ *     (both readers return false with no window.location; the browser
+ *     default-ON arms need limbs.js/ragdoll.js, which no suite splices)
+ *   - readRigModuleFlag (setup_rig.js) → false
+ */
+export const ENTITIES_JS_TOPLEVEL_STUBS = Object.freeze({
+  readSelectionIndicatorMode: '() => "brackets"',
+  limbDamageEnabled: "() => false",
+  ragdollEnabled: "() => false",
+  readRigModuleFlag: "() => false",
+});
+
+/**
+ * `const X = ...;` prelude for {@link ENTITIES_JS_TOPLEVEL_STUBS}, skipping any
+ * name in `except` (a suite that already declares its own shim for one).
+ */
+export function entitiesToplevelPrelude(except = []) {
+  return Object.entries(ENTITIES_JS_TOPLEVEL_STUBS)
+    .filter(([n]) => !except.includes(n))
+    .map(([n, init]) => `const ${n} = ${init};`)
+    .join("\n") + "\n";
+}
+
+/**
+ * Source to splice so `new EntityManager(...)` can be constructed: its
+ * constructor calls `createPreCreateBuffer()` (./pre_create_buffer.js, a pure
+ * dependency-free module). Rather than a stub, the GENUINE module is inlined —
+ * the A8-M4 pre-create buffer is part of the spawn path these suites drive.
+ * Measured 2026-10-05: it is the only import the constructor touches.
+ */
+export function entitiesCtorPrelude() {
+  const src = readFileSync(new URL("../../scene3d/pre_create_buffer.js", import.meta.url), "utf8");
+  return "// === pre_create_buffer.js (genuine) ===\n" + stripExports(src) + "\n";
+}

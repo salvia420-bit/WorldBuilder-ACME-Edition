@@ -24,7 +24,11 @@ try {
   MotionSequence = mod.MotionSequence;
   await init(readFileSync(join(here, "pkg", "holtburger_web_bg.wasm")));
 } catch (e) {
-  console.log(`  [SKIP] wasm pkg not loadable in Node: ${String(e.message).slice(0, 120)}`);
+  // Colon form so run-js-headless's SKIP detector sees it: without pkg/ this
+  // suite asserted nothing and must not be tabulated as a PASS (the runner
+  // registers it with `requires: pkg/…wasm`, so a CI box without a wasm
+  // build reports NO-FIXTURE instead of running it at all).
+  console.log(`wasm smoke: SKIP — wasm pkg not loadable in Node: ${String(e.message).slice(0, 120)}`);
   process.exit(0); // not a failure — the cargo + poser tests already gate the logic
 }
 

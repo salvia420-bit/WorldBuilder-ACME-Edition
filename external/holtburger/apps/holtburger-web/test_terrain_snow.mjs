@@ -71,6 +71,7 @@ import {
 } from "./scene3d/terrain_snow.js";
 import { FAM_SNOWICE, familyForCode } from "./scene3d/terrain_families.js";
 import { PRESETS, PRESET_NAMES } from "./scene3d/quality.js";
+import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -221,7 +222,7 @@ check("a distance fade exists (an unfiltered micro-facet aliases at range)",
   /snowFade = 1\.0 - smoothstep\(uSnowSparkleFadeStart, uSnowSparkleFadeEnd, vViewDepth\)/.test(FRAG));
 check("the sand sparkle's final colour write is untouched (no new term spliced "
   + "into it — wave 1B's exact-match lock still holds)",
-  /fragColor = vec4\(modulated \* ndotl \* cloudShadow \* csmShadow \+ iblSpec\s*\n\s*\+ sandSparkle \* cloudShadow \* csmShadow, 1\.0\);/.test(FRAG));
+  checkTerrainFinalColour(FRAG).ok /* 2026-10-05: shared-tail + far-bake aware, harness/lib/terrain_final_colour.mjs */);
 check("no light is constructed anywhere in the snow module (§5.2)",
   !/new THREE\.[A-Za-z]*Light|PointLight/.test(SNOW_SRC));
 

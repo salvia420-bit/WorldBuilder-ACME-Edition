@@ -464,7 +464,10 @@ check("relay carries palSigs + palHiMB",
 check("relay entity columns fail soft to nulls (like matMB)",
   /return \{ entMB: null, entHi: null \};/.test(relaySrc));
 check("relay paletted columns fail soft to nulls",
-  /return \{ palSigs: null, palMB: null, palHiMB: null, palEvict: null \};/.test(relaySrc));
+  // 2026-10-05: the relay gained a 5th column, `palRemint` (re-mint count —
+  // separates "budget dropped a signature" from "it was rebuilt"); the
+  // fail-soft object nulls it too.
+  /return \{ palSigs: null, palMB: null, palHiMB: null, palEvict: null, palRemint: null \};/.test(relaySrc));
 check("relay reads the diag surfaces optionally (legacy page => nulls, no throw)",
   /window\.__diag\?\.entityOwned\?\.\(\)/.test(relaySrc) &&
   /window\.__diag\?\.palettedCache\?\.\(\)/.test(relaySrc));

@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath, join as joinPath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { stripStaticImports } from "./harness/lib/splice_module.mjs";
+import { entitiesToplevelPrelude, entitiesCtorPrelude } from "./harness/lib/scene3d_stubs.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -64,14 +66,10 @@ function loadModule(relPath) {
   const full = resolvePath(__dirname, relPath);
   if (!existsSync(full)) throw new Error(`module not found: ${full}`);
   let src = readFileSync(full, "utf8");
-  // Drop `import * as THREE from "three";`
-  src = src.replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "");
-  // Drop single-line `import { … } from "…";` (any relative/bare path).
-  src = src.replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  // Drop multi-line `import {\n … \n} from "…";` blocks.
-  src = src.replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  // Drop any remaining default/namespace single-line imports.
-  src = src.replace(/^\s*import\s+[A-Za-z_$][\w$]*\s+from\s+["'][^"']+["'];?\s*$/gm, "");
+  // 2026-10-05: shared tolerant stripper (harness/lib/splice_module.mjs) —
+  // the hand-rolled regexes missed `import {...} from "..."; // comment`
+  // lines (entities.js particle_env import) and died in new Function().
+  src = stripStaticImports(src).replace(/import\.meta\.url/g, '"file:///__spliced__"');
   return src;
 }
 
@@ -91,6 +89,9 @@ const animSrc = loadModule("scene3d/animation.js");
 const entitiesSrc = loadModule("scene3d/entities.js");
 
 const composite =
+  // Module-top-level reader calls + the genuine pre-create buffer the
+  // EntityManager constructor needs (shared: harness/lib/scene3d_stubs.mjs).
+  entitiesToplevelPrelude() + entitiesCtorPrelude() +
   "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
   "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
   "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
@@ -181,8 +182,16 @@ function makeInst(baseScale = 1.0) {
 }
 
 // #8 — cycleOmega-clear path in setMotion() also resets _omegaAccumQ.
+// 2026-10-05: `?cycleOmega` went DEFAULT-ON (2026-06-09; the reader returns
+// true even with no window), so the clear branch only runs on the `=off`
+// escape. Build this case's manager from a factory instance whose module-
+// scope flag read sees `?cycleOmega=off`.
 {
-  const em = makeManager();
+  const { EntityManager: EMOff } = factory(
+    THREE, globalThis.performance ?? { now: () => Date.now() },
+    { location: { search: "?cycleOmega=off" } },
+  );
+  const em = new EMOff({ scene: new THREE.Group(), quality: { preset: "high" } }, {});
   const inst = makeInst();
   inst.guid = 0x2000;
   inst.meta = { modelId: 0x02000001, mtableId: 0x09000001 };
@@ -195,7 +204,7 @@ function makeInst(baseScale = 1.0) {
   );
   em.entityMap.set(inst.guid >>> 0, inst);
   // Drive a locomotion command (Walk-forward family). CYCLE_OMEGA_ON is
-  // false in node (no window), so the `else if (inst._cycleOmega)` clear
+  // false under `?cycleOmega=off`, so the `else if (inst._cycleOmega)` clear
   // branch runs. The downstream clip resolution may throw on the stub
   // wasm — that's after our reset, so guard it.
   try {

@@ -36,6 +36,7 @@
 
 import { readFileSync } from "node:fs";
 import { sandCodeBitmask } from "./scene3d/terrain_sand.js";
+import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -151,7 +152,7 @@ check("S4: the sparkle HONOURS the cellTouchesWater bypass (the 07-31 water fix)
 check("S4: the sparkle is multiplied by cloudShadow AND csmShadow (it is sunlight)",
   /sandSparkle \* cloudShadow \* csmShadow/.test(FRAG));
 check("S4: the sparkle is ADDED to the final colour, never replaces it",
-  /fragColor = vec4\(modulated \* ndotl \* cloudShadow \* csmShadow \+ iblSpec\s*\n\s*\+ sandSparkle \* cloudShadow \* csmShadow, 1\.0\);/.test(FRAG));
+  checkTerrainFinalColour(FRAG).ok /* 2026-10-05: shared-tail + far-bake aware, harness/lib/terrain_final_colour.mjs */);
 check("S4: a distance fade exists (an unfiltered micro-facet aliases at range)",
   /sparkFade = 1\.0 - smoothstep\(uSandSparkleFadeStart, uSandSparkleFadeEnd, vViewDepth\)/.test(FRAG));
 check("S4: a GRAZING gate exists (sand flashes at a low angle, not from above)",

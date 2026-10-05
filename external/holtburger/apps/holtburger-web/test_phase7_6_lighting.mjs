@@ -396,7 +396,12 @@ check(
     "R2.A: buildLightForSetupLight(cone_angle=0) → PointLight at the SetupLight origin",
     ptLight && ptLight.isPointLight === true &&
         ptLight.position.x === 1 && ptLight.position.y === 2 && ptLight.position.z === 3 &&
-        Math.abs(ptLight.intensity - 3) < 1e-6 && ptLight.distance === 12,
+        // waves-2 L2 (2026-05-29): retail range = falloff * static_light_factor
+        // (1.3, acclient.c const; lighting.js STATIC_LIGHT_FACTOR) — the old
+        // `distance === falloff` predates it.
+        Math.abs(ptLight.intensity - 3) < 1e-6 &&
+        Math.abs(ptLight.distance - 12 * LIGHTING_CONSTANTS.STATIC_LIGHT_FACTOR) < 1e-9 &&
+        LIGHTING_CONSTANTS.STATIC_LIGHT_FACTOR === 1.3,
     `isPointLight=${ptLight?.isPointLight}, pos=(${ptLight?.position.x},${ptLight?.position.y},${ptLight?.position.z}), intensity=${ptLight?.intensity}, distance=${ptLight?.distance}`
 );
 

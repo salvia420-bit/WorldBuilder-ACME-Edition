@@ -191,13 +191,24 @@ check(
     `size=${layer.nodes.size}, has=${layer.nodes.has(TEST_GUID >>> 0)}`,
 );
 const entry = layer.nodes.get(TEST_GUID >>> 0);
+// 2026-10-05: the label text lives in an inner `<ac-text>` child
+// (entry.textEl — swaps to the retail bitmap font once the font runtime
+// loads), and the per-frame position is written as
+// `transform: translate3d(Xpx, Ypx, 0) …` (Perf B6, composited) instead of
+// style.left/top, which now stay at their "0px" prime. Read both from where
+// hud.js actually writes them.
+const plateText = (e) => (e?.textEl ? e.textEl.textContent : e?.el?.textContent);
+const plateXY = (e) => {
+    const m = /translate3d\(\s*(-?\d+(?:\.\d+)?)px,\s*(-?\d+(?:\.\d+)?)px/.exec(e?.el?.style?.transform ?? "");
+    return m ? [Number(m[1]), Number(m[2])] : [NaN, NaN];
+};
 check(
-    "Nameplate DOM <div> was appended to domRoot with textContent=name",
+    "Nameplate DOM <div> was appended to domRoot with its <ac-text> label = name",
     entry?.el != null &&
         mockDomRoot.children.includes(entry.el) &&
-        entry.el.textContent === "Sparring Golem",
+        plateText(entry) === "Sparring Golem",
     `appended=${mockDomRoot.children.includes(entry?.el)}, ` +
-        `text=${entry?.el?.textContent}`,
+        `text=${plateText(entry)}`,
 );
 // Before tick, display is "none" so the DIV doesn't briefly land at
 // (0,0) before first projection.
@@ -217,8 +228,7 @@ check(
     `display=${entry.el.style.display}`,
 );
 // left / top are strings like "640px". Parse + verify they're in range.
-const left1 = parseInt(entry.el.style.left, 10);
-const top1 = parseInt(entry.el.style.top, 10);
+const [left1, top1] = plateXY(entry);
 check(
     "Post-tick: pixel coords inside the 1280×720 viewport (with slight margin)",
     Number.isFinite(left1) &&
@@ -227,7 +237,7 @@ check(
         left1 <= 1280 + 64 &&
         top1 >= -64 &&
         top1 <= 720 + 64,
-    `left=${entry.el.style.left}, top=${entry.el.style.top}`,
+    `transform=${entry.el.style.transform}`,
 );
 // Looking straight at the entity from (0, 1.8, 10) with the +1.9 Y
 // offset, the projection point should land near the horizontal centre
@@ -278,8 +288,8 @@ check(
 layer.setNameplate(TEST_GUID, "Drudge Toiler", fakeEntity);
 check(
     "setNameplate(same guid, new name) updates textContent in place",
-    entry.el.textContent === "Drudge Toiler" && layer.nodes.size === 1,
-    `text=${entry.el.textContent}`,
+    plateText(entry) === "Drudge Toiler" && layer.nodes.size === 1,
+    `text=${plateText(entry)}`,
 );
 
 // Remove + verify the DOM child is detached and the map entry dropped.

@@ -139,6 +139,12 @@ const url = pathToFileURL(
   resolvePath(__dirname, "plugins/status-indicators.js")
 ).href;
 const { mount, manifest, __test } = await import(url);
+// 2026-10-05: the classifier cases used 0x40000 / 0x80000 as "ADDITIVE" /
+// "MULTIPLICATIVE" — those are NOT the EnchantmentTypeFlags bits (ACE
+// EnchantmentTypeFlags.cs: Multiplicative = 0x4000, Additive = 0x8000; the
+// app's shared table ui/enchantment_constants.js agrees). Read the shared
+// table so the test cannot drift from the wire definition again.
+const { ETF } = await import(pathToFileURL(resolvePath(__dirname, "ui/enchantment_constants.js")).href);
 
 console.log("===========================================================");
 console.log("Wave 1.F — status-indicators event-wiring smoke test");
@@ -173,22 +179,22 @@ check("COOLDOWN flag → cooldown (filtered out of buff/debuff counts)", () => {
 });
 
 check("ADDITIVE + negative statValue → debuff", () => {
-  const e = { type: 0x40000, statValue: -10 };
+  const e = { type: ETF.ADDITIVE, statValue: -10 };
   if (__test.classifyEnchKind(e) !== "debuff") throw new Error("not debuff");
 });
 
 check("ADDITIVE + positive statValue → buff", () => {
-  const e = { type: 0x40000, statValue: 10 };
+  const e = { type: ETF.ADDITIVE, statValue: 10 };
   if (__test.classifyEnchKind(e) !== "buff") throw new Error("not buff");
 });
 
 check("MULTIPLICATIVE >1.0 → buff", () => {
-  const e = { type: 0x80000, statValue: 1.25 };
+  const e = { type: ETF.MULTIPLICATIVE, statValue: 1.25 };
   if (__test.classifyEnchKind(e) !== "buff") throw new Error("not buff");
 });
 
 check("MULTIPLICATIVE <1.0 → debuff", () => {
-  const e = { type: 0x80000, statValue: 0.75 };
+  const e = { type: ETF.MULTIPLICATIVE, statValue: 0.75 };
   if (__test.classifyEnchKind(e) !== "debuff") throw new Error("not debuff");
 });
 
@@ -359,11 +365,13 @@ check("burden 1.1 → burden indicator active AND over", () => {
   }
 });
 
-check("burden 0.2 → burden indicator inactive again", () => {
-  burdenValue = 0.2;
+// Rec #183 tier ramp: "light" (inactive) is ratio < 0.20; 0.20 itself is the
+// first "moderate" tier and lights the icon, so drop back BELOW the boundary.
+check("burden 0.1 (light tier, < 0.20) → burden indicator inactive again", () => {
+  burdenValue = 0.1;
   fakeClient.events.emit("playerStatsUpdated", {});
   if (getIndicator("burden").classList.contains("active")) {
-    throw new Error("burden still active at 0.2");
+    throw new Error("burden still active at 0.1");
   }
 });
 
@@ -418,7 +426,7 @@ check("enchantmentAdded buff → buffs indicator active", () => {
 check("add debuff → debuffs indicator active too", () => {
   fakeClient._setEnchantments([
     { type: 0x2000000, spellId: 1158 },
-    { type: 0x40000, statValue: -10, spellId: 999 }, // ADDITIVE neg → debuff
+    { type: ETF.ADDITIVE, statValue: -10, spellId: 999 }, // ADDITIVE neg → debuff
   ]);
   fakeClient.world.dispatchEvent(new CustomEvent("enchantmentAdded", {
     detail: { type: 0, layeredSpellId: 2, spellId: 999 },

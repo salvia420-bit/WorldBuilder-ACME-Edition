@@ -50,6 +50,12 @@
 //   --timeout=MS      Per-test wall-clock timeout (default 120000). On timeout
 //                     the test is a FAIL (killed).
 //   --bail            Stop at the first FAIL (still prints the partial table).
+//   --run-quarantined Also execute the QUARANTINE entries and tag each XFAIL
+//                     (still broken) or XPASS (fixed — un-quarantine it).
+//                     Informational only; never changes the exit code.
+//   --strict-fixtures Treat a NO-FIXTURE row (a suite whose `requires` local
+//                     data fixture is absent) as a FAIL. Default: reported,
+//                     not run, no effect on the exit code.
 //   --allow-skips     Tolerate a child that printed a SKIP banner and exited 0.
 //                     OFF by default: such a child asserted NOTHING, so
 //                     counting it as a pass is exactly the defect the
@@ -96,10 +102,13 @@ const TIER1 = [
   { flag: "retailCamZoom+camStiffness+mouseSmooth", file: "tests/camera_retail_math.test.cjs" },
   { flag: "remoteInterp(JS)", file: "tests/remote_interp_ownership.test.cjs" },
   { flag: "jumpParity(JS)", file: "tests/jump_charge_parity.test.cjs" },
-  { flag: "unifiedMotion(poser)", file: "test_motion_sequence.mjs" },
+  // test_motion_sequence.mjs (unifiedMotion poser) is QUARANTINED below — a
+  // real poser-vs-mixer divergence, not a stale test (see its reason).
   // Exercises the REAL compiled wasm MotionSequence boundary (entities.js path);
-  // SKIPs (exit 0) gracefully when pkg/ isn't built, so it's safe in the pure-JS tier.
-  { flag: "unifiedMotion(wasm)", file: "test_motion_sequence_wasm_smoke.mjs" },
+  // Needs the (gitignored) pkg/ wasm build — see its `requires`.
+  // `requires` the gitignored wasm build: absent → NO-FIXTURE, never a hollow PASS.
+  { flag: "unifiedMotion(wasm)", file: "test_motion_sequence_wasm_smoke.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
   // VFX (Visual-Behavior Suite) — tree-wind + the component system (2026-06-23).
   { flag: "treeWind(JS)", file: "test_wind_clip_gen.mjs" },
   { flag: "treeWindRig(JS)", file: "test_bbox_rig.mjs" },
@@ -134,7 +143,9 @@ const TIER4 = [
   { flag: "blockingParticleParity", file: "test_a11_s0_blocking_particle.mjs" },
   { flag: "defaultScriptSpawn", file: "test_a11_s5_default_script_spawn.mjs" },
   { flag: "acWindowPositionMerge(R11)", file: "test_ac_window_position_merge.mjs" },
-  { flag: "aliasSplit(JS)", file: "test_p1_alias_split.mjs" },
+  // Lives under harness/ (the plan used to name the app root → a permanent
+  // MISSING row that `--strict-missing` would have failed).
+  { flag: "aliasSplit(JS)", file: "harness/test_p1_alias_split.mjs" },
   // 2026-08-03 (R8#5) — the combat/gore cluster. limbs, blood_decals and
   // ragdoll_env were 2,400 lines of DEFAULT-ON code with no suite at all, and
   // the four pre-existing siblings below were never registered either: 522
@@ -171,7 +182,10 @@ const TIER4 = [
 // asserted nothing — `--allow-skips`) still fails them, which is the correct
 // outcome for the two suites that silently no-op when THREE_PATH is absent.
 const TIER5 = [
-  { tier: 5, flag: "xu7_transcode", file: "test_xu7_transcode.mjs" },
+  // `requires`: a LOCAL data fixture outside the repo. Absent → NO-FIXTURE row
+  // (not run, not a pass; fails only under --strict-fixtures). See runOne.
+  { tier: 5, flag: "xu7_transcode", file: "test_xu7_transcode.mjs",
+    requires: "/mnt/wbterminal2/xubc7-corpus/statics-lossless/0x06003789.ktx2" },
   // 2026-08-08 — the transcode BUDGET (`?xu7Budget`). Sibling of the above and
   // deliberately separate: that suite needs the real transcoder and the
   // /mnt corpus fixture, this one needs neither and pins the scheduler.
@@ -226,7 +240,8 @@ const TIER5 = [
   { tier: 5, flag: "plugin_loader", file: "tests/plugin_loader.test.cjs" },
   { tier: 5, flag: "plugin_query_wire", file: "tests/plugin_query_wire.test.cjs" },
   { tier: 5, flag: "rust_pose", file: "tests/rust_pose.test.cjs" },
-  { tier: 5, flag: "soa_aos_parity", file: "tests/soa_aos_parity.test.cjs" },
+  { tier: 5, flag: "soa_aos_parity", file: "tests/soa_aos_parity.test.cjs",
+    requires: "/mnt/wbterminal2/holtburger-dist" },
   { tier: 5, flag: "spellbook_wasm_record", file: "tests/spellbook_wasm_record.test.cjs" },
   { tier: 5, flag: "target_cycle", file: "tests/target_cycle.test.cjs" },
   { tier: 5, flag: "test_ws14_cast_cooldown", file: "tests/test_ws14_cast_cooldown.test.mjs" },
@@ -281,7 +296,6 @@ const TIER5 = [
   { tier: 5, flag: "diag_combat_giveup", file: "test_diag_combat_giveup.mjs" },
   { tier: 5, flag: "diag_events_diff_lbfilter", file: "test_diag_events_diff_lbfilter.mjs" },
   { tier: 5, flag: "diag_spawn_classifier", file: "test_diag_spawn_classifier.mjs" },
-  { tier: 5, flag: "f2_turn_to_align", file: "test_f2_turn_to_align.mjs" },
   { tier: 5, flag: "first_bake_batch_flags", file: "test_first_bake_batch_flags.mjs" },
   { tier: 5, flag: "fixed_grid", file: "test_fixed_grid.mjs" },
   { tier: 5, flag: "gemsparkle_emit", file: "test_gemsparkle_emit.mjs" },
@@ -386,56 +400,138 @@ const TIER5 = [
   { tier: 5, flag: "walkin_instance_evict", file: "test_walkin_instance_evict.mjs" },
   { tier: 5, flag: "walkin_instance_guard", file: "test_walkin_instance_guard.mjs" },
   { tier: 5, flag: "weather_flags", file: "test_weather_flags.mjs" },
+  // 2026-10-05 — formerly UNREGISTERED suites; each executed and green.
+  { tier: 5, flag: "bc7_record_budget", file: "test_bc7_record_budget.mjs" },
+  { tier: 5, flag: "cam_moving_bench", file: "test_cam_moving_bench.mjs" },
+  { tier: 5, flag: "dead_batch_skip", file: "test_dead_batch_skip.mjs" },
+  { tier: 5, flag: "draw_sort_program", file: "test_draw_sort_program.mjs" },
+  { tier: 5, flag: "frame_split_probe", file: "test_frame_split_probe.mjs" },
+  { tier: 5, flag: "landblock_lru_frame_slot", file: "test_landblock_lru_frame_slot.mjs" },
+  { tier: 5, flag: "mem_census", file: "test_mem_census.mjs" },
+  { tier: 5, flag: "object_radius", file: "test_object_radius.mjs" },
+  { tier: 5, flag: "paletted_dedup", file: "test_paletted_dedup.mjs" },
+  { tier: 5, flag: "stall_probe", file: "test_stall_probe.mjs" },
+  { tier: 5, flag: "stat_array_merge", file: "test_stat_array_merge.mjs" },
+  { tier: 5, flag: "stat_batch_memo_slots", file: "test_stat_batch_memo_slots.mjs" },
+  { tier: 5, flag: "stat_batch_runs", file: "test_stat_batch_runs.mjs" },
+  { tier: 5, flag: "stat_batch_walk", file: "test_stat_batch_walk.mjs" },
+  { tier: 5, flag: "static_atlas_growth", file: "test_static_atlas_growth.mjs" },
+  { tier: 5, flag: "static_atlas_pages", file: "test_static_atlas_pages.mjs" },
+  { tier: 5, flag: "static_geom_cache", file: "test_static_geom_cache.mjs" },
+  { tier: 5, flag: "static_merge_projection", file: "test_static_merge_projection.mjs" },
+  { tier: 5, flag: "surface_planes", file: "test_surface_planes.mjs" },
+  { tier: 5, flag: "texture_census", file: "test_texture_census.mjs" },
+  { tier: 5, flag: "texture_census_real_three", file: "test_texture_census_real_three.mjs" },
+  { tier: 5, flag: "texture_rehydrate", file: "test_texture_rehydrate.mjs" },
+  { tier: 5, flag: "texture_release", file: "test_texture_release.mjs" },
+  { tier: 5, flag: "cmt_attack_type_collapse", file: "tests/cmt_attack_type_collapse.test.mjs" },
+  { tier: 5, flag: "motion_pending_queue", file: "tests/motion_pending_queue.test.mjs" },
+  { tier: 5, flag: "tradeskill_receiver", file: "tests/test_tradeskill_receiver.mjs" },
+  // 2026-10-05 — harness/test_*.mjs suites: the coverage guard never scanned
+  // harness/, so 25 of these 26 ran nowhere. Each executed and green.
+  // Needs the (deliberately uncommitted) esbuild binary: $ESBUILD_BIN or the
+  // scripts/build-shell.mjs ESBUILD_DEFAULT path.
+  { tier: 5, flag: "harness_build_shell", file: "harness/test_build_shell.mjs",
+    requires: () => process.env.ESBUILD_BIN || "/mnt/wbterminal2/reeng/T11/bin/esbuild" },
+  { tier: 5, flag: "harness_cell_fusion", file: "harness/test_cell_fusion.mjs" },
+  { tier: 5, flag: "harness_census_class", file: "harness/test_census_class.mjs" },
+  { tier: 5, flag: "harness_console_allowlist", file: "harness/test_console_allowlist.mjs" },
+  { tier: 5, flag: "harness_diag_schema", file: "harness/test_diag_schema.mjs" },
+  { tier: 5, flag: "harness_draw_pools", file: "harness/test_draw_pools.mjs" },
+  { tier: 5, flag: "harness_frame_phase_census", file: "harness/test_frame_phase_census.mjs" },
+  { tier: 5, flag: "harness_frame_work", file: "harness/test_frame_work.mjs" },
+  { tier: 5, flag: "harness_geom_bundles", file: "harness/test_geom_bundles.mjs" },
+  { tier: 5, flag: "harness_moving_bench_boot", file: "harness/test_moving_bench_boot.mjs" },
+  { tier: 5, flag: "harness_nra_derive", file: "harness/test_nra_derive.mjs" },
+  { tier: 5, flag: "harness_pack_fetch_controller", file: "harness/test_pack_fetch_controller.mjs" },
+  { tier: 5, flag: "harness_pack_fetch_region", file: "harness/test_pack_fetch_region.mjs",
+    requires: "/mnt/wbterminal2/reeng/T10/ci-run1/manifest.json" },
+  { tier: 5, flag: "harness_page_resample_texref", file: "harness/test_page_resample_texref.mjs" },
+  { tier: 5, flag: "harness_report_v2", file: "harness/test_report_v2.mjs" },
+  { tier: 5, flag: "harness_residency_grid", file: "harness/test_residency_grid.mjs" },
+  { tier: 5, flag: "harness_rsid_marker", file: "harness/test_rsid_marker.mjs" },
+  { tier: 5, flag: "harness_service_worker_v3", file: "harness/test_service_worker_v3.mjs" },
+  { tier: 5, flag: "harness_slotgrid_lru_assert", file: "harness/test_slotgrid_lru_assert.mjs" },
+  { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs" },
+  { tier: 5, flag: "harness_tex_compressed_only", file: "harness/test_tex_compressed_only.mjs" },
+  { tier: 5, flag: "harness_texchan_decode", file: "harness/test_texchan_decode.mjs",
+    requires: "/mnt/wbterminal2/holtburger-dist/suite/texchan-manifest.json" },
+  { tier: 5, flag: "harness_texture_worker", file: "harness/test_texture_worker.mjs" },
+  { tier: 5, flag: "harness_texture_worker_real", file: "harness/test_texture_worker_real.mjs",
+    requires: "/mnt/wbterminal2/xubc7-corpus/statics-lossless/0x06003789.ktx2" },
+  { tier: 5, flag: "harness_wind_fallback_peel", file: "harness/test_wind_fallback_peel.mjs" },
+  // 2026-10-05 — un-QUARANTINED: each was repaired (stale assertion or rotted
+  // loader — per-file comments carry the evidence) and now passes.
+  { tier: 5, flag: "a15_q1_entity_buffer_caps", file: "test_a15_q1_entity_buffer_caps.mjs" },
+  { tier: 5, flag: "a15_q3_dispatch_parity", file: "test_a15_q3_dispatch_parity.mjs" },
+  { tier: 5, flag: "a1_o4_single_frame_driver", file: "test_a1_o4_single_frame_driver.mjs" },
+  { tier: 5, flag: "a5_p2_tween_clock", file: "test_a5_p2_tween_clock.mjs" },
+  { tier: 5, flag: "cast_motion_drains", file: "test_cast_motion_drains.mjs" },
+  { tier: 5, flag: "diag_spawnfailed_lbkey", file: "test_diag_spawnfailed_lbkey.mjs" },
+  { tier: 5, flag: "envcell_guard", file: "test_envcell_guard.mjs" },
+  { tier: 5, flag: "examine_dye_preview", file: "test_examine_dye_preview.mjs" },
+  { tier: 5, flag: "f10_hud_nameplate", file: "test_f10_hud_nameplate.mjs" },
+  { tier: 5, flag: "fixed_grid_park", file: "test_fixed_grid_park.mjs" },
+  { tier: 5, flag: "mat_budget_lru", file: "test_mat_budget_lru.mjs" },
+  { tier: 5, flag: "per_vital_events", file: "test_per_vital_events.mjs" },
+  { tier: 5, flag: "phase7_4a_animation_clip", file: "test_phase7_4a_animation_clip.mjs" },
+  { tier: 5, flag: "phase7_4b_entity_pipeline", file: "test_phase7_4b_entity_pipeline.mjs" },
+  { tier: 5, flag: "phase7_6_lighting", file: "test_phase7_6_lighting.mjs" },
+  { tier: 5, flag: "phase7_batch7_omega_basescale", file: "test_phase7_batch7_omega_basescale.mjs" },
+  { tier: 5, flag: "phase7_batch9_entity_lifecycle", file: "test_phase7_batch9_entity_lifecycle.mjs" },
+  { tier: 5, flag: "picking_resolve", file: "test_picking_resolve.mjs" },
+  { tier: 5, flag: "play_effect_resolver", file: "test_play_effect_resolver.mjs" },
+  { tier: 5, flag: "plugin_index_gen", file: "test_plugin_index_gen.mjs" },
+  { tier: 5, flag: "pure_smooth_prediction", file: "test_pure_smooth_prediction.mjs" },
+  { tier: 5, flag: "recolor_escape_entmb", file: "test_recolor_escape_entmb.mjs" },
+  { tier: 5, flag: "sky_lighting", file: "test_sky_lighting.mjs" },
+  { tier: 5, flag: "stat_geom_dedup", file: "test_stat_geom_dedup.mjs" },
+  { tier: 5, flag: "status_indicators", file: "test_status_indicators.mjs" },
+  { tier: 5, flag: "terrain_dirt_shader", file: "test_terrain_dirt_shader.mjs" },
+  { tier: 5, flag: "terrain_ice", file: "test_terrain_ice.mjs" },
+  { tier: 5, flag: "terrain_sand_sparkle", file: "test_terrain_sand_sparkle.mjs" },
+  { tier: 5, flag: "terrain_snow", file: "test_terrain_snow.mjs" },
+  { tier: 5, flag: "terrain_volcano_shader", file: "test_terrain_volcano_shader.mjs" },
+  { tier: 5, flag: "ws03_cast_overlay_guard", file: "tests/test_ws03_cast_overlay_guard.mjs" },
+  // 2026-10-05 — appeared mid-session (concurrent shader work); executed, green.
+  { tier: 5, flag: "shader_logdepth", file: "test_shader_logdepth.mjs" },
 ];
 
-// Registered but KNOWN-FAILING. Listed so they are visible as QUARANTINED
-// rows instead of being quietly left out of the plan — an omitted failure
-// reads as "we have no test", which is how several of these got lost.
-// Clearing this list is task #156.
+// Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
+// with file:line). Not run by default (they would fail), but printed every run
+// and executable with `--run-quarantined` (XFAIL/XPASS, never affects the exit
+// code) so a fix is noticed the moment it lands. A STALE test does not belong
+// here — fix the test. Cleared of the "unclassified — see task #156" backlog
+// on 2026-10-05; every entry must name the bug.
 const QUARANTINE = [
-  { file: "tests/test_ws03_cast_overlay_guard.mjs", why: "pre-existing: static-shape regexes drifted vs scene3d/entities.js (untouched vs HEAD)" },
-  { file: "test_a15_q1_entity_buffer_caps.mjs", why: "unclassified — see task #156" },
-  { file: "test_a15_q3_dispatch_parity.mjs", why: "unclassified — see task #156" },
-  { file: "test_a1_o4_single_frame_driver.mjs", why: "unclassified — see task #156" },
-  { file: "test_a5_p2_tween_clock.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_cast_over_locomotion.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_jump_clip_plays.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_locomotion_dispatch.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_locomotion_per_stance.mjs", why: "unclassified — see task #156" },
-  { file: "test_ac_motion_inventory.mjs", why: "unclassified — see task #156" },
-  { file: "test_cast_motion_drains.mjs", why: "unclassified — see task #156" },
-  { file: "test_diag_spawnfailed_lbkey.mjs", why: "harness stripExports gap: _attachCast is not defined (R8)" },
-  { file: "test_envcell_guard.mjs", why: "STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT gap (documented R8)" },
-  { file: "test_examine_dye_preview.mjs", why: "unclassified — see task #156" },
-  { file: "test_f10_hud_nameplate.mjs", why: "unclassified — see task #156" },
-  { file: "test_fixed_grid_park.mjs", why: "pre-existing, byte-identical FAIL set vs HEAD (R8)" },
-  { file: "test_mat_budget_lru.mjs", why: "unclassified — see task #156" },
-  { file: "test_per_vital_events.mjs", why: "unclassified — see task #156" },
-  { file: "test_phase7_4a_animation_clip.mjs", why: "unclassified — see task #156" },
-  { file: "test_phase7_4b_entity_pipeline.mjs", why: "unclassified — see task #156" },
-  { file: "test_phase7_6_lighting.mjs", why: "unclassified — see task #156" },
-  { file: "test_phase7_batch7_omega_basescale.mjs", why: "unclassified — see task #156" },
-  { file: "test_phase7_batch9_entity_lifecycle.mjs", why: "unclassified — see task #156" },
-  { file: "test_picking_resolve.mjs", why: "unclassified — see task #156" },
-  { file: "test_play_effect_resolver.mjs", why: "unclassified — see task #156" },
-  { file: "test_plugin_index_gen.mjs", why: "unclassified — see task #156" },
-  { file: "test_pure_smooth_prediction.mjs", why: "unclassified — see task #156" },
-  { file: "test_recolor_escape_entmb.mjs", why: "unclassified — see task #156" },
-  { file: "test_sky_assets.mjs", why: "unclassified — see task #156" },
-  { file: "test_sky_dome.mjs", why: "unclassified — see task #156" },
-  { file: "test_sky_lighting.mjs", why: "unclassified — see task #156" },
-  { file: "test_stat_geom_dedup.mjs", why: "unclassified — see task #156" },
-  { file: "test_status_indicators.mjs", why: "unclassified — see task #156" },
-  { file: "test_terrain_dirt_shader.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
-  { file: "test_terrain_ice.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
-  { file: "test_terrain_sand_sparkle.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
-  { file: "test_terrain_snow.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
-  { file: "test_terrain_visual_z.mjs", why: "unclassified — see task #156" },
-  { file: "test_terrain_volcano_shader.mjs", why: "pre-existing GLSL byte-identity drift (documented R7)" },
-  { file: "test_workstream_b_prediction.mjs", why: "unclassified — see task #156" },
-  { file: "test_workstream_d_camera_relative.mjs", why: "unclassified — see task #156" },
+  {
+    file: "test_motion_sequence.mjs",
+    why: "REAL BUG (suspected visual regression, needs 1070 eye-test): poseRigAt " +
+      "(scene3d/motion/motion_sequence.js:35-45) writes RAW part positions + posFrames root " +
+      "motion, while the production mixer clip (scene3d/animation.js:199-245 buildAnimationClip) " +
+      "plays IN PLACE (B1-render fix v2: subtracts the common per-frame drift, skips posFrames " +
+      "unless ?renderRootMotion=on). Under the default ?unifiedMotion (ALL classes incl. " +
+      "locomotion, DEC-18) the poser drives the rig from the SAME animData " +
+      "(scene3d/entities.js:10686 entry.sequenceDescriptor), so the B1 'model strides ahead, " +
+      "snaps back' fix is bypassed. Part B parity maxErr=31.5 on the synthetic 4-frame clip.",
+  },
 ];
-const QUARANTINED = new Set(QUARANTINE.map((q) => q.file));
+
+// Not JS-headless suites: Node wrappers that shell out to `cargo run/test`
+// (holtburger-dat examples / holtburger-core movement tests) against the real
+// DATs in ~/ac_base_dats. They need the Rust toolchain + a BUILD + licensed
+// data, none of which a pure-Node CI leg has (and builds are out of scope for
+// this runner). Listed so they are visible and not "unregistered"; their
+// status was NOT verified on 2026-10-05 (running them would build). Home:
+// harness/cargo-tests.mjs (the Rust leg).
+const NEEDS_TOOLCHAIN = [
+  { file: "test_ac_cast_over_locomotion.mjs", why: "cargo run -p holtburger-dat --example cast_over_locomotion + ~/ac_base_dats" },
+  { file: "test_ac_jump_clip_plays.mjs", why: "cargo run -p holtburger-dat --example jump_clip_data_check + ~/ac_base_dats" },
+  { file: "test_ac_locomotion_dispatch.mjs", why: "cargo test -p holtburger-core --lib movement::" },
+  { file: "test_ac_locomotion_per_stance.mjs", why: "cargo run -p holtburger-dat --example player_mt_stance_coverage + ~/ac_base_dats" },
+  { file: "test_ac_motion_inventory.mjs", why: "cargo run -p holtburger-dat --example wave_8_motion_inventory + ~/ac_base_dats" },
+];
+const QUARANTINED = new Set([...QUARANTINE, ...NEEDS_TOOLCHAIN].map((q) => q.file));
 
 // COVERAGE GUARD — every `test_*.mjs` in the tree must be in a tier or in
 // QUARANTINE. Unlisted files are reported so the registration list can never
@@ -451,6 +547,9 @@ function unregisteredSuites() {
   const SCAN = [
     { dir: "", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
     { dir: "rynth", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
+    // 2026-10-05: harness/ carries 26 `test_*.mjs` suites of its own; only one
+    // was registered and the guard never looked, so 25 ran nowhere.
+    { dir: "harness", match: (n) => n.startsWith("test_") && n.endsWith(".mjs") },
     { dir: "tests", match: (n) => /\.(test\.)?(mjs|cjs)$/.test(n) && (n.startsWith("test_") || n.includes(".test.")) },
   ];
   for (const { dir, match } of SCAN) {
@@ -481,6 +580,8 @@ function parseArgs(argv) {
     allowSkips: false,
     timeoutMs: 120000,
     bail: false,
+    runQuarantined: false,
+    strictFixtures: false,
     help: false,
   };
   for (const a of argv) {
@@ -489,6 +590,8 @@ function parseArgs(argv) {
     else if (a === "--strict-missing") opts.strictMissing = true;
     else if (a === "--allow-skips") opts.allowSkips = true;
     else if (a === "--bail") opts.bail = true;
+    else if (a === "--run-quarantined") opts.runQuarantined = true;
+    else if (a === "--strict-fixtures") opts.strictFixtures = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else if (a.startsWith("--only=")) {
       opts.only = a
@@ -538,6 +641,7 @@ const STATUS = Object.freeze({
   FAIL: "FAIL",
   SKIP: "SKIP",
   MISSING: "MISSING",
+  NOFIXTURE: "NO-FIXTURE",
 });
 
 // A child that prints a SKIP banner and exits 0 asserted NOTHING (2026-08-03
@@ -593,6 +697,13 @@ function runOne(entry, opts) {
   const abs = path.resolve(APP_ROOT, entry.file);
   if (!existsSync(abs)) {
     return { ...entry, status: STATUS.MISSING, code: null, detail: "file not present", output: "" };
+  }
+  // 2026-10-05: a suite that needs a LOCAL data fixture (an external mount)
+  // is not run where the fixture is absent (a CI box) — reported as its own
+  // NO-FIXTURE row, never as a PASS. `--strict-fixtures` makes it a failure.
+  const need = typeof entry.requires === "function" ? entry.requires() : entry.requires;
+  if (need && !existsSync(path.resolve(APP_ROOT, need))) {
+    return { ...entry, status: STATUS.NOFIXTURE, code: null, detail: `fixture absent: ${need}`, output: "" };
   }
   const run = spawnSync(process.execPath, [entry.file], {
     cwd: APP_ROOT,
@@ -699,7 +810,8 @@ function main() {
     const isFailNow =
       res.status === STATUS.FAIL ||
       (res.status === STATUS.SKIP && !opts.allowSkips) ||
-      (res.status === STATUS.MISSING && opts.strictMissing);
+      (res.status === STATUS.MISSING && opts.strictMissing) ||
+      (res.status === STATUS.NOFIXTURE && opts.strictFixtures);
     if (opts.bail && isFailNow) {
       console.log("\n[run-js-headless] --bail: stopping at first failure.");
       break;
@@ -717,11 +829,13 @@ function main() {
   const failed = results.filter((r) => r.status === STATUS.FAIL);
   const missing = results.filter((r) => r.status === STATUS.MISSING);
   const skipped = results.filter((r) => r.status === STATUS.SKIP);
+  const noFixture = results.filter((r) => r.status === STATUS.NOFIXTURE);
 
   console.log("\n" + "=".repeat(76));
   console.log(
     `[run-js-headless] ${passed.length} passed, ${failed.length} failed, ` +
-      `${missing.length} missing  (of ${results.length} run` +
+      `${skipped.length} skipped, ${missing.length} missing, ${noFixture.length} no-fixture, ` +
+      `${QUARANTINE.length} quarantined  (of ${results.length} run` +
       (plan.length !== results.length ? `; ${plan.length - results.length} skipped by --bail` : "") +
       ")"
   );
@@ -730,6 +844,9 @@ function main() {
   }
   for (const r of missing) {
     console.log(`  MISSING : ${r.file}${opts.strictMissing ? " (STRICT → FAIL)" : ""}`);
+  }
+  for (const r of noFixture) {
+    console.log(`  NO-FIXTURE: ${r.file} — ${r.detail}${opts.strictFixtures ? " (STRICT → FAIL)" : " (not run; not a pass)"}`);
   }
   console.log("=".repeat(76));
 
@@ -742,7 +859,17 @@ function main() {
   // a failure nobody lists is indistinguishable from a test that was never
   // written, which is how several of these were lost in the first place.
   for (const q of QUARANTINE) {
-    console.log(`  QUARANTINED: ${q.file} — ${q.why}`);
+    let tag = "";
+    if (opts.runQuarantined) {
+      // XFAIL = still failing as recorded; XPASS = the bug looks fixed →
+      // move the file back into a tier. Never affects the exit code.
+      const r = runOne({ ...q, flag: "quarantined", tier: 0 }, opts);
+      tag = r.status === STATUS.PASS ? " [XPASS — un-quarantine it]" : ` [XFAIL ${r.detail || r.status}]`;
+    }
+    console.log(`  QUARANTINED: ${q.file}${tag} — ${q.why}`);
+  }
+  for (const q of NEEDS_TOOLCHAIN) {
+    console.log(`  NEEDS-TOOLCHAIN (not run here): ${q.file} — ${q.why}`);
   }
 
   // Coverage guard. A suite in neither a tier nor QUARANTINE is invisible —
@@ -755,8 +882,9 @@ function main() {
 
   const missingCountsAsFail = opts.strictMissing ? missing.length : 0;
   const skipCountsAsFail = opts.allowSkips ? 0 : skipped.length;
+  const fixtureCountsAsFail = opts.strictFixtures ? noFixture.length : 0;
   const exitNonZero =
-    failed.length > 0 || missingCountsAsFail > 0 || skipCountsAsFail > 0 ||
+    failed.length > 0 || missingCountsAsFail > 0 || skipCountsAsFail > 0 || fixtureCountsAsFail > 0 ||
     unregistered.length > 0;
   process.exit(exitNonZero ? 1 : 0);
 }

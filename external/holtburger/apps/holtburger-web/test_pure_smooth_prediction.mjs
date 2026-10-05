@@ -45,9 +45,13 @@ function locateThreeDir() {
         const idx = buildPath.indexOf("/build/three.module.js");
         if (idx !== -1) return buildPath.slice(0, idx);
     }
+    // App's own declared dependency first (2026-10-05) — require.resolve
+    // yields build/three.cjs here, and the npx fallback ships no examples/jsm.
+    const appThree = joinPath(__dirname, "node_modules", "three");
+    if (existsSync(joinPath(appThree, "build/three.module.js"))) return appThree;
     try {
         const idx = require.resolve("three");
-        const i = idx.indexOf("/build/three.module.js");
+        const i = idx.search(/\/build\/three\.(module\.js|cjs)$/);
         if (i !== -1) return idx.slice(0, i);
     } catch (_) {}
     const candidates = [
@@ -68,60 +72,12 @@ if (!threeDir) {
 console.log(`three loaded from: ${threeDir}`);
 
 const THREE = await import(joinPath(threeDir, "build/three.module.js"));
-const { OrbitControls } = await import(
-    joinPath(threeDir, "examples/jsm/controls/OrbitControls.js")
-);
-const { PointerLockControls } = await import(
-    joinPath(threeDir, "examples/jsm/controls/PointerLockControls.js")
-);
-
 console.log("GAP 2 — pure-smoothing prediction path standalone ESM test");
 console.log("=========================");
 
-function loadModule(relPath) {
-    const full = resolvePath(__dirname, relPath);
-    let src = readFileSync(full, "utf8");
-    src = src
-        .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-        .replace(
-            /^\s*import\s+\{\s*OrbitControls\s*\}\s+from\s+["']three\/addons\/controls\/OrbitControls\.js["'];?\s*$/m,
-            ""
-        )
-        .replace(
-            /^\s*import\s+\{\s*PointerLockControls\s*\}\s+from\s+["']three\/addons\/controls\/PointerLockControls\.js["'];?\s*$/m,
-            ""
-        )
-        .replace(
-            /^\s*import\s+\{\s*acToThree\s*\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
-            "const acToThree = (ax, ay, az) => [ax, az, -ay];"
-        );
-    return src;
-}
-
-function stripExports(src) {
-    return src
-        .replace(/^\s*export\s+function\s+/gm, "function ")
-        .replace(/^\s*export\s+class\s+/gm, "class ")
-        .replace(/^\s*export\s+const\s+/gm, "const ")
-        .replace(/^\s*export\s+default\s+/gm, "")
-        .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
-}
-
-const camSrc = loadModule("scene3d/camera.js");
-const composite =
-    "// === camera.js ===\n" + stripExports(camSrc) + "\n" +
-    "; return { CameraSwitcher, CAMERA_MODES, createOrthoCamera };";
-
-const factory = new Function(
-    "THREE",
-    "OrbitControls",
-    "PointerLockControls",
-    "performance",
-    "window",
-    "document",
-    composite
-);
-
+// 2026-10-05 — camera.js is IMPORTED as a real ES module (it grew imports
+// the old hand-rolled splice never learned; the suite died on load). The
+// window/document shims are installed as globals before the import.
 // ---- Mock window/document. Pure-smoothing reads only
 // `window.getLocalPlayerGuid` (indirectly), `window.__predPureSmooth`
 // (the A/B lever), and the integrator pose via the session handle. -----
@@ -153,14 +109,9 @@ const fakeDoc = {
     activeElement: null,
 };
 
-const factoryEnv = factory(
-    THREE,
-    OrbitControls,
-    PointerLockControls,
-    globalThis.performance ?? { now: () => Date.now() },
-    fakeWindow,
-    fakeDoc
-);
+globalThis.window = fakeWindow;
+globalThis.document = fakeDoc;
+const factoryEnv = await import("./scene3d/camera.js");
 const { CameraSwitcher, createOrthoCamera } = factoryEnv;
 
 // ---- Mock integrator: a MOVING landblock-local pose. The integrator

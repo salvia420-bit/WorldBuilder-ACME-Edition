@@ -3,15 +3,11 @@
 // rewriting `import * as THREE from "three"` + `import ... from
 // "three/addons/..."` into closure-captured references (same trick
 // the 7.4a/7.4b tests use). Drives a CameraSwitcher with a mock
-// `sessionHandle.setMovementInput` recorder + verifies the
-// camera-relative WASD math at yaw=0 and yaw=π/2.
-//
-// The load-bearing assertion: at yaw=π/2, pressing W (intent
-// forward) should NOT produce setMovementInput(forward=+1, strafe=0)
-// — it should produce setMovementInput(forward=0, strafe=+1)
-// because the camera is now facing east, and pressing forward means
-// "move east", which is `strafe=+1` in the world-fixed (camera-
-// rotated) convention.
+// `sessionHandle.setMovementInput` recorder + verifies the WASD intent
+// (`lastMoveIntent`) per camera mode. 2026-10-05: follow-mode WASD is
+// PLAYER-LOCAL since Cohere-D Phase 1 (the camera-relative yaw rotation
+// this file originally pinned was removed on purpose), and the camera
+// dispatcher stays silent under the default-ON `?cmdInterp`.
 //
 // Run with:
 //   cd apps/holtburger-web/
@@ -47,9 +43,15 @@ function locateThreeDir() {
         const idx = buildPath.indexOf("/build/three.module.js");
         if (idx !== -1) return buildPath.slice(0, idx);
     }
+    // The app's own declared dependency FIRST (2026-10-05): `require.resolve`
+    // yields build/three.cjs on this layout, so the old `/build/three.module.js`
+    // match never hit and the scan fell through to a stale npx cache whose
+    // three ships no examples/jsm — an unconditional SKIP that asserted nothing.
+    const appThree = joinPath(__dirname, "node_modules", "three");
+    if (existsSync(joinPath(appThree, "build/three.module.js"))) return appThree;
     try {
         const idx = require.resolve("three");
-        const i = idx.indexOf("/build/three.module.js");
+        const i = idx.search(/\/build\/three\.(module\.js|cjs)$/);
         if (i !== -1) return idx.slice(0, i);
     } catch (_) {}
     const candidates = [
@@ -131,26 +133,16 @@ function stripExports(src) {
         .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
 }
 
-const camSrc = loadModule("scene3d/camera.js");
-const composite =
-    "// === camera.js ===\n" + stripExports(camSrc) + "\n" +
-    "; return { CameraSwitcher, CAMERA_MODES, createOrthoCamera };";
-
-const factory = new Function(
-    "THREE",
-    "OrbitControls",
-    "PointerLockControls",
-    "performance",
-    "window",
-    "document",
-    composite
-);
-
-// Provide minimal performance + window + document shims. Node has
-// performance.now() natively. window/document need just enough
-// surface for the listener installers — `addEventListener` /
-// `removeEventListener` no-ops + `activeElement: null`.
-const noopListener = () => ({ addEventListener: () => {}, removeEventListener: () => {} });
+// 2026-10-05 — camera.js is now IMPORTED as a real ES module instead of
+// text-spliced into new Function(). It grew imports (input.js run-modifier,
+// ui/input-funnel.js, camera_retail_math, rust_pose) that the hand-rolled
+// stripper below never learned, and the spliced body died with "Cannot use
+// import statement outside a module" — hidden for months behind an
+// OrbitControls-not-found SKIP. Node resolves `three` and
+// `three/addons/...` from the app's own node_modules (same three.module.js
+// instance as THREE above), so the genuine module graph runs. The window /
+// document shims are installed as globals BEFORE the import so any
+// module-top-level flag read sees them.
 const fakeDoc = {
     addEventListener: () => {},
     removeEventListener: () => {},
@@ -160,14 +152,9 @@ const fakeWindow = {
     addEventListener: () => {},
     removeEventListener: () => {},
 };
-const factoryEnv = factory(
-    THREE,
-    OrbitControls,
-    PointerLockControls,
-    globalThis.performance ?? { now: () => Date.now() },
-    fakeWindow,
-    fakeDoc
-);
+globalThis.window = fakeWindow;
+globalThis.document = fakeDoc;
+const factoryEnv = await import("./scene3d/camera.js");
 const { CameraSwitcher, CAMERA_MODES, createOrthoCamera } = factoryEnv;
 
 // ---- Mock sessionHandle that records calls --------------------------
@@ -245,151 +232,117 @@ check(
 );
 
 // ---- Helper to drive a tick with a specific keystate + yaw ----------
+// 2026-10-05 rewrite. Two deliberate app changes made the original
+// assertions stale:
+//   1. Cohere-D Phase 1 (2026-05-12, camera.js computeMovementFromKeys):
+//      follow-mode WASD is PLAYER-LOCAL — the camera yaw no longer rotates
+//      the intent vector (and auto-turn-to-align was removed). The old
+//      "yaw=π/2 W → strafe=+1" camera-relative convention is gone.
+//   2. `?cmdInterp` is DEFAULT-ON (camera.js CMD_INTERP_ON, `!== "off"`):
+//      raw key edges reach wasm via handleKeyAction, so the camera
+//      dispatcher must NOT also call setMovementInput (row-14 double-drive).
+//      The resolved intent is still published every tick as
+//      `switcher.lastMoveIntent`, which is what these checks now read.
 function driveTick(keys, yaw, dt = 0.016) {
     Object.assign(switcher.keys, keys);
     switcher.followYaw = yaw;
     calls.length = 0;
     switcher.tick(dt);
+    return switcher.lastMoveIntent;
 }
-
-// ---- Assert 3: W with followYaw=0 → setMovementInput(+1, 0, 0, run) -
-// At yaw=0, camera faces +Y (north). Pressing W should move the
-// player north, which in world-fixed coords is forward=+1, strafe=0.
-driveTick({ w: true, a: false, s: false, d: false, q: false, e: false, shift: false }, 0);
-check(
-    "Phase 7.5: W + followYaw=0 → setMovementInput(forward=+1, strafe=0, ...)",
-    calls.length === 1 && calls[0].forward === 1 && calls[0].strafe === 0,
-    `calls=${JSON.stringify(calls)}`
-);
-const yaw0Call = calls[0];
-
-// ---- Reset signature so subsequent calls fire -----------------------
 function resetSig() {
     switcher.lastInputSig = "STALE";
 }
+const K = (o) => ({ w: false, a: false, s: false, d: false, q: false, e: false, shift: false, ...o });
+const isMv = (mv, f, s, t) => !!mv && mv.forward === f && mv.strafe === s && (t === undefined || mv.turn === t);
 
-// ---- Assert 4: W with followYaw=π/2 → setMovementInput(0, +1, ...) --
-// At yaw=π/2, camera faces +X (east). Pressing W should move the
-// player east, which in world-fixed coords is forward=0, strafe=+1.
-resetSig();
-driveTick({ w: true, a: false, s: false, d: false, q: false, e: false, shift: false }, Math.PI / 2);
+let mv = driveTick(K({ w: true }), 0);
+check("Phase 7.5: W + followYaw=0 → intent forward=+1, strafe=0", isMv(mv, 1, 0, 0), JSON.stringify(mv));
 check(
-    "Phase 7.5: W + followYaw=π/2 → setMovementInput(forward=0, strafe=+1, ...) (camera-east = world-east strafe)",
-    calls.length === 1 && calls[0].forward === 0 && calls[0].strafe === 1,
+    "Phase 7.5: cmdInterp default-ON → camera dispatcher sends NO setMovementInput (no double-drive)",
+    calls.length === 0,
     `calls=${JSON.stringify(calls)}`
 );
-const yawPi2Call = calls[0];
+const yaw0Call = mv;
 
-// ---- Assert 5: D with followYaw=0 → setMovementInput(0, +1, ...) ----
-// At yaw=0, pressing D (strafe right in camera frame) = world-east.
 resetSig();
-driveTick({ w: false, a: false, s: false, d: true, q: false, e: false, shift: false }, 0);
+mv = driveTick(K({ w: true }), Math.PI / 2);
 check(
-    "Phase 7.5: D + followYaw=0 → setMovementInput(forward=0, strafe=+1, ...)",
-    calls.length === 1 && calls[0].forward === 0 && calls[0].strafe === 1,
-    `calls=${JSON.stringify(calls)}`
+    "Phase 7.5: follow is player-local — W + followYaw=π/2 still → forward=+1, strafe=0 (camera yaw does not redirect WASD)",
+    isMv(mv, 1, 0, 0),
+    JSON.stringify(mv)
 );
+const yawPi2Call = mv;
 
-// ---- Assert 6: D with followYaw=π/2 → setMovementInput(-1, 0, ...) --
-// At yaw=π/2 (camera faces east), pressing D (strafe right in camera
-// frame) = world-south. World-south = forward=-1, strafe=0.
 resetSig();
-driveTick({ w: false, a: false, s: false, d: true, q: false, e: false, shift: false }, Math.PI / 2);
-check(
-    "Phase 7.5: D + followYaw=π/2 → setMovementInput(forward=-1, strafe=0, ...) (camera-right = world-south)",
-    calls.length === 1 && calls[0].forward === -1 && calls[0].strafe === 0,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ d: true }), 0);
+check("Phase 7.5: D + followYaw=0 → forward=0, strafe=+1", isMv(mv, 0, 1), JSON.stringify(mv));
 
-// ---- Assert 7: W+D diagonal at yaw=0 → forward=+1, strafe=+1 --------
 resetSig();
-driveTick({ w: true, a: false, s: false, d: true, q: false, e: false, shift: false }, 0);
-check(
-    "Phase 7.5: W+D diagonal + yaw=0 → forward=+1, strafe=+1 (no normalization)",
-    calls.length === 1 && calls[0].forward === 1 && calls[0].strafe === 1,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ d: true }), Math.PI / 2);
+check("Phase 7.5: D + followYaw=π/2 → forward=0, strafe=+1 (player-local)", isMv(mv, 0, 1), JSON.stringify(mv));
 
-// ---- Assert 8: Q (turn left) → turn=-1 ------------------------------
 resetSig();
-driveTick({ w: false, a: false, s: false, d: false, q: true, e: false, shift: false }, 0);
-check(
-    "Phase 7.5: Q → turn=-1 (left)",
-    calls.length === 1 && calls[0].turn === -1,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ w: true, d: true }), 0);
+check("Phase 7.5: W+D diagonal → forward=+1, strafe=+1 (no normalization)", isMv(mv, 1, 1), JSON.stringify(mv));
 
-// ---- Assert 9: Shift → run=false ------------------------------------
 resetSig();
-driveTick({ w: true, a: false, s: false, d: false, q: false, e: false, shift: true }, 0);
-check(
-    "Phase 7.5: W + Shift → run=false (walk modifier)",
-    calls.length === 1 && calls[0].run === false,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ q: true }), 0);
+check("Phase 7.5: Q → turn=-1 (left)", !!mv && mv.turn === -1, JSON.stringify(mv));
 
-// ---- Assert 10: Mode switch to 'orbit' suppresses movement ---------
+resetSig();
+mv = driveTick(K({ w: true }), 0);
+check("Phase 7.5: W (no Shift) → run=true (run-by-default; ToggleRun option defaults TRUE)", !!mv && mv.run === true, JSON.stringify(mv));
+resetSig();
+mv = driveTick(K({ w: true, shift: true }), 0);
+check("Phase 7.5: W + Shift → run=false (walk modifier)", !!mv && mv.run === false, JSON.stringify(mv));
+
+// ---- Mode switch to 'orbit' suppresses movement ----------------------
 switcher.switchMode("orbit");
 check(
     "Phase 7.5: switchMode('orbit') flips mode + activeCamera",
     switcher.mode === "orbit" && switcher.activeCamera === persp,
     `mode=${switcher.mode}, activeCamera === persp? ${switcher.activeCamera === persp}`
 );
-// Verify computeMovementFromKeys returns null in orbit (movement
-// suppressed — no setMovementInput call).
 const orbitMv = switcher.computeMovementFromKeys();
 check(
     "Phase 7.5: orbit mode suppresses computeMovementFromKeys (returns null)",
     orbitMv === null,
     `orbitMv=${JSON.stringify(orbitMv)}`
 );
-// Tick the switcher with W pressed in orbit mode — should NOT fire
-// setMovementInput.
 resetSig();
-driveTick({ w: true, a: false, s: false, d: false, q: false, e: false, shift: false }, 0);
+mv = driveTick(K({ w: true }), 0);
 check(
-    "Phase 7.5: tick in orbit mode does NOT fire setMovementInput on WASD",
-    calls.length === 0,
-    `calls.length=${calls.length}`
+    "Phase 7.5: tick in orbit mode publishes a null intent and fires no setMovementInput",
+    mv === null && calls.length === 0,
+    `mv=${JSON.stringify(mv)} calls.length=${calls.length}`
 );
 
-// ---- Assert 11: Mode switch to 'topDown' --------------------------
+// ---- Mode switch to 'topDown' -----------------------------------------
 switcher.switchMode("topDown");
 check(
     "Phase 7.5: switchMode('topDown') flips mode + activeCamera",
     switcher.mode === "topDown" && switcher.activeCamera === ortho,
     `mode=${switcher.mode}, activeCamera === ortho? ${switcher.activeCamera === ortho}`
 );
-
-// In topDown mode, WASD is world-fixed regardless of followYaw. Press
-// W → forward=+1, regardless of yaw.
 resetSig();
-driveTick({ w: true, a: false, s: false, d: false, q: false, e: false, shift: false }, Math.PI / 2);
-check(
-    "Phase 7.5: topDown mode is world-fixed — W → forward=+1 regardless of followYaw",
-    calls.length === 1 && calls[0].forward === 1 && calls[0].strafe === 0,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ w: true }), Math.PI / 2);
+check("Phase 7.5: topDown is world-fixed — W → forward=+1 regardless of followYaw", isMv(mv, 1, 0), JSON.stringify(mv));
 resetSig();
-driveTick({ w: false, a: false, s: false, d: true, q: false, e: false, shift: false }, Math.PI / 2);
-check(
-    "Phase 7.5: topDown mode is world-fixed — D → strafe=+1 regardless of followYaw",
-    calls.length === 1 && calls[0].forward === 0 && calls[0].strafe === 1,
-    `calls=${JSON.stringify(calls)}`
-);
+mv = driveTick(K({ d: true }), Math.PI / 2);
+check("Phase 7.5: topDown is world-fixed — D → strafe=+1 regardless of followYaw", isMv(mv, 0, 1), JSON.stringify(mv));
 
-// ---- Assert 12: Mode cycles through all 3 ---------------------------
+// ---- Mode cycles through all 3 (CAMERA_MODES order, `C` key) ------------
 switcher.switchMode("follow");
 const cycle = [];
 for (let i = 0; i < 6; i += 1) {
     cycle.push(switcher.mode);
     const idx = CAMERA_MODES.indexOf(switcher.mode);
-    const nextMode = CAMERA_MODES[(idx + 1) % CAMERA_MODES.length];
-    switcher.switchMode(nextMode);
+    switcher.switchMode(CAMERA_MODES[(idx + 1) % CAMERA_MODES.length]);
 }
 check(
-    "Phase 7.5: mode cycles follow → orbit → topDown → follow (CAMERA_MODES ordering)",
-    cycle.join(",") === "follow,orbit,topDown,follow,orbit,topDown",
+    "Phase 7.5: mode cycles follow → topDown → orbit → follow (CAMERA_MODES ordering)",
+    cycle.join(",") === "follow,topDown,orbit,follow,topDown,orbit",
     `cycle=${cycle.join(",")}`
 );
 
@@ -449,16 +402,12 @@ const recordingCanvas = {
         left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600,
     }),
 };
-// Re-build the module factory bound to the recording shims so the
-// constructor's listener installers see them.
-const recFactoryEnv = factory(
-    THREE,
-    OrbitControls,
-    PointerLockControls,
-    globalThis.performance ?? { now: () => Date.now() },
-    recordingWindow,
-    recordingDoc
-);
+// The module is a real ES import now (cached), and camera.js resolves
+// `window` / `document` as globals at CALL time, so swapping the globals
+// is what binds the constructor's listener installers to the recorders.
+globalThis.window = recordingWindow;
+globalThis.document = recordingDoc;
+const recFactoryEnv = factoryEnv;
 const recPersp = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 5000);
 const recOrtho = recFactoryEnv.createOrthoCamera(recordingCanvas);
 const switcher2 = new recFactoryEnv.CameraSwitcher({
@@ -473,10 +422,19 @@ const switcher2 = new recFactoryEnv.CameraSwitcher({
 // (A) the 5 global input listeners (blur/keydown/keyup/wheel/C) landed
 // in _globalListeners — at least 4 (window 'blur' is skipped if window
 // is undefined, but our shim provides it, so expect all 5).
+// P-unification (2026-07-28): under the default-ON `?inputFunnelV2` the
+// keydown/keyup keystate mirror + the C mode toggle are RAW funnel
+// subscribers (`_funnelUnbinds`), not document listeners, so
+// `_globalListeners` keeps only blur + wheel. The C1 invariant is that the
+// page-global input handlers (wherever they live) are ALL installed and
+// survive switchMode — count both homes.
+const gl = switcher2._globalListeners;
+const fu = switcher2._funnelUnbinds || [];
 check(
-    "C1 (#1): _globalListeners holds the page-global input handlers (>=4)",
-    Array.isArray(switcher2._globalListeners) && switcher2._globalListeners.length >= 4,
-    `_globalListeners.length=${switcher2._globalListeners ? switcher2._globalListeners.length : "MISSING"}`
+    "C1 (#1): page-global input handlers installed — _globalListeners (blur/wheel) + funnel binds (keydown/keyup/C) >= 4",
+    Array.isArray(gl) && gl.length + fu.length >= 4 &&
+        gl.some(([t]) => t === "blur") && gl.some(([t]) => t === "wheel"),
+    `_globalListeners=${gl ? gl.map(([t]) => t).join("/") : "MISSING"} funnelBinds=${fu.length}`
 );
 
 // (B) the constructor's switchMode('follow') must NOT have removed any
@@ -495,9 +453,10 @@ const globalLenBefore = switcher2._globalListeners.length;
 switcher2.switchMode("orbit");
 switcher2.switchMode("topDown");
 check(
-    "C1 (#1): _globalListeners.length unchanged after two switchMode toggles",
-    switcher2._globalListeners.length === globalLenBefore,
-    `before=${globalLenBefore} after=${switcher2._globalListeners.length}`
+    "C1 (#1): _globalListeners.length + funnel binds unchanged after two switchMode toggles",
+    switcher2._globalListeners.length === globalLenBefore &&
+        (switcher2._funnelUnbinds || []).length === fu.length,
+    `before=${globalLenBefore}+${fu.length} after=${switcher2._globalListeners.length}+${(switcher2._funnelUnbinds || []).length}`
 );
 
 // (D) getActive() returns the live activeCamera (ortho in topDown,
@@ -530,14 +489,8 @@ switcher2.dispose();
 
 // ---- Summary --------------------------------------------------------
 console.log("=========================");
-console.log("Resolution of the load-bearing sign convention:");
-console.log("  yaw=0   W → forward=+1, strafe=0  (player moves +Y north — camera faces north)");
-console.log("  yaw=π/2 W → forward=0,  strafe=+1 (player moves +X east  — camera faces east)");
-console.log("  yaw=0   D → forward=0,  strafe=+1 (player moves +X east  — strafe-right in camera-frame)");
-console.log("  yaw=π/2 D → forward=-1, strafe=0  (player moves -Y south — strafe-right of east-facing = south)");
-console.log("Convention: setMovementInput.forward = clampSign(worldDy) where +Y = north;");
-console.log("            setMovementInput.strafe  = clampSign(worldDx) where +X = east.");
-console.log(`recorded calls: ${calls.length} most recent; recorded yaw=0/yaw=π/2 W: ${JSON.stringify(yaw0Call)} / ${JSON.stringify(yawPi2Call)}`);
+console.log("Convention (Cohere-D Phase 1): follow-mode WASD is player-local; camera yaw never redirects it.");
+console.log(`yaw=0 / yaw=π/2 W intents: ${JSON.stringify(yaw0Call)} / ${JSON.stringify(yawPi2Call)}`);
 if (failed === 0) {
     console.log(`PASS: ${passed}/${passed} Phase 7.5 camera-math checks green.`);
     process.exit(0);

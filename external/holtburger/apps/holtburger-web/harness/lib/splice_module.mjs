@@ -23,24 +23,32 @@
 // the same class of defect this review exists to remove. A loud
 // "you must stub X" is always preferable to a silent truthy X.
 
+// Every pattern tolerates a trailing `// comment` after the statement
+// (2026-10-05: entities.js carries
+// `import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 ...`, which
+// survived the old `;?[ \t]*$` anchor and died inside new Function()).
+const TRAIL = String.raw`;?[ \t]*(?:\/\/[^\n]*)?$`;
 const IMPORT_PATTERNS = [
   // import { a, b as c } from "x";   (brace body may span lines)
-  /^[ \t]*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[ \t]*$/gm,
+  new RegExp(String.raw`^[ \t]*import\s+\{[^}]*\}\s+from\s+["'][^"']+["']` + TRAIL, "gm"),
   // import * as NS from "x";
-  /^[ \t]*import\s+\*\s+as\s+[A-Za-z_$][\w$]*\s+from\s+["'][^"']+["'];?[ \t]*$/gm,
+  new RegExp(String.raw`^[ \t]*import\s+\*\s+as\s+[A-Za-z_$][\w$]*\s+from\s+["'][^"']+["']` + TRAIL, "gm"),
   // import Default, { a } from "x";  /  import Default from "x";
-  /^[ \t]*import\s+[A-Za-z_$][\w$]*\s*(?:,\s*\{[^}]*\})?\s*from\s+["'][^"']+["'];?[ \t]*$/gm,
+  new RegExp(String.raw`^[ \t]*import\s+[A-Za-z_$][\w$]*\s*(?:,\s*\{[^}]*\})?\s*from\s+["'][^"']+["']` + TRAIL, "gm"),
   // import "x";  (side-effect only)
-  /^[ \t]*import\s+["'][^"']+["'];?[ \t]*$/gm,
+  new RegExp(String.raw`^[ \t]*import\s+["'][^"']+["']` + TRAIL, "gm"),
 ];
 
 /** Every identifier bound by a static import in `src`. */
 export function importedNames(src) {
   const out = new Set();
-  const re = /^[ \t]*import\s+([\s\S]*?)\s+from\s+["'][^"']+["'];?[ \t]*$/gm;
+  const re = new RegExp(String.raw`^[ \t]*import\s+([\s\S]*?)\s+from\s+["'][^"']+["']` + TRAIL, "gm");
   let m;
   while ((m = re.exec(src)) !== null) {
-    const spec = m[1].trim();
+    // Drop comments inside the specifier first: a `// ... built from, so ...`
+    // comment inside a multi-line brace list used to be split on its comma
+    // and yield the bogus import name "from" (materials.js, 2026-10-05).
+    const spec = m[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "").trim();
     const braces = /\{([\s\S]*?)\}/.exec(spec);
     if (braces) {
       for (const part of braces[1].split(",")) {

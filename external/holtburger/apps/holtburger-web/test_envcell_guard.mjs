@@ -61,52 +61,16 @@ console.log("Batch 11 — EnvCell post-compileAsync eviction guard (envcell-guar
 console.log(`three loaded from: ${threePath}`);
 console.log("=========================");
 
-// ---- load + splice the modules (strip imports/exports) --------------
-function loadModule(relPath) {
-  const full = resolvePath(__dirname, relPath);
-  if (!existsSync(full)) throw new Error(`module not found: ${full}`);
-  let src = readFileSync(full, "utf8");
-  src = src.replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "");
-  src = src.replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  src = src.replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  src = src.replace(/^\s*import\s+[A-Za-z_$][\w$]*\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  return src;
-}
-function stripExports(src) {
-  return src
-    .replace(/^\s*export\s+async\s+function\s+/gm, "async function ")
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ")
-    .replace(/^\s*export\s+const\s+/gm, "const ")
-    .replace(/^\s*export\s+let\s+/gm, "let ")
-    .replace(/^\s*export\s+default\s+/gm, "")
-    .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
-}
-
-const adapterSrc = loadModule("scene3d/adapter.js");
-const cellsSrc = loadModule("scene3d/cells.js");
-
-const composite =
-  "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
-  "// === cells.js ===\n" + stripExports(cellsSrc) + "\n" +
-  "; return { buildEnvCellsForLandblock };";
-
-// Inject the cross-module symbols cells.js imported: `lbKeyOf` (real) and
-// `materialCanCastShadow` (stub — never reached on an empty cell). adapter
-// symbols (meshToGeometryGroups / acQuatToThree / placementToMatrix4 /
-// meshToFusedGeometry) are spliced inline above.
-const factory = new Function(
-  "THREE", "performance", "window", "globalThis", "lbKeyOf", "materialCanCastShadow",
-  composite,
-);
-const { buildEnvCellsForLandblock } = factory(
-  THREE,
-  globalThis.performance ?? { now: () => Date.now() },
-  undefined,
-  globalThis,
-  lbKeyOf,
-  () => false,
-);
+// ---- load cells.js as a REAL ES module ------------------------------
+// 2026-10-05: the hand-rolled splice rotted as cells.js grew module-top-level
+// reads of imported symbols (readPortalPass2Flag(null), makeLosCache(),
+// STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT) — it died with a bare ReferenceError and
+// sat in QUARANTINE. Node resolves every cells.js import from the tree
+// (verified: the whole graph imports headless), so the GENUINE module runs.
+// Its flag readers look at globalThis.location at module load, so the sync-
+// path flag is set BEFORE the import.
+globalThis.location = { search: "?noEnvcellTimeSlice=1" };
+const { buildEnvCellsForLandblock } = await import("./scene3d/cells.js");
 
 // ---- wasm/scene3d mocks ---------------------------------------------
 const LB_FULL = 0xA9B40000;          // Holtburg LB (full 32-bit id)
@@ -141,7 +105,17 @@ function makeScene3d(compileAsyncImpl) {
       fallbackMaterial: new THREE.MeshBasicMaterial(),
       async preload() {},
     },
-    renderer: { compileAsync: compileAsyncImpl },
+    // P6 hardening (2026-07-10): cells.js now prewarms through
+    // bake_prewarm.js guardedCompileAsync, which calls the SYNC
+    // `renderer.compile()` and polls program readiness itself — it never calls
+    // `renderer.compileAsync`. The old mock only had compileAsync, so compile()
+    // threw, cells.js swallowed it ("cells will lazy-compile") and the
+    // simulated eviction never ran. Drive the hook from compile(); an empty
+    // Set = "no programs pending", so the guard re-checks right after.
+    renderer: {
+      compile: (subtree, camera, scene) => { compileAsyncImpl(subtree, camera, scene); return new Set(); },
+      compileAsync: compileAsyncImpl,
+    },
   };
 }
 
@@ -154,7 +128,7 @@ const wasmExports = {
 // Force the SYNC path (envcellTimeSlice = false) so this test proves the
 // guard fires WITHOUT the `envcellTimeSlice &&` qualifier (the bug was that
 // the qualifier suppressed the guard on exactly this path).
-globalThis.location = { search: "?noEnvcellTimeSlice=1" };
+// (globalThis.location set above, before the import.)
 
 // =====================================================================
 // Test 1: eviction lands during compileAsync await (sync path) →
@@ -164,7 +138,11 @@ globalThis.location = { search: "?noEnvcellTimeSlice=1" };
   const scene3d = makeScene3d(async (subtree, camera, scene) => {
     // Simulate an eviction tick interleaving while compile is in flight:
     // evict() removes the lbKey from envCellLoadedLbs.
+    // geom-audit (2026-07-02): the mid-build eviction signal is now the
+    // per-LB generation token, which landblock_lru's evict() deletes along
+    // with the loaded mark — mirror both.
     scene3d.envCellLoadedLbs.delete(LB_KEY);
+    scene3d.envCellBuildGen?.delete(LB_KEY);
     // Yield once to model the real async boundary.
     await Promise.resolve();
   });

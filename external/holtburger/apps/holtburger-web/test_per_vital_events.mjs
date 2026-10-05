@@ -219,6 +219,11 @@ function makeFakeClient() {
 const fakeClient = makeFakeClient();
 window.__pluginClient = fakeClient;
 
+// 2026-10-05: the liquid vital ORBS (plugins/vitals-orbs.js) are DEFAULT-ON
+// since the 2026-08-01 1070 sign-off, and vitals-hud.js's mount() is a
+// deliberate no-op while they are active (two-sided exclusion). This suite
+// covers the classic bars, so select them with the documented escape.
+globalThis.location = { search: "?vitalsOrbs=off" };
 const unmount = mount({ client: fakeClient });
 
 // Pull the overlay element out of document.body. The plugin sets

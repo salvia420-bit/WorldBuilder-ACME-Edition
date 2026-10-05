@@ -34,6 +34,8 @@ function check(name, ok, detail) {
 // This used to be a THREE_PATH-env-only lookup that exit-0'd when unset, so the
 // invocation in this file's own header asserted nothing. See F2.
 import { locateThree, requireThree } from "./harness/lib/locate_three.mjs";
+import { spliceModule } from "./harness/lib/splice_module.mjs";
+import { MATERIALS_JS_STUBS } from "./harness/lib/scene3d_stubs.mjs";
 
 const threePath = locateThree();
 const THREE = await requireThree("C4 program-cache-key ESM test");
@@ -81,15 +83,15 @@ const { setupCsm } = csmFactory(THREE);
 // the flag is off — see _installLightClampShaderPatch).
 globalThis.window = { location: { search: "?lightClamp=retail" } };
 
-const matsSrc = loadModule("scene3d/materials.js");
-const matsPatched = matsSrc
-    .replace(
-        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
-        ""
-    )
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ")
-    .replace(/^\s*export\s+const\s+/gm, "const ");
+// 2026-10-05 — the hand-rolled stripper's `[\w*\s{},]+` specifier class
+// cannot cross a `// comment` inside a multi-line brace list (materials.js's
+// bc7_textures.js import carries three), so an `import {` survived into
+// new Function(). Use the shared splice helper + explicit stub map instead
+// (harness/lib/splice_module.mjs; fails loudly naming any new import).
+const matsPatched = spliceModule(readFileSync(resolvePath(__dirname, "scene3d/materials.js"), "utf8"), {
+    stubs: MATERIALS_JS_STUBS,
+    label: "scene3d/materials.js",
+});
 const matsFactory = new Function(
     "THREE",
     matsPatched +

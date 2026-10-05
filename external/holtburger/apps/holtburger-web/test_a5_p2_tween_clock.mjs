@@ -25,6 +25,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath, join as joinPath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { stripStaticImports } from "./harness/lib/splice_module.mjs";
+import { entitiesToplevelPrelude, entitiesCtorPrelude } from "./harness/lib/scene3d_stubs.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -80,11 +82,9 @@ function loadModule(relPath) {
     const full = resolvePath(__dirname, relPath);
     if (!existsSync(full)) throw new Error(`module not found: ${full}`);
     let src = readFileSync(full, "utf8");
-    src = src
-        .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-        .replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "")
-        .replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
-    return src;
+    // Shared tolerant stripper (2026-10-05): the hand-rolled regexes missed
+    // `import {...} from "..."; // trailing comment` lines in entities.js.
+    return stripStaticImports(src).replace(/import\.meta\.url/g, '"file:///__spliced__"');
 }
 function stripExports(src) {
     return src
@@ -118,6 +118,8 @@ const PARTICLE_OWNER_STUB =
 
 const entitiesRaw = readFileSync(resolvePath(__dirname, "scene3d/entities.js"), "utf8");
 const composite = PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
+    // module-top-level reader calls other than readRigModuleFlag (stubbed above)
+    entitiesToplevelPrelude(["readRigModuleFlag"]) + entitiesCtorPrelude() +
     "// === adapter.js ===\n" + stripExports(loadModule("scene3d/adapter.js")) + "\n" +
     "// === animation.js ===\n" + stripExports(loadModule("scene3d/animation.js")) + "\n" +
     "// === entities.js ===\n" + stripExports(loadModule("scene3d/entities.js")) + "\n" +
@@ -158,12 +160,15 @@ console.log("[1] source wiring asserts");
     const tickerWall = (entitiesRaw.match(/Tween\(inst, performance\.now\(\)\)/g) || []).length;
     check("no ticker call site reads performance.now()", tickerWall === 0, `found ${tickerWall}`);
     const tickerDt = (entitiesRaw.match(/Tween\(inst, this\._tweenNowMs\(\)\)/g) || []).length;
-    check("all 4 ticker call sites read _tweenNowMs()", tickerDt === 4, `found ${tickerDt}`);
+    // WS-B teardown (2026-06-18): the swing + cast vibe-pose tweens
+    // (setSwingPose / setCastPose + their tickers) were RETIRED in favour of
+    // the Rust motion authority — 2 tickers (jump + scale) remain.
+    check("both remaining ticker call sites (jump + scale) read _tweenNowMs()", tickerDt === 2, `found ${tickerDt}`);
     const stampWall = (entitiesRaw.match(/startMs: performance\.now\(\)/g) || []).length;
     check("no tween startMs stamps performance.now()", stampWall === 0, `found ${stampWall}`);
     const stampDt = (entitiesRaw.match(/startMs: this\._tweenNowMs\(\)/g) || []).length;
-    check("all 7 stamp sites use _tweenNowMs() (4 jump + swing + cast + scale)",
-        stampDt === 7, `found ${stampDt}`);
+    check("all 5 stamp sites use _tweenNowMs() (4 jump + scale; swing/cast retired)",
+        stampDt === 5, `found ${stampDt}`);
     check("tick(dt) advances the accumulated clock by dt*1000",
         /this\._tweenClockMs \+= dt \* 1000;/.test(entitiesRaw));
 }
@@ -280,54 +285,11 @@ console.log("[6] 2s-gap phase test — jump pose (generic)");
 }
 
 // =====================================================================
-console.log("[7] 2s-gap phase test — swing");
+console.log("[7] swing/cast vibe-pose tweens stay retired (WS-B 2026-06-18)");
 {
-    wallMs = 100000;
     const em = makeManager("?tweenClock=dt");
-    const inst = makeHumanInst(0x102);
-    em.entityMap.set(0x102, inst);
-    em.setSwingPose(0x102); // 300ms triangle 0→1→0
-    const tw = inst._swingTween;
-    check("swing startMs stamped from the dt clock",
-        tw && Math.abs(tw.startMs - em._tweenNowMs()) < EPS);
-    em.entityMap.delete(0x102); // fixture has no mixer — tick only the clock
-    wallMs += 2000;
-    em.tick(0.15); // half of 300ms → triangle peak (amplitude 1.0)
-    em._tickSwingTween(inst, em._tweenNowMs());
-    const arm = inst.parts[13];
-    check("swing at triangle PEAK after 150ms accumulated dt (wall +2s ignored)",
-        inst._swingTween !== null &&
-        arm.quaternion.angleTo(tw.swingQ) < 1e-6,
-        `angleTo(swingQ)=${arm.quaternion.angleTo(tw.swingQ).toFixed(6)}`);
-    em.tick(0.2); // past 300ms total
-    em._tickSwingTween(inst, em._tweenNowMs());
-    check("swing completes + arm restored to baseQ on accumulated dt",
-        inst._swingTween === null && arm.quaternion.equals(tw.baseQ));
-}
-
-// =====================================================================
-console.log("[8] 2s-gap phase test — cast");
-{
-    wallMs = 100000;
-    const em = makeManager("?tweenClock=dt");
-    const inst = makeHumanInst(0x103);
-    em.entityMap.set(0x103, inst);
-    em.setCastPose(0x103); // 600ms triangle, both arms
-    const tw = inst._castTween;
-    check("cast startMs stamped from the dt clock",
-        tw && Math.abs(tw.startMs - em._tweenNowMs()) < EPS);
-    em.entityMap.delete(0x103); // fixture has no mixer — tick only the clock
-    wallMs += 2000;
-    em.tick(0.3); // t=0.5 → triangle peak
-    em._tickCastTween(inst, em._tweenNowMs());
-    const left = inst.parts[10];
-    const leftEntry = tw.arms.find((a) => a.armIdx === 10);
-    check("cast at triangle PEAK after 300ms accumulated dt",
-        inst._castTween !== null && left.quaternion.angleTo(leftEntry.castQ) < 1e-6);
-    em.tick(0.35);
-    em._tickCastTween(inst, em._tweenNowMs());
-    check("cast completes + arms restored on accumulated dt",
-        inst._castTween === null && left.quaternion.equals(leftEntry.baseQ));
+    check("setSwingPose retired (Rust motion authority owns swings)", typeof em.setSwingPose !== "function");
+    check("setCastPose retired (Rust motion authority owns casts)", typeof em.setCastPose !== "function");
 }
 
 // =====================================================================
@@ -361,31 +323,15 @@ console.log("[10] flag OFF — legacy wall-clock behavior byte-preserved");
     const instJ = makeHumanInst(0x200);
     em._applyHumanJumpPose(instJ);
     check("OFF: startMs is the wall clock", Math.abs(instJ._jumpPoseTween.startMs - wallMs) < EPS);
-    const instS = makeHumanInst(0x201);
-    em.entityMap.set(0x201, instS);
-    em.setSwingPose(0x201);
-    const swingBase = instS._swingTween.baseQ.clone();
-    const instC = makeHumanInst(0x202);
-    em.entityMap.set(0x202, instC);
-    em.setCastPose(0x202);
-    const castEntry = instC._castTween.arms.find((a) => a.armIdx === 10);
     const instK = makeHumanInst(0x203);
     em._fireHook(instK, { hookType: 12, rampEnd: 2.0, rampTime: 0.4, direction: 0 }, null, null);
     // 2s wall gap with only 1ms of loop dt: wall-clocked tweens all complete
     // immediately (the legacy desync this flag exists to fix).
-    em.entityMap.delete(0x201); // fixtures have no mixer — tick only the clock
-    em.entityMap.delete(0x202);
     wallMs += 2000;
     em.tick(0.001);
     em._tickJumpPoseTween(instJ, em._tweenNowMs());
-    em._tickSwingTween(instS, em._tweenNowMs());
-    em._tickCastTween(instC, em._tweenNowMs());
     em._tickScaleHookTween(instK, em._tweenNowMs());
     check("OFF: jump tween completed on the wall gap", instJ._jumpPoseTween === null);
-    check("OFF: swing tween completed + restored on the wall gap",
-        instS._swingTween === null && instS.parts[13].quaternion.equals(swingBase));
-    check("OFF: cast tween completed + restored on the wall gap",
-        instC._castTween === null && instC.parts[10].quaternion.equals(castEntry.baseQ));
     check("OFF: scale tween snapped to end on the wall gap",
         instK._scaleHookTween === null && Math.abs(instK.root.scale.x - 2.0) < 1e-9);
 }

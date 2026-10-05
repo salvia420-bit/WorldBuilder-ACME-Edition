@@ -18,8 +18,8 @@
 //          NON-local guid, stepping past the local rig (which is in
 //          `roots` but excluded from `guidByRoot`). Inverses: only-other
 //          → otherGuid; empty → null; only-local → null.
-//   destroy — calling the returned handle's destroy() cancels an
-//          in-flight charge (cancelAnimationFrame + setMovementInput(0)).
+//   destroy — calling the returned handle's destroy() cancels the
+//          in-flight wasm run-up (stopStick + cancelPursuit) and unbinds.
 //   #32  — debug-overlay re-picks ONLY when the cursor moved; a 2nd
 //          updateValues() with no mousemove does NOT re-invoke
 //          __pickEntityAt, but one after a mousemove DOES.
@@ -120,11 +120,27 @@ const isAttackerBehindDefender = () => false;
 const classifySpell = () => null;
 const pickSkillLevel = () => 0;
 const determineSpellRange = () => 0;
+// 2026-10-05 — imports picking.js gained since this stub list was written.
+// (The splice died at module load on \`faceDeadzoneRad(CAST_FACING_20)\`.)
+const resolveAttackTypeForStance = () => 0;
+const isThrustSlashAttackType = () => false;
+const decideRangeWarn = () => null;
+// Input funnel (P-unification, default-ON in the browser): take the legacy
+// document-listener arm so the fake document below receives the binds.
+const getInputFunnel = () => { throw new Error("funnel not used: inputFunnelV2On() stubbed false"); };
+const inputFunnelV2On = () => false;
+// server_turn.js: \`?serverTurn\` is DEFAULT OFF → the real accessor is a
+// constant false; the face-loop paths are not exercised here.
+const serverTurnOwnsFacing = () => false;
 `;
+// camera_math.js is a pure, import-free module — inline the GENUINE
+// faceDeadzoneRad / faceTurnStep rather than stubbing the face-turn math.
+const cameraMathSrc = stripExports(readFileSync(resolvePath(__dirname, "scene3d/camera_math.js"), "utf8"));
 
 const pickingComposite =
     "// === picking.js ===\n" +
     uiStubs +
+    "// === camera_math.js (genuine) ===\n" + cameraMathSrc + "\n" +
     stripExports(pickingSrc) +
     "\n; return { setupClickPicking };";
 
@@ -154,9 +170,11 @@ const fakeDoc = {
 const fakeWindow = {};
 
 function makeFakeCanvas() {
+    const removed = [];
     return {
+        removed,
         addEventListener: () => {},
-        removeEventListener: () => {},
+        removeEventListener: (type) => { removed.push(type); },
         getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
     };
 }
@@ -212,7 +230,12 @@ function buildPicking(localGuid, others) {
         // Melee fire path requires `attack` to be a function before it
         // arms the charge; magic/missile not exercised here.
         attack: () => {},
+        // The client-side run-up is now the wasm StickyManager / pursuit
+        // (cancelClientMove → stopStick + cancelPursuit).
+        stopStick: () => { sessionMovementCalls.push(["stopStick"]); },
+        cancelPursuit: () => { sessionMovementCalls.push(["cancelPursuit"]); },
     };
+    const canvas = makeFakeCanvas();
     const handle = pickingFactory(
         THREE,
         fakeWindow,
@@ -222,7 +245,7 @@ function buildPicking(localGuid, others) {
         fakeRaf,
         fakeCancel,
     ).setupClickPicking({
-        canvas: makeFakeCanvas(),
+        canvas,
         liveScene3d,
         sessionHandle,
         isInMeleeStance: () => true,
@@ -230,7 +253,7 @@ function buildPicking(localGuid, others) {
         isInMagicStance: () => false,
         getLocalPlayerGuid: () => localGuid,
     });
-    return { handle, liveScene3d, em, sessionMovementCalls,
+    return { handle, liveScene3d, em, sessionMovementCalls, canvas,
              pickEntityAt: fakeWindow.__pickEntityAt };
 }
 
@@ -280,42 +303,26 @@ console.log("\n#18 — child-mesh hit resolves up to entity root guid");
 // ===================================================================
 // pick-destroy — destroy() cancels an in-flight charge
 // ===================================================================
-console.log("\npick-destroy — destroy() cancels in-flight charge (rAF + movement stop)");
+console.log("\npick-destroy — destroy() cancels the in-flight run-up + unbinds");
 {
+    // 2026-10-05: the JS charge loop this block used to drive (startCharge's
+    // rAF chargeTick + cancelCharge's setMovementInput(0,0,0)) was DELETED on
+    // 2026-07-06 for server-authoritative combat (see picking.js above
+    // turnToFaceThenAct(targetGuid, fire, MISSILE_FACE_TARGET)). The run-up
+    // is now the wasm StickyManager / pursuit, and destroy() tears it down via
+    // cancelClientMove() → stopStick() + cancelPursuit().
     const LOCAL = 0x70000001;
     const OTHER = 0x70000002;
-    const { handle, em, sessionMovementCalls } = buildPicking(LOCAL, [[OTHER, null]]);
-
-    // Simulate an in-flight charge by driving __fireAttackOnTarget on a
-    // selected, out-of-range target so startCharge arms the rAF loop.
-    em.entityManager.entityMap.get(OTHER >>> 0).root.position = { x: 5000, y: 5000, z: 0 };
-    em.entityManager.entityMap.get(OTHER >>> 0).root.position.set = function (x, y, z) { this.x = x; this.y = y; this.z = z; };
-    // getSelectedTarget returns OTHER; entityAcPosition reads root.position.
-    em.entityManager.getSelectedTarget = () => OTHER >>> 0;
-    // Add minimal helpers used along the melee fire path.
-    em.entityManager.getEquippedWeapon = () => null;
-    em.entityManager.isDualWield = () => false;
-    em.entityManager.setSwingMotion = () => {};
-
-    // Provide a position for the local root too (entityAcPosition path).
-    fakeWindow.__combatBarState = { chargeAttack: true, attackHeight: 2, powerLevel: 1 };
-    const before = { raf: rafCalls, cancel: cancelCalls };
-    try { fakeWindow.__fireAttackOnTarget(2); } catch (_) {}
-    const chargeArmed = rafCalls > before.raf;
-    check("charge armed an rAF loop (precondition)", chargeArmed,
-        "rafCalls=" + rafCalls);
-
-    const movesBefore = sessionMovementCalls.length;
+    const { handle, sessionMovementCalls, canvas } = buildPicking(LOCAL, [[OTHER, null]]);
+    const before = sessionMovementCalls.length;
     handle.destroy();
-    const cancelledAfter = cancelCalls > before.cancel;
-    // destroy() → cancelCharge() → cancelAnimationFrame + setMovementInput(0,0,0,false)
-    const stopped = sessionMovementCalls.some(
-        (a) => a[0] === 0 && a[1] === 0 && a[2] === 0 && a[3] === false,
-    );
-    check("destroy() called cancelAnimationFrame", cancelledAfter,
-        "cancelCalls=" + cancelCalls);
-    check("destroy() zeroed movement input", stopped,
-        "moves=" + JSON.stringify(sessionMovementCalls.slice(movesBefore)));
+    const after = sessionMovementCalls.slice(before).map((c) => c[0]);
+    check("destroy() stops the wasm sticky run-up (stopStick)", after.includes("stopStick"),
+        "calls=" + JSON.stringify(after));
+    check("destroy() cancels any wasm pursuit (cancelPursuit)", after.includes("cancelPursuit"),
+        "calls=" + JSON.stringify(after));
+    check("destroy() unbinds the canvas pointerdown pick handler", canvas.removed.includes("pointerdown"),
+        "removed=" + JSON.stringify(canvas.removed));
 }
 
 // restore prototype patches before loading the overlay

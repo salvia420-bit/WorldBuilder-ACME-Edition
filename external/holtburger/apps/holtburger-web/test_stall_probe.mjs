@@ -213,8 +213,13 @@ check(recB.by[0][0] === "xu7DecodeMs", `part4: buckets ranked by ms desc (top=${
 // PART 5 — the residual is reported and honest.
 check(recB.explainedMs >= 120 && recB.explainedMs < 140, `part5: explainedMs ~= 121 (${recB.explainedMs})`);
 check(
-  Math.abs(recB.residualMs - (recB.intervalMs - recB.explainedMs)) < 0.05,
-  "part5: residualMs = interval − explained",
+  // stall_probe.js rounds interval, explained AND residual to 0.1 ms
+  // INDEPENDENTLY (residual from the unrounded operands), so the difference
+  // of the two rounded fields can legitimately be off by one rounding step.
+  // The old 0.05 tolerance was tighter than the module's own resolution and
+  // failed whenever the timer fractions straddled a .x5 boundary.
+  Math.abs(recB.residualMs - (recB.intervalMs - recB.explainedMs)) <= 0.1 + 1e-9,
+  `part5: residualMs = interval − explained (±1 rounding step: ${recB.residualMs} vs ${recB.intervalMs} − ${recB.explainedMs})`,
 );
 check(rep.residualMs === Number((rep.long.totalMs - rep.explainedMs).toFixed(1)), "part5: report-level residual closes");
 check(

@@ -37,6 +37,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { stripStaticImports } from "./harness/lib/splice_module.mjs";
+import { importEdited } from "./harness/lib/import_edited.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -68,7 +70,7 @@ if (!threePath) {
   process.exit(0);
 }
 
-const THREE = await import("file://" + threePath);
+const THREE = await import("three"); // the SAME instance entities.js imports
 
 console.log("Batch 9 — entity lifecycle (#2 spawn-race / #11 ReplaceObject / #24 CallPES / em-dispose)");
 console.log(`three loaded from: ${threePath}`);
@@ -79,28 +81,10 @@ function loadModule(relPath) {
   const full = resolvePath(__dirname, relPath);
   if (!existsSync(full)) throw new Error(`module not found: ${full}`);
   let src = readFileSync(full, "utf8");
-  src = src.replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "");
-  src = src.replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  src = src.replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  src = src.replace(/^\s*import\s+[A-Za-z_$][\w$]*\s+from\s+["'][^"']+["'];?\s*$/gm, "");
-  // Test-infra-only: neutralize runtime dynamic imports that cannot resolve in
-  // a bare `new Function` context. `meshToGeometryGroups` IS already spliced in
-  // (adapter.js is loaded inline below) as a top-level symbol. Collapse BOTH
-  // the `import(...)` line AND the immediately-following
-  // `const meshToGeometryGroups = adapter.meshToGeometryGroups;` (which would
-  // otherwise re-declare a block-local const and TDZ-trap the line above).
-  src = src.replace(
-    /const adapter = await import\("\.\/adapter\.js"\);\s*\n\s*const meshToGeometryGroups = adapter\.meshToGeometryGroups;/g,
-    "/* test: dynamic adapter import collapsed to spliced meshToGeometryGroups */",
-  );
-  // The lazy `THREE` re-import in the chain walker is unused beyond `void THREE`
-  // (per its own comment). Drop the redeclaration entirely so the later
-  // `void THREE;` simply references the in-scope (factory-param) THREE — a new
-  // block-scoped `const THREE` would shadow + TDZ-trap the param.
-  src = src.replace(
-    /const THREE = \(await import\("three"\)\)\.default \?\? \(await import\("three"\)\);/g,
-    "/* test: lazy THREE re-import removed (uses factory-param THREE) */",
-  );
+  // 2026-10-05: shared tolerant stripper (harness/lib/splice_module.mjs) —
+  // the hand-rolled regexes missed `import {...} from "..."; // comment`
+  // lines (entities.js particle_env import) and died in new Function().
+  src = stripStaticImports(src).replace(/import\.meta\.url/g, '"file:///__spliced__"');
   return src;
 }
 
@@ -157,19 +141,12 @@ const PARTICLE_OWNER_STUB =
 const PRE_CREATE_SRC = "// === pre_create_buffer.js ===\n" +
   stripExports(loadModule("scene3d/pre_create_buffer.js")) + "\n";
 
-const composite =
-  "const timeRng = () => 0.999;\n" + PRE_CREATE_SRC + PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
-  "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
-  "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
-  "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
-  "; return { EntityManager, EntityInstance, AnimationCache };";
-
-const factory = new Function("THREE", "performance", "window", composite);
-const { EntityManager, EntityInstance } = factory(
-  THREE,
-  globalThis.performance ?? { now: () => Date.now() },
-  undefined,
-);
+// 2026-10-05 — import the GENUINE entities.js module graph (verified to load
+// headless) instead of a text splice whose hand-stub list rotted on every new
+// import (the spawn path died on recolor_flag.js gatePaletteId).
+// EntityInstance is module-private, so the one edit is an appended export.
+const { EntityManager, EntityInstance } = await importEdited(
+  "scene3d/entities.js", (src) => src + "\nexport { EntityInstance };\n", "batch9-main");
 
 // ---- helpers ---------------------------------------------------------
 function makeManager(extra = {}) {
@@ -285,19 +262,13 @@ function spawnMeta(guid) {
   // meshToGeometryGroups(...) through this.__test_m2gg when present. This keeps
   // the real detach/tag/dispose logic intact and only swaps the (untestable in
   // node) wasm-mesh converter.
-  let eSrc = loadModule("scene3d/entities.js");
-  eSrc = eSrc.replace(
+  // Same seam, applied to the REAL module via a data: URL import whose
+  // specifiers resolve to the already-loaded dependencies
+  // (harness/lib/import_edited.mjs) — no stubbed imports.
+  const M2 = await importEdited("scene3d/entities.js", (src) => src.replace(
     /const \{ groups, surfaceDids \} = meshToGeometryGroups\(wasmMesh\);/g,
     "const { groups, surfaceDids } = (this.__test_m2gg ? this.__test_m2gg(wasmMesh) : meshToGeometryGroups(wasmMesh));",
-  );
-  const comp =
-    "const timeRng = () => 0.999;\n" + PRE_CREATE_SRC + PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
-    "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
-    "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
-    "// === entities.js ===\n" + stripExports(eSrc) + "\n" +
-    "; return { EntityManager, EntityInstance, AnimationCache };";
-  const f2 = new Function("THREE", "performance", "window", comp);
-  const M2 = f2(THREE, globalThis.performance ?? { now: () => Date.now() }, undefined);
+  ) + "\nexport { EntityInstance };\n", "batch9-m2gg");
 
   const em = makeManager();
   const EM = M2.EntityManager;
@@ -385,7 +356,7 @@ function spawnMeta(guid) {
   check("#11 remove(guid) did NOT dispose the shared spawn geom", sharedDisposed === 0,
     `sharedDisposed=${sharedDisposed}`);
 
-  void em; void f2;
+  void em;
 }
 
 // =====================================================================

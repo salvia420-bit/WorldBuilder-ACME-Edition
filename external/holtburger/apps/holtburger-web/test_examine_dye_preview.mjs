@@ -384,8 +384,12 @@ check("PaperdollViewport is exported as a class", () => {
 });
 
 check("PaperdollViewport.loadPlayer signature matches caller expectation", () => {
-  if (!/async\s+loadPlayer\s*\(\s*setupId\s*,\s*mtableId\s*,\s*paletteId\s*,\s*subPalettes\s*\)/.test(viewportSrc)) {
-    throw new Error("loadPlayer signature drifted from (setupId, mtableId, paletteId, subPalettes)");
+  // The leading four params are the contract both callers rely on; the
+  // signature later grew two OPTIONAL trailing params (wieldedItems,
+  // stanceLow — wielded-item rig attach + stance cache key), which
+  // examine-target.js now passes too. Pin the prefix order, allow the tail.
+  if (!/async\s+loadPlayer\s*\(\s*setupId\s*,\s*mtableId\s*,\s*paletteId\s*,\s*subPalettes\s*(?:,\s*wieldedItems\s*)?(?:,\s*stanceLow\s*)?\)/.test(viewportSrc)) {
+    throw new Error("loadPlayer signature drifted from (setupId, mtableId, paletteId, subPalettes[, wieldedItems[, stanceLow]])");
   }
 });
 

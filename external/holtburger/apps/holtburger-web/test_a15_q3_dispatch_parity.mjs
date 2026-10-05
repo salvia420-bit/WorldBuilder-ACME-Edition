@@ -31,7 +31,7 @@
 //   cd apps/holtburger-web/
 //   node test_a15_q3_dispatch_parity.mjs
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
 
@@ -73,6 +73,12 @@ const wxUpdateFromDayGroup = () => {};
 // visibility) and installs it in installSharedDrainHook; out of scope for
 // this entity-update parity test (covered by test_a8_m3_kind17_dispatch.mjs).
 const createClientEventDispatcher = () => () => false;
+// 2026-10-05: loop.js runs \`setMasterClock(VFX_GLOBALS.uTime)\` at MODULE TOP
+// LEVEL (the single VFX master clock, ./vfx/oscillators.js +
+// ./materials.js). Inert for an entity-dispatch parity test; without these
+// the module throws ReferenceError on load.
+const VFX_GLOBALS = { uTime: { value: 0 } };
+const setMasterClock = () => {};
 // A15-Q4: loop.js now imports the shared kind table + dispatcher factory
 // from ./entity_dispatch.js (stripped above). KIND values are LOAD-BEARING
 // (the KIND_* aliases read them); the factory stub mirrors the real
@@ -93,14 +99,27 @@ const createEntityDispatcher = ({ neutral = {}, backend = {} } = {}) => ({
   },
 });
 `;
+// loop.js now builds THREE scratch vectors at module top level
+// (\`const _fogProbePos = new THREE.Vector3()\`), so the stripped
+// \`import * as THREE from "three"\` must come back — as an absolute file URL,
+// since a data: module cannot resolve the bare specifier.
+const THREE_URL = pathToFileURL(joinPath(__dirname, "node_modules", "three", "build", "three.module.js")).href;
 const transformed =
-  stubs + stripped +
+  `import * as THREE from ${JSON.stringify(THREE_URL)};\n` + stubs + stripped +
   "\nexport { drainEntityEvents3D as __testDrain, _legacyDirectDrainArm as __testLegacyArm };\n";
 
 async function loadLoopModule(search, salt) {
   // Flag IIFEs read window.location.search at module load — set it first.
+  // 2026-10-05: spawn dispatch is TIME-SLICED by default (loop.js
+  // _armSpawn → _enqueueDeferredSpawn, pumped on setTimeout(0)), and a
+  // same-burst REMOVE cancels the queued spawn (item #2) — correct app
+  // behaviour, but it makes a synchronous call-sequence parity test see no
+  // spawn. Pin inline dispatch with the documented `?noSpawnTimeSlice=1`
+  // escape; that reader uses globalThis.location, not window.location.
+  const full = (search ? search + "&" : "?") + "noSpawnTimeSlice=1";
   globalThis.window = globalThis.window || {};
-  globalThis.window.location = { search };
+  globalThis.window.location = { search: full };
+  globalThis.location = { search: full };
   const src = `// salt:${salt}\n${transformed}`;
   const url = "data:text/javascript;base64," + Buffer.from(src).toString("base64");
   return import(url);
@@ -181,7 +200,9 @@ const sig = (calls) => calls.map((c) => `${c[0]}(${typeof c[1] === "object" ? "o
 console.log("PART 1 — call-sequence parity: unified core vs legacy arm");
 {
   globalThis.window = { getLocalPlayerGuid: () => LOCAL_GUID };
-  const mod = await loadLoopModule("", "p1-default");
+  // dispatchParity / serverSwing were promoted DEFAULT-ON (`!== "off"`
+  // readers, loop.js); the flag-OFF arms below now say `=off` explicitly.
+  const mod = await loadLoopModule("?dispatchParity=off", "p1-off");
   const sequence = [
     upd(1),                                        // SPAWN
     upd(0),                                        // POSITION (remote, outdoor)
@@ -235,8 +256,8 @@ console.log("PART 1 — call-sequence parity: unified core vs legacy arm");
 console.log("PART 2 — D2/D4 fire only under their flags");
 {
   globalThis.window = { getLocalPlayerGuid: () => LOCAL_GUID };
-  const modOff = await loadLoopModule("", "p2-off");
-  const modOn = await loadLoopModule("?serverSwing=on", "p2-on");
+  const modOff = await loadLoopModule("?serverSwing=off", "p2-off");
+  const modOn = await loadLoopModule("", "p2-default-on");
 
   // D2 (FU-1): rides em._wieldHandAttach (set by entities.js under
   // ?wieldHandAttach=on) — flag carried on the manager, not re-read here.
@@ -259,7 +280,7 @@ console.log("PART 2 — D2/D4 fire only under their flags");
     emSwingOff.calls.some((c) => c[0] === "setMotion"));
   const emSwingOn = makeEm();
   modOn.dispatchEntityUpdate({ entityManager: emSwingOn }, emSwingOn, { ...atk });
-  check("D4 fires setSwingPose for local attack cmd under ?serverSwing=on",
+  check("D4 fires setSwingPose for local attack cmd under default-ON ?serverSwing",
     emSwingOn.calls.some((c) => c[0] === "setSwingPose" && c[1] === LOCAL_GUID));
   const emSwingRemote = makeEm();
   modOn.dispatchEntityUpdate({ entityManager: emSwingRemote }, emSwingRemote, upd(8, { motionCommand: 0x44000060 }));
@@ -275,8 +296,8 @@ console.log("PART 2 — D2/D4 fire only under their flags");
 console.log("PART 3 — D3 echo dedup gated on ?dispatchParity=on");
 {
   globalThis.window = { getLocalPlayerGuid: () => LOCAL_GUID };
-  const modOff = await loadLoopModule("", "p3-off");
-  const modOn = await loadLoopModule("?dispatchParity=on", "p3-on");
+  const modOff = await loadLoopModule("?dispatchParity=off", "p3-off");
+  const modOn = await loadLoopModule("", "p3-default-on");
   const swing = () => upd(8, { guid: LOCAL_GUID, motionCommand: 0x44000060 });
 
   const emA = makeEm({ echoConsumed: true });
@@ -287,7 +308,7 @@ console.log("PART 3 — D3 echo dedup gated on ?dispatchParity=on");
 
   const emB = makeEm({ echoConsumed: true });
   modOn.dispatchEntityUpdate({ entityManager: emB }, emB, swing());
-  check("flag ON + echo consumed: setMotion swallowed (F6-2)",
+  check("default-ON + echo consumed: setMotion swallowed (F6-2)",
     emB.calls.some((c) => c[0] === "consumeLocalSwingEcho") &&
     !emB.calls.some((c) => c[0] === "setMotion"));
 

@@ -45,6 +45,7 @@
 // Run from apps/holtburger-web/:  node test_terrain_volcano_shader.mjs
 
 import { readFileSync } from "node:fs";
+import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
 import { volcanoCodeBitmask, obsidianCodeBitmask, TERRAIN_CODE_OBSIDIAN_PLAIN }
   from "./scene3d/terrain_volcano.js";
 
@@ -188,7 +189,7 @@ check("V4: the obsidian specular is also added to iblSpec",
   /iblSpec \+= obsSpec \* obsidianW;/.test(FRAG));
 check("V4: THE FINAL fragColor LINE IS BYTE-UNCHANGED (no new term there) — "
   + "which is also what keeps this rebasable next to wave 2A's sparkle",
-  /fragColor = vec4\(modulated \* ndotl \* cloudShadow \* csmShadow \+ iblSpec\s*\n\s*\+ sandSparkle \* cloudShadow \* csmShadow, 1\.0\);/.test(FRAG));
+  checkTerrainFinalColour(FRAG).ok /* 2026-10-05: shared-tail + far-bake aware, harness/lib/terrain_final_colour.mjs */);
 check("V4: a distance fade exists (a high-frequency noise field aliases at range)",
   /crackFade = 1\.0 - smoothstep\(uCrackGlowFadeStart, uCrackGlowFadeEnd, vViewDepth\)/.test(FRAG));
 check("V4: the veins are a RIDGED threshold (abs(2n-1) is 0 along the field's "

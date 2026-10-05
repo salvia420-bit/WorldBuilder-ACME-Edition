@@ -201,7 +201,7 @@ export const REGISTRY = Object.freeze([
     name: "__atlasStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/static_atlas.js:1027",
+    evidence: "scene3d/static_atlas.js:1070",
     availability: "in-world",
     retiresAt: "ST9",
     successor: "__diag.pools",
@@ -260,7 +260,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.vfxGauge",
     status: "current",
     reads: "object",
-    evidence: "scene3d/index.js:721",
+    evidence: "scene3d/index.js:727",
     availability: "flag:?vfxGauge=on",
     note: "Half-B timing meter. tCpuMs/tGpuMs are LAST-FRAME levels; frames is "
       + "the only counter. tGpuMs=-1 when N/A; SwiftShader GPU clock is not "
@@ -276,7 +276,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.wasmMem",
     status: "current",
     reads: "async-function",
-    evidence: "scene3d/index.js:4832",
+    evidence: "scene3d/index.js:4849",
     availability: "in-world",
     note: "Sums main + bake-worker hb_mem_census (src/lib.rs:11469-11593; "
       + "summarizeMemCensus in scene3d/mem_census.js:30-68). `missing` names "
@@ -347,7 +347,7 @@ export const REGISTRY = Object.freeze([
     name: "__landblockLru.getStats",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6200",
+    evidence: "scene3d/index.js:6278",
     availability: "late",
     retiresAt: "ST7",
     successor: "__diag.residency",
@@ -365,7 +365,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.textures",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:4855",
+    evidence: "scene3d/index.js:4879",
     availability: "flag:?texCensus=on",
     opaque: true,
     note: "WeakRef texture census (scene3d/texture_census.js). Returns null "
@@ -488,7 +488,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.residency",
     status: "current",
     reads: "function",
-    evidence: "scene3d/index.js:6675",
+    evidence: "scene3d/index.js:6753",
     spec: "pass-10 S3 (pass 6 D-06.9.4 + additions)",
     availability: "flag:?slotGrid=on",
     note: "Slot-grid residency surface; successor of __landblockLru.getStats. "
@@ -535,7 +535,7 @@ export const REGISTRY = Object.freeze([
     status: "current",
     reads: "function",
     spec: "pass-10 S3 (pass 7 S7 + M6 pair)",
-    evidence: "scene3d/index.js:6343",
+    evidence: "scene3d/index.js:6421",
     availability: "in-world",
     note: "Draw-pool surface; successor of __atlasStats. LIVE since the T22 "
       + "producer swap (index.js installs the PRODUCER census, which supersedes "

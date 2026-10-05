@@ -67,7 +67,20 @@ check("anchor parented to the AC frame (worldRoot), root scene only as fallback"
 check("anchor frame's matrixWorld is seeded before the first worldToLocal",
   /frame\.updateWorldMatrix\(/.test(upd));
 // tick: camera-follow at altitude, hidden indoors
-const tickFn = sky.slice(sky.indexOf("  tick(_dt, camera) {"), sky.indexOf("  tick(_dt, camera) {") + 2200);
+// Brace-matched method body (was a fixed 2200-char window, which the tick
+// outgrew — the bird block now sits ~2.6 KB in, past the window's end).
+function methodBody(src, header) {
+  const start = src.indexOf(header);
+  if (start < 0) return "";
+  const open = src.indexOf("{", start);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+  }
+  return "";
+}
+const tickFn = methodBody(sky, "  tick(_dt, camera) {");
 check("tick lifts the anchor along three.js world +Y (overhead), hides indoors",
   /_skyBirdPosScratch\.copy\(camera\.position\)/.test(tickFn) &&
   /_skyBirdPosScratch\.y \+= this\._skyBirdAltitude/.test(tickFn) &&

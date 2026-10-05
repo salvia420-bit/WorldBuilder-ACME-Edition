@@ -88,11 +88,14 @@ console.log("PART 1 — ?retailRunKeys flag parse");
 check("explicit search 'on' parses true", readRetailRunKeysFlag("?retailRunKeys=on") === true);
 check("explicit search 'ON' parses true (case-fold)", readRetailRunKeysFlag("?retailRunKeys=ON") === true);
 check("explicit search 'off' parses false", readRetailRunKeysFlag("?retailRunKeys=off") === false);
-check("absent parses false (default-off)", readRetailRunKeysFlag("?foo=1") === false);
-check("empty search parses false", readRetailRunKeysFlag("") === false);
-check("no-window no-arg parses false (never throws)", (() => {
+// Promoted to DEFAULT-ON (docs/url-flags.md "Now default-ON" list; reader is
+// the `!== "off"` idiom at scene3d/input.js readRetailRunKeysFlag). Only an
+// explicit `=off` is the escape hatch.
+check("absent parses true (default-on)", readRetailRunKeysFlag("?foo=1") === true);
+check("empty search parses true (default-on)", readRetailRunKeysFlag("") === true);
+check("no-window no-arg parses true (never throws)", (() => {
   _resetRetailRunKeysForTest();
-  return readRetailRunKeysFlag() === false;
+  return readRetailRunKeysFlag() === true;
 })());
 check("option index is retail RunAsDefaultMovement 0x0A", RUN_AS_DEFAULT_MOVEMENT_OPTION === 0x0a);
 
@@ -136,7 +139,7 @@ withEnv({
 console.log("PART 3 — resolveRunModifier truth table");
 // ---------------------------------------------------------------------
 
-withEnv({ search: "" }, () => {
+withEnv({ search: "?retailRunKeys=off" }, () => {
   check("flag OFF: no shift → run (legacy)", resolveRunModifier(false, null) === true);
   check("flag OFF: shift → walk (legacy)", resolveRunModifier(true, null) === false);
   // Flag off must NEVER consult the option (byte-identical guarantee).

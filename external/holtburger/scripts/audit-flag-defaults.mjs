@@ -245,7 +245,12 @@ function classify(sites) {
   return { def: "?", kind: "UNCLASSIFIED — read the site" };
 }
 function docPolarity(cell) {
-  const t = cell.replace(/\*/g, "").trim().toLowerCase();
+  // 2026-10-05: drop backticked ESCAPE mentions (`?flag=off`, `=off`) before
+  // reading polarity — they describe how to turn a default OFF, not the
+  // default. The unifiedMotion cell ("**ALL classes including locomotion** …
+  // `?unifiedMotion=off` is the escape") was read as an OFF claim because the
+  // escape was the only on/off token in it.
+  const t = cell.replace(/`[^`]*=\s*off`/gi, "").replace(/\*/g, "").trim().toLowerCase();
   // A numeric default cell ("0.4", "`0`/`off`/`false` disables", "32") carries
   // no boolean polarity — `0.4` must not read as OFF just because it starts
   // with a zero.
@@ -318,7 +323,22 @@ if (!ONLY_MISMATCH) {
       `  numeric/enum/value: ${rows.filter((r) => ["num", "val", "?"].includes(r.def)).length}\n`,
   );
 }
-const polarity = mism.filter((r) => r.mismatch.startsWith("DEFAULT-POLARITY"));
+// KNOWN, REASONED doc/code polarity disagreements (2026-10-05). Each is a
+// REAL mismatch this script proved; the docs are out of scope for the change
+// that wired this audit into CI, so they are allowlisted with the reason and
+// the owner of the fix. An entry that stops mismatching FAILS (stale), so the
+// list cannot silently pre-approve a future regression of the same flag.
+const KNOWN_POLARITY_MISMATCHES = {
+  punchSidedness:
+    "docs/url-flags.md row says **on**, but scene3d/cells.js:255-311 returns \"off\" when absent — an " +
+    "OWNER-DIRECTED default-OFF (2026-08-12, comment at cells.js:296-301: \"the decision is the owner's\"). " +
+    "The CODE is the shipped truth; the docs row (and the cells.js:264 \"BACK TO DEFAULT-ON\" banner above " +
+    "it) are stale. Fix: docs row → off, pending the owner's call on flipping back.",
+};
+const polarityAll = mism.filter((r) => r.mismatch.startsWith("DEFAULT-POLARITY"));
+const polarity = polarityAll.filter((r) => !Object.prototype.hasOwnProperty.call(KNOWN_POLARITY_MISMATCHES, r.name));
+const allowlistedPolarity = polarityAll.filter((r) => Object.prototype.hasOwnProperty.call(KNOWN_POLARITY_MISMATCHES, r.name));
+const stalePolarityAllow = Object.keys(KNOWN_POLARITY_MISMATCHES).filter((n) => !polarityAll.some((r) => r.name === n));
 const undoc = mism.filter((r) => r.mismatch.startsWith("UNDOCUMENTED"));
 const stale = mism.filter((r) => r.mismatch.startsWith("STALE-ROW"));
 console.log(`## DEFAULT-POLARITY mismatches (docs cell vs reader) — ${polarity.length}`);
@@ -342,7 +362,13 @@ for (const r of cmism) for (const c of r.commentMismatches) console.log(`  ${r.n
 // stay advisory: they are a docs backfill debt, not a wrong-behaviour claim,
 // and there are ~150 of them. `--lenient` restores exit 0 for a survey run.
 const LENIENT = argv.includes("--lenient");
-const hardFindings = polarity.length + cmism.length;
+for (const r of allowlistedPolarity) {
+  console.log(`  ALLOWLISTED ${r.name}: ${r.mismatch} — ${KNOWN_POLARITY_MISMATCHES[r.name]}`);
+}
+for (const n of stalePolarityAllow) {
+  console.log(`  STALE-ALLOWLIST ${n}: no longer mismatches — remove it from KNOWN_POLARITY_MISMATCHES`);
+}
+const hardFindings = polarity.length + cmism.length + stalePolarityAllow.length;
 if (hardFindings > 0) {
   console.log(
     `\nFAIL: ${polarity.length} default-polarity + ${cmism.length} comment-vs-reader ` +

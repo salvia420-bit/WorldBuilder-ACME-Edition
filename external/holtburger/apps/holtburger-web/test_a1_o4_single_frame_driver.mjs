@@ -144,8 +144,10 @@ const loopSrc = readFileSync(`${__dirname}/scene3d/loop.js`, "utf8");
 const idxSrc = readFileSync(`${__dirname}/scene3d/index.js`, "utf8");
 
 // -- index.html: O4-a extraction --------------------------------------
-check("index.html parses ?singleDriver=on (__SINGLE_DRIVER_ON)",
-  /get\("singleDriver"\)\s*===\s*"on"/.test(htmlSrc) && htmlSrc.includes("__SINGLE_DRIVER_ON"));
+// 2026-10-05: `singleDriver` was promoted DEFAULT-ON (docs/url-flags.md
+// "Now default-ON" list) — both readers are the `!== "off"` escape idiom.
+check("index.html parses ?singleDriver (default-ON, =off escape) into __SINGLE_DRIVER_ON",
+  /__SINGLE_DRIVER_ON = \(\(\) => \{[\s\S]{0,200}get\("singleDriver"\)\s*!==\s*"off"/.test(htmlSrc));
 check("index.html defines pumpNetFrame (extracted drainEvents body)",
   htmlSrc.includes("function pumpNetFrame()"));
 const pumpStart = htmlSrc.indexOf("function pumpNetFrame()");
@@ -192,12 +194,16 @@ check("watchdog staleness threshold is two missed beats (4000 ms)",
   /__lastPumpMs[\s\S]{0,200}?>\s*4000/.test(htmlSrc));
 check("watchdog disarms when the claim flag is off",
   /if\s*\(!window\.__scene3dFrameDriverActive\)\s*return;/.test(htmlSrc));
-check("stale heartbeat un-claims AND resumes the 2D driver",
-  /pump heartbeat stale[\s\S]{0,300}__scene3dFrameDriverActive\s*=\s*false;[\s\S]{0,100}__resume2dFrameDriver\(\)/.test(htmlSrc));
+// 2026-06-20 regression fix (index.html __check2dHeartbeat): the 2D driver
+// was RETIRED, so un-claim + resume-2D ORPHANED the pump on any >4 s stall.
+// The watchdog now HOLDS the 3D claim and keeps monitoring.
+check("stale heartbeat HOLDS the 3D claim (post-2D-retire) and re-arms the watchdog",
+  /pump heartbeat stale[\s\S]{0,300}__scene3dFrameDriverActive\s*=\s*true;[\s\S]{0,120}setTimeout\(__check2dHeartbeat/.test(htmlSrc) &&
+    !/pump heartbeat stale[\s\S]{0,400}__scene3dFrameDriverActive\s*=\s*false;/.test(htmlSrc));
 
 // -- scene3d/index.js: claim lifecycle ----------------------------------
-check("index.js parses ?singleDriver=on",
-  /get\("singleDriver"\)\s*===\s*"on"/.test(idxSrc));
+check("index.js parses ?singleDriver (default-ON, =off escape)",
+  /get\("singleDriver"\)\s*!==\s*"off"/.test(idxSrc));
 check("claim rule excludes renderOnDemand-without-netDrainHz",
   /singleDriverRequested\s*&&\s*!\(renderOnDemand\s*&&\s*!\(netDrainHz\s*>\s*0\)\)/.test(idxSrc));
 check("refused-claim combo warns and leaves the 2D loop driving",
@@ -217,8 +223,15 @@ check("onPause releases the claim",
   /onPause:\s*\(\)\s*=>\s*\{[^}]*_releaseFrameDriverClaim\(\);\s*\}/.test(idxSrc));
 check("onResume re-claims",
   /onResume:[\s\S]{0,400}__scene3dFrameDriverActive\s*=\s*true/.test(idxSrc));
-check("release helper un-claims then queues the 2D resume",
-  /_releaseFrameDriverClaim[\s\S]{0,400}__scene3dFrameDriverActive\s*=\s*false;[\s\S]{0,200}__resume2dFrameDriver\?\.\(\)/.test(idxSrc));
+{
+  // Post-2D-retire the release helper ONLY un-claims; resuming the retired
+  // net-only 2D driver collapsed PVS/scenery streaming (scene3d/index.js
+  // _releaseFrameDriverClaim header). onResume re-claims.
+  const a = idxSrc.indexOf("function _releaseFrameDriverClaim() {");
+  const body = a >= 0 ? idxSrc.slice(a, idxSrc.indexOf("\n  }\n", a) + 4) : "";
+  check("release helper un-claims and does NOT resume the retired 2D driver",
+    /__scene3dFrameDriverActive\s*=\s*false;/.test(body) && !body.includes("__resume2dFrameDriver"));
+}
 
 // -- scene3d/loop.js: phase #0 placement ---------------------------------
 const tickIdx = loopSrc.indexOf("export function tickPerFrame(");

@@ -99,14 +99,31 @@ console.log("PART 1: contract");
 
 console.log("PART 2: static source shape");
 const ent = readFileSync(join(ROOT, "scene3d/entities.js"), "utf8");
-check("entities.js defines CAST_OVERLAY_GUARD (=='on' opt-in)",
-  /CAST_OVERLAY_GUARD[\s\S]{0,300}get\("castOverlayGuard"\)\s*\?\.\s*toLowerCase\(\)\s*===\s*"on"/.test(ent));
+// 2026-10-05 refresh: the flag was promoted DEFAULT-ON (reader is the
+// `!== "off"` escape idiom, entities.js CAST_OVERLAY_GUARD), the same-cycle
+// gate compares the PRE-stamp key (`preLocoCycleKey`, 2026-08-01 ordering
+// fix), and cancelCastSequence grew diag/lifecycle emits ahead of the WS03
+// block — so fixed-width windows were replaced by a brace-matched body.
+function methodBody(src, header) {
+  const start = src.indexOf(header);
+  if (start < 0) return "";
+  const open = src.indexOf("{", start + header.length - 1);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+  }
+  return "";
+}
+check("entities.js defines CAST_OVERLAY_GUARD (default-ON, `=off` escape)",
+  /const CAST_OVERLAY_GUARD = [\s\S]{0,300}get\("castOverlayGuard"\)\s*\?\.\s*toLowerCase\(\)\s*!==\s*"off"/.test(ent));
 check("setMotion install-underneath guards on _baseSuppressAction.isRunning() → weight 0",
-  /CAST_OVERLAY_GUARD\s*&&[\s\S]{0,220}_baseSuppressAction[\s\S]{0,200}isRunning\(\)[\s\S]{0,700}setEffectiveWeight\(0\)/.test(ent));
-check("install-underneath no-ops on same-cycle re-issue",
-  /cacheKey === inst\._locoCycleKey[\s\S]{0,200}return;/.test(ent));
+  /CAST_OVERLAY_GUARD\s*&&[\s\S]{0,220}_baseSuppressAction[\s\S]{0,200}isRunning\(\)[\s\S]{0,1600}action\.setEffectiveWeight\(0\)/.test(ent));
+check("install-underneath no-ops on same-cycle re-issue (pre-stamp key)",
+  /if \(cacheKey === preLocoCycleKey\) \{[\s\S]{0,400}return;/.test(ent));
+const cancelBody = methodBody(ent, "cancelCastSequence(guid, cause) {");
 check("cancelCastSequence hard-cuts the overlay under the flag",
-  /cancelCastSequence\(guid, cause\) \{[\s\S]{0,1400}CAST_OVERLAY_GUARD[\s\S]{0,260}_baseSuppressAction[\s\S]{0,200}\.stop\(\)/.test(ent));
+  /if \(CAST_OVERLAY_GUARD\) \{\s*const ov = inst\._baseSuppressAction;[\s\S]{0,200}ov\.stop\(\)/.test(cancelBody));
 // MF1: the swap-safe early-return must live INSIDE the flag gate, and the legacy
 // same-action gate must survive verbatim in the `else` (flag-OFF byte-identical).
 check("restore early-return is INSIDE the flag gate (onFinished)",

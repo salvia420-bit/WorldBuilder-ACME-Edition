@@ -42,7 +42,8 @@ import {
   resolveIceQuality,
 } from "./scene3d/terrain_snow.js";
 import { FAM_SNOWICE, familyForCode } from "./scene3d/terrain_families.js";
-import { PRESETS, PRESET_NAMES } from "./scene3d/quality.js";
+import { PRESETS, PRESET_NAMES, TERRAIN_VFX_PROMOTED, terrainMaster } from "./scene3d/quality.js";
+import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -263,8 +264,15 @@ check("?terrainIce is a SEPARATE master from ?terrainSnow (plan §3.4: one is "
   !/iceEnabled: terrainSnowEnabled\(\)/.test(SRC));
 check("the wireframe short-circuit carries the ice fields off, for shape parity",
   /iceEnabled: false,\s*\n\s*iceCodeMask: 0,\s*\n\s*iceRefractionEnabled: false,/.test(SRC));
-check("both masters ship FALSE on all four quality tiers (§5.9)",
-  PRESET_NAMES.every((p) => PRESETS[p].terrainIce === false));
+// 2026-10-05: `ice` was PROMOTED on the 2026-08-01 1070 sign-off
+// (quality.js TERRAIN_VFX_PROMOTED.ice = true), so the master now follows the
+// switchboard ladder: ON at high/ultra, OFF at low/mid — no longer FALSE
+// everywhere. The URL flag (`?terrainIce`) is still a strict opt-in override.
+check("the ice master follows the promotion switchboard (promoted → high/ultra only)",
+  TERRAIN_VFX_PROMOTED.ice === true &&
+  PRESET_NAMES.every((p) => PRESETS[p].terrainIce === terrainMaster("ice", p)) &&
+  PRESETS.high.terrainIce === true && PRESETS.ultra.terrainIce === true &&
+  PRESETS.low.terrainIce === false && PRESETS.mid.terrainIce === false);
 check("iceRefraction is present on all four tiers and true ONLY on ultra",
   PRESET_NAMES.every((p) => "terrainIceRefraction" in PRESETS[p])
   && PRESETS.ultra.terrainIceRefraction === true
@@ -293,7 +301,7 @@ check("the wave-1B sand sparkle block is intact and still last before fragColor"
   iSandSparkle > iIce && iSandSparkle < iFragColor
   && /vec3 sandSparkle = vec3\(0\.0\);/.test(FRAG));
 check("the sand sparkle's final colour write is byte-unchanged",
-  /fragColor = vec4\(modulated \* ndotl \* cloudShadow \* csmShadow \+ iblSpec\s*\n\s*\+ sandSparkle \* cloudShadow \* csmShadow, 1\.0\);/.test(FRAG));
+  checkTerrainFinalColour(FRAG).ok /* 2026-10-05: shared-tail + far-bake aware, harness/lib/terrain_final_colour.mjs */);
 check("the ice terms ride iblSpec, so they compose with the PBR env term and "
   + "the water sheen instead of overwriting either",
   countOf(FRAG, "iblSpec +=") >= 3);

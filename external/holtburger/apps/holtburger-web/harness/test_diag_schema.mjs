@@ -90,7 +90,24 @@ const ok = (cond, label) => {
     const lo = Math.max(0, line - 6);
     const hi = Math.min(lines.length, line + 5);
     const hit = lines.slice(lo, hi).some((l) => l.includes(bare));
-    ok(hit, `${s.name}: "${bare}" appears near ${m[1]}:${line}`);
+    if (hit) { ok(true, `${s.name}: "${bare}" appears near ${m[1]}:${line}`); continue; }
+    // DRIFT vs DEATH (2026-10-05). scene3d/index.js is edited daily, so a
+    // pure ±5-line window turned every unrelated insertion above a
+    // registration into a red gate (7 of 21 surfaces had drifted, none had
+    // died). What this lint exists to catch is a registration site that
+    // DIES or MOVES FILES — so on a window miss, look for the actual
+    // registration assignment anywhere in the cited file. Found → pass with
+    // a loud "update the evidence line" note; absent → FAIL as before.
+    const regRe = segs[0] === "__diag"
+      ? new RegExp(String.raw`__diag\.${bare}\s*=[^=]`)
+      : new RegExp(String.raw`window\.${bare}\s*=[^=]`);
+    const at = lines.findIndex((l) => regRe.test(l));
+    if (at >= 0) {
+      console.log(`  note ${s.name}: evidence drifted ${m[1]}:${line} -> :${at + 1} (update harness/lib/diag_schema.mjs)`);
+      ok(true, `${s.name}: registration still present in ${m[1]}`);
+    } else {
+      ok(false, `${s.name}: "${bare}" not near ${m[1]}:${line} and no registration (${regRe}) anywhere in the file`);
+    }
   }
 }
 

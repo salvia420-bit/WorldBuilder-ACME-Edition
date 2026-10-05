@@ -51,23 +51,28 @@ const diagSrc = stripImports(readFileSync(diagPath, "utf8"));
 // Inject lbKeyOf + no-op attach stubs (the install loop optional-chains
 // each fn). performance is a real one; window is our stub.
 const noopAttach = () => {};
+// 2026-10-05: diag.js keeps growing `attach<Name> as _attach<Name>` surface
+// imports (cast, geometry, collision, limbs, ragdoll, killImpulse...), and a
+// hand-written parameter list rotted on every one ("_attachCast is not
+// defined"). Derive the list from diag.js's own import lines instead — each
+// surface attacher is irrelevant to the onSpawnFailed lb-key contract under
+// test, so every one is the same inert no-op. Anything ELSE imported is a
+// hard error, not a silent stub.
+const rawDiag = readFileSync(diagPath, "utf8");
+const imported = [...rawDiag.matchAll(/^\s*import\s+\{([^}]*)\}\s+from/gm)]
+  .flatMap((m) => m[1].split(",").map((p) => p.trim().split(/\s+/).pop()).filter(Boolean));
+const attachNames = imported.filter((n) => /^_attach[A-Z]\w*$/.test(n));
+const other = imported.filter((n) => n !== "lbKeyOf" && !attachNames.includes(n));
+if (other.length) throw new Error(`diag.js imports unstubbed symbol(s): ${other.join(", ")}`);
 const factory = new Function(
-  "lbKeyOf",
-  "_attachPlacements", "_attachEntityTypes", "_attachEvents", "_attachWire",
-  "_attachPhysics", "_attachMotion", "_attachPvs", "_attachAssets",
-  "_attachIntegrity", "_attachFonts", "_attachStrings", "_attachInput",
-  "_attachCombat", "_attachPalettes", "_attachLod", "_attachClothing",
-  "window", "performance", "console",
+  "lbKeyOf", ...attachNames, "window", "performance", "console",
   `${diagSrc}\n; return { installDiag };`,
 );
 
 const fakeWindow = {};
 const { installDiag } = factory(
   lbKeyOf,
-  noopAttach, noopAttach, noopAttach, noopAttach,
-  noopAttach, noopAttach, noopAttach, noopAttach,
-  noopAttach, noopAttach, noopAttach, noopAttach,
-  noopAttach, noopAttach, noopAttach, noopAttach,
+  ...attachNames.map(() => noopAttach),
   fakeWindow,
   globalThis.performance ?? { now: () => Date.now() },
   console,

@@ -33,6 +33,7 @@ globalThis.cancelAnimationFrame = () => {};
 import { SuiteAssetSource, registerSuiteDecoder, _hasSuiteDecoder } from "../scene3d/suite_assets.js";
 import { attachWindTrees } from "../scene3d/animated_scenery.js";
 import { isTreeDid, treeWindDids, _resetTreeWindFlags } from "../scene3d/tree_wind.js";
+import { _resetVfxCatalog } from "../scene3d/vfx_catalog.js";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -191,17 +192,24 @@ console.log("\n== C) no-miss path is byte-identical (failed empty ⇒ statics un
   check("failed empty ⇒ statics array reference + members unchanged",
     after === frozenStatics && after.length === before.length &&
     after.every((p, i) => p === before[i]));
-  // And the guard early-returns keep failed empty (treeWind off ⇒ nothing peeled back).
-  globalThis.window.location.search = "?treeWind=off";
+  // And the guard early-returns keep failed empty when NOTHING was peeled.
+  // 2026-06-27 vanished-trees fix (animated_scenery.js attachWindTrees): the
+  // builder's gate now MATCHES the statics.js peel gate,
+  // `treeWindEnabled() || visualEnabled()`, and `?visual` is default-ON — so
+  // `?treeWind=off` alone no longer reaches the early return (it builds, and
+  // a build miss re-freezes via `failed`). The true off-trace is both off.
+  globalThis.window.location.search = "?treeWind=off&visual=off";
   _resetTreeWindFlags();
+  _resetVfxCatalog();
   const offRes = await attachWindTrees(
     { staticsGroup: { add() {} } }, [{ modelId: 0x02001063 }],
     { fetchBuildingPlacement: async () => ({ partCount: 1, free() {} }) },
   );
-  check("treeWind OFF guard returns {built:0, failed:[]} (off-trace re-adds nothing)",
+  check("treeWind OFF + visual OFF guard returns {built:0, failed:[]} (off-trace re-adds nothing)",
     offRes.built === 0 && Array.isArray(offRes.failed) && offRes.failed.length === 0);
   globalThis.window.location.search = "?treeWind=on";
   _resetTreeWindFlags();
+  _resetVfxCatalog();
 }
 
 console.log(`\nP4.3 wind fallback peel: ${passed} passed, ${failed} failed`);

@@ -39,6 +39,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath, join as joinPath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { stripStaticImports } from "./harness/lib/splice_module.mjs";
+import { entitiesToplevelPrelude } from "./harness/lib/scene3d_stubs.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -87,97 +89,24 @@ if (!threePath) {
 }
 
 const threeUrl = "file://" + threePath;
-const THREE = await import(threeUrl);
+const THREE = await import("three"); // same instance entities.js imports
 
 console.log("Phase 7.4b — entity-pipeline standalone ESM test");
 console.log(`three loaded from: ${threePath}`);
 console.log("=========================");
 
-// Patch + load the entities.js + animation.js modules with the
-// closure-captured THREE — same trick the 7.4a test uses to bypass
-// Node's bare-specifier resolution on `import * as THREE from
-// "three"`.
-function loadModule(relPath) {
-    const full = resolvePath(__dirname, relPath);
-    if (!existsSync(full)) {
-        throw new Error(`module not found: ${full}`);
-    }
-    let src = readFileSync(full, "utf8");
-    src = src
-        .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
-        // Strip `import { … } from "./X.js"` / "../ui/X.js" lines (incl.
-        // multi-line blocks) — we splice modules by hand instead.
-        .replace(/^\s*import\s+\{[^{}]*\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "")
-        .replace(/^\s*import\s+\{[^{}]*\n[\s\S]*?\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
-    return src;
-}
-
-const animSrc = loadModule("scene3d/animation.js");
-const adapterSrc = loadModule("scene3d/adapter.js");
-const entitiesSrc = loadModule("scene3d/entities.js");
-
-// Strip `export` keywords + concatenate so the entitiesSrc's local
-// references (meshToGeometryGroups, AnimationCache, etc.) all
-// resolve via lexical scope. Adapter first (entities depends on it),
-// then animation (entities depends on AnimationCache + buildAnimationClip),
-// then entities. Skipped exports → exposed via the factory's return.
-function stripExports(src) {
-    return src
-        .replace(/^\s*export\s+async\s+function\s+/gm, "async function ")
-        .replace(/^\s*export\s+function\s+/gm, "function ")
-        .replace(/^\s*export\s+class\s+/gm, "class ")
-        .replace(/^\s*export\s+const\s+/gm, "const ")
-        .replace(/^\s*export\s+default\s+/gm, "")
-        .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
-}
-
-// A9-Stage2 setup_rig.js is a stripped import; force the legacy inline rig
-// paths so module-scope `RIG_MODULE_ON = readRigModuleFlag()` evaluates.
-const RIG_STUBS =
-    "const readRigModuleFlag = () => false;\n" +
-    "const applyRestPoseFrame = () => { throw new Error('rigModule stubbed'); };\n" +
-    "const buildPartSurfaceMeshes = () => { throw new Error('rigModule stubbed'); };\n" +
-    "const createPartFramesProxy = () => { throw new Error('rigModule stubbed'); };\n";
-
-// 82a6102c integrated speechBubbles + the B2 PlayEffect spawn-drain
-// always-on (gates removed), so these stripped-import names are now
-// called unconditionally in _spawnImpl/remove. No-op stubs.
-const UI_STUBS =
-    "const drainPendingPlayEffects = () => {};\n" +
-    "const showSpeechBubbleOnEntity = () => {};\n" +
-    "const removeSpeechBubbleFromEntity = () => {};\n" +
-    "const ensureNameplateForEntity = () => {};\n";
-
-// A11-S3: entities.js imports the ?particleClock flag parse (stripped
-// import from ./particles/time_rng.js); "off" = legacy manager-tail path
-// (covered by test_particle_clock.mjs).
-const PARTICLE_CLOCK_STUB = "const particleClockMode = () => \"off\";\n";
-// A11-S2: entities.js imports the ?particleOwner facade (stripped import
-// from ./particles/owner_registry.js); flag-off = legacy per-guid map path
-// (the facade itself is covered by test_particle_owner.mjs).
-const PARTICLE_OWNER_STUB =
-    "const particleOwnerOn = () => false;\n" +
-    "const ownerRegistry = { addEmitter: async () => 0, destroyEmitter: () => false, " +
-    "stopEmitter: () => false, destroySome: () => 0, destroyAllForOwner: () => 0, " +
-    "ownerKeys: () => [][Symbol.iterator]() };\n";
-
-// A8-M4: entities.js imports the generic pre-create buffer (stripped import
-// from ./pre_create_buffer.js). Pure + dependency-free by construction, so
-// splice the REAL module source rather than a stub.
-const PRE_CREATE_SRC = "// === pre_create_buffer.js ===\n" +
-    stripExports(loadModule("scene3d/pre_create_buffer.js")) + "\n";
-
-const composite = PRE_CREATE_SRC + PARTICLE_CLOCK_STUB + PARTICLE_OWNER_STUB + RIG_STUBS + UI_STUBS +
-    "// === adapter.js ===\n" + stripExports(adapterSrc) + "\n" +
-    "// === animation.js ===\n" + stripExports(animSrc) + "\n" +
-    "// === entities.js ===\n" + stripExports(entitiesSrc) + "\n" +
-    "; return { EntityManager, AnimationCache, buildAnimationClip, " +
-    "meshToGeometryGroups, surfacePixelsToTexture, acQuatToThree };";
-
-const factory = new Function("THREE", "performance", "window", composite);
-// Provide a lightweight performance shim — Node has performance.now()
-// natively in 18+.
-const factoryEnv = factory(THREE, globalThis.performance ?? { now: () => Date.now() }, undefined);
+// 2026-10-05 — entities.js / animation.js / adapter.js are IMPORTED as real ES
+// modules instead of text-spliced into new Function(). The splice rotted on
+// every new import (module-top-level reader calls, then spawn-path helpers
+// such as recolor_flag.js gatePaletteId), and a growing hand-stub list made
+// the spawn path partly fake. Verified 2026-10-05: the whole entities.js
+// module graph imports headless in Node, so the GENUINE code runs. `three`
+// is imported by the same bare specifier the app uses, so THREE below is the
+// SAME instance entities.js builds with (instanceof checks hold).
+const __entMod = await import("./scene3d/entities.js");
+const __animMod = await import("./scene3d/animation.js");
+const __adapterMod = await import("./scene3d/adapter.js");
+const factoryEnv = { ...__adapterMod, ...__animMod, ...__entMod };
 const { EntityManager, AnimationCache, buildAnimationClip } = factoryEnv;
 
 // ---- Mock wasm exports ----------------------------------------------

@@ -42,6 +42,7 @@
 import { readFileSync } from "node:fs";
 import { dirtCodeBitmask, clayCodeBitmask } from "./scene3d/terrain_dirt.js";
 import { FAM_DIRT, familyForCode } from "./scene3d/terrain_families.js";
+import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -174,8 +175,12 @@ check("the mud print uses the shared centre + radius",
   MUD_PRINT_CODE.includes("uSnowTrailCenter") && MUD_PRINT_CODE.includes("uSnowTrailRadius"));
 check("the mud print gates on its OWN float, not snow's",
   MUD_PRINT_CODE.includes("uMudTrailEnabled > 0.5") && !MUD_PRINT_CODE.includes("uSnowTrailEnabled"));
-check("the total sampler count is unchanged by wave 3B (15, none added)",
-  countOf(FRAG, "uniform sampler") + countOf(FRAG, "uniform highp sampler") === 15,
+// 15 at wave 3B (2026-08-01); 16 since uMacroTex (93f7f8ce, 2026-08-02 — the
+// macro-variation texture, not a wave-3B sampler). Wave 3B itself still adds
+// none: its trail sampler is the shared uSnowTrailMap (next check).
+check("the total sampler count is unchanged by wave 3B (16 = 15 + uMacroTex, none added)",
+  countOf(FRAG, "uniform sampler") + countOf(FRAG, "uniform highp sampler") === 16 &&
+    FRAG.includes("uniform sampler2DArray uMacroTex;"),
   String(countOf(FRAG, "uniform sampler") + countOf(FRAG, "uniform highp sampler")));
 check("the uniform block explains the shared-sampler naming",
   FRAG.includes("THE TRAIL SAMPLER IS SHARED"));
@@ -228,13 +233,17 @@ check("the sheen is OUTSIDE the uPbrEnabled block (retail Gouraud wins by defaul
 console.log("\n-- M6 the shared fragColor statement is BYTE-UNCHANGED ----------");
 // ===========================================================================
 const FRAG_COLOR_LINE = FRAG.slice(iFragColor, FRAG.indexOf("\n}", iFragColor));
-check("fragColor is written exactly once", countOf(FRAG, "fragColor = vec4(") === 1);
-check("the statement is byte-identical to the wave-2 one",
-  FRAG_COLOR_LINE.replace(/\s+/g, " ").trim()
-  === "fragColor = vec4(modulated * ndotl * cloudShadow * csmShadow + iblSpec + sandSparkle * cloudShadow * csmShadow, 1.0);",
-  JSON.stringify(FRAG_COLOR_LINE));
+// 2026-10-05: the final colour is now `terrainLit = terrainApplyLight(...) +
+// iblSpec + sandSparkle*…; fragColor = vec4(terrainApplyFog(terrainLit, …))`
+// (shared lighting tail, same maths) plus ONE documented far-ring bake early
+// return — see harness/lib/terrain_final_colour.mjs. The wave-3B intent is
+// unchanged: no mud/dirt term in the final colour.
+const FINAL = checkTerrainFinalColour(FRAG);
+check("fragColor: the final write + the uBakeAlbedo early return, nothing else",
+  FINAL.ok, FINAL.why);
+check("the final colour is the wave-2 maths (shared tail, fog-wrapped)", FINAL.ok, FINAL.why);
 check("no wave-3B term appears in the final colour statement",
-  !/mud|Mud|clay|Clay|dirt|Dirt/.test(FRAG_COLOR_LINE));
+  FINAL.finalBlock.length > 0 && !/mud|Mud|clay|Clay|dirt|Dirt/.test(FINAL.finalBlock.replace(/\/\/[^\n]*/g, "")));
 
 // ===========================================================================
 console.log("\n-- M7 strict no-op when off ------------------------------------");

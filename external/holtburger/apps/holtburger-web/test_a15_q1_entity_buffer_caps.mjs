@@ -249,13 +249,14 @@ check(
   /__scene3dEntityBacklog/.test(src) &&
     /b\.length\s*>\s*ENTITY_BUFFER_CAP/.test(src),
 );
+// 2026-10-05: the 2D `deferredSpawns` ring these two checks pinned was
+// RETIRED with the 2D PIXI spawn handler (index.html dispatch2dSpawn, "RETIRED
+// 2026-06-18 (item 7b)"; the buffer itself removed in item 8). The unbounded-
+// growth hazard A15-Q1 capped is therefore gone by deletion — pin that it
+// stays gone (a re-introduced 2D buffer must come back WITH its cap).
 check(
-  "deferredSpawns push is ring-capped against ENTITY_BUFFER_CAP",
-  /deferredSpawns\.length\s*>\s*ENTITY_BUFFER_CAP/.test(src),
-);
-check(
-  "deferredSpawns push is gated on (__SPAWN_DEFER_2D_ONLY && __USE_RENDERER_3D)",
-  /__SPAWN_DEFER_2D_ONLY\s*&&\s*__USE_RENDERER_3D/.test(src),
+  "retired 2D deferredSpawns buffer stays deleted (no push / no declaration)",
+  !/deferredSpawns\.push\(/.test(src) && !/(?:let|const|var)\s+deferredSpawns\b/.test(src),
 );
 check(
   "the stale 'hook is undefined ... 2D' comment is gone",

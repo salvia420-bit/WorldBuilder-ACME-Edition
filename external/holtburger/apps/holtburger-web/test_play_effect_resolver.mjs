@@ -194,10 +194,12 @@ function makeRecordingParticleManager() {
   return {
     calls,
     destroyed,
+    // The real ParticleManager.addEmitter is ASYNC (geometry/material
+    // fetch) and play_effect_vfx.js chains `.then` on it — return a Promise.
     addEmitter(args) {
       const id = nextId++;
       calls.push({ id, ...args });
-      return id;
+      return Promise.resolve(id);
     },
     destroyParticleEmitter(id) {
       destroyed.push(id);
@@ -298,6 +300,10 @@ function setupLiveScene3d({
       wasmExports,
       materialCache: null,
       _worldParticleManager: particleManager,
+      // EntityManager always constructs this map (entities.js constructor);
+      // play_effect_vfx.js seeds it on the `?particleOwner=off` legacy arm,
+      // which is the arm this headless run takes (no location.search).
+      _particleEmittersForGuid: new Map(),
       getPhysicsScriptTableDid: (g) => ((g >>> 0) === (targetGuid >>> 0) ? (tableDid >>> 0) : 0),
     },
   };
@@ -363,6 +369,16 @@ check("VFX_COVERAGE.realVfxAttempts is a getter (number)", typeof VFX_COVERAGE.r
 check("VFX_COVERAGE.realVfxResolved is a getter (number)", typeof VFX_COVERAGE.realVfxResolved === "number");
 check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
 
+// Track B7 (2026-06-08): the resolver schedules each CreateParticle spawn on
+// a StartTime setTimeout (0 ms here) and addEmitter resolves asynchronously,
+// so a case must let those land before counting addEmitter calls.
+async function resolveAndSettle(...args) {
+  const r = await __test.tryResolveRealVfx(...args);
+  await new Promise((res) => setTimeout(res, 5));
+  await Promise.resolve(); await Promise.resolve();
+  return r;
+}
+
 // =========================================================================
 // Case A — happy path: scriptId 0x04 (Launch), one entry, one CreateParticle
 // hook, picker resolves, ParticleManager.addEmitter called once.
@@ -387,7 +403,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 0.5);
+  const result = await resolveAndSettle(TARGET, 0x04, 0.5);
   const d = statsDelta(before);
   check("Case A: resolver returns true on happy path", result === true);
   check("Case A: addEmitter called exactly once", particleManager.calls.length === 1,
@@ -443,7 +459,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   const { particleManager } = setupLiveScene3d({
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
-  const result = await __test.tryResolveRealVfx(TARGET, 0x05, 0.25); // below first mod
+  const result = await resolveAndSettle(TARGET, 0x05, 0.25); // below first mod
   check("Case B: resolver returns true (picker → low)", result === true);
   check("Case B: addEmitter called once", particleManager.calls.length === 1);
   check("Case B: emitterInfo is the LOW fixture (kind='low')",
@@ -477,7 +493,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   const { particleManager } = setupLiveScene3d({
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 5.0); // above all mods
+  const result = await resolveAndSettle(TARGET, 0x04, 5.0); // above all mods
   check("Case C: resolver returns true (picker → clamp to last)", result === true);
   check("Case C: emitterInfo is the HIGH fixture (clamp last)",
     particleManager.calls[0]?.emitterInfo?.kind === "high",
@@ -495,7 +511,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   const wasmExports = makeWasmStubs();
   setupLiveScene3d({ tableDid: 0, wasmExports, targetGuid: TARGET }); // entity exists, table=0
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case D: resolver returns false on tableDid=0", result === false);
   check("Case D: missNoTable bumped by 1", d.miss.noTable === 1, `got ${d.miss.noTable}`);
@@ -520,7 +536,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   });
   setupLiveScene3d({ tableDid: TABLE_DID, wasmExports, targetGuid: TARGET });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case E: resolver returns false when scriptId absent", result === false);
   check("Case E: missNoScriptId bumped by 1", d.miss.noScriptId === 1, `got ${d.miss.noScriptId}`);
@@ -550,7 +566,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case F: resolver returns false when no CreateParticle hooks",
     result === false);
@@ -584,7 +600,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   const { particleManager } = setupLiveScene3d({
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   check("Case G: resolver returns true with multi-hook script", result === true);
   check("Case G: addEmitter called 3 times (13+26+13, Sound skipped)",
     particleManager.calls.length === 3, `got ${particleManager.calls.length}`);
@@ -624,12 +640,20 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
 
   // Capture the scheduled cleanup callback. The resolver calls setTimeout
   // (global, not window) — patch the global.
+  // Track B7 (2026-06-08): every hook's spawn is ALSO a setTimeout (its
+  // StartTime delay, 0 here), so record every scheduled callback, run the
+  // spawn timers first, then pick out the one-shot cleanup (2500 ms).
+  const scheduled = [];
   let captured = null;
   let capturedDelay = 0;
   const origSetTimeout = globalThis.setTimeout;
-  globalThis.setTimeout = (cb, delay) => { captured = cb; capturedDelay = delay; return 0; };
+  globalThis.setTimeout = (cb, delay) => { scheduled.push([cb, delay]); return 0; };
   try {
     const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+    for (const [cb, delay] of scheduled.slice()) if (delay < 2500) cb();
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    const cleanup = scheduled.find(([, delay]) => delay >= 2500);
+    if (cleanup) { captured = cleanup[0]; capturedDelay = cleanup[1]; }
     check("Case H: resolver returns true", result === true);
     check("Case H: 2 emitters spawned", particleManager.calls.length === 2);
     check("Case H: setTimeout captured with 2500ms delay", capturedDelay === 2500,
@@ -655,7 +679,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   const wasmExports = makeWasmStubs();
   setupLiveScene3d({ tableDid: 0x3400000B, wasmExports, targetGuid: TARGET, hasEntity: false });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case I: resolver returns false when entity absent", result === false);
   check("Case I: missNoEntity bumped by 1", d.miss.noEntity === 1, `got ${d.miss.noEntity}`);
@@ -679,7 +703,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
   };
   setupLiveScene3d({ tableDid: TABLE_DID, wasmExports, targetGuid: TARGET });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case J: resolver returns false on fetchPhysicsScript throw", result === false);
   check("Case J: missPhysicsScriptFetch bumped by 1",
@@ -710,7 +734,7 @@ check("pickScriptEntry is exported", typeof pickScriptEntry === "function");
     tableDid: TABLE_DID, wasmExports, targetGuid: TARGET,
   });
   const before = snapshotStats();
-  const result = await __test.tryResolveRealVfx(TARGET, 0x04, 1.0);
+  const result = await resolveAndSettle(TARGET, 0x04, 1.0);
   const d = statsDelta(before);
   check("Case K: resolver returns false when only emitter fetch fails",
     result === false);

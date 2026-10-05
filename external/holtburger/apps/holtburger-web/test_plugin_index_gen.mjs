@@ -211,7 +211,12 @@ check("EVERY on-disk *.manifest.json passes schema validation (0 errors)", () =>
 
 check("every descriptor has manifestPath + devPath pointing at a real stem", () => {
   for (const d of built.descriptors) {
-    assertTrue(/^\.\/[a-z0-9.\-]+\.manifest\.json$/.test(d.manifestPath), `bad manifestPath ${d.manifestPath}`);
+    // `_` admitted (2026-10-05): plugins/ui_click_sounds.manifest.json ships
+    // with an underscore stem (its manifest `id` is the kebab
+    // "ui-click-sounds"). Nothing at runtime keys on the file stem's charset —
+    // the loader resolves the descriptor path verbatim — so this is a
+    // path-shape check (relative, single segment, lowercase), not a naming lint.
+    assertTrue(/^\.\/[a-z0-9._\-]+\.manifest\.json$/.test(d.manifestPath), `bad manifestPath ${d.manifestPath}`);
     const stem = d.manifestPath.replace(/^\.\//, "").replace(/\.manifest\.json$/, "");
     assertEq(d.devPath, `./${stem}.manifest.dev.json`, `devPath for ${stem}`);
   }

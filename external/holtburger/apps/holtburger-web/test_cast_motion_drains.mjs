@@ -50,7 +50,7 @@
 //   cd apps/holtburger-web/
 //   node test_cast_motion_drains.mjs
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
 
@@ -105,7 +105,6 @@ const KIND = Object.freeze({
   MOTION: 5, APPEARANCE: 6, ATTACH: 7, MOTION_ACTION: 8, TURN: 9,
 });
 const createEntityDispatcher = () => ({ dispatch: () => false });
-const THREE = { Vector3: class { constructor(x, y, z) { this.x = x; this.y = y; this.z = z; } } };
 const CRACK_GLOW_OSC_NAME = "crackGlow";
 const VFX_GLOBALS = { uTime: 0 };
 const getOscillator = () => null;
@@ -119,8 +118,13 @@ const terrainVfxTick = () => {};
 const tickOscillators = () => {};
 const tickWeatherInputs = () => {};
 `;
+// 2026-10-05: loop.js builds real THREE objects at module top level
+// (fog-probe Vector3s + a THREE.Color), so the old 1-class fake no longer
+// loads. Use the genuine three (absolute file URL — a data: module cannot
+// resolve the bare "three" specifier).
+const THREE_URL = pathToFileURL(joinPath(dirname(fileURLToPath(import.meta.url)), "node_modules", "three", "build", "three.module.js")).href;
 const transformed =
-  stubs + stripped +
+  `import * as THREE from ${JSON.stringify(THREE_URL)};\n` + stubs + stripped +
   "\nexport { drainMotionActions as __testDrainActions, drainMotionAxes as __testDrainAxes };\n";
 
 /**
@@ -164,6 +168,11 @@ const WINDUP_08_PURPLE_LOW = 0x0132;
 const WINDUP_04_LOW = 0x0072; // MagicPowerUp04
 const MAGIC_STANCE = 0x0049;
 const SIDESTEP_RIGHT_LOW = 0x000f;
+// 2026-10-05: the pollMotionActions row grew a 5th word — the action's speed
+// as f32 BITS (loop.js MOTION_ACTION_ROW_U32 = 5, motionActionSpeed). With the
+// old 4-word rows the drain's stride walked across row boundaries and played
+// nothing. 0x3f800000 = 1.0f.
+const SPEED_1 = 0x3f800000;
 const TURN_RIGHT_LOW = 0x000d;
 
 console.log("===========================================================");
@@ -184,8 +193,8 @@ console.log("\nPART 1 — module-level wasm export is resolved + invoked");
     pollMotionActions: () => {
       pollCalls += 1;
       return Uint32Array.from([
-        REMOTE_GUID, WINDUP_04_LOW, 11, MAGIC_STANCE,
-        REMOTE_GUID, WINDUP_08_PURPLE_LOW, 12, MAGIC_STANCE,
+        REMOTE_GUID, WINDUP_04_LOW, 11, MAGIC_STANCE, SPEED_1,
+        REMOTE_GUID, WINDUP_08_PURPLE_LOW, 12, MAGIC_STANCE, SPEED_1,
       ]);
     },
   };
@@ -242,7 +251,7 @@ console.log("\nPART 2 — SessionHandle method takes precedence when present");
   const sessionHandle = {
     pollMotionActions() {
       viaHandle += 1;
-      return Uint32Array.from([REMOTE_GUID, WINDUP_08_PURPLE_LOW, 5, MAGIC_STANCE]);
+      return Uint32Array.from([REMOTE_GUID, WINDUP_08_PURPLE_LOW, 5, MAGIC_STANCE, SPEED_1]);
     },
   };
   const wasmExports = {
@@ -266,7 +275,7 @@ console.log("\nPART 3 — ?multiAction=off / ?castAxes=off escapes");
   const em = makeEm();
   let polls = 0;
   m.__testDrainActions(
-    makeScene(em, { pollMotionActions: () => { polls += 1; return Uint32Array.from([REMOTE_GUID, 1, 1, 1]); } }),
+    makeScene(em, { pollMotionActions: () => { polls += 1; return Uint32Array.from([REMOTE_GUID, 1, 1, 1, SPEED_1]); } }),
     {},
   );
   check("?multiAction=off never polls", polls === 0, `polls=${polls}`);
@@ -307,8 +316,8 @@ console.log("\nPART 4 — local-guid skip, stamp dedup, axis routing");
     makeScene(em, {
       pollMotionActions: () =>
         Uint32Array.from([
-          LOCAL_GUID, WINDUP_08_PURPLE_LOW, 7, MAGIC_STANCE,
-          REMOTE_GUID, WINDUP_08_PURPLE_LOW, 7, MAGIC_STANCE,
+          LOCAL_GUID, WINDUP_08_PURPLE_LOW, 7, MAGIC_STANCE, SPEED_1,
+          REMOTE_GUID, WINDUP_08_PURPLE_LOW, 7, MAGIC_STANCE, SPEED_1,
         ]),
     }),
     {},
@@ -328,7 +337,7 @@ console.log("\nPART 4 — local-guid skip, stamp dedup, axis routing");
       call += 1;
       // Same 15-bit sequence re-broadcast (ACE re-sends UpdateMotion on
       // unrelated state changes) — must play exactly once.
-      return Uint32Array.from([REMOTE_GUID, WINDUP_08_PURPLE_LOW, 9, MAGIC_STANCE]);
+      return Uint32Array.from([REMOTE_GUID, WINDUP_08_PURPLE_LOW, 9, MAGIC_STANCE, SPEED_1]);
     },
   };
   const scene = makeScene(em, wasmExports);

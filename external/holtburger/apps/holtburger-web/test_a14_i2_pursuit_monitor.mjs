@@ -9,11 +9,10 @@
 //            with no fire; idle = pending (continue); terminal latch.
 //   PART 3 — turn monitor semantics: 2/3 → act (no cancel); timeout →
 //            act WITH cancel; terminal latch.
-//   PART 4 — static picking.js invariants: the flag-on pursuit path
-//            contains ZERO setMovementInput calls; arrival invokes the
-//            SAME charge.fireAttack closure with the windup release
-//            FIRST (F6-6 preserved verbatim); the legacy chargeTick /
-//            turn loop are untouched (flag-off byte path).
+//   PART 4 — static picking.js invariants: the client-side charge
+//            pursuit (startCharge/chargeTick/pursuitMonitorTick/
+//            cancelCharge) was deleted 2026-07-06 for server-authoritative
+//            combat; pin that it stays deleted + the face-then-act shape.
 //
 // Run:
 //   cd apps/holtburger-web/
@@ -153,79 +152,35 @@ console.log("PART 4 — static picking.js invariants");
     return null;
   }
 
-  const monitorTick = extractFn("pursuitMonitorTick");
-  check("pursuitMonitorTick exists", !!monitorTick);
+  // 2026-07-06 "server-authoritative combat" (picking.js, the comment above
+  // `turnToFaceThenAct(targetGuid, fire, MISSILE_FACE_TARGET)`): the whole
+  // client-side charge pursuit — startCharge / chargeTick / the wasm
+  // pursuitMonitorTick consumer / cancelCharge — was DELETED. Retail
+  // `ClientCombatSystem::ExecuteAttack` (acclient.c:408626) sends the attack
+  // immediately and the server owns range/approach. The old PART 4 pinned
+  // that deleted consumer; it now pins its ABSENCE, so a re-introduced
+  // client-side pursuit fails here loudly. The pure monitor (PARTS 1-3, 5)
+  // stays covered because scene3d/pursuit_monitor.js still ships.
+  for (const gone of ["pursuitMonitorTick", "startCharge", "chargeTick", "cancelCharge"]) {
+    check(`deleted client-side pursuit fn ${gone} stays deleted`, extractFn(gone) === null);
+  }
   check(
-    "ZERO setMovementInput in the wasm pursuit monitor",
-    !!monitorTick && !monitorTick.includes("setMovementInput"),
+    "no client-side pursueEntity drive in picking.js (server owns approach)",
+    !source.includes("sessionHandle.pursueEntity("),
   );
   check(
-    "monitor arrival invokes the SAME charge.fireAttack closure (F6-6)",
-    !!monitorTick && monitorTick.includes("charge.fireAttack()"),
+    "missile fire = optimistic turn-to-face then act (no pursuit)",
+    /turnToFaceThenAct\(targetGuid, fire, MISSILE_FACE_TARGET\)/.test(source),
   );
-  const releaseIdx = monitorTick?.indexOf("_releaseLocalWindupHold()") ?? -1;
-  const fireIdx = monitorTick?.indexOf("charge.fireAttack()") ?? -1;
-  check(
-    "windup release BEFORE fire on arrival (legacy order preserved)",
-    releaseIdx >= 0 && fireIdx >= 0 && releaseIdx < fireIdx,
-  );
-
-  const startCharge = extractFn("startCharge");
-  check("startCharge exists", !!startCharge);
-  check(
-    "flag-on startCharge hands steering to pursueEntity",
-    !!startCharge && startCharge.includes("sessionHandle.pursueEntity("),
-  );
-  check(
-    "startCharge keeps the windup hold (setSwingMotion holdAtPeak) on both paths",
-    !!startCharge && startCharge.includes("holdAtPeak: true"),
-  );
-  check(
-    "ZERO setMovementInput in startCharge",
-    !!startCharge && !startCharge.includes("setMovementInput"),
-  );
-
-  // Legacy paths untouched: chargeTick still steers via
-  // setMovementInput(1, 0, turn, true) and stops with (0,0,0,false).
-  const chargeTick = extractFn("chargeTick");
-  check("legacy chargeTick still present (flag-off path)", !!chargeTick);
-  check(
-    "legacy chargeTick still steers via setMovementInput",
-    !!chargeTick && chargeTick.includes("setMovementInput(1"),
-  );
-  check(
-    "legacy chargeTick fire path intact (F6-6 site)",
-    !!chargeTick && chargeTick.includes("charge.fireAttack()"),
-  );
-
-  const cancel = extractFn("cancelCharge");
-  check(
-    "cancelCharge routes wasm pursuits to cancelPursuit (no stomp)",
-    !!cancel && cancel.includes("cancelPursuit") &&
-      cancel.includes("charge.wasmPursuit"),
-  );
-  check(
-    "cancelCharge legacy branch keeps the (0,0,0) stop",
-    !!cancel && cancel.includes("setMovementInput?.(0, 0, 0, false)"),
-  );
-
   const turnFn = extractFn("turnToFaceThenAct");
+  check("turnToFaceThenAct exists", !!turnFn);
   check(
-    "turnToFaceThenAct wasm branch uses turnToEntity",
-    !!turnFn && turnFn.includes("sessionHandle.turnToEntity("),
-  );
-  check(
-    "turn wasm branch is monitor-shaped (createTurnMonitor)",
-    !!turnFn && turnFn.includes("createTurnMonitor("),
+    "turnToFaceThenAct is single-flight (ROT-1 faceLoopToken)",
+    !!turnFn && turnFn.includes("myToken !== faceLoopToken"),
   );
   check(
     "S15 NO-GO: no 0xF649 / TurnToEvent send appears in picking.js",
     !source.includes("0xF649") && !source.toLowerCase().includes("turntoevent"),
-  );
-  check(
-    "effective-on requires the exports (typeof guards)",
-    source.includes('typeof sessionHandle.pursueEntity === "function"') &&
-      source.includes('typeof sessionHandle.pursuitStatus === "function"'),
   );
 }
 

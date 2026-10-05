@@ -30,6 +30,7 @@
 //            neighbour tiers. SKIPs (not fails) if the port cannot be bound.
 //
 // Run:  node harness/test_build_shell.mjs        (exit 0/1)
+//       … --write-results  also refreshes docs/RESULTS-shell-requests-2026-08-09.json
 // Needs the esbuild binary ($ESBUILD_BIN or the documented default) — absent
 // binary is a loud SKIP with exit 0 (the binary is deliberately not committed).
 
@@ -65,7 +66,10 @@ const read = (p) => fs.readFileSync(p, "utf8");
 try {
   resolveEsbuild();
 } catch (e) {
-  console.log(`BUILD-SHELL SKIP — ${e.message}`);
+  // `BUILD-SHELL: SKIP —` (colon form) so run-js-headless's SKIP detector
+  // classifies a missing binary as SKIP (asserted nothing → FAIL by default)
+  // instead of a hollow PASS. Provide $ESBUILD_BIN on CI.
+  console.log(`BUILD-SHELL: SKIP — ${e.message}`);
   process.exit(0);
 }
 
@@ -294,7 +298,14 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
       "postprocessing) are identical on both arms and excluded from the shell count, as in D-12.2.",
   );
   report.setVerdict("EXPLORATORY");
-  const outPath = path.join(APP_ROOT, "docs", "RESULTS-shell-requests-2026-08-09.json");
+  // 2026-10-05: write the committed docs/ artifact ONLY on request
+  // (`--write-results`). As a registered gate suite this runs on every
+  // run-js-headless pass, and an unconditional write re-stamped `ts` + the
+  // content hashes in a tracked docs file each time — a gate must not dirty
+  // the tree. Default: same report, written under the test's temp root.
+  const outPath = process.argv.includes("--write-results")
+    ? path.join(APP_ROOT, "docs", "RESULTS-shell-requests-2026-08-09.json")
+    : path.join(tmp, "RESULTS-shell-requests.json");
   report.write(outPath);
   check(fs.existsSync(outPath), `RESULTS-v2 artifact written (${path.relative(APP_ROOT, outPath)})`);
 }
@@ -328,7 +339,9 @@ await (async () => {
     }
   }
   if (!up) {
-    console.log("  SKIP: serve.py did not come up (port contention?) — header rules verified manually at landing");
+    // Sub-check notice, worded so run-js-headless does not read the WHOLE
+    // suite (parts 1-5 asserted) as a SKIP.
+    console.log("  [part 6 sub-check not run] serve.py did not come up (port contention?) — header rules verified manually at landing");
     proc.kill();
     return;
   }
@@ -346,7 +359,7 @@ await (async () => {
       );
       check(!res.headers.get("content-encoding"), "live shell/ served IDENTITY under Accept-Encoding gzip+zstd");
     } else {
-      console.log("  SKIP: no live shell/ build at APP_ROOT — run scripts/build-shell.mjs first");
+      console.log("  [part 6 sub-check not run] no live shell/ build at APP_ROOT (gitignored) — run scripts/build-shell.mjs first");
     }
     const neg = await fetchHead("/apps/holtburger-web/scene3d/index.js");
     check((neg.headers.get("cache-control") || "") === "no-cache", "scene3d/*.js stays no-cache");

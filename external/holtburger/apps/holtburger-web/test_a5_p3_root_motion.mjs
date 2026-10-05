@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath, join as joinPath } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { entitiesToplevelPrelude } from "./harness/lib/scene3d_stubs.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -117,7 +118,10 @@ const composite =
     // Shims for imported symbols entities.js calls at module top level
     // (setup_rig.js's flag reader) — the splice deliberately omits that
     // module; flags read false in the Node harness anyway (no window).
-    "function readRigModuleFlag() { return false; }\n" +
+    // (selection_brackets / limbs / ragdoll / setup_rig readers) — shared
+    // list in harness/lib/scene3d_stubs.mjs so the next top-level reader is
+    // fixed in one place.
+    entitiesToplevelPrelude() +
     "// === adapter.js ===\n" + stripExports(loadModule("scene3d/adapter.js")) + "\n" +
     "// === animation.js ===\n" + stripExports(loadModule("scene3d/animation.js")) + "\n" +
     "// === entities.js ===\n" + stripExports(loadModule("scene3d/entities.js")) + "\n" +

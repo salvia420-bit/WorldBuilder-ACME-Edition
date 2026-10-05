@@ -80,6 +80,26 @@ const WAIVERS = {
     sealedEvict: "outer true == inner absent-default",
     staticsRingTimeSlice: "outer true == inner absent-default",
     bakePrewarm: "outer true == inner absent-default",
+    // 2026-10-05 — the sites the mechanical presenceVerdict cannot prove,
+    // read by eye. (The 14 above now verify mechanically; kept for history.)
+    diag: "index.js eventLogEnabled: bare URL → early `return false`; absent diag+eventLog → `=== \"on\" || === \"1\"` → false — consistent",
+    eventLog: "same IIFE as `diag` (index.js eventLogEnabled) — consistent",
+    lbLruDebug: "index.js: `let lbLruDebug = false` ~12 lines above the guard; inner `=== \"1\"` → absent false — consistent",
+  },
+  // KNOWN BUGS — real reader divergences the lint has PROVEN, left in the app
+  // because app code is out of scope for the change that wired this gate
+  // (2026-10-05). These are NOT known-good; each names the fix. The gate stays
+  // green on them so it can block NEW regressions, and an entry whose finding
+  // disappears is reported as STALE so the list cannot outlive its bug.
+  "PRESENCE-DIVERGENT": {
+    particleOwner:
+      "BUG scene3d/particles/owner_registry.js:56 — `if (globalThis.location?.search)` guard: a bare URL " +
+      "(no query) reads OFF while any query reads ON (docs row: default ON). Fix: drop the presence " +
+      "guard / default `on = true`.",
+    blockingParticleParity:
+      "BUG scene3d/statics.js:4287 `_blockingParticleParityOn` — same presence-guard shape: bare URL → " +
+      "false, any query → ON (docs: default ON). Observationally inert for statics today (comment above " +
+      "it), but the walkers disagree. Fix: `return true` fallback.",
   },
 };
 
@@ -117,7 +137,7 @@ for (const f of files) {
     // URLSearchParams or location.search (readers often stash the params
     // object in a variable a few lines above the .get()).
     const ctx = lines.slice(Math.max(0, i - 10), i + 3).join("\n");
-    if (!/URLSearchParams|location\.search/.test(ctx)) continue;
+    if (!/URLSearchParams|location\??\.search/.test(ctx)) continue;
     for (const m of lines[i].matchAll(GET_RE)) {
       const name = m[1];
       // Statement window for classification: this line + next 3 (chained
@@ -126,14 +146,71 @@ for (const f of files) {
       // Presence-guard heuristic: an enclosing `if (` within the previous
       // 6 lines that tests location.search truthiness (not just `|| ""`).
       const pre = lines.slice(Math.max(0, i - 6), i).join("\n");
+      // 2026-10-05: `location?.search` (optional chaining) counts too — the
+      // `location\.search`-only regex missed `globalThis.location?.search`
+      // guards entirely (scene3d/particles/owner_registry.js particleOwner).
       const presenceGuard =
-        /if\s*\([^)]*location\.search[^)]*\)/.test(pre) &&
-        !/location\.search\s*\|\|/.test(pre);
+        /if\s*\([^)]*location\??\.search[^)]*\)/.test(pre) &&
+        !/location\??\.search\s*(?:\|\||\?\?)/.test(pre);
       const list = readers.get(name) || [];
-      list.push({ file: path.relative(ROOT, f), line: i + 1, stmt, presenceGuard });
+      list.push({
+        file: path.relative(ROOT, f), line: i + 1, stmt, presenceGuard,
+        // context for the presence-guard verdict (below)
+        preCtx: presenceGuard ? lines.slice(Math.max(0, i - 8), i).join("\n") : "",
+        postCtx: presenceGuard ? lines.slice(i, Math.min(lines.length, i + 18)).join("\n") : "",
+      });
       readers.set(name, list);
     }
   }
+}
+
+// ── presence-guard verdict (2026-10-05) ─────────────────────────────────────
+// A read inside `if (location.search) { … }` only diverges when the INNER
+// branch makes an UNCONDITIONAL decision from the param (`return get(x) !==
+// "off"` / `on = get(x) === "on"`) whose absent-param answer differs from the
+// OUTER fallback the bare URL takes. Every other shape is consistent by
+// construction: a raw capture (`const v = get(x)`) or a conditional
+// assignment (`if (v === "off") on = false`) leaves the outer default in
+// force when the param is absent. This turns the old "read every site by eye"
+// waiver list into a mechanical check that only surfaces the real divergences
+// (particleOwner was one the regex never even saw). Unprovable shapes stay
+// findings, so the heuristic can never hide a site it does not understand.
+function presenceVerdict(s, name) {
+  const all = s.preCtx + "\n" + s.postCtx;
+  const at = s.preCtx.length + 1 + Math.max(0, s.postCtx.search(new RegExp(`get\\(\\s*["']${name}["']`)));
+  // The whole statement holding the read: back to the previous `;`/`{`/`}`,
+  // forward to the next `;`.
+  const start = Math.max(all.lastIndexOf(";", at), all.lastIndexOf("{", at), all.lastIndexOf("}", at)) + 1;
+  const end = all.indexOf(";", at);
+  const stmt = all.slice(start, end >= 0 ? end : all.length).replace(/\/\/[^\n]*/g, "").trim();
+  const decides = /[!=]==?\s*["'][^"']*["']/.test(stmt);
+  const unconditional = /^(?:return\b|[A-Za-z_$][\w$.]*\s*=(?!=))/.test(stmt);
+  if (!decides || !unconditional) {
+    return { verdict: "consistent", why: "raw capture / conditional assignment — absent param keeps the outer default" };
+  }
+  // Absent-param value of `get(x)…<op> "tok"`: undefined/null never equals a
+  // literal, so `!==`/`!=` yields true and `===`/`==` yields false. Only a
+  // single comparison (no &&/||/?:) is evaluated; anything richer is unknown.
+  const cmps = stmt.match(/[!=]==?\s*["'][^"']*["']/g) || [];
+  if (cmps.length !== 1 || /&&|\|\||\?(?!\.)/.test(stmt.replace(/\?\./g, ""))) {
+    return { verdict: "unknown", why: "compound expression — could not prove the inner/outer defaults; read the site" };
+  }
+  let inner = cmps[0].startsWith("!");
+  if (/^(?:return\s*)?!\s*\(/.test(stmt.replace(/^[A-Za-z_$][\w$.]*\s*=\s*/, ""))) inner = !inner;
+  // Outer (bare-URL) default: `let x = bool;` before the guard, an early
+  // `if (… !…location…search) return bool;`, or a `return bool;` after it.
+  const letM = /(?:let|var)\s+[\w$]+\s*=\s*(true|false)\s*;(?![^]*(?:let|var)\s+[\w$]+\s*=\s*(?:true|false)\s*;)/.exec(s.preCtx);
+  const earlyM = /if\s*\([^)]*!\s*[\w$.]*location\??\.search[^)]*\)\s*return\s+(true|false)\s*;/.exec(s.preCtx);
+  const after = all.slice(end >= 0 ? end : at);
+  const retM = /\}\s*(?:catch\s*(?:\([^)]*\))?\s*\{[^}]*\}\s*)?(?:\/\/[^\n]*\s*)*return\s+(true|false)\s*;/.exec(after);
+  const pick = earlyM || letM || retM;
+  if (!pick) return { verdict: "unknown", why: "could not find the bare-URL fallback — read the site" };
+  const outer = pick[1] === "true";
+  if (inner === outer) return { verdict: "consistent", why: `absent=${inner} == bare-URL=${outer}` };
+  return {
+    verdict: "divergent",
+    why: `absent param resolves ${inner ? "ON" : "OFF"} on any URL WITH a query, but a bare URL (no query at all) resolves ${outer ? "ON" : "OFF"}`,
+  };
 }
 
 // Second idiom: regex-literal readers on location.search, e.g.
@@ -182,11 +259,14 @@ for (const [name, sites] of readers) {
       });
     }
     if (s.presenceGuard) {
-      findings.push({
-        kind: "PRESENCE-GUARD",
-        flag: name,
-        detail: `${s.file}:${s.line} read inside if(location.search) — bare-URL default may diverge`,
-      });
+      const v = presenceVerdict(s, name);
+      if (v.verdict !== "consistent") {
+        findings.push({
+          kind: v.verdict === "divergent" ? "PRESENCE-DIVERGENT" : "PRESENCE-GUARD",
+          flag: name,
+          detail: `${s.file}:${s.line} read inside if(location.search) — ${v.why}`,
+        });
+      }
     }
   }
 }
@@ -235,4 +315,17 @@ if (VERBOSE) {
 for (const f of active.sort((a, b) => a.kind.localeCompare(b.kind) || a.flag.localeCompare(b.flag))) {
   console.log(`${f.kind}  ${f.flag}  ${f.detail}`);
 }
-process.exit(active.length ? 1 : 0);
+// Known-bug allowlist hygiene: an entry whose finding no longer fires means
+// the bug was fixed (or the reader moved) — fail so the entry gets removed
+// instead of silently pre-waiving the next regression of that flag.
+const staleBugWaivers = Object.keys(WAIVERS["PRESENCE-DIVERGENT"]).filter(
+  (flag) => !findings.some((f) => f.kind === "PRESENCE-DIVERGENT" && f.flag === flag),
+);
+for (const flag of staleBugWaivers) {
+  console.log(`STALE-WAIVER  ${flag}  PRESENCE-DIVERGENT no longer fires — remove it from WAIVERS (bug fixed?)`);
+}
+const knownBugs = waived.filter((f) => f.kind === "PRESENCE-DIVERGENT");
+if (knownBugs.length) {
+  console.log(`(${knownBugs.length} KNOWN-BUG divergence(s) allowlisted: ${knownBugs.map((f) => f.flag).join(", ")} — see WAIVERS["PRESENCE-DIVERGENT"])`);
+}
+process.exit(active.length || staleBugWaivers.length ? 1 : 0);

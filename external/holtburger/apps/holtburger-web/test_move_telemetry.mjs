@@ -88,7 +88,14 @@ check(
 );
 check(
   "gait is taken from the interpreter hold_run, not re-derived in JS",
-  /"gait": tele\.hold_run\.map/.test(libSrc),
+  // ORACLE session 2: the dump now reads the movement system's own
+  // `effective_gait` (hold_run XOR run-by-default), never the raw SHIFT latch
+  // and never a JS-side guess. The derivation itself is pinned in PART 4.
+  /"gait": tele\.effective_gait,/.test(libSrc) && !/"gait": tele\.hold_run/.test(libSrc),
+);
+check(
+  "effective_gait is derived from the interpreter hold_run via gait_from_hold_run",
+  /effective_gait: interp\.map\(\|i\| match Self::gait_from_hold_run\(i\.hold_run\)/.test(systemSrc),
 );
 
 console.log("PART 4 — the core snapshot forwarder");

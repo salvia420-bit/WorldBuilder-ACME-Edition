@@ -274,17 +274,23 @@ check(
     `got=(${quatVals[0]}, ${quatVals[1]}, ${quatVals[2]}, ${quatVals[3]})`,
 );
 
-// Position passthrough: frame 1 part 2 origin should land at (12, 12.1, 12.2).
+// Position: frame 1 part 2's raw origin is (12, 12.1, 12.2), but the
+// B1-render fix v2 (2026-06-19, animation.js buildAnimationClip) plays clips
+// IN PLACE by default: each frame's COMMON translation (mean of all parts,
+// relative to frame 0) is subtracted so a baked locomotion stride does not
+// run the model ahead of the integrator-driven root. Every part here moves
+// +10 between frame 0 and 1, so the in-place value is raw − 10 = (2, 2.1, 2.2):
+// per-part (limb) offsets survive, whole-body drift does not.
 const part2Pos = clip?.tracks?.find(
     (t) => t.name === "part_2.position",
 );
 const posVals = part2Pos?.values ?? [];
 // Frame 1 → posVals[3..6]
 check(
-    "Position passthrough: frame=1 part=2 → (12, 12.1, 12.2)",
-    Math.abs(posVals[3] - 12) < 1e-6 &&
-        Math.abs(posVals[4] - 12.1) < 1e-5 &&
-        Math.abs(posVals[5] - 12.2) < 1e-5,
+    "Position in-place (B1 v2): frame=1 part=2 → raw (12,12.1,12.2) − common drift 10 = (2, 2.1, 2.2)",
+    Math.abs(posVals[3] - 2) < 1e-5 &&
+        Math.abs(posVals[4] - 2.1) < 1e-5 &&
+        Math.abs(posVals[5] - 2.2) < 1e-5,
     `got=(${posVals[3]}, ${posVals[4]}, ${posVals[5]})`,
 );
 
