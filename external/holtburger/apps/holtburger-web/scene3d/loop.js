@@ -100,6 +100,7 @@ import { createClientEventDispatcher } from "./client_event_dispatch.js";
 // unit half under plain node. Consumed only inside
 // `applyLocalPlayerPoseFromIntegrator` behind the default-off flag.
 import { parseRustPoseFlag, rustPoseWorldFromPose } from "./rust_pose.js";
+import { beginPoseFrame, endPoseFrame, readLocalPlayerPose } from "./frame_pose.js";
 // FU-2 (2026-08-02, `?serverTurn=on`, DEFAULT OFF) — server turn authority +
 // the retail control handoff. Leaf module (imports nothing) shared with
 // picking.js; flag-off every export is inert.
@@ -923,15 +924,9 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // `_rigZSmooth` state is deliberately untouched — nothing reads it
   // flag-on, and flags are frozen at module load (a reload re-seeds it).
   if (RUST_POSE_ON) {
-    let pose = null;
-    if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
-      try { pose = sessionHandle.getLocalPlayerPose(); } catch (_) { pose = null; }
-    }
+    // Per-frame shared snapshot (frame_pose.js frees the wasm box).
+    const pose = readLocalPlayerPose(sessionHandle);
     const world = rustPoseWorldFromPose(pose);
-    // WASM-BOX LIFETIME (camera.js _integratorWorldPose): release the box
-    // after the copy — this runs every rAF. rust_pose.js stays import-free /
-    // mock-friendly, so the free belongs here at the call site.
-    try { pose?.free?.(); } catch (_) { /* already released */ }
     if (!world) return;
     scene3d.entityManager.setPose(
       guid,
@@ -971,24 +966,20 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   // Track B2: default grounded so the legacy terrain-clamp path is used
   // whenever the pose is unavailable (pre-spawn / read failure).
   let isOnGround = true;
-  if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
-    try {
-      const pose = sessionHandle.getLocalPlayerPose();
-      if (pose) {
-        if (typeof pose.z === "number" && Number.isFinite(pose.z)) {
-          posZ = pose.z;
-        }
-        if (typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
-          heading = pose.heading;
-        }
-        if (typeof pose.isOnGround === "boolean") {
-          isOnGround = pose.isOnGround;
-        }
-        // WASM-BOX LIFETIME (camera.js _integratorWorldPose): per-rAF read —
-        // release the wasm-bindgen box after copying the fields out.
-        pose.free?.();
+  {
+    // Per-frame shared snapshot (frame_pose.js frees the wasm box).
+    const pose = readLocalPlayerPose(sessionHandle);
+    if (pose) {
+      if (typeof pose.z === "number" && Number.isFinite(pose.z)) {
+        posZ = pose.z;
       }
-    } catch (_) {}
+      if (typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
+        heading = pose.heading;
+      }
+      if (typeof pose.isOnGround === "boolean") {
+        isOnGround = pose.isOnGround;
+      }
+    }
   }
   const qw = Math.cos(heading * 0.5);
   const qz = Math.sin(heading * 0.5);
@@ -2402,7 +2393,20 @@ function _rp3NowMs() {
     : Date.now();
 }
 
+// One `getLocalPlayerPose()` wasm crossing per frame (scene3d/frame_pose.js):
+// the body is synchronous and the pose cell is only written by the async recv
+// loop, so every reader inside sees the same values it would have read
+// directly — the window just shares one frozen snapshot and frees the box.
 export function tickPerFrame(scene3d, sessionHandle, dt) {
+  beginPoseFrame();
+  try {
+    return _tickPerFrameBody(scene3d, sessionHandle, dt);
+  } finally {
+    endPoseFrame();
+  }
+}
+
+function _tickPerFrameBody(scene3d, sessionHandle, dt) {
   // ── CRITICAL #0 (A1-O4) — single-driver net/input pump. Retail runs net
   // dispatch + input interp inside the one SmartBox::UseTime pass
   // (acclient.c:146316, :146324); under ?singleDriver=on the scene3d
@@ -2880,13 +2884,10 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       try {
         const mi = scene3d?.cameraSwitcher?.lastMoveIntent;
         let heading = null;
-        if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
-          const p = sessionHandle.getLocalPlayerPose();
-          if (p && typeof p.heading === "number" && Number.isFinite(p.heading)) {
-            heading = p.heading;
-          }
-          // WASM-BOX LIFETIME (camera.js _integratorWorldPose): release.
-          p?.free?.();
+        // Per-frame shared snapshot (frame_pose.js frees the wasm box).
+        const p = readLocalPlayerPose(sessionHandle);
+        if (p && typeof p.heading === "number" && Number.isFinite(p.heading)) {
+          heading = p.heading;
         }
         tickServerTurnControl({
           intentHeld: !!mi && ((mi.forward | 0) !== 0 || (mi.strafe | 0) !== 0 || (mi.turn | 0) !== 0),

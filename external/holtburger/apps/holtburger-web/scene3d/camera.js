@@ -169,6 +169,7 @@ import {
 // m_position (CPhysicsObj::set_frame acclient.c:321328/:321350). Pure
 // import-free module, headless-tested by tests/rust_pose.test.cjs.
 import { parseRustPoseFlag } from "./rust_pose.js";
+import { readLocalPlayerPose } from "./frame_pose.js";
 
 /**
  * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
@@ -2042,15 +2043,13 @@ export class CameraSwitcher {
     // quaternion) pre-spawn or in unit-test mocks.
     let heading = null;
     const handle = this._getSessionHandle?.();
-    if (handle && typeof handle.getLocalPlayerPose === "function") {
-      try {
-        const pose = handle.getLocalPlayerPose();
-        if (pose && typeof pose.heading === "number"
-            && Number.isFinite(pose.heading)) {
-          heading = pose.heading;
-        }
-        pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
-      } catch (_) {}
+    {
+      // Per-frame shared snapshot (frame_pose.js frees the wasm box).
+      const pose = readLocalPlayerPose(handle);
+      if (pose && typeof pose.heading === "number"
+          && Number.isFinite(pose.heading)) {
+        heading = pose.heading;
+      }
     }
     if (heading === null && typeof this.getPlayerHeading === "function") {
       try {
@@ -2233,26 +2232,17 @@ export class CameraSwitcher {
    */
   _integratorWorldPose() {
     const handle = this._getSessionHandle?.();
-    if (!handle || typeof handle.getLocalPlayerPose !== "function") return null;
-    let pose;
-    try {
-      pose = handle.getLocalPlayerPose();
-    } catch (_) {
-      return null;
-    }
-    if (!pose) return null;
     // WASM-BOX LIFETIME: getLocalPlayerPose() returns a wasm-bindgen-boxed
-    // LocalPlayerPose (pkg/holtburger_web.js `class LocalPlayerPose` — __wrap +
-    // free()). Its only other reclaimer is the FinalizationRegistry, i.e. GC's
-    // leisure, so a per-frame read that never free()s orphans one wasm
-    // allocation per frame per call site. Copy every field out FIRST, then
-    // release the box on this frame. `?.` keeps the plain-object test mocks
-    // (which have no free) working.
+    // LocalPlayerPose whose only other reclaimer is the FinalizationRegistry.
+    // readLocalPlayerPose (scene3d/frame_pose.js) copies the fields into a
+    // frozen plain object and frees the box at once; inside tickPerFrame the
+    // snapshot is shared by every per-frame reader (one wasm crossing).
+    const pose = readLocalPlayerPose(handle);
+    if (!pose) return null;
     const lx = pose.x;
     const ly = pose.y;
     const lz = pose.z;
     const lbId = (pose.landblockId >>> 0);
-    try { pose.free?.(); } catch (_) { /* already released */ }
     if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) {
       return null;
     }
