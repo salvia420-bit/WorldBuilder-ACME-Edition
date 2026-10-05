@@ -1696,6 +1696,51 @@ pub fn faithful_find_transitional_position(
     // landblock indoor seam (real portal handles) needs the live cell graph —
     // see `find_transit_cells` / `add_all_outside_cells` (Phase C/D).
     let curr = t.sphere_path.curr_pos;
+
+    // Collision round 3, issue 1 — "indoor limbo" HOLD. Retail loads cells
+    // synchronously, so when a mover walks out through an EnvCell's exterior
+    // portal the outdoor ring is always there: the straddle test
+    // (acclient.c:348296-348325) adds it and `find_cell_list` picks the
+    // landcell. Ours streams: if the landcell under the mover is not resident
+    // yet, the ring adds only null entries, nothing claims the sphere centre,
+    // and the driver KEEPS the EnvCell (retail's own no-winner rule,
+    // :312452-312459). Committing that is limbo: once the sphere is a radius
+    // past the portal plane the straddle never fires again, terrain never
+    // joins, and the player stands indoors on no ground until the server
+    // corrects. So — like the unbaked-cell case, which does not run the
+    // faithful driver at all — HOLD the move when the driver's answer is an
+    // EnvCell with an exterior portal that does NOT contain the sphere centre
+    // while the outdoor landblock under the centre is not resident. Every
+    // committed pose then keeps the centre inside the cell, so the straddle
+    // still fires once the terrain streams in.
+    if (curr.objcell_id & 0xFFFF) >= 0x100 {
+        let centre = Vector3::new(
+            curr.frame.origin.x,
+            curr.frame.origin.y,
+            curr.frame.origin.z + input.object.capsule[0].0,
+        );
+        let outdoor_under = lcoord_to_cellid(
+            (centre.x / CELL_SIZE).floor() as i32,
+            (centre.y / CELL_SIZE).floor() as i32,
+        );
+        let limbo = world
+            .get_visible(curr.objcell_id)
+            .is_some_and(|cell| !cell.point_in_cell(centre))
+            && !exterior_portal_planes(scene, curr.objcell_id).is_empty()
+            && !scene.terrain_landblock_resident(outdoor_under);
+        if limbo {
+            return TransitionOutcome {
+                pose: input.begin,
+                wall_normal: None,
+                grounded: !input.airborne || input.force_grounded,
+                cell_changed: false,
+                state: TransitionState::Collided,
+                contact_plane: input.last_contact_plane,
+                frames_stationary_fall: input.frames_stationary_fall,
+            };
+        }
+    }
+
     let (lb_x, lb_y) = input.begin.landblock_coords();
     let lb_origin_x = lb_x as f32 * METERS_PER_LANDBLOCK;
     let lb_origin_y = lb_y as f32 * METERS_PER_LANDBLOCK;
@@ -3204,35 +3249,8 @@ mod drift {
     /// no terrain.
     #[test]
     fn walking_out_of_a_mouth_cell_onto_the_terrain_goes_outdoors() {
-        let o = cell_origin();
-        let mut polys = HashMap::new();
-        // Floor up to the lip (cell-local x = +2), flush with the terrain.
-        polys.insert(1u16, floor_poly_local(-HE, MOUTH_PORTAL_X - FCX, 0.0));
-        let mut scene = SpatialScene::new();
-        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
-        scene.insert_cell_aabb(
-            CELL_ID,
-            Aabb::new(
-                v(o.x - HE, o.y - HE, FLOOR_WZ - 1.0),
-                v(LB_BASE_X + MOUTH_PORTAL_X, o.y + HE, FLOOR_WZ + 4.0),
-            ),
-        );
-        scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        let env = mouth_walkout_env(true);
         let px = LB_BASE_X + MOUTH_PORTAL_X;
-        scene.insert_cell_portal_polygon(
-            CELL_ID,
-            CellPortalPolygon {
-                other_cell_id: (LB_ID & 0xFFFF_0000) | 0xFFFF,
-                vertices: vec![
-                    v(px, o.y - 3.0, FLOOR_WZ),
-                    v(px, o.y + 3.0, FLOOR_WZ),
-                    v(px, o.y + 3.0, FLOOR_WZ + 4.0),
-                    v(px, o.y - 3.0, FLOOR_WZ + 4.0),
-                ],
-                portal_side: false,
-            },
-        );
-        let env = DriftEnv { scene };
         let begin = pose_at(MOUTH_PORTAL_X - 0.5, FCY, FLOOR_WZ);
         let end = pose_at(MOUTH_PORTAL_X + 0.8, FCY, FLOOR_WZ - SINK);
         let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
@@ -3253,6 +3271,67 @@ mod drift {
             "sank below the terrain leaving the mouth: z={}",
             out.pose.coords.z
         );
+    }
+
+    /// Collision round 3, issue 1 — "indoor limbo". Walking out of a mouth
+    /// cell before the outdoor terrain has streamed in: retail never sees
+    /// this (synchronous cell loads); ours used to commit the walk, keep the
+    /// EnvCell (nothing claims the centre) and leave the player indoors on
+    /// no ground, past the straddle band for good. The move is now HELD; once
+    /// the terrain arrives the same walk goes outdoors.
+    #[test]
+    fn walking_out_before_the_terrain_streams_in_is_held_then_succeeds() {
+        let begin = pose_at(MOUTH_PORTAL_X - 0.5, FCY, FLOOR_WZ);
+        let end = pose_at(MOUTH_PORTAL_X + 0.8, FCY, FLOOR_WZ - SINK);
+
+        let mut env = mouth_walkout_env(false);
+        let held = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
+        assert_eq!(held.pose, begin, "walked out into limbo with no terrain resident");
+        assert!(held.pose.is_indoors());
+
+        env.scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
+        assert!(
+            !out.pose.is_indoors(),
+            "still indoors after the terrain arrived: 0x{:08X}",
+            out.pose.landblock_id.0
+        );
+    }
+
+    /// The mouth cell of the two walk-out tests: floor up to the lip
+    /// (cell-local x = +2), AABB ending at the lip, an exterior portal in the
+    /// lip plane; flush flat terrain when `with_terrain`.
+    fn mouth_walkout_env(with_terrain: bool) -> DriftEnv {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(-HE, MOUTH_PORTAL_X - FCX, 0.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                v(o.x - HE, o.y - HE, FLOOR_WZ - 1.0),
+                v(LB_BASE_X + MOUTH_PORTAL_X, o.y + HE, FLOOR_WZ + 4.0),
+            ),
+        );
+        if with_terrain {
+            scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        }
+        let px = LB_BASE_X + MOUTH_PORTAL_X;
+        scene.insert_cell_portal_polygon(
+            CELL_ID,
+            CellPortalPolygon {
+                other_cell_id: (LB_ID & 0xFFFF_0000) | 0xFFFF,
+                vertices: vec![
+                    v(px, o.y - 3.0, FLOOR_WZ),
+                    v(px, o.y + 3.0, FLOOR_WZ),
+                    v(px, o.y + 3.0, FLOOR_WZ + 4.0),
+                    v(px, o.y - 3.0, FLOOR_WZ + 4.0),
+                ],
+                portal_side: false,
+            },
+        );
+        DriftEnv { scene }
     }
 
     /// F3: membership is decided at the sphere CENTRE, not at the feet. A
