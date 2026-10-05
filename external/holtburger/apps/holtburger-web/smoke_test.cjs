@@ -450,10 +450,7 @@ try {
 // injected — Phase D capture would see entitiesGroup.children=0.
 try {
     const fs = require("fs");
-    const idxHtmlSrc = fs.readFileSync(
-        __dirname + "/index.html",
-        "utf8"
-    );
+    const idxHtmlSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
     const positionHook =
         /window\.liveScene3d\?\.loadSpawnsForLandblock/.test(idxHtmlSrc) &&
         /window\.liveScene3d\.loadSpawnsForLandblock\s*\(/.test(idxHtmlSrc);
@@ -712,12 +709,9 @@ try {
 // F.B server-sound-message baseline depends on this being wired.
 try {
     const fs = require("fs");
-    const htmlSrc = fs.readFileSync(
-        __dirname + "/index.html",
-        "utf8"
-    );
+    const htmlSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
     const hasGmsSource = /source\s*:\s*["']GameMessageSound["']/.test(htmlSrc);
-    const hasKind16 = /evt\.kind\s*===\s*16/.test(htmlSrc);
+    const hasKind16 = /evt\.kind\s*===\s*(?:16|ClientEventKind\.SOUND_TRIGGERED)\b/.test(htmlSrc);
     const hasPushBeforePlay = /_pushEventRecord[\s\S]{0,2000}audioMgr\.play\(\s*entry\.waveDid/m.test(htmlSrc);
     check(
         "Phase F.C: index.html's kind=16 GameMessageSound arm pushes eventLog record before audioMgr.play()",
@@ -3701,7 +3695,7 @@ try {
     // as F.40's check (and like Sky-J / H2 / H3 before db2abfa).
     try {
         const idxPath = path.resolve(__dirname, "index.html");
-        const idxSrc = fs.readFileSync(idxPath, "utf8");
+        const idxSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
         // Count occurrences — must appear at LEAST twice (import + init3D).
         const matches = idxSrc.match(/fetchEntitySurfacesPixelsBatch/g) || [];
         check(
@@ -3832,10 +3826,7 @@ try {
         );
     }
     try {
-        const indexHtml = fs.readFileSync(
-            path.resolve(__dirname, "index.html"),
-            "utf8"
-        );
+        const indexHtml = require("./harness/app_source.cjs").readAppSource(__dirname);
         const hasForward = /__scene3dEntityHook\??\.\(.*entityUpdates/.test(indexHtml);
         check(
             "Phase 7.5: 2D drainEvents forwards to __scene3dEntityHook",
@@ -3891,7 +3882,7 @@ try {
         const hasPointSpot = /THREE\.PointLight|THREE\.SpotLight/.test(lSrc);
         const hasDistanceCap = /MAX_ACTIVE_LIGHTS|activeLights.*sort|\.visible\s*=\s*[^=]*<\s*32/.test(lSrc);
         const hasWasm = typeof globalThis.fetchSetupModelLights === "function" ||
-            /fetchSetupModelLights/.test(fs.readFileSync(__dirname + "/index.html", "utf8"));
+            /fetchSetupModelLights/.test(require("./harness/app_source.cjs").readAppSource(__dirname));
         check(
             "F#1: per-SetupModel lights — wasm export + JS attach impl (not stub)",
             !isStub && hasPointSpot && hasDistanceCap && hasWasm,
@@ -4619,10 +4610,7 @@ try {
     // walking outside the ring renders void terrain.
     try {
         const fs = require("fs");
-        const indexHtmlSrc = fs.readFileSync(
-            __dirname + "/index.html",
-            "utf8"
-        );
+        const indexHtmlSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
         const hasLoadTerrain = /window\.liveScene3d\?\.loadTerrainForLandblock/.test(
             indexHtmlSrc
         );
@@ -4876,7 +4864,7 @@ try {
         const camSrc = fs.readFileSync(__dirname + "/scene3d/camera.js", "utf8");
         const loopSrc = fs.readFileSync(__dirname + "/scene3d/loop.js", "utf8");
         const entSrc = fs.readFileSync(__dirname + "/scene3d/entities.js", "utf8");
-        const indexSrc = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const indexSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
         const hasPredictedPos = /this\.predictedPlayerPos\s*=/.test(camSrc);
         const hasGetPredicted = /getPredictedPlayerWorldPos\s*\(\s*\)\s*{/.test(camSrc);
         const hasAdvance = /_advancePrediction\s*\(\s*dt\s*\)\s*{/.test(camSrc);
@@ -4944,7 +4932,7 @@ try {
         const fs = require("fs");
         const dtsPath = __dirname + "/pkg/holtburger_web.d.ts";
         const dtsSrc = fs.existsSync(dtsPath) ? fs.readFileSync(dtsPath, "utf8") : "";
-        const indexSrc = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const indexSrc = require("./harness/app_source.cjs").readAppSource(__dirname);
         const hasGetSkyState = /getSkyState/.test(dtsSrc);
         const hasGetSkyObjectStates = /getSkyObjectStates/.test(dtsSrc);
         const hasHasSkyDesc = /hasSkyDesc/.test(dtsSrc);
@@ -5682,7 +5670,7 @@ try {
     // the swiftshader 3D-texture zero-bake caveat.
     try {
         const fs = require("fs");
-        const idxHtml = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const idxHtml = require("./harness/app_source.cjs").readAppSource(__dirname);
         const idxJs = fs.readFileSync(__dirname + "/scene3d/index.js", "utf8");
         const sdJs = fs.readFileSync(__dirname + "/scene3d/sky_dome.js", "utf8");
         const coExists = fs.existsSync(__dirname + "/scene3d/cloud_overlay.js");

@@ -16,10 +16,10 @@ import { getInputController as __getInputController, resolveRunModifier as __res
 
 export function pumpEntityUpdatesAndInput(D) {
   const { playerRunRate, __inputFunnelOn, entityMap, __UNIFIED_DISPATCH, SPRITE_HEADING_OFFSET,
-     handlePositionUpdate, handleEntityRemove, handleEntityMetaRefresh, handleEntityVelocity,
-     handleEntityMotion, dispatch2dSpawn, neutralSpawn, neutralRemove, __dispatch2d, handle,
-     BASE_RUN_FORWARD_SPEED, WALK_FORWARD_SPEED, RUN_HELD_TURN_SPEED_RAD_PER_SEC,
-     NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC, keyState, __axisValue, CAST_MOVE_ON, CMD_INTERP_ON } = D;
+    handlePositionUpdate, handleEntityRemove, handleEntityMetaRefresh, handleEntityVelocity,
+    handleEntityMotion, dispatch2dSpawn, neutralSpawn, neutralRemove, __dispatch2d, handle,
+    BASE_RUN_FORWARD_SPEED, WALK_FORWARD_SPEED, RUN_HELD_TURN_SPEED_RAD_PER_SEC,
+    NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC, keyState, __axisValue, CAST_MOVE_ON, CMD_INTERP_ON } = D;
   // Phase 4 step 2b: drain the parallel entity-update channel
   // and apply each update to the scene graph by GUID. The
   // channel runs at the same cadence as poll_events but

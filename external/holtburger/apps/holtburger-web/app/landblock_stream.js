@@ -19,8 +19,8 @@ import { KIND as ENTITY_KIND, createEntityDispatcher } from "../scene3d/entity_d
 
 export function createLandblockStream(D) {
   const { fetch_landblock_heightmaps, populateBuildingAabbsForLandblock,
-     populateStaticsAabbsForLandblock, fetchEnvCellsInLandblock, __hbWasmNs,
-     METERS_PER_LANDBLOCK, applyConfirmedStance, entityMap, __UNIFIED_DISPATCH } = D;
+    populateStaticsAabbsForLandblock, fetchEnvCellsInLandblock, __hbWasmNs,
+    METERS_PER_LANDBLOCK, applyConfirmedStance, entityMap, __UNIFIED_DISPATCH } = D;
   // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
   // ACE sends ObjectCreate for the local player as soon as the
   // spawn handshake completes (Player_Networking.cs:224 —

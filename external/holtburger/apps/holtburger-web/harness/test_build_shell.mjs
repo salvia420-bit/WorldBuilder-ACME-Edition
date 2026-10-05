@@ -238,7 +238,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // D-12.2's "266 modulepreload links [M]" was a `grep -c modulepreload` LINE
   // count — it includes the BEGIN/END markers + one in-JS comment mention.
   // Actual <link rel=modulepreload> elements on HEAD: 263 (same ~270 class).
-  check(mp.length === 263, `unbundled modulepreload block == 263 link elements (got ${mp.length})`);
+  // 2026-10-05: + one link per app/*.js module (index.html's inline script was
+  // split into app/; gen-modulepreload seeds them like index.html).
+  const appMods = mp.filter((h) => h.startsWith("./app/")).length;
+  check(appMods === fs.readdirSync(path.join(APP_ROOT, "app")).filter((f) => f.endsWith(".js")).length,
+    `every app/*.js module is modulepreloaded (got ${appMods})`);
+  check(mp.length === 263 + appMods, `unbundled modulepreload block == 263 + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
   const coldUnbundledBare = 1 + mp.length + 1 + 1 + (workersInMp ? 0 : 1);

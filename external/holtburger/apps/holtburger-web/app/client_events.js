@@ -31,12 +31,12 @@ export const STOP_PUMP = Symbol("stopPump");
 
 export function dispatchClientEvent(evt, D) {
   const { populateSkyDescFromRegion, RANGED_STANCES, MAGIC_STANCES, setLocalPlayerGuid,
-     getLocalPlayerGuid, __unifiedClientEventOn, __resetEntDrainPending,
-     ensureCellContainersForLandblock, ensureBuildingAabbsAroundLandblock,
-     ensureTerrainAroundLandblock, loginStatus, characterUl, createNameInput, createBtn,
-     createStatus, postSpawn, teleportBtn, chatPanel, chatInput, chatSendBtn, appendChatLine,
-     renderVitalsPanel, renderInventoryPanel, setBootState, handle, renderCharacterList,
-     CAST_MOVE_ON, CMD_INTERP_ON, EVT_GUARD_ON } = D;
+    getLocalPlayerGuid, __unifiedClientEventOn, __resetEntDrainPending,
+    ensureCellContainersForLandblock, ensureBuildingAabbsAroundLandblock,
+    ensureTerrainAroundLandblock, loginStatus, characterUl, createNameInput, createBtn,
+    createStatus, postSpawn, teleportBtn, chatPanel, chatInput, chatSendBtn, appendChatLine,
+    renderVitalsPanel, renderInventoryPanel, setBootState, handle, renderCharacterList,
+    CAST_MOVE_ON, CMD_INTERP_ON, EVT_GUARD_ON } = D;
   try { window.__diag?.wire?.onEvent?.(evt); } catch (_) {}
   // rynth-integration (2026-07-16): default-off push-event tap.
   // The client already drains poll_events destructively here;

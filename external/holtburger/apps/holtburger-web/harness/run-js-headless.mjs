@@ -455,6 +455,9 @@ const TIER5 = [
   // Reads the deployed slice packs: absent dist → NO-FIXTURE (CI has no bake).
   { tier: 5, flag: "inventoryActionFailed(kind48)", file: "tests/rejection_feedback_kind48.test.mjs" },
   { tier: 5, flag: "framePose(cache)", file: "tests/frame_pose.test.mjs" },
+  // 2026-10-05 — the ClientEvent dispatcher moved out of index.html into
+  // app/client_events.js; pins the loop-control -> return conversion.
+  { tier: 5, flag: "appClientEvents", file: "tests/app_client_events.test.mjs" },
   { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs",
     requires: "../../dist/manifest.json" },
   { tier: 5, flag: "harness_tex_compressed_only", file: "harness/test_tex_compressed_only.mjs" },
