@@ -2122,7 +2122,16 @@ pub fn faithful_find_placement_position(
     gates: &super::transition::TransitionGates,
 ) -> Option<PlacementOutcome> {
     let scene = env.scene();
-    let begin_cell = scene.current_cell(pose);
+    // Collision round 3, issue 3: seed from the SERVER's cell, as retail's
+    // SetPosition does — `CPhysicsObj::AdjustPosition` (acclient.c:319117-
+    // 319170) keeps `p->objcell_id` and only narrows it through
+    // `CEnvCell::find_visible_child_cell` (:349698: the cell itself if it
+    // contains the point, else its stab list). `current_cell_for_arrival` is
+    // that: the carried cell first, then the true geometric owner — never
+    // `current_cell`'s portal-neighbour / loose-AABB walk at the FEET, which
+    // could seed the placement in an unrelated cell under the floor. Tested
+    // at the sphere centre (F3).
+    let begin_cell = scene.current_cell_for_arrival(&sphere_centre_pose(pose, object));
 
     // INDOOR residency guard (the transitional fn's no-BSP guard): a begin cell
     // with no resident physics BSP has nothing to place against — return None so
@@ -3216,6 +3225,40 @@ mod drift {
             "placement relabelled into 0x{:08X}",
             out.pose.landblock_id.0
         );
+    }
+
+    /// Round 3 (critic issue 3): arrival placement is SEEDED from the server's
+    /// cell (`CPhysicsObj::AdjustPosition`, acclient.c:319117-319170 →
+    /// `CEnvCell::find_visible_child_cell` :349698), not from `current_cell`
+    /// at the feet. Fixture: the room's hull starts 0.45 m above its floor
+    /// (the feet are outside it even with `current_cell`'s 0.4 m rescue
+    /// sphere), and an unrelated, NOT portal-linked cell below has a loose
+    /// AABB reaching the floor plane. The old seed fell through to the AABB
+    /// scan and placed the player from that cell: no cell array reaches the
+    /// room from there, so the placement fails (or labels the wrong cell).
+    #[test]
+    fn placement_is_seeded_from_the_servers_cell_not_the_feet() {
+        const UNDER_ID: u32 = 0x1234_0102;
+        let o = cell_origin();
+        let mut room = HashMap::new();
+        room.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        let mut under = HashMap::new();
+        under.insert(1u16, floor_poly_local(-HE, HE, -3.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(room));
+        scene.insert_cell_physics_bsp(UNDER_ID, bsp_from(under));
+        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(0.0, 0.0, 1.0), -0.45)]));
+        scene.insert_cell_membership(UNDER_ID, membership_at_cell_origin(&[(v(0.0, 0.0, -1.0), 0.1)]));
+        scene.insert_cell_aabb(
+            UNDER_ID,
+            Aabb::new(v(o.x - HE, o.y - HE, FLOOR_WZ - 3.0), v(o.x + HE, o.y + HE, FLOOR_WZ + 0.1)),
+        );
+        let env = DriftEnv { scene };
+        let pose = pose_at(FCX, FCY, FLOOR_WZ + 0.005);
+        assert_eq!(env.scene.current_cell(&pose), UNDER_ID, "fixture: the old feet seed");
+        let out = super::faithful_find_placement_position(&env, &pose, &input_for(pose, pose).object, &gates())
+            .expect("placement from the server's cell succeeds");
+        assert_eq!(out.pose.landblock_id, Guid(CELL_ID));
     }
 
     /// Round 2 (critic issue 4): the door stopgap re-derives the cell of a
