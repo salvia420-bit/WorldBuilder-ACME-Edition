@@ -3858,6 +3858,14 @@ mod drift {
             }
         }
 
+        /// One driver sub-step for a horizontal move of (dx, dy):
+        /// `CTransition::calc_num_steps` splits it into ceil(|d| / r) equal
+        /// steps (acclient.c:311820-311848).
+        fn substep(dx: f32, dy: f32) -> f32 {
+            let len = (dx * dx + dy * dy).sqrt();
+            len / (len / radius()).ceil().max(1.0)
+        }
+
         fn walk(env: &ObjEnv, from_x: f32, from_y: f32, to_x: f32, to_y: f32, state_extra: u32) -> TransitionOutcome {
             let mut input = input_for(pose_at(from_x, from_y, FLOOR_WZ), pose_at(to_x, to_y, FLOOR_WZ));
             input.object.state |= state_extra;
@@ -3881,6 +3889,12 @@ mod drift {
             assert!(
                 out.pose.coords.x <= face + 0.05,
                 "walked through the closed door: x={} face={face}",
+                out.pose.coords.x
+            );
+            // ... and not stopped short: within one sub-step of the face.
+            assert!(
+                out.pose.coords.x >= face - substep(1.4, 0.9) - 0.01,
+                "stopped short of the door: x={} face={face}",
                 out.pose.coords.x
             );
             assert!(
@@ -3931,6 +3945,11 @@ mod drift {
             assert!(
                 out.pose.coords.x <= contact + 0.05,
                 "walked through the creature: x={} contact={contact}",
+                out.pose.coords.x
+            );
+            assert!(
+                out.pose.coords.x >= contact - substep(2.2, 0.0) - 0.01,
+                "stopped short of the creature: x={} contact={contact}",
                 out.pose.coords.x
             );
         }
@@ -4033,6 +4052,157 @@ mod drift {
                 "walked through the doorway's door from outdoors: x={}",
                 out.pose.coords.x
             );
+        }
+
+        /// Item 5: with objects collided inside the driver, the post-step
+        /// door-stopgap cell relabel is skipped — the cell must still be
+        /// right on both sides of a doorway with a door in it. Closed: the
+        /// walk out stops at the leaf and the label stays the EnvCell.
+        /// Open (ETHEREAL): the walk out ends outdoors. Guards (the driver's
+        /// own pick decides; there is no relabel to get wrong).
+        #[test]
+        fn walking_out_through_a_doorway_door_keeps_the_right_cell() {
+            let _on = Switch::on();
+            let px = LB_BASE_X + MOUTH_PORTAL_X;
+            let o = cell_origin();
+            let begin = pose_at(MOUTH_PORTAL_X - 0.9, FCY, FLOOR_WZ);
+            let end = pose_at(MOUTH_PORTAL_X + 0.8, FCY, FLOOR_WZ);
+
+            let closed = ObjEnv {
+                scene: mouth_walkout_env(true).scene,
+                objects: vec![door(v(px, o.y, FLOOR_WZ), CELL_ID, 0)],
+            };
+            let out = faithful_find_transitional_position(&closed, &input_for(begin, end), true, true);
+            assert_eq!(out.pose.landblock_id, Guid(CELL_ID), "stopped indoors but relabelled");
+            assert!(
+                out.pose.coords.x <= MOUTH_PORTAL_X - LEAF - radius() + 0.05,
+                "walked through the closed doorway door: x={}",
+                out.pose.coords.x
+            );
+
+            let open = ObjEnv {
+                scene: mouth_walkout_env(true).scene,
+                objects: vec![door(v(px, o.y, FLOOR_WZ), CELL_ID, physics_state::ETHEREAL)],
+            };
+            let out = faithful_find_transitional_position(&open, &input_for(begin, end), true, true);
+            assert!(
+                !out.pose.is_indoors(),
+                "walked out through the open door but still labelled 0x{:08X} (x={})",
+                out.pose.landblock_id.0,
+                out.pose.coords.x
+            );
+        }
+
+        /// A mover with IGNORE_CREATURES walks through a creature: the
+        /// sphere test collides, and FindObjCollisions turns it into OK
+        /// (acclient.c:316295-316300). Guard (old code never blocked); the
+        /// control without the bit is `a_creature_sphere_blocks_the_mover`.
+        #[test]
+        fn a_mover_ignoring_creatures_walks_through_one() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![creature(
+                    v(o.x + 1.2, o.y, FLOOR_WZ),
+                    WeenieTraits {
+                        is_creature: true,
+                        ..WeenieTraits::default()
+                    },
+                )],
+            };
+            let out = walk(&env, FCX - 0.6, FCY, FCX + 1.6, FCY, ois::IGNORE_CREATURES);
+            assert!(
+                out.pose.coords.x > FCX + 1.2,
+                "an IGNORE_CREATURES mover was blocked by a creature: x={}",
+                out.pose.coords.x
+            );
+        }
+
+        fn cylinder_obj(origin: Vector3, radius: f32, height: f32) -> ObjCollider {
+            ObjCollider {
+                id: 0x8000_0077,
+                state: 0,
+                weenie: Some(WeenieTraits::default()),
+                cell_id: CELL_ID,
+                origin,
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+                bsp: None,
+                bsp_bound: 0.0,
+                shapes: Arc::new(SetupCollisionShapes {
+                    cylspheres: vec![crate::spatial::SetupCylSphere {
+                        origin: Vector3::zero(),
+                        radius,
+                        height,
+                    }],
+                    spheres: Vec::new(),
+                }),
+            }
+        }
+
+        /// A cylsphere object (a pillar-shaped prop) blocks a head-on walk
+        /// at its radius (`CCylSphere::intersects_sphere`, acclient.c:362244
+        /// / :362035 → step_sphere_up's slide arm, 361976). Old code: walks
+        /// through.
+        #[test]
+        fn a_cylsphere_object_blocks_the_mover_at_its_radius() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![cylinder_obj(v(o.x + 1.2, o.y, FLOOR_WZ), 0.4, 1.8)],
+            };
+            let out = walk(&env, FCX - 0.6, FCY, FCX + 1.6, FCY, 0);
+            let contact = FCX + 1.2 - (0.4 + radius());
+            assert!(
+                out.pose.coords.x <= contact + 0.05,
+                "walked through the cylinder: x={} contact={contact}",
+                out.pose.coords.x
+            );
+            assert!(
+                out.pose.coords.x >= contact - substep(2.2, 0.0) - 0.01,
+                "stopped short of the cylinder: x={} contact={contact}",
+                out.pose.coords.x
+            );
+        }
+
+        /// A LOW cylsphere (0.3 m — under the 0.6 m step-up height) is
+        /// stepped onto, not walked into: `CCylSphere::step_sphere_up`
+        /// (361976) → `CTransition::step_up` → `step_sphere_down` (361574)
+        /// sets a +Z contact plane on the cap. Old code: walks through it
+        /// at floor height.
+        #[test]
+        fn a_low_cylsphere_object_is_stepped_onto() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![cylinder_obj(v(o.x + 1.6, o.y, FLOOR_WZ), 1.0, 0.3)],
+            };
+            let out = walk(&env, FCX - 0.4, FCY, FCX + 1.6, FCY, 0);
+            assert!(
+                out.pose.coords.z >= FLOOR_WZ + 0.2,
+                "did not step up onto the low object: z={} (x={})",
+                out.pose.coords.z,
+                out.pose.coords.x
+            );
+        }
+
+        /// The flattened part BSP carries its bounding sphere, so the
+        /// resolver's leaf-sphere reject (CGfxObj physics-sphere test,
+        /// acclient.c:356515) applies. Old code: `sphere: None`.
+        #[test]
+        fn the_flattened_part_bsp_has_a_bounding_sphere() {
+            let tris = vec![Triangle::new(v(0.0, 0.0, 0.0), v(3.0, 0.0, 0.0), v(0.0, 4.0, 0.0))];
+            let bsp = ObjPhysicsBsp::from_triangles(&tris);
+            match &bsp.tree {
+                BspNode::Leaf(l) => {
+                    let s = l.sphere.expect("leaf bounding sphere");
+                    assert!((s.radius - 4.0).abs() < 1e-5, "radius {}", s.radius);
+                }
+                _ => panic!("expected one leaf"),
+            }
         }
     }
 
