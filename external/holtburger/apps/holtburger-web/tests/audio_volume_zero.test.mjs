@@ -9,7 +9,8 @@
 //
 // Fails on the old code: the source scan below finds that idiom at the
 // sound sites in scene3d/entities.js (4), app/client_events.js (2),
-// plugins/ui_click_sounds.js and plugins/audio_optimistic.js; and
+// plugins/ui_click_sounds.js, plugins/audio_optimistic.js and (round 2)
+// scene3d/play_effect_vfx.js:1934 (wire PlayScript SoundTweaked vol); and
 // AudioManager.play(…, {gain: 0}) used to start a voice (gain snapped to 0
 // but the voice was spent) — it now returns null.
 //
@@ -31,7 +32,7 @@ assert.equal(retailVolume(undefined), 1.0);
 ok("retailVolume keeps 0, defaults only a missing value");
 
 const IDIOM = /\b(?:entry\.volume|soundVolume|e\.soundVolume|desc\.soundVolume|hook\.soundVolume)\s*>\s*0\s*\?/;
-for (const rel of ["scene3d/entities.js", "app/client_events.js", "plugins/ui_click_sounds.js", "plugins/audio_optimistic.js"]) {
+for (const rel of ["scene3d/entities.js", "app/client_events.js", "plugins/ui_click_sounds.js", "plugins/audio_optimistic.js", "scene3d/play_effect_vfx.js"]) {
   const src = readFileSync(path.join(APP, rel), "utf8");
   const hits = src.split("\n").filter((l) => IDIOM.test(l) && !l.trim().startsWith("//"));
   assert.deepEqual(hits, [], `${rel} still maps volume 0 to 1.0:\n${hits.join("\n")}`);

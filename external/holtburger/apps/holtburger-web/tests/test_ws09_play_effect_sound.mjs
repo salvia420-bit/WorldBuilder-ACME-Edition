@@ -7,14 +7,18 @@
 //       false for it, but the sound already fired), and
 //   (2) it fires the SoundTable(2) hook that the generic Fizzle 0x33000103
 //       (CreateParticle + SoundTable) carries — previously dropped.
-// Also proves the default-OFF regression: with the flag absent, NO sound hook
-// is routed (byte-identical to today).
+// 2026-10-05: the flag is DEFAULT ON (retail runs every PhysicsScript hook,
+// acclient.c:342188-342221). The "on" arm now runs with NO flag at all and the
+// "off" arm with `?playEffectSound=off` — on the old code (strict `=== "on"`)
+// the no-flag arm routed nothing, so case 1 (fizzle 0x33000103: exactly one
+// sound) failed. Case 5 adds a SoundTweaked with vol 0: the sink must get
+// volume 0 (silent), not the old `> 0 ? v : 1.0` full volume.
 //
 // `PLAY_EFFECT_SOUND_ON` is read once at module import, so the ON and OFF arms
 // run in separate child processes (this file is its own worker):
 //   node tests/test_ws09_play_effect_sound.mjs            → driver (spawns both)
-//   node tests/test_ws09_play_effect_sound.mjs worker-on  → flag ON arm
-//   node tests/test_ws09_play_effect_sound.mjs worker-off → flag OFF arm
+//   node tests/test_ws09_play_effect_sound.mjs worker-on  → default arm (no flag)
+//   node tests/test_ws09_play_effect_sound.mjs worker-off → `?playEffectSound=off`
 
 import { register } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -49,7 +53,7 @@ globalThis.window = {
   __playEffectVfxBound: false,
   __hbWasm: null,
   liveScene3d: null,
-  location: FLAG_ON ? { search: "?playEffectSound=on" } : { search: "" },
+  location: FLAG_ON ? { search: "" } : { search: "?playEffectSound=off" },
 };
 
 // Recording sound sink — the real EntityManager._firePlayEffectSoundHook.
@@ -242,6 +246,29 @@ const SCRIPT_ID = 0x51; // Fizzle PScriptType (PlayScript.Fizzle)
   const result = await __test.tryResolveRealVfx(TARGET, SCRIPT_ID, 0.5);
   ok(result === true, "particle-only script resolves true");
   ok(soundCalls.length === 0, `particle-only: no sound routed either arm (got ${soundCalls.length})`);
+}
+
+// --- Case 5: SoundTweaked(21) with vol 0 → routed with volume 0 (silent) ----
+{
+  _clearPhysicsScriptTableCache();
+  soundCalls.length = 0;
+  const PES = 0x33000500;
+  const scriptByDid = new Map([[PES, makePhysicsScript([
+    { hookType: 21, soundWaveId: 0x0A00BEEF, soundVolume: 0, soundProbability: 1 },
+  ])]]);
+  installScene({
+    tableDid: 0x34000008,
+    table: { id: 0x34000008, scripts: { [String(SCRIPT_ID)]: [{ mod: 1.0, scriptDid: PES }] } },
+    scriptByDid,
+    particleEmitter: null,
+  });
+  await __test.tryResolveRealVfx(TARGET, SCRIPT_ID, 0.5);
+  if (FLAG_ON) {
+    ok(soundCalls.length === 1 && soundCalls[0]?.soundVolume === 0,
+      `SoundTweaked vol 0 reaches the sink as volume 0 (got ${JSON.stringify(soundCalls[0])})`);
+  } else {
+    ok(soundCalls.length === 0, "flag OFF: SoundTweaked not routed");
+  }
 }
 
 console.log(`WS09 sound-hook [${MODE}]: ${pass} passed, ${fail} failed`);

@@ -1709,7 +1709,7 @@ const _realVfxStats = {
   // Track B7 — resolver exceeded the hard deadline; placeholder kept.
   timedOut: 0,
   // WS09 — audio hooks (Sound/SoundTable/SoundTweaked) routed to the entity
-  // sound sink from a wire PlayScript (only bumped when `?playEffectSound=on`).
+  // sound sink from a wire PlayScript (default on; `?playEffectSound=off` skips).
   soundHooksFired: 0,
 };
 
@@ -1920,8 +1920,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0) {
   // PlayScript still plays. Decode the primitives synchronously (the wasm entry
   // object may be reclaimed before the deferred fire) and hand a plain `desc` to
   // the EntityManager helper, which owns StartTime scheduling + the sound sink
-  // (same path as the H2 gesture/spawn walker). Default OFF (`?playEffectSound=
-  // on`); off = byte-identical (whole branch skipped).
+  // (same path as the H2 gesture/spawn walker). DEFAULT ON since 2026-10-05:
+  // retail runs every PhysicsScript hook (SoundHook/SoundTableHook/
+  // SoundTweakedHook::Execute, acclient.c:342188-342221).
+  // `?playEffectSound=off` skips it.
   if (PLAY_EFFECT_SOUND_ON && typeof em._firePlayEffectSoundHook === "function") {
     for (const e of entriesJs) {
       const ht = e.hookType | 0;
@@ -1931,7 +1933,11 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0) {
         startTime: +e.startTime || 0,
         soundWaveId: (e.soundWaveId >>> 0),
         soundProbability: Number.isFinite(e.soundProbability) ? e.soundProbability : 1.0,
-        soundVolume: e.soundVolume > 0 ? e.soundVolume : 1.0,
+        // SoundTweaked vol 0 is SILENT in retail (SoundTweakedHook::Execute
+        // passes vol straight to PlaySoundA, acclient.c:342207-342209;
+        // GetAttenuation drops volume <= 0, 383096). Only a missing value
+        // defaults to 1.0.
+        soundVolume: Number.isFinite(e.soundVolume) ? e.soundVolume : 1.0,
         soundEnum: 0,
       };
       if (ht === 2) {
@@ -2524,7 +2530,10 @@ function _castIsLocalPlayer(guid) {
     return lpg !== null && lpg !== undefined && (lpg >>> 0) === (guid >>> 0);
   } catch (_) { return false; }
 }
-// WS09 (2026-07-12) — `?playEffectSound=on` (DEFAULT OFF). The PlayEffect
+// WS09 (2026-07-12) — `?playEffectSound` (DEFAULT ON since 2026-10-05; `=off`
+// / `=0` / `=false` escape: retail runs every hook of a PhysicsScript,
+// SoundHook/SoundTableHook/SoundTweakedHook::Execute acclient.c:342188-342221,
+// so a wire PlayScript's sounds are retail behaviour, not an option). The PlayEffect
 // resolver spawned particle hooks (13/26) ONLY, dropping the Sound(1)/
 // SoundTable(2)/SoundTweaked(21) hooks carried by wire PlayScripts — so fizzle
 // (0x33000103 = CreateParticle + SoundTable), cast cues, and projectile
@@ -2533,17 +2542,18 @@ function _castIsLocalPlayer(guid) {
 // `EntityManager._firePlayEffectSoundHook` — the SAME sink the H2 gesture/
 // spawn walker uses (entities.js:~10762/~10857). Runs ABOVE the
 // `particleHookCount === 0` early-return below so a SOUND-ONLY script still
-// plays (WS09-verify mustFix #2). Default OFF pending an ear-test; off =
-// byte-identical (the whole branch is skipped). Coordinate WS08 — WS08 owns
+// plays (WS09-verify mustFix #2). Off = the whole branch is skipped.
+// Coordinate WS08 — WS08 owns
 // the fizzle cancel+toast (kind=13), WS09 owns the fizzle particle+sound from
 // the wire Fizzle script (kind=30); WS08 must NOT double the fizzle sound.
 const PLAY_EFFECT_SOUND_ON = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search)
-      .get("playEffectSound")?.toLowerCase() === "on";
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search)
+      .get("playEffectSound")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 // Survey A11-S0 (2026-06-11): `?blockingParticleParity` — DEFAULT-ON
