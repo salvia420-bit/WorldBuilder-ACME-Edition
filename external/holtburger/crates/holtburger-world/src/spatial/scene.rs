@@ -1678,6 +1678,12 @@ impl SpatialScene {
         self.clear_landblock_building_portals(landblock_id);
         let lb_high = landblock_id & 0xFFFF_0000;
         let table = Arc::make_mut(&mut self.building_transit_cells);
+        // `CSortCell::add_building` (acclient.c:356074-356078) is
+        // `if (!this->building) this->building = _object;` — a landcell holds
+        // ONE building, the first `init_buildings` adds in LandBlockInfo
+        // order. A building with no portals still claims its cell
+        // (`makeBuilding` builds it with `num_portals = 0`, :719153-719215).
+        let mut claimed: HashSet<u32> = HashSet::new();
         for (origin, portals) in buildings {
             // `LandDefs::adjust_to_outside`'s near-zero pre-snap (ACE
             // LandDefs.cs:131-134, the same constant the bridge uses).
@@ -1688,6 +1694,9 @@ impl SpatialScene {
                 continue;
             }
             let landcell = lb_high | ((cx as u32) * 8 + (cy as u32) + 1);
+            if !claimed.insert(landcell) {
+                continue; // a later building on an already-claimed landcell
+            }
             for &(other_cell, other_portal) in portals {
                 if (other_portal as i16) < 0 {
                     continue;

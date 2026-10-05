@@ -2835,6 +2835,32 @@ mod drift {
         assert!(scene.building_transit_cells(lb | 0x000B).is_empty());
     }
 
+    /// `CSortCell::add_building` (acclient.c:356074-356078): a landcell holds
+    /// ONE building — the first registered in LandBlockInfo order. A later
+    /// building whose origin falls on the same landcell is never consulted
+    /// for transit, even when the first has no portals at all.
+    #[test]
+    fn a_landcell_keeps_only_its_first_building() {
+        let lb = 0x1234_0000u32;
+        let mut scene = SpatialScene::new();
+        scene.set_landblock_building_portals(
+            lb,
+            &[
+                // Both origins on landcell (0,0) → low word 1.
+                (v(5.0, 5.0, 0.0), vec![(0x0100, 0)]),
+                (v(20.0, 20.0, 0.0), vec![(0x0101, 0)]),
+                // Landcell (1,0) → low 9: first building has no portals.
+                (v(30.0, 5.0, 0.0), vec![]),
+                (v(40.0, 5.0, 0.0), vec![(0x0102, 0)]),
+            ],
+        );
+        assert_eq!(scene.building_transit_cells(lb | 0x0001), &[lb | 0x0100]);
+        assert!(
+            scene.building_transit_cells(lb | 0x0009).is_empty(),
+            "a portal-less first building still claims its landcell"
+        );
+    }
+
     /// F1(a/b): walking through a building's door from outdoors ends inside
     /// the building's EnvCell — reached the retail way, through the outdoor
     /// landcell's building portal (`CBuildingObj::find_building_transit_cells`
