@@ -303,8 +303,10 @@ check("H3: the pass asks the composer for a depth texture",
 
 // The real wiring, by source scan — the fake composer above proves the shape,
 // this proves atmosphere_pipeline.js actually uses it.
-check("H3: atmosphere_pipeline builds exactly ONE EffectPass",
-  (PIPE_SRC.match(/new EffectPass\(/g) || []).length === 1);
+// The only other EffectPass allowed is the ?nanScrub guard, which must run as its
+// own pass ahead of the chain (bloom and haze sample neighbours of its output).
+check("H3: atmosphere_pipeline builds ONE post-chain EffectPass (plus only the nanScrub guard)",
+  (PIPE_SRC.match(/new EffectPass\(/g) || []).length === 1 + (PIPE_SRC.match(/new EffectPass\(camera, scrub\)/g) || []).length);
 check("H3: heatHaze is inside the fxPass argument list, behind filter(Boolean)",
   /\.\.\.\[heatHaze, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering\]\.filter\(Boolean\)/
     .test(PIPE_SRC));
