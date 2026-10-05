@@ -921,7 +921,10 @@ export function consolidateSingletonsViaTexArray(nodes) {
       mesh.name = `stat-atlas-lb${lb.toString(16)}-${parts[1]}-x${consumed.length}`;
       meshes.push(mesh);
       // the merged mesh owns its geometry (cloned); free the originals' GPU geometry.
-      for (const n of consumed) { try { n.geometry?.dispose?.(); } catch (_) {} }
+      for (const n of consumed) {
+        if (n.geometry?.userData?.__cacheOwned === true) continue; // ?statGeomCache owns it
+        try { n.geometry?.dispose?.(); } catch (_) {}
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[static_atlas] bucket failed, passthrough:", String(e?.message ?? e));
@@ -1799,8 +1802,12 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           rlist.push({ node: n, lbKey, row });
         }
       }
-      // free the consumed source geometry's GPU buffer (mirrors the merge path).
-      try { n.geometry?.dispose?.(); } catch (_) {}
+      // free the consumed source geometry's GPU buffer (mirrors the merge path)
+      // — unless ?statGeomCache shares it: other landblocks may be drawing that
+      // buffer, and the cache alone decides when it goes.
+      if (n.geometry?.userData?.__cacheOwned !== true) {
+        try { n.geometry?.dispose?.(); } catch (_) {}
+      }
       _atlasStats.atlased++;
       handled = true;
       heldEntry = null; // committed to _lbMembership — eviction owns it now

@@ -116,6 +116,7 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTe
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
 import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate, setStatArrayMergeProvider } from "./static_batch_x.js";
+import { getStaticGeomCache } from "./static_geom_cache.js";
 import { STAT_ARRAY_MERGE_PROVIDER } from "./static_array_pool.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
@@ -785,6 +786,13 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
   // `starvedCount > 0` to leave the LB un-marked + retryable instead of
   // permanently baking a hole into the town.
   let starvedCount = 0;
+  // ?statGeomCache (perf T3): which legacy-decoded models are safe to share.
+  // `completeIds` = decoded with zero record misses and at least one group;
+  // `emptyIds` = a genuinely empty model (zero tris, zero misses). Bundle-served
+  // and starved/partial models are in neither, so they keep per-LB ownership.
+  const completeIds = new Set();
+  const emptyIds = new Set();
+  const surfaceDidsByModel = new Map();
 
   if (uniqueModelIds.length === 0) {
     return {
@@ -793,6 +801,9 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       allSurfaceDids,
       skippedZeroTri,
       starvedCount,
+      completeIds,
+      emptyIds,
+      surfaceDidsByModel,
     };
   }
 
@@ -829,6 +840,9 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
           allSurfaceDids,
           skippedZeroTri,
           starvedCount,
+          completeIds,
+          emptyIds,
+          surfaceDidsByModel,
         };
       }
     }
@@ -846,6 +860,9 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       allSurfaceDids,
       skippedZeroTri,
       starvedCount,
+      completeIds,
+      emptyIds,
+      surfaceDidsByModel,
       fetchFailed: true,
     };
   }
@@ -866,6 +883,7 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       const misses = typeof m.decodeMisses === "number" ? m.decodeMisses >>> 0 : -1;
       const starved = misses > 0;
       if (starved) starvedCount += 1;
+      else if (misses === 0) emptyIds.add(id >>> 0);
       droppedModelIds.push({ id: id >>> 0, reason: starved ? "decode-starved" : "zero-tri" });
       if (typeof m.free === "function") m.free();
       continue;
@@ -876,7 +894,10 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     // retryable — the throw happens BEFORE any node attach, so the retry
     // re-bake cannot duplicate nodes. Once the retry cap is exhausted the
     // caller accepts this partial output as-is.
-    if (((typeof m.decodeMisses === "number" ? m.decodeMisses : 0) >>> 0) > 0) {
+    // A missing `decodeMisses` field (stale wasm) reads -1 here and is never
+    // shared: completeness must be PROVEN to enter ?statGeomCache.
+    const decodeMisses = typeof m.decodeMisses === "number" ? m.decodeMisses >>> 0 : -1;
+    if (decodeMisses > 0) {
       starvedCount += 1;
     }
     // Snapshot every DID this model references — material cache
@@ -906,6 +927,10 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       // Cost is O(1) per (model, surface) per LB feed — never per placement.
       stampStaticContentKeys(id, groups);
       groupsByModel.set(id, groups);
+      if (decodeMisses === 0) {
+        completeIds.add(id >>> 0);
+        surfaceDidsByModel.set(id >>> 0, Array.from(surfacesArr, (d) => d >>> 0));
+      }
     }
     if (typeof m.free === "function") m.free();
   }
@@ -926,7 +951,103 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
     allSurfaceDids,
     skippedZeroTri,
     starvedCount,
+    completeIds,
+    emptyIds,
+    surfaceDidsByModel,
   };
+}
+
+// ---------------------------------------------------------------------------
+// ?statGeomCache (perf T3, GPU half) — the bake's three seams. See
+// scene3d/static_geom_cache.js for the ownership rule these enforce.
+// ---------------------------------------------------------------------------
+
+/**
+ * After `fetchPrimaryGeometries(missIds)`: every model it decoded COMPLETELY
+ * becomes a shared entry (leased by this bake), every genuinely empty model is
+ * recorded so it is not refetched, and every cache HIT is spliced into
+ * `primary` exactly as a fresh decode would have been — groups, surface DIDs
+ * for the material preload, and the degrade chain id while the chain is still
+ * unresolved. Partial / starved / bundle-served models are left alone: they
+ * keep today's per-LB ownership.
+ */
+function adoptIntoStaticGeomCache(cache, primary, hits, lbKey, leases) {
+  for (const id of primary.completeIds) {
+    const groups = primary.groupsByModel.get(id);
+    if (!groups) continue;
+    const e = cache.insert(id, {
+      groups,
+      surfaceDids: primary.surfaceDidsByModel.get(id) || [],
+      didDegrade: primary.didDegradeByModel.get(id) || 0,
+    });
+    if (e.groups !== groups) {
+      // A concurrent bake inserted this model while we were fetching it. Use
+      // the shared copy; ours was never attached to anything.
+      for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
+      primary.groupsByModel.set(id, e.groups);
+      if (e.didDegrade && e.degraded === null) primary.didDegradeByModel.set(id, e.didDegrade);
+      else primary.didDegradeByModel.delete(id);
+    }
+    cache.acquire(lbKey, id);
+    leases.push(id);
+    hits.set(id, e);
+  }
+  for (const id of primary.emptyIds) cache.insert(id, {});
+  for (const [id, e] of hits) {
+    if (primary.groupsByModel.has(id)) continue; // a fresh insert, already spliced
+    if (e.groups.length === 0) { primary.skippedZeroTri += 1; continue; }
+    primary.groupsByModel.set(id, e.groups);
+    for (const d of e.surfaceDids) primary.allSurfaceDids.add(d);
+    if (e.didDegrade && e.degraded === null) primary.didDegradeByModel.set(id, e.didDegrade);
+  }
+}
+
+/**
+ * After `fetchDegradedGeometries`: a chain resolved for a SHARED model is
+ * handed to its entry (first resolver wins — a loser's clones were never
+ * attached and are disposed); a chain the entry already holds is used as-is.
+ * A model whose chain came back with nothing stays unresolved and is asked
+ * again by the next bake rather than being cached as "no LOD" (the fetch
+ * swallows transient errors into the same empty answer). Non-shared models'
+ * chains pass through untouched (per-LB owned, as before).
+ */
+function adoptDegradedIntoStaticGeomCache(cache, fetched, hits, leases) {
+  const shared = new Set(leases.map((id) => id >>> 0));
+  const out = new Map();
+  for (const [id, bySurface] of fetched) {
+    const key = id >>> 0;
+    if (!shared.has(key)) { out.set(id, bySurface); continue; }
+    if (!cache.setDegraded(key, bySurface)) {
+      for (const levels of bySurface.values()) {
+        for (const lvl of levels) { try { lvl?.geometry?.dispose?.(); } catch (_) {} }
+      }
+    }
+  }
+  for (const [id, e] of hits) {
+    if (e.degraded instanceof Map && e.degraded.size > 0) out.set(id, e.degraded);
+  }
+  return out;
+}
+
+/**
+ * Eviction-during-build cleanup: dispose what THIS bake owns, never a shared
+ * (`__cacheOwned`) geometry — that one's lease goes back in the bake's finally.
+ */
+function disposeBakeOwnedGeometries(groupsByModel, degradedGeomByModel) {
+  for (const groups of groupsByModel.values()) {
+    for (const g of groups) {
+      if (g?.geometry?.userData?.__cacheOwned === true) continue;
+      try { g?.geometry?.dispose?.(); } catch (_) {}
+    }
+  }
+  for (const bySurface of degradedGeomByModel.values()) {
+    for (const levels of bySurface.values()) {
+      for (const lvl of levels) {
+        if (lvl?.geometry?.userData?.__cacheOwned === true) continue;
+        try { lvl?.geometry?.dispose?.(); } catch (_) {}
+      }
+    }
+  }
 }
 
 // streamFix retryability (2026-07-02): per-LB starved-decode retry budget.
@@ -2031,6 +2152,13 @@ export async function bakeStaticsForLandblock(
   // un-baked and retryable instead of permanently stripping its statics.
   // The `finally` after the bake body releases this slot.
   _staticsInFlight.add(lbKey);
+  // ?statGeomCache (perf T3) — model ids THIS bake acquired, and whether the
+  // bake handed its nodes over. The `finally` below releases exactly these
+  // when it did not (throw, starved retry, eviction during the build), so an
+  // abort never strands a lease and never touches one an earlier bake holds.
+  const geomCache = getStaticGeomCache();
+  const bakeLeases = geomCache ? [] : null;
+  let bakeLeasesCommitted = false;
   try {
 
   // Materials shared with buildings / cells phases (Phase 0.2 / 3.3
@@ -2185,7 +2313,28 @@ export async function bakeStaticsForLandblock(
   const spFetchRaw = surfacePixelsFetcher(wasmExports);
   const mmFetch = (ids) => mmFetchRaw(ids, urgent);
   const spFetch = (dids) => spFetchRaw(dids, urgent);
-  const primary = await fetchPrimaryGeometries(uniqueModelIds, mmFetch);
+  // ?statGeomCache — models already decoded by ANY earlier bake are served from
+  // the shared cache and leased NOW (before the next await), so a trim running
+  // while this bake waits can never dispose them. Only the rest are fetched.
+  let fetchIds = uniqueModelIds;
+  const cacheHits = geomCache ? new Map() : null;
+  if (geomCache) {
+    fetchIds = [];
+    for (const id of uniqueModelIds) {
+      const e = geomCache.lookup(id);
+      if (e) {
+        geomCache.acquire(lbKey, id);
+        bakeLeases.push(id);
+        cacheHits.set(id >>> 0, e);
+      } else {
+        fetchIds.push(id);
+      }
+    }
+  }
+  const primary = await fetchPrimaryGeometries(fetchIds, mmFetch);
+  if (geomCache && !primary.fetchFailed) {
+    adoptIntoStaticGeomCache(geomCache, primary, cacheHits, lbKey, bakeLeases);
+  }
   if (primary.fetchFailed) {
     // streamFix retryability (2026-07-02): the whole model-mesh batch fetch
     // THREW after the LB was already marked baked above (A2 marks after the
@@ -2232,7 +2381,7 @@ export async function bakeStaticsForLandblock(
   // per-LB materialCache.preload (surface decode) both depend only on
   // `primary`, not on each other — run them concurrently so the LOD-mesh
   // batch hides under the surface decode instead of serializing behind it.
-  const [degradedGeomByModel] = await Promise.all([
+  const [fetchedDegraded] = await Promise.all([
     fetchDegradedGeometries(
       primary.didDegradeByModel,
       mmFetch,
@@ -2256,6 +2405,13 @@ export async function bakeStaticsForLandblock(
       }
     })(),
   ]);
+
+  // ?statGeomCache — fold the resolved degrade chains into the shared entries
+  // (first resolver wins) and hand already-resolved chains to the node build.
+  // Off: the fetched map is used as-is.
+  const degradedGeomByModel = geomCache
+    ? adoptDegradedIntoStaticGeomCache(geomCache, fetchedDegraded, cacheHits, bakeLeases)
+    : fetchedDegraded;
 
   // === Per-LB instantiation — plain Mesh per placement PER SURFACE GROUP,
   //     no InstancedMesh ===
@@ -2500,14 +2656,9 @@ export async function bakeStaticsForLandblock(
     // R-JS-T4a — degradedGeomByModel: modelId → Map<surfaceKey, [{geometry,
     // dist, degradeMode}, ...]> (one entry per degrade band), so each
     // surface value is now an array of band levels — dispose every band.
-    for (const groups of primary.groupsByModel.values()) {
-      for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
-    }
-    for (const bySurface of degradedGeomByModel.values()) {
-      for (const levels of bySurface.values()) {
-        for (const lvl of levels) { try { lvl?.geometry?.dispose?.(); } catch (_) {} }
-      }
-    }
+    // ?statGeomCache: shared geometry is never disposed here — the lease this
+    // bake took is released by the `finally` instead.
+    disposeBakeOwnedGeometries(primary.groupsByModel, degradedGeomByModel);
     return {
       ...makeEmptySummary(),
       evictedDuringBuild: true,
@@ -2561,14 +2712,7 @@ export async function bakeStaticsForLandblock(
       // Evicted while the prewarm await was outstanding — dispose this LB's per-surface
       // group geometries (full + degraded) and bail without attaching (same as the
       // time-slice cancellation guard above; nodes were never added to the scene graph).
-      for (const groups of primary.groupsByModel.values()) {
-        for (const g of groups) { try { g?.geometry?.dispose?.(); } catch (_) {} }
-      }
-      for (const bySurface of degradedGeomByModel.values()) {
-        for (const levels of bySurface.values()) {
-          for (const lvl of levels) { try { lvl?.geometry?.dispose?.(); } catch (_) {} }
-        }
-      }
+      disposeBakeOwnedGeometries(primary.groupsByModel, degradedGeomByModel);
       return {
         ...makeEmptySummary(),
         evictedDuringBuild: true,
@@ -2692,19 +2836,23 @@ export async function bakeStaticsForLandblock(
   // owned once (shared by reference across all placements of the model in
   // this LB, exactly like the full geometry), so push each band's geometry
   // ONCE here → the LRU disposes each band exactly once on eviction.
+  // ?statGeomCache — shared geometry is NOT listed: the LB holds a lease on it
+  // instead (released by the LRU's `_releaseStaticGeomForLb` facade on evict).
+  // The `__cacheOwned` test is the same one every LRU dispose loop applies.
   const lbDisposableGeometries = [];
   for (const groups of primary.groupsByModel.values()) {
     for (const g of groups) {
-      if (g && g.geometry) lbDisposableGeometries.push(g.geometry);
+      if (g && g.geometry && g.geometry.userData?.__cacheOwned !== true) lbDisposableGeometries.push(g.geometry);
     }
   }
   for (const bySurface of degradedGeomByModel.values()) {
     for (const levels of bySurface.values()) {
       for (const lvl of levels) {
-        if (lvl && lvl.geometry) lbDisposableGeometries.push(lvl.geometry);
+        if (lvl && lvl.geometry && lvl.geometry.userData?.__cacheOwned !== true) lbDisposableGeometries.push(lvl.geometry);
       }
     }
   }
+  bakeLeasesCommitted = true;
 
   // Draw-call savings for the per-LB path: by default every placement becomes
   // its own draw call (plain Mesh, no instancing), so the count is identical to
@@ -2744,6 +2892,12 @@ export async function bakeStaticsForLandblock(
     // `staticsBakedLbs` membership is what gates future calls now; the
     // in-flight Set only deduped the concurrent window.
     _staticsInFlight.delete(lbKey);
+    // ?statGeomCache — an aborted bake gives back exactly what it took.
+    if (bakeLeases && !bakeLeasesCommitted) {
+      for (const id of bakeLeases) {
+        try { geomCache.release(lbKey, id); } catch (_) { /* fail-soft */ }
+      }
+    }
   }
 }
 

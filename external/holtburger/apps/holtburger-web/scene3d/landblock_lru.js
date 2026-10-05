@@ -1454,6 +1454,16 @@ export class LandblockLRU {
   // eligibility on later ticks. `?parkUseTimeMs=0` sets the floor to 0 → the
   // young-skip below is never taken → byte-identical to the pre-S15 path.
   _tickParkPoolPressure(refLbKey) {
+    // ?statGeomCache (default-OFF, perf T3) — the shared statics geometry no
+    // resident or parked LB is using goes FIRST: under the live-geometry
+    // governor it is the cheapest geometry in the scene to give back (nothing
+    // draws it, nothing re-bakes because of it), and without the governor it
+    // is only trimmed to its own byte budget. Bounded per call inside the
+    // cache. Runs before the empty-pool return because the cache can hold
+    // unowned entries while the pool is empty. Absent ⇒ flag off ⇒ no-op.
+    if (typeof this.scene3d?._staticGeomCacheTrim === "function") {
+      try { this.scene3d._staticGeomCacheTrim(this._geomPressure()); } catch (_) { /* fail-soft */ }
+    }
     if (this.parkPool.size === 0) return;
     // Fire when EITHER the byte backstop OR the live-geometry governor is
     // exceeded. Re-evaluated each iteration so we stop the instant enough
@@ -1931,6 +1941,15 @@ export class LandblockLRU {
     // Fail-soft. Mirrors the _evictStaticParticlesForLb facade above.
     if (typeof s._evictStaticAtlasForLb === "function") {
       try { s._evictStaticAtlasForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
+    // ?statGeomCache (default-OFF, perf T3) — this LB's statics geometry was
+    // never in its disposables (it is shared, `__cacheOwned`); give back the
+    // lease instead. The entry survives in the cache's unowned LRU until its
+    // budget or the live-geometry governor reclaims it. Park does NOT come
+    // here (parked nodes still draw from the geometry); disposeParked does.
+    // Absent ⇒ flag off ⇒ no-op.
+    if (typeof s._releaseStaticGeomForLb === "function") {
+      try { s._releaseStaticGeomForLb(lbKey); } catch (_) { /* fail-soft */ }
     }
     // ?statBatchCrossLb (default-OFF) — excise this LB's geometry from the cross-LB
     // per-material ?staticBatch BatchedMeshes (per-gid deleteGeometry; same-frame,

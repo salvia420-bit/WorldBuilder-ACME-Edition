@@ -57,6 +57,7 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb } from "./static_batch_x.js";
+import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
 // Costs one module parse and zero frame time until something arms it, the same
@@ -6159,6 +6160,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // for an LB with no membership, so this is safe with the flag off (default —
     // nothing was ever fed → nothing to excise).
     liveScene3d._evictStaticBatchXForLb = evictStaticBatchXForLb;
+    // ?statGeomCache (default-OFF, perf T3) — the shared statics geometry's two
+    // LRU seams: release an evicted LB's lease, and trim the unowned set (to
+    // its budget, or harder while the live-geometry governor is engaged).
+    // Flag off ⇒ getStaticGeomCache() is null ⇒ neither facade exists and the
+    // LRU's typeof guards make both call sites no-ops.
+    {
+      const geomCache = getStaticGeomCache();
+      if (geomCache) {
+        liveScene3d._releaseStaticGeomForLb = (lbKey) => geomCache.releaseLb(lbKey);
+        liveScene3d._staticGeomCacheTrim = (pressure) => geomCache.trim({ pressure: !!pressure });
+        if (typeof window !== "undefined") window.__staticGeomCache = () => geomCache.getStats();
+      }
+    }
     const landblockLru = new LandblockLRU({
       scene3d: liveScene3d,
       maxResident: lbCap,

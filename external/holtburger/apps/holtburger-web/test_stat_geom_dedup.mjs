@@ -279,11 +279,16 @@ let bmA;
       bmA.userData.gidVerts.size === 0 && bmA.userData.dedupGids.size === 0 &&
       bmA.userData.deadVerts === 6,
     `gids=${bmA.userData.gidVerts.size} keys=${bmA.userData.dedupGids.size} dead=${bmA.userData.deadVerts}`);
-  check("27: the bucket itself is never removed/disposed per-LB (it spans the region)",
-    sc.staticsGroup.children.includes(bmA));
+  // Contract changed with `_reapBucketIfEmpty` (static_batch_x.js): a bucket
+  // whose LAST geometry leaves is reaped the same frame — removed from the
+  // group and disposed — rather than kept for a later optimize() pass. These
+  // two used to assert the opposite (pre-reap behaviour) and had gone stale.
+  check("27: the emptied bucket is reaped same-frame (removed from the group)",
+    !sc.staticsGroup.children.includes(bmA));
   M.tickStatBatchXOptimize();
-  check("28: lazy optimize() still reclaims the freed extent after a dedup eviction",
-    bmA.userData.deadVerts === 0, `used=${bmA.userData.usedVerts}`);
+  check("28: optimize() after the reap is a no-op on the dead bucket (nothing re-adds it)",
+    !sc.staticsGroup.children.includes(bmA) && bmA.userData.gidVerts.size === 0,
+    `gids=${bmA.userData.gidVerts.size}`);
 }
 
 // ===== 7. re-feed idempotence under dedup =====

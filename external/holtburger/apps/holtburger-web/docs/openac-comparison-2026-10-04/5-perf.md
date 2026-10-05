@@ -51,8 +51,18 @@ deep-cloning every model's triangles once per prefetch dry-run round plus once p
 LB bake), `did_degrade` is memoized behind the same miss gate (it re-parsed the Setup/GfxObj records
 on every bake), `pack_model_mesh` packs from a slice, and the bulk `ModelMesh` getters copy once into
 JS instead of twice. Re-entering an LB therefore no longer decodes or parses anything on the statics
-path. NOT done: the GPU half (geometry keyed by content id with a refcount, so re-entry also skips
-the per-LB `BufferGeometry` build and atlas re-upload); that is JS-side ownership work.
+path. The GPU half then landed opt-in as `?statGeomCache=on` (scene3d/static_geom_cache.js): one
+geometry per model shared by every LB, LB leases released on true evict, an unowned LRU trimmed to a
+byte budget and FIRST under the live-geometry governor. Live census (SwiftShader, `lbCap=40`,
+Holtburg -> 14 LB east -> back; same tour each arm, 0 page errors in all five runs):
+model-mesh fetches 2,207 (225 distinct) off vs 289 (228) on; never-drawn per-LB source geometry held
+in disposables 26.1 MB vs 0; park pool 24.6 MB vs 3.8 MB; whole cache 146 entries / 1.1 MB. With
+`warmPark=off` (172 true evicts) leases tracked the resident set, released models stayed cached, and
+re-baking ~37 evicted Holtburg LBs cost 6 statics cache misses. Budget/pressure trims did not fire
+live (unowned peaked 0.5 MB) and are covered by the unit suite only. Not measured: frame time, and
+whether `?statGeomDedup` on top stops the region buckets re-copying shared geometry (probe bug).
+Found on the way, NOT fixed: chunk-bucket (`?statBatchChunk`) members of a PARKED LB keep drawing —
+park has no hook for static_batch_x, only for the atlas and terrain batch.
 
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.
