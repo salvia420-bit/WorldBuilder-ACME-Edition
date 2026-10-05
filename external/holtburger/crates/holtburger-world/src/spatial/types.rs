@@ -312,6 +312,10 @@ pub struct SpatialBody {
 pub struct RemoteArc {
     /// Height the body left the ground at.
     pub takeoff_z: f32,
+    /// Wave 4: `Some(takeoff_z)` when the take-off was more than
+    /// `REMOTE_UNKNOWN_FLOOR_M` above every floor the scene can sample
+    /// (geometry we do not hold); the arc then lands no lower than it.
+    pub unsampled_floor: Option<f32>,
     /// Seconds spent airborne (safety cap).
     pub elapsed: f32,
 }

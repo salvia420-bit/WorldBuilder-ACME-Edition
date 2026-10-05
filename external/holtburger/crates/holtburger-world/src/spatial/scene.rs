@@ -364,9 +364,19 @@ fn remote_ground_at(scene: &SpatialScene, pose: &WorldPosition, ceiling_z: f32) 
     let g = pose.global_coords();
     if pose.is_indoors() {
         let cell = scene.current_cell(pose);
-        return super::highest_floor_z_under(scene.cell_triangles(cell), g.x, g.y, ceiling_z)
+        let room = super::highest_floor_z_under(scene.cell_triangles(cell), g.x, g.y, ceiling_z)
             .map(|z| (z, up));
+        // Indoor statics (furniture, platforms) registered on the cell.
+        let statics = highest_static_floor(scene.cell_static_physics_bsp(cell), g.x, g.y, ceiling_z);
+        return higher_floor(room, statics);
     }
+    // Outdoor statics and building BSPs (docks, bridges, wagons, roofs) —
+    // the physics BSPs `insert_static_physics_bsp` / `insert_building_physics_bsp`
+    // keep resident per landblock (wave 4: the critic's dock regression).
+    let statics = scene
+        .statics_physics_bsp
+        .get(&(pose.landblock_id.0 & 0xFFFF_0000))
+        .and_then(|list| highest_static_floor(list, g.x, g.y, ceiling_z));
     let terrain = super::faithful_bridge::faithful_terrain_floor(scene, pose);
     let building = super::highest_floor_z_under(
         scene.building_triangles_for_landblock(pose.landblock_id.0 & 0xFFFF_0000),
@@ -377,12 +387,73 @@ fn remote_ground_at(scene: &SpatialScene, pose: &WorldPosition, ceiling_z: f32) 
     // Terrain plane normals are taken facing up (the bounce and the
     // friction projection need the outward normal).
     let terrain = terrain.map(|(z, n)| if n.z < 0.0 { (z, Vector3::new(-n.x, -n.y, -n.z)) } else { (z, n) });
-    match (terrain, building) {
-        (Some((tz, _)), Some(bz)) if bz > tz => Some((bz, up)),
-        (Some(t), _) => Some(t),
-        (None, Some(bz)) => Some((bz, up)),
-        (None, None) => None,
+    higher_floor(higher_floor(terrain, building.map(|z| (z, up))), statics)
+}
+
+fn higher_floor(a: Option<(f32, Vector3)>, b: Option<(f32, Vector3)>) -> Option<(f32, Vector3)> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(if y.0 > x.0 { y } else { x }),
+        (x, None) => x,
+        (None, y) => y,
     }
+}
+
+/// D7 wave 4: the highest WALKABLE polygon (world normal.z >= FLOOR_Z, the
+/// same `set_on_walkable` test, acclient.c:322601-322603) of a set of object
+/// physics BSPs under world (x, y), at or below `ceiling_z`, with its world
+/// normal. Polygons are object-local; a vertex lifts to world as
+/// `origin + orientation · (v · scale)` (the inverse of
+/// `sweep_sphere_against_object_bsp`'s frame change). The BSP root sphere
+/// rejects objects whose footprint cannot cover (x, y).
+fn highest_static_floor(
+    bsps: &[Arc<CellPhysicsBsp>],
+    x: f32,
+    y: f32,
+    ceiling_z: f32,
+) -> Option<(f32, Vector3)> {
+    use holtburger_dat::physics::BspNode;
+    let mut best: Option<(f32, Vector3)> = None;
+    for bsp in bsps {
+        let scale = if bsp.scale > 0.0 { bsp.scale } else { 1.0 };
+        let root = match &bsp.tree {
+            BspNode::Internal(n) => n.sphere,
+            BspNode::Leaf(l) => l.sphere,
+            BspNode::Port(_) => None,
+        };
+        if let Some(sphere) = root {
+            let c = bsp.orientation.rotate_vector(sphere.center * scale) + bsp.origin;
+            let r = sphere.radius * scale;
+            if (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y) > r * r {
+                continue;
+            }
+        }
+        for poly in bsp.polys.values() {
+            if poly.vertices.len() < 3 {
+                continue;
+            }
+            let n = bsp.orientation.rotate_vector(poly.plane.normal);
+            if n.z < super::FLOOR_Z {
+                continue;
+            }
+            let w: Vec<Vector3> = poly
+                .vertices
+                .iter()
+                .map(|&v| bsp.orientation.rotate_vector(v * scale) + bsp.origin)
+                .collect();
+            for i in 1..w.len() - 1 {
+                let tri = Triangle::new(w[0], w[i], w[i + 1]);
+                if !tri.contains_xy(x, y) {
+                    continue;
+                }
+                if let Some(z) = tri.z_at_xy(x, y) {
+                    if z <= ceiling_z + 1e-3 && best.is_none_or(|(b, _)| z > b) {
+                        best = Some((z, n));
+                    }
+                }
+            }
+        }
+    }
+    best
 }
 
 /// D7: one `CPhysicsObj::UpdatePhysicsInternal` slice (acclient.c:317701-
@@ -466,8 +537,14 @@ fn step_remote_arc(
     } else {
         next.rebucket_outdoor_landblock().normalize_outdoor_cell()
     };
-    let (floor, normal) = remote_ground_at(scene, &next, pose.coords.z + 0.05)
+    let (mut floor, normal) = remote_ground_at(scene, &next, pose.coords.z + 0.05)
         .unwrap_or((arc.takeoff_z, Vector3::new(0.0, 0.0, 1.0)));
+    // Took off from something we cannot sample: land no lower than the
+    // take-off height (fallback only — set at launch when the take-off was
+    // more than REMOTE_UNKNOWN_FLOOR_M above every sampled floor).
+    if let Some(unsampled) = arc.unsampled_floor {
+        floor = floor.max(unsampled);
+    }
     if next.coords.z <= floor {
         next.coords.z = floor;
         return (next, v, Some(normal));
@@ -5412,7 +5489,14 @@ impl SpatialScene {
                 let (z, _) = remote_ground_at(self, &next, body.pose.coords.z + step_up)?;
                 if self.remote_jump_arc_enabled && body.pose.coords.z - z > step_down {
                     next.coords.z = body.pose.coords.z;
-                    let leave_v = Vector3::new(walk_v.x + slide_v.x, walk_v.y + slide_v.y, 0.0);
+                    // `get_leave_ground_velocity` (acclient.c:343806-343833)
+                    // REPLACES the velocity with the walk (state) velocity;
+                    // only a zero walk velocity keeps the physics velocity.
+                    let leave_v = if walk_v != Vector3::zero() {
+                        Vector3::new(walk_v.x, walk_v.y, 0.0)
+                    } else {
+                        slide_v
+                    };
                     return Some((guid, (next, leave_v, true)));
                 }
                 next.coords.z = z;
@@ -5464,6 +5548,7 @@ impl SpatialScene {
                 if leave_ground {
                     body.remote_arc = Some(super::RemoteArc {
                         takeoff_z: next.coords.z,
+                        unsampled_floor: None,
                         elapsed: 0.0,
                     });
                     self.remote_airborne_changes.push((guid, true));
@@ -5665,6 +5750,16 @@ impl SpatialScene {
         if !(velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite()) {
             return;
         }
+        // Wave 4 (critic regression): a take-off from geometry we cannot
+        // sample (more than REMOTE_UNKNOWN_FLOOR_M above every sampled
+        // floor) lands no lower than the take-off height.
+        let Some(start) = self.body_store.body(SpatialBodyId::Entity(guid)).map(|b| b.pose) else {
+            return;
+        };
+        let unsampled_floor = match remote_ground_at(self, &start, start.coords.z + 0.05) {
+            Some((z, _)) if start.coords.z - z <= REMOTE_UNKNOWN_FLOOR_M => None,
+            _ => Some(start.coords.z),
+        };
         let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
             return;
         };
@@ -5681,6 +5776,7 @@ impl SpatialScene {
         if launch {
             body.remote_arc = Some(super::RemoteArc {
                 takeoff_z: start_z,
+                unsampled_floor,
                 elapsed: 0.0,
             });
             // Retail `CMotionInterp::LeaveGround` edge (:344457). The interp

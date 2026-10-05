@@ -4055,6 +4055,129 @@ mod remote_pose_driver {
         assert_eq!(scene.body(body_id).unwrap().remote_velocity, Vector3::zero());
     }
 
+    // === Wave 4 (final-critic regression): static-object floors. ==========
+
+    /// A static object's physics BSP (a dock deck): one walkable square of
+    /// half-size `half` at object-local z = 0, placed at world `origin`.
+    fn static_deck(scene: &mut SpatialScene, origin: Vector3, half: f32) {
+        use holtburger_dat::physics::{BspLeaf, BspNode, ResolvedPolygon};
+        let verts = vec![
+            Vector3::new(-half, -half, 0.0),
+            Vector3::new(half, -half, 0.0),
+            Vector3::new(half, half, 0.0),
+            Vector3::new(-half, half, 0.0),
+        ];
+        let plane = ResolvedPolygon::make_plane(&verts).unwrap();
+        let mut polys = std::collections::HashMap::new();
+        polys.insert(
+            7u16,
+            ResolvedPolygon {
+                num_points: verts.len(),
+                vertices: verts,
+                plane,
+            },
+        );
+        let tree = BspNode::Leaf(BspLeaf {
+            index: 0,
+            solid: 1,
+            sphere: Some(holtburger_common::Sphere {
+                center: Vector3::new(0.0, 0.0, 0.0),
+                radius: half * 1.5,
+            }),
+            poly_ids: vec![7],
+        });
+        scene.insert_static_physics_bsp(
+            0x0102_0000,
+            crate::spatial::CellPhysicsBsp {
+                tree,
+                polys,
+                origin,
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+            },
+        );
+    }
+
+    /// The final critic's regression: a jump from a dock (a static object,
+    /// not terrain or a building triangle) dropped to the terrain under it.
+    /// The static's physics BSP is now sampled as a floor.
+    #[test]
+    fn jump_from_a_static_deck_lands_on_the_deck() {
+        let deck = ARC_TERRAIN + 3.0;
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, deck));
+        static_deck(&mut scene, Vector3::new(242.0, 434.0, deck), 6.0);
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 1.0, 3.0), true);
+        assert_eq!(
+            scene.remote_arc(GUID).unwrap().unsampled_floor,
+            None,
+            "the deck is a sampled floor"
+        );
+        fly(&mut scene, body_id, 0.05);
+        assert!((scene.body(body_id).unwrap().pose.coords.z - deck).abs() < 1e-4, "on the deck");
+    }
+
+    /// Fallback only: a take-off from geometry the scene does not hold at
+    /// all lands no lower than the take-off height.
+    #[test]
+    fn jump_from_unsampled_geometry_lands_at_takeoff_height() {
+        let ledge = ARC_TERRAIN + 3.0;
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, ledge));
+        scene.remote_vector_update(GUID, Vector3::new(0.0, 1.0, 3.0), true);
+        assert_eq!(scene.remote_arc(GUID).unwrap().unsampled_floor, Some(ledge));
+        fly(&mut scene, body_id, 0.05);
+        assert!((scene.body(body_id).unwrap().pose.coords.z - ledge).abs() < 1e-4);
+    }
+
+    /// Walking off a static deck's edge falls (it used to keep the deck
+    /// height forever — the unknown-floor stopgap).
+    #[test]
+    fn running_off_a_static_deck_falls() {
+        let deck = ARC_TERRAIN + 3.0;
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, deck));
+        static_deck(&mut scene, Vector3::new(242.0, 434.0, deck), 1.0);
+        scene
+            .body_mut(body_id)
+            .unwrap()
+            .set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
+        let mut left = false;
+        for _ in 0..10 {
+            scene.step_remote_position_managers(0.1);
+            if scene.remote_arc(GUID).is_some() {
+                left = true;
+                break;
+            }
+        }
+        assert!(left, "ran off the 2 m deck");
+        fly(&mut scene, body_id, 0.05);
+        assert!((scene.body(body_id).unwrap().pose.coords.z - ARC_TERRAIN).abs() < 1e-4);
+    }
+
+    /// Retail `get_leave_ground_velocity` (acclient.c:343806-343833) REPLACES
+    /// the velocity with the walk velocity when walking off a ledge; it does
+    /// not add a sliding physics velocity to it.
+    #[test]
+    fn walking_off_a_ledge_leaves_with_the_walk_velocity_only() {
+        let deck = ARC_TERRAIN + 3.0;
+        let (mut scene, body_id) = arc_scene(arc_pose(50.0, 50.0, deck));
+        static_deck(&mut scene, Vector3::new(242.0, 434.0, deck), 1.0);
+        {
+            let body = scene.body_mut(body_id).unwrap();
+            body.set_motion_state(Some(run_snapshot(InterpretedMotionCommand::RUN_FORWARD, 1.0)));
+            body.remote_velocity = Vector3::new(3.0, 3.0, 0.0);
+        }
+        for _ in 0..10 {
+            scene.step_remote_position_managers(0.1);
+            if scene.remote_arc(GUID).is_some() {
+                break;
+            }
+        }
+        assert!(scene.remote_arc(GUID).is_some(), "left the deck");
+        let v = scene.body(body_id).unwrap().remote_velocity;
+        let horiz = (v.x * v.x + v.y * v.y).sqrt();
+        assert!((horiz - 4.0).abs() < 1e-3, "the run velocity (4 m/s), not run + slide: {horiz}");
+        assert_eq!(v.z, 0.0, "a remote's jump_v_z is 0 (no jump_extent)");
+    }
+
     /// Indoors there is no terrain sampler: the arc lands at the take-off
     /// height.
     #[test]
