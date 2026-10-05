@@ -1442,6 +1442,13 @@ export async function preInit3D(canvas) {
   const cellsGroup = new THREE.Group(); cellsGroup.name = "cells";
   const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
+  // ?punchRetail (2026-10-05) draw-order phase tags, read by the opaque sort in
+  // atmosphere_pipeline.js: everything that must draw AFTER the doorway punch
+  // (shells, statics, interior cells, entities) is phase 2; the terrain family
+  // stays phase 0 and the punch mesh is phase 1. Inert without the flag.
+  for (const g of [buildingsGroup, staticsGroup, cellsGroup, entitiesGroup]) {
+    g.userData.__punchPhase = 2;
+  }
 
   // Phase 5 PView render-order fix (2026-05-25) — mirrors WB.GameScene.cs:1610.
   // Two-layer split so the renderer can interleave a depth-clear between
@@ -5577,6 +5584,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // the offending depth consumer is identified.
               punchOcclusion:
                 new URLSearchParams(window.location.search).get("punchOcclusion")?.toLowerCase() === "on",
+              // ?punchRetail=on (2026-10-05) — retail DRAW ORDER for the
+              // outdoor doorway punch: terrain → punch → shells/statics/cells/
+              // entities in ONE world pass (no world/cells split, no scissor,
+              // no stencil). See atmosphere_pipeline.js `punchPhaseOpaqueSort`.
+              punchRetail:
+                new URLSearchParams(window.location.search).get("punchRetail")?.toLowerCase() === "on",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so

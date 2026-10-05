@@ -415,6 +415,38 @@ class SkyCapturePass extends Pass {
  *   height?: number,
  * }} opts
  */
+// ?punchRetail draw-order phase of a render item's object: 0 = terrain family
+// and anything untagged, 1 = the doorway punch, 2 = shells / statics / interior
+// cells / entities (tagged on their top-level groups in index.js). Cached on
+// the object once it is attached under a tagged group or the scene, so the
+// per-frame sort is a property read.
+function _punchPhase(obj) {
+  const cached = obj.__hbPunchPhase;
+  if (cached !== undefined) return cached;
+  let p = 0;
+  let attached = false;
+  for (let o = obj; o; o = o.parent) {
+    const tag = o.userData?.__punchPhase;
+    if (tag !== undefined) { p = tag; attached = true; break; }
+    if (!o.parent) { attached = o.isScene === true; break; }
+  }
+  if (attached) obj.__hbPunchPhase = p;
+  return p;
+}
+
+// three r184 `painterSortStable`, with the punch phase as the primary key.
+function punchPhaseOpaqueSort(a, b) {
+  const pa = _punchPhase(a.object);
+  const pb = _punchPhase(b.object);
+  if (pa !== pb) return pa - pb;
+  if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
+  if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
+  if (a.material.id !== b.material.id) return a.material.id - b.material.id;
+  if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
+  if (a.z !== b.z) return a.z - b.z;
+  return a.id - b.id;
+}
+
 export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const {
     skyScene,
@@ -430,6 +462,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     portalStencil = false,
     portalPunch = false,
     punchOcclusion = false,
+    punchRetail = false,
   } = opts ?? {};
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
@@ -788,10 +821,31 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
           "show through walls.",
       );
     }
-    portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
-      stencil: _punchStencil,
-    });
-    composer.addPass(portalPunchPass);
+    if (punchRetail) {
+      // ?punchRetail (2026-10-05) — RETAIL DRAW ORDER. Retail punches a
+      // building's doorways and then draws everything nearer AFTER the punch
+      // (RenderDeviceD3D::DrawBuilding acclient.c:456933: portals, reached
+      // cells, then the shell; OpenAC RetailFrameWalk.DrawBuilding), so a
+      // nearer wall/tree/building overwrites any leak. Here the punch mesh
+      // joins the MAIN scene and the opaque sort orders the single world pass
+      // terrain family → punch → shells/statics/cells/entities. The punch
+      // therefore only ever erases TERRAIN depth (the thing that covers a
+      // below-grade interior), and every occluder is depth-tested normally:
+      // no world/cells split, no union scissor (the MSAA black box), no
+      // stencil occlusion gate. The pass object stays as the aperture
+      // container `tickPortalPunch` feeds; it is never added to the composer.
+      portalPunchPass = new PortalPunchPass(scene, camera, "punch", { stencil: false });
+      portalPunchPass.enabled = false;
+      portalPunchPass.inScene = true;
+      portalPunchPass.apertureGroup.userData.__punchPhase = 1;
+      scene.add(portalPunchPass.apertureGroup);
+      renderer.setOpaqueSort(punchPhaseOpaqueSort);
+    } else {
+      portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
+        stencil: _punchStencil,
+      });
+      composer.addPass(portalPunchPass);
+    }
   }
 
   // ?indoorDepthSplit (2026-08-04). Published once per tick by cells.js
@@ -1191,6 +1245,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // wasted split on frames with no doorway in view).
       const punchActive =
         portalPunch &&
+        !punchRetail && // retail order punches inside the single world pass
         !isIndoor &&
         !!portalPunchPass &&
         portalPunchPass.hasApertures;
@@ -1222,6 +1277,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // `punchActive` requires `!isIndoor` and the split requires indoor —
       // they are mutually exclusive by construction, and the `else if` makes
       // that structural rather than incidental.
+      //
+      // 2026-10-05: the punch pass was added unconditionally and never
+      // disabled, so it stamped far-Z into doorways on frames whose cells
+      // pass does NOT run to refill them (stale skyDome._lastIsIndoor vs the
+      // per-frame punch feed, or the indoor-split branch). Retail punches
+      // only inside the building pass that then draws the reached cells.
+      if (portalPunchPass) portalPunchPass.enabled = punchActive;
       if (punchActive) {
         // (1) world pass → terrain + facade + outdoor statics only (layer 0).
         worldMaskPass.mask = CAM_LAYER_MASK_WORLD_ONLY;

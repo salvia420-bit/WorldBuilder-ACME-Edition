@@ -2976,6 +2976,9 @@ export function tickPortalPunch(scene3d, sessionHandle) {
           // pass, not off a flag, so "I passed the flag" and "the composer gave
           // me a stencil attachment" can never be confused in a diag paste.
           occlusionGated: pass.occlusionGated === true,
+          // ?punchRetail — the punch draws INSIDE the world pass, ordered
+          // terrain → punch → shells/statics/cells/entities (no split).
+          retailOrder: pass.inScene === true,
           sidedness: sidednessSource !== "off" && sidednessSource !== "unavailable",
           // "flag" = retail portal_side (v3) · "heuristic" = the round-5
           // AABB-centre inference (v2) · "off" = no gate · "unavailable" =

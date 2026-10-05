@@ -405,6 +405,8 @@ export class PortalPunchPass extends Pass {
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false; // fixed at identity under apertureGroup
     mesh.visible = false;
+    // Never a pick/ray target (?punchRetail puts this mesh in the main scene).
+    mesh.raycast = () => {};
     this._positions = positions;
     this._posAttr = attr;
     this._posCapacity = cap;
@@ -444,7 +446,15 @@ export class PortalPunchPass extends Pass {
     const prevScissorZ = inputBuffer ? inputBuffer.scissor.z : 0;
     const prevScissorW = inputBuffer ? inputBuffer.scissor.w : 0;
     try {
-      if (rect && inputBuffer) {
+      // 2026-10-05 "portal punch = screen-sized black box": NEVER scissor a
+      // MULTISAMPLED target. three resolves the MSAA renderbuffer into the
+      // texture after every render (blitFramebuffer — which honours the
+      // scissor test) and then invalidates the MSAA colour, so only the
+      // scissor rect resolved and it came back BLACK (live-confirmed: the
+      // box vanished with msaa off). The scissor is a pure optimisation —
+      // the GPU clips the punch polygons anyway, and retail has none.
+      const multisampled = (inputBuffer?.samples | 0) > 0;
+      if (rect && inputBuffer && !multisampled) {
         const bw = inputBuffer.width | 0;
         const bh = inputBuffer.height | 0;
         // Round OUTWARD by a pixel so a doorway edge is never sliced off by
