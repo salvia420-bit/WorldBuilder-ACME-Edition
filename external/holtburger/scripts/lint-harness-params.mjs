@@ -59,7 +59,7 @@ const EMIT_ALLOW = {
 
 // ── collect READER-set files (R1/R2 sweep) ──────────────────────────────────
 const readerFiles = [];
-(function walk(d) {
+function walk(d) {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {
     const p = path.join(d, e.name);
     if (e.isDirectory()) {
@@ -69,7 +69,9 @@ const readerFiles = [];
       readerFiles.push(p);
     }
   }
-})(path.join(APP, "scene3d"));
+}
+// app/ = the ES modules extracted from index.html's inline script (2026-10-05).
+for (const sub of ["scene3d", "app"]) walk(path.join(APP, sub));
 readerFiles.push(path.join(APP, "index.html"));
 
 const readers = new Set();

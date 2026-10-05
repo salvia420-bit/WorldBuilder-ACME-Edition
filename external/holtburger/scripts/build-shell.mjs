@@ -101,7 +101,7 @@ export const WORKER_ENTRIES = Object.freeze({
   keepalive_worker: "scene3d/keepalive_worker.js",
 });
 
-const BUNDLED_DIRS = ["scene3d", "plugins", "ui", "rynth"];
+const BUNDLED_DIRS = ["scene3d", "plugins", "ui", "rynth", "app"];
 
 // ---------------------------------------------------------------------------
 // helpers

@@ -8,7 +8,7 @@
 //
 // Mechanical, dependency-free, deliberately heuristic: it parses
 // `apps/holtburger-web/docs/url-flags.md` table rows and sweeps
-// `index.html` + `scene3d/**/*.js` for `URLSearchParams….get("flag")` reader
+// `index.html` + `scene3d/**/*.js` + `app/**/*.js` for `URLSearchParams….get("flag")` reader
 // sites, then reports:
 //   UNDOCUMENTED  reader exists, no docs row
 //   NO-READER     docs row exists, no reader found in the swept tree
@@ -105,7 +105,7 @@ const WAIVERS = {
 
 // ── collect files ───────────────────────────────────────────────────────────
 const files = [];
-(function walk(d) {
+function walk(d) {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {
     const p = path.join(d, e.name);
     if (e.isDirectory()) {
@@ -115,7 +115,9 @@ const files = [];
       files.push(p);
     }
   }
-})(path.join(appDir, "scene3d"));
+}
+// app/ = the ES modules extracted from index.html's inline script (2026-10-05).
+for (const sub of ["scene3d", "app"]) walk(path.join(appDir, sub));
 files.push(path.join(appDir, "index.html"));
 
 // ── docs rows ───────────────────────────────────────────────────────────────

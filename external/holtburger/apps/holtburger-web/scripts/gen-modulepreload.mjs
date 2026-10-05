@@ -36,7 +36,7 @@
 //   node scripts/gen-modulepreload.mjs --check    # exit 1 if out of date (CI)
 //   node scripts/gen-modulepreload.mjs --print    # print the block, no write
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -100,6 +100,20 @@ const queue = [];
 for (const spec of collectSpecifiers(indexSrc, /* followDynamic */ true)) {
   const fsPath = consider(spec, ROOT);
   if (fsPath) queue.push(fsPath);
+}
+
+// 1b) app/*.js — the ES modules extracted from index.html's inline script
+//     (2026-10-05). They carry the eager dynamic `import()`s that used to sit
+//     inline, so seed them exactly like index.html (static + dynamic).
+const APP_DIR = resolve(ROOT, "app");
+if (existsSync(APP_DIR)) {
+  for (const f of readdirSync(APP_DIR).sort()) {
+    if (!f.endsWith(".js")) continue;
+    for (const spec of collectSpecifiers(readFileSync(resolve(APP_DIR, f), "utf8"), true)) {
+      const fsPath = consider(spec, APP_DIR);
+      if (fsPath) queue.push(fsPath);
+    }
+  }
 }
 
 // 2) Transitive crawl — static imports only.

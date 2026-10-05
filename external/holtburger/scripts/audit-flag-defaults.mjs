@@ -65,7 +65,7 @@ function walk(d) {
     else if (/\.(js|mjs|html)$/.test(e.name)) files.push(p);
   }
 }
-for (const t of ["scene3d", "index.html", "plugins", "rynth", "netbrain"]) walk(path.join(appDir, t));
+for (const t of ["scene3d", "app", "index.html", "plugins", "rynth", "netbrain"]) walk(path.join(appDir, t));
 
 const readers = new Map(); // name → [{file,line,stmt,comment,idiom}]
 const GET_RE = /\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)/g;

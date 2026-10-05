@@ -1,7 +1,7 @@
 // test_r10_index_orchestrator.mjs — round-10 review of index.html
 // (the orchestrator file: boot, net drain, wire dispatch, chat, login).
 //
-// index.html is not a module, so this follows the precedent already used by
+// index.html is not a module (and app/*.js closes over injected deps), so this follows the precedent already used by
 // test_a15_q4_renderer_neutral_core.mjs / test_a8_m3_kind17_dispatch.mjs
 // (static source assertions) and test_static_batch.mjs / test_light_pool.mjs
 // (`new Function` extraction of a named function out of the source text).
@@ -23,9 +23,11 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join as joinPath } from "node:path";
 import { readFileSync } from "node:fs";
+import appSource from "./harness/app_source.cjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(joinPath(__dirname, "index.html"), "utf8");
+// index.html + the app/*.js modules split out of its inline script (2026-10-05).
+const SRC = appSource.readAppSource(__dirname);
 
 let failed = 0;
 let passed = 0;
@@ -37,20 +39,21 @@ function check(name, ok, detail) {
 }
 
 // ---------------------------------------------------------------------
-// Extraction helper. index.html's <script type="module"> is uniformly
-// indented, so a function's body ends at the first line that is exactly
-// `<indent>}`. Brace-counting would have to model template literals and
+// Extraction helper. index.html's <script type="module"> (and each app/*.js
+// module) is uniformly indented, so a function's body ends at the first line
+// that is exactly `<indent>}`. A leading `export ` is dropped so the text can
+// be fed to `new Function`. Brace-counting would have to model template literals and
 // regex literals; indentation matching does not.
 // ---------------------------------------------------------------------
 function extractFunction(name) {
-  const re = new RegExp(`^([ ]+)(?:async )?function ${name}\\(`, "m");
+  const re = new RegExp(`^([ ]*)(?:export )?(?:async )?function ${name}\\(`, "m");
   const m = re.exec(SRC);
   if (!m) throw new Error(`extractFunction: ${name} not found`);
   const indent = m[1];
   const start = m.index;
   const close = SRC.indexOf(`\n${indent}}\n`, start);
   if (close < 0) throw new Error(`extractFunction: ${name} close not found`);
-  return SRC.slice(start, close + 1 + indent.length + 1);
+  return SRC.slice(start, close + 1 + indent.length + 1).replace(/^([ ]*)export /, "$1");
 }
 
 function extractRange(startNeedle, endNeedle) {
@@ -409,8 +412,8 @@ function renderBanner({ serverName, accountName, account = "tailnet1", chars = 2
 console.log("PART 4 — autonomous-login re-entrancy claim");
 
 const claimSrc = extractRange(
-  "      let __autoLoginInFlight = false;",
-  "      window.__autoLoginInFlight = () => __autoLoginInFlight;"
+  "  let __autoLoginInFlight = false;",
+  "  window.__autoLoginInFlight = () => __autoLoginInFlight;"
 );
 const claimFactory = new Function(
   "window",
@@ -516,8 +519,8 @@ check(
 
 // 5d. Orchestrator claim wiring.
 {
-  const start = SRC.indexOf("      async function runAutonomousLogin(opts = {}) {");
-  const end = SRC.indexOf("      window.__runAutonomousLogin = runAutonomousLogin;");
+  const start = SRC.indexOf("  async function runAutonomousLogin(opts = {}) {");
+  const end = SRC.indexOf("  window.__runAutonomousLogin = runAutonomousLogin;");
   check("runAutonomousLogin located", start > 0 && end > start);
   const body = SRC.slice(start, end);
   const claimAt = body.indexOf("if (!__autoLoginClaim()) {");
