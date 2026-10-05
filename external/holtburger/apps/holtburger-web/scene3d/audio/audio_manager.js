@@ -57,6 +57,34 @@ export function readAudioRetailPanFlag() {
   }
 }
 
+export function readAudioWhenInactiveFlag() {
+  try {
+    const search = (typeof location !== "undefined" && location?.search) || "";
+    return new URLSearchParams(search).get("audioWhenInactive") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+// Saved volume sliders (plugins/options-panel.js writes this key). Read at
+// AudioManager construction so a reload starts at the player's levels, not
+// at 1.0 until the Audio tab is opened.
+export const AUDIO_SETTINGS_KEY = "hb.options.audio.v1";
+export function loadSavedAudioGains(storage) {
+  const out = { master: 1.0, effect: 1.0, ambient: 1.0 };
+  try {
+    const st = storage ?? (typeof localStorage !== "undefined" ? localStorage : null);
+    const raw = st?.getItem?.(AUDIO_SETTINGS_KEY);
+    if (!raw) return out;
+    const parsed = JSON.parse(raw);
+    for (const k of ["master", "effect", "ambient"]) {
+      const v = Number(parsed?.[k]);
+      if (Number.isFinite(v)) out[k] = Math.max(0, Math.min(1, v));
+    }
+  } catch (_) { /* defaults */ }
+  return out;
+}
+
 const DEFAULT_REF_DISTANCE = 5.0;      // meters: at/below this distance, full volume
 const DEFAULT_ROLLOFF_FACTOR = 2.0;    // inverse-SQUARE attenuation rate (retail)
 const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
@@ -84,20 +112,31 @@ export class AudioManager {
       throw new Error("AudioManager: opts.fetchWave required");
     }
     this._fetchWave = opts.fetchWave;
-    this._masterGainValue = (opts.masterGain ?? 1.0);
+    const saved = opts.savedGains === false
+      ? null : loadSavedAudioGains(opts.storage);
+    this._masterGainValue = saved ? saved.master : (opts.masterGain ?? 1.0);
     // HRTF PannerNode mix (default) vs retail's stereo mix (?audioRetailPan=on).
     // `opts.hrtf` overrides the URL flag (tests).
     this._hrtf = (typeof opts.hrtf === "boolean") ? opts.hrtf : !readAudioRetailPanFlag();
     // Category slider values (retail effect_sound_volume / ambient_sound_volume).
     // Retail mode folds them into the dB computation BEFORE the -50 dB cull
     // (acclient.c:383092-383095); HRTF mode applies them on the bus GainNodes.
-    this._effectGainValue = 1.0;
-    this._ambientGainValue = 1.0;
+    this._effectGainValue = saved ? saved.effect : 1.0;
+    this._ambientGainValue = saved ? saved.ambient : 1.0;
     // Last listener pose (three.js frame) + its retail compass heading.
     this._listenerPos = null;
     this._listenerHeading = 0;
     // Retail 16-voice pool (acclient.c:383004-383067).
     this.voicePool = new VoicePool();
+    // Retail SoundManager::s_bPlaySoundOnlyWhenActive = true (acclient.c
+    // 45633): every play entry refuses NEW sounds while the client is not
+    // the active app (383015, 383160, PlaySoundA 383469/383494/383661/383687,
+    // PlaySoundFromCenter 383575/383598). Sounds already playing finish.
+    // `?audioWhenInactive=on` keeps sound playing in a background/unfocused
+    // tab (off-screen ear tests); default is retail.
+    this._active = true;
+    this.inactiveSkipCount = 0;
+    if (!readAudioWhenInactiveFlag()) this._installActivityTracking(opts.document, opts.window);
 
     /** @type {AudioContext|null} */
     this._ctx = null;
@@ -145,6 +184,32 @@ export class AudioManager {
     if (this._userGestureNotified) return;
     this._userGestureNotified = true;
     this._initContext();
+  }
+
+  /** Retail Device::m_bIsActiveApp: false refuses new sounds. */
+  setActive(active) {
+    this._active = !!active;
+  }
+
+  isActive() {
+    return this._active;
+  }
+
+  _installActivityTracking(doc, win) {
+    const d = doc ?? (typeof document !== "undefined" ? document : null);
+    const w = win ?? (typeof window !== "undefined" ? window : null);
+    const recompute = () => {
+      const hidden = !!d?.hidden;
+      let focused = true;
+      try { if (typeof d?.hasFocus === "function") focused = !!d.hasFocus(); } catch (_) {}
+      this._active = !hidden && focused;
+    };
+    try {
+      d?.addEventListener?.("visibilitychange", recompute);
+      w?.addEventListener?.("focus", () => { this._active = !d?.hidden; });
+      w?.addEventListener?.("blur", () => { this._active = false; });
+      recompute();
+    } catch (_) { /* no DOM: stay active */ }
   }
 
   _initContext() {
@@ -434,6 +499,11 @@ export class AudioManager {
    */
   async play(did, worldPos, opts = {}) {
     if (!(await this._ensureRunning())) return null;
+    if (opts.sliderTwice) {
+      // Retail pre-multiplies the slider into `volume` on some paths and
+      // GetAttenuation multiplies it again (see _sliderFor).
+      opts = { ...opts, gain: ((typeof opts.gain === "number") ? opts.gain : 1.0) * this._sliderFor(opts.category) };
+    }
     if (this._hrtf) return this._playHrtf(did, worldPos, opts);
     const volume = (typeof opts.gain === "number") ? opts.gain : 1.0;
     const master = (opts.category === "ambient") ? this._ambientGainValue : this._effectGainValue;
@@ -483,16 +553,20 @@ export class AudioManager {
    */
   async playFromCenter(waveDid, volume, opts = {}) {
     if (!(await this._ensureRunning())) return null;
-    const master = (opts.category === "ambient") ? this._ambientGainValue : this._effectGainValue;
-    const a = retailAttenuation(0, (typeof volume === "number") ? volume : 1.0, master);
+    const master = this._sliderFor(opts.category);
+    let vol = (typeof volume === "number") ? volume : 1.0;
+    if (opts.sliderTwice) vol *= master;
+    const a = retailAttenuation(0, vol, master);
     this.lastMix = { play: a.play, decibels: a.decibels, pan: 0 };
     if (!a.play) {
       this.skipCount += 1;
       return null;
     }
-    // In HRTF mode the bus already carries the slider: undo the fold-in.
+    // Whole-dB gain as retail (GetAttenuation ceil, acclient.c:383098). In
+    // HRTF mode the bus GainNode already carries the slider, so the voice
+    // gets the slider-free dB.
     const gainValue = this._hrtf
-      ? Math.min(1, Math.max(0, volume))
+      ? linearGain(retailAttenuation(0, vol, 1.0).decibels)
       : linearGain(a.decibels);
     return this._startVoice(waveDid, {
       gainValue,
@@ -503,7 +577,31 @@ export class AudioManager {
     });
   }
 
+  /**
+   * The category slider (retail effect_sound_volume / ambient_sound_volume).
+   * `opts.sliderTwice` reproduces retail's double application:
+   *   - SoundHook: PlaySoundA(gid, obj) passes effect_sound_volume AS the
+   *     volume (acclient.c:342190 -> 383481), and GetAttenuation multiplies
+   *     by effect_sound_volume again (383092-383095);
+   *   - ambient: PlayAmbientSound / PlayAmbientSoundFromCenter pre-multiply
+   *     ambient_sound_volume (383527, 383551) before GetAttenuation's
+   *     is_ambient multiply.
+   */
+  _sliderFor(category) {
+    return (category === "ambient") ? this._ambientGainValue : this._effectGainValue;
+  }
+
+  /** Listener position in the AC frame (null before the first pose). */
+  getListenerAc() {
+    return this._listenerPos ? threeToAc(this._listenerPos) : null;
+  }
+
   async _ensureRunning() {
+    if (!this._active) {
+      this.skipCount += 1;
+      this.inactiveSkipCount += 1;
+      return false;
+    }
     if (!this._ctx) {
       this.skipCount += 1;
       return false;
@@ -589,27 +687,23 @@ export class AudioManager {
   // HRTF path (the default; `?audioRetailPan=on` selects the retail mix): PannerNode with exponential
   // ref=5/rolloff=2 (= 25/d^2) + the 88.9 m one-shot cull.
   async _playHrtf(did, worldPos, opts) {
-    // Phase 2 (2026-06-04) — retail -50 dB silence cull (ONE-SHOTS ONLY):
-    // 25/d^2 < 0.0031623 => d > 88.91.
-    const SILENCE_CUTOFF_DISTANCE = 88.91;
-    if (!opts.loop && !((opts.gain ?? 1.0) > 0)) {
-      this.skipCount += 1; // volume <= 0 is silent (acclient.c:383096)
-      return null;
-    }
+    // Retail -50 dB cull (ONE-SHOTS ONLY), from GetAttenuation itself
+    // (acclient.c:383079-383118): the audible edge moves with the sound's
+    // volume and the slider (94 m at 1.0; 200 m+ for loud sounds; nothing
+    // at volume <= 0) instead of a fixed 88.9 m.
     if (!opts.loop) {
+      let dist = 0;
       const L = this._ctx.listener;
-      let lx, ly, lz;
-      if (L && L.positionX && typeof L.positionX.value === "number") {
-        lx = L.positionX.value; ly = L.positionY.value; lz = L.positionZ.value;
+      if (opts.rolloffFactor !== 0 && worldPos && L && L.positionX && typeof L.positionX.value === "number") {
+        const dx = worldPos.x - L.positionX.value;
+        const dy = worldPos.y - L.positionY.value;
+        const dz = worldPos.z - L.positionZ.value;
+        dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       }
-      if (typeof lx === "number" && worldPos) {
-        const dx = worldPos.x - lx;
-        const dy = worldPos.y - ly;
-        const dz = worldPos.z - lz;
-        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > SILENCE_CUTOFF_DISTANCE) {
-          this.skipCount += 1;
-          return null;
-        }
+      const a = retailAttenuation(dist, opts.gain ?? 1.0, this._sliderFor(opts.category));
+      if (!a.play) {
+        this.skipCount += 1;
+        return null;
       }
     }
     const panner = this._ctx.createPanner();
