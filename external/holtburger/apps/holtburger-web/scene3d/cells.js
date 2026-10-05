@@ -175,9 +175,12 @@ const INDOOR_DEPTH_SPLIT = (() => {
 // itself the diagnosis: no banner ⇒ stale bundle ⇒ add `?nosw=1`.
 const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 
-// ?punchSidedness (2026-08-04 round 7; default re-flipped OFF 2026-08-12 —
-// see the reader below for the full flip history and the trade-off) — DEFAULT OFF, and off is the RESTORED
-// round-4 behaviour the user confirmed working outdoors.
+// ?punchSidedness (2026-08-04 round 7) — SHIPPED DEFAULT: OFF (absent → "off",
+// owner-directed 2026-08-12; see the reader below). Off is the round-4
+// behaviour the user confirmed working outdoors. `=on` (also 1/true/yes)
+// enables the retail `portal_side` sidedness gate; `=heuristic` the AABB-centre
+// A/B arm. Comments below that describe it as "on by default" record the
+// flip history of 2026-08-12, NOT the current default.
 //
 // The round-5 sidedness gate (`apertureFacesAway`) regressed the outdoor punch.
 // It rests on the sign of "is the room centre inside or outside this doorway",
@@ -198,15 +201,17 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // names the owning room's interior on 15,186/15,186 outdoor-facing portals,
 // none on-plane (holtburger-dat tests/cell_portal_flags_parity.rs).
 //
-//   =off           the kill path — no sidedness gate. Byte-identical to the
-//                  round-4 arm the user confirmed working outdoors.
-//   absent / =on   DEFAULT since 2026-08-12 — the REAL flag, via the v3
+//   absent / =off  DEFAULT (owner-directed 2026-08-12) — no sidedness gate.
+//                  Byte-identical to the round-4 arm the user confirmed
+//                  working outdoors.
+//   =on            the retail `portal_side` gate — the REAL flag, via the v3
 //                  export. No confidence guard, because there is nothing to
 //                  be unconfident about.
 //   =heuristic     the round-5/7 AABB-centre inference, kept ONLY as the
 //                  A/B reference arm for the eye test.
 //
-// -- ON by DEFAULT 2026-08-12, after a flip / revert / measure / re-flip --
+// -- The case for ON (it WAS default-on for part of 2026-08-12, after a
+// flip / revert / measure / re-flip; the owner then set it back to OFF) --
 // The paragraph above explains why this sat opt-in: a *speculative* gate does
 // not get to risk a confirmed-good outdoor punch. That reason is now void --
 // the gate is not speculative. It reads retail's own `portal_side` bit and
@@ -227,7 +232,8 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 //
 // THE FULL HISTORY, because this default moved three times in one night and a
 // bisect will land in the middle of it: flipped ON (421cdf0a) -> reverted to OFF
-// (e8a94405, converse case unmeasured) -> MEASURED (26c7cd63) -> ON again, here.
+// (e8a94405, converse case unmeasured) -> MEASURED (26c7cd63) -> ON again ->
+// OFF (owner-directed isolation arm; the current default — see the reader).
 // The revert was conditional on exactly the measurement that then arrived; both
 // risks it named are closed:
 //   (1) DAT-space vs AC-WORLD-space. The 15,186/15,186 portal_side parity is a
@@ -251,7 +257,7 @@ const INDOOR_SPLIT_BUILD = "2026-08-04-r5";
 // witnesses the audit alone cannot adjudicate; they are covered by the census's
 // weak bucket (109 cases, 0 bad). The claim is 0 proven-wrong out of 8 and
 // 127/127 two-sided agreement on the sign -- not 8 independently proven drops.
-// `?punchSidedness=off` remains the escape hatch, byte-identical to the old arm.
+// Absent / `?punchSidedness=off` = no gate, byte-identical to the old arm.
 const PUNCH_SIDEDNESS_MODE = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
@@ -261,14 +267,15 @@ const PUNCH_SIDEDNESS_MODE = (() => {
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  // ⚠ 2026-08-12 — BACK TO DEFAULT-ON. The hypothesis test this was flipped
-  // OFF for has RUN, and it came back NEGATIVE.
+  // Absent (or any unrecognised value) → "off". THIS IS THE SHIPPED DEFAULT.
   //
   // History, so nobody flips this a sixth time by accident: it went
   // off -> on -> reverted -> measured -> on (handoff §-12B) -> OFF for one
-  // live session as a black-flicker isolation arm -> back ON here.
+  // live session as a black-flicker isolation arm -> an agent flipped it back
+  // ON -> the owner restored OFF (the block after this one). The notes below
+  // are the measurements that agent cited; they are evidence, not the default.
   //
-  // WHY THE ARM IS RETIRED (measured on the owner's live 1070 session,
+  // MEASURED (the owner's live 1070 session,
   // 2026-08-12, 420 s of 2 Hz sampling + CDP screencast, read-only):
   //   * The flag really was off: `__portalPunch.sidednessMode === "off"` at
   //     module load AND `_portalPunchDiag.gates.sidednessSource === "off"`
@@ -282,18 +289,16 @@ const PUNCH_SIDEDNESS_MODE = (() => {
   //     ~34 % wide x ~4 % tall). A pass that gates nothing and touches 1.4 %
   //     of the frame cannot be the source of a screen- or object-sized black,
   //     and OFF is precisely the arm that leaves far-side doors ungated.
-  // Leaving it off therefore buys nothing and re-exposes the portal
-  // bleed-through this gate was written for (handoff §-12B §A), which is what
-  // the old comment here said to do in exactly this case: "If the flicker
-  // persists with this off, flip it back rather than leaving both defects
-  // live."
+  // By that measurement, leaving it off buys nothing and re-exposes the portal
+  // bleed-through this gate was written for (handoff §-12B §A); the old
+  // comment here said "If the flicker persists with this off, flip it back
+  // rather than leaving both defects live." The owner chose OFF regardless.
   //
   // The competing explanation on the table that day — the `terrain-batch`
   // program's 17-texture-unit request — was ALSO measured and is a red
   // herring; see the corrected note at the `PUNCH_SIDEDNESS` block below.
   //
-  // `?punchSidedness=off` restores that isolation arm in one flag, and is
-  // byte-identical to the pre-flip round-4 behaviour.
+  // The off arm is byte-identical to the pre-flip round-4 behaviour.
   // ⚠ DEFAULT OFF — OWNER-DIRECTED 2026-08-12, and restored here after a
   // subagent reverted it to "on" on its own judgement. The evidence for
   // flipping back is real and is recorded below, but the decision is the
