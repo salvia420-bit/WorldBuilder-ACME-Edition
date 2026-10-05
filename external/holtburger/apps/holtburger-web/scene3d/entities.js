@@ -5862,11 +5862,14 @@ export class EntityManager {
     // would be rendered un-separated. Measured live: a Tusker Guard pinned at
     // the 1.476 m floor on tick frames but flicked to 0.300 m on managed-row
     // frames — 0.3 is `StickyManager::adjust_offset`'s bare `STICKY_RADIUS`
-    // (acclient.c:388559), i.e. the Rust REMOTE sticky lane is still
-    // radius-blind the way `?combatRadii` found the LOCAL lane to be (both
-    // its radii are 0.0 there). Fixing that in Rust is the deeper repair and
-    // is filed as a residual; this is the render-side guarantee that holds
-    // regardless. Re-uses the same floor + push-out as `tick`.
+    // (acclient.c:388559), i.e. the Rust REMOTE sticky lane was radius-blind
+    // (both radii 0.0). That deeper repair has since landed (remote motion
+    // D6, 86c3ef14: `stick_remote_entity_to` carries the holder's and the
+    // target's `combat_part_dims` radius, so a sticky row now stands at
+    // r_holder + r_target + 0.3, outside this floor) — the push-out stays as
+    // the render-side guarantee for every other row and for the
+    // `?combatRadii=off` 0.0 fallback. Re-uses the same floor + push-out as
+    // `tick`.
     // (Gate lives INSIDE `_applyCreatureSeparation` so the eval counter stays
     // unconditionally reachable on this lane too; rows here are sparse — only
     // bodies whose Rust manager stepped this tick — so the per-row player-pose
