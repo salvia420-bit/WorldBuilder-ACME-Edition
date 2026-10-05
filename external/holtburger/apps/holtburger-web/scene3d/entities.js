@@ -2974,6 +2974,11 @@ function expandActionCommandLow16(cmd) {
 // frame 16, fr 0). The next Ready then plays link(gesture→Ready), frames
 // 16..end of that same anim: the recoil, the "second half of the cast
 // gesture". The 0x10-class windups (MagicPowerUp*) stay one-shot actions.
+// Cap on how long a Ready waits for a pending cast-gesture commit (see
+// setMotion). Generous: a cold bake behind world streaming can take >1 s, and
+// a late gesture + recoil beats a lost one.
+const CAST_GESTURE_COMMIT_WAIT_MS = 2500;
+
 function isSubstateCastGesture(cmd) {
   const c = cmd >>> 0;
   const low = c & 0xffff;
@@ -8980,7 +8985,14 @@ export class EntityManager {
     // re-broadcast of the held state must be a no-op (not a snap back to the
     // spawn state), and a real state change replaces it there.
     if (inst._unifiedSeq.stateHold && isDoorStateMotion(motionCommand >>> 0)) return;
-    const incoming = classifyMotionCommand(motionCommand >>> 0);
+    // A bare 0 / Stop is substituted to Ready inside setMotion; classify it
+    // as the Ready it becomes. (ACE's non-PK windups put the action in the
+    // forward slot, which the wasm filters to 0, so each windup arrives as
+    // KIND_MOTION(0) + KIND_MOTION_ACTION; the mtClassFallback "walk" for a
+    // bare 0 made that 0 cut the windup/gesture already playing.)
+    const lowIn = (motionCommand >>> 0) & 0xffff;
+    const incoming = (lowIn === 0 || lowIn === 0x0004 /* Stop */)
+      ? "idle" : classifyMotionCommand(motionCommand >>> 0);
     if ((incoming === "attack" || incoming === "cast") && inst._unifiedSeq.clearOnDone) return;
     // 2026-10-05: retail never cuts a queued action/link on a Ready re-issue
     // (same-substate re-speed / remove_cyclic_anims only, acclient.c:337780ff).
@@ -9588,7 +9600,66 @@ export class EntityManager {
    * the cycle's `setEffectiveTimeScale` — composing with (not clobbering)
    * the `?velScale=on` T11 velocity-scale path (see `tick()` ~L6343).
    */
-  async setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
+  setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst) return Promise.resolve();
+    // 2026-10-05 cast regression (fb58331a): a final cast gesture is a held
+    // SUBSTATE whose link + cycle commit in one step AFTER their bakes resolve,
+    // token-gated like any cycle. ACE sends the closing Ready ~0.35 s after the
+    // gesture (Player_Magic.cs FinishCast; the gesture's link length at
+    // CastSpeed 2.0), and loop.js / setLocalStance / the cmdInterp Ready lane
+    // can issue one too. Whenever the gesture's bake was still in flight (cold
+    // cache, LRU eviction, a busy bake queue), that Ready bumped the token, the
+    // gesture commit was dropped, and the Ready itself dedupe-returned against
+    // the unchanged Ready cycle: no raise, no hold, no recoil. The old action
+    // path was never token-gated, so it always played. Retail cannot lose it
+    // either: the gesture is appended to the sequence the moment its motion is
+    // applied (GetObjectSequence, acclient.c:337748), and the Ready that follows
+    // builds on top of it. So a Ready/Stop arriving while a gesture commit is
+    // pending WAITS for it, then plays the gesture→Ready recoil link.
+    const low = (motionCommand >>> 0) & 0xffff;
+    const idleClass = low === CMD_LOW_READY || low === CMD_LOW_STOP || low === 0;
+    if (!idleClass) {
+      const c = classifyMotionCommand(motionCommand >>> 0);
+      // Action one-shots (windups, swings, emotes) queue on top of whatever
+      // base cycle commits; they never supersede a waiting Ready.
+      if (!((c === "attack" || c === "cast") && !isSubstateCastGesture(motionCommand))) {
+        inst._motionIssueSeq = ((inst._motionIssueSeq | 0) + 1) | 0;
+      }
+    } else {
+      inst._motionIssueSeq = ((inst._motionIssueSeq | 0) + 1) | 0;
+    }
+    const pending = inst._castGesturePending;
+    if (idleClass && pending) {
+      return this._setMotionAfterCastGesture(inst, pending, guid, motionCommand, motionStance, motionSpeed);
+    }
+    const p = this._setMotionImpl(guid, motionCommand, motionStance, motionSpeed);
+    if (isSubstateCastGesture(motionCommand)) {
+      const tracked = p.catch(() => {}).then(() => {
+        if (inst._castGesturePending === tracked) inst._castGesturePending = null;
+      });
+      inst._castGesturePending = tracked;
+    }
+    return p;
+  }
+
+  // A Ready/Stop that arrived while a cast gesture's commit was pending: wait
+  // for that commit (capped, so a hung bake cannot wedge the rig), then apply
+  // the Ready unless a newer base command was issued meanwhile.
+  async _setMotionAfterCastGesture(inst, pending, guid, motionCommand, motionStance, motionSpeed) {
+    const issue = inst._motionIssueSeq;
+    let timer = 0;
+    await Promise.race([
+      pending,
+      new Promise((r) => { timer = setTimeout(r, CAST_GESTURE_COMMIT_WAIT_MS); }),
+    ]);
+    clearTimeout(timer);
+    if (this.entityMap.get(guid >>> 0) !== inst) return;
+    if (inst._motionIssueSeq !== issue) return; // superseded while waiting
+    return this._setMotionImpl(guid, motionCommand, motionStance, motionSpeed);
+  }
+
+  async _setMotionImpl(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
     // COL-10 clip half (2026-07-27) — retail CMotionInterp::adjust_motion
@@ -10120,7 +10191,15 @@ export class EntityManager {
     // last fetch finished.
     const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
     const styleLinksP = inst._pendingStyleLinks || null;
-    if (cacheKey === inst.currentActionKey && !styleLinksP) return; // already playing
+    if (cacheKey === inst.currentActionKey && !styleLinksP) {
+      // Already on this cycle. A gesture whose commit never landed (superseded
+      // or no cycle) must not stay the remembered substate: setLocalStance
+      // would keep re-issuing Ready and the next link would key off it.
+      if (isSubstateCastGesture(inst.lastMotionCommand ?? 0) && !castGestureSubstate) {
+        inst.lastMotionCommand = cmd;
+      }
+      return; // already playing
+    }
     this.motionSwitchCount += 1;
 
     // Locomotion transition LINK. When transitioning from a known previous
@@ -10144,7 +10223,13 @@ export class EntityManager {
       cacheKey !== inst.currentActionKey &&
       ((cls !== "attack" && cls !== "cast") || castGestureSubstate)
     ) {
-      linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, cmd, stance);
+      // The link's INNER key is the full 32-bit command (C3), but the wire
+      // Ready (KIND_MOTION low16) and setLocalStance's Ready are bare 0x0003:
+      // links[(Magic, MagicBlast)] holds only 0x41000003, so the bare lookup
+      // missed and the wasm fell back to the Ready CYCLE, i.e. no recoil.
+      const linkTo = (isSubstateCastGesture(fromMotion) && cmd === CMD_LOW_READY)
+        ? CMD_READY_FULL : cmd;
+      linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, linkTo, stance);
     }
     inst.lastMotionCommand = cmd;
 

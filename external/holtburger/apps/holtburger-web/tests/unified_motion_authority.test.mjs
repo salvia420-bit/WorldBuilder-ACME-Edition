@@ -63,6 +63,7 @@ const SWORD = 0x8000003e;
 const MAGIC_BLAST = 0x4000002b;
 const POWERUP1 = 0x1000006f;
 let linkDelayMs = 0; // delay for style-link bakes (stance-switch race test)
+let gestureDelayMs = 0; // delay for MagicBlast bakes (cold-cache cast race)
 function yFor(cmd, from, stance = 0) {
   const low = cmd & 0xffff;
   if (from) {
@@ -70,7 +71,9 @@ function yFor(cmd, from, stance = 0) {
     if ((from & 0xffff) === 0x03 && (cmd >>> 24) === 0x80) return 400;
     // Cast gesture substate: Ready→MagicBlast (raise) / MagicBlast→Ready (recoil).
     if ((from & 0xffff) === 0x03 && low === 0x2b) return 200;
-    if ((from & 0xffff) === 0x2b && low === 0x03) return 250;
+    // Real MT 0x09000001: links[(Magic, MagicBlast)] holds ONLY the full
+    // Ready 0x41000003 (the link inner key is never masked, C3).
+    if ((from & 0xffff) === 0x2b && cmd === READY) return 250;
     if ((from & 0xffff) === 0x03 && low === 0x6f) return 950; // windup action
     // MotionTable links: door Off→On / On→Off, and Ready→gesture.
     if ((from & 0xffff) === 0x0c && low === 0x0b) return 700;
@@ -94,6 +97,7 @@ const wasmExports = {
     fetches.push({ cmd: cmd >>> 0, from: fromMotion >>> 0 });
     const y = yFor(cmd >>> 0, fromMotion >>> 0, stance >>> 0);
     if (y === 400 && linkDelayMs) await new Promise((r) => setTimeout(r, linkDelayMs));
+    if ((cmd & 0xffff) === 0x2b && gestureDelayMs) await new Promise((r) => setTimeout(r, gestureDelayMs));
     const meshes = Array.from({ length: PART_COUNT }, (_, p) => partMesh(p));
     const n = y == null ? 0 : (fromMotion ? 4 : (y === 150 ? 1 : NUM_FRAMES));
     return {
@@ -372,5 +376,62 @@ test("an action's speed scales its link only, not the following cycle", async ()
   for (let i = 0; i < 5 && !inst._unifiedSeq; i += 1) await new Promise((r) => setTimeout(r, 1));
   assert.equal(inst._unifiedSeq?.speed, 2.0, "windup link at CastSpeed");
   assert.equal(inst._motionSpeed, 1.0, "cycle speed untouched");
+  em.dispose();
+});
+
+// 2026-10-05 regression (fb58331a "cast gestures are held substates"): drive
+// the EXACT command stream ACE sends a remote observer for a non-PK war spell
+// (Player_Magic.cs DoWindupGestures / DoCastGesture / FinishCast; wasm
+// session/messages/position.rs): each windup is KIND_MOTION(0) (the action
+// forward command is filtered to 0) + KIND_MOTION_ACTION(full windup) at
+// CastSpeed 2.0; the final gesture is KIND_MOTION(bare 0x2B) at 2.0; then
+// KIND_MOTION(bare Ready 0x0003) at 1.0 ~0.35 s later. The gesture's bake is
+// cold, so the Ready lands while it is still in flight.
+test("war-spell cast from the wire: a Ready during a cold gesture bake keeps raise + recoil", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY);
+  await em.setMotion(inst.guid, READY, 0x49, 1.0); // in Magic stance, idle
+  // Windup: KIND_MOTION(0) then KIND_MOTION_ACTION(MagicPowerUp01).
+  em.setMotion(inst.guid, 0, 0x49, 2.0);
+  em.setMotion(inst.guid, POWERUP1, 0x49, 2.0);
+  for (let i = 0; i < 5 && !inst._unifiedSeq; i += 1) await new Promise((r) => setTimeout(r, 1));
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 950 && partY(inst) < 954, "windup plays");
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  gestureDelayMs = 30;
+  try {
+    const g = em.setMotion(inst.guid, MAGIC_BLAST & 0xffff, 0x49, 2.0);
+    await new Promise((r) => setTimeout(r, 5));
+    const r = em.setMotion(inst.guid, 0x0003, 0x49, 1.0); // FinishCast Ready (bare)
+    await Promise.all([g, r]);
+  } finally {
+    gestureDelayMs = 0;
+  }
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 200 && partY(inst) < 204, "Ready->MagicBlast raise plays (not lost to the Ready)");
+  let sawRecoil = false;
+  for (let i = 0; i < 20; i += 1) {
+    em.tick(0.02);
+    const y = partY(inst);
+    if (y >= 250 && y < 254) sawRecoil = true;
+  }
+  assert.ok(sawRecoil, "MagicBlast->Ready recoil link plays (full-key lookup)");
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "back on the Magic Ready cycle");
+  assert.equal(inst.lastMotionCommand, 0x0003, "substate memory is Ready again");
+  em.dispose();
+});
+
+test("local caster: setLocalStance's bare Ready after a held gesture plays the recoil", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY);
+  await em.setMotion(inst.guid, READY, 0x49, 1.0);
+  await em.setMotion(inst.guid, MAGIC_BLAST & 0xffff, 0x49, 2.0);
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.equal(partY(inst), 150, "holding the gesture");
+  em.setLocalStance(inst.guid, 0x49); // loop.js skip-branch for the local Ready echo
+  for (let i = 0; i < 5 && !inst._unifiedSeq; i += 1) await new Promise((r) => setTimeout(r, 1));
+  em.tick(0.01);
+  assert.ok(partY(inst) >= 250 && partY(inst) < 254, "recoil link from the bare local Ready");
   em.dispose();
 });
