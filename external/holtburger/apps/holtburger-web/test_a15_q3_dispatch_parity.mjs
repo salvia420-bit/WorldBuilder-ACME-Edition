@@ -244,8 +244,8 @@ console.log("PART 2 — D2/D4 fire only under their flags");
   const modOff = await loadLoopModule("?serverSwing=off", "p2-off");
   const modOn = await loadLoopModule("", "p2-default-on");
 
-  // D2 (FU-1): rides em._wieldHandAttach (set by entities.js under
-  // ?wieldHandAttach=on) — flag carried on the manager, not re-read here.
+  // D2 (FU-1): rides em._wieldHandAttach (set by the entities.js
+  // constructor, default ON, `=off` escape) — carried on the manager.
   const emNoWield = makeEm();
   modOff.dispatchEntityUpdate({ entityManager: emNoWield }, emNoWield, upd(1));
   check("D2 inert without em._wieldHandAttach",

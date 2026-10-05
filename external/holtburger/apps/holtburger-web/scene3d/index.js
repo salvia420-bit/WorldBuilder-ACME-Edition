@@ -3053,22 +3053,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // item carries no ParentLocation, and attachChildToParent retries the
   // holding-location resolve with Quiver(5)→RightHand(1) for an ammo
   // child whose ParentEvent location was 0. `?wieldHandAttach=off` restores
-  // the legacy gate / heuristic / root-origin fallback. Read once here.
-  const wieldHandAttach =
-    new URLSearchParams(window.location.search).get("wieldHandAttach")?.toLowerCase() !== "off";
-  // wieldedSpawn (2026-06-11): DEFAULT-ON (`!== "off"` reader) paired with
-  // the wasm-side gate, also default-ON (synthetic KIND_SPAWN + attach for
-  // wielded items
-  // with no world presence). JS half: hide a freshly-committed rig whose own
-  // attach is parked in `_pendingAttach` so the weapon never flashes at its
-  // spawn pose before the async hand-mount lands. Read once here.
-  const wieldedSpawn =
-    new URLSearchParams(window.location.search).get("wieldedSpawn")?.toLowerCase() !== "off";
+  // the legacy gate / heuristic / root-origin fallback. The EntityManager
+  // constructor parses both this and `?wieldedSpawn` (same `!== "off"`
+  // default-ON readers); this scope reuses the manager's parsed value.
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
-  // Thread the flag onto the manager so attachChildToParent /
-  // _resolveHoldingLocation can read it without a second URL parse.
-  entityManager._wieldHandAttach = wieldHandAttach;
-  entityManager._wieldedSpawn = wieldedSpawn;
+  const wieldHandAttach = entityManager._wieldHandAttach;
 
   // Wielded-children pass for the local player rig in the world scene
   // + ALL remote players. The recv loop emits kind=47 EntityDetached

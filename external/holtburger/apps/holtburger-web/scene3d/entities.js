@@ -3666,38 +3666,33 @@ export class EntityManager {
         if (flag === "0" || flag === "off") this._hotSwapAppearance = false;
       }
     } catch (_) {}
-    // FU-1 (2026-06-11): wieldHandAttach — `=== "on"` FALLBACK (live default
-    // is ON: index.js overwrites with a `!== "off"` read) that lets
+    // FU-1 (2026-06-11): wieldHandAttach — DEFAULT-ON (`!== "off"` reader;
+    // `?wieldHandAttach=off` restores the legacy gate). Lets
     // attachChildToParent retry the holding-location resolve with
     // Quiver(5)→RightHand(1) for an ammo child whose ParentEvent location
     // was 0 (instead of mounting it at the wielder root / feet). index.js
-    // overwrites this field after construction from a single URL parse;
-    // initialise here so the field is never undefined when the manager is
-    // built from a path that doesn't set it (e.g. the hello-cube capture).
-    this._wieldHandAttach = false;
+    // reads the same flag for its held-item mask (flushWieldedDirty).
+    // No `window` (node harness, worker) → the shipped default (ON).
+    this._wieldHandAttach = true;
     try {
       if (typeof window !== "undefined" && window.location) {
         const flag = new URLSearchParams(window.location.search).get("wieldHandAttach");
-        this._wieldHandAttach = (flag?.toLowerCase() === "on");
+        this._wieldHandAttach = flag?.toLowerCase() !== "off";
       }
     } catch (_) {}
-    // wieldedSpawn (2026-06-11): `=== "on"` FALLBACK (live default is ON:
-    // index.js overwrites with a `!== "off"` read; wasm side is also
-    // default-ON). The wasm side
-    // synthesizes a KIND_SPAWN for a wielded child that has no world
-    // presence (pack→wield / login-wielded) with its kind=7 attach in the
-    // same drain batch — the attach parks in `_pendingAttach` until the rig
-    // commits. The mount resolves async (holding-location fetch), so under
-    // this flag `_spawnImpl` hides a rig whose own attach is pending at
+    // wieldedSpawn (2026-06-11): DEFAULT-ON (`!== "off"` reader; the wasm
+    // side is also default-ON). The wasm side synthesizes a KIND_SPAWN for a
+    // wielded child that has no world presence (pack→wield / login-wielded)
+    // with its kind=7 attach in the same drain batch — the attach parks
+    // until the rig commits. The mount resolves async (holding-location
+    // fetch), so `_spawnImpl` hides a rig whose own attach is pending at
     // commit time; `attachChildToParent` re-asserts state-visible on mount.
-    // Mirrors the `_wieldHandAttach` pattern above (index.js overwrites
-    // after construction from a single URL parse; initialise here so the
-    // field is never undefined).
-    this._wieldedSpawn = false;
+    // `?wieldedSpawn=off` disables the hide. No `window` → shipped default.
+    this._wieldedSpawn = true;
     try {
       if (typeof window !== "undefined" && window.location) {
         const flag = new URLSearchParams(window.location.search).get("wieldedSpawn");
-        this._wieldedSpawn = (flag?.toLowerCase() === "on");
+        this._wieldedSpawn = flag?.toLowerCase() !== "off";
       }
     } catch (_) {}
     // C2 (2026-07-12) — retail keybind TARGET CYCLING (CPlayerSystem::
