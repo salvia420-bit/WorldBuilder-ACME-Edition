@@ -124,7 +124,7 @@ fn sphere_centre_pose(
     centre
 }
 
-fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
+pub(super) fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
     let cx = orientation.rotate_vector(Vector3::new(1.0, 0.0, 0.0));
     let cy = orientation.rotate_vector(Vector3::new(0.0, 1.0, 0.0));
     let cz = orientation.rotate_vector(Vector3::new(0.0, 0.0, 1.0));
@@ -735,7 +735,10 @@ impl CObjCell for SceneObjCell {
                 return r;
             }
         }
-        TransitionState::OK as i32
+        // Doors / creatures / players shadowed into this cell — the dynamic
+        // half of the same shadow list (`?objCollideInTransition`; OK when
+        // no overlay is installed). See `obj_collision.rs`.
+        super::obj_collision::collide_cell_objects(self.cell_id, transition)
     }
 }
 
@@ -1712,6 +1715,11 @@ pub fn faithful_find_transitional_position(
     t.collision_info.frames_stationary_fall = input.frames_stationary_fall;
 
     let world = SceneWorld::new(scene);
+    // Doors / creatures / players inside the transition (`?objCollideInTransition`).
+    let reach = (input.end.global_coords() - input.begin.global_coords()).length()
+        + input.object.height
+        + 2.0;
+    let _objects = install_obj_overlay(env, &world, &input.begin, reach, &input.object, input.gates.skip_parented_entities);
     // The player is gravity-affected (GRAVITY_PS). VERIFY(1070): thread the
     // real per-object gravity bit if non-player movers route here (only the
     // local player routes here today — always gravity-affected).
@@ -2026,6 +2034,33 @@ pub fn faithful_find_transitional_position(
     }
 }
 
+// ─── Objects in the transition ───────────────────────────────────────────────
+
+/// When `?objCollideInTransition` is on, gather the objects near `pose`,
+/// build their per-cell shadow lists against `world`, and install them for
+/// the driver's cells (`obj_collision::collide_cell_objects`) until the
+/// returned guard drops. `None` (nothing installed) when the switch is off or
+/// no object is near. Call with the `WorldFrameGuard` already held (the
+/// shadow `find_cell_list` runs in the world frame).
+fn install_obj_overlay(
+    env: &dyn TransitionEnv,
+    world: &SceneWorld<'_>,
+    pose: &WorldPosition,
+    reach: f32,
+    object: &super::transition::ObjectInfo,
+    skip_parented: bool,
+) -> Option<super::obj_collision::ObjOverlayGuard> {
+    use super::obj_collision::{build_obj_overlay, obj_collide_in_transition_enabled, ObjOverlayGuard};
+    if !obj_collide_in_transition_enabled() {
+        return None;
+    }
+    let objects = env.obj_colliders_near(pose, reach, object.self_guid, skip_parented);
+    if objects.is_empty() {
+        return None;
+    }
+    Some(ObjOverlayGuard::install(Rc::new(build_obj_overlay(world, objects))))
+}
+
 // ─── Cell for a pose moved AFTER the transition ──────────────────────────────
 
 /// The cell retail's `CObjCell::find_cell_list` (acclient.c:346961-347060)
@@ -2264,6 +2299,10 @@ pub fn faithful_find_placement_position(
     t.init_path(Some(begin_cell), None, &pos);
 
     let world = SceneWorld::new(scene);
+    // Objects inside the placement too (`?objCollideInTransition`): retail's
+    // placement inserts collide the same shadow lists (only the INITIAL
+    // placement insert skips objects, acclient.c:347151).
+    let _objects = install_obj_overlay(env, &world, pose, object.height + 4.0 + 2.0, object, gates.skip_parented_entities);
     let mover = FaithfulMover { has_gravity: true };
     let found = t.find_valid_position(&world, &mover);
     if found == 0 {
@@ -3681,6 +3720,319 @@ mod drift {
             !sealed_cell.wants_outside_cells(1, &[at(px)]),
             "a cell with no exterior portal never pulls in the outdoor ring"
         );
+    }
+
+    // ── Objects INSIDE the transition (`obj_collision.rs`) ──
+    //
+    // Each test runs with `?objCollideInTransition` ON (thread-local switch)
+    // and an env whose `obj_colliders_near` returns the fixture objects. On
+    // the old code those objects were never collided inside the driver
+    // (only clamped afterwards in holtburger-core), so every "blocks" /
+    // "pushed out" assertion here fails there.
+    mod objects {
+        use super::*;
+        use crate::spatial::obj_collision::{
+            build_obj_overlay, physics_state, set_obj_collide_in_transition, ObjCollider,
+            ObjPhysicsBsp, WeenieTraits,
+        };
+        use crate::spatial::transition::object_info_state as ois;
+        use std::sync::Arc;
+
+        struct ObjEnv {
+            scene: SpatialScene,
+            objects: Vec<ObjCollider>,
+        }
+
+        impl TransitionEnv for ObjEnv {
+            fn scene(&self) -> &SpatialScene {
+                &self.scene
+            }
+            fn terrain_height_at(&self, _x: f32, _y: f32) -> Option<f32> {
+                None
+            }
+            fn terrain_normal_at(&self, _x: f32, _y: f32) -> Option<Vector3> {
+                None
+            }
+            fn water_depth_at(&self, _x: f32, _y: f32) -> f32 {
+                0.0
+            }
+            fn is_entirely_water_cell_at(&self, _x: f32, _y: f32) -> bool {
+                false
+            }
+            fn entity_colliders_near(
+                &self,
+                _pose: &WorldPosition,
+                _prefilter_dist: f32,
+                _exclude: Guid,
+                _skip_parented: bool,
+            ) -> Vec<EntityCollider> {
+                Vec::new()
+            }
+            fn obj_colliders_near(
+                &self,
+                _pose: &WorldPosition,
+                _prefilter_dist: f32,
+                _exclude: Guid,
+                _skip_parented: bool,
+            ) -> Vec<ObjCollider> {
+                self.objects.clone()
+            }
+        }
+
+        /// Turns the switch on for the test's thread and off again on drop.
+        struct Switch;
+        impl Switch {
+            fn on() -> Self {
+                set_obj_collide_in_transition(true);
+                Switch
+            }
+        }
+        impl Drop for Switch {
+            fn drop(&mut self) {
+                set_obj_collide_in_transition(false);
+            }
+        }
+
+        fn floor_scene() -> SpatialScene {
+            let o = cell_origin();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            let mut scene = SpatialScene::new();
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            scene
+        }
+
+        /// Half-thickness of the door leaf.
+        const LEAF: f32 = 0.13;
+
+        /// A 2 m wide, 2.2 m tall, 0.26 m thick door leaf centred on its
+        /// local x = 0 plane: a −X face at x = −LEAF (the winding of
+        /// `wall_env`'s wall) and a +X face at x = +LEAF, as the physics
+        /// triangles of a HAS_PHYSICS_BSP object.
+        fn door(origin: Vector3, cell_id: u32, state: u32) -> ObjCollider {
+            let f = [v(-LEAF, -1.0, 0.0), v(-LEAF, -1.0, 2.2), v(-LEAF, 1.0, 2.2), v(-LEAF, 1.0, 0.0)];
+            let b = [v(LEAF, -1.0, 0.0), v(LEAF, 1.0, 0.0), v(LEAF, 1.0, 2.2), v(LEAF, -1.0, 2.2)];
+            let tris = vec![
+                Triangle::new(f[0], f[1], f[2]),
+                Triangle::new(f[0], f[2], f[3]),
+                Triangle::new(b[0], b[1], b[2]),
+                Triangle::new(b[0], b[2], b[3]),
+            ];
+            ObjCollider {
+                id: 0x7A9B_401F,
+                state: state | physics_state::HAS_PHYSICS_BSP,
+                weenie: Some(WeenieTraits::default()),
+                cell_id,
+                origin,
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+                bsp: Some(Arc::new(ObjPhysicsBsp::from_triangles(&tris))),
+                bsp_bound: (LEAF * LEAF + 1.0 + 2.2 * 2.2).sqrt(),
+                cylspheres: Vec::new(),
+                spheres: Vec::new(),
+            }
+        }
+
+        /// A creature (or player) with one Setup sphere r 0.5 at z 0.5.
+        fn creature(origin: Vector3, weenie: WeenieTraits) -> ObjCollider {
+            ObjCollider {
+                id: 0x8000_0042,
+                state: 0,
+                weenie: Some(weenie),
+                cell_id: CELL_ID,
+                origin,
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+                bsp: None,
+                bsp_bound: 0.0,
+                cylspheres: Vec::new(),
+                spheres: vec![Sphere {
+                    center: v(0.0, 0.0, 0.5),
+                    radius: 0.5,
+                }],
+            }
+        }
+
+        fn walk(env: &ObjEnv, from_x: f32, from_y: f32, to_x: f32, to_y: f32, state_extra: u32) -> TransitionOutcome {
+            let mut input = input_for(pose_at(from_x, from_y, FLOOR_WZ), pose_at(to_x, to_y, FLOOR_WZ));
+            input.object.state |= state_extra;
+            faithful_find_transitional_position(env, &input, true, true)
+        }
+
+        /// A closed door leaf stops the mover at its face and the mover
+        /// SLIDES along it (retail: the door's part BSP through
+        /// `CPartArray::FindObjCollisions`, acclient.c:325464).
+        #[test]
+        fn a_closed_door_leaf_blocks_and_the_mover_slides_along_it() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let door_x = 1.0; // cell-local
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![door(v(o.x + door_x, o.y, FLOOR_WZ), CELL_ID, 0)],
+            };
+            let out = walk(&env, FCX + 0.2, FCY, FCX + 1.6, FCY + 0.9, 0);
+            let face = FCX + door_x - LEAF - radius();
+            assert!(
+                out.pose.coords.x <= face + 0.05,
+                "walked through the closed door: x={} face={face}",
+                out.pose.coords.x
+            );
+            assert!(
+                out.pose.coords.y > FCY + 0.15,
+                "did not slide along the door leaf: y={}",
+                out.pose.coords.y
+            );
+        }
+
+        /// An OPEN door (live `ETHEREAL` from the wire) passes — retail marks
+        /// it obstruction-ethereal and returns OK (acclient.c:316201-316212,
+        /// :316295-316300). Guard: the old code never blocked either.
+        #[test]
+        fn an_open_ethereal_door_lets_the_mover_through() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![door(v(o.x + 1.0, o.y, FLOOR_WZ), CELL_ID, physics_state::ETHEREAL)],
+            };
+            let out = walk(&env, FCX + 0.2, FCY, FCX + 1.6, FCY, 0);
+            assert!(
+                out.pose.coords.x > FCX + 1.0,
+                "an open door blocked the mover: x={}",
+                out.pose.coords.x
+            );
+        }
+
+        /// A creature's Setup sphere blocks a head-on walk
+        /// (`CSphere::intersects_sphere`, acclient.c:359390 / :359157).
+        #[test]
+        fn a_creature_sphere_blocks_the_mover() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let npc_x = 1.2; // cell-local
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![creature(
+                    v(o.x + npc_x, o.y, FLOOR_WZ),
+                    WeenieTraits {
+                        is_creature: true,
+                        ..WeenieTraits::default()
+                    },
+                )],
+            };
+            let out = walk(&env, FCX - 0.6, FCY, FCX + 1.6, FCY, 0);
+            let contact = FCX + npc_x - (0.5 + radius());
+            assert!(
+                out.pose.coords.x <= contact + 0.05,
+                "walked through the creature: x={} contact={contact}",
+                out.pose.coords.x
+            );
+        }
+
+        /// Two non-PK players pass through each other; two PKs do not
+        /// (acclient.c:316214-316225: the exemption needs a player mover and
+        /// a player target, neither impenetrable, and not both PK / both
+        /// PK-lite). The PK arm fails on the old code (nothing blocked).
+        #[test]
+        fn a_non_pk_player_passes_through_another_player_but_two_pks_collide() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let npc_x = 1.2;
+            let other = |pk: bool| ObjEnv {
+                scene: floor_scene(),
+                objects: vec![creature(
+                    v(o.x + npc_x, o.y, FLOOR_WZ),
+                    WeenieTraits {
+                        is_player: true,
+                        is_creature: true,
+                        is_pk: pk,
+                        ..WeenieTraits::default()
+                    },
+                )],
+            };
+            let through = walk(&other(false), FCX - 0.6, FCY, FCX + 1.6, FCY, ois::IS_PLAYER);
+            assert!(
+                through.pose.coords.x > FCX + npc_x,
+                "a non-PK player was blocked by another player: x={}",
+                through.pose.coords.x
+            );
+            let blocked = walk(&other(true), FCX - 0.6, FCY, FCX + 1.6, FCY, ois::IS_PLAYER | ois::IS_PK);
+            assert!(
+                blocked.pose.coords.x <= FCX + npc_x - (0.5 + radius()) + 0.05,
+                "two PKs passed through each other: x={}",
+                blocked.pose.coords.x
+            );
+        }
+
+        /// An arrival placement overlapping an NPC is pushed out of it
+        /// (the PLACEMENT insert's overlap test, acclient.c:359226-359244).
+        #[test]
+        fn a_placement_overlapping_an_npc_is_pushed_out() {
+            let _on = Switch::on();
+            let o = cell_origin();
+            let npc = v(o.x + 1.2, o.y, FLOOR_WZ);
+            let env = ObjEnv {
+                scene: floor_scene(),
+                objects: vec![creature(
+                    npc,
+                    WeenieTraits {
+                        is_creature: true,
+                        ..WeenieTraits::default()
+                    },
+                )],
+            };
+            let pose = pose_at(FCX + 0.5, FCY, FLOOR_WZ + 0.005);
+            let object = input_for(pose, pose).object;
+            let out = super::super::faithful_find_placement_position(&env, &pose, &object, &gates())
+                .expect("a free spot exists next to the NPC");
+            let g = out.pose.global_coords();
+            let d = ((g.x - npc.x).powi(2) + (g.y - npc.y).powi(2)).sqrt();
+            assert!(d >= 0.97, "still overlapping the NPC after placement: centre distance {d}");
+        }
+
+        /// A door standing in a dungeon mouth's exterior portal is shadowed
+        /// into BOTH the EnvCell and the outdoor landcell
+        /// (`calc_cross_cells_static` 322405 → `add_shadows_to_cells`
+        /// 321978), so it collides from either side: an outdoor mover
+        /// walking at it is stopped by it through the landcell's list.
+        #[test]
+        fn a_door_in_a_doorway_collides_from_the_envcell_and_the_landcell() {
+            let _on = Switch::on();
+            let px = LB_BASE_X + MOUTH_PORTAL_X;
+            let o = cell_origin();
+            let d = door(v(px, o.y, FLOOR_WZ), CELL_ID, 0);
+            let env = ObjEnv {
+                scene: mouth_walkout_env(true).scene,
+                objects: vec![d.clone()],
+            };
+            let landcell = (LB_ID & 0xFFFF_0000) | 0x0001;
+            {
+                let _wf = holtburger_dat::transition::types::WorldFrameGuard::enter();
+                let world = SceneWorld::new(&env.scene);
+                let overlay = build_obj_overlay(&world, vec![d]);
+                let cells = overlay.cells_of(0x7A9B_401F);
+                assert!(cells.contains(&CELL_ID), "door not in its EnvCell: {cells:x?}");
+                assert!(cells.contains(&landcell), "door not shadowed into the landcell: {cells:x?}");
+            }
+            // From outdoors, walking -x at the door face.
+            let outdoor = |x: f32| WorldPosition {
+                landblock_id: Guid(landcell),
+                coords: v(x, FCY, FLOOR_WZ),
+                rotation: Quaternion::identity(),
+            };
+            let input = input_for(outdoor(MOUTH_PORTAL_X + 1.2), outdoor(MOUTH_PORTAL_X - 0.4));
+            let out = faithful_find_transitional_position(&env, &input, true, true);
+            assert!(
+                out.pose.coords.x >= MOUTH_PORTAL_X + radius() - 0.05,
+                "walked through the doorway's door from outdoors: x={}",
+                out.pose.coords.x
+            );
+        }
     }
 
     fn wall_env() -> DriftEnv {

@@ -65,6 +65,14 @@ pub mod object_info_state {
     pub const FREE_ROTATE: u32 = 0x10;
     pub const EDGE_SLIDE: u32 = 0x200;
     pub const IGNORE_CREATURES: u32 = 0x400;
+    /// `OBJECTINFO::init` (acclient.c:314118-314143) ORs these in from the
+    /// mover's weenie (`IsImpenetrable` / `IsPlayer` / `IsPK` / `IsPKLite`);
+    /// `CPhysicsObj::FindObjCollisions` reads them for the player-vs-player
+    /// pass-through (316214-316225).
+    pub const IS_IMPENETRABLE: u32 = 0x80;
+    pub const IS_PLAYER: u32 = 0x100;
+    pub const IS_PK: u32 = 0x800;
+    pub const IS_PKLITE: u32 = 0x1000;
 }
 
 /// The RETAIL player collision spheres, verbatim from Setup `0x02000001`
@@ -323,6 +331,21 @@ pub trait TransitionEnv {
         exclude: Guid,
         skip_parented: bool,
     ) -> Vec<EntityCollider>;
+    /// The objects near `pose` as `CPhysicsObj::FindObjCollisions` sees them
+    /// (`super::obj_collision`): every object within `prefilter_dist` (XY,
+    /// widened by the object's own extent) except `exclude` and — with
+    /// `skip_parented` — parented objects (`CObjCell::find_obj_collisions`
+    /// skips them, acclient.c:347159). Ethereal objects ARE included: retail
+    /// tests them as obstruction-ethereal. Default: none (test envs).
+    fn obj_colliders_near(
+        &self,
+        _pose: &WorldPosition,
+        _prefilter_dist: f32,
+        _exclude: Guid,
+        _skip_parented: bool,
+    ) -> Vec<super::obj_collision::ObjCollider> {
+        Vec::new()
+    }
 }
 
 impl TransitionEnv for WorldState {
@@ -382,6 +405,84 @@ impl TransitionEnv for WorldState {
                     radius: self.entity_collision_radius(e),
                     has_physics_bsp: e.has_physics_bsp(),
                     bsp,
+                })
+            })
+            .collect()
+    }
+
+    fn obj_colliders_near(
+        &self,
+        pose: &WorldPosition,
+        prefilter_dist: f32,
+        exclude: Guid,
+        skip_parented: bool,
+    ) -> Vec<super::obj_collision::ObjCollider> {
+        use super::obj_collision::{obj_bsp_for_geometry, ObjCollider, WeenieTraits};
+        use super::scenery::SetupCylSphere;
+        use holtburger_common::properties::{ItemType, ObjectDescriptionFlag as F, WorldObjectExt as _};
+        let here = pose.global_coords();
+        self.entities
+            .iter()
+            .filter(|e| e.guid != exclude && !(skip_parented && e.physics_parent_id.is_some()))
+            .filter_map(|e| {
+                let g = e.position.global_coords();
+                let scale = e
+                    .obj_scale()
+                    .map(|s| s as f32)
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .unwrap_or(1.0);
+                let setup_id = WorldState::entity_setup_did(e);
+                // CSetup cylspheres / spheres (staged per SetupModel); before
+                // the Setup has streamed in, a humanoid cylinder of the cached
+                // radius stands in (the same residency fallback the clamp used).
+                let (cylspheres, spheres) =
+                    match setup_id.and_then(|id| self.scene.setup_collision_shapes(id)) {
+                        Some(s) => (s.cylspheres.clone(), s.spheres.clone()),
+                        None => {
+                            let r = setup_id
+                                .and_then(|id| self.setup_radii.get(&id).copied())
+                                .unwrap_or(PLAYER_SETUP_SPHERE_RADIUS);
+                            (
+                                vec![SetupCylSphere {
+                                    origin: Vector3::zero(),
+                                    radius: r,
+                                    height: PLAYER_SETUP_HEIGHT,
+                                }],
+                                Vec::new(),
+                            )
+                        }
+                    };
+                let geo = self.entity_physics_bsp(e);
+                let bsp_bound = geo.as_ref().map_or(0.0, |b| b.geometry.bound_radius);
+                let prim_extent = cylspheres
+                    .iter()
+                    .map(|c| c.origin.length() + c.radius.max(c.height))
+                    .chain(spheres.iter().map(|s| s.center.length() + s.radius))
+                    .fold(0.0f32, f32::max);
+                let reach = prefilter_dist + bsp_bound.max(prim_extent) * scale;
+                let dx = g.x - here.x;
+                let dy = g.y - here.y;
+                if dx * dx + dy * dy > reach * reach {
+                    return None;
+                }
+                Some(ObjCollider {
+                    id: e.guid.0,
+                    state: e.physics_state.bits(),
+                    weenie: Some(WeenieTraits {
+                        is_player: e.flags.contains(F::PLAYER),
+                        is_creature: e.item_type().is_some_and(|t| t.contains(ItemType::CREATURE)),
+                        is_impenetrable: e.flags.contains(F::FREE_PK_STATUS),
+                        is_pk: e.flags.contains(F::PLAYER_KILLER),
+                        is_pklite: e.flags.contains(F::PK_LITE_STATUS),
+                    }),
+                    cell_id: e.position.landblock_id.0,
+                    origin: g,
+                    orientation: e.position.rotation,
+                    scale,
+                    bsp: geo.as_ref().map(|b| obj_bsp_for_geometry(&b.geometry)),
+                    bsp_bound,
+                    cylspheres,
+                    spheres,
                 })
             })
             .collect()

@@ -21,6 +21,10 @@ mod scene;
 /// FindObjCollisions`). Consumed by `holtburger-core`'s movement system
 /// under the default-off `USE_SCENERY_COLLISION` gate.
 pub mod scenery;
+/// Doors, creatures and players collided INSIDE the faithful transition
+/// (retail `CObjCell::find_obj_collisions` → `CPhysicsObj::FindObjCollisions`),
+/// behind the default-off `?objCollideInTransition` switch.
+pub mod obj_collision;
 mod types;
 
 pub use entity_collision::{

@@ -1094,6 +1094,11 @@ pub struct SpatialScene {
     /// Collision round 3 (F6): building physics BSPs by `Arc` address, see
     /// [`Self::insert_building_physics_bsp`] / [`Self::is_building_bsp`].
     building_bsps: Arc<HashMap<usize, std::sync::Weak<CellPhysicsBsp>>>,
+    /// Objects in the transition: each SetupModel's collision primitives
+    /// (`CSetup` cylspheres / spheres) by setup id — what
+    /// `CPhysicsObj::FindObjCollisions` tests a non-BSP object with
+    /// (acclient.c:316229-316276). See `obj_collision.rs`.
+    setup_collision_shapes: Arc<HashMap<u32, Arc<super::obj_collision::SetupCollisionShapes>>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space AABB index for non-building outdoor static placements
     /// (signs, props, trees). Keyed by the landblock high word (the
@@ -1483,6 +1488,7 @@ impl SpatialScene {
             building_transit_cells: Arc::new(HashMap::new()),
             building_portal_landblocks: Arc::new(HashSet::new()),
             building_bsps: Arc::new(HashMap::new()),
+            setup_collision_shapes: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
@@ -3916,6 +3922,24 @@ impl SpatialScene {
             .entry(landblock_high)
             .or_default()
             .push(bsp);
+    }
+
+    /// Objects in the transition: register a SetupModel's collision
+    /// primitives (setup-local, unscaled). Idempotent; replaces.
+    pub fn register_setup_collision_shapes(
+        &mut self,
+        setup_id: u32,
+        shapes: super::obj_collision::SetupCollisionShapes,
+    ) {
+        Arc::make_mut(&mut self.setup_collision_shapes).insert(setup_id, Arc::new(shapes));
+    }
+
+    /// A SetupModel's collision primitives, when its Setup has been parsed.
+    pub fn setup_collision_shapes(
+        &self,
+        setup_id: u32,
+    ) -> Option<Arc<super::obj_collision::SetupCollisionShapes>> {
+        self.setup_collision_shapes.get(&setup_id).cloned()
     }
 
     /// Is `bsp` a building's physics BSP (registered through
