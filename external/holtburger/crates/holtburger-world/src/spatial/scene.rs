@@ -5572,36 +5572,6 @@ impl SpatialScene {
                 continue;
             };
             let mut stepped = false;
-            // D5: turn toward the MoveTo heading at the retail turn rate
-            // (the TurnRight cycle's π/2 rad/s — motion-table data,
-            // unverified — × the run turn factor 1.5 of
-            // `apply_run_to_command`, acclient.c:343469). The heading rides
-            // the export as a heading-owned row (the sticky-row channel: JS
-            // applies its quaternion).
-            if self.remote_moveto_enabled
-                && body.remote_arc.is_none()
-                && let Some(drive) = body.remote_moveto
-            {
-                let rate = if drive.forward == Some(true) {
-                    std::f32::consts::FRAC_PI_2 * 1.5
-                } else {
-                    std::f32::consts::FRAC_PI_2
-                };
-                let current = body.pose.rotation.to_heading();
-                let mut diff = (drive.heading_rad - current) % std::f32::consts::TAU;
-                if diff > std::f32::consts::PI {
-                    diff -= std::f32::consts::TAU;
-                } else if diff < -std::f32::consts::PI {
-                    diff += std::f32::consts::TAU;
-                }
-                let max = rate * quantum;
-                let turn = diff.clamp(-max, max);
-                if turn.abs() > 1e-5 {
-                    body.pose.rotation = holtburger_common::Quaternion::from_heading(current + turn);
-                    self.remote_sticky_stepped.insert(guid);
-                    stepped = true;
-                }
-            }
             if let Some(&(next, v, leave_ground)) = ground_moves.get(&guid) {
                 body.pose = next;
                 body.remote_velocity = v;
@@ -5644,6 +5614,39 @@ impl SpatialScene {
                     }
                 }
                 stepped = true;
+            }
+            // D5: turn toward the MoveTo heading at the retail turn rate.
+            // AFTER the ground move / arc above: those write `body.pose`
+            // wholesale from a pose computed before this slice's turn, so a
+            // turn applied first was overwritten (the rotation never moved).
+            // (the TurnRight cycle's π/2 rad/s — motion-table data,
+            // unverified — × the run turn factor 1.5 of
+            // `apply_run_to_command`, acclient.c:343469). The heading rides
+            // the export as a heading-owned row (the sticky-row channel: JS
+            // applies its quaternion).
+            if self.remote_moveto_enabled
+                && body.remote_arc.is_none()
+                && let Some(drive) = body.remote_moveto
+            {
+                let rate = if drive.forward == Some(true) {
+                    std::f32::consts::FRAC_PI_2 * 1.5
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                };
+                let current = body.pose.rotation.to_heading();
+                let mut diff = (drive.heading_rad - current) % std::f32::consts::TAU;
+                if diff > std::f32::consts::PI {
+                    diff -= std::f32::consts::TAU;
+                } else if diff < -std::f32::consts::PI {
+                    diff += std::f32::consts::TAU;
+                }
+                let max = rate * quantum;
+                let turn = diff.clamp(-max, max);
+                if turn.abs() > 1e-5 {
+                    body.pose.rotation = holtburger_common::Quaternion::from_heading(current + turn);
+                    self.remote_sticky_stepped.insert(guid);
+                    stepped = true;
+                }
             }
             if body.position_manager.queue_active() {
                 // Interp idles while the object is out of contact
