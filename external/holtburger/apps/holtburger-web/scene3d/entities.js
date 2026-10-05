@@ -55,6 +55,19 @@ function _groundClampZ(wx, wy, z, cellIdx) {
   return z;
 }
 
+// PROJ-VIS (2026-10-05): raw outdoor terrain height at AC world (wx, wy), or
+// null when the session can't answer (terrain not streamed / no handle).
+function _terrainZAt(wx, wy) {
+  const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+  if (!sh || typeof sh.terrainHeightAt !== "function") return null;
+  try {
+    const gz = sh.terrainHeightAt(wx, wy);
+    return (typeof gz === "number" && Number.isFinite(gz)) ? gz : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // 2026-05-28 — `?spawnTrace=1` opt-in per-stage timing for entity spawn.
 // When set, _spawnImpl captures `performance.now()` deltas around the two
 // dominant async stages (animationCache.get, materialCache.preload /
@@ -1539,6 +1552,55 @@ const PROJECTILE_GROUND_CLAMP_SKIP_ON = (() => {
     return new URLSearchParams(window.location.search).get("projectileGroundClampSkip")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
+// PROJ-VIS (2026-10-05) — spell/missile projectile render fidelity. All four are
+// DEFAULT-ON, opt-out only (explicit off-family value); absent = ON.
+//   ?projectileLights=off       — Setup LightInfo on a MISSILE (32 of 43 projectile
+//                                 Setups carry one, e.g. Lightning Bolt 0x02000D52)
+//                                 is attached through the fixed light pool and lit
+//                                 from spawn when PhysicsState::LIGHTING_ON (0x800)
+//                                 is set (retail CPhysicsObj::set_state →
+//                                 CPartArray::InitLights, acclient.c:322172). Off =
+//                                 legacy (projectile lights only under ?entityLights=on,
+//                                 dark until a SetLight hook that never comes).
+//   ?projectileLaunchClock=off  — integrate from the ObjectCreate RECEIPT time
+//                                 (loop.js stamps `meta.recvMs`) instead of the end of
+//                                 the async rig build, so spawn latency no longer
+//                                 leaves the bolt trailing its true flight (and
+//                                 exploding short of the target).
+//   ?projectileTerrainStop=off  — stop a ballistic projectile that dives under the
+//                                 outdoor terrain surface (retail client collides
+//                                 missiles itself; ACE's impact stop arrives a
+//                                 round-trip later).
+//   ?projectileDefaultScriptSpawn=off — restore playing a MISSILE's wire
+//                                 default_script at spawn. Retail plays that script
+//                                 only on COLLISION (ACCWeenieObject::DoCollision →
+//                                 play_default_script when SCRIPTED_COLLISION,
+//                                 acclient.c:436857-436870); ACE authors it as
+//                                 PlayScript.ProjectileCollision (SpellProjectile.cs:90).
+//                                 Playing it at spawn raced the Setup default_script
+//                                 (the bolt's trail, acclient.c:320867) for the
+//                                 single `_particleChainsAttached` slot, so a bolt
+//                                 either lost its trail or burst a collision splash
+//                                 at the caster's hands.
+function _projFlagOn(name) {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get(name);
+    if (v == null) return true;
+    const s = String(v).toLowerCase();
+    return !(s === "off" || s === "0" || s === "false" || s === "no");
+  } catch (_) { return true; }
+}
+const PROJECTILE_LIGHTS_ON = _projFlagOn("projectileLights");
+const PROJECTILE_LAUNCH_CLOCK_ON = _projFlagOn("projectileLaunchClock");
+const PROJECTILE_TERRAIN_STOP_ON = _projFlagOn("projectileTerrainStop");
+const PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON = _projFlagOn("projectileDefaultScriptSpawn");
+/** PhysicsState::LIGHTING_ON (acclient.c:322181 `BYTE1(new_state) & 8`). */
+const PHYSICS_STATE_LIGHTING_ON = 0x800;
+/** Below-terrain tolerance (m) before the client-side terrain stop fires. */
+const PROJECTILE_TERRAIN_STOP_EPS = 0.25;
+/** A pending impact stop older than this (ms) is stale and pruned. */
+const PROJECTILE_PENDING_STOP_TTL_MS = 10000;
 // Survey A11-S0 (2026-06-11): retail `CreateBlockingParticleEmitter`
 // (acclient.c:329528-329565) returns 0 and does NOT replace when the
 // emitter id is already live — the opposite of the non-blocking
@@ -4697,15 +4759,52 @@ export class EntityManager {
     // projectile classification (projectile_index ← PhysicsState::Missile) AND a
     // meaningfully non-zero launch velocity, so a non-missile spawn (vx/vy/vz = 0)
     // is never marked ballistic.
+    // PROJ-VIS: classify once (wasm getter; spawn-static) — read by the
+    // light attach, dynamic-LOD skip and default-script arm below.
+    inst._isProjectile = this.isProjectile(guid);
     {
       const lvx = +(meta.vx ?? 0);
       const lvy = +(meta.vy ?? 0);
       const lvz = +(meta.vz ?? 0);
-      if (lvx * lvx + lvy * lvy + lvz * lvz > 1e-4 && this.isProjectile(guid)) {
+      if (lvx * lvx + lvy * lvy + lvz * lvz > 1e-4 && inst._isProjectile) {
         inst.lastVel = { vx: lvx, vy: lvy, vz: lvz, omegaZ: 0 };
+        // PROJ-VIS: anchor the flight clock to when the ObjectCreate ARRIVED
+        // (loop.js `_armSpawn` stamps `meta.recvMs`), not to now — the rig build
+        // above awaits keyframes/materials, and starting the clock here made the
+        // bolt run that latency behind its server flight for its whole life, so
+        // the impact stop (NoDraw + VectorUpdate) caught it short of the target.
+        // The first `_tickBallisticProjectiles` pass integrates the elapsed gap
+        // (substepped; >2 s is skipped as a teleport, like retail).
+        const nowMs = typeof performance !== "undefined" ? performance.now() : 0;
+        const recvMs = +meta.recvMs;
         inst.lastVelMs =
-          typeof performance !== "undefined" ? performance.now() : 0;
+          PROJECTILE_LAUNCH_CLOCK_ON && Number.isFinite(recvMs) && recvMs > 0 && recvMs <= nowMs
+            ? recvMs
+            : nowMs;
         inst._ballistic = true;
+        // RP6 particle cull exemption (particle_manager.js `_rp6ShouldCull`):
+        // a projectile's trail emitters must emit every frame of the flight.
+        if (inst.root) {
+          inst.root.userData = inst.root.userData || {};
+          inst.root.userData.__ballistic = true;
+        }
+        // The impact VectorUpdate can beat a slow rig build (setVelocity parks
+        // it in `_pendingProjectileStops`); honour it so the bolt integrates to
+        // where the server stopped it instead of flying on, hidden, for 5 s.
+        const pendingStop = this._pendingProjectileStops?.get(guid);
+        if (pendingStop != null) {
+          this._pendingProjectileStops.delete(guid);
+          inst._ballisticStopMs = pendingStop;
+        }
+        // Client-side terrain stop is only trusted when the launch point is
+        // above the local terrain sample (a bolt fired across a rise can be
+        // authored below our sample — see the ground-clamp skip above).
+        inst._ballisticTerrainOk = false;
+        if (PROJECTILE_TERRAIN_STOP_ON && (inst._outdoorCellIdx & 0xffff) < 0x0100) {
+          const gz = _terrainZAt(inst.root.position.x, inst.root.position.y);
+          inst._ballisticTerrainOk =
+            gz != null && inst.root.position.z >= gz - PROJECTILE_TERRAIN_STOP_EPS;
+        }
         // G-4 (?projectileGravity=on): arc the flight for gravity-class
         // missiles. Sampled once at spawn (classification is spawn-static).
         inst._ballisticGravity =
@@ -4875,12 +4974,27 @@ export class EntityManager {
     // intensity 0). The SetLight (25) hook later toggles them on/off. Fire-
     // and-forget so the wasm fetch doesn't block spawn return. Skipped wholly
     // when the flag is off (default) → zero allocation, byte-identical scene.
+    // PROJ-VIS (2026-10-05, `?projectileLights`, default ON): a MISSILE's Setup
+    // lights attach regardless of `?entityLights`, but ONLY through the fixed
+    // light pool (pool carriers never change the renderer's light count → no
+    // relink freeze; the legacy `.visible`-cap path would relink on every
+    // cast, so it is left to the explicit `?entityLights=on` opt-in). Lit from
+    // spawn when the ObjectCreate PhysicsState carries LIGHTING_ON — retail has
+    // no SetLight hook for a bolt, the state bit IS the switch
+    // (CPhysicsObj::set_state → CPartArray::InitLights, acclient.c:322172).
+    const projLights =
+      PROJECTILE_LIGHTS_ON &&
+      inst._isProjectile === true &&
+      !!this.scene3d?.lighting?.lightPool?.enabled;
     if (
-      this._entityLightsOn &&
+      (this._entityLightsOn || projLights) &&
       this.wasmExports &&
       typeof this.wasmExports.fetchSetupModelLights === "function"
     ) {
-      this._attachEntityLights(inst, setupId).catch((e) => {
+      const lightOpts = projLights
+        ? { projectile: true, startOn: this._projectileLightingOn(guid) }
+        : undefined;
+      this._attachEntityLights(inst, setupId, lightOpts).catch((e) => {
         // eslint-disable-next-line no-console
         if (!this._entityLightsWarned) {
           this._entityLightsWarned = true;
@@ -4969,6 +5083,9 @@ export class EntityManager {
     if (
       DEFAULT_SCRIPT_SPAWN_ON &&
       pesId === 0 &&
+      // PROJ-VIS: a MISSILE's wire default_script is its COLLISION script
+      // (see PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON) — never a spawn effect.
+      !(PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON && inst._isProjectile === true) &&
       !this._particleChainsAttached.has(guid) &&
       this.wasmExports &&
       typeof this.wasmExports.fetchPhysicsScript === "function" &&
@@ -5953,6 +6070,15 @@ export class EntityManager {
     // visibility don't fight: the rendered flag is `stateVisible &&
     // !renderCullHidden`.
     _setEntityStateVisible(inst, !!visible);
+    // PROJ-VIS: a projectile's NoDraw (ACE ProjectileImpact SetState) must also
+    // put out its pool-fed light — the carrier keeps feeding the fixed pool even
+    // under a hidden root, so a dark rig would otherwise still glow.
+    if (inst._projectileLights) {
+      this._setProjectileLightsOn(
+        inst,
+        !!visible && !inst._projectileImpacted && this._projectileLightingOn(guid),
+      );
+    }
   }
 
   /**
@@ -10067,7 +10193,26 @@ export class EntityManager {
    */
   setVelocity(upd) {
     const inst = this.entityMap.get((upd.guid >>> 0));
-    if (!inst) return;
+    if (!inst) {
+      // PROJ-VIS (2026-10-05): a projectile's ONLY VectorUpdate is its impact
+      // stop. On a short flight it can land while the rig is still building
+      // (spawnInFlight) and used to be dropped here — the bolt then flew on
+      // past the target (lit, hidden only by NoDraw) for ACE's 5 s pre-Destroy
+      // window. Park the impact TIME; the ballistic seed in `_spawnImpl`
+      // consumes it and the integrator stops the bolt at that instant.
+      const g = upd.guid >>> 0;
+      const v2 = (+upd.vx || 0) ** 2 + (+upd.vy || 0) ** 2 + (+upd.vz || 0) ** 2;
+      if (PROJECTILE_IMPACT_STOP_ON && v2 <= 1e-6 && this.spawnInFlight?.has(g)) {
+        const nowMs = typeof performance !== "undefined" ? performance.now() : 0;
+        if (!this._pendingProjectileStops) this._pendingProjectileStops = new Map();
+        const m = this._pendingProjectileStops;
+        if (m.size > 64) {
+          for (const [k, t] of m) if (nowMs - t > PROJECTILE_PENDING_STOP_TTL_MS) m.delete(k);
+        }
+        m.set(g, nowMs);
+      }
+      return;
+    }
     // Pre-impact velocity, captured BEFORE the overwrite below. For a
     // PhysicsState::Missile this is still the ObjectCreate launch velocity
     // (ACE streams nothing in flight), i.e. the exact flight direction of the
@@ -10091,8 +10236,7 @@ export class EntityManager {
     // dead-reckon VectorUpdate is untouched. `?projectileImpactStop=off` restores the
     // (masked-by-NoDraw) legacy behavior byte-identically.
     if (PROJECTILE_IMPACT_STOP_ON && inst._ballistic && this.isProjectile(upd.guid >>> 0)) {
-      inst._ballistic = false;
-      inst._ballisticGravity = false;
+      this._stopBallisticProjectile(inst);
       // Record WHERE it hit and WHICH WAY it was going. Correlated to a victim
       // by proximity at death time (the impact carries no defender guid), so a
       // mage bolt or an arrow topples the creature the way it was travelling.
@@ -10967,6 +11111,7 @@ export class EntityManager {
       this._scriptManagersForGuid.delete(g);
     }
     this._particleChainsAttached.delete(g);
+    this._pendingProjectileStops?.delete(g);
     // === Wave R3.B (2026-05-29) — drop the per-guid sort-center attach guard
     // so a re-spawn of the same guid re-attaches. The per-SETUP offset cache
     // (`_sortCenterCache`) is intentionally NOT cleared here — it's keyed by
@@ -11030,8 +11175,14 @@ export class EntityManager {
    * Async (the wasm fetch is awaited); fire-and-forget at the call site so
    * spawn return isn't blocked. Returns a small descriptor for harnesses.
    */
-  async _attachEntityLights(inst, setupId) {
+  async _attachEntityLights(inst, setupId, opts = undefined) {
     const summary = { created: 0, capped: false };
+    // PROJ-VIS (2026-10-05): `opts.projectile` = a MISSILE's lights (see the
+    // spawn-site note): tagged `__dynamicPriority` so the light pool gives
+    // them a slot ahead of static torches (retail: dynamic lights claim HW
+    // slots before statics, minimize_object_lighting acclient.c:380659), and
+    // `opts.startOn` lights them immediately (PhysicsState LIGHTING_ON).
+    const projectile = !!(opts && opts.projectile);
     if (!inst || !inst.root || !Array.isArray(inst.parts)) return summary;
     const sid = setupId >>> 0;
     // Raw 0x01 GfxObjs (setup_id >> 24 != 0x02) carry no Setup → no lights.
@@ -11112,6 +11263,15 @@ export class EntityManager {
       light.userData.__entityLight = true;
       light.intensity = 0;
       light.visible = false;
+      if (projectile) {
+        light.userData.__dynamicPriority = true;
+        inst._projectileLights = true;
+        // Lit only while the bolt is still in flight and drawn: an impact (or
+        // NoDraw) that landed during the async LightInfo fetch keeps it dark.
+        if (opts.startOn && !inst._projectileImpacted && inst._stateVisible !== false) {
+          light.intensity = light.userData.__setupIntensity;
+        }
+      }
       partGroup.add(light);
       if (Array.isArray(active)) active.push(light);
       if (!Array.isArray(inst._setupLights)) inst._setupLights = [];
@@ -13180,6 +13340,11 @@ export class EntityManager {
       if (inst._lodRespawning) continue; // a band query / respawn is in flight
       if (this.spawnInFlight.has(g)) continue;
       if (inst._jumpPoseTween) continue; // (swing/cast tweens retired, WS-B 2026-06-18)
+      // PROJ-VIS: never LOD-respawn a projectile. `_respawnForLod` is
+      // remove()+spawn(): mid-flight it tore down the trail emitters + light and
+      // re-seeded the flight from the stale ObjectCreate velocity (even after
+      // the impact stop). Retail swaps degrade levels inside the part array.
+      if (inst._isProjectile || inst._ballistic) continue;
       const p = inst.root?.position;
       if (!p) continue;
       // Entity WORLD horizontal distance. entitiesGroup is under worldRoot
@@ -13276,14 +13441,22 @@ export class EntityManager {
       // late (e.g. the spawn raced a stalled frame).
       let last = inst._ballisticLastMs;
       if (last == null) last = inst.lastVelMs != null ? inst.lastVelMs : now;
-      let rdt = (now - last) / 1000;
-      inst._ballisticLastMs = now;
-      if (!(rdt > 1e-4)) continue;
-      // Retail update_object treats a >2 s gap as a teleport and does NOT
-      // integrate across it (acclient.c:323120-323159) — otherwise an alt-tab
-      // would hurl the bolt forward. (Moot in practice: a projectile despawns
-      // on impact within ~1 s, so it's long gone after any real stall.)
-      if (rdt > 2.0) continue;
+      // PROJ-VIS: an impact stop that raced the rig build (`_ballisticStopMs`,
+      // parked by setVelocity) caps the integration at the server's impact
+      // time, then the projectile stops exactly like the in-flight impact path.
+      const stopMs = inst._ballisticStopMs;
+      const endMs = stopMs != null && stopMs < now ? Math.max(stopMs, last) : now;
+      let rdt = (endMs - last) / 1000;
+      inst._ballisticLastMs = endMs;
+      const reachedStop = stopMs != null && now >= stopMs;
+      if (!(rdt > 1e-4) || rdt > 2.0) {
+        // Retail update_object treats a >2 s gap as a teleport and does NOT
+        // integrate across it (acclient.c:323120-323159) — otherwise an alt-tab
+        // would hurl the bolt forward. (Moot in practice: a projectile despawns
+        // on impact within ~1 s, so it's long gone after any real stall.)
+        if (reachedStop) this._stopBallisticProjectile(inst);
+        continue;
+      }
       const pos = inst.root.position;
       // Substep at <=0.1 s (native MAX_QUANTUM) so a recovered multi-frame gap
       // integrates the full path instead of one oversized Euler step.
@@ -13300,6 +13473,73 @@ export class EntityManager {
         remaining -= step;
       }
       if (inst._ballisticAlignPath) this._alignToVelocity(inst, lv);
+      // PROJ-VIS: client-side terrain collision (retail collides missiles
+      // locally; ACE's zero-velocity impact arrives a round-trip later). Only
+      // when the launch point was above our terrain sample, and only outdoors.
+      if (PROJECTILE_TERRAIN_STOP_ON && inst._ballisticTerrainOk) {
+        const gz = _terrainZAt(pos.x, pos.y);
+        if (gz != null && pos.z < gz - PROJECTILE_TERRAIN_STOP_EPS) {
+          pos.z = gz;
+          this._stopBallisticProjectile(inst);
+          continue;
+        }
+      }
+      if (reachedStop) this._stopBallisticProjectile(inst);
+    }
+  }
+
+  /**
+   * PROJ-VIS (2026-10-05): end a ballistic projectile's self-integration —
+   * the single stop path shared by the in-flight impact VectorUpdate
+   * (setVelocity), an impact that raced the rig build (`_ballisticStopMs`) and
+   * the client terrain stop. Also extinguishes the projectile's Setup lights:
+   * ACE clears LightsStatus in the same ProjectileImpact (SpellProjectile.cs:
+   * 209-238) and retail's set_state then DestroyLights (acclient.c:322188).
+   */
+  _stopBallisticProjectile(inst) {
+    if (!inst) return;
+    inst._ballistic = false;
+    inst._ballisticGravity = false;
+    inst._ballisticStopMs = null;
+    inst._projectileImpacted = true;
+    if (inst.lastVel) {
+      inst.lastVel.vx = 0;
+      inst.lastVel.vy = 0;
+      inst.lastVel.vz = 0;
+    }
+    this._setProjectileLightsOn(inst, false);
+  }
+
+  /** PROJ-VIS: does this projectile's last PhysicsState carry LIGHTING_ON?
+   *  Defaults to true when the wasm getter is unavailable (ACE sets
+   *  LightsStatus on every spell projectile weenie that has a light). */
+  _projectileLightingOn(guid) {
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      if (!sh || typeof sh.objectPhysicsState !== "function") return true;
+      const st = sh.objectPhysicsState(guid >>> 0) >>> 0;
+      if (st === 0) return true; // unknown guid → don't guess dark
+      return (st & PHYSICS_STATE_LIGHTING_ON) !== 0;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /** PROJ-VIS: drive a projectile's attached Setup lights on/off by
+   *  INTENSITY only (never `.visible` — pool carriers stay invisible so the
+   *  renderer's light count never changes, no shader relink). */
+  _setProjectileLightsOn(inst, on) {
+    const lights = inst && inst._setupLights;
+    if (!Array.isArray(lights) || lights.length === 0 || !inst._projectileLights) return;
+    for (const light of lights) {
+      if (on) {
+        const authored = light.userData && Number.isFinite(light.userData.__setupIntensity)
+          ? light.userData.__setupIntensity
+          : light.intensity;
+        light.intensity = authored;
+      } else {
+        light.intensity = 0;
+      }
     }
   }
 
@@ -13338,7 +13578,17 @@ export class EntityManager {
     // UpdatePosition), so a real-time integration here is correct and immune to
     // the freeze. Runs unconditionally; no-op when no entity is ballistic.
     this._tickBallisticProjectiles();
-    if (!(dt > 0)) return;
+    if (!(dt > 0)) {
+      // PROJ-VIS (2026-10-05): the particle/script managers run on the WALL
+      // clock (time_rng.js currentTime) and retail never gates them
+      // (acclient.c:322886), yet the default `?particleClock=off` path only
+      // reached them at the tail of this method — so the dt-recovery window
+      // (dt forced to 0 for 10 frames after any >0.5 s stall; a first cast's
+      // DAT load is one) froze every emitter mid-flight: the projectile moved
+      // (wall-clock above) but its trail emitted nothing for those frames.
+      if (particleClockMode() === "off") this.tickParticlesAndScripts();
+      return;
+    }
     // A5-P2 (`?tweenClock=dt`) — advance the unified tween clock by the SAME
     // dt every mixer below consumes (retail: one elapsed-time quantum for the
     // whole update pass, acclient.c:340659-340780). Placed after the dt>0

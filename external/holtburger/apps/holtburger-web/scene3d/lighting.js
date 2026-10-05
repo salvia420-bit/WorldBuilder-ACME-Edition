@@ -1580,6 +1580,25 @@ function refreshCellLightRef(scene3d, camera) {
  * (Render::insert_light's key). NO hysteresis — the selection is only
  * rebuilt on set/count changes, so slot-boundary flicker cannot happen.
  */
+// PROJ-VIS (2026-10-05): a source tagged `userData.__dynamicPriority` (a spell /
+// missile projectile's Setup light, entities.js `_attachEntityLights` opts.
+// projectile) sorts AHEAD of every ordinary source but BEHIND the viewer light
+// (-1), nearest-first among themselves. Retail: dynamic (object) lights claim
+// hardware slots before static lights (minimize_object_lighting,
+// acclient.c:380659), so a bolt flying down a torch-lit street keeps its glow
+// instead of losing the last pool slot to a nearer brazier. Slot COUNT is
+// untouched (relink-freeze rule) — this only reorders the candidates.
+// Beyond this radius a projectile light competes on plain distance (its ~10 m
+// falloff can't reach the player's surroundings, so it must not starve a torch).
+const DYNAMIC_PRIORITY_RADIUS_SQ = 48 * 48;
+export function lightSelectionSortKey(distSq, userData) {
+  if (userData && userData.__dynamicPriority === true && distSq < DYNAMIC_PRIORITY_RADIUS_SQ) {
+    const d = distSq > 0 ? distSq : 0;
+    return -1 + d / (1 + d); // ∈ [-1, 0): after the viewer, before statics
+  }
+  return distSq;
+}
+
 function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc) {
   let cellSet = scene3d._cellLightsSet;
   if (!cellSet) {
@@ -1634,7 +1653,7 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
     const dx = tmp.x - refX;
     const dy = tmp.y - refY;
     const dz = tmp.z - refZ;
-    scratch.push({ light, distSq: dx * dx + dy * dy + dz * dz });
+    scratch.push({ light, distSq: lightSelectionSortKey(dx * dx + dy * dy + dz * dz, ud) });
   }
   scratch.sort(sortByDistSq);
   pickSelectedSources(pool, scratch);
@@ -1841,6 +1860,9 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // were `√hysteresis` nearer, so it isn't kicked out by a barely-closer
     // rival. Inert when hysteresis === 1 or the source was unselected.
     if (hysteresis !== 1 && light.__lightPoolSel) distSq *= hysteresis;
+    // PROJ-VIS: projectile lights first (pool mode only — the legacy
+    // `.visible`-cap path never attaches them; see lightSelectionSortKey).
+    if (lightPool && lightPool.enabled) distSq = lightSelectionSortKey(distSq, light.userData);
     let slot = scratch[i];
     if (!slot) {
       slot = { light, distSq };

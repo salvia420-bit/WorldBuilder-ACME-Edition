@@ -753,6 +753,14 @@ function _billboardEmitterRetail(emitter, camera, mode, scene) {
 function _rp6ShouldCull(emitter, camera) {
   const parent = emitter.parent;
   if (!parent) return false; // no anchor → don't cull (bail open)
+  // PROJ-VIS (2026-10-05): never cull an emitter riding a ballistic projectile
+  // (entities.js stamps `root.userData.__ballistic` at the flight seed). Its
+  // anchor crosses the frustum in a fraction of a second while the cull flag
+  // is only re-evaluated every `recheckInterval` ticks, and a culled emitter
+  // emits NOTHING — for a world-space trail (is_parent_local=false) those
+  // skipped births are permanent gaps in the trail. Projectile emitters are few
+  // and short-lived, so the exemption costs ~nothing.
+  if (parent.userData && parent.userData.__ballistic === true) return false;
 
   // World-space emitter origin. Entity rigs live under worldRoot
   // (rotated -π/2 about X), so the LOCAL parent.position is NOT in the

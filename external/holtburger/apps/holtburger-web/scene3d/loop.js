@@ -3276,15 +3276,36 @@ export function noteLocalPlayerLandblockForSpawnFlush(lbIdOrKey) {
   return flushed;
 }
 
+/** PROJ-VIS: true for a spawn meta carrying a missile launch velocity. The
+ *  wasm KIND_SPAWN arm sets vx/vy/vz only for PhysicsState::MISSILE objects
+ *  (0 for everything else), the same signal entities.js seeds `_ballistic` on. */
+export function isMissileLaunchMeta(meta) {
+  if (!meta) return false;
+  const vx = +meta.vx || 0;
+  const vy = +meta.vy || 0;
+  const vz = +meta.vz || 0;
+  return vx * vx + vy * vy + vz * vz > 1e-4;
+}
+
 function _armSpawn(scene3d, em, upd) {
   // Snapshot before async — the wasm-bindgen handle may be `.free()`'d by the
   // owner right after dispatch, but the spawn is async + may await the
   // keyframe fetch. The plain meta is safe to hold across the deferral.
   const meta = toMeta(upd);
+  // PROJ-VIS (2026-10-05): a missile launch (the wasm KIND_SPAWN arm forwards a
+  // non-zero PhysicsDesc velocity ONLY for PhysicsState::MISSILE) is stamped
+  // with its RECEIPT time — entities.js starts the flight clock there, so the
+  // async rig build no longer delays the bolt along its path — and skips the
+  // time-slice FIFO: behind a town-load burst at 6 kick-offs/tick a sub-second
+  // bolt could spend its whole flight queued and never be seen at all.
+  const missile = isMissileLaunchMeta(meta);
+  if (missile) {
+    meta.recvMs = typeof performance !== "undefined" ? performance.now() : 0;
+  }
   // Dispatch the LOCAL PLAYER immediately so the camera latches onto its rig
   // without a few-frame delay (mirrors the backlog replay's local-first
   // priority). All other spawns time-slice across frames unless disabled.
-  if (!_SPAWN_TIMESLICE || isLocalPlayerGuid(meta.guid >>> 0)) {
+  if (!_SPAWN_TIMESLICE || missile || isLocalPlayerGuid(meta.guid >>> 0)) {
     _doSpawn(em, meta);
     return;
   }
