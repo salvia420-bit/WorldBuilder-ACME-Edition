@@ -1007,6 +1007,16 @@ fn parse_remote_jump_arc_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "remoteJumpArc=off")
 }
 
+/// OpenAC comparison 2026-10-04 (remote motion D5): `?remoteMoveTo=off`
+/// disables the client-side MoveTo steer for remote bodies (the core
+/// `drive_remote_movetos` pump + the scene's realization). DEFAULT-ON (owner
+/// policy 2026-10-05); rides the effective `remoteInterp` composite.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_moveto_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteMoveTo=off")
+}
+
 fn parse_remote_interp_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     // F-2026-06-27: DEFAULT-ON (was `== "remoteInterp=on"`); only `=off` disables.
@@ -43942,6 +43952,7 @@ async fn recv_loop(
     // const; see `parse_sticky_retail_flag` for the full compose rule.
     let remote_root_motion_on: bool = parse_remote_root_motion_flag(&flag_search());
     let remote_jump_arc_on: bool = parse_remote_jump_arc_flag(&flag_search());
+    let remote_moveto_on: bool = parse_remote_moveto_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -44124,6 +44135,7 @@ async fn recv_loop(
             remote_interp_on,
             remote_root_motion_on,
             remote_jump_arc_on,
+            remote_moveto_on,
             remote_sticky_on,
             combat_radii_on,
             server_run_rate_on,

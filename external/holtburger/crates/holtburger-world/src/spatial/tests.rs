@@ -4178,6 +4178,65 @@ mod remote_pose_driver {
         assert_eq!(v.z, 0.0, "a remote's jump_v_z is 0 (no jump_extent)");
     }
 
+    // === OpenAC comparison 2026-10-04, remote motion D5: remote MoveTo. ===
+
+    /// The scene realizes a remote MoveTo steer: the body runs along the
+    /// steer heading (run 4.0 × run rate, the RunForward the MoveToManager
+    /// `_DoMotion`s), turns toward it at the capped rate, and the slice is
+    /// exported as a heading-owned row (JS applies its quaternion).
+    #[test]
+    fn remote_moveto_drive_runs_toward_its_heading() {
+        let start = arc_pose(50.0, 50.0, ARC_TERRAIN);
+        let (mut scene, body_id) = arc_scene(start);
+        let east = std::f32::consts::PI; // AC heading 180° = east
+        scene.set_remote_moveto(
+            GUID,
+            true,
+            Some(crate::spatial::RemoteMoveToDrive {
+                heading_rad: east,
+                forward: Some(true),
+            }),
+            None,
+        );
+        let _ = scene.take_remote_sticky_stepped();
+        scene.step_remote_position_managers(0.1);
+        let body = scene.body(body_id).unwrap();
+        let moved = body.pose.global_coords() - start.global_coords();
+        assert!((moved.x - 0.4).abs() < 1e-3 && moved.y.abs() < 1e-3, "ran 0.4 m east: {moved:?}");
+        let turned = (body.pose.rotation.to_heading() - start.rotation.to_heading()).abs();
+        assert!(turned > 0.0 && turned <= std::f32::consts::FRAC_PI_2 * 1.5 * 0.1 + 1e-3, "capped turn {turned}");
+        assert!(scene.take_remote_sticky_stepped().contains(&GUID), "heading-owned row");
+        assert!(scene.take_remote_stepped_poses().iter().any(|(g, _)| *g == GUID));
+
+        scene.set_remote_moveto_enabled(false);
+        let before = scene.body(body_id).unwrap().pose;
+        scene.step_remote_position_managers(0.1);
+        assert_eq!(scene.body(body_id).unwrap().pose, before, "?remoteMoveTo=off: no steer");
+    }
+
+    /// `InterpolateTo(p, IsMovingTo())` (MoveOrTeleport acclient.c:323492):
+    /// while a remote is moving-to, a wire correction does not overwrite its
+    /// heading (the hard-coded `false` let the wire heading fight the steer).
+    #[test]
+    fn moving_to_keeps_heading_through_interpolation() {
+        for moving_to in [true, false] {
+            let start = outdoor_pose(50.0, 50.0);
+            let (mut scene, body_id) = scene_with_remote_body(start);
+            scene.set_remote_moveto(GUID, moving_to, None, None);
+            let mut target = outdoor_pose(52.0, 50.0);
+            target.rotation = Quaternion::from_heading(std::f32::consts::FRAC_PI_2);
+            reconcile(&mut scene, body_id, target, AuthoritativeBodySync::Snapshot, ctx(Some(true), Some(start)));
+            scene.step_remote_position_managers(0.05);
+            let rotation = scene.body(body_id).unwrap().pose.rotation;
+            let drift = (rotation.to_heading() - start.rotation.to_heading()).abs();
+            if moving_to {
+                assert!(drift < 1e-4, "keep_heading: heading unchanged ({drift})");
+            } else {
+                assert!(drift > 1e-3, "control: the wire heading is adopted ({drift})");
+            }
+        }
+    }
+
     /// Indoors there is no terrain sampler: the arc lands at the take-off
     /// height.
     #[test]

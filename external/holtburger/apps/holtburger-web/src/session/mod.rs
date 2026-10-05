@@ -42,6 +42,7 @@ pub(crate) struct LoopFlags {
     pub(crate) remote_interp_on: bool,
     pub(crate) remote_root_motion_on: bool,
     pub(crate) remote_jump_arc_on: bool,
+    pub(crate) remote_moveto_on: bool,
     pub(crate) remote_sticky_on: bool,
     pub(crate) combat_radii_on: bool,
     pub(crate) server_run_rate_on: bool,

@@ -4145,6 +4145,9 @@ impl MovementSystem {
                 world.scene.unstick_local_player();
             }
         }
+        // OpenAC comparison 2026-10-04 (remote motion D5): step every
+        // remote MoveTo directive (see `drive_remote_movetos`).
+        drive_remote_movetos(&mut self.movement_managers, world, now);
 
         if self.suppress_frontend_autonomous_once
             && matches!(
@@ -9324,6 +9327,118 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
     }
     fn display_autorun_status(&mut self, on: bool) {
         log::info!("cmdInterp: AutoRun {}", if on { "ON" } else { "OFF" });
+    }
+}
+
+/// OpenAC comparison 2026-10-04 (remote motion D5) — the per-frame REMOTE
+/// MoveTo pump. Retail runs `MovementManager::UseTime` (acclient.c:339359) →
+/// `MoveToManager::UseTime` (:346018) for every object with a MoveTo
+/// directive (armed by `MovementManager::unpack_movement` :339492 from
+/// UpdateMotion types 6-9 — MoveToObject :345184/:345859, MoveToPosition
+/// :345790, TurnToObject :345242, TurnToHeading), so a chasing mob steers
+/// toward its target's LIVE pose between the server's position updates
+/// (`HandleMoveToPosition` :345577, `HandleTurnToHeading` :345712,
+/// `BeginNextNode` :345521, `CheckProgressMade` :344833). The registry
+/// already unpacks those directives for remotes; until now nothing stepped
+/// them. This feeds each remote manager the same `MoveToView` the local
+/// driver builds — pose / contact / interpolation from the remote body,
+/// the target's live pose re-resolved per tick (the `HandleUpdateTarget`
+/// cadence, :346051) — and hands the steer to the scene, which turns and
+/// advances the body (`SpatialScene::set_remote_moveto`). `IsMovingTo()`
+/// (:315822 → :339312) rides along as the body's interpolation
+/// keep-heading (`MoveOrTeleport` :323492). A sticky arrival installs the
+/// remote sticky lane. Ported in spirit from OpenAC
+/// `RuntimeRemotePhysicsUpdater` (moveToArmed) / `MoveToManager.cs`; the
+/// state machine is holtburger's own retail port (`move_to.rs`).
+/// `?remoteMoveTo=off` (scene switch) disables it.
+pub(crate) fn drive_remote_movetos(
+    managers: &mut HashMap<Guid, MovementManager>,
+    world: &mut WorldState,
+    now: Instant,
+) {
+    if !world.scene.remote_moveto_active() {
+        return;
+    }
+    let local = world.player.guid;
+    for (&guid, manager) in managers.iter_mut() {
+        if guid == local {
+            continue;
+        }
+        let Some((self_pos, on_contact, interpolating)) = world.scene.remote_moveto_view(guid)
+        else {
+            continue;
+        };
+        if !manager.is_moveto_active() {
+            world.scene.set_remote_moveto(guid, false, None, None);
+            continue;
+        }
+        let target_pos = match manager.moveto_directive_target() {
+            Some(target) => {
+                let pose = world
+                    .scene
+                    .remote_target_pose(target)
+                    .or_else(|| world.entities.get(target).map(|entity| entity.position));
+                if pose.is_none() {
+                    // Target gone: retail cancels 0x37 (acclient.c:346086).
+                    let mut effects = MotionSideEffects::default();
+                    let _ = manager.cancel_moveto_with_effects(0x37, on_contact, &mut effects);
+                    world.scene.set_remote_moveto(guid, false, None, None);
+                    continue;
+                }
+                pose
+            }
+            None => None,
+        };
+        let (self_radius, self_height) = world.combat_part_dims(guid);
+        let view = MoveToView {
+            on_walkable_contact: on_contact,
+            self_pos,
+            self_radius,
+            self_height,
+            target_pos,
+            motions_pending: manager.moveto_motions_pending(),
+            is_interpolating: interpolating,
+            now,
+        };
+        let mut effects = MotionSideEffects::default();
+        let out = manager.use_time_moveto(&view, &mut effects);
+        let drive = match out.steer {
+            Some(MoveToSteer::Walk { target, away, run }) => {
+                let to_target = target.global_coords() - self_pos.global_coords();
+                let planar = Vector3::new(to_target.x, to_target.y, 0.0);
+                if planar.length_squared() > 1e-6 {
+                    let mut heading = Vector3::zero().heading_to(&planar);
+                    if away {
+                        // The away walk faces away (acclient.c:346224-346239).
+                        heading = normalize_heading(heading + std::f32::consts::PI);
+                    }
+                    Some(holtburger_world::spatial::RemoteMoveToDrive {
+                        heading_rad: heading,
+                        forward: Some(run),
+                    })
+                } else {
+                    None
+                }
+            }
+            Some(MoveToSteer::Turn { heading_deg }) => Some(holtburger_world::spatial::RemoteMoveToDrive {
+                heading_rad: normalize_heading(heading_deg.to_radians()),
+                forward: None,
+            }),
+            None => None,
+        };
+        if let Some((target, radius, _height)) = out.stick_to {
+            // Sticky-bit arrival → PositionManager::StickTo
+            // (acclient.c:345553-345566) on the remote sticky lane, with
+            // the same radius sources as the wire install.
+            let resolved = world.combat_sticky_radius(target);
+            let target_radius = if resolved > 0.0 { resolved } else { radius };
+            world
+                .scene
+                .stick_remote_entity_to(guid, target, self_radius, target_radius);
+        }
+        world
+            .scene
+            .set_remote_moveto(guid, manager.is_moveto_active(), drive, out.set_heading);
     }
 }
 

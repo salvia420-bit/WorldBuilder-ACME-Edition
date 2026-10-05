@@ -1682,4 +1682,88 @@ mod tests {
             "FIFO fully drained with the completion stream"
         );
     }
+
+    /// OpenAC comparison 2026-10-04 (remote motion D5): the remote MoveTo
+    /// pump (`system::drive_remote_movetos`) steps a REMOTE manager's
+    /// directive against its scene body — retail runs
+    /// `MoveToManager::UseTime` (acclient.c:346018) for every object — and
+    /// hands the steer to the body: `IsMovingTo()` for keep-heading and a
+    /// heading toward the destination (BeginTurnToHeading :345456 first,
+    /// then the walk). Before this nothing stepped remote directives (the
+    /// registry only pumped completions). Lifecycle cases ported from
+    /// OpenAC `MoveToManagerLifecycleTests` (arm → steer → idle clears).
+    #[test]
+    fn remote_moveto_pump_steers_the_remote_body() {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Quaternion, Vector3};
+        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx, SpatialBodyId};
+
+        let guid = Guid(0x8000_0042);
+        let mut world = holtburger_world::WorldState::synthetic();
+        world.scene.set_remote_interp_enabled(true);
+        let start = WorldPosition {
+            landblock_id: Guid(0x0102_0011),
+            coords: Vector3::new(50.0, 50.0, 0.0),
+            rotation: Quaternion::from_heading(0.0),
+        };
+        world.scene.reconcile_authoritative_body_with_remote(
+            SpatialBodyId::Entity(guid),
+            start,
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Snapshot,
+            web_time::Instant::now(),
+            Some(RemoteCorrectionCtx {
+                contact: Some(true),
+                player_pose: Some(start),
+            }),
+        );
+
+        let mut manager = MovementManager::default();
+        let _ = manager.minterp();
+        // 20 m due east (AC heading 180°) in the same landblock.
+        manager.moveto().move_to_position(
+            Origin {
+                cell_id: Guid(0x0102_0011),
+                position: Vector3::new(70.0, 50.0, 0.0),
+            },
+            MovementParameters::default(),
+        );
+        assert!(manager.is_moveto_active());
+        let mut managers = std::collections::HashMap::new();
+        managers.insert(guid, manager);
+
+        crate::client::movement::system::drive_remote_movetos(
+            &mut managers,
+            &mut world,
+            web_time::Instant::now(),
+        );
+        let body = world.scene.body(SpatialBodyId::Entity(guid)).unwrap();
+        assert!(body.remote_moving_to, "IsMovingTo() feeds keep_heading");
+        let drive = body.remote_moveto.expect("the directive steers the body");
+        let east = 180.0_f32.to_radians();
+        assert!((drive.heading_rad - east).abs() < 0.05, "turns toward the destination: {}", drive.heading_rad);
+
+        // The scene realizes the steer: the body turns toward east.
+        let before = body.pose.rotation.to_heading();
+        world.scene.step_remote_position_managers(0.1);
+        let after = world
+            .scene
+            .body(SpatialBodyId::Entity(guid))
+            .unwrap()
+            .pose
+            .rotation
+            .to_heading();
+        assert!((after - east).abs() < (before - east).abs(), "turned toward east: {before} -> {after}");
+
+        // Escape hatch: the pump does nothing with the switch off.
+        world.scene.set_remote_moveto(guid, false, None, None);
+        world.scene.set_remote_moveto_enabled(false);
+        crate::client::movement::system::drive_remote_movetos(
+            &mut managers,
+            &mut world,
+            web_time::Instant::now(),
+        );
+        assert!(world.scene.body(SpatialBodyId::Entity(guid)).unwrap().remote_moveto.is_none());
+    }
 }

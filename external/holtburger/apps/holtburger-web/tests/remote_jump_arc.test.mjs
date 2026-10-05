@@ -70,3 +70,15 @@ test("the JS-only arc is gone (it was the second body that snapped back)", () =>
   const loop = src("../scene3d/loop.js");
   assert.doesNotMatch(loop, /upd\.weenieFlags, lbId & 0xffff/);
 });
+
+test("D5: ?remoteMoveTo is a default-on wasm flag and the core pump runs every tick", () => {
+  const lib = src("../src/lib.rs");
+  assert.match(lib, /fn parse_remote_moveto_flag\(search: &str\) -> bool \{[\s\S]{0,200}kv == "remoteMoveTo=off"/);
+  for (const f of ["../src/session/messages/login.rs", "../src/session/commands/lifecycle.rs"]) {
+    assert.match(src(f), /new_world\.scene\.set_remote_moveto_enabled\(remote_moveto_on\)/, f);
+  }
+  const sys = src("../../../crates/holtburger-core/src/client/movement/system.rs");
+  assert.match(sys, /drive_remote_movetos\(&mut self\.movement_managers, world, now\);/);
+  const scene = src("../../../crates/holtburger-world/src/spatial/scene.rs");
+  assert.match(scene, /remote_interpolate_to\(body\.pose, pose, body\.remote_moving_to, blip\)/, "keep_heading = IsMovingTo()");
+});

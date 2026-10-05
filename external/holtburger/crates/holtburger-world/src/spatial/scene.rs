@@ -1384,6 +1384,9 @@ pub struct SpatialScene {
     /// [`Self::step_remote_position_managers`] (retail runs
     /// `UpdatePhysicsInternal` on every object). `?remoteJumpArc=off`.
     remote_jump_arc_enabled: bool,
+    /// OpenAC comparison 2026-10-04 (remote motion D5): remote bodies follow
+    /// their client-side MoveTo steer (`?remoteMoveTo=off`).
+    remote_moveto_enabled: bool,
     /// D7: per-tick leave-ground (`true`) / hit-ground (`false`) edges of
     /// remote bodies, drained by the wasm tick next to
     /// [`Self::take_remote_stepped_poses`] into the JS airborne event
@@ -1583,6 +1586,7 @@ impl SpatialScene {
             remote_stepped_poses: HashMap::new(),
             remote_root_motion_enabled: true,
             remote_jump_arc_enabled: true,
+            remote_moveto_enabled: true,
             remote_airborne_changes: Vec::new(),
             local_sticky_target: None,
             remote_sticky_enabled: false,
@@ -1847,6 +1851,17 @@ impl SpatialScene {
     /// `?remoteJumpArc=off` escape for the D7 remote gravity arc.
     pub fn set_remote_jump_arc_enabled(&mut self, enabled: bool) {
         self.remote_jump_arc_enabled = enabled;
+    }
+
+    /// `?remoteMoveTo=off` escape for the D5 remote MoveTo steer.
+    pub fn set_remote_moveto_enabled(&mut self, enabled: bool) {
+        self.remote_moveto_enabled = enabled;
+    }
+
+    /// True when the remote MoveTo pump should run (the switch AND the
+    /// remote body driver that realizes its steer).
+    pub fn remote_moveto_active(&self) -> bool {
+        self.remote_moveto_enabled && self.remote_interp_enabled
     }
 
     /// True when remote bodies fly their own arc (the arc switch AND the
@@ -5260,7 +5275,7 @@ impl SpatialScene {
                         };
                         let queued = body
                             .position_manager
-                            .remote_interpolate_to(body.pose, pose, false, blip);
+                            .remote_interpolate_to(body.pose, pose, body.remote_moving_to, blip);
                         if queued {
                             let start = if indoor {
                                 CONSTRAINT_LEASH_INDOOR_M
@@ -5449,11 +5464,26 @@ impl SpatialScene {
                     && !body.position_manager.queue_active()
                     && body.last_wire_contact.unwrap_or(true)
                     && !self.remote_sticky_targets.contains_key(&guid);
-                let v_local = if walk { body.state_velocity_local() } else { Vector3::zero() };
-                let walk_v = if v_local.x != 0.0 || v_local.y != 0.0 {
-                    body.pose.rotation.rotate_vector(v_local)
-                } else {
-                    Vector3::zero()
+                // D5: an active remote MoveTo steer supplies the motion the
+                // retail MoveToManager `_DoMotion`s (RunForward / WalkForward
+                // — walk 3.12, run 4.0 × run rate, the get_state_velocity
+                // constants; a turn node moves nothing forward).
+                let drive = if self.remote_moveto_enabled { body.remote_moveto } else { None };
+                let walk_v = match drive {
+                    Some(super::RemoteMoveToDrive { heading_rad, forward: Some(run) }) if walk => {
+                        let speed = if run { 4.0 * body.my_run_rate } else { 3.12 };
+                        holtburger_common::Quaternion::from_heading(heading_rad)
+                            .rotate_vector(Vector3::new(0.0, speed, 0.0))
+                    }
+                    Some(_) => Vector3::zero(),
+                    None => {
+                        let v_local = if walk { body.state_velocity_local() } else { Vector3::zero() };
+                        if v_local.x != 0.0 || v_local.y != 0.0 {
+                            body.pose.rotation.rotate_vector(v_local)
+                        } else {
+                            Vector3::zero()
+                        }
+                    }
                 };
                 let sliding = self.remote_jump_arc_enabled && body.remote_velocity != Vector3::zero();
                 if walk_v == Vector3::zero() && !sliding {
@@ -5542,6 +5572,36 @@ impl SpatialScene {
                 continue;
             };
             let mut stepped = false;
+            // D5: turn toward the MoveTo heading at the retail turn rate
+            // (the TurnRight cycle's π/2 rad/s — motion-table data,
+            // unverified — × the run turn factor 1.5 of
+            // `apply_run_to_command`, acclient.c:343469). The heading rides
+            // the export as a heading-owned row (the sticky-row channel: JS
+            // applies its quaternion).
+            if self.remote_moveto_enabled
+                && body.remote_arc.is_none()
+                && let Some(drive) = body.remote_moveto
+            {
+                let rate = if drive.forward == Some(true) {
+                    std::f32::consts::FRAC_PI_2 * 1.5
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                };
+                let current = body.pose.rotation.to_heading();
+                let mut diff = (drive.heading_rad - current) % std::f32::consts::TAU;
+                if diff > std::f32::consts::PI {
+                    diff -= std::f32::consts::TAU;
+                } else if diff < -std::f32::consts::PI {
+                    diff += std::f32::consts::TAU;
+                }
+                let max = rate * quantum;
+                let turn = diff.clamp(-max, max);
+                if turn.abs() > 1e-5 {
+                    body.pose.rotation = holtburger_common::Quaternion::from_heading(current + turn);
+                    self.remote_sticky_stepped.insert(guid);
+                    stepped = true;
+                }
+            }
             if let Some(&(next, v, leave_ground)) = ground_moves.get(&guid) {
                 body.pose = next;
                 body.remote_velocity = v;
@@ -5791,6 +5851,46 @@ impl SpatialScene {
         self.body_store
             .body(SpatialBodyId::Entity(guid))
             .and_then(|body| body.remote_arc)
+    }
+
+    /// D5 — what the remote MoveTo pump needs from a remote body: its pose,
+    /// its own walkable contact (retail `transient_state & 1`, the
+    /// `MoveToManager::UseTime` gate acclient.c:346024) and whether its
+    /// interpolation queue is active.
+    pub fn remote_moveto_view(&self, guid: Guid) -> Option<(WorldPosition, bool, bool)> {
+        let body = self.body_store.body(SpatialBodyId::Entity(guid))?;
+        let on_contact = body.remote_arc.is_none() && body.last_wire_contact != Some(false);
+        Some((body.pose, on_contact, body.position_manager.queue_active()))
+    }
+
+    /// D5 — install this slice's remote MoveTo state: `moving_to` is
+    /// `IsMovingTo()` (keep_heading), `drive` the steer (None = no steer),
+    /// `snap_heading` a HandleTurnToHeading arrival snap (acclient.c:345746).
+    pub fn set_remote_moveto(
+        &mut self,
+        guid: Guid,
+        moving_to: bool,
+        drive: Option<super::RemoteMoveToDrive>,
+        snap_heading: Option<f32>,
+    ) {
+        let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
+            return;
+        };
+        body.remote_moving_to = moving_to;
+        body.remote_moveto = drive;
+        if let Some(heading) = snap_heading {
+            body.pose.rotation = holtburger_common::Quaternion::from_heading(heading);
+            let pose = body.pose;
+            self.remote_sticky_stepped.insert(guid);
+            self.remote_stepped_poses.insert(guid, pose);
+        }
+    }
+
+    /// D5 — best-known live pose of a MoveTo target (the same resolution
+    /// the remote sticky lane uses: the target's own body, the local
+    /// player's body, then the wire-fed pose).
+    pub fn remote_target_pose(&self, target: Guid) -> Option<WorldPosition> {
+        self.resolve_remote_sticky_target_pose(target)
     }
 
     /// A2-P3 R2 — a REMOTE entity's current sticky target (diag/tests).

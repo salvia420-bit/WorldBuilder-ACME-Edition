@@ -14,6 +14,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         remote_interp_on,
         remote_root_motion_on,
         remote_jump_arc_on,
+        remote_moveto_on,
         remote_sticky_on,
         combat_radii_on,
         server_run_rate_on,
@@ -252,6 +253,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 new_world.set_remote_sticky_enabled(remote_sticky_on);
                 new_world.scene.set_remote_root_motion_enabled(remote_root_motion_on);
                 new_world.scene.set_remote_jump_arc_enabled(remote_jump_arc_on);
+                new_world.scene.set_remote_moveto_enabled(remote_moveto_on);
                 // COMBAT-RADII (2026-07-28): size-aware
                 // standoffs (?combatRadii, default ON).
                 new_world.set_combat_radii_enabled(combat_radii_on);

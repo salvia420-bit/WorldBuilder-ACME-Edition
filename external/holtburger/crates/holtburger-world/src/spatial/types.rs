@@ -302,6 +302,29 @@ pub struct SpatialBody {
     /// D7: `Some` while the remote body is out of contact and flying its
     /// own arc (retail transient CONTACT clear), `None` on the ground.
     pub remote_arc: Option<RemoteArc>,
+    /// OpenAC comparison 2026-10-04 (remote motion D5): retail
+    /// `CPhysicsObj::IsMovingTo` (acclient.c:315822 → :339312) for a REMOTE
+    /// body — its MoveToManager has an active directive. Feeds
+    /// `InterpolateTo(p, IsMovingTo())` (`MoveOrTeleport` :323492) as
+    /// `keep_heading`, so wire headings do not fight the client steer.
+    pub remote_moving_to: bool,
+    /// D5: this slice's MoveTo steer for a remote body (the motions the
+    /// remote MoveToManager would `_DoMotion`), set by the movement system's
+    /// remote MoveTo pump. `None` = no steer (idle / arrived / turn done).
+    pub remote_moveto: Option<RemoteMoveToDrive>,
+}
+
+/// OpenAC comparison 2026-10-04 (remote motion D5) — one remote MoveTo
+/// steer: face `heading_rad` (AC heading, the `Quaternion::from_heading`
+/// convention) and, for a walk/run node, advance forward. Ported in spirit
+/// from OpenAC `RuntimeRemotePhysicsUpdater` (moveToArmed) — the steering
+/// itself comes from holtburger-core's retail `MoveToManager` port.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemoteMoveToDrive {
+    pub heading_rad: f32,
+    /// `Some(run)` while a walk/run node is active (`MoveToSteer::Walk`);
+    /// `None` for a turn-in-place node.
+    pub forward: Option<bool>,
 }
 
 /// OpenAC comparison 2026-10-04 (remote motion D7) — the airborne state of
@@ -336,6 +359,8 @@ impl SpatialBody {
             my_run_rate: 1.0,
             remote_velocity: Vector3::zero(),
             remote_arc: None,
+            remote_moving_to: false,
+            remote_moveto: None,
         }
     }
 
@@ -354,6 +379,8 @@ impl SpatialBody {
             my_run_rate: 1.0,
             remote_velocity: Vector3::zero(),
             remote_arc: None,
+            remote_moving_to: false,
+            remote_moveto: None,
         }
     }
 
