@@ -37,6 +37,7 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 - [x] **Grass in front of doorways** stays visible and isn't painted over by the interior. — **2026-10-05 owner:** grass blades are off by default (`&terrainGrass=on`), so this is not testable on the default URL.
 - [x] **No black box** anywhere, including with anti-aliasing on (`msaa` default). — **2026-10-05 owner:** owner suspects a flickering green light in the distance (late July/early August 'bouncing lights'). Being investigated.
 - [ ] **A/B:** if anything is off, compare with `&punchRetail=off`.
+- [ ] **Black patches near town buildings (2026-10-05 history research):** at a black spot run `JSON.stringify(__diag.lights().bad)`, `__indoorDepthSplit`, `JSON.stringify(liveScene3d._portalPunchDiag)`. Then try one reload each with `&nanScrub=off`, `&sealLogDepth=on`, `&indoorDepthSplit=off`, `&punchRetail=off`, `&portalPunch=off`, `&msaa=off` and note which one changes it. `nanScrub` is now on by default, so if the patches are gone entirely, the cause was a non-finite shader value.
 - [ ] **Indoor seal:** standing inside, compare `&sealLogDepth=on` against the bare URL at a doorway. Outdoor particles and terrain seen through the door should sort correctly with `=on`.
 
 ## Spells / effects

@@ -1055,6 +1055,29 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // `?horizonFade=off` and dropped by filter(Boolean).
     ...[heatHaze, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
   );
+  // NaN/Inf scrub (2026-10-05, `?nanScrub=off` escape). One non-finite pixel
+  // in the HDR scene buffer is smeared across the screen by the bloom mip-blur
+  // (and propagates through aerial perspective) — the recurring "black patch"
+  // shape. Bloom blurs the RAW input buffer in its own update, before the
+  // effects merged into fxPass run, so the scrub must be its OWN pass ahead of
+  // fxPass, not an effect inside it. Worst case a bad shader now costs single
+  // black pixels instead of patches. One cheap fullscreen pass.
+  const nanScrubOn = (() => {
+    try {
+      return new URLSearchParams(globalThis.location?.search || "").get("nanScrub")?.toLowerCase() !== "off";
+    } catch (_) { return true; }
+  })();
+  if (nanScrubOn) {
+    const scrub = new Effect(
+      "NanScrub",
+      /* glsl */ `
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+        bool bad = any(isnan(inputColor)) || any(isinf(inputColor));
+        outputColor = bad ? vec4(0.0, 0.0, 0.0, 1.0) : inputColor;
+      }`,
+    );
+    composer.addPass(new EffectPass(camera, scrub));
+  }
   composer.addPass(fxPass);
 
   // Live tuning handle for the 1070 eye-test, mirroring `window.__horizonFade`:
