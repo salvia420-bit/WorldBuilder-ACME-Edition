@@ -2548,7 +2548,13 @@ fn test_remote_update_position_force_advance_moves_without_forced_reposition() {
 }
 
 /// D9: a remote's force stamp is not consulted (acclient.c:145157-145165),
-/// so an older force stamp with a newer POSITION stamp still applies.
+/// so an older force stamp with a newer POSITION stamp still applies
+/// (`HandleReceivedPosition` :145125-145240 → `MoveOrTeleport`
+/// interpolates). The pre-D9 version of this test expected the frame to be
+/// REJECTED and pinned that the entity therefore stayed in the player's
+/// landblock; under retail the frame is accepted, so the new pose is kept
+/// in the player's landblock here and the nearby check pins that an
+/// accepted, non-reset move keeps the spatial index current.
 #[test]
 fn test_remote_update_position_ignores_a_regressed_force_sequence() {
     let mut state = WorldState::synthetic();
@@ -2571,7 +2577,7 @@ fn test_remote_update_position_ignores_a_regressed_force_sequence() {
         guid,
         pos: PositionPack {
             pos: WorldPosition {
-                landblock_id: Guid(0x2020FFFF),
+                landblock_id: Guid(0x0A0AFFFF),
                 coords: Vector3::new(40.0, 50.0, 60.0),
                 rotation: holtburger_common::math::Quaternion::identity(),
             },
