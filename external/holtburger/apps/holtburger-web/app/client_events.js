@@ -1874,11 +1874,11 @@ export function dispatchClientEvent(evt, D) {
         // Retail HandleSoundEvent queues the message on the unknown
         // object and plays it when the object arrives (acclient.c:
         // 143340-143345, QueueBlobForObject 310848-310861; dropped
-        // 25 s after the first, 310666). A replay never re-queues.
+        // 25 s after the LAST queued sound, 310666). A replay never re-queues.
         if (!replay) {
           // Replayed synchronously by the entity-insert hook
-          // (entities.js -> drainPendingObjectSounds); one 25 s deadline
-          // per guid from its first queued sound.
+          // (entities.js -> drainPendingObjectSounds); one sliding 25 s
+          // deadline per guid, re-armed by each queued sound.
           pendingObjectSounds.add(sndGuid, () => runServerSound(true));
           stats.queuedForObject = (stats.queuedForObject | 0) + 1;
         }

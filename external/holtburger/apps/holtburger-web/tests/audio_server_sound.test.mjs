@@ -166,16 +166,20 @@ await test("entities.js insert hook drains queued object sounds", async () => {
   const at = src.indexOf("drainPendingPlayEffects(this, guid);");
   assert.ok(at > 0 && src.slice(at, at + 300).includes("drainPendingObjectSounds(guid)"));
 });
-await test("one 25 s deadline per guid, from the first queued sound", () => {
+// Retail GetObjectA (309376) never returns the null object, so each blob
+// re-runs AddObjectToBeDestroyed (310650-310672): the 25 s timer slides
+// from the LAST queued sound. Old code kept the first sound's deadline and
+// dropped both at 25.001 s.
+await test("the 25 s deadline slides: a sound queued at 20 s keeps both alive at 25.001 s", () => {
   let t = 0;
   const q = new rules.PendingObjectSounds({ now: () => t });
   let played = 0;
   q.add(1, () => { played++; });
-  t = 20000; q.add(1, () => { played++; });   // joins the first deadline
-  t = 24000; q.prune(t);
-  assert.equal(q.size, 2);
+  t = 20000; q.add(1, () => { played++; });   // re-arms to 45 s
   t = 25001; q.prune(t);
-  assert.equal(q.size, 0, "second sound expires with the first (shared deadline)");
+  assert.equal(q.size, 2, "both still queued");
+  t = 45001; q.prune(t);
+  assert.equal(q.size, 0);
   assert.equal(q.expired, 2);
   assert.equal(played, 0);
 });

@@ -114,12 +114,14 @@ export async function playUiSound(live, soundType, opts = {}) {
 /**
  * Sounds for objects the client does not know yet. Retail
  * SmartBox::HandleSoundEvent (acclient.c:143333-143350) queues the blob on
- * a null object (CObjectMaint::QueueBlobForObject 310848-310861): the FIRST
- * blob for an unknown id creates the null object and schedules its
- * destruction once, at cur_time + 25.0 (AddObjectToBeDestroyed 310666);
- * later blobs for the same id join that object and share its deadline. The
- * blobs are replayed when the real object is created. Here: one deadline
- * per guid from its first queue; `drain(guid)` replays synchronously and is
+ * a null object (CObjectMaint::QueueBlobForObject 310848-310861). GetObjectA
+ * (309376) only searches the real object table, so EVERY blob for a
+ * not-yet-created id calls AddObjectToBeDestroyed again (310650-310672),
+ * which removes the old entry and re-arms destruction at cur_time + 25.0;
+ * CObjectMaint::UseTime (310246-310270) ignores the stale queue entries.
+ * So the 25 s deadline SLIDES from the LAST queued blob. The blobs are
+ * replayed when the real object is created. Here: one sliding deadline per
+ * guid; `drain(guid)` replays synchronously and is
  * called from the entity-insert hook (entities.js, next to
  * drainPendingPlayEffects).
  */
@@ -145,9 +147,11 @@ export class PendingObjectSounds {
     const g = guid >>> 0;
     let e = this.byGuid.get(g);
     if (!e) {
-      e = { deadline: now + OBJECT_BLOB_TTL_S * 1000, replays: [] };
+      e = { deadline: 0, replays: [] };
       this.byGuid.set(g, e);
     }
+    // Every queued blob re-arms the timer (AddObjectToBeDestroyed 310666).
+    e.deadline = now + OBJECT_BLOB_TTL_S * 1000;
     e.replays.push(replay);
   }
 
