@@ -157,6 +157,7 @@ const TIER4 = [
   { flag: "limbs", file: "tests/limbs.test.mjs" },
   { flag: "bloodDecals", file: "tests/blood_decals.test.mjs" },
   { flag: "ragdollEnv", file: "tests/ragdoll_env.test.mjs" },
+  { flag: "projectileLights+projectileLaunchClock+projectileTerrainStop", file: "tests/projectile_visual_fidelity.test.mjs" },
   { flag: "ragdollEnergy", file: "tests/ragdoll_energy.test.mjs" },
   { flag: "killImpulse", file: "tests/kill_impulse.test.mjs" },
   { flag: "gfxRelief", file: "tests/gfx_relief.test.mjs" },

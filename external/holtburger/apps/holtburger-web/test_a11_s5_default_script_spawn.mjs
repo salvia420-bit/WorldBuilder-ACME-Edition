@@ -611,7 +611,9 @@ function armResolverFor(guid, did = 0x33000a02) {
 // ---- static wiring pins (the real spawn-arm + hook 17/18 routing) -----
 check(
   "spawn arm: _resolveDefaultScriptDid gated on DEFAULT_SCRIPT_SPAWN_ON && pesId===0 && !_particleChainsAttached.has(guid)",
-  /DEFAULT_SCRIPT_SPAWN_ON\s*&&\s*\n\s*pesId === 0\s*&&\s*\n\s*!this\._particleChainsAttached\.has\(guid\)/.test(entitiesSrc),
+  // PROJ-VIS (2026-10-05): a MISSILE skip clause (its wire default_script is
+  // the collision script) may sit between pesId===0 and the idempotency check.
+  /DEFAULT_SCRIPT_SPAWN_ON\s*&&\s*\n\s*pesId === 0\s*&&\s*\n(?:\s*\/\/[^\n]*\n)*(?:\s*!\(PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON && inst\._isProjectile === true\)\s*&&\s*\n)?\s*!this\._particleChainsAttached\.has\(guid\)/.test(entitiesSrc),
 );
 check(
   "spawn arm: drops despawn-mid-resolve (!this.entityMap.has(guid)) and re-checks the idempotency set",
