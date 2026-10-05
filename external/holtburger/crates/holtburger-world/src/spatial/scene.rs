@@ -903,6 +903,24 @@ pub struct SpatialScene {
     /// `populateBuildingAabbsForLandblock`; cleared per-landblock by
     /// `clear_building_aabbs_for_landblock`.
     building_origins: Arc<HashMap<BuildingId, (f32, f32)>>,
+    /// OpenAC comparison 2026-10-04 (collision F1): retail's building
+    /// portal list per OUTDOOR landcell — `CSortCell::building` →
+    /// `CBuildingObj::portals[i]->other_cell_id`, the EnvCells an outdoor
+    /// mover can transit into (`CLandCell::find_transit_cells`
+    /// acclient.c:355423 → `CSortCell::find_transit_cells` :356087 →
+    /// `CBuildingObj::find_building_transit_cells` :719068 →
+    /// `CEnvCell::check_building_transit` :348110). Keyed by the full
+    /// outdoor cell id the building is registered on
+    /// (`CLandBlock::init_buildings` :352114 — the landcell containing the
+    /// building origin); values are full EnvCell ids. Populated by
+    /// [`Self::set_landblock_building_portals`], cleared with the other
+    /// building tables in [`Self::clear_building_aabbs_for_landblock`].
+    building_transit_cells: Arc<HashMap<u32, Vec<u32>>>,
+    /// Landblock high words whose building portal list has been registered
+    /// (even an empty one). The faithful bridge only trusts the driver's
+    /// outdoor→EnvCell pick once this landblock's buildings are known;
+    /// before that it keeps the legacy entry test.
+    building_portal_landblocks: Arc<HashSet<u32>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space AABB index for non-building outdoor static placements
     /// (signs, props, trees). Keyed by the landblock high word (the
@@ -1278,6 +1296,8 @@ impl SpatialScene {
             door_part_index: HashMap::new(),
             open_door_exclusion_aabbs: HashMap::new(),
             building_origins: Arc::new(HashMap::new()),
+            building_transit_cells: Arc::new(HashMap::new()),
+            building_portal_landblocks: Arc::new(HashSet::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
@@ -1625,7 +1645,89 @@ impl SpatialScene {
         // Landblock` pass), so they get torn down together.
         Arc::make_mut(&mut self.building_physics_index)
             .remove(&(landblock_id & 0xFFFF_0000));
+        // Collision F1: the building portal lists share the building
+        // lifetime (same LandBlockInfo pass).
+        self.clear_landblock_building_portals(landblock_id);
         removed
+    }
+
+    /// OpenAC comparison 2026-10-04 (collision F1): register a landblock's
+    /// building portals — what retail's `CLandBlock::init_buildings`
+    /// (acclient.c:352114) does when it builds a `CBuildingObj` per
+    /// `LandBlockInfo` building and adds it to a landcell. Replaces any
+    /// previous list for the landblock and marks its buildings known
+    /// ([`Self::building_portals_resident`]), even when it has none.
+    ///
+    /// Each entry is one `BuildInfo`: its frame origin (landblock-local, as
+    /// stored in the DAT) and its portals as `(other_cell_id,
+    /// other_portal_id)` raw `u16`s (`CBldPortal::UnPack` :362517).
+    ///   * Owning landcell: `LandDefs::adjust_to_outside(lb, origin)` then
+    ///     `CLandBlock::get_landcell` on THIS landblock (:352169-352170), i.e.
+    ///     the in-block cell `floor(x/24)·8 + floor(y/24) + 1`. A building
+    ///     whose origin lies outside the landblock has no landcell here and
+    ///     is dropped, as retail deletes it (:352180).
+    ///   * EnvCell id: `block_mask | other_cell_id` (:362520).
+    ///   * `other_portal_id` is read as a signed short (:362523); a negative
+    ///     id never transits (`check_building_transit`'s `portal_id >= 0`,
+    ///     :348123), so such portals are not stored.
+    pub fn set_landblock_building_portals(
+        &mut self,
+        landblock_id: u32,
+        buildings: &[(Vector3, Vec<(u16, u16)>)],
+    ) {
+        self.clear_landblock_building_portals(landblock_id);
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let table = Arc::make_mut(&mut self.building_transit_cells);
+        for (origin, portals) in buildings {
+            // `LandDefs::adjust_to_outside`'s near-zero pre-snap (ACE
+            // LandDefs.cs:131-134, the same constant the bridge uses).
+            let snap = |c: f32| if c.abs() < 0.0002 { 0.0 } else { c };
+            let cx = (snap(origin.x) / CELL_SIZE).floor();
+            let cy = (snap(origin.y) / CELL_SIZE).floor();
+            if !(0.0..8.0).contains(&cx) || !(0.0..8.0).contains(&cy) {
+                continue;
+            }
+            let landcell = lb_high | ((cx as u32) * 8 + (cy as u32) + 1);
+            for &(other_cell, other_portal) in portals {
+                if (other_portal as i16) < 0 {
+                    continue;
+                }
+                let env = lb_high | u32::from(other_cell);
+                let cells = table.entry(landcell).or_default();
+                if !cells.contains(&env) {
+                    cells.push(env);
+                }
+            }
+        }
+        Arc::make_mut(&mut self.building_portal_landblocks).insert(lb_high);
+        self.bump_collision_rev();
+    }
+
+    /// Drop a landblock's building portal lists (and its "known" mark).
+    pub fn clear_landblock_building_portals(&mut self, landblock_id: u32) {
+        let lb_high = landblock_id & 0xFFFF_0000;
+        if !self.building_portal_landblocks.contains(&lb_high) {
+            return;
+        }
+        Arc::make_mut(&mut self.building_transit_cells)
+            .retain(|cell, _| (*cell & 0xFFFF_0000) != lb_high);
+        Arc::make_mut(&mut self.building_portal_landblocks).remove(&lb_high);
+        self.bump_collision_rev();
+    }
+
+    /// The EnvCells behind the building portals of the building registered
+    /// on outdoor landcell `cell_id` (empty when it has no building).
+    pub fn building_transit_cells(&self, cell_id: u32) -> &[u32] {
+        self.building_transit_cells
+            .get(&cell_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Has `cell_id`'s landblock had its building portals registered?
+    pub fn building_portals_resident(&self, cell_id: u32) -> bool {
+        self.building_portal_landblocks
+            .contains(&(cell_id & 0xFFFF_0000))
     }
 
     pub fn building_aabb_count(&self) -> usize {
@@ -4013,6 +4115,11 @@ impl SpatialScene {
             for lb in &lbs {
                 idx.remove(lb);
             }
+        }
+        // Collision F1: the building portal lists (same lifetime).
+        if !self.building_portal_landblocks.is_empty() {
+            Arc::make_mut(&mut self.building_transit_cells).retain(|cell, _| !in_set(*cell));
+            Arc::make_mut(&mut self.building_portal_landblocks).retain(|lb| !in_set(*lb));
         }
 
         // Statics family (keyed directly by landblock high word).

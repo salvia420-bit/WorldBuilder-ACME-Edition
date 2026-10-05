@@ -205,6 +205,16 @@ pub struct SceneObjCell {
     /// OWN world frame (non-Euclidean-safe: portal connectivity, not spatial
     /// overlap — gmriggs/trevis).
     resolved_neighbours: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)>,
+    /// OpenAC comparison 2026-10-04 (collision F1): for an OUTDOOR landcell
+    /// that has a building registered on it, the EnvCells behind that
+    /// building's portals (`CSortCell::building` → `CBldPortal::GetOtherCell`
+    /// → `CEnvCell::GetVisible`, acclient.c:719082 / :362493), each with its
+    /// cell-membership BSP for `CEnvCell::check_building_transit`'s
+    /// sphere-vs-cell gate (:348110). Before this, outdoor cells carried NO
+    /// building list, so from outdoors no EnvCell ever entered the cell
+    /// array and walking into a building or dungeon mouth was left to a
+    /// heuristic outside the driver. Empty for indoor cells.
+    building_cells: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)>,
     /// DUNGEON-MOUTH (2026-08-13): the WORLD-space planes of this cell's
     /// EXTERIOR portals — the portals whose `other_cell_id` carries AC's
     /// outdoor sentinel (`CCellPortal::UnPack`, `acclient.c:362396-362398`,
@@ -491,8 +501,35 @@ impl CObjCell for SceneObjCell {
         num_sphere: u32,
         spheres: &[Sphere],
         cell_array: &mut dyn CellArrayApi,
-        _path: Option<&mut SpherePath>,
+        mut path: Option<&mut SpherePath>,
     ) {
+        // OUTDOOR landcell (collision F1): `CLandCell::find_transit_cells`
+        // (acclient.c:355423) = `add_all_outside_cells` (already done by
+        // `find_cell_list`'s outdoor branch for the same `p`, and idempotent)
+        // + `CSortCell::find_transit_cells` (:356087) →
+        // `CBuildingObj::find_building_transit_cells` (:719068): for every
+        // building portal whose other cell is resident,
+        // `CEnvCell::check_building_transit` (:348110) adds that cell when
+        // any sphere intersects it (`CCellStruct::sphere_intersects_cell`,
+        // :348139) and sets `path->hits_interior_cell` (:348146-348147).
+        // Ported from OpenAC `CellTransit.CheckBuildingTransit`
+        // (CellTransit.cs:407-462). A cell with no resident membership BSP
+        // is added ungated, the convention the portal flood below uses.
+        for (id, handle, membership) in &self.building_cells {
+            let reaches = match membership {
+                Some(m) => spheres.iter().take(num_sphere as usize).any(|s| {
+                    let local = m.world_to_local(s.center);
+                    m.tree.sphere_intersects_cell(&local, s.radius) != CellBound::Outside
+                }),
+                None => true,
+            };
+            if reaches {
+                if let Some(path) = path.as_deref_mut() {
+                    path.hits_interior_cell = true;
+                }
+                cell_array.add_cell(*id, Some(handle.clone()));
+            }
+        }
         // `CEnvCell::find_transit_cells` (acclient.c:348250) floods the portal
         // ring, but only the neighbours the moving spheres actually reach:
         // `CCellStruct::sphere_intersects_cell` (acclient.c:355502 →
@@ -761,6 +798,7 @@ impl<'a> SceneWorld<'a> {
             aabb,
             portal_neighbours,
             resolved_neighbours,
+            building_cells: Vec::new(),
             exterior_portal_planes: exterior_portal_planes(self.scene, cell_id),
             // E3.2: precise membership BSP for this cell (falls back to AABB if absent).
             membership: self.scene.cell_membership(cell_id).cloned(),
@@ -1158,6 +1196,26 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         None => (WaterType::NotWater, [false; 4]),
     };
 
+    // Collision F1: `CSortCell::building`'s portal targets, resolved like
+    // `CBldPortal::GetOtherCell` → `CEnvCell::GetVisible` (acclient.c:362493)
+    // through the cached `get_visible` (a non-resident cell is skipped — the
+    // decomp's `if (v9)` at :719083).
+    let building_cells: Vec<(u32, ObjCellHandle, Option<Arc<CellMembership>>)> = {
+        let ids = scene.building_transit_cells(cell_id);
+        if ids.is_empty() {
+            Vec::new()
+        } else {
+            let world = SceneWorld::new(scene);
+            ids.iter()
+                .filter_map(|&env| {
+                    world
+                        .get_visible(env)
+                        .map(|h| (env, h, scene.cell_membership(env).cloned()))
+                })
+                .collect()
+        }
+    };
+
     Rc::new(SceneObjCell {
         cell_id,
         pos,
@@ -1166,6 +1224,7 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         aabb: Some(aabb),
         portal_neighbours: Vec::new(),
         resolved_neighbours: Vec::new(),
+        building_cells,
         // Outdoor CLandCell: the ring is seeded unconditionally by
         // `find_cell_list`'s `< 0x100` branch, so it never asks for it again.
         exterior_portal_planes: Vec::new(),
@@ -1671,9 +1730,9 @@ pub fn faithful_find_transitional_position(
     //   * an EnvCell that does not contain the sphere centre (the F2
     //     keep-previous-cell deviation in `check_other_cells`, or a
     //     zero-step transition that never ran `find_cell_list`);
-    //   * an outdoor answer from an outdoor start: outdoor cells carry no
-    //     building portal list yet, so the driver cannot see an EnvCell from
-    //     outdoors at all (collision F1(a/b)).
+    //   * an outdoor answer from an outdoor start whose landblock's building
+    //     portals are not registered yet — without them the driver cannot
+    //     see an EnvCell from outdoors at all.
     // Both legacy tests now take the sphere centre too (F3).
     if input.gates.local_envcell_entry {
         let centre_world = Vector3::new(
@@ -1689,7 +1748,7 @@ pub fn faithful_find_transitional_position(
                 .get_visible(driver_cell)
                 .filter(|cell| cell.point_in_cell(centre_world))
                 .map(|_| driver_cell)
-        } else if !outdoor {
+        } else if !outdoor || scene.building_portals_resident(begin_cell) {
             Some(driver_cell)
         } else {
             None
@@ -2707,6 +2766,119 @@ mod drift {
             origin: cell_origin(),
             orientation: Quaternion::identity(),
         }
+    }
+
+    /// A building-interior EnvCell on flat terrain. Its door plane is the
+    /// cell-local x = 0 plane (world x = FCX, landblock-local); the room
+    /// (hull, floor, AABB) lies on the +x side, floor flush with the terrain.
+    /// `building_portals`: `None` ⇒ the landblock's buildings are not
+    /// registered at all; `Some(list)` ⇒ registered with that list.
+    fn building_env(building_portals: Option<Vec<(Vector3, Vec<(u16, u16)>)>>) -> DriftEnv {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(0.0, HE, 0.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        scene.insert_cell_membership(
+            CELL_ID,
+            membership_at_cell_origin(&[
+                (v(1.0, 0.0, 0.0), 0.0),  // x >= 0 (inside the door)
+                (v(0.0, 0.0, -1.0), 4.0), // z <= 4 (under the ceiling)
+            ]),
+        );
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(v(o.x, o.y - HE, FLOOR_WZ - 1.0), v(o.x + HE, o.y + HE, FLOOR_WZ + 4.0)),
+        );
+        scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        if let Some(list) = building_portals {
+            scene.set_landblock_building_portals(LB_ID, &list);
+        }
+        DriftEnv { scene }
+    }
+
+    /// Walk from 0.8 m outside the door to 0.6 m inside it.
+    fn walk_through_the_door(env: &DriftEnv) -> TransitionOutcome {
+        let outdoor = |x: f32, z: f32| WorldPosition {
+            landblock_id: Guid((LB_ID & 0xFFFF_0000) | 0x0001),
+            coords: v(x, FCY, z),
+            rotation: Quaternion::identity(),
+        };
+        let input = input_for(outdoor(FCX - 0.8, FLOOR_WZ), outdoor(FCX + 0.6, FLOOR_WZ - SINK));
+        faithful_find_transitional_position(env, &input, true, true)
+    }
+
+    /// `CLandBlock::init_buildings` registration (acclient.c:352114): a
+    /// building lands on the landcell holding its origin; a negative
+    /// `other_portal_id` never transits (`check_building_transit`'s
+    /// `portal_id >= 0`, :348123); a building outside the landblock is
+    /// dropped; unloading clears the lists and the "known" mark.
+    #[test]
+    fn building_portals_register_on_the_landcell_holding_the_building() {
+        let lb = 0x1234_0000u32;
+        let mut scene = SpatialScene::new();
+        assert!(!scene.building_portals_resident(lb | 0x0001));
+        scene.set_landblock_building_portals(
+            lb,
+            &[
+                // origin (30, 50) → cell column 1, row 2 → low word 1·8+2+1 = 0x0B.
+                (v(30.0, 50.0, 3.0), vec![(0x0100, 0), (0x0101, 0xFFFF), (0x0102, 2)]),
+                // Origin beyond the landblock's +x edge: no landcell here.
+                (v(200.0, 5.0, 0.0), vec![(0x0103, 0)]),
+            ],
+        );
+        assert!(scene.building_portals_resident(lb | 0x0001));
+        assert_eq!(scene.building_transit_cells(lb | 0x000B), &[lb | 0x0100, lb | 0x0102]);
+        assert!(scene.building_transit_cells(lb | 0x0001).is_empty());
+        scene.clear_building_aabbs_for_landblock(lb);
+        assert!(!scene.building_portals_resident(lb | 0x0001));
+        assert!(scene.building_transit_cells(lb | 0x000B).is_empty());
+    }
+
+    /// F1(a/b): walking through a building's door from outdoors ends inside
+    /// the building's EnvCell — reached the retail way, through the outdoor
+    /// landcell's building portal (`CBuildingObj::find_building_transit_cells`
+    /// → `CEnvCell::check_building_transit`, acclient.c:719068 / :348110),
+    /// and committed by the driver's own `point_in_cell` pick.
+    #[test]
+    fn walking_through_a_building_door_enters_its_cell_through_the_portal() {
+        // The building's origin is on the landcell the mover walks on.
+        let env = building_env(Some(vec![(v(FCX, FCY, 0.0), vec![(0x0100, 0)])]));
+        let out = walk_through_the_door(&env);
+        assert_eq!(
+            out.pose.landblock_id,
+            Guid(CELL_ID),
+            "did not enter the building cell through its portal"
+        );
+        assert!(
+            out.pose.coords.z >= FLOOR_WZ - 0.05,
+            "sank through the floor entering a building: z={}",
+            out.pose.coords.z
+        );
+    }
+
+    /// F1: an EnvCell that is NOT behind a building portal can never be
+    /// entered from outdoors, even when the sphere centre is inside its hull
+    /// (a dungeon / tunnel room whose hull pokes out of the hillside).
+    /// Retail's outdoor cell array only ever gains EnvCells through
+    /// `CSortCell::building` (acclient.c:356087). The old code flipped the
+    /// player into any EnvCell of the landblock whose hull held the centre —
+    /// a cell the driver never saw, whose array then had no terrain.
+    #[test]
+    fn an_envcell_with_no_building_portal_is_not_entered_from_outdoors() {
+        // Buildings registered for the landblock — none leads to CELL_ID.
+        let env = building_env(Some(Vec::new()));
+        let out = walk_through_the_door(&env);
+        assert!(
+            !out.pose.is_indoors(),
+            "entered 0x{:08X}, which no building portal leads to",
+            out.pose.landblock_id.0
+        );
+        assert!(
+            out.pose.coords.z >= FLOOR_WZ - 0.05,
+            "sank below the terrain: z={}",
+            out.pose.coords.z
+        );
     }
 
     /// F1(c): the cell a move ends in is the driver's. Walking out of a
