@@ -28,6 +28,35 @@
 // with distanceModel "exponential" gives WebAudio gain = (max(d,ref)/ref)^(-rolloff)
 // = 25/d^2 for d>=5 (flat unity below). Bit-matches retail GetAttenuation
 // (acclient.c:383086-383087, VOL_MIN_DIST_SQ=25=5*5).
+import { VoicePool, VOICE_PRIORITY } from "./voice_pool.js";
+import {
+  mix as retailMix,
+  getAttenuation as retailAttenuation,
+  linearGain,
+  stereoPositionFromPan,
+  threeToAc,
+  headingFromThreeQuaternion,
+} from "./retail_mixer.js";
+
+// 2026-10-05 (audio parity) — two mixes. DEFAULT: the HRTF PannerNode
+// path below — owner product call 2026-10-05: keep HRTF where the web client
+// is deliberately better than retail's stereo. OPT-IN `?audioRetailPan=on`:
+// retail's mix — yaw-only integer pan (StereoPannerNode) + 25/d^2
+// integer-dB gain + -50 dB cull, computed once at start
+// (scene3d/audio/retail_mixer.js; acclient.c 383079-383118, 383152-383180).
+// In BOTH modes every voice goes through retail's 16-slot pool
+// (scene3d/audio/voice_pool.js; acclient.c 383004-383067), volume <= 0 is
+// silent, and playFromCenter() is the non-positional retail
+// PlaySoundFromCenter.
+export function readAudioRetailPanFlag() {
+  try {
+    const search = (typeof location !== "undefined" && location?.search) || "";
+    return new URLSearchParams(search).get("audioRetailPan") === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
 const DEFAULT_REF_DISTANCE = 5.0;      // meters: at/below this distance, full volume
 const DEFAULT_ROLLOFF_FACTOR = 2.0;    // inverse-SQUARE attenuation rate (retail)
 const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
@@ -56,6 +85,19 @@ export class AudioManager {
     }
     this._fetchWave = opts.fetchWave;
     this._masterGainValue = (opts.masterGain ?? 1.0);
+    // HRTF PannerNode mix (default) vs retail's stereo mix (?audioRetailPan=on).
+    // `opts.hrtf` overrides the URL flag (tests).
+    this._hrtf = (typeof opts.hrtf === "boolean") ? opts.hrtf : !readAudioRetailPanFlag();
+    // Category slider values (retail effect_sound_volume / ambient_sound_volume).
+    // Retail mode folds them into the dB computation BEFORE the -50 dB cull
+    // (acclient.c:383092-383095); HRTF mode applies them on the bus GainNodes.
+    this._effectGainValue = 1.0;
+    this._ambientGainValue = 1.0;
+    // Last listener pose (three.js frame) + its retail compass heading.
+    this._listenerPos = null;
+    this._listenerHeading = 0;
+    // Retail 16-voice pool (acclient.c:383004-383067).
+    this.voicePool = new VoicePool();
 
     /** @type {AudioContext|null} */
     this._ctx = null;
@@ -125,12 +167,12 @@ export class AudioManager {
       // expose per-category control. Guard so a re-init doesn't orphan buses.
       if (!this._effectMaster) {
         this._effectMaster = this._ctx.createGain();
-        this._effectMaster.gain.value = 1.0;
+        this._effectMaster.gain.value = this._busGain(this._effectGainValue);
         this._effectMaster.connect(this._master);
       }
       if (!this._ambientMaster) {
         this._ambientMaster = this._ctx.createGain();
-        this._ambientMaster.gain.value = 1.0;
+        this._ambientMaster.gain.value = this._busGain(this._ambientGainValue);
         this._ambientMaster.connect(this._master);
       }
       this._listener = this._ctx.listener;
@@ -173,7 +215,15 @@ export class AudioManager {
    */
   setEffectGain(value) {
     const v = Math.max(0.0, Math.min(1.0, value));
-    if (this._effectMaster) this._effectMaster.gain.value = v;
+    this._effectGainValue = v;
+    if (this._effectMaster) this._effectMaster.gain.value = this._busGain(v);
+  }
+
+  // Retail mode: the slider is folded into the per-voice dB (so it also moves
+  // the -50 dB audibility edge, as retail's does) and the bus stays at unity.
+  // HRTF mode: the bus carries the slider, as before.
+  _busGain(v) {
+    return this._hrtf ? v : 1.0;
   }
 
   /**
@@ -183,7 +233,8 @@ export class AudioManager {
    */
   setAmbientGain(value) {
     const v = Math.max(0.0, Math.min(1.0, value));
-    if (this._ambientMaster) this._ambientMaster.gain.value = v;
+    this._ambientGainValue = v;
+    if (this._ambientMaster) this._ambientMaster.gain.value = this._busGain(v);
   }
 
   /**
@@ -223,6 +274,9 @@ export class AudioManager {
    * @param {{w:number, x:number, y:number, z:number}} [quaternion]
    */
   setListener(worldPos, quaternion) {
+    // Kept even before the AudioContext exists: the retail mix reads it.
+    if (worldPos) this._listenerPos = { x: +worldPos.x, y: +worldPos.y, z: +worldPos.z };
+    if (quaternion) this._listenerHeading = headingFromThreeQuaternion(quaternion);
     if (!this._listener) return;
     const L = this._listener;
     // Newer browsers: `L.positionX.value = …` is the preferred API.
@@ -355,21 +409,104 @@ export class AudioManager {
   }
 
   /**
-   * Play a one-shot positional sound at a world position.
+   * Play a one-shot (or looping) positional sound at a world position
+   * given in the three.js frame (the frame `setListener` receives).
    *
-   * Fire-and-forget: returns a Promise<{source, panner, gain}|null>
-   * that resolves once the source has STARTED (not finished). Caller
-   * can use the returned handle to stop or change volume mid-play.
+   * Retail mix (`?audioRetailPan=on`): the per-call `gain` is retail's `volume` argument
+   * to GetAttenuation — 25/d^2 beyond 5 m, clamp to 1, times the category
+   * slider, integer dB, dropped below -50 dB — and the pan is the retail
+   * yaw-only integer pan; both are fixed when the sound starts
+   * (acclient.c:383079-383118, 383152-383180). `gain <= 0` is SILENT
+   * (retail's `v5 > 0` test, 383096). Default: the HRTF PannerNode path
+   * (25/d^2 via the panner, same 88.9 m one-shot cull, volume <= 0 silent).
+   *
+   * Every voice then competes for one of retail's 16 slots
+   * (acclient.c:383004-383067): `opts.priority` defaults to the constant 0
+   * every retail voice records, so a 17th concurrent sound is dropped.
+   *
+   * Fire-and-forget: resolves once the source has STARTED (not finished)
+   * with `{source, panner, gain}` (panner = StereoPannerNode in retail mode,
+   * PannerNode in HRTF mode, null from the centre), or null when skipped.
    *
    * @param {number} did Wave DID (0x0Axxxxxx).
    * @param {{x:number, y:number, z:number}} worldPos
-   * @param {PlayOpts} [opts]
-   * @returns {Promise<{source: AudioBufferSourceNode, panner: PannerNode, gain: GainNode}|null>}
+   * @param {PlayOpts & {priority?: number}} [opts]
    */
   async play(did, worldPos, opts = {}) {
-    if (!this._ctx) {
+    if (!(await this._ensureRunning())) return null;
+    if (this._hrtf) return this._playHrtf(did, worldPos, opts);
+    const volume = (typeof opts.gain === "number") ? opts.gain : 1.0;
+    const master = (opts.category === "ambient") ? this._ambientGainValue : this._effectGainValue;
+    let m;
+    if (opts.rolloffFactor === 0 || !this._listenerPos || !worldPos) {
+      // Callers that ask for no falloff (the ambient layer plays AT the
+      // listener) and calls before the first listener pose mix from the
+      // centre: distance 0, pan 0 (retail PlayAmbientSoundFromCenter shape,
+      // acclient.c:383559).
+      const a = retailAttenuation(0, volume, master);
+      m = { play: a.play, decibels: a.decibels, pan: 0 };
+    } else {
+      m = retailMix(
+        threeToAc(this._listenerPos),
+        this._listenerHeading,
+        threeToAc(worldPos),
+        volume,
+        master,
+      );
+    }
+    this.lastMix = m;
+    // Loops are lifecycle-managed by ambient_runtime / portal_space and are
+    // never culled here; a loop that starts inaudible starts at gain 0.
+    if (!m.play && !opts.loop) {
       this.skipCount += 1;
       return null;
+    }
+    return this._startVoice(did, {
+      gainValue: m.play ? linearGain(m.decibels) : 0,
+      pan: m.pan,
+      loop: !!opts.loop,
+      category: opts.category,
+      priority: opts.priority,
+    });
+  }
+
+  /**
+   * Retail SoundManager::PlaySoundFromCenter (acclient.c:383569-383620):
+   * no position, no distance falloff, no pan — `GetAttenuation(0.0, volume)`
+   * times the effect slider (ambient slider for `category: "ambient"`),
+   * integer dB, silent at or below 0 / under -50 dB. Used for UI sounds,
+   * environment-change sounds and the portal whooshes.
+   *
+   * @param {number} waveDid
+   * @param {number} volume  retail `volume` (SoundTable row volume / 1.0)
+   * @param {{category?: "effect"|"ambient", loop?: boolean, priority?: number}} [opts]
+   */
+  async playFromCenter(waveDid, volume, opts = {}) {
+    if (!(await this._ensureRunning())) return null;
+    const master = (opts.category === "ambient") ? this._ambientGainValue : this._effectGainValue;
+    const a = retailAttenuation(0, (typeof volume === "number") ? volume : 1.0, master);
+    this.lastMix = { play: a.play, decibels: a.decibels, pan: 0 };
+    if (!a.play) {
+      this.skipCount += 1;
+      return null;
+    }
+    // In HRTF mode the bus already carries the slider: undo the fold-in.
+    const gainValue = this._hrtf
+      ? Math.min(1, Math.max(0, volume))
+      : linearGain(a.decibels);
+    return this._startVoice(waveDid, {
+      gainValue,
+      pan: null,
+      loop: !!opts.loop,
+      category: opts.category,
+      priority: opts.priority,
+    });
+  }
+
+  async _ensureRunning() {
+    if (!this._ctx) {
+      this.skipCount += 1;
+      return false;
     }
     if (this._ctx.state === "suspended") {
       // Try to resume; if it fails (e.g. no user gesture yet) skip.
@@ -377,50 +514,106 @@ export class AudioManager {
         await this._ctx.resume();
       } catch (_) {
         this.skipCount += 1;
-        return null;
+        return false;
       }
     }
-    // Phase 2 (2026-06-04) — retail -50 dB silence cull (ONE-SHOTS ONLY).
-    // Retail computes attenuation = ceil(log2(v5)*6.0206) and drops the sound
-    // when it falls below VOL_MIN(-50, @45626) (acclient.c:383098-383108).
-    // With our inverse-square v=25/d^2, -50 dB (=10^(-50/20)=0.0031623) is
-    // crossed near d=88.9 m: 25/d^2 < 0.0031623 => d > 88.91. Cull here BEFORE
-    // _loadBuffer to save the fetch+decode. We do NOT cull loops
-    // (opts.loop===true): ambient loops are lifecycle-managed by
-    // ambient_runtime and may re-enter range as the listener moves.
-    const SILENCE_CUTOFF_DISTANCE = 88.91; // 25/d^2 < 0.0031623 => d > 88.9 m
+    return true;
+  }
+
+  // Shared tail: decode, build source -> gain -> [stereo panner] -> bus,
+  // claim a retail voice slot, start. `pan` null = no panner node.
+  async _startVoice(did, { gainValue, pan, loop, category, priority, panner: hrtfPanner, followGuid }) {
+    const buf = await this._loadBuffer(did);
+    if (!buf || !this._ctx) {
+      this.skipCount += 1;
+      return null;
+    }
+    const source = this._ctx.createBufferSource();
+    source.buffer = buf;
+    source.loop = !!loop;
+    const gain = this._ctx.createGain();
+    gain.gain.value = gainValue;
+    let panner = hrtfPanner ?? null;
+    if (!panner && pan != null && typeof this._ctx.createStereoPanner === "function") {
+      panner = this._ctx.createStereoPanner();
+      panner.pan.value = stereoPositionFromPan(pan);
+    }
+    const bus = (category === "ambient") ? this._ambientMaster : this._effectMaster;
+    const out = bus || this._master;
+    if (panner) source.connect(gain).connect(panner).connect(out);
+    else source.connect(gain).connect(out);
+
+    // Retail 16-voice pool. A stolen voice is stopped (SoundBuf::Stop).
+    const token = this.voicePool.claim(
+      { stop: () => { try { source.stop(); } catch (_) {} } },
+      (typeof priority === "number") ? priority : VOICE_PRIORITY,
+    );
+    if (!token) {
+      try { source.disconnect(); } catch (_) {}
+      try { gain.disconnect(); } catch (_) {}
+      try { panner?.disconnect(); } catch (_) {}
+      this.skipCount += 1;
+      this.voiceDropCount = (this.voiceDropCount | 0) + 1;
+      return null;
+    }
+    // Wave 2 / G1 — disconnect the chain when the source ends (one-shots:
+    // buffer finished; loops: caller stop()). Also frees the voice slot and
+    // drops follow-mode tracking.
+    source.onended = () => {
+      this.voicePool.release(token);
+      try { source.disconnect(); } catch (_) {}
+      try { gain.disconnect(); } catch (_) {}
+      try { panner?.disconnect(); } catch (_) {}
+      this._followingHandles.delete(source);
+    };
+    // Wave 3 / A4 — follow-mode (HRTF path only: the retail mix is fixed at
+    // start, acclient.c:383179, so there is nothing to re-pan).
+    if (hrtfPanner && followGuid != null && Number.isFinite(followGuid)) {
+      this._followingHandles.set(source, { panner: hrtfPanner, guid: followGuid >>> 0 });
+    }
+    try {
+      source.start(0);
+      this.playCount += 1;
+      return { source, panner, gain };
+    } catch (e) {
+      this.voicePool.release(token);
+      this._followingHandles.delete(source);
+      this.lastError = String(e?.message ?? e);
+      this.skipCount += 1;
+      // eslint-disable-next-line no-console
+      console.warn("[H3/audio] source.start threw:", e);
+      return null;
+    }
+  }
+
+  // HRTF path (the default; `?audioRetailPan=on` selects the retail mix): PannerNode with exponential
+  // ref=5/rolloff=2 (= 25/d^2) + the 88.9 m one-shot cull.
+  async _playHrtf(did, worldPos, opts) {
+    // Phase 2 (2026-06-04) — retail -50 dB silence cull (ONE-SHOTS ONLY):
+    // 25/d^2 < 0.0031623 => d > 88.91.
+    const SILENCE_CUTOFF_DISTANCE = 88.91;
+    if (!opts.loop && !((opts.gain ?? 1.0) > 0)) {
+      this.skipCount += 1; // volume <= 0 is silent (acclient.c:383096)
+      return null;
+    }
     if (!opts.loop) {
       const L = this._ctx.listener;
       let lx, ly, lz;
       if (L && L.positionX && typeof L.positionX.value === "number") {
         lx = L.positionX.value; ly = L.positionY.value; lz = L.positionZ.value;
       }
-      // If we can't determine the listener position (older setPosition-only
-      // browsers, or pre-setListener), SKIP the cull — never throw.
       if (typeof lx === "number" && worldPos) {
         const dx = worldPos.x - lx;
         const dy = worldPos.y - ly;
         const dz = worldPos.z - lz;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist > SILENCE_CUTOFF_DISTANCE) {
+        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > SILENCE_CUTOFF_DISTANCE) {
           this.skipCount += 1;
           return null;
         }
       }
     }
-    const buf = await this._loadBuffer(did);
-    if (!buf) {
-      this.skipCount += 1;
-      return null;
-    }
-    const source = this._ctx.createBufferSource();
-    source.buffer = buf;
-    source.loop = !!opts.loop;
-
     const panner = this._ctx.createPanner();
     panner.panningModel = "HRTF";
-    // Phase 0 (2026-06-04) — "exponential" gives (max(d,ref)/ref)^(-rolloff);
-    // with ref=5/rolloff=2 = 25/d^2 = retail inverse-square (acclient.c:383086).
     panner.distanceModel = "exponential";
     panner.refDistance = opts.refDistance ?? DEFAULT_REF_DISTANCE;
     panner.rolloffFactor = opts.rolloffFactor ?? DEFAULT_ROLLOFF_FACTOR;
@@ -432,60 +625,16 @@ export class AudioManager {
     } else if (typeof panner.setPosition === "function") {
       panner.setPosition(worldPos.x, worldPos.y, worldPos.z);
     }
-
-    const gain = this._ctx.createGain();
-    // Phase 3b (2026-06-05) — dB-domain ceil quantization. Retail
-    // GetAttenuation does not apply the effective gain v5 linearly: it
-    // quantizes to integer decibels via attenuation = ceil(log2(v5)*6.0206)
-    // (acclient.c:383098), where 6.0206 = 20*log10(2) maps a log2 ratio to dB.
-    // Mirror that here by snapping the per-call gain to the same integer-dB
-    // grid before handing it to the GainNode. Sub-1dB change, dominated by the
-    // Phase 0 curve error and inaudible at the 1.0 default (ceil(0)=0 -> 1.0);
-    // implemented for retail faithfulness per FIX-PLAN Phase 3b, not audibility.
-    gain.gain.value = AudioManager._quantizeGainToDb(opts.gain ?? 1.0);
-
-    // Phase 3 (2026-06-04) — route through the category master bus
-    // (effect default | ambient). Falls back to the global master if the
-    // bus is missing (e.g. an older context that predates bus creation).
-    const bus = (opts.category === "ambient")
-      ? this._ambientMaster
-      : this._effectMaster;
-    source.connect(gain).connect(panner).connect(bus || this._master);
-    // Wave 2 / G1 fix (2026-05-28) — disconnect the chain when the source
-    // ends. For one-shots, `onended` fires when the buffer finishes; for
-    // loops it fires when the caller calls `source.stop()`. Without this,
-    // gain + panner nodes accumulate in the Web Audio graph until GC,
-    // which is non-deterministic and can stack hundreds of orphan nodes
-    // in long sessions.
-    // Wave 3 / A4 fix (2026-05-28) — also drop the follow-mode tracking
-    // entry so updateFollowingPositions stops touching a dead panner.
-    source.onended = () => {
-      try { source.disconnect(); } catch (_) {}
-      try { gain.disconnect(); } catch (_) {}
-      try { panner.disconnect(); } catch (_) {}
-      this._followingHandles.delete(source);
-    };
-    // Wave 3 / A4 fix (2026-05-28) — register for follow-mode tracking
-    // if the caller asked the sound to track a moving entity. The
-    // per-rAF `updateFollowingPositions` call will rewrite this panner's
-    // position each frame from the entity's current world pose.
-    if (opts.followGuid != null && Number.isFinite(opts.followGuid)) {
-      this._followingHandles.set(source, {
-        panner,
-        guid: opts.followGuid >>> 0,
-      });
-    }
-    try {
-      source.start(0);
-      this.playCount += 1;
-      return { source, panner, gain };
-    } catch (e) {
-      this.lastError = String(e?.message ?? e);
-      this.skipCount += 1;
-      // eslint-disable-next-line no-console
-      console.warn("[H3/audio] source.start threw:", e);
-      return null;
-    }
+    // Phase 3b — integer-dB snap of the per-call gain (acclient.c:383098).
+    return this._startVoice(did, {
+      gainValue: AudioManager._quantizeGainToDb(opts.gain ?? 1.0),
+      pan: null,
+      panner,
+      loop: !!opts.loop,
+      category: opts.category,
+      priority: opts.priority,
+      followGuid: opts.followGuid,
+    });
   }
 
   /**
