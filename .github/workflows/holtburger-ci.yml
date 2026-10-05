@@ -63,5 +63,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: external/holtburger
+      # holtburger-protocol's build.rs generates code from Chorizite's
+      # protocol.xml, which lives in a separate (untracked) clone locally.
+      # Pinned to the commit the local tree builds against.
+      - name: Fetch Chorizite.ACProtocol (protocol.xml)
+        working-directory: .
+        run: |
+          git clone --filter=blob:none https://github.com/Chorizite/Chorizite.ACProtocol.git external/chorizite/Chorizite.ACProtocol
+          git -C external/chorizite/Chorizite.ACProtocol checkout --quiet ff7dffd6afa53c4e2b2ba14bd89962258ebd4371
       - name: Unit tests (no DAT fixtures needed)
         run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib

@@ -328,13 +328,10 @@ if (!ONLY_MISMATCH) {
 // that wired this audit into CI, so they are allowlisted with the reason and
 // the owner of the fix. An entry that stops mismatching FAILS (stale), so the
 // list cannot silently pre-approve a future regression of the same flag.
-const KNOWN_POLARITY_MISMATCHES = {
-  punchSidedness:
-    "docs/url-flags.md row says **on**, but scene3d/cells.js:255-311 returns \"off\" when absent — an " +
-    "OWNER-DIRECTED default-OFF (2026-08-12, comment at cells.js:296-301: \"the decision is the owner's\"). " +
-    "The CODE is the shipped truth; the docs row (and the cells.js:264 \"BACK TO DEFAULT-ON\" banner above " +
-    "it) are stale. Fix: docs row → off, pending the owner's call on flipping back.",
-};
+// Known docs-vs-code polarity mismatches, each with the reason. Empty: the
+// last entry (punchSidedness) was resolved 2026-10-05 by fixing its docs row.
+// A stale entry FAILS the audit, so this list can only shrink honestly.
+const KNOWN_POLARITY_MISMATCHES = {};
 const polarityAll = mism.filter((r) => r.mismatch.startsWith("DEFAULT-POLARITY"));
 const polarity = polarityAll.filter((r) => !Object.prototype.hasOwnProperty.call(KNOWN_POLARITY_MISMATCHES, r.name));
 const allowlistedPolarity = polarityAll.filter((r) => Object.prototype.hasOwnProperty.call(KNOWN_POLARITY_MISMATCHES, r.name));

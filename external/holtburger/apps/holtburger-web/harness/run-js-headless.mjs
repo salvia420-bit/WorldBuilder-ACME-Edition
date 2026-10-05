@@ -452,7 +452,11 @@ const TIER5 = [
   { tier: 5, flag: "harness_rsid_marker", file: "harness/test_rsid_marker.mjs" },
   { tier: 5, flag: "harness_service_worker_v3", file: "harness/test_service_worker_v3.mjs" },
   { tier: 5, flag: "harness_slotgrid_lru_assert", file: "harness/test_slotgrid_lru_assert.mjs" },
-  { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs" },
+  // Reads the deployed slice packs: absent dist → NO-FIXTURE (CI has no bake).
+  { tier: 5, flag: "inventoryActionFailed(kind48)", file: "tests/rejection_feedback_kind48.test.mjs" },
+  { tier: 5, flag: "framePose(cache)", file: "tests/frame_pose.test.mjs" },
+  { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs",
+    requires: "../../dist/manifest.json" },
   { tier: 5, flag: "harness_tex_compressed_only", file: "harness/test_tex_compressed_only.mjs" },
   { tier: 5, flag: "harness_texchan_decode", file: "harness/test_texchan_decode.mjs",
     requires: "/mnt/wbterminal2/holtburger-dist/suite/texchan-manifest.json" },
