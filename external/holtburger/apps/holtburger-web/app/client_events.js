@@ -849,8 +849,9 @@ export function dispatchClientEvent(evt, D) {
     // ACPlugin PR-4 (2026-05-27): Character.OnPortalSpaceEntered
     // mirror. Bridges PlayerTeleport into the typed Character's
     // `applyEffectsPlayerTeleport` via WorldState's dispatcher,
-    // and fires the bus event so the loading-screen overlay
-    // and any other plugin can subscribe.
+    // and fires the bus event so any plugin can subscribe (the
+    // loading-screen curtain that used to listen here is retired —
+    // portal space is the retail tunnel below).
     try {
       window.__pluginClient?.world?.dispatchEffectsPlayerTeleport?.();
       window.__pluginClient?.events?.emit?.('portalSpaceEntered', {
@@ -875,39 +876,51 @@ export function dispatchClientEvent(evt, D) {
           ?.cancelOneShotOverlaysForGuid?.(lpg >>> 0);
       }
     } catch (_) {}
-    // Portal-space donut travel visual (2026-06-09). The retail
-    // engine flies the camera through Setup 0x02000306 (a hollow
-    // purplish ring) during portal transit. DEFAULT-ON since
-    // 2026-07-02 (`?portalSpace=off` to disable;
-    // `?portalSpace=<scale>` still overrides the ring scale);
-    // plays on every teleport incl. indoor↔indoor + rapid recalls.
-    // Lazy-import keeps it additive / load-on-first-use.
+    // Portal space (2026-10-05 rework) — the retail gmSmartBoxUI tunnel
+    // (acclient.c:262328-262580; OpenAC PortalTunnelPresentation): world
+    // hidden, tunnel Setup (DID-by-enum 0x10000001/7) animated at 40 fps on
+    // black with random camera roll, held until the kind=66 TeleportArrived
+    // edge + destination cells resident, then continue (>=2 s) -> tunnel
+    // fade-out -> world fade-in. Plays on every teleport incl. indoor<->indoor
+    // and same-landblock hops. DEFAULT-ON; `?portalSpace=off` disables (a
+    // legacy numeric `?portalSpace=<scale>` just means on).
     try {
       const sp = new URLSearchParams(window.location.search);
       const ps = sp.get('portalSpace');
       const enabled = ps !== 'off' && ps !== '0' && ps !== 'false';
       if (enabled && window.liveScene3d) {
-        const psf = parseFloat(ps);
-        const scale = (ps === 'on' || ps === '' || !Number.isFinite(psf))
-          ? undefined : psf;
-        // Parse a hex Wave DID (or off/none → 0). undefined = use
-        // the module default.
+        // Parse a hex Wave DID (or off/none → 0). undefined = module default.
         const hexDid = (v) => {
           if (v === null) return undefined;
           if (v === 'off' || v === 'none' || v === '0') return 0;
           const n = parseInt(v.replace(/^0x/i, ''), 16);
           return Number.isFinite(n) ? (n >>> 0) : undefined;
         };
-        // ?portalSound=<hex|off> overrides the enter whoosh
-        // (default 0x0A000246 UI_EnterPortal); ?portalSoundLoop=<hex>
-        // adds an optional looping bed (e.g. 0x0A000316).
+        // ?portalSound=<hex|off> overrides the enter whoosh (default
+        // 0x0A000246 UI_EnterPortal); ?portalSoundLoop=<hex> adds an
+        // optional looping bed (e.g. 0x0A000316).
         const enterDid = hexDid(sp.get('portalSound'));
         const loopDid = hexDid(sp.get('portalSoundLoop'));
         import('../scene3d/portal_space.js')
-          .then((m) => m.startPortalSpace(window.liveScene3d, scale, enterDid, loopDid))
+          .then((m) => m.startPortalSpace(window.liveScene3d, {
+            enterDid,
+            loopDid,
+            // Character.OnPortalSpaceExited mirror (api.js coverage row 14).
+            onExit: () => {
+              try { window.__pluginClient?.events?.emit?.('portalSpaceExited', {}); } catch (_) {}
+            },
+          }))
           .catch((e) => console.warn('[portalSpace] start failed:', e));
       }
     } catch (_) {}
+  } else if (evt.kind === ClientEventKind.TELEPORT_ARRIVED /* TeleportArrived */) {
+    // kind=66 — the destination self UpdatePosition of the pending teleport
+    // was applied (retail waiting_for_teleport cleared). Portal space adds the
+    // cells-resident half and leaves the tunnel. u32Payload = dest objcell.
+    const cellId = (evt.u32Payload ?? 0) >>> 0;
+    import('../scene3d/portal_space.js')
+      .then((m) => m.signalPortalArrived({ cellId }))
+      .catch(() => {});
   } else if (evt.kind === ClientEventKind.CONTRACTS_UPDATED /* ContractsUpdated */) {
     // Wave F.5 (2026-05-27): ACE pushed either
     // `GameEvent::SendClientContractTrackerTable` (opcode

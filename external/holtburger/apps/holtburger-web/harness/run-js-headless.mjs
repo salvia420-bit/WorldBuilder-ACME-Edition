@@ -196,7 +196,7 @@ const TIER5 = [
   { tier: 5, flag: "atlas_bc7_pre_gate", file: "test_atlas_bc7_pre_gate.mjs" },
   { tier: 5, flag: "terrain_bc7_aniso", file: "test_terrain_bc7_aniso.mjs" },
   { tier: 5, flag: "r10_index_orchestrator", file: "test_r10_index_orchestrator.mjs" },
-  { tier: 5, flag: "loading_screen_portal_event", file: "test_loading_screen_portal_event.mjs" },
+  { tier: 5, flag: "portal_space_sequencer", file: "test_portal_space_sequencer.mjs" },
   { tier: 5, flag: "rig_indoor_layer", file: "test_rig_indoor_layer.mjs" },
   { tier: 5, flag: "c1_facing_camera", file: "tests/test_c1_facing_camera.cjs" },
   { tier: 5, flag: "cast_busy_clock", file: "tests/test_cast_busy_clock.mjs" },

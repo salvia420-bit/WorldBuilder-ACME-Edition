@@ -106,6 +106,7 @@ if (texCensusEnabled()) {
   console.log("[texCensus] ?texCensus=on — tracing textures weakly from module import");
 }
 import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
+import { portalSpaceOwnsFrame, renderPortalSpaceFrame, renderPortalSpaceOverlay } from "./portal_space.js";
 // ST8 stage A (?frameWork, SPEC §3 T21 / pass-08 D-08.2) — the post-render
 // stream slot (P4) + the ?framePhase census instrument. Flag OFF: every call
 // below is a guarded no-op and the legacy task placement is byte-identical.
@@ -2550,6 +2551,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // so the render path stays byte-identical. Both the composer and the direct
     // path converge on recordRenderDiag(), which closes the window.
     vfxGaugeBeginFrame(renderer);
+    // Portal space (retail gmSmartBoxUI, acclient.c:262445-262449): while the
+    // tunnel owns the screen the WORLD IS NOT DRAWN (SmartBox::Hide) — the
+    // portal viewport is cleared black and only the tunnel object renders.
+    // Sim / drain / streaming above and the P4 slot below still run, so the
+    // destination keeps loading behind it. A throw inside still returns true
+    // (black frame), never a half-hidden world.
+    if (!nullRender && portalSpaceOwnsFrame() && renderPortalSpaceFrame(renderer, activeCam)) {
+      recordRenderDiag(renderer, scene);
+      _postRenderStreamSlot();
+      scheduleNext();
+      return;
+    }
     // Workstream Sky-I-C (2026-05-11) — render the sky pass FIRST,
     // then the world OVER it. The sky pass clears the framebuffer
     // (color+depth) and paints the dome + celestials. We then clear
@@ -2588,6 +2601,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           if (cloudActive) {
             cloudOverlay.renderOverlay(renderer);
           }
+          renderPortalSpaceOverlay(renderer); // WORLD_FADEIN black fade (no-op otherwise)
           recordRenderDiag(renderer, scene);
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -2751,6 +2765,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // color + depth from the clear color in a single shared-depth pass.
         renderer.render(scene, activeCam);
       }
+      renderPortalSpaceOverlay(renderer); // WORLD_FADEIN black fade (no-op otherwise)
       recordRenderDiag(renderer, scene);
     } catch (e) {
       // One-shot, on a closure flag rather than `liveScene3dRef` — this path

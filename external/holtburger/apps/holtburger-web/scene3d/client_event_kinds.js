@@ -57,4 +57,5 @@ export const ClientEventKind = Object.freeze({
   LOCALIZATION: 59,
   ENVIRON_CHANGE: 60,
   CMD_INTERP: 61,
+  TELEPORT_ARRIVED: 66,
 });
