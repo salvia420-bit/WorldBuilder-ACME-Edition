@@ -77,6 +77,7 @@ const tickCellVisibility3D = () => {};
 const tickPortalStencil = () => {};
 const tickPortalPunch = () => {};
 const tickPvsLoadExpansion = () => {};
+const noteEntityLandcell = () => {}; // cells.js (door-seal landcell writer)
 const statAtlasEnabled = () => false;
 const tickStatAtlasOptimize = () => {};
 const statBatchChunkEnabled = () => false;

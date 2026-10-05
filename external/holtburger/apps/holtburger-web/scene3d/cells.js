@@ -3101,10 +3101,12 @@ function resolveSealPass(scene3d) {
  * cell's view clip. A stale `pkg/` without the export falls back to the
  * unrestricted export (`_portalSealDiag.source` says which).
  *
- * Also publishes the OUTDOOR REMAINDER the seal pass draws before stamping
- * (retail draws all outdoor content before the stamp; see portal_punch.js
+ * Also publishes the OUTDOOR REMAINDER (+ its doorway rect) that
+ * SealRemainderPass / the direct path draw BEFORE the wipe (retail draws all
+ * outdoor content before Clear(4) and the stamp; see portal_punch.js
  * drawOutdoorRemainder) and flags entities standing in outdoor landcells.
  */
+let _sealStalePkgWarned = false;
 export function tickPortalSeal(scene3d, sessionHandle) {
   const pass = resolveSealPass(scene3d);
   if (!pass || !sessionHandle) return;
@@ -3113,6 +3115,7 @@ export function tickPortalSeal(scene3d, sessionHandle) {
   if (pass._errored || !scene3d._indoorSplitArmed) {
     pass.setApertures(null, null);
     pass.outdoorRemainder = null;
+    pass.remainderRect = null;
     return;
   }
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
@@ -3148,14 +3151,31 @@ export function tickPortalSeal(scene3d, sessionHandle) {
     if (res.kept > 0) {
       markOutdoorEntities(scene3d);
       pass.outdoorRemainder = sealOutdoorRemainder(scene3d);
+      // Round 3: the pre-draw's PortalList clip — the union rect of exactly
+      // the doorways being sealed.
+      pass.remainderRect = res.rect ?? null;
     } else {
       pass.outdoorRemainder = null;
+      pass.remainderRect = null;
+    }
+    if (!hasOutside && !_sealStalePkgWarned) {
+      _sealStalePkgWarned = true;
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[portal_seal] wasm pkg/ lacks getPViewOutsidePortals — the seal (and " +
+          "its outdoor-remainder pre-draw) is fed from EVERY frustum-visible " +
+          "EnvCell's doorways, not the reached ones. Rebuild pkg/.",
+        );
+      } catch (_) {}
     }
     scene3d._portalSealDiag = {
       kept: res.kept,
       dropped: res.dropped,
       source: hasOutside ? "pview-outside" : "frustum-unrestricted",
       remainderDraws: pass.remainderDraws ?? 0,
+      remainderNarrowed: pass.remainderNarrowed ?? 0,
+      depthRestores: pass.depthRestores ?? 0,
     };
   } catch (_) {
     pass.setApertures(null, null);
@@ -3183,8 +3203,9 @@ export function sealOutdoorRemainder(scene3d) {
  * 0x100`) with `userData.__splitOutdoor = true`, so the seal's pre-draw paints
  * it before the doorway wall — retail draws landcell objects in LScape::draw,
  * before the stamp, and only EnvCell objects after it (DrawObjCellForDummies,
- * acclient.c:461597). Cell index: the last wire position's landcell
- * (`_wireCellIdx`, entities.js setPose) or the spawn cell (`_outdoorCellIdx`).
+ * acclient.c:461597). Cell index: the landcell of the last KIND_POSITION
+ * (`_wireCellIdx`, written by loop.js `_armPosition` via noteEntityLandcell)
+ * or the spawn cell (`_outdoorCellIdx`, entities.js).
  * An entity with no known cell stays unflagged = drawn after the wall (the
  * pre-round-2 behaviour).
  */
@@ -3209,6 +3230,21 @@ export function markOutdoorEntities(scene3d) {
   });
   return n;
 }
+
+/**
+ * The writer for `_wireCellIdx` (round 3: nothing wrote it before, so an
+ * entity that spawned indoors and walked out stayed "indoor" for the seal's
+ * pre-draw forever). Called by loop.js `_armPosition` on every KIND_POSITION
+ * with the update's full cell id (`landblockId`, `0xXXYYcccc`); keeps the low
+ * 16 bits, the landcell (`< 0x100` = outdoor).
+ */
+export function noteEntityLandcell(em, guid, cellId) {
+  const inst = em?.entityMap?.get?.(guid >>> 0);
+  if (!inst) return false;
+  inst._wireCellIdx = (cellId >>> 0) & 0xffff;
+  return true;
+}
+
 
 /**
  * Per-frame PVS-driven content-load expander (2026-05-16 bandwidth pass).

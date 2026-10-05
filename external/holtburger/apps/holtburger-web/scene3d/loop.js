@@ -36,7 +36,7 @@
 // frame, BEFORE `renderer.render(scene, camera)`.
 
 import * as THREE from "three";
-import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion } from "./cells.js";
+import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion, noteEntityLandcell } from "./cells.js";
 // Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
 // effective-radius helper; S2/S3 (the Far Composite Ring) adds one budgeted
 // tick. Both are hard no-ops behind `?farTerrain=off`.
@@ -3403,6 +3403,11 @@ function _armPosition(scene3d, em, upd) {
   const wy = lbY * 192.0 + (upd.y ?? 0);
   const wz = upd.z ?? 0;
   const g = upd.guid >>> 0;
+  // Door seal (2026-10-05 round 3): remember this entity's CURRENT landcell
+  // so the indoor seal can tell an NPC standing outside (drawn before the
+  // doorway wall) from one inside (after it). `landblockId` is the full cell
+  // id; only the spawn cell was known before.
+  noteEntityLandcell(em, g, lbId);
   // Always stash the latest world-space position per guid, even
   // when the 3D EntityManager has no rig for this guid yet (the
   // wasm-side eager-WorldState path suppresses KIND_SPAWN for

@@ -158,6 +158,7 @@ console.log("\n-- L4 scan scene3d/*.js -----------------------------------------
 const ALLOW = {
   "portal_punch.js#1": "SEAL — routes through withLogDepthVertex/Fragment behind the ?sealLogDepth=off escape (default ON); the conditional is invisible to this scan, L5 + tests/portal_seal_logdepth.test.mjs pin it",
   "portal_punch.js#2": "PUNCH — depthFunc Always + constant gl_FragDepth FAR_DEPTH: endpoint-preserving under both encodings",
+  "portal_punch.js#4": "SEAL DEPTH RESTORE — shaders routed through withLogDepthVertex/Fragment (invisible to this scan); writes the seal's own log depth or the saved depth; pinned by tests/portal_seal_retail_order.test.mjs R7",
   "portal_stencil.js#1": "RESET — depthFunc Always + constant gl_FragDepth FAR_DEPTH: endpoint-preserving under both encodings",
   "terrain_batch.js#1": "clones terrain.js's TERRAIN_*_GLSL (glsl.vertexShader/fragmentShader), which carries the hand-rolled chunk",
   "shader_logdepth.js#1": "doc-comment usage example, not a construction",

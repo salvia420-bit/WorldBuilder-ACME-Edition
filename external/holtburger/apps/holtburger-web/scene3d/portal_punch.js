@@ -44,18 +44,24 @@ import { withLogDepthVertex, withLogDepthFragment } from "./shader_logdepth.js";
 // three r184's logdepthbuf chunks via shader_logdepth.js. A CORRECT seal makes
 // the doorway depth wall live for the first time, so it ships together with
 // the two retail-order fixes it depends on:
-//   1. OUTDOOR REMAINDER BEFORE THE STAMP. Retail PView::DrawCells
-//      (acclient.c:461450-461560) draws ALL outdoor content (LScape::draw) before
-//      the Z wipe and the stamp. cells.js relayers the player landblock's
-//      buildings + statics onto layer 1 so terrain cannot occlude the room after
-//      the wipe; that content, plus outdoor entities, is now drawn by this pass
-//      immediately BEFORE it stamps (see drawOutdoorRemainder), so a tree or a
-//      neighbour house seen out of the doorway keeps its colour.
+//   1. OUTDOOR REMAINDER BEFORE THE WIPE. Retail PView::DrawCells
+//      (acclient.c:461450-461560) draws ALL outdoor content (LScape::draw),
+//      depth-tested together, BEFORE Clear(4) and the stamp. cells.js relayers
+//      the player landblock's buildings + statics onto layer 1 so terrain
+//      cannot occlude the room after the wipe; that content, plus outdoor
+//      entities, is drawn by SealRemainderPass right after the world pass and
+//      BEFORE the wipe (round 3: round 2 drew it after the wipe, against no
+//      depth), narrowed to the doorway rect, so a tree or a neighbour house
+//      seen out of the doorway keeps its colour and its terrain occlusion.
 //   2. REACHED CELLS ONLY. cells.js feeds the seal from the PView walk's
 //      outside view (wasm getPViewOutsidePortals), not from every
 //      frustum-visible EnvCell.
-// `=off` restores the old perspective seal AND skips the remainder pre-pass,
-// i.e. the pre-2026-10-05 indoor frame exactly.
+//   3. DEPTH RESTORE. SealDepthSavePass / SealDepthRestorePass put the
+//      pre-wipe depth back under the sealed pixels after the cells pass, so the
+//      depth-reading post effects see the terrain's real distance through a
+//      doorway instead of the wall.
+// `=off` restores the old perspective seal and skips all three, i.e. the
+// pre-2026-10-05 indoor frame exactly.
 export function sealLogDepthEnabled() {
   try {
     if (typeof window === "undefined" || !window.location) return true;
@@ -369,8 +375,17 @@ export class PortalPunchPass extends Pass {
     // `{ scene, worldRoot, buildingsGroup, staticsGroup, entitiesGroup }`, set
     // per tick by cells.js `tickPortalSeal`. null = no pre-draw.
     this.outdoorRemainder = null;
+    // Union screen rect of the sealed doorways ([0,1], y up) — the pre-draw's
+    // PortalList clip. null = full frame.
+    this.remainderRect = null;
     this._remainderHidden = [];
     this.remainderDraws = 0; // diag: frames the pre-draw ran
+    this.remainderNarrowed = 0; // diag: …of which narrowed to the doorway rect
+    this.depthRestores = 0; // diag: frames the depth restore ran
+    this._depthSaved = false;
+    this._savedDepthRT = null;
+    this._curDepthRT = null;
+    this._restoreMat = null;
     this._markMat = this._stencilGate ? makeMarkMaterial() : null;
     // PERSISTENT aperture mesh (2026-08-04 perf). `setApertures` runs EVERY
     // frame the punch is armed; the original implementation disposed the
@@ -590,14 +605,8 @@ export class PortalPunchPass extends Pass {
         this._apertureMesh.material = this._punchMat;
         renderer.render(this.apertureScene, cam);
       } else {
-        // SEAL: retail draws all outdoor content BEFORE the stamp
-        // (PView::DrawCells, LScape::draw at acclient.c:461480 precedes the
-        // Clear + DrawPortalPolyInternal at :461484/:461536). The outdoor
-        // content our split moved past the wipe is drawn here, into the same
-        // target, so the wall below protects its colour like terrain's.
-        if (this._sealLogDepth && this.outdoorRemainder) {
-          this.drawOutdoorRemainder(renderer, cam);
-        }
+        // (SEAL: the outdoor remainder is drawn BEFORE the wipe by
+        // SealRemainderPass / the direct path, never here — round 3.)
         // Legacy unconditional punch (no stencil attachment available).
         // Draw the aperture polygons: colorWrite off, depthFunc Always, write
         // FAR. Punches the doorway depth to far in the shared buffer the cells
@@ -624,21 +633,43 @@ export class PortalPunchPass extends Pass {
     }
   }
 
+  /** True when this SEAL wants the outdoor-remainder pre-draw this frame. */
+  get wantsRemainder() {
+    return this.mode === "seal" && this._sealLogDepth === true && !this._errored &&
+      this.outdoorRemainder != null && this.hasApertures;
+  }
+
+  /** True when this SEAL wants the pre-wipe depth saved and restored. */
+  get wantsDepthRestore() {
+    return this.mode === "seal" && this._sealLogDepth === true && !this._errored && this.hasApertures;
+  }
+
   /**
    * Draw the outdoor remainder (see collectOutdoorRemainderHidden) into the
-   * currently bound target with the camera on the INDOOR layer. Everything it
-   * touches — node visibility, camera mask, scene background, shadow-map auto
-   * update — is restored before returning, also on a throw.
+   * bound target with the camera on the INDOOR layer. MUST run BEFORE the
+   * depth wipe, right after the world pass, so it depth-tests against terrain
+   * and the other-landblock buildings exactly as retail LScape::draw tests all
+   * outdoor content together (acclient.c:461480, before Clear(4) at :461484).
    *
-   * Shadow maps are NOT re-rendered here (they were rendered by the world pass
-   * and are rendered again by the cells pass). The cells pass that follows
-   * redraws these nodes too: wherever they are nearer than the doorway wall the
-   * redraw lands at identical depth (LessEqual) and wins with identical colour;
-   * where they are beyond the wall it fails and this draw's colour stays —
-   * which is the point. Cost: these nodes draw twice on armed indoor frames
-   * that have a doorway in view.
+   * Narrowed to `remainderRect` (the union screen rect of the doorways being
+   * sealed, GL convention [0,1] y-up, from cells.js) — retail's PortalList
+   * clip: viewport set to the rect and the camera given the matching view
+   * offset, so both the cull frustum and the rasterised area are the doorway.
+   * Viewport, never scissor: a scissor on a multisampled target also clips the
+   * MSAA resolve (the 2026-10-05 black-box bug).
+   *
+   * Everything it touches — node visibility, camera mask / view / projection,
+   * target viewport, scene background, shadow-map auto update — is restored,
+   * also on a throw. Shadow maps are not re-rendered (the world pass rendered
+   * them). The cells pass redraws these nodes after the wipe: nearer than the
+   * wall at identical depth (LessEqual, same colour), beyond it rejected, so
+   * this draw's colour stays exactly where the doorway shows outdoors.
+   *
+   * @param {THREE.WebGLRenderer} renderer
+   * @param {THREE.Camera} cam
+   * @param {THREE.WebGLRenderTarget|null} target  null = the canvas
    */
-  drawOutdoorRemainder(renderer, cam) {
+  drawOutdoorRemainder(renderer, cam, target = null) {
     const rem = this.outdoorRemainder;
     const scene = rem && rem.scene;
     if (!scene || !rem.worldRoot || !cam || !cam.layers) return false;
@@ -647,6 +678,9 @@ export class PortalPunchPass extends Pass {
     const prevBg = scene.background;
     const shadowMap = renderer.shadowMap;
     const prevShadowAuto = shadowMap ? shadowMap.autoUpdate : undefined;
+    const prevAutoClear = renderer.autoClear;
+    const prevTarget = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
+    const narrow = narrowCameraToRect(renderer, cam, target, this.remainderRect);
     let n = 0;
     try {
       for (; n < hidden.length; n++) hidden[n].visible = false;
@@ -655,15 +689,21 @@ export class PortalPunchPass extends Pass {
       // world pass's colour.
       scene.background = null;
       if (shadowMap) shadowMap.autoUpdate = false;
+      renderer.autoClear = false;
+      if (renderer.setRenderTarget) renderer.setRenderTarget(target);
       renderer.render(scene, cam);
       this.remainderDraws++;
+      if (narrow) this.remainderNarrowed++;
       return true;
     } finally {
       for (let i = 0; i < n; i++) hidden[i].visible = true;
       hidden.length = 0;
+      if (narrow) narrow.restore();
       cam.layers.mask = prevMask;
       scene.background = prevBg;
       if (shadowMap) shadowMap.autoUpdate = prevShadowAuto;
+      renderer.autoClear = prevAutoClear;
+      if (renderer.setRenderTarget) renderer.setRenderTarget(prevTarget);
     }
   }
 
@@ -671,6 +711,289 @@ export class PortalPunchPass extends Pass {
     this._disposeApertureMesh();
     this._punchMat?.dispose();
     this._markMat?.dispose();
+    this._restoreMat?.dispose();
+    this._savedDepthRT?.dispose();
+    this._curDepthRT?.dispose();
     super.dispose?.();
+  }
+}
+
+/**
+ * Narrow `cam` + the render viewport to `rect` ([0,1] GL convention, y up).
+ * Returns `{ restore() }` or null when there is nothing to narrow (no rect, a
+ * degenerate rect, a camera without setViewOffset, or a rect covering the
+ * whole frame). Expands outward by one pixel so a doorway edge is never cut.
+ * Exported for the node test.
+ */
+export function narrowCameraToRect(renderer, cam, target, rect) {
+  if (!rect || !cam || typeof cam.setViewOffset !== "function") return null;
+  if (!(Number.isFinite(rect.x0) && Number.isFinite(rect.y0) &&
+        Number.isFinite(rect.x1) && Number.isFinite(rect.y1))) return null;
+  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) return null;
+  let W;
+  let H;
+  if (target) {
+    W = target.width | 0;
+    H = target.height | 0;
+  } else if (renderer && typeof renderer.getSize === "function") {
+    const v = renderer.getSize(new THREE.Vector2());
+    W = v.x | 0;
+    H = v.y | 0;
+  }
+  if (!(W > 0 && H > 0)) return null;
+  const x = Math.max(0, Math.floor(rect.x0 * W) - 1);
+  const y = Math.max(0, Math.floor(rect.y0 * H) - 1); // from the bottom
+  const x1 = Math.min(W, Math.ceil(rect.x1 * W) + 1);
+  const y1 = Math.min(H, Math.ceil(rect.y1 * H) + 1);
+  const w = x1 - x;
+  const h = y1 - y;
+  if (w <= 0 || h <= 0) return null;
+  if (x === 0 && y === 0 && w === W && h === H) return null;
+
+  const prevView = cam.view ? { ...cam.view } : null;
+  const prevProj = cam.projectionMatrix.clone();
+  const prevProjInv = cam.projectionMatrixInverse.clone();
+  const prevViewport = target ? target.viewport.clone() : null;
+  const prevRendererViewport =
+    !target && renderer && typeof renderer.getViewport === "function"
+      ? renderer.getViewport(new THREE.Vector4())
+      : null;
+  // three's view offset counts y from the TOP of the full frame.
+  cam.setViewOffset(W, H, x, H - y - h, w, h);
+  if (target) {
+    target.viewport.set(x, y, w, h);
+  } else if (renderer && typeof renderer.setViewport === "function") {
+    renderer.setViewport(x, y, w, h);
+  }
+  return {
+    x, y, w, h, W, H,
+    restore() {
+      cam.view = prevView;
+      cam.projectionMatrix.copy(prevProj);
+      cam.projectionMatrixInverse.copy(prevProjInv);
+      if (target && prevViewport) target.viewport.copy(prevViewport);
+      if (prevRendererViewport) renderer.setViewport(prevRendererViewport);
+    },
+  };
+}
+
+/**
+ * The per-pixel rule the depth restore implements (the GLSL in
+ * makeDepthRestoreMaterial is this function): under a sealed pixel, if the
+ * depth left after the cells pass still EQUALS the seal's own depth there,
+ * nothing interior drew in front of the wall, so the pixel shows outdoor
+ * colour and gets back the pre-wipe (outdoor) depth. Otherwise the interior
+ * surface that won keeps its depth.
+ */
+export const DEPTH_RESTORE_EPS = 1e-5;
+export function restoredDepth(cur, sealOwn, saved) {
+  return Math.abs(cur - sealOwn) <= DEPTH_RESTORE_EPS ? saved : cur;
+}
+
+// Fullscreen copy of a depth texture into a float colour target. texelFetch:
+// no filtering on a depth texture (implementation-defined with LINEAR).
+let _copyScene = null;
+let _copyCam = null;
+let _copyMat = null;
+function _depthCopyRig() {
+  if (_copyScene) return { scene: _copyScene, cam: _copyCam, mat: _copyMat };
+  _copyMat = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    uniforms: { tDepth: { value: null } },
+    vertexShader: /* glsl */ `
+      void main() {
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      precision highp float;
+      uniform highp sampler2D tDepth;
+      out vec4 _c;
+      void main() {
+        _c = vec4(texelFetch(tDepth, ivec2(gl_FragCoord.xy), 0).r, 0.0, 0.0, 1.0);
+      }`,
+    depthTest: false,
+    depthWrite: false,
+  });
+  _copyMat.name = "portal-seal-depth-copy";
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), _copyMat);
+  mesh.frustumCulled = false;
+  _copyScene = new THREE.Scene();
+  _copyScene.add(mesh);
+  _copyCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  return { scene: _copyScene, cam: _copyCam, mat: _copyMat };
+}
+
+function _ensureFloatRT(rt, w, h) {
+  if (rt && rt.width === w && rt.height === h) return rt;
+  rt?.dispose();
+  const next = new THREE.WebGLRenderTarget(w, h, {
+    type: THREE.FloatType,
+    format: THREE.RedFormat,
+    depthBuffer: false,
+    stencilBuffer: false,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    generateMipmaps: false,
+  });
+  next.texture.name = "portal-seal-depth";
+  return next;
+}
+
+function _copyDepth(renderer, depthTexture, rt) {
+  const rig = _depthCopyRig();
+  rig.mat.uniforms.tDepth.value = depthTexture;
+  renderer.setRenderTarget(rt);
+  renderer.render(rig.scene, rig.cam);
+  rig.mat.uniforms.tDepth.value = null;
+}
+
+function makeDepthRestoreMaterial() {
+  const vertexShader = /* glsl */ `
+      void main() {
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`;
+  // Same vertex math + same log-depth statements as the seal, so `own` is the
+  // value the seal stamped at this fragment. Then restoredDepth() verbatim.
+  const fragmentShader = /* glsl */ `
+      precision highp float;
+      uniform highp sampler2D tSaved;
+      uniform highp sampler2D tCur;
+      out vec4 _c;
+      void main() {
+        ivec2 p = ivec2(gl_FragCoord.xy);
+        #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+          float own = vIsPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;
+        #else
+          float own = gl_FragCoord.z;
+        #endif
+        float cur = texelFetch(tCur, p, 0).r;
+        gl_FragDepth = abs(cur - own) <= 1.0e-5 ? texelFetch(tSaved, p, 0).r : cur;
+        _c = vec4(0.0);
+      }`;
+  const m = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    uniforms: { tSaved: { value: null }, tCur: { value: null } },
+    vertexShader: withLogDepthVertex(vertexShader),
+    fragmentShader: withLogDepthFragment(fragmentShader),
+  });
+  m.name = "portal-seal-depth-restore";
+  m.colorWrite = false;
+  m.depthTest = true;
+  m.depthFunc = THREE.AlwaysDepth;
+  m.depthWrite = true;
+  m.side = THREE.DoubleSide;
+  return m;
+}
+
+/**
+ * Composer slot right AFTER the world pass and BEFORE the depth wipe: draws
+ * the seal's outdoor remainder against the world depth (retail LScape::draw
+ * order). Disabled unless the seal wants it this frame.
+ */
+export class SealRemainderPass extends Pass {
+  constructor(seal) {
+    super("SealRemainderPass");
+    this.seal = seal;
+    this.needsSwap = false;
+  }
+
+  render(renderer, inputBuffer) {
+    const seal = this.seal;
+    if (!seal || !seal.wantsRemainder) return;
+    try {
+      seal.drawOutdoorRemainder(renderer, seal.camera, inputBuffer);
+    } catch (e) {
+      seal._errored = true;
+      // eslint-disable-next-line no-console
+      console.warn("[portal_seal] outdoor-remainder pre-draw failed — seal DISABLED:", e);
+    }
+  }
+}
+
+/**
+ * Composer slot after the remainder pass and BEFORE the wipe: copy the
+ * outdoor depth aside for SealDepthRestorePass.
+ */
+export class SealDepthSavePass extends Pass {
+  constructor(seal) {
+    super("SealDepthSavePass");
+    this.seal = seal;
+    this.needsSwap = false;
+  }
+
+  render(renderer, inputBuffer) {
+    const seal = this.seal;
+    if (!seal) return;
+    seal._depthSaved = false;
+    const depth = inputBuffer?.depthTexture;
+    if (!seal.wantsDepthRestore || !depth) return;
+    const prev = renderer.getRenderTarget();
+    try {
+      seal._savedDepthRT = _ensureFloatRT(seal._savedDepthRT, inputBuffer.width, inputBuffer.height);
+      _copyDepth(renderer, depth, seal._savedDepthRT);
+      seal._depthSaved = true;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[portal_seal] depth save failed — restore skipped:", e);
+    } finally {
+      renderer.setRenderTarget(prev);
+    }
+  }
+}
+
+/**
+ * Composer slot right AFTER the cells pass: under the sealed pixels, give
+ * back the pre-wipe depth wherever the seal's wall is still the depth (see
+ * restoredDepth), so AerialPerspective / heat haze / horizon dissolve / the
+ * cloud overlay read the outdoor distance through a doorway instead of the
+ * wall. Two draws: a fullscreen depth copy and the aperture mesh.
+ */
+export class SealDepthRestorePass extends Pass {
+  constructor(seal) {
+    super("SealDepthRestorePass");
+    this.seal = seal;
+    this.needsSwap = false;
+    // The effects read pmndrs' STABLE depth copy, which the composer blits
+    // only after passes that ask for it (EffectComposer.render, 6.39.1
+    // build/index.js:1279). The cells RenderPass blitted before this pass ran,
+    // so ask for a re-blit or the restore is invisible to every effect.
+    this.needsDepthBlit = true;
+  }
+
+  render(renderer, inputBuffer) {
+    const seal = this.seal;
+    if (!seal || !seal._depthSaved) return;
+    seal._depthSaved = false;
+    const depth = inputBuffer?.depthTexture;
+    const cam = seal.camera;
+    if (!depth || !cam || !seal.hasApertures || !seal._apertureMesh) return;
+    const prev = renderer.getRenderTarget();
+    const prevAutoClear = renderer.autoClear;
+    const mesh = seal._apertureMesh;
+    const prevMat = mesh.material;
+    // This slot runs right after the cells pass, while the camera is still on
+    // the INDOOR-only mask; the aperture mesh lives on layer 0.
+    const prevMask = cam.layers.mask;
+    try {
+      cam.layers.mask = prevMask | 1;
+      seal._curDepthRT = _ensureFloatRT(seal._curDepthRT, inputBuffer.width, inputBuffer.height);
+      _copyDepth(renderer, depth, seal._curDepthRT);
+      if (!seal._restoreMat) seal._restoreMat = makeDepthRestoreMaterial();
+      seal._restoreMat.uniforms.tSaved.value = seal._savedDepthRT.texture;
+      seal._restoreMat.uniforms.tCur.value = seal._curDepthRT.texture;
+      mesh.material = seal._restoreMat;
+      renderer.autoClear = false;
+      renderer.setRenderTarget(inputBuffer);
+      renderer.render(seal.apertureScene, cam);
+      seal.depthRestores++;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[portal_seal] depth restore failed:", e);
+    } finally {
+      cam.layers.mask = prevMask;
+      mesh.material = prevMat;
+      renderer.autoClear = prevAutoClear;
+      renderer.setRenderTarget(prev);
+    }
   }
 }

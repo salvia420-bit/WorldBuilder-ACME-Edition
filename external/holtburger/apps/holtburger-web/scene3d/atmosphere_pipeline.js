@@ -50,7 +50,12 @@ import {
 import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atmosphere";
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
 import { PortalStencilPass } from "./portal_stencil.js";
-import { PortalPunchPass } from "./portal_punch.js";
+import {
+  PortalPunchPass,
+  SealRemainderPass,
+  SealDepthSavePass,
+  SealDepthRestorePass,
+} from "./portal_punch.js";
 import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_effect.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
@@ -886,6 +891,39 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // The render-target is the composer's input buffer (still being written
   // to between this and `fxPass`); the clear operates on its depth texture
   // (`composer.inputBuffer.depthTexture`).
+  // Live only when ?indoorDepthSplit is engaged (see the PORTAL SEAL note
+  // below); hoisted above the wipe because two of the seal's slots must run
+  // BEFORE it.
+  const indoorDepthSplitFlag = (() => {
+    try {
+      const v = new URLSearchParams(globalThis.location?.search || "").get("indoorDepthSplit");
+      return v !== "off"; // DEFAULT-ON (2026-08-04); "on"/"retail"/"strict"/absent all construct the seal slot
+    } catch (_) { return false; }
+  })();
+  const portalSealPass = indoorDepthSplitFlag ? new PortalPunchPass(scene, camera, "seal") : null;
+
+  // SEAL round 3 (2026-10-05) — the two seal slots that precede the wipe,
+  // retail PView::DrawCells order (acclient.c:461480-461484):
+  //   sealRemainderPass — the OUTDOOR REMAINDER (player-landblock shells and
+  //     statics cells.js relayered onto layer 1, plus outdoor entities) drawn
+  //     against the WORLD depth, so terrain / other-landblock houses occlude it
+  //     exactly as LScape::draw depth-tests all outdoor content together. Round
+  //     2 drew it after the wipe, against nothing.
+  //   sealDepthSavePass — copies that outdoor depth aside; sealDepthRestorePass
+  //     (after the cells pass) puts it back under the sealed pixels.
+  // All three are disabled unless the seal is live this frame (preFrameSkySync).
+  let sealRemainderPass = null;
+  let sealDepthSavePass = null;
+  let sealDepthRestorePass = null;
+  if (portalSealPass) {
+    sealRemainderPass = new SealRemainderPass(portalSealPass);
+    sealRemainderPass.enabled = false;
+    composer.addPass(sealRemainderPass);
+    sealDepthSavePass = new SealDepthSavePass(portalSealPass);
+    sealDepthSavePass.enabled = false;
+    composer.addPass(sealDepthSavePass);
+  }
+
   const depthClearPass = new ClearPass(false, true, false);
   depthClearPass.enabled = false;
   composer.addPass(depthClearPass);
@@ -898,19 +936,12 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // the indoor-split flag is live, so the composer pass list is byte-identical
   // otherwise. Ordering is load-bearing: AFTER depthClearPass, BEFORE the cells
   // mask/render pair.
-  // Live only when ?indoorDepthSplit is engaged. Read here rather than plumbed
-  // through options so the pipeline cannot be constructed in a state where the
-  // seal slot is missing while cells.js is arming the split. `off`/absent =>
-  // the pass is never constructed and the composer list is byte-identical.
-  const indoorDepthSplitFlag = (() => {
-    try {
-      const v = new URLSearchParams(globalThis.location?.search || "").get("indoorDepthSplit");
-      return v !== "off"; // DEFAULT-ON (2026-08-04); "on"/"retail"/"strict"/absent all construct the seal slot
-    } catch (_) { return false; }
-  })();
-  let portalSealPass = null;
-  if (indoorDepthSplitFlag) {
-    portalSealPass = new PortalPunchPass(scene, camera, "seal");
+  // Live only when ?indoorDepthSplit is engaged. Read (above) rather than
+  // plumbed through options so the pipeline cannot be constructed in a state
+  // where the seal slot is missing while cells.js is arming the split.
+  // `off`/absent => the pass is never constructed and the composer list is
+  // byte-identical.
+  if (portalSealPass) {
     portalSealPass.enabled = false;
     composer.addPass(portalSealPass);
   }
@@ -933,6 +964,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   cellsRenderPass.clearDepth = false;
   cellsRenderPass.enabled = false;
   composer.addPass(cellsRenderPass);
+
+  // SEAL round 3 — depth restore, right after the cells pass (see above).
+  if (portalSealPass) {
+    sealDepthRestorePass = new SealDepthRestorePass(portalSealPass);
+    sealDepthRestorePass.enabled = false;
+    composer.addPass(sealDepthRestorePass);
+  }
 
   // Restore the camera's mask to BOTH after the indoor split so downstream
   // consumers (CSM cascade matrices, picking raycasters, plugin scripts
@@ -1136,6 +1174,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
   let activeCamera = camera;
 
+  // Seal round 3 slots follow the seal: the remainder pre-draw when the seal
+  // has a remainder to draw, the depth save/restore when the wall is live.
+  function _setSealSlots(sealOn) {
+    if (sealRemainderPass) sealRemainderPass.enabled = sealOn && portalSealPass.wantsRemainder;
+    const restore = sealOn && portalSealPass.wantsDepthRestore;
+    if (sealDepthSavePass) sealDepthSavePass.enabled = restore;
+    if (sealDepthRestorePass) sealDepthRestorePass.enabled = restore;
+  }
+
   /**
    * Re-point the compound fx shader at a new render camera (2026-08-03 fix).
    *
@@ -1179,6 +1226,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     portalStencilPass,
     portalPunchPass,
     portalSealPass,
+    sealRemainderPass,
+    sealDepthSavePass,
+    sealDepthRestorePass,
     // Phase 5 PView render-order fix (2026-05-25) — exposed for diag
     // probes + the zfighting harness, which reads `depthClearPass.enabled`
     // to confirm the indoor split is wired.
@@ -1358,6 +1408,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //     caused the 2026-05-29 see-through); the punch is bounded to doorways.
         depthClearPass.enabled = false;
         if (portalSealPass) portalSealPass.enabled = false;
+        _setSealSlots(false);
         // (3) cells pass → interior EnvCells + entities (layer 1) with the world
         //     depth + punches intact (clear=false/clearDepth=false). Interior
         //     wins inside the punched doorways, loses behind the facade.
@@ -1386,35 +1437,29 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //     longer occlude the room the camera is standing in. Retail's
         //     `DrawBuilding` + `DrawEnvCell` loop at :461606.
         //
-        // KNOWN GAP vs retail: terrain depth is gone after the wipe, so the
-        // depth-reading post effects (aerial perspective, heat haze, clouds;
-        // horizonDissolve is switched off above while armed) read the doorway
-        // seal's depth for terrain and sky seen through a doorway, never the
-        // terrain's own distance. The old PERSPECTIVE seal (`?sealLogDepth=
-        // off`) writes ~0.98 at a 5 m doorway, which these effects decode as
-        // LOG depth, i.e. ~4 km: heavy aerial-perspective haze through every
-        // doorway. The log seal decodes as the wall distance: almost no haze
-        // (AerialPerspective here has sky:false). Outdoors, the same terrain
-        // gets distance haze between the two. Matching the outdoor look
-        // exactly would need the pre-wipe depth copied aside and restored
-        // under the sealed pixels after the cells pass (an extra depth copy + two fullscreen passes). Retail draws no
-        // atmosphere indoors, so there is no retail answer to copy. Tracked in
-        // the `sealLogDepth` docs row.
         // (2b) retail step 3 — seal the doorway planes at TRUE depth so the
         //      cells pass cannot overpaint the world-pass colour (terrain AND
         //      the layer-0 outdoor particles drawn with it) that is legitimately
         //      visible through the aperture. With `?sealLogDepth` (default on)
-        //      the seal pass FIRST draws the outdoor remainder — the player
-        //      landblock's relayered shells/statics and outdoor entities, which
-        //      sit on layer 1 — so they are painted before the wall, as retail
-        //      paints all outdoor content (LScape::draw) before the stamp
-        //      (PortalPunchPass.drawOutdoorRemainder; fed by cells.js
-        //      tickPortalSeal from the PView walk's outside view).
+        //      three more slots follow the seal (round 3, see where they are
+        //      added): sealRemainderPass draws the player-landblock outdoor
+        //      remainder BEFORE the wipe against the world depth (retail
+        //      LScape::draw order, acclient.c:461480-461484), and
+        //      sealDepthSavePass / sealDepthRestorePass put the outdoor depth
+        //      back under the sealed pixels after the cells pass, so the
+        //      depth-reading post effects (aerial perspective, heat haze, the
+        //      cloud overlay; horizonDissolve is off while armed) see the
+        //      terrain's real distance through a doorway instead of the wall.
+        //      Retail draws no atmosphere indoors; the bar is "the doorway view
+        //      looks like the same view outdoors". Fed by cells.js
+        //      tickPortalSeal from the PView walk's outside view.
         if (portalSealPass) portalSealPass.enabled = portalSealPass.hasApertures;
+        _setSealSlots(!!portalSealPass && portalSealPass.enabled);
         cellsMaskPass.enabled = true;
         cellsRenderPass.enabled = true;
       } else {
         if (portalSealPass) portalSealPass.enabled = false;
+        _setSealSlots(false);
         worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
         depthClearPass.enabled = false;
         cellsMaskPass.enabled = false;

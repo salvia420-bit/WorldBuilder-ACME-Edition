@@ -1,32 +1,38 @@
 // tests/portal_seal_retail_order.test.mjs
 //
-// The indoor portal SEAL in retail order (2026-10-05 round 2, `?sealLogDepth`).
+// The indoor portal SEAL in retail order (`?sealLogDepth`, round 3).
 // Retail PView::DrawCells (acclient.c:461450-461560):
-//   LScape::draw (ALL outdoor content) → Clear(Z) → DrawPortalPolyInternal(
-//   portal, 0) for the other_cell_id == -1 portals of the REACHED cells, only
-//   when outside_view.view_count != 0 → the cells.
+//   LScape::draw (ALL outdoor content, depth-tested together) → Clear(Z) →
+//   DrawPortalPolyInternal(portal, 0) for the other_cell_id == -1 portals of
+//   the REACHED cells (only when outside_view.view_count != 0) → the cells.
 //
-//   R1  DRAW ORDER (behavioural, not regex). A fake renderer rasterises one
-//       doorway pixel through the real composer sequence: world pass (layer 0)
-//       → depth clear → the real PortalPunchPass("seal").render → cells pass
-//       (layer 1). The player-landblock outdoor static cells.js relayers onto
-//       layer 1 and an entity in an outdoor landcell must be drawn BEFORE the
-//       stamp and stay visible through the doorway; an EnvCell, an indoor
-//       entity and an interior particle beyond the wall must not.
-//       Fails on the old seal pass (no pre-draw): the tree is drawn only by the
-//       cells pass, after the wall, and is rejected.
-//   R2  the pre-draw restores everything it touches (visibility, camera mask,
-//       scene.background, shadow auto-update), and `?sealLogDepth=off` skips it.
-//   R3  LOG-DEPTH MODEL: the seal's depth statements are three's own
-//       logdepthbuf chunk statements, and evaluated at the same point they give
-//       the value a MeshBasicMaterial fragment writes there (and the old
-//       perspective seal does not).
-//   R4  FEED (cells.js tickPortalSeal): apertures come from the PView walk's
-//       outside view (wasm getPViewOutsidePortals), not from every
-//       frustum-visible EnvCell; a mouthless dungeon (empty outside view)
-//       stamps nothing; a stale pkg falls back to the unrestricted export.
-//       Fails on the old feed (always the unrestricted export).
-//   R5  markOutdoorEntities flags outdoor-landcell entities, never the player.
+// A fake renderer rasterises a few named pixels through the REAL pass objects
+// in the composer's armed indoor order (atmosphere_pipeline.js):
+//   world (layer 0) → SealRemainderPass → SealDepthSavePass → depth clear →
+//   seal → cells (layer 1) → SealDepthRestorePass.
+//
+//   R1  the outdoor remainder (relayered player-landblock statics, outdoor
+//       entities) is drawn BEFORE the depth clear, against the world depth: a
+//       layer-0 hill in front of an outdoor NPC still hides it (round 2 drew the
+//       remainder after the clear and the NPC painted through the hill — this
+//       group fails on that code); with no hill the NPC shows through the
+//       doorway; EnvCells / indoor entities / interior particles beyond the
+//       wall never do.
+//   R2  everything the pre-draw touches is restored; `?sealLogDepth=off` skips
+//       all three seal slots (the old frame).
+//   R3  log-depth model: the seal's depth statements are three's own logdepthbuf
+//       chunk lines and evaluate to MeshBasic's depth at the same point.
+//   R4  feed (cells.js tickPortalSeal): reached cells only, dungeon → zero,
+//       stale pkg → fallback + one console warning, rect published.
+//   R5  the REAL landcell writer: loop.js dispatchEntityUpdate(KIND.POSITION)
+//       updates the cell an entity stands in, so one that spawned indoors and
+//       walked out is drawn before the wall (fails on the old loop.js: nothing
+//       wrote `_wireCellIdx`).
+//   R6  the pre-draw is narrowed to the doorway rect (camera view offset +
+//       target viewport) and both are restored.
+//   R7  depth restore: after the cells pass the sealed pixels carry the OUTDOOR
+//       depth again (what the post effects read), except where interior
+//       geometry won in front of the wall.
 //
 // Run: node tests/portal_seal_retail_order.test.mjs
 
@@ -34,25 +40,44 @@ import * as THREE from "three";
 import assert from "node:assert/strict";
 
 globalThis.location = { search: "" };
-const { PortalPunchPass, collectOutdoorRemainderHidden } = await import("../scene3d/portal_punch.js");
+globalThis.requestAnimationFrame = () => 0;
+globalThis.cancelAnimationFrame = () => {};
+globalThis.window = globalThis;
+
+const pp = await import("../scene3d/portal_punch.js");
+const {
+  PortalPunchPass, collectOutdoorRemainderHidden, SealRemainderPass,
+  SealDepthSavePass, SealDepthRestorePass, narrowCameraToRect, restoredDepth,
+} = pp;
 const { tickPortalSeal, markOutdoorEntities } = await import("../scene3d/cells.js");
 
 let groups = 0;
+let failures = 0;
 async function t(name, fn) {
-  await fn();
-  groups++;
-  console.log("  ok ", name);
+  try {
+    await fn();
+    groups++;
+    console.log("  ok ", name);
+  } catch (e) {
+    failures++;
+    console.log("  FAIL", name, "\n     ", String(e && e.message).split("\n").slice(0, 3).join("\n      "));
+  }
 }
 
 const WORLD_ONLY = 1 << 0;
 const INDOOR_ONLY = 1 << 1;
+const WALL = 0.3;
 
 // ---------------------------------------------------------------------------
-// One-pixel rasteriser. Every mesh carries `userData.px` = its depth at the
-// doorway pixel (undefined = does not cover it). Normal materials: LessEqual +
-// depth write. The seal material (depthFunc Always) writes the wall depth.
-function makePixelRenderer(wallDepth) {
-  const px = { color: "clear", depth: 1.0 };
+// Multi-pixel rasteriser. Mesh `userData.px` = { pixelName: depth }. Normal
+// materials: LessEqual + depth write. Special materials by name:
+//   portal-seal                 — Always: every pixel's depth := WALL (one doorway covers all)
+//   portal-seal-depth-copy      — snapshots every pixel's depth into the bound target
+//   portal-seal-depth-restore   — depth := restoredDepth(cur, WALL, saved) per pixel
+function makePixelRenderer(pixels) {
+  const px = {};
+  for (const p of pixels) px[p] = { color: "clear", depth: 1.0 };
+  const copies = new Map(); // texture -> {pixel: depth}
   const log = [];
   const renderer = {
     autoClear: true,
@@ -61,19 +86,36 @@ function makePixelRenderer(wallDepth) {
     getRenderTarget() { return this._target; },
     setRenderTarget(t) { this._target = t; },
     clearStencil() {},
-    clearDepth() { px.depth = 1.0; },
+    clearDepth() { for (const p of pixels) px[p].depth = 1.0; },
     render(scene, cam) {
       scene.traverseVisible((o) => {
         if (!o.isMesh || !o.layers.test(cam.layers)) return;
-        if (o.material?.name === "portal-seal") {
+        const mname = o.material?.name;
+        if (mname === "portal-seal") {
           log.push("SEAL");
-          px.depth = wallDepth;
+          for (const p of pixels) px[p].depth = WALL;
+          return;
+        }
+        if (mname === "portal-seal-depth-copy") {
+          log.push("COPY");
+          const snap = {};
+          for (const p of pixels) snap[p] = px[p].depth;
+          copies.set(this._target.texture, snap);
+          return;
+        }
+        if (mname === "portal-seal-depth-restore") {
+          log.push("RESTORE");
+          const saved = copies.get(o.material.uniforms.tSaved.value);
+          const cur = copies.get(o.material.uniforms.tCur.value);
+          for (const p of pixels) px[p].depth = restoredDepth(cur[p], WALL, saved[p]);
           return;
         }
         log.push(o.name);
-        const d = o.userData.px;
-        if (d === undefined) return;
-        if (d <= px.depth) { px.depth = d; px.color = o.name; }
+        const d = o.userData.px || {};
+        for (const p of pixels) {
+          if (d[p] === undefined) continue;
+          if (d[p] <= px[p].depth) { px[p].depth = d[p]; px[p].color = o.name; }
+        }
       });
     },
   };
@@ -89,6 +131,8 @@ function mesh(name, layer, px, ud = {}) {
 }
 
 // The live scene graph shape (index.js): scene → worldRoot → 5 groups.
+// Pixel A: plain doorway view. Pixel B: a hill rises in front of the NPC.
+// Pixel C: an interior chair stands in front of the doorway wall.
 function makeWorld() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x123456);
@@ -102,27 +146,26 @@ function makeWorld() {
   entitiesGroup.layers.set(1);
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
   scene.add(worldRoot);
-  // Doorway pixel, wall at 0.30. Terrain far away behind everything.
-  terrainGroup.add(mesh("terrain", 0, 0.9));
+  terrainGroup.add(mesh("terrain", 0, { A: 0.9, B: 0.9, C: 0.9 }));
+  terrainGroup.add(mesh("hill", 0, { B: 0.4 }));
   // Player-landblock outdoor content, relayered onto layer 1 by cells.js.
-  staticsGroup.add(mesh("tree", 1, 0.5, { __splitLayer: 1, landblockId: 0xa9b40000 }));
-  buildingsGroup.add(mesh("shell", 1, undefined, { __splitLayer: 1, landblockId: 0xa9b40000 }));
-  // Another landblock's house: stays on layer 0, drawn by the world pass.
-  buildingsGroup.add(mesh("otherLbHouse", 0, 0.7, { landblockId: 0xaab40000 }));
+  staticsGroup.add(mesh("tree", 1, { A: 0.5, B: 0.5, C: 0.5 }, { __splitLayer: 1, landblockId: 0xa9b40000 }));
+  buildingsGroup.add(mesh("shell", 1, {}, { __splitLayer: 1, landblockId: 0xa9b40000 }));
+  buildingsGroup.add(mesh("otherLbHouse", 0, { A: 0.7 }, { landblockId: 0xaab40000 }));
   // Interior-anchored particle: layer 1 at emission, NOT relayered.
-  staticsGroup.add(mesh("interiorParticle", 1, 0.35));
-  // An EnvCell surface beyond the wall (another building's room).
-  cellsGroup.add(mesh("envcell", 1, 0.6));
+  staticsGroup.add(mesh("interiorParticle", 1, { A: 0.35 }));
+  // EnvCells: one beyond the wall (another room), one chair in front of it.
+  cellsGroup.add(mesh("envcellFar", 1, { A: 0.6, B: 0.6 }));
+  cellsGroup.add(mesh("chair", 1, { C: 0.2 }));
   // Entities.
-  entitiesGroup.add(mesh("npcOutdoor", 1, 0.45, { __splitOutdoor: true }));
-  entitiesGroup.add(mesh("npcIndoorFar", 1, 0.4));
-  entitiesGroup.add(mesh("playerInRoom", 1, undefined));
+  entitiesGroup.add(mesh("npcOutdoor", 1, { A: 0.45, B: 0.45 }, { __splitOutdoor: true }));
+  entitiesGroup.add(mesh("npcIndoorFar", 1, { A: 0.4 }));
+  entitiesGroup.add(mesh("playerInRoom", 1, {}));
   return { scene, worldRoot, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup };
 }
 
 function makeSeal(world, opts = {}) {
   const pass = new PortalPunchPass(null, null, "seal", opts);
-  // One doorway quad (AC coords; the fake rasteriser ignores geometry).
   pass.setApertures([1, 4, 0, 5, 0, 1, 5, 0, 1, 5, 2, 0, 5, 2], null);
   pass.outdoorRemainder = {
     scene: world.scene,
@@ -134,81 +177,111 @@ function makeSeal(world, opts = {}) {
   return pass;
 }
 
-// The composer's armed indoor sequence (atmosphere_pipeline.js preFrameSkySync
-// `indoorSplitArmed && isIndoor`): worldMask → world → depthClear → seal →
-// cellsMask → cells → restore mask.
-function runIndoorFrame(world, seal, wallDepth) {
-  const cam = new THREE.PerspectiveCamera();
-  const { renderer, px, log } = makePixelRenderer(wallDepth);
-  const target = { isFakeTarget: true, scissor: new THREE.Vector4(), scissorTest: false, samples: 0, width: 4, height: 4 };
-  cam.layers.mask = WORLD_ONLY;
-  renderer.render(world.scene, cam);
-  log.push("CLEAR");
-  renderer.clearDepth();
+function fakeTarget() {
+  return {
+    isFakeTarget: true,
+    width: 400, height: 200, samples: 0,
+    scissor: new THREE.Vector4(), scissorTest: false,
+    viewport: new THREE.Vector4(0, 0, 400, 200),
+    depthTexture: { isFakeDepth: true },
+  };
+}
+
+// The composer's armed indoor sequence, pass for pass, with the real
+// PortalPunchPass + the three real seal slots (preFrameSkySync enables them
+// exactly when the seal has apertures).
+function runIndoorFrame(world, seal) {
+  const cam = new THREE.PerspectiveCamera(60, 2, 0.1, 5000);
+  cam.updateMatrixWorld();
   seal.camera = cam;
-  seal.render(renderer, target);
-  cam.layers.mask = INDOOR_ONLY;
-  renderer.render(world.scene, cam);
-  cam.layers.mask = WORLD_ONLY | INDOOR_ONLY;
-  return { px, log, cam, renderer };
+  const pixels = ["A", "B", "C"];
+  const { renderer, px, log } = makePixelRenderer(pixels);
+  const target = fakeTarget();
+  const remainder = new SealRemainderPass(seal);
+  const save = new SealDepthSavePass(seal);
+  const restore = new SealDepthRestorePass(seal);
+  cam.layers.mask = WORLD_ONLY;                 // worldMaskPass
+  renderer.setRenderTarget(target);
+  renderer.render(world.scene, cam);            // worldRenderPass
+  log.push("WORLD_DONE");
+  remainder.render(renderer, target);           // sealRemainderPass
+  save.render(renderer, target);                // sealDepthSavePass
+  log.push("CLEAR");
+  renderer.clearDepth();                        // depthClearPass
+  seal.render(renderer, target);                // portalSealPass
+  cam.layers.mask = INDOOR_ONLY;                // cellsMaskPass
+  renderer.setRenderTarget(target);
+  renderer.render(world.scene, cam);            // cellsRenderPass
+  restore.render(renderer, target);             // sealDepthRestorePass
+  cam.layers.mask = WORLD_ONLY | INDOOR_ONLY;   // cellsPostMaskPass
+  return { px, log, cam, renderer, target, restore };
 }
 
 console.log("portal seal — retail order");
 
-await t("R1 outdoor remainder is drawn before the stamp and survives it", () => {
+await t("R1 outdoor remainder is drawn between the world pass and the clear, depth-tested", () => {
   const world = makeWorld();
   const seal = makeSeal(world, { logDepth: true });
-  const { px, log } = runIndoorFrame(world, seal, 0.3);
-  const sealAt = log.indexOf("SEAL");
+  const { px, log } = runIndoorFrame(world, seal);
+  const worldDone = log.indexOf("WORLD_DONE");
   const clearAt = log.indexOf("CLEAR");
-  assert.ok(sealAt > clearAt, "seal after the depth clear");
-  const before = log.slice(clearAt + 1, sealAt);
+  const sealAt = log.indexOf("SEAL");
+  assert.ok(worldDone >= 0 && clearAt > worldDone && sealAt > clearAt, log.join(","));
+  const pre = log.slice(worldDone + 1, clearAt);
   for (const n of ["tree", "shell", "npcOutdoor"]) {
-    assert.ok(before.includes(n), `${n} must be drawn between the clear and the stamp; got ${before.join(",")}`);
+    assert.ok(pre.includes(n), `${n} must be drawn after the world pass and BEFORE the clear; got ${pre.join(",")}`);
   }
-  for (const n of ["envcell", "npcIndoorFar", "interiorParticle", "playerInRoom", "terrain", "otherLbHouse"]) {
-    assert.ok(!before.includes(n), `${n} must NOT be drawn before the stamp`);
+  for (const n of ["envcellFar", "chair", "npcIndoorFar", "interiorParticle", "playerInRoom"]) {
+    assert.ok(!pre.includes(n), `${n} must NOT be in the pre-draw`);
   }
-  // The nearest OUTDOOR thing in the doorway wins: the outdoor NPC (0.45) in
-  // front of the tree (0.5); the indoor NPC (0.40) and the EnvCell (0.60) lie
-  // beyond the wall (0.30) and are rejected.
-  assert.equal(px.color, "npcOutdoor");
+  assert.ok(!log.slice(clearAt + 1, sealAt).some((n) => n !== "COPY"), "nothing outdoor drawn between clear and stamp");
+  // A: nearest outdoor thing through the doorway is the outdoor NPC.
+  assert.equal(px.A.color, "npcOutdoor");
+  // B: the layer-0 hill (0.40) is in front of the NPC (0.45) and the tree
+  //    (0.50) — LScape::draw depth-tests them together, so the hill wins.
+  assert.equal(px.B.color, "hill");
+  // C: the interior chair in front of the wall wins.
+  assert.equal(px.C.color, "chair");
 });
 
-await t("R1b without the outdoor entity, the relayered tree is what shows", () => {
+await t("R1b without the outdoor entity, the relayered tree is what shows at A", () => {
   const world = makeWorld();
   world.entitiesGroup.children.find((c) => c.name === "npcOutdoor").userData.__splitOutdoor = false;
   const seal = makeSeal(world, { logDepth: true });
-  const { px } = runIndoorFrame(world, seal, 0.3);
-  assert.equal(px.color, "tree");
+  const { px } = runIndoorFrame(world, seal);
+  assert.equal(px.A.color, "tree");
+  assert.equal(px.B.color, "hill");
 });
 
-await t("R2 the pre-draw restores visibility, mask, background and shadow auto-update", () => {
+await t("R2 the pre-draw restores visibility, mask, background, shadow auto-update, autoClear", () => {
   const world = makeWorld();
   const bg = world.scene.background;
   const seal = makeSeal(world, { logDepth: true });
   const visBefore = [];
   world.scene.traverse((o) => visBefore.push(o.visible));
-  const { cam, renderer } = runIndoorFrame(world, seal, 0.3);
+  const { cam, renderer } = runIndoorFrame(world, seal);
   const visAfter = [];
   world.scene.traverse((o) => visAfter.push(o.visible));
   assert.deepEqual(visAfter, visBefore);
   assert.equal(world.scene.background, bg);
   assert.equal(renderer.shadowMap.autoUpdate, true);
+  assert.equal(renderer.autoClear, true);
   assert.equal(cam.layers.mask, WORLD_ONLY | INDOOR_ONLY);
   assert.equal(seal.remainderDraws, 1);
   const hidden = collectOutdoorRemainderHidden(seal.outdoorRemainder);
   assert.deepEqual(hidden.map((o) => o.name || o.type).sort(),
-    ["Group", "Group", "interiorParticle", "npcIndoorFar", "playerInRoom"].sort(),
-    "terrain + cells groups, the interior particle and the non-outdoor entities");
+    ["Group", "Group", "interiorParticle", "npcIndoorFar", "playerInRoom"].sort());
 });
 
-await t("R2b ?sealLogDepth=off (logDepth false) skips the pre-draw: the old frame", () => {
+await t("R2b ?sealLogDepth=off (logDepth false): no pre-draw, no depth save/restore", () => {
   const world = makeWorld();
   const seal = makeSeal(world, { logDepth: false });
-  const { log } = runIndoorFrame(world, seal, 0.3);
-  const before = log.slice(log.indexOf("CLEAR") + 1, log.indexOf("SEAL"));
-  assert.deepEqual(before, []);
+  assert.equal(seal.wantsRemainder, false);
+  assert.equal(seal.wantsDepthRestore, false);
+  const { log } = runIndoorFrame(world, seal);
+  const pre = log.slice(log.indexOf("WORLD_DONE") + 1, log.indexOf("CLEAR"));
+  assert.deepEqual(pre, []);
+  assert.ok(!log.includes("RESTORE"));
   assert.equal(seal.remainderDraws, 0);
 });
 
@@ -222,10 +295,8 @@ await t("R3 seal depth == MeshBasic log depth at the same point", () => {
   const sealFrag = fs.split("\n").find((l) => l.includes("gl_FragDepth ="));
   const sealVert = vs.split("\n").find((l) => l.includes("vFragDepth ="));
   assert.ok(chunkFrag && chunkVert && sealFrag && sealVert);
-  assert.equal(norm(sealFrag), norm(chunkFrag), "same fragment statement as MeshBasic's chunk");
-  assert.equal(norm(sealVert), norm(chunkVert), "same vertex statement as MeshBasic's chunk");
-
-  // Evaluate both at a doorway point 5 m in front of the renderer's camera.
+  assert.equal(norm(sealFrag), norm(chunkFrag));
+  assert.equal(norm(sealVert), norm(chunkVert));
   const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000);
   cam.updateMatrixWorld();
   const clip = new THREE.Vector4(0.3, 0.2, -5, 1).applyMatrix4(cam.matrixWorldInverse).applyMatrix4(cam.projectionMatrix);
@@ -242,75 +313,70 @@ await t("R3 seal depth == MeshBasic log depth at the same point", () => {
   };
   const sealDepth = evalStmts(sealVert, sealFrag);
   const basicDepth = evalStmts(chunkVert, chunkFrag);
-  assert.ok(Math.abs(sealDepth - basicDepth) < 1e-12, `${sealDepth} vs ${basicDepth}`);
+  assert.ok(Math.abs(sealDepth - basicDepth) < 1e-12);
   assert.ok(Math.abs(sealDepth - Math.log2(1 + 5) / Math.log2(1 + 5000)) < 1e-9);
-  // The old perspective seal wrote gl_FragCoord.z: ~0.98 here, i.e. kilometres
-  // away in the log buffer — the wall rejected almost nothing.
-  assert.ok(glFragCoordZ - sealDepth > 0.5, `perspective ${glFragCoordZ} vs log ${sealDepth}`);
+  assert.ok(glFragCoordZ - sealDepth > 0.5);
 });
 
 // ---------------------------------------------------------------------------
-// R4: the feed.
 function quadAt(y, x0, x1) {
-  // AC coords (Z-up): a 2x2 m doorway quad facing the camera at AC y = `y`.
   return [4, x0, y, 0, x1, y, 0, x1, y, 2, x0, y, 2];
 }
 function makeFeedScene3d() {
   const world = makeWorld();
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000);
-  // three Y-up; worldRoot maps AC (x, y, z) → three (x, z, -y) (index.js).
   world.worldRoot.rotation.x = -Math.PI / 2;
   world.worldRoot.updateMatrixWorld(true);
   camera.position.set(0, 1, 0);
   camera.lookAt(0, 1, -10); // = AC +y
   camera.updateMatrixWorld(true);
   const seal = new PortalPunchPass(null, null, "seal", { logDepth: true });
-  return {
-    ...world,
-    camera,
-    _indoorSplitArmed: true,
-    atmospherePipeline: { portalSealPass: seal },
-    seal,
-  };
+  return { ...world, camera, _indoorSplitArmed: true, atmospherePipeline: { portalSealPass: seal }, seal };
 }
 
-await t("R4 the seal is fed from the PView outside view, not every visible EnvCell", () => {
+await t("R4 the seal is fed from the PView outside view and publishes the doorway rect", () => {
   const s3 = makeFeedScene3d();
   const sh = {
     getPViewOutsidePortals: () => Float32Array.from([1, ...quadAt(5, -1, 1)]),
     getVisiblePortalApertures: () => Float32Array.from([2, ...quadAt(5, -1, 1), ...quadAt(8, 2, 4)]),
   };
   tickPortalSeal(s3, sh);
-  assert.equal(s3.seal.hasApertures, true);
-  assert.equal(s3.seal._apertureCount, 1, "only the reached cell's outdoor portal");
+  assert.equal(s3.seal._apertureCount, 1);
   assert.equal(s3._portalSealDiag.source, "pview-outside");
-  assert.ok(s3.seal.outdoorRemainder && s3.seal.outdoorRemainder.worldRoot === s3.worldRoot);
+  const r = s3.seal.remainderRect;
+  assert.ok(r && r.x1 > r.x0 && r.y1 > r.y0 && r.x0 > 0 && r.x1 < 1, JSON.stringify(r));
 });
 
 await t("R4b mouthless dungeon: empty outside view → no stamp, no pre-draw", () => {
   const s3 = makeFeedScene3d();
   const sh = {
     getPViewOutsidePortals: () => Float32Array.from([0]),
-    // The unrestricted export still sees the surface buildings of the loaded
-    // neighbour landblocks — the 0x01D90100 report.
     getVisiblePortalApertures: () => Float32Array.from([2, ...quadAt(5, -1, 1), ...quadAt(8, 2, 4)]),
   };
   tickPortalSeal(s3, sh);
   assert.equal(s3.seal.hasApertures, false);
   assert.equal(s3.seal.outdoorRemainder, null);
+  assert.equal(s3.seal.wantsRemainder, false);
 });
 
-await t("R4c stale pkg (no getPViewOutsidePortals) falls back to the unrestricted export", () => {
-  const s3 = makeFeedScene3d();
-  const sh = {
-    getVisiblePortalApertures: () => Float32Array.from([2, ...quadAt(5, -1, 1), ...quadAt(8, 2, 4)]),
-  };
-  tickPortalSeal(s3, sh);
-  assert.equal(s3.seal._apertureCount, 2);
-  assert.equal(s3._portalSealDiag.source, "frustum-unrestricted");
+await t("R4c stale pkg falls back to the unrestricted export and warns ONCE", () => {
+  const warns = [];
+  const prevWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const s3 = makeFeedScene3d();
+    const sh = { getVisiblePortalApertures: () => Float32Array.from([2, ...quadAt(5, -1, 1), ...quadAt(8, 2, 4)]) };
+    tickPortalSeal(s3, sh);
+    tickPortalSeal(s3, sh);
+    assert.equal(s3.seal._apertureCount, 2);
+    assert.equal(s3._portalSealDiag.source, "frustum-unrestricted");
+  } finally {
+    console.warn = prevWarn;
+  }
+  assert.equal(warns.filter((w) => w.includes("getPViewOutsidePortals")).length, 1);
 });
 
-await t("R4d disarmed split clears apertures and the remainder", () => {
+await t("R4d disarmed split clears apertures, remainder and rect", () => {
   const s3 = makeFeedScene3d();
   const sh = { getPViewOutsidePortals: () => Float32Array.from([1, ...quadAt(5, -1, 1)]) };
   tickPortalSeal(s3, sh);
@@ -318,23 +384,95 @@ await t("R4d disarmed split clears apertures and the remainder", () => {
   tickPortalSeal(s3, sh);
   assert.equal(s3.seal.hasApertures, false);
   assert.equal(s3.seal.outdoorRemainder, null);
+  assert.equal(s3.seal.remainderRect, null);
 });
 
-await t("R5 markOutdoorEntities: outdoor landcell → flagged; EnvCell, unknown, player → not", () => {
-  const mk = () => ({ root: { userData: {} } });
-  const a = { ...mk(), _wireCellIdx: 0x0021 };
-  const b = { ...mk(), _wireCellIdx: 0x0105 };
-  const c = { ...mk(), _outdoorCellIdx: 0x0003 };
-  const d = mk();
-  const self = { ...mk(), _outdoorCellIdx: 0x0010 };
-  const entityMap = new Map([[1, a], [2, b], [3, c], [4, d], [99, self]]);
-  const n = markOutdoorEntities({ entityManager: { entityMap, _localPlayerGuid: () => 99 } });
-  assert.equal(n, 2);
-  assert.equal(a.root.userData.__splitOutdoor, true);
-  assert.equal(b.root.userData.__splitOutdoor, false);
-  assert.equal(c.root.userData.__splitOutdoor, true);
-  assert.equal(d.root.userData.__splitOutdoor, false);
+await t("R5 loop.js KIND.POSITION writes the current landcell; an entity that walks out is drawn before the wall", async () => {
+  const { dispatchEntityUpdate } = await import("../scene3d/loop.js");
+  const { KIND } = await import("../scene3d/entity_dispatch.js");
+  globalThis.getLocalPlayerGuid = () => 99;
+  const npc = { root: { userData: {} }, _outdoorCellIdx: 0x0105 }; // spawned in an EnvCell
+  const self = { root: { userData: {} }, _outdoorCellIdx: 0x0010 };
+  const entityMap = new Map([[7, npc], [99, self]]);
+  // EntityManager._localPlayerGuid reads window.getLocalPlayerGuid (entities.js).
+  const em = { entityMap, setPose() {}, _localPlayerGuid: () => globalThis.getLocalPlayerGuid() };
+  const scene3d = { entityManager: em };
+  markOutdoorEntities(scene3d);
+  assert.equal(npc.root.userData.__splitOutdoor, false, "spawned indoors");
+  // It walks out: ACE sends its new position in outdoor landcell 0x0021.
+  dispatchEntityUpdate(scene3d, em, { kind: KIND.POSITION, guid: 7, landblockId: 0xa9b40021, x: 10, y: 20, z: 30 });
+  assert.equal(npc._wireCellIdx, 0x0021);
+  markOutdoorEntities(scene3d);
+  assert.equal(npc.root.userData.__splitOutdoor, true, "now outdoors → drawn before the wall");
+  // …and back inside.
+  dispatchEntityUpdate(scene3d, em, { kind: KIND.POSITION, guid: 7, landblockId: 0xa9b40105, x: 10, y: 20, z: 30 });
+  markOutdoorEntities(scene3d);
+  assert.equal(npc.root.userData.__splitOutdoor, false);
+  // The local player is never outdoor while the split is armed.
+  dispatchEntityUpdate(scene3d, em, { kind: KIND.POSITION, guid: 99, landblockId: 0xa9b40021, x: 1, y: 1, z: 1 });
+  markOutdoorEntities(scene3d);
   assert.equal(self.root.userData.__splitOutdoor, false);
 });
 
-console.log(`portal seal retail order: ${groups} groups ok`);
+await t("R6 the pre-draw is narrowed to the doorway rect and fully restored", () => {
+  const world = makeWorld();
+  const seal = makeSeal(world, { logDepth: true });
+  seal.remainderRect = { x0: 0.25, y0: 0.1, x1: 0.5, y1: 0.6 };
+  const cam = new THREE.PerspectiveCamera(60, 2, 0.1, 5000);
+  cam.updateMatrixWorld();
+  const projBefore = cam.projectionMatrix.clone();
+  seal.camera = cam;
+  const target = fakeTarget();
+  let seen = null;
+  const renderer = {
+    autoClear: true, shadowMap: { autoUpdate: true }, _t: null,
+    getRenderTarget() { return this._t; }, setRenderTarget(t) { this._t = t; },
+    render(_s, c) {
+      seen = { view: c.view ? { ...c.view } : null, viewport: target.viewport.clone(), proj: c.projectionMatrix.clone() };
+    },
+  };
+  new SealRemainderPass(seal).render(renderer, target);
+  assert.ok(seen && seen.view && seen.view.enabled, "camera view offset set during the draw");
+  // 400x200 target: x 0.25→100-1=99 … 0.5→200+1=201; y (bottom-up) 0.1→20-1=19 … 0.6→120+1=121.
+  assert.deepEqual([seen.viewport.x, seen.viewport.y, seen.viewport.z, seen.viewport.w], [99, 19, 102, 102]);
+  assert.deepEqual([seen.view.fullWidth, seen.view.fullHeight, seen.view.offsetX, seen.view.offsetY, seen.view.width, seen.view.height],
+    [400, 200, 99, 200 - 19 - 102, 102, 102]);
+  assert.ok(!seen.proj.equals(projBefore), "projection narrowed");
+  assert.equal(cam.view, null);
+  assert.ok(cam.projectionMatrix.equals(projBefore));
+  assert.deepEqual(target.viewport.toArray(), [0, 0, 400, 200]);
+  assert.equal(seal.remainderNarrowed, 1);
+  // Degenerate / full-frame rects do not narrow.
+  assert.equal(narrowCameraToRect(renderer, cam, target, { x0: 0, y0: 0, x1: 1, y1: 1 }), null);
+  assert.equal(narrowCameraToRect(renderer, cam, target, null), null);
+});
+
+await t("R7 after the cells pass the sealed pixels carry the OUTDOOR depth again", () => {
+  const world = makeWorld();
+  const seal = makeSeal(world, { logDepth: true });
+  const { px, log } = runIndoorFrame(world, seal);
+  assert.ok(log.includes("RESTORE"));
+  assert.equal(seal.depthRestores, 1);
+  // A: the post effects now read the outdoor NPC's distance, not the wall.
+  assert.equal(px.A.depth, 0.45);
+  // B: the hill.
+  assert.equal(px.B.depth, 0.4);
+  // C: the chair won in front of the wall and keeps its own depth.
+  assert.equal(px.C.depth, 0.2);
+  // The restore pass asks the composer to re-blit its stable depth copy.
+  assert.equal(new SealDepthRestorePass(seal).needsDepthBlit, true);
+  // The GLSL is restoredDepth(): same predicate, same seal depth expression.
+  const mat = seal._restoreMat;
+  assert.ok(mat, "restore material built");
+  assert.match(mat.fragmentShader, /gl_FragDepth = abs\(cur - own\) <= 1\.0e-5 \? texelFetch\(tSaved, p, 0\)\.r : cur;/);
+  const sealFrag = seal._punchMat.fragmentShader.split("\n").find((l) => l.includes("gl_FragDepth ="));
+  const rhs = sealFrag.split("=").slice(1).join("=").trim();
+  assert.ok(mat.fragmentShader.includes("float own = " + rhs), "own = the seal's log-depth expression");
+  assert.equal(mat.depthFunc, THREE.AlwaysDepth);
+  assert.equal(mat.colorWrite, false);
+  assert.equal(restoredDepth(WALL, WALL, 0.9), 0.9);
+  assert.equal(restoredDepth(0.2, WALL, 0.9), 0.2);
+});
+
+console.log(`portal seal retail order: ${groups} groups ok, ${failures} failed`);
+process.exit(failures ? 1 : 0);

@@ -53,6 +53,7 @@ const stubs = `
 // test stubs for stripped imports (test_a15_q3_dispatch_parity.mjs)
 const tickCellVisibility3D = () => {};
 const tickPvsLoadExpansion = () => {};
+const noteEntityLandcell = () => {}; // cells.js (door-seal landcell writer)
 const tickLightingForCellState = () => {};
 const getTerrainVisualZ = (sc, x, y, z) => z; // identity: unified setPose args == legacy
 const cullTerrainGroup = () => {};

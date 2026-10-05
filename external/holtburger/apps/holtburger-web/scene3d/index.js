@@ -2709,6 +2709,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
         activeCam.layers.mask = 1 << 0; // terrain (+ other LBs, still layer 0)
         renderer.render(scene, activeCam);
+        // (1b) SEAL round 3 — the outdoor remainder (player-landblock shells /
+        // statics relayered onto layer 1, outdoor entities) drawn NOW, against
+        // the terrain depth, before the wipe: retail LScape::draw depth-tests
+        // all outdoor content together before Clear(4) (acclient.c:461480-
+        // 461484). Same call the composer's SealRemainderPass makes; restores
+        // the camera mask / view / viewport itself. No-op unless the seal is
+        // live with apertures.
+        {
+          const sealPassPre = liveScene3dRef?._directPortalSealPass;
+          if (sealPassPre && sealPassPre.wantsRemainder) {
+            try {
+              sealPassPre.drawOutdoorRemainder(renderer, activeCam, null);
+            } catch (e) {
+              sealPassPre._errored = true;
+            }
+            activeCam.layers.mask = 1 << 0;
+          }
+        }
         // (2) depth-only wipe, colour kept — retail's `Clear(4, …, 1.0f)`.
         renderer.autoClear = false;
         renderer.clearDepth();
