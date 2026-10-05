@@ -17,6 +17,7 @@ import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 // the retail chain). Flag-off `serverTurnOwnsFacing()` is a constant false and
 // this file behaves byte-identically.
 import { serverTurnOwnsFacing } from "./server_turn.js";
+import { objectIsAttackable } from "./target_cycle.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -648,6 +649,24 @@ export function setupClickPicking({
     } catch (_) { return false; }
   }
 
+  // Retail ClientCombatSystem::ObjectIsAttackable over the spawn metas (see
+  // target_cycle.js objectIsAttackable). Doors, chests, signs, vendors and
+  // other non-attackable objects fail it, so they are never sent an attack
+  // and a combat-stance click on them takes the use path instead.
+  function entityIsAttackableTarget(guid) {
+    try {
+      const em = liveScene3d?.entityManager;
+      const get = (g) =>
+        em?.entityMap?.get?.(g >>> 0) || em?.entityMap?.get?.(String(g >>> 0)) || null;
+      const ent = get(guid);
+      if (!ent) return false;
+      const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      if (me !== 0 && (guid >>> 0) === me) return false; // never attack yourself
+      const self = me !== 0 ? get(me) : null;
+      return objectIsAttackable(ent.meta || ent, self ? (self.meta || self) : null);
+    } catch (_) { return false; }
+  }
+
   // F17-2 double-click bookkeeping, shared by every use-class branch:
   // consume on the second click inside the window, (re-)arm otherwise.
   function doubleClickGate(guid) {
@@ -1078,7 +1097,10 @@ export function setupClickPicking({
           };
           turnToFaceThenAct(guid, doCast, CAST_FACE_TARGET);
         }
-      } else if (isInMeleeStance?.() || isInRangedStance?.()) {
+      } else if ((isInMeleeStance?.() || isInRangedStance?.()) && entityIsAttackableTarget(guid)) {
+        // A non-attackable object (door, chest, NPC, lever) falls through to
+        // the use branch below in every stance, as in retail
+        // (ItemHolder::UseObject, acclient.c:433545) and OpenAC.
         // Retail UX — click on the monster only TARGETS it. Firing
         // happens via the combat-bar Hi/Med/Lo buttons (which call
         // `window.__fireAttackOnTarget(height)` below). Lets the
@@ -1233,6 +1255,12 @@ export function setupClickPicking({
     if (targetGuid === 0) {
       console.log("[fire-attack] no target selected — click a monster first");
       emitActionRejected("Select a target first."); // F11-5
+      return;
+    }
+    // Retail ExecuteAttack (acclient.c:408640) drops a target that fails
+    // ObjectIsAttackable and prints this line instead of attacking.
+    if (!entityIsAttackableTarget(targetGuid)) {
+      emitActionRejected("You must select a valid combat target before attacking");
       return;
     }
     const cb = window.__combatBarState;

@@ -89,6 +89,46 @@ export function matchesSelectionType(meta, type) {
   }
 }
 
+export const ODF_PLAYER_KILLER = 0x00000020; // PK
+export const ODF_FREE_PK_STATUS = 0x00200000;
+export const ODF_PKLITE_STATUS = 0x02000000;
+
+/**
+ * Retail `ClientCombatSystem::ObjectIsAttackable` (acclient.c:407410), the
+ * gate `ExecuteAttack` (acclient.c:408640) applies to the selected target
+ * before it sends a Targeted{Melee,Missile}Attack. OpenAC ports it verbatim
+ * (SelectedObjectHealthPolicy.ObjectIsAttackable). In order:
+ *   1. not a Creature (ItemType 0x10) → NOT attackable. A door is ItemType
+ *      Misc, so it is never a target even though ACE stamps Attackable on
+ *      some doors and items.
+ *   2. target or player in free-PK status → attackable.
+ *   3. a player target → both PK, or both PK-lite.
+ *   4. a pet (owned summon) → no. The spawn meta carries no pet owner, so a
+ *      `petOwner` field is honoured only when present.
+ *   5. otherwise the Attackable ODF bit (0x10).
+ * An unknown target (no meta) is not attackable, the same as retail's missing
+ * weenie object.
+ *
+ * @param {{itemType?:number, objDescFlags?:number, petOwner?:number}|null} target
+ * @param {{objDescFlags?:number}|null} player the local player's meta
+ */
+export function objectIsAttackable(target, player) {
+  if (!target) return false;
+  const it = (target.itemType >>> 0) || 0;
+  if ((it & ITEM_TYPE_CREATURE) === 0) return false;
+  const todf = (target.objDescFlags >>> 0) || 0;
+  if ((todf & ODF_FREE_PK_STATUS) !== 0) return true;
+  if (!player) return false;
+  const podf = (player.objDescFlags >>> 0) || 0;
+  if ((podf & ODF_FREE_PK_STATUS) !== 0) return true;
+  if ((todf & ODF_PLAYER) !== 0) {
+    if ((todf & ODF_PLAYER_KILLER) !== 0 && (podf & ODF_PLAYER_KILLER) !== 0) return true;
+    return (todf & ODF_PKLITE_STATUS) !== 0 && (podf & ODF_PKLITE_STATUS) !== 0;
+  }
+  if ((target.petOwner >>> 0) !== 0) return false;
+  return (todf & ODF_ATTACKABLE) !== 0;
+}
+
 /**
  * Core SelectNext ordering (acclient.c:397944-398210), factored pure.
  *

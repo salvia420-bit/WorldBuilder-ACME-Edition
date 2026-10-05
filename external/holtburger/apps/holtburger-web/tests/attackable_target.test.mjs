@@ -1,0 +1,82 @@
+// tests/attackable_target.test.mjs — owner report 2026-10-05: "doors are fine,
+// I can attack them though, view OpenAC to see their behavior".
+//
+// Retail gates every attack on ClientCombatSystem::ObjectIsAttackable
+// (acclient.c:407410; ExecuteAttack drops a failing target at :408640), and
+// OpenAC ports it as SelectedObjectHealthPolicy.ObjectIsAttackable. The first
+// test is ItemType.Creature, so a door (ItemType Misc, ODF Door, sometimes
+// Attackable too) is never a combat target. A combat-stance click on it takes
+// the use path instead (ItemHolder::UseObject, acclient.c:433545).
+//
+// Pins the pure policy (scene3d/target_cycle.js objectIsAttackable) on
+// ACE-shaped metas, plus the picking.js wiring (DOM + three.js, so source
+// assertions in the same style as tests/target_cycle.test.cjs).
+//
+// Run: node tests/attackable_target.test.mjs   (from apps/holtburger-web/)
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { objectIsAttackable } from "../scene3d/target_cycle.js";
+
+// ACE ItemType / ObjectDescriptionFlag bits.
+const IT_CREATURE = 0x10, IT_MISC = 0x80, IT_CONTAINER = 0x200;
+const IT_MELEE = 0x1;
+const ODF_STUCK = 0x4, ODF_PLAYER = 0x8, ODF_ATTACKABLE = 0x10, ODF_PK = 0x20;
+const ODF_DOOR = 0x1000, ODF_FREE_PK = 0x200000, ODF_PKLITE = 0x2000000;
+
+const me = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_ATTACKABLE };
+
+test("doors are never attackable, with or without ACE's Attackable bit", () => {
+  assert.equal(objectIsAttackable({ itemType: IT_MISC, objDescFlags: ODF_STUCK | ODF_DOOR }, me), false);
+  assert.equal(
+    objectIsAttackable({ itemType: IT_MISC, objDescFlags: ODF_STUCK | ODF_DOOR | ODF_ATTACKABLE }, me),
+    false, "Attackable alone is not enough: retail checks ItemType.Creature first");
+});
+
+test("other non-creatures are not attackable (chests, loose items)", () => {
+  assert.equal(objectIsAttackable({ itemType: IT_CONTAINER, objDescFlags: ODF_STUCK | ODF_ATTACKABLE }, me), false);
+  assert.equal(objectIsAttackable({ itemType: IT_MELEE, objDescFlags: 0x12 }, me), false, "live dagger ODF 0x12");
+});
+
+test("monsters are attackable; non-attackable NPCs are not", () => {
+  assert.equal(objectIsAttackable({ itemType: IT_CREATURE, objDescFlags: ODF_STUCK | ODF_ATTACKABLE }, me), true);
+  assert.equal(objectIsAttackable({ itemType: IT_CREATURE, objDescFlags: ODF_STUCK }, me), false, "town NPC");
+  assert.equal(
+    objectIsAttackable({ itemType: IT_CREATURE, objDescFlags: ODF_ATTACKABLE, petOwner: 0x50000001 }, me),
+    false, "owned pet");
+});
+
+test("players: PK vs PK and PK-lite vs PK-lite only, free-PK always", () => {
+  const npk = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_ATTACKABLE };
+  const pk = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_PK };
+  const pkl = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_PKLITE };
+  assert.equal(objectIsAttackable(npk, me), false, "non-PK player");
+  assert.equal(objectIsAttackable(pk, me), false, "PK target, non-PK me");
+  assert.equal(objectIsAttackable(pk, pk), true);
+  assert.equal(objectIsAttackable(pkl, pkl), true);
+  assert.equal(objectIsAttackable(pkl, pk), false);
+  assert.equal(objectIsAttackable({ ...npk, objDescFlags: ODF_PLAYER | ODF_FREE_PK }, me), true);
+  assert.equal(objectIsAttackable(npk, { objDescFlags: ODF_PLAYER | ODF_FREE_PK }), true);
+});
+
+test("unknown target is not attackable", () => {
+  assert.equal(objectIsAttackable(null, me), false);
+  assert.equal(objectIsAttackable({}, me), false);
+});
+
+test("picking.js gates the attack and routes non-attackable clicks to use", () => {
+  const src = readFileSync(new URL("../scene3d/picking.js", import.meta.url), "utf8");
+  assert.match(src, /import \{ objectIsAttackable \} from "\.\/target_cycle\.js";/);
+  // fireAttackOnSelectedTarget refuses before any wire send.
+  const fire = src.slice(src.indexOf("function fireAttackOnSelectedTarget("));
+  const gate = fire.indexOf("if (!entityIsAttackableTarget(targetGuid))");
+  assert.ok(gate > 0, "attack gate present");
+  assert.ok(gate < fire.indexOf("missileAttack("), "gate precedes the missile send");
+  assert.ok(gate < fire.indexOf("const fireOnce"), "gate precedes the melee/missile senders");
+  assert.match(fire, /You must select a valid combat target before attacking/);
+  // Combat-stance click: only an attackable target stays on the select-only
+  // branch; a door falls through to the double-click useObject branch.
+  assert.match(src,
+    /\} else if \(\(isInMeleeStance\?\.\(\) \|\| isInRangedStance\?\.\(\)\) && entityIsAttackableTarget\(guid\)\) \{/);
+});
