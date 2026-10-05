@@ -2635,7 +2635,7 @@ export class CameraSwitcher {
       // With the raw command both lanes converge on speed 0.65 / sign -1 →
       // timeScale -0.779 = -(2.028 / 2.6017), the COL-10 table's value.
       else if (m.forward < 0) { fwdCmd = 0x45000006; }                   // WalkBackwards (adjust_motion at setMotion)
-      else if (m.strafe !== 0) { fwdCmd = 0x41000003; }                 // idle base under a pure strafe
+      else if (m.strafe !== 0) { fwdCmd = 0x6500000f; fwdSpeed = m.strafe < 0 ? -1.0 : 1.0; } // pure strafe IS the cycle (2026-10-05)
       else if (m.turn > 0) { fwdCmd = 0x6500000d; }                     // TurnRight
       else if (m.turn < 0) { fwdCmd = 0x6500000e; }                     // TurnLeft
       else { fwdCmd = 0x41000003; }                                     // Ready (stop → idle)

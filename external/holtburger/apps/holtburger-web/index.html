@@ -3521,6 +3521,23 @@
           }
         });
       }
+      // ?fullscreen=1 — browsers refuse requestFullscreen without a user
+      // gesture, so arm a one-shot listener: the first click/keypress
+      // enters fullscreen on the canvas column (same target as the button).
+      if (canvasColumn && /^(1|on|true|yes)$/i.test(new URLSearchParams(location.search).get("fullscreen") || "")) {
+        const enterFs = (ev) => {
+          if (ev.target === fullscreenBtn) return;
+          window.removeEventListener("pointerdown", enterFs, true);
+          window.removeEventListener("keydown", enterFs, true);
+          if (!document.fullscreenElement) {
+            canvasColumn.requestFullscreen?.()
+              .then(() => setTimeout(() => window.dispatchEvent(new Event("resize")), 50))
+              .catch((e) => console.warn("[fullscreen] request failed:", e));
+          }
+        };
+        window.addEventListener("pointerdown", enterFs, true);
+        window.addEventListener("keydown", enterFs, true);
+      }
       // Combat-stance UI state. Module-scoped so both the keymap
       // handler (in renderHoltburg's closure) and handleEntityMotion
       // (top-level) can write to the same indicator. Reverse map
@@ -10047,7 +10064,16 @@
                         if (fwd > 0) forwardCmd = run ? 0x44000007 : 0x45000005;
                         else if (fwd < 0) forwardCmd = 0x45000006;
                         else forwardCmd = 0x41000003;
-                        em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance);
+                        // 2026-10-05: a pure strafe IS the cycle (retail
+                        // CMotionTable sidestep-as-substate); the sidestep
+                        // layer below rides the mixer, which UNIFIED_LOCO
+                        // no longer advances. Sign carries direction.
+                        let fwdSpeed = 1.0;
+                        if (fwd === 0 && side !== 0) {
+                          forwardCmd = 0x6500000f;
+                          fwdSpeed = side < 0 ? -1.0 : 1.0;
+                        }
+                        em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance, fwdSpeed);
                       }
                       // Row 13 (setSidestepLayer replacement): always
                       // the SideStepRight clip, sign carries direction

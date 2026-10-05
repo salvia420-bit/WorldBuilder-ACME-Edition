@@ -9109,6 +9109,13 @@ export class EntityManager {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return false;
     inst._castSequenceToken = ((inst._castSequenceToken | 0) + 1) | 0;
+    // 2026-10-05: a Ready setMotion no longer pre-empts a one-shot (see
+    // _preemptUnifiedForMotion), so the deliberate cut frees it here.
+    if (inst._unifiedSeq?.clearOnDone) {
+      this._clearUnifiedQueue(inst);
+      try { inst._unifiedSeq.seq.free(); } catch (_) { /* already freed */ }
+      inst._unifiedSeq = null;
+    }
     inst._castBusyUntilMs = 0; // F8-4 — cancelled cast frees the busy window
     inst._castChainActive = false; // WS08b — cancelled cast is no longer in flight
     // WS16 diag: tag the cancel cause (anim-break / fizzle / UseDone / recast).
@@ -9368,6 +9375,12 @@ export class EntityManager {
     if (!inst._unifiedSeq) return;
     const incoming = classifyMotionCommand(motionCommand >>> 0);
     if ((incoming === "attack" || incoming === "cast") && inst._unifiedSeq.clearOnDone) return;
+    // 2026-10-05: retail never cuts a queued action/link on a Ready re-issue
+    // (same-substate re-speed / remove_cyclic_anims only, acclient.c:337780ff).
+    // The per-press MaybeStopCompletely (457f9de1) emits DriveApplied(Ready),
+    // which freed the cast gesture here before it could play. Deliberate cuts
+    // (anim-break / fizzle) free it in cancelCastSequence instead.
+    if (incoming === "idle" && inst._unifiedSeq.clearOnDone) return;
     const ua = inst._unifiedSeq;
     this._clearUnifiedQueue(inst); // frees every pending record except `ua`
     try { ua.seq.free(); } catch (_) { /* already freed */ }
@@ -10107,6 +10120,14 @@ export class EntityManager {
       motionSpeed =
         -0.64999998 * (Number.isFinite(sIn) && sIn !== 0 ? Math.abs(sIn) : 1.0);
     }
+    // 2026-10-05: SideStepLeft → SideStepRight with NEGATED speed (retail
+    // adjust_motion, acclient.c:343746) — the later Left→Right remap alone
+    // kept the speed positive, so a left strafe played the right cycle.
+    if (((motionCommand >>> 0) & 0xffff) === CMD_LOW_SIDESTEP_LEFT) {
+      const sIn = +motionSpeed;
+      motionCommand = (((motionCommand >>> 0) & 0xffff0000) | CMD_LOW_SIDESTEP_RIGHT) >>> 0;
+      motionSpeed = -(Number.isFinite(sIn) && sIn !== 0 ? Math.abs(sIn) : 1.0);
+    }
     // CQ-06 (2026-07-27) — death-hold guard, retail refusal semantics. Once a
     // sequence is in the Dead substate, retail REFUSES motions with no path
     // out of it: the player MT has NO `links[(stance, Dead)]` (dump-verified,
@@ -10566,6 +10587,17 @@ export class EntityManager {
       inst._forwardCommand = cmd >>> 0;
       inst._forwardSpeed = inst._motionSpeed ?? 1.0;
     }
+    // 2026-10-05 — peace↔combat draw/sheathe: retail GetObjectSequence's
+    // style branch (acclient.c:337700-745; OpenAC CMotionTable.cs:158-212)
+    // plays links[(oldStyle, Ready)][newStyle] (or the two-hop via the
+    // default style) before the new style's cycle. We only ever swapped the
+    // Ready cycle, so the rig snapped.
+    if (
+      UNIFIED_LOCO && (cmd & 0xffff) === CMD_LOW_READY &&
+      prevStance !== 0 && (stance & 0xffff) !== (prevStance & 0xffff)
+    ) {
+      this._playStyleLink(inst, setupId, mtableId, prevStance, stance);
+    }
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
@@ -10883,7 +10915,11 @@ export class EntityManager {
     // owned by the predictor. If so, only stamp the stance — the predictor
     // re-issues Run/Walk with the new stance on its next input tick
     // (it reads getStance), so the active clip is left untouched.
-    const lastCls = classifyMotionCommand((inst.lastMotionCommand ?? 0) >>> 0);
+    // 2026-10-05: no prior command (fresh spawn, never moved) is NOT moving —
+    // the ?mtClassFallback classifier maps a bare 0 to "walk", which made
+    // every stance change before the first step stamp-only (no draw anim).
+    const lastCmd = (inst.lastMotionCommand ?? 0) >>> 0;
+    const lastCls = lastCmd ? classifyMotionCommand(lastCmd) : null;
     const moving = lastCls === "walk" || lastCls === "run";
     if (!changed || moving) {
       // No pose swap: just record the confirmed stance so getStance()
@@ -12454,6 +12490,20 @@ export class EntityManager {
    * Intra-link multi-segment chaining (windup→strike→recover within ONE link
    * record) IS already handled by try_resolve_link_frames (T4, lib.rs).
    */
+  // Stance-change link (see setMotion): direct links[(from, Ready)][to], else
+  // the retail two-hop through the default style (acclient.c:337726).
+  async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
+    const full = (s) => (((s >>> 0) & 0xffff) | 0x80000000) >>> 0;
+    const from = full(fromStyle), to = full(toStyle);
+    const o = { forceUnified: true };
+    if (await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, from, o)) return;
+    const DEF = 0x8000003d; // NonCombat = the humanoid default_style
+    if (from !== DEF && to !== DEF &&
+        await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, DEF, from, o)) {
+      await this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, to, DEF, o);
+    }
+  }
+
   async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance, opts = undefined) {
     // Returns true when a clip was resolved and played (or handed to the
     // unified one-shot), false otherwise — the door-state caller falls back
@@ -12519,7 +12569,8 @@ export class EntityManager {
         : null;
     if (
       (UNIFIED_ATTACK && _unifiedCls === "attack") ||
-      (UNIFIED_CAST && _unifiedCls === "cast")
+      (UNIFIED_CAST && _unifiedCls === "cast") ||
+      (UNIFIED_LOCO && opts?.forceUnified === true && entry?.sequenceDescriptor)
     ) {
       // Build the swing as a one-shot in the RUST MotionSequence interpreter.
       // The class is read off window.__hbWasm (typeof-guarded): a stale pkg/
@@ -15201,9 +15252,25 @@ export class EntityManager {
           // advancing the playhead faster/slower. frameNumber carries phase, so
           // the swap band-aids (CROSSFADE_S=0, RESUME_WINDOW) aren't needed.
           const lo = inst._unifiedLoco;
-          lo.seq.advance(dt * this._unifiedLocoGaitScale(inst, lo.base));
-          poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
-          this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
+          const step = dt * this._unifiedLocoGaitScale(inst, lo.base);
+          if (step >= 0) {
+            lo.seq.advance(step);
+            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
+            this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
+          } else {
+            // 2026-10-05: advance() ignores dt<=0 (motion_sequence.rs
+            // advance_impl), so a backstep/left-strafe (negative speed) froze
+            // the cycle. Retail runs it backwards (CSequence::update_internal,
+            // acclient.c:340659) — step the phase back and seek.
+            const dur = +lo.desc.duration || 0;
+            if (dur > 0) {
+              let p = lo.seq.phase + step / dur;
+              p -= Math.floor(p);
+              lo.seq.seekPhase(p);
+            }
+            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
+            lo.lastHookTime = -1; // no reverse footfall spam
+          }
         } else {
           inst.mixer.update(dt);
         }
