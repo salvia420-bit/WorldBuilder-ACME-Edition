@@ -5584,12 +5584,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // the offending depth consumer is identified.
               punchOcclusion:
                 new URLSearchParams(window.location.search).get("punchOcclusion")?.toLowerCase() === "on",
-              // ?punchRetail=on (2026-10-05) — retail DRAW ORDER for the
-              // outdoor doorway punch: terrain → punch → shells/statics/cells/
-              // entities in ONE world pass (no world/cells split, no scissor,
-              // no stencil). See atmosphere_pipeline.js `punchPhaseOpaqueSort`.
+              // ?punchRetail (2026-10-05, DEFAULT-ON; `=off` escape restores the
+              // world/cells split) — retail DRAW ORDER for the outdoor doorway
+              // punch: terrain → punch → shells/statics/cells/entities in ONE
+              // world pass (no split, no scissor, no stencil). See
+              // atmosphere_pipeline.js `punchPhaseOpaqueSort`.
               punchRetail:
-                new URLSearchParams(window.location.search).get("punchRetail")?.toLowerCase() === "on",
+                new URLSearchParams(window.location.search).get("punchRetail")?.toLowerCase() !== "off",
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // Expose the portal-stencil pass (null when the flag is off) so
