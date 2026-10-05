@@ -919,7 +919,7 @@ import {
   acQuatToThree,
   acToThree,
 } from "./adapter.js";
-import { AnimationCache, cycleTimeScale, hasRootMotion } from "./animation.js";
+import { AnimationCache, cycleTimeScale } from "./animation.js";
 // Routes the recolored/paletted entity-surface decode through the bake worker
 // (off the main thread) with a transparent main-thread fallback.
 // `surfacePixelsFetcher` does the same for the non-recolored entity surface
@@ -11642,8 +11642,8 @@ export class EntityManager {
     // (clearOnDone:false) — retail's "play the link, then enter the
     // framerate-0 hold cycle". It goes straight onto the playhead (a state
     // change is not a queued gesture). Door sounds + the Ethereal flip ride its
-    // hooks; `?rootMotionObject` applies its net root displacement on natural
-    // completion (remote entities only), as the mixer `finished` listener did.
+    // hooks. The link is posed from its raw part frames, and no root motion is
+    // applied to the anchor (see _playStateHoldLink).
     if (opts?.stateHold && this._playStateHoldLink(inst, entry, fromCmd, toCmd, stance)) {
       return true;
     }
@@ -11696,19 +11696,29 @@ export class EntityManager {
     if (!seq) return false;
     const rec = {
       seq, desc: d, clearOnDone: false, stateHold: true,
-      // Posed in place like the mixer clip it replaces (buildAnimationClip
-      // subtracts the common per-frame translation from every clip).
-      inPlace: true,
+      // RAW part frames (retail CPartArray::UpdateParts), NOT in place.
+      // 2026-10-05 owner report: the door opened the wrong way / protruded
+      // into the building, and the next use threw it ~1 m outward. The
+      // in-place fix subtracts the MEAN translation of all parts relative to
+      // the clip's frame 0. That is right for a locomotion stride, but a door
+      // swing is hinge motion, so the leaves' origins sweep an arc and the
+      // mean moves with them. Measured on the retail DATs: double door
+      // 0x03000767 (5 parts) mean -0.40 m y; 0x03000559 (3 parts) -0.65 m;
+      // single-leaf 0x03000c17 about 2 m. Subtracting that slid the static
+      // frame/lintel parts and dragged the leaves off their hinges. A reversed
+      // (On→Off) link starts at the OPEN frame, so the closed hold ended up
+      // offset the opposite way, and every use snapped the door back and
+      // forth by that amount. The mixer bake had the same subtraction
+      // (buildAnimationClip B1-render v2); retail never had any of it.
+      inPlace: false,
       hooks: entry.hooks || null, lastHookTime: -1,
       speed: this._unifiedOneShotSpeed(inst),
     };
-    if (
-      this._rootMotionObjectOn &&
-      hasRootMotion(entry.rootMotionNet) &&
-      !this._isLocalPlayerGuid(inst.guid >>> 0)
-    ) {
-      this._armUnifiedRootMotion(inst, rec, entry.rootMotionNet);
-    }
+    // No `?rootMotionObject` arm here. The link HOLDS its final frame, and that
+    // frame already carries the bake's folded root motion (DIM5_2_ROOT_ORIENT,
+    // posed raw above). Also moving the anchor by the net on completion would
+    // count the displacement twice, once more on every use. (The surveyed
+    // door/chest/lever anims carry no pos_frames, so this is a guard.)
     const prev = inst._unifiedSeq;
     this._clearUnifiedQueue(inst); // frees every pending record except `prev`
     if (prev) { try { prev.seq.free(); } catch (_) { /* already freed */ } }
@@ -14051,7 +14061,10 @@ export class EntityManager {
           const step = dt * this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0);
           if (step >= 0) {
             lo.seq.advance(step);
-            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
+            // A held door/chest state cycle is a static pose, so it is posed
+            // raw. In place is for locomotion strides only (see
+            // _playStateHoldLink).
+            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, lo.hold !== true);
             this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
           } else {
             // 2026-10-05: advance() ignores dt<=0 (motion_sequence.rs

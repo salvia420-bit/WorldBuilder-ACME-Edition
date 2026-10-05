@@ -36,7 +36,11 @@ function frames(yOffset, n = NUM_FRAMES) {
   for (let f = 0; f < n; f += 1) {
     for (let p = 0; p < PART_COUNT; p += 1) {
       const b = (f * PART_COUNT + p) * 7;
-      flat[b] = p; flat[b + 1] = 0; flat[b + 2] = 0;
+      flat[b] = p; flat[b + 2] = 0;
+      // Door links (700 = Off→On, 800 = On→Off) swing part 1 like a hinged
+      // leaf: its origin moves, parts 0/2 (the frame) stay put. The mean part
+      // translation therefore moves too, which in-place posing would subtract.
+      flat[b + 1] = (yOffset === 700 || yOffset === 800) && p === 1 ? -0.25 * f : 0;
       flat[b + 3] = 1; flat[b + 4] = f / 100; flat[b + 5] = yOffset / 1000;
     }
   }
@@ -168,6 +172,11 @@ test("doors: spawn holds the state, links play as HELD one-shots, re-broadcasts 
   for (let i = 0; i < 20; i += 1) em.tick(0.05);
   assert.equal(door._unifiedSeq, open, "hold survives completion");
   assert.equal(partY(door), 703, "held on the link's final (open) frame");
+  // 2026-10-05 door regression: a state link is posed from its RAW frames.
+  // In place would subtract the leaf's mean sweep (-0.25 m here) from every
+  // part and drag the static frame along with it.
+  assert.equal(door.parts[0].position.y, 0, "static door frame part is not dragged");
+  assert.ok(Math.abs(door.parts[1].position.y - -0.75) < 1e-6, "leaf at its authored open position");
 
   // Both triggers of one change (server Motion + SetState kind=15) → one play.
   await em.setMotion(door.guid, DOOR_ON, 0, 1.0);
@@ -182,6 +191,7 @@ test("doors: spawn holds the state, links play as HELD one-shots, re-broadcasts 
   assert.equal(open.seq.__wbg_ptr, 0, "previous hold freed");
   for (let i = 0; i < 20; i += 1) em.tick(0.05);
   assert.equal(partY(door), 803, "held closed");
+  assert.equal(door.parts[0].position.y, 0, "closed hold not offset either");
   assert.equal(door.mixer, undefined, "no mixer anywhere");
   em.dispose();
 });
