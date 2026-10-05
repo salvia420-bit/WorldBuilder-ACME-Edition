@@ -51,6 +51,7 @@
 
 import * as THREE from "three";
 import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
+import { withLogDepth } from "./shader_logdepth.js";
 
 // ── retail constants ───────────────────────────────────────────────────
 export const PORTAL_SETUP_ENUM = 0x10000001; // portalspace_background
@@ -284,7 +285,9 @@ function readPose() {
 function tunnelMaterial(map, surf) {
   const opacity = Math.max(0, Math.min(1, 1 - (+surf.translucency || 0)));
   const ld = new THREE.Vector3(LIGHT_DIR_AC[0], LIGHT_DIR_AC[2], -LIGHT_DIR_AC[1]).normalize().negate();
-  return new THREE.ShaderMaterial({
+  // withLogDepth: the renderer uses a logarithmic depth buffer, and the
+  // tunnel depth-tests against itself.
+  return new THREE.ShaderMaterial(withLogDepth({
     uniforms: {
       map: { value: map },
       hasMap: { value: map ? 1 : 0 },
@@ -322,7 +325,7 @@ function tunnelMaterial(map, surf) {
     transparent: opacity < 1,
     depthWrite: opacity >= 1,
     side: THREE.DoubleSide,
-  });
+  }));
 }
 
 async function resolveDid(wasm, enumValue, fallback) {

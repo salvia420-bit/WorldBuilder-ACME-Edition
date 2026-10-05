@@ -162,9 +162,13 @@ check(
 // static: tick(dt) reaches the phase exactly once behind the "off" gate
 const offGate = 'if (particleClockMode() === "off") this.tickParticlesAndScripts();';
 check("tick(dt) tail = off-gated tickParticlesAndScripts() call", entitiesSrc.includes(offGate));
+// Two call sites since PROJ-VIS (2026-10-05): the tail of tick(dt) and the
+// dt<=0 stall-recovery early return. They are mutually exclusive per frame —
+// the early-return one must be immediately followed by `return;`.
 check(
-  "exactly ONE call site of tickParticlesAndScripts() in entities.js",
-  entitiesSrc.split("this.tickParticlesAndScripts()").length === 2
+  "tickParticlesAndScripts() runs at most once per frame (tail + early-return branch only)",
+  entitiesSrc.split("this.tickParticlesAndScripts()").length === 3 &&
+    /if \(particleClockMode\(\) === "off"\) this\.tickParticlesAndScripts\(\);\s*return;/.test(entitiesSrc)
 );
 check(
   "moved block not duplicated (ONE _worldParticleManager.tick() in entities.js)",
