@@ -79,6 +79,7 @@ import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js"
 import { attachStaticDefaultScriptsWorld } from "./statics.js";
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
 import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
+import { objectBakeAllowed, tickObjectRadius } from "./object_radius.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -3191,6 +3192,9 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     if (seen.has(lbKey)) continue;
     seen.add(lbKey);
   }
+  // ?objRadius (perf T7, default off ⇒ no-op): hide/show object-baked LBs
+  // against the near radius on each landblock crossing.
+  tickObjectRadius(scene3d, seen);
   // 2026-05-28 perf: expand the load ring by one LB so prefetch leads
   // motion. Drive-2 captured a 3.3s spike at +101.9s when the player
   // approached the edge of the original PVS-driven ring and 6 new LBs
@@ -3391,6 +3395,8 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   const fireOne = (lbKey) => {
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
+    // ?objRadius (perf T7): outside the near radius the ring is terrain-only.
+    const objOk = objectBakeAllowed(seen, lbKey);
     if (loadTerrain) {
       try {
         loadTerrain(lbX, lbY);
@@ -3402,7 +3408,7 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
         }
       }
     }
-    if (loadStatics) {
+    if (loadStatics && objOk) {
       try {
         loadStatics(lbX, lbY);
       } catch (e) {
@@ -3413,7 +3419,7 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
         }
       }
     }
-    if (loadBuildings) {
+    if (loadBuildings && objOk) {
       try {
         loadBuildings(lbX, lbY);
       } catch (e) {
@@ -3443,14 +3449,17 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   const sBaked = scene3d.staticsBakedLbs instanceof Set ? scene3d.staticsBakedLbs : null;
   const bBaked = scene3d.buildingsBakedLbs instanceof Set ? scene3d.buildingsBakedLbs : null;
   const isNewBake = (lbKey) => {
+    // ?objRadius (perf T7): objects outside the near radius are never "new" —
+    // fireOne will not start them, so counting them would hold the sweep open.
+    const objOk = objectBakeAllowed(seen, lbKey);
     if (loadTerrain && tBaked && !tBaked.has(lbKey)) return true;
-    if (loadStatics && sBaked && !sBaked.has(lbKey)) return true;
-    if (loadBuildings && bBaked && !bBaked.has(lbKey)) return true;
+    if (objOk && loadStatics && sBaked && !sBaked.has(lbKey)) return true;
+    if (objOk && loadBuildings && bBaked && !bBaked.has(lbKey)) return true;
     // No baked-Set wired for a present domain → can't prove baked; treat as new
     // so we still make progress (and the per-key guard dedups the re-fire).
     if (loadTerrain && !tBaked) return true;
-    if (loadStatics && !sBaked) return true;
-    if (loadBuildings && !bBaked) return true;
+    if (objOk && loadStatics && !sBaked) return true;
+    if (objOk && loadBuildings && !bBaked) return true;
     return false;
   };
 

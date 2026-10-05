@@ -94,6 +94,21 @@ stand, but both of its 1070 runs ended in a browser disconnect that is not yet e
 coincided with the box going offline; the first did not). Still unmeasured on a GPU: frame time for
 any of these; the next 1070 session needs the owner's sleep disabled and a working 3D capture.
 
+**Status (2026-10-05) — T7 landed opt-in as `?objRadius=N`** (scene3d/object_radius.js). Statics and
+buildings bake only within Chebyshev N of the player's landblock while terrain fills the whole ring;
+object-baked landblocks past N+1 are hidden (top-level nodes, chunk-bucket + atlas instances via the
+park seams, instanced animated props) and shown again at <= N. Memory is still released per whole
+landblock at eviction (per-kind eviction would split the LRU's mixed disposables; not done). Live,
+SwiftShader, same tour, final stop back at Holtburg: base 79 statics-baked landblocks / 10,851 visible
+bucket+atlas instances; `objRadius=2` 50 / 2,994 (-72%), 0 errors. Not a default (retail draws objects
+across `mid_width = 11`); not yet wired into the quality presets; GPU frame time unmeasured.
+Found and fixed on the way (both affect the DEFAULT build, not just the flag): (1) an atlas re-home
+(`_atlasRefeedImpl`, fires when a surface's texture lands later) re-added VISIBLE instances for a
+landblock that was already parked; (2) instanced animated props of a parked landblock kept their
+shared-InstancedMesh slots and drew in their last pose. Ghost check with `objRadius=2&lbCap=20`
+over Holtburg -> 14 east -> back: up to 176 parked landblocks owning 10,994 bucket/atlas instances,
+0 visible; parked animated props collapse (1,512) and restore on unpark.
+
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.
 - **holtburger:** `static_batch_x.js:1451` sets `perObjectFrustumCulled = true` on every bucket, which costs 5.72 ms of per-instance rebuild. The SPEC answer at `pool_registry.js:377-378` sets `perObjectFrustumCulled=false` and relies on 768 m sector node culling. The frame-cost doc §3d measured that trade at **+420k tris/frame (+81%)** on buckets, and the trade "would invert on weaker hardware".

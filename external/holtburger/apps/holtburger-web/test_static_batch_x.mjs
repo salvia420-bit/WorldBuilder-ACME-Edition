@@ -42,7 +42,7 @@ const factory = new Function(
   stripped +
     "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
     "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
-    "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, " +
+    "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, batchXInstancesForLb, " +
     "tickStatBatchXOptimize, getStatBatchXStats };"
 );
 const M = factory(THREE);
@@ -414,6 +414,9 @@ for (const dedup of [false, true]) {
   check(`P4[${tag}]: park flags visibility (memo invalidation) and deletes nothing`,
     bm._visibilityChanged === true && bm.userData.instances === 6 &&
     bm._instanceInfo.filter((i) => i.active).length === 6);
+  check(`P4b[${tag}]: ghost diag counts LBa's instances as active and hidden`,
+    M.batchXInstancesForLb(LBa).join() === "3,0" && M.batchXInstancesForLb(LBb).join() === "3,3",
+    `${M.batchXInstancesForLb(LBa)} / ${M.batchXInstancesForLb(LBb)}`);
   M.parkStaticBatchXForLb(LBa); // idempotent
   const shown = M.unparkStaticBatchXForLb(LBa);
   check(`P5[${tag}]: unpark restores LBa (6 visible again)`,

@@ -2376,6 +2376,11 @@ export class LandblockLRU {
     if (typeof s._unparkStaticBatchXForLb === "function") {
       try { s._unparkStaticBatchXForLb(lbKey); } catch (_) {}
     }
+    // ?objRadius (perf T7): a landblock outside the object near radius must
+    // stay hidden after the re-attach above. No-op when the flag is off.
+    if (typeof s._objRadiusAfterUnpark === "function") {
+      try { s._objRadiusAfterUnpark(lbKey); } catch (_) {}
+    }
     // Rebuild the static script emitters from the stashed anchors (statics
     // children AND interior anchors inside cell containers — both stamp
     // userData.isStaticScriptAnchor). Fire-and-forget: the rebuild is

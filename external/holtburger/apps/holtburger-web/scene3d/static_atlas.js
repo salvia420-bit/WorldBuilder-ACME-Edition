@@ -1064,7 +1064,7 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   ptErrorUnwound: 0,
   // ST5 (`?texCompressedOnly` + `atlasRefeed`) re-home tally (pass 5 S8):
   // all zero unless the compressed-only arm is live.
-  refeeds: 0, rehomedNodes: 0, emptyBucketsGCd: 0, ptFullHoldout: 0 };
+  refeeds: 0, rehomedNodes: 0, emptyBucketsGCd: 0, ptFullHoldout: 0, refeedRehides: 0 };
 const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlased
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
@@ -1964,10 +1964,42 @@ export function _atlasRefeedImpl(rsId) {
         }
       }
     } catch (_) { /* fail-soft: nodes keep their current form */ }
+    // A re-home lands on its own clock (texture arrival), so its landblock may
+    // be PARKED or hidden by ?objRadius by now; the instances it just added are
+    // visible, which painted a hidden landblock until it next unparked. Re-apply
+    // the hide for any landblock the scene says must not show (2026-10-05).
+    try {
+      const hiddenFn = _lastScene3d._lbObjectsHidden;
+      if (typeof hiddenFn === "function") {
+        const lbs = new Set();
+        for (const n of toFeed) {
+          const lb = n?.userData?.landblockId;
+          if (lb != null) lbs.add(((lb >>> 0) & 0xffff0000) >>> 0);
+        }
+        for (const k of lbs) {
+          if (hiddenFn(k)) { parkStaticAtlasForLb(k); _atlasStats.refeedRehides += 1; }
+        }
+      }
+    } catch (_) { /* fail-soft */ }
   }
   return list.length;
 }
 registerAtlasRefeed(_atlasRefeedImpl);
+
+/** Diag: [active, visible] atlas instances this landblock owns (ghost check). */
+export function atlasInstancesForLb(lbKey) {
+  const list = _lbMembership.get(lbKey >>> 0);
+  let active = 0, visible = 0;
+  for (const m of list || []) {
+    if (m.iid == null) continue;
+    const b = _buckets.get(m.bucketKey);
+    const inf = b?.bm?._instanceInfo?.[m.iid];
+    if (!inf || !inf.active) continue;
+    active += 1;
+    if (inf.visible) visible += 1;
+  }
+  return [active, visible];
+}
 
 /**
  * Phase 9a warm-park (W4 §3.2): hide an LB's atlas instances WITHOUT

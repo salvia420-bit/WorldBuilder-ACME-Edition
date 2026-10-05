@@ -716,6 +716,34 @@ function _writeInstancedPose(inst, g) {
   }
 }
 
+/**
+ * Collapse an instanced anchor's slots to a zero-scale matrix (drawn as
+ * nothing) while it must not show: its landblock is PARKED (the slots stay in
+ * the shared InstancedMesh, so before this a parked landblock's animated props
+ * kept drawing in their last pose — the same ghost class as the static chunk
+ * buckets), or its anchor is hidden (`?objRadius`). Idempotent; the loop
+ * rewrites the real pose the frame it may show again.
+ */
+const _ZERO_MAT = new THREE.Matrix4().makeScale(0, 0, 0);
+function _collapseInstanced(inst) {
+  if (inst.collapsed) return;
+  for (const s of inst.slots) {
+    s.bucket.mesh.setMatrixAt(s.index, _ZERO_MAT);
+    _markDirty(s.bucket, s.index);
+  }
+  inst.collapsed = true;
+  _collapseStats.collapses += 1;
+}
+const _collapseStats = { collapses: 0, restores: 0 };
+/** Diag: how often instanced props were collapsed/restored (park, ?objRadius). */
+export function animatedSceneryCollapseStats() { return { ..._collapseStats }; }
+
+/** False when the anchor or any ancestor is hidden (visible === false). */
+function _anchorVisible(node) {
+  for (let o = node; o; o = o.parent) if (o.visible === false) return false;
+  return true;
+}
+
 /** Orphan reclaim for an instanced anchor: swap-remove each slot. */
 function _reclaimInstancedSlots(inst) {
   for (const s of inst.slots) {
@@ -1095,7 +1123,10 @@ function _ensureRaf() {
         // re-attach this node. Skip it (it is invisible and un-posed while
         // parked) and reclaim on the tick after the pool true-disposes it.
         // See `_isParkedLb`.
-        if (_isParkedLb(inst.node)) continue;
+        if (_isParkedLb(inst.node)) {
+          if (inst.instanced) _collapseInstanced(inst);
+          continue;
+        }
         if (inst.instanced) _reclaimInstancedSlots(inst); // shared geometry — reclaim slots, dispose nothing
         try { inst.node.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); }); } catch (_) {}
         _builtKeys.delete(inst.key);
@@ -1103,6 +1134,17 @@ function _ensureRaf() {
         const g = _didGroups.get(inst.animId);
         if (g && --g.refCount <= 0) _disposeDidGroup(inst.animId);
         continue;
+      }
+      if (inst.instanced) {
+        if (!_anchorVisible(inst.node)) { _collapseInstanced(inst); continue; }
+        if (inst.collapsed) {
+          // Showing again: restore the pose now, even past the distance cull
+          // below (which would otherwise leave it collapsed indefinitely).
+          inst.collapsed = false;
+          _collapseStats.restores += 1;
+          const g0 = _didGroups.get(inst.animId);
+          if (g0) _writeInstancedPose(inst, g0);
+        }
       }
       if (camPos) {
         const p = inst.node.position;

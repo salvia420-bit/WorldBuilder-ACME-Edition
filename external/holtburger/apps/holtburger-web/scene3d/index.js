@@ -57,6 +57,7 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
+import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides } from "./object_radius.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
@@ -4008,6 +4009,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             self.landblockLru?.track(lbKeyForLru);
           }
         } catch (_) {}
+        // ?objRadius (perf T7, default off ⇒ no-op): a bake landing outside
+        // the near radius is hidden on arrival.
+        afterObjectBake(self, lbKeyForLru);
         // GAP 2 (2026-05-29) — light newly-streamed building geometry.
         self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
@@ -4066,6 +4070,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             self.landblockLru?.track(lbKeyForLru);
           }
         } catch (_) {}
+        // ?objRadius (perf T7, default off ⇒ no-op): see the buildings loader.
+        afterObjectBake(self, lbKeyForLru);
         // GAP 2 (2026-05-29) — light newly-streamed static geometry.
         self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.staticsGroup) {
@@ -6164,6 +6170,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // retained — see static_batch_x.js parkStaticBatchXForLb).
     liveScene3d._parkStaticBatchXForLb = parkStaticBatchXForLb;
     liveScene3d._unparkStaticBatchXForLb = unparkStaticBatchXForLb;
+    // ?objRadius (perf T7): unpark re-shows bucket/atlas instances; this
+    // re-hides them for a landblock still outside the near radius (no-op off).
+    liveScene3d._objRadiusAfterUnpark = (lbKey) => objRadiusAfterUnpark(liveScene3d, lbKey);
+    // Must this landblock's objects be hidden right now (parked, or outside
+    // ?objRadius)? Consulted by late shared-buffer feeds (atlas re-home) that
+    // land after the park/hide already ran.
+    liveScene3d._lbObjectsHidden = (lbKey) => {
+      try { if (liveScene3d.landblockLru?.isParked?.(lbKey)) return true; } catch (_) {}
+      return objectRadiusHides(liveScene3d, lbKey);
+    };
+    if (typeof window !== "undefined") window.__objRadius = () => getObjectRadiusStats(liveScene3d);
     // ?statGeomCache (default-OFF, perf T3) — the shared statics geometry's two
     // LRU seams: release an evicted LB's lease, and trim the unowned set (to
     // its budget, or harder while the live-geometry governor is engaged).

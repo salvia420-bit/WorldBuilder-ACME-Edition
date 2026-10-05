@@ -2465,6 +2465,21 @@ export function unparkStaticBatchXForLb(lbKey) {
   return _setLbVisible(lbKey, true);
 }
 
+/** Diag: [active, visible] bucket instances this landblock owns (ghost check). */
+export function batchXInstancesForLb(lbKey) {
+  const list = _lbMembership.get(_lbKeyOfId(lbKey));
+  let active = 0, visible = 0;
+  for (const m of list || []) {
+    for (const iid of m.iids || []) {
+      const inf = m.bm._instanceInfo?.[iid];
+      if (!inf || !inf.active) continue;
+      active += 1;
+      if (inf.visible) visible += 1;
+    }
+  }
+  return [active, visible];
+}
+
 function _setLbVisible(lbKey, visible) {
   const list = _lbMembership.get(_lbKeyOfId(lbKey));
   if (!list) return 0;
