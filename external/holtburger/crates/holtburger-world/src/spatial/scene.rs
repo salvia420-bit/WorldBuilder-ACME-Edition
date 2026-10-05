@@ -1002,6 +1002,9 @@ pub struct SpatialScene {
     /// outdoor→EnvCell pick once this landblock's buildings are known;
     /// before that it keeps the legacy entry test.
     building_portal_landblocks: Arc<HashSet<u32>>,
+    /// Collision round 3 (F6): building physics BSPs by `Arc` address, see
+    /// [`Self::insert_building_physics_bsp`] / [`Self::is_building_bsp`].
+    building_bsps: Arc<HashMap<usize, std::sync::Weak<CellPhysicsBsp>>>,
     /// Workstream C (3D camera collision, 2026-05-11): per-landblock
     /// world-space AABB index for non-building outdoor static placements
     /// (signs, props, trees). Keyed by the landblock high word (the
@@ -1390,6 +1393,7 @@ impl SpatialScene {
             building_origins: Arc::new(HashMap::new()),
             building_transit_cells: Arc::new(HashMap::new()),
             building_portal_landblocks: Arc::new(HashSet::new()),
+            building_bsps: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
@@ -3806,14 +3810,51 @@ impl SpatialScene {
             .push(Arc::new(bsp));
     }
 
+    /// Collision round 3, issue 2 (F6): [`Self::insert_static_physics_bsp`]
+    /// for a BUILDING's physics BSP (a LandBlockInfo building's GfxObj or
+    /// Setup part), additionally remembered as a building so the faithful
+    /// bridge can collide it the way retail's
+    /// `CBuildingObj::find_building_collisions` does (acclient.c:719116-719129:
+    /// `bldg_check = 1` around the part's BSP). The identity is the shared
+    /// `Arc` (the outdoor overlap bake re-registers the same `Arc` per land
+    /// cell); a `Weak` guards against address reuse after the BSP is dropped.
+    pub fn insert_building_physics_bsp(&mut self, landblock_high: u32, bsp: CellPhysicsBsp) {
+        self.bump_collision_rev();
+        let bsp = Arc::new(bsp);
+        Arc::make_mut(&mut self.building_bsps)
+            .insert(Arc::as_ptr(&bsp) as usize, Arc::downgrade(&bsp));
+        Arc::make_mut(&mut self.statics_physics_bsp)
+            .entry(landblock_high)
+            .or_default()
+            .push(bsp);
+    }
+
+    /// Is `bsp` a building's physics BSP (registered through
+    /// [`Self::insert_building_physics_bsp`])?
+    pub fn is_building_bsp(&self, bsp: &Arc<CellPhysicsBsp>) -> bool {
+        self.building_bsps
+            .get(&(Arc::as_ptr(bsp) as usize))
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|known| Arc::ptr_eq(&known, bsp))
+    }
+
     /// B4 Tier-2: drop every static physics BSP for `landblock_high`
     /// (mirror of `clear_static_aabbs_for_landblock`). Returns the removed
     /// count for diagnostic logging.
     pub fn clear_static_physics_bsps_for_landblock(&mut self, landblock_high: u32) -> usize {
         self.bump_collision_rev();
-        match Arc::make_mut(&mut self.statics_physics_bsp).remove(&landblock_high) {
+        let removed = match Arc::make_mut(&mut self.statics_physics_bsp).remove(&landblock_high) {
             Some(v) => v.len(),
             None => 0,
+        };
+        self.prune_building_bsps();
+        removed
+    }
+
+    /// Drop building-BSP identities whose BSP no longer exists anywhere.
+    fn prune_building_bsps(&mut self) {
+        if self.building_bsps.values().any(|w| w.strong_count() == 0) {
+            Arc::make_mut(&mut self.building_bsps).retain(|_, w| w.strong_count() > 0);
         }
     }
 
@@ -4292,6 +4333,7 @@ impl SpatialScene {
                 }
             }
         }
+        self.prune_building_bsps();
 
         // DAT-01 phase 2a (2026-07-27): the SCENERY family. Wired here and
         // not only into the per-LB form because this batched path is the ONE

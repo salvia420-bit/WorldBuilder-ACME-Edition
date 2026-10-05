@@ -17260,6 +17260,16 @@ thread_local! {
     /// `(landblock_high, [(landblock-local origin, [(other_cell_id,
     /// other_portal_id)])])`. An empty list still marks the landblock's
     /// buildings known, so the driver's outdoor cell answer is trusted there.
+    /// Collision round 3 (F6): the BUILDING physics BSPs staged by
+    /// `populateBuildingAabbsForLandblock` (0x01 GfxObj buildings and 0x02
+    /// Setup parts). Same payload and drain cadence as `STATIC_BSP_PENDING`,
+    /// but drained through `SpatialScene::insert_building_physics_bsp` so the
+    /// faithful driver can collide them as retail's
+    /// `CBuildingObj::find_building_collisions` (acclient.c:719116) does.
+    static BUILDING_BSP_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     static BUILDING_PORTALS_PENDING:
         std::cell::RefCell<Vec<(u32, Vec<(holtburger_common::Vector3, Vec<(u16, u16)>)>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
@@ -17528,6 +17538,22 @@ fn drain_pending_building_origins_into(scene: &mut holtburger_world::SpatialScen
         let count = buf.len();
         for (building_id, x, y) in buf.drain(..) {
             scene.register_building_origin(building_id, x, y);
+        }
+        count
+    })
+}
+
+/// Collision round 3 (F6): drain `BUILDING_BSP_PENDING` into the live
+/// scene's static BSP table, tagged as buildings. Returns the count.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn drain_pending_building_bsps_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    BUILDING_BSP_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, bsp) in buf.drain(..) {
+            scene.insert_building_physics_bsp(landblock_high, bsp);
         }
         count
     })
@@ -18483,7 +18509,7 @@ async fn populate_building_aabbs_for_landblock_impl(
                                             );
                                         if !polys.is_empty() {
                                             enqueue_outdoor_overlap_bake(landblock_high);
-                                            STATIC_BSP_PENDING.with(|pile| {
+                                            BUILDING_BSP_PENDING.with(|pile| {
                                                 pile.borrow_mut().push((
                                                     landblock_high,
                                                     holtburger_world::CellPhysicsBsp {
@@ -18562,7 +18588,7 @@ async fn populate_building_aabbs_for_landblock_impl(
                         };
                         let world_orientation = placement_orientation.multiply(b.rot);
                         enqueue_outdoor_overlap_bake(landblock_high);
-                        STATIC_BSP_PENDING.with(|pile| {
+                        BUILDING_BSP_PENDING.with(|pile| {
                             pile.borrow_mut().push((
                                 landblock_high,
                                 holtburger_world::CellPhysicsBsp {

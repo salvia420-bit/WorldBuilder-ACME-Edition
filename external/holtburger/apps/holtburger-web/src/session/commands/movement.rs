@@ -854,7 +854,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // physics-BSP inserts queued alongside the AABBs.
             // Same cadence; consulted only when USE_STATIC_BSP
             // is on, so this is inert-but-present by default.
-            let drained_static_bsps = drain_pending_static_bsps_into(&mut w.scene);
+            // Collision round 3 (F6): building BSPs go to the same table,
+            // tagged as buildings (`insert_building_physics_bsp`).
+            let drained_static_bsps = drain_pending_static_bsps_into(&mut w.scene)
+                + crate::drain_pending_building_bsps_into(&mut w.scene);
             if drained_static_bsps > 0 {
                 console_log_str(&format!(
                     "[b4t2] drained {drained_static_bsps} pending static physics BSPs \

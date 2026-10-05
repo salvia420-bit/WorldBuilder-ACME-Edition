@@ -177,6 +177,10 @@ pub struct SceneObjCell {
     /// after the env-cell geometry, so static walls/doors/props stop the mover
     /// instead of being walked through.
     statics: Vec<Arc<CellPhysicsBsp>>,
+    /// Collision round 3 (F6): `statics_building[i]` ⇔ `statics[i]` is a
+    /// building part (`SpatialScene::is_building_bsp`), collided the way
+    /// `CBuildingObj::find_building_collisions` does (acclient.c:719116).
+    statics_building: Vec<bool>,
     /// The cell's WORLD-space AABB (from [`SpatialScene::cell_aabb`]). Drives
     /// [`Self::point_in_cell`] so `find_cell_list` re-seats `check_cell` to this
     /// cell each step instead of nulling it (the base trait `point_in_cell`
@@ -684,7 +688,19 @@ impl CObjCell for SceneObjCell {
         // the PART's `gfxobj_scale.z` (acclient.c:314669), NOT the mover's scale
         // (the mover's size already lives in the sphere radius). Unscaled
         // env-cell statics are 1.0; scaled outdoor scenery carries its own.
-        for st in &self.statics {
+        for (k, st) in self.statics.iter().enumerate() {
+            // Collision round 3, issue 2 (F6): a building part goes through
+            // `CBuildingObj::find_building_collisions` (acclient.c:719116-
+            // 719129): `bldg_check = 1` around the part's
+            // `find_obj_collisions`, then `bldg_check = 0`, and a non-OK
+            // result on a mover not in CONTACT marks
+            // `collided_with_environment`. `bldg_check` makes
+            // `BSPTREE::find_collisions`' placement test drop its centre-solid
+            // short-circuit while an interior cell is in the array
+            // (`center_solid = !hits_interior_cell`, acclient.c:361344-361351;
+            // resolver_find.rs) — so a placement in a doorway is not rejected
+            // by the building shell it stands in.
+            let building = self.statics_building.get(k).copied().unwrap_or(false);
             // The static's WORLD frame (origin + orientation basis) — the part
             // pose `CPhysicsPart::find_obj_collisions` caches into (acclient.c:314669).
             let st_pos = Position {
@@ -694,12 +710,26 @@ impl CObjCell for SceneObjCell {
             transition
                 .sphere_path
                 .cache_localspace_sphere(&st_pos, st.scale);
+            if building {
+                transition.sphere_path.bldg_check = true; // acclient.c:719123
+            }
             let r = holtburger_dat::transition::resolver_find::find_collisions(
                 &st.tree,
                 transition,
                 st.scale,
                 &st.polys,
             );
+            if building {
+                transition.sphere_path.bldg_check = false; // acclient.c:719125
+                // acclient.c:719126-719127.
+                if r != TransitionState::OK as i32
+                    && transition.object_info.state
+                        & holtburger_dat::transition::types::object_info_state::CONTACT
+                        == 0
+                {
+                    transition.collision_info.collided_with_environment = true;
+                }
+            }
             // acclient.c:347162 — first object whose result != OK wins.
             if r != TransitionState::OK as i32 {
                 return r;
@@ -805,6 +835,7 @@ impl<'a> SceneWorld<'a> {
             cell_id,
             pos,
             bsp,
+            statics_building: statics.iter().map(|s| self.scene.is_building_bsp(s)).collect(),
             statics,
             aabb,
             portal_neighbours,
@@ -1231,6 +1262,7 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         cell_id,
         pos,
         bsp: None,
+        statics_building: statics.iter().map(|s| scene.is_building_bsp(s)).collect(),
         statics,
         aabb: Some(aabb),
         portal_neighbours: Vec::new(),
@@ -3373,6 +3405,67 @@ mod drift {
             "still indoors after the terrain arrived: 0x{:08X}",
             out.pose.landblock_id.0
         );
+    }
+
+    /// Collision round 3, issue 2 (F6): a placement in a building's doorway
+    /// is not rejected by the building shell it stands in. Retail collides a
+    /// building through `CBuildingObj::find_building_collisions`, which sets
+    /// `bldg_check` (acclient.c:719123); with an interior cell in the array
+    /// (`hits_interior_cell`) `BSPTREE::find_collisions`' placement test then
+    /// drops its centre-in-solid short-circuit (:361346-361348) and only real
+    /// polygon contact rejects. The shell here is one SOLID leaf (the whole
+    /// space is "inside the shell") whose only polygon is 5 m overhead. The
+    /// same BSP registered as an ordinary static still rejects the doorway
+    /// (centre in solid) — the old behaviour for buildings, which never set
+    /// `bldg_check`.
+    #[test]
+    fn a_doorway_placement_is_not_rejected_by_the_building_shell() {
+        let shell = || {
+            let mut polys = HashMap::new();
+            polys.insert(
+                1u16,
+                poly(vec![v(0.0, 0.0, 5.0), v(1.0, 0.0, 5.0), v(1.0, 1.0, 5.0), v(0.0, 1.0, 5.0)]),
+            );
+            CellPhysicsBsp {
+                tree: BspNode::Leaf(BspLeaf {
+                    index: 0,
+                    solid: 1,
+                    sphere: None,
+                    poly_ids: vec![1],
+                }),
+                polys,
+                origin: v(LB_BASE_X + MOUTH_PORTAL_X, LB_BASE_Y + FCY, FLOOR_WZ),
+                orientation: Quaternion::identity(),
+                scale: 1.0,
+            }
+        };
+        let lb_high = LB_ID & 0xFFFF_0000;
+        // In the doorway: 0.2 m inside the exterior portal plane, so the
+        // outdoor ring (and the shell registered on its landcell) is in the
+        // cell array together with the interior cell.
+        let pose = pose_at(MOUTH_PORTAL_X - 0.2, FCY, FLOOR_WZ + 0.005);
+        let object = input_for(pose, pose).object;
+
+        let mut env = mouth_walkout_env(true);
+        env.scene.insert_building_physics_bsp(lb_high, shell());
+        env.scene.bake_outdoor_static_overlap_for_landblock(lb_high, true);
+        let out = super::faithful_find_placement_position(&env, &pose, &object, &gates())
+            .expect("a doorway placement inside the building shell is accepted");
+        assert!(
+            (out.pose.global_coords().x - pose.global_coords().x).abs() < 0.05,
+            "the placement was pushed off the doorway: x {} → {}",
+            pose.global_coords().x,
+            out.pose.global_coords().x
+        );
+
+        // Control: the same BSP as a plain static (no bldg_check) — the
+        // doorway spot is rejected (moved away, or no placement at all).
+        let mut plain = mouth_walkout_env(true);
+        plain.scene.insert_static_physics_bsp(lb_high, shell());
+        plain.scene.bake_outdoor_static_overlap_for_landblock(lb_high, true);
+        let rejected = super::faithful_find_placement_position(&plain, &pose, &object, &gates())
+            .is_none_or(|o| (o.pose.global_coords().x - pose.global_coords().x).abs() >= 0.05);
+        assert!(rejected, "control: a plain static shell should reject the doorway");
     }
 
     /// The mouth cell of the two walk-out tests: floor up to the lip
