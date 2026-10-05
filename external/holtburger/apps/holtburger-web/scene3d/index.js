@@ -5313,10 +5313,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             (typeof window !== "undefined" ? window.__sessionHandle : null) ??
             sessionHandle ??
             null,
-          // sceneAccessor lets the composer's RenderPass render the main
-          // world scene each frame for its depth attachment, so the
-          // cloud raymarch occludes correctly at terrain/buildings/
-          // player. Without this, clouds paint over land + player.
+          // sceneAccessor is stored but currently unused: the cloud
+          // composer's RenderPass draws an EMPTY scene (no second main-scene
+          // render). Clouds stay off land + player by draw order — the
+          // overlay quad lives in the sky scene, drawn before the world pass.
           sceneAccessor: () => scene,
           proceduralTextures: cloudProcedural,
         });
@@ -5546,7 +5546,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // apertures. See portal_stencil.js.
               portalStencil:
                 new URLSearchParams(window.location.search).get("portalStencil") === "on",
-              // Portal-punch cell renderer (?portalPunch=on to enable; default OFF).
+              // Portal-punch cell renderer (DEFAULT-ON since 2026-08-04; ?portalPunch=off
+              // to disable — see the reader below).
               // Retail per-aperture depth punch so building/cave interiors show
               // through door/window/cave-mouth apertures from an outdoor camera — this
               // is what stops terrain covering env-cell entrances. Fixed 2026-07-05 to

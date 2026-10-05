@@ -259,7 +259,8 @@ export function setupSceneLighting(scene, opts = {}) {
 
   // Problem-A fix — allocate the fixed light pool BEFORE the first render so
   // its per-type count is the constant the renderer compiles against from frame
-  // 0. No-op (lightPool stays null) unless `?lightPool=on`.
+  // 0. ALWAYS-ON since 2026-06-15; lightPool stays null only under the
+  // `?lightPool=off` escape hatch (see getLightPoolConfig).
   let lightPool = null;
   const lpCfg = getLightPoolConfig();
   if (lpCfg.enabled) {
@@ -541,7 +542,7 @@ function getRp5Config() {
   return _rp5Config;
 }
 
-// === Problem-A fix (2026-06-15) — fixed light POOL (?lightPool=on) =====
+// === Problem-A fix (2026-06-15) — fixed light POOL (always-on; ?lightPool=off) =====
 // THE FREEZE: three.js bakes the per-type COUNT of *visible* lights into every
 // lit material's shader program cache key (WebGLPrograms numPointLights/
 // numSpotLights/…; a `.visible=false` light is skipped in projectObject so it
@@ -572,8 +573,10 @@ function getRp5Config() {
 // gets the same intensity-swap treatment.
 //
 //   ?lightPool=off       revert to the legacy .visible cap (escape hatch)
-//   ?lightPoolSize=<n>   point-pool size (default 8 — shader-compile-trim 2026-06-22;
-//                        =32 restores the prior 32-slot selection exactly)
+//   ?lightPoolSize=<n>   point-pool size (default 16 = LIGHT_POOL_DEFAULT_POINT —
+//                        8 after the 2026-06-22 shader-compile-trim, raised to 16
+//                        2026-07-05, see below; =32 restores the prior 32-slot
+//                        selection exactly)
 //   ?lightPoolSpot=<n>   spot-pool size (default 2; spots are ~absent in the
 //                        shipped base DAT so this is headroom, not real cost)
 //

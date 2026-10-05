@@ -81,9 +81,10 @@ export class CloudOverlay {
         ? sessionHandleAccessor
         : () => null;
     // sceneAccessor: returns the main world scene (terrain + buildings +
-    // entities). Used as the RenderPass scene so the composer's input
-    // buffer gets a real depth attachment → cloud raymarch clips at
-    // terrain depth instead of painting over land/player.
+    // entities). Stored but currently UNUSED: the cloud composer's
+    // RenderPass draws the empty `_fallbackScene` (see preRender), and
+    // land/player occlusion comes from draw order (overlay in the sky
+    // pass, world pass after it), not from this scene's depth.
     this.sceneAccessor =
       typeof sceneAccessor === 'function' ? sceneAccessor : () => null;
 
@@ -178,19 +179,18 @@ export class CloudOverlay {
     // renderer's clearColor and nothing visible renders.
     //
     // We create a SEPARATE composer with its own RTs so the cloud
-    // bake doesn't interfere with the main scene render. The
-    // RenderPass renders the MAIN world scene (terrain + buildings +
-    // entities) so the composer's input buffer gets a real depth
-    // attachment — that depth then occludes cloud rays in the
-    // EffectPass(CloudsEffect), so clouds don't paint over land.
+    // bake doesn't interfere with the main scene render. Its RenderPass
+    // renders the EMPTY `_fallbackScene` (see preRender — rendering the
+    // main scene there made clouds uniformly dark), so the main world
+    // scene is NOT rendered a second time: the composer's depth is a
+    // plain far-plane clear, and the raymarch itself is not occluded.
     //
-    // Cost: scene rendered twice per frame (once for composer's depth,
-    // once for the main canvas). Cheaper option (depth-only pass) is
-    // Clouds-G polish; this MVP doubles render work but is correct.
-    //
-    // Fallback to empty scene if sceneAccessor returns null (e.g.,
-    // pre-init). Empty scene → depth=1.0 → clouds paint everywhere
-    // (the pre-Clouds-E.4 behavior).
+    // Clouds still never paint over land: the overlay quad is attached
+    // to the SKY scene (attachToSkyScene, renderOrder 999), so it is
+    // composited during the sky pass, BEFORE the world pass, which then
+    // overdraws it wherever geometry is. The optional depth-texture
+    // discard (setSceneDepthTexture / setDepthDiscardEnabled) is a
+    // second, opt-in layer on top of that draw order.
     this._fallbackScene = new THREE.Scene();
     this.composer = null;
     this._composerSized = false;
@@ -471,8 +471,9 @@ export class CloudOverlay {
    * composer's internal RT) so the overlay shader can discard cloud
    * fragments behind world geometry. Call once after both the cloud
    * overlay and the atmosphere pipeline are constructed. Passing null
-   * (or never calling this) leaves the shader on the legacy depth-
-   * unaware path -- cloud paints unconditionally over the framebuffer.
+   * (or never calling this) leaves the shader without the discard --
+   * the quad then paints unconditionally over what the SKY pass drew,
+   * and the world pass that follows still overdraws it at geometry.
    *
    * The depth texture identity may change at runtime (the atmosphere
    * pipeline rebuilds it on resize). Callers should re-call this on

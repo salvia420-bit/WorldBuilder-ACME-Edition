@@ -17,10 +17,11 @@
 //      - Dithering kills banding in the resulting gradients
 //
 // Cloud overlay coexistence: cloud overlay's `preRender` runs BEFORE
-// `composer.render`, and `renderOverlay` AFTER. Clouds appear
-// depth-UNAWARE relative to world geometry on this path (overlay
-// quad draws after the composer's final pass); depth-correct cloud
-// occlusion is a follow-on cleanup.
+// `composer.render`. Its overlay quad is attached to the SKY scene
+// (SkyDome.setCloudOverlay → attachToSkyScene), so it is composited by
+// the sky RenderPass BEFORE the world pass, which then overdraws it at
+// world geometry — clouds are occluded by draw order (`renderOverlay`
+// is a no-op while attached). See cloud_overlay.js.
 //
 // ECEF setup: takram defaults to WGS-84 ellipsoid + `correctAltitude=true`
 // which doesn't match our spherical (bottomRadius=6.36M) setup — the
@@ -1211,9 +1212,11 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // World pass clear flags. The world pass is the first GEOMETRY pass, so
       // it always starts from a FRESH depth buffer; it keeps the COLOR the sky
       // pass drew (outdoor) or clears color too (indoor / no sky pass). Note
-      // `clearDepth` must be true even indoors now — the old code relied on the
-      // (now-removed) depthClearPass to reset depth, so leaving it false would
-      // render the world pass against stale depth.
+      // `clearDepth` must be true even indoors now — the old code relied on
+      // depthClearPass to reset depth, and that pass (still in the composer)
+      // now only runs between the world and cells passes of the armed
+      // ?indoorDepthSplit indoor split, never BEFORE the world pass — so leaving
+      // it false would render the world pass against stale depth.
       if (skyRenderPass && skyRenderPass.enabled) {
         worldRenderPass.clear = false;      // sky drew the background
         worldRenderPass.clearDepth = true;  // …but depth starts fresh
