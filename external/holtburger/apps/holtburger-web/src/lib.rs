@@ -36254,6 +36254,125 @@ impl SessionHandle {
         self.visible_portal_apertures_flat(mvp, true, true)
     }
 
+    /// Retail `outside_view` for the indoor portal SEAL (2026-10-05).
+    ///
+    /// `PView::DrawCells` (acclient.c:461450) stamps the doorway planes only
+    /// when `outside_view.view_count != 0`, and only the portals with
+    /// `other_cell_id == -1` of the cells in `cell_draw_list` — the cells the
+    /// `PView::ClipPortals` walk REACHED from the viewer's cell, each through
+    /// its own clipped view. `getVisiblePortalApertures` has no reachability
+    /// at all (every outdoor-facing portal of every frustum-visible EnvCell of
+    /// every loaded landblock), which is why the seal had apertures while the
+    /// player stood in a mouthless dungeon.
+    ///
+    /// This runs the SAME walk as `getRenderSetWithPView` (same portal map,
+    /// same depth cap, same near-plane-clipped projection, same screen-space
+    /// clip against the parent view) and, instead of skipping the
+    /// outdoor-facing portals of each reached cell, emits the ones whose
+    /// projection survives that cell's view clip — i.e. the portals that
+    /// contribute to retail's `outside_view`. A dungeon with no reachable
+    /// mouth, or an outdoor viewer, returns zero apertures.
+    ///
+    /// Wire shape: identical to `getVisiblePortalApertures` (world-space AC
+    /// polygons, unclipped), so the JS consumer is a drop-in:
+    ///   `[ count, (nverts, x0,y0,z0, …) × count ]`
+    /// ADDITIVE export under a new name; a stale `pkg/` lacks it and JS
+    /// falls back to the unrestricted export.
+    ///
+    /// Read-only; does not mutate snapshot state.
+    #[wasm_bindgen(js_name = getPViewOutsidePortals)]
+    pub fn get_pview_outside_portals(&self, mvp: &[f32], max_depth: u8) -> Vec<f32> {
+        let mut out: Vec<f32> = vec![0.0];
+        if mvp.len() != 16 {
+            return out;
+        }
+        let mut mvp_arr = [0.0f32; 16];
+        mvp_arr.copy_from_slice(mvp);
+        let snap = self.cell_scene_snapshot.borrow();
+        // Retail `DrawInside` is the EnvCell-viewer path only.
+        if snap.current_cell == 0 || (snap.current_cell & 0xFFFF) < 0x0100 {
+            return out;
+        }
+        const PVIEW_MAX_DEPTH: u8 = 8;
+        let effective_max_depth: u8 = if max_depth > 0 {
+            max_depth
+        } else {
+            PVIEW_MAX_DEPTH
+        };
+
+        let mut portal_map: std::collections::HashMap<
+            u32,
+            Vec<(u32, Vec<holtburger_common::Vector3>)>,
+        > = std::collections::HashMap::new();
+        for (from, to, flat, ..) in &snap.cell_portal_polygons {
+            if flat.len() < 9 || flat.len() % 3 != 0 {
+                continue;
+            }
+            let mut verts: Vec<holtburger_common::Vector3> =
+                Vec::with_capacity(flat.len() / 3);
+            for chunk in flat.chunks_exact(3) {
+                verts.push(holtburger_common::Vector3::new(
+                    chunk[0], chunk[1], chunk[2],
+                ));
+            }
+            portal_map.entry(*from).or_default().push((*to, verts));
+        }
+        if portal_map.is_empty() {
+            return out;
+        }
+
+        let initial_view: Vec<[f32; 2]> = vec![
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ];
+        let mut visible: std::collections::HashSet<u32> =
+            std::collections::HashSet::new();
+        visible.insert(snap.current_cell);
+        let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
+            std::collections::VecDeque::new();
+        queue.push_back((snap.current_cell, initial_view, 0));
+        let mut count: u32 = 0;
+        while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
+            let Some(portals) = portal_map.get(&cell_id) else {
+                continue;
+            };
+            for (neighbour, verts) in portals {
+                let outdoor = (*neighbour & 0xFFFF) >= 0xFFFE;
+                // Interior neighbours past the depth cap are not walked
+                // (same rule as the render-set walk); outdoor portals of a
+                // reached cell are always considered.
+                if !outdoor && (depth >= effective_max_depth || visible.contains(neighbour)) {
+                    continue;
+                }
+                let projected = holtburger_world::pview_project_polygon(verts, &mvp_arr);
+                if projected.is_empty() {
+                    continue;
+                }
+                let clipped =
+                    holtburger_world::pview_clip_polygon_against_polygon(&projected, &view_poly);
+                if clipped.len() < 3 {
+                    continue;
+                }
+                if outdoor {
+                    out.push(verts.len() as f32);
+                    for v in verts {
+                        out.push(v.x);
+                        out.push(v.y);
+                        out.push(v.z);
+                    }
+                    count += 1;
+                    continue;
+                }
+                visible.insert(*neighbour);
+                queue.push_back((*neighbour, clipped, depth + 1));
+            }
+        }
+        out[0] = count as f32;
+        out
+    }
+
     /// Phase 4 PView port (2026-05-25): frustum-aware visibility.
     /// Takes a 16-float **column-major** view-projection matrix (same
     /// memory layout as `THREE.Matrix4.elements` — pass it directly
