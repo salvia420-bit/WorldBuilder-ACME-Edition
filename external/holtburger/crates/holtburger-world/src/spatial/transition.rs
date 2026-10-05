@@ -550,17 +550,23 @@ impl GeometryCaches {
 /// acclient.c:311675-311680 / per-step `find_cell_list`
 /// acclient.c:313300-313307; `check_building_transit` acclient.c:348110).
 /// Returns `true` when the landblock id changed.
-fn step_cell_transit_flips(
+pub(super) fn step_cell_transit_flips(
     env: &dyn TransitionEnv,
     pose: &mut WorldPosition,
     gates: &TransitionGates,
     radius: f32,
+    centre_height: f32,
 ) -> bool {
     if !gates.local_envcell_entry {
         return false;
     }
     if !pose.is_indoors() {
-        if let Some(entered) = env.scene().entered_envcell_for_outdoor_pose(pose, radius) {
+        // Collision round 3, issue 4: entry is retail's `point_in_cell` at
+        // `sphere[0].center` (acclient.c:347039-347047), as in the faithful
+        // driver — not "a feet sphere touches the hull".
+        let mut centre = *pose;
+        centre.coords.z += centre_height;
+        if let Some(entered) = env.scene().entered_envcell_for_outdoor_pose(&centre, 0.0) {
             pose.landblock_id = Guid(entered);
             return true;
         }
@@ -901,7 +907,7 @@ pub fn find_transitional_position(
         collision.base.sliding_normal_valid = false;
         collision.base.contact_plane_valid = false;
 
-        if step_cell_transit_flips(env, &mut pose, gates, object.radius) {
+        if step_cell_transit_flips(env, &mut pose, gates, object.radius, object.capsule[0].0) {
             cell_changed = true;
             caches.refresh(env, &pose, object, gates);
         }

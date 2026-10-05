@@ -5346,11 +5346,20 @@ impl MovementSystem {
         // AuthoritativeBodySync::Reset still overrides. Runs BEFORE
         // `indoor_unbaked` and the `is_indoors()` branch so they all see
         // the flipped pose this tick.
+        // Collision round 3, issue 4: entry is retail's `point_in_cell` at
+        // `sphere[0].center` (acclient.c:347039-347047), as in the faithful
+        // driver — the player's low Setup sphere centre, radius 0 — not "a
+        // 0.4 m feet sphere touches the hull".
         if USE_LOCAL_ENVCELL_ENTRY
             && !pose.is_indoors()
             && let Some(entered) = world.scene.entered_envcell_for_outdoor_pose(
-                &pose,
-                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                &{
+                    let mut centre = pose;
+                    centre.coords.z +=
+                        holtburger_world::spatial::transition::PLAYER_SETUP_SPHERE_LOW_Z;
+                    centre
+                },
+                0.0,
             )
         {
             pose.landblock_id = Guid(entered);

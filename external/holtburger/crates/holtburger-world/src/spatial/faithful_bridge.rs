@@ -3124,6 +3124,40 @@ mod drift {
         assert_eq!(env.scene.entered_envcell_for_outdoor_pose(&pose, 0.0), Some(CELL_ID));
     }
 
+    /// Round 3 (critic issue 4): the APPROXIMATE pipeline's per-step entry
+    /// flip (`step_cell_transit_flips`) uses retail's `point_in_cell` at the
+    /// sphere centre (acclient.c:347039-347047), like the faithful driver.
+    /// It used a 0.48 m sphere at the FEET, which "entered" a building while
+    /// the player stood 0.3 m outside its door.
+    #[test]
+    fn the_approximate_entry_flip_tests_the_sphere_centre() {
+        let env = building_env(Some(vec![(v(FCX, FCY, 0.0), vec![(0x0100, 0)])]));
+        let at = |x: f32| WorldPosition {
+            landblock_id: Guid((LB_ID & 0xFFFF_0000) | 0x0001),
+            coords: v(x, FCY, FLOOR_WZ),
+            rotation: Quaternion::identity(),
+        };
+        let object = input_for(at(FCX), at(FCX)).object;
+        let flip = |pose: &mut WorldPosition| {
+            crate::spatial::transition::step_cell_transit_flips(
+                &env,
+                pose,
+                &gates(),
+                object.radius,
+                object.capsule[0].0,
+            )
+        };
+        // 0.3 m outside the door: the feet sphere reaches the hull, the
+        // centre does not.
+        let mut outside = at(FCX - 0.3);
+        assert!(!flip(&mut outside), "entered from 0.3 m outside the door");
+        assert!(!outside.is_indoors());
+        // 0.3 m inside: the centre is in the room.
+        let mut inside = at(FCX + 0.3);
+        assert!(flip(&mut inside));
+        assert_eq!(inside.landblock_id, Guid(CELL_ID));
+    }
+
     /// The building is registered on the NEIGHBOURING landcell (its origin
     /// is past the 24 m line); the mover walks in from the landcell next
     /// door. The outdoor ring includes that landcell once the sphere
