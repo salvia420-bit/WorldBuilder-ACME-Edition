@@ -208,7 +208,7 @@
     },
     {
       "id": "remote_motion",
-      "score": 7.0,
+      "score": 7.4,
       "provisional": false,
       "files": [
         "apps/holtburger-web/scene3d/entity_dispatch.js",
@@ -225,20 +225,24 @@
       ],
       "audit": {
         "date": "2026-10-05",
-        "by": "critic round 2",
-        "score": 7.0,
-        "round": 2
+        "by": "critic round 3 (final)",
+        "score": 7.4,
+        "score_excl_D5": 8.2,
+        "round": 3
       },
       "open": [
-        "Round 3 in progress (final): floor model stopgap (no transition sweep), landing zeroes velocity (retail friction slide), D5 MoveToManager/keep_heading, D9 stamp gating, GRAVITY gate/apex/omega nits",
-        "Seam: _wireCellIdx writer removed by ca895d6d, read by cells.js:3203 - assigned to the seal agent",
-        "Open research: retail may flatten remote running jumps (LeaveGround get_leave_ground_velocity 343822)"
+        "REGRESSION (round 3): jump from a dock/static object falls to the terrain below (take-off-height floor removed; remote_ground_at ignores static BSPs, scene.rs:470)",
+        "HIGH D5 no client MoveToManager for remotes; keep_heading=false (scene.rs:5162) - chasing mobs face stale heading, overshoot",
+        "MED-LOW walking off a static edge floats (scene.rs:5408)",
+        "LOW walk-off velocity summed not replaced (get_leave_ground_velocity 343806-343833)",
+        "LOW indoor landing stops dead; hard-landing bounce skipped; newer-instance frames applied immediately; omega ignored"
       ],
       "evidence": [
-        "One body: arc integrated in the Rust remote body, managed row = arc (UpdatePhysicsInternal 317740-317776, root motion off-ground 320014-320025, !contact no-op 323481)",
-        "Airborne edges from the body clear arms-up (client_events.js:1740)",
-        "6 Rust tests + JS wiring tests"
-      ]
+        "D9 stamp gate matches HandleReceivedPosition 145157-145240 / MoveOrTeleport 323451-323498",
+        "Landing physics = UpdatePhysicsInternal 317701-317776, calc_friction 316091-316151, handle_all_collisions 321865-321886",
+        "ACE's empty-state UpdateMotion before a jump VectorUpdate means retail shows the full remote arc under ACE (Player.HandleActionJump)"
+      ],
+      "status": "parked after 3 rounds; regression fix + D5 as next wave"
     },
     {
       "id": "movement_physics_collision",
@@ -268,6 +272,7 @@
         "round": 3
       },
       "open": [
+        "Wave 3 (doors/NPCs in transition) merged behind ?objCollideInTransition=on; critic pending before any default flip",
         "MED-HIGH doors/NPCs clamped after the transition (entity_collision.rs:205). Next wave plan: per-transition object overlay bucketed by CROSS-CELL shadows (add_obj_to_cell 322897 -> calc_cross_cells_static 322405 / calc_cross_cells 322447 -> add_shadows_to_cells 321978); port the outer intersect overloads CSphere::intersects_sphere 359390 / CCylSphere::intersects_sphere 362244 incl. step-up/slide/land bodies; FindObjCollisions dispatch order 316159-316290 (ETHEREAL+IGNORE_COLLISIONS skip, obstruction_ethereal, HAS_PHYSICS_BSP 0x10000 -> part BSP else cylspheres else spheres, missile_ignore, non-PK players pass through each other); post-hit STATIC -> collided_with_environment, ethereal/IGNORE_CREATURES -> OK + add_object; skip insert_type 2, parented, self; statics and overlay share one ordered pass; door open state from live PhysicsState; flag-gated, then drop clamp_delta_against_entities + door stopgap",
         "MED pre-existing: physics runs in world-space f32 (landblock*192 + local; ~2-4 mm resolution at Holtburg), below retail's 0.0002 epsilons; run transitions landblock-local or subtract cell origin in f64",
         "MED-LOW buildings registered in every overlapped landcell (scene.rs:2579) and all Setup parts staged; retail: origin landcell only (init_buildings 352114 -> add_to_cell 719262), part 0 only",
@@ -279,7 +284,8 @@
         "Negative other_portal_id skip and out-of-block building drop match retail (362499, 352169-352180)",
         "holtburger-world --lib 707/707",
         "Round 3: retail straddle epsilon (348313-348318) in both copies; bldg_check live (719116-719129 -> 361344-361351); placement seeded from server cell; approximate entry = centre point test; limbo hold when outdoor terrain not resident",
-        "holtburger-world 725/725, core 646"
+        "holtburger-world 725/725, core 646",
+        "Wave 3: ?objCollideInTransition (default off) ports CObjCell::find_obj_collisions 347142, cross-cell shadows 322897/322405/322447/321978, FindObjCollisions 316159-316306, CSphere 359157/359390, CCylSphere 362035/362244; 741/741 world tests; headless flag-on: closed cottage door stops the walk at x=185.21 and a diagonal slides along it; 0 console errors"
       ],
       "status": "parked after 3 rounds; doors/NPCs-in-transition is the next wave"
     },
@@ -370,13 +376,8 @@
         "round": 2
       },
       "open": [
-        "MED CasterEffect script sounds play twice: ?castSyntheticCasterVfx (entities.js:1444, emit 8725-8735) re-emits playEffect the wire already delivered, now audible",
-        "LOW-MED focus loss doesn't mute playing sounds (retail DirectSound buffers without global-focus flags, 385860-385928); test pins the non-retail tail",
-        "LOW ambient distances ignore height (ambient_model.js:351)",
-        "LOW queued server sound: per-entry 25 s vs per-guid deadline; 250 ms poll replay vs synchronous",
-        "LOW overdue ambients burst on tab return",
-        "NIT indoor clears the ambient queue at once; empty STB rows add no weight",
-        "slider-twice test only regex-checks"
+        "Round 3 merged (CasterEffect sound once, focus-loss mute, 3D ambient distances, per-object queued-sound deadline + synchronous replay, ambient fast-forward, indoor drain): critic pending",
+        "capture_audio_leak.cjs reads removed continuousStartCount"
       ],
       "evidence": [
         "Voice pool, server 0xF750 wire volume + probability, environment option mapping, centred UI/portal sounds via the UI SoundTable, table-row pick quirk, SoundTweaked layout all confirmed against acclient.c (383004-383067, 143333/316424/383655, 396430-396545, 383569-383589, 383447-383449, 343123)",
@@ -531,6 +532,31 @@
         "?sealLogDepth and ?remoteJumpArc default-on again (behavioural tests: seal rasteriser model R1-R5; 6 Rust remote-arc tests)"
       ],
       "critic": "final: collision 8.1 (parked), seal 7.0 (parked, restore shader fixed by orchestrator); audio 8.0 after r2; remote r3 critic pending"
+    },
+    {
+      "id": 3,
+      "started": "2026-10-05",
+      "agents": [
+        {
+          "facet": "movement_physics_collision",
+          "scope": "doors/NPCs/players collided inside the transition (flag, default off)"
+        },
+        {
+          "facet": "audio",
+          "scope": "round 3"
+        }
+      ],
+      "merged": [
+        "db65e965",
+        "f08e3c4e",
+        "c88cef91",
+        "e6609951",
+        "cf792d6e",
+        "0676d403",
+        "fdb968b4",
+        "7577d166"
+      ],
+      "gate": "JS 368/368; lints clean; world 741/741, core 646; release wasm rebuilt"
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
