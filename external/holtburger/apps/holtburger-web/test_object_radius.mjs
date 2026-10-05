@@ -32,8 +32,9 @@ console.log("=========================");
 // ---- 1. flag grammar ----
 {
   const _l = globalThis.location;
-  for (const [search, want] of [["", null], ["?objRadius=3", 3], ["?objRadius=1", 1], ["?objRadius=12", 12],
-    ["?objRadius=0", null], ["?objRadius=13", null], ["?objRadius=on", null], ["?objRadius=3x", null]]) {
+  for (const [search, want] of [["", 4], ["?objRadius=3", 3], ["?objRadius=1", 1], ["?objRadius=12", 12],
+    ["?objRadius=off", null], ["?objRadius=0", null], ["?objRadius=false", null], ["?objRadius=no", null],
+    ["?objRadius=13", 4], ["?objRadius=on", 4], ["?objRadius=3x", 4]]) {
     globalThis.location = { search };
     M.__setObjRadiusForTest(undefined);
     check(`1. ${search || "(absent)"} -> ${want}`, M.objRadiusSetting() === want, String(M.objRadiusSetting()));

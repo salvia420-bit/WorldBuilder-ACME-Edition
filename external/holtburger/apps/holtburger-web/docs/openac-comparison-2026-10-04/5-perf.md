@@ -100,8 +100,9 @@ object-baked landblocks past N+1 are hidden (top-level nodes, chunk-bucket + atl
 park seams, instanced animated props) and shown again at <= N. Memory is still released per whole
 landblock at eviction (per-kind eviction would split the LRU's mixed disposables; not done). Live,
 SwiftShader, same tour, final stop back at Holtburg: base 79 statics-baked landblocks / 10,851 visible
-bucket+atlas instances; `objRadius=2` 50 / 2,994 (-72%), 0 errors. Not a default (retail draws objects
-across `mid_width = 11`); not yet wired into the quality presets; GPU frame time unmeasured.
+bucket+atlas instances; `objRadius=2` 50 / 2,994 (-72%), 0 errors. Then made the DEFAULT at 4
+(OpenAC's High near tier; trims only the outermost ring of retail's `mid_width = 11` grid);
+`?objRadius=off` restores full-ring objects. Not per-quality-preset; GPU frame time unmeasured.
 Found and fixed on the way (both affect the DEFAULT build, not just the flag): (1) an atlas re-home
 (`_atlasRefeedImpl`, fires when a surface's texture lands later) re-added VISIBLE instances for a
 landblock that was already parked; (2) instanced animated props of a parked landblock kept their

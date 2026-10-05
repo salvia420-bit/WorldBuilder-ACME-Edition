@@ -10,8 +10,9 @@
 // keeps 81/121 = 67% of it, radius 3 keeps 49/121 = 40%, and so do the
 // per-instance walk terms and the bake churn per landblock crossing.
 //
-// FIDELITY. Retail draws objects across the whole `mid_width = 11` grid, so
-// this is an OPT-IN knob for weaker machines, not a default. Absent ⇒ every
+// FIDELITY. Retail draws objects across the whole `mid_width = 11` grid; the
+// default of 4 (OpenAC's High near tier) trims only the outer ring of the
+// 11x11 grid. `?objRadius=off` restores full-ring objects, and then every
 // function here is a no-op and the ring behaves exactly as before.
 //
 // WHAT IT DOES (Chebyshev landblock distance d to the player's landblock[s]):
@@ -41,21 +42,26 @@
 
 const OBJ_RADIUS_MIN = 1;   // the player's neighbours always keep their objects
 const OBJ_RADIUS_MAX = 12;  // matches ?pvsRingRadius's ceiling
+const OBJ_RADIUS_DEFAULT = 4;
 
 let _setting; // undefined = unread, null = off, else N
-/** `?objRadius=N` (integer 1..12) ⇒ N; anything else ⇒ null (off, the default). */
+/**
+ * `?objRadius=N` (integer 1..12) ⇒ N; `off`/`0`/`false`/`no` ⇒ null (full-ring
+ * objects); absent or anything else ⇒ 4 (the default).
+ */
 export function objRadiusSetting() {
   if (_setting !== undefined) return _setting;
-  let n = null;
+  let n = OBJ_RADIUS_DEFAULT;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
-      const raw = new URLSearchParams(globalThis.location.search).get("objRadius") || "";
-      if (/^[0-9]+$/.test(raw)) {
+      const raw = (new URLSearchParams(globalThis.location.search).get("objRadius") || "").trim().toLowerCase();
+      if (raw === "off" || raw === "0" || raw === "false" || raw === "no") n = null;
+      else if (/^[0-9]+$/.test(raw)) {
         const v = Number(raw);
         if (v >= OBJ_RADIUS_MIN && v <= OBJ_RADIUS_MAX) n = v;
       }
     }
-  } catch (_) { n = null; }
+  } catch (_) { n = OBJ_RADIUS_DEFAULT; }
   _setting = n;
   return n;
 }
