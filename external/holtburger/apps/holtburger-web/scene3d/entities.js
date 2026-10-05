@@ -1198,25 +1198,6 @@ import { CULL_DIST_SQ } from "./culling.js";
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
 import { createPreCreateBuffer } from "./pre_create_buffer.js";
-// OpenAC comparison 2026-10-04 (remote motion D3/D7) — remote jump arc: retail
-// gravity on a jumping remote, `!contact` wire poses dropped while it flies.
-// Pure module; wiring is in setVelocity / setPose / applyManagedPose / tick.
-import {
-  readRemoteJumpArcFlag,
-  decodeWireContact,
-  isRemoteJumpVelocity,
-  startRemoteJump,
-  stepRemoteJump,
-  REMOTE_JUMP_MAX_MS,
-} from "./remote_airborne.js";
-const REMOTE_JUMP_ARC_ON = (() => {
-  try {
-    if (typeof window === "undefined" || !window.location) return true;
-    return readRemoteJumpArcFlag(window.location.search);
-  } catch (_) {
-    return true;
-  }
-})();
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -5870,22 +5851,6 @@ export class EntityManager {
     // `if (!this->parent)`; `update_object` :323099). Writing the wire world
     // pose here would fling the weapon out of the hand.
     if (WIELD_PERSIST_ON && inst._attachedParentGuid != null) return;
-    // OpenAC comparison 2026-10-04 (remote motion D7): while a remote flies
-    // its jump arc the wasm body is still walking the GROUND (it no-ops
-    // `!contact` frames and may root-motion until the first one lands), so its
-    // rows would pin the jumper to the terrain. Retail zeroes root motion off
-    // walkable ground (acclient.c:320014-320025) and interp is idle out of
-    // contact (:389208), i.e. nothing but the arc moves it. A row far from
-    // the arc is a hard set (teleport / far snap) — that ends the jump.
-    if (inst._remoteJump) {
-      const p = inst.root.position;
-      const dx = x - p.x;
-      const dy = y - p.y;
-      const dz = z - p.z;
-      if (dx * dx + dy * dy + dz * dz <= DEAD_RECKON_TELEPORT_SNAP_SQ) return;
-      this._endRemoteJump(inst);
-      inst._remoteJumpAwaitUntilMs = 0;
-    }
     inst._wasmDriven = REMOTE_INTERP_OWNERSHIP_FRAMES;
     inst.root.position.set(x, y, z);
     let tgt = inst._serverTargetPos;
@@ -5926,39 +5891,10 @@ export class EntityManager {
     }
   }
 
-  setPose(guid, x, y, z, qw, qx, qy, qz, wireFlags, cellIdx) {
+  setPose(guid, x, y, z, qw, qx, qy, qz) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
-    // OpenAC comparison 2026-10-04 (remote motion D3/D7). `wireFlags` is the
-    // KIND_POSITION row's `weenieFlags` (wire UpdatePositionFlag bits + a
-    // present marker; undefined/0 from a stale pkg → contact unknown);
-    // `cellIdx` the low 16 bits of its landcell.
-    if (cellIdx !== undefined) inst._wireCellIdx = cellIdx & 0xffff;
-    if (
-      inst._remoteJumpAwaitUntilMs &&
-      !inst._remoteJump &&
-      (typeof performance !== "undefined" ? performance.now() : 0) >
-        inst._remoteJumpAwaitUntilMs
-    ) {
-      inst._remoteJumpAwaitUntilMs = 0; // landing never confirmed — resume
-    }
-    if (inst._remoteJump || inst._remoteJumpAwaitUntilMs) {
-      const contact = decodeWireContact(wireFlags);
-      if (contact === false) {
-        // Retail drops a remote's `!contact` position outright —
-        // `CPhysicsObj::MoveOrTeleport` returns 0 (acclient.c:323481-323482)
-        // before any heading, interpolation or constraint is touched — while
-        // its own physics flies the jump. Here the arc (or its landing) owns
-        // the rig, so the frame changes nothing: no heading retarget, no
-        // sticky clear, no ease toward a mid-air pose.
-        return;
-      }
-      // A grounded (or contact-unknown) pose ends the jump; the normal path
-      // below eases from wherever the arc left the rig.
-      if (inst._remoteJump) this._endRemoteJump(inst);
-      inst._remoteJumpAwaitUntilMs = 0;
-    }
     // HELD-ITEM (2026-08-02) — same parented-object guard as
     // `applyManagedPose` / `setVisibility`. ACE keeps broadcasting a position
     // for an equipped item in some flows (drop/pickup echo, teleport
@@ -10552,46 +10488,6 @@ export class EntityManager {
         } catch (_e) { /* enrichment only — never break the impact stop */ }
       }
     }
-    // OpenAC comparison 2026-10-04 (remote motion D7) — a remote JUMP. ACE
-    // broadcasts the jumper's launch velocity once (Player.cs:954) and nothing
-    // while it flies but `!contact` positions. Retail `DoVectorUpdate`
-    // (acclient.c:143459) set_velocity()s the remote and its own physics flies
-    // the arc under gravity (UpdatePhysicsInternal :317701) until the ground
-    // stops it. Seed that arc here; `tick` integrates it.
-    if (
-      REMOTE_JUMP_ARC_ON &&
-      inst.root &&
-      !inst._ballistic &&
-      !inst._isProjectile &&
-      !inst._deadFrozen &&
-      !(WIELD_PERSIST_ON && inst._attachedParentGuid != null) &&
-      isRemoteJumpVelocity(+upd.vz) &&
-      !this._isLocalPlayerGuid(upd.guid >>> 0)
-    ) {
-      inst._remoteJump = startRemoteJump(
-        inst.root.position,
-        inst.lastVel,
-        inst._wireCellIdx ?? inst._outdoorCellIdx ?? 0,
-        inst.lastVelMs,
-      );
-      inst._remoteJumpAwaitUntilMs = inst.lastVelMs + REMOTE_JUMP_MAX_MS;
-    }
-  }
-
-  /**
-   * Remote motion D3/D7 — end a remote jump arc (landed, timed out, or
-   * superseded by a grounded wire pose / hard snap). Re-anchors the ease
-   * target to where the arc put the rig and drops the launch velocity so the
-   * dead-reckon extrapolation cannot fling it on after the landing.
-   */
-  _endRemoteJump(inst) {
-    inst._remoteJump = null;
-    inst.lastVel = null;
-    if (inst.root) {
-      let tgt = inst._serverTargetPos;
-      if (!tgt) tgt = inst._serverTargetPos = new THREE.Vector3();
-      tgt.copy(inst.root.position);
-    }
   }
 
   /**
@@ -14249,29 +14145,8 @@ export class EntityManager {
       // target. Inert (0 | 0 = 0) unless applyManagedPose ever armed it.
       const wasmDriven = (inst._wasmDriven | 0) > 0;
       if (wasmDriven) inst._wasmDriven -= 1;
-      // OpenAC comparison 2026-10-04 (remote motion D7) — fly a remote's jump
-      // arc (seeded by setVelocity) the way retail's per-object physics does:
-      // v·dt + ½·g·dt² with g = -9.8 (UpdatePhysicsInternal acclient.c:317756-
-      // 317776), landing on the terrain surface. While it flies the arc OWNS
-      // the position: the sticky glue and dead-reckon ease below are skipped
-      // (setPose already dropped the `!contact` wire poses). On landing the
-      // ease target is re-anchored to the landing spot and setPose keeps
-      // dropping `!contact` poses until the first grounded one.
-      let airborneOwned = false;
-      if (inst._remoteJump) {
-        const arc = inst._remoteJump;
-        const nowMs = typeof performance !== "undefined" ? performance.now() : 0;
-        if (nowMs - arc.startMs > REMOTE_JUMP_MAX_MS || inst._deadFrozen) {
-          this._endRemoteJump(inst);
-        } else {
-          airborneOwned = true;
-          if (stepRemoteJump(arc, inst.root.position, dt, _terrainZAt) === "landed") {
-            this._endRemoteJump(inst);
-          }
-        }
-      }
       let stickyGlued = false;
-      if (inst._stickyTarget && !airborneOwned) {
+      if (inst._stickyTarget) {
         const tgtInst = this.entityMap.get(inst._stickyTarget >>> 0);
         if (tgtInst && tgtInst !== inst && tgtInst.root) {
           const tp = tgtInst.root.position;
@@ -14334,7 +14209,7 @@ export class EntityManager {
       // `if (!this->parent)`), and easing a hand-local root toward a WORLD
       // target walks the weapon out of the hand. `setPose`/`attachChildToParent`
       // already null the target, so this is belt-and-braces.
-      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !airborneOwned && !wasmDriven && !inst._deadFrozen && !(WIELD_PERSIST_ON && inst._attachedParentGuid != null)) {
+      if (runSmoothing && this._deadReckonOn && inst._serverTargetPos && !inst._ballistic && !stickyGlued && !wasmDriven && !inst._deadFrozen && !(WIELD_PERSIST_ON && inst._attachedParentGuid != null)) {
         const tgt = inst._serverTargetPos;
         // B5/QW2/REMOTE-3: extrapolate the server target forward by the last
         // VectorUpdate velocity while it's fresh — retail integrates
