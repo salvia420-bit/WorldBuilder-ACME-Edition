@@ -16,6 +16,13 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 - [ ] **Start/stop transitions:** walk↔run↔stop now play their transition clip on the new playback system. Check that responsiveness feels right: an attack or cast pressed during a stop transition now waits for it, as in retail.
 - [ ] **Swings on moved entities:** emotes and guessed swings on characters that have walked now play (they went to a dead mixer before).
 
+- [ ] **Doors and chests (mixer retired):** open, close, rapid toggle, and a door already open at spawn. Sounds play once, there's no snap-back to the spawn state, and nothing loops between open and closed.
+- [ ] **Idle NPCs that never moved:** breathe on their idle cycle, and their fidgets and emotes play full-body.
+- [ ] **Diagonal strafe** (W+D, S+A): feet speed matches, no frozen cycle.
+- [ ] **Cast while strafing, and a fizzle mid-windup:** the gesture stops cleanly.
+- [ ] **Swing spam:** gestures queue rather than cut each other off.
+- [ ] **Jump** arms and legs, and **death collapse** holding into the corpse.
+- [ ] **Teleport during an emote:** note whether it's cut. It currently isn't; retail cuts it.
 ## Sky / atmosphere (`clouds=on`)
 - [ ] **Clouds drift:** over ~30 s the clouds visibly move and don't loop back every second.
 - [ ] **Fog colour:** follows the horizon at dawn, noon and dusk (the async sky probe changed how it's read).
