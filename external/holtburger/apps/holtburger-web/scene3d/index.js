@@ -5531,6 +5531,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // `skyDome.skyScene`) and so are safe to construct in
             // parallel afterwards.
             atmospherePipeline = createAtmospherePipeline(renderer, scene, camera, {
+              // ?cloudsMainPass: hand the overlay over directly instead of
+              // relying on the window.liveScene3d lookup.
+              cloudOverlay: liveScene3d?.cloudOverlay ?? null,
               skyScene: skyDome?.skyScene,
               skyCamera: skyDome?.skyCamera,
               atmosphereRuntime,
