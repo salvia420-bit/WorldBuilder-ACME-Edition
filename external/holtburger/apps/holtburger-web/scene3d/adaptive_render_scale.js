@@ -29,12 +29,24 @@
  * across the band (vsync-locked ~16 ms below a threshold scale, >55 ms above
  * it). The controller then raises → drops frames → lowers → has headroom →
  * raises … forever, a visible sharp/blurry resolution churn every
- * cooldown+eval (~3 s) for the entire session. The damper watches the change
- * history; when the last `settleFlips` changes strictly alternate direction
- * inside `settleWindowMs`, it latches: snaps to the LOWEST scale of the
- * flip-flop (the sustainable side), suppresses raises for `settleLockMs`
- * (lowering stays allowed — safety first), and counts the latch in
- * `controller.settleLatches` (reachable via `window.__adaptiveRenderScale`).
+ * cooldown+eval (~3 s) for the entire session.
+ *
+ * 2026-10-05 — the damper was rewritten as a FAILED-RAISE CEILING. The first
+ * version latched only when the last 4 changes strictly alternated
+ * (up/down/up/down). The live churn is a SAWTOOTH instead — frame time lags
+ * the scale change (RT rebuild, shader warm-up), so the controller overshoots
+ * both ways: up×4, down×3, up×4, … (reproduced headless at DPR 2: 0.35→0.83→
+ * 0.35 every ~2 s for minutes, `settleLatches` stuck at 0, the canvas
+ * visibly resizing "every second, endlessly"). Strict alternation never
+ * appears, so it never latched.
+ * Now: any DOWN that follows an UP (within `settleWindowMs`) proves that raise
+ * was not sustainable, so raises are capped BELOW the failed peak (at the
+ * scale the raise started from) for `settleLockMs`. A later failure at or
+ * under the cap lowers it again, so a sawtooth converges in a few cycles and
+ * a flip-flop stops at its first reversal. Lowering is never blocked (safety
+ * first). `controller.settleLatches` counts cap engagements and
+ * `controller.raiseCeiling` exposes the live cap (both via
+ * `window.__adaptiveRenderScale`).
  */
 export function adaptiveResSettleEnabled() {
   try {
@@ -180,7 +192,6 @@ export class AdaptiveRenderScaleController {
     // defaults ON here so headless/unit constructions get it; production
     // wiring passes the URL-flag reader explicitly.
     settle = true,
-    settleFlips = 4,
     settleWindowMs = 120_000,
     settleLockMs = 300_000,
     now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
@@ -212,12 +223,19 @@ export class AdaptiveRenderScaleController {
     this.applyNoOps = 0;
     this._prevCatastrophic = false;
     this._settle = !!settle;
-    this._settleFlips = settleFlips;
     this._settleWindowMs = settleWindowMs;
     this._settleLockMs = settleLockMs;
     this._settleUntil = 0;
-    this._dirHistory = []; // [{dir, to, t}] — last few applied changes
+    this._lastChange = null; // {dir, from, to, t} — the last applied change
+    this.raiseCeiling = maxScale; // raises never exceed this while latched
     this.settleLatches = 0; // reachability counter for the damper
+  }
+
+  /** The highest scale a raise may reach right now. */
+  _raiseCap(t) {
+    if (!this._settle) return this._maxScale;
+    if (t >= this._settleUntil) this.raiseCeiling = this._maxScale; // lock expired
+    return this.raiseCeiling;
   }
 
   /** Call once per frame. Records the inter-frame delta and evaluates on cadence. */
@@ -283,16 +301,18 @@ export class AdaptiveRenderScaleController {
       const next = Math.max(this._minScale, Math.round((s - st) * 1000) / 1000);
       if (next < s) this._apply(next, t, p75, "down");
     } else if (p75 < this._lowMs && s < this._maxScale) {
-      // Settle latch: while latched, headroom does NOT raise (raising is
-      // exactly what re-enters the dropped-frames side of the flip-flop).
-      // Lowering stays allowed above — safety first.
-      if (this._settle && t < this._settleUntil) return;
-      const next = Math.min(this._maxScale, Math.round((s + this._step) * 1000) / 1000);
-      if (next > s) this._apply(next, t, p75, "up");
+      // Settle cap: headroom only raises up to the ceiling left by the last
+      // failed raise (raising past it is exactly what re-enters the
+      // dropped-frames side of the churn). Lowering stays allowed above.
+      const cap = this._raiseCap(t);
+      const next = Math.min(cap, Math.round((s + this._step) * 1000) / 1000);
+      if (next > s + 1e-9) this._apply(next, t, p75, "up");
     }
   }
 
   _apply(scale, t, p75, dir) {
+    let before = scale;
+    try { before = this._getScale(); } catch (_) { /* keep the target */ }
     try {
       this._applyScale(scale);
     } catch (_) {
@@ -316,34 +336,27 @@ export class AdaptiveRenderScaleController {
     this._cooldownUntil = t + this._cooldownMs;
     if (this._log) this._log(`[adaptive-res] ${dir} → scale=${scale} (p75 frame ${Math.round(p75)}ms)`);
     if (this._settle) this._noteChangeForSettle(scale, t, dir);
+    this._lastChange = { dir, from: before, to: scale, t };
   }
 
-  /** Track applied changes; latch when the tail is a strict up/down flip-flop
-   *  inside the window. On latch: snap to the LOWEST scale of the flip-flop
-   *  (the sustainable side) and suppress raises for settleLockMs. */
+  /** A DOWN right after an UP means that raise was not sustainable: cap
+   *  raises at the scale the raise started from (strictly below the failed
+   *  peak) for settleLockMs. Repeated failures only ever lower the cap. */
   _noteChangeForSettle(scale, t, dir) {
-    const h = this._dirHistory;
-    h.push({ dir, to: scale, t });
-    while (h.length && (h.length > 8 || t - h[0].t > this._settleWindowMs)) h.shift();
-    const n = this._settleFlips;
-    if (h.length < n) return;
-    if (t < this._settleUntil) return; // already latched
-    const tail = h.slice(-n);
-    for (let i = 1; i < tail.length; i++) {
-      if (tail[i].dir === tail[i - 1].dir) return; // not alternating
-    }
-    const floor = Math.min(...tail.map((e) => e.to));
+    const prev = this._lastChange;
+    if (dir !== "down" || !prev || prev.dir !== "up") return;
+    if (t - prev.t > this._settleWindowMs) return;
+    const ceiling = Math.max(this._minScale, prev.from);
+    const latched = t < this._settleUntil;
+    if (latched && ceiling >= this.raiseCeiling) return;
+    this.raiseCeiling = latched ? Math.min(this.raiseCeiling, ceiling) : ceiling;
     this._settleUntil = t + this._settleLockMs;
     this.settleLatches += 1;
-    const cur = this._getScale();
-    if (floor < cur) {
-      try { this._applyScale(floor); } catch (_) { /* keep latch anyway */ }
-      this.changes += 1;
-    }
     if (this._log) {
       this._log(
-        `[adaptive-res] oscillation latch #${this.settleLatches} — holding scale=${Math.min(floor, cur)} ` +
-        `(no raises for ${Math.round(this._settleLockMs / 1000)}s; ?adaptiveResSettle=off disables)`
+        `[adaptive-res] oscillation latch #${this.settleLatches} — raise to ${prev.to} failed; ` +
+        `holding scale <= ${this.raiseCeiling} for ${Math.round(this._settleLockMs / 1000)}s ` +
+        `(?adaptiveResSettle=off disables)`
       );
     }
   }

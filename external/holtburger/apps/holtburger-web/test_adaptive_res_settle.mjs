@@ -6,10 +6,14 @@
 // undamped controller raises/lowers forever ("screen resolution keeps
 // changing"). Asserts:
 //   1. settle:false reproduces the endless churn (sanity — the bug exists).
-//   2. settle:true latches after the flip-flop, snaps to the sustainable
+//   2. settle:true latches after the flip-flop, holds the sustainable
 //      (lower) scale, and stops changing for the lock window.
 //   3. Lowering is still allowed while latched (safety valve).
 //   4. settleLatches reachability counter increments.
+//   5. (2026-10-05) the SAWTOOTH churn — frame time lags the scale change, so
+//      the controller overshoots both ways (up×4, down×3, …) and the changes
+//      never strictly alternate. The first damper (strict-alternation latch)
+//      never fired on it; the failed-raise ceiling must.
 import { AdaptiveRenderScaleController } from "./scene3d/adaptive_render_scale.js";
 
 let passed = 0, failed = 0;
@@ -21,10 +25,17 @@ function check(label, cond, extra = "") {
 // Simulated GPU: threshold response. At or below `goodScale` the GPU holds
 // vsync (17 ms); above it, it drops frames (80 ms). Optional `crushMs`
 // models a mid-session load spike that is slow at EVERY scale.
-function runSim({ settle, minutes = 10, goodScale = 0.6, crushAfterMin = null }) {
+// `lagMs` models the live sawtooth: the GPU's frame time follows the scale it
+// had `lagMs` ago (render-target rebuild + shader warm-up after each resize).
+function runSim({ settle, minutes = 10, goodScale = 0.6, crushAfterMin = null, lagMs = 0 }) {
   let clock = 0;
   let scale = 0.35; // the smart-default start on a 4K/200% display
   const applied = [];
+  const scaleAt = (t) => {
+    let s = 0.35;
+    for (const a of applied) { if (a.t <= t) s = a.s; else break; }
+    return s;
+  };
   const c = new AdaptiveRenderScaleController({
     getScale: () => scale,
     applyScale: (s) => { scale = s; applied.push({ t: clock, s }); },
@@ -37,7 +48,8 @@ function runSim({ settle, minutes = 10, goodScale = 0.6, crushAfterMin = null })
   const endMs = minutes * 60_000;
   while (clock < endMs) {
     const crushed = crushAfterMin != null && clock > crushAfterMin * 60_000;
-    const dt = crushed ? 80 : (scale <= goodScale + 1e-9 ? 17 : 80);
+    const seen = lagMs ? scaleAt(clock - lagMs) : scale;
+    const dt = crushed ? 80 : (seen <= goodScale + 1e-9 ? 17 : 80);
     clock += dt;
     c.recordFrame();
   }
@@ -97,6 +109,28 @@ let undampedChanges = 0;
   while (clock < 5 * 60_000) { clock += 17; c.recordFrame(); }
   check("healthy GPU ramps to maxScale without latching",
     scale === 1 && c.settleLatches === 0, `scale=${scale} latches=${c.settleLatches}`);
+}
+
+// 5. The live sawtooth (2026-10-05): lagged frame time → runs of ups then runs
+//    of downs, never a strict up/down alternation.
+{
+  const und = runSim({ settle: false, minutes: 10, lagMs: 5000 });
+  const dirs = [];
+  for (let i = 1; i < und.applied.length; i++) {
+    dirs.push(und.applied[i].s > und.applied[i - 1].s ? "u" : "d");
+  }
+  check("lagged model reproduces the sawtooth (consecutive same-direction runs)",
+    /uu/.test(dirs.join("")) && /dd/.test(dirs.join("")), dirs.join(""));
+  check("undamped sawtooth churns all session (>=20 changes in 10min)",
+    und.c.changes >= 20, `changes=${und.c.changes}`);
+  const { c, scale, applied } = runSim({ settle: true, minutes: 10, lagMs: 5000 });
+  check("damped sawtooth latched", c.settleLatches >= 1, `latches=${c.settleLatches}`);
+  const late = applied.filter((a) => a.t > 2 * 60_000 && a.t < 5 * 60_000);
+  check("damped sawtooth is quiet between minute 2 and the lock expiry",
+    late.length === 0, `changes=${late.map((a) => a.s).join(",")}`);
+  check("damped sawtooth total changes well below undamped (<=25%)",
+    c.changes <= und.c.changes * 0.25, `damped=${c.changes} undamped=${und.c.changes}`);
+  check("damped sawtooth ends on the sustainable side", scale <= 0.6 + 1e-9, `scale=${scale}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
