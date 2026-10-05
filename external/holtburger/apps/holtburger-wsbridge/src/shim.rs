@@ -191,7 +191,9 @@ pub async fn run(cfg: Config) -> Result<()> {
         .as_str()
         .into_client_request()
         .with_context(|| format!("invalid bridge url: {}", cfg.bridge_url))?;
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(request)
+    // latency (2026-10-05): disable Nagle — every WS frame is one small AC
+    // datagram, and Nagle would hold a frame behind an unacked predecessor.
+    let (mut ws, _resp) = tokio_tungstenite::connect_async_with_config(request, None, true)
         .await
         .with_context(|| format!("connect ws bridge {}", cfg.bridge_url))?;
     log::info!("ws connected to {}", cfg.bridge_url);

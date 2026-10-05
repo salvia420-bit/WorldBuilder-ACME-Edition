@@ -152,7 +152,16 @@ pub async fn accept_loop(cfg: Config, listener: TcpListener) -> Result<()> {
 
 async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -> Result<()> {
     log::info!("[{peer}] accepted; upgrading to ws");
-    let ws = tokio_tungstenite::accept_async(tcp)
+    // latency (2026-10-05): TCP_NODELAY. Each WS frame carries one small AC
+    // datagram; with Nagle on, a frame written while its predecessor is
+    // still unacked waits for that ACK — up to the peer's delayed-ACK timer
+    // (40 ms Linux / 200 ms Windows) — on every ACE burst (a reply is
+    // routinely several back-to-back datagrams). Browsers already set
+    // NODELAY on their side; the bridge was the one Nagle hop. Best-effort.
+    if let Err(err) = tcp.set_nodelay(true) {
+        log::warn!("[{peer}] set_nodelay failed (continuing with Nagle): {err}");
+    }
+    let ws =tokio_tungstenite::accept_async(tcp)
         .await
         .with_context(|| format!("[{peer}] websocket handshake"))?;
 
