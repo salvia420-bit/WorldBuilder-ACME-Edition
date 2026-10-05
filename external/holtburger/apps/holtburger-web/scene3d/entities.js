@@ -11041,189 +11041,40 @@ export class EntityManager {
   }
 
   /**
-   * Wave 2 Phase 2.2 (2026-05-26) — layer a sidestep cycle on top of
-   * the active forward locomotion clip.
+   * Record the entity's interpreted SIDESTEP axis (retail `RawMotionState`
+   * carries forward / sidestep / turn as independent slots,
+   * acclient.c:332759-332786). Since the animation consolidation this is a
+   * plain scalar setter: it stashes `_sidestepCommand` (SideStepRight
+   * 0x6500000F — Left is folded to Right, the direction rides the speed sign)
+   * and `_sidestepSpeed` (the wire `sidestep_speed` magnitude) for the
+   * `stateGroundSpeed` getter's X term, which scales the locomotion cycle's
+   * gait. It no longer layers a 0.5-weight mixer clip: a pure strafe already
+   * plays the SideStepRight CYCLE through setMotion on the Rust playhead, and a
+   * diagonal plays the forward cycle (retail has one playhead, no blend).
    *
-   * **Why this exists.** Retail's `RawMotionState` carries forward,
-   * sidestep, and turn as three INDEPENDENT command slots
-   * (`~/ac-headers/acclient.c:332759-332786`,
-   * `external/ACE/Source/ACE.Server/Physics/Animation/RawMotionState.cs:7-115`).
-   * The wasm side now packs both slots when the player holds W+D
-   * (`crates/holtburger-core/src/client/movement/common.rs::build_motion_state_raw_motion_state`).
-   * `setMotion()` plays ONE clip via crossFadeTo, replacing whatever
-   * was active — fine for the forward axis, but it would clobber the
-   * forward clip on a follow-up sidestep dispatch.
-   *
-   * **Mechanism.** Mirrors `_tryPlayLink`'s overlay pattern: fetch the
-   * sidestep cycle through the AnimationCache, install it as a separate
-   * keyed action (`sidestep:0x{cmd}:0x{stance}`), set LoopRepeat, and
-   * just `.play()` it. The mixer blends it with the active locomotion
-   * action by their respective weights — three.js's
-   * `AnimationMixer.update(dt)` handles concurrent actions natively.
-   *
-   * Pass `sidestepCmd = 0` (or any non-sidestep command low-16) to
-   * fade out and remove the sidestep layer; this is the path
-   * `setLocomotionPair` takes when strafe key releases while forward
-   * is still held.
-   *
-   * No-op for entities without a rig (silently returns) or when the
-   * cmd doesn't map to a known sidestep low (`0x0F`/`0x10`).
+   * The name is kept because index.html / loop.js / camera.js call it.
+   * `sidestepCmd = 0` (or any non-sidestep low-16) clears the axis.
    *
    * @param {number} guid
    * @param {number} sidestepCmd Full u32 motion command. Use 0 to clear.
-   * @param {number} motionStance Stance (current_style); 0 inherits.
-   * @param {number} [speed] W4.5 / DIM1-3 (2026-06-05): the wire
-   *   `sidestep_speed` scalar (retail MotionInterp.cs:414 / acclient.c:332766
-   *   scales the strafe anim by it). When omitted/non-finite, defaults to 1.0
-   *   (the un-modulated sidestep anim speed) — backward-compatible with the
-   *   3-arg local caller (index.html). Threading the real wire value here makes
-   *   `inst._sidestepSpeed` carry the fractional magnitude the
-   *   `stateGroundSpeed` getter / velScale consume. (anim-deep FIX-PLAN W4.5.)
+   * @param {number} _motionStance unused (kept for the callers' signature)
+   * @param {number} [speed] wire `sidestep_speed`; omitted/non-finite → 1.0.
    */
-  async setSidestepLayer(guid, sidestepCmd, motionStance, speed) {
+  setSidestepLayer(guid, sidestepCmd, _motionStance, speed) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
-    // Wave 2 Phase 2.5 (2026-05-26): defensive Left → Right substitution.
-    // Our wasm wire-emit (`crates/holtburger-core/src/client/movement/
-    // common.rs::sidestep_command_for_state`) and the local-prediction
-    // dispatch at `index.html:9290` both already pass
-    // `SideStepRight (0x6500000F)` regardless of direction. But ACE's
-    // UpdateMotion broadcast from a remote player on an older client (or
-    // a custom plugin emitting the raw enum value) could still carry the
-    // Left code (`0x65000010`). Map it to Right so the cache lookup hits
-    // the same `MotionTable.cycles[(stance, SideStepRight)]` clip
-    // retail used for both directions. The direction sign rides
-    // `sidestep_speed`, but the rig only needs ONE clip either way.
-    let normalizedCmd = sidestepCmd >>> 0;
-    if ((normalizedCmd & 0xFFFF) === CMD_LOW_SIDESTEP_LEFT) {
-      normalizedCmd = (normalizedCmd & 0xFFFF0000) | CMD_LOW_SIDESTEP_RIGHT;
+    let cmd = sidestepCmd >>> 0;
+    if ((cmd & 0xFFFF) === CMD_LOW_SIDESTEP_LEFT) {
+      cmd = ((cmd & 0xFFFF0000) | CMD_LOW_SIDESTEP_RIGHT) >>> 0;
     }
-    const cmd = normalizedCmd;
-    const cmdLow = cmd & 0xFFFF;
-
-    // Clear path — fade out any existing sidestep layer, then return.
-    const SIDESTEP_LAYER_KEY_PREFIX = "sidestep:";
-    const clearLayer = (reason) => {
-      if (!inst.actions) return;
-      for (const [key, action] of inst.actions.entries()) {
-        if (typeof key === "string" && key.startsWith(SIDESTEP_LAYER_KEY_PREFIX)) {
-          try {
-            action.fadeOut(CROSSFADE_S);
-            // Disable after a few frames; three.js will GC the binding.
-            setTimeout(() => {
-              try { action.enabled = false; } catch (_) {}
-            }, Math.max(50, CROSSFADE_S * 1000 + 16));
-          } catch (_) {}
-        }
-      }
-      if (window?.__diag?.motion?.onSidestepLayerCleared) {
-        try {
-          window.__diag.motion.onSidestepLayerCleared({ guid: guid >>> 0, reason });
-        } catch (_) {}
-      }
-    };
-
-    if (cmd === 0 || (cmdLow !== 0x000F && cmdLow !== 0x0010)) {
-      // T1: clear the stashed sidestep state so the per-frame stateGroundSpeed
-      // getter drops the X term once sidestep is released.
+    const low = cmd & 0xFFFF;
+    if (cmd === 0 || (low !== CMD_LOW_SIDESTEP_RIGHT && low !== CMD_LOW_SIDESTEP_LEFT)) {
       inst._sidestepCommand = 0;
       inst._sidestepSpeed = 0;
-      clearLayer(cmd === 0 ? "cleared" : `unsupported-cmd=0x${cmdLow.toString(16)}`);
       return;
     }
-    // T1: stash the interpreted sidestep command (full u32, already collapsed
-    // to SideStepRight 0x6500000F above) for the stateGroundSpeed getter's X
-    // term. retail get_state_velocity keys the X term on
-    // `command == SideStepRight` and scales by sidestep_speed.
-    // W4.5 / DIM1-3 (2026-06-05): thread the real wire `sidestep_speed`
-    // magnitude (was hardcoded 1.0, dropping fractional-speed strafes). When the
-    // caller omits it (3-arg callers) `speed` is undefined → fall back to 1.0,
-    // the un-modulated sidestep anim speed. Harmless until velScale is live AND
-    // a fractional-speed strafe occurs. (anim-deep FIX-PLAN W4.5.)
-    inst._sidestepCommand = cmd >>> 0;
+    inst._sidestepCommand = cmd;
     inst._sidestepSpeed = Number.isFinite(speed) ? Math.abs(speed) : 1.0;
-
-    let stance = (motionStance >>> 0);
-    if (stance === 0 && inst.lastStance) {
-      stance = inst.lastStance;
-    }
-    if (stance === 0) {
-      // No prior stance recorded; defer to a future setMotion call.
-      return;
-    }
-
-    const setupId =
-      (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
-    const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
-    const layerKey = `${SIDESTEP_LAYER_KEY_PREFIX}0x${cmd.toString(16)}:0x${stance.toString(16)}`;
-
-    let action = inst.actions?.get(layerKey);
-    if (!action) {
-      const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
-      if (typeof fetchKeyframes !== "function") return;
-      let entry;
-      try {
-        entry = await this.animationCache.get(
-          setupId,
-          mtableId,
-          cmd,
-          stance,
-          fetchKeyframes,
-          {
-            modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
-            textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
-            paletteId: (inst.meta.paletteId ?? 0) >>> 0,
-            paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
-          },
-        );
-      } catch (e) {
-        console.warn(
-          `[wave2.2] setSidestepLayer fetch failed for entity 0x${(guid >>> 0).toString(16)}:`,
-          e,
-        );
-        return;
-      }
-      if (!this.entityMap.has(guid >>> 0)) return;
-      const clip = entry?.clip;
-      if (!clip) {
-        // No sidestep cycle for this (stance, cmd) — silent no-op; the
-        // forward clip alone still drives the visible animation.
-        return;
-      }
-      inst.evictOldestUnused?.();
-      action = inst.mixer.clipAction(clip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.clampWhenFinished = false;
-      // Weight 0.5 = additive 50/50 blend with the forward clip.
-      // Three.js mixers sum weighted poses across all `enabled+play()`-ed
-      // actions; equal weights yield a midpoint pose which reads as a
-      // diagonal walk. Tunable later if user feedback says the rig looks
-      // too sideways or too straight.
-      action.setEffectiveWeight(0.5);
-      action.enabled = true;
-      inst.actions?.set(layerKey, action);
-    } else {
-      // Re-arm an existing layer (fadeOut may have started during a
-      // brief release+re-press of A/D).
-      action.enabled = true;
-      action.setEffectiveWeight(0.5);
-    }
-    try {
-      _noteDeadMixerStart(inst, "setSidestepLayer");
-      action.play();
-      if (window?.__diag?.motion?.onSidestepLayerPlayed) {
-        try {
-          window.__diag.motion.onSidestepLayerPlayed({
-            guid: guid >>> 0,
-            cmd: cmd >>> 0,
-            stance: stance >>> 0,
-            layerKey,
-          });
-        } catch (_) {}
-      }
-    } catch (e) {
-      console.warn(`[wave2.2] setSidestepLayer play failed: ${e?.message ?? e}`);
-    }
   }
 
   /**

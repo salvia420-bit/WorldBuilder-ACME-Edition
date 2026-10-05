@@ -2593,11 +2593,11 @@ export class CameraSwitcher {
     // WalkBackwards command and let `setMotion`'s retail `adjust_motion` port
     // rewrite it (see the COL-10 note at the backward arm below) so the forward
     // clip plays in REVERSE under the default-on ?signedMotionSpeed; and
-    // (b) COMBINATIONAL: layer the additive sidestep
-    // blend (setSidestepLayer) over the forward/backward base so backward-left /
-    // forward-right diagonals animate both axes instead of collapsing to one
-    // clip. Left-vs-right strafe reverse + a dedicated turn slot stay follow-ons
-    // (setSidestepLayer collapses Left→Right; matches the F15-2 deferral).
+    // (b) COMBINATIONAL: record the sidestep slot (setSidestepLayer — since the
+    // animation consolidation a scalar setter for the stateGroundSpeed gait
+    // term, no blend layer) alongside the forward/backward cycle; one playhead,
+    // so a diagonal plays the forward cycle (retail has no clip blend). A dedicated
+    // turn slot stays a follow-on (setSidestepLayer collapses Left→Right).
     // DEFAULT-ON (validated 2026-06-27 on the local rig: backward→motionSign −1,
     // backward-left→sign −1 + sidestep slot 0x6500000f; `=off` escape). Lazy
     // module-once flag read.
@@ -2648,16 +2648,15 @@ export class CameraSwitcher {
     if (m.forward > 0) cmd = m.run ? 0x44000007 : 0x45000005;   // Run / Walk Forward
     else if (m.forward < 0) cmd = 0x45000006;                   // WalkBackwards
     // Issue 4 (2026-06-03): pure sidestep is dispatched here as the FORWARD
-    // command via setMotion (a full-weight clip swap), NOT via
-    // entityManager.setSidestepLayer (a 0.5-weight additive blend layered over
-    // a forward base clip). As a result _resolveStateGroundSpeed reads sidestep
+    // command via setMotion (the SideStep cycle on the playhead), NOT via
+    // entityManager.setSidestepLayer (now only a gait-scalar setter; it was a
+    // 0.5-weight mixer blend before the animation consolidation). As a result
+    // _resolveStateGroundSpeed reads sidestep
     // from inst._sidestepCommand (entities.js:~4421), which only setSidestepLayer
     // populates — so the velScale getter returns null for a camera-dispatched
     // pure strafe and the cycleTimeScale falls back to the (no-op) rig-XZ EMA.
     // This is HARMLESS: sidestep |velocity|≈0, so the EMA-derived cycleTimeScale
-    // no-ops anyway. We deliberately do NOT route through setSidestepLayer: that
-    // is a visible-animation change (additive blend vs. full clip swap) that
-    // cannot be validated without a GPU eye-test.
+    // no-ops anyway.
     else if (m.strafe > 0) cmd = 0x6500000f;                    // SideStepRight
     else if (m.strafe < 0) cmd = 0x65000010;                    // SideStepLeft
     else if (m.turn > 0) cmd = 0x6500000d;                      // TurnRight

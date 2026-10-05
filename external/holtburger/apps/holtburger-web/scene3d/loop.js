@@ -580,8 +580,9 @@ function drainMotionAxes(scene3d, sessionHandle) {
     const sideCmd = flat[i + 2] >>> 0;
     const turnCmd = flat[i + 3] >>> 0;
     const forwardIdle = flat[i + 4] >>> 0;
-    // Sidestep → additive strafe overlay (strafe-cast footwork). Speed defaults
-    // to 1.0 inside setSidestepLayer (OQ-3), matching today's local behaviour.
+    // Sidestep → record the strafe axis for the gait (setSidestepLayer is a
+    // scalar setter since the animation consolidation — no overlay clip). Speed
+    // defaults to 1.0 inside setSidestepLayer (OQ-3).
     if (sideCmd !== 0 && typeof em.setSidestepLayer === "function") {
       em.setSidestepLayer(guid, sideCmd, stance);
     } else if (
@@ -589,7 +590,7 @@ function drainMotionAxes(scene3d, sessionHandle) {
       em.entityMap?.get?.(guid)?._sidestepCommand &&
       typeof em.setSidestepLayer === "function"
     ) {
-      // Strafe released: clear the layer + its gait scalars (audit F2), which
+      // Strafe released: clear the axis + its gait scalars (audit F2), which
       // otherwise stayed set for remote entities after the strafe ended.
       em.setSidestepLayer(guid, 0, stance);
     }

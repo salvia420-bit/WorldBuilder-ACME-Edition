@@ -212,3 +212,22 @@ test("A5-P3 root motion on the playhead: applied once, only on natural completio
   assert.ok(Math.abs(inst.root.position.x - (x0 + 1)) < 1e-6, "applied exactly once");
   em.dispose();
 });
+
+test("setSidestepLayer is a scalar setter (no layer, no playhead change)", async () => {
+  const em = makeManager();
+  const inst = await spawn(em, READY);
+  await em.setMotion(inst.guid, WALK, 0x3d);
+  const loco = inst._unifiedLoco;
+  const ret = em.setSidestepLayer(inst.guid, 0x65000010 /* Left */, 0x3d, -0.5);
+  assert.equal(ret, undefined, "synchronous");
+  assert.equal(inst._sidestepCommand, SIDESTEP_R, "Left folded to SideStepRight");
+  assert.equal(inst._sidestepSpeed, 0.5, "speed magnitude");
+  assert.equal(inst._unifiedLoco, loco, "the forward cycle keeps the playhead");
+  assert.equal(inst._unifiedSeq ?? null, null);
+  em.setSidestepLayer(inst.guid, SIDESTEP_R, 0x3d);
+  assert.equal(inst._sidestepSpeed, 1.0, "omitted speed defaults to 1.0");
+  em.setSidestepLayer(inst.guid, 0, 0x3d);
+  assert.equal(inst._sidestepCommand, 0);
+  assert.equal(inst._sidestepSpeed, 0);
+  em.dispose();
+});
