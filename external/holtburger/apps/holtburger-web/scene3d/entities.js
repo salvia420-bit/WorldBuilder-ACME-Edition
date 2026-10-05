@@ -1025,6 +1025,11 @@ const CMD_DOOR_OFF = 0x4000000c;
 // = perpetual open↔close (the 2026-06-29 "all doors/chests opening and closing
 // over and over" bug; confirmed live — a closed chest spawned with Off(0xc) on
 // LoopRepeat). Special-case the LOOP MODE at the play sites via this predicate.
+// The wasm `MotionSequence` class (the Rust CSequence playhead), read off the
+// boot-installed `window.__hbWasm` namespace. null = stale pkg/ or no window.
+function _motionSequenceClass() {
+  return (typeof window !== "undefined" && window.__hbWasm?.MotionSequence) || null;
+}
 function isDoorStateMotion(cmd) {
   const low = (cmd >>> 0) & 0xffff;
   return low === (CMD_DOOR_ON & 0xffff) || low === (CMD_DOOR_OFF & 0xffff);
@@ -3241,7 +3246,9 @@ class EntityInstance {
     this.actions = new Map();
     this.actionLastUsedMs = new Map();
     this.currentAction = null;
-    this.currentActionKey = null;
+    // Mixer-side key (doors only until the mixer is retired); read through the
+    // `currentActionKey` accessor below, which prefers the Rust playhead's key.
+    this._mixerActionKey = null;
     this.meta = meta;
     // Render-completeness audit (2026-05-29) — wielded-item attach state.
     // When this entity is a held child (weapon/shield/bow), `_attachedParentGuid`
@@ -3328,6 +3335,20 @@ class EntityInstance {
     // (LoopOnce one-shots) and for the stance-Ready pose swap.
     /** @type {Map<string, { time: number, leftAt: number }>} */
     this._recentLocomotionTime = new Map();
+  }
+
+  // The playhead's key: the locomotion cycle the Rust MotionSequence
+  // (`_unifiedLoco`) is driving — the same `AnimationCache.makeKey` string the
+  // mixer used, so every reader (setMotion's re-issue dedup, the hook event
+  // records, plugin `animationHookDone`, `__diag.motion`, index.html's
+  // remote-swing dedup) keeps its key shape. One-shots on `_unifiedSeq` never
+  // change it, exactly like the mixer's link overlays never did.
+  get currentActionKey() {
+    return this._unifiedLoco?.cacheKey ?? this._mixerActionKey ?? null;
+  }
+
+  set currentActionKey(v) {
+    this._mixerActionKey = v ?? null;
   }
 
   registerGeometry(geom) {
@@ -5016,7 +5037,25 @@ export class EntityManager {
     // hooks fired on such an entity silently no-op (not an error;
     // many static placements have animation hooks but no SoundTable).
     inst.soundTableDid = (meta.soundTableDid ?? 0) >>> 0;
-    if (initialClip) {
+    // Animation consolidation — the spawn's initial cycle goes straight onto the
+    // Rust playhead (`_unifiedLoco`), so every entity is on ONE authority from
+    // its first frame instead of breathing on the mixer until its first move.
+    // Same gate as the mixer auto-play below (walk/run/idle cycles only; one-shot
+    // classes and motion=0 stay at the rest pose). Door/chest state motions stay
+    // on the mixer for now (their state links still play there).
+    let _spawnOnPlayhead = false;
+    if (initialClip && !isDoorStateMotion(initialMotion)) {
+      const _cls0 = classifyMotionCommand(initialMotion);
+      if (_cls0 === "walk" || _cls0 === "run" || _cls0 === "idle") {
+        const cacheKey0 = AnimationCache.makeKey(
+          setupId, mtableId, initialMotion, resolvedStance || initialStance,
+        );
+        _spawnOnPlayhead = this._installUnifiedLoco(
+          inst, animEntry.sequenceDescriptor, cacheKey0, animEntry.hooks, initialMotion,
+        );
+      }
+    }
+    if (initialClip && !_spawnOnPlayhead) {
       const cacheKey = AnimationCache.makeKey(
         setupId,
         mtableId,
@@ -9287,6 +9326,44 @@ export class EntityManager {
     return true;
   }
 
+  // The ONE locomotion-cycle installer (spawn + setMotion). Builds the cyclic
+  // Rust MotionSequence for descriptor `d` and puts it on `inst._unifiedLoco`,
+  // carrying the prior cycle's normalized phase across a swap (walk→run: no
+  // foot-pop). Door/chest On/Off STATE cycles are held, not looped
+  // (isDoorStateMotion — looping them is the 2026-06-29 open↔close bug): built
+  // non-cyclic and advanced past their end so the playhead clamps the final
+  // (open/closed) frame, with no hook timeline (spawning or snapping a door into
+  // a state must not replay its swing sounds). Returns false when no sequence
+  // could be built (no wasm class / no descriptor) — the caller keeps its
+  // previous state.
+  _installUnifiedLoco(inst, d, cacheKey, hooks, cmd) {
+    const MS = _motionSequenceClass();
+    if (!MS || !d) return false;
+    const hold = isDoorStateMotion(cmd >>> 0);
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
+      d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+      !hold, // cyclic locomotion loops; a held state latches its final frame
+    );
+    if (!seq) return false;
+    const prev = inst._unifiedLoco;
+    if (!hold && prev?.seq && !prev.hold && typeof seq.seekPhase === "function") {
+      try { seq.seekPhase(prev.seq.phase); } catch (_) {}
+    }
+    if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
+    if (hold) {
+      try { seq.advance(_finiteOr0(d.duration) + 1); } catch (_) {}
+    }
+    // No base-speed snapshot: the tick reads it live per cacheKey (audit F2 —
+    // the snapshot froze a stale run base onto idle).
+    inst._unifiedLoco = {
+      seq, desc: d, cacheKey, hold,
+      hooks: hold ? null : (hooks || null), lastHookTime: -1,
+    };
+    inst._locoCycleKey = cacheKey;
+    return true;
+  }
+
   // ---- J5: pending_animations (retail MotionTableManager) -----------------
   // `inst._unifiedSeq` stays the SINGLE playhead; `inst._unifiedQueue` is the
   // bookkeeping list that says what plays after it, exactly as retail keeps
@@ -10625,7 +10702,8 @@ export class EntityManager {
     // flight. Every await below re-checks it: last command issued wins, not
     // last fetch finished.
     const motionToken = inst._motionToken = ((inst._motionToken | 0) + 1) | 0;
-    if (cacheKey === (unifiedOwnsCycle ? inst._unifiedLoco.cacheKey : inst.currentActionKey)) return; // already playing
+    // `currentActionKey` is the playhead's key whenever `_unifiedLoco` exists.
+    if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
 
@@ -10707,34 +10785,10 @@ export class EntityManager {
       // A one-shot (_unifiedSeq) suppresses this during a swing then resumes it.
       // By here attack/cast/death/stop have already returned, so cls is a
       // locomotion cycle (walk/run/idle/Ready). Default-off → unchanged below.
-      if (UNIFIED_LOCO) {
-        const MS =
-          (typeof window !== "undefined" && window.__hbWasm) ? window.__hbWasm.MotionSequence : null;
-        const d = entry.sequenceDescriptor;
-        if (MS && d) {
-          const seq = MS.fromDescriptor(
-            d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
-            d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
-            true, // cyclic locomotion — loops
-          );
-          if (seq) {
-            const prev = inst._unifiedLoco;
-            // Carry normalized phase from the prior cycle (no foot-pop on swap).
-            if (prev?.seq && typeof seq.seekPhase === "function") {
-              try { seq.seekPhase(prev.seq.phase); } catch (_) {}
-            }
-            if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
-            // No base-speed snapshot: the tick reads it live per cacheKey
-            // (audit F2 — the snapshot froze a stale run base onto idle).
-            inst._unifiedLoco = {
-              seq, desc: d, cacheKey,
-              hooks: entry.hooks || null, lastHookTime: -1,
-            };
-            inst._locoCycleKey = cacheKey;
-            try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
-            return; // the tick drives the loco cycle; skip the mixer crossFadeTo
-          }
-        }
+      if (UNIFIED_LOCO &&
+          this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd)) {
+        try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
+        return; // the tick drives the loco cycle; skip the mixer crossFadeTo
       }
       // Don't exceed the per-entity action cap. Evict before install.
       inst.evictOldestUnused();
