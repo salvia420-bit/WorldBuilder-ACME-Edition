@@ -3093,14 +3093,26 @@ mod drift {
         polys.insert(1u16, floor_poly_local(-HE, HE, 0.0));
         let mut scene = SpatialScene::new();
         scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
-        // Hull: cell-local x <= 2 (a room whose membership ends 2 m east of
-        // its origin, while its floor runs on). No portal, no exterior portal.
-        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(-1.0, 0.0, 0.0), 2.0)]));
+        // Hull: cell-local x <= 1.6 (a room whose membership ends 1.6 m east
+        // of its origin, while its floor runs on). No portal, no exterior
+        // portal.
+        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(-1.0, 0.0, 0.0), 1.6)]));
         let env = DriftEnv { scene };
         let begin = pose_at(FCX + 1.5, FCY, FLOOR_WZ);
         let end = pose_at(FCX + 2.8, FCY, FLOOR_WZ - SINK);
         let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
-        assert!(out.pose.coords.x > FCX + 2.5, "walk advanced: x={}", out.pose.coords.x);
+        // Do not require the full 1.3 m. On these synthetic indoor floors
+        // with `retail_ground` off, only part of a sinking walk is realized
+        // (the other indoor walks in this module assert only `x > begin`);
+        // measured here: 2 of the 3 steps (x = FCX + 2.367). What the test
+        // needs is the sphere centre more than a capsule radius (0.48 + the
+        // 0.01 BSP pad) past the hull, so the OLD exit test would have fired:
+        // 1.6 - 2.1 = -0.5.
+        assert!(
+            out.pose.coords.x > FCX + 2.1,
+            "the sphere centre did not get clear of the hull: x={}",
+            out.pose.coords.x
+        );
         assert_eq!(
             out.pose.landblock_id,
             Guid(CELL_ID),
