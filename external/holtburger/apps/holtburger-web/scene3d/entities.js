@@ -15338,7 +15338,7 @@ export class EntityManager {
           const step = dt * this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0);
           if (step >= 0) {
             lo.seq.advance(step);
-            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
+            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
             this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
           } else {
             // 2026-10-05: advance() ignores dt<=0 (motion_sequence.rs
@@ -15351,7 +15351,7 @@ export class EntityManager {
               p -= Math.floor(p);
               lo.seq.seekPhase(p);
             }
-            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);
+            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
             lo.lastHookTime = -1; // no reverse footfall spam
           }
         } else {

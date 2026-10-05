@@ -137,7 +137,7 @@ if (THREE && anim) {
   let maxErr = 0, allMatch = true;
   for (let F = 0; F < NUM_FRAMES; F += 1) {
     mixer.setTime((F + 0.5) / FR);
-    poseRigAt(F, sdesc, seqParts);
+    poseRigAt(F, sdesc, seqParts, /* inPlace — the mixer clip plays in place */ true);
     for (let p = 0; p < PART_COUNT; p += 1) {
       const m = rigParts[p], s = seqParts[p];
       const dp = Math.max(Math.abs(m.position.x - s.position.x), Math.abs(m.position.y - s.position.y), Math.abs(m.position.z - s.position.z));

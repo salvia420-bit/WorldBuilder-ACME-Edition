@@ -37,5 +37,5 @@ Start from the normal tunnel URL with `?nosw=1` (and `clouds=on` where noted).
 - [ ] **Portal travel:** the loading curtain never sticks. It hides on arrival or after at most 8 s.
 
 ## Camera / movement feel
-- [ ] **Running "jut back":** reproduce with `&moveTelemetry=1`, then paste `__hbWasm.localPoseSnapDiag()` and `__hbWasm.leashEchoDiag()`.
+- [ ] **Running "jut back" — fix landed:** the run cycle drew the body up to 3.25 m ahead of its real position and snapped it back every cycle (measured headless; now 0.18 m of normal bob). Confirm it's gone. If any jut remains, it's a different cause: reproduce with `&moveTelemetry=1`, then paste `__hbWasm.localPoseSnapDiag()` and `__hbWasm.leashEchoDiag()`.
 - [ ] **syncPhysicsTick pairing:** every load warns that `?posePublishPostTick` is off. Compare camera smoothness with `&posePublishPostTick=on` to decide whether to make it the default.

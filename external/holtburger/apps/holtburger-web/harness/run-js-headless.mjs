@@ -102,8 +102,8 @@ const TIER1 = [
   { flag: "retailCamZoom+camStiffness+mouseSmooth", file: "tests/camera_retail_math.test.cjs" },
   { flag: "remoteInterp(JS)", file: "tests/remote_interp_ownership.test.cjs" },
   { flag: "jumpParity(JS)", file: "tests/jump_charge_parity.test.cjs" },
-  // test_motion_sequence.mjs (unifiedMotion poser) is QUARANTINED below — a
-  // real poser-vs-mixer divergence, not a stale test (see its reason).
+  // Unified poser vs mixer-clip parity, incl. the in-place locomotion fix.
+  { flag: "unifiedMotion(poser)", file: "test_motion_sequence.mjs" },
   // Exercises the REAL compiled wasm MotionSequence boundary (entities.js path);
   // Needs the (gitignored) pkg/ wasm build — see its `requires`.
   // `requires` the gitignored wasm build: absent → NO-FIXTURE, never a hollow PASS.
@@ -503,19 +503,7 @@ const TIER5 = [
 // code) so a fix is noticed the moment it lands. A STALE test does not belong
 // here — fix the test. Cleared of the "unclassified — see task #156" backlog
 // on 2026-10-05; every entry must name the bug.
-const QUARANTINE = [
-  {
-    file: "test_motion_sequence.mjs",
-    why: "REAL BUG (suspected visual regression, needs 1070 eye-test): poseRigAt " +
-      "(scene3d/motion/motion_sequence.js:35-45) writes RAW part positions + posFrames root " +
-      "motion, while the production mixer clip (scene3d/animation.js:199-245 buildAnimationClip) " +
-      "plays IN PLACE (B1-render fix v2: subtracts the common per-frame drift, skips posFrames " +
-      "unless ?renderRootMotion=on). Under the default ?unifiedMotion (ALL classes incl. " +
-      "locomotion, DEC-18) the poser drives the rig from the SAME animData " +
-      "(scene3d/entities.js:10686 entry.sequenceDescriptor), so the B1 'model strides ahead, " +
-      "snaps back' fix is bypassed. Part B parity maxErr=31.5 on the synthetic 4-frame clip.",
-  },
-];
+const QUARANTINE = [];
 
 // Not JS-headless suites: Node wrappers that shell out to `cargo run/test`
 // (holtburger-dat examples / holtburger-core movement tests) against the real
