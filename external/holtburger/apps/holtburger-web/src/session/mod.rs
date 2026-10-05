@@ -127,6 +127,10 @@ pub(crate) struct LoopCtx {
     pub(crate) entity_seeded: bool,
     pub(crate) heartbeat_armed: bool,
     pub(crate) pending_post_teleport_login_complete: bool,
+    /// Portal-space arrival edge: the `teleport_sequence` of the last
+    /// `PlayerTeleport`, consumed by the first local-player `UpdatePosition`
+    /// carrying that (or a newer) sequence -> kind=66 TeleportArrived.
+    pub(crate) pending_teleport_arrival_seq: Option<u16>,
     pub(crate) last_diag_force_seq: Option<u16>,
     pub(crate) local_player_kind1_emitted: bool,
     pub(crate) local_player_spawn_emitted: bool,

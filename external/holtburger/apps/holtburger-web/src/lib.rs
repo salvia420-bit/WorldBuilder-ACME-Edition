@@ -16176,6 +16176,58 @@ fn setup_default_script_id<S: holtburger_dat::ResourceSource + ?Sized>(
     setup.default_script.unwrap_or(0)
 }
 
+/// Portal-space (2026-10-05): retail `DBObj::GetDIDByEnum(&did, enum, category)`
+/// — resolve a client enum through the DAT's DidMapper (EnumIDMap) tree:
+/// master map `0x25000000` -> `client_enum_to_id[category]` = sub-map DID ->
+/// `client_enum_to_id[enum_value]`. gmSmartBoxUI resolves the portal-space
+/// tunnel this way (`GetDIDByEnum(&bgDID, 0x10000001, 7)` -> Setup,
+/// `GetDIDByEnum(.., 0x10000002, 7)` -> Animation; acclient.c:262328/262443;
+/// OpenAC `RetailDataIdResolver`). Returns 0 when any hop is absent (JS then
+/// falls back to the DAT-verified constants). Category 7 = UIASSET.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = resolveClientEnumDid)]
+pub async fn resolve_client_enum_did(enum_value: u32, category: u32) -> Result<u32, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", DID_MAPPER_MASTER_ID)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = client_enum_did(s, enum_value, category);
+    })
+    .await?;
+    Ok(client_enum_did(source.as_ref(), enum_value, category))
+}
+
+/// Root DidMapper ("the record at 0x25000000 is the index describing every
+/// other DidMapper", did_mapper.rs) — the retail portal.dat MasterMapId.
+#[cfg(any(target_arch = "wasm32", test))]
+const DID_MAPPER_MASTER_ID: u32 = 0x2500_0000;
+
+/// Pure two-hop DidMapper walk behind [`resolve_client_enum_did`]; 0 on any
+/// miss / parse failure.
+#[cfg(any(target_arch = "wasm32", test))]
+fn client_enum_did<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    enum_value: u32,
+    category: u32,
+) -> u32 {
+    use holtburger_dat::file_type::DidMapper;
+    use holtburger_dat::ResourceKey;
+    let read = |id: u32| -> Option<DidMapper> {
+        let bytes = source.get_file_by_key(ResourceKey::new("eor/portal", id)).ok()?;
+        DidMapper::read_le(&mut std::io::Cursor::new(&bytes)).ok()
+    };
+    let Some(master) = read(DID_MAPPER_MASTER_ID) else {
+        return 0;
+    };
+    let Some(&sub_id) = master.client_enum_to_id.get(&category) else {
+        return 0;
+    };
+    let Some(sub) = read(sub_id) else {
+        return 0;
+    };
+    sub.client_enum_to_id.get(&enum_value).copied().unwrap_or(0)
+}
+
 // === Render-completeness audit (2026-05-29) — wielded-item holding locations ===
 //
 // AC attaches a wielded child object (weapon / shield / bow) to its wielder by
@@ -25538,6 +25590,26 @@ const CLIENT_EVENT_KIND_OBJECT_APPRAISED: u32 = 32;
 /// `PlayerTeleport.teleport_sequence`); other slots unused.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED: u32 = 33;
+
+/// `kind = 66` — TeleportArrived (portal-space exit gate, 2026-10-05).
+/// Emitted ONCE per `PlayerTeleport`, on the first local-player
+/// `UpdatePosition` whose `teleport_sequence` is the teleport's own (or
+/// newer) — i.e. the destination pose has been applied client-side. This
+/// is the first half of retail's portal-space exit condition:
+/// `SmartBox::teleport_in_progress` = `player && !position_update_complete`
+/// (acclient.c:143092), where `HandlePlayerTeleport` sets
+/// `waiting_for_teleport` (acclient.c:143428-143450) and the destination
+/// position clears it; `SmartBox::UseTime` then flips
+/// `position_update_complete` once the cell manager stops blocking for
+/// cells (acclient.c:146262-146283). The JS side
+/// (`scene3d/portal_space.js`) adds the cells-ready half and runs the
+/// gmSmartBoxUI tunnel state machine (acclient.c:262415-262580).
+///
+/// `u32Payload` = destination objcell id (full `0xXXYYCCCC`);
+/// `u32Payload2` = the teleport sequence. Kind number chosen with a gap
+/// above 61 to stay clear of parallel waves.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_TELEPORT_ARRIVED: u32 = 66;
 
 // Kinds 34-39 reserved for parallel-running waves (F.4 Vendor, F.5
 // Contracts, F.6 Emote) per the 2026-05-27 parallel-coordination plan.
@@ -43285,6 +43357,9 @@ async fn recv_loop(
     // (the destination pose), then this clears. See the const's doc-comment
     // and the `PlayerTeleport` / `UpdatePosition` recv arms below.
     let pending_post_teleport_login_complete = false;
+    // Portal-space arrival edge (kind=66): armed by `PlayerTeleport`,
+    // consumed by the destination self `UpdatePosition`.
+    let pending_teleport_arrival_seq: Option<u16> = None;
     // Academy-rubberband diagnostic — when set, holds the last
     // observed `world.player.force_position_sequence`. Any tick where
     // it changes emits a `[acad-diag rubberband]` console line so the
@@ -43670,6 +43745,7 @@ async fn recv_loop(
         entity_seeded,
         heartbeat_armed,
         pending_post_teleport_login_complete,
+        pending_teleport_arrival_seq,
         last_diag_force_seq,
         local_player_kind1_emitted,
         local_player_spawn_emitted,

@@ -26,6 +26,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         entity_seeded,
         heartbeat_armed,
         pending_post_teleport_login_complete,
+        pending_teleport_arrival_seq,
         ..
     } = &mut *ctx;
     match message {
@@ -194,6 +195,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // mirror. `Character.cs:468-471` fires the bus
             // event on every Effects_PlayerTeleport — the
             // loading-screen overlay listens for it.
+            // Portal-space exit gate: arm the arrival edge for THIS
+            // teleport (a re-teleport before arrival simply re-arms with
+            // the newer sequence). Consumed in the self `UpdatePosition`
+            // arm below -> kind=66 TeleportArrived.
+            *pending_teleport_arrival_seq = Some(data.teleport_sequence);
             queued_events.borrow_mut().push(ClientEvent {
                 kind: CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED,
                 string_payload: None,
@@ -240,6 +246,21 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 // `LoginComplete`, send it now — ACE clears
                 // `Teleporting` and starts accepting our
                 // AutonomousPosition from the correct landblock.
+                // Portal-space exit gate (kind=66): the destination pose
+                // of the pending teleport has arrived. `wrapping_sub < 0x8000`
+                // = same-or-newer u16 sequence (retail's half-range compare).
+                if let Some(seq) = *pending_teleport_arrival_seq
+                    && data.pos.teleport_sequence.wrapping_sub(seq) < 0x8000
+                {
+                    *pending_teleport_arrival_seq = None;
+                    queued_events.borrow_mut().push(ClientEvent {
+                        kind: CLIENT_EVENT_KIND_TELEPORT_ARRIVED,
+                        string_payload: None,
+                        u32_payload: Some(u32::from(data.pos.pos.landblock_id)),
+                        u32_payload_2: Some(u32::from(data.pos.teleport_sequence)),
+                        f32_payload: None,
+                    });
+                }
                 if *pending_post_teleport_login_complete {
                     *pending_post_teleport_login_complete = false;
                     let login_complete = GameAction::LoginComplete(Box::new(
