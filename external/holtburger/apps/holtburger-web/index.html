@@ -1631,7 +1631,11 @@
       import { initChatLog } from "./app/chat_log.js";
       import { initHudPanels } from "./app/hud_panels.js";
       import { initAutoLogin } from "./app/auto_login.js";
-      import { dispatchClientEvent, STOP_PUMP } from "./app/client_events.js";
+      import { dispatchClientEvent, flushPanelBatch, STOP_PUMP } from "./app/client_events.js";
+      // latency (2026-10-05): per-action input→wire→screen hop timings
+      // (`__diag.latency.summary()`). Module-load side effect hooks
+      // WebSocket send/onmessage BEFORE start_session opens the socket.
+      import "./app/latency_diag.js";
       import { pumpEntityUpdatesAndInput } from "./app/frame_pump.js";
       import { createLandblockStream } from "./app/landblock_stream.js";
       import { initSlashCommands } from "./app/slash_commands.js";
@@ -4173,6 +4177,11 @@
           // and method surfaces. Bump that schema's `version` whenever
           // a new load-bearing global is added/renamed (HUD rec #184).
           window.__sessionHandle = handle;
+          // latency (2026-10-05): wrap the action methods (prototype, once).
+          try {
+            window.__latencyDiag?.noteWorkerSocket?.(netWorkerEnabled());
+            window.__latencyDiag?.attachHandle?.(handle);
+          } catch (_) {}
           // P6.1 promotion (2026-07-28) — a reconnect builds a NEW wasm
           // session, and the facade is created once per page. Rebind it
           // here (one call re-probes capabilities and re-points every
@@ -5880,6 +5889,12 @@
             get lastInputSig() { return lastInputSig; }, set lastInputSig(v) { lastInputSig = v; },
             get lastForwardAxis() { return lastForwardAxis; }, set lastForwardAxis(v) { lastForwardAxis = v; },
           };
+          // latency (2026-10-05): kind 8 / kind 11 panel renders coalesced
+          // per poll_events batch (see app/client_events.js flushPanelBatch).
+          // `?panelBatch=off` restores render-per-event.
+          const __panelBatch = /[?&]panelBatch=(?:off|0|false)(?:&|$)/i.test(location.search || "")
+            ? null
+            : { stats: false, inventory: false };
           function pumpNetFrame() {
             // Heartbeat for the O4-c watchdog: stamped on EVERY pump run
             // regardless of which driver (2D rAF, 3D tickPerFrame phase
@@ -5912,9 +5927,23 @@
                 /* pre-shadow no-op */
               }
             }
+            // latency (2026-10-05): hop stamps (no-op unless an action is
+            // pending) + per-batch panel coalescing. The kind is read BEFORE
+            // dispatch — the evtGuard finally frees the wasm box.
+            const __lat = window.__latencyDiag;
+            __lat?.onPumpStart?.();
+            const __latTrack = !!(__lat && __lat._pending.length !== 0);
             const events = handle.poll_events();
-            for (const evt of events) {
-              if (dispatchClientEvent(evt, __clientEventDeps) === STOP_PUMP) return;
+            __clientEventDeps.panelBatch = __panelBatch;
+            try {
+              for (const evt of events) {
+                const __k = __latTrack ? evt.kind : -1;
+                if (dispatchClientEvent(evt, __clientEventDeps) === STOP_PUMP) return;
+                if (__latTrack) __lat.onEvent(__k);
+              }
+            } finally {
+              __clientEventDeps.panelBatch = null;
+              flushPanelBatch(__panelBatch, __clientEventDeps);
             }
             pumpEntityUpdatesAndInput(__framePumpDeps);
           }

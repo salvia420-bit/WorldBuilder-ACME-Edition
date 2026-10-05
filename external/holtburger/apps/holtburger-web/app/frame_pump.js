@@ -91,7 +91,14 @@ export function pumpEntityUpdatesAndInput(D) {
   // into `__scene3dEntityBacklog` (now ring-capped at
   // ENTITY_BUFFER_CAP — see ~L4520) and nothing drains it.
   try { window.__scene3dEntityHook?.(entityUpdates); } catch (e) { console.warn("[7.5] scene3d hook:", e); }
+  // latency (2026-10-05): the 3D hook above already applied the batch, so a
+  // local-player KIND_MOTION seen here = the rig was updated (stance /
+  // attack / cast hop of __diag.latency). Zero cost unless an action is
+  // pending.
+  const __lat = window.__latencyDiag;
+  const __latTrack = !!(__lat && __lat._pending.length !== 0);
   for (const upd of entityUpdates) {
+    if (__latTrack) { try { __lat.onEntityUpdate(upd.kind, upd.guid); } catch (_) {} }
     // A15-Q4 (`?unifiedDispatch=on`): route through the single
     // shared kind table (scene3d/entity_dispatch.js) — neutral
     // hooks (worldStreamer streaming, worldObjectManager feed)

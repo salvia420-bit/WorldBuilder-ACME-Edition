@@ -29,6 +29,28 @@ import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
  *  pumpNetFrame (kind 4 Disconnected): stop draining this batch. */
 export const STOP_PUMP = Symbol("stopPump");
 
+/**
+ * latency (2026-10-05): flush the panel renders a drain batch coalesced
+ * (see the kind 8 / kind 11 arms). Called by pumpNetFrame after the batch —
+ * and before a STOP_PUMP return — so the UI still updates in the SAME frame
+ * as the events, once. Order matches the unbatched path: render, then the
+ * plugin-bus emit. Resets the flags. No-op without a batch object.
+ */
+export function flushPanelBatch(batch, D) {
+  if (!batch) return;
+  const { stats, inventory } = batch;
+  batch.stats = false;
+  batch.inventory = false;
+  if (stats) {
+    try { D.renderVitalsPanel(D.handle); } catch (e) { console.warn("[panelBatch] vitals:", e); }
+    try { window.__pluginClient?.events?.emit?.("playerStatsUpdated", {}); } catch (e) { console.warn("[panelBatch] stats emit:", e); }
+  }
+  if (inventory) {
+    try { D.renderInventoryPanel(D.handle); } catch (e) { console.warn("[panelBatch] inventory:", e); }
+    try { window.__pluginClient?.events?.emit?.("playerInventoryChanged", {}); } catch (e) { console.warn("[panelBatch] inventory emit:", e); }
+  }
+}
+
 export function dispatchClientEvent(evt, D) {
   const { populateSkyDescFromRegion, RANGED_STANCES, MAGIC_STANCES, setLocalPlayerGuid,
     getLocalPlayerGuid, __unifiedClientEventOn, __resetEntDrainPending,
@@ -633,13 +655,21 @@ export function dispatchClientEvent(evt, D) {
     // iteration. Refreshing on every event is cheap
     // because playerStats() is a clone of pre-built
     // typed arrays.
-    renderVitalsPanel(handle);
-    // Phase G — also relay through the facade so plugins
-    // (spellbook) can refresh from playerKnownSpells()
-    // without polling. The wasm side piggybacks the
-    // known-spells snapshot on this same hook.
-    if (window.__pluginClient) {
-      window.__pluginClient.events.emit("playerStatsUpdated", {});
+    // latency (2026-10-05): inside a frame-pump drain the render + bus
+    // emit coalesce to ONE per batch (flushPanelBatch, same frame, after
+    // the batch) — a tunnel-latency batch carries one kind=8 per packet,
+    // and each used to rebuild the vitals panel + fan out to every plugin.
+    if (D.panelBatch) {
+      D.panelBatch.stats = true;
+    } else {
+      renderVitalsPanel(handle);
+      // Phase G — also relay through the facade so plugins
+      // (spellbook) can refresh from playerKnownSpells()
+      // without polling. The wasm side piggybacks the
+      // known-spells snapshot on this same hook.
+      if (window.__pluginClient) {
+        window.__pluginClient.events.emit("playerStatsUpdated", {});
+      }
     }
   } else if (evt.kind === ClientEventKind.INVENTORY_UPDATED) {
     // Phase 4 step 4 follow-on: InventoryUpdated.
@@ -647,14 +677,21 @@ export function dispatchClientEvent(evt, D) {
     // ViewContents / IdentifyObjectResponse all funnel
     // here. The wasm-side filter excludes entities not
     // owned by the player.
-    renderInventoryPanel(handle);
-    // PR-EE 2026-05-22: also relay through the plugin bus
-    // so vendor-ui / inventory-panel / examine-popover and
-    // future plugins can react without polling. Payload is
-    // intentionally empty — subscribers re-pull state via
-    // `client.player.inventory` (live snapshot from wasm).
-    if (window.__pluginClient && window.__pluginClient.events) {
-      window.__pluginClient.events.emit("playerInventoryChanged", {});
+    // latency (2026-10-05): coalesced per drain batch like kind=8 above
+    // (a full inventory DOM rebuild + MutationObserver paperdoll rebuild
+    // per packet was the burst-frame cost).
+    if (D.panelBatch) {
+      D.panelBatch.inventory = true;
+    } else {
+      renderInventoryPanel(handle);
+      // PR-EE 2026-05-22: also relay through the plugin bus
+      // so vendor-ui / inventory-panel / examine-popover and
+      // future plugins can react without polling. Payload is
+      // intentionally empty — subscribers re-pull state via
+      // `client.player.inventory` (live snapshot from wasm).
+      if (window.__pluginClient && window.__pluginClient.events) {
+        window.__pluginClient.events.emit("playerInventoryChanged", {});
+      }
     }
   } else if (evt.kind === ClientEventKind.VENDOR_OPENED) {
     // Phase 4 step 5: VendorOpened. The wasm side cached the
