@@ -47,6 +47,10 @@
 //                  Useful when scoping a capture window to a specific
 //                  input drill (e.g. "now press W+D, then dump").
 //   reset()      — zero all state (matrix, byGuid, history, link plays)
+//   authority(guid) — which driver owns the rig now (unifiedSeq / unifiedLoco /
+//                  mixer), the loco cache key, the one-shot head, gait scalars
+//   deadMixerStarts — mixer actions started on an entity whose mixer is frozen
+//                  (`_unifiedLoco` set); split per call site in deadMixerBySite
 
 const MAX_GLOBAL_HISTORY = 200;
 const MAX_PER_GUID_HISTORY = 20;
@@ -151,6 +155,62 @@ export function attachMotion(diag) {
     maxGlobalHistory: MAX_GLOBAL_HISTORY,
     maxPerGuidHistory: MAX_PER_GUID_HISTORY,
     maxLinkPlays: MAX_LINK_PLAYS,
+    // Mixer actions started on an entity whose mixer no longer advances
+    // (`_unifiedLoco` set → the tick never calls mixer.update again), i.e.
+    // animations that silently never play. Per-site split in deadMixerBySite.
+    deadMixerStarts: 0,
+    deadMixerBySite: {},
+
+    /** Hook: entities.js started a mixer action under a frozen mixer. */
+    onDeadMixerStart(meta) {
+      motion.deadMixerStarts += 1;
+      const site = String(meta?.site ?? "unknown");
+      motion.deadMixerBySite[site] = (motion.deadMixerBySite[site] | 0) + 1;
+    },
+
+    /**
+     * Which animation authority drives `guid`'s rig this frame — mirrors the
+     * per-entity tick order (_unifiedSeq → _unifiedLoco → mixer). Returns
+     * null when the entity is unknown.
+     */
+    authority(guid) {
+      const em = typeof window !== "undefined" ? window.liveScene3d?.entityManager : null;
+      const inst = em?.entityMap?.get?.(guid >>> 0);
+      if (!inst) return null;
+      const ua = inst._unifiedSeq;
+      const lo = inst._unifiedLoco;
+      let seqHead = null;
+      if (ua) {
+        seqHead = {
+          motion: inst._unifiedQueue?.list?.[0]?.motion ?? null,
+          queued: Math.max(0, (inst._unifiedQueue?.list?.length ?? 1) - 1),
+          clearOnDone: !!ua.clearOnDone,
+          deathHold: ua.deathHold === true,
+          speed: ua.speed ?? 1,
+        };
+        try {
+          seqHead.frame = ua.seq.globalFrameIndex;
+          seqHead.done = !!ua.seq.done;
+        } catch (_) { seqHead.freed = true; }
+      }
+      return {
+        driver: ua ? "unifiedSeq" : lo ? "unifiedLoco" : "mixer",
+        locoKey: lo?.cacheKey ?? null,
+        seqHead,
+        currentActionKey: inst.currentActionKey ?? null,
+        // true ⇒ mixer.update(dt) is NOT called for this entity this frame.
+        mixerFrozen: !!(ua || lo),
+        gait: {
+          forwardCommand: inst._forwardCommand ?? 0,
+          forwardSpeed: inst._forwardSpeed ?? 0,
+          locoBaseSpeed: inst._locoBaseSpeed ?? 0,
+          sidestepCommand: inst._sidestepCommand ?? 0,
+          sidestepSpeed: inst._sidestepSpeed ?? 0,
+          motionSpeed: inst._motionSpeed ?? 1,
+          sign: inst._motionSpeedSign ?? 1,
+        },
+      };
+    },
 
     /**
      * Hook fired from entities.js::setMotion immediately after
@@ -532,6 +592,8 @@ export function attachMotion(diag) {
       motion.globalHistory.length = 0;
       motion.linkPlays.length = 0;
       motion.coverage.clear();
+      motion.deadMixerStarts = 0;
+      motion.deadMixerBySite = {};
     },
   };
 

@@ -1039,6 +1039,15 @@ function isDoorStateMotion(cmd) {
   const low = (cmd >>> 0) & 0xffff;
   return low === (CMD_DOOR_ON & 0xffff) || low === (CMD_DOOR_OFF & 0xffff);
 }
+// Diag: a mixer action is being started on an entity whose mixer no longer
+// advances (the tick drives `_unifiedLoco` instead), so it never plays.
+// Counted in `__diag.motion.deadMixerStarts`; no behaviour change.
+function _noteDeadMixerStart(inst, site) {
+  if (!inst?._unifiedLoco) return;
+  try {
+    window.__diag?.motion?.onDeadMixerStart?.({ guid: inst.guid >>> 0, site });
+  } catch (_) { /* diag only */ }
+}
 // Locomotion (walk/run/idle cycles) — the WORKING oracle, migrated LAST. Drives
 // a CYCLIC MotionSequence with gait scaling + Rust phase carry across swaps.
 // A one-shot (_unifiedSeq) suppresses _unifiedLoco during a swing, then resumes
@@ -3381,6 +3390,7 @@ class EntityInstance {
    */
   crossFadeTo(nextAction, nextActionKey, durationS) {
     if (this.currentAction === nextAction) return;
+    _noteDeadMixerStart(this, "crossFadeTo");
     // Wave 7 Phase 7.1 (2026-05-26): stash the departing action's mixer
     // time so a same-key re-fetch within 200 ms can resume mid-stride.
     // We record ALL outgoing transitions (locomotion or otherwise) and
@@ -9709,6 +9719,7 @@ export class EntityManager {
       action.setEffectiveTimeScale(swingSpeed);
     }
     action.setEffectiveWeight(1.0);
+    _noteDeadMixerStart(inst, "setSwingMotion");
     action.reset();
     action.play();
     const prior = inst.currentAction;
@@ -11114,6 +11125,7 @@ export class EntityManager {
       action.setEffectiveWeight(0.5);
     }
     try {
+      _noteDeadMixerStart(inst, "setSidestepLayer");
       action.play();
       if (window?.__diag?.motion?.onSidestepLayerPlayed) {
         try {
@@ -12702,6 +12714,7 @@ export class EntityManager {
       if (linkSpeed !== 1.0) {
         try { action.setEffectiveTimeScale(linkSpeed); } catch (_) {}
       }
+      _noteDeadMixerStart(inst, "tryPlayLink");
       action.reset();
       action.play();
       // A5-P3 (?rootMotionObject=1) — arm the completion-time anchor
