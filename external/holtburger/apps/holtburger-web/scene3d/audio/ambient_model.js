@@ -212,7 +212,8 @@ class DeadlineQueue {
     }
   }
   peekKey() { return this.a.length ? this.a[0].key : Infinity; }
-  pop() {
+  pop() { return this.popEntry().item; }
+  popEntry() {
     const a = this.a;
     const top = a[0];
     const last = a.pop();
@@ -229,7 +230,7 @@ class DeadlineQueue {
         i = m;
       }
     }
-    return top.item;
+    return top;
   }
   clear() { this.a.length = 0; }
 }
@@ -300,6 +301,26 @@ export class AmbientSoundScheduler {
     }
   }
 
+  /**
+   * Advance the queue to `now` WITHOUT playing anything — what retail's
+   * Ambient::UseTime does while the sound manager refuses plays (inactive
+   * app, s_bPlaySoundOnlyWhenActive 45633): each due instance is popped at
+   * its deadline, its play is refused, and Ambient::Play re-queues it at
+   * that time + its interval (384452-384500); an instance that can no
+   * longer be heard drops off. So when sound resumes the bed carries on at
+   * its cadence instead of every overdue instance firing at once.
+   */
+  fastForward(now) {
+    while (this._queue.size && this._queue.peekKey() < now) {
+      const { item: inst, key } = this._queue.popEntry();
+      inst.onQueue = false;
+      if (!inst.canHear()) continue;
+      const interval = inst.getPlayInterval(this.rng);
+      this._queue.push(inst, interval > 0 ? key + interval : now);
+      inst.onQueue = true;
+    }
+  }
+
   clear() {
     for (const i of this.instances) i.onQueue = false;
     this.instances.length = 0;
@@ -324,12 +345,24 @@ export class AmbientSoundScheduler {
 /**
  * Rebuild the scheduler from the 3x3 landblocks around the listener.
  *
+ * Offsets are 3D when the source supplies vertex heights: retail
+ * Position::get_offset is a full 3D difference, CalcWeight (383863) and the
+ * 120 m cull (384375) use its 3D length and IntermitSound::AddTo sizes the
+ * shells from it (384270); CalcDir uses x/y only (383880).
+ *
+ * A cell whose STB exists but lists no ambient rows still adds its weight to
+ * the shared total (Ambient::AddSound adds `total += weight` before walking
+ * the rows, 384382) — it dilutes the neighbours' shares.
+ *
  * @param {AmbientSoundScheduler} scheduler
- * @param {{x:number, y:number}} listener  AC world metres (lbX = floor(x/192))
+ * @param {{x:number, y:number, z?:number}} listener  AC world metres (lbX = floor(x/192))
  * @param {(lbX:number, lbY:number) => (((vertexIndex:number) =>
- *          ({stbId:number, sounds:AmbientDesc[]}|null))|null)} cellSource
- *        Returns a per-vertex STB lookup for a loaded landblock, or null
- *        when the landblock is missing (contributes nothing).
+ *          ({stbId:number, sounds:AmbientDesc[]}|null))
+ *          | {stbAt:(vi:number) => ({stbId:number, sounds:AmbientDesc[]}|null),
+ *             heightAt?:(vi:number) => (number|null)}
+ *          | null)} cellSource
+ *        Per-vertex STB (and optional height) lookup for a loaded
+ *        landblock, or null when the landblock is missing.
  * @returns {{missing:number}} landblocks that returned null
  */
 export function gatherAmbient(scheduler, listener, cellSource, now, firings = null) {
@@ -341,19 +374,24 @@ export function gatherAmbient(scheduler, listener, cellSource, now, firings = nu
     for (let dy = -1; dy <= 1; dy++) {
       const bx = vx + dx, by = vy + dy;
       if (bx < 0 || bx > 0xff || by < 0 || by > 0xff) continue;
-      const lookup = cellSource(bx, by);
-      if (!lookup) { missing += 1; continue; }
+      const src = cellSource(bx, by);
+      if (!src) { missing += 1; continue; }
+      const stbAt = typeof src === "function" ? src : src.stbAt;
+      const heightAt = typeof src === "function" ? null : src.heightAt;
+      const lz = Number.isFinite(listener.z) ? listener.z : 0;
       for (let x = 0; x < CELLS_PER_SIDE; x++) {
         for (let y = 0; y < CELLS_PER_SIDE; y++) {
+          const vi = x * VERTICES_PER_SIDE + y;
+          const h = heightAt ? heightAt(vi) : null;
           const offset = {
             x: bx * LANDBLOCK_LENGTH + x * LAND_CELL_LENGTH - listener.x,
             y: by * LANDBLOCK_LENGTH + y * LAND_CELL_LENGTH - listener.y,
-            z: 0,
+            z: Number.isFinite(h) ? h - lz : 0,
           };
           if (lenSq(offset) > MAX_DISTANCE_SQ) continue;
-          const stb = lookup(x * VERTICES_PER_SIDE + y);
-          if (!stb || !stb.stbId || !stb.sounds || stb.sounds.length === 0) continue;
-          scheduler.contributeCell(offset, stb.stbId, stb.sounds);
+          const stb = stbAt(vi);
+          if (!stb) continue;
+          scheduler.contributeCell(offset, stb.stbId >>> 0, stb.sounds || []);
         }
       }
     }

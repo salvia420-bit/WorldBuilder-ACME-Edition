@@ -190,7 +190,12 @@ export class AudioManager {
   setActive(active) {
     const was = this._active;
     this._active = !!active;
-    if (was !== this._active) this._applyFocusMute();
+    if (was !== this._active) {
+      // Bumped on every focus change so consumers (the ambient scheduler)
+      // can tell an inactive stretch happened between two of their ticks.
+      this.activityEpoch = (this.activityEpoch | 0) + 1;
+      this._applyFocusMute();
+    }
   }
 
   // Retail creates its DirectSound buffers WITHOUT DSBCAPS_GLOBALFOCUS /

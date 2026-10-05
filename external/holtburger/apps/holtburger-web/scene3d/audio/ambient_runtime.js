@@ -28,9 +28,23 @@
 // (`getBakedAmbientTriggers`, baked_ambient_source.js) or the live wasm
 // Region chain over each landblock's `userData.terrainCodes` (scenePick 0).
 //
-// Divergence: offsets are horizontal (vertex z = 0). Retail's
-// Position::get_offset includes the vertex height; the terrain heights are
-// not available to this adapter. Same choice as OpenAC.
+// Heights (2026-10-05 round 3): offsets are 3D like retail's
+// Position::get_offset — vertex Z from the terrain mesh's
+// `userData.heights` (81 control-grid Z, column-major, terrain.js) against
+// the player's Z. A landblock without a loaded mesh falls back to z = 0.
+//
+// Inactive app: retail keeps running Ambient::UseTime while the sound
+// manager refuses plays, so cadences carry on; here the scheduler is
+// fast-forwarded (no plays) while the AudioManager reports inactive, and on
+// the first tick after any focus change (a hidden tab stops
+// requestAnimationFrame, so that tick is the first one back), so returning
+// to the tab does not fire every overdue ambient at once. A plain frame
+// hitch (no focus change) is NOT fast-forwarded: retail would play the
+// overdue sound late, once.
+//
+// Indoors: retail's InitSounds resets the counts and adds nothing, so
+// instances stop being audible and drop off the queue at their own
+// deadlines (384452) — the queue is not cleared at once.
 
 import { acToThree } from "../adapter.js";
 import {
@@ -96,6 +110,7 @@ export class AmbientRuntime {
     this._lastGatherS = -Infinity;
     this._lastMissing = 0;
     this._lastIndoor = false;
+    this._lastEpoch = null;
 
     // Diagnostics.
     this.tickCount = 0;
@@ -118,6 +133,15 @@ export class AmbientRuntime {
   tick(_dt) {
     this.tickCount += 1;
     const now = this._nowS();
+    const epoch = this._audioManager.activityEpoch | 0;
+    const focusChanged = this._lastEpoch !== null && epoch !== this._lastEpoch;
+    this._lastEpoch = epoch;
+    const inactive = this._audioManager.isActive?.() === false;
+    if (inactive || focusChanged) {
+      this._scheduler.fastForward(now);
+      this.fastForwardCount = (this.fastForwardCount | 0) + 1;
+      if (inactive) return;
+    }
 
     if (!this._getBakedAmbientTriggers && !this._region) {
       this._tryResolveRegion();
@@ -127,25 +151,33 @@ export class AmbientRuntime {
       }
     }
 
-    const indoor = !!this._isCurrentCellIndoor() && !this._isCurrentCellSeenOutside?.();
-    if (indoor) {
-      // Outdoor cells only contribute when outdoors or seen_outside
-      // (acclient.c:146721/146746); with nothing added every queued sound
-      // fails CanHear and drops out — clear does that at once.
-      if (!this._lastIndoor) this._scheduler.clear();
-      this._lastIndoor = true;
-      this._gatherKey = null;
-      this.skippedIndoor += 1;
-      return;
-    }
-    this._lastIndoor = false;
-
     const player = this._getPlayerPos();
     if (!player || !Number.isFinite(player.x) || !Number.isFinite(player.y)) {
       this.skippedNoPlayer += 1;
       return;
     }
     const listener = { x: +player.x, y: +player.y, z: Number.isFinite(player.z) ? +player.z : 0 };
+
+    const indoor = !!this._isCurrentCellIndoor() && !this._isCurrentCellSeenOutside?.();
+    if (indoor) {
+      // Outdoor cells only contribute when outdoors or seen_outside
+      // (acclient.c:146721/146746). Retail InitSounds + UpdatePlayQueue with
+      // nothing added: counts reset, nothing is audible, and each queued
+      // instance drops off at its own deadline (Ambient::Play CanHear,
+      // 384452-384500) — keep ticking the queue rather than clearing it.
+      if (!this._lastIndoor) {
+        this._scheduler.beginRebuild();
+        this._scheduler.endRebuild(now);
+      }
+      this._lastIndoor = true;
+      this._gatherKey = null;
+      this.skippedIndoor += 1;
+      this._firings.length = 0;
+      this._scheduler.tick(now, this._firings, this._soundBase(listener));
+      this._emit(listener);
+      return;
+    }
+    this._lastIndoor = false;
 
     const key = `${Math.floor(listener.x / LAND_CELL_LENGTH)}:${Math.floor(listener.y / LAND_CELL_LENGTH)}`;
     const loading = this._lastMissing > 0 && now - this._lastGatherS >= REGATHER_WHILE_LOADING_S;
@@ -224,8 +256,18 @@ export class AmbientRuntime {
     this._emit(listener);
   }
 
-  /** Per-landblock vertex -> {stbId, sounds} lookup, or null while missing. */
+  /** Per-landblock {stbAt, heightAt} lookup, or null while missing. */
   _cellSource(lbX, lbY, liveCache) {
+    const mesh = this._findMesh(lbX, lbY);
+    const heights = mesh?.userData?.heights;
+    const heightAt = heights && heights.length >= VERTICES_PER_SIDE * VERTICES_PER_SIDE
+      ? (vi) => heights[vi]
+      : null;
+    const stbAt = this._stbSource(lbX, lbY, mesh, liveCache);
+    return stbAt ? { stbAt, heightAt } : null;
+  }
+
+  _stbSource(lbX, lbY, mesh, liveCache) {
     if (this._getBakedAmbientTriggers) {
       let triggers;
       try { triggers = this._getBakedAmbientTriggers(lbX, lbY); } catch (_) { triggers = null; }
@@ -238,7 +280,6 @@ export class AmbientRuntime {
       }
       return (vi) => byVertex.get(vi) ?? null;
     }
-    const mesh = this._findMesh(lbX, lbY);
     const codes = mesh?.userData?.terrainCodes;
     if (!codes || codes.length < VERTICES_PER_SIDE * VERTICES_PER_SIDE) return null;
     return (vi) => this._liveStbForCode(codes[vi] | 0, liveCache);

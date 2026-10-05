@@ -272,4 +272,71 @@ test("gatherer: weights neighbouring cells (not just the nearest vertex)", () =>
   assert.ok(vols.every((v) => v > 0.2), `both beds audible: ${vols}`);
 });
 
+// ── round 3 ──
+// Heights: retail get_offset is 3D; CalcWeight 383863 / the 120 m cull
+// 384375 / AddTo 384270 use the 3D length. Old code: z forced to 0, so a
+// vertex 60 m up at 50 m horizontal weighed 400/2500 instead of 400/6100.
+test("gather uses vertex height: 60 m above at 50 m horizontal -> 400/6100", () => {
+  const bx = 0xa9, by = 0xb4;
+  const listener = V(bx * 192 + 22, by * 192, 0); // vertex (3,0) is 72-22 = 50 m east
+  const s = new AmbientSoundScheduler(scripted());
+  gatherAmbient(s, listener, (x, y) => (x === bx && y === by ? {
+    stbAt: (vi) => (vi === 3 * 9 + 0 ? { stbId: 0x20000001, sounds: [Continuous()] } : null),
+    heightAt: (vi) => (vi === 3 * 9 + 0 ? 60 : 0),
+  } : null), 0);
+  near(s.totalSoundCount, 400 / 6100, 1e-6);
+});
+test("gather: height can push a cell past the 120 m cull", () => {
+  const bx = 0xa9, by = 0xb4;
+  const listener = V(bx * 192 + 22, by * 192, 0);
+  const s = new AmbientSoundScheduler(scripted());
+  gatherAmbient(s, listener, (x, y) => (x === bx && y === by ? {
+    stbAt: (vi) => (vi === 27 ? { stbId: 0x20000001, sounds: [Continuous()] } : null),
+    heightAt: () => 115, // sqrt(50^2 + 115^2) = 125.4 m > 120
+  } : null), 0);
+  assert.equal(s.totalSoundCount, 0);
+});
+// AddSound adds the weight before walking the rows (384382): an STB with no
+// ambient rows still dilutes its neighbours. Old code skipped such cells.
+test("an STB with no ambient rows still adds weight to the total", () => {
+  const bx = 0xa9, by = 0xb4;
+  const listener = V(bx * 192 + 96, by * 192 + 96, 0);
+  const lookup = (vi) => (Math.floor(vi / 9) < 4
+    ? { stbId: 0x20000001, sounds: [Continuous(1, 5)] }
+    : { stbId: 0x20000002, sounds: [] });
+  const withEmpty = new AmbientSoundScheduler(scripted());
+  gatherAmbient(withEmpty, listener, (x, y) => (x === bx && y === by ? lookup : null), 0);
+  const onlyBed = new AmbientSoundScheduler(scripted());
+  gatherAmbient(onlyBed, listener, (x, y) => (x === bx && y === by ? (vi) => (Math.floor(vi / 9) < 4 ? lookup(vi) : null) : null), 0);
+  assert.ok(withEmpty.totalSoundCount > onlyBed.totalSoundCount);
+  assert.ok(withEmpty.instances[0].currentVolume < onlyBed.instances[0].currentVolume);
+});
+// UseTime keeps re-queueing while plays are refused (384452-384500): no
+// burst of overdue ambients when sound resumes. Old code had no
+// fastForward, so the next tick fired every overdue instance at once.
+test("fastForward re-queues overdue instances at their cadence without firing", () => {
+  const s = new AmbientSoundScheduler(scripted());
+  s.beginRebuild();
+  const bed = s.track(Continuous(1, 5), 1);
+  s.contribute(bed, V(0, 0));
+  s.endRebuild(0); // armed: deadline 5
+  s.fastForward(23); // pops at 5,10,15,20 -> next 25, nothing played
+  const f = [];
+  s.tick(24, f, V(0, 0));
+  assert.equal(f.length, 0, "not due yet");
+  s.tick(25.01, f, V(0, 0));
+  assert.equal(f.length, 1, "resumes at its own cadence");
+});
+test("fastForward drops instances that went inaudible", () => {
+  const s = new AmbientSoundScheduler(scripted());
+  s.beginRebuild();
+  const bed = s.track(Continuous(1, 5), 1);
+  s.contribute(bed, V(0, 0));
+  s.endRebuild(0);
+  s.beginRebuild(); s.endRebuild(0);
+  s.fastForward(6);
+  assert.equal(s.queuedCount, 0);
+  assert.equal(bed.onQueue, false);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", FAILURES above" : ""}`);

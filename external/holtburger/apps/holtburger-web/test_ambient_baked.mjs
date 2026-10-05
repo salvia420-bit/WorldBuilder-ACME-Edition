@@ -201,6 +201,88 @@ const TRIGGERS = [{
   check("baked: pending counted as terrainSampleMiss", rt.stats().terrainSampleMisses >= 1, String(rt.stats().terrainSampleMisses));
 }
 
+// Round 3 — inactive app: no plays while inactive, and no burst of
+// overdue ambients on return (retail UseTime keeps re-queueing while
+// plays are refused). Old code: the first tick after return fired every
+// overdue instance.
+{
+  const { rt, calls, state } = makeBakedRuntime(() => TRIGGERS, { x: 96, y: 96, z: 50 });
+  let active = true;
+  rt._audioManager.isActive = () => active;
+  rt._audioManager.activityEpoch = 0;
+  rt.tick(0); await flush();
+  calls.length = 0;
+  active = false; rt._audioManager.activityEpoch += 1;
+  state.clockMs = 2000; rt.tick(0); // one tick, then the hidden tab stops rAF
+  active = true; rt._audioManager.activityEpoch += 1;
+  state.clockMs = 30050; rt.tick(0); await flush();
+  const beds = calls.filter((c) => c.did === 0x0a000000 + 70).length;
+  check("inactive -> return: no plays while away and no burst on the first tick back", beds === 0 && calls.length === 0,
+    JSON.stringify(calls.map((c) => c.did.toString(16))));
+  calls.length = 0;
+  state.clockMs = 35100; rt.tick(0); await flush();
+  check("the bed then resumes at its cadence", calls.some((c) => c.did === 0x0a000000 + 70));
+}
+// A plain frame hitch (no focus change) still plays the overdue bed once.
+{
+  const { rt, calls, state } = makeBakedRuntime(() => TRIGGERS, { x: 96, y: 96, z: 50 });
+  rt._audioManager.isActive = () => true;
+  rt._audioManager.activityEpoch = 0;
+  rt.tick(0); await flush();
+  calls.length = 0;
+  state.clockMs = 12000; rt.tick(0); await flush();
+  check("hitch: overdue bed plays once (late), not skipped", calls.filter((c) => c.did === 0x0a000000 + 70).length === 1);
+}
+// Round 3 — the runtime feeds terrain-mesh heights (userData.heights) into
+// the 3D gather: terrain 500 m above the player is beyond 120 m -> silence.
+// Old code ignored height (z = 0) and played the bed.
+{
+  const calls = [];
+  const meshes = [];
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) {
+    meshes.push({ userData: { lbX: x, lbY: y, heights: new Float32Array(81).fill(550) } });
+  }
+  const rt = new AmbientRuntime({
+    soundTableCache: { async resolveSound(_s, t) { return { waveDid: 0x0a000000 + t, volume: 1, probability: 1 }; } },
+    audioManager: { async play() { calls.push(1); }, async playFromCenter() { calls.push(1); } },
+    getPlayerPos: () => ({ x: 96, y: 96, z: 50 }),
+    getRegion: () => ({}),
+    getBakedAmbientTriggers: () => TRIGGERS,
+    getTerrainMeshes: () => meshes,
+    rng: () => 0.0,
+    clock: () => 0,
+  });
+  rt.tick(0); await flush();
+  check("heights: terrain 500 m above the player contributes nothing", rt.stats().totalSoundCount === 0 && calls.length === 0,
+    JSON.stringify({ total: rt.stats().totalSoundCount, plays: calls.length }));
+}
+// Round 3 — indoors: the queue is NOT cleared at once; instances drop at
+// their own deadline (Ambient::Play CanHear, 384452). Old code cleared it.
+{
+  let indoor = false;
+  const calls = [];
+  const state = { clockMs: 0 };
+  const rt = new AmbientRuntime({
+    soundTableCache: { async resolveSound(_s, t) { return { waveDid: 0x0a000000 + t, volume: 1, probability: 1 }; } },
+    audioManager: { async play() { calls.push(1); }, async playFromCenter() { calls.push(1); } },
+    getPlayerPos: () => ({ x: 96, y: 96, z: 50 }),
+    getRegion: () => ({}),
+    getBakedAmbientTriggers: () => TRIGGERS,
+    isCurrentCellIndoor: () => indoor,
+    rng: () => 0.0,
+    clock: () => state.clockMs,
+  });
+  rt.tick(0); await flush();
+  const queuedBefore = rt.stats().queued;
+  indoor = true;
+  state.clockMs = 500; rt.tick(0);
+  check("indoors: queue kept until deadlines", rt.stats().queued === queuedBefore && queuedBefore > 0, `${rt.stats().queued}/${queuedBefore}`);
+  calls.length = 0;
+  state.clockMs = 6000; rt.tick(0); await flush();
+  check("indoors: instances drop at their deadline without playing", rt.stats().queued === 0 && calls.length === 0,
+    JSON.stringify({ q: rt.stats().queued, plays: calls.length }));
+}
+
 // eslint-disable-next-line no-console
 console.log("=========================");
 // eslint-disable-next-line no-console
