@@ -32,7 +32,7 @@ globalThis.document = {
 };
 
 const rules = await import("../scene3d/audio/retail_sound_rules.js");
-const { dispatchClientEvent } = await import("../app/client_events.js");
+const { dispatchClientEvent, _pendingObjectSoundsForTest } = await import("../app/client_events.js");
 const { ClientEventKind } = await import("../scene3d/client_event_kinds.js");
 
 let passed = 0;
@@ -134,6 +134,39 @@ await test("environ 115 plays nothing", async () => {
   dispatchClientEvent(evt(ClientEventKind.ENVIRON_CHANGE, { u32Payload: 115 }), D);
   for (let i = 0; i < 5; i++) await tick();
   assert.equal(calls.length, 0);
+});
+
+// ── sound for an object not created yet (round 2) ──
+// Retail HandleSoundEvent 143340-143345 queues the blob on the unknown
+// object and plays it when the object is created (QueueBlobForObject
+// 310848; the null object is destroyed after 25 s, 310666). Old code:
+// "entity not in registry — skip", the sound was lost.
+await test("0xF750 for an unknown object plays once the object arrives", async () => {
+  calls.length = 0;
+  const LATE = 0x50000077;
+  rows = new Map([[`${0x20000001}:${0x8c}`, { waveDid: 0x0a000333, probability: 1, volume: 1, priority: 0 }]]);
+  dispatchClientEvent(evt(ClientEventKind.SOUND_TRIGGERED, { u32Payload: LATE, u32Payload2: 0x8c, f32Payload: 0.9 }), D);
+  await tick(); await tick();
+  assert.equal(calls.length, 0, "nothing yet");
+  window.liveScene3d.entityManager.entityMap.set(LATE, { soundTableDid: 0x20000001, root: { position: { x: 0, y: 0, z: 0 } } });
+  _pendingObjectSoundsForTest().poll();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(calls.length, 1, JSON.stringify(calls));
+  assert.equal(calls[0].wave, 0x0a000333);
+  assert.equal(calls[0].opts.gain, 0.9);
+  assert.equal(_pendingObjectSoundsForTest().pending.length, 0);
+});
+await test("queued object sound expires after 25 s", () => {
+  let t = 0;
+  const q = new rules.PendingObjectSounds({ now: () => t, setTimer: () => {} });
+  let played = 0;
+  q.add(1, () => { played++; }, () => false);
+  t = 24000; q.poll();
+  assert.equal(q.pending.length, 1);
+  t = 25001; q.poll();
+  assert.equal(q.pending.length, 0);
+  assert.equal(q.expired, 1);
+  assert.equal(played, 0);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", FAILURES above" : ""}`);

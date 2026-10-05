@@ -23,7 +23,11 @@ import { inferAttackTypeForWeapon, ATTACK_TYPE } from "../ui/ac_attack_type_for_
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
 import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
 import { acToThree } from "../scene3d/adapter.js";
-import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter } from "../scene3d/audio/retail_sound_rules.js";
+import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, PendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
+
+// Server sounds for objects not created yet (retail QueueBlobForObject).
+const _pendingObjectSounds = new PendingObjectSounds();
+export function _pendingObjectSoundsForTest() { return _pendingObjectSounds; }
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
@@ -1839,153 +1843,165 @@ export function dispatchClientEvent(evt, D) {
     }
     const stats = window.__soundTriggeredStats;
     stats.received += 1;
-    const scene3d = window.liveScene3d;
-    const emgr = scene3d?.entityManager ?? null;
-    const inst = emgr?.entityMap?.get(sndGuid) ?? null;
-    // Event-sound coverage fix (2026-06-09): local-player SoundTable
-    // fallback. The local player entity is seeded without a
-    // SoundTable (lib.rs:30960 minimal seed; its self-ObjectCreate
-    // meta only hydrates one post-wasm-rebuild and only when the
-    // Setup carries `default_sound_table`). But ACE targets the
-    // bulk of action sounds — eat, drink, pickup, drop, wield,
-    // raise-trait, death, wound/fall-damage, resist, lifestone,
-    // spell-expire — at `player.Guid`. Without a table those all
-    // hit the `noSoundTable` skip below and play silence. Default
-    // the local player to the canonical humanoid table 0x20000001
-    // (verified to map the shared 0x8B-0x97 action cluster +
-    // Eat/Drink/Wound/Death). We mutate `inst.soundTableDid` so it
-    // persists → also unblocks the animation Sound-hook channel for
-    // the player. A race-accurate DID from the wasm spawn meta
-    // (post-rebuild) supersedes this (it only fires when the table
-    // is still 0). Remote entities are unaffected.
-    if (inst && !(inst.soundTableDid >>> 0)) {
-      const lpg = (typeof window.getLocalPlayerGuid === "function")
-        ? (window.getLocalPlayerGuid() >>> 0) : 0;
-      if (lpg && (sndGuid >>> 0) === lpg) {
-        inst.soundTableDid = 0x20000001;
-        stats.localPlayerFallback = (stats.localPlayerFallback | 0) + 1;
+    // 0xF750 playback, re-runnable for a sound queued on an object the
+    // client had not created yet (see the !inst branch).
+    const runServerSound = (replay) => {
+      const scene3d = window.liveScene3d;
+      const emgr = scene3d?.entityManager ?? null;
+      const inst = emgr?.entityMap?.get(sndGuid) ?? null;
+      // Event-sound coverage fix (2026-06-09): local-player SoundTable
+      // fallback. The local player entity is seeded without a
+      // SoundTable (lib.rs:30960 minimal seed; its self-ObjectCreate
+      // meta only hydrates one post-wasm-rebuild and only when the
+      // Setup carries `default_sound_table`). But ACE targets the
+      // bulk of action sounds — eat, drink, pickup, drop, wield,
+      // raise-trait, death, wound/fall-damage, resist, lifestone,
+      // spell-expire — at `player.Guid`. Without a table those all
+      // hit the `noSoundTable` skip below and play silence. Default
+      // the local player to the canonical humanoid table 0x20000001
+      // (verified to map the shared 0x8B-0x97 action cluster +
+      // Eat/Drink/Wound/Death). We mutate `inst.soundTableDid` so it
+      // persists → also unblocks the animation Sound-hook channel for
+      // the player. A race-accurate DID from the wasm spawn meta
+      // (post-rebuild) supersedes this (it only fires when the table
+      // is still 0). Remote entities are unaffected.
+      if (inst && !(inst.soundTableDid >>> 0)) {
+        const lpg = (typeof window.getLocalPlayerGuid === "function")
+          ? (window.getLocalPlayerGuid() >>> 0) : 0;
+        if (lpg && (sndGuid >>> 0) === lpg) {
+          inst.soundTableDid = 0x20000001;
+          stats.localPlayerFallback = (stats.localPlayerFallback | 0) + 1;
+        }
       }
-    }
-    if (!inst) {
-      stats.entityMissing += 1;
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[task-F/gms] entity 0x${sndGuid.toString(16).padStart(8, "0")} `
-        + `not in registry — skip`,
-      );
-    } else if (!(inst.soundTableDid >>> 0)) {
-      stats.noSoundTable += 1;
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[task-F/gms] entity 0x${sndGuid.toString(16).padStart(8, "0")} `
-        + `has no SoundTable — skip`,
-      );
-    } else {
-      const stbDid = inst.soundTableDid >>> 0;
-      const cache = scene3d?.soundTableCache ?? null;
-      const audioMgr = scene3d?.audioManager ?? null;
-      if (!cache || !audioMgr) {
-        // 3D scene not initialised (renderer=2d or pre-
-        // init). Silent no-op — the event isn't actionable
-        // without the 3D audio runtime.
-        stats.lastError = "no_cache_or_audio_mgr";
+      if (!inst) {
+        stats.entityMissing += 1;
+        // Retail HandleSoundEvent queues the message on the unknown
+        // object and plays it when the object arrives (acclient.c:
+        // 143340-143345, QueueBlobForObject 310848; dropped after
+        // 25 s, 310666). Replay once; a replay never re-queues.
+        if (!replay) {
+          _pendingObjectSounds.add(
+            sndGuid,
+            () => runServerSound(true),
+            () => !!window.liveScene3d?.entityManager?.entityMap?.get(sndGuid),
+          );
+          stats.queuedForObject = (stats.queuedForObject | 0) + 1;
+        }
+      } else if (!(inst.soundTableDid >>> 0)) {
+        stats.noSoundTable += 1;
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[task-F/gms] entity 0x${sndGuid.toString(16).padStart(8, "0")} `
+          + `has no SoundTable — skip`,
+        );
       } else {
-        cache.resolveSound(stbDid, sndEnum)
-          .then((entry) => {
-            if (!entry) {
-              stats.enumMissing += 1;
-              // eslint-disable-next-line no-console
-              console.debug(
-                `[task-F/gms] no SoundTable entry for enum=0x`
-                + `${sndEnum.toString(16)} on stb=0x`
-                + `${stbDid.toString(16)} (guid=0x`
-                + `${sndGuid.toString(16).padStart(8, "0")}) — skip`,
-              );
-              return;
-            }
-            // Snapshot position at resolve-time so a
-            // moving entity's audio lands at its current
-            // location (matches Task E's snapshot pattern).
-            const pos = inst.root?.position;
-            if (!pos) {
-              stats.lastError = "no_position";
-              return;
-            }
-            const plan = serverSoundPlan(entry, sndScale);
-            if (!plan.play) {
-              if (plan.reason === "wire_volume_silent") stats.scaleClamped += 1;
-              else stats.probabilityMissed = (stats.probabilityMissed | 0) + 1;
-              return;
-            }
-            const gain = plan.gain;
-            // Phase F.C — runtime event log probe. Source
-            // is "GameMessageSound" — the ACE wire-pushed
-            // 0xF750 SoundTriggered; F.D's validator
-            // matches against server_sound_messages in the
-            // F.B manifest's S3 channel (which is a
-            // "synthetic injection" path for the probe
-            // scenario — the actual server hasn't been
-            // captured yet).
-            const pushEventRecord = scene3d?._pushEventRecord;
-            if (pushEventRecord) {
-              pushEventRecord({
-                type: "sound",
-                wave_did: (entry.waveDid >>> 0),
-                parent_entity_guid: (sndGuid >>> 0),
-                world_pos: [+pos.x, +pos.y, +pos.z],
-                t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
-                source: "GameMessageSound",
-                source_meta: {
-                  server_object_guid: (sndGuid >>> 0),
-                  sound_enum: sndEnum,
-                  stb_did: stbDid,
-                  scale: sndScale,
-                  gain,
-                },
-              });
-            }
-            // Wave C / PR10 (2026-06-06): suppress the
-            // server-broadcast echo when the same
-            // (soundEnum, itemGuid) was fired optimistically
-            // by audio_optimistic.js within the last 300ms.
-            // The ring entry is consumed on the suppress
-            // check so a second genuine fire still plays.
-            try {
-              if (window.__audioOptimistic?.shouldSuppressEcho?.(sndEnum, sndGuid)) {
-                stats.suppressedEchoes = (stats.suppressedEchoes | 0) + 1;
-                return Promise.resolve();
+        const stbDid = inst.soundTableDid >>> 0;
+        const cache = scene3d?.soundTableCache ?? null;
+        const audioMgr = scene3d?.audioManager ?? null;
+        if (!cache || !audioMgr) {
+          // 3D scene not initialised (renderer=2d or pre-
+          // init). Silent no-op — the event isn't actionable
+          // without the 3D audio runtime.
+          stats.lastError = "no_cache_or_audio_mgr";
+        } else {
+          cache.resolveSound(stbDid, sndEnum)
+            .then((entry) => {
+              if (!entry) {
+                stats.enumMissing += 1;
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `[task-F/gms] no SoundTable entry for enum=0x`
+                  + `${sndEnum.toString(16)} on stb=0x`
+                  + `${stbDid.toString(16)} (guid=0x`
+                  + `${sndGuid.toString(16).padStart(8, "0")}) — skip`,
+                );
+                return;
               }
-            } catch (_) {}
-            // D4-NEW-1 (2026-06-05): transform the RAW AC-frame
-            // entity position (inst.root.position; the worldRoot
-            // -π/2 rotation never reaches the AudioContext) into the
-            // three.js listener frame so the panner pans the correct
-            // HRTF bearing (north→overhead bug otherwise). The
-            // event-log world_pos above stays AC-frame for cross-
-            // source diffing; only the panner value is transformed.
-            // Mirrors the scene3d/entities.js Sound(1) sibling
-            // (~:8498) and scene3d/index.js GameMessageSound (~:3520).
-            const sndT = acToThree(pos.x, pos.y, pos.z);
-            return audioMgr.play(
-              entry.waveDid,
-              { x: sndT[0], y: sndT[1], z: sndT[2] },
-              { gain },
-            ).then(() => {
-              stats.played += 1;
+              // Snapshot position at resolve-time so a
+              // moving entity's audio lands at its current
+              // location (matches Task E's snapshot pattern).
+              const pos = inst.root?.position;
+              if (!pos) {
+                stats.lastError = "no_position";
+                return;
+              }
+              const plan = serverSoundPlan(entry, sndScale);
+              if (!plan.play) {
+                if (plan.reason === "wire_volume_silent") stats.scaleClamped += 1;
+                else stats.probabilityMissed = (stats.probabilityMissed | 0) + 1;
+                return;
+              }
+              const gain = plan.gain;
+              // Phase F.C — runtime event log probe. Source
+              // is "GameMessageSound" — the ACE wire-pushed
+              // 0xF750 SoundTriggered; F.D's validator
+              // matches against server_sound_messages in the
+              // F.B manifest's S3 channel (which is a
+              // "synthetic injection" path for the probe
+              // scenario — the actual server hasn't been
+              // captured yet).
+              const pushEventRecord = scene3d?._pushEventRecord;
+              if (pushEventRecord) {
+                pushEventRecord({
+                  type: "sound",
+                  wave_did: (entry.waveDid >>> 0),
+                  parent_entity_guid: (sndGuid >>> 0),
+                  world_pos: [+pos.x, +pos.y, +pos.z],
+                  t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+                  source: "GameMessageSound",
+                  source_meta: {
+                    server_object_guid: (sndGuid >>> 0),
+                    sound_enum: sndEnum,
+                    stb_did: stbDid,
+                    scale: sndScale,
+                    gain,
+                  },
+                });
+              }
+              // Wave C / PR10 (2026-06-06): suppress the
+              // server-broadcast echo when the same
+              // (soundEnum, itemGuid) was fired optimistically
+              // by audio_optimistic.js within the last 300ms.
+              // The ring entry is consumed on the suppress
+              // check so a second genuine fire still plays.
+              try {
+                if (window.__audioOptimistic?.shouldSuppressEcho?.(sndEnum, sndGuid)) {
+                  stats.suppressedEchoes = (stats.suppressedEchoes | 0) + 1;
+                  return Promise.resolve();
+                }
+              } catch (_) {}
+              // D4-NEW-1 (2026-06-05): transform the RAW AC-frame
+              // entity position (inst.root.position; the worldRoot
+              // -π/2 rotation never reaches the AudioContext) into the
+              // three.js listener frame so the panner pans the correct
+              // HRTF bearing (north→overhead bug otherwise). The
+              // event-log world_pos above stays AC-frame for cross-
+              // source diffing; only the panner value is transformed.
+              // Mirrors the scene3d/entities.js Sound(1) sibling
+              // (~:8498) and scene3d/index.js GameMessageSound (~:3520).
+              const sndT = acToThree(pos.x, pos.y, pos.z);
+              return audioMgr.play(
+                entry.waveDid,
+                { x: sndT[0], y: sndT[1], z: sndT[2] },
+                { gain },
+              ).then(() => {
+                stats.played += 1;
+              });
+            })
+            .catch((e) => {
+              stats.lastError = String(e?.message ?? e);
+              // eslint-disable-next-line no-console
+              console.warn(
+                `[task-F/gms] resolve/play threw for `
+                + `guid=0x${sndGuid.toString(16).padStart(8, "0")} `
+                + `enum=0x${sndEnum.toString(16)}:`,
+                e,
+              );
             });
-          })
-          .catch((e) => {
-            stats.lastError = String(e?.message ?? e);
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[task-F/gms] resolve/play threw for `
-              + `guid=0x${sndGuid.toString(16).padStart(8, "0")} `
-              + `enum=0x${sndEnum.toString(16)}:`,
-              e,
-            );
-          });
+        }
       }
-    }
+    };
+    runServerSound(false);
   } else if (evt.kind === ClientEventKind.ENVIRON_CHANGE) {
     // AdminEnvirons (0xEA60) — server-pushed environment change
     // (retail CPlayerSystem::Handle_Admin__Environs, acclient.c:396298).

@@ -110,3 +110,59 @@ export async function playUiSound(live, soundType, opts = {}) {
   const stb = await resolveUiSoundTableDid(live?.wasmExports);
   return playSoundFromCenter(live, stb, soundType, opts);
 }
+
+/**
+ * Sounds for objects the client does not know yet. Retail
+ * SmartBox::HandleSoundEvent (acclient.c:143333-143350) queues the blob on
+ * a null object (CObjectMaint::QueueBlobForObject 310848-310861) and replays
+ * it when the object is created; the null object is destroyed 25 s later
+ * (AddObjectToBeDestroyed, cur_time + 25.0 at 310666). We poll for the
+ * object and replay, dropping entries older than 25 s.
+ */
+export const OBJECT_BLOB_TTL_S = 25.0;
+export class PendingObjectSounds {
+  constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
+    setTimer = (fn, ms) => setTimeout(fn, ms), pollMs = 250 } = {}) {
+    this._now = now;
+    this._setTimer = setTimer;
+    this._pollMs = pollMs;
+    /** @type {Array<{guid:number, replay:() => void, has:() => boolean, t:number}>} */
+    this.pending = [];
+    this._armed = false;
+    this.replayed = 0;
+    this.expired = 0;
+  }
+
+  add(guid, replay, has) {
+    this.pending.push({ guid: guid >>> 0, replay, has, t: this._now() });
+    this._arm();
+  }
+
+  poll() {
+    const now = this._now();
+    const keep = [];
+    for (const p of this.pending) {
+      let present = false;
+      try { present = !!p.has(); } catch (_) {}
+      if (present) {
+        this.replayed += 1;
+        try { p.replay(); } catch (_) {}
+      } else if (now - p.t > OBJECT_BLOB_TTL_S * 1000) {
+        this.expired += 1;
+      } else {
+        keep.push(p);
+      }
+    }
+    this.pending = keep;
+  }
+
+  _arm() {
+    if (this._armed) return;
+    this._armed = true;
+    this._setTimer(() => {
+      this._armed = false;
+      this.poll();
+      if (this.pending.length) this._arm();
+    }, this._pollMs);
+  }
+}
