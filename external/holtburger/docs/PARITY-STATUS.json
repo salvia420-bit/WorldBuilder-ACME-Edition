@@ -53,8 +53,8 @@
     },
     {
       "id": "render.interiors_portal_punch",
-      "score": 7.0,
-      "provisional": true,
+      "score": 6.0,
+      "provisional": false,
       "files": [
         "apps/holtburger-web/scene3d/cells.js",
         "apps/holtburger-web/scene3d/portal_punch.js",
@@ -68,14 +68,26 @@
         "Occlusion through a wall/tree/building not yet eye-tested",
         "Black patches near town buildings: A/B flag sweep pending on real GPU"
       ],
-      "audit": null,
-      "open": [],
-      "evidence": []
+      "audit": {
+        "date": "2026-10-05",
+        "by": "critic (wave 1)",
+        "score": 6.0,
+        "round": 1
+      },
+      "open": [
+        "HIGH with a correct seal: cells.js SPLIT_RELAYER_GROUPS (cells.js:494) relayers player-LB buildings/statics into the cells pass AFTER the seal -> outdoor objects seen out a doorway from inside would be hidden. Retail PView::DrawCells (acclient.c:461450-461560): outdoor LScape::draw, depth clear, doorway stamp at true depth, then only cell_draw_list",
+        "MED seal stamps every visible outdoor-facing aperture of all loaded LBs (cells.js:3085-3128); retail stamps only other_cell_id==-1 portals of cells in cell_draw_list, clipped per view",
+        "MED depth-reading post effects (AerialPerspective, horizonDissolve, heatHaze, clouds) see the seal plane through doorways",
+        "Unexplained: seal had apertures in dungeon 0x01D90100 (retail stamps none: outside_view.view_count==0)"
+      ],
+      "evidence": [
+        "Seal log-depth write matches three r184 logdepthbuf chunks (shader_logdepth.js); kept opt-in"
+      ]
     },
     {
       "id": "render.sky_clouds_fog",
-      "score": 7.0,
-      "provisional": true,
+      "score": 4.0,
+      "provisional": false,
       "files": [
         "apps/holtburger-web/scene3d/atmosphere_*.js",
         "apps/holtburger-web/scene3d/cloud_*.js",
@@ -90,9 +102,21 @@
         "Fog colour vs horizon at dawn/noon/dusk unchecked",
         "Swamp ground fog occlusion unchecked"
       ],
-      "audit": null,
-      "open": [],
-      "evidence": []
+      "audit": {
+        "date": "2026-10-05",
+        "by": "critic (wave 1)",
+        "score": 4.0,
+        "round": 1
+      },
+      "open": [
+        "HIGH default sky is takram Bruneton physical sky + star catalog, not retail: GameSky::Draw (acclient.c:308475) draws the DayGroup DAT SkyObjects (dome GfxObjs, textured cloud bands, sun/moon) with depth ALWAYS, zfar x4; K.6 removed our DAT sky (sky_dome.js:1-20). Default build draws NO clouds; retail always shows cloud bands",
+        "Night-ramp hack exists because the physical sky cannot produce Dereth's authored nights (DayGroup sun never below horizon)",
+        "Volumetric clouds (?clouds=on, ?cloudsMainPass) are a divergence from retail",
+        "LOW sky_dome.js:54-60 mislabels SkyObject property bits (0x01 = draw after world, 0x04 weather, 0x02 hide under fog override; acclient.c 308687-308827)"
+      ],
+      "evidence": [
+        "Fog lerp follows SkyDesc::GetWorldFog (acclient.c:301602)"
+      ]
     },
     {
       "id": "render.lighting_shadows",
@@ -180,8 +204,8 @@
     },
     {
       "id": "remote_motion",
-      "score": 6.5,
-      "provisional": true,
+      "score": 6.0,
+      "provisional": false,
       "files": [
         "apps/holtburger-web/scene3d/entity_dispatch.js",
         "apps/holtburger-web/scene3d/server_turn.js",
@@ -195,14 +219,28 @@
         "D7: no remote gravity/terrain sweep (jump arcs float, Z cuts terrain)",
         "D9/D10 minor"
       ],
-      "audit": null,
-      "open": [],
-      "evidence": []
+      "audit": {
+        "date": "2026-10-05",
+        "by": "critic (wave 1)",
+        "score": 6.0,
+        "round": 1
+      },
+      "open": [
+        "HIGH (inferred) running-jump backward snap on landing: wasm body has no root motion while !contact (scene.rs:4811/5021); JS arc lands elsewhere; fix = arc in the Rust body (step_remote_position_managers). ?remoteJumpArc made opt-in",
+        "HIGH remote arms-up pose never clears: REMOTE_AIRBORNE_STATE only grounds on a VectorUpdate with |vz|<=1 (position.rs:1449-1455), ACE never sends one on landing",
+        "MED landing/root-motion Z use terrain only (bridges, docks, indoor ledges); no wall sweep",
+        "MED D5 no client MoveToManager for remotes; keep_heading hard-coded false (scene.rs:4868)",
+        "LOW-MED D9 instance/force-position stamp gating (entity.rs:1135-1196)",
+        "LOW 8 m row filter heuristic; small hops <1 m/s and non-jump falls get no gravity"
+      ],
+      "evidence": [
+        "Arc integrates retail gravity/50 m/s clamp (UpdatePhysicsInternal 317701, calc_acceleration 317787); !contact ignored as MoveOrTeleport 323451-323498; D1/D2/D3-stale/D4/D6/D8/D10 closed"
+      ]
     },
     {
       "id": "movement_physics_collision",
-      "score": 6.5,
-      "provisional": true,
+      "score": 7.0,
+      "provisional": false,
       "files": [
         "crates/holtburger-core/src/client/movement/**",
         "crates/holtburger-world/src/spatial/**",
@@ -219,9 +257,21 @@
         "F7: outdoor point_in_cell AABB with +/-64 m z band; retail is 2D",
         "posePublishPostTick pairing decision pending owner A/B"
       ],
-      "audit": null,
-      "open": [],
-      "evidence": []
+      "audit": {
+        "date": "2026-10-05",
+        "by": "critic (wave 1)",
+        "score": 7.0,
+        "round": 1
+      },
+      "open": [
+        "Round 2 in progress: one building per landcell (356074); keep driver EnvCell when no centre hit (312439-312465); legacy entry in pre-registration window; feet-based relabel at placement + door stopgap; ungated no-membership cells; stale re-registration; F6 bldg_check",
+        "Doors collided after the transition (clamp_delta_against_entities), not by door BSP inside the driver"
+      ],
+      "evidence": [
+        "F1/F3 follow retail find_cell_list -> CLandCell/CSortCell::find_transit_cells -> check_building_transit; pick committed from curr_pos.objcell_id (acclient.c 346961-347051, 355423, 356087, 719068, 348110, 312381)",
+        "Negative other_portal_id skip and out-of-block building drop match retail (362499, 352169-352180)",
+        "holtburger-world --lib 707/707"
+      ]
     },
     {
       "id": "combat_magic",
@@ -303,9 +353,23 @@
       "inherited_leads": [
         "Not audited this cycle - score is a placeholder"
       ],
-      "audit": null,
-      "open": [],
-      "evidence": []
+      "audit": {
+        "date": "2026-10-05",
+        "by": "fresh audit agent (read-only), decomp+OpenAC+ACE",
+        "score": 6.0
+      },
+      "open": [
+        "HIGH ambient: one nearest vertex, no 400/d^2 weighting over 120 m, no 8-direction buckets, continuous sounds as buffer loops, intermittents not positional (acclient.c 352470-352509, 383857-384452; OpenAC AmbientSoundGatherer/Scheduler)",
+        "HIGH UI/optimistic sounds pass AC-frame positions to a three-frame listener (likely silent) and use the player SoundTable, not the UI table; retail PlaySoundFromCenter (383569-383620, GetUISoundTable 396438)",
+        "MED-HIGH server Sound 0xF750: gain uses entry.volume, retail uses wire volume only; no probability roll; volume<=0 forced to 1.0 (316424, 383655)",
+        "MED no 16-voice ring with priority stealing (383004-383067; OpenAC RetailVoicePool)",
+        "MED HRTF panner vs retail yaw-only +/-15 dB stereo pan fixed at start, 0 under 5 m (383152-383180, 386102-386130)",
+        "LOW-MED volume 0 treated as 1.0 at several call sites",
+        "LOW no silence-while-inactive; slider double-application not reproduced"
+      ],
+      "evidence": [
+        "At parity: equal-odds SoundTable pick (sound_table_cache.js:246), SoundTable-hook probability roll, SoundTweaked prob/vol, 25/d^2 falloff and dB quantise, listener on camera (acclient.c 383079-383118, 383433-383512, 144034)"
+      ]
     },
     {
       "id": "streaming_residency_perf",
@@ -402,11 +466,21 @@
         "Holtburg cottage A9B3 (EnvCells 0x100/0x103, origin 180,84,116): indoor cell labels tracked geometry walking inside; walking west from x=189 stopped at 185.19 outdoors and from inside at 183.96, consistent with a closed door near x=184.6. Full outdoor-to-indoor walk through an OPEN door not yet probed.",
         "Memory: a default-render SwiftShader tab reached 2 GB; available fell to 1.08 GB. Use ?wireframe=1 or short sessions for probes."
       ],
-      "critic": "pending",
+      "critic": "done: collision 7.0, remote_motion 6.0, interiors 6.0, sky 4.0 - all below 8.5; seal + jump arc reverted to opt-in",
       "unverified": [
         "Remote jump arc visuals (?remoteJumpArc)",
         "Door seal depth visuals",
         "?cloudsMainPass visuals (opt-in)"
+      ]
+    },
+    {
+      "id": 2,
+      "started": "2026-10-05",
+      "agents": [
+        {
+          "facet": "audio",
+          "scope": "gaps 2-6: centred UI sounds + UI table, server sound volume/prob, 16-voice pool, retail stereo pan mixer, volume-0"
+        }
       ]
     }
   ],
