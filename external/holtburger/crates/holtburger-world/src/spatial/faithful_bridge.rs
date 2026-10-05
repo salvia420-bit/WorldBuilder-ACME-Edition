@@ -513,15 +513,17 @@ impl CObjCell for SceneObjCell {
         // any sphere intersects it (`CCellStruct::sphere_intersects_cell`,
         // :348139) and sets `path->hits_interior_cell` (:348146-348147).
         // Ported from OpenAC `CellTransit.CheckBuildingTransit`
-        // (CellTransit.cs:407-462). A cell with no resident membership BSP
-        // is added ungated, the convention the portal flood below uses.
+        // (CellTransit.cs:407-462). Retail always gates on the cell's
+        // CCellStruct (:348139); a cell whose membership BSP is not resident
+        // cannot be gated, so it is skipped — OpenAC does the same
+        // (CellTransit.cs:424-436, "CellBSP null → skipped").
         for (id, handle, membership) in &self.building_cells {
             let reaches = match membership {
                 Some(m) => spheres.iter().take(num_sphere as usize).any(|s| {
                     let local = m.world_to_local(s.center);
                     m.tree.sphere_intersects_cell(&local, s.radius) != CellBound::Outside
                 }),
-                None => true,
+                None => false,
             };
             if reaches {
                 if let Some(path) = path.as_deref_mut() {
@@ -2858,6 +2860,43 @@ mod drift {
         assert!(
             scene.building_transit_cells(lb | 0x0009).is_empty(),
             "a portal-less first building still claims its landcell"
+        );
+    }
+
+    /// `CEnvCell::check_building_transit` (acclient.c:348110-348152) always
+    /// gates on `CCellStruct::sphere_intersects_cell` (:348139). A building
+    /// cell whose membership hull is not resident cannot be gated, so it must
+    /// not join the outdoor cell array (OpenAC CellTransit.cs:424-436 skips
+    /// it). The old code added it UNGATED — from anywhere on the landcell.
+    #[test]
+    fn a_building_cell_without_a_membership_hull_is_not_added_ungated() {
+        use holtburger_dat::transition::objcell::{CObjCell as _, Landscape as _};
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        polys.insert(1u16, floor_poly_local(0.0, HE, 0.0));
+        let mut scene = SpatialScene::new();
+        // Resident (physics BSP) but NO membership hull.
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        scene.set_landblock_building_portals(LB_ID, &[(v(FCX, FCY, 0.0), vec![(0x0100, 0)])]);
+        let landcell_id = (LB_ID & 0xFFFF_0000) | 0x0001;
+        let land = scene.get_landcell(landcell_id).expect("landcell resident");
+        let mut frame = Frame::identity();
+        frame.origin = v(o.x - 5.0, o.y, FLOOR_WZ);
+        let p = Position {
+            objcell_id: landcell_id,
+            frame,
+        };
+        // 5 m outside the door: nothing could gate this sphere into the cell.
+        let s = Sphere {
+            center: v(o.x - 5.0, o.y, FLOOR_WZ + 0.475),
+            radius: 0.48,
+        };
+        let mut ca = holtburger_dat::transition::types::CellArray::default();
+        land.find_transit_cells(&p, 2, &[s, s], &mut ca, None);
+        assert!(
+            ca.cells.iter().all(|c| c.cell_id != CELL_ID),
+            "an ungateable building cell joined the outdoor cell array"
         );
     }
 
