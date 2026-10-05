@@ -27,14 +27,17 @@ const DOOR_ON = 0x4000000b;
 const DOOR_OFF = 0x4000000c;
 const SIDESTEP_R = 0x6500000f;
 
-// Frames carry a per-motion y offset so the posed rig tells clips apart.
+// Each baked frame is tagged in the (raw, un-normalized) part quaternion:
+// qy = clip id / 1000, qx = frame / 100 — the poser writes quaternions
+// verbatim and its in-place locomotion fix only touches positions, so
+// `partY(inst)` = clip id + frame index of what is posed right now.
 function frames(yOffset, n = NUM_FRAMES) {
   const flat = new Float32Array(n * PART_COUNT * 7);
   for (let f = 0; f < n; f += 1) {
     for (let p = 0; p < PART_COUNT; p += 1) {
       const b = (f * PART_COUNT + p) * 7;
-      flat[b] = p; flat[b + 1] = yOffset + f; flat[b + 2] = 0;
-      flat[b + 3] = 1;
+      flat[b] = p; flat[b + 1] = 0; flat[b + 2] = 0;
+      flat[b + 3] = 1; flat[b + 4] = f / 100; flat[b + 5] = yOffset / 1000;
     }
   }
   return flat;
@@ -110,7 +113,10 @@ async function spawn(em, motionCommand, extra = {}) {
     ...extra,
   });
 }
-const partY = (inst) => inst.parts[0].position.y;
+const partY = (inst) => {
+  const q = inst.parts[0].quaternion;
+  return Math.round(q.y * 1000) + Math.round(q.x * 100);
+};
 
 test("spawn puts the initial cycle on the Rust playhead", async () => {
   const em = makeManager();
@@ -142,5 +148,67 @@ test("a walk → run swap stays on the playhead and carries phase", async () => 
   assert.notEqual(inst._unifiedLoco.cacheKey, walkKey);
   em.tick(0.05);
   assert.ok(partY(inst) >= 100, "run cycle posed");
+  em.dispose();
+});
+
+test("doors: spawn holds the state, links play as HELD one-shots, re-broadcasts are no-ops", async () => {
+  const em = makeManager();
+  const door = await spawn(em, DOOR_OFF);
+  assert.ok(door._unifiedLoco?.hold, "closed state installed as a held cycle");
+  assert.equal(door.lastMotionCommand, DOOR_OFF, "spawn state seeds the link memory");
+  em.tick(0.016);
+  assert.equal(partY(door), 600 + NUM_FRAMES - 1, "held on the Off cycle's final frame");
+
+  // Open: the Off→On LINK plays once and holds its final (open) frame.
+  await em.playDoorMotion(door.guid, true);
+  const open = door._unifiedSeq;
+  assert.ok(open?.stateHold && open.clearOnDone === false, "open link is a held one-shot");
+  em.tick(0.05);
+  assert.ok(partY(door) >= 700 && partY(door) < 704, "open swing playing");
+  for (let i = 0; i < 20; i += 1) em.tick(0.05);
+  assert.equal(door._unifiedSeq, open, "hold survives completion");
+  assert.equal(partY(door), 703, "held on the link's final (open) frame");
+
+  // Both triggers of one change (server Motion + SetState kind=15) → one play.
+  await em.setMotion(door.guid, DOOR_ON, 0, 1.0);
+  await em.playDoorMotion(door.guid, true);
+  assert.equal(door._unifiedSeq, open, "re-broadcast of the held state is a no-op");
+  em.tick(0.05);
+  assert.equal(partY(door), 703, "no snap back to the spawn (closed) state");
+
+  // Close: the On→Off link replaces the open hold.
+  await em.setMotion(door.guid, DOOR_OFF, 0, 1.0);
+  assert.notEqual(door._unifiedSeq, open);
+  assert.equal(open.seq.__wbg_ptr, 0, "previous hold freed");
+  for (let i = 0; i < 20; i += 1) em.tick(0.05);
+  assert.equal(partY(door), 803, "held closed");
+  assert.equal(door.currentAction, null, "no mixer action anywhere");
+  em.dispose();
+});
+
+test("doors: no prior state → no link → the commanded state's cycle hold shows", async () => {
+  const em = makeManager();
+  const chest = await spawn(em, READY);
+  await em.setMotion(chest.guid, DOOR_ON, 0, 1.0);
+  assert.equal(chest._unifiedSeq ?? null, null);
+  assert.ok(chest._unifiedLoco.hold, "On cycle installed held, not looping");
+  for (let i = 0; i < 10; i += 1) em.tick(0.05);
+  assert.equal(partY(chest), 500 + NUM_FRAMES - 1);
+  em.dispose();
+});
+
+test("A5-P3 root motion on the playhead: applied once, only on natural completion", async () => {
+  const em = makeManager();
+  em._rootMotionObjectOn = true; // node has no location → the reader defaults off
+  const inst = await spawn(em, READY);
+  const x0 = inst.root.position.x;
+  const rec = { seq: MS.fromDescriptor(4, 30, 4 / 30, null, null, null, false) };
+  em._armUnifiedRootMotion(inst, rec, [1, 0, 0, 1, 0, 0, 0]);
+  em._applyUnifiedRootMotionIfDone(inst, rec);
+  assert.equal(inst.root.position.x, x0, "not applied before completion");
+  rec.seq.advance(1);
+  em._applyUnifiedRootMotionIfDone(inst, rec);
+  em._applyUnifiedRootMotionIfDone(inst, rec);
+  assert.ok(Math.abs(inst.root.position.x - (x0 + 1)) < 1e-6, "applied exactly once");
   em.dispose();
 });

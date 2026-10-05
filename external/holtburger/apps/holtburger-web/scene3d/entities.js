@@ -5041,10 +5041,10 @@ export class EntityManager {
     // Rust playhead (`_unifiedLoco`), so every entity is on ONE authority from
     // its first frame instead of breathing on the mixer until its first move.
     // Same gate as the mixer auto-play below (walk/run/idle cycles only; one-shot
-    // classes and motion=0 stay at the rest pose). Door/chest state motions stay
-    // on the mixer for now (their state links still play there).
+    // classes and motion=0 stay at the rest pose). A door/chest spawning in a
+    // state (On/Off) is installed as a HELD cycle — its final open/closed frame.
     let _spawnOnPlayhead = false;
-    if (initialClip && !isDoorStateMotion(initialMotion)) {
+    if (initialClip) {
       const _cls0 = classifyMotionCommand(initialMotion);
       if (_cls0 === "walk" || _cls0 === "run" || _cls0 === "idle") {
         const cacheKey0 = AnimationCache.makeKey(
@@ -5053,6 +5053,13 @@ export class EntityManager {
         _spawnOnPlayhead = this._installUnifiedLoco(
           inst, animEntry.sequenceDescriptor, cacheKey0, animEntry.hooks, initialMotion,
         );
+        // Seed the motion-state memory with the spawn state so the FIRST server
+        // Motion broadcast (e.g. Use → On) resolves its MotionTable LINK
+        // (Off→On = the authored opening swing; On→Off = the same anim at
+        // negative framerate, baked reversed) instead of snapping.
+        if (_spawnOnPlayhead && isDoorStateMotion(initialMotion)) {
+          inst.lastMotionCommand = initialMotion >>> 0;
+        }
       }
     }
     if (initialClip && !_spawnOnPlayhead) {
@@ -9426,6 +9433,10 @@ export class EntityManager {
   // the pending tail, so a freed record is never left in the queue.
   _preemptUnifiedForMotion(inst, motionCommand) {
     if (!inst._unifiedSeq) return;
+    // A held door/chest state link is owned by setMotion's door branch: a
+    // re-broadcast of the held state must be a no-op (not a snap back to the
+    // spawn state), and a real state change replaces it there.
+    if (inst._unifiedSeq.stateHold && isDoorStateMotion(motionCommand >>> 0)) return;
     const incoming = classifyMotionCommand(motionCommand >>> 0);
     if ((incoming === "attack" || incoming === "cast") && inst._unifiedSeq.clearOnDone) return;
     // 2026-10-05: retail never cuts a queued action/link on a Ready re-issue
@@ -10614,7 +10625,9 @@ export class EntityManager {
         if (played) return;
       }
       // Unknown prior state / no link entry → fall through: the 1-frame
-      // cycle hold below snaps the object to the commanded state.
+      // cycle hold below snaps the object to the commanded state. Drop any
+      // held link of the previous state so that cycle hold is what shows.
+      this._dropStateHold(inst);
     }
     // Locomotion. Build the cache key the same way the spawn path did
     // (resolvedStance falls back to the entity's first-bake stance).
@@ -12655,6 +12668,17 @@ export class EntityManager {
     // The tick loop advances inst._unifiedSeq + poses the rig and SUPPRESSES the
     // mixer; on completion the stance cycle resumes. Default-off → unchanged
     // mixer overlay path below.
+    // Door/chest/lever state transitions (setMotion's isDoorStateMotion
+    // branch): the link's final frame IS the destination hold pose (Off→On
+    // ends open, On→Off ends closed), so the one-shot HOLDS it
+    // (clearOnDone:false) — retail's "play the link, then enter the
+    // framerate-0 hold cycle". It goes straight onto the playhead (a state
+    // change is not a queued gesture). Door sounds + the Ethereal flip ride its
+    // hooks; `?rootMotionObject` applies its net root displacement on natural
+    // completion (remote entities only), as the mixer `finished` listener did.
+    if (opts?.stateHold && this._playStateHoldLink(inst, entry, fromCmd, toCmd, stance)) {
+      return true;
+    }
     const _unifiedCls =
       (entry?.sequenceDescriptor && typeof classifyMotionCommand === "function")
         ? classifyMotionCommand(toCmd >>> 0)
@@ -12872,6 +12896,73 @@ export class EntityManager {
   // clip end. Mirrors retail's remove_cyclic_anims-then-re-add. Gated by the
   // caller on ?fullBodyOneShot; a same-overlay guard avoids duplicate
   // listeners on rapid replay (spam-click).
+  // Build + install a held state-transition one-shot (see the stateHold call
+  // site in `_tryPlayLink`). Returns false when no sequence could be built.
+  _playStateHoldLink(inst, entry, fromCmd, toCmd, stance) {
+    const MS = _motionSequenceClass();
+    const d = entry?.sequenceDescriptor;
+    if (!MS || !d) return false;
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
+      d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+      false, // one-shot → latches `done`, holds the final (open/closed) frame
+    );
+    if (!seq) return false;
+    const rec = {
+      seq, desc: d, clearOnDone: false, stateHold: true,
+      // Posed in place like the mixer clip it replaces (buildAnimationClip
+      // subtracts the common per-frame translation from every clip).
+      inPlace: true,
+      hooks: entry.hooks || null, lastHookTime: -1,
+      speed: this._unifiedOneShotSpeed(inst),
+    };
+    if (
+      this._rootMotionObjectOn &&
+      hasRootMotion(entry.rootMotionNet) &&
+      !this._isLocalPlayerGuid(inst.guid >>> 0)
+    ) {
+      this._armUnifiedRootMotion(inst, rec, entry.rootMotionNet);
+    }
+    const prev = inst._unifiedSeq;
+    this._clearUnifiedQueue(inst); // frees every pending record except `prev`
+    if (prev) { try { prev.seq.free(); } catch (_) { /* already freed */ } }
+    inst._unifiedSeq = rec;
+    console.log(
+      `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (state link held, ${entry.hooks?.length ?? 0} hooks)`,
+    );
+    return true;
+  }
+
+  // Free a held door/chest state link (setMotion's door fallthrough).
+  _dropStateHold(inst) {
+    const ua = inst._unifiedSeq;
+    if (!ua || !ua.stateHold) return;
+    try { ua.seq.free(); } catch (_) { /* already freed */ }
+    inst._unifiedSeq = null;
+  }
+
+  // A5-P3 on the playhead: stamp the record with the overlay clip's net root
+  // displacement + the per-guid KIND_POSITION stamp at play time. Applied ONCE
+  // by `_applyUnifiedRootMotionIfDone` when the sequence completes naturally;
+  // a record freed before completion (interrupted) applies nothing — the same
+  // contract the mixer `finished` listener had.
+  _armUnifiedRootMotion(inst, rec, net) {
+    let poseTs = 0;
+    try {
+      if (typeof window !== "undefined" && window.__lastEntityWorldPos) {
+        poseTs = window.__lastEntityWorldPos.get(inst.guid >>> 0)?.ts ?? 0;
+      }
+    } catch (_) {}
+    rec.rootMotion = { net, poseTs, applied: false };
+  }
+
+  _applyUnifiedRootMotionIfDone(inst, rec) {
+    const rm = rec?.rootMotion;
+    if (!rm || rm.applied || !rec.seq.done) return;
+    rm.applied = true;
+    this._applyRootMotionToAnchor(inst, rm.net, rm.poseTs);
+  }
+
   _suppressBaseCycleForOverlay(inst, overlayAction) {
     try {
       if (!inst || !overlayAction || !inst.mixer) return;
@@ -15335,8 +15426,9 @@ export class EntityManager {
           // keeps any older record (or a rebuilt-mid-flight one) at 1.0x rather
           // than NaN-ing the playhead.
           ua.seq.advance(dt * (ua.speed ?? 1));
-          poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts);
+          poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts, ua.inPlace === true);
           this._drainUnifiedHooks(inst, ua); // swoosh / chime / strike (Step 6)
+          if (ua.rootMotion) this._applyUnifiedRootMotionIfDone(inst, ua);
           if (ua.seq.done && ua.clearOnDone) {
             try { ua.seq.free(); } catch (_) { /* already freed */ }
             inst._unifiedSeq = null;
