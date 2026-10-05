@@ -11,6 +11,17 @@
 
 use crate::*;
 
+pub(crate) mod commands;
+
+/// What the loop does after a handler returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LoopFlow {
+    /// Keep looping (the old arm fell through / `continue`d).
+    Continue,
+    /// Return from `recv_loop` (the old arm `return`ed).
+    Exit,
+}
+
 /// The startup URL-flag reads `recv_loop` takes once before the loop.
 /// `Copy`, so handlers read them by value (`let LoopFlags { x, .. } = ctx.flags;`).
 #[derive(Clone, Copy)]
