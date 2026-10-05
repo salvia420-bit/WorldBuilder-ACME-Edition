@@ -858,6 +858,14 @@ function makeDepthRestoreMaterial() {
       precision highp float;
       uniform highp sampler2D tSaved;
       uniform highp sampler2D tCur;
+      // Declared here, not by withLogDepthFragment: that helper leaves any
+      // source that already mentions vFragDepth untouched, and three only
+      // defines USE_LOGARITHMIC_DEPTH_BUFFER — it declares none of these.
+      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        uniform float logDepthBufFC;
+        varying float vFragDepth;
+        varying float vIsPerspective;
+      #endif
       out vec4 _c;
       void main() {
         ivec2 p = ivec2(gl_FragCoord.xy);
@@ -997,3 +1005,6 @@ export class SealDepthRestorePass extends Pass {
     }
   }
 }
+
+/** Test hook: the depth-restore material (tests/portal_shader_decls.test.mjs). */
+export const __test_makeDepthRestoreMaterial = () => makeDepthRestoreMaterial();
