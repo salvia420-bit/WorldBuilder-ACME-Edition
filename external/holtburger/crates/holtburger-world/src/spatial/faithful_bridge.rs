@@ -112,6 +112,18 @@ fn capsule_spheres(object: &super::transition::ObjectInfo) -> [Sphere; 2] {
     ]
 }
 
+/// `pose` lifted from the feet to the centre of the mover's first Setup
+/// sphere (`sphere[0].center`) — the point retail tests cell membership at
+/// (`CObjCell::find_cell_list`, acclient.c:347039-347047). Collision F3.
+fn sphere_centre_pose(
+    pose: &WorldPosition,
+    object: &super::transition::ObjectInfo,
+) -> WorldPosition {
+    let mut centre = *pose;
+    centre.coords.z += object.capsule[0].0;
+    centre
+}
+
 fn frame_from(orientation: Quaternion, origin: Vector3) -> Frame {
     let cx = orientation.rotate_vector(Vector3::new(1.0, 0.0, 0.0));
     let cy = orientation.rotate_vector(Vector3::new(0.0, 1.0, 0.0));
@@ -1268,7 +1280,12 @@ pub fn faithful_find_transitional_position(
     faithful_stepup: bool,
 ) -> TransitionOutcome {
     let scene = env.scene();
-    let begin_cell = scene.current_cell(&input.begin);
+    // Collision F3: membership is decided at `sphere[0].center`, not at the
+    // feet (`CObjCell::find_cell_list`'s `point_in_cell(sphere->center -
+    // block_offset)`, acclient.c:347039-347047). Feet sit exactly on the
+    // floor plane, where a stair / ramp / floor just under a room's hull
+    // reads as outside the room.
+    let begin_cell = scene.current_cell(&sphere_centre_pose(&input.begin, &input.object));
     let outdoor = !input.begin.is_indoors();
 
     if outdoor {
@@ -1292,7 +1309,7 @@ pub fn faithful_find_transitional_position(
         }
     }
 
-    let end_cell = scene.current_cell(&input.end);
+    let end_cell = scene.current_cell(&sphere_centre_pose(&input.end, &input.object));
 
     // WORLD-space frames (identity player rotation → vertical two-sphere
     // capsule, matching `cell_physics_bsp_solid`). VERIFY(1070): a non-vertical
@@ -1633,48 +1650,92 @@ pub fn faithful_find_transitional_position(
     // Cell-transit flip (walk-in fix, 2026-07-02): retail re-derives cell
     // membership from geometry every transition in BOTH directions
     // (`check_building_transit` acclient.c:348110 / `find_cell_list`
-    // acclient.c:313300). The legacy chain (system.rs:3070) and the
-    // approximate pipeline (`step_cell_transit_flips`, transition.rs:369)
-    // both carry this flip, but this bridge — the default path since
-    // `USE_FAITHFUL_TRANSITION` went on (Phase 3 B4, 2026-06-28) — pinned
-    // the output `landblock_id` to `input.begin`'s, so a player WALKING
-    // into a building never flipped indoors: `is_indoors()` stayed false,
-    // the indoor render/collision branches never engaged, and interiors
-    // stayed hidden while standing inside the shell. Same gate + capsule
-    // radius as the sibling paths (entry/exit MUST move together).
+    // acclient.c:346961). This bridge — the default path since
+    // `USE_FAITHFUL_TRANSITION` went on (Phase 3 B4, 2026-06-28) — used to
+    // pin the output `landblock_id` to `input.begin`'s, so a player WALKING
+    // into a building never flipped indoors.
+    //
+    // OpenAC comparison 2026-10-04 (collision F1(c)/F3): the cell is now the
+    // DRIVER's own answer. `check_other_cells` (acclient.c:312381) writes
+    // `find_cell_list`'s `point_in_cell(sphere[0].center)` pick into
+    // `check_pos.objcell_id` (`adjust_check_pos`) and `validate_transition`
+    // commits it to `curr_pos.objcell_id` — retail's cur_cell after the
+    // move. Previously that answer was thrown away and replaced by scene
+    // heuristics (feet-sphere entry/exit tests over every EnvCell in the
+    // landblock), which could put the player in a cell the driver never
+    // saw; the next frame then started in that cell with no terrain in its
+    // cell array.
+    //
+    // The legacy heuristics remain ONLY as the fallback when the driver's
+    // answer cannot be trusted:
+    //   * an EnvCell that does not contain the sphere centre (the F2
+    //     keep-previous-cell deviation in `check_other_cells`, or a
+    //     zero-step transition that never ran `find_cell_list`);
+    //   * an outdoor answer from an outdoor start: outdoor cells carry no
+    //     building portal list yet, so the driver cannot see an EnvCell from
+    //     outdoors at all (collision F1(a/b)).
+    // Both legacy tests now take the sphere centre too (F3).
     if input.gates.local_envcell_entry {
-        // OpenAC comparison 2026-10-04 (collision F1/F3): retail decides
-        // membership with `point_in_cell(sphere[0].center)` (acclient.c
-        // `CObjCell::find_cell_list` ~347030-347060), not with the feet and
-        // not with "the sphere touches the hull". The old test sat a 0.48 m
-        // sphere on the FEET, so on terrain above a shallow tunnel it reached
-        // ~0.5 m underground, flipped the player into a tunnel EnvCell they
-        // were not inside, and the next step had no terrain and no
-        // containing cell: free fall. ENTRY is now the sphere CENTRE inside
-        // the cell (radius 0). Exit and indoor→indoor tracking keep their
-        // feet-sphere tests (tuned around `current_cell`'s seam continuity):
-        // a centre inside a cell implies the feet sphere touches it, so the
-        // stricter entry cannot flicker against the looser exit.
-        let mut centre = pose;
-        centre.coords.z += input.object.capsule[0].0;
-        if !pose.is_indoors() {
-            if let Some(entered) = scene.entered_envcell_for_outdoor_pose(&centre, 0.0) {
-                pose.landblock_id = holtburger_common::Guid(entered);
-            }
-        } else if let Some(outdoor_cell) =
-            scene.exited_envcell_to_outdoor(&pose, input.object.radius)
-        {
-            pose.landblock_id = holtburger_common::Guid(outdoor_cell);
+        let centre_world = Vector3::new(
+            curr.frame.origin.x,
+            curr.frame.origin.y,
+            curr.frame.origin.z + input.object.capsule[0].0,
+        );
+        let driver_cell = curr.objcell_id;
+        let driver_pick = if driver_cell == 0 {
+            None
+        } else if (driver_cell & 0xFFFF) >= 0x100 {
+            world
+                .get_visible(driver_cell)
+                .filter(|cell| cell.point_in_cell(centre_world))
+                .map(|_| driver_cell)
+        } else if !outdoor {
+            Some(driver_cell)
         } else {
-            // Indoor→indoor cell transit (2026-07-18): the settled pose above
-            // is pinned to `input.begin`'s cell, and neither the outdoor
-            // rebucket (outdoor-only) nor the entry/exit flips touch a walk
-            // BETWEEN EnvCells of the same dungeon — so the pose's low word
-            // froze at the login cell while x/y streamed (live: 0x01AD across
-            // 60m of soak wandering). Re-derive from geometry like retail's
-            // per-transition `find_cell_list`; `current_cell` falls back to
-            // the unchanged id when no loaded AABB contains the point.
-            pose.landblock_id = holtburger_common::Guid(scene.current_cell(&pose));
+            None
+        };
+        match driver_pick {
+            Some(cell) if (cell & 0xFFFF) >= 0x100 => {
+                // Indoor: the committed EnvCell, coords in ITS landblock.
+                let o = landblock_world_origin(cell);
+                pose.landblock_id = holtburger_common::Guid(cell);
+                pose.coords = Vector3::new(
+                    curr.frame.origin.x - o.x,
+                    curr.frame.origin.y - o.y,
+                    curr.frame.origin.z,
+                );
+            }
+            Some(_) => {
+                // Outdoor. From an outdoor start the pose is already the
+                // rebucketed outdoor cell above. From an EnvCell (left
+                // through an exterior portal: `check_other_cells` picked an
+                // outdoor cell of the straddle ring) turn the begin-relative
+                // pose outdoor and re-derive the landcell from its coords.
+                if !outdoor {
+                    pose.landblock_id = holtburger_common::Guid(
+                        (input.begin.landblock_id.0 & 0xFFFF_0000) | 0x0001,
+                    );
+                    pose = pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
+                }
+            }
+            None => {
+                let centre = sphere_centre_pose(&pose, &input.object);
+                if !pose.is_indoors() {
+                    // 2abe9511: entry = the sphere CENTRE inside the cell.
+                    if let Some(entered) = scene.entered_envcell_for_outdoor_pose(&centre, 0.0) {
+                        pose.landblock_id = holtburger_common::Guid(entered);
+                    }
+                } else if let Some(outdoor_cell) =
+                    scene.exited_envcell_to_outdoor(&centre, input.object.radius)
+                {
+                    pose.landblock_id = holtburger_common::Guid(outdoor_cell);
+                } else {
+                    // Indoor→indoor cell transit (2026-07-18): re-derive from
+                    // geometry; `current_cell` falls back to the unchanged id
+                    // when no loaded cell contains the point.
+                    pose.landblock_id = holtburger_common::Guid(scene.current_cell(&centre));
+                }
+            }
         }
     }
 
@@ -2110,8 +2171,8 @@ pub(crate) fn faithful_diag_step(
     faithful_stepup: bool,
 ) -> FaithfulDiagStep {
     let scene = env.scene();
-    let begin_cell = scene.current_cell(&input.begin);
-    let end_cell = scene.current_cell(&input.end);
+    let begin_cell = scene.current_cell(&sphere_centre_pose(&input.begin, &input.object));
+    let end_cell = scene.current_cell(&sphere_centre_pose(&input.end, &input.object));
 
     let mut begin_frame = Frame::identity();
     begin_frame.origin = input.begin.global_coords();
@@ -2607,6 +2668,147 @@ mod drift {
         assert!(
             out.pose.coords.z >= terrain - 0.05,
             "sank below the terrain over a tunnel: z={} < {terrain}",
+            out.pose.coords.z
+        );
+    }
+
+    // ── Collision F1 / F3 (OpenAC comparison 2026-10-04) ──
+    //
+    // Synthetic ports of OpenAC's DoorwayCellMembershipTests
+    // (tests/AcDream.Core.Tests/Conformance/DoorwayCellMembershipTests.cs),
+    // which run against the installed A9B3 cottage DATs: an outdoor mover
+    // enters an EnvCell ONLY through a building portal (`RegisterBuildings`
+    // + `..._OutdoorSeed_..._RecoversViaGrowingWalk`), and the cell the
+    // move ends in is the transition's own `point_in_cell(sphere centre)`
+    // pick.
+
+    /// A convex membership hull (`CellStruct.cell_bsp` shape): a chain of
+    /// splitting planes, inside ⇔ on the POSITIVE side (`N·p + d >= 0`) of
+    /// every one — the walk `BspNode::point_inside_cell` does.
+    fn hull(planes: &[(Vector3, f32)]) -> BspNode {
+        use holtburger_dat::physics::InternalNode;
+        let mut node: Option<Box<BspNode>> = None;
+        for &(normal, d) in planes.iter().rev() {
+            node = Some(Box::new(BspNode::Internal(InternalNode {
+                tag: [0u8; 4],
+                plane: Plane { normal, d },
+                pos: node,
+                neg: None,
+                sphere: None,
+                poly_ids: vec![],
+            })));
+        }
+        *node.expect("at least one plane")
+    }
+
+    fn membership_at_cell_origin(planes: &[(Vector3, f32)]) -> CellMembership {
+        CellMembership {
+            tree: hull(planes),
+            origin: cell_origin(),
+            orientation: Quaternion::identity(),
+        }
+    }
+
+    /// F1(c): the cell a move ends in is the driver's. Walking out of a
+    /// dungeon-mouth cell through its exterior portal onto flush terrain must
+    /// end OUTDOORS: `check_other_cells` picks the outdoor cell of the
+    /// straddle ring once the sphere centre leaves the cell. The old marshal
+    /// discarded that pick; its exit test refused to eject from a cell with
+    /// no membership hull and `current_cell` kept the carried EnvCell — the
+    /// player stood on the terrain labelled as inside a cell whose array has
+    /// no terrain.
+    #[test]
+    fn walking_out_of_a_mouth_cell_onto_the_terrain_goes_outdoors() {
+        let o = cell_origin();
+        let mut polys = HashMap::new();
+        // Floor up to the lip (cell-local x = +2), flush with the terrain.
+        polys.insert(1u16, floor_poly_local(-HE, MOUTH_PORTAL_X - FCX, 0.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(polys));
+        scene.insert_cell_aabb(
+            CELL_ID,
+            Aabb::new(
+                v(o.x - HE, o.y - HE, FLOOR_WZ - 1.0),
+                v(LB_BASE_X + MOUTH_PORTAL_X, o.y + HE, FLOOR_WZ + 4.0),
+            ),
+        );
+        scene.populate_terrain_heights(LB_ID, [FLOOR_WZ; 81]);
+        let px = LB_BASE_X + MOUTH_PORTAL_X;
+        scene.insert_cell_portal_polygon(
+            CELL_ID,
+            CellPortalPolygon {
+                other_cell_id: (LB_ID & 0xFFFF_0000) | 0xFFFF,
+                vertices: vec![
+                    v(px, o.y - 3.0, FLOOR_WZ),
+                    v(px, o.y + 3.0, FLOOR_WZ),
+                    v(px, o.y + 3.0, FLOOR_WZ + 4.0),
+                    v(px, o.y - 3.0, FLOOR_WZ + 4.0),
+                ],
+                portal_side: false,
+            },
+        );
+        let env = DriftEnv { scene };
+        let begin = pose_at(MOUTH_PORTAL_X - 0.5, FCY, FLOOR_WZ);
+        let end = pose_at(MOUTH_PORTAL_X + 0.8, FCY, FLOOR_WZ - SINK);
+        let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
+        assert!(
+            !out.pose.is_indoors(),
+            "still labelled 0x{:08X} after walking out onto the terrain (x={})",
+            out.pose.landblock_id.0,
+            out.pose.coords.x
+        );
+        assert_eq!(out.pose.landblock_id.0 & 0xFFFF_0000, LB_ID & 0xFFFF_0000);
+        assert!(
+            out.pose.global_coords().x > px + 0.48,
+            "the walk did not carry the sphere clear of the portal: x={} (portal {px})",
+            out.pose.global_coords().x
+        );
+        assert!(
+            out.pose.coords.z >= FLOOR_WZ - 0.05,
+            "sank below the terrain leaving the mouth: z={}",
+            out.pose.coords.z
+        );
+    }
+
+    /// F3: membership is decided at the sphere CENTRE, not at the feet. A
+    /// room whose hull starts 0.2 m above its walking floor (a stair or
+    /// ramp whose treads sit just under the hull) with a basement cell below:
+    /// the feet are in the basement's hull, the centre in the room's. Retail
+    /// (`find_cell_list`'s `point_in_cell(sphere[0].center)`) keeps the
+    /// room. The old code derived the begin cell AND the marshalled cell from
+    /// the feet and labelled the player as in the basement.
+    #[test]
+    fn standing_on_a_floor_just_under_the_room_hull_keeps_the_room() {
+        const BASEMENT_ID: u32 = 0x1234_0101;
+        let mut room = HashMap::new();
+        room.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+        let mut basement = HashMap::new();
+        basement.insert(1u16, floor_poly_local(-HE, HE, -3.0));
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_physics_bsp(CELL_ID, bsp_from(room));
+        scene.insert_cell_physics_bsp(BASEMENT_ID, bsp_from(basement));
+        // Room: inside ⇔ cell-local z >= 0.2. Basement: inside ⇔ z <= 0.2.
+        scene.insert_cell_membership(CELL_ID, membership_at_cell_origin(&[(v(0.0, 0.0, 1.0), -0.2)]));
+        scene.insert_cell_membership(
+            BASEMENT_ID,
+            membership_at_cell_origin(&[(v(0.0, 0.0, -1.0), 0.2)]),
+        );
+        scene.insert_cell_portal(CELL_ID, BASEMENT_ID);
+        scene.insert_cell_portal(BASEMENT_ID, CELL_ID);
+        let env = DriftEnv { scene };
+        let begin = pose_at(FCX, FCY, FLOOR_WZ);
+        let end = pose_at(FCX + 1.3, FCY, FLOOR_WZ - SINK);
+        let out = faithful_find_transitional_position(&env, &input_for(begin, end), true, true);
+        assert!(out.pose.coords.x > begin.coords.x, "walk advanced");
+        assert_eq!(
+            out.pose.landblock_id,
+            Guid(CELL_ID),
+            "relabelled into the cell the FEET are in (0x{:08X})",
+            out.pose.landblock_id.0
+        );
+        assert!(
+            out.pose.coords.z >= FLOOR_WZ - 0.05,
+            "sank through the room floor: z={}",
             out.pose.coords.z
         );
     }
@@ -3573,8 +3775,8 @@ mod drift {
     /// the candidate grounded signals.
     fn raw_drive(env: &DriftEnv, input: &TransitionInput) -> (CTransition, i32) {
         let scene = env.scene();
-        let begin_cell = scene.current_cell(&input.begin);
-        let end_cell = scene.current_cell(&input.end);
+        let begin_cell = scene.current_cell(&super::sphere_centre_pose(&input.begin, &input.object));
+        let end_cell = scene.current_cell(&super::sphere_centre_pose(&input.end, &input.object));
         let mut bf = Frame::identity();
         bf.origin = input.begin.global_coords();
         let begin_pos = Position {
