@@ -1,20 +1,37 @@
 # holtburger-web
 
-Browser-loadable WASM bundle for `emit-dynamic-site`. Started as the
-smallest possible consumer of the wasm32 cross-compile floor; now hosts
-the Phase 3 renderer entry points and the Phase 4 step 1
-wasm-driven AC login driver. See
-[`docs/phase-2-wasm-spike.md`](../../../../docs/phase-2-wasm-spike.md)
-§8 step 1,
-[`docs/phase-3-renderer.md`](../../../../docs/phase-3-renderer.md), and
-[`docs/phase-4-renderer.md`](../../../../docs/phase-4-renderer.md) for
-context.
+The browser Asheron's Call client. It has two halves:
 
-## What it does
+- **`index.html` + `scene3d/` + `plugins/` + `ui/`**: a three.js 3D client
+  written as plain ES modules, with no bundler. The import map in `index.html`
+  pins three 0.184.0, postprocessing 6.39.1 and the vendored @takram
+  atmosphere/clouds.
+- **`src/` (this crate, `holtburger-web`)**: a `cdylib` compiled to wasm with
+  `wasm-pack`. It owns the AC session, DAT decode and bake helpers, and the
+  retail motion interpreter.
 
-Exposes a small `wasm-bindgen` surface over `holtburger-protocol` +
-`holtburger-session` so a plain `index.html` can prove the bundle loads
-and executes in a browser:
+**For how to run, test and navigate the app, read
+[`../../HANDOFF.md`](../../HANDOFF.md) first.** This README covers only how
+the crate is built and verified.
+
+> The 2D PixiJS renderer was retired on 2026-06-18. Its code is in `legacy/`
+> and nothing loads it. The page no longer imports `pixi.js`, and the 3D path
+> is the only renderer. `index.html` still contains some `?renderer=2d`
+> readers. They only turn the 3D path off and leave nothing to draw, so don't
+> use that flag.
+
+Historical context for the earliest bundle (the phase 2–4 spike, at the
+repository root):
+[`docs/phase-2-wasm-spike.md`](../../../../docs/phase-2-wasm-spike.md),
+[`docs/phase-3-renderer.md`](../../../../docs/phase-3-renderer.md),
+[`docs/phase-4-renderer.md`](../../../../docs/phase-4-renderer.md).
+
+## The early wasm surface (historical)
+
+The list below is the **original** phase 2–4 `wasm-bindgen` surface. It is kept
+because the smoke test still asserts these symbols. The live API is far larger:
+`SessionHandle` has 240+ methods, and the generated `pkg/holtburger_web.d.ts`
+is the authoritative listing.
 
 - `start()` — installs `console_error_panic_hook` so panics surface in
   the browser console.
@@ -40,14 +57,17 @@ and executes in a browser:
   looks up the named entry, and returns the decompressed byte length.
   The Node smoke test runs this end-to-end against an in-process
   `http.createServer` serving `dats/assets.hba`.
-- `fetch_landblock_heightmap(asset_url, cell_id) -> Promise<LandblockMesh>`
-  (wasm32-only, Phase 3 step 1) — fetches an HBA, looks up
-  `eor/cell:cell_id` (typically `XXYYFFFF` for landblock terrain),
-  parses it as a `CellLandblock`, and hands the 9×9 height grid back
-  as a triangle mesh: `positions` (`Float32Array`, 243 floats — 81
-  verts × 3D), `indices` (`Uint16Array`, 384 — 64 quads × 6),
-  `heightMin` / `heightMax` (metres). Browser-side
-  `index.html` feeds this into PixiJS to draw the Holtburg terrain.
+- `fetch_landblock_heightmap(cell_id) -> Promise<LandblockMesh>`
+  (wasm32-only, Phase 3 step 1; now a one-element wrapper over
+  `fetch_landblock_heightmaps`) — reads `eor/cell:cell_id` (typically
+  `XXYYFFFF` for landblock terrain) from the initialised resource
+  source, parses it as a `CellLandblock`, and hands the 9×9 height
+  grid back as a triangle mesh: `positions` (`Float32Array`, 243
+  floats — 81 verts × 3D), `indices` (`Uint16Array`, 384 — 64 quads ×
+  6), `heightMin` / `heightMax` (metres). The original consumer was
+  the PixiJS 2D view, which is now retired. The 3D terrain path
+  (`scene3d/terrain.js`) uses the newer batched and subdivided bake
+  exports.
 - `start_session(bridge_url, server_ip, server_port, username,
   password, asset_url) -> Promise<SessionHandle>` (wasm32-only,
   Phase 4 steps 1 + 2a + 2a.5) — drives the AC login →
@@ -97,21 +117,24 @@ and executes in a browser:
 
 ## Frontend dependencies
 
-[PixiJS 8](https://pixijs.com/) is loaded as an ESM module from
-jsdelivr in `index.html`:
+The browser loads its JavaScript dependencies through the
+`<script type="importmap">` in `index.html`. There is no bundler.
 
-```html
-<script type="importmap">
-  { "imports": {
-    "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs"
-  } }
-</script>
-```
+- From jsdelivr:
+  - `three@0.184.0`, plus `three/addons/`
+  - `postprocessing@6.39.1`
+  - `tiny-invariant@1.3.3`
+- Vendored under `vendor/`:
+  - @takram `three-atmosphere`, `three-geospatial`,
+    `three-geospatial-effects` and `three-clouds`
+  - `@dgreenheck/three-pinata`
 
-The pin is `8.18.1` — bump that and the URL together. No npm/bundler
-in this crate; the import map keeps the tree dependency-free. If a
-future renderer step grows enough JS to want a bundler, that's the
-right time to introduce one.
+When you bump a CDN version, change the URL in the import map. If the
+dependency also appears in `package.json` (used by the Node test gate),
+change it there too.
+
+PixiJS is **gone**. The 2D renderer and its `pixi.js` import-map entry were
+removed on 2026-06-18, and its code is kept, unused, in `legacy/`.
 
 ## Build
 
@@ -192,12 +215,13 @@ python3 scripts/serve.py            # :8765 by default; --port N to override
 #   cd external/holtburger && python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-`index.html` runs the wasm symbol-presence checks and then renders
-the Holtburg landblock terrain (Phase 3 step 1) into the on-page
-`<canvas>`. Browser verification is manual — there's no
-headless-browser harness wired up here. The deliverable artefact for
-Phase 3 step 1 is a screenshot of the rendered landblock at
-`docs/images/phase-3-step-1-landblock.png`.
+`index.html` runs the wasm symbol-presence checks, shows the login
+form, and after spawn renders the world in 3D with three.js. Use
+`?nosw=1` on dev URLs, because the service worker caches `index.html` and
+the shards. For headless runs, auto-login, the Node test gate
+(`node harness/run-js-headless.mjs`) and the Playwright harness, see
+[`../../HANDOFF.md`](../../HANDOFF.md) §3–4 and
+[`harness/README.md`](harness/README.md).
 
 ## HTTP-source fixture (§8 step 4 / Phase 3 step 1)
 
