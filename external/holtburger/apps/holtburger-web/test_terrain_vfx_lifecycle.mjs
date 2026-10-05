@@ -376,9 +376,9 @@ console.log("\n-- L8: the two kill switches are allocation-free no-ops --");
   check("?terrainVfx=off: stats still say WHY", surface.stats().disabledReason === "flag");
 
   const w2 = fresh("?wireframe=1");
-  check("wireframeActive matches scene3d/index.js:698 (=== \"1\")",
-    wireframeActive("?wireframe=1") === true && wireframeActive("?wireframe=0") === false
-    && wireframeActive("") === false);
+  check("wireframeActive uses the shared reader (1/on/true/yes; absent/0 off)",
+    wireframeActive("?wireframe=1") === true && wireframeActive("?wireframe=on") === true
+    && wireframeActive("?wireframe=0") === false && wireframeActive("") === false);
   const s2 = initTerrainVfx({ THREE: FakeTHREE, scene3d: w2.scene3d, parent: w2.worldRoot });
   const p2 = recorder("t.wire", { families: [] });
   registerTerrainVfx(p2);

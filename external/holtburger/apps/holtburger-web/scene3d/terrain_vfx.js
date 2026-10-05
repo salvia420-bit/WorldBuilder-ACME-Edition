@@ -75,6 +75,7 @@ import {
   terrainTrailFadeSource,
 } from "./vfx_flags.js";
 import { FAM_COUNT, familyForCode } from "./terrain_families.js";
+import { wireframeFlagOn } from "./wireframe_flag.js";
 import { createTrailMap, resolveTrailMapConfig } from "./trail_map.js";
 
 // ---------------------------------------------------------------------------
@@ -118,17 +119,12 @@ export function coverageMatches(coverage, families) {
  * `?wireframe=1` guard (plan §8 risk 8). Wireframe mode skips sky, composer,
  * CSM and shadows and swaps every material for a `MeshBasicMaterial`;
  * `terrain_batch` explicitly never batches in it. Terrain VFX must be a hard
- * no-op there. Mirrors `scene3d/index.js:698` (`=== "1"`), plus `on` so a
- * near-miss spelling still disables rather than half-enables.
+ * no-op there. Delegates to the shared reader (scene3d/wireframe_flag.js,
+ * 1/on/true/yes) that index.js and entities.js also use, so every consumer
+ * agrees on which spellings enable the mode.
  */
 export function wireframeActive(search) {
-  try {
-    const s = typeof search === "string"
-      ? search
-      : (typeof window !== "undefined" && window.location ? window.location.search : "");
-    const v = new URLSearchParams(s).get("wireframe");
-    return v === "1" || v === "on";
-  } catch (_) { return false; }
+  return wireframeFlagOn(search);
 }
 
 /** Deterministic [0,1) LCG — `Math.random` is banned (§5.5). */

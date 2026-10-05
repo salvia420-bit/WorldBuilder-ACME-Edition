@@ -3,11 +3,13 @@
 // per-entity surface material at L977 swaps from MeshStandardMaterial
 // (texture+PBR) to a shared MeshBasicMaterial({wireframe:true}) so
 // entities render as wire silhouettes consistent with the rest of the
-// scene in wire-agent mode.
+// scene in wire-agent mode. Shared reader: scene3d/wireframe_flag.js
+// (accepts 1/on/true/yes). The try keeps import-stripping source-eval
+// harnesses (no `wireframeFlagOn` binding) at the default (off).
+import { wireframeFlagOn } from "./wireframe_flag.js";
 const WIREFRAME_MODE = (() => {
   try {
-    if (typeof window === "undefined") return false;
-    return new URLSearchParams(window.location.search).get("wireframe") === "1";
+    return wireframeFlagOn();
   } catch (_) { return false; }
 })();
 

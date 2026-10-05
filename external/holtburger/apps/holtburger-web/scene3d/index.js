@@ -253,6 +253,7 @@ import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./f
 // (the module imports no three), and it installs its own park/unpark/evict
 // hooks by CHAINING onto terrain_batch.js's — never clobbering them.
 import { initTerrainVfx, terrainVfxNoteLandblockMesh } from "./terrain_vfx.js";
+import { wireframeFlagOn } from "./wireframe_flag.js";
 // Terrain-VFX family §3.1 GRASS (Wave 1A). Registers a camera-scoped provider
 // with the spine above — but ONLY under `?terrainGrass=on`: with the flag off
 // initTerrainGrass registers nothing, so a bare-default boot is byte-identical
@@ -853,12 +854,8 @@ export async function preInit3D(canvas) {
   // plugin + scene-graph code paths intact. Does NOT mutate the
   // quality preset — `?quality=ultra&wireframe=1` is valid and yields
   // wireframe-everything regardless of preset.
-  const wireframeMode = (() => {
-    try {
-      if (typeof window === "undefined") return false;
-      return new URLSearchParams(window.location.search).get("wireframe") === "1";
-    } catch (_) { return false; }
-  })();
+  // Shared reader (scene3d/wireframe_flag.js): accepts 1/on/true/yes.
+  const wireframeMode = wireframeFlagOn();
   // 2026-05-23 — `?diag=1` keeps the audio + ambient chain constructed
   // even under ?wireframe=1, so the diag layer's events surface has
   // something to observe. Headless browsers without a user gesture
