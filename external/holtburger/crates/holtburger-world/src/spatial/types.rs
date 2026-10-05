@@ -291,6 +291,34 @@ pub struct SpatialBody {
     /// (acclient.c:344163) and persisting across later non-running states.
     /// Default 1.0. Feeds [`SpatialBody::adjusted_max_speed`].
     pub my_run_rate: f32,
+    /// OpenAC comparison 2026-10-04 (remote motion D7): retail
+    /// `m_velocityVector` of a REMOTE object, written only by
+    /// `SmartBox::DoVectorUpdate` → `set_velocity` (acclient.c:143459-143480)
+    /// — NOT the wire UpdatePosition velocity, which retail never applies
+    /// to a remote (`MoveOrTeleport` ignores it, :323451-323498). Kept apart
+    /// from [`Self::velocity`], which the authoritative reconcile and the
+    /// interp drain both overwrite.
+    pub remote_velocity: Vector3,
+    /// D7: `Some` while the remote body is out of contact and flying its
+    /// own arc (retail transient CONTACT clear), `None` on the ground.
+    pub remote_arc: Option<RemoteArc>,
+}
+
+/// OpenAC comparison 2026-10-04 (remote motion D7) — the airborne state of
+/// a REMOTE body (retail runs `UpdatePhysicsInternal` on every object,
+/// acclient.c:311375 → :323081 → :317701). See
+/// `SpatialScene::step_remote_position_managers`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RemoteArc {
+    /// Height the body left the ground at.
+    pub takeoff_z: f32,
+    /// Stopgap floor for a take-off from a structure (bridge, dock, roof):
+    /// the take-off height when it was more than
+    /// `REMOTE_ARC_STRUCTURE_FLOOR_M` above the terrain. Remotes run no
+    /// transition sweep here, so this is the only non-terrain floor known.
+    pub structure_floor: Option<f32>,
+    /// Seconds spent airborne (safety cap).
+    pub elapsed: f32,
 }
 
 impl SpatialBody {
@@ -307,6 +335,8 @@ impl SpatialBody {
             position_manager: PositionManager::default(),
             last_wire_contact: None,
             my_run_rate: 1.0,
+            remote_velocity: Vector3::zero(),
+            remote_arc: None,
         }
     }
 
@@ -323,6 +353,8 @@ impl SpatialBody {
             position_manager: PositionManager::default(),
             last_wire_contact: None,
             my_run_rate: 1.0,
+            remote_velocity: Vector3::zero(),
+            remote_arc: None,
         }
     }
 

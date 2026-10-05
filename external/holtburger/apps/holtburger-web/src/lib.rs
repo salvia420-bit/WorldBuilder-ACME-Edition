@@ -986,6 +986,17 @@ fn parse_remote_root_motion_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "remoteRootMotion=off")
 }
 
+/// OpenAC comparison 2026-10-04 (remote motion D7): `?remoteJumpArc=off`
+/// disables the remote gravity arc the wasm remote body flies after a
+/// jump VectorUpdate (`SpatialScene::remote_vector_update` /
+/// `step_remote_position_managers`). DEFAULT-ON (Rust-unit-tested); only
+/// rides the effective `remoteInterp` composite.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_jump_arc_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteJumpArc=off")
+}
+
 fn parse_remote_interp_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     // F-2026-06-27: DEFAULT-ON (was `== "remoteInterp=on"`); only `=off` disables.
@@ -43707,6 +43718,7 @@ async fn recv_loop(
     // effective remoteInterp composite AND the USE_STICKY_MANAGER
     // const; see `parse_sticky_retail_flag` for the full compose rule.
     let remote_root_motion_on: bool = parse_remote_root_motion_flag(&flag_search());
+    let remote_jump_arc_on: bool = parse_remote_jump_arc_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -43888,6 +43900,7 @@ async fn recv_loop(
             routine_pos_guard_on,
             remote_interp_on,
             remote_root_motion_on,
+            remote_jump_arc_on,
             remote_sticky_on,
             combat_radii_on,
             server_run_rate_on,

@@ -305,6 +305,87 @@ const REMOTE_BLIP_OUTDOOR_M: f32 = 100.0;
 /// gate, acclient.c:323483-323489).
 const REMOTE_INTERP_PLAYER_RADIUS_M: f32 = 96.0;
 
+/// OpenAC comparison 2026-10-04 (remote motion D7) — `PhysicsGlobals::gravity`
+/// (acclient.c:45824), applied by `calc_acceleration` (:317787) to a GRAVITY
+/// object that is not in contact on walkable ground.
+const REMOTE_ARC_GRAVITY: f32 = -9.8;
+/// D7: `UpdatePhysicsInternal`'s velocity clamp (acclient.c:317740-317747).
+const REMOTE_ARC_MAX_VELOCITY: f32 = 50.0;
+/// D7 stopgap floor: a take-off more than this far above the terrain is
+/// treated as a take-off from a structure (bridge, dock, roof) and the arc
+/// lands no lower than the take-off height. Remotes run no transition sweep
+/// here, so terrain is the only floor otherwise known.
+const REMOTE_ARC_STRUCTURE_FLOOR_M: f32 = 0.3;
+/// D7 safety cap (s) on an arc that never meets a floor. Not retail (retail
+/// has a real collision sweep); it only stops a body hanging in the air.
+const REMOTE_ARC_MAX_S: f32 = 4.0;
+
+/// D7: clear a remote body's arc (hit ground / hard set), recording the
+/// hit-ground edge and zeroing the physics velocity. Retail
+/// `CMotionInterp::HitGround` (acclient.c:344429) re-applies the current
+/// movement, which hands locomotion back to the motion (our D1 root motion).
+fn end_remote_arc(body: &mut SpatialBody, guid: Guid, changes: &mut Vec<(Guid, bool)>) {
+    if body.remote_arc.take().is_some() {
+        changes.push((guid, false));
+    }
+    body.remote_velocity = Vector3::zero();
+}
+
+/// D7: the floor an arc lands on at `pose` — the terrain surface outdoors,
+/// raised to the structure floor for a take-off from a structure; the
+/// take-off height indoors (env cells have no terrain sampler here) or over
+/// unloaded terrain.
+fn remote_arc_floor(scene: &SpatialScene, arc: &super::RemoteArc, pose: &WorldPosition) -> f32 {
+    if pose.is_indoors() {
+        return arc.takeoff_z;
+    }
+    let terrain = super::faithful_bridge::faithful_terrain_floor(scene, pose)
+        .map(|(z, _)| z)
+        .unwrap_or(arc.takeoff_z);
+    match arc.structure_floor {
+        Some(floor) => terrain.max(floor),
+        None => terrain,
+    }
+}
+
+/// D7: one `UpdatePhysicsInternal` slice of a remote arc (acclient.c:317701-
+/// 317776; no friction — `calc_friction` only acts on walkable contact,
+/// :316107). Returns the next pose, the next velocity, and whether the body
+/// met its floor this slice (it is then put on the floor).
+fn step_remote_arc(
+    scene: &SpatialScene,
+    arc: &super::RemoteArc,
+    pose: WorldPosition,
+    velocity: Vector3,
+    quantum: f32,
+) -> (WorldPosition, Vector3, bool) {
+    let mut v = velocity;
+    let mag2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    if mag2 > REMOTE_ARC_MAX_VELOCITY * REMOTE_ARC_MAX_VELOCITY {
+        let k = REMOTE_ARC_MAX_VELOCITY / mag2.sqrt();
+        v = Vector3::new(v.x * k, v.y * k, v.z * k);
+    }
+    let mut next = pose;
+    next.coords = next.coords
+        + Vector3::new(
+            v.x * quantum,
+            v.y * quantum,
+            v.z * quantum + 0.5 * REMOTE_ARC_GRAVITY * quantum * quantum,
+        );
+    v = Vector3::new(v.x, v.y, v.z + REMOTE_ARC_GRAVITY * quantum);
+    let mut next = if next.is_indoors() {
+        next
+    } else {
+        next.rebucket_outdoor_landblock().normalize_outdoor_cell()
+    };
+    let floor = remote_arc_floor(scene, arc, &next);
+    if v.z <= 0.0 && next.coords.z <= floor {
+        next.coords.z = floor;
+        return (next, v, true);
+    }
+    (next, v, false)
+}
+
 /// A2-P2 (2026-06-12, W3+ S8) — wire context for a REMOTE position
 /// correction, threaded from `apply_entity_position_pack` (and friends)
 /// into the scene reconcile so the retail `MoveOrTeleport` lattice
@@ -1124,6 +1205,17 @@ pub struct SpatialScene {
     /// remote bodies by their interpreted-state velocity every slice (see
     /// [`Self::step_remote_position_managers`]). `?remoteRootMotion=off`.
     remote_root_motion_enabled: bool,
+    /// OpenAC comparison 2026-10-04 (remote motion D7): a remote body that
+    /// leaves the ground flies its own gravity arc in
+    /// [`Self::step_remote_position_managers`] (retail runs
+    /// `UpdatePhysicsInternal` on every object). `?remoteJumpArc=off`.
+    remote_jump_arc_enabled: bool,
+    /// D7: per-tick leave-ground (`true`) / hit-ground (`false`) edges of
+    /// remote bodies, drained by the wasm tick next to
+    /// [`Self::take_remote_stepped_poses`] into the JS airborne event
+    /// (retail `CMotionInterp::LeaveGround` / `HitGround`,
+    /// acclient.c:344457 / :344429).
+    remote_airborne_changes: Vec<(Guid, bool)>,
     /// A2-P3 (2026-06-12, W3+ S9) — O(1) mirror of the LOCAL player
     /// body's sticky target ([`PositionManager::sticky_object_id`]),
     /// kept in sync by [`Self::stick_local_player_to`] /
@@ -1314,6 +1406,8 @@ impl SpatialScene {
             remote_interp_enabled: false,
             remote_stepped_poses: HashMap::new(),
             remote_root_motion_enabled: true,
+            remote_jump_arc_enabled: true,
+            remote_airborne_changes: Vec::new(),
             local_sticky_target: None,
             remote_sticky_enabled: false,
             remote_sticky_targets: HashMap::new(),
@@ -1572,6 +1666,23 @@ impl SpatialScene {
     /// `?remoteRootMotion=off` escape for the D1 per-slice remote root motion.
     pub fn set_remote_root_motion_enabled(&mut self, enabled: bool) {
         self.remote_root_motion_enabled = enabled;
+    }
+
+    /// `?remoteJumpArc=off` escape for the D7 remote gravity arc.
+    pub fn set_remote_jump_arc_enabled(&mut self, enabled: bool) {
+        self.remote_jump_arc_enabled = enabled;
+    }
+
+    /// True when remote bodies fly their own arc (the arc switch AND the
+    /// remote body driver that steps it). The wasm VectorUpdate arm uses
+    /// this to retire its legacy |vz| airborne heuristic.
+    pub fn remote_jump_arc_active(&self) -> bool {
+        self.remote_jump_arc_enabled && self.remote_interp_enabled
+    }
+
+    /// D7: drain this tick's remote leave-ground / hit-ground edges.
+    pub fn take_remote_airborne_changes(&mut self) -> Vec<(Guid, bool)> {
+        std::mem::take(&mut self.remote_airborne_changes)
     }
 
     /// A2-P3 R2: drain the per-tick sticky-stepped guid set (drained by
@@ -4700,6 +4811,10 @@ impl SpatialScene {
                 SpatialSampleMode::SimulatingMotionState | SpatialSampleMode::SimulatingVelocity
             );
 
+        // D7 (remote motion): the pose the previous reconcile applied — a
+        // ctx-less remote reconcile that carries the SAME wire pose is a
+        // non-position update (VectorUpdate) and must not relocate.
+        let prior_authoritative_pose = body.authoritative_pose;
         body.authoritative_pose = Some(pose);
         body.velocity = velocity;
         body.omega = omega;
@@ -4855,6 +4970,11 @@ impl SpatialScene {
                     body.position_manager.stop();
                     body.pose = pose;
                     body.sampling.mode = mode;
+                    // A hard set places the object; any arc it was flying
+                    // is over (D7).
+                    if let SpatialBodyId::Entity(guid) = body_id {
+                        end_remote_arc(&mut body, guid, &mut self.remote_airborne_changes);
+                    }
                     // Export the hard set as a managed row (OpenAC
                     // comparison 2026-10-04, remote motion D4): JS ignores
                     // wire positions while a body is wasm-driven, so an
@@ -4884,6 +5004,7 @@ impl SpatialScene {
                         body.pose = pose;
                         body.sampling.mode = mode;
                         if let SpatialBodyId::Entity(guid) = body_id {
+                            end_remote_arc(&mut body, guid, &mut self.remote_airborne_changes);
                             self.remote_stepped_poses.insert(guid, pose); // D4
                         }
                     } else {
@@ -4932,6 +5053,16 @@ impl SpatialScene {
                 // snap-to-`entity.position` here would stomp the eased
                 // pose every vector frame. Documented S8 deviation;
                 // unreachable with the flag off.
+                body.sampling.mode = mode;
+            } else if body_existed && prior_authoritative_pose == Some(pose) {
+                // OpenAC comparison 2026-10-04 (remote motion D7): a
+                // ctx-less reconcile carrying the wire pose this body
+                // already absorbed is a velocity/bookkeeping update — the
+                // VectorUpdate of a jump. Retail `DoVectorUpdate` only
+                // `set_velocity`s (acclient.c:143459-143480); snapping to
+                // the last wire pose here dragged a root-motion-advanced
+                // runner back to where its last UpdatePosition put it, at
+                // the very moment it jumped.
                 body.sampling.mode = mode;
             } else {
                 body.pose = pose;
@@ -5057,6 +5188,10 @@ impl SpatialScene {
                     if body.position_manager.queue_active()
                         || body.pose.is_indoors()
                         || !body.last_wire_contact.unwrap_or(true)
+                        // D7: retail zeroes root motion off walkable ground
+                        // (UpdatePositionInternal acclient.c:320014-320025);
+                        // the arc below moves an airborne body.
+                        || body.remote_arc.is_some()
                         || self.remote_sticky_targets.contains_key(&guid)
                     {
                         return None;
@@ -5070,8 +5205,50 @@ impl SpatialScene {
                     next.coords = next.coords + Vector3::new(step.x, step.y, 0.0);
                     let mut next = next.rebucket_outdoor_landblock().normalize_outdoor_cell();
                     let (z, _) = super::faithful_bridge::faithful_terrain_floor(self, &next)?;
-                    next.coords.z = z;
+                    // D7 stopgap (critic wave 1, issue 3): a body standing
+                    // more than REMOTE_ARC_STRUCTURE_FLOOR_M above the
+                    // terrain is on a structure (bridge, dock) — keep its
+                    // height instead of dropping it to the terrain under
+                    // the deck. Retail's transition sweep would hold it on
+                    // the structure's walkable polygon; remotes run none here.
+                    let on_structure = super::faithful_bridge::faithful_terrain_floor(self, &body.pose)
+                        .is_some_and(|(here, _)| {
+                            body.pose.coords.z - here > REMOTE_ARC_STRUCTURE_FLOOR_M
+                        });
+                    next.coords.z = if on_structure { body.pose.coords.z } else { z };
                     Some((guid, next))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        // OpenAC comparison 2026-10-04 (remote motion D7). Retail simulates
+        // every remote: `CPhysics::UseTime` → `update_object`
+        // (acclient.c:311375 → :323081) → `UpdatePhysicsInternal` (:317701):
+        // |v| clamped to 50 (:317740-317747), offset += v·q + ½·a·q²
+        // (:317756-317769), v += a·q (:317771-317776), a = gravity off the
+        // ground (`calc_acceleration` :317787, -9.8 :45824). A body that left
+        // the ground (`remote_vector_update`) flies that arc HERE, in the one
+        // body the renderer draws — so the managed row IS the arc and there is
+        // nothing to snap back to on landing. It lands on the terrain (or the
+        // take-off height indoors / from a structure / over unloaded terrain).
+        let arcs: HashMap<Guid, (WorldPosition, Vector3, f32, bool)> = if self.remote_jump_arc_enabled {
+            self.body_store
+                .bodies
+                .values()
+                .filter_map(|body| {
+                    let SpatialBodyId::Entity(guid) = body.id else {
+                        return None;
+                    };
+                    let arc = body.remote_arc?;
+                    let (next, v, landed) = step_remote_arc(self, &arc, body.pose, body.remote_velocity, quantum);
+                    let elapsed = arc.elapsed + quantum;
+                    let mut next = next;
+                    let timed_out = !landed && elapsed >= REMOTE_ARC_MAX_S;
+                    if timed_out {
+                        next.coords.z = remote_arc_floor(self, &arc, &next);
+                    }
+                    Some((guid, (next, v, elapsed, landed || timed_out)))
                 })
                 .collect()
         } else {
@@ -5086,8 +5263,27 @@ impl SpatialScene {
                 body.pose = next;
                 stepped = true;
             }
+            if let Some(&(next, v, elapsed, landed)) = arcs.get(&guid) {
+                body.pose = next;
+                body.remote_velocity = v;
+                if landed {
+                    end_remote_arc(body, guid, &mut self.remote_airborne_changes);
+                    // HitGround: the body's OWN contact is back (retail
+                    // transient CONTACT, which gates interp at :389208 and
+                    // root motion at :320014). A stale mid-air wire bit must
+                    // not keep a landed runner frozen until the next
+                    // grounded UpdatePosition.
+                    body.last_wire_contact = Some(true);
+                } else if let Some(arc) = body.remote_arc.as_mut() {
+                    arc.elapsed = elapsed;
+                }
+                stepped = true;
+            }
             if body.position_manager.queue_active() {
-                let on_contact = body.last_wire_contact.unwrap_or(true);
+                // Interp idles while the object is out of contact
+                // (acclient.c:389208) — its own arc, or the wire's bit.
+                let on_contact =
+                    body.remote_arc.is_none() && body.last_wire_contact.unwrap_or(true);
                 // Retail `adjust_offset` (acclient.c:389228-389240):
                 // `my_max_speed = get_adjusted_max_speed() * 2.0`, the
                 // 7.5 m/s MAX_INTERPOLATED_VELOCITY floor only when that is
@@ -5231,6 +5427,58 @@ impl SpatialScene {
         if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
             body.my_run_rate = run_rate;
         }
+    }
+
+    /// OpenAC comparison 2026-10-04 (remote motion D7) — retail
+    /// `SmartBox::DoVectorUpdate` for a REMOTE object (acclient.c:143459-
+    /// 143480): `set_velocity` on the remote (the caller has already run the
+    /// vector-stamp gate). An upward velocity lifts it off the ground — the
+    /// jump ACE broadcasts (Player.cs:954) — and the body then flies its own
+    /// arc in [`Self::step_remote_position_managers`] until it lands. Any
+    /// upward launch counts, so small hops arc too. No-op unless
+    /// [`Self::remote_jump_arc_active`].
+    pub fn remote_vector_update(&mut self, guid: Guid, velocity: Vector3) {
+        if !self.remote_jump_arc_active() {
+            return;
+        }
+        if !(velocity.x.is_finite() && velocity.y.is_finite() && velocity.z.is_finite()) {
+            return;
+        }
+        let Some(body) = self.body_store.body(SpatialBodyId::Entity(guid)) else {
+            return;
+        };
+        let start = body.pose;
+        let launch = velocity.z > 0.0 && body.remote_arc.is_none();
+        let structure_floor = if launch && !start.is_indoors() {
+            super::faithful_bridge::faithful_terrain_floor(self, &start)
+                .map(|(terrain, _)| terrain)
+                .filter(|terrain| start.coords.z - terrain > REMOTE_ARC_STRUCTURE_FLOOR_M)
+                .map(|_| start.coords.z)
+        } else {
+            None
+        };
+        let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
+            return;
+        };
+        body.remote_velocity = velocity;
+        if launch {
+            body.remote_arc = Some(super::RemoteArc {
+                takeoff_z: start.coords.z,
+                structure_floor,
+                elapsed: 0.0,
+            });
+            // Retail `CMotionInterp::LeaveGround` edge (:344457). The interp
+            // queue is kept: it idles while the body is out of contact
+            // (:389208) and corrects after the landing.
+            self.remote_airborne_changes.push((guid, true));
+        }
+    }
+
+    /// D7 — a remote body's airborne arc, if it is flying one (diag/tests).
+    pub fn remote_arc(&self, guid: Guid) -> Option<super::RemoteArc> {
+        self.body_store
+            .body(SpatialBodyId::Entity(guid))
+            .and_then(|body| body.remote_arc)
     }
 
     /// A2-P3 R2 — a REMOTE entity's current sticky target (diag/tests).

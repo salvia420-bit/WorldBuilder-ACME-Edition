@@ -1658,6 +1658,21 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         REMOTE_POSES.with(|c| {
                             *c.borrow_mut() = frame;
                         });
+                        // OpenAC comparison 2026-10-04 (remote
+                        // motion D7): the remote bodies' own
+                        // leave-ground / hit-ground edges this tick
+                        // (retail LeaveGround / HitGround,
+                        // acclient.c:344457 / :344429) drive the JS
+                        // airborne pose — set AND cleared.
+                        for (guid, airborne) in w.scene.take_remote_airborne_changes() {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(guid)),
+                                u32_payload_2: Some(u32::from(airborne)),
+                                f32_payload: None,
+                            });
+                        }
                     }
                     // A2-P3 (W3+ S9): publish the local
                     // sticky target for the diag getter —

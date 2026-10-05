@@ -8,13 +8,6 @@ use crate::*;
 use crate::session::{LoopCtx, LoopFlags, LoopFlow};
 use holtburger_protocol::messages::{GameAction, GameMessage};
 
-/// Remote motion D3/D7 (OpenAC comparison 2026-10-04): marker bit OR'd into
-/// a KIND_POSITION row's `weenie_flags`, which then carries the wire
-/// `UpdatePositionFlag` bits (IS_GROUNDED = 0x04). A row without the marker
-/// came from a pkg that predates the field (JS treats contact as unknown).
-/// Mirrored by `WIRE_FLAGS_PRESENT` in scene3d/remote_airborne.js.
-const KIND_POSITION_WIRE_FLAGS_PRESENT: u32 = 0x8000_0000;
-
 pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow {
     let LoopFlags {
         wire_state_packs_stage1_on,
@@ -614,17 +607,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 physics_script_did: 0,
                 sound_table_did: 0,
                 obj_desc_flags: 0,
-                // Remote motion D3/D7 (OpenAC comparison 2026-10-04):
-                // on KIND_POSITION this slot carries the raw wire
-                // `UpdatePositionFlag` bits, tagged with
-                // KIND_POSITION_WIRE_FLAGS_PRESENT so JS can tell
-                // "not grounded" (bit 0x04 clear) from a stale pkg
-                // (0). Retail ignores a remote's `!contact` position
-                // (`CPhysicsObj::MoveOrTeleport`, acclient.c:323481-
-                // 323482). JS uses the bit to keep such a frame from
-                // yanking a remote that is flying its own jump arc.
-                weenie_flags: KIND_POSITION_WIRE_FLAGS_PRESENT
-                    | data.pos.flags.bits(),
+                weenie_flags: 0,
                 // A1 (2026-05-29): non-MOTION updates carry no
                 // playback speed — identity (no anim scaling).
                 motion_speed: 1.0,
@@ -1445,7 +1428,34 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             let local_guid = world.borrow().as_ref()
                 .map(|w| u32::from(w.player.guid))
                 .unwrap_or(0);
-            if remote_guid != local_guid && remote_guid != 0 {
+            // OpenAC comparison 2026-10-04 (remote motion D7, critic wave 1
+            // issue 2): when the remote body flies its own arc, the
+            // airborne edges come from that body's leave-ground / hit-ground
+            // (retail CMotionInterp::LeaveGround / HitGround,
+            // acclient.c:344457 / :344429), drained by the tick
+            // (`take_remote_airborne_changes`). The |vz| edge below never
+            // grounded a jumper: ACE sends no VectorUpdate on landing (only
+            // Player.cs:954 at the jump), so the arms-up pose stuck.
+            let arc_owned = remote_guid != local_guid
+                && remote_guid != 0
+                && world.borrow_mut().as_mut().is_some_and(|w| {
+                    if !w.scene.remote_jump_arc_active() {
+                        return false;
+                    }
+                    // The routed world handler ran the vector-stamp gate
+                    // (DoVectorUpdate :143459-143470); it stored the
+                    // velocity only when it accepted the frame.
+                    let wire = data.velocity.finite_or_zero();
+                    let accepted = w
+                        .entities
+                        .get(data.guid)
+                        .is_some_and(|e| e.velocity == wire);
+                    if accepted {
+                        w.scene.remote_vector_update(data.guid, wire);
+                    }
+                    true
+                });
+            if !arc_owned && remote_guid != local_guid && remote_guid != 0 {
                 const VZ_THRESHOLD: f32 = 1.0;
                 let now_airborne = data.velocity.z.abs() > VZ_THRESHOLD;
                 let fire = REMOTE_AIRBORNE_STATE.with(|m| {
