@@ -276,11 +276,10 @@ check(
     entitiesSrc.includes("{ dedupeKind: true }"),
 );
 check(
-  "spawn-commit drains via _drainPreCreate (flag on) and keeps the legacy flushes (flag off)",
+  "spawn-commit drains via _drainPreCreate (flag on) and keeps the legacy attach flush (flag off)",
   entitiesSrc.includes("this._drainPreCreate(guid);") &&
     entitiesSrc.includes("_drainPreCreate(guid) {") &&
-    entitiesSrc.includes("this._flushPendingAttach(guid);") &&
-    entitiesSrc.includes("this._pendingVisibility.has(guid)"),
+    entitiesSrc.includes("this._flushPendingAttach(guid);"),
 );
 check(
   "wieldedSpawn pending-attach probe consults whichever map owns the park",

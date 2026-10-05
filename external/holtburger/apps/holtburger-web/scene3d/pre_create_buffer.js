@@ -1,5 +1,5 @@
 // A8-M4 (2026-06-11 unification survey) — generic PRE-CREATE event buffer,
-// the retail "null object" analog (`?preCreateBuffer=on`, default OFF).
+// the retail "null object" analog (`?preCreateBuffer`, default ON since 2026-07-27; `=off` escape).
 //
 // Retail: a wire message addressed to a guid with no created CPhysicsObj is
 // NOT dropped — `CObjectMaint::QueueBlobForObject` (acclient.c:310848-310860)

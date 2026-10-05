@@ -138,7 +138,6 @@ const removeBody = (() => {
 const iBail = removeBody.indexOf("if (!inst) return;");
 const iPreCreate = removeBody.indexOf("this._preCreate.purgeGuid(g);");
 const iAttach = removeBody.indexOf("this._pendingAttach.delete(g);");
-const iVis = removeBody.indexOf("this._pendingVisibility.delete(g);");
 
 check("remove() still has the `!inst` early-return", iBail > 0);
 check(
@@ -151,16 +150,10 @@ check(
   iAttach > 0 && iAttach < iBail,
   `purge@${iAttach} bail@${iBail}`,
 );
-check(
-  "_pendingVisibility.delete(g) runs BEFORE the `!inst` early-return",
-  iVis > 0 && iVis < iBail,
-  `purge@${iVis} bail@${iBail}`,
-);
 // Each purge must appear exactly once — a duplicate after the bail would
 // make the ordering assertions above pass while leaving dead code behind.
 for (const [label, stmt] of [
   ["_pendingAttach.delete", "this._pendingAttach.delete(g);"],
-  ["_pendingVisibility.delete", "this._pendingVisibility.delete(g);"],
   ["_preCreate.purgeGuid", "this._preCreate.purgeGuid(g);"],
 ]) {
   const n = removeBody.split(stmt).length - 1;
@@ -178,7 +171,6 @@ const cwStart = entitiesSrc.indexOf("  clearWorldEntities() {");
 const cwBody = entitiesSrc.slice(cwStart, entitiesSrc.indexOf("\n  }", cwStart));
 check("clearWorldEntities() clears the generic buffer", cwBody.includes("this._preCreate.clear();"));
 check("clearWorldEntities() clears _pendingAttach", cwBody.includes("this._pendingAttach.clear();"));
-check("clearWorldEntities() clears _pendingVisibility", cwBody.includes("this._pendingVisibility.clear();"));
 
 // =====================================================================
 // PART 3 — behavioral: the pure buffer under the LEAK-02 sequences.
