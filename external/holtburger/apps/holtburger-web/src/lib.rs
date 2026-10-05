@@ -43729,7 +43729,7 @@ async fn recv_loop(
                 };
                 for event in events {
                     // recv_loop split (2026-10-05): the per-event body lives
-                    // in session/messages.rs.
+                    // in session/messages/ (handle_message + per-GameMessage modules).
                     if let session::LoopFlow::Exit =
                         session::messages::handle_message(&mut ctx, event).await
                     {
