@@ -1907,6 +1907,13 @@ pub(crate) struct MovementSystem {
     /// key-driven edges (one sender per edge, zero new suppression
     /// state).
     pending_cmd_interp_sends: Vec<MotionState>,
+    /// Combat requests (attack / cast) that must reach ACE AFTER the
+    /// MaybeStopCompletely MoveToState queued with them. Retail stops at
+    /// press (`StartAttackRequest` acclient.c:408917) and sends the attack
+    /// later (`ExecuteAttack` :408626); ACE's MoveToState handler cancels a
+    /// pending MoveTo chain (`StopExistingMoveToChains`), so attack-THEN-stop
+    /// on the wire silently cancels an out-of-reach melee swing.
+    pending_post_stop_actions: Vec<GameAction>,
     /// Diagnostics/test counter — MoveToState motion pulses actually
     /// sent (the legacy edge-detector site AND the step-5 interpreter
     /// flush). The row-9 one-sender-per-edge contract is pinned on it.
@@ -2350,6 +2357,7 @@ impl MovementSystem {
             cmd_interp_runtime: None,
             command_interpreter: None,
             pending_cmd_interp_sends: Vec::new(),
+            pending_post_stop_actions: Vec::new(),
             motion_state_pulses_sent: 0,
             pending_cmd_interp_jump_release: false,
             cmd_interp_events: Vec::new(),
@@ -2593,6 +2601,21 @@ impl MovementSystem {
             self.queued_drive_commands
                 .push(QueuedDriveCommand::MaybeStopCompletely);
         }
+    }
+
+    /// Queue retail `MaybeStopCompletely` and send `action` right AFTER the
+    /// stop's MoveToState flush on the next tick, so ACE sees stop-then-
+    /// attack (see `pending_post_stop_actions`). On the legacy
+    /// (`?cmdInterp=off`) lane there is no stop, so the action is handed
+    /// back for the caller to send immediately.
+    pub(crate) fn enqueue_stop_then_action(&mut self, action: GameAction) -> Option<GameAction> {
+        if !self.cmd_interp_enabled() {
+            return Some(action);
+        }
+        self.queued_drive_commands
+            .push(QueuedDriveCommand::MaybeStopCompletely);
+        self.pending_post_stop_actions.push(action);
+        None
     }
 
     /// Retail wire-latch write — `SmartBox::SetObjectMovement`
@@ -4011,6 +4034,11 @@ impl MovementSystem {
                 .await?;
             self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
             self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+        }
+        // Combat requests queued behind the MaybeStopCompletely above —
+        // sent only now, after the stop's MoveToState is on the wire.
+        for action in std::mem::take(&mut self.pending_post_stop_actions) {
+            session.send_action(action).await?;
         }
 
         // Wave-1 step 5 (row 8) — flush a queued interpreter-lane jump

@@ -404,6 +404,16 @@ impl MovementSystemHandle {
         self.inner.enqueue_maybe_stop_completely();
     }
 
+    /// Stop-then-send for cast / attack requests: queues the stop and sends
+    /// `action` right after its MoveToState on the next tick. Returns the
+    /// action back on the legacy lane (no stop) for an immediate send.
+    pub fn enqueue_stop_then_action(
+        &mut self,
+        action: holtburger_protocol::messages::GameAction,
+    ) -> Option<holtburger_protocol::messages::GameAction> {
+        self.inner.enqueue_stop_then_action(action)
+    }
+
     /// Wave-1 step 5 (rows 12-13): drain the interpreter lane's
     /// JS-facing event stream — interpreter effects (forward-slot
     /// eviction, FU-A reclaims), the installed drive per dispatched

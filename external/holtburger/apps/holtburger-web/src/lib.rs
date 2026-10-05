@@ -888,8 +888,11 @@ fn placement_id_flag() -> bool {
 /// instead of hard-cutting. Default OFF = single-hop, byte-identical.
 #[cfg(target_arch = "wasm32")]
 fn parse_get_link_flag(search: &str) -> bool {
+    // DEFAULT-ON 2026-10-05: retail/ACE resolve every link two-hop; the
+    // single hop missed the style-level `(style << 16)` group, so the
+    // peace↔combat draw/sheathe link never resolved. `?getLink=off` escape.
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "getLink=on")
+    !trimmed.split('&').any(|kv| kv == "getLink=off")
 }
 
 /// A4-Q4: the `?getLink=` gate, parsed once. Non-wasm builds (native
@@ -50896,7 +50899,7 @@ async fn recv_loop(
                         // stop counting until re-pressed (the slidecast
                         // re-tap, PARITY-LEDGER H2/R1). Every JS cast/attack
                         // path funnels through this arm, so it lives here.
-                        movement.enqueue_maybe_stop_completely();
+                        // (retail MaybeStopCompletely — queued with the request below)
                         // Phase F (combat-magic): build and send a
                         // GameAction::CastTargetedSpell. ACE validates
                         // everything server-side (mana cost, spell
@@ -50911,7 +50914,14 @@ async fn recv_loop(
                                 spell_id,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        // Stop's MoveToState must reach ACE BEFORE the request (ACE
+                        // cancels a pending MoveTo chain on MoveToState) — the
+                        // movement tick sends `action` right after the stop flush.
+                        let send_result = match movement.enqueue_stop_then_action(action) {
+                            Some(action) => session.send_action(action).await.map(|_| ()),
+                            None => Ok(()),
+                        };
+                        if let Err(e) = send_result {
                             log::warn!(
                                 "recv_loop: send_action(CastTargetedSpell): {e}"
                             );
@@ -50932,14 +50942,21 @@ async fn recv_loop(
                     }
                     Some(SessionCommand::CastUntargetedSpell { spell_id }) => {
                         // Retail MaybeStopCompletely first (see CastTargetedSpell).
-                        movement.enqueue_maybe_stop_completely();
+                        // (retail MaybeStopCompletely — queued with the request below)
                         use holtburger_protocol::messages::{
                             CastUntargetedSpellActionData, GameAction,
                         };
                         let action = GameAction::CastUntargetedSpell(Box::new(
                             CastUntargetedSpellActionData { spell_id },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        // Stop's MoveToState must reach ACE BEFORE the request (ACE
+                        // cancels a pending MoveTo chain on MoveToState) — the
+                        // movement tick sends `action` right after the stop flush.
+                        let send_result = match movement.enqueue_stop_then_action(action) {
+                            Some(action) => session.send_action(action).await.map(|_| ()),
+                            None => Ok(()),
+                        };
+                        if let Err(e) = send_result {
                             log::warn!(
                                 "recv_loop: send_action(CastUntargetedSpell): {e}"
                             );
@@ -52909,7 +52926,7 @@ async fn recv_loop(
                         accuracy_level,
                     }) => {
                         // Retail MaybeStopCompletely first (see CastTargetedSpell).
-                        movement.enqueue_maybe_stop_completely();
+                        // (retail MaybeStopCompletely — queued with the request below)
                         // Phase E (combat-missile): mirror of the
                         // melee arm — ACE owns target liveness,
                         // ammo check, range, stance check, etc.
@@ -52925,7 +52942,14 @@ async fn recv_loop(
                                 accuracy_level,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        // Stop's MoveToState must reach ACE BEFORE the request (ACE
+                        // cancels a pending MoveTo chain on MoveToState) — the
+                        // movement tick sends `action` right after the stop flush.
+                        let send_result = match movement.enqueue_stop_then_action(action) {
+                            Some(action) => session.send_action(action).await.map(|_| ()),
+                            None => Ok(()),
+                        };
+                        if let Err(e) = send_result {
                             log::warn!(
                                 "recv_loop: send_action(TargetedMissileAttack): {e}"
                             );
@@ -52948,7 +52972,7 @@ async fn recv_loop(
                         power_level,
                     }) => {
                         // Retail MaybeStopCompletely first (see CastTargetedSpell).
-                        movement.enqueue_maybe_stop_completely();
+                        // (retail MaybeStopCompletely — queued with the request below)
                         // Phase B (combat-melee): build a
                         // GameAction::TargetedMeleeAttack (sub-opcode 0x0008)
                         // and dispatch. ACE's HandleActionTargetedMeleeAttack
@@ -52969,7 +52993,14 @@ async fn recv_loop(
                                 power_level,
                             },
                         ));
-                        if let Err(e) = session.send_action(action).await {
+                        // Stop's MoveToState must reach ACE BEFORE the request (ACE
+                        // cancels a pending MoveTo chain on MoveToState) — the
+                        // movement tick sends `action` right after the stop flush.
+                        let send_result = match movement.enqueue_stop_then_action(action) {
+                            Some(action) => session.send_action(action).await.map(|_| ()),
+                            None => Ok(()),
+                        };
+                        if let Err(e) = send_result {
                             log::warn!(
                                 "recv_loop: send_action(TargetedMeleeAttack): {e}"
                             );
