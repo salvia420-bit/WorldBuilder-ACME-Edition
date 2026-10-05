@@ -2504,8 +2504,11 @@ fn test_stale_player_autonomous_sync_is_ignored() {
     assert_eq!(state.player.force_position_sequence, 40);
 }
 
+/// OpenAC comparison 2026-10-04 (remote motion D9): retail consults
+/// FORCE_POSITION_TS only for the player (acclient.c:145157-145165); a
+/// remote's force advance interpolates (EntityMoved), it does not hard-snap.
 #[test]
-fn test_remote_update_position_emits_forced_reposition_when_force_sequence_advances() {
+fn test_remote_update_position_force_advance_moves_without_forced_reposition() {
     let mut state = WorldState::synthetic();
     let guid = Guid(0x6000_0001);
     let initial_pos = WorldPosition {
@@ -2537,18 +2540,17 @@ fn test_remote_update_position_emits_forced_reposition_when_force_sequence_advan
     let events = state.handle_message(&msg);
 
     assert_eq!(state.entities.get(guid).unwrap().position.coords.x, 10.0);
+    assert!(!events.iter().any(|event| matches!(event, WorldEvent::ForcedReposition { .. })));
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::ForcedReposition {
-            guid: event_guid,
-            pos,
-            sequence: 41,
-        } if *event_guid == guid && (pos.coords.x - 10.0).abs() < 1e-5
+        WorldEvent::EntityMoved { guid: event_guid, .. } if *event_guid == guid
     )));
 }
 
+/// D9: a remote's force stamp is not consulted (acclient.c:145157-145165),
+/// so an older force stamp with a newer POSITION stamp still applies.
 #[test]
-fn test_stale_remote_update_position_is_ignored_when_force_sequence_regresses() {
+fn test_remote_update_position_ignores_a_regressed_force_sequence() {
     let mut state = WorldState::synthetic();
     let player_guid = Guid(0x5000_0002);
     let guid = Guid(0x6000_0002);
@@ -2583,8 +2585,8 @@ fn test_stale_remote_update_position_is_ignored_when_force_sequence_regresses() 
 
     let events = state.handle_message(&msg);
 
-    assert!(events.is_empty());
-    assert_eq!(state.entities.get(guid).unwrap().position, initial_pos);
+    assert!(!events.is_empty());
+    assert_eq!(state.entities.get(guid).unwrap().position.coords.x, 40.0);
 
     let nearby: std::collections::HashSet<_> = state
         .get_nearby_world_entities()
@@ -2594,8 +2596,10 @@ fn test_stale_remote_update_position_is_ignored_when_force_sequence_regresses() 
     assert!(nearby.contains(&guid));
 }
 
+/// D9: a frame without a position stamp is no retail "forced snap" — with
+/// the teleport stamp unchanged it interpolates (MoveOrTeleport :323492).
 #[test]
-fn test_remote_autonomous_position_emits_forced_reposition_even_without_sequence_change() {
+fn test_remote_autonomous_position_without_stamp_change_moves_not_resets() {
     let mut state = WorldState::synthetic();
     let guid = Guid(0x6000_0003);
     let initial_pos = WorldPosition {
@@ -2623,13 +2627,10 @@ fn test_remote_autonomous_position_emits_forced_reposition_even_without_sequence
 
     assert_eq!(state.entities.get(guid).unwrap().position.coords.x, 7.0);
     assert_eq!(state.entities.get(guid).unwrap().sequences[5], 13);
+    assert!(!events.iter().any(|event| matches!(event, WorldEvent::ForcedReposition { .. })));
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::ForcedReposition {
-            guid: event_guid,
-            pos,
-            sequence: 40,
-        } if *event_guid == guid && (pos.coords.x - 7.0).abs() < 1e-5
+        WorldEvent::EntityMoved { guid: event_guid, .. } if *event_guid == guid
     )));
 }
 
@@ -4127,8 +4128,10 @@ fn test_remote_position_reset_suspends_body_sampling() {
             },
             instance_sequence: 2,
             position_sequence: 3,
-            teleport_sequence: 30,
-            force_position_sequence: 41,
+            // D9: a remote hard-sets on a TELEPORT advance (MoveOrTeleport
+            // acclient.c:323469); its force stamp is not consulted.
+            teleport_sequence: 31,
+            force_position_sequence: 40,
             ..PositionPack::default()
         },
         &mut Vec::new(),

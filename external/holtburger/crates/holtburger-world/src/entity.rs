@@ -1134,8 +1134,25 @@ impl Entity {
         force_position_sequence: u16,
         server_control_sequence: Option<u16>,
     ) -> EntityPositionSyncOutcome {
-        if !self.should_accept_server_position_sequences(teleport_sequence, force_position_sequence)
-        {
+        // OpenAC comparison 2026-10-04 (remote motion D9). This gate serves
+        // REMOTE objects only (UpdatePosition / 0xF753 for a non-player guid;
+        // the local player has its own, `player/mutations.rs`). Retail:
+        // * `SmartBox::UnpackPositionEvent` (acclient.c:145257-145291): an
+        //   OLDER instance stamp is dropped; a NEWER one is deferred until
+        //   the re-create lands. We have no blob queue, so a newer instance
+        //   applies and adopts the stamp (the `accept_set_state_sequence`
+        //   precedent) rather than losing the frame.
+        // * `HandleReceivedPosition` (:145125-145240) consults
+        //   FORCE_POSITION_TS only when `object == player` (:145157-145165);
+        //   for a remote the force stamp neither rejects nor snaps.
+        // * `newer_event(POSITION)` is required FIRST, whatever the teleport
+        //   stamp does (:145167); then an OLDER teleport stamp rejects (and
+        //   restores the position stamp, :145170-145178).
+        // * `MoveOrTeleport` hard-sets only on a NEWER teleport stamp
+        //   (:323469-323478); everything else interpolates — including a
+        //   frame without a position stamp (no retail "forced snap").
+        let current_instance = self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX];
+        if instance_sequence != current_instance && !is_newer_u16(instance_sequence, current_instance) {
             return EntityPositionSyncOutcome::Rejected;
         }
 
@@ -1162,25 +1179,17 @@ impl Entity {
         }
 
         let old_teleport_sequence = self.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX];
-        let old_force_position_sequence = self.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX];
         let old_position_sequence = self.sequences[OBJECT_POSITION_SEQUENCE_INDEX];
 
-        let teleport_advanced = is_newer_u16(teleport_sequence, old_teleport_sequence);
-        let force_advanced = is_newer_u16(force_position_sequence, old_force_position_sequence);
-
-        // Position-only update (no newer teleport/force): retail gates the apply on
-        // newer_event(object, 0, position_ts) (acclient.c:145167) — reject a stale or
-        // reordered position-only frame. A newer teleport/force is an authoritative
-        // snap that applies regardless; a `None` position_sequence is a forced snap.
-        // OQ-9 settled by ACE source: PositionPack.cs:47 bumps ObjectPosition per
-        // broadcast (GetNextSequence), so a legitimate newer frame is never dropped.
-        if !teleport_advanced && !force_advanced {
-            if let Some(incoming_position_sequence) = position_sequence {
-                if !is_newer_u16(incoming_position_sequence, old_position_sequence) {
-                    return EntityPositionSyncOutcome::Rejected;
-                }
+        if let Some(incoming_position_sequence) = position_sequence {
+            if !is_newer_u16(incoming_position_sequence, old_position_sequence) {
+                return EntityPositionSyncOutcome::Rejected;
             }
         }
+        if is_newer_u16(old_teleport_sequence, teleport_sequence) {
+            return EntityPositionSyncOutcome::Rejected;
+        }
+        let teleport_advanced = is_newer_u16(teleport_sequence, old_teleport_sequence);
 
         self.position = position;
         self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = instance_sequence;
@@ -1188,14 +1197,13 @@ impl Entity {
             self.sequences[OBJECT_POSITION_SEQUENCE_INDEX] = position_sequence;
         }
         self.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX] = teleport_sequence;
+        // Recorded (bookkeeping) but never consulted for a remote.
         self.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX] = force_position_sequence;
         if let Some(server_control_sequence) = server_control_sequence {
             self.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX] = server_control_sequence;
         }
 
-        let reset_required = position_sequence.is_none() || teleport_advanced || force_advanced;
-
-        if reset_required {
+        if teleport_advanced {
             EntityPositionSyncOutcome::Reset {
                 sequence: force_position_sequence,
             }
@@ -1625,5 +1633,85 @@ mod physics_state_predicates_tests {
         assert!(!none.has_physics_bsp());
         assert!(!none.is_missile());
         assert!(!none.is_particle_emitter());
+    }
+}
+
+/// OpenAC comparison 2026-10-04 (remote motion D9): the REMOTE position gate
+/// follows retail `UnpackPositionEvent` + `HandleReceivedPosition` +
+/// `MoveOrTeleport` (acclient.c:145257-145291, :145125-145240,
+/// :323451-323498).
+#[cfg(test)]
+mod remote_position_gate_tests {
+    use super::*;
+
+    fn remote() -> Entity {
+        let mut e = Entity::new(
+            Guid::from(0x7000_0001u32),
+            "remote".into(),
+            WorldPosition::default(),
+        );
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 5;
+        e.sequences[OBJECT_POSITION_SEQUENCE_INDEX] = 100;
+        e.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX] = 10;
+        e.sequences[OBJECT_FORCE_POSITION_SEQUENCE_INDEX] = 20;
+        e
+    }
+
+    fn at(x: f32) -> WorldPosition {
+        let mut p = WorldPosition::default();
+        p.coords.x = x;
+        p
+    }
+
+    fn rejected(r: &EntityPositionSyncOutcome) -> bool {
+        matches!(r, EntityPositionSyncOutcome::Rejected)
+    }
+
+    fn moved(r: &EntityPositionSyncOutcome) -> bool {
+        matches!(r, EntityPositionSyncOutcome::Moved)
+    }
+
+    #[test]
+    fn older_instance_is_dropped_newer_is_adopted() {
+        let mut e = remote();
+        let r = e.apply_server_position_update(at(1.0), 4, Some(101), 10, 20, None);
+        assert!(rejected(&r), "older instance (:145266-145272)");
+        let r = e.apply_server_position_update(at(2.0), 6, Some(101), 10, 20, None);
+        assert!(moved(&r));
+        assert_eq!(e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX], 6);
+    }
+
+    #[test]
+    fn force_stamp_neither_rejects_nor_snaps_a_remote() {
+        let mut e = remote();
+        let r = e.apply_server_position_update(at(1.0), 5, Some(101), 10, 21, None);
+        assert!(moved(&r), "force advance interpolates");
+        let r = e.apply_server_position_update(at(2.0), 5, Some(102), 10, 19, None);
+        assert!(moved(&r), "an older force stamp still applies");
+    }
+
+    #[test]
+    fn position_stamp_is_required_even_when_the_teleport_stamp_advances() {
+        let mut e = remote();
+        let r = e.apply_server_position_update(at(1.0), 5, Some(100), 11, 20, None);
+        assert!(rejected(&r), "newer_event(POSITION) first (:145167)");
+        assert_eq!(e.sequences[OBJECT_TELEPORT_SEQUENCE_INDEX], 10);
+        let r = e.apply_server_position_update(at(1.0), 5, Some(101), 11, 20, None);
+        assert!(matches!(r, EntityPositionSyncOutcome::Reset { .. }), "newer teleport hard-sets");
+    }
+
+    #[test]
+    fn older_teleport_stamp_rejects_and_keeps_the_position_stamp() {
+        let mut e = remote();
+        let r = e.apply_server_position_update(at(1.0), 5, Some(101), 9, 20, None);
+        assert!(rejected(&r));
+        assert_eq!(e.sequences[OBJECT_POSITION_SEQUENCE_INDEX], 100, "restored (:145177)");
+    }
+
+    #[test]
+    fn a_frame_without_a_position_stamp_interpolates() {
+        let mut e = remote();
+        let r = e.apply_server_position_update(at(1.0), 5, None, 10, 20, Some(3));
+        assert!(moved(&r), "no retail forced snap");
     }
 }
