@@ -53,7 +53,9 @@ globalThis.window = {
   __playEffectVfxBound: false,
   __hbWasm: null,
   liveScene3d: null,
-  location: FLAG_ON ? { search: "" } : { search: "?playEffectSound=off" },
+  // castPlaceholder=off: the THREE stub cannot build placeholder bursts (case 6
+  // drives the full _onPlayEffect path); irrelevant to the sound branch.
+  location: FLAG_ON ? { search: "?castPlaceholder=off" } : { search: "?playEffectSound=off&castPlaceholder=off" },
 };
 
 // Recording sound sink — the real EntityManager._firePlayEffectSoundHook.
@@ -64,7 +66,7 @@ function makeParticleManager() {
   const calls = [];
   return {
     calls,
-    addEmitter(args) { const id = nextId++; calls.push({ id, ...args }); return id; },
+    addEmitter(args) { const id = nextId++; calls.push({ id, ...args }); return Promise.resolve(id); },
     destroyParticleEmitter() {},
   };
 }
@@ -269,6 +271,44 @@ const SCRIPT_ID = 0x51; // Fizzle PScriptType (PlayScript.Fizzle)
   } else {
     ok(soundCalls.length === 0, "flag OFF: SoundTweaked not routed");
   }
+}
+
+// --- Case 6 (2026-10-05 round 3): local CasterEffect plays its sounds ONCE --
+// The cast chain's synthetic chain-end emit (entities.js castSyntheticCasterVfx)
+// re-sends a CasterEffect the wire GameMessageScript also delivers. Real
+// caster-effect scripts carry sound hooks — DAT dump via WorldBuilder.Terminal:
+// HealthUpBlue 0x33000091 and SkillUpYellow 0x33000074 = CreateParticle +
+// SoundTable. Retail plays the script once, so exactly ONE sound per hook.
+// Old code: the synthetic copy fired the SoundTable hook too -> 2 sounds.
+{
+  _clearPhysicsScriptTableCache();
+  soundCalls.length = 0;
+  const PES = 0x33000091;
+  const scriptByDid = new Map([[PES, makePhysicsScript([
+    { hookType: 13, emitterDid: 0x32000091 },
+    { hookType: 2, soundEnum: 0x76 },
+  ])]]);
+  installScene({
+    tableDid: 0x34000009,
+    table: { id: 0x34000009, scripts: { [String(SCRIPT_ID)]: [{ mod: 1.0, scriptDid: PES }] } },
+    scriptByDid,
+    particleEmitter: { emitterId: 0x32000091 },
+  });
+  // Chain-end synthetic emit (as entities.js sends it), then the wire copy.
+  __test.onPlayEffect({ detail: { targetGuid: TARGET, scriptId: SCRIPT_ID, speed: 1.0, synthetic: true } });
+  __test.onPlayEffect({ detail: { targetGuid: TARGET, scriptId: SCRIPT_ID, speed: 1.0 } });
+  for (let i = 0; i < 40; i++) await new Promise((r) => setTimeout(r, 5));
+  if (FLAG_ON) {
+    ok(soundCalls.length === 1, `CasterEffect synthetic + wire -> exactly one sound (got ${soundCalls.length})`);
+  } else {
+    ok(soundCalls.length === 0, "flag OFF: no CasterEffect sound");
+  }
+  // The emit site must tag the synthetic copy.
+  const { readFileSync } = await import("node:fs");
+  const ent = readFileSync(resolvePath(__dirname, "../scene3d/entities.js"), "utf8");
+  const emitAt = ent.indexOf('window.__pluginClient.events.emit("playEffect"');
+  ok(emitAt > 0 && /synthetic:\s*true/.test(ent.slice(emitAt, emitAt + 600)),
+    "entities.js chain-end CasterEffect emit is tagged synthetic:true");
 }
 
 console.log(`WS09 sound-hook [${MODE}]: ${pass} passed, ${fail} failed`);

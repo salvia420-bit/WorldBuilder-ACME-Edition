@@ -8735,6 +8735,9 @@ export class EntityManager {
             targetGuid: g >>> 0,
             scriptId: (seq.casterEffect | 0) >>> 0,
             speed: Number.isFinite(seq.formulaScale) ? +seq.formulaScale : 1.0,
+            // Visuals only: the wire GameMessageScript carries the same
+            // script and plays its sound hooks once (play_effect_vfx.js).
+            synthetic: true,
           });
           // WS16 diag: CasterEffect PlayScript emitted at chain end.
           try { window.__diag?.cast?.onCasterEffect?.({ guid: g, scriptId: (seq.casterEffect | 0) >>> 0, scale: seq.formulaScale }); } catch (_) {}

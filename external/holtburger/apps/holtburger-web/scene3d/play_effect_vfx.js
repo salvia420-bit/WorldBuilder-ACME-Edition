@@ -1730,14 +1730,14 @@ const _realVfxStats = {
  * @param {number} scriptId
  * @param {number} speed
  */
-function _tryResolveRealVfxBounded(targetGuid, scriptId, speed, t0) {
+function _tryResolveRealVfxBounded(targetGuid, scriptId, speed, t0, silent = false) {
   const DEADLINE_MS = 300;
   let timer = null;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => resolve("timeout"), DEADLINE_MS);
   });
   Promise.race([
-    _tryResolveRealVfx(targetGuid, scriptId, speed, t0),
+    _tryResolveRealVfx(targetGuid, scriptId, speed, t0, silent),
     deadline,
   ]).then((outcome) => {
     if (outcome === "timeout") {
@@ -1802,7 +1802,12 @@ function _isLiveInstance(em, guid, inst) {
  * @param {number} speed — picker's mod-weight; per acclient.c:336552
  * @returns {Promise<boolean>}
  */
-async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0) {
+// `silent` = draw the script's particles but skip its sound hooks: the
+// local caster's synthetic chain-end CasterEffect (entities.js
+// castSyntheticCasterVfx) re-emits a script the wire ALSO delivers, and
+// retail plays that script once (one GameMessageScript, one set of hook
+// sounds). The wire copy keeps the sounds.
+async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = false) {
   _realVfxStats.attempts += 1;
   // `?castLat=on` stamp. Defaults to "now" so the exported
   // `tryResolveRealVfx` and any older caller still produce coherent (if
@@ -1924,7 +1929,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0) {
   // retail runs every PhysicsScript hook (SoundHook/SoundTableHook/
   // SoundTweakedHook::Execute, acclient.c:342188-342221).
   // `?playEffectSound=off` skips it.
-  if (PLAY_EFFECT_SOUND_ON && typeof em._firePlayEffectSoundHook === "function") {
+  if (!silent && PLAY_EFFECT_SOUND_ON && typeof em._firePlayEffectSoundHook === "function") {
     for (const e of entriesJs) {
       const ht = e.hookType | 0;
       if (ht !== 1 && ht !== 2 && ht !== 21) continue;
@@ -2661,7 +2666,7 @@ function _pruneExpired(guid, bucket, now) {
  * @param {number} scriptId
  * @param {number} speed
  */
-function _enqueuePlayEffect(guid, scriptId, speed) {
+function _enqueuePlayEffect(guid, scriptId, speed, silent = false) {
   const g = guid >>> 0;
   const now = (typeof performance !== "undefined" && performance.now)
     ? performance.now()
@@ -2698,7 +2703,7 @@ function _enqueuePlayEffect(guid, scriptId, speed) {
     bucket = [];
     _pendingPlayEffects.set(g, bucket);
   }
-  bucket.push({ scriptId: scriptId >>> 0, speed, enqueuedMs: now });
+  bucket.push({ scriptId: scriptId >>> 0, speed, enqueuedMs: now, silent: !!silent });
   _pendingStats.enqueued += 1;
   // Per-guid cap — drop OLDEST on overflow.
   if (bucket.length > _PENDING_MAX_PER_GUID) {
@@ -2759,7 +2764,7 @@ export function drainPendingPlayEffects(em, guid) {
   for (const eff of live) {
     _pendingStats.replayed += 1;
     // Replay through the shared dispatch — identical to a live event.
-    _dispatchResolvedPlayEffect(g, eff.scriptId, eff.speed);
+    _dispatchResolvedPlayEffect(g, eff.scriptId, eff.speed, undefined, !!eff.silent);
   }
 }
 
@@ -2777,6 +2782,8 @@ function _onPlayEffect(evt) {
   // `pickScriptEntry`'s weighted mod selection per acclient.c:336552.
   // Default to 1.0 on the wire (the most common ACE broadcast).
   const speed = Number.isFinite(detail.speed) ? detail.speed : 1.0;
+  // Synthetic local CasterEffect (entities.js chain end): visuals only.
+  const silent = detail.synthetic === true;
 
   _castLat(
     "msg",
@@ -2848,13 +2855,13 @@ function _onPlayEffect(evt) {
   // `drainPendingPlayEffects`; when OFF we fall through to the original
   // drop-on-miss behavior unchanged.
   if (PLAY_EFFECT_QUEUE_ON && _liveInstanceForGuid(targetGuid) === null) {
-    _enqueuePlayEffect(targetGuid, scriptId, speed);
+    _enqueuePlayEffect(targetGuid, scriptId, speed, silent);
     return;
   }
 
   // Thread the live event's own epoch so the `_castLat` trace measures from
   // when the PlayEffect actually arrived, not from dispatch entry.
-  _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0);
+  _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0, silent);
 }
 
 /**
@@ -2878,7 +2885,7 @@ function _onPlayEffect(evt) {
  *   than required so the queue-replay caller (which has no epoch of its own)
  *   still traces against a sane origin.
  */
-function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLatNow()) {
+function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLatNow(), silent = false) {
   // Wave 17 / Phase 51: try the REAL retail VFX chain FIRST. If the
   // resolver completes (table → pick → physics-script → emitters),
   // skip the placeholder fallthrough for this event. On any miss the
@@ -2930,7 +2937,7 @@ function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLat
     // off, nothing shows until the real emitters attach — which they still
     // do: the deadline is a STATS boundary, not a cancel; see
     // `_tryResolveRealVfxBounded`).
-    _tryResolveRealVfxBounded(targetGuid, scriptId, speed, _t0);
+    _tryResolveRealVfxBounded(targetGuid, scriptId, speed, _t0, silent);
     return;
   }
   // No table → synchronous placeholder path, identical to pre-Phase-51
