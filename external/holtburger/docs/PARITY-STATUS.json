@@ -479,8 +479,44 @@
         {
           "facet": "audio",
           "scope": "gaps 2-6: centred UI sounds + UI table, server sound volume/prob, 16-voice pool, retail stereo pan mixer, volume-0"
+        },
+        {
+          "facet": "movement_physics_collision",
+          "scope": "round 2 (critic issues 1-5)"
+        },
+        {
+          "facet": "remote_motion",
+          "scope": "round 2: arc in the Rust body, airborne edges from the body"
+        },
+        {
+          "facet": "render.interiors_portal_punch",
+          "scope": "round 2: retail DrawCells order, reached-doorway seal feed"
         }
-      ]
+      ],
+      "merged": [
+        "76dfb50f",
+        "583daf91",
+        "536db75c",
+        "968dd9b4",
+        "06face92",
+        "508c3f31",
+        "d25abee5",
+        "53075e3a",
+        "f17b15d4",
+        "70eaa5e5",
+        "ca895d6d",
+        "93fd6621",
+        "a1da0da8",
+        "8f215d92"
+      ],
+      "gate": "JS 365/365; lints clean; holtburger-world --lib 721/721; core/common/protocol --lib pass; release wasm 2026-10-05 ~15:00",
+      "smoke": [
+        "SwiftShader, 0 console errors across login + 3 teleports",
+        "Cottage A9B3 cell 0x103 facing the door: seal armed, source pview-outside, kept 2 doorways, outdoor pre-draw running; facing away: kept 0",
+        "Dungeon 0x01D90100: seal kept 0 (was stamping surface doorways before)",
+        "?sealLogDepth and ?remoteJumpArc default-on again (behavioural tests: seal rasteriser model R1-R5; 6 Rust remote-arc tests)"
+      ],
+      "critic": "pending (round 2 critics: collision, remote motion, interiors; round 1: audio)"
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
