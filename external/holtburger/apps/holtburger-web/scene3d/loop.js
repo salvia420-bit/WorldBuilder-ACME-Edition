@@ -1497,9 +1497,18 @@ function readFogLerpFlag() {
 // HOW. One tiny private render of the sky scene (the takram SkyMaterial quad
 // only — stars/moons hidden for the probe) through a narrow-FOV camera aimed
 // `farFogSkyElevDeg` above the horizon, into an 8x8 HalfFloat target, then a
-// readback. The readback IS a GPU sync, so it is throttled to `farFogSkyHz`
-// (default 4 Hz) and skipped entirely indoors, when `scene.fog` is absent, and
-// after three consecutive failures (sticky fall-back to the authored hex).
+// readback. The readback is throttled to `farFogSkyHz` (default 4 Hz) and
+// skipped entirely indoors, when `scene.fog` is absent, and after three
+// consecutive failures (sticky fall-back to the authored hex).
+//
+// ASYNC READBACK (2026-10-05). The readback goes through three r184's WebGL2
+// `readRenderTargetPixelsAsync` (PIXEL_PACK_BUFFER + fenceSync, polled) instead
+// of the synchronous `readRenderTargetPixels`, which stalled the main thread on
+// a full GPU sync 4x/sec. At most ONE read is in flight (`_fogProbeInFlight`);
+// while it is, the probe returns null and the caller keeps using the last good
+// sample (`_fogProbeLast`) — the same behaviour as a throttled tick, just with
+// the result landing a few frames later. Falls back to the sync call when the
+// async method is absent.
 //
 // WHY NOT the composer's own sky pass: its buffer is overwritten by the world
 // pass in the same frame, and the horizon row's screen position depends on the
@@ -1517,6 +1526,7 @@ let _fogProbeNextMs = 0;
 let _fogProbeFails = 0;
 let _fogProbeDead = false;
 let _fogProbeLast = null;
+let _fogProbeInFlight = false;
 const _fogProbePos = new THREE.Vector3();
 const _fogProbeFwd = new THREE.Vector3();
 const _fogProbeDir = new THREE.Vector3();
@@ -1533,10 +1543,50 @@ function _halfToFloat(h) {
   return s * (f + 1024) * Math.pow(2, e - 25);
 }
 
+/** Average the probe buffer's finite texels → the probe sample. Throws when
+ *  no texel is finite (the 0xFFFF sentinel survived = the read never landed). */
+function _reduceFogProbe(buf, at) {
+  let r = 0; let g = 0; let b = 0; let n = 0;
+  for (let i = 0; i < buf.length; i += 4) {
+    const pr = _halfToFloat(buf[i]);
+    const pg = _halfToFloat(buf[i + 1]);
+    const pb = _halfToFloat(buf[i + 2]);
+    if (!Number.isFinite(pr) || !Number.isFinite(pg) || !Number.isFinite(pb)) continue;
+    r += pr; g += pg; b += pb; n += 1;
+  }
+  if (n === 0) throw new Error("probe read no finite texels");
+  return {
+    r: Math.max(0, r / n),
+    g: Math.max(0, g / n),
+    b: Math.max(0, b / n),
+    elevDeg: farFogSkyElevDeg(),
+    at,
+  };
+}
+
+function _fogProbeSucceeded(out) {
+  _fogProbeFails = 0;
+  _fogProbeLast = out;
+  if (typeof window !== "undefined") window.__farFogSkyProbe = out;
+  return out;
+}
+
+function _fogProbeFailed(err) {
+  _fogProbeFails += 1;
+  if (_fogProbeFails >= _FOG_PROBE_MAX_FAILS && !_fogProbeDead) {
+    _fogProbeDead = true;
+    // eslint-disable-next-line no-console
+    console.warn("[far-terrain S1] horizon sky probe disabled after "
+      + `${_fogProbeFails} failures; falling back to the authored fog hex.`, err);
+  }
+  return null;
+}
+
 /**
  * Render + read the sky radiance just above the horizon in the camera azimuth.
  * Returns `{ r, g, b }` in LINEAR working space (pre-exposure), or null when
- * the probe cannot run this frame (indoors, no sky yet, throttled, disabled).
+ * the probe cannot run this frame (indoors, no sky yet, throttled, disabled,
+ * or the sample is an async read still in flight — it lands in `_fogProbeLast`).
  * The last good sample is reused between throttled ticks by the caller.
  */
 function sampleHorizonSkyRadiance(scene3d) {
@@ -1560,6 +1610,9 @@ function sampleHorizonSkyRadiance(scene3d) {
   //     probe takes over exactly as before.
   if (scene3d?.nullRender) return null;
   if (!(scene3d?.terrainBakedLbs?.size > 0)) return null;
+  // One async read at a time: the buffer belongs to the in-flight read until
+  // it settles. The caller reuses `_fogProbeLast` meanwhile.
+  if (_fogProbeInFlight) return null;
 
   const hz = farFogSkyHz();
   const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
@@ -1630,40 +1683,37 @@ function sampleHorizonSkyRadiance(scene3d) {
     // path indistinguishable from success impossible: every texel decodes
     // non-finite, `n` stays 0, and we take the sticky fallback below instead of
     // quietly driving the fog to black.
+    // (The async path keeps the same sentinel: it resolves WITHOUT touching
+    // the buffer when the target has no framebuffer, and rejects on bad
+    // format/type/bounds — both end in `_fogProbeFailed`.)
     _fogProbeBuf.fill(0xffff);
+    if (typeof renderer.readRenderTargetPixelsAsync === "function") {
+      // The readPixels into a PIXEL_PACK_BUFFER is issued synchronously inside
+      // this call (while the probe target is still bound — the `finally` below
+      // restores the renderer after); only the fence wait is deferred.
+      _fogProbeInFlight = true;
+      const buf = _fogProbeBuf;
+      renderer.readRenderTargetPixelsAsync(
+        _fogProbeRT, 0, 0, _FOG_PROBE_PX, _FOG_PROBE_PX, buf,
+      ).then(
+        () => {
+          _fogProbeInFlight = false;
+          try { _fogProbeSucceeded(_reduceFogProbe(buf, now)); } catch (err) { _fogProbeFailed(err); }
+        },
+        (err) => {
+          _fogProbeInFlight = false;
+          _fogProbeFailed(err);
+        },
+      );
+      return null; // the caller keeps `_fogProbeLast` until this read lands
+    }
     renderer.readRenderTargetPixels(
       _fogProbeRT, 0, 0, _FOG_PROBE_PX, _FOG_PROBE_PX, _fogProbeBuf,
     );
-
-    let r = 0; let g = 0; let b = 0; let n = 0;
-    for (let i = 0; i < _fogProbeBuf.length; i += 4) {
-      const pr = _halfToFloat(_fogProbeBuf[i]);
-      const pg = _halfToFloat(_fogProbeBuf[i + 1]);
-      const pb = _halfToFloat(_fogProbeBuf[i + 2]);
-      if (!Number.isFinite(pr) || !Number.isFinite(pg) || !Number.isFinite(pb)) continue;
-      r += pr; g += pg; b += pb; n += 1;
-    }
-    if (n === 0) throw new Error("probe read no finite texels");
-    const out = {
-      r: Math.max(0, r / n),
-      g: Math.max(0, g / n),
-      b: Math.max(0, b / n),
-      elevDeg: farFogSkyElevDeg(),
-      at: now,
-    };
-    _fogProbeFails = 0;
-    _fogProbeLast = out;
-    if (typeof window !== "undefined") window.__farFogSkyProbe = out;
-    return out;
+    return _fogProbeSucceeded(_reduceFogProbe(_fogProbeBuf, now));
   } catch (err) {
-    _fogProbeFails += 1;
-    if (_fogProbeFails >= _FOG_PROBE_MAX_FAILS) {
-      _fogProbeDead = true;
-      // eslint-disable-next-line no-console
-      console.warn("[far-terrain S1] horizon sky probe disabled after "
-        + `${_fogProbeFails} failures; falling back to the authored fog hex.`, err);
-    }
-    return null;
+    _fogProbeInFlight = false;
+    return _fogProbeFailed(err);
   } finally {
     if (savedVisible.length) {
       const kids = skyScene.children;
