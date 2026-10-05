@@ -17241,6 +17241,18 @@ thread_local! {
         std::cell::RefCell<Vec<(holtburger_world::BuildingId, f32, f32)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Collision F1 (OpenAC comparison 2026-10-04): per-landblock building
+    /// portal lists from `LandblockInfo.buildings`, queued by
+    /// `populateBuildingAabbsForLandblock` and drained on `TickMovement`
+    /// into `SpatialScene::set_landblock_building_portals` — retail's
+    /// `CLandBlock::init_buildings` (acclient.c:352114). Each entry is
+    /// `(landblock_high, [(landblock-local origin, [(other_cell_id,
+    /// other_portal_id)])])`. An empty list still marks the landblock's
+    /// buildings known, so the driver's outdoor cell answer is trusted there.
+    static BUILDING_PORTALS_PENDING:
+        std::cell::RefCell<Vec<(u32, Vec<(holtburger_common::Vector3, Vec<(u16, u16)>)>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
     /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
     /// pending cell-physics-triangle inserts queued by
     /// `fetchEnvCellsInLandblock` (alongside the existing cell-AABB
@@ -17505,6 +17517,22 @@ fn drain_pending_building_origins_into(scene: &mut holtburger_world::SpatialScen
         let count = buf.len();
         for (building_id, x, y) in buf.drain(..) {
             scene.register_building_origin(building_id, x, y);
+        }
+        count
+    })
+}
+
+/// Collision F1: drain `BUILDING_PORTALS_PENDING` into the live scene.
+/// Returns the number of landblocks registered.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn drain_pending_building_portals_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    BUILDING_PORTALS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, buildings) in buf.drain(..) {
+            scene.set_landblock_building_portals(landblock_high, &buildings);
         }
         count
     })
@@ -18259,7 +18287,9 @@ async fn populate_building_aabbs_for_landblock_impl(
         Err(_) => {
             // No LandblockInfo in this landblock (ocean cell, sparse
             // wilderness). Zero buildings is a valid outcome — return
-            // 0 rather than fail.
+            // 0 rather than fail. Collision F1: still mark the
+            // landblock's buildings known (none).
+            BUILDING_PORTALS_PENDING.with(|p| p.borrow_mut().push((landblock_high, Vec::new())));
             return Ok(0);
         }
     };
@@ -18268,6 +18298,27 @@ async fn populate_building_aabbs_for_landblock_impl(
             "populateBuildingAabbsForLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
         ))
     })?;
+
+    // Collision F1: register every building's portals on its landcell
+    // (retail `CLandBlock::init_buildings`, acclient.c:352114) — origin
+    // stays landblock-local, as `set_landblock_building_portals` expects.
+    BUILDING_PORTALS_PENDING.with(|p| {
+        p.borrow_mut().push((
+            landblock_high,
+            info.buildings
+                .iter()
+                .map(|b| {
+                    (
+                        b.frame.origin,
+                        b.portals
+                            .iter()
+                            .map(|q| (q.other_cell_id, q.other_portal_id))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        ))
+    });
 
     if info.buildings.is_empty() {
         return Ok(0);

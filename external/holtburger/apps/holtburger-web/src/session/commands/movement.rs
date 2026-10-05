@@ -888,6 +888,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // door-registration arm to project a
             // `(BuildingId, part_index)` hit back into the
             // JS-side `buildingMap` key.
+            // Collision F1: building portal lists from the same pass.
+            let _ = crate::drain_pending_building_portals_into(&mut w.scene);
             let drained_origins =
                 drain_pending_building_origins_into(&mut w.scene);
             if drained_origins > 0 {
