@@ -114,55 +114,70 @@ export async function playUiSound(live, soundType, opts = {}) {
 /**
  * Sounds for objects the client does not know yet. Retail
  * SmartBox::HandleSoundEvent (acclient.c:143333-143350) queues the blob on
- * a null object (CObjectMaint::QueueBlobForObject 310848-310861) and replays
- * it when the object is created; the null object is destroyed 25 s later
- * (AddObjectToBeDestroyed, cur_time + 25.0 at 310666). We poll for the
- * object and replay, dropping entries older than 25 s.
+ * a null object (CObjectMaint::QueueBlobForObject 310848-310861): the FIRST
+ * blob for an unknown id creates the null object and schedules its
+ * destruction once, at cur_time + 25.0 (AddObjectToBeDestroyed 310666);
+ * later blobs for the same id join that object and share its deadline. The
+ * blobs are replayed when the real object is created. Here: one deadline
+ * per guid from its first queue; `drain(guid)` replays synchronously and is
+ * called from the entity-insert hook (entities.js, next to
+ * drainPendingPlayEffects).
  */
 export const OBJECT_BLOB_TTL_S = 25.0;
 export class PendingObjectSounds {
-  constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
-    setTimer = (fn, ms) => setTimeout(fn, ms), pollMs = 250 } = {}) {
+  constructor({ now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()) } = {}) {
     this._now = now;
-    this._setTimer = setTimer;
-    this._pollMs = pollMs;
-    /** @type {Array<{guid:number, replay:() => void, has:() => boolean, t:number}>} */
-    this.pending = [];
-    this._armed = false;
+    /** @type {Map<number, {deadline:number, replays:Array<() => void>}>} */
+    this.byGuid = new Map();
     this.replayed = 0;
     this.expired = 0;
   }
 
-  add(guid, replay, has) {
-    this.pending.push({ guid: guid >>> 0, replay, has, t: this._now() });
-    this._arm();
+  get size() {
+    let n = 0;
+    for (const e of this.byGuid.values()) n += e.replays.length;
+    return n;
   }
 
-  poll() {
+  add(guid, replay) {
     const now = this._now();
-    const keep = [];
-    for (const p of this.pending) {
-      let present = false;
-      try { present = !!p.has(); } catch (_) {}
-      if (present) {
-        this.replayed += 1;
-        try { p.replay(); } catch (_) {}
-      } else if (now - p.t > OBJECT_BLOB_TTL_S * 1000) {
-        this.expired += 1;
-      } else {
-        keep.push(p);
+    this.prune(now);
+    const g = guid >>> 0;
+    let e = this.byGuid.get(g);
+    if (!e) {
+      e = { deadline: now + OBJECT_BLOB_TTL_S * 1000, replays: [] };
+      this.byGuid.set(g, e);
+    }
+    e.replays.push(replay);
+  }
+
+  /** Replay (in arrival order) every sound queued for `guid`. */
+  drain(guid) {
+    const now = this._now();
+    this.prune(now);
+    const g = guid >>> 0;
+    const e = this.byGuid.get(g);
+    if (!e) return 0;
+    this.byGuid.delete(g);
+    for (const r of e.replays) {
+      this.replayed += 1;
+      try { r(); } catch (_) {}
+    }
+    return e.replays.length;
+  }
+
+  prune(now = this._now()) {
+    for (const [g, e] of this.byGuid) {
+      if (now > e.deadline) {
+        this.expired += e.replays.length;
+        this.byGuid.delete(g);
       }
     }
-    this.pending = keep;
   }
+}
 
-  _arm() {
-    if (this._armed) return;
-    this._armed = true;
-    this._setTimer(() => {
-      this._armed = false;
-      this.poll();
-      if (this.pending.length) this._arm();
-    }, this._pollMs);
-  }
+/** The session-wide queue (client_events queues, entities.js drains). */
+export const pendingObjectSounds = new PendingObjectSounds();
+export function drainPendingObjectSounds(guid) {
+  return pendingObjectSounds.drain(guid);
 }

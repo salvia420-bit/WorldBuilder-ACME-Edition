@@ -1065,6 +1065,7 @@ import {
   materialRendersNothing,
 } from "./materials.js";
 import { drainPendingPlayEffects } from "./play_effect_vfx.js";
+import { drainPendingObjectSounds } from "./audio/retail_sound_rules.js";
 // #16 (?itemFx) — the optional non-retail UiEffects 3D item-aura. Mirrors the
 // statics.js frag seam (buildFragVariant + VFX_GLOBALS), keyed off the entity's
 // UiEffects bitmask via item_fx.itemFxPlanFor. Lazy frag deps below keep the
@@ -4878,6 +4879,8 @@ export class EntityManager {
     // ahead of this spawn (queued by guid when the target was not yet in the
     // entityMap). No-op if none queued.
     drainPendingPlayEffects(this, guid);
+    // Server sounds that arrived before this object (retail QueueBlobForObject).
+    try { drainPendingObjectSounds(guid); } catch (_) {}
     // Spawn-race recovery (2026-05-30): if a surface's DAT resources had not
     // yet streamed from the server when this entity spawned, its decode
     // returned empty and the mesh got the shared flat-grey fallback material

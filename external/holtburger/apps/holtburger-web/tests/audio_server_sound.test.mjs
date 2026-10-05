@@ -32,7 +32,7 @@ globalThis.document = {
 };
 
 const rules = await import("../scene3d/audio/retail_sound_rules.js");
-const { dispatchClientEvent, _pendingObjectSoundsForTest } = await import("../app/client_events.js");
+const { dispatchClientEvent } = await import("../app/client_events.js");
 const { ClientEventKind } = await import("../scene3d/client_event_kinds.js");
 
 let passed = 0;
@@ -136,36 +136,47 @@ await test("environ 115 plays nothing", async () => {
   assert.equal(calls.length, 0);
 });
 
-// ── sound for an object not created yet (round 2) ──
+// ── sound for an object not created yet ──
 // Retail HandleSoundEvent 143340-143345 queues the blob on the unknown
-// object and plays it when the object is created (QueueBlobForObject
-// 310848; the null object is destroyed after 25 s, 310666). Old code:
-// "entity not in registry — skip", the sound was lost.
-await test("0xF750 for an unknown object plays once the object arrives", async () => {
+// object (QueueBlobForObject 310848-310861) and replays it when the object
+// is created; the null object is destroyed 25 s after the FIRST blob
+// (310666). Round 3: replay is synchronous from the entity-insert hook
+// (entities.js drainPendingObjectSounds), and one deadline per guid.
+// Old code: a 250 ms poll (nothing played at insert time) and a deadline
+// per message.
+await test("0xF750 for an unknown object plays synchronously when the object is inserted", async () => {
   calls.length = 0;
   const LATE = 0x50000077;
   rows = new Map([[`${0x20000001}:${0x8c}`, { waveDid: 0x0a000333, probability: 1, volume: 1, priority: 0 }]]);
   dispatchClientEvent(evt(ClientEventKind.SOUND_TRIGGERED, { u32Payload: LATE, u32Payload2: 0x8c, f32Payload: 0.9 }), D);
   await tick(); await tick();
   assert.equal(calls.length, 0, "nothing yet");
+  assert.equal(rules.pendingObjectSounds.size, 1);
   window.liveScene3d.entityManager.entityMap.set(LATE, { soundTableDid: 0x20000001, root: { position: { x: 0, y: 0, z: 0 } } });
-  _pendingObjectSoundsForTest().poll();
+  assert.equal(rules.drainPendingObjectSounds(LATE), 1, "drained at insert");
   for (let i = 0; i < 5; i++) await tick();
   assert.equal(calls.length, 1, JSON.stringify(calls));
   assert.equal(calls[0].wave, 0x0a000333);
   assert.equal(calls[0].opts.gain, 0.9);
-  assert.equal(_pendingObjectSoundsForTest().pending.length, 0);
+  assert.equal(rules.pendingObjectSounds.size, 0);
 });
-await test("queued object sound expires after 25 s", () => {
+await test("entities.js insert hook drains queued object sounds", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../scene3d/entities.js", import.meta.url), "utf8");
+  const at = src.indexOf("drainPendingPlayEffects(this, guid);");
+  assert.ok(at > 0 && src.slice(at, at + 300).includes("drainPendingObjectSounds(guid)"));
+});
+await test("one 25 s deadline per guid, from the first queued sound", () => {
   let t = 0;
-  const q = new rules.PendingObjectSounds({ now: () => t, setTimer: () => {} });
+  const q = new rules.PendingObjectSounds({ now: () => t });
   let played = 0;
-  q.add(1, () => { played++; }, () => false);
-  t = 24000; q.poll();
-  assert.equal(q.pending.length, 1);
-  t = 25001; q.poll();
-  assert.equal(q.pending.length, 0);
-  assert.equal(q.expired, 1);
+  q.add(1, () => { played++; });
+  t = 20000; q.add(1, () => { played++; });   // joins the first deadline
+  t = 24000; q.prune(t);
+  assert.equal(q.size, 2);
+  t = 25001; q.prune(t);
+  assert.equal(q.size, 0, "second sound expires with the first (shared deadline)");
+  assert.equal(q.expired, 2);
   assert.equal(played, 0);
 });
 

@@ -23,11 +23,7 @@ import { inferAttackTypeForWeapon, ATTACK_TYPE } from "../ui/ac_attack_type_for_
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
 import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
 import { acToThree } from "../scene3d/adapter.js";
-import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, PendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
-
-// Server sounds for objects not created yet (retail QueueBlobForObject).
-const _pendingObjectSounds = new PendingObjectSounds();
-export function _pendingObjectSoundsForTest() { return _pendingObjectSounds; }
+import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
@@ -1877,14 +1873,13 @@ export function dispatchClientEvent(evt, D) {
         stats.entityMissing += 1;
         // Retail HandleSoundEvent queues the message on the unknown
         // object and plays it when the object arrives (acclient.c:
-        // 143340-143345, QueueBlobForObject 310848; dropped after
-        // 25 s, 310666). Replay once; a replay never re-queues.
+        // 143340-143345, QueueBlobForObject 310848-310861; dropped
+        // 25 s after the first, 310666). A replay never re-queues.
         if (!replay) {
-          _pendingObjectSounds.add(
-            sndGuid,
-            () => runServerSound(true),
-            () => !!window.liveScene3d?.entityManager?.entityMap?.get(sndGuid),
-          );
+          // Replayed synchronously by the entity-insert hook
+          // (entities.js -> drainPendingObjectSounds); one 25 s deadline
+          // per guid from its first queued sound.
+          pendingObjectSounds.add(sndGuid, () => runServerSound(true));
           stats.queuedForObject = (stats.queuedForObject | 0) + 1;
         }
       } else if (!(inst.soundTableDid >>> 0)) {
