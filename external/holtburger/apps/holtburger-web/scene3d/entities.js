@@ -10586,6 +10586,8 @@ export class EntityManager {
     const preLocoCycleKey = inst._locoCycleKey;
     if (VEL_SCALE_ON && (cls === "walk" || cls === "run")) {
       inst._locoCycleKey = cacheKey;
+      // Seed from the memo so a gait swap never inherits the prior cycle's base.
+      inst._locoBaseSpeed = this._cycleBaseSpeedCache.get(cacheKey) ?? 0;
       this._resolveCycleBaseSpeed(inst, mtableId, stance, cmd, cacheKey);
       // T1: stash the interpreted forward motion state (full u32 command +
       // forward_speed scalar) so tick() can feed the new wasm `stateGroundSpeed`
@@ -10595,8 +10597,18 @@ export class EntityManager {
       // backstep arrives as WalkForward with a negated forward_speed upstream);
       // `inst._motionSpeed` is the broadcast forward_speed (set above). The
       // sidestep axis is driven separately (setSidestepLayer stashes its scalars).
-      inst._forwardCommand = cmd >>> 0;
-      inst._forwardSpeed = inst._motionSpeed ?? 1.0;
+      // Sidestep / turn / fall cycles also classify "walk" but carry no
+      // forward axis — zero it so the getter doesn't keep the last run.
+      const isFwd = cmdLow === CMD_LOW_WALK_FORWARD || cmdLow === CMD_LOW_RUN_FORWARD;
+      inst._forwardCommand = isFwd ? cmd >>> 0 : 0;
+      inst._forwardSpeed = isFwd ? (inst._motionSpeed ?? 1.0) : 0;
+    } else {
+      // Audit F2: idle/Ready (and any other non-gait cycle) clears the gait
+      // state; it used to keep the last walk/run values forever, so the idle
+      // cycle was velocity-scaled against the run's authored speed.
+      inst._forwardCommand = 0;
+      inst._forwardSpeed = 0;
+      inst._locoBaseSpeed = 0;
     }
     // 2026-10-05 — peace↔combat draw/sheathe: retail GetObjectSequence's
     // style branch (acclient.c:337700-745; OpenAC CMotionTable.cs:158-212)
@@ -10708,9 +10720,10 @@ export class EntityManager {
               try { seq.seekPhase(prev.seq.phase); } catch (_) {}
             }
             if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
+            // No base-speed snapshot: the tick reads it live per cacheKey
+            // (audit F2 — the snapshot froze a stale run base onto idle).
             inst._unifiedLoco = {
               seq, desc: d, cacheKey,
-              base: inst._locoBaseSpeed || 0,
               hooks: entry.hooks || null, lastHookTime: -1,
             };
             inst._locoCycleKey = cacheKey;
@@ -15274,7 +15287,7 @@ export class EntityManager {
           // advancing the playhead faster/slower. frameNumber carries phase, so
           // the swap band-aids (CROSSFADE_S=0, RESUME_WINDOW) aren't needed.
           const lo = inst._unifiedLoco;
-          const step = dt * this._unifiedLocoGaitScale(inst, lo.base);
+          const step = dt * this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0);
           if (step >= 0) {
             lo.seq.advance(step);
             poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts);

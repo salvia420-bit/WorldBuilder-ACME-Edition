@@ -602,6 +602,14 @@ function drainMotionAxes(scene3d, sessionHandle) {
     // to 1.0 inside setSidestepLayer (OQ-3), matching today's local behaviour.
     if (sideCmd !== 0 && typeof em.setSidestepLayer === "function") {
       em.setSidestepLayer(guid, sideCmd, stance);
+    } else if (
+      sideCmd === 0 &&
+      em.entityMap?.get?.(guid)?._sidestepCommand &&
+      typeof em.setSidestepLayer === "function"
+    ) {
+      // Strafe released: clear the layer + its gait scalars (audit F2), which
+      // otherwise stayed set for remote entities after the strafe ended.
+      em.setSidestepLayer(guid, 0, stance);
     }
     // Turn → a turn-in-place (no forward command) plays the turn cycle as the
     // base motion; heading-ease still drives the actual rotation, so the cycle is
