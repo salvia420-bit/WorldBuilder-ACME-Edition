@@ -231,3 +231,37 @@ test("setSidestepLayer is a scalar setter (no layer, no playhead change)", async
   assert.equal(inst._sidestepSpeed, 0);
   em.dispose();
 });
+
+test("setSwingMotion always plays a full-body one-shot on the playhead (never-moved entity too)", async () => {
+  const em = makeManager();
+  const GESTURE = 0x10000087;
+  window.__sessionHandle = {
+    lookupMotionLinkForSwing: () => ({
+      kind: "swing", animId: 1, durationSec: 4 / FRAMERATE, resolvedCommand: GESTURE,
+    }),
+  };
+  try {
+    const inst = await spawn(em, READY); // spawned, never moved
+    const loco = inst._unifiedLoco;
+    await em.setSwingMotion(inst.guid, GESTURE, { stance: 0x3d });
+    const a = inst._unifiedSeq;
+    assert.ok(a && a.clearOnDone === true, "gesture is a clearOnDone one-shot");
+    em.tick(0.01);
+    assert.ok(partY(inst) >= 900 && partY(inst) < 904, "gesture owns the rig");
+    // A second gesture queues behind the first (J5), not a cut.
+    await em.setSwingMotion(inst.guid, GESTURE, { stance: 0x3d, speed: 2 });
+    assert.equal(inst._unifiedSeq, a, "in-flight gesture keeps the playhead");
+    assert.equal(inst._unifiedQueue.list.length, 2);
+    for (let i = 0; i < 10; i += 1) em.tick(0.05);
+    assert.notEqual(inst._unifiedSeq, a);
+    for (let i = 0; i < 10; i += 1) em.tick(0.05);
+    assert.equal(inst._unifiedSeq, null, "queue drained");
+    assert.equal(inst._unifiedLoco, loco, "cycle resumes");
+    em.tick(0.01);
+    assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "back on the Ready cycle");
+    assert.equal(inst.currentAction, null);
+  } finally {
+    delete window.__sessionHandle;
+    em.dispose();
+  }
+});

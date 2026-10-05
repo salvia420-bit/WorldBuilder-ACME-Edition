@@ -9626,13 +9626,11 @@ export class EntityManager {
   /**
    * @param {number} guid
    * @param {number} motionCmd
-   * @param {{ holdAtPeak?: boolean, speed?: number, stance?: number }} [opts]
-   *   When `holdAtPeak` is true (Wave 4 / Phase 4.2), the clip plays
-   *   from frame 0 to its peak frame (`durationSec * 0.5`), then
-   *   pauses. Call `releaseSwingHold(guid)` to resume from peak to
-   *   end. If `durationSec` isn't available (cache miss / coarse
-   *   classification), the hold is silently downgraded to a normal
-   *   one-shot swing — the visual still plays, just without the hold.
+   * @param {{ speed?: number, stance?: number }} [opts]
+   *   Plays the gesture as a full-body one-shot on the Rust playhead
+   *   (queued behind an in-flight gesture). `opts.speed` paces it
+   *   (multiplies the server per-motion speed). The retired mixer-only
+   *   `holdAtPeak` option is ignored (no caller passed it).
    *   `opts.stance` (WS01) pins the MotionTable link lookup stance; a
    *   falsy/absent value falls through to the entity's derived stance.
    */
@@ -9640,7 +9638,6 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
-    const holdAtPeak = !!(opts && opts.holdAtPeak);
     // WS01: a caller may pin the stance (the cast chain always uses Magic 0x0049)
     // so a stale `inst.currentStance` (e.g. NonCombat, which carries NO magic
     // gestures — DAT-verified vs player MT 0x09000001) can't make the from-Ready
@@ -9742,165 +9739,30 @@ export class EntityManager {
       // non-human silent-no-op that already applied.
       return;
     }
-    // Mixer frozen (the tick drives _unifiedLoco and never calls
-    // mixer.update), so a mixer swing would never play: queue it as a unified
-    // one-shot instead; the queue hands back to _unifiedLoco when done.
-    // holdAtPeak is not supported on this path (no caller passes it).
-    {
-      const MS = (typeof window !== "undefined" && window.__hbWasm?.MotionSequence) || null;
-      const d = entry?.sequenceDescriptor;
-      if (inst._unifiedLoco && MS && d) {
-        const seq = MS.fromDescriptor(
-          d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
-          d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
-          false,
-        );
-        if (seq) {
-          const optSpeed = +(opts?.speed) > 0 ? +opts.speed : 1.0;
-          const rec = { seq, desc: d, clearOnDone: true, hooks: entry.hooks || null, lastHookTime: -1,
-            speed: this._unifiedOneShotSpeed(inst) * optSpeed };
-          if (inst._swingRestoreTimer) { clearTimeout(inst._swingRestoreTimer); inst._swingRestoreTimer = null; }
-          this._enqueueUnifiedOneShot(inst, resolvedCmd, (d.segmentCounts?.length || 1), rec);
-          return;
-        }
-      }
-    }
-    const swingKey = `swing:${resolvedCmd.toString(16)}:${stance.toString(16)}`;
-    let action = inst.actions.get(swingKey);
-    if (!action) {
-      inst.evictOldestUnused?.();
-      action = inst.mixer.clipAction(clip);
-      inst.actions.set(swingKey, action);
-    }
-    inst.actionLastUsedMs.set(swingKey, performance.now());
-    if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
-      inst.hookTimelines.set(swingKey, entry.hooks);
-    }
-    inst.actionLastHookTime.set(swingKey, -1);
-    action.setLoop(THREE.LoopOnce, 1);
-    action.clampWhenFinished = true;
-    action.enabled = true;
-    // A3 (2026-05-29): one-shot swings/casts honor the server's per-motion
-    // speed too. The base timeScale normalizes the clip to its authored
-    // duration (`clip.duration / dur`); MULTIPLY by `inst._motionSpeed`
-    // (retail `Framerate *= speed`) so a hasted/slowed attack plays faster/
-    // slower. Identity (1.0) is the fail-soft default.
-    // F8-1: `opts.speed` lets a caller pace this one-shot (e.g. the cast
-    // chain at ACE CastSpeed=2.0). Defaults to 1.0, so non-cast callers are
-    // unaffected. Composes multiplicatively with the server per-motion speed.
-    const swingSpeed = (inst._motionSpeed ?? 1.0) * (+(opts?.speed) > 0 ? +opts.speed : 1.0);
-    const dur = +result.durationSec;
-    if (Number.isFinite(dur) && dur > 0 && Number.isFinite(clip.duration) && clip.duration > 0) {
-      action.setEffectiveTimeScale((clip.duration / dur) * swingSpeed);
-    } else {
-      action.setEffectiveTimeScale(swingSpeed);
-    }
-    action.setEffectiveWeight(1.0);
-    _noteDeadMixerStart(inst, "setSwingMotion");
-    action.reset();
-    action.play();
-    const prior = inst.currentAction;
-    // FU-3 (2026-06-11) — full-body one-shot is now UNCONDITIONAL (the
-    // ?fullBodyOneShot flag was retired 2026-06-18): the local swing/cast
-    // OVERLAYS locomotion (legs keep running) like the `_tryPlayLink`
-    // server-echo path, and the base-cycle suppression below ramps that base to
-    // 0 for the overlay's duration. The old `=off` branch — crossFadeFrom(prior),
-    // which faded the legs OUT — is gone.
-    // (swing/cast vibe-pose tween clears removed — posers retired, WS-B 2026-06-18)
-    inst.currentAction = action;
-    inst.currentActionKey = swingKey;
-    // Make the LOCAL optimistic swing/cast one-shot full-body, exactly like the
-    // server-echo `_tryPlayLink` path: without the base-cycle suppression
-    // three.js normalizes overlay+base to ~50/50 → the swing plays at half
-    // amplitude.
-    if (!inst._locoCycleKey || !inst.actions?.has(inst._locoCycleKey)) {
-      // ensure a base to suppress when velScale is off (it only sets
-      // _locoCycleKey for walk/run): point it at the prior locomotion/Ready
-      // action so its weight is ramped to 0 for the overlay's duration
-      if (prior && prior !== action) {
-        for (const [k, a] of inst.actions) {
-          if (a === prior) { inst._locoCycleKey = k; break; }
-        }
-      }
-    }
-    this._suppressBaseCycleForOverlay(inst, action);
-    if (inst._swingRestoreTimer) clearTimeout(inst._swingRestoreTimer);
-    // Wave 4 / Phase 4.2 (2026-05-26) — hold-at-peak windup. Schedule a
-    // pause at `dur * 0.5` after play() so the rig holds at the peak
-    // frame until `releaseSwingHold(guid)` fires. The Ready-restore
-    // timer is skipped here (the release path arms it for the remaining
-    // post-peak duration). If `dur` isn't a valid number (coarse
-    // classify, no MotionData), the hold downgrades to a normal swing.
-    // Drop any previous hold (rapid re-fire on same guid).
-    if (inst._swingHold) {
-      if (inst._swingHold.peakTimerId) {
-        clearTimeout(inst._swingHold.peakTimerId);
-      }
-      inst._swingHold = null;
-    }
-    const peakUsable = holdAtPeak && Number.isFinite(dur) && dur > 0;
-    if (peakUsable) {
-      const peakMs = Math.max(20, Math.round(dur * 500)); // dur*1000 / 2.
-      const peakTimerId = setTimeout(() => {
-        if (!this.entityMap.has(g)) return;
-        if (inst.currentActionKey !== swingKey) return;
-        // Action may have been replaced by a newer swing — guard via
-        // the hold-record back-reference, not just currentAction.
-        if (!inst._swingHold || inst._swingHold.swingKey !== swingKey) return;
-        try { action.paused = true; } catch (_) {}
-        // eslint-disable-next-line no-console
-        console.log(
-          "[entities/swingHold] peak-paused guid=0x" + g.toString(16) +
-          " key=" + swingKey + " t=" + (action.time ?? 0).toFixed(2) + "s",
-        );
-      }, peakMs);
-      inst._swingHold = {
-        swingKey,
-        stance,
-        action,
-        peakTimerId,
-        startedMs: performance.now(),
-      };
-      // Don't arm the auto-restore timer — `releaseSwingHold` arms it
-      // for the post-peak remaining duration when the hold ends.
-      // eslint-disable-next-line no-console
-      console.log(
-        "[entities/swingMotion] HOLD guid=0x" + g.toString(16) +
-        " cmd=0x" + (motionCmd >>> 0).toString(16) +
-        " anim=" + result.animId +
-        " dur=" + dur.toFixed(2) + "s (pause at " + (peakMs / 1000).toFixed(2) + "s)",
-      );
-    } else {
-      // WS02: the clip plays at `swingSpeed` (CAST_SPEED=2.0 for casts, above),
-      // so it FINISHES at dur/swingSpeed real seconds. Restoring at the
-      // un-scaled `dur` held the clamped final cast frame ~dur/2 too long (a
-      // mushy half-blend vs the restored base once the clip actually ended).
-      // Divide by the effective speed so Ready-restore fires when the clip ends
-      // (retail returns to Ready ~one cast-gesture-length after the gesture
-      // starts — FinishCast). Melee (swingSpeed=1.0) is byte-identical. Gated
-      // with the loop.js dedup for one-toggle rollback.
-      const _effSpeed = (CAST_GESTURE_PARITY_ON && Number.isFinite(swingSpeed) && swingSpeed > 0)
-        ? swingSpeed : 1.0;
-      const restoreDelayMs = Math.max(
-        80,
-        Math.round((((Number.isFinite(dur) && dur > 0) ? dur : (clip.duration || 0.4)) * 1000) / _effSpeed),
-      );
-      inst._swingRestoreTimer = setTimeout(() => {
-        inst._swingRestoreTimer = null;
-        if (!this.entityMap.has(g)) return;
-        if (inst.currentActionKey !== swingKey) return;
-        // Audit F3: when _unifiedLoco owns the cycle, forcing Ready here would
-        // stop a running mob (the swing never touched its cycle).
-        if (UNIFIED_LOCO && inst._unifiedLoco) return;
-        this.setMotion(g, CMD_LOW_READY, stance);
-      }, restoreDelayMs);
-      console.log(
-        "[entities/swingMotion] guid=0x" + g.toString(16) +
-        " cmd=0x" + (motionCmd >>> 0).toString(16) +
-        " anim=" + result.animId +
-        " dur=" + (Number.isFinite(dur) ? dur.toFixed(2) : "0.00") + "s",
-      );
-    }
+    // The gesture is a full-body one-shot on the Rust playhead, queued behind
+    // any gesture already in flight (J5 pending_animations); when the queue
+    // drains the tick falls back to the `_unifiedLoco` cycle. The server
+    // per-motion speed (`inst._motionSpeed`, retail `Framerate *= speed`)
+    // composes with `opts.speed` (e.g. the cast chain at ACE CastSpeed=2.0).
+    const MS = _motionSequenceClass();
+    const d = entry?.sequenceDescriptor;
+    if (!MS || !d) return; // stale pkg / no descriptor → no gesture (like a link miss)
+    const seq = MS.fromDescriptor(
+      d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
+      d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+      false,
+    );
+    if (!seq) return;
+    const optSpeed = +(opts?.speed) > 0 ? +opts.speed : 1.0;
+    const rec = { seq, desc: d, clearOnDone: true, hooks: entry.hooks || null, lastHookTime: -1,
+      speed: this._unifiedOneShotSpeed(inst) * optSpeed };
+    this._enqueueUnifiedOneShot(inst, resolvedCmd, (d.segmentCounts?.length || 1), rec);
+    console.log(
+      "[entities/swingMotion] guid=0x" + g.toString(16) +
+      " cmd=0x" + (motionCmd >>> 0).toString(16) +
+      " anim=" + result.animId +
+      " dur=" + (Number.isFinite(+result.durationSec) ? (+result.durationSec).toFixed(2) : "0.00") + "s",
+    );
   }
 
   /**
