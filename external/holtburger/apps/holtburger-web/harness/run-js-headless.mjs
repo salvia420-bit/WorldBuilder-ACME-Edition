@@ -462,6 +462,8 @@ const TIER5 = [
   // 2026-10-05 — the ClientEvent dispatcher moved out of index.html into
   // app/client_events.js; pins the loop-control -> return conversion.
   { tier: 5, flag: "appClientEvents", file: "tests/app_client_events.test.mjs" },
+  { tier: 5, flag: "attackableTarget", file: "tests/attackable_target.test.mjs" },
+  { tier: 5, flag: "latencyDiag", file: "tests/latency_diag.test.mjs" },
   { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs",
     requires: "../../dist/manifest.json" },
   { tier: 5, flag: "harness_tex_compressed_only", file: "harness/test_tex_compressed_only.mjs" },
