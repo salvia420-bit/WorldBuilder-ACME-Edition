@@ -12,6 +12,7 @@
 use crate::*;
 
 pub(crate) mod commands;
+pub(crate) mod messages;
 
 /// What the loop does after a handler returns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
