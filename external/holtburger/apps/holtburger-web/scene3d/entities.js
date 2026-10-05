@@ -9262,6 +9262,7 @@ export class EntityManager {
       inst._swingRestoreTimer = null;
       if (!this.entityMap.has(g)) return;
       if (inst.currentActionKey !== swingKey) return;
+      if (UNIFIED_LOCO && inst._unifiedLoco) return; // cycle owner unchanged (F3)
       this.setMotion(g, CMD_LOW_READY, stance);
     }, remainingMs);
     inst._swingHold = null;
@@ -9688,6 +9689,29 @@ export class EntityManager {
       // non-human silent-no-op that already applied.
       return;
     }
+    // Mixer frozen (the tick drives _unifiedLoco and never calls
+    // mixer.update), so a mixer swing would never play: queue it as a unified
+    // one-shot instead; the queue hands back to _unifiedLoco when done.
+    // holdAtPeak is not supported on this path (no caller passes it).
+    {
+      const MS = (typeof window !== "undefined" && window.__hbWasm?.MotionSequence) || null;
+      const d = entry?.sequenceDescriptor;
+      if (inst._unifiedLoco && MS && d) {
+        const seq = MS.fromDescriptor(
+          d.numFrames >>> 0, _finiteOr0(d.framerate), _finiteOr0(d.duration),
+          d.frameTimes || EMPTY_F32, d.segmentStarts || EMPTY_U32, d.segmentCounts || EMPTY_U32,
+          false,
+        );
+        if (seq) {
+          const optSpeed = +(opts?.speed) > 0 ? +opts.speed : 1.0;
+          const rec = { seq, desc: d, clearOnDone: true, hooks: entry.hooks || null, lastHookTime: -1,
+            speed: this._unifiedOneShotSpeed(inst) * optSpeed };
+          if (inst._swingRestoreTimer) { clearTimeout(inst._swingRestoreTimer); inst._swingRestoreTimer = null; }
+          this._enqueueUnifiedOneShot(inst, resolvedCmd, (d.segmentCounts?.length || 1), rec);
+          return;
+        }
+      }
+    }
     const swingKey = `swing:${resolvedCmd.toString(16)}:${stance.toString(16)}`;
     let action = inst.actions.get(swingKey);
     if (!action) {
@@ -9812,6 +9836,9 @@ export class EntityManager {
         inst._swingRestoreTimer = null;
         if (!this.entityMap.has(g)) return;
         if (inst.currentActionKey !== swingKey) return;
+        // Audit F3: when _unifiedLoco owns the cycle, forcing Ready here would
+        // stop a running mob (the swing never touched its cycle).
+        if (UNIFIED_LOCO && inst._unifiedLoco) return;
         this.setMotion(g, CMD_LOW_READY, stance);
       }, restoreDelayMs);
       console.log(
@@ -12648,6 +12675,12 @@ export class EntityManager {
           // count — retail's `num_anims` is exactly that (CMotionTable fills it
           // in as it appends nodes to the CSequence).
           this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec);
+          // Audit F3: stamp the server-swing time here too (the mixer branch
+          // below does), or index.html's guessed-swing dedup never sees a
+          // unified server swing and fires a second, guessed one.
+          if (_unifiedCls === "attack" || _unifiedCls === "cast") {
+            inst._lastServerSwingMs = performance.now();
+          }
           return true; // skip the mixer overlay; the tick drives the rig
         }
       }
