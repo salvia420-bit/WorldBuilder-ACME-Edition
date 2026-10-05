@@ -23,6 +23,7 @@ import { inferAttackTypeForWeapon, ATTACK_TYPE } from "../ui/ac_attack_type_for_
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
 import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
 import { acToThree } from "../scene3d/adapter.js";
+import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter } from "../scene3d/audio/retail_sound_rules.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
@@ -1789,8 +1790,8 @@ export function dispatchClientEvent(evt, D) {
     //   u32Payload  = entity GUID (the sound's source)
     //   u32Payload2 = `Sound` enum value (lookup key into
     //                 the entity's SoundTable)
-    //   f32Payload  = scale (server-side volume multiplier,
-    //                 typically 1.0)
+    //   f32Payload  = wire volume (ACE GameMessageSound
+    //                 default 1.0)
     //
     // Resolution chain (mirrors Task E's SoundTable hook
     // dispatch in `scene3d/entities.js::_fireHook`):
@@ -1798,9 +1799,12 @@ export function dispatchClientEvent(evt, D) {
     //      → EntityInstance (Task E plumbing — inst exposes
     //      `soundTableDid` + `root.position`).
     //   2. resolveSound(soundTableDid, soundEnum) picks a
-    //      `SoundEntry` weighted by `probability`.
-    //   3. audioManager.play(waveDid, pos, { gain: vol*scale })
-    //      mixes through the same PannerNode path as Task E.
+    //      `SoundEntry` (uniform pick, retail GetSound).
+    //   3. serverSoundPlan: roll the row's probability, gain =
+    //      WIRE volume only, volume <= 0 silent — retail
+    //      HandleSoundEvent (acclient.c:143333) -> play_sound
+    //      (316424) -> PlaySoundA(stype, obj, volume) (383655).
+    //   4. audioManager.play(waveDid, pos, { gain }).
     //
     // Soft cases (each logs debug + skips):
     //   - entity unknown (despawn race between ACE send +
@@ -1809,26 +1813,13 @@ export function dispatchClientEvent(evt, D) {
     //     on its weenie — normal for many statics)
     //   - resolveSound returns null (Sound enum absent from
     //     the SoundTable's `Sounds` dictionary)
-    //   - scale <= 0 (treated as 1.0; logs a one-shot warn
-    //     so the bug surfaces without spamming the console)
+    //   - wire volume <= 0 is SILENT, as in retail (the old
+    //     code forced it to 1.0); probability roll missed
     const sndGuid = evt.u32Payload >>> 0;
     const sndEnum = evt.u32Payload2 >>> 0;
-    let sndScale = (typeof evt.f32Payload === "number")
+    const sndScale = (typeof evt.f32Payload === "number")
       ? +evt.f32Payload
       : 1.0;
-    if (!(sndScale > 0)) {
-      if (!window.__soundTriggeredScaleWarned) {
-        window.__soundTriggeredScaleWarned = true;
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[task-F/gms] non-positive scale=${evt.f32Payload} for `
-          + `guid=0x${sndGuid.toString(16).padStart(8, "0")} `
-          + `enum=0x${sndEnum.toString(16)}; treating as 1.0 `
-          + `(further occurrences silenced this session)`,
-        );
-      }
-      sndScale = 1.0;
-    }
     // Capture-script telemetry counters — accumulate
     // outcomes so a diag can assert (a) the event was
     // observed, (b) the resolve path was taken, (c) the
@@ -1848,9 +1839,6 @@ export function dispatchClientEvent(evt, D) {
     }
     const stats = window.__soundTriggeredStats;
     stats.received += 1;
-    if (sndScale === 1.0 && (typeof evt.f32Payload === "number") && !(evt.f32Payload > 0)) {
-      stats.scaleClamped += 1;
-    }
     const scene3d = window.liveScene3d;
     const emgr = scene3d?.entityManager ?? null;
     const inst = emgr?.entityMap?.get(sndGuid) ?? null;
@@ -1923,8 +1911,13 @@ export function dispatchClientEvent(evt, D) {
               stats.lastError = "no_position";
               return;
             }
-            const baseVol = entry.volume > 0 ? entry.volume : 1.0;
-            const gain = baseVol * sndScale;
+            const plan = serverSoundPlan(entry, sndScale);
+            if (!plan.play) {
+              if (plan.reason === "wire_volume_silent") stats.scaleClamped += 1;
+              else stats.probabilityMissed = (stats.probabilityMissed | 0) + 1;
+              return;
+            }
+            const gain = plan.gain;
             // Phase F.C — runtime event log probe. Source
             // is "GameMessageSound" — the ACE wire-pushed
             // 0xF750 SoundTriggered; F.D's validator
@@ -2020,52 +2013,27 @@ export function dispatchClientEvent(evt, D) {
         + `${window.__environFogOverride ? `override rgb=0x${window.__environFogOverride.rgb.toString(16)}` : "clear (region fog)"}`,
       );
     } else if (ec >= 0x65) {
-      // SOUND: retail plays SoundType (= EnvironChangeType + 0x11)
-      // from the UI SoundTable via PlaySoundFromCenter
-      // (acclient.c:396438+) — non-positional ("from center"), so
-      // play at the listener. The UI SoundTable is **0x2000004B**:
-      // a portal.dat scan found it is the UNIQUE 0x20 SoundTable
-      // carrying all 21 environ slots 0x76-0x8A (Roar 0x76->Wave
-      // 0x0A000314 … Thunder6 0x8A->0x0A0004D2). Override with
-      // window.__environSoundTableDid. Fail-soft if the slot is absent.
-      const ENVIRON_SOUND_TABLE = (window.__environSoundTableDid >>> 0) || 0x2000004B;
-      const soundType = (ec + 0x11) >>> 0;
+      // SOUND: retail CPlayerSystem::Handle_Admin__Environs
+      // (acclient.c:396430-396545) plays the option's Sound_UI_* type via
+      // PlaySoundFromCenter(stype, GetUISoundTable()) — non-positional,
+      // row probability rolled, row volume x effect slider
+      // (383569-383589). Options 115/116 and >123 have no case (silent);
+      // 117-123 map to Squeal/Thunder1-6 (0x84-0x8A), not option+0x11.
+      // The UI SoundTable is resolved through the EnumIDMap
+      // (GetUISoundTable 401286: GetByEnum(0x10000003, 7)); fallback
+      // 0x2000004B. window.__environSoundTableDid still overrides.
+      const soundType = environSoundType(ec);
       const scene3d = window.liveScene3d;
-      const cache = scene3d?.soundTableCache ?? null;
-      const audioMgr = scene3d?.audioManager ?? null;
       // eslint-disable-next-line no-console
       console.log(
-        `[environ] sound 0x${ec.toString(16)} -> sType 0x${soundType.toString(16)} `
-        + `via stb 0x${ENVIRON_SOUND_TABLE.toString(16)}`
-        + `${(cache && audioMgr) ? "" : " (no 3D audio runtime — skip)"}`,
+        `[environ] sound 0x${ec.toString(16)} -> sType 0x${soundType.toString(16)}`
+        + `${(scene3d?.soundTableCache && scene3d?.audioManager) ? "" : " (no 3D audio runtime — skip)"}`,
       );
-      if (cache && audioMgr) {
-        cache.resolveSound(ENVIRON_SOUND_TABLE, soundType)
-          .then((entry) => {
-            if (!entry) {
-              // eslint-disable-next-line no-console
-              console.debug(
-                `[environ] no sound for type 0x${ec.toString(16)} `
-                + `(sType 0x${soundType.toString(16)}) on stb 0x`
-                + `${ENVIRON_SOUND_TABLE.toString(16)} — skip`,
-              );
-              return;
-            }
-            // Co-locate with the (camera-anchored) listener so the
-            // environ cue is heard "around" the player, not from a
-            // direction. camera.position is already three.js-frame.
-            const cam = scene3d?.camera?.position;
-            const pos = cam ? { x: cam.x, y: cam.y, z: cam.z } : { x: 0, y: 0, z: 0 };
-            const gain = entry.volume > 0 ? entry.volume : 1.0;
-            // eslint-disable-next-line no-console
-            console.log(`[environ] sound playing wave 0x${(entry.waveDid >>> 0).toString(16)} gain=${gain.toFixed(2)}`);
-            return audioMgr.play(entry.waveDid, pos, {
-              category: "ambient",
-              gain,
-              refDistance: 1e6,
-              rolloffFactor: 0,
-            });
-          })
+      if (soundType) {
+        const override = window.__environSoundTableDid >>> 0;
+        (override
+          ? playSoundFromCenter(scene3d, override, soundType)
+          : playUiSound(scene3d, soundType))
           .catch((e) => {
             // eslint-disable-next-line no-console
             console.warn(`[environ] sound resolve/play threw for type 0x${ec.toString(16)}:`, e);
