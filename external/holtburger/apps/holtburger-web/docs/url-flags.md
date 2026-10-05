@@ -1350,7 +1350,7 @@ EFFECTIVE absent-param behavior traced from the reader code, not from comments.
 | `routinePosGuard` | `!= off` | ON | lib.rs parse_routine_pos_guard_flag |
 | `seqDebug` | `== "seqDebug=1"` opt-in | OFF | lib.rs parse_seq_debug_flag |
 | `sharedWasm` | `=== "on"` opt-in | OFF | index.html:2018 |
-| `staticParticleEvict` | `!== "off"` | ON | statics.js:3839 |
+| ~~`staticParticleEvict`~~ | — | **REMOVED 2026-10-05** — eviction always on; `=off` only restored the measured staticsGroup leak (573→~114k nodes) | statics.js (no reader) |
 | `terrainRingTimeSlice` | `!== "off"` | ON | terrain.js:2698 |
 | `tipFlex` | _boolFlag(visualAllEffects()) | ON via visualAll | vfx_flags.js |
 | `tipPerf` | regex `!= off` | ON | ui/ac_font.js:265; plugins/status-indicators.js:440 |
