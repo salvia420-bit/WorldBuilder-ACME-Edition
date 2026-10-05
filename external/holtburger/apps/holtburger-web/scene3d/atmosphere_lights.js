@@ -113,6 +113,68 @@ export function retailSunLighting({
   };
 }
 
+function finite3(v) {
+  return !!v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+}
+function finiteNonZero3(v) {
+  return finite3(v) && v.x * v.x + v.y * v.y + v.z * v.z > 1e-12;
+}
+
+/**
+ * LIGHT-GUARD (2026-10-05) — last line of defence for the two scene-wide
+ * lights. Every lit material reads the sun's colour×intensity and the probe's
+ * 9 SH coefficients; one NaN/Inf in either blacks out the whole frame (and
+ * the bloom mip chain spreads it). Non-finite intensity → 0 (sun) / the
+ * retail 0.2 floor (probe); a non-finite sun colour falls back to the last
+ * finite one; a non-finite SH set is restored from the last finite copy.
+ * Mutates in place; returns the number of repairs (for tests/diag).
+ */
+export function sanitizeAtmosphereLights(lights) {
+  let fixes = 0;
+  const sun = lights && lights.sun;
+  const probe = lights && lights.skyProbe;
+  if (sun) {
+    if (!(Number.isFinite(sun.intensity) && sun.intensity >= 0)) {
+      sun.intensity = 0;
+      fixes += 1;
+    }
+    const c = sun.color;
+    if (c) {
+      if (Number.isFinite(c.r) && Number.isFinite(c.g) && Number.isFinite(c.b)) {
+        if (!lights._sunColorGood) lights._sunColorGood = c.clone();
+        else lights._sunColorGood.copy(c);
+      } else {
+        if (lights._sunColorGood) c.copy(lights._sunColorGood);
+        else c.setRGB(1, 1, 1);
+        fixes += 1;
+      }
+    }
+  }
+  if (probe) {
+    if (!(Number.isFinite(probe.intensity) && probe.intensity >= 0)) {
+      probe.intensity = LSCAPE_LIGHT_MINIMUM;
+      fixes += 1;
+    }
+    const co = probe.sh && probe.sh.coefficients;
+    if (Array.isArray(co)) {
+      let ok = true;
+      for (let i = 0; i < co.length && ok; i += 1) ok = finite3(co[i]);
+      if (ok) {
+        if (!lights._shGood) lights._shGood = co.map((v) => v.clone());
+        else for (let i = 0; i < co.length; i += 1) lights._shGood[i].copy(co[i]);
+      } else {
+        for (let i = 0; i < co.length; i += 1) {
+          if (lights._shGood && lights._shGood[i]) co[i].copy(lights._shGood[i]);
+          else co[i].set(0, 0, 0);
+        }
+        fixes += 1;
+      }
+    }
+  }
+  if (fixes) lights.guardFixes = (lights.guardFixes | 0) + fixes;
+  return fixes;
+}
+
 /**
  * Owns the takram SunDirectionalLight + SkyLightProbe and updates them
  * each frame from an AC SkyState snapshot.
@@ -214,11 +276,17 @@ export class AtmosphereLights {
   tick(state, cameraWorldPos) {
     if (!state) return;
 
+    // LIGHT-GUARD (2026-10-05) — a NaN heading/pitch (or a zero vector) would
+    // put NaN into the sun's direction uniform and the probe's SH, which
+    // blacks out every lit fragment. Keep the last good direction instead.
+    if (!this._sunDirGood) this._sunDirGood = new THREE.Vector3(0, 1, 0);
     sunDirFromHeadingPitch(state.dirHeading, state.dirPitch, this._sunDirScratch);
+    if (finiteNonZero3(this._sunDirScratch)) this._sunDirGood.copy(this._sunDirScratch);
+    else this._sunDirScratch.copy(this._sunDirGood);
     this.sun.sunDirection.copy(this._sunDirScratch);
     this.skyProbe.sunDirection.copy(this._sunDirScratch);
 
-    if (cameraWorldPos) {
+    if (cameraWorldPos && finite3(cameraWorldPos)) {
       // sun.target.position anchors the parallel light's shadow
       // camera. SunDirectionalLight.update() reads target.position
       // for the transmittance lookup.
@@ -292,6 +360,8 @@ export class AtmosphereLights {
       if (this.iblOwnsDiffuse) this.skyProbe.intensity = 0;
       this._sunTintApplied = false;
     }
+
+    sanitizeAtmosphereLights(this);
 
     this._lastState = state;
     this._tickCount += 1;

@@ -884,6 +884,10 @@ function allocateLightPool(lightsGroup, cfg) {
     lightsGroup.add(sl.target);
     spot.push(sl);
   }
+  // LIGHT-GUARD — park every slot at the safe idle pose from frame 0 (see
+  // parkPoolSlot).
+  for (let i = 0; i < point.length; i += 1) parkPoolSlot(point[i]);
+  for (let i = 0; i < spot.length; i += 1) parkPoolSlot(spot[i]);
   return {
     enabled: true,
     pointCount: cfg.pointCount,
@@ -892,6 +896,12 @@ function allocateLightPool(lightsGroup, cfg) {
     spot,
     selPoint: [], // nearest point sources, re-picked at the sort cadence
     selSpot: [], // nearest spot sources, re-picked at the sort cadence
+    // LIGHT-GUARD (2026-10-05) — per-slot verdict of the last write ("ok" |
+    // "idle" | a reject reason) for window.__diag.lights, plus cumulative
+    // reject counters.
+    pointStatus: new Array(cfg.pointCount).fill("idle"),
+    spotStatus: new Array(cfg.spotCount).fill("idle"),
+    guard: newLightGuardCounters(),
     _tmp: new THREE.Vector3(),
   };
 }
@@ -900,8 +910,14 @@ function allocateLightPool(lightsGroup, cfg) {
 // Used when the scene has zero active source lights so the pool goes dark
 // without a count change.
 function zeroLightPool(pool) {
-  for (let i = 0; i < pool.point.length; i += 1) pool.point[i].intensity = 0;
-  for (let i = 0; i < pool.spot.length; i += 1) pool.spot[i].intensity = 0;
+  for (let i = 0; i < pool.point.length; i += 1) {
+    parkPoolSlot(pool.point[i]);
+    if (pool.pointStatus) pool.pointStatus[i] = "idle";
+  }
+  for (let i = 0; i < pool.spot.length; i += 1) {
+    parkPoolSlot(pool.spot[i]);
+    if (pool.spotStatus) pool.spotStatus[i] = "idle";
+  }
   // Clear the hysteresis tags BEFORE forgetting the selection (same order
   // pickSelectedSources uses). INVARIANT: `__lightPoolSel` is true only while a
   // source actually holds a slot — a stale tag biases every later sort by
@@ -927,6 +943,11 @@ function pickSelectedSources(pool, scratch) {
   pool.selPoint.length = 0;
   pool.selSpot.length = 0;
   for (let i = 0; i < scratch.length; i += 1) {
+    // LIGHT-GUARD — a candidate whose world position was non-finite / absurd,
+    // or whose rig is detached, sorts as +Infinity; it must never be picked.
+    // (A NaN distSq used to poison Array.sort — a NaN comparator result gives
+    // an arbitrary, call-varying order, so slots "bounce" between sources.)
+    if (!(scratch[i].distSq < Infinity)) continue;
     const src = scratch[i].light;
     if (src.isSpotLight) {
       if (pool.selSpot.length < pool.spotCount) pool.selSpot.push(src);
@@ -945,49 +966,485 @@ function pickSelectedSources(pool, scratch) {
 }
 
 // Copy the currently-selected sources' LIVE world-position + colour + intensity
-// into the pool slots, zeroing the unused tail. Runs EVERY frame (not just on a
+// into the pool slots, parking the unused tail. Runs EVERY frame (not just on a
 // re-sort) so a light riding a moving creature never lags — the source light is
 // parented under the rig part, so getWorldPosition tracks it exactly.
+//
+// LIGHT-GUARD (2026-10-05): every value goes through writePoolSlot, which
+// validates/clamps it. A pool slot feeds EVERY lit material's light uniforms,
+// so one NaN/Infinity here turns every lit fragment NaN — and the bloom mip
+// chain then smears that NaN over the whole frame (the near-full-screen
+// black). Returns true when a SELECTED source was rejected this frame (the
+// cell-scoped path uses it to force a re-selection so the slot isn't wasted).
 function feedSelectedIntoPool(pool) {
   const tmp = pool._tmp;
+  let rejected = false;
   for (let i = 0; i < pool.point.length; i += 1) {
-    const dst = pool.point[i];
     const src = i < pool.selPoint.length ? pool.selPoint[i] : null;
-    if (!src) {
-      dst.intensity = 0;
-      continue;
-    }
-    if (typeof src.getWorldPosition === "function") src.getWorldPosition(tmp);
-    else if (src.position) tmp.set(src.position.x, src.position.y, src.position.z);
-    else tmp.set(0, 0, 0);
-    dst.position.copy(tmp);
-    if (dst.color && src.color) dst.color.copy(src.color);
-    dst.intensity = src.intensity || 0;
-    dst.distance = src.distance || 0;
-    if (src.decay != null) dst.decay = src.decay;
+    const st = writePoolSlot(pool.point[i], src, tmp, pool.guard);
+    if (pool.pointStatus) pool.pointStatus[i] = st;
+    if (src && st !== "ok") rejected = true;
   }
   for (let i = 0; i < pool.spot.length; i += 1) {
-    const dst = pool.spot[i];
     const src = i < pool.selSpot.length ? pool.selSpot[i] : null;
-    if (!src) {
-      dst.intensity = 0;
-      continue;
-    }
-    if (typeof src.getWorldPosition === "function") src.getWorldPosition(tmp);
-    else if (src.position) tmp.set(src.position.x, src.position.y, src.position.z);
-    else tmp.set(0, 0, 0);
-    dst.position.copy(tmp);
-    if (dst.color && src.color) dst.color.copy(src.color);
-    dst.intensity = src.intensity || 0;
-    dst.distance = src.distance || 0;
-    if (src.decay != null) dst.decay = src.decay;
-    if (src.angle != null) dst.angle = src.angle;
-    if (src.penumbra != null) dst.penumbra = src.penumbra;
-    if (src.target && typeof src.target.getWorldPosition === "function") {
-      src.target.getWorldPosition(tmp);
-      dst.target.position.copy(tmp);
+    const st = writePoolSlot(pool.spot[i], src, tmp, pool.guard);
+    if (pool.spotStatus) pool.spotStatus[i] = st;
+    if (src && st !== "ok") rejected = true;
+  }
+  return rejected;
+}
+
+// === LIGHT-GUARD (2026-10-05) — pool-slot parameter validation =============
+// Owner report: an intermittent near-full-screen black, correlated with a
+// flickering green light in the distance. The green light is almost surely a
+// green dungeon portal (Setup 0x020005D3 — 139 portal weenies; LightInfo
+// ARGB(255,0,150,0), intensity 100, falloff 6) or a green-lit creature /
+// Acid Stream projectile (0x020003F6, light at the part origin). Those are
+// ENTITY rigs, and their lights ride animated / ballistic transforms.
+//
+// Every pool slot is uploaded into EVERY lit material's light uniforms; GLSL
+// has no NaN firewall, so one bad slot value poisons every lit fragment, and
+// the HalfFloat bloom mip chain spreads even a single NaN pixel across the
+// screen. Intensity 0 does NOT save a slot: color*0 = 0, but the
+// attenuation/direction terms are computed from position/distance first and
+// NaN*0 = NaN. So every write is validated here:
+//   - position: finite and |c| <= LIGHT_POS_LIMIT, else the slot is parked;
+//   - intensity: finite, clamped to [0, LIGHT_INTENSITY_CLAMP];
+//   - distance: clamped to [0, LIGHT_DISTANCE_MAX] (the DAT carries one
+//     FLT_MAX falloff — Setup 0x02001096 — and ×1.3 overflows float32 → Inf);
+//   - decay / color / spot angle+penumbra: finite and in range;
+//   - a source whose rig is detached from the scene (a despawned entity
+//     whose light was never spliced out of activeLights) is parked.
+// Idle slots are PARKED far below the world with intensity 0 and a finite
+// cutoff, so no fragment ever sits exactly on an idle light (normalize(0) =
+// NaN) and the physical-falloff branch never sees distance 0.
+const LIGHT_POS_LIMIT = 1.0e6; // m — Dereth is ~49 km across; beyond is garbage
+const LIGHT_DISTANCE_MAX = 1000.0; // m — ~65x the largest finite DAT falloff×1.3
+const LIGHT_COLOR_MAX = 16.0; // linear; DAT colours decode to [0,1]
+const LIGHT_PARK_Y = -1.0e5; // idle-slot park point (three Y-up, under the world)
+const LIGHT_PARK_DISTANCE = 1.0;
+// Cell-scoped path: frames between re-checks while any candidate is rejected.
+const LIGHT_REJECT_RECHECK_FRAMES = 60;
+
+function newLightGuardCounters() {
+  return {
+    nonFinitePos: 0,
+    farPos: 0,
+    detached: 0,
+    nonFiniteIntensity: 0,
+    clampedIntensity: 0,
+    nonFiniteDistance: 0,
+    clampedDistance: 0,
+    badColor: 0,
+    badDecay: 0,
+    badSpot: 0,
+    lastReject: null,
+  };
+}
+
+function _finite3(v) {
+  return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
+}
+
+/**
+ * True when `obj` hangs under a parent chain that does NOT end at a
+ * THREE.Scene — its owning rig/placement was removed from the scene graph
+ * (entity despawn, disposed LOD rig) while the light stayed in
+ * `scene3d.activeLights`. A parentless object is NOT considered detached
+ * (free-standing carriers: the synthetic viewer light, test mocks).
+ *
+ * Only armed when the live scene3d carries a real `scene` (THREE.Scene) —
+ * set per tick by capActiveLightsByDistance via `_detachCheckArmed`. Headless
+ * harnesses that hang sources under a bare Group (never added to a Scene)
+ * keep the historic behaviour.
+ */
+let _detachCheckArmed = false;
+function isLightSourceDetached(obj) {
+  if (!_detachCheckArmed || !obj || !obj.parent) return false;
+  let o = obj;
+  for (let depth = 0; depth < 64 && o.parent; depth += 1) o = o.parent;
+  return o.isScene !== true;
+}
+
+/**
+ * Resolve a source's world position into `out`; returns null when usable or
+ * the reject reason ("nonFinitePos" | "farPos"). Never throws.
+ */
+function resolveSourcePosition(src, out) {
+  try {
+    if (typeof src.getWorldPosition === "function") src.getWorldPosition(out);
+    else if (src.position) out.set(src.position.x, src.position.y, src.position.z);
+    else out.set(0, 0, 0);
+  } catch (_) {
+    return "nonFinitePos";
+  }
+  if (!_finite3(out)) return "nonFinitePos";
+  if (
+    Math.abs(out.x) > LIGHT_POS_LIMIT ||
+    Math.abs(out.y) > LIGHT_POS_LIMIT ||
+    Math.abs(out.z) > LIGHT_POS_LIMIT
+  ) {
+    return "farPos";
+  }
+  return null;
+}
+
+/**
+ * Candidate sort key for the selection passes: squared distance to the
+ * reference point, or +Infinity for an unusable source (non-finite / absurd
+ * position, detached rig) so pickSelectedSources skips it.
+ */
+function candidateDistSq(light, tmp, refX, refY, refZ) {
+  if (isLightSourceDetached(light)) return Infinity;
+  if (resolveSourcePosition(light, tmp)) return Infinity;
+  const dx = tmp.x - refX;
+  const dy = tmp.y - refY;
+  const dz = tmp.z - refZ;
+  const d = dx * dx + dy * dy + dz * dz;
+  return Number.isFinite(d) ? d : Infinity;
+}
+
+/** Sanitize a light intensity. NaN/±Inf/negative → 0; cap LIGHT_INTENSITY_CLAMP. */
+export function sanitizeLightIntensity(v) {
+  const n = +v;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > LIGHT_INTENSITY_CLAMP ? LIGHT_INTENSITY_CLAMP : n;
+}
+
+/**
+ * Sanitize a three `distance` cutoff. NaN/negative/0 → 0 (three: infinite
+ * reach); +Inf or > LIGHT_DISTANCE_MAX → LIGHT_DISTANCE_MAX.
+ */
+export function sanitizeLightDistance(v) {
+  const n = +v;
+  if (Number.isNaN(n) || n <= 0) return 0;
+  return n > LIGHT_DISTANCE_MAX ? LIGHT_DISTANCE_MAX : n;
+}
+
+// Park an idle slot: dark, finite, far below the world, finite cutoff. Each
+// field is only written when it differs (no per-frame churn).
+function parkPoolSlot(dst) {
+  if (dst.intensity !== 0) dst.intensity = 0;
+  const p = dst.position;
+  if (p.x !== 0 || p.y !== LIGHT_PARK_Y || p.z !== 0) p.set(0, LIGHT_PARK_Y, 0);
+  if (dst.distance !== LIGHT_PARK_DISTANCE) dst.distance = LIGHT_PARK_DISTANCE;
+  if (!(Number.isFinite(dst.decay) && dst.decay >= 0)) dst.decay = LIGHT_DECAY;
+  const c = dst.color;
+  if (c && !(Number.isFinite(c.r) && Number.isFinite(c.g) && Number.isFinite(c.b))) {
+    c.setRGB(1, 1, 1);
+  }
+  if (dst.isSpotLight && dst.target) {
+    const t = dst.target.position;
+    if (t.x !== 0 || t.y !== LIGHT_PARK_Y - 1 || t.z !== 0) t.set(0, LIGHT_PARK_Y - 1, 0);
+  }
+}
+
+function _guardReject(guard, reason, src) {
+  if (!guard) return;
+  if (typeof guard[reason] === "number") guard[reason] += 1;
+  let at = 0;
+  try {
+    at = typeof performance !== "undefined" && performance.now ? performance.now() : 0;
+  } catch (_) {}
+  guard.lastReject = { reason, source: describeLightSource(src), at };
+}
+
+/**
+ * Write one source into one pool slot with full validation. Returns "ok",
+ * "idle" (no source; slot parked) or the reject reason (slot parked).
+ * Exported for the headless tests.
+ */
+export function writePoolSlot(dst, src, tmp, guard) {
+  if (!src) {
+    parkPoolSlot(dst);
+    return "idle";
+  }
+  if (isLightSourceDetached(src)) {
+    parkPoolSlot(dst);
+    _guardReject(guard, "detached", src);
+    return "detached";
+  }
+  const posErr = resolveSourcePosition(src, tmp);
+  if (posErr) {
+    parkPoolSlot(dst);
+    _guardReject(guard, posErr, src);
+    return posErr;
+  }
+  const rawI = src.intensity == null ? 0 : +src.intensity;
+  if (!Number.isFinite(rawI)) {
+    // A non-finite intensity is a malformed source — park, don't guess.
+    parkPoolSlot(dst);
+    _guardReject(guard, "nonFiniteIntensity", src);
+    return "nonFiniteIntensity";
+  }
+  const sc = src.color;
+  if (sc && !(Number.isFinite(sc.r) && Number.isFinite(sc.g) && Number.isFinite(sc.b))) {
+    parkPoolSlot(dst);
+    _guardReject(guard, "badColor", src);
+    return "badColor";
+  }
+  dst.position.copy(tmp);
+  if (dst.color && sc) {
+    dst.color.setRGB(
+      Math.min(LIGHT_COLOR_MAX, Math.max(0, sc.r)),
+      Math.min(LIGHT_COLOR_MAX, Math.max(0, sc.g)),
+      Math.min(LIGHT_COLOR_MAX, Math.max(0, sc.b))
+    );
+  }
+  if (guard && rawI > LIGHT_INTENSITY_CLAMP) guard.clampedIntensity += 1;
+  dst.intensity = sanitizeLightIntensity(rawI);
+  const rawD = src.distance == null ? 0 : +src.distance;
+  if (guard && !Number.isFinite(rawD)) guard.nonFiniteDistance += 1;
+  else if (guard && rawD > LIGHT_DISTANCE_MAX) guard.clampedDistance += 1;
+  dst.distance = sanitizeLightDistance(rawD);
+  if (src.decay != null) {
+    const dk = +src.decay;
+    if (Number.isFinite(dk) && dk >= 0 && dk <= 8) dst.decay = dk;
+    else {
+      dst.decay = LIGHT_DECAY;
+      if (guard) guard.badDecay += 1;
     }
   }
+  if (dst.isSpotLight) {
+    if (src.angle != null) {
+      const a = +src.angle;
+      if (Number.isFinite(a) && a > 0 && a <= Math.PI / 2) dst.angle = a;
+      else {
+        dst.angle = Math.PI / 6;
+        if (guard) guard.badSpot += 1;
+      }
+    }
+    if (src.penumbra != null) {
+      const pn = +src.penumbra;
+      dst.penumbra = Number.isFinite(pn) ? Math.min(1, Math.max(0, pn)) : 0;
+    }
+    let aimed = false;
+    if (src.target && typeof src.target.getWorldPosition === "function") {
+      try {
+        const tp = dst.target.position;
+        src.target.getWorldPosition(tp);
+        // A target ON the light gives a zero-length cone axis (normalize(0)
+        // = NaN in the shader) — fall through and aim straight down.
+        if (_finite3(tp) && tp.distanceToSquared(tmp) > 1e-12) aimed = true;
+      } catch (_) {}
+    }
+    if (!aimed) dst.target.position.set(tmp.x, tmp.y - 1, tmp.z);
+  }
+  return "ok";
+}
+
+/**
+ * Compact, JSON-safe identity of a light source for diagnostics: what it is
+ * (entity rig / outdoor static / cell static / viewer) plus the stamps the
+ * attach paths leave on userData.
+ */
+function describeLightSource(src) {
+  if (!src) return null;
+  const ud = src.userData || {};
+  let kind = "dynamic";
+  if (src.isViewerLightSource) kind = "viewer";
+  else if (ud.__entityLight) kind = "entityLight";
+  else if (ud.__ownerGuid != null) kind = "entityRig";
+  else if (ud.__cellId != null) kind = "cellStatic";
+  else if (ud.__lbKey != null) kind = "outdoorStatic";
+  const hex = (n) => (n == null ? null : "0x" + (n >>> 0).toString(16).padStart(8, "0"));
+  return {
+    kind,
+    name: src.name || null,
+    guid: hex(ud.__ownerGuid),
+    setupId: hex(ud.__setupId),
+    lbKey: hex(ud.__lbKey),
+    cellId: hex(ud.__cellId),
+    seq: src.__lightSeqId ?? null,
+  };
+}
+
+/**
+ * LIGHT-GUARD (2026-10-05) — `window.__diag.lights(opts)` snapshot.
+ *
+ * What three is ACTUALLY uploading as light uniforms, slot by slot, plus the
+ * selected source behind each slot and every visible scene light (sun, sky
+ * probe, hemisphere, ambient, CSM casters). Paste-able JSON; `bad` lists every
+ * non-finite / out-of-range value found. Cheap enough to call from a console
+ * while the black screen is up (no allocation outside the call).
+ *
+ *   opts.all     — also list every activeLights source (default: only bad ones)
+ *   opts.limit   — cap for that list (default 400)
+ */
+export function lightPoolSnapshot(scene3d, opts = {}) {
+  const round = (n, d = 3) =>
+    typeof n === "number" ? (Number.isFinite(n) ? +n.toFixed(d) : String(n)) : n;
+  const vec = (v) => (v ? [round(v.x), round(v.y), round(v.z)] : null);
+  const col = (c) => (c ? [round(c.r), round(c.g), round(c.b)] : null);
+  const fin = (...xs) => xs.every((x) => typeof x !== "number" || Number.isFinite(x));
+  const bad = [];
+  const out = {
+    t: (() => {
+      try { return typeof performance !== "undefined" ? round(performance.now(), 1) : 0; } catch (_) { return 0; }
+    })(),
+    mode: null,
+    pool: null,
+    cell: null,
+    sceneLights: [],
+    sources: null,
+    bad,
+  };
+  if (!scene3d) return out;
+  const lighting = scene3d.lighting;
+  const pool = lighting && lighting.lightPool;
+  const clCfg = getCellLightsConfig();
+  out.mode = !pool || !pool.enabled ? "legacy-visible-cap" : clCfg.enabled ? "pool+cellLights" : "pool+hysteresis";
+  const tmp = new THREE.Vector3();
+  if (pool && pool.enabled) {
+    const slots = [];
+    const dump = (arr, sel, status, type) => {
+      for (let i = 0; i < arr.length; i += 1) {
+        const l = arr[i];
+        const src = i < sel.length ? sel[i] : null;
+        const row = {
+          slot: `${type}${i}`,
+          status: status ? status[i] : null,
+          intensity: round(l.intensity),
+          distance: round(l.distance),
+          decay: round(l.decay),
+          color: col(l.color),
+          pos: vec(l.position),
+          src: describeLightSource(src),
+        };
+        if (src) {
+          row.srcIntensity = round(src.intensity);
+          row.srcDistance = round(src.distance);
+          row.srcColorHex = src.color && src.color.getHexString ? "#" + src.color.getHexString() : null;
+          try {
+            if (typeof src.getWorldPosition === "function") {
+              src.getWorldPosition(tmp);
+              row.srcPos = vec(tmp);
+            }
+          } catch (e) {
+            row.srcPos = "threw: " + (e && e.message);
+          }
+          row.detached = isLightSourceDetached(src);
+        }
+        if (type === "spot") {
+          row.angle = round(l.angle);
+          row.penumbra = round(l.penumbra);
+          row.target = vec(l.target && l.target.position);
+        }
+        const p = l.position;
+        const c = l.color;
+        row.finite = fin(l.intensity, l.distance, l.decay, p.x, p.y, p.z, c.r, c.g, c.b) &&
+          (type !== "spot" || fin(l.angle, l.penumbra));
+        if (!row.finite || l.intensity < 0 || l.distance < 0) bad.push({ where: row.slot, row });
+        slots.push(row);
+      }
+    };
+    dump(pool.point, pool.selPoint, pool.pointStatus, "point");
+    dump(pool.spot, pool.selSpot, pool.spotStatus, "spot");
+    out.pool = {
+      pointCount: pool.pointCount,
+      spotCount: pool.spotCount,
+      lit: slots.filter((r) => r.status === "ok").length,
+      guard: pool.guard ? { ...pool.guard } : null,
+      hysteresis: getLightPoolConfig().hysteresis,
+      slots,
+    };
+  }
+  const st = scene3d._cellLightsStats;
+  if (st) out.cell = { ...st };
+  // Every VISIBLE light in the scene graph — exactly the set three counts and
+  // uploads (sun, probe, ambient, hemisphere, CSM, pool slots, and — on the
+  // legacy path — the visible sources themselves).
+  const root = scene3d.scene || (lighting && lighting.lightsGroup && lighting.lightsGroup.parent) || null;
+  if (root && typeof root.traverseVisible === "function") {
+    root.traverseVisible((o) => {
+      if (!o.isLight || (pool && pool.enabled && o.name && o.name.startsWith("lightpool-"))) return;
+      const row = {
+        type: o.type,
+        name: o.name || null,
+        intensity: round(o.intensity),
+        color: col(o.color),
+        castShadow: !!o.castShadow,
+      };
+      const nums = [o.intensity, o.color && o.color.r, o.color && o.color.g, o.color && o.color.b];
+      try {
+        o.getWorldPosition(tmp);
+        row.pos = vec(tmp);
+        nums.push(tmp.x, tmp.y, tmp.z);
+      } catch (_) {}
+      if (o.isDirectionalLight && o.target) {
+        try {
+          const tp = new THREE.Vector3();
+          o.target.getWorldPosition(tp);
+          row.dir = vec(tp.sub(tmp));
+          nums.push(tp.x, tp.y, tp.z);
+          if (tp.lengthSq() === 0) bad.push({ where: "dirlight-zero-direction", row });
+        } catch (_) {}
+      }
+      if (o.sunDirection) {
+        row.sunDirection = vec(o.sunDirection);
+        nums.push(o.sunDirection.x, o.sunDirection.y, o.sunDirection.z);
+      }
+      if (o.isLightProbe && o.sh && Array.isArray(o.sh.coefficients)) {
+        for (const c of o.sh.coefficients) nums.push(c.x, c.y, c.z);
+        row.sh0 = vec(o.sh.coefficients[0]);
+      }
+      if (o.isPointLight || o.isSpotLight) {
+        row.distance = round(o.distance);
+        row.decay = round(o.decay);
+        nums.push(o.distance, o.decay);
+      }
+      row.finite = fin(...nums);
+      if (!row.finite) bad.push({ where: "scene:" + (o.name || o.type), row });
+      out.sceneLights.push(row);
+    });
+  }
+  // Sources: by default only the bad ones (non-finite pose, detached rig).
+  const lights = Array.isArray(scene3d.activeLights) ? scene3d.activeLights : [];
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 400;
+  const rows = [];
+  let nBad = 0;
+  let nDetached = 0;
+  for (let i = 0; i < lights.length; i += 1) {
+    const l = lights[i];
+    const det = isLightSourceDetached(l);
+    const posErr = resolveSourcePosition(l, tmp);
+    const iOk = Number.isFinite(+l.intensity) && Number.isFinite(+l.distance);
+    if (det) nDetached += 1;
+    const isBad = !!posErr || !iOk;
+    if (isBad) nBad += 1;
+    if ((opts.all || isBad || det) && rows.length < limit) {
+      rows.push({
+        i,
+        src: describeLightSource(l),
+        detached: det,
+        posErr,
+        pos: vec(tmp),
+        intensity: round(l.intensity),
+        distance: round(l.distance),
+        colorHex: l.color && l.color.getHexString ? "#" + l.color.getHexString() : null,
+        selected: !!l.__lightPoolSel,
+      });
+    }
+  }
+  out.sources = { total: lights.length, bad: nBad, detached: nDetached, rows };
+  return out;
+}
+
+// Install / re-install `window.__diag.lights` (diag.js rebuilds the
+// window.__diag object on init and merges prior keys; anything that replaces
+// it wholesale would drop ours, so this is re-checked every tick — one
+// property read).
+function installLightDiag(scene3d) {
+  if (typeof window === "undefined") return;
+  try {
+    const d = window.__diag || (window.__diag = {});
+    if (d.lights && d.lights.__scene3d === scene3d) return;
+    const fn = (opts) => lightPoolSnapshot(scene3d, opts || {});
+    fn.__scene3d = scene3d;
+    // One-liner for the owner: JSON on the clipboard-friendly console.
+    fn.json = (opts) => JSON.stringify(lightPoolSnapshot(scene3d, opts || {}), null, 1);
+    d.lights = fn;
+  } catch (_) { /* never let diagnostics break the light tick */ }
 }
 
 // === LG1 (render-completeness waves-3, 2026-05-29) — intensity clamp ===
@@ -1552,9 +2009,13 @@ function refreshCellLightRef(scene3d, camera) {
   if (switcher && typeof switcher.getPlayerWorldPosition === "function") {
     haveRef = switcher.getPlayerWorldPosition(refPos) != null;
   }
+  // LIGHT-GUARD — a non-finite player pose must not become the ranking origin
+  // (every candidate would rank NaN → nothing lit, or garbage order).
+  if (haveRef && !_finite3(refPos)) haveRef = false;
   if (!haveRef) {
     const cam = camera ?? scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
-    if (cam && cam.position) refPos.copy(cam.position);
+    if (cam && cam.position && _finite3(cam.position)) refPos.copy(cam.position);
+    else if (!_finite3(refPos)) refPos.set(0, 0, 0);
   }
   return refPos;
 }
@@ -1631,7 +2092,9 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
     // and dynamics claim HW slots before statics (minimize_object_lighting).
     scratch.push({ light: viewerSrc, distSq: -1 });
   }
+  const hysteresis = getLightPoolConfig().hysteresis ?? 1;
   let scoped = 0;
+  let rejected = 0;
   for (let i = 0; i < lights.length; i += 1) {
     const light = lights[i];
     const ud = light.userData;
@@ -1642,18 +2105,27 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
       if (enclosed) continue; // outdoor lamp can't reach an enclosed cell
     }
     // else: entity/dynamic source — always a candidate.
-    scoped += 1;
-    if (typeof light.getWorldPosition === "function") {
-      light.getWorldPosition(tmp);
-    } else if (light.position) {
-      tmp.set(light.position.x, light.position.y, light.position.z);
-    } else {
-      tmp.set(0, 0, 0);
+    // LIGHT-GUARD — unusable sources (non-finite / absurd position, detached
+    // rig) are counted and dropped here so they can neither be selected nor
+    // scramble the sort (a NaN key made Array.sort order arbitrary).
+    let distSq = candidateDistSq(light, tmp, refX, refY, refZ);
+    if (!(distSq < Infinity)) {
+      rejected += 1;
+      continue;
     }
-    const dx = tmp.x - refX;
-    const dy = tmp.y - refY;
-    const dz = tmp.z - refZ;
-    scratch.push({ light, distSq: lightSelectionSortKey(dx * dx + dy * dy + dz * dz, ud) });
+    scoped += 1;
+    // LIGHT-GUARD — selection stick band on this path too (same factor as the
+    // legacy path, ?lightHysteresis). "Rebuild only on set change" removed the
+    // per-frame churn, but every rebuild (LB stream-in, entity spawn/despawn,
+    // cell crossing) still re-ranked purely by distance, so the source at the
+    // N/N+1 boundary — typically a distant portal — flipped in and out as you
+    // walked: the "flickering light off in the distance".
+    if (hysteresis !== 1 && light.__lightPoolSel) distSq *= hysteresis;
+    // Projectile lights outrank static torches within range (retail gives
+    // moving lights priority). Applied AFTER the stick band: the priority key
+    // is negative, and scaling a negative key would DEMOTE a held light.
+    distSq = lightSelectionSortKey(distSq, ud);
+    scratch.push({ light, distSq });
   }
   scratch.sort(sortByDistSq);
   pickSelectedSources(pool, scratch);
@@ -1661,6 +2133,7 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
   if (stats) {
     stats.scoped = scoped;
     stats.candidates = lights.length;
+    stats.rejected = rejected;
   }
 }
 
@@ -1681,6 +2154,8 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
  * lives in. No coord-transform needed.
  */
 function capActiveLightsByDistance(scene3d, sessionHandle) {
+  if (scene3d) installLightDiag(scene3d);
+  _detachCheckArmed = !!(scene3d && scene3d.scene && scene3d.scene.isScene === true);
   const lights = scene3d?.activeLights;
   const lightPool = scene3d?.lighting?.lightPool;
   // RND-05/03 — cell-scoped selection is only meaningful in pool mode (the
@@ -1744,20 +2219,37 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
       stats = {
         rebuilds: 0, key: 0, count: -1, srcKey: 0,
         scoped: 0, candidates: 0, built: false,
+        rejected: 0, framesSinceBuild: 0, dirty: false,
       };
       scene3d._cellLightsStats = stats;
     }
-    if (stats.built && key === stats.key && stats.srcKey === srcKey) {
-      feedSelectedIntoPool(lightPool);
+    stats.framesSinceBuild = (stats.framesSinceBuild | 0) + 1;
+    // LIGHT-GUARD — two extra (cheap, rare) rebuild triggers on top of the
+    // retail set/inventory key: (a) a SELECTED source went bad mid-hold
+    // (feed parked it → `dirty`), so its slot is handed to the next-best
+    // source on the very next frame instead of sitting dark until an
+    // unrelated set change; (b) candidates were rejected at the last build
+    // (NaN pose / detached rig) — re-check them at a slow cadence so a
+    // transiently-bad source (or a rig re-attached to the scene) comes back.
+    const recheck =
+      (stats.rejected | 0) > 0 &&
+      stats.framesSinceBuild >= LIGHT_REJECT_RECHECK_FRAMES;
+    if (
+      stats.built && !stats.dirty && !recheck &&
+      key === stats.key && stats.srcKey === srcKey
+    ) {
+      if (feedSelectedIntoPool(lightPool)) stats.dirty = true;
       return;
     }
     selectCellScopedSources(scene3d, lightPool, lights, renderSetArr, viewerSrc);
-    feedSelectedIntoPool(lightPool);
+    stats.dirty = false;
+    if (feedSelectedIntoPool(lightPool)) stats.dirty = true;
     stats.rebuilds += 1;
     stats.key = key;
     stats.count = lights.length;
     stats.srcKey = srcKey;
     stats.built = true;
+    stats.framesSinceBuild = 0;
     return;
   }
 
@@ -1811,7 +2303,11 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
   if (switcher && typeof switcher.getPlayerWorldPosition === "function") {
     haveRef = switcher.getPlayerWorldPosition(refPos) != null;
   }
-  if (!haveRef) refPos.copy(camera.position);
+  if (haveRef && !_finite3(refPos)) haveRef = false; // LIGHT-GUARD
+  if (!haveRef) {
+    if (_finite3(camera.position)) refPos.copy(camera.position);
+    else if (!_finite3(refPos)) refPos.set(0, 0, 0);
+  }
   const refX = refPos.x;
   const refY = refPos.y;
   const refZ = refPos.z;
@@ -1845,17 +2341,10 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // Reach for getWorldPosition. Light is parented under a part
     // Object3D inside worldRoot, so we need its WORLD position (the
     // local position is part-relative, not world-relative).
-    if (typeof light.getWorldPosition === "function") {
-      light.getWorldPosition(tmp);
-    } else if (light.position) {
-      tmp.set(light.position.x, light.position.y, light.position.z);
-    } else {
-      tmp.set(0, 0, 0);
-    }
-    const dx = tmp.x - refX;
-    const dy = tmp.y - refY;
-    const dz = tmp.z - refZ;
-    let distSq = dx * dx + dy * dy + dz * dz;
+    // LIGHT-GUARD — unusable sources (non-finite / absurd position, detached
+    // rig) key as +Infinity: they sort last, are never picked into a pool
+    // slot, and can't scramble the sort the way a NaN key did.
+    let distSq = candidateDistSq(light, tmp, refX, refY, refZ);
     // Stick band: a source that held a pool slot last cycle sorts as if it
     // were `√hysteresis` nearer, so it isn't kicked out by a barely-closer
     // rival. Inert when hysteresis === 1 or the source was unselected.
@@ -1886,7 +2375,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // correct flags. (This `.visible` churn is exactly the per-type COUNT
     // change that relinks every lit material — see the ?lightPool note above.)
     for (let i = 0; i < scratch.length; i += 1) {
-      const want = i < MAX_ACTIVE_LIGHTS;
+      const want = i < MAX_ACTIVE_LIGHTS && scratch[i].distSq < Infinity;
       const light = scratch[i].light;
       if (light.visible !== want) {
         light.visible = want;
@@ -2143,14 +2632,18 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // C3 #6 — entity-rig lights are owned by entities.js `remove()`
       // (it detaches/disposes per-rig lights), so they get NO __lbKey
       // and are NEVER bucketed into lightsByLbKey. Pass lbKey: null.
+      // LIGHT-GUARD — carry the owning instance + guid so the attach loop can
+      // (a) skip a rig that despawned while the fetch was in flight and
+      // (b) stamp `__ownerGuid` for window.__diag.lights.
+      const ownerGuid = (inst.guid ?? 0) >>> 0;
       for (let pi = 0; pi < parts.length; pi += 1) {
         const p = parts[pi];
-        if (p) entry.push({ partIndex: pi, object3D: p, lbKey: null });
+        if (p) entry.push({ partIndex: pi, object3D: p, lbKey: null, ownerInst: inst, ownerGuid });
       }
       // If no per-part groups were tracked, fall back to attaching at
       // the rig root as part 0.
       if (parts.length === 0) {
-        entry.push({ partIndex: 0, object3D: root, lbKey: null });
+        entry.push({ partIndex: 0, object3D: root, lbKey: null, ownerInst: inst, ownerGuid });
       }
     });
   }
@@ -2271,8 +2764,19 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // placement setups never pay the template cost.
       /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
       let template = null;
-      for (const { partIndex, object3D, lbKey, cellId } of partEntries) {
+      for (const { partIndex, object3D, lbKey, cellId, ownerInst, ownerGuid } of partEntries) {
         if (partIndex !== targetPartIndex) continue;
+        // LIGHT-GUARD — the entity despawned (or was LOD-respawned under the
+        // same guid) while `fetchSetupModelLights` was awaited: attaching
+        // would parent a light to a disposed rig and push it into
+        // activeLights with no owner left to release it (a ghost light that
+        // never moves again).
+        if (ownerInst) {
+          const em = scene3d.entityManager;
+          const map = em && em.entityMap;
+          if (ownerInst._disposed) continue;
+          if (map && typeof map.get === "function" && map.get(ownerGuid) !== ownerInst) continue;
+        }
         // Per-placement instance. First placement reuses the source
         // light (zero allocation beyond what `makeThreeLightForSetupLight`
         // already paid); subsequent placements construct a fresh
@@ -2331,6 +2835,10 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
           if (!inst.userData) inst.userData = {};
           inst.userData.__cellId = cellId >>> 0;
         }
+        // LIGHT-GUARD — provenance stamps for window.__diag.lights.
+        if (!inst.userData) inst.userData = {};
+        inst.userData.__setupId = setupId >>> 0;
+        if (ownerInst) inst.userData.__ownerGuid = ownerGuid >>> 0;
       }
       if (!attachedAny) {
         // No matching part for this light's partIndex — possible
@@ -2462,6 +2970,14 @@ function createLightFromTemplate(template, transform) {
   if (srcUd) {
     const ud = {};
     for (const k in srcUd) {
+      // LIGHT-GUARD — `__`-prefixed keys are PER-INSTANCE stamps
+      // (__lbKey / __cellId / __ownerGuid / __setupId / __vfxFlamePhase ...)
+      // written onto the FIRST placement, whose userData object IS the
+      // template's. Copying them leaked placement #1's scope onto every
+      // later placement (e.g. an outdoor lantern inheriting an interior
+      // `__cellId` and going dark whenever that room left the render set,
+      // or an entity rig light inheriting a static's `__lbKey`).
+      if (k.charCodeAt(0) === 95 && k.charCodeAt(1) === 95) continue;
       if (Object.prototype.hasOwnProperty.call(srcUd, k)) {
         ud[k] = srcUd[k];
       }
@@ -2581,8 +3097,16 @@ function makeThreeLightForSetupLight(sl) {
   // NOT pre-multiply), so this is the only 1.3× in the chain (STATIC_LIGHT_FACTOR
   // is the module-level const). Default-on, fail-soft (0/NaN falloff ⇒ 0 =
   // infinite reach, unchanged).
+  //
+  // LIGHT-GUARD (2026-10-05): capped at LIGHT_DISTANCE_MAX. The base DAT has
+  // exactly one non-physical falloff — Setup 0x02001096, falloff = FLT_MAX
+  // (3.4028235e38) — and FLT_MAX*1.3 overflows the float32 uniform to +Inf.
+  // Census of all 608 Setup lights (client_portal.dat, 2026-10-05): every
+  // other falloff is 1..15 m, so the cap never touches real data.
   const safeFalloff =
-    Number.isFinite(falloff) && falloff > 0 ? falloff * STATIC_LIGHT_FACTOR : 0;
+    Number.isFinite(falloff) && falloff > 0
+      ? Math.min(LIGHT_DISTANCE_MAX, falloff * STATIC_LIGHT_FACTOR)
+      : 0;
   // #16 (2026-06-07) — AC's LightInfo color channels are authored in
   // gamma/sRGB space (the same space the DAT textures live in). With
   // three.js ColorManagement enabled (the renderer's default), a bare
@@ -2605,7 +3129,12 @@ function makeThreeLightForSetupLight(sl) {
   // and the attach/release path is byte-identical to today. A SpotLight
   // with no orientation falls back to three.js's default downward aim.
   let spotTargetLocal = null;
+  // LIGHT-GUARD: a cone wider than a hemisphere is not a spotlight three can
+  // express (the shipped DAT's cone_angle is uninitialised garbage, always
+  // about -2.3e23, so every shipped light is a PointLight); clamp a real one
+  // to (0, pi/2].
   if (Number.isFinite(coneAngle) && coneAngle > 0) {
+    coneAngle = Math.min(coneAngle, Math.PI / 2);
     // SpotLight. `angle` is the cone's half-angle in radians;
     // `penumbra` is the soft-edge fraction; `decay` is physical
     // inverse-square falloff.

@@ -317,6 +317,7 @@ const TIER5 = [
   { tier: 5, flag: "leak01_bridge_index_prune", file: "test_leak01_bridge_index_prune.mjs" },
   { tier: 5, flag: "lifestone_popup", file: "test_lifestone_popup.mjs" },
   { tier: 5, flag: "light_pool", file: "test_light_pool.mjs" },
+  { tier: 5, flag: "light_guard", file: "test_light_guard.mjs" },
   { tier: 5, flag: "lore_panel", file: "test_lore_panel.mjs" },
   { tier: 5, flag: "lru_light_eviction", file: "test_lru_light_eviction.mjs" },
   { tier: 5, flag: "map_panel", file: "test_map_panel.mjs" },

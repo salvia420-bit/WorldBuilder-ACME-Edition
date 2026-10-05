@@ -11059,6 +11059,22 @@ export class EntityManager {
         if (bucket.size === 0) this._nameToGuid.delete(inst.meta.name);
       }
     }
+    // LIGHT-GUARD (2026-10-05) — release the Setup lights that lighting.js
+    // `attachSetupModelLights` (recordEntities) parented under this rig. Only
+    // the `?entityLights` path (`inst._setupLights`, below) was ever spliced
+    // out of `scene3d.activeLights`; these default-path rig lights (green
+    // dungeon portals, lit creatures, Acid Stream bolts…) leaked forever as
+    // ghost pool sources frozen at the despawn pose.
+    if (inst._setupLightScanned === true && inst.root && Array.isArray(this.scene3d?.activeLights)) {
+      const active = this.scene3d.activeLights;
+      try {
+        inst.root.traverse((o) => {
+          if (!o.isLight) return;
+          const idx = active.indexOf(o);
+          if (idx !== -1) active.splice(idx, 1);
+        });
+      } catch (_) { /* never block a despawn on light bookkeeping */ }
+    }
     inst.dispose();
     this.entityMap.delete(g);
     this.removeCount += 1;
