@@ -1,11 +1,11 @@
 // A15-Q3 (2026-06-12, SQ3 spec §5) — acceptance gate for the unified
 // entity-update dispatcher.
 //
-//   PART 1 — call-sequence parity: over synthetic plain-JS updates for
-//            kinds 0,1,2,3,4,5,6,7,8,9 (every field set), the unified
-//            `dispatchEntityUpdate` produces the same EntityManager call
-//            sequence as the legacy direct-drain arm
-//            (`_legacyDirectDrainArm`) for the shared kinds.
+//   PART 1 — call sequence: over synthetic plain-JS updates for kinds
+//            0..9 (every field set), the unified `dispatchEntityUpdate`
+//            makes the expected EntityManager calls. (The legacy
+//            direct-drain arm it used to be compared against was removed
+//            2026-10-05 with ?legacyDirectDrain.)
 //   PART 2 — flag gating: D2 (FU-1 wield nudge) fires only under
 //            em._wieldHandAttach; D4 (FU-3 server-swing pose) fires only
 //            under ?serverSwing=on + local guid + attack-class cmd.
@@ -15,9 +15,6 @@
 //   PART 4 — lifetime: the drainEntityEvents3D wrapper frees each handle
 //            exactly once; the shared-drain hook path NEVER frees.
 //            dispatchEntityUpdate never throws on a hostile update.
-//   PART 5 — ?legacyDirectDrain=on routes to the verbatim legacy arm
-//            (observable: no __lastEntityWorldPos pos-slot stash, which
-//            only the unified core performs on KIND_POSITION).
 //
 // loop.js imports three-dependent modules (entities.js etc.), so this
 // test source-transforms it: strip the import statements, prepend no-op
@@ -106,7 +103,7 @@ const createEntityDispatcher = ({ neutral = {}, backend = {} } = {}) => ({
 const THREE_URL = pathToFileURL(joinPath(__dirname, "node_modules", "three", "build", "three.module.js")).href;
 const transformed =
   `import * as THREE from ${JSON.stringify(THREE_URL)};\n` + stubs + stripped +
-  "\nexport { drainEntityEvents3D as __testDrain, _legacyDirectDrainArm as __testLegacyArm };\n";
+  "\nexport { drainEntityEvents3D as __testDrain };\n";
 
 async function loadLoopModule(search, salt) {
   // Flag IIFEs read window.location.search at module load — set it first.
@@ -197,7 +194,7 @@ const sceneStub = { useSharedDrain: false, entityManager: null };
 const sig = (calls) => calls.map((c) => `${c[0]}(${typeof c[1] === "object" ? "obj" : c[1]})`).join(" | ");
 
 // =====================================================================
-console.log("PART 1 — call-sequence parity: unified core vs legacy arm");
+console.log("PART 1 — unified core call sequence");
 {
   globalThis.window = { getLocalPlayerGuid: () => LOCAL_GUID };
   // dispatchParity / serverSwing were promoted DEFAULT-ON (`!== "off"`
@@ -221,21 +218,9 @@ console.log("PART 1 — call-sequence parity: unified core vs legacy arm");
   const sc1 = { ...sceneStub, entityManager: emUnified };
   for (const u of sequence) mod.dispatchEntityUpdate(sc1, emUnified, u);
 
-  delete globalThis.window.__lastEntityWorldPos;
-  const emLegacy = makeEm();
-  const sc2 = { ...sceneStub, entityManager: emLegacy };
-  mod.__testLegacyArm(sc2, fakeSession(sequence.map((u) => ({ ...u }))));
-
-  // Legacy KIND_MOTION_ACTION calls consumeLocalSwingEcho unconditionally
-  // (the F6-2 dedup shipped unflagged in the dead arm); the unified core
-  // gates it behind ?dispatchParity (off here). Drop that probe call from
-  // the legacy trace — with echoConsumed=false the subsequent setMotion is
-  // identical, so the EFFECTFUL sequences must match exactly.
-  const legacyEffectful = emLegacy.calls.filter((c) => c[0] !== "consumeLocalSwingEcho");
-  check("effectful EntityManager call sequences identical (shared kinds)",
-    sig(emUnified.calls) === sig(legacyEffectful),
-    sig(emUnified.calls) !== sig(legacyEffectful)
-      ? `unified=[${sig(emUnified.calls)}] legacy=[${sig(legacyEffectful)}]` : undefined);
+  check("unified core dispatched every shared kind",
+    ["setPose", "setMotion", "setLocalStance"].every((n) => emUnified.calls.some((c) => c[0] === n)),
+    `calls=[${sig(emUnified.calls)}]`);
   check("unified core never called consumeLocalSwingEcho with flag off",
     !emUnified.calls.some((c) => c[0] === "consumeLocalSwingEcho"));
   check("local MOTION echo → setLocalStance, not setMotion (B9 skip kept)",
@@ -365,28 +350,6 @@ console.log("PART 4 — lifetime: wrapper frees exactly once, hook never; no thr
   } catch (_) { threw = true; }
   finally { console.warn = realWarn; }
   check("dispatchEntityUpdate never throws (hostile/null/unknown-kind)", !threw);
-}
-
-// =====================================================================
-console.log("PART 5 — ?legacyDirectDrain=on routes to the verbatim legacy arm");
-{
-  globalThis.window = { getLocalPlayerGuid: () => LOCAL_GUID };
-  const mod = await loadLoopModule("?legacyDirectDrain=on", "p5");
-  delete globalThis.window.__lastEntityWorldPos;
-  let freed = 0;
-  const u = upd(0);
-  u.free = () => { freed += 1; };
-  const em = makeEm();
-  mod.__testDrain({ useSharedDrain: false, entityManager: em }, fakeSession([u]));
-  check("legacy arm still dispatches (setPose) and frees once",
-    em.calls.some((c) => c[0] === "setPose") && freed === 1, `freed=${freed}`);
-  check("legacy arm has NO pos-slot stash (proves legacy body ran, not unified)",
-    !globalThis.window.__lastEntityWorldPos);
-  // useSharedDrain still wins over the hatch (live 3D unaffected either way).
-  const em4 = makeEm();
-  mod.__testDrain({ useSharedDrain: true, entityManager: em4 }, fakeSession([upd(0)]));
-  check("useSharedDrain early-return fires before the hatch (live mode inert)",
-    em4.calls.length === 0);
 }
 
 // =====================================================================
