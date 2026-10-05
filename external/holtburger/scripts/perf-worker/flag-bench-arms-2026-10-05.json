@@ -1,0 +1,48 @@
+[
+ {
+  "name": "base",
+  "quality": "mid",
+  "flags": ""
+ },
+ {
+  "name": "geomCache",
+  "quality": "mid",
+  "flags": "statGeomCache=on"
+ },
+ {
+  "name": "batchRuns",
+  "quality": "mid",
+  "flags": "statBatchRuns=on",
+  "tour": false
+ },
+ {
+  "name": "sortProgram",
+  "quality": "mid",
+  "flags": "drawSortProgram=on",
+  "probeSort": true,
+  "tour": false
+ },
+ {
+  "name": "allOn",
+  "quality": "mid",
+  "flags": "statGeomCache=on&statBatchRuns=on&drawSortProgram=on&statBatchMemoSlots=4"
+ },
+ {
+  "name": "baseHigh",
+  "quality": "high",
+  "flags": "",
+  "tour": false
+ },
+ {
+  "name": "memoSlotsHigh",
+  "quality": "high",
+  "flags": "statBatchMemoSlots=4",
+  "tour": false
+ },
+ {
+  "name": "allOnHigh",
+  "quality": "high",
+  "flags": "statGeomCache=on&statBatchRuns=on&drawSortProgram=on&statBatchMemoSlots=4",
+  "tour": false
+ }
+]

@@ -87,9 +87,16 @@ export function installDrawSortProgram(renderer) {
   try { set(drawSortProgramEnabled()); } catch (_) { /* fail-soft */ }
 
   /**
-   * Count real program binds for `frames` render() calls. three already elides
-   * a bind of the current program (WebGLState.useProgram), so every
-   * `gl.useProgram` that reaches the context is a switch.
+   * Count real program binds over `frames` DISPLAYED frames (rAF ticks). three
+   * already elides a bind of the current program (WebGLState.useProgram), so
+   * every `gl.useProgram` that reaches the context is a switch.
+   *
+   * Frames are rAF ticks, not `info.render.frame`: that counter advances once
+   * per `renderer.render()` call, and a composited frame here makes dozens of
+   * them (passes, shadow cascades, RT updates) — 38 per frame measured on the
+   * default path — so a render()-based "per frame" understated switches by
+   * that factor, and on the 1070 the counter was seen not to advance at all
+   * (every probe ran to its 60 s timeout). `renderCalls` is kept as a diag.
    */
   const probe = (frames = 240) => new Promise((resolve) => {
     const gl = renderer.getContext();
@@ -103,13 +110,16 @@ export function installDrawSortProgram(renderer) {
     };
     const f0 = renderer.info.render.frame;
     const t0 = performance.now();
+    let ticks = 0;
     const tick = () => {
-      const df = renderer.info.render.frame - f0;
-      if (df >= frames || performance.now() - t0 > 60000) {
+      ticks++;
+      if (ticks > frames || performance.now() - t0 > 60000) {
         gl.useProgram = orig;
+        const df = ticks - 1;
         resolve({
           sortOn: on,
-          renderCalls: df,
+          frames: df,
+          renderCalls: renderer.info.render.frame - f0,
           switches,
           switchesPerFrame: df > 0 ? +(switches / df).toFixed(1) : null,
           distinctPrograms: seen.size,
