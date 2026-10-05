@@ -1,141 +1,414 @@
 {
   "schema": 1,
   "updated": "2026-10-05",
-  "basis": "master 4dc55751. Scores marked provisional:true are orchestrator estimates from HANDOFF.md section 7, VISUAL-CHECKLIST.md owner answers and docs/openac-comparison-2026-10-04 (checked against git log for which findings landed). A score only becomes non-provisional after a critic pass (decomp + OpenAC re-derivation, tests asserting it). Pass bar = 8.5, green gate, zero new console errors.",
+  "basis": "Facet map only. Scores are provisional placeholders until each facet's fresh audit (current code vs acclient.c and OpenAC, re-derived from scratch) and a critic pass. Findings and fix commits from earlier sessions are recorded under 'inherited_leads': hypotheses to re-verify, not evidence.",
   "scale": "10 indistinguishable from retail; 8.5 retail with nits; 7 clearly right but noticeably off; 5 approximation/programmer behaviour",
   "gate": {
     "js": "node harness/run-js-headless.mjs --quiet (orchestrator only, capped-build)",
-    "lints": ["node scripts/lint-url-flags.mjs", "node scripts/audit-flag-defaults.mjs", "node scripts/gen-client-event-kinds.mjs --check"],
+    "lints": [
+      "node scripts/lint-url-flags.mjs",
+      "node scripts/audit-flag-defaults.mjs",
+      "node scripts/gen-client-event-kinds.mjs --check"
+    ],
     "rust": "cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib (orchestrator only, capped-build)"
   },
   "facets": [
     {
       "id": "render.terrain",
-      "score": 7.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/terrain*.js", "apps/holtburger-web/scene3d/far_terrain*.js", "apps/holtburger-web/scene3d/terrain_families.js"],
-      "evidence": ["Height/split use retail magic (WorldBuilder TerrainAlgorithms cross-check)", "No owner complaint in the 2026-10-05 pass"],
-      "open": ["Terrain family particles (dirt/snow/sand/rock) log-depth fix awaiting a real-GPU check", "No critic pass yet"]
+      "score": 7.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/terrain*.js",
+        "apps/holtburger-web/scene3d/far_terrain*.js",
+        "apps/holtburger-web/scene3d/terrain_families.js"
+      ],
+      "inherited_leads": [
+        "Height/split use retail magic (WorldBuilder TerrainAlgorithms cross-check)",
+        "No owner complaint in the 2026-10-05 pass",
+        "Terrain family particles (dirt/snow/sand/rock) log-depth fix awaiting a real-GPU check",
+        "No critic pass yet"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.statics",
-      "score": 7.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/statics.js", "apps/holtburger-web/scene3d/buildings.js", "apps/holtburger-web/scene3d/static_*.js", "apps/holtburger-web/scene3d/animated_scenery.js"],
-      "evidence": ["Static batch buckets keyed by material value (followup branch, not merged)"],
-      "open": ["Retail degrade ladder for buildings/props absent (perf doc T8)", "No critic pass yet"]
+      "score": 7.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/statics.js",
+        "apps/holtburger-web/scene3d/buildings.js",
+        "apps/holtburger-web/scene3d/static_*.js",
+        "apps/holtburger-web/scene3d/animated_scenery.js"
+      ],
+      "inherited_leads": [
+        "Static batch buckets keyed by material value (followup branch, not merged)",
+        "Retail degrade ladder for buildings/props absent (perf doc T8)",
+        "No critic pass yet"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.interiors_portal_punch",
-      "score": 7.0, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/cells.js", "apps/holtburger-web/scene3d/portal_punch.js", "apps/holtburger-web/scene3d/portal_*.js", "apps/holtburger-web/scene3d/pool_envcells.js", "apps/holtburger-web/scene3d/cell_fusion.js"],
-      "evidence": ["punchRetail default-on; owner 2026-10-05: interiors through doors look fine"],
-      "open": ["HANDOFF #3: makeSealMaterial writes perspective depth into the log-depth buffer (sealLogDepth=on is opt-in)", "Occlusion through a wall/tree/building not yet eye-tested", "Black patches near town buildings: A/B flag sweep pending on real GPU"]
+      "score": 7.0,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/cells.js",
+        "apps/holtburger-web/scene3d/portal_punch.js",
+        "apps/holtburger-web/scene3d/portal_*.js",
+        "apps/holtburger-web/scene3d/pool_envcells.js",
+        "apps/holtburger-web/scene3d/cell_fusion.js"
+      ],
+      "inherited_leads": [
+        "punchRetail default-on; owner 2026-10-05: interiors through doors look fine",
+        "HANDOFF #3: makeSealMaterial writes perspective depth into the log-depth buffer (sealLogDepth=on is opt-in)",
+        "Occlusion through a wall/tree/building not yet eye-tested",
+        "Black patches near town buildings: A/B flag sweep pending on real GPU"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.sky_clouds_fog",
-      "score": 7.0, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/atmosphere_*.js", "apps/holtburger-web/scene3d/cloud_*.js", "apps/holtburger-web/scene3d/sky_*.js", "apps/holtburger-web/scene3d/ground_fog.js", "apps/holtburger-web/scene3d/weather_state.js", "apps/holtburger-web/scene3d/daygroup_weather.js"],
-      "evidence": ["Owner 2026-10-05: clouds drift and look good"],
-      "open": ["HANDOFF #4: cloud overlay runs a second EffectComposer (renders the world twice) and skips ToneMapping", "Fog colour vs horizon at dawn/noon/dusk unchecked", "Swamp ground fog occlusion unchecked"]
+      "score": 7.0,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/atmosphere_*.js",
+        "apps/holtburger-web/scene3d/cloud_*.js",
+        "apps/holtburger-web/scene3d/sky_*.js",
+        "apps/holtburger-web/scene3d/ground_fog.js",
+        "apps/holtburger-web/scene3d/weather_state.js",
+        "apps/holtburger-web/scene3d/daygroup_weather.js"
+      ],
+      "inherited_leads": [
+        "Owner 2026-10-05: clouds drift and look good",
+        "HANDOFF #4: cloud overlay runs a second EffectComposer (renders the world twice) and skips ToneMapping",
+        "Fog colour vs horizon at dawn/noon/dusk unchecked",
+        "Swamp ground fog occlusion unchecked"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.lighting_shadows",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/lighting.js", "apps/holtburger-web/scene3d/atmosphere_lights.js", "apps/holtburger-web/scene3d/csm.js", "apps/holtburger-web/scene3d/night_ramp.js", "apps/holtburger-web/scene3d/sun_direction.js"],
-      "evidence": ["ae3cb2b6 light-pool NaN/Inf guards + __diag.lights; 4dc55751 nanScrub default-on"],
-      "open": ["Owner: flickering green light in the distance (bouncing lights) - fix landed, needs retest", "AcmeLights P3/P4 branches unmerged (importance-ranked selection)"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/lighting.js",
+        "apps/holtburger-web/scene3d/atmosphere_lights.js",
+        "apps/holtburger-web/scene3d/csm.js",
+        "apps/holtburger-web/scene3d/night_ramp.js",
+        "apps/holtburger-web/scene3d/sun_direction.js"
+      ],
+      "inherited_leads": [
+        "ae3cb2b6 light-pool NaN/Inf guards + __diag.lights; 4dc55751 nanScrub default-on",
+        "Owner: flickering green light in the distance (bouncing lights) - fix landed, needs retest",
+        "AcmeLights P3/P4 branches unmerged (importance-ranked selection)"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.particles_vfx",
-      "score": 7.0, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/particles/**", "apps/holtburger-web/scene3d/vfx/**", "apps/holtburger-web/scene3d/play_effect_vfx.js", "apps/holtburger-web/scene3d/script_manager.js"],
-      "evidence": ["d17c9b9f projectiles fly/trail/glow like retail; 626c643b spinning missiles + retail particle twist; owner: no grey squares"],
-      "open": ["Owner: bolt motion while moving, trails, light and path visibility weaker than retail - fix landed, needs retest"]
+      "score": 7.0,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/particles/**",
+        "apps/holtburger-web/scene3d/vfx/**",
+        "apps/holtburger-web/scene3d/play_effect_vfx.js",
+        "apps/holtburger-web/scene3d/script_manager.js"
+      ],
+      "inherited_leads": [
+        "d17c9b9f projectiles fly/trail/glow like retail; 626c643b spinning missiles + retail particle twist; owner: no grey squares",
+        "Owner: bolt motion while moving, trails, light and path visibility weaker than retail - fix landed, needs retest"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "render.materials_textures",
-      "score": 7.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/materials.js", "apps/holtburger-web/scene3d/pool_material.js", "apps/holtburger-web/scene3d/bc7_textures.js", "apps/holtburger-web/scene3d/xu7_textures.js", "apps/holtburger-web/scene3d/tex_overrides.js", "apps/holtburger-web/scene3d/texture_*.js"],
-      "evidence": ["Surface translucency/luminosity follow D3DPolyRender::SetSurface"],
-      "open": ["No critic pass yet"]
+      "score": 7.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/materials.js",
+        "apps/holtburger-web/scene3d/pool_material.js",
+        "apps/holtburger-web/scene3d/bc7_textures.js",
+        "apps/holtburger-web/scene3d/xu7_textures.js",
+        "apps/holtburger-web/scene3d/tex_overrides.js",
+        "apps/holtburger-web/scene3d/texture_*.js"
+      ],
+      "inherited_leads": [
+        "Surface translucency/luminosity follow D3DPolyRender::SetSurface",
+        "No critic pass yet"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "animation_motion",
-      "score": 7.5, "provisional": true,
-      "files": ["apps/holtburger-web/src/motion_sequence.rs", "apps/holtburger-web/scene3d/motion/**", "apps/holtburger-web/scene3d/motion_queue.js", "apps/holtburger-web/scene3d/entities.js", "apps/holtburger-web/scene3d/rust_pose.js", "apps/holtburger-web/scene3d/setup_rig.js"],
-      "evidence": ["8f8141ca AnimationMixer deleted - Rust playhead is the single authority", "Owner 2026-10-05: backwards walk, strafe, stop = perfect; draw/sheathe very good", "fb58331a stance links commit with new cycle; 49059d6e door links pose raw part frames"],
-      "open": ["Draw/sheathe slight frame freeze + first toggle after spawn snaps (fb58331a, needs retest)", "Door regression (wrong way / sticks / projects 1 m) - 49059d6e, needs retest", "Unchecked: monsters run cycle on hit, start/stop transitions, swing spam queueing, jump, death collapse, teleport-cuts-emote", "Combat doc P1-1: one-shots baked from Ready, no out/return hop", "Combat doc P1-2: two pending_animations queues"]
+      "score": 7.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/src/motion_sequence.rs",
+        "apps/holtburger-web/scene3d/motion/**",
+        "apps/holtburger-web/scene3d/motion_queue.js",
+        "apps/holtburger-web/scene3d/entities.js",
+        "apps/holtburger-web/scene3d/rust_pose.js",
+        "apps/holtburger-web/scene3d/setup_rig.js"
+      ],
+      "inherited_leads": [
+        "8f8141ca AnimationMixer deleted - Rust playhead is the single authority",
+        "Owner 2026-10-05: backwards walk, strafe, stop = perfect; draw/sheathe very good",
+        "fb58331a stance links commit with new cycle; 49059d6e door links pose raw part frames",
+        "Draw/sheathe slight frame freeze + first toggle after spawn snaps (fb58331a, needs retest)",
+        "Door regression (wrong way / sticks / projects 1 m) - 49059d6e, needs retest",
+        "Unchecked: monsters run cycle on hit, start/stop transitions, swing spam queueing, jump, death collapse, teleport-cuts-emote",
+        "Combat doc P1-1: one-shots baked from Ready, no out/return hop",
+        "Combat doc P1-2: two pending_animations queues"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "remote_motion",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/entity_dispatch.js", "apps/holtburger-web/scene3d/server_turn.js", "apps/holtburger-web/scene3d/pursuit_monitor.js"],
-      "evidence": ["86c3ef14 remotes move between updates (D1/D4); 3eb33bba retail catch-up speed (D2); 358b8a5e stale UpdateMotion gate (D8)"],
-      "open": ["D3: JS lane lets stale/rejected UpdatePositions reach setPose", "D5: no client MoveToManager for remotes", "D6: sticky lane radius-blind (mob glued 0.3 m from target centre)", "D7: no remote gravity/terrain sweep (jump arcs float, Z cuts terrain)", "D9/D10 minor"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/entity_dispatch.js",
+        "apps/holtburger-web/scene3d/server_turn.js",
+        "apps/holtburger-web/scene3d/pursuit_monitor.js"
+      ],
+      "inherited_leads": [
+        "86c3ef14 remotes move between updates (D1/D4); 3eb33bba retail catch-up speed (D2); 358b8a5e stale UpdateMotion gate (D8)",
+        "D3: JS lane lets stale/rejected UpdatePositions reach setPose",
+        "D5: no client MoveToManager for remotes",
+        "D6: sticky lane radius-blind (mob glued 0.3 m from target centre)",
+        "D7: no remote gravity/terrain sweep (jump arcs float, Z cuts terrain)",
+        "D9/D10 minor"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "movement_physics_collision",
-      "score": 6.5, "provisional": true,
-      "files": ["crates/holtburger-core/src/client/movement/**", "crates/holtburger-world/src/spatial/**", "crates/holtburger-world/src/spatial.rs"],
-      "evidence": ["5435f726 jut-back fix; owner: massive improvement, no jut", "7100de40 world-frame collision at LB edges, real outdoor-cell lookup (F4/F5)", "47f3e116/48d42c4b doors follow retail collision + SetState"],
-      "open": ["Collision F1: EnvCell entry/exit is a post-transition heuristic ignoring the driver's cell (HIGH)", "F2: null check_cell disables all collision (HIGH)", "F3: membership uses feet, retail uses sphere[0] centre ~0.475 m higher", "F6: bldg_check never set", "F7: outdoor point_in_cell AABB with +/-64 m z band; retail is 2D", "posePublishPostTick pairing decision pending owner A/B"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "crates/holtburger-core/src/client/movement/**",
+        "crates/holtburger-world/src/spatial/**",
+        "crates/holtburger-world/src/spatial.rs"
+      ],
+      "inherited_leads": [
+        "5435f726 jut-back fix; owner: massive improvement, no jut",
+        "7100de40 world-frame collision at LB edges, real outdoor-cell lookup (F4/F5)",
+        "47f3e116/48d42c4b doors follow retail collision + SetState",
+        "Collision F1: EnvCell entry/exit is a post-transition heuristic ignoring the driver's cell (HIGH)",
+        "F2: null check_cell disables all collision (HIGH)",
+        "F3: membership uses feet, retail uses sphere[0] centre ~0.475 m higher",
+        "F6: bldg_check never set",
+        "F7: outdoor point_in_cell AABB with +/-64 m z band; retail is 2D",
+        "posePublishPostTick pairing decision pending owner A/B"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "combat_magic",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/plugins/combat-bar.js", "apps/holtburger-web/plugins/spellbook.js", "apps/holtburger-web/ui/**", "apps/holtburger-web/scene3d/picking.js", "apps/holtburger-web/src/combat_toggle.rs", "apps/holtburger-web/scene3d/spell_*.js"],
-      "evidence": ["41eb9a60 MaybeStopCompletely in combat arms (P0-4)", "07680647 cast gesture survives the following Ready", "3580dcfd doors not combat targets", "Owner: melee swing timing good"],
-      "open": ["Owner: cast gesture better but needs OpenAC comparison", "P0-1 DEC-17 queue + setMotion zombie head (verify still live after mixer deletion)", "P0-2 locomotion change cuts an in-flight action", "P0-5 missile predicts the swing locally, echo not de-duplicated", "P1-3 server-action dedup by wall-clock window, not action stamp", "M-3 repeat-attack UI can't tell end-of-sequence"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/plugins/combat-bar.js",
+        "apps/holtburger-web/plugins/spellbook.js",
+        "apps/holtburger-web/ui/**",
+        "apps/holtburger-web/scene3d/picking.js",
+        "apps/holtburger-web/src/combat_toggle.rs",
+        "apps/holtburger-web/scene3d/spell_*.js"
+      ],
+      "inherited_leads": [
+        "41eb9a60 MaybeStopCompletely in combat arms (P0-4)",
+        "07680647 cast gesture survives the following Ready",
+        "3580dcfd doors not combat targets",
+        "Owner: melee swing timing good",
+        "Owner: cast gesture better but needs OpenAC comparison",
+        "P0-1 DEC-17 queue + setMotion zombie head (verify still live after mixer deletion)",
+        "P0-2 locomotion change cuts an in-flight action",
+        "P0-5 missile predicts the swing locally, echo not de-duplicated",
+        "P1-3 server-action dedup by wall-clock window, not action stamp",
+        "M-3 repeat-attack UI can't tell end-of-sequence"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "net_session_protocol",
-      "score": 7.5, "provisional": true,
-      "files": ["apps/holtburger-web/src/lib.rs", "apps/holtburger-web/src/session/**", "apps/holtburger-web/src/net_worker.rs", "crates/holtburger-protocol/**", "crates/holtburger-session/**", "apps/holtburger-wsbridge/**"],
-      "evidence": ["recv_loop split into session::commands / session::messages (744d1ff7..f208f88b)", "Ordered outbound send_ordered!", "be09034a TCP_NODELAY; b9e56994 __diag.latency"],
-      "open": ["No critic pass on protocol coverage vs Chorizite opcode table yet"]
+      "score": 7.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/src/lib.rs",
+        "apps/holtburger-web/src/session/**",
+        "apps/holtburger-web/src/net_worker.rs",
+        "crates/holtburger-protocol/**",
+        "crates/holtburger-session/**",
+        "apps/holtburger-wsbridge/**"
+      ],
+      "inherited_leads": [
+        "recv_loop split into session::commands / session::messages (744d1ff7..f208f88b)",
+        "Ordered outbound send_ordered!",
+        "be09034a TCP_NODELAY; b9e56994 __diag.latency",
+        "No critic pass on protocol coverage vs Chorizite opcode table yet"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "ui_hud_plugins",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/app/**", "apps/holtburger-web/plugins/**", "apps/holtburger-web/ui/**", "apps/holtburger-web/scene3d/hud.js"],
-      "evidence": ["index.html inline script split into app/ modules (a6747727..bd7ea94a)"],
-      "open": ["No systematic comparison against the 101 retail DAT layouts (WBT ui-layout-render) yet"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/app/**",
+        "apps/holtburger-web/plugins/**",
+        "apps/holtburger-web/ui/**",
+        "apps/holtburger-web/scene3d/hud.js"
+      ],
+      "inherited_leads": [
+        "index.html inline script split into app/ modules (a6747727..bd7ea94a)",
+        "No systematic comparison against the 101 retail DAT layouts (WBT ui-layout-render) yet"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "audio",
-      "score": 6.0, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/audio/**", "apps/holtburger-web/plugins/audio_optimistic.js", "apps/holtburger-web/plugins/ui_click_sounds.js"],
-      "evidence": [],
-      "open": ["Not audited this cycle - score is a placeholder"]
+      "score": 6.0,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/audio/**",
+        "apps/holtburger-web/plugins/audio_optimistic.js",
+        "apps/holtburger-web/plugins/ui_click_sounds.js"
+      ],
+      "inherited_leads": [
+        "Not audited this cycle - score is a placeholder"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "streaming_residency_perf",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/landblock_lru.js", "apps/holtburger-web/scene3d/residency*.js", "apps/holtburger-web/scene3d/world_stream.js", "apps/holtburger-web/scene3d/pool_*.js", "apps/holtburger-web/scene3d/bake_*.js", "apps/holtburger-web/src/prefetch.rs"],
-      "evidence": ["thread_local triangulation memo (decode once per wasm instance)"],
-      "open": ["Perf doc T1-T10 untouched (cached draw blocks, refcounted mesh cache, single streaming budget, fixed texture pages, native DXT, degrade ladder)", "Retail residency target (DBOCache + LScape slot grid) not reached"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/landblock_lru.js",
+        "apps/holtburger-web/scene3d/residency*.js",
+        "apps/holtburger-web/scene3d/world_stream.js",
+        "apps/holtburger-web/scene3d/pool_*.js",
+        "apps/holtburger-web/scene3d/bake_*.js",
+        "apps/holtburger-web/src/prefetch.rs"
+      ],
+      "inherited_leads": [
+        "thread_local triangulation memo (decode once per wasm instance)",
+        "Perf doc T1-T10 untouched (cached draw blocks, refcounted mesh cache, single streaming budget, fixed texture pages, native DXT, degrade ladder)",
+        "Retail residency target (DBOCache + LScape slot grid) not reached"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "portal_space_teleport",
-      "score": 7.0, "provisional": true,
-      "files": ["apps/holtburger-web/scene3d/portal_space.js"],
-      "evidence": ["1aedd85c retail/OpenAC portal space replaces the loading curtain; ce568885 TeleportArrived edge; c2714bd4 invisible player in dungeons fixed"],
-      "open": ["All three need owner retest"]
+      "score": 7.0,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/scene3d/portal_space.js"
+      ],
+      "inherited_leads": [
+        "1aedd85c retail/OpenAC portal space replaces the loading curtain; ce568885 TeleportArrived edge; c2714bd4 invisible player in dungeons fixed",
+        "All three need owner retest"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     },
     {
       "id": "code_health",
-      "score": 6.5, "provisional": true,
-      "files": ["apps/holtburger-web/docs/url-flags.md", "scripts/lint-url-flags.mjs", "scripts/audit-flag-defaults.mjs", "apps/holtburger-web/harness/**", "HANDOFF.md"],
-      "evidence": ["Gate 345 suites 0 fail (06efafa4); CI at repo root", "Flag retirement phase 1 landed"],
-      "open": ["~540 URL flags; settled default-on ones should become plain code", "lib.rs still ~64k lines outside recv_loop"]
+      "score": 6.5,
+      "provisional": true,
+      "files": [
+        "apps/holtburger-web/docs/url-flags.md",
+        "scripts/lint-url-flags.mjs",
+        "scripts/audit-flag-defaults.mjs",
+        "apps/holtburger-web/harness/**",
+        "HANDOFF.md"
+      ],
+      "inherited_leads": [
+        "Gate 345 suites 0 fail (06efafa4); CI at repo root",
+        "Flag retirement phase 1 landed",
+        "~540 URL flags; settled default-on ones should become plain code",
+        "lib.rs still ~64k lines outside recv_loop"
+      ],
+      "audit": null,
+      "open": [],
+      "evidence": []
     }
   ],
-  "waves": [],
-  "owner_retest_queue": [
-    "Doors: open/close/rapid toggle/open-at-spawn (49059d6e)",
-    "Draw/sheathe freeze + first toggle after spawn (fb58331a)",
-    "Cast gesture standing + moving (07680647, fb58331a)",
-    "Projectiles: motion while moving, trail, light, path visibility (d17c9b9f, 626c643b)",
-    "Portal space replaces curtain; player visible after portalling into a dungeon (1aedd85c, c2714bd4)",
-    "Flickering green distant light (ae3cb2b6, 4dc55751)"
-  ]
+  "waves": [
+    {
+      "id": 1,
+      "started": "2026-10-05",
+      "note": "Builders launched from inherited comparison-doc leads before the fresh-audit plan; their output goes through the same critic gate.",
+      "agents": [
+        {
+          "facet": "movement_physics_collision",
+          "scope": "collision F1/F2/F3/F6"
+        },
+        {
+          "facet": "remote_motion",
+          "scope": "D3/D6/D7"
+        },
+        {
+          "facet": "render.interiors_portal_punch+render.sky_clouds_fog",
+          "scope": "seal log-depth, cloud overlay single composer"
+        }
+      ],
+      "merged": [
+        "a458e03d",
+        "44848f65",
+        "bb5392b7",
+        "d7f72604",
+        "0dd0e848",
+        "0dbf4073",
+        "32004347",
+        "f21bed55",
+        "69a5bb31"
+      ],
+      "gate": "JS 358/358 pass; lints + event-kinds clean; holtburger-world --lib 707/707; release wasm built 2026-10-05 14:05",
+      "smoke": [
+        "SwiftShader login: in-world in 4 s, 0 console errors over ~3 min including teleports",
+        "Spawned in dungeon cell 0x01D90100: indoor seal armed and rendering (sealLogDepth default-on), no shader errors",
+        "Holtburg cottage A9B3 (EnvCells 0x100/0x103, origin 180,84,116): indoor cell labels tracked geometry walking inside; walking west from x=189 stopped at 185.19 outdoors and from inside at 183.96, consistent with a closed door near x=184.6. Full outdoor-to-indoor walk through an OPEN door not yet probed.",
+        "Memory: a default-render SwiftShader tab reached 2 GB; available fell to 1.08 GB. Use ?wireframe=1 or short sessions for probes."
+      ],
+      "critic": "pending",
+      "unverified": [
+        "Remote jump arc visuals (?remoteJumpArc)",
+        "Door seal depth visuals",
+        "?cloudsMainPass visuals (opt-in)"
+      ]
+    }
+  ],
+  "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified."
 }
