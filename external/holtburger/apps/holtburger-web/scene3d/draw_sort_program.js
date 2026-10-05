@@ -8,8 +8,9 @@
 // program. The frame-cost doc measured 160 program switches per frame against
 // 79 distinct programs (2026-08-06-frame-cost-structure-measured.md:69); the
 // glue census (§4b) notes that figure PREDATES the BatchedMesh colorTexture fix,
-// so whether the interleave still costs anything is UNMEASURED. Hence opt-in,
-// with a live A/B probe in the same page load:
+// so whether the interleave still costs anything was unmeasured; it shipped
+// opt-in with a live A/B probe, and went DEFAULT-ON 2026-10-05 once the 1070
+// probe read 252 -> 153 switches/frame (see drawSortProgramEnabled):
 //
 //   await window.__drawSort.probe(240)   // { switchesPerFrame, distinctPrograms, sortOn, ... }
 //   window.__drawSort.set(true)          // program sort on (no reload, no recompile)
@@ -25,20 +26,25 @@
 // resolve by depth test. The transparent sort is untouched.
 //
 // Cost: the program id is read through `renderer.properties` (a WeakMap) at most
-// once per material per render() call — memoized on a frame stamp — not twice
-// per comparison. An uncompiled material sorts last within its renderOrder.
+// once per material per render() call — memoized on the material itself with a
+// frame stamp — not twice per comparison. An uncompiled material sorts last within its renderOrder.
 
 let _flag;
-/** `?drawSortProgram=on` arms the program-grouped opaque sort at boot.
- *  DEFAULT-OFF (only `on` arms it): the win is unmeasured — see the header. */
+/** The program-grouped opaque sort. DEFAULT-ON (2026-10-05); only an explicit
+ *  off-form (`?drawSortProgram=off`/`0`/`false`/`no`) disarms it. Measured:
+ *  the 1070 live probe 252 -> 153 program switches per frame (-39%), the
+ *  comparator +0.09 ms over painterSortStable on the 1,544-item main pass
+ *  (after the material-stamped memo), no pixel change beyond an off/off
+ *  animation control at Holtburg. */
 export function drawSortProgramEnabled() {
   if (_flag !== undefined) return _flag;
-  let on = false;
+  let on = true;
   try {
     if (typeof window !== "undefined" && window.location?.search) {
-      on = new URLSearchParams(window.location.search).get("drawSortProgram") === "on";
+      const v = (new URLSearchParams(window.location.search).get("drawSortProgram") || "").toLowerCase();
+      if (v === "off" || v === "0" || v === "false" || v === "no") on = false;
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   return (_flag = on);
 }
 
@@ -46,15 +52,22 @@ export function drawSortProgramEnabled() {
 export function makeProgramSort(renderer) {
   const props = renderer.properties;
   const info = renderer.info;
-  const memo = new WeakMap(); // material -> { frame, key }
+  // The memo lives ON the material (three own-props, never copied by
+  // Material.copy/clone or serialized by toJSON), stamped with this
+  // comparator's token so two renderers can never read each other's keys.
+  // It was a WeakMap: one WeakMap.get per comparison made the comparator ~1.9x
+  // three's painterSortStable on the live 1,542-item main pass (1.13 vs
+  // 0.62 ms, SwiftShader host, 2026-10-05) — CPU spent on a CPU-bound frame to
+  // save GPU binds. Two property reads are near-free on a hit.
+  const tok = {};
   function programKey(material) {
     const frame = info.render.frame;
-    let m = memo.get(material);
-    if (m && m.frame === frame) return m.key;
+    if (material.__dspTok === tok && material.__dspFrame === frame) return material.__dspKey;
     const p = props.get(material).currentProgram;
     const key = p ? p.id : Number.MAX_SAFE_INTEGER;
-    if (m) { m.frame = frame; m.key = key; }
-    else memo.set(material, { frame, key });
+    material.__dspTok = tok;
+    material.__dspFrame = frame;
+    material.__dspKey = key;
     return key;
   }
   return function programSortStable(a, b) {

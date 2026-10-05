@@ -61,8 +61,38 @@ in disposables 26.1 MB vs 0; park pool 24.6 MB vs 3.8 MB; whole cache 146 entrie
 re-baking ~37 evicted Holtburg LBs cost 6 statics cache misses. Budget/pressure trims did not fire
 live (unowned peaked 0.5 MB) and are covered by the unit suite only. Not measured: frame time, and
 whether `?statGeomDedup` on top stops the region buckets re-copying shared geometry (probe bug).
-Found on the way, NOT fixed: chunk-bucket (`?statBatchChunk`) members of a PARKED LB keep drawing —
-park has no hook for static_batch_x, only for the atlas and terrain batch.
+Found on the way and FIXED 2026-10-05 (2486991c): chunk-bucket (`?statBatchChunk`) members of a
+PARKED LB kept drawing — park had no hook for static_batch_x. Live: 60 parked LBs had 10,225 bucket
+instances still drawing; they are now hidden on park and shown on unpark.
+
+**Status (2026-10-05) — default-on pass.** Tooling: `scripts/perf-worker/flag-bench.mjs` (interleaved
+fresh-profile 1070 arms) + `flag-bench-report.py`. The 1070 session ended early: the box's display
+slept (Chrome drops rAF to 1 Hz with no vsync — "1008 ms frames"), then the box went offline. It
+yielded one valid rep each of base and `?statBatchRuns` (p50 50.1 vs 58.3 ms at a ~2,300-draw orbit
+pose; one rep, frames snap to 8.33 ms vsync steps — not a verdict), and the `__drawSort` live probe.
+Its screenshots are black in the 3D area (off-screen-window WebGL capture), so no 1070 eye-test.
+The rest was measured where CPU work can be isolated from SwiftShader raster:
+
+| walk CPU per frame (ms), one Holtburg scene, quality high, flags toggled in-page, 4 reps | main moving | main+3 cascades still | main+3 cascades moving |
+|---|---|---|---|
+| base | 0.37 | 4.33 | 4.61 |
+| `statBatchRuns=on` | 0.33 | 1.71 | 1.59 |
+| `statBatchMemoSlots=4` | 0.29 | 0.81 | 0.93 |
+| both | 0.25 | 0.72 | 1.01 |
+
+Shadow passes re-render most frames at `high` despite the static-shadow gate, which is what makes
+the slots pay. Opaque sort on the real 1,544-item main pass (603 materials, 16 programs), Node,
+interleaved: painterSortStable 0.34 ms, program sort 0.68 ms -> 0.43 ms after moving its memo off a
+WeakMap onto the material. `__drawSort.probe` counted `render()` calls (~38 per composited frame)
+as "frames"; it now counts rAF frames.
+
+Decisions: **`statBatchMemoSlots` DEFAULT 4** and **`drawSortProgram` DEFAULT-ON** (1070 probe
+252 -> 153 switches/frame; no pixel change beyond an off/off animation control), both with `=off`
+escapes; bare default and escapes load with 0 errors. **`statBatchRuns` stays OFF** — it adds ~nothing
+on top of the slots and its one 1070 rep read worse. **`statGeomCache` stays OFF** — its memory wins
+stand, but both of its 1070 runs ended in a browser disconnect that is not yet explained (the second
+coincided with the box going offline; the first did not). Still unmeasured on a GPU: frame time for
+any of these; the next 1070 session needs the owner's sleep disabled and a working 3D capture.
 
 ### T1. Camera-independent cached draw blocks with per-frame *run selection* (do not drop culling)
 - **OpenAC:** `Walk/FarLandscapeDrawCache.cs:55-95` (per-entry `Block`, "every batch has a slot, visible or not, so the block does not depend on where the camera is looking"). Grouping and ordering are at `:600-630`. Commit `193f6138` took Sawato CPU p50 from 5.11 to 4.42 ms and p99 from 6.73 to 5.29 ms by removing 22.5k per-frame command rebuilds.

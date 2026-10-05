@@ -107,14 +107,15 @@ console.log("PART 4 — install, live toggle, flag grammar");
     return import(`./scene3d/draw_sort_program.js?${encodeURIComponent(search)}`)
       .then((mod) => { const v = mod.drawSortProgramEnabled(); delete globalThis.window; return v; });
   };
-  check("absent ⇒ off (opt-in)", drawSortProgramEnabled() === false);
-  check("?drawSortProgram=on arms it", (await withSearch("?drawSortProgram=on")) === true);
-  check("anything else stays off", (await withSearch("?drawSortProgram=yes")) === false);
+  check("absent ⇒ on (default-on)", drawSortProgramEnabled() === true);
+  check("?drawSortProgram=off disarms it", (await withSearch("?drawSortProgram=off")) === false);
+  check("?drawSortProgram=0 disarms it", (await withSearch("?drawSortProgram=0")) === false);
+  check("anything else stays on", (await withSearch("?drawSortProgram=yes")) === true);
 
   const r = fakeRenderer();
   globalThis.window = {};
   const on = installDrawSortProgram(r);
-  check("default install leaves three's sort (null)", on === false && r.opaqueSort === null);
+  check("default install arms the program sort", on === true && typeof r.opaqueSort === "function");
   check("window.__drawSort is installed", typeof window.__drawSort?.probe === "function");
   window.__drawSort.set(true);
   check("set(true) installs the program sort", typeof r.opaqueSort === "function" && window.__drawSort.get());

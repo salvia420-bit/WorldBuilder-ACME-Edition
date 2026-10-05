@@ -203,12 +203,13 @@ function both(bm, cam) {
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n-- 1. flag reader (default 1 = off; 2..8 opt-in) --");
+console.log("\n-- 1. flag reader (default 4; off/0/1/false/no escape to 1; 2..8 explicit) --");
 {
   const _l = globalThis.location;
   for (const [search, want] of [
-    ["", 1], ["?statBatchMemoSlots=1", 1], ["?statBatchMemoSlots=2", 2], ["?statBatchMemoSlots=8", 8],
-    ["?statBatchMemoSlots=9", 1], ["?statBatchMemoSlots=on", 1], ["?statBatchMemoSlots=3x", 1],
+    ["", 4], ["?statBatchMemoSlots=1", 1], ["?statBatchMemoSlots=2", 2], ["?statBatchMemoSlots=8", 8],
+    ["?statBatchMemoSlots=off", 1], ["?statBatchMemoSlots=0", 1], ["?statBatchMemoSlots=NO", 1],
+    ["?statBatchMemoSlots=9", 4], ["?statBatchMemoSlots=on", 4], ["?statBatchMemoSlots=3x", 4],
   ]) {
     globalThis.location = { search };
     M.__setStatBatchMemoSlotsForTest(undefined);

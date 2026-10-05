@@ -58,7 +58,7 @@ const factory = new Function(
     "evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats, " +
     "statBatchNoSortEnabled, __setStatBatchNoSortForTest, " +
     "statBatchMemoMode, __setStatBatchMemoForTest, __setStatGeomDedupForTest, " +
-    "statBatchSphereMode, __setStatBatchSphereForTest };"
+    "statBatchSphereMode, __setStatBatchSphereForTest, __setStatBatchMemoSlotsForTest };"
 );
 const M = factory(THREE);
 
@@ -176,6 +176,10 @@ const reset = (mode, slacks, noSort, sphere) => {
   // every later one. `?statBatchSphere` defaults to "off" and must be reset
   // explicitly, not left to `__resetStatBatchXForTest`.
   M.__setStatBatchSphereForTest(sphere || "off");
+  // This suite pins the SINGLE-slot memo (its decision path is what sections
+  // 1-10 assert); ?statBatchMemoSlots (default 4 since 2026-10-05) has its own
+  // suite, test_stat_batch_memo_slots.mjs.
+  M.__setStatBatchMemoSlotsForTest(1);
 };
 
 // ---------------------------------------------------------------------------

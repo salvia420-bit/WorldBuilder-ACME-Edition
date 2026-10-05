@@ -536,24 +536,34 @@ export function statBatchMemoMode() {
 // camera rebuilds first, so with slots on a set flag also moves `visRev` on
 // `__memo` before that rebuild — otherwise the other slots would never see it.
 //
-// OFF (absent, `1`, anything unparsed) = the single slot, byte-identical: `st`
-// itself is the slot and no copy is ever taken. Not measured on a GPU.
+// DEFAULT-ON at 4 slots (2026-10-05): colour camera + the 3 CSM cascades. In-page
+// A/B on one settled Holtburg scene (quality high, 4 reps, toggled via the test
+// seams): walking the buckets for the main camera + 3 cascades cost 4.33 ms
+// still / 4.61 ms moving per frame with one slot, 0.81 / 0.93 ms with four;
+// main camera alone 0.37 -> 0.29 ms moving (noise band), so `mid` (no CSM)
+// pays nothing for it. Shadow passes do re-render most frames at `high` even
+// with the static-shadow gate, which is what makes the slots pay.
+// `=off` / `=0` / `=1` / `=false` / `=no` escape to the single slot,
+// byte-identical: `st` itself is the slot and no copy is ever taken.
 // ---------------------------------------------------------------------------
 const _MEMO_SLOTS_MAX = 8;
+const _MEMO_SLOTS_DEFAULT = 4;
 let _memoSlotsN;
-/** `?statBatchMemoSlots=N` — 2..8 per-camera memo slots; anything else ⇒ 1 (off). */
+/** `?statBatchMemoSlots=N` — 2..8 per-camera memo slots. DEFAULT 4 (absent or
+ *  unparsed); `off`/`0`/`1`/`false`/`no` ⇒ 1 (the single slot). */
 export function statBatchMemoSlots() {
   if (_memoSlotsN !== undefined) return _memoSlotsN;
-  let n = 1;
+  let n = _MEMO_SLOTS_DEFAULT;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
-      const raw = new URLSearchParams(globalThis.location.search).get("statBatchMemoSlots") || "";
-      if (/^[0-9]+$/.test(raw)) {
+      const raw = (new URLSearchParams(globalThis.location.search).get("statBatchMemoSlots") || "").toLowerCase();
+      if (raw === "off" || raw === "0" || raw === "1" || raw === "false" || raw === "no") n = 1;
+      else if (/^[0-9]+$/.test(raw)) {
         const v = Number(raw);
         if (v >= 2 && v <= _MEMO_SLOTS_MAX) n = v;
       }
     }
-  } catch (_) { n = 1; }
+  } catch (_) { n = _MEMO_SLOTS_DEFAULT; }
   _memoSlotsN = n;
   return n;
 }
