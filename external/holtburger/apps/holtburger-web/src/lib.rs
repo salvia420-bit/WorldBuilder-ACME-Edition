@@ -43028,6 +43028,29 @@ macro_rules! send_ordered {
     };
 }
 
+/// Send-or-disconnect (2026-10-05 recv_loop split). The recv loop's one
+/// fatal-send shape, formerly copy-pasted at every send site: on `Err($e)`
+/// log `$log`, queue a `CLIENT_EVENT_KIND_DISCONNECTED` event whose string
+/// payload is `format!($payload)`, and return from the enclosing fn (with
+/// `$ret` when given, e.g. a `LoopFlow` from a command handler). `$e` names
+/// the error binding so the caller's format strings can capture it inline.
+#[cfg(target_arch = "wasm32")]
+macro_rules! send_or_disconnect {
+    ($queued:expr, $e:ident, $res:expr, $log:literal, $payload:literal $(, $ret:expr)?) => {
+        if let Err($e) = $res {
+            log::warn!($log);
+            $queued.borrow_mut().push(ClientEvent {
+                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                string_payload: Some(format!($payload)),
+                u32_payload: None,
+                u32_payload_2: None,
+                f32_payload: None,
+            });
+            return $($ret)?;
+        }
+    };
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     // Direct `Session` (default) or a `RemoteSessionProxy` bridging to the
@@ -45370,19 +45393,13 @@ async fn recv_loop(
                                         account: account.clone(),
                                     },
                                 ));
-                                if let Err(e) = session.send_message(&msg).await {
-                                    log::warn!("recv_loop: send CharacterEnterWorld: {e}");
-                                    queued_events.borrow_mut().push(ClientEvent {
-                                        kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                        string_payload: Some(format!(
-                                            "CharacterEnterWorld: {e}"
-                                        )),
-                                        u32_payload: None,
-                                        u32_payload_2: None,
-                                        f32_payload: None,
-                                    });
-                                    return;
-                                }
+                                send_or_disconnect!(
+                                    queued_events,
+                                    e,
+                                    session.send_message(&msg).await,
+                                    "recv_loop: send CharacterEnterWorld: {e}",
+                                    "CharacterEnterWorld: {e}"
+                                );
                             }
                         }
                         GameMessage::PlayerCreate(data) => {
@@ -45429,17 +45446,13 @@ async fn recv_loop(
                             let login_complete = GameAction::LoginComplete(Box::new(
                                 holtburger_protocol::messages::LoginCompleteActionData,
                             ));
-                            if let Err(e) = session.send_action(login_complete).await {
-                                log::warn!("recv_loop: send LoginComplete: {e}");
-                                queued_events.borrow_mut().push(ClientEvent {
-                                    kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                    string_payload: Some(format!("LoginComplete: {e}")),
-                                    u32_payload: None,
-                                    u32_payload_2: None,
-                                    f32_payload: None,
-                                });
-                                return;
-                            }
+                            send_or_disconnect!(
+                                queued_events,
+                                e,
+                                session.send_action(login_complete).await,
+                                "recv_loop: send LoginComplete: {e}",
+                                "LoginComplete: {e}"
+                            );
 
                             state = LoopState::InWorld {
                                 player_guid: data.guid,
@@ -50168,19 +50181,13 @@ async fn recv_loop(
                                 guid,
                             },
                         ));
-                        if let Err(e) = session.send_message(&msg).await {
-                            log::warn!("recv_loop: send CharacterEnterWorldRequest: {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "CharacterEnterWorldRequest: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            session.send_message(&msg).await,
+                            "recv_loop: send CharacterEnterWorldRequest: {e}",
+                            "CharacterEnterWorldRequest: {e}"
+                        );
                     }
                     Some(SessionCommand::CreateCharacter { mut request }) => {
                         // Stamp the session's account name onto the
@@ -50190,17 +50197,13 @@ async fn recv_loop(
                         // to know about account names.
                         request.account_name = account_name.clone();
                         let msg = GameMessage::CharacterCreate(request);
-                        if let Err(e) = session.send_message(&msg).await {
-                            log::warn!("recv_loop: send CharacterCreate: {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("CharacterCreate: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            session.send_message(&msg).await,
+                            "recv_loop: send CharacterCreate: {e}",
+                            "CharacterCreate: {e}"
+                        );
                     }
                     Some(SessionCommand::DeleteCharacter { character_slot }) => {
                         use holtburger_protocol::messages::CharacterDeleteRequestData;
@@ -50209,38 +50212,26 @@ async fn recv_loop(
                             character_slot,
                         };
                         let msg = GameMessage::CharacterDeleteRequest(Box::new(req));
-                        if let Err(e) = session.send_message(&msg).await {
-                            log::warn!("recv_loop: send CharacterDeleteRequest: {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "CharacterDeleteRequest: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            session.send_message(&msg).await,
+                            "recv_loop: send CharacterDeleteRequest: {e}",
+                            "CharacterDeleteRequest: {e}"
+                        );
                     }
                     Some(SessionCommand::RestoreCharacter { guid }) => {
                         use holtburger_common::Guid;
                         use holtburger_protocol::messages::CharacterRestoreRequestData;
                         let req = CharacterRestoreRequestData { guid: Guid(guid) };
                         let msg = GameMessage::CharacterRestoreRequest(Box::new(req));
-                        if let Err(e) = session.send_message(&msg).await {
-                            log::warn!("recv_loop: send CharacterRestoreRequest: {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "CharacterRestoreRequest: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            session.send_message(&msg).await,
+                            "recv_loop: send CharacterRestoreRequest: {e}",
+                            "CharacterRestoreRequest: {e}"
+                        );
                     }
                     Some(SessionCommand::SendChat { message }) => {
                         // Phase 4 step 2a.6: the cli routes chat
@@ -50256,17 +50247,13 @@ async fn recv_loop(
                         // sendChannel instead (see `plugins/chat-panel.js`
                         // submitChat).
                         let action = GameAction::Talk(Box::new(TalkActionData { message }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Talk): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_chat: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Talk): {e}",
+                            "send_chat: {e}"
+                        );
                     }
                     Some(SessionCommand::SendEmote { message }) => {
                         // Wave 9 Phase 9.2 (2026-05-26). Free-form text
@@ -50276,17 +50263,13 @@ async fn recv_loop(
                         // players to see; no motion is played.
                         use holtburger_protocol::messages::chat::actions::EmoteActionData;
                         let action = GameAction::Emote(Box::new(EmoteActionData { message }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Emote): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_emote: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Emote): {e}",
+                            "send_emote: {e}"
+                        );
                     }
                     Some(SessionCommand::SendSoulEmote { message }) => {
                         // Wave 9 Phase 9.2 (2026-05-26). Pose / soul
@@ -50303,17 +50286,13 @@ async fn recv_loop(
                         let action = GameAction::SoulEmote(Box::new(SoulEmoteActionData {
                             message,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(SoulEmote): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_soul_emote: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SoulEmote): {e}",
+                            "send_soul_emote: {e}"
+                        );
                     }
                     Some(SessionCommand::BroadcastEmoteMotion { motion_full }) => {
                         // Wave 9.5 (2026-05-26). Queue a transient
@@ -50380,17 +50359,13 @@ async fn recv_loop(
                             target,
                             message,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Tell): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_tell: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Tell): {e}",
+                            "send_tell: {e}"
+                        );
                     }
                     Some(SessionCommand::SendChannel { channel, message }) => {
                         use holtburger_protocol::messages::chat::actions::ChatChannelActionData;
@@ -50399,17 +50374,13 @@ async fn recv_loop(
                             channel: ChatChannelId::from_raw(channel),
                             message,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(ChatChannel): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_channel: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ChatChannel): {e}",
+                            "send_channel: {e}"
+                        );
                     }
                     Some(SessionCommand::SendTurbineChannel { chat_type, message }) => {
                         // Mirror holtburger-core's
@@ -50508,20 +50479,15 @@ async fn recv_loop(
                                 chat_type: TurbineChatTypeId::Known(chat_type_enum),
                             },
                         };
-                        if let Err(e) = session
-                            .send_message(&GameMessage::TurbineChat(Box::new(tc_msg)))
-                            .await
-                        {
-                            log::warn!("recv_loop: send_message(TurbineChat): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("send_turbine_channel: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            session
+                                .send_message(&GameMessage::TurbineChat(Box::new(tc_msg)))
+                                .await,
+                            "recv_loop: send_message(TurbineChat): {e}",
+                            "send_turbine_channel: {e}"
+                        );
                     }
                     Some(SessionCommand::UseObject { guid }) => {
                         // Phase 4 step 5 (interactive entities): wrap
@@ -50540,17 +50506,13 @@ async fn recv_loop(
                                 guid: holtburger_common::Guid::from(guid),
                             }),
                         );
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Use): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("use_object: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Use): {e}",
+                            "use_object: {e}"
+                        );
                     }
                     // EX-05 (2026-06-05) — examine refactor: fire
                     // `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8).
@@ -50568,17 +50530,13 @@ async fn recv_loop(
                                 guid: holtburger_common::Guid::from(guid),
                             }),
                         );
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(IdentifyObject guid=0x{guid:08X}): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("request_appraisal: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(IdentifyObject guid=0x{guid:08X}): {e}",
+                            "request_appraisal: {e}"
+                        );
                     }
                     // === Wave 5.A — tradeskill useWithTarget (2026-05-28) ===
                     Some(SessionCommand::UseWithTarget {
@@ -50609,17 +50567,13 @@ async fn recv_loop(
                                     target_guid: holtburger_common::Guid::from(target_guid),
                                 },
                             ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(UseWithTarget): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("use_with_target: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(UseWithTarget): {e}",
+                            "use_with_target: {e}"
+                        );
                     }
                     Some(SessionCommand::SalvageItemsWith { tool_guid, items }) => {
                         // R14: GameActionCreateTinkeringTool (0x027D). The
@@ -50636,17 +50590,13 @@ async fn recv_loop(
                                         .collect(),
                                 },
                             ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(SalvageItemsWith): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("salvage_items_with: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SalvageItemsWith): {e}",
+                            "salvage_items_with: {e}"
+                        );
                     }
                     Some(SessionCommand::PopulateTerrain {
                         landblock_id,
@@ -50803,17 +50753,13 @@ async fn recv_loop(
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode: target_mode },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(ChangeCombatMode): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("toggle_combat_mode: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ChangeCombatMode): {e}",
+                            "toggle_combat_mode: {e}"
+                        );
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
                         ));
@@ -50882,19 +50828,13 @@ async fn recv_loop(
                         let action = GameAction::ChangeCombatMode(Box::new(
                             ChangeCombatModeActionData { mode },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(ChangeCombatMode {mode:?}): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("set_combat_mode: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ChangeCombatMode {mode:?}): {e}",
+                            "set_combat_mode: {e}"
+                        );
                         console_log_str(&format!(
                             "[combat-mode] set: → {mode:?}",
                         ));
@@ -50932,21 +50872,13 @@ async fn recv_loop(
                             Some(action) => session.send_action(action).await.map(|_| ()),
                             None => Ok(()),
                         };
-                        if let Err(e) = send_result {
-                            log::warn!(
-                                "recv_loop: send_action(CastTargetedSpell): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "cast_targeted_spell: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_result,
+                            "recv_loop: send_action(CastTargetedSpell): {e}",
+                            "cast_targeted_spell: {e}"
+                        );
                         console_log_str(&format!(
                             "[cast_spell] target=0x{target_guid:08X} spell_id={spell_id}",
                         ));
@@ -50967,21 +50899,13 @@ async fn recv_loop(
                             Some(action) => session.send_action(action).await.map(|_| ()),
                             None => Ok(()),
                         };
-                        if let Err(e) = send_result {
-                            log::warn!(
-                                "recv_loop: send_action(CastUntargetedSpell): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "cast_untargeted_spell: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_result,
+                            "recv_loop: send_action(CastUntargetedSpell): {e}",
+                            "cast_untargeted_spell: {e}"
+                        );
                         console_log_str(&format!(
                             "[cast_spell] untargeted spell_id={spell_id}",
                         ));
@@ -50993,21 +50917,13 @@ async fn recv_loop(
                         let action = GameAction::RemoveSpellFromBook(Box::new(
                             RemoveSpellFromBookActionData { spell_id },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RemoveSpellFromBook): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "remove_spell_from_book: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RemoveSpellFromBook): {e}",
+                            "remove_spell_from_book: {e}"
+                        );
                         console_log_str(&format!(
                             "[remove_spell] spell_id={spell_id}",
                         ));
@@ -51033,21 +50949,13 @@ async fn recv_loop(
                         let action = GameAction::RaiseSkill(Box::new(
                             RaiseSkillActionData { skill_type, xp_spent },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RaiseSkill): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "raise_skill: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RaiseSkill): {e}",
+                            "raise_skill: {e}"
+                        );
                         console_log_str(&format!(
                             "[raise_skill] skill_type={skill_type} xp_spent={xp_spent}",
                         ));
@@ -51062,21 +50970,13 @@ async fn recv_loop(
                                 credits_spent: credits as i32,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(TrainSkill): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "train_skill: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(TrainSkill): {e}",
+                            "train_skill: {e}"
+                        );
                         console_log_str(&format!(
                             "[train_skill] skill_type={skill_type} credits={credits}",
                         ));
@@ -51091,21 +50991,13 @@ async fn recv_loop(
                         let action = GameAction::RaiseAttribute(Box::new(
                             RaiseAttributeActionData { attribute_type, xp_spent },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RaiseAttribute): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "raise_attribute: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RaiseAttribute): {e}",
+                            "raise_attribute: {e}"
+                        );
                         console_log_str(&format!(
                             "[raise_attribute] attribute_type={attribute_type} xp_spent={xp_spent}",
                         ));
@@ -51117,21 +51009,13 @@ async fn recv_loop(
                         let action = GameAction::RaiseVital(Box::new(
                             RaiseVitalActionData { vital_type, xp_spent },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RaiseVital): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "raise_vital: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RaiseVital): {e}",
+                            "raise_vital: {e}"
+                        );
                         console_log_str(&format!(
                             "[raise_vital] vital_type={vital_type} xp_spent={xp_spent}",
                         ));
@@ -51160,21 +51044,13 @@ async fn recv_loop(
                         let action = GameAction::SetSingleCharacterOption(Box::new(
                             SetSingleCharacterOptionActionData { option, value },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(SetSingleCharacterOption {option:?} = {value}): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "set_character_option: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SetSingleCharacterOption {option:?} = {value}): {e}",
+                            "set_character_option: {e}"
+                        );
                         if let Some(w) = world.borrow_mut().as_mut() {
                             w.player.set_character_option_enabled(option, value);
                             publish_player_stats_snapshot(w, &latest_stats);
@@ -51204,19 +51080,13 @@ async fn recv_loop(
                                 layer,
                             },
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(AddShortcut idx={index} guid=0x{object_guid:08X}): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("add_shortcut: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AddShortcut idx={index} guid=0x{object_guid:08X}): {e}",
+                            "add_shortcut: {e}"
+                        );
                         console_log_str(&format!(
                             "[shortcut] add: idx={index} guid=0x{object_guid:08X} spell={spell_id} layer={layer}",
                         ));
@@ -51228,19 +51098,13 @@ async fn recv_loop(
                         let action = GameAction::RemoveShortcut(Box::new(RemoveShortcutActionData {
                             index,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RemoveShortcut idx={index}): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("remove_shortcut: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RemoveShortcut idx={index}): {e}",
+                            "remove_shortcut: {e}"
+                        );
                         console_log_str(&format!("[shortcut] remove: idx={index}"));
                     }
                     Some(SessionCommand::GiveObject {
@@ -51259,17 +51123,13 @@ async fn recv_loop(
                                 amount,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(GiveObject): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("give_object: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(GiveObject): {e}",
+                            "give_object: {e}"
+                        );
                         console_log_str(&format!(
                             "[give] target=0x{target_guid:08X} item=0x{item_guid:08X} amount={amount}",
                         ));
@@ -51297,17 +51157,13 @@ async fn recv_loop(
                             vendor_guid: Guid(vendor_guid),
                             items: profiles,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Buy): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("buy_from_vendor: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Buy): {e}",
+                            "buy_from_vendor: {e}"
+                        );
                         console_log_str(&format!(
                             "[buy] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
@@ -51335,17 +51191,13 @@ async fn recv_loop(
                             vendor_guid: Guid(vendor_guid),
                             items: profiles,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Sell): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("sell_to_vendor: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Sell): {e}",
+                            "sell_to_vendor: {e}"
+                        );
                         console_log_str(&format!(
                             "[sell] vendor=0x{vendor_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
@@ -51358,21 +51210,13 @@ async fn recv_loop(
                         let action = GameAction::FellowshipCreate(Box::new(
                             FellowshipCreateActionData { name, share_xp },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(FellowshipCreate): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "fellowship_create: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipCreate): {e}",
+                            "fellowship_create: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/create] name={log_name:?} share_xp={share_xp}",
                         ));
@@ -51384,17 +51228,13 @@ async fn recv_loop(
                         let action = GameAction::FellowshipQuit(Box::new(
                             FellowshipQuitActionData { disband },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(FellowshipQuit): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("fellowship_quit: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipQuit): {e}",
+                            "fellowship_quit: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/quit] disband={disband}",
                         ));
@@ -51409,21 +51249,13 @@ async fn recv_loop(
                                 player_guid: Guid(member_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(FellowshipDismiss): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "fellowship_dismiss: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipDismiss): {e}",
+                            "fellowship_dismiss: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/dismiss] member=0x{member_guid:08X}",
                         ));
@@ -51438,21 +51270,13 @@ async fn recv_loop(
                                 player_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(FellowshipRecruit): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "fellowship_recruit: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipRecruit): {e}",
+                            "fellowship_recruit: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/recruit] target=0x{target_guid:08X}",
                         ));
@@ -51466,21 +51290,13 @@ async fn recv_loop(
                                 panel_open: want_updates,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(FellowshipUpdateRequest): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "fellowship_update_request: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipUpdateRequest): {e}",
+                            "fellowship_update_request: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/update-request] want_updates={want_updates}",
                         ));
@@ -51497,21 +51313,13 @@ async fn recv_loop(
                                 new_leader_guid: Guid(new_leader_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(FellowshipAssignNewLeader): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "fellowship_assign_new_leader: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(FellowshipAssignNewLeader): {e}",
+                            "fellowship_assign_new_leader: {e}"
+                        );
                         console_log_str(&format!(
                             "[fellowship/assign-leader] new_leader=0x{new_leader_guid:08X}",
                         ));
@@ -51535,17 +51343,13 @@ async fn recv_loop(
                             slumlord_guid: Guid(slumlord_guid),
                             item_guids: item_guids.into_iter().map(Guid).collect(),
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BuyHouse): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("buy_house: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BuyHouse): {e}",
+                            "buy_house: {e}"
+                        );
                         console_log_str(&format!(
                             "[house/buy] slumlord=0x{slumlord_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
@@ -51557,17 +51361,13 @@ async fn recv_loop(
                         let action = GameAction::HouseQuery(Box::new(
                             HouseQueryActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(HouseQuery): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("house_query: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(HouseQuery): {e}",
+                            "house_query: {e}"
+                        );
                         console_log_str("[house/query]");
                     }
                     Some(SessionCommand::AbandonHouse) => {
@@ -51577,17 +51377,13 @@ async fn recv_loop(
                         let action = GameAction::AbandonHouse(Box::new(
                             AbandonHouseActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(AbandonHouse): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("abandon_house: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AbandonHouse): {e}",
+                            "abandon_house: {e}"
+                        );
                         console_log_str("[house/abandon]");
                     }
                     Some(SessionCommand::RentHouse {
@@ -51609,17 +51405,13 @@ async fn recv_loop(
                             slumlord_guid: Guid(slumlord_guid),
                             item_guids: item_guids.into_iter().map(Guid).collect(),
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(RentHouse): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("rent_house: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RentHouse): {e}",
+                            "rent_house: {e}"
+                        );
                         console_log_str(&format!(
                             "[house/rent] slumlord=0x{slumlord_guid:08X} count={item_count} items=[{log_preview}]",
                         ));
@@ -51632,17 +51424,13 @@ async fn recv_loop(
                         let action = GameAction::AddPermanentGuest(Box::new(
                             AddPermanentGuestActionData { target_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(AddPermanentGuest): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("add_permanent_guest: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AddPermanentGuest): {e}",
+                            "add_permanent_guest: {e}"
+                        );
                         console_log_str(&format!("[house/add-guest] target={log_name}"));
                     }
                     Some(SessionCommand::BootSpecificHouseGuest { target_name }) => {
@@ -51653,17 +51441,13 @@ async fn recv_loop(
                         let action = GameAction::BootSpecificHouseGuest(Box::new(
                             BootSpecificHouseGuestActionData { target_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BootSpecificHouseGuest): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("boot_specific_house_guest: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BootSpecificHouseGuest): {e}",
+                            "boot_specific_house_guest: {e}"
+                        );
                         console_log_str(&format!("[house/boot] target={log_name}"));
                     }
                     Some(SessionCommand::RemoveAllPermanentGuests) => {
@@ -51673,17 +51457,13 @@ async fn recv_loop(
                         let action = GameAction::RemoveAllPermanentGuests(Box::new(
                             RemoveAllPermanentGuestsActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(RemoveAllPermanentGuests): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("remove_all_permanent_guests: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RemoveAllPermanentGuests): {e}",
+                            "remove_all_permanent_guests: {e}"
+                        );
                         console_log_str("[house/remove-all]");
                     }
                     Some(SessionCommand::OpenTrade { partner_guid }) => {
@@ -51696,17 +51476,13 @@ async fn recv_loop(
                                 trade_partner_guid: Guid(partner_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(OpenTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("open_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(OpenTrade): {e}",
+                            "open_trade: {e}"
+                        );
                         console_log_str(&format!(
                             "[trade/open] partner=0x{partner_guid:08X}",
                         ));
@@ -51718,17 +51494,13 @@ async fn recv_loop(
                         let action = GameAction::CloseTradeNegotiations(Box::new(
                             CloseTradeNegotiationsActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(CloseTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("close_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(CloseTrade): {e}",
+                            "close_trade: {e}"
+                        );
                         console_log_str("[trade/close]");
                     }
                     Some(SessionCommand::AddToTrade {
@@ -51743,17 +51515,13 @@ async fn recv_loop(
                             item_guid: Guid(item_guid),
                             trade_slot,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(AddToTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("add_to_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AddToTrade): {e}",
+                            "add_to_trade: {e}"
+                        );
                         console_log_str(&format!(
                             "[trade/add] item=0x{item_guid:08X} slot={trade_slot}",
                         ));
@@ -51794,17 +51562,13 @@ async fn recv_loop(
                             initiator_accepts,
                             partner_accepts,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(AcceptTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("accept_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AcceptTrade): {e}",
+                            "accept_trade: {e}"
+                        );
                         console_log_str(&format!(
                             "[trade/accept] partner=0x{:08X}",
                             u32::from(partner_guid),
@@ -51817,17 +51581,13 @@ async fn recv_loop(
                         let action = GameAction::DeclineTrade(Box::new(
                             DeclineTradeActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(DeclineTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("decline_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(DeclineTrade): {e}",
+                            "decline_trade: {e}"
+                        );
                         console_log_str("[trade/decline]");
                     }
                     Some(SessionCommand::ResetTrade) => {
@@ -51837,17 +51597,13 @@ async fn recv_loop(
                         let action = GameAction::ResetTrade(Box::new(
                             ResetTradeActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(ResetTrade): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("reset_trade: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ResetTrade): {e}",
+                            "reset_trade: {e}"
+                        );
                         console_log_str("[trade/reset]");
                     }
                     Some(SessionCommand::SwearAllegiance { target_guid }) => {
@@ -51860,21 +51616,13 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(SwearAllegiance): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "swear_allegiance: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SwearAllegiance): {e}",
+                            "swear_allegiance: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/swear] target=0x{target_guid:08X}",
                         ));
@@ -51900,21 +51648,13 @@ async fn recv_loop(
                                         accepted,
                                     },
                                 ));
-                                if let Err(e) = send_ordered!(movement, session, action) {
-                                    log::warn!(
-                                        "recv_loop: send_action(ConfirmationResponse): {e}"
-                                    );
-                                    queued_events.borrow_mut().push(ClientEvent {
-                                        kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                        string_payload: Some(format!(
-                                            "confirmation_response: {e}"
-                                        )),
-                                        u32_payload: None,
-                                        u32_payload_2: None,
-                                        f32_payload: None,
-                                    });
-                                    return;
-                                }
+                                send_or_disconnect!(
+                                    queued_events,
+                                    e,
+                                    send_ordered!(movement, session, action),
+                                    "recv_loop: send_action(ConfirmationResponse): {e}",
+                                    "confirmation_response: {e}"
+                                );
                                 console_log_str(&format!(
                                     "[confirm/respond] type={confirmation_type} ctx={context} accepted={accepted}"
                                 ));
@@ -51931,21 +51671,13 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(BreakAllegiance): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "break_allegiance: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BreakAllegiance): {e}",
+                            "break_allegiance: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/break] target=0x{target_guid:08X}",
                         ));
@@ -51958,17 +51690,13 @@ async fn recv_loop(
                         let action = GameAction::AddFriend(Box::new(AddFriendActionData {
                             friend_name,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(AddFriend): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("add_friend: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AddFriend): {e}",
+                            "add_friend: {e}"
+                        );
                         console_log_str(&format!("[friends/add] name={name_for_log}"));
                     }
                     Some(SessionCommand::RemoveFriend { friend_guid }) => {
@@ -51981,17 +51709,13 @@ async fn recv_loop(
                                 friend_guid: Guid(friend_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(RemoveFriend): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("remove_friend: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RemoveFriend): {e}",
+                            "remove_friend: {e}"
+                        );
                         console_log_str(&format!(
                             "[friends/remove] target=0x{friend_guid:08X}",
                         ));
@@ -52014,21 +51738,13 @@ async fn recv_loop(
                                 message_type,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(ModifyCharacterSquelch): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "modify_character_squelch: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ModifyCharacterSquelch): {e}",
+                            "modify_character_squelch: {e}"
+                        );
                         console_log_str(&format!(
                             "[squelch/character] target=0x{target_guid:08X} add={add} mask=0x{message_type:08X}",
                         ));
@@ -52045,21 +51761,13 @@ async fn recv_loop(
                         let action = GameAction::ModifyAccountSquelch(Box::new(
                             ModifyAccountSquelchActionData { add, account_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(ModifyAccountSquelch): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "modify_account_squelch: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ModifyAccountSquelch): {e}",
+                            "modify_account_squelch: {e}"
+                        );
                         // `message_type` is logged but not on the wire; ACE
                         // wire is (bool, name) only for this opcode.
                         console_log_str(&format!(
@@ -52073,21 +51781,13 @@ async fn recv_loop(
                         let action = GameAction::ModifyGlobalSquelch(Box::new(
                             ModifyGlobalSquelchActionData { add, message_type },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(ModifyGlobalSquelch): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "modify_global_squelch: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(ModifyGlobalSquelch): {e}",
+                            "modify_global_squelch: {e}"
+                        );
                         console_log_str(&format!(
                             "[squelch/global] add={add} mask=0x{message_type:08X}",
                         ));
@@ -52096,17 +51796,13 @@ async fn recv_loop(
                         use holtburger_protocol::messages::{GameAction, TitleSetActionData};
                         let action =
                             GameAction::TitleSet(Box::new(TitleSetActionData { title_id }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(TitleSet): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("title_set: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(TitleSet): {e}",
+                            "title_set: {e}"
+                        );
                         console_log_str(&format!("[title/set] id={title_id}"));
                     }
                     Some(SessionCommand::SetAllegianceName { new_name }) => {
@@ -52117,21 +51813,13 @@ async fn recv_loop(
                         let action = GameAction::SetAllegianceName(Box::new(
                             SetAllegianceNameActionData { new_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(SetAllegianceName): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "set_allegiance_name: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SetAllegianceName): {e}",
+                            "set_allegiance_name: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/set-name] name=\"{name_for_log}\"",
                         ));
@@ -52150,21 +51838,13 @@ async fn recv_loop(
                                 officer_level,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(SetAllegianceOfficer): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "set_allegiance_officer: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SetAllegianceOfficer): {e}",
+                            "set_allegiance_officer: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/officer] target=\"{name_for_log}\" level={officer_level}",
                         ));
@@ -52183,21 +51863,13 @@ async fn recv_loop(
                                 gag_on,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(AllegianceChatGag): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "allegiance_chat_gag: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AllegianceChatGag): {e}",
+                            "allegiance_chat_gag: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/chat-gag] target=\"{name_for_log}\" gag={gag_on}",
                         ));
@@ -52209,21 +51881,13 @@ async fn recv_loop(
                         let action = GameAction::RecallAllegianceHometown(Box::new(
                             RecallAllegianceHometownActionData {},
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RecallAllegianceHometown): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "recall_allegiance_hometown: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RecallAllegianceHometown): {e}",
+                            "recall_allegiance_hometown: {e}"
+                        );
                         console_log_str("[allegiance/recall]");
                     }
                     // === Wave 6.B / Agent 6.B — Lifestone bind/recall UI (2026-05-28) ===
@@ -52234,21 +51898,13 @@ async fn recv_loop(
                         let action = GameAction::TeleToLifestone(Box::new(
                             TeleToLifestoneActionData,
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(TeleToLifestone): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "tele_to_lifestone: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(TeleToLifestone): {e}",
+                            "tele_to_lifestone: {e}"
+                        );
                         console_log_str("[lifestone/recall]");
                     }
                     Some(SessionCommand::AddAllegianceBan { target_name }) => {
@@ -52259,21 +51915,13 @@ async fn recv_loop(
                         let action = GameAction::AddAllegianceBan(Box::new(
                             AddAllegianceBanActionData { target_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(AddAllegianceBan): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "add_allegiance_ban: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AddAllegianceBan): {e}",
+                            "add_allegiance_ban: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/add-ban] target=\"{name_for_log}\"",
                         ));
@@ -52286,21 +51934,13 @@ async fn recv_loop(
                         let action = GameAction::RemoveAllegianceBan(Box::new(
                             RemoveAllegianceBanActionData { target_name },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(RemoveAllegianceBan): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "remove_allegiance_ban: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(RemoveAllegianceBan): {e}",
+                            "remove_allegiance_ban: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/remove-ban] target=\"{name_for_log}\"",
                         ));
@@ -52319,21 +51959,13 @@ async fn recv_loop(
                                 account_boot,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(BreakAllegianceBoot): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "break_allegiance_boot: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BreakAllegianceBoot): {e}",
+                            "break_allegiance_boot: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/boot] target=\"{name_for_log}\" account_boot={account_boot}",
                         ));
@@ -52345,21 +51977,13 @@ async fn recv_loop(
                         let action = GameAction::DoAllegianceLockAction(Box::new(
                             DoAllegianceLockActionActionData { lock_action },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(DoAllegianceLockAction): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "do_allegiance_lock_action: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(DoAllegianceLockAction): {e}",
+                            "do_allegiance_lock_action: {e}"
+                        );
                         console_log_str(&format!("[allegiance/lock] action={lock_action}"));
                     }
                     Some(SessionCommand::BookData { object_guid }) => {
@@ -52368,17 +51992,13 @@ async fn recv_loop(
                         let action = GameAction::BookData(Box::new(BookDataActionData {
                             object_guid: Guid(object_guid),
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BookData): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("book_data: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BookData): {e}",
+                            "book_data: {e}"
+                        );
                         console_log_str(&format!(
                             "[book/data] guid=0x{object_guid:08X}",
                         ));
@@ -52389,17 +52009,13 @@ async fn recv_loop(
                         let action = GameAction::BookAddPage(Box::new(BookAddPageActionData {
                             object_guid: Guid(object_guid),
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BookAddPage): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("book_add_page: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BookAddPage): {e}",
+                            "book_add_page: {e}"
+                        );
                         console_log_str(&format!(
                             "[book/add-page] guid=0x{object_guid:08X}",
                         ));
@@ -52421,17 +52037,13 @@ async fn recv_loop(
                                 text,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BookModifyPage): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("book_modify_page: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BookModifyPage): {e}",
+                            "book_modify_page: {e}"
+                        );
                         console_log_str(&format!(
                             "[book/modify-page] guid=0x{object_guid:08X} page={page_num} len={text_len}",
                         ));
@@ -52450,17 +52062,13 @@ async fn recv_loop(
                                 page_num,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(BookDeletePage): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("book_delete_page: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(BookDeletePage): {e}",
+                            "book_delete_page: {e}"
+                        );
                         console_log_str(&format!(
                             "[book/delete-page] guid=0x{object_guid:08X} page={page_num}",
                         ));
@@ -52480,17 +52088,13 @@ async fn recv_loop(
                                 inscription,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(SetInscription): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("set_inscription: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(SetInscription): {e}",
+                            "set_inscription: {e}"
+                        );
                         console_log_str(&format!(
                             "[inscription/set] guid=0x{object_guid:08X} len={insc_len}",
                         ));
@@ -52611,17 +52215,13 @@ async fn recv_loop(
                                 equip_mask: EquipMask::from_bits_truncate(equip_mask),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(GetAndWieldItem): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("wield_from_pack: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(GetAndWieldItem): {e}",
+                            "wield_from_pack: {e}"
+                        );
                         console_log_str(&format!(
                             "[paperdoll/wield] item=0x{item_guid:08X} slot=0x{equip_mask:08X}",
                         ));
@@ -52640,17 +52240,13 @@ async fn recv_loop(
                                 item_guid: Guid(item_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(DropItem): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("drop_item: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(DropItem): {e}",
+                            "drop_item: {e}"
+                        );
                         console_log_str(&format!(
                             "[paperdoll/drop] item=0x{item_guid:08X}",
                         ));
@@ -52671,17 +52267,13 @@ async fn recv_loop(
                                 placement,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(PutItemInContainer): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("move_item: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(PutItemInContainer): {e}",
+                            "move_item: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/move] item=0x{item_guid:08X} container=0x{container_guid:08X} slot={placement}",
                         ));
@@ -52719,19 +52311,13 @@ async fn recv_loop(
                                 placement: 0,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(PutItemInContainer/Unwield): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("unwield_to_pack: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(PutItemInContainer/Unwield): {e}",
+                            "unwield_to_pack: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/unwield] item=0x{item_guid:08X} player=0x{player_guid_raw:08X}",
                         ));
@@ -52753,17 +52339,13 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(StackableSplitToWield): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("split_stack_to_wield: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(StackableSplitToWield): {e}",
+                            "split_stack_to_wield: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{equip_mask:08X} amount={amount}",
                         ));
@@ -52786,17 +52368,13 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(StackableSplitToContainer): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("split_stack_to_container: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(StackableSplitToContainer): {e}",
+                            "split_stack_to_container: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/split-container] stack=0x{stack_guid:08X} container=0x{container_guid:08X} slot={placement} amount={amount}",
                         ));
@@ -52815,17 +52393,13 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(StackableSplitTo3D): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("split_stack_to_3d: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(StackableSplitTo3D): {e}",
+                            "split_stack_to_3d: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/split-3d] stack=0x{stack_guid:08X} amount={amount}",
                         ));
@@ -52846,17 +52420,13 @@ async fn recv_loop(
                                 amount: amount as i32,
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(StackableMerge): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("merge_stacks: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(StackableMerge): {e}",
+                            "merge_stacks: {e}"
+                        );
                         console_log_str(&format!(
                             "[inventory/merge] src=0x{src_guid:08X} dst=0x{dst_guid:08X} amount={amount}",
                         ));
@@ -52876,21 +52446,13 @@ async fn recv_loop(
                         let action = GameAction::AbandonContract(Box::new(
                             AbandonContractActionData { contract_id },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(AbandonContract): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "abandon_contract: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AbandonContract): {e}",
+                            "abandon_contract: {e}"
+                        );
                         console_log_str(&format!(
                             "[contracts/abandon] contract_id={contract_id}",
                         ));
@@ -52912,21 +52474,13 @@ async fn recv_loop(
                                 target_name: target_name.clone(),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!(
-                                "recv_loop: send_action(AllegianceInfoRequest): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!(
-                                    "allegiance_info_request: {e}"
-                                )),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(AllegianceInfoRequest): {e}",
+                            "allegiance_info_request: {e}"
+                        );
                         console_log_str(&format!(
                             "[allegiance/info-request] target={target_name:?}",
                         ));
@@ -52960,19 +52514,13 @@ async fn recv_loop(
                             Some(action) => session.send_action(action).await.map(|_| ()),
                             None => Ok(()),
                         };
-                        if let Err(e) = send_result {
-                            log::warn!(
-                                "recv_loop: send_action(TargetedMissileAttack): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("missile_attack: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_result,
+                            "recv_loop: send_action(TargetedMissileAttack): {e}",
+                            "missile_attack: {e}"
+                        );
                         console_log_str(&format!(
                             "[missile_attack] target=0x{target_guid:08X} height={attack_height:?} accuracy={accuracy_level:.2}",
                         ));
@@ -53011,19 +52559,13 @@ async fn recv_loop(
                             Some(action) => session.send_action(action).await.map(|_| ()),
                             None => Ok(()),
                         };
-                        if let Err(e) = send_result {
-                            log::warn!(
-                                "recv_loop: send_action(TargetedMeleeAttack): {e}"
-                            );
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("attack: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_result,
+                            "recv_loop: send_action(TargetedMeleeAttack): {e}",
+                            "attack: {e}"
+                        );
                         console_log_str(&format!(
                             "[attack] target=0x{target_guid:08X} height={attack_height:?} power={power_level:.2}",
                         ));
@@ -53040,17 +52582,13 @@ async fn recv_loop(
                         };
                         let action =
                             GameAction::CancelAttack(Box::new(CancelAttackActionData {}));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(CancelAttack): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("cancelAttack: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(CancelAttack): {e}",
+                            "cancelAttack: {e}"
+                        );
                         console_log_str("[cancelAttack] sent");
                     }
                     Some(SessionCommand::QueryHealth { target_guid }) => {
@@ -53067,17 +52605,13 @@ async fn recv_loop(
                                 target_guid: Guid(target_guid),
                             },
                         ));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(QueryHealth): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("queryHealth: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(QueryHealth): {e}",
+                            "queryHealth: {e}"
+                        );
                     }
                     Some(SessionCommand::JumpChargeBegin) => {
                         // G-7 / F1-6 — set the standstill charge. JS already
@@ -53612,17 +53146,13 @@ async fn recv_loop(
                             object_guid: player_guid,
                             spell_id: 0,
                         }));
-                        if let Err(e) = send_ordered!(movement, session, action) {
-                            log::warn!("recv_loop: send_action(Jump): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("jump: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                                f32_payload: None,
-                            });
-                            return;
-                        }
+                        send_or_disconnect!(
+                            queued_events,
+                            e,
+                            send_ordered!(movement, session, action),
+                            "recv_loop: send_action(Jump): {e}",
+                            "jump: {e}"
+                        );
                         console_log_str(&format!(
                             "[jump] skill={jump_skill} burden={burden:.2} → vz={vz:.2} m/s",
                         ));
