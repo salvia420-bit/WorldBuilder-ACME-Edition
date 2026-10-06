@@ -1024,6 +1024,24 @@ check(
 }
 
 // ============================================================
+// Test 17a: BirthratePerMeter — retail emits once moved > birthrate metres
+// ============================================================
+{
+  // Retail ParticleEmitterInfo::ShouldEmitParticle: birthrate² < |offset|².
+  // The old ACE form compared the last-emit CLOCK to |offset|², so with a
+  // large clock nothing short of a very long walk ever emitted.
+  const info = new ParticleEmitterInfo(makeBaseInfo({
+    emitterType: EmitterType.BirthratePerMeter,
+    birthrate: 2.0, maxParticles: 10, totalParticles: 0,
+  }));
+  const lastEmit = 3600; // one hour of uptime on the emit clock
+  check("PerMeter: moved 1.5 m < 2 m birthrate ⇒ no emit",
+    info.shouldEmitParticle(0, 0, new THREE.Vector3(1.5, 0, 0), lastEmit) === false);
+  check("PerMeter: moved 2.5 m > 2 m birthrate ⇒ emit (independent of emit clock)",
+    info.shouldEmitParticle(0, 0, new THREE.Vector3(0, 2.0, 1.5), lastEmit) === true);
+}
+
+// ============================================================
 // Test 17b: Explode init — retail c.z = sin(pitch)*c.z (no cos(pitch) factor)
 // ============================================================
 {

@@ -281,10 +281,12 @@ export class ParticleEmitterInfo {
           return true;
         }
       } else if (this.emitterType === EmitterType.BirthratePerMeter) {
-        // ACE: lastEmitTime < emitterOffset.LengthSquared() — note the
-        // variable name confusion; "lastEmitTime" is actually being
-        // re-used as a per-meter accumulator here per ACE.cs. Faithful port.
-        if (lastEmitTime < emitterOffset.lengthSq()) {
+        // Retail ParticleEmitterInfo::ShouldEmitParticle (0x517420): emit once
+        // the parent has moved more than `birthrate` metres since the last
+        // emit — birthrate² < |offset|². ACE (`lastEmitTime < LengthSquared()`,
+        // marked "// verify") compared the emit CLOCK instead, so a per-metre
+        // trail needed √(seconds of uptime) metres per particle and died out.
+        if (this.birthrate * this.birthrate < emitterOffset.lengthSq()) {
           return true;
         }
       }
