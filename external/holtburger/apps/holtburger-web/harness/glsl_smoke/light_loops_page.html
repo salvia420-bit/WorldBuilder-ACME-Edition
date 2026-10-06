@@ -1,0 +1,38 @@
+<!doctype html><html><body><canvas id="c" width="64" height="64"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+import * as THREE from "three";
+import { installLightLoops } from "/app/scene3d/light_loops.js";
+const out = { errors: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+out.patch = JSON.parse(JSON.stringify(installLightLoops(THREE)));
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c") });
+renderer.debug.checkShaderErrors = true;
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100); cam.position.set(0, 0, 5);
+for (let i = 0; i < 16; i++) { const l = new THREE.PointLight(0xffaa66, 2, 6, 2); l.position.set(Math.cos(i) * 2, Math.sin(i) * 2, 1); scene.add(l); }
+for (let i = 0; i < 2; i++) { const l = new THREE.SpotLight(0x66aaff, 3, 10, 0.5, 0.2, 2); l.position.set(i ? 2 : -2, 2, 3); scene.add(l); }
+for (let i = 0; i < 2; i++) { const l = new THREE.DirectionalLight(0xffffff, 0.5); l.position.set(i, 1, 1); scene.add(l); }
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.3));
+const RE = "RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );";
+const plain = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.6, side: THREE.DoubleSide });
+const clamp = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.6, alphaTest: 0.1 });
+clamp.onBeforeCompile = (sh) => {
+  // same shape as materials.js _installLightClampShaderPatch: expand the chunk, wrap EVERY RE_Direct call
+  const wrapped = THREE.ShaderChunk.lights_fragment_begin.split(RE).join("{ vec3 _b = reflectedLight.directDiffuse; " + RE + " vec3 _d = reflectedLight.directDiffuse - _b; reflectedLight.directDiffuse = _b + min(_d, directLight.color); }");
+  sh.fragmentShader = sh.fragmentShader.replace("#include <lights_fragment_begin>", wrapped);
+};
+clamp.customProgramCacheKey = () => "clampSmoke";
+const m1 = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), plain); m1.position.x = -1.2; scene.add(m1);
+const m2 = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), clamp); m2.position.x = 1.2; scene.add(m2);
+const t0 = performance.now();
+renderer.render(scene, cam);
+out.renderMs = Math.round(performance.now() - t0);
+const gl = renderer.getContext();
+out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS), runnable: p.diagnostics ? p.diagnostics.runnable : "n/a", fragLen: gl.getShaderSource(gl.getAttachedShaders(p.program)[1] || gl.getAttachedShaders(p.program)[0]).length }));
+const px = new Uint8Array(4); gl.readPixels(16, 32, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); out.pixelLeft = Array.from(px);
+gl.readPixels(48, 32, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); out.pixelRight = Array.from(px);
+const all = new Uint8Array(64 * 64 * 4); gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, all);
+out.frame = Array.from(all);
+out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+window.__smoke = out;
+</script></body></html>

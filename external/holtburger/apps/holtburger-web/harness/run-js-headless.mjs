@@ -447,6 +447,11 @@ const TIER5 = [
   { tier: 5, flag: "particle_inst_alpha", file: "test_particle_inst_alpha.mjs" },
   { tier: 5, flag: "nra_pack_lut", file: "test_nra_pack_lut.mjs" },
   { tier: 5, flag: "batch_mat_variant_clone", file: "test_batch_mat_variant_clone.mjs" },
+  // 2026-10-06 session 3 — first-turn hitch (point/spot light loops kept as loops) and the
+  // two suites the gate used to report UNREGISTERED.
+  { tier: 5, flag: "light_loops", file: "test_light_loops.mjs" },
+  { tier: 5, flag: "anim_cache_evict_dispose", file: "test_anim_cache_evict_dispose.mjs" },
+  { tier: 5, flag: "particle_time_latch", file: "test_particle_time_latch.mjs" },
   { tier: 5, flag: "fog_probe_pbo_unbind", file: "test_fog_probe_pbo_unbind.mjs" },
   { tier: 5, flag: "frame_split_probe", file: "test_frame_split_probe.mjs" },
   { tier: 5, flag: "landblock_lru_frame_slot", file: "test_landblock_lru_frame_slot.mjs" },

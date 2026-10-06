@@ -162,6 +162,7 @@ import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
+import { installLightLoops } from "./light_loops.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
 import { syncBatchMatVariants } from "./batched_material_variant.js";
 import {
@@ -1088,6 +1089,9 @@ export async function preInit3D(canvas) {
       return false;
     }
   })();
+  // ?lightLoops (2026-10-06): point / spot light loops stay real loops, so a lit program is
+  // ~4x less fragment code (D3DCompile ~3 s per program on the 1070). Must precede every compile.
+  installLightLoops(THREE);
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: !!quality.flags.antialias && (wireframeMode || _canvasMsaa),
