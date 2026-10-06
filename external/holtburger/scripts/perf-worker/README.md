@@ -158,3 +158,16 @@ Same box discipline as `flag-bench.mjs` (schtasks /it launch, off-screen, `--mut
 | `hbprobe.mjs --label X` | one-shot fresh boot: draw census by category + CPU profile + framePhase + nvidia-smi |
 
 Frame times on this panel quantize to 8.33 ms (120 Hz): read means/lows, not p50 alone.
+
+## 2026-10-06 session 3 additions
+
+| tool | what |
+|---|---|
+| `hbsess.mjs boot … --no-orbit` | leave the default chase camera (the bench's first-turn starting pose) |
+| `hbbench.mjs` FIRST TURN phase | 12 s third-person 360° sweep right after the world settles (`--no-first-turn` skips) → `firstTurn` stats |
+| `glcensus.js` + `glcensus.py` | UNTRACED per-frame GL census: call counts/bytes, main-thread ms inside GL calls, a fence for GPU-side lag, upload bytes attributed to the owning scene object, first draws per object, LoAF |
+| `gputrace.mjs` + `angleattr.py` | first-turn trace with `gpu.angle` (ANGLE's own compile/link work); avoid gpu.service/gpu.decoder (≈10× GPU-process inflation) |
+| `drawcensus.js` | per-category draw census over a few seconds of orbit |
+| `box/hbprobe-launch.bat` | now logs Chrome to `D:\Temp\hbbench\logs\<profile>.log` (mid-boot deaths) |
+
+Box rule (owner, 2026-10-06): if someone is using the 1070, stop — see HANDOFF-1070-perf-2026-10-06.md §1b.

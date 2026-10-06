@@ -1,7 +1,8 @@
 // hbbench.mjs — interleaved fresh-profile 1070 bench against a FROZEN snapshot server.
 //   node hbbench.mjs --arms arms.json --reps 2 --port 8766 --out DIR
-// arms.json: [{name, quality, flags}]. Per run: boot -> Holtburg -> settle -> orbit warm-up ->
-// STILL 20 s + MOVING 20 s (orbit) -> cold teleport tour (poi:Shoushi 35 s, back 35 s).
+// arms.json: [{name, quality, flags}]. Per run: boot -> Holtburg -> settle -> FIRST TURN (12 s
+// third-person 360 sweep) -> orbit warm-up -> STILL 20 s + MOVING 20 s (orbit) -> cold teleport tour
+// (poi:Shoushi 35 s, back 35 s).
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, statSync, openSync, readSync, closeSync } from "node:fs";
@@ -69,6 +70,17 @@ async function runOne(arm, rep) {
     await sleep(8000);
     let last = null, since = Date.now(); const ts = Date.now();
     while (Date.now() - ts < 150000) { const cur = await pg.evaluate(() => `${window.__landblockLru?.entries?.size}|${window.liveScene3d?.renderer?.info?.memory?.geometries}`).catch(() => null); if (cur !== last) { last = cur; since = Date.now(); } else if (Date.now() - since >= 12000) break; await sleep(1000); }
+    // FIRST TURN: the first third-person 360-degree sweep after the world settles (cold views:
+    // first-sight programs, uploads). --no-first-turn skips it.
+    if (!argv.includes("--no-first-turn")) {
+      res.firstTurn = stats(await pg.evaluate(async (ms) => {
+        try { window.__cam.release(); } catch (_) {}
+        const d = []; let last = null; const t0 = performance.now();
+        await new Promise((res) => { const f = (now) => { if (last !== null) d.push(now - last); last = now; window.__cam.player(8, ((now - t0) / ms) * 360, 12, 1.5); if (now - t0 >= ms) return res(); requestAnimationFrame(f); }; requestAnimationFrame(f); });
+        return d;
+      }, 12000));
+      await sleep(2000);
+    }
     const pose = await pg.evaluate(() => window.__cam.world());
     const orbit = { x: pose.x, y: pose.y, z: pose.z + 1.5, dist: 70, az: 45, el: 22, degPerSec: 12 };
     await pg.evaluate(FRAMES, { ms: 25000, orbit });
@@ -104,7 +116,7 @@ for (let rep = 1; rep <= REPS; rep++) {
     const r = await runOne(arm, rep);
     all.push(r);
     const f = (x) => x ? `${x.fps}fps p99 ${x.p99} low1 ${x.low1}` : "-";
-    log(`  ${r.error ? "ERROR " + r.error : "ok"} | still ${f(r.still)} | moving ${f(r.moving)} | draws ${r.draws} | tour ${r.tour ? `fps ${r.tour.fps} jank ${r.tour.jankMs} h100 ${r.tour.h100} h250 ${r.tour.h250} max ${r.tour.max} low1 ${r.tour.low1} low01 ${r.tour.low01}` : "-"} | errs ${r.errors.length}`);
+    log(`  ${r.error ? "ERROR " + r.error : "ok"} | firstTurn ${r.firstTurn ? `${r.firstTurn.fps}fps jank ${r.firstTurn.jankMs} h100 ${r.firstTurn.h100} max ${r.firstTurn.max}` : "-"} | still ${f(r.still)} | moving ${f(r.moving)} | draws ${r.draws} | tour ${r.tour ? `fps ${r.tour.fps} jank ${r.tour.jankMs} h100 ${r.tour.h100} h250 ${r.tour.h250} max ${r.tour.max} low1 ${r.tour.low1} low01 ${r.tour.low01}` : "-"} | errs ${r.errors.length}`);
     writeFileSync(join(OUT, "summary.json"), JSON.stringify(all, null, 1));
   }
 }

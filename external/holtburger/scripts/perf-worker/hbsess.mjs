@@ -1,5 +1,5 @@
 // hbsess.mjs — persistent probe session on the 1070 (exploration, not timing).
-//   node hbsess.mjs boot [--quality mid] [--flags 'a=b'] [--window 1280,720]
+//   node hbsess.mjs boot [--quality mid] [--flags 'a=b'] [--window 1280,720] [--no-orbit]
 //   node hbsess.mjs eval <file.js>      file = body of an async fn; `return` value printed as JSON
 //   node hbsess.mjs orbit               park the camera on the Holtburg orbit pose (stored in window.__hbOrbit)
 //   node hbsess.mjs profile <sec> [out] CDP CPU profile while orbiting
@@ -75,7 +75,10 @@ if (cmd === "boot") {
     await sleep(1000);
   }
   const pose = await pg.evaluate(() => window.__cam.world());
-  await pg.evaluate((o) => { window.__hbOrbit = o; window.__cam.orbit(o.x, o.y, o.z, o.dist, o.az, o.el); }, { x: pose.x, y: pose.y, z: pose.z + 1.5, dist: 70, az: 45, el: 22, degPerSec: 12 });
+  // --no-orbit leaves the default chase camera (the bench's first-turn starting point);
+  // the orbit pose is still stored for `orbit` / `profile`.
+  await pg.evaluate(({ o, park }) => { window.__hbOrbit = o; if (park) window.__cam.orbit(o.x, o.y, o.z, o.dist, o.az, o.el); },
+    { o: { x: pose.x, y: pose.y, z: pose.z + 1.5, dist: 70, az: 45, el: 22, degPerSec: 12 }, park: !argv.includes("--no-orbit") });
   console.log("ready; settled", last, "in", Date.now() - t, "ms");
   process.exit(0);
 }
