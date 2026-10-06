@@ -830,7 +830,16 @@ export function setupClickPicking({
     // Build a fresh flat list of entity roots per click — entities come
     // and go, so caching would just invite the spawn/despawn maintenance
     // bug that F7's full version exists to solve.
-    const roots = Array.from(em.entityMap.values()).map(inst => inst?.root).filter(Boolean);
+    // PICK-VIS (2026-10-06): only what is DRAWN is pickable. three's Raycaster
+    // never checks `visible` (r184 `intersect` tests layers only), and
+    // `_applyEntityVisible` (entities.js) hides a rig by `root.visible = false`
+    // for NoDraw / Hidden / Cloaked / detached state AND for the render cull —
+    // so a hidden entity stayed clickable (select a cloaked or culled NPC by
+    // clicking empty air or a wall). Retail and OpenAC hit-test only the parts
+    // they drew. A hidden LOCAL rig (first person) no longer occludes either.
+    const roots = Array.from(em.entityMap.values())
+      .map(inst => inst?.root)
+      .filter(r => r && r.visible !== false);
     if (roots.length === 0) return null;
     // Parallel guid lookup so the hit-to-guid resolution below stays O(1).
     // Excludes the local player so you can't pick yourself.
@@ -839,6 +848,7 @@ export function setupClickPicking({
       const g = guid >>> 0;
       if (g === localGuid) continue;
       if (!inst || !inst.root) continue;
+      if (inst.root.visible === false) continue; // PICK-VIS: hidden ⇒ unpickable
       guidByRoot.set(inst.root, g);
     }
 
@@ -857,8 +867,15 @@ export function setupClickPicking({
     // self-hit yields no guidByRoot match, so the loop simply advances.
     const hits = raycaster.intersectObjects(roots, true);
     for (const hit of hits) {
+      // A hidden part (e.g. a `materialRendersNothing` mesh, a NoDraw part)
+      // under a visible rig is not drawn either — skip the hit.
       let obj = hit.object;
-      while (obj && !guidByRoot.has(obj)) obj = obj.parent;
+      let hidden = false;
+      while (obj && !guidByRoot.has(obj)) {
+        if (obj.visible === false) hidden = true;
+        obj = obj.parent;
+      }
+      if (hidden) continue;
       if (obj) return guidByRoot.get(obj);
     }
     return null;

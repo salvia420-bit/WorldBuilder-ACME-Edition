@@ -300,6 +300,38 @@ console.log("\n#18 — child-mesh hit resolves up to entity root guid");
         (pickEntityAt(100, 100) >>> 0) === (OTHER >>> 0));
 }
 
+// PICK-VIS (2026-10-06): hidden rigs / parts are not pickable (retail and
+// OpenAC hit-test only drawn parts; three's Raycaster ignores `visible`).
+console.log("\nPICK-VIS — hidden entities and hidden parts are not pickable");
+{
+    const LOCAL = 0x61000001;
+    const HID = 0x61000002;
+    const VIS = 0x61000003;
+    const { em, pickEntityAt } = buildPicking(LOCAL, [[HID, null], [VIS, null]]);
+    em.otherRoots[HID].visible = false;              // NoDraw / cloaked / culled
+    let passedRoots = null;
+    const prev = THREE.Raycaster.prototype.intersectObjects;
+    THREE.Raycaster.prototype.intersectObjects = function (roots) {
+        passedRoots = roots;
+        return nextHits.map((object) => ({ object, distance: 0 }));
+    };
+    nextHits = [em.otherRoots[HID], em.otherRoots[VIS]];
+    check("hidden rig in front of a visible one -> the visible one is picked",
+        (pickEntityAt(100, 100) >>> 0) === (VIS >>> 0));
+    check("hidden rig is not even raycast",
+        Array.isArray(passedRoots) && !passedRoots.includes(em.otherRoots[HID]));
+    nextHits = [em.otherRoots[HID]];
+    check("only a hidden rig under the cursor -> null", pickEntityAt(100, 100) === null);
+    const hiddenPart = { parent: em.otherRoots[VIS], visible: false };
+    nextHits = [hiddenPart];
+    check("hit on a hidden PART of a visible rig -> skipped (null)", pickEntityAt(100, 100) === null);
+    const shownPart = { parent: em.otherRoots[VIS], visible: true };
+    nextHits = [hiddenPart, shownPart];
+    check("hidden part skipped, drawn part of the same rig picks it",
+        (pickEntityAt(100, 100) >>> 0) === (VIS >>> 0));
+    THREE.Raycaster.prototype.intersectObjects = prev;
+}
+
 // ===================================================================
 // pick-destroy — destroy() cancels an in-flight charge
 // ===================================================================
