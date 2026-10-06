@@ -950,6 +950,7 @@ import { gatePaletteId, gateSubPalettes } from "./recolor_flag.js";
 // consults this memo before paying a per-entity wasm await.
 import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
 import { PartDegrade, partDegradeEnabled, PART_DEGRADE_INTERVAL_S } from "./part_degrade.js";
+import { linkMissIsDefect } from "./motion_link_diag.js";
 // Animation consolidation (docs/animation-audit §5) — COMPLETE (2026-10-05):
 // every entity rig is driven by ONE authority, the RUST MotionSequence
 // interpreter (src/motion_sequence.rs, cargo-tested retail CSequence): a cyclic
@@ -12004,7 +12005,11 @@ export class EntityManager {
       const tcls = (typeof classifyMotionCommand === "function")
         ? classifyMotionCommand(toCmd >>> 0)
         : null;
-      if (tcls === "attack" || tcls === "cast") {
+      // 2026-10-06: only a real swing / cast miss is a defect. Emotes, idle
+      // fidgets (Twitch1-4 reach this path via the class-byte fallback),
+      // FallDown, Jump and recalls legitimately lack links in many tables —
+      // retail plays nothing for them either (scene3d/motion_link_diag.js).
+      if (linkMissIsDefect(toCmd >>> 0, ATTACK_COMMANDS, CAST_COMMANDS)) {
         // eslint-disable-next-line no-console
         console.warn(
           `[motion-link] no MotionTable link for ${(tcls)} 0x${(toCmd >>> 0).toString(16)} ` +
