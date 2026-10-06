@@ -37,15 +37,16 @@ src = src.replace(/^\s*import\s+.*$/gm, "");
 const stripped = src
   .replace(/^\s*export\s+function\s+/gm, "function ")
   .replace(/^\s*export\s+const\s+/gm, "const ");
+const { batchedMaterialFor, memberMaterialOf } = await import("./scene3d/batched_material_variant.js");
 const factory = new Function(
-  "THREE",
+  "THREE", "batchedMaterialFor",
   stripped +
     "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
     "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
     "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, batchXInstancesForLb, " +
     "tickStatBatchXOptimize, getStatBatchXStats };"
 );
-const M = factory(THREE);
+const M = factory(THREE, batchedMaterialFor);
 
 // ---- mock singleton nodes (mirrors test_static_batch.mjs) ----
 // Statics singleton geometries are NON-indexed {position, uv, normal} (adapter.js
@@ -89,8 +90,18 @@ check("2: lone singleton + LOD pass through (out = 2, identity preserved)",
 check("3: 2 buckets created and self-added to staticsGroup",
   scene3d.staticsGroup.children.filter((c) => c.isBatchedMesh).length === 2,
   `children=${scene3d.staticsGroup.children.length}`);
-const bmA = scene3d.staticsGroup.children.find((c) => c.material === matA);
-const bmB = scene3d.staticsGroup.children.find((c) => c.material === matB);
+const bmA = scene3d.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matA);
+const bmB = scene3d.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matB);
+// batchMatVariant (2026-10-06): the bucket draws through its OWN material object
+// (three caches the batched program apart) that reads through to the member.
+check("4b: bucket material is a distinct variant of the member", !!bmA && bmA.material !== matA && memberMaterialOf(bmA.material) === matA);
+{
+  const was = matA.opacity;
+  matA.opacity = 0.25; matA.needsUpdate = true;
+  check("4c: member state changes are seen through the bucket's variant",
+    bmA.material.opacity === 0.25 && bmA.material.version === matA.version && bmA.material.id === matA.id);
+  matA.opacity = was;
+}
 check("4: buckets keep their surface material + carry NO landblockId + named static-batch-x-*",
   bmA && bmB && bmA.userData.landblockId === undefined && /^static-batch-c-r50x50-s00000a00/.test(bmA.name),
   `nameA=${bmA && bmA.name}`);
@@ -135,7 +146,7 @@ check("11: surf-A bucket now 9 instances over 2 gids (per-LB geometry identity)"
   const bms = scene3d.staticsGroup.children.filter((c) => c.isBatchedMesh);
   const far = bms.find((c) => /^static-batch-c-r68x73-/.test(c.name));
   check("11b: far LB lands in its OWN region chunk (3 buckets, r68x73 exists, LB1 bucket untouched)",
-    rF && bms.length === 3 && !!far && far.material === matA && bmA.userData.instances === 9,
+    rF && bms.length === 3 && !!far && memberMaterialOf(far.material) === matA && bmA.userData.instances === 9,
     `buckets=${bms.length} far=${far && far.name}`);
   check("11c: chunk bounds invalidated on feed (boundingSphere === null, three recomputes at cull)",
     bmA.boundingSphere === null && far.boundingSphere === null);
@@ -248,8 +259,8 @@ M.__resetStatBatchXForTest();
     [singleton(1, 0, LB1, g, matOpaque), singleton(1, 1, LB1, g, matOpaque),
      singleton(2, 0, LB1, triGeom(1), matTrans), singleton(2, 1, LB1, triGeom(1), matTrans)],
     s3, LB1);
-  const bO = s3.staticsGroup.children.find((c) => c.material === matOpaque);
-  const bT = s3.staticsGroup.children.find((c) => c.material === matTrans);
+  const bO = s3.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matOpaque);
+  const bT = s3.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matTrans);
   check("23: opaque bucket skips instance sort; transparent keeps it; chunk node IS frustum-culled",
     bO && bT && bO.sortObjects === false && bT.sortObjects === true &&
     bO.perObjectFrustumCulled === true && bO.frustumCulled === true &&

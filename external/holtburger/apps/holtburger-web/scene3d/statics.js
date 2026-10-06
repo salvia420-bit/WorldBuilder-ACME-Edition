@@ -72,6 +72,7 @@
 //      Phase 7.2 capture, F#5+6 capture) stay green.
 
 import * as THREE from "three";
+import { batchedMaterialFor } from "./batched_material_variant.js";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
 // T13 (ST3, `?geomBundles`): HBG1 bundle consumption — armed only by
@@ -2062,7 +2063,8 @@ export function consolidateStaticSingletons(nodes, outBatches) {
       if (m.geometry.index) maxIdx += m.geometry.index.count;
     }
     let bm;
-    try { bm = new THREE.BatchedMesh(group.length, maxVerts, maxIdx, mat); }
+    try { bm = new THREE.BatchedMesh(group.length, maxVerts, maxIdx,
+      typeof batchedMaterialFor === "function" ? batchedMaterialFor(mat) : mat); }
     catch (_) { out.push(...group); continue; }
     let added = 0;
     for (const m of group) {

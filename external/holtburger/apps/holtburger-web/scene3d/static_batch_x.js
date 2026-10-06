@@ -28,6 +28,7 @@
 // ~29->~47 fps). `?statBatchChunk=off` escapes to the per-LB legacy path.
 
 import * as THREE from "three";
+import { batchedMaterialFor } from "./batched_material_variant.js";
 
 let _flag;
 /** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
@@ -1935,7 +1936,12 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
   if (!region) { region = new Map(); _buckets.set(regionKey, region); }
   let b = region.get(mat);
   if (b) return b;
-  const bm = new THREE.BatchedMesh(_INIT_INST, _INIT_VERTS, _INIT_VERTS * 2, mat);
+  // The bucket draws through a variant of `mat` (batched_material_variant.js):
+  // reads fall through to `mat`, but three caches the batched program apart so
+  // plain-Mesh draws of `mat` stop flipping its program every frame. The
+  // region map and `ud.material` stay keyed by the MEMBER `mat`.
+  const bm = new THREE.BatchedMesh(_INIT_INST, _INIT_VERTS, _INIT_VERTS * 2,
+    typeof batchedMaterialFor === "function" ? batchedMaterialFor(mat) : mat);
   // OPAQUE: skip the per-frame instance depth sort (CPU win; statAtlas
   // precedent). Transparent buckets keep the sort for blend order — unless
   // `?statBatchNoSort=on` proves this material's blend is order-independent
