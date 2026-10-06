@@ -407,13 +407,11 @@ export class AnimationCache {
         //
         // Geometries held by cached entries are also referenced by
         // every live entity's Mesh tree (entity registers them at
-        // spawn time via `inst.registerGeometry`). Eviction just
-        // drops the cache entry — live entities continue rendering;
-        // dispose happens via normal GC when the last entity using
-        // a geometry despawns. Cache geometries don't carry the
-        // `__disposable` userData tag, so `EntityInstance.dispose`'s
-        // skip-cache-geometries guard (FU3) already protects against
-        // disposing them prematurely. Mixer + AnimationAction objects
+        // spawn time via `inst.registerGeometry`). While cached they
+        // carry no `__disposable` tag, so `EntityInstance.dispose`'s
+        // FU3 guard never frees them. On EVICTION the cache releases
+        // them (see `_evictLruIfNeeded` EVICT-DISPOSE) — GC alone
+        // never frees an uploaded geometry's GL buffers. Mixer + AnimationAction objects
         // pinned by live entities also keep `entry.clip` alive
         // independently of the cache.
         this.entries = new Map();
@@ -946,12 +944,18 @@ export class AnimationCache {
      * in flight — the cap effectively becomes maxEntries + max-
      * pending-concurrent-fetches, which is still bounded).
      *
-     * Cache geometries held in evicted entries are NOT disposed here.
-     * Live entities still reference them via `inst.geometries` (cache-
-     * shared, no `__disposable` tag). When the last entity using a
-     * geometry despawns + GC runs, the geometry is reclaimed. The
-     * `EntityInstance.dispose` FU3 guard ensures we never dispose
-     * cache geometries prematurely.
+     * EVICT-DISPOSE (2026-10-06). GC does NOT reclaim an uploaded
+     * BufferGeometry: three's WebGLGeometries keeps it (and its GL
+     * buffers) until its 'dispose' event. Entity despawn skips cache
+     * geometries (FU3: no `__disposable` tag), so an evicted entry's
+     * part geometry used to leak for the rest of the session — live on
+     * the 1070, the cache hit its 256 cap on the first Holtburg→Yaraq
+     * trip and every revisit re-fetched (and re-leaked) evicted setups.
+     * Now an evicted entry's geometries are tagged `__disposable` and
+     * disposed: unused ones free their GL buffers now; one still drawn
+     * by a live entity is simply re-uploaded by three on its next draw,
+     * and that entity's despawn now owns the release (FU3 sees the tag).
+     * Entries never share geometry (each builds its own partGroups).
      *
      * @private
      */
@@ -966,7 +970,9 @@ export class AnimationCache {
         for (const key of this.entries.keys()) {
             if (this.entries.size <= this.maxEntries) break;
             if (this.pendingStartTimes.has(key)) continue;
+            const gone = this.entries.get(key);
             this.entries.delete(key);
+            AnimationCache._releaseEntryGeometry(gone);
             evicted += 1;
             // Defensive: if the caller has a sidecar map keyed by the
             // same string, future versions might want to clear it
@@ -1141,7 +1147,34 @@ export class AnimationCache {
      * the cache's own references so the GC can reclaim them once
      * the mixers also let go.
      */
+    /**
+     * EVICT-DISPOSE — hand an evicted/cleared entry's part geometries to
+     * their users: tag `__disposable` (so a live entity's despawn frees
+     * them) and dispose now (frees GL buffers if nothing draws them; three
+     * re-uploads on the next draw if something still does). Accepts the
+     * cached Promise; a rejected/empty entry is a no-op.
+     * @private
+     */
+    static _releaseEntryGeometry(entry) {
+        if (!entry || typeof entry.then !== "function") return;
+        entry.then((v) => {
+            const parts = v?.partGroups;
+            if (!Array.isArray(parts)) return;
+            for (const part of parts) {
+                for (const g of part?.groups ?? []) {
+                    const geo = g?.geometry;
+                    if (!geo || typeof geo.dispose !== "function") continue;
+                    try {
+                        if (geo.userData) geo.userData.__disposable = true;
+                        geo.dispose();
+                    } catch (_) { /* fail-soft */ }
+                }
+            }
+        }, () => {});
+    }
+
     dispose() {
+        for (const entry of this.entries.values()) AnimationCache._releaseEntryGeometry(entry);
         this.entries.clear();
         this.partNames.clear();
         this.prewarmedSetupIds.clear();
