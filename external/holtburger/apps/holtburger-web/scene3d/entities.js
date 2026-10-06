@@ -12196,10 +12196,35 @@ export class EntityManager {
         surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
       };
     };
+    // PART-GEO-MEMO (2026-10-06): ONE geometry per particle GfxObj, shared by
+    // every emitter that draws it. ParticleManager.destroyParticleEmitter never
+    // disposes geometry ("cache-owned by the geometryFactory") — but this factory
+    // had no cache: each addEmitter decoded + uploaded a fresh geometry that was
+    // never freed. Live (1070, warmPark=off, Holtburg<->Yaraq x2): 743 orphaned
+    // particle geometries by the third Holtburg visit. Failed (null) resolves are
+    // not memoized, so a decode-starved miss can retry. `__cacheOwned` keeps the
+    // LB dispose loops off a geometry other emitters still draw.
+    const _resolveMemo = new Map(); // hwGfxObjId -> Promise<{geometry, surfaceDid}|null>
+    const resolveGfxObjShared = (hwGfxObjId) => {
+      const id = hwGfxObjId >>> 0;
+      let p = _resolveMemo.get(id);
+      if (!p) {
+        p = resolveGfxObj(id).then(
+          (r) => {
+            if (!r) { _resolveMemo.delete(id); return r; }
+            try { r.geometry.userData.__cacheOwned = true; } catch (_) {}
+            return r;
+          },
+          (e) => { _resolveMemo.delete(id); throw e; },
+        );
+        _resolveMemo.set(id, p);
+      }
+      return p;
+    };
     this._worldParticleManager = new ParticleManager({
       scene: this.scene3d?.entitiesGroup ?? rig?.parent ?? null,
       geometryFactory: async (hwGfxObjId) => {
-        const r = await resolveGfxObj(hwGfxObjId);
+        const r = await resolveGfxObjShared(hwGfxObjId);
         return r?.geometry ?? null;
       },
       // Retail deg_mode facing (2026-07-28) — hw GfxObj → did_degrade chain
@@ -12215,7 +12240,7 @@ export class EntityManager {
       },
       materialFactory: async (hwGfxObjId) => {
         if (!materialCache) return null;
-        const r = await resolveGfxObj(hwGfxObjId);
+        const r = await resolveGfxObjShared(hwGfxObjId);
         if (!r?.surfaceDid) return null;
         try {
           // 2026-06-20 ParticleViewer parity: UNLIT billboard material
