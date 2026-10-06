@@ -454,6 +454,8 @@ const TIER5 = [
   { tier: 5, flag: "part_degrade", file: "test_part_degrade.mjs" },
   { tier: 5, flag: "cell_static_merge", file: "test_cell_static_merge.mjs" },
   { tier: 5, flag: "particle_shared_alpha", file: "test_particle_shared_alpha.mjs" },
+  // 2026-10-06 remote-console fix: the pre-3D entity backlog keeps state events.
+  { tier: 5, flag: "entity_backlog", file: "test_entity_backlog.mjs" },
   { tier: 5, flag: "anim_cache_evict_dispose", file: "test_anim_cache_evict_dispose.mjs" },
   { tier: 5, flag: "particle_time_latch", file: "test_particle_time_latch.mjs" },
   { tier: 5, flag: "fog_probe_pbo_unbind", file: "test_fog_probe_pbo_unbind.mjs" },

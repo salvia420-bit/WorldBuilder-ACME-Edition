@@ -10,9 +10,10 @@
 //
 // Standalone node ESM test (no live ACE session, no browser, §2.8). Two
 // parts:
-//   PART 1 — behavioral: reimplement the EXACT ring-cap + 3D-defer-gate
-//            semantics, drive them with >cap synthetic updates, assert
-//            the length bound holds and the gate skips in 3D mode.
+//   PART 1 — behavioral: drive a verbatim mirror of index.html's
+//            __pushBacklog (which calls the SHIPPED scene3d/entity_backlog.js)
+//            with >cap synthetic updates, assert the bounds, that state
+//            events survive, and that the 3D defer gate skips.
 //   PART 2 — static: read index.html as text and assert the caps + the
 //            `?spawnDefer2dOnly` gate + the corrected stale comment are
 //            actually wired into the shipped source.
@@ -27,6 +28,7 @@ import { readFileSync } from "node:fs";
 // index.html's inline script was split into app/*.js (2026-10-05); text pins
 // read the whole boot orchestrator (index.html + app/*.js).
 import appSource from "./harness/app_source.cjs";
+import { compactEntityBacklog, BACKLOG_HARD_CAP } from "./scene3d/entity_backlog.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -48,122 +50,87 @@ const ENTITY_BUFFER_CAP = 512;
 
 console.log("PART 1 — behavioral ring-cap + defer gate");
 
-// ---- (b) __scene3dEntityBacklog ring-cap ----------------------------
-// SPAWN-PRESERVING eviction (2026-06-17 ultra-spawn fix). Mirrors the
-// shipped __pushBacklog body in index.html: KIND_SPAWN (kind===1) is an
-// early finite burst that is drained-once wasm-side (never re-emitted), so
-// it must NEVER be evicted; the steady KIND_POSITION/KIND_MOTION flood
-// (100s/sec) is the filler that gets trimmed oldest-first. Single-pass
-// O(n) compaction keeps all spawns + the newest non-spawns that fit.
-{
+// ---- (b) __scene3dEntityBacklog: bounded, state-safe compaction ------
+// 2026-10-06: the shipped __pushBacklog (index.html) compacts through the
+// SHIPPED scene3d/entity_backlog.js once the backlog passes ENTITY_BUFFER_CAP
+// (then again each time it doubles): POSITION / VELOCITY / MOTION /
+// MOTION_ACTION / TURN coalesce to the newest per guid; SPAWN / REMOVE /
+// META_REFRESH / APPEARANCE / ATTACH are never dropped; BACKLOG_HARD_CAP
+// bounds a backlog the 3D hook never drains. The mirror below is the
+// index.html body verbatim minus the console text.
+function makePushBacklog() {
   const backlog = [];
-  let warned = 0;
+  const st = { info: 0, warn: 0 };
+  let compactAt = ENTITY_BUFFER_CAP;
   function pushBacklog(cloned) {
     if (!cloned) return;
     const b = backlog;
     b.push(cloned);
-    if (b.length > ENTITY_BUFFER_CAP) {
-      let spawnCount = 0;
-      for (let i = 0; i < b.length; i += 1) if ((b[i].kind | 0) === 1) spawnCount += 1;
-      const nonSpawnBudget = Math.max(0, ENTITY_BUFFER_CAP - spawnCount);
-      const keep = new Set();
-      let nonSpawnKept = 0;
-      for (let i = b.length - 1; i >= 0; i -= 1) {
-        const e = b[i];
-        if ((e.kind | 0) === 1) keep.add(e);
-        else if (nonSpawnKept < nonSpawnBudget) { keep.add(e); nonSpawnKept += 1; }
-      }
-      const compacted = [];
-      for (let i = 0; i < b.length; i += 1) if (keep.has(b[i])) compacted.push(b[i]);
-      const overEvicted = compacted.length < b.length;
-      b.length = 0;
-      for (let i = 0; i < compacted.length; i += 1) b.push(compacted[i]);
-      if (overEvicted && !warned) warned = 1;
+    if (b.length < compactAt >>> 1) compactAt = ENTITY_BUFFER_CAP; // drained since
+    if (b.length > compactAt) {
+      const r = compactEntityBacklog(b, { hardCap: BACKLOG_HARD_CAP });
+      compactAt = Math.max(ENTITY_BUFFER_CAP, r.after * 2);
+      if (r.hardDropped > 0) { if (!st.warn) st.warn = 1; }
+      else if (!st.info) st.info = 1;
     }
   }
-  // Drive far past the cap with a pure NON-spawn flood (KIND_POSITION),
-  // as in a populated 2D zone (100s/sec). With no spawns to preserve,
-  // behavior collapses to the legacy keep-latest-N.
+  return { backlog, pushBacklog, st };
+}
+{
+  // A populated zone's flood: 200 movers x (position, motion), far past the cap.
+  const { backlog, pushBacklog, st } = makePushBacklog();
   const N = ENTITY_BUFFER_CAP * 50;
-  for (let i = 0; i < N; i += 1) pushBacklog({ kind: 0, guid: i });
+  // each round of 200 alternates position / motion, so every mover gets both kinds
+  for (let i = 0; i < N; i += 1) pushBacklog({ kind: Math.floor(i / 200) % 2 ? 5 : 0, guid: 0x80000000 + (i % 200), seq: i });
   check(
-    `backlog bounded at ENTITY_BUFFER_CAP after ${N} non-spawn pushes`,
-    backlog.length === ENTITY_BUFFER_CAP,
+    `a ${N}-update flood from 200 movers stays bounded (one newest position + motion each, plus the tail since the last compaction)`,
+    backlog.length <= 2 * ENTITY_BUFFER_CAP,
     `len=${backlog.length}`,
   );
-  check(
-    "pure non-spawn flood keeps the LATEST N (oldest dropped)",
-    backlog[backlog.length - 1].guid === N - 1 &&
-      backlog[0].guid === N - ENTITY_BUFFER_CAP,
-    `first=${backlog[0].guid} last=${backlog[backlog.length - 1].guid}`,
-  );
-  check("backlog overflow warned exactly once (latched)", warned === 1);
-  // null clones (freed wasm handle) must not grow the buffer.
+  const newest = new Map();
+  for (const e of backlog) newest.set(`${e.guid}:${e.kind}`, Math.max(newest.get(`${e.guid}:${e.kind}`) ?? -1, e.seq));
+  check("every mover's NEWEST position and motion survive", newest.size === 400 && [...newest.values()].every((q) => q >= N - 400));
+  check("coalescing is reported once (info, latched), never as a loss", st.info === 1 && st.warn === 0);
   const before = backlog.length;
   pushBacklog(null);
   check("null clone is a no-op (freed-handle path)", backlog.length === before);
+}
+{
+  // A backlog nobody drains (distinct guids, nothing to coalesce): the hard cap bounds it.
+  const { backlog, pushBacklog, st } = makePushBacklog();
+  const N = BACKLOG_HARD_CAP * 3;
+  for (let i = 0; i < N; i += 1) pushBacklog({ kind: 0, guid: i });
+  check(`never-drained backlog bounded by 2 x BACKLOG_HARD_CAP after ${N} distinct pushes`, backlog.length <= 2 * BACKLOG_HARD_CAP, `len=${backlog.length}`);
+  check("the newest survive, the oldest go", backlog[backlog.length - 1].guid === N - 1 && backlog[0].guid > 0, `first=${backlog[0].guid}`);
+  check("the hard-cap loss is warned (latched)", st.warn === 1);
 }
 
 // ---- (b2) spawn-preserving regression (the ultra-spawn fix) ---------
 // The exact failing shape at quality=ultra: an EARLY spawn burst (the
 // ~58 ObjectCreate spawns + the one-shot local-player spawn) followed by
-// a long KIND_POSITION/KIND_MOTION flood that, while init3D is slow to
-// install the live drain hook, would overflow the 512 ring. The OLD
-// oldest-first splice dropped every (oldest) spawn → spawnAttempted:0.
-// The fix must keep ALL spawns and the rig's spawn after any flood.
+// a long KIND_POSITION/KIND_MOTION flood while init3D is slow to install
+// the live drain hook. ALL spawns and the rig's spawn must survive — and
+// (2026-10-06) so must the burst's wield / appearance / removal events,
+// which the 2026-06-17 policy dropped with the filler.
 {
-  const backlog = [];
-  let warned = 0;
-  function pushBacklog(cloned) {
-    if (!cloned) return;
-    const b = backlog;
-    b.push(cloned);
-    if (b.length > ENTITY_BUFFER_CAP) {
-      let spawnCount = 0;
-      for (let i = 0; i < b.length; i += 1) if ((b[i].kind | 0) === 1) spawnCount += 1;
-      const nonSpawnBudget = Math.max(0, ENTITY_BUFFER_CAP - spawnCount);
-      const keep = new Set();
-      let nonSpawnKept = 0;
-      for (let i = b.length - 1; i >= 0; i -= 1) {
-        const e = b[i];
-        if ((e.kind | 0) === 1) keep.add(e);
-        else if (nonSpawnKept < nonSpawnBudget) { keep.add(e); nonSpawnKept += 1; }
-      }
-      const compacted = [];
-      for (let i = 0; i < b.length; i += 1) if (keep.has(b[i])) compacted.push(b[i]);
-      const overEvicted = compacted.length < b.length;
-      b.length = 0;
-      for (let i = 0; i < compacted.length; i += 1) b.push(compacted[i]);
-      if (overEvicted && !warned) warned = 1;
-    }
-  }
+  const { backlog, pushBacklog } = makePushBacklog();
   const LOCAL_RIG_GUID = 0x50000008;
   const SPAWN_BURST = 58; // matches the observed low-quality attempted:58
-  // 1) early spawn burst: NPCs/items first, then the local-player rig.
   for (let i = 0; i < SPAWN_BURST; i += 1) pushBacklog({ kind: 1, guid: 0x10000 + i });
   pushBacklog({ kind: 1, guid: LOCAL_RIG_GUID });
-  // 2) long position/motion flood, far exceeding the 512 ring.
+  for (let i = 0; i < 10; i += 1) pushBacklog({ kind: 7, guid: 0x20000 + i }); // ATTACH: wielded items
+  pushBacklog({ kind: 6, guid: 0x10003 }); // APPEARANCE
+  pushBacklog({ kind: 2, guid: 0x10009 }); // REMOVE
   const FLOOD = ENTITY_BUFFER_CAP * 20;
   for (let i = 0; i < FLOOD; i += 1) {
     pushBacklog({ kind: i % 2 === 0 ? 0 : 5, guid: 0x10000 + (i % (SPAWN_BURST + 1)) });
   }
   const spawnsLeft = backlog.filter((e) => (e.kind | 0) === 1);
-  check(
-    "ALL spawns survive a post-burst position/motion flood",
-    spawnsLeft.length === SPAWN_BURST + 1,
-    `spawns kept=${spawnsLeft.length}/${SPAWN_BURST + 1}`,
-  );
-  check(
-    "the one-shot local-player rig spawn (0x50000008) is preserved",
-    backlog.some((e) => (e.kind | 0) === 1 && (e.guid >>> 0) === LOCAL_RIG_GUID),
-    "rig spawn present in surviving backlog",
-  );
-  check(
-    "backlog stays bounded (spawns + newest filler ≤ cap once spawns ≤ cap)",
-    backlog.length === ENTITY_BUFFER_CAP,
-    `len=${backlog.length}`,
-  );
-  check("spawn-preserving overflow warned exactly once (latched)", warned === 1);
+  check("ALL spawns survive a post-burst position/motion flood", spawnsLeft.length === SPAWN_BURST + 1, `spawns kept=${spawnsLeft.length}/${SPAWN_BURST + 1}`);
+  check("the one-shot local-player rig spawn (0x50000008) is preserved", backlog.some((e) => (e.kind | 0) === 1 && (e.guid >>> 0) === LOCAL_RIG_GUID));
+  check("the wield (ATTACH), appearance and removal events survive too",
+    backlog.filter((e) => e.kind === 7).length === 10 && backlog.some((e) => e.kind === 6) && backlog.some((e) => e.kind === 2));
+  check("backlog stays small (state events + one position/motion per guid + the tail)", backlog.length <= 2 * ENTITY_BUFFER_CAP, `len=${backlog.length}`);
 }
 
 // ---- (a) deferredSpawns: 3D-defer gate + ring-cap -------------------
@@ -248,9 +215,11 @@ check(
   src.includes('get("spawnDefer2dOnly")'),
 );
 check(
-  "backlog push is ring-capped against ENTITY_BUFFER_CAP",
+  "backlog push compacts through scene3d/entity_backlog.js past ENTITY_BUFFER_CAP",
   /__scene3dEntityBacklog/.test(src) &&
-    /b\.length\s*>\s*ENTITY_BUFFER_CAP/.test(src),
+    /import\s*\{[^}]*compactEntityBacklog[^}]*\}\s*from\s*"\.\/scene3d\/entity_backlog\.js"/.test(src) &&
+    /let\s+__backlogCompactAt\s*=\s*ENTITY_BUFFER_CAP/.test(src) &&
+    /compactEntityBacklog\(b,\s*\{\s*hardCap:\s*BACKLOG_HARD_CAP\s*\}\)/.test(src),
 );
 // 2026-10-05: the 2D `deferredSpawns` ring these two checks pinned was
 // RETIRED with the 2D PIXI spawn handler (index.html dispatch2dSpawn, "RETIRED

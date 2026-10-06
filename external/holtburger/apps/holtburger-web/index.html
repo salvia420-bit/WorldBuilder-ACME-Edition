@@ -1558,6 +1558,9 @@
       import { startNetWorkerSession, netWorkerEnabled } from "./scene3d/net_worker_client.js";
       // Generated from the CLIENT_EVENT_KIND_* constants in src/lib.rs.
       import { ClientEventKind } from "./scene3d/client_event_kinds.js";
+      // Pre-3D entity backlog compaction (2026-10-06): coalesce superseded updates, never drop
+      // spawn / remove / appearance / attach events (scene3d/entity_backlog.js).
+      import { compactEntityBacklog, BACKLOG_HARD_CAP } from "./scene3d/entity_backlog.js";
       import { createClient, API_VERSION as CLIENT_API_VERSION } from "./plugins/api.js";
       // P6.1 promotion (2026-07-28): capability probe for the plugin
       // loader's manifest `capabilities` gate. The loader runs long before
@@ -3442,6 +3445,9 @@
         } catch (_) { return false; }
       })();
       let __backlogOverflowWarned = false;
+      // Compact when the backlog passes this; then wait until it doubles (amortized O(1) per push).
+      let __backlogCompactAt = ENTITY_BUFFER_CAP;
+      let __backlogHardCapWarned = false;
 
       // Workstream E (3D camera/game-feel fix): pre-init3D entity-event
       // backlog. The 2D drainEvents loop forwards every pollEntityUpdates
@@ -3533,80 +3539,35 @@
         if (!cloned) return;
         const b = window.__scene3dEntityBacklog;
         b.push(cloned);
-        // A15-Q1: ring-cap. In pure-2D sessions this stub is NEVER
-        // replaced (installSharedDrainHook runs only on the 3D init
-        // path), so without a cap the backlog grows unbounded for the
-        // whole session. Keep the latest N so the 3D-hot-swap race the
-        // backlog exists for is still covered.
-        //
-        // SPAWN-PRESERVING eviction (2026-06-17 ultra-spawn fix): the old
-        // `b.splice(0, b.length - CAP)` evicted OLDEST-first and was NOT
-        // spawn-aware. KIND_SPAWN (kind===1) is an EARLY, finite burst at
-        // zone entry (one ObjectCreate per visible NPC/item + the one-shot
-        // local-player spawn ~+2 s post-SelectCharacter, emitted ONCE and
-        // drained-once wasm-side so never re-delivered). Steady state is a
-        // KIND_POSITION/KIND_MOTION flood (100s/sec). When init3D is slow to
-        // reach installSharedDrainHook (e.g. quality=ultra: subdivLevel 8 ⇒
-        // the awaited bakeTerrainRing fetch_subdivided_landblocks(level=4)
-        // batch + CSM/POM/cloud construction runs FIRST, scene3d/index.js
-        // ~L1196), that flood overflowed the 512 ring and the oldest-first
-        // splice dropped the entire spawn burst before the install-time
-        // replay ran — so EntityManager.spawn() was never called for ANY
-        // guid (spawnAttempted:0) and the rig never appeared. Position/motion
-        // events for an unspawned guid create no placeholder (loop.js
-        // _armPosition only stashes __lastEntityWorldPos / no-op setPose), so
-        // the miss was permanent. Fix: NEVER evict a KIND_SPAWN; trim the
-        // OLDEST non-spawn instead. Spawns are a bounded burst, so the
-        // surviving spawn set replays in full on install regardless of how
-        // late init3D installs the live dispatcher. Decoupled from the ultra
-        // atmosphere/terrain warm-up; identical behavior at low / wireframe /
-        // 2D (those rarely overflow, and when they do only filler is dropped).
-        if (b.length > ENTITY_BUFFER_CAP) {
-          // O(n) compaction (no per-element splice): keep ALL spawns + the
-          // NEWEST non-spawns that fit the REMAINING budget. Two passes so
-          // the non-spawn budget is computed against the FINAL spawn count
-          // (a single reverse pass can't know how many spawns remain ahead
-          // of it). Pass 1: count spawns. Pass 2 (reverse, newest-first):
-          // mark every spawn to keep + the freshest `CAP - spawnCount`
-          // non-spawns. Pass 3 (forward): rebuild in ORIGINAL arrival order
-          // so the install-time replay sees the same interleave. The ring's
-          // array identity (the same `window.__scene3dEntityBacklog` the
-          // drain does `.splice(0)` on) is preserved via in-place rebuild.
-          let __spawnCount = 0;
-          for (let __i = 0; __i < b.length; __i += 1) {
-            if ((b[__i].kind | 0) === 1 /* KIND.SPAWN */) __spawnCount += 1;
-          }
-          // Budget for non-spawns once all spawns are retained. If spawns
-          // alone already meet/exceed the cap (a >512-spawn burst — not
-          // seen in practice), keep zero filler; spawns still all survive
-          // (bounded by the finite zone-entry burst, and the install replay
-          // would dispatch them regardless).
-          const __nonSpawnBudget = Math.max(0, ENTITY_BUFFER_CAP - __spawnCount);
-          const __keep = new Set();
-          let __nonSpawnKept = 0;
-          for (let __i = b.length - 1; __i >= 0; __i -= 1) {
-            const __e = b[__i];
-            if ((__e.kind | 0) === 1 /* KIND.SPAWN */) {
-              __keep.add(__e); // every spawn kept
-            } else if (__nonSpawnKept < __nonSpawnBudget) {
-              __keep.add(__e); // freshest non-spawns up to budget
-              __nonSpawnKept += 1;
-            }
-            // else: oldest non-spawn over budget — drop it.
-          }
-          const __compacted = [];
-          for (let __i = 0; __i < b.length; __i += 1) {
-            if (__keep.has(b[__i])) __compacted.push(b[__i]);
-          }
-          const __overEvicted = __compacted.length < b.length;
-          b.length = 0;
-          for (let __i = 0; __i < __compacted.length; __i += 1) b.push(__compacted[__i]);
-          if (__overEvicted && !__backlogOverflowWarned) {
-            __backlogOverflowWarned = true;
+        // A15-Q1 (bounded backlog) + 2026-10-06 state-safe compaction. Until
+        // init3D installs the live dispatcher every update lands here; in a
+        // pure-2D session that never happens. The old cap kept every SPAWN and
+        // the NEWEST other events, so on a slow boot it dropped REMOVE (ghost
+        // objects after the replay), APPEARANCE (lost clothing / palettes) and
+        // ATTACH (wielded items never put in hand) along with position filler.
+        // compactEntityBacklog keeps every SPAWN / REMOVE / META_REFRESH /
+        // APPEARANCE / ATTACH and only coalesces POSITION / VELOCITY / MOTION /
+        // MOTION_ACTION / TURN to the newest per guid — nothing the replay needs
+        // is lost. Arrival order and the array identity (the drain splice(0)s
+        // this array) are kept. BACKLOG_HARD_CAP bounds a never-drained backlog.
+        if (b.length < __backlogCompactAt >>> 1) __backlogCompactAt = ENTITY_BUFFER_CAP; // drained since
+        if (b.length > __backlogCompactAt) {
+          const r = compactEntityBacklog(b, { hardCap: BACKLOG_HARD_CAP });
+          __backlogCompactAt = Math.max(ENTITY_BUFFER_CAP, r.after * 2);
+          if (r.hardDropped > 0) {
+            if (__backlogHardCapWarned) return;
+            __backlogHardCapWarned = true;
             console.warn(
-              `[A15-Q1] __scene3dEntityBacklog exceeded ${ENTITY_BUFFER_CAP}; ` +
-              `dropping oldest non-spawn (spawns preserved; 3D drain hook not ` +
-              `installed yet — slow init3D, e.g. quality=ultra, or 2D mode).`
+              `[A15-Q1] __scene3dEntityBacklog: ${r.after} events kept after coalescing, over the ` +
+              `${BACKLOG_HARD_CAP} cap — dropped the ${r.hardDropped} oldest (${r.spawnsDropped} spawns); ` +
+              `3D drain hook not installed (2D mode?).`
+            );
+          } else if (!__backlogOverflowWarned) {
+            __backlogOverflowWarned = true;
+            console.info(
+              `[A15-Q1] __scene3dEntityBacklog passed ${ENTITY_BUFFER_CAP} before the 3D drain hook ` +
+              `was installed (slow init3D): coalesced ${r.coalesced} superseded position/motion ` +
+              `updates; every spawn, removal, appearance and attach event kept.`
             );
           }
         }
