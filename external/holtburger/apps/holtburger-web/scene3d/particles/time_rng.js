@@ -22,9 +22,27 @@ let _currentTimeFn = () => {
 
 let _rngFn = () => Math.random();
 
+// Per-tick clock latch. Retail reads ONE `PhysicsTimer::curr_time` per physics
+// tick; reading performance.now() per particle per tick cost ~1.2% of main-
+// thread self time at Holtburg (1070). While a latch is held (ParticleManager
+// .tick), currentTime() returns the value sampled when the outermost latch
+// was taken. Depth-counted so nested ticks share the outer sample.
+let _latchDepth = 0;
+let _latchedTime = 0;
+
+/** Sample the clock once and hold it until the matching `releaseTimeLatch()`. */
+export function holdTimeLatch() {
+  if (_latchDepth++ === 0) _latchedTime = _currentTimeFn();
+}
+
+/** Release a latch taken by `holdTimeLatch()`. */
+export function releaseTimeLatch() {
+  if (_latchDepth > 0) _latchDepth--;
+}
+
 /** Returns the current "physics time" in seconds. Mockable via `setCurrentTime`. */
 export function currentTime() {
-  return _currentTimeFn();
+  return _latchDepth > 0 ? _latchedTime : _currentTimeFn();
 }
 
 /** Returns a uniform random in [0, 1). Mockable via `setRng`. */

@@ -21,7 +21,7 @@ import { ParticleEmitter } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 // Same mockable physics clock the emitters age on (seconds) — used by the
 // culled count-bounded stop bound below so tests can drive it deterministically.
-import { currentTime } from "./time_rng.js";
+import { currentTime, holdTimeLatch, releaseTimeLatch } from "./time_rng.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -1420,6 +1420,15 @@ export class ParticleManager {
 
   /** ACE `UpdateParticles()` (ParticleManager.cs:52-64). Per-frame. */
   tick() {
+    holdTimeLatch();
+    try {
+      return this._tickLatched();
+    } finally {
+      releaseTimeLatch();
+    }
+  }
+
+  _tickLatched() {
     const removeIds = [];
 
     // RP6 (2026-06-08) — re-evaluate the off-screen cull set every
