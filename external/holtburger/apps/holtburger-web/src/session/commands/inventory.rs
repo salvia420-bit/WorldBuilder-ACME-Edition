@@ -36,6 +36,22 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 LoopFlow::Exit
             );
         }
+        SessionCommand::NoLongerViewingContents { container_guid } => {
+            // HUD overhaul 2026-10-05: the loot window closed.
+            let action = holtburger_protocol::messages::GameAction::NoLongerViewingContents(
+                Box::new(holtburger_protocol::messages::NoLongerViewingContentsActionData {
+                    container_guid: holtburger_common::Guid::from(container_guid),
+                }),
+            );
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(NoLongerViewingContents): {e}",
+                "noLongerViewingContents: {e}",
+                LoopFlow::Exit
+            );
+        }
         // EX-05 (2026-06-05) — examine refactor: fire
         // `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8).
         // ACE replies with `GameEvent::IdentifyObjectResponse`

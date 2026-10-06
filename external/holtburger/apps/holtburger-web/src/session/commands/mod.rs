@@ -53,6 +53,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::CancelAttack { .. }
         | SessionCommand::QueryHealth { .. }) => combat::handle(ctx, c).await,
         c @ (SessionCommand::UseObject { .. }
+        | SessionCommand::NoLongerViewingContents { .. }
         | SessionCommand::RequestAppraisal { .. }
         | SessionCommand::UseWithTarget { .. }
         | SessionCommand::SalvageItemsWith { .. }

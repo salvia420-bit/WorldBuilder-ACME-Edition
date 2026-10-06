@@ -66,6 +66,16 @@ pub struct WorldState {
     pub fellowship: Option<FellowshipState>,
     pub trade: Option<TradeState>,
     pub open_containers: std::collections::HashSet<Guid>,
+    /// HUD overhaul 2026-10-05 — inventory placement order, mirroring the
+    /// server's `WorldObject.PlacementPosition` (ACE `Container.
+    /// TryAddToInventory` / `TryRemoveFromInventory`): item → (container,
+    /// position, uses-pack-slot). Packs/foci and ordinary items are ordered
+    /// independently and positions stay compact (list semantics: remove
+    /// closes the gap, insert at P pushes P.. down). Seeded from
+    /// PlayerDescription / ViewContents
+    /// (both sent ordered by PlacementPosition) and updated from
+    /// InventoryPutObjInContainer's slot. Read via `inventory_placement`.
+    pub container_placement: std::collections::HashMap<Guid, (Guid, i32, bool)>,
     /// MOVE-RUNRATE-105 fix A (2026-08-11) — runtime carrier of
     /// `?serverRunRate` (`=off` is the only opt-out; DEFAULT ON). ON:
     /// `WorldContextExt::player_run_rate` prefers the server's published
@@ -637,6 +647,7 @@ impl WorldState {
             fellowship: None,
             trade: None,
             open_containers: std::collections::HashSet::new(),
+            container_placement: std::collections::HashMap::new(),
             server_run_rate_enabled: true,
             player_description_properties: None,
             terrain_heights: std::collections::HashMap::new(),

@@ -17,8 +17,8 @@
 //!   u32 version
 //!   u32 contract_id
 //!   u32 contract_stage    — `ContractStage` enum (1=New, 2=InProgress, 3=DoneOrPendingRepeat, 4+=contract-specific)
-//!   i64 time_when_done
-//!   i64 time_when_repeats
+//!   f64 time_when_done
+//!   f64 time_when_repeats
 //!
 //! `Social_SendClientContractTracker` appends two i32 bools after the
 //! 28-byte payload (Chorizite's `ReadBool` reads i32; retail
@@ -44,16 +44,21 @@ use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 /// 3=DoneOrPendingRepeat. Values ≥ 4 are "contract-specific update
 /// messages" per Chorizite's `ContractStage.generated.cs` comment.
 ///
-/// Times are i64 — server seconds since epoch when the quest was
-/// completed (`time_when_done`) and when it next becomes available
-/// (`time_when_repeats`). Both can be 0 pre-completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Times are f64 SECONDS REMAINING (HUD overhaul 2026-10-05 fix): retail
+/// `CContractTracker` declares `long double _time_when_done /
+/// _time_when_repeats` (acclient.h:37828, 8-byte doubles under MSVC) and
+/// ACE writes `double TimeWhenDone/TimeWhenRepeats` =
+/// `QuestManager.GetNextSolveTime(..).TotalSeconds` (ContractTracker.cs).
+/// They were decoded as i64, which reinterpreted the double's bit pattern
+/// (3600.0 → 4660134898793709568) and broke every contract countdown.
+/// Both are 0 pre-completion. Same 28-byte wire size.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContractTrackerEntry {
     pub version: u32,
     pub contract_id: u32,
     pub stage: u32,
-    pub time_when_done: i64,
-    pub time_when_repeats: i64,
+    pub time_when_done: f64,
+    pub time_when_repeats: f64,
 }
 
 impl ProtocolUnpack for ContractTrackerEntry {
@@ -64,8 +69,8 @@ impl ProtocolUnpack for ContractTrackerEntry {
         let version = LittleEndian::read_u32(&data[*offset..*offset + 4]);
         let contract_id = LittleEndian::read_u32(&data[*offset + 4..*offset + 8]);
         let stage = LittleEndian::read_u32(&data[*offset + 8..*offset + 12]);
-        let time_when_done = LittleEndian::read_i64(&data[*offset + 12..*offset + 20]);
-        let time_when_repeats = LittleEndian::read_i64(&data[*offset + 20..*offset + 28]);
+        let time_when_done = LittleEndian::read_f64(&data[*offset + 12..*offset + 20]);
+        let time_when_repeats = LittleEndian::read_f64(&data[*offset + 20..*offset + 28]);
         *offset += 28;
         Some(Self {
             version,
@@ -82,8 +87,8 @@ impl ProtocolPack for ContractTrackerEntry {
         buf.write_u32::<LittleEndian>(self.version).unwrap();
         buf.write_u32::<LittleEndian>(self.contract_id).unwrap();
         buf.write_u32::<LittleEndian>(self.stage).unwrap();
-        buf.write_i64::<LittleEndian>(self.time_when_done).unwrap();
-        buf.write_i64::<LittleEndian>(self.time_when_repeats).unwrap();
+        buf.write_f64::<LittleEndian>(self.time_when_done).unwrap();
+        buf.write_f64::<LittleEndian>(self.time_when_repeats).unwrap();
     }
 }
 
@@ -97,7 +102,7 @@ impl ProtocolPack for ContractTrackerEntry {
 /// retail's gmContractsUI pins as the prominent display in the panel
 /// header. ACE leaves this `false` in all observed flows (ACE
 /// `ContractManager.cs:147,200,221`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SendClientContractTrackerEventData {
     pub tracker: ContractTrackerEntry,
     pub delete_contract: bool,
@@ -143,7 +148,7 @@ impl ProtocolPack for SendClientContractTrackerEventData {
 /// ACE writes `numBuckets = 32` (from `HashComparer(32)`); we preserve
 /// the value the server sent on unpack and emit a fixed `BUCKETS` on
 /// pack to match.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SendClientContractTrackerTableEventData {
     /// `(contract_id, tracker)` pairs in wire order. ACE emits sorted
     /// by `HashComparer`-ordering which is not lexicographic by ID;
@@ -196,8 +201,8 @@ mod tests {
             version: 1,
             contract_id,
             stage,
-            time_when_done: 1_712_000_000,
-            time_when_repeats: 1_712_086_400,
+            time_when_done: 3_600.5,
+            time_when_repeats: 86_400.25,
         }
     }
 
@@ -219,13 +224,13 @@ mod tests {
 
     #[test]
     fn contract_tracker_entry_zero_times() {
-        // Pre-completion: both i64 timestamps 0.
+        // Pre-completion: both times 0.
         let entry = ContractTrackerEntry {
             version: 1,
             contract_id: 0x0042,
             stage: 1, // New
-            time_when_done: 0,
-            time_when_repeats: 0,
+            time_when_done: 0.0,
+            time_when_repeats: 0.0,
         };
         let mut buf = Vec::new();
         entry.pack(&mut buf);

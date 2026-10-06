@@ -3150,6 +3150,72 @@ fn test_inventory_put_obj_in_container() {
     }));
 }
 
+/// HUD overhaul 2026-10-05 — placement order mirrors ACE
+/// `Container.TryAddToInventory`: an insert at P shifts same-class siblings
+/// at ≥ P up one; packs and items are ordered independently; an item that
+/// leaves the container drops out of the ranking (gaps don't count).
+#[test]
+fn test_inventory_placement_matches_ace_insert_shift() {
+    let mut state = WorldState::synthetic();
+    let pack = Guid(0x50);
+    let put = |state: &mut WorldState, item: Guid, slot: u32| {
+        let msg = GameMessage::GameEvent(Box::new(GameEventMessage {
+            target: Guid::NULL,
+            sequence: 0,
+            event: GameEvent::InventoryPutObjInContainer(Box::new(
+                InventoryPutObjInContainerEventData {
+                    item_guid: item,
+                    container_guid: pack,
+                    slot,
+                    container_type: 0,
+                },
+            )),
+        }));
+        let _ = state.handle_message(&msg);
+    };
+    for i in 1..=4u32 {
+        state.entities.insert(Entity::new(
+            Guid(i),
+            format!("Item{i}"),
+            WorldPosition::default(),
+        ));
+    }
+    // Seed A,B,C in that order (ViewContents / PlayerDescription order).
+    state.seed_inventory_placement(pack, vec![(Guid(1), false), (Guid(2), false), (Guid(3), false)]);
+    for i in 1..=3u32 {
+        state.entities.get_mut(Guid(i)).unwrap().set_container_id(Some(pack));
+    }
+    assert_eq!(state.inventory_placement(Guid(1)), Some(0));
+    assert_eq!(state.inventory_placement(Guid(3)), Some(2));
+
+    // D dropped at slot 1 → A, D, B, C.
+    put(&mut state, Guid(4), 1);
+    let order: Vec<_> = (1..=4u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(0), Some(2), Some(3), Some(1)]);
+
+    // C moved to the front (slot 0) → C, A, D, B.
+    put(&mut state, Guid(3), 0);
+    let order: Vec<_> = (1..=4u32).map(|i| state.inventory_placement(Guid(i))).collect();
+    assert_eq!(order, vec![Some(1), Some(3), Some(0), Some(2)]);
+
+    // A leaves the pack → it has no placement and the rest close ranks.
+    state.entities.get_mut(Guid(1)).unwrap().set_container_id(None);
+    assert_eq!(state.inventory_placement(Guid(1)), None);
+    assert_eq!(state.inventory_placement(Guid(3)), Some(0));
+    assert_eq!(state.inventory_placement(Guid(4)), Some(1));
+    assert_eq!(state.inventory_placement(Guid(2)), Some(2));
+
+    // Rightward move with list semantics (ACE compacts on removal): C, D, B
+    // — C dropped onto B (index 2) is sent as slot 1 by the client
+    // (retail UIElement_ItemList shifts the index past its own removal)
+    // and must land just before B: D, C, B. (A non-compacting model put it
+    // before D — caught live 2026-10-05.)
+    put(&mut state, Guid(3), 1);
+    assert_eq!(state.inventory_placement(Guid(4)), Some(0));
+    assert_eq!(state.inventory_placement(Guid(3)), Some(1));
+    assert_eq!(state.inventory_placement(Guid(2)), Some(2));
+}
+
 #[test]
 fn test_inventory_put_object_in_3d() {
     let mut state = WorldState::synthetic();

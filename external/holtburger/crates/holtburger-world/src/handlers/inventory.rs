@@ -163,7 +163,22 @@ pub(crate) fn handle_event(
 ) -> bool {
     match &event.event {
         GameEvent::InventoryPutObjInContainer(data) => {
-            state.move_entity_into_container(data.item_guid, data.container_guid, events)
+            let moved =
+                state.move_entity_into_container(data.item_guid, data.container_guid, events);
+            // HUD overhaul 2026-10-05: keep the server's placement order
+            // (ContainerType 0 = item list, 1 container / 2 foci = pack list).
+            let uses_pack_slot = state
+                .entities
+                .get(data.item_guid)
+                .map(|e| e.uses_player_container_slot())
+                .unwrap_or(data.container_type != 0);
+            state.record_inventory_placement(
+                data.item_guid,
+                data.container_guid,
+                data.slot,
+                uses_pack_slot,
+            );
+            moved
         }
         GameEvent::InventoryPutObjectIn3D(data) => {
             state.move_entity_into_world(data.object_guid, events)
@@ -171,6 +186,15 @@ pub(crate) fn handle_event(
         GameEvent::ViewContents(data) => {
             state.open_containers.insert(data.container);
             events.push(WorldEvent::ContainerOpened(data.container));
+            // HUD overhaul 2026-10-05: ViewContents lists the contents in
+            // PlacementPosition order (ACE GameEventViewContents).
+            state.seed_inventory_placement(
+                data.container,
+                data.items
+                    .iter()
+                    .map(|it| (it.guid, it.container_type != 0))
+                    .collect::<Vec<_>>(),
+            );
 
             for item in &data.items {
                 let guid = item.guid;

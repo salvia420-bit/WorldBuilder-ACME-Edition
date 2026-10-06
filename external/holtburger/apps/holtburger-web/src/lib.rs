@@ -26289,6 +26289,12 @@ enum SessionCommand {
     /// - Out-of-range / not-interactive → `GameEvent::WeenieError`,
     ///   normalised into `kind=13 UseFailed`.
     UseObject { guid: u32 },
+    /// HUD overhaul 2026-10-05: the loot window closed — tell the server we
+    /// stopped viewing `container_guid` (`GameAction::NoLongerViewingContents`,
+    /// sub-opcode 0x0195; retail sends it from gmExternalContainerUI's close
+    /// path). Without it ACE only releases a chest when the player walks out
+    /// of range, so a second player can't open it in the meantime.
+    NoLongerViewingContents { container_guid: u32 },
     /// EX-05 (2026-06-05) — examine refactor wire side. Sends
     /// `GameAction::IdentifyObject(guid)` (sub-opcode 0x00C8). ACE
     /// replies with `GameEvent::IdentifyObjectResponse` (opcode
@@ -28254,6 +28260,17 @@ pub struct InventoryItem {
     /// open-container), which mis-handles pack-slot items that aren't
     /// ItemType.Container (e.g. some foci).
     requires_backpack_slot: bool,
+    /// HUD overhaul 2026-10-05: the item's index in its container's server
+    /// display order (`WorldState::inventory_placement` — ACE
+    /// PlacementPosition semantics; packs/foci and items counted
+    /// separately). `-1` when unknown. The inventory grid sorts by it so a
+    /// moved item lands where the server put it, and the order survives a
+    /// relog exactly like retail.
+    placement: i32,
+    /// HUD overhaul 2026-10-05: `PropertyInt::MaxStackSize` (11), `0` when
+    /// the item isn't stackable or the wire hasn't sent it. Lets the drag
+    /// rules refuse a merge into a full stack and auto-merge on pickup.
+    max_stack_size: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -28263,6 +28280,18 @@ impl InventoryItem {
     #[wasm_bindgen(getter)]
     pub fn guid(&self) -> u32 {
         self.guid
+    }
+
+    /// Index in the container's server display order, `-1` if unknown.
+    #[wasm_bindgen(getter)]
+    pub fn placement(&self) -> i32 {
+        self.placement
+    }
+
+    /// `PropertyInt::MaxStackSize`, `0` when not stackable / unknown.
+    #[wasm_bindgen(getter, js_name = maxStackSize)]
+    pub fn max_stack_size(&self) -> u32 {
+        self.max_stack_size
     }
 
     /// Weenie class id (`PublicWeenieDescription.wcid`). Used by JS
@@ -34087,7 +34116,10 @@ impl LocalPlayerPose {
     /// Heading (yaw) in radians, extracted via
     /// `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))` — same convention as
     /// JS's `quaternionToYaw` at `index.html:2757-2762`.
-    /// `yaw = 0` → facing +Y (north); `yaw = π/2` → facing +X (east).
+    /// `yaw = 0` → facing +Y (north); `yaw = π/2` → facing −X (WEST) — the
+    /// yaw is counter-clockwise, so the retail compass heading is `−yaw`
+    /// (verified live 2026-10-05 by walking: pose yaw 0.571 rad moved at
+    /// bearing 325.9°; plugins/radar.js `compassHeadingFromPoseYaw`).
     #[wasm_bindgen(getter)]
     pub fn heading(&self) -> f32 {
         self.heading
@@ -37980,6 +38012,19 @@ impl SessionHandle {
     /// **Timing.** Caller should wait for `kind=7 EnteredWorld` (or
     /// equivalently, that the player is in-world) before clicking;
     /// pre-EnteredWorld uses are silently dropped by ACE.
+    /// HUD overhaul 2026-10-05: close-the-container notification
+    /// (`GameAction::NoLongerViewingContents` 0x0195) — the loot window
+    /// (plugins/corpse-loot-bar.js) calls it when it closes.
+    #[wasm_bindgen(js_name = noLongerViewingContents)]
+    pub fn no_longer_viewing_contents(&self, container_guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::NoLongerViewingContents { container_guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("noLongerViewingContents: cmd channel closed ({e})"))
+            })
+    }
+
     #[wasm_bindgen(js_name = useObject)]
     pub fn use_object(&self, guid: u32) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
@@ -42221,6 +42266,14 @@ fn publish_player_inventory_snapshot(
         // comment for the derivation and why it stands in for
         // `WeenieType == Container`).
         let requires_backpack_slot = entity.uses_player_container_slot();
+        let placement = world
+            .inventory_placement(guid)
+            .map(|p| p.min(i32::MAX as u32) as i32)
+            .unwrap_or(-1);
+        let max_stack_size = entity
+            .get_int_prop(PropertyInt::MaxStackSize)
+            .map(|v| v.max(0) as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -42244,6 +42297,8 @@ fn publish_player_inventory_snapshot(
             containers_capacity,
             items_capacity,
             requires_backpack_slot,
+            placement,
+            max_stack_size,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS
@@ -49507,13 +49562,14 @@ impl SessionHandle {
 /// the protocol crate's `ContractTrackerEntry` tuple-of-fields) so the
 /// JS-side wrapper can borrow individual fields without re-parsing.
 #[cfg(any(target_arch = "wasm32", test))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct ContractTrackerView {
     contract_id: u32,
     stage: u32,
     version: u32,
-    time_when_done: i64,
-    time_when_repeats: i64,
+    /// Seconds remaining (f64 on the wire — see ContractTrackerEntry).
+    time_when_done: f64,
+    time_when_repeats: f64,
 }
 
 /// Internal snapshot of the local player's active contracts.
@@ -49601,8 +49657,8 @@ impl ContractsSnapshotJs {
                 contract_id: t.contract_id,
                 stage: t.stage,
                 version: t.version,
-                time_when_done: t.time_when_done as f64,
-                time_when_repeats: t.time_when_repeats as f64,
+                time_when_done: t.time_when_done,
+                time_when_repeats: t.time_when_repeats,
             })
             .collect()
     }
@@ -49745,8 +49801,8 @@ mod contracts_tests {
             version: 1,
             contract_id: id,
             stage,
-            time_when_done: 0,
-            time_when_repeats: 0,
+            time_when_done: 0.0,
+            time_when_repeats: 0.0,
         }
     }
 

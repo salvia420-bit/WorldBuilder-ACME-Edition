@@ -872,9 +872,20 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                             f32_payload: None,
                         });
                     } else {
+                        // HUD overhaul 2026-10-05: the chat line is
+                        // what the PLAYER reads, so render the retail
+                        // English text (holtburger-core's template
+                        // table, PascalCase→sentence fallback) rather
+                        // than the Rust Debug label — the log used to
+                        // show `YouHaveEnteredTheChannel(General)`.
+                        // Consumers key on the u32 code, never this
+                        // string.
+                        let text = holtburger_core::errors::format_weenie_error(
+                            data.error, None,
+                        );
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                            string_payload: Some(label),
+                            string_payload: Some(text),
                             u32_payload: Some(code),
                             u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
                             f32_payload: None,
@@ -888,7 +899,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // parameter string. Same kind=2
                     // chat treatment as the bare
                     // WeenieError arm; no kind=13.
-                    let label = format!("{:?}({})", data.error, data.parameter);
+                    // HUD overhaul 2026-10-05: retail English with
+                    // the parameter substituted (see the arm above).
+                    let label = holtburger_core::errors::format_weenie_error(
+                        data.error,
+                        Some(data.parameter.as_str()),
+                    );
                     let code = data.error as u32;
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,

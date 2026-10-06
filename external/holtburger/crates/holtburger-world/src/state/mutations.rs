@@ -850,6 +850,15 @@ impl WorldState {
     ) {
         self.bootstrap_player_entity_from_description(data);
 
+        // HUD overhaul 2026-10-05: the main pack's display order. ACE
+        // GameEventPlayerDescription writes the main pack's direct contents
+        // ordered by PlacementPosition (items, then packs/foci); the u32 is
+        // the ContainerType (0 item, 1 container, 2 foci).
+        let player_guid = self.player.guid;
+        let ordered: Vec<(Guid, bool)> =
+            data.inventory.iter().map(|(g, ct)| (*g, *ct != 0)).collect();
+        self.seed_inventory_placement(player_guid, ordered);
+
         self.emit_player_info(events);
         self.emit_level_info(events);
     }
@@ -1624,6 +1633,114 @@ impl WorldState {
         );
 
         true
+    }
+
+    /// HUD overhaul 2026-10-05 — record a server-confirmed placement.
+    /// ACE keeps each container's `PlacementPosition`s compact: removing an
+    /// item decrements every same-class sibling after it
+    /// (`Container.TryRemoveFromInventory`) and adding at P increments every
+    /// sibling at ≥ P (`TryAddToInventory`) — i.e. plain list semantics, the
+    /// same as retail's UIElement_ItemList. So: take the container's current
+    /// same-class list (items still in it, in recorded order, the moved item
+    /// excluded), insert `item` at `slot`, and renumber 0..n.
+    /// `uses_pack_slot` selects the pack/foci list vs the item list, which
+    /// are ordered independently.
+    pub fn record_inventory_placement(
+        &mut self,
+        item: Guid,
+        container: Guid,
+        slot: u32,
+        uses_pack_slot: bool,
+    ) {
+        let mut list = self.ordered_container_list(container, uses_pack_slot, Some(item));
+        let at = (slot as usize).min(list.len());
+        list.insert(at, item);
+        self.container_placement
+            .retain(|g, (c, _, k)| !(*c == container && *k == uses_pack_slot) && *g != item);
+        for (i, g) in list.into_iter().enumerate() {
+            self.container_placement
+                .insert(g, (container, i as i32, uses_pack_slot));
+        }
+    }
+
+    /// The same-class contents of `container` in display order: recorded
+    /// placements first (by position), then any member without one (by
+    /// guid). Only entities whose container is still `container` count.
+    fn ordered_container_list(
+        &self,
+        container: Guid,
+        uses_pack_slot: bool,
+        exclude: Option<Guid>,
+    ) -> Vec<Guid> {
+        let in_container = |g: Guid| {
+            self.entities
+                .get(g)
+                .and_then(|e| e.container_id())
+                .is_some_and(|c| c == container)
+        };
+        let mut recorded: Vec<(i32, Guid)> = self
+            .container_placement
+            .iter()
+            .filter(|(g, (c, _, k))| {
+                *c == container && *k == uses_pack_slot && Some(**g) != exclude && in_container(**g)
+            })
+            .map(|(g, (_, p, _))| (*p, *g))
+            .collect();
+        recorded.sort_by_key(|(p, g)| (*p, u32::from(*g)));
+        let mut list: Vec<Guid> = recorded.into_iter().map(|(_, g)| g).collect();
+        let mut extra: Vec<Guid> = self
+            .entities
+            .iter()
+            .filter(|e| e.container_id() == Some(container))
+            .filter(|e| e.uses_player_container_slot() == uses_pack_slot)
+            .map(|e| e.guid)
+            .filter(|g| Some(*g) != exclude && !self.container_placement.contains_key(g))
+            .collect();
+        extra.sort_by_key(|g| u32::from(*g));
+        list.extend(extra);
+        list
+    }
+
+    /// Seed a container's order from a list the server sent already sorted
+    /// by PlacementPosition (PlayerDescription inventory, ViewContents).
+    /// Positions restart at 0 per class; anything previously recorded for
+    /// this container is dropped first.
+    pub fn seed_inventory_placement<I>(&mut self, container: Guid, ordered: I)
+    where
+        I: IntoIterator<Item = (Guid, bool)>,
+    {
+        self.container_placement.retain(|_, (c, _, _)| *c != container);
+        let (mut next_item, mut next_pack) = (0i32, 0i32);
+        for (guid, pack) in ordered {
+            let pos = if pack { &mut next_pack } else { &mut next_item };
+            self.container_placement.insert(guid, (container, *pos, pack));
+            *pos += 1;
+        }
+    }
+
+    /// The item's index in its container's display order (its rank among
+    /// the same-class siblings that are STILL in that container), or `None`
+    /// when no placement is known or the item has since left the container.
+    pub fn inventory_placement(&self, item: Guid) -> Option<u32> {
+        let &(container, pos, pack) = self.container_placement.get(&item)?;
+        let in_container = |g: Guid| {
+            self.entities
+                .get(g)
+                .and_then(|e| e.container_id())
+                .is_some_and(|c| c == container)
+        };
+        if !in_container(item) {
+            return None;
+        }
+        let key = (pos, u32::from(item));
+        let rank = self
+            .container_placement
+            .iter()
+            .filter(|(g, (c, p, k))| {
+                *c == container && *k == pack && (*p, u32::from(**g)) < key && in_container(**g)
+            })
+            .count();
+        Some(rank as u32)
     }
 
     pub(crate) fn move_entity_into_world(
