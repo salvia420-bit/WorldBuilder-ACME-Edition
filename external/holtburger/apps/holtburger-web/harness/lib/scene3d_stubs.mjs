@@ -117,12 +117,15 @@ export function entitiesToplevelPrelude(except = []) {
 
 /**
  * Source to splice so `new EntityManager(...)` can be constructed: its
- * constructor calls `createPreCreateBuffer()` (./pre_create_buffer.js, a pure
- * dependency-free module). Rather than a stub, the GENUINE module is inlined —
- * the A8-M4 pre-create buffer is part of the spawn path these suites drive.
- * Measured 2026-10-05: it is the only import the constructor touches.
+ * constructor calls `createPreCreateBuffer()` (./pre_create_buffer.js) and,
+ * since 2026-10-06, `partDegradeEnabled()` / `new PartDegrade()`
+ * (./part_degrade.js; `tick` reads PART_DEGRADE_INTERVAL_S). Both are pure,
+ * dependency-free modules, so the GENUINE sources are inlined rather than
+ * stubbed — they are part of the spawn / tick paths these suites drive.
  */
 export function entitiesCtorPrelude() {
-  const src = readFileSync(new URL("../../scene3d/pre_create_buffer.js", import.meta.url), "utf8");
-  return "// === pre_create_buffer.js (genuine) ===\n" + stripExports(src) + "\n";
+  const pcb = readFileSync(new URL("../../scene3d/pre_create_buffer.js", import.meta.url), "utf8");
+  const pd = readFileSync(new URL("../../scene3d/part_degrade.js", import.meta.url), "utf8");
+  return "// === pre_create_buffer.js (genuine) ===\n" + stripExports(pcb) + "\n" +
+    "// === part_degrade.js (genuine) ===\n" + stripExports(pd) + "\n";
 }

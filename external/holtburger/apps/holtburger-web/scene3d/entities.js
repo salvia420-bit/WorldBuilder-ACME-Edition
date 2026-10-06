@@ -949,6 +949,7 @@ import { gatePaletteId, gateSubPalettes } from "./recolor_flag.js";
 // A12 (S14): spawns.js pre-warms LOD degrade bands per wave; _spawnImpl
 // consults this memo before paying a per-entity wasm await.
 import { lodPrewarmGet, lodPrewarmSet } from "./lod_prewarm.js";
+import { PartDegrade, partDegradeEnabled, PART_DEGRADE_INTERVAL_S } from "./part_degrade.js";
 // Animation consolidation (docs/animation-audit §5) — COMPLETE (2026-10-05):
 // every entity rig is driven by ONE authority, the RUST MotionSequence
 // interpreter (src/motion_sequence.rs, cargo-tested retail CSequence): a cyclic
@@ -1684,6 +1685,8 @@ const DYN_LOD_ON = (() => {
 // Throttle the dynamic-LOD recheck — distance bands are coarse, so ~2 Hz is
 // plenty and keeps the per-entity async band query off the hot path.
 const DYN_LOD_INTERVAL_S = 0.5;
+/** ?partDegrade camera position scratch. */
+const _pdCam = { x: 0, y: 0, z: 0 };
 // R7 (runtime ObjScale/translucency, 2026-06-09) — `?runtimeObjScale=on`
 // (default OFF). A mid-game `UpdateObject` (0xF7DB) re-sends the full ODD,
 // which can carry a NEW obj_scale (server grow/shrink) or TRANSLUCENCY
@@ -3537,6 +3540,18 @@ export class EntityManager {
     this._cycleOmegaCache = new Map();
     // T9 — dynamic-LOD recheck throttle accumulator (seconds).
     this._dynLodAccum = 0;
+    // ?partDegrade (2026-10-06, opt-in `=on`) — retail per-part GfxObjDegradeInfo pick (part_degrade.js).
+    this._partDegrade = partDegradeEnabled()
+      ? new PartDegrade({
+          fetchInfo: (did) => {
+            const fn = this.wasmExports?.fetch_gfx_obj_degrade_info
+              ?? (typeof window !== "undefined" ? window.__hbWasm?.fetch_gfx_obj_degrade_info : undefined);
+            return typeof fn === "function" ? fn(did) : null;
+          },
+        })
+      : null;
+    this._partDegradeAccum = 0;
+    try { if (typeof window !== "undefined") window.__partDegrade = this._partDegrade; } catch (_) {}
     // RP2 (2026-06-08) — monotonic frame counter for the far-band smoothing
     // stride (`?entitySmoothStride=`). Only advanced in `tick` when a stride
     // is configured; per-entity `_smoothFrameStamp` records the frame an
@@ -4077,6 +4092,7 @@ export class EntityManager {
         const partMesh = partMeshes[p];
         if (!partMesh) { partGroups.push({ groups: [], surfaceDids: [] }); continue; }
         const conv = meshToGeometryGroups(partMesh);
+        conv.didDegrade = (partMesh.didDegrade ?? 0) >>> 0; // ?partDegrade
         partGroups.push(conv);
         for (const did of conv.surfaceDids) allSurfaceDids.add(did >>> 0);
         if (typeof partMesh.free === "function") { try { partMesh.free(); } catch (_) {} }
@@ -4512,6 +4528,9 @@ export class EntityManager {
       const partGroup = new THREE.Group();
       partGroup.name = `part_${p}`;
       const conv = partGroups[p];
+      // ?partDegrade: the part GfxObj's degrade chain (part_degrade.js reads it per tick).
+      partGroup.userData.didDegrade = ((conv && conv.didDegrade) ?? 0) >>> 0;
+      partGroup.userData.__degHidden = false;
       if (RIG_MODULE_ON) {
         applyRestPoseFrame(THREE, partGroup, restOrigins, restOrientations, p, hasRestPose);
         buildPartSurfaceMeshes(THREE, {
@@ -10974,6 +10993,9 @@ export class EntityManager {
         partGroup.remove(child);
       }
       const conv = newPartGroups[p];
+      // ?partDegrade: the swapped-in GfxObj brings its own degrade chain; the new meshes start visible.
+      partGroup.userData.didDegrade = ((conv && conv.didDegrade) ?? 0) >>> 0;
+      partGroup.userData.__degHidden = false;
       if (!conv) continue;
       // A9-Stage2: retail `CPhysicsPart::SetPart` swaps the part contents
       // in place (the part Group / its transform survives; only the surface
@@ -14718,6 +14740,21 @@ export class EntityManager {
         this._tickDynamicLod();
       }
     }
+    // ?partDegrade (2026-10-06, opt-in `=on`) — retail per-part degrade pick: a
+    // part whose GfxObjDegradeInfo pick lands on a NULL level is not drawn (human
+    // body parts beyond 134 m). The player's own parts never degrade.
+    if (this._partDegrade) {
+      this._partDegradeAccum += dt;
+      if (this._partDegradeAccum >= PART_DEGRADE_INTERVAL_S) {
+        this._partDegradeAccum = 0;
+        const cam = (typeof window !== "undefined") ? window.liveScene3d?.camera : null;
+        if (cam && cam.matrixWorld) {
+          const ce = cam.matrixWorld.elements;
+          _pdCam.x = ce[12]; _pdCam.y = ce[13]; _pdCam.z = ce[14];
+          try { this._partDegrade.tick(this.entityMap.values(), _pdCam, this._localPlayerGuid()); } catch (_) {}
+        }
+      }
+    }
     // A8-M4 (2026-06-12, `?preCreateBuffer=on`) — retail 25 s pre-create
     // expiry (acclient.c:310666; the timer is refreshed on every enqueue,
     // QueueBlobForObject → AddObjectToBeDestroyed remove+re-add). Whole
@@ -16462,6 +16499,20 @@ export class EntityManager {
     }
     // Indoor-layer invariant — the replacement meshes default to layer 0.
     _stampEntityIndoorLayer(this.scene3d, partGroup);
+    // ?partDegrade: retail SetPart loads the NEW GfxObj's degrade chain
+    // (CPhysicsPart::LoadGfxObjArray). fetchBuildingPlacement does not fill
+    // didDegrade, so look it up; the fresh meshes start visible meanwhile.
+    partGroup.userData.didDegrade = 0;
+    partGroup.userData.__degHidden = false;
+    if (this._partDegrade && typeof ents_wasm.fetchModelDidDegrades === "function") {
+      Promise.resolve(ents_wasm.fetchModelDidDegrades(new Uint32Array([newGfxObjId >>> 0])))
+        .then((r) => {
+          if (inst.parts && inst.parts[partIndex] === partGroup) {
+            partGroup.userData.didDegrade = ((r && r[0]) ?? 0) >>> 0;
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   /**

@@ -60,6 +60,7 @@ import {
 } from "./adapter.js";
 import { materialCanCastShadow, VERTEX_BAKE } from "./materials.js";
 import { fuseSurfaceGroups } from "./cell_fusion.js";
+import { mergeCellStatics, cellStaticMergeEnabled } from "./cell_static_merge.js";
 // ST9 (`?drawPools`, ENVCELL-POOL-SWAP): the interior producer swap. Every
 // reader below is behind `envCellPoolsActive()`, which is false unless the full
 // F-11.3 chain armed the pooled world (index.js `initPoolWorld`) AND
@@ -943,6 +944,11 @@ const SEALED_EVICT_ENABLED = (() => {
 // skip the whole subtree every frame. SAFE: interior animated scenery +
 // default-script particles live in `staticsGroup` (world-frame), NOT under the
 // cell container, so they still animate.
+/** ?cellStaticMerge totals (window.__cellStaticMerge): props merged, the draw ranges they
+ *  had, the merged meshes they became. */
+const _cellStaticMergeStats = { props: 0, ranges: 0, meshes: 0, errors: 0 };
+try { if (typeof window !== "undefined") window.__cellStaticMerge = _cellStaticMergeStats; } catch (_) { /* fail-soft */ }
+
 const FREEZE_STATIC_MATRIX = (() => {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
@@ -1876,6 +1882,23 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       };
       cellContainer.add(m);
       staticObjectCount += 1;
+    }
+
+    // ?cellStaticMerge (2026-10-06, default OFF) — one draw per (cell, material) for the
+    // props above; each prop's Mesh becomes an empty anchor Group (light anchors keep
+    // working). The merged buffers are per-cell copies: dispose them with the landblock.
+    if (cellStaticMergeEnabled()) {
+      try {
+        const r = mergeCellStatics(THREE, cellContainer, { shadow: cellsShadow, canCastShadow: materialCanCastShadow });
+        for (const g of r.geometries) lbDisposableGeometries.push(g);
+        cellContainer.userData.mergedStatics = r.props;
+        _cellStaticMergeStats.props += r.props;
+        _cellStaticMergeStats.ranges += r.ranges;
+        _cellStaticMergeStats.meshes += r.meshes;
+      } catch (e) {
+        _cellStaticMergeStats.errors += 1;
+        if (_cellStaticMergeStats.errors === 1) console.warn("[cellStaticMerge] merge failed (props stay unmerged):", e);
+      }
     }
 
     // Cells default to hidden; the visibility tick flips `.visible`

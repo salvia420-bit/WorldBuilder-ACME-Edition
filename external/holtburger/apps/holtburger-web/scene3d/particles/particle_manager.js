@@ -284,6 +284,123 @@ function particleInstancingAlphaEnabled() {
 }
 export function setParticleInstancingAlphaFlag(on) { _INST_ALPHA_ON = !!on; }
 
+// ── Shared alpha buckets across managers (2026-10-06, `?particleSharedAlpha`) ──
+//
+// The static and the world/entity ParticleManager each kept their OWN alpha bucket per
+// (gfxobj, layer). Every bucket sits at the identity origin, so three ordered the two
+// managers' buckets by that origin, not by their content: where a chimney plume of one
+// manager overlapped a plume of the other on screen, whichever drew second could be cut by
+// the first one's alphaTest depth writes (1070 session 2 note, 2026-10-06: Holtburg's
+// 0x1000fbf smoke lives in both managers). With this flag every manager whose scene has the
+// same world transform, and whose particles use an equivalent material, appends its alpha
+// instances to ONE bucket in a module-level registry, so one back-to-front sort covers both.
+//
+// Frame protocol. The static manager ticks in its own rAF callback and the world manager
+// inside the main loop's entity tick, in no guaranteed order but both before the frame's
+// render. The frame id is `document.timeline.currentTime` (one value per frame for every
+// rAF callback). The first append of a frame resets the bucket; EVERY manager's finalize
+// re-sorts and republishes it (so the last one, with every instance, wins); a frame without
+// appends parks it dark; `_INST_BUCKET_IDLE_TICKS` idle frames reap it.
+// `?particleSharedAlpha=on` opts in — DEFAULT OFF until a 1070 look check.
+let _SHARED_ALPHA_ON = null;
+export function particleSharedAlphaEnabled() {
+  if (_SHARED_ALPHA_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleSharedAlpha") || "").toLowerCase();
+      _SHARED_ALPHA_ON = v === "on" || v === "1" || v === "true" || v === "yes";
+    } catch (_) {
+      _SHARED_ALPHA_ON = false;
+    }
+  }
+  return _SHARED_ALPHA_ON;
+}
+export function setParticleSharedAlphaFlag(on) { _SHARED_ALPHA_ON = !!on; }
+let _sharedFrameFallback = 0;
+const _defaultFrameId = () => {
+  try {
+    const t = document.timeline.currentTime;
+    if (typeof t === "number") return t;
+  } catch (_) { /* no document (node) */ }
+  return _sharedFrameFallback;
+};
+let _sharedFrameId = _defaultFrameId;
+/** Test seam: frame-id source for the shared alpha buckets. */
+export function __setSharedAlphaFrameSource(fn) { _sharedFrameId = typeof fn === "function" ? fn : _defaultFrameId; }
+/** Material equivalence for sharing one bucket: same texture and the state the bucket keeps. */
+export function _alphaMatSig(mat) {
+  if (!mat) return "";
+  return [mat.type, mat.map ? mat.map.uuid : "-", mat.side, mat.fog ? 1 : 0, mat.toneMapped ? 1 : 0,
+    mat.color && mat.color.getHex ? mat.color.getHex() : "-", mat.alphaTest, mat.depthTest ? 1 : 0].join("|");
+}
+function _sameWorld(a, b) {
+  if (a === b) return true;
+  const x = a && a.matrixWorld && a.matrixWorld.elements, y = b && b.matrixWorld && b.matrixWorld.elements;
+  if (!x || !y) return false;
+  for (let i = 0; i < 16; i++) if (Math.abs(x[i] - y[i]) > 1e-6) return false;
+  return true;
+}
+const _sharedCamLocal = new THREE.Vector3();
+export class SharedAlphaBuckets {
+  constructor() {
+    /** key -> { im, n, alpha, shared, frame, idle, idleFrame, scene, sig } */
+    this.buckets = new Map();
+    this.stats = { created: 0, reaped: 0, rejectedScene: 0, rejectedMat: 0, finalizes: 0 };
+  }
+  /**
+   * The shared bucket for `key`, or null when this caller cannot share it (different scene
+   * transform or material). Creates it through `makeIm()` (parented to `scene`) on first use.
+   */
+  acquire(key, scene, sig, makeIm, frameId) {
+    let b = this.buckets.get(key);
+    if (!b) {
+      const im = makeIm();
+      if (!im) return null;
+      scene.add(im);
+      b = { im, n: 0, alpha: true, shared: true, frame: frameId, idle: 0, idleFrame: -1, scene, sig };
+      this.buckets.set(key, b);
+      this.stats.created++;
+    } else if (!_sameWorld(b.scene, scene)) {
+      this.stats.rejectedScene++;
+      return null;
+    } else if (b.sig !== sig) {
+      this.stats.rejectedMat++;
+      return null;
+    }
+    if (b.frame !== frameId) { b.n = 0; b.frame = frameId; }
+    b.idle = 0;
+    return b;
+  }
+  /** Publish every shared bucket for this frame (see the protocol note above). */
+  finalize(frameId, camWorld, sortFn) {
+    this.stats.finalizes++;
+    for (const [key, b] of this.buckets) {
+      const im = b.im;
+      if (b.frame !== frameId || b.n === 0) {
+        if (b.idleFrame !== frameId) { b.idleFrame = frameId; b.idle++; }
+        if (im.count !== 0) { im.count = 0; im.instanceMatrix.needsUpdate = true; }
+        if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
+          try { im.parent?.remove(im); } catch (_) {}
+          try { im.material?.dispose?.(); } catch (_) {}
+          try { im.dispose?.(); } catch (_) {}
+          this.buckets.delete(key);
+          this.stats.reaped++;
+        }
+        continue;
+      }
+      if (camWorld && typeof sortFn === "function") {
+        _sharedCamLocal.copy(camWorld);
+        try { b.scene.worldToLocal(_sharedCamLocal); } catch (_) {}
+        sortFn(im, b.n, _sharedCamLocal);
+      }
+      im.count = b.n;
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    }
+  }
+}
+/** The registry every ParticleManager shares (`?particleSharedAlpha=on`). */
+export const sharedAlphaBuckets = new SharedAlphaBuckets();
+
 /** Turn a cloned slot material into the shared ALPHA bucket material. */
 export function _configureAlphaBucketMaterial(mat) {
   mat.transparent = true;
@@ -304,6 +421,7 @@ export function _configureAlphaBucketMaterial(mat) {
 }
 
 const _sortCam = new THREE.Vector3();
+const _sortCamWorld = new THREE.Vector3();
 let _sortIdx = new Uint32Array(256);
 let _sortKey = new Float32Array(256);
 let _sortMat = new Float32Array(256 * 16);
@@ -983,6 +1101,9 @@ export class ParticleManager {
     this._instancing = opts.instancing === true;
     /** @type {Map<number, {im: THREE.InstancedMesh, n: number}>} gfxobj → bucket */
     this._instBuckets = new Map();
+    // ?particleSharedAlpha: this tick's camera in WORLD space (shared buckets sort in their
+    // own host scene's space).
+    this._instSortCamWorld = null;
     // Diagnostic seam for the runtime A/B (see setParticleInstancingFlag). Only
     // the opted-in manager installs it, and it mutates nothing until called —
     // the URL flag still decides the initial state.
@@ -1551,11 +1672,13 @@ export class ParticleManager {
       for (const b of this._instBuckets.values()) b.n = 0;
     }
     this._instSortCam = null;
-    if (bbCamera && this._scene && this._instBuckets.size > 0) {
+    this._instSortCamWorld = null;
+    if (bbCamera && this._scene && (this._instBuckets.size > 0 || sharedAlphaBuckets.buckets.size > 0)) {
       try {
         bbCamera.getWorldPosition(_sortCam);
+        this._instSortCamWorld = _sortCamWorld.copy(_sortCam);
         this._instSortCam = this._scene.worldToLocal(_sortCam);
-      } catch (_) { this._instSortCam = null; }
+      } catch (_) { this._instSortCam = null; this._instSortCamWorld = null; }
     }
 
     for (const [id, emitter] of this.particleTable) {
@@ -1749,45 +1872,21 @@ export class ParticleManager {
     const layer = emitter.renderLayer | 0;
     const alpha = emitter._instAlpha === true;
     const key = `${gfx}|${layer}${alpha ? "|a" : ""}`;
-    let bucket = this._instBuckets.get(key);
+    let bucket = null;
+    if (alpha && particleSharedAlphaEnabled()) {
+      bucket = sharedAlphaBuckets.acquire(key, this._scene, _alphaMatSig(emitter._instBaseMat),
+        () => { const im = this._makeBucketIm(emitter, gfx, layer, alpha); im.name += "-s"; return im; }, _sharedFrameId());
+    }
+    if (!bucket) bucket = this._instBuckets.get(key);
     if (!bucket) {
-      const mat = emitter._instBaseMat.clone();
-      if (alpha) {
-        _configureAlphaBucketMaterial(mat);
-      } else {
-        mat.transparent = true;
-        mat.blending = THREE.AdditiveBlending;
-        mat.depthWrite = false;
-        mat.opacity = 1; // folded into the per-instance color
-        mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
-      }
-      // Same three r184 two-pass as the per-slot path above (see meshFactory):
-      // transparent + DoubleSide submits the mesh twice. Cheaper here — it costs
-      // 2 draws per BUCKET, not per particle — but it is the same flat-quad
-      // geometry (`emitter._instGeom`), so the second pass is equally wasted and
-      // equally pixel-identical to drop.
-      mat.forceSinglePass = true;
-      mat.userData.__cacheOwned = false;
-      mat.userData.__disposable = true;
-      const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
-      im.count = 0;
-      im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}${alpha ? "-a" : ""}`;
-      // RP6 culls per emitter by contribution; three's per-object test would
-      // measure the bucket's identity-placed bounds, not the particles'.
-      im.frustumCulled = false;
-      im.matrixAutoUpdate = false;
-      im.updateMatrix();
-      im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha };
-      // Same emission-time layer the singleton slot meshes get (meshFactory).
-      if (layer > 0) im.layers.set(layer);
-      im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+      const im = this._makeBucketIm(emitter, gfx, layer, alpha);
       this._scene.add(im);
       bucket = { im, n: 0, alpha };
       this._instBuckets.set(key, bucket);
     }
     // Grow before writing if this emitter could overflow the buffer.
     const need = bucket.n + emitter.numParticles;
-    if (need > bucket.im.instanceMatrix.count) _growBucket(bucket, need, this._scene);
+    if (need > bucket.im.instanceMatrix.count) _growBucket(bucket, need, bucket.scene || this._scene);
     const im = bucket.im;
     const cap = im.instanceMatrix.count;
     let n = bucket.n;
@@ -1804,6 +1903,41 @@ export class ParticleManager {
       n += 1;
     }
     bucket.n = n;
+  }
+
+  /** One bucket's InstancedMesh (not yet parented) for an emitter's (gfxobj, layer, blend). */
+  _makeBucketIm(emitter, gfx, layer, alpha) {
+    const mat = emitter._instBaseMat.clone();
+    if (alpha) {
+      _configureAlphaBucketMaterial(mat);
+    } else {
+      mat.transparent = true;
+      mat.blending = THREE.AdditiveBlending;
+      mat.depthWrite = false;
+      mat.opacity = 1; // folded into the per-instance color
+      mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
+    }
+    // Same three r184 two-pass as the per-slot path above (see meshFactory):
+    // transparent + DoubleSide submits the mesh twice. Cheaper here — it costs
+    // 2 draws per BUCKET, not per particle — but it is the same flat-quad
+    // geometry (`emitter._instGeom`), so the second pass is equally wasted and
+    // equally pixel-identical to drop.
+    mat.forceSinglePass = true;
+    mat.userData.__cacheOwned = false;
+    mat.userData.__disposable = true;
+    const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
+    im.count = 0;
+    im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}${alpha ? "-a" : ""}`;
+    // RP6 culls per emitter by contribution; three's per-object test would
+    // measure the bucket's identity-placed bounds, not the particles'.
+    im.frustumCulled = false;
+    im.matrixAutoUpdate = false;
+    im.updateMatrix();
+    im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha };
+    // Same emission-time layer the singleton slot meshes get (meshFactory).
+    if (layer > 0) im.layers.set(layer);
+    im.setColorAt(0, _instColor.setRGB(1, 1, 1));
+    return im;
   }
 
   /**
@@ -1891,11 +2025,16 @@ export class ParticleManager {
     }
     let buckets = 0, instances = 0;
     for (const b of this._instBuckets.values()) { buckets++; instances += b.im.count | 0; }
-    return { emitters: this.particleTable.size, instEmitters, liveParticles, meshesInScene, buckets, instances };
+    return { emitters: this.particleTable.size, instEmitters, liveParticles, meshesInScene, buckets, instances,
+      sharedAlphaBuckets: sharedAlphaBuckets.buckets.size, sharedAlpha: { ...sharedAlphaBuckets.stats } };
   }
 
   /** Publish this tick's instance counts + buffer uploads. */
   _finalizeInstBuckets() {
+    // ?particleSharedAlpha: every manager republishes the shared buckets (protocol note above).
+    if (sharedAlphaBuckets.buckets.size > 0) {
+      sharedAlphaBuckets.finalize(_sharedFrameId(), this._instSortCamWorld, _sortBucketBackToFront);
+    }
     if (this._instBuckets.size === 0) return;
     // Map deletion during for..of is safe (visited entries only).
     for (const [key, b] of this._instBuckets) {

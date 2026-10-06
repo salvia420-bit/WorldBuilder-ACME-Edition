@@ -673,6 +673,9 @@ export class AnimationCache {
                     partGroups[p] = { groups: [], surfaceDids: [] };
                     try { window.__diag?.assets?.onMeshError?.({ partIndex: p, setupId, error: e }); } catch (_) {}
                 }
+                // ?partDegrade: the part GfxObj's degrade chain DID (0 = none, or an
+                // older pkg/ that does not fill it for entity parts).
+                partGroups[p].didDegrade = (partMesh.didDegrade ?? 0) >>> 0;
                 if (typeof partMesh.free === "function") {
                     try { partMesh.free(); } catch (_) {}
                 }

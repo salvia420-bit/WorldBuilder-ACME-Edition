@@ -7004,11 +7004,14 @@ fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
 /// keyframe values and the rig falls apart in motion (the
 /// user-reported symptom).
 ///
-/// Returns `(per_part_tris, rest_poses)` where `rest_poses[pi]` is the
-/// `(offset, rot)` that `walk_setup_parts`'s pose-priority chain
-/// resolved (idle anim → placement → identity). When no rest pose
-/// exists (raw GfxObj, naked setup without MotionTable), the slot
+/// Returns `(per_part_tris, rest_poses, part_did_degrades)` where
+/// `rest_poses[pi]` is the `(offset, rot)` that `walk_setup_parts`'s
+/// pose-priority chain resolved (idle anim → placement → identity). When no
+/// rest pose exists (raw GfxObj, naked setup without MotionTable), the slot
 /// holds identity — caller can still apply it harmlessly.
+/// `part_did_degrades[pi]` is the part GfxObj's `did_degrade` (the 0x11
+/// GfxObjDegradeInfo retail's `CPhysicsPart::LoadGfxObjArray` loads for the
+/// part, acclient.c:314892), 0 when the GfxObj has none or failed to load.
 #[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_setup_model_per_part_with_rest_pose<
     S: holtburger_dat::ResourceSource + ?Sized,
@@ -7024,6 +7027,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
 ) -> Option<(
     Vec<Vec<Tri>>,
     Vec<(holtburger_common::Vector3, holtburger_common::Quaternion)>,
+    Vec<u32>,
 )> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::ResourceKey;
@@ -7042,6 +7046,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
                 )
             })
             .collect();
+    let mut did_degrades: Vec<u32> = vec![0; part_count];
     walk_setup_parts(
         source,
         setup_id,
@@ -7051,6 +7056,9 @@ fn triangulate_setup_model_per_part_with_rest_pose<
         None,
         wire_placement,
         |pi, gfx, offset, rot, swaps| {
+            if let Some(d) = did_degrades.get_mut(pi) {
+                *d = gfx.did_degrade.unwrap_or(0);
+            }
             if let Some(slot) = buckets.get_mut(pi) {
                 // Capture the pose-priority-resolved rest frame for this
                 // part as a side channel. Caller threads it into
@@ -7073,7 +7081,7 @@ fn triangulate_setup_model_per_part_with_rest_pose<
             }
         },
     )?;
-    Some((buckets, rest_poses))
+    Some((buckets, rest_poses, did_degrades))
 }
 
 // ObjDesc TMChange (wire texture-change) support. The wire swaps
@@ -24087,6 +24095,11 @@ pub(crate) struct EntityAnimationKeyframesInner {
     pub segment_counts: Vec<u32>,
     pub segment_framerates: Vec<f32>,
     pub segment_anim_ids: Vec<u32>,
+    /// ?partDegrade (2026-10-06): per-part GfxObj `did_degrade` (0x11 chain
+    /// DID, 0 = none), same order as `part_tris`. Packed into each part's
+    /// `ModelMesh.didDegrade` so JS can run retail's per-part
+    /// `GfxObjDegradeInfo::get_degrade` pick (scene3d/part_degrade.js).
+    pub part_did_degrades: Vec<u32>,
 }
 
 /// Post-prefetch body of `fetch_entity_animation_keyframes`. Takes a
@@ -24162,6 +24175,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             rest_origins.extend_from_slice(&[0.0, 0.0, 0.0]);
             rest_orientations.extend_from_slice(&[1.0, 0.0, 0.0, 0.0]);
         }
+        let raw_did_degrade = resolve_did_degrade_cached(source, setup_id);
         return Ok(EntityAnimationKeyframesInner {
             part_tris: parts_tris,
             part_count,
@@ -24180,13 +24194,14 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             segment_counts: Vec::new(),
             segment_framerates: Vec::new(),
             segment_anim_ids: Vec::new(),
+            part_did_degrades: vec![raw_did_degrade; part_count as usize],
         });
     }
 
     // SetupModel (0x02 prefix) — full skeleton + optional motion
     // table + optional cycle.
     let wire_placement = (placement_id != 0).then_some(placement_id);
-    let (parts_tris, rest_poses) =
+    let (parts_tris, rest_poses, part_did_degrades) =
         triangulate_setup_model_per_part_with_rest_pose(source, setup_id, mc, tc, wire_placement)
             .ok_or_else(|| {
                 format!(
@@ -24254,6 +24269,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     segment_counts: Vec::new(),
                     segment_framerates: Vec::new(),
                     segment_anim_ids: Vec::new(),
+                    part_did_degrades,
                 });
             }
         },
@@ -24345,6 +24361,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         segment_counts,
         segment_framerates,
         segment_anim_ids,
+        part_did_degrades,
     })
 }
 
@@ -24723,8 +24740,18 @@ async fn build_entity_animation_counted(
 /// passes through field-for-field.
 #[cfg(target_arch = "wasm32")]
 fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityAnimationData {
-    let part_meshes: Vec<ModelMesh> =
-        inner.part_tris.iter().map(|t| pack_model_mesh(t)).collect();
+    // ?partDegrade: each part mesh carries its GfxObj's degrade chain DID
+    // (pack_model_mesh cannot see the source GfxObj, so it leaves 0).
+    let part_meshes: Vec<ModelMesh> = inner
+        .part_tris
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut m = pack_model_mesh(t);
+            m.did_degrade = inner.part_did_degrades.get(i).copied().unwrap_or(0);
+            m
+        })
+        .collect();
     let hooks: Vec<AnimationHookJs> = inner
         .hooks
         .into_iter()
@@ -46457,6 +46484,80 @@ mod tests_substitution {
         assert_eq!(key_of(resolve_static_placement_frame(&setup, None, false)), 9);
     }
 
+    /// ?partDegrade (2026-10-06): the rest-pose part walk reports each part
+    /// GfxObj's `did_degrade` (retail `CPhysicsPart::LoadGfxObjArray` loads the
+    /// part's chain from its GfxObj), AFTER wire model changes — a replaced part
+    /// reports the replacement GfxObj's chain.
+    #[test]
+    fn triangulate_setup_model_per_part_with_rest_pose_reports_part_did_degrades() {
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        let setup_id: u32 = 0x0200009A;
+        let (part_a, part_b, part_c): (u32, u32, u32) = (0x0100000C, 0x0100000D, 0x0100000E);
+        let with_degrade = |id: u32, marker: u32, degrade: Option<u32>| -> Vec<u8> {
+            let bytes = synth_gfx_obj_one_triangle(id, marker, 0.0);
+            let mut gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).unwrap();
+            gfx.did_degrade = degrade;
+            let mut out = Vec::new();
+            gfx.pack(&mut Cursor::new(&mut out)).unwrap();
+            out
+        };
+        let mut placement_frames = HashMap::new();
+        placement_frames.insert(
+            0,
+            PlacementType {
+                anim_frame: AnimationFrame {
+                    frames: vec![
+                        Frame { origin: Vector3::zero(), orientation: Quaternion::identity() },
+                        Frame { origin: Vector3::zero(), orientation: Quaternion::identity() },
+                    ],
+                    hooks: vec![],
+                },
+            },
+        );
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part_a, part_b],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames,
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part_a), with_degrade(part_a, 0xAAAAAAAA, Some(0x110006C6)));
+        files.insert(("eor/portal".into(), part_b), with_degrade(part_b, 0xBBBBBBBB, None));
+        files.insert(("eor/portal".into(), part_c), with_degrade(part_c, 0xCCCCCCCC, Some(0x1100002E)));
+        let source = MockSource { files };
+
+        let (_, _, base) =
+            triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[], &[], None)
+                .expect("triangulate");
+        assert_eq!(base, vec![0x110006C6, 0], "one did_degrade per part, 0 = no chain");
+
+        let (_, _, swapped) =
+            triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[(1, part_c)], &[], None)
+                .expect("triangulate with a model change");
+        assert_eq!(swapped, vec![0x110006C6, 0x1100002E], "a replaced part reports the replacement's chain");
+    }
+
     #[test]
     fn triangulate_setup_model_per_part_with_rest_pose_keeps_vertices_local() {
         use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
@@ -46524,7 +46625,7 @@ mod tests_substitution {
         );
         let source = MockSource { files };
 
-        let (per_part_tris, rest_poses) =
+        let (per_part_tris, rest_poses, _did_degrades) =
             triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[], &[], None)
                 .expect("triangulate per-part with rest pose");
 
