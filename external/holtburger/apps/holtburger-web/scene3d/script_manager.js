@@ -194,8 +194,16 @@ export class ScriptManager {
    */
   _armNextHook() {
     const cur = this._currData;
-    if (cur === null || this._hookIndex >= cur.entries.length) {
+    if (cur === null) {
       this._nextHookTime = Infinity;
+      return;
+    }
+    if (this._hookIndex >= cur.entries.length) {
+      // A current script with no hooks left (only possible for a script with
+      // ZERO entries — the update loop pops after the last hook) must still
+      // end, or it holds the owner forever and every script queued behind it
+      // never plays. It ends at its own end time; `update()` pops it there.
+      this._nextHookTime = cur.startTime + (+cur.length || 0);
       return;
     }
     this._nextHookTime = cur.startTime + (+cur.entries[this._hookIndex].startTime || 0);

@@ -218,6 +218,26 @@ function entries(...times) {
   }
 }
 
+// T11: an EMPTY script must not wedge the owner's queue.
+{
+  const fired = [];
+  const m = new ScriptManager({ executeHook: (e) => fired.push(e.tag) });
+  m.addScript(0x33000001, [], { now: 10 });           // zero entries, length 0
+  m.addScript(0x33000002, [{ startTime: 0.5, tag: "B" }]);
+  m.update(10.0);
+  check("T11 empty script pops at its end time", m._currData?.scriptDid === 0x33000002,
+    `current=${m._currData?.scriptDid?.toString(16)}`);
+  m.update(10.6);
+  check("T11 script queued behind an empty one fires", fired.join() === "B", `fired=${fired}`);
+  check("T11 manager idle afterwards", m.active === false);
+  const m2 = new ScriptManager({ executeHook: () => {} });
+  m2.addScript(0x33000003, [], { now: 5, length: 2 });
+  m2.update(6.0);
+  check("T11 empty script with length holds until start+length", m2.active === true);
+  m2.update(7.0);
+  check("T11 ...then ends", m2.active === false);
+}
+
 // restore global hooks
 setCurrentTime(null);
 setRng(null);
