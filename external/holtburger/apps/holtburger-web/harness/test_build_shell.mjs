@@ -108,8 +108,8 @@ console.log("PART 1 — entry coverage + arithmetic premises");
   );
   const xu7Src = read(path.join(APP_ROOT, "scene3d", "xu7_textures.js"));
   check(
-    /if \(v == null\) return 0;/.test(xu7Src),
-    "texWorkers absent => 0 workers (xu7_textures.js) — texture worker NOT a cold-boot request (T14 DEV OFF)",
+    /if \(v == null\) return canWorker \? 1 : 0;/.test(xu7Src),
+    "texWorkers absent => 1 worker (xu7_textures.js) — texture worker IS a cold-boot request (DEFAULT ON 2026-10-06; built lazily on the first xu7 job)",
   );
 }
 

@@ -34,6 +34,7 @@
 
 import * as THREE from "three";
 import {
+  BlendFunction,
   BloomEffect,
   ClearPass,
   Effect,
@@ -50,6 +51,7 @@ import {
 import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atmosphere";
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
 import { PortalStencilPass } from "./portal_stencil.js";
+import { setDrawSortPhase } from "./draw_sort_program.js";
 import {
   PortalPunchPass,
   SealRemainderPass,
@@ -862,7 +864,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       portalPunchPass.inScene = true;
       portalPunchPass.apertureGroup.userData.__punchPhase = 1;
       scene.add(portalPunchPass.apertureGroup);
-      renderer.setOpaqueSort(punchPhaseOpaqueSort);
+      // The phase is the program sort's PRIMARY key (draw_sort_program.js), not
+      // a replacement for it; punchPhaseOpaqueSort only serves the
+      // ?drawSortProgram=off arm.
+      setDrawSortPhase(renderer, _punchPhase, punchPhaseOpaqueSort);
     } else {
       portalPunchPass = new PortalPunchPass(scene, camera, "punch", {
         stencil: _punchStencil,
@@ -1139,14 +1144,26 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       return new URLSearchParams(globalThis.location?.search || "").get("nanScrub")?.toLowerCase() !== "off";
     } catch (_) { return true; }
   })();
+  // 2026-10-06 — the 10-05 scrub never worked: an Effect's default blend is
+  // NORMAL, `mix(dst, src, opacity)`, and `NaN * 0.0` is NaN, so every scrubbed
+  // pixel got its NaN mixed straight back in (1070 readback: the buffer entering
+  // fxPass held the same 2 NaN pixels as the one entering the scrub, and bloom
+  // blacked the WHOLE frame at Holtburg). SRC blend returns the scrubbed colour
+  // alone. The non-finite test reads the exponent bits so a fast-math HLSL
+  // compile cannot fold it away, and negative radiance (same bad pixels, -0.19)
+  // is clamped — bloom would otherwise spread it as a dark smear.
   if (nanScrubOn) {
     const scrub = new Effect(
       "NanScrub",
       /* glsl */ `
+      bool hbNonFinite(const in vec4 c) {
+        uvec4 e = floatBitsToUint(c) & uvec4(0x7f800000u);
+        return any(equal(e, uvec4(0x7f800000u)));
+      }
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
-        bool bad = any(isnan(inputColor)) || any(isinf(inputColor));
-        outputColor = bad ? vec4(0.0, 0.0, 0.0, 1.0) : inputColor;
+        outputColor = hbNonFinite(inputColor) ? vec4(0.0, 0.0, 0.0, 1.0) : max(inputColor, vec4(0.0));
       }`,
+      { blendFunction: BlendFunction.SRC },
     );
     composer.addPass(new EffectPass(camera, scrub));
   }

@@ -396,12 +396,13 @@ function _liftChannel(src, sw, sh, srcStride, ch, dw, dh) {
     for (let i = 0, n = dw * dh; i < n; i++) out[i] = src[i * srcStride + ch];
     return out;
   }
+  // Column map hoisted out of the row loop (same nearest-neighbour picks).
+  const col = new Int32Array(dw);
+  for (let x = 0; x < dw; x++) col[x] = Math.min(sw - 1, ((x * sw) / dw) | 0) * srcStride + ch;
   for (let y = 0; y < dh; y++) {
     const sy = Math.min(sh - 1, ((y * sh) / dh) | 0);
-    for (let x = 0; x < dw; x++) {
-      const sx = Math.min(sw - 1, ((x * sw) / dw) | 0);
-      out[y * dw + x] = src[(sy * sw + sx) * srcStride + ch];
-    }
+    const row = sy * sw * srcStride, orow = y * dw;
+    for (let x = 0; x < dw; x++) out[orow + x] = src[row + col[x]];
   }
   return out;
 }
@@ -436,6 +437,8 @@ function _texChannel(tex, ch, w, h, plane, surfaceDid) {
  * previous surface's relief. `stats` is the module tally (mutated).
  * Returns true when at least one real source was found.
  */
+const _nraLut = new Uint8Array(256);
+const _nraRoughLut = new Uint8Array(256);
 export function packNraLayer(nraArray, layer, mat, w, h, stats) {
   const dst = nraArray?.image?.data;
   if (!dst || !mat) return false;
@@ -474,21 +477,34 @@ export function packNraLayer(nraArray, layer, mat, w, h, stats) {
   const roughScalar = Math.min(1, Math.max(0, Number.isFinite(mat.roughness) ? mat.roughness : 1));
   const roughFlat = Math.round(roughScalar * 255);
 
-  for (let i = 0; i < px; i++) {
-    const o = base + i * 4;
-    if (nR && nG) {
-      // decode -> scale -> re-encode (0.5-centred, the NormalGL convention the
-      // wasm normal-gen emits and three decodes with `* 2.0 - 1.0`).
-      const x = ((nR.px[i] / 255) * 2 - 1) * scale;
-      const y = ((nG.px[i] / 255) * 2 - 1) * scale;
-      dst[o] = Math.max(0, Math.min(255, Math.round((x * 0.5 + 0.5) * 255)));
-      dst[o + 1] = Math.max(0, Math.min(255, Math.round((y * 0.5 + 0.5) * 255)));
+  // Perf 2026-10-06: both per-pixel maps depend only on the source byte and
+  // per-material constants, so they are 256-entry tables built with the EXACT
+  // per-pixel expressions (byte-identical output; 2.4x faster on a 512² layer).
+  // This loop ran inside the statics bake on the main thread — 345 ms of one
+  // 400 ms frame on a 1070 teleport tour.
+  //   normal: decode -> scale -> re-encode (0.5-centred, the NormalGL convention
+  //           the wasm normal-gen emits and three decodes with `* 2.0 - 1.0`)
+  //   rough:  roughScalar * texchan roughness
+  const nLut = _nraLut, rLut = _nraRoughLut;
+  if (nR && nG) {
+    for (let v = 0; v < 256; v++) {
+      const x = ((v / 255) * 2 - 1) * scale;
+      nLut[v] = Math.max(0, Math.min(255, Math.round((x * 0.5 + 0.5) * 255)));
+    }
+  }
+  if (rgh) for (let v = 0; v < 256; v++) rLut[v] = Math.round(roughScalar * v);
+  const nRp = nR && nG ? nR.px : null, nGp = nR && nG ? nG.px : null;
+  const rp = rgh ? rgh.px : null, ap = hgt ? hgt.px : (ao ? ao.px : null);
+  for (let i = 0, o = base; i < px; i++, o += 4) {
+    if (nRp !== null) {
+      dst[o] = nLut[nRp[i]];
+      dst[o + 1] = nLut[nGp[i]];
     } else {
       dst[o] = _NRA_FLAT_N;
       dst[o + 1] = _NRA_FLAT_N;
     }
-    dst[o + 2] = rgh ? Math.round((roughScalar * rgh.px[i]) ) : roughFlat;
-    dst[o + 3] = hgt ? hgt.px[i] : (ao ? ao.px[i] : _NRA_FLAT_A);
+    dst[o + 2] = rp !== null ? rLut[rp[i]] : roughFlat;
+    dst[o + 3] = ap !== null ? ap[i] : _NRA_FLAT_A;
   }
 
   if (stats) {

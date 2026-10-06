@@ -37,7 +37,7 @@ src = src.replace(/^\s*import\s+.*$/gm, "");
 const stripped = src
   .replace(/^\s*export\s+function\s+/gm, "function ")
   .replace(/^\s*export\s+const\s+/gm, "const ");
-const { batchedMaterialFor, memberMaterialOf } = await import("./scene3d/batched_material_variant.js");
+const { batchedMaterialFor, memberMaterialOf, syncBatchMatVariants } = await import("./scene3d/batched_material_variant.js");
 const factory = new Function(
   "THREE", "batchedMaterialFor",
   stripped +
@@ -93,13 +93,17 @@ check("3: 2 buckets created and self-added to staticsGroup",
 const bmA = scene3d.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matA);
 const bmB = scene3d.staticsGroup.children.find((c) => memberMaterialOf(c.material) === matB);
 // batchMatVariant (2026-10-06): the bucket draws through its OWN material object
-// (three caches the batched program apart) that reads through to the member.
+// (three caches the batched program apart): a shape-identical clone of the
+// member, brought up to it once per frame by syncBatchMatVariants().
 check("4b: bucket material is a distinct variant of the member", !!bmA && bmA.material !== matA && memberMaterialOf(bmA.material) === matA);
 {
   const was = matA.opacity;
   matA.opacity = 0.25; matA.needsUpdate = true;
-  check("4c: member state changes are seen through the bucket's variant",
-    bmA.material.opacity === 0.25 && bmA.material.version === matA.version && bmA.material.id === matA.id);
+  syncBatchMatVariants(); // what the render loop runs before every frame
+  check("4c: member state changes reach the bucket's variant by the next frame",
+    bmA.material.opacity === 0.25 && bmA.material.version === matA.version);
+  check("4d: the variant is a real instance of the member's class (no prototype chain — keeps three's material reads monomorphic)",
+    Object.getPrototypeOf(bmA.material) === Object.getPrototypeOf(matA) && Object.prototype.hasOwnProperty.call(bmA.material, "opacity"));
   matA.opacity = was;
 }
 check("4: buckets keep their surface material + carry NO landblockId + named static-batch-x-*",

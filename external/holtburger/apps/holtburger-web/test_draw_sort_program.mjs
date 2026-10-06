@@ -10,6 +10,7 @@ import {
   makeProgramSort,
   installDrawSortProgram,
   drawSortProgramEnabled,
+  setDrawSortPhase,
 } from "./scene3d/draw_sort_program.js";
 
 let failed = 0, passed = 0;
@@ -126,6 +127,33 @@ console.log("PART 4 — install, live toggle, flag grammar");
   window.__drawSort.set(false);
   check("set(false) restores three's painterSortStable", r.opaqueSort === null);
   delete globalThis.window;
+}
+
+// ---------------------------------------------------------------------------
+console.log("PART 5 — a registered phase is the primary key, not a replacement");
+// ---------------------------------------------------------------------------
+{
+  // 2026-10-06: ?punchRetail installed its own comparator AFTER this module and
+  // the program sort was silently gone on every default boot.
+  const phaseOnly = () => 0;
+  const phaseOf = (o) => o.phase;
+  for (const order of ["install-first", "phase-first"]) {
+    const r = fakeRenderer();
+    globalThis.window = {};
+    if (order === "install-first") { installDrawSortProgram(r); setDrawSortPhase(r, phaseOf, phaseOnly); }
+    else { setDrawSortPhase(r, phaseOf, phaseOnly); installDrawSortProgram(r); }
+    const s = r.opaqueSort;
+    check(`${order}: the program sort stays installed`, typeof s === "function" && s !== phaseOnly);
+    const a = mat(1), b = mat(2);
+    r.bind(a, 1); r.bind(b, 2);
+    check(`${order}: phase beats program`, s(item(b, { object: { phase: 0 } }), item(a, { object: { phase: 1 } })) < 0);
+    check(`${order}: program groups inside a phase`, s(item(b, { object: { phase: 1 } }), item(a, { object: { phase: 1 } })) > 0);
+    window.__drawSort.set(false);
+    check(`${order}: set(false) falls back to the phase-only sort`, r.opaqueSort === phaseOnly);
+    window.__drawSort.set(true);
+    check(`${order}: set(true) restores the phased program sort`, r.opaqueSort === s);
+    delete globalThis.window;
+  }
 }
 
 console.log(`\n${passed} passed / ${failed} failed`);

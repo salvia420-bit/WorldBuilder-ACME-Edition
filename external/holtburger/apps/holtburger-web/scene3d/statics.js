@@ -4462,10 +4462,10 @@ async function _ensureStaticParticleManager(scene3d, wasmExports) {
   };
   scene3d._staticParticleManager = new ParticleManager({
     scene: scene3d.staticsGroup ?? null,
-    // ?particleInstancing=on (default OFF) — collapse this manager's additive
-    // default_script billboards (fountains/braziers/torches) to 1 draw per
-    // emitter. Measured ~627 of 808 draws/frame at Cragstone. Still gated by
-    // the URL flag inside ParticleManager, so OFF ⇒ byte-identical.
+    // ?particleInstancing (DEFAULT ON 2026-10-06; `=off` escapes) — collapse
+    // this manager's default_script billboards (fountains/braziers/torches,
+    // additive AND alpha since 2026-10-06) to 1 draw per (gfxobj, layer,
+    // blend). Measured ~627 of 808 draws/frame at Cragstone.
     instancing: true,
     geometryFactory: async (hwGfxObjId) => {
       const r = await resolveGfxObjShared(hwGfxObjId);

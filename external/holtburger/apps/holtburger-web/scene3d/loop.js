@@ -35,6 +35,7 @@
 // `init3D`'s render loop calls this once per requestAnimationFrame
 // frame, BEFORE `renderer.render(scene, camera)`.
 
+import { asyncLinkBusy } from "./async_link_guard.js";
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion, noteEntityLandcell } from "./cells.js";
 // Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
@@ -1551,6 +1552,24 @@ function _fogProbeFailed(err) {
  * or the sample is an async read still in flight — it lands in `_fogProbeLast`).
  * The last good sample is reused between throttled ticks by the caller.
  */
+function _memoReadability(renderer) {
+  const caps = renderer?.capabilities;
+  if (!caps || caps.__hbReadMemo) return;
+  try {
+    for (const fn of ["textureTypeReadable", "textureFormatReadable"]) {
+      const orig = caps[fn];
+      if (typeof orig !== "function") continue;
+      const memo = new Map();
+      caps[fn] = function (v) {
+        let r = memo.get(v);
+        if (r === undefined) { r = orig.call(this, v); memo.set(v, r); }
+        return r;
+      };
+    }
+    Object.defineProperty(caps, "__hbReadMemo", { value: true });
+  } catch (_) { /* fail-soft: three keeps asking */ }
+}
+
 function sampleHorizonSkyRadiance(scene3d) {
   if (_fogProbeDead) return null;
   const renderer = scene3d?.renderer;
@@ -1575,6 +1594,11 @@ function sampleHorizonSkyRadiance(scene3d) {
   // One async read at a time: the buffer belongs to the in-flight read until
   // it settles. The caller reuses `_fogProbeLast` meanwhile.
   if (_fogProbeInFlight) return null;
+  // 2026-10-06 — and not while ?asyncLink has a shader compile in flight: the
+  // readback's getBufferSubData is a synchronous GPU-process round-trip that
+  // queues behind the driver compile (189 ms measured on the 1070, Shoushi
+  // teleport). The fog colour holds its last sample for those few frames.
+  if (asyncLinkBusy()) return null;
 
   const hz = farFogSkyHz();
   const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
@@ -1649,6 +1673,13 @@ function sampleHorizonSkyRadiance(scene3d) {
     // the buffer when the target has no framebuffer, and rejects on bad
     // format/type/bounds — both end in `_fogProbeFailed`.)
     _fogProbeBuf.fill(0xffff);
+    // 2026-10-06 — three re-asks `textureTypeReadable(HalfFloatType)` before
+    // every readback, and that answer is a `gl.getParameter(IMPLEMENTATION_
+    // COLOR_READ_TYPE)` — a synchronous GPU-process round-trip that queued 194 ms
+    // behind a driver shader compile on the 1070 (first street-level camera
+    // sweep). This probe's target never changes and it is the app's only
+    // readback caller, so memoise the two readability answers once.
+    _memoReadability(renderer);
     if (typeof renderer.readRenderTargetPixelsAsync === "function") {
       // The readPixels into a PIXEL_PACK_BUFFER is issued synchronously inside
       // this call (while the probe target is still bound — the `finally` below

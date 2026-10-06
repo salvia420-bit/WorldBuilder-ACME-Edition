@@ -1195,6 +1195,7 @@ const RIG_MODULE_ON = readRigModuleFlag();
 // cull. Only the constant is imported; the cull pass is driven from loop.js
 // via `tickEntityRenderVisibility`.
 import { CULL_DIST_SQ } from "./culling.js";
+import { getOcclusionCuller, ENTITY_PAD_M } from "./occlusion_cull.js";
 // A8-M4 (2026-06-12) — generic pre-create event buffer (retail null-object
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
@@ -2615,6 +2616,9 @@ export function tickEntityRenderVisibility(scene3d, culler) {
 
   let tested = 0;
   let culled = 0;
+  let occluded = 0;
+  const occ = getOcclusionCuller(scene3d, THREE);
+  const frameNo = occ ? occ.frame : 0;
   for (const inst of map.values()) {
     if (!inst || !inst.root) continue;
     // Local player — never cull (and clear any stale cull flag so a prior
@@ -2662,6 +2666,17 @@ export function tickEntityRenderVisibility(scene3d, culler) {
       const distSq = culler.getDistanceSq(p.x, p.y, p.z);
       if (distSq > distHorizonSq) want = false;
     }
+    // ?occlusionCull (occlusion_cull.js) — a frustum-visible rig whose padded
+    // bounds put no sample on screen (behind a building, inside a shop seen
+    // from the street) is not submitted: ~40 part draws per humanoid.
+    if (want && occ && occ.armed) {
+      const b = _occEntityBox(inst, frameNo);
+      // String key: cell proxies are keyed by numeric cell id in the same map.
+      if (b && !occ.want(inst._occKey ?? (inst._occKey = "e" + (inst.guid >>> 0)), b[0], b[1], b[2], b[3], b[4], b[5])) {
+        occluded += 1;
+        want = false;
+      }
+    }
     const cullHidden = !want;
     if (inst._renderCullHidden !== cullHidden) {
       inst._renderCullHidden = cullHidden;
@@ -2669,7 +2684,38 @@ export function tickEntityRenderVisibility(scene3d, culler) {
     }
     if (cullHidden) culled += 1;
   }
-  return { tested, culled };
+  return { tested, culled, occluded };
+}
+
+// ?occlusionCull proxy bounds for an entity rig, in the MAIN scene's frame:
+// the rig's world AABB (all part meshes) padded by ENTITY_PAD_M, stored as an
+// offset from the root's world position so it follows a walking rig for free.
+// Re-measured every OCC_ENTITY_REMEASURE frames (pose, equip, scale changes).
+const OCC_ENTITY_REMEASURE = 45;
+const _occEntBox3 = new THREE.Box3();
+const _occEntOut = [0, 0, 0, 0, 0, 0];
+function _occEntityBox(inst, frameNo) {
+  const root = inst.root;
+  // A hidden root is skipped by the per-frame matrix walk (?skipHiddenMatrix):
+  // refresh just its own world matrix so the proxy follows a rig that walks
+  // while occluded.
+  if (root.visible === false) root.updateWorldMatrix(false, false);
+  const mw = root.matrixWorld.elements;
+  let c = inst._occBox;
+  if (!c || frameNo - c.f >= OCC_ENTITY_REMEASURE || frameNo < c.f) {
+    _occEntBox3.makeEmpty();
+    try { _occEntBox3.setFromObject(root); } catch (_) { return null; }
+    if (_occEntBox3.isEmpty()) return null;
+    const mn = _occEntBox3.min, mx = _occEntBox3.max;
+    c = inst._occBox = {
+      f: frameNo,
+      lo: [mn.x - mw[12] - ENTITY_PAD_M, mn.y - mw[13] - ENTITY_PAD_M, mn.z - mw[14] - ENTITY_PAD_M],
+      hi: [mx.x - mw[12] + ENTITY_PAD_M, mx.y - mw[13] + ENTITY_PAD_M, mx.z - mw[14] + ENTITY_PAD_M],
+    };
+  }
+  _occEntOut[0] = mw[12] + c.lo[0]; _occEntOut[1] = mw[13] + c.lo[1]; _occEntOut[2] = mw[14] + c.lo[2];
+  _occEntOut[3] = mw[12] + c.hi[0]; _occEntOut[4] = mw[13] + c.hi[1]; _occEntOut[5] = mw[14] + c.hi[2];
+  return _occEntOut;
 }
 
 // Wave 1.7 (2026-05-26, post-Joe-Trevis-quote restoration) — arms-up jump
@@ -12223,6 +12269,10 @@ export class EntityManager {
     };
     this._worldParticleManager = new ParticleManager({
       scene: this.scene3d?.entitiesGroup ?? rig?.parent ?? null,
+      // ?particleInstancing (DEFAULT ON 2026-10-06): entity/world emitters
+      // (portal swirl, lifestone, cast effects) join the per-(gfxobj, layer,
+      // blend) instanced buckets too — 107 per-particle draws at Holtburg.
+      instancing: true,
       geometryFactory: async (hwGfxObjId) => {
         const r = await resolveGfxObjShared(hwGfxObjId);
         return r?.geometry ?? null;

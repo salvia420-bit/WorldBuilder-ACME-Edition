@@ -201,9 +201,11 @@ const PAYLOAD = new Uint8Array(64).fill(1);
 
 async function run() {
   // ---------------------------------------------------------------- PART 1 --
-  console.log("PART 1 — ?texWorkers flag grammar (DEV opt-in, DEFAULT OFF)");
-  check("absent ⇒ OFF (default-off, DEV stage)", texWorkersEnabled("") === false);
-  check("unrelated query ⇒ OFF", texWorkersEnabled("?other=1") === false);
+  console.log("PART 1 — ?texWorkers flag grammar (DEFAULT ON since 2026-10-06, GATE-TEXWORKER measured on the 1070)");
+  const hadWorker = typeof globalThis.Worker !== "undefined";
+  if (!hadWorker) globalThis.Worker = function () {}; // default-on needs Web Workers
+  check("absent ⇒ ON (default-on, Workers available)", texWorkersEnabled("") === true);
+  check("unrelated query ⇒ ON", texWorkersEnabled("?other=1") === true);
   check("=on opts in", texWorkersEnabled("?texWorkers=on") === true);
   check("=1 opts in", texWorkersEnabled("?texWorkers=1") === true);
   check("=true opts in", texWorkersEnabled("?texWorkers=true") === true);
@@ -211,8 +213,14 @@ async function run() {
   check("=2 (measurement escape) reads ON", texWorkersEnabled("?texWorkers=2") === true);
   check("=off reads OFF", texWorkersEnabled("?texWorkers=off") === false);
   check("=0 reads OFF", texWorkersEnabled("?texWorkers=0") === false);
-  check("empty value reads OFF", texWorkersEnabled("?texWorkers=") === false);
-  check("garbage (=onn) reads OFF — exact-match opt-in", texWorkersEnabled("?texWorkers=onn") === false);
+  check("empty value reads ON (the default)", texWorkersEnabled("?texWorkers=") === true);
+  check("garbage (=onn) reads ON — only explicit off-forms disarm", texWorkersEnabled("?texWorkers=onn") === true);
+  check("=no reads OFF", texWorkersEnabled("?texWorkers=no") === false);
+  check("=false reads OFF", texWorkersEnabled("?texWorkers=false") === false);
+  if (!hadWorker) delete globalThis.Worker;
+  check("no Web Workers in this environment ⇒ the DEFAULT is off (no dead worker + fallback)",
+    hadWorker || texWorkersEnabled("") === false);
+  check("…but an explicit =on still asks for one", texWorkersEnabled("?texWorkers=on") === true);
 
   // ---------------------------------------------------------------- PART 2 --
   console.log("PART 2 — worker helper parity vs bc7_textures.js (no drift)");

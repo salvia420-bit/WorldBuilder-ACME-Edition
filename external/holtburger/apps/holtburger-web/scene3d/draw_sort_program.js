@@ -48,8 +48,12 @@ export function drawSortProgramEnabled() {
   return (_flag = on);
 }
 
-/** The opaque comparator for `renderer`. Exported for the regression suite. */
-export function makeProgramSort(renderer) {
+/** The opaque comparator for `renderer`. Exported for the regression suite.
+ *  `phaseOf(object)`, when given, is a PRIMARY key ahead of groupOrder — the
+ *  ?punchRetail draw-order phase (atmosphere_pipeline.js), so terrain → punch →
+ *  shells/statics/cells/entities still holds and programs group inside each
+ *  phase. */
+export function makeProgramSort(renderer, phaseOf = null) {
   const props = renderer.properties;
   const info = renderer.info;
   // The memo lives ON the material (three own-props, never copied by
@@ -71,6 +75,10 @@ export function makeProgramSort(renderer) {
     return key;
   }
   return function programSortStable(a, b) {
+    if (phaseOf !== null) {
+      const pa = phaseOf(a.object), pb = phaseOf(b.object);
+      if (pa !== pb) return pa - pb;
+    }
     if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
     if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
     if (a.material.id !== b.material.id) {
@@ -88,13 +96,48 @@ export function makeProgramSort(renderer) {
  * Install the sort (when armed) and the `window.__drawSort` A/B seam. Never
  * throws: a diag/perf install must not break boot.
  */
+// One sort state per renderer, shared by the install below and
+// setDrawSortPhase: whichever runs last must not clobber the other. Until
+// 2026-10-06 ?punchRetail's setOpaqueSort(punchPhaseOpaqueSort) ran after this
+// install and silently replaced the program sort (1070, Holtburg mid: 66
+// program switches over 167 static-batch draws of only 13 programs).
+function _state(renderer) {
+  let st = renderer.__hbDrawSort;
+  if (!st) {
+    st = { on: false, sort: null, phaseOf: null, phaseOnly: null };
+    try { Object.defineProperty(renderer, "__hbDrawSort", { value: st, configurable: true }); } catch (_) { renderer.__hbDrawSort = st; }
+  }
+  return st;
+}
+function _apply(renderer, st) {
+  if (st.on && !st.sort) st.sort = makeProgramSort(renderer, st.phaseOf);
+  // off => the phase-only comparator if a phase is registered, else three's
+  // painterSortStable (null).
+  renderer.setOpaqueSort(st.on ? st.sort : st.phaseOnly);
+  return st.on;
+}
+
+/**
+ * Register a primary draw-order phase (see makeProgramSort). `phaseOnlySort` is
+ * the comparator used while the program sort is OFF. The program sort keeps its
+ * own on/off state (flag default, or __drawSort.set).
+ */
+export function setDrawSortPhase(renderer, phaseOf, phaseOnlySort) {
+  const st = _state(renderer);
+  if (!renderer.__hbDrawSortInstalled) st.on = drawSortProgramEnabled();
+  st.phaseOf = phaseOf || null;
+  st.phaseOnly = phaseOnlySort || null;
+  st.sort = null; // rebuild with the phase key
+  return _apply(renderer, st);
+}
+
 export function installDrawSortProgram(renderer) {
-  let sort = null;
+  const st = _state(renderer);
+  try { Object.defineProperty(renderer, "__hbDrawSortInstalled", { value: true, configurable: true }); } catch (_) { renderer.__hbDrawSortInstalled = true; }
   let on = false;
   const set = (v) => {
-    on = !!v;
-    if (on && !sort) sort = makeProgramSort(renderer);
-    renderer.setOpaqueSort(on ? sort : null); // null => three's painterSortStable
+    st.on = !!v;
+    on = _apply(renderer, st);
     return on;
   };
   try { set(drawSortProgramEnabled()); } catch (_) { /* fail-soft */ }

@@ -137,3 +137,24 @@ streaming hitches reproduce reliably.
 - Original Firefox driver setup: `~/handoff-firefox-driver-2026-05-20.md`
 - `?agentic=low`: `reference_agentic_low_mode.md` in memory
 - Prior stutter diagnosis: `project_holtburger_stutter_fixes_2026-05-21.md` in memory
+
+## 2026-10-06 — real-GPU attribution kit (Chrome on the 1070, fresh profile per boot)
+
+Same box discipline as `flag-bench.mjs` (schtasks /it launch, off-screen, `--mute-audio`, kill by
+`D:\Temp\hbbench\` profile path). Copy `box/hbprobe-launch.bat` to `D:\Temp\hbbench\` once; tunnel:
+`ssh -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75`.
+
+| tool | what |
+|---|---|
+| `hbsess.mjs boot [--quality mid] [--flags ..]` | boot ONE persistent session at Holtburg (orbit pose stored as `window.__hbOrbit`) |
+| `hbsess.mjs eval file.js` | run a page-side async snippet (census, A/B windows, diag reads) — no reboot |
+| `hbsess.mjs snap out.jpg` | real 3D frame (toDataURL inside the screen-target render; page.screenshot is black) |
+| `hbsess.mjs profile SEC out [street]` | CDP CPU profile while orbiting (or a street-level 360 sweep) |
+| `hbsess.mjs tourprof base DEST HOLDMS` | CPU profile + rAF timestamps across a teleport (`poi:Shoushi`, `0xACB40001,96,96,120`) or `street` sweep |
+| `tourattr.py base [MIN_MS]` | attribute every frame >= MIN_MS to self + app-inclusive functions (marker-correlated) |
+| `proftree.py prof.cpuprofile 'fn file:line' DEPTH MIN` | inclusive child breakdown of any function |
+| `hbbench.mjs --arms a.json --reps N --port 8766` | interleaved fresh-boot arms: still/moving orbit + cold Shoushi tour (jank, 1%/0.1% low) |
+| `hb-mksnap.sh NAME` | frozen code snapshot (code copied, data symlinked) to bench on :8766 while editing the live tree |
+| `hbprobe.mjs --label X` | one-shot fresh boot: draw census by category + CPU profile + framePhase + nvidia-smi |
+
+Frame times on this panel quantize to 8.33 ms (120 Hz): read means/lows, not p50 alone.

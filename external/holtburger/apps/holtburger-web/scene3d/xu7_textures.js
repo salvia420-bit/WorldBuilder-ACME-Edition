@@ -647,11 +647,10 @@ function _transcodeNow(module, bytes) {
 // SUBSEQUENT job routes straight to the main-thread arm.
 
 /**
- * `?texWorkers` — DEV opt-in, **DEFAULT OFF** (flag lifecycle SPEC §0.1; the
- * orchestrator flips it after GATE-TEXWORKER). EXACT-MATCH opt-in like
- * `?texFreeCpu`: only `on`/`1`/`true`/`yes` (or an integer >= 1 — the
- * `?texWorkers=N` measurement escape; v1 always constructs ONE worker and
- * records the request) read ON. Absent, empty, `off`, `0`, garbage ⇒ OFF.
+ * `?texWorkers` — **DEFAULT ON since 2026-10-06** (GATE-TEXWORKER measured on
+ * the 1070, see `_texWorkersRequested`). `off`/`0`/`false`/`no` read OFF; an
+ * integer >= 1 is the `?texWorkers=N` measurement escape (v1 always constructs
+ * ONE worker and records the request). Absent, empty, `on`, garbage ⇒ ON.
  * Not memoized — same ESM-suite re-stub reason as `xu7BudgetEnabled`.
  */
 export function texWorkersEnabled(search) {
@@ -659,17 +658,29 @@ export function texWorkersEnabled(search) {
 }
 
 /** The requested worker count (0 = off). v1 constructs at most 1. */
+// DEFAULT ON since 2026-10-06 (the GATE-TEXWORKER measurement): 1070, cold
+// Holtburg→Shoushi→Holtburg teleport tour, fresh profiles, 2 reps/arm against a
+// frozen snapshot — tour jank 5.5/5.8 s → 4.2/5.1 s, tour 1% low 7.1/6.6 →
+// 9.2/8.2 fps, 0.1% low 3.6/3.2 → 5.2/4.3 fps, steady fps unchanged, 0 page
+// errors. The main-thread arm it removes was the basis transcoder: 190-416 ms
+// frames, one ~32-48 ms 1024² decode per item regardless of `?xu7Budget`.
+// Explicit off-forms (`off`/`0`/`false`/`no`) keep the budgeted main-thread FIFO.
 function _texWorkersRequested(search) {
   try {
     const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
     const v = new URLSearchParams(s).get("texWorkers");
-    if (v == null) return 0;
+    // The DEFAULT needs Web Workers: where there are none (node test harness,
+    // exotic embeds) default-on would only build a dead worker and pay its
+    // fallback (incl. a second payload fetch). An explicit `on` still asks.
+    const canWorker = typeof Worker !== "undefined";
+    if (v == null) return canWorker ? 1 : 0;
     const t = String(v).toLowerCase();
+    if (t === "off" || t === "false" || t === "no" || t === "") return t === "" && canWorker ? 1 : 0;
     if (t === "on" || t === "true" || t === "yes") return 1;
     const n = Number.parseInt(t, 10);
-    return Number.isFinite(n) && n >= 1 ? n : 0;
+    return Number.isFinite(n) ? (n >= 1 ? n : 0) : (canWorker ? 1 : 0);
   } catch (_) {
-    return 0;
+    return typeof Worker !== "undefined" ? 1 : 0;
   }
 }
 

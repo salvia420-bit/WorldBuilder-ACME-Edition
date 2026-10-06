@@ -181,19 +181,24 @@ export const PARTICLE_RP6_STATS = {
 // are kept OUT of the scene graph (onMeshActive/onMeshFree noops) and used
 // purely as transform+opacity carriers we read back each tick. That keeps
 // particle.js/particle_emitter.js byte-identical on this path.
+// DEFAULT ON since 2026-10-06 (1070, Holtburg orbit, one page load, 4x6 s
+// interleaved: 28.1 -> 29.7 fps, 1,294 -> 1,154 draws, with the alpha half
+// below; chimney smoke / fountain puffs eye-checked side by side). Explicit
+// off-forms (`?particleInstancing=off|0|false|no`) keep the per-mesh path.
 let _INST_ON = null;
 function particleInstancingEnabled() {
   if (_INST_ON === null) {
     try {
-      // Strict opt-in: ONLY `=on` enables. A `!== "off"` test would read ON
-      // when the param is absent — the documented flag-default footgun.
-      _INST_ON = new URLSearchParams(location.search).get("particleInstancing") === "on";
+      const v = (new URLSearchParams(location.search).get("particleInstancing") || "").toLowerCase();
+      _INST_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
     } catch (_) {
-      _INST_ON = false;
+      _INST_ON = true;
     }
   }
   return _INST_ON;
 }
+// Every manager that opted in (statics + world/entity); the A/B seam drives all.
+const _instManagers = new Set();
 
 // three's color_fragment only applies vColor under USE_COLOR (`vertexColors`),
 // and USE_COLOR with NO `color` attribute reads the default generic attribute
@@ -244,6 +249,91 @@ const _NOOP = () => {};
  * settled page load is the only way to hold the scene identical by construction.
  */
 export function setParticleInstancingFlag(on) { _INST_ON = !!on; }
+
+// ── Alpha (NormalBlending) instancing (2026-10-06, `?particleInstancingAlpha`) ──
+//
+// The additive-only rule above holds for the colour-fold trick, not for
+// instancing as such. An alpha particle's per-slot clone also exists only to
+// carry `opacity`, and for NormalBlending that opacity is the ALPHA, so the
+// bucket material carries it there instead: instanceColor = (op, op, op) and
+// the bucket's ONE shader patch replaces <color_fragment> with
+// `diffuseColor.a *= vColor.r` (rgb untouched). Per-mesh, three computes
+// alpha = material.opacity * tex.a and alpha-tests it; here alpha =
+// 1 * tex.a * op, alpha-tested by the same <alphatest_fragment> that follows,
+// with the same alphaTest 0.1 / depthWrite true of the per-mesh alpha branch.
+// One constant customProgramCacheKey ⇒ one program for every alpha bucket.
+// Draw ORDER is the only thing per-mesh rendering had that a bucket loses:
+// three sorted each particle mesh back-to-front; `_finalizeInstBuckets` now
+// sorts every alpha bucket's instances back-to-front against the camera each
+// tick. (OpenAC batches its billboards the same way — one instanced draw per
+// blend key, distance-sorted: ParticleRenderer.Rhi.cs.) Measured reason: at
+// Holtburg ~200 alpha chimney/fountain particles were ~200 draws and ~200
+// material switches per frame on the 1070. DEFAULT ON with instancing;
+// `?particleInstancingAlpha=off` keeps alpha emitters on the per-mesh path.
+let _INST_ALPHA_ON = null;
+function particleInstancingAlphaEnabled() {
+  if (_INST_ALPHA_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleInstancingAlpha") || "").toLowerCase();
+      _INST_ALPHA_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _INST_ALPHA_ON = true;
+    }
+  }
+  return _INST_ALPHA_ON;
+}
+export function setParticleInstancingAlphaFlag(on) { _INST_ALPHA_ON = !!on; }
+
+/** Turn a cloned slot material into the shared ALPHA bucket material. */
+export function _configureAlphaBucketMaterial(mat) {
+  mat.transparent = true;
+  mat.blending = THREE.NormalBlending;
+  mat.alphaTest = 0.1;
+  mat.depthWrite = true;
+  mat.opacity = 1; // carried per instance in instanceColor.r
+  mat.vertexColors = true;
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      "#if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA ) || defined( USE_INSTANCING_COLOR )\n\tdiffuseColor.a *= vColor.r;\n#endif",
+    );
+  };
+  mat.customProgramCacheKey = () => "hbParticleInstAlpha";
+  mat.needsUpdate = true;
+  return mat;
+}
+
+const _sortCam = new THREE.Vector3();
+let _sortIdx = new Uint32Array(256);
+let _sortKey = new Float32Array(256);
+let _sortMat = new Float32Array(256 * 16);
+let _sortCol = new Float32Array(256 * 3);
+/** Back-to-front sort of a bucket's first n instances against a local-space camera. */
+export function _sortBucketBackToFront(im, n, cam) {
+  if (n < 2) return;
+  if (_sortIdx.length < n) {
+    const c = 1 << Math.ceil(Math.log2(n));
+    _sortIdx = new Uint32Array(c); _sortKey = new Float32Array(c);
+    _sortMat = new Float32Array(c * 16); _sortCol = new Float32Array(c * 3);
+  }
+  const m = im.instanceMatrix.array;
+  const col = im.instanceColor ? im.instanceColor.array : null;
+  for (let i = 0; i < n; i++) {
+    const dx = m[i * 16 + 12] - cam.x, dy = m[i * 16 + 13] - cam.y, dz = m[i * 16 + 14] - cam.z;
+    _sortKey[i] = dx * dx + dy * dy + dz * dz;
+    _sortIdx[i] = i;
+  }
+  const idx = _sortIdx.subarray(0, n);
+  idx.sort((a, b) => _sortKey[b] - _sortKey[a]); // far first
+  _sortMat.set(m.subarray(0, n * 16));
+  if (col) _sortCol.set(col.subarray(0, n * 3));
+  for (let i = 0; i < n; i++) {
+    const j = idx[i];
+    if (j === i) continue;
+    m.set(_sortMat.subarray(j * 16, j * 16 + 16), i * 16);
+    if (col) col.set(_sortCol.subarray(j * 3, j * 3 + 3), i * 3);
+  }
+}
 
 // Buckets are keyed by gfxobj (⇒ shared geometry + texture), NOT by emitter.
 // Measured at Cragstone: 2182 live static emitters holding 8492 particles —
@@ -896,12 +986,17 @@ export class ParticleManager {
     // Diagnostic seam for the runtime A/B (see setParticleInstancingFlag). Only
     // the opted-in manager installs it, and it mutates nothing until called —
     // the URL flag still decides the initial state.
+    if (this._instancing) _instManagers.add(this);
     if (this._instancing && typeof window !== "undefined") {
+      const sum = (rs) => rs.reduce((a, r) => {
+        for (const [k, v] of Object.entries(r)) a[k] = typeof v === "number" ? (a[k] || 0) + v : v;
+        return a;
+      }, { managers: rs.length });
       window.__setParticleInstancing = (on) => {
         setParticleInstancingFlag(on);   // future addEmitter calls follow suit
-        return this.setInstancing(on);   // existing emitters re-point now
+        return sum([..._instManagers].map((m) => m.setInstancing(on))); // existing emitters re-point now
       };
-      window.__particleInstancingDiag = () => this.instancingDiag();
+      window.__particleInstancingDiag = () => sum([..._instManagers].map((m) => m.instancingDiag()));
     }
     // RP6 (2026-06-08) — off-screen emitter culling. `_rp6Frame`
     // counts ticks so the frustum/distance set is only re-evaluated
@@ -1181,7 +1276,7 @@ export class ParticleManager {
     const useInst =
       this._instancing &&
       particleInstancingEnabled() &&
-      baseIsAdditive &&
+      (baseIsAdditive || particleInstancingAlphaEnabled()) &&
       !!geometry &&
       !!baseMaterial &&
       !!this._scene;
@@ -1354,6 +1449,7 @@ export class ParticleManager {
         emitter._instKey = info.hwGfxObjId >>> 0;
         emitter._instGeom = instGeom;
         emitter._instBaseMat = baseMaterial;
+        emitter._instAlpha = !baseIsAdditive;
       } catch (e) {
         emitter._instKey = null;
         emitter._onMeshActive = null;
@@ -1453,6 +1549,13 @@ export class ParticleManager {
     // vanish this frame with no per-emitter bookkeeping.
     if (this._instBuckets.size > 0) {
       for (const b of this._instBuckets.values()) b.n = 0;
+    }
+    this._instSortCam = null;
+    if (bbCamera && this._scene && this._instBuckets.size > 0) {
+      try {
+        bbCamera.getWorldPosition(_sortCam);
+        this._instSortCam = this._scene.worldToLocal(_sortCam);
+      } catch (_) { this._instSortCam = null; }
     }
 
     for (const [id, emitter] of this.particleTable) {
@@ -1644,15 +1747,20 @@ export class ParticleManager {
     if (!parts || !parts.length) return;
     const gfx = emitter._instKey >>> 0;
     const layer = emitter.renderLayer | 0;
-    const key = `${gfx}|${layer}`;
+    const alpha = emitter._instAlpha === true;
+    const key = `${gfx}|${layer}${alpha ? "|a" : ""}`;
     let bucket = this._instBuckets.get(key);
     if (!bucket) {
       const mat = emitter._instBaseMat.clone();
-      mat.transparent = true;
-      mat.blending = THREE.AdditiveBlending;
-      mat.depthWrite = false;
-      mat.opacity = 1; // folded into the per-instance color
-      mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
+      if (alpha) {
+        _configureAlphaBucketMaterial(mat);
+      } else {
+        mat.transparent = true;
+        mat.blending = THREE.AdditiveBlending;
+        mat.depthWrite = false;
+        mat.opacity = 1; // folded into the per-instance color
+        mat.vertexColors = true; // required for vColor (== instanceColor) to reach diffuse
+      }
       // Same three r184 two-pass as the per-slot path above (see meshFactory):
       // transparent + DoubleSide submits the mesh twice. Cheaper here — it costs
       // 2 draws per BUCKET, not per particle — but it is the same flat-quad
@@ -1663,18 +1771,18 @@ export class ParticleManager {
       mat.userData.__disposable = true;
       const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
       im.count = 0;
-      im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}`;
+      im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}${alpha ? "-a" : ""}`;
       // RP6 culls per emitter by contribution; three's per-object test would
       // measure the bucket's identity-placed bounds, not the particles'.
       im.frustumCulled = false;
       im.matrixAutoUpdate = false;
       im.updateMatrix();
-      im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer };
+      im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha };
       // Same emission-time layer the singleton slot meshes get (meshFactory).
       if (layer > 0) im.layers.set(layer);
       im.setColorAt(0, _instColor.setRGB(1, 1, 1));
       this._scene.add(im);
-      bucket = { im, n: 0 };
+      bucket = { im, n: 0, alpha };
       this._instBuckets.set(key, bucket);
     }
     // Grow before writing if this emitter could overflow the buffer.
@@ -1688,7 +1796,8 @@ export class ParticleManager {
       if (!m || m.visible === false) continue;
       m.updateMatrix();
       im.setMatrixAt(n, m.matrix);
-      // Fold per-particle opacity into the instance color (additive-exact).
+      // Per-particle opacity rides the instance color: folded into rgb for
+      // additive (exact), read back as ALPHA by the alpha bucket's shader.
       const op = m.material?.opacity ?? 1;
       _instColor.setRGB(op, op, op);
       im.setColorAt(n, _instColor);
@@ -1716,7 +1825,9 @@ export class ParticleManager {
       if (on) {
         const probe = (emitter.partStorage || []).find(Boolean);
         if (!probe || !probe.geometry || !probe.material) return false;
-        if (probe.material.blending !== THREE.AdditiveBlending) return false; // additive-only, as ever
+        const alpha = probe.material.blending !== THREE.AdditiveBlending;
+        if (alpha && !particleInstancingAlphaEnabled()) return false;
+        emitter._instAlpha = alpha;
         const g = _instGeometryFor(probe.geometry);
         if (!g) return false;
         emitter._instKey = (emitter.info?.hwGfxObjId ?? 0) >>> 0;
@@ -1809,6 +1920,7 @@ export class ParticleManager {
         continue;
       }
       b.idle = 0;
+      if (b.alpha && this._instSortCam) _sortBucketBackToFront(im, b.n, this._instSortCam);
       im.count = b.n;
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;

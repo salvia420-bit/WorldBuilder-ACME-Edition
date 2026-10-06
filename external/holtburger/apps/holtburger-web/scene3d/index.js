@@ -161,6 +161,9 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
+import { installAsyncLinkGuard } from "./async_link_guard.js";
+import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
+import { syncBatchMatVariants } from "./batched_material_variant.js";
 import {
   adaptiveResEnabled,
   adaptiveResSettleEnabled,
@@ -1345,6 +1348,14 @@ export async function preInit3D(canvas) {
   applyBatchedMeshColorTextureFix(THREE);
 
   const scene = new THREE.Scene();
+  // ?skipHiddenMatrix (perf 2026-10-06, skip_hidden_matrix.js) — the per-frame
+  // matrix walk stops at invisible subtrees; re-shown subtrees recompute in full.
+  try { installSkipHiddenMatrix(THREE); } catch (_) { /* never break boot */ }
+  // ?asyncLink (perf 2026-10-06, async_link_guard.js) — a world draw whose
+  // shader program is new or still linking is skipped and compiled in the
+  // background instead of freezing the frame on a synchronous link (1-2 s per
+  // MeshStandard variant on ANGLE/D3D11).
+  try { installAsyncLinkGuard(renderer, () => scene); } catch (_) { /* never break boot */ }
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
   // home of this URL parse, but it's `await import()`'d from
   // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
@@ -2551,6 +2562,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // render submission below. No-op (returns on line 1) when the flag is off,
     // so the render path stays byte-identical. Both the composer and the direct
     // path converge on recordRenderDiag(), which closes the window.
+    // ?batchMatVariant (batched_material_variant.js): bucket variants are
+    // shape-identical clones of their member materials — bring them up to the
+    // member (fades, re-seated maps, needsUpdate) before anything draws.
+    try { syncBatchMatVariants(); } catch (_) { /* never break the frame */ }
     vfxGaugeBeginFrame(renderer);
     // Portal space (retail gmSmartBoxUI, acclient.c:262445-262449): while the
     // tunnel owns the screen the WORLD IS NOT DRAWN (SmartBox::Hide) — the
@@ -3713,7 +3728,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         } catch (_) {}
         // Render-completeness audit (2026-05-29) GAP 1+2 — light the interior
         // cell props (lanterns/braziers) that just streamed in for this LB.
-        self._rescanSetupLights();
+        // Perf 2026-10-06: NOT for an idempotent / in-flight no-op —
+        // world_stream fires this loader on every position update, and the
+        // rescan walks statics + buildings + cells + entities: measured 201
+        // rescans per 10 s on a settled 1070 session, every one a no-op.
+        if (!(r && (r.idempotent || r.inFlight))) self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.cellsGroup) {
           self.materialCache.addFillCompanions(self.cellsGroup);
           // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1

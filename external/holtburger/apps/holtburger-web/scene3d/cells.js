@@ -70,6 +70,7 @@ import { envCellPoolsActive, offerCellSurfacesToPools, poolCellVisibilityTick, p
 // T13 (ST3, `?geomBundles`): per-LB envcell meshes from HBG1 bundles.
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
+import { getOcclusionCuller, CELL_SHRINK_M } from "./occlusion_cull.js";
 // ST8 stage A (?frameWork, SPEC §3 T21) — W6 chunk-yield adapter; flag OFF
 // returns exactly today's setTimeout(0) macrotask yield (byte-identical).
 import { frameWorkW6Yield } from "./frame_work.js";
@@ -2552,6 +2553,27 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   }
   const registry = scene3d.cellContainers3d;
   if (!(registry instanceof Map)) return;
+
+  // ?occlusionCull (perf 2026-10-06, occlusion_cull.js) — outdoors, drop the
+  // interior cells whose (shrunk) bounds put no sample on screen last frame:
+  // the walls hide them. Through a doorway/window, or over an open courtyard
+  // wall, the box shows and the cell stays. The current cell is never a
+  // candidate. Indoors / split-armed the culler is disarmed (all visible).
+  const occ = getOcclusionCuller(scene3d, THREE);
+  if (occ) {
+    const occCam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+    occ.beginFrame(occCam, !isIndoor && !splitArmed);
+    if (occ.armed && !CELL_BUG_PARITY) {
+      for (const cid of visibleSet) {
+        if (cid === (cellId >>> 0)) continue;
+        const container = registry.get(cid);
+        if (!container || !container.userData?.isEnvCell) continue;
+        const b = _occCellBox(container);
+        if (!b) continue;
+        if (!occ.want(cid, b[0], b[1], b[2], b[3], b[4], b[5])) visibleSet.delete(cid);
+      }
+    }
+  }
   // 2026-05-28 perf: instead of iterating the whole registry (typically
   // 600+ entries with only ~10 actually visible), diff against the prior
   // frame's visible set. Cell becomes visible → set true; cell drops out
@@ -2613,6 +2635,27 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // against the just-applied visibility state. Reuses `cellId` resolved
   // above — no extra wasm call. Optional-chained throughout; never throws.
   try { window.__diag?.pvs?.onCellTick?.(cellId); } catch (_) { /* swallow */ }
+}
+
+// ?occlusionCull proxy bounds for an interior cell container, in the MAIN
+// scene's frame, shrunk by CELL_SHRINK_M per side (so a drawn cell's own walls
+// can never occlude its proxy). Containers are static; the box is cached and
+// rebuilt only when the container gains/loses children (statics streaming in).
+const _occBox3 = new THREE.Box3();
+function _occCellBox(container) {
+  const n = container.children.length;
+  let c = container.userData.__occBox;
+  if (c && c.n === n) return c.b;
+  _occBox3.makeEmpty();
+  try { _occBox3.setFromObject(container); } catch (_) { return null; }
+  if (_occBox3.isEmpty()) return null;
+  const mn = _occBox3.min, mx = _occBox3.max;
+  const b = [mn.x, mn.y, mn.z, mx.x, mx.y, mx.z];
+  for (let k = 0; k < 3; k++) {
+    if (b[k + 3] - b[k] > 3 * CELL_SHRINK_M) { b[k] += CELL_SHRINK_M; b[k + 3] -= CELL_SHRINK_M; }
+  }
+  container.userData.__occBox = { n, b };
+  return b;
 }
 
 // Portal-stencil feed (2026-07-05, ?portalStencil). Runs each frame AFTER
