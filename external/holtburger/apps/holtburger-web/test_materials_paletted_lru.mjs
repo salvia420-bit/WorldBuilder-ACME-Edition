@@ -161,6 +161,19 @@ function freshCache() {
         texDisposed === OVER,
         `texDisposed=${texDisposed}, expected=${OVER}`
     );
+    // EVICT-OWN (2026-10-06): an evicted pair is handed to its remaining
+    // users (a live mesh re-uploads it on its next draw) — untagged-cache +
+    // __disposable so the last wearer's despawn frees it; survivors unchanged.
+    check(
+        "evicted material+texture lose __cacheOwned and gain __disposable",
+        mats[0].userData.__cacheOwned === false && mats[0].userData.__disposable === true
+            && texs[0].userData.__cacheOwned === false && texs[0].userData.__disposable === true,
+        `mat=${JSON.stringify(mats[0].userData)} tex=${JSON.stringify(texs[0].userData)}`
+    );
+    check(
+        "surviving entries stay cache-owned and not disposable",
+        mats[COUNT - 1].userData.__cacheOwned === true && mats[COUNT - 1].userData.__disposable !== true
+    );
     check(
         "eviction is oldest-by-insertion (the first OVER keys went, the most-recent survive)",
         recentDisposed === OVER - 1 && oldestUndisposed === OVER,

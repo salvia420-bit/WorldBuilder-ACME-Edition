@@ -4020,6 +4020,17 @@ export class MaterialCache {
       if (this._palEvictedKeys.size > PAL_EVICT_MEMORY_KEYS) {
         this._palEvictedKeys.delete(this._palEvictedKeys.keys().next().value);
       }
+      // EVICT-OWN (2026-10-06): hand ownership to whoever still draws it.
+      // dispose() below frees the GL texture, but a live mesh still holding
+      // `oldMat` makes three RE-UPLOAD `oldTex` on its next draw — and with
+      // `__cacheOwned` still set, entity despawn (`_disposeMaterialIfOwned`)
+      // refused to free it, so the re-upload lived for the rest of the
+      // session (1070, Holtburg<->Yaraq: 0 -> 125 -> 178 such textures).
+      // Untagged-cache + `__disposable` lets the last wearer's despawn free it.
+      for (const o of [oldMat, oldTex]) {
+        if (!o) continue;
+        o.userData = { ...(o.userData || {}), __cacheOwned: false, __disposable: true };
+      }
       try { oldMat?.dispose?.(); } catch (_) {}
       try { oldTex?.dispose?.(); } catch (_) {}
     }
