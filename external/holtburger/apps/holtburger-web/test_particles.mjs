@@ -987,7 +987,7 @@ check(
 }
 
 // ============================================================
-// Test 17: Explode update — preserves ACE quirk (A.X scalar across XYZ)
+// Test 17: Explode update — retail: A.X scalar across XYZ, plus A.Z drift on z
 // ============================================================
 {
   // ACE Particle.cs:166: `(lifetime * B + C * A.X) * lifetime + Offset + parent.Origin;`
@@ -996,7 +996,7 @@ check(
   mockRngVal = 0.5;
   const info = new ParticleEmitterInfo(makeBaseInfo({
     particleType: ParticleType.Explode,
-    aX: 2, aY: 999, aZ: 999, // A.Y/Z unused in Explode update.
+    aX: 2, aY: 999, aZ: 3, // A.Y unused; A.Z adds a linear z drift (retail case 6).
     bX: 1, bY: 1, bZ: 1,
     cX: 0, cY: 0, cZ: 0, // C is randomized in init via cos(ra)*c.X*rb etc.
     minA: 1, maxA: 1,
@@ -1010,17 +1010,44 @@ check(
   const p = new Particle();
   p.init(info, parent, -1, parentOffset, mesh,
     new THREE.Vector3(0, 0, 0), false,
-    new THREE.Vector3(2, 999, 999), new THREE.Vector3(1, 1, 1), new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(2, 999, 3), new THREE.Vector3(1, 1, 1), new THREE.Vector3(0, 0, 0),
   );
 
-  // At t=1: (1*B + C*A.X)*1 = B + 0 = (1, 1, 1) (since C is zero after init).
+  // At t=1: (1*B + C*A.X)*1 = B = (1, 1, 1); z adds A.Z*t = 3 → (1, 1, 4).
   mockTime = 1.0;
   p.update(ParticleType.Explode, false, mesh, parent);
   check(
-    "Explode @ t=1: position = (t*B + C*A.X)*t + offset + parent = (1+0)*1 + 0 + 0 = (1, 1, 1)",
-    approx(mesh.position.x, 1) && approx(mesh.position.y, 1) && approx(mesh.position.z, 1),
+    "Explode @ t=1: position = (t*B + C*A.X + (0,0,A.Z))*t = (1, 1, 4)",
+    approx(mesh.position.x, 1) && approx(mesh.position.y, 1) && approx(mesh.position.z, 4),
     `pos=(${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`
   );
+}
+
+// ============================================================
+// Test 17b: Explode init — retail c.z = sin(pitch)*c.z (no cos(pitch) factor)
+// ============================================================
+{
+  // rng 0.75 → yaw = pitch = +π/2. Retail: c = (0, 0·…, sin(π/2)·1) → (0,0,1).
+  // The ACE form multiplied z by cos(π/2)=0 too, zeroing the whole vector.
+  mockTime = 0;
+  mockRngVal = 0.75;
+  const info = new ParticleEmitterInfo(makeBaseInfo({
+    particleType: ParticleType.Explode,
+    minA: 1, maxA: 1, minB: 1, maxB: 1, minC: 1, maxC: 1,
+  }));
+  const parent = { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() };
+  const parentOffset = { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() };
+  const p = new Particle();
+  p.init(info, parent, -1, parentOffset, makeMesh(),
+    new THREE.Vector3(0, 0, 0), false,
+    new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 1, 1),
+  );
+  check(
+    "Explode init @ pitch=π/2: direction is straight up (0,0,1)",
+    approx(p.c.x, 0) && approx(p.c.y, 0) && approx(p.c.z, 1),
+    `c=(${p.c.x}, ${p.c.y}, ${p.c.z})`
+  );
+  mockRngVal = 0.5;
 }
 
 // ============================================================

@@ -342,7 +342,13 @@ export class Particle {
 
         this.c.x = Math.cos(ra) * c.x * rb;
         this.c.y = Math.sin(ra) * c.y * rb;
-        this.c.z = Math.sin(po) * c.z * rb;
+        // Retail Particle::Init (acclient.c:330649, case 6): z has NO cos(pitch)
+        // factor. ACE Particle.cs multiplies it in too, which after the
+        // normalize caps every burst at ~45 deg elevation (no straight-up
+        // sparks). `?particleInitAce=on` restores the ACE form.
+        this.c.z = PARTICLE_INIT_ACE_LEGACY
+          ? Math.sin(po) * c.z * rb
+          : Math.sin(po) * c.z;
 
         if (normalizeCheckSmall(this.c)) {
           this.c.set(0, 0, 0);
@@ -546,13 +552,16 @@ export class Particle {
         break;
       }
       case ParticleType.Explode: {
-        // ACE: (lifetime * B + C * A.X) * lifetime + Offset + parent.Origin;
-        // Note: ALL three components share scalar A.X (only X). Faithful.
+        // Retail Particle::Update (acclient.c:330313, case 6):
+        //   (t*B + C*A.x) * t, and z adds A.z inside: (t*B.z + C.z*A.x + A.z) * t.
+        // All three share scalar A.x; A.z is a constant upward drift. ACE
+        // Particle.cs:166 drops the A.z term (`?particleInitAce=on` keeps that).
         const ax = this.a.x;
+        const az = PARTICLE_INIT_ACE_LEGACY ? 0 : this.a.z;
         mesh.position.set(
           (lt * this.b.x + this.c.x * ax) * lt + ox + px,
           (lt * this.b.y + this.c.y * ax) * lt + oy + py,
-          (lt * this.b.z + this.c.z * ax) * lt + oz + pz,
+          (lt * this.b.z + this.c.z * ax + az) * lt + oz + pz,
         );
         break;
       }
