@@ -4208,10 +4208,16 @@ const STATIC_HOOK_CALL_PES = 19;
 // depth-capped (retail loops it forever via the re-added FPHook); it is bounded
 // instead by anchor liveness (anchor.parent) + `_spDisposed` + the cancel set.
 const STATIC_MAX_CALL_PES_DEPTH = 3;
+// CYCLE-LOOP (2026-10-06): per-anchor bound on PENDING CallPES re-runs. A
+// well-formed ambient loop (self or A->B->A) keeps 1-2 pending; a branching
+// graph (fan-out inside a cycle) saturates this and stops growing instead of
+// doubling every pass. Mirrors entities.js MAX_OWNER_SCRIPT_QUEUE.
+const STATIC_MAX_PENDING_CALL_PES = 8;
 // Pending CallPES re-run timers, so disposeStaticParticles can cancel a
 // still-pending loop (a 0–35s window can outlive a teardown). Module-level,
 // consistent with `_spRafId`/`_spDisposed` below.
 const _staticCallPesTimeouts = new Set();
+let _staticCallPesCapWarned = false; // one warn per session for the pending cap
 // `?staticCallPes=off` disables ONLY the CallPES re-play loop (default on),
 // while keeping the one-shot CreateParticle emitters. Lets the 1070 A/B isolate
 // the loop (timers + repeated finite-swarm re-spawns) from the base emitter
@@ -4520,7 +4526,7 @@ const _staticOffsetQuat = new THREE.Quaternion();
  * The timer is tracked in `_staticCallPesTimeouts` so disposeStaticParticles
  * can cancel a still-pending loop. No-op in non-browser contexts (tests).
  */
-function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, ownerKey, depth) {
+function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, ownerKey, depth, chain = null) {
   if (!STATIC_CALL_PES_ON) return; // `?staticCallPes=off` — base emitters only.
   if (typeof setTimeout !== "function") return; // headless tests — no loop.
   const bytes = entry.hookData;
@@ -4530,7 +4536,15 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
   if (callPesDid === 0) return;
   const callPesPause = dv.getFloat32(4, true);
   const isSelf = callPesDid === (scriptId >>> 0);
-  if (!isSelf && depth >= STATIC_MAX_CALL_PES_DEPTH) {
+  // CYCLE-LOOP (2026-10-06): a call back to ANY script already in this chain
+  // (A->B->A) is a loop, exactly like the self-loop: retail has no depth
+  // counter (CPhysicsObj::CallPES, acclient.c:318973), so a two-script
+  // ambient ping-pong used to die after STATIC_MAX_CALL_PES_DEPTH hops. Only
+  // genuine fan-out (new scripts) accumulates depth.
+  const path = Array.isArray(chain) && chain.length ? chain : [scriptId >>> 0];
+  const cycleAt = path.indexOf(callPesDid);
+  const isLoop = isSelf || cycleAt >= 0;
+  if (!isLoop && depth >= STATIC_MAX_CALL_PES_DEPTH) {
     // eslint-disable-next-line no-console
     console.warn(
       `[scene3d.statics/CallPES] depth guard hit (depth=${depth} >= ` +
@@ -4545,13 +4559,30 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
   const pauseW = +callPesPause || 0;
   const randPause = pauseW < 0.0002 ? 0 : rng() * pauseW;
   const delayMs = Math.max(0, ((+entry.startTime || 0) + randPause) * 1000);
-  const nextDepth = isSelf ? depth : depth + 1; // self-loop never caps.
+  const nextDepth = isLoop ? depth : depth + 1; // loops never cap.
+  // A loop re-enters at the repeated script, so the chain is trimmed back to
+  // its ancestors (bounded); fan-out extends it.
+  const nextChain = cycleAt >= 0 ? path.slice(0, cycleAt) : path;
+  const ud = anchor ? (anchor.userData || (anchor.userData = {})) : null;
+  if (ud && (ud.__callPesPending | 0) >= STATIC_MAX_PENDING_CALL_PES) {
+    if (!_staticCallPesCapWarned) {
+      _staticCallPesCapWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene3d.statics/CallPES] pending cap (${STATIC_MAX_PENDING_CALL_PES}) hit on one anchor; ` +
+          `dropping 0x${callPesDid.toString(16)} from 0x${(scriptId >>> 0).toString(16)} (branching script graph?)`
+      );
+    }
+    return;
+  }
+  if (ud) ud.__callPesPending = (ud.__callPesPending | 0) + 1;
   const tid = setTimeout(() => {
     _staticCallPesTimeouts.delete(tid);
+    if (ud) ud.__callPesPending = Math.max(0, (ud.__callPesPending | 0) - 1);
     if (_spDisposed) return; // scene torn down.
     if (!anchor || !anchor.parent) return; // LB evicted — anchor detached.
     _runStaticParticleChain(
-      manager, anchor, callPesDid, wasmExports, ownerKey, nextDepth
+      manager, anchor, callPesDid, wasmExports, ownerKey, nextDepth, nextChain
     ).catch(() => {});
   }, delayMs);
   _staticCallPesTimeouts.add(tid);
@@ -4569,7 +4600,8 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
  * Returns the count of emitters attached. Fail-soft: a fetch failure on
  * the script or any emitter is logged + skipped, never thrown.
  */
-async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0) {
+async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0, chain = null) {
+  const chainHere = (Array.isArray(chain) ? chain : []).concat(pesId >>> 0);
   let ps;
   try {
     ps = await wasmExports.fetchPhysicsScript(pesId);
@@ -4589,7 +4621,7 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
     // swarms. Schedule the sub-script re-run (self = perpetual loop) and move
     // on. Fire-and-forget; never blocks the create-particle hooks below.
     if ((e.hookType | 0) === STATIC_HOOK_CALL_PES) {
-      _scheduleStaticCallPes(manager, anchor, pesId, e, wasmExports, ownerKey, depth);
+      _scheduleStaticCallPes(manager, anchor, pesId, e, wasmExports, ownerKey, depth, chainHere);
       continue;
     }
     if (

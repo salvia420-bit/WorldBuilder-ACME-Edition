@@ -55,10 +55,17 @@ check("drops callPesDid === 0", /callPesDid === 0\) return/.test(schedFn));
 // 3. Self vs cross-reference depth handling — the heart of the loop.
 check("self-reference detected via callPesDid === scriptId",
   /isSelf = callPesDid === \(scriptId >>> 0\)/.test(schedFn));
-check("ONLY cross-references are depth-capped (self loops forever)",
-  /!isSelf && depth >= STATIC_MAX_CALL_PES_DEPTH/.test(schedFn));
-check("self-reference keeps depth; cross-reference increments",
-  /nextDepth = isSelf \? depth : depth \+ 1/.test(schedFn));
+check("ONLY non-loop cross-references are depth-capped (self + cycle loops forever)",
+  /!isLoop && depth >= STATIC_MAX_CALL_PES_DEPTH/.test(schedFn));
+check("loops keep depth; fan-out increments",
+  /nextDepth = isLoop \? depth : depth \+ 1/.test(schedFn));
+// CYCLE-LOOP (2026-10-06): a call back to any ancestor in the chain is a loop.
+check("a call back to an ANCESTOR in the chain counts as a loop (A->B->A)",
+  /const cycleAt = path\.indexOf\(callPesDid\)/.test(schedFn) && /const isLoop = isSelf \|\| cycleAt >= 0/.test(schedFn));
+check("a loop trims the chain back to its ancestors (bounded)",
+  /const nextChain = cycleAt >= 0 \? path\.slice\(0, cycleAt\) : path/.test(schedFn));
+check("per-anchor pending cap bounds loop/branch storms",
+  /__callPesPending \| 0\) >= STATIC_MAX_PENDING_CALL_PES/.test(schedFn) && /__callPesPending = Math\.max\(0/.test(schedFn));
 check("STATIC_MAX_CALL_PES_DEPTH defined", /const STATIC_MAX_CALL_PES_DEPTH = \d+;/.test(src));
 
 // 4. Retail [0, pause] jitter (Random::RollDice; < 0.0002 fires immediately).
@@ -76,8 +83,8 @@ check("timer re-invokes _runStaticParticleChain with nextDepth",
   /_runStaticParticleChain\(\s*\n?\s*manager, anchor, callPesDid, wasmExports, ownerKey, nextDepth/.test(schedFn));
 
 // 6. _runStaticParticleChain threads a depth param (default 0).
-check("_runStaticParticleChain accepts depth = 0",
-  /async function _runStaticParticleChain\(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0\)/.test(src));
+check("_runStaticParticleChain accepts depth = 0 and a chain",
+  /async function _runStaticParticleChain\(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0, chain = null\)/.test(src));
 
 // 7. Timer lifecycle: tracked + cancelled on dispose.
 check("pending timers tracked in _staticCallPesTimeouts Set",
