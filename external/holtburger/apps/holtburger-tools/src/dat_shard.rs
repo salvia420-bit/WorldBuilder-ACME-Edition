@@ -1204,6 +1204,7 @@ pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
         // byte-identical to pre-T10 output.
         world_index: None,
         pack_url_template: None,
+        catalog_regions: None,
     };
 
     let manifest_path = opts.output_dir.join("manifest.json");

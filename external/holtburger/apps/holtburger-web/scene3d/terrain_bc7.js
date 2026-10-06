@@ -100,6 +100,10 @@ import {
 // synchronous build below is 88 MiB of alloc+memcpy in one main-thread task).
 // Flag off ⇒ these imports are never called and the path below is unchanged.
 import { texWorkersEnabled, workerTerrainAssemble } from "./xu7_textures.js";
+// `?bandwidth` (2026-10-06): a LOW session promotes terrain to the retail-
+// native t512 tier (20 MB) instead of the upscaled t1024 (65 MB) and waits
+// longer before starting it.
+import { lowBandwidth } from "./bandwidth_tier.js";
 
 export const TERRAIN_BC7_DEPTH = 33;
 const DEFAULT_BASE = "scene3d/assets/terrain_bc7";
@@ -175,9 +179,12 @@ export function terrainBc7Enabled(search) {
   return on;
 }
 
-/** Tier order to try: the pinned one only, else the default preference list. */
+/** Tier order to try: the pinned one only, else the default preference list
+ *  — reversed on a `?bandwidth` LOW session, where the retail-native t512
+ *  (20 MB) is the full tier and the upscaled t1024 (65 MB) only a fallback. */
 export function terrainBc7TierOrder() {
-  return _tierPref ? [_tierPref] : [...TERRAIN_BC7_TIERS];
+  if (_tierPref) return [_tierPref];
+  return lowBandwidth() ? [...TERRAIN_BC7_TIERS].reverse() : [...TERRAIN_BC7_TIERS];
 }
 
 /** Anisotropy floor the high-res tier is worth paying for.
@@ -244,34 +251,47 @@ export function terrainBc7Anisotropy(base, tier, search) {
 
 // --------------------------------------------------------------------------
 // ST5 — `?terrainT1024`: the TIER LADDER flag (SPEC §0.2.1 + §1.3; pass-12
-// D-12.1; pass-05 D-05.2). DEFAULT OFF, and "off" here means ABSENT.
+// D-12.1; pass-05 D-05.2). DEFAULT ON since 2026-10-06 ("auto").
 // --------------------------------------------------------------------------
 //
-// THE LADDER, AND WHY THE FLAG'S GRAMMAR LOOKS ODD
+// THE LADDER
 // SPEC §1.3 states the end-state ladder as: t128 color (lane B tail, 1 CAS
 // file) → `preview-complete` → t128 nra → **`converged` stamps with terrain
 // at t128** → the full pair streams post-converged on idle lane T,
 // "default-ON, non-budgeted, wholesale-swapped (`?terrainT1024=eager|defer|
-// off`, default `defer`)". That grammar describes the world AFTER the
-// default flip; it has no spelling for "no ladder at all", because by then
-// there is no other path. Today there is: this module's 2026-08-05
-// t1024-FIRST boot, which is the shipped default and the kill path (I7).
+// off`, default `defer`)".
 //
-// So the reader has four states and the ABSENT one is legacy:
-//   absent            — LADDER OFF. `buildTerrainBc7Atlas` runs exactly as
-//                       it did before this landing: resolve tier order,
-//                       fetch the full pair, build, return. Byte-identical.
+// 2026-10-06 — THE DEFAULT FLIPPED. Measured on the 1070 through a shaped
+// 666 kbps link, the t1024-FIRST boot meant no terrain at all for 30+ min:
+// `resolveTerrainRingOpts` awaits the whole atlas, and the 58 payloads
+// (65 MB on the wire) queued behind the ring's statics traffic. The ladder
+// fixes exactly that, but its t128 source was the pack controller's lane-B
+// slice only (`?packSource`, default OFF), so it could never arm on a default
+// boot. The slice now also comes from a STATIC tier
+// (`assets/terrain_bc7/t128/`, mip-sliced from t1024 by
+// scripts/derive-terrain-t128.mjs — byte-identical to the pack slices), and
+// an ABSENT flag means "auto":
+//   absent / `auto`   — LADDER ON. t128 from the pack slice when the
+//                       controller is armed, else from the static tier;
+//                       promotion to the full tier per the deferred rules,
+//                       target + patience per `?bandwidth` (high: t1024,
+//                       promote once the scene is ready or after 30 s; low:
+//                       retail-native t512, after the scene is ready or 120 s).
+//                       No t128 source at all (un-derived checkout) ⇒ the
+//                       legacy full-tier boot, counted as a fallback.
+//   `legacy`          — LADDER OFF: the pre-2026-10-06 t1024-first boot,
+//                       byte-identical (the kill path).
 //   `defer`/`on`/`1`  — ladder ON, full tier promoted AFTER the converged
 //     /`true`/`yes`     signal (SPEC's own default within the ladder).
 //   `eager`           — ladder ON, promotion starts as soon as the t128 pair
 //                       is live (the "I have bandwidth" arm).
 //   `off`/`0`/`false` — ladder ON, terrain PINNED at t128 and never
-//     /`no`             promoted. This is the low-bandwidth arm and the
-//                       demote destination — NOT the legacy path.
+//     /`no`             promoted. The minimum-bandwidth arm and the demote
+//                       destination — NOT the legacy path.
 //
-// The distinction is documented in docs/url-flags.md the same way; a bench
-// arm that means "today's client" must OMIT the parameter.
-export const TERRAIN_LADDER_MODES = Object.freeze(["absent", "defer", "eager", "off"]);
+// Final look on a fast link is unchanged (t1024, the 2026-08-05 direction):
+// the ladder changes WHEN the full tier arrives, not WHICH tier ends up live.
+export const TERRAIN_LADDER_MODES = Object.freeze(["auto", "legacy", "defer", "eager", "off"]);
 
 /**
  * `?terrainT1024` — one of `TERRAIN_LADDER_MODES`. NOT memoised (the ESM
@@ -291,10 +311,12 @@ export function terrainT1024Mode(search) {
   try {
     v = new URLSearchParams(s).get("terrainT1024");
   } catch (_) {
-    return "absent";
+    return "auto";
   }
-  if (v == null) return "absent";
+  if (v == null) return "auto";
   const t = String(v).toLowerCase();
+  if (t === "legacy") return "legacy";
+  if (t === "auto") return "auto";
   // Every documented off-spelling in one statement (the lint's OFF-SPELLING
   // rule): `off`/`0`/`false`/`no` pin t128, they do NOT disarm the ladder.
   if (t === "off" || t === "0" || t === "false" || t === "no") return "off";
@@ -306,9 +328,9 @@ export function terrainT1024Mode(search) {
   return "defer";
 }
 
-/** Ladder armed at all? (`?terrainT1024` present in any spelling.) */
+/** Ladder armed at all? (Everything except `?terrainT1024=legacy`.) */
 export function terrainLadderArmed(search) {
-  return terrainT1024Mode(search) !== "absent";
+  return terrainT1024Mode(search) !== "legacy";
 }
 
 /** Test hook: clear the memoised flag read. */
@@ -341,7 +363,9 @@ const _stats = {
   anisotropy: 0,      // taps actually requested on both arrays
   anisotropyBase: null, // what the global preset cap offered
   // ST5 tier ladder (`?terrainT1024`). `mode: "absent"` + every counter 0 is
-  // the legacy arm's honest reading — an ABSENT ladder, not a failed one.
+  // "the ladder has not run" (before the first ring resolve); `?terrainT1024=
+  // legacy` stamps `mode: "legacy"` with every counter still 0 — an ABSENT
+  // ladder, not a failed one.
   ladder: _freshLadderStats(),
 };
 
@@ -351,7 +375,7 @@ function _freshLadderStats() {
     armed: false,
     tier: null,            // the tier CURRENTLY on the GPU: "t128" | full tier
     fullTier: null,        // the promote target (manifest tier)
-    sliceSource: null,     // "pack" | null — where the t128 pair came from
+    sliceSource: null,     // "pack" | "static" | null — where the t128 pair came from
     t128Ms: null,          // ms from ladder start to the t128 pair being built
     t128Bytes: 0,          // GPU bytes of the t128 pair (both arrays)
     promoteStartMs: null,
@@ -458,8 +482,12 @@ export async function loadTerrainBc7Manifest(baseUrl, { quiet = false } = {}) {
   }
 }
 
-async function _fetchPayload(base, name) {
-  const resp = await fetch(`${base}/${name}`);
+async function _fetchPayload(base, name, priority) {
+  // `priority: "low"` for the ladder's PROMOTION fetches: the full tier is an
+  // upgrade of terrain that is already on screen, so it must not compete with
+  // the ring's first-paint traffic (fetch-priority hint; ignored where
+  // unsupported, and plain `fetch(url)` when unset — byte-identical).
+  const resp = priority ? await fetch(`${base}/${name}`, { priority }) : await fetch(`${base}/${name}`);
   if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${name}`);
   const buf = await resp.arrayBuffer();
   _stats.bytes += buf.byteLength;
@@ -480,7 +508,7 @@ async function _fetchPayload(base, name) {
  * (format, w, h, levels) — a partially-populated array would leave undefined
  * blocks in real layers, which is far worse than falling back to RGBA8.
  */
-export async function loadTerrainBc7Channel(manifest, channel, baseUrl) {
+export async function loadTerrainBc7Channel(manifest, channel, baseUrl, { priority } = {}) {
   const base = baseUrl ?? DEFAULT_BASE;
   const size = manifest.tileSize;
   const wantLevels = manifest.levels;
@@ -504,7 +532,7 @@ export async function loadTerrainBc7Channel(manifest, channel, baseUrl) {
     const rs = String(meta?.rsId ?? "");
     if (!rs) continue;
     layerRs[idx] = rs;
-    if (!byRs.has(rs)) byRs.set(rs, _fetchPayload(base, `${rs}_${channel}.hbc7`));
+    if (!byRs.has(rs)) byRs.set(rs, _fetchPayload(base, `${rs}_${channel}.hbc7`, priority));
   }
 
   let parsedByRs;
@@ -836,6 +864,22 @@ export const TERRAIN_LADDER_DEFER_SETTLE_MS = 2000;
  *  ends at the full tier (SPEC §0.2.1). */
 export const TERRAIN_LADDER_DEFER_MAX_MS = 30000;
 
+/** `auto` on a `?bandwidth` LOW session: the ceiling before the (t512)
+ *  promotion starts regardless. 20 MB at 666 kbps is ~4 min of link time;
+ *  starting it before the ring's own records are in only delays both. */
+export const TERRAIN_LADDER_LOW_BW_MAX_MS = 120000;
+
+/** The page-level "scene is up" latch index.html sets with the `ready` boot
+ *  state (sticky — `__bootState` itself can be overwritten). On a boot with no
+ *  pack controller this is the only converged-shaped signal there is. */
+function _sceneReadySignal() {
+  try {
+    return typeof window !== "undefined" && window.__sceneReadyEverFired === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** How long the ladder waits for the controller's lane-B t128 slices
  *  (`bootCommons` fetches both; the ring resolve can beat them). */
 export const TERRAIN_SLICE_WAIT_MS = 15000;
@@ -1104,11 +1148,64 @@ function _t128ChannelFromSlice(manifest, sliceBytes, channel) {
   return { byLayer, tileSize: size, levels, layerRs };
 }
 
-/** Both t128 channels, or null (counted) when the slice source is absent. */
+/** The static t128 tier (scripts/derive-terrain-t128.mjs), as
+ *  `{color, nra}` channels in `loadTerrainBc7Channel` shape, or null.
+ *  The static manifest must describe the SAME layer→rsId map as the full
+ *  tier it will be promoted to — a stale derive after a re-bake is refused,
+ *  never mixed. Quiet on a plain miss (an un-derived checkout is a
+ *  supported state: the caller falls back to the legacy boot, counted). */
+async function _loadStaticT128Pair(manifest) {
+  const base = `${DEFAULT_BASE}/t128`;
+  let m = null;
+  try {
+    const resp = await fetch(`${base}/manifest.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    m = await resp.json();
+  } catch (e) {
+    _stats.ladder.lastError = `static t128 tier unavailable (${String(e?.message ?? e)}) — run scripts/derive-terrain-t128.mjs`;
+    return null;
+  }
+  const want = manifest?.layers ?? {};
+  const have = m?.layers ?? {};
+  for (let i = 0; i < TERRAIN_BC7_DEPTH; i += 1) {
+    const a = String(want[String(i)]?.rsId ?? "");
+    const b = String(have[String(i)]?.rsId ?? "");
+    if (!a || a !== b) {
+      _stats.ladder.lastError = `static t128 layer ${i} is ${b || "missing"}, full tier has ${a || "missing"} — re-derive`;
+      return null;
+    }
+  }
+  if (m.tileSize !== TERRAIN_T128_TILE || !Number.isInteger(m.levels) || m.levels < 2) {
+    _stats.ladder.lastError = `static t128 manifest is ${m.tileSize}px/${m.levels} levels`;
+    return null;
+  }
+  const out = {};
+  for (const chan of ["color", "nra"]) {
+    // eslint-disable-next-line no-await-in-loop
+    const ch = await loadTerrainBc7Channel(m, chan, base);
+    if (!ch) {
+      _stats.ladder.lastError = `static t128 ${chan}: ${_stats.lastError}`;
+      return null;
+    }
+    out[chan] = ch;
+  }
+  return out;
+}
+
+/** Both t128 channels, or null (counted) when no slice source is available.
+ *  Source order: the pack controller's lane-B slice when it is ARMED (the
+ *  SPEC path), else the static derived tier (the default boot). */
 async function _loadT128Pair(manifest) {
   const ctl = await _ladderController();
   if (!ctl || !ctl.armed) {
-    _stats.ladder.lastError = "pack controller not armed (`?packSource` off or legacy dist)";
+    const pair = await _loadStaticT128Pair(manifest);
+    if (pair) {
+      _stats.ladder.sliceSource = "static";
+      return pair;
+    }
+    if (!_stats.ladder.lastError) {
+      _stats.ladder.lastError = "pack controller not armed (`?packSource` off or legacy dist) and no static t128 tier";
+    }
     return null;
   }
   const out = {};
@@ -1311,7 +1408,7 @@ async function _promoteToFullTier() {
   const built = {};
   for (const chan of chans) {
     // eslint-disable-next-line no-await-in-loop
-    const ch = await loadTerrainBc7Channel(_ladder.manifest, chan, _ladder.base);
+    const ch = await loadTerrainBc7Channel(_ladder.manifest, chan, _ladder.base, { priority: "low" });
     if (!ch) {
       _stats.ladder.promoteFailures += 1;
       _stats.ladder.lastError = `${tier} ${chan} channel unavailable — staying at t128`;
@@ -1451,20 +1548,25 @@ export function demoteTerrainUnderPressure(opts = {}) {
 function _schedulePromotion(mode) {
   if (mode === "off") return;
   if (mode === "eager") { promoteTerrainT1024Now().catch(() => {}); return; }
+  // `defer` and `auto` share the deferred rules; `auto` additionally takes
+  // the bandwidth tier's patience (a low session waits up to 120 s).
+  const maxMs = mode === "auto" && lowBandwidth() ? TERRAIN_LADDER_LOW_BW_MAX_MS : TERRAIN_LADDER_DEFER_MAX_MS;
   const t0 = _ladder.now();
   const poll = () => {
     if (_stats.ladder.tier !== "t128") return; // already promoted/demoted away
     const ctl = _ladder.controller;
-    const ms = ctl?.diag?.milestones ?? null;
+    const ms = ctl?.armed ? (ctl?.diag?.milestones ?? null) : null;
     // `convergedMs` is the milestone SPEC names; today NOTHING stamps it
     // (read-verified: pack_fetch_controller.js sets inWorldMs :666 and
     // previewCompleteMs :779-780 only). Until a producer does, the ladder
     // uses preview-complete + a settle as the converged proxy rather than
-    // waiting forever on a field that is null by construction.
-    const signal = ms ? (ms.convergedMs ?? ms.previewCompleteMs) : null;
+    // waiting forever on a field that is null by construction. With NO armed
+    // controller (the default boot) the page's sticky `ready` latch is the
+    // proxy: the scene is up and its first-paint fetch wave has drained.
+    const signal = ms ? (ms.convergedMs ?? ms.previewCompleteMs) : (_sceneReadySignal() ? 0 : null);
     const elapsed = _ladder.now() - t0;
     if ((signal != null && elapsed >= TERRAIN_LADDER_DEFER_SETTLE_MS)
-        || elapsed >= TERRAIN_LADDER_DEFER_MAX_MS) {
+        || elapsed >= maxMs) {
       promoteTerrainT1024Now().catch(() => {});
       return;
     }
@@ -1626,13 +1728,16 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
   }
   if (!manifest) return null;
 
-  // ST5 tier ladder (`?terrainT1024`). ABSENT ⇒ not one line of the ladder
-  // runs and everything below is the 2026-08-05 path byte-for-byte (I7's
-  // kill path). PRESENT ⇒ boot at t128 and promote per mode; a ladder that
-  // cannot arm (no slice source) falls through here, loudly and counted, so
-  // the flag can never leave a session with no terrain at all.
+  // ST5 tier ladder (`?terrainT1024`). `legacy` ⇒ not one line of the ladder
+  // runs and everything below is the 2026-08-05 path byte-for-byte (the kill
+  // path). Anything else (incl. ABSENT = `auto`, the default since
+  // 2026-10-06) ⇒ boot at t128 and promote per mode; a ladder that cannot arm
+  // (no slice source) falls through here, loudly and counted, so the flag can
+  // never leave a session with no terrain at all.
   const ladderMode = terrainT1024Mode();
-  if (ladderMode !== "absent") {
+  if (ladderMode === "legacy") {
+    _stats.ladder.mode = "legacy";
+  } else {
     const laddered = await _buildViaLadder({ manifest, base, anisotropy, mode: ladderMode });
     if (laddered) return laddered;
   }

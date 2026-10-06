@@ -71,11 +71,22 @@ const documentStub = {
   },
 };
 
+// 2026-10-06: the road tile moved into its own exported helper (the BC7
+// terrain arm fetches ONLY that tile), so splice it in alongside.
+const roadMatch = adapterSrc.match(
+  /export function buildRoadCanvasFromTile\(tex\)\s*\{([\s\S]*?)\n\}/
+);
+if (!roadMatch) {
+  console.log("  [FAIL] could not locate buildRoadCanvasFromTile in adapter.js");
+  process.exit(1);
+}
+
 const builder = new Function(
   "ATLAS_TILE_PX",
   "ATLAS_DEPTH",
   "document",
   "ImageData",
+  `function buildRoadCanvasFromTile(tex) {${roadMatch[1]}\n}\n` +
   `return function buildTerrainAtlasArrayBytes(terrainTextures) {${fnMatch[1]}\n};`
 )(ATLAS_TILE_PX, ATLAS_DEPTH, documentStub, ImageDataStub);
 
@@ -116,11 +127,17 @@ const GUARD_RE = /not a non-empty array/;
     });
   }
   let err = null;
-  try { builder(tiles); } catch (e) { err = e; }
+  let out = null;
+  try { out = builder(tiles); } catch (e) { err = e; }
   check(
     "33-element valid array proceeds past the guard (no guard Error)",
     !(err && GUARD_RE.test(err.message)),
     err ? `unexpected guard error: ${err.message}` : "no guard error"
+  );
+  check(
+    "…builds completely, incl. the code-32 road canvas (no error of any kind)",
+    !err && out && out.roadCanvas && out.roadCanvas.width === ATLAS_TILE_PX,
+    err ? err.message : `roadCanvas=${out && out.roadCanvas && out.roadCanvas.width}`
   );
 }
 

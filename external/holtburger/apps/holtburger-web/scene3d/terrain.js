@@ -34,6 +34,7 @@ import {
   subdividedLandblockMeshToGeometry,
   buildVertexTypesDataTexture,
   buildTerrainAtlasArrayBytes,
+  buildRoadCanvasFromTile,
   buildTerrainDetailArrayBytes,
   buildAlphaMaskArrayBytes,
   getAdapterMaxAnisotropy,
@@ -3753,6 +3754,31 @@ export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
 // `opts` to `bakeTerrainForLandblock` rather than recomputing per LB.
 
 /**
+ * The road overlay's canvas from the RoadType (code 32) retail tile ALONE —
+ * the BC7 terrain arm's replacement for decoding all 33 tiles (2026-10-06).
+ * `fetch_terrain_textures(codes)` decodes only the requested codes; a pkg that
+ * predates the filter ignores the argument and returns all 33, which is still
+ * correct (the road tile is picked out by its code). Fail-soft: null ⇒ no
+ * road overlay (`uRoadEnabled` 0), never a broken terrain build.
+ */
+async function fetchRoadCanvasOnly(wasmExports) {
+  let list = null;
+  try {
+    list = await wasmExports.fetch_terrain_textures(new Uint32Array([32]));
+    const road = Array.from(list || []).find((t) => t && t.terrainType === 32);
+    return road ? buildRoadCanvasFromTile(road) : null;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrain] road tile fetch failed (no road overlay):", e);
+    return null;
+  } finally {
+    for (const t of Array.from(list || [])) {
+      try { t?.free?.(); } catch (_) { /* already freed */ }
+    }
+  }
+}
+
+/**
  * Resolve the once-per-ring opts the per-LB baker consumes. Reads
  * quality flags / detail-normal array off `scene3d`, computes the
  * shared bitmasks, and (optionally) builds the atlas + road textures
@@ -3943,10 +3969,6 @@ export async function resolveTerrainRingOpts(
   let roadTexture = existing?.roadTexture ?? null;
   let roadCanvas = existing?.roadCanvas ?? null;
   if (!atlasTexture) {
-    const terrainTextures = await wasmExports.fetch_terrain_textures();
-    const built = buildTerrainAtlasArrayBytes(terrainTextures);
-    roadCanvas = built.roadCanvas;
-
     // ?terrainBc7 (DEFAULT ON 2026-08-04; =off escape) — retail-derived BC7
     // atlas arm. Resolved
     // FIRST because it is mutually exclusive with the CC0 arm below: both write
@@ -3981,6 +4003,22 @@ export async function resolveTerrainRingOpts(
       scene3d.terrainBc7State = bc7Atlas;
     }
     const bc7Active = !!bc7Atlas?.atlasTexture;
+
+    // Retail RGBA8 tiles — fetched only when they will be USED (2026-10-06).
+    // The BC7 arrays replace the RGBA8 atlas wholesale, so with BC7 active the
+    // only retail tile still needed is RoadType's (code 32) for the road
+    // overlay; the other 28 unique 512² tiles were ~11 MB of downloads that
+    // gated the FIRST terrain mesh (measured at 666 kbps: requested at
+    // in-world, landed 3.5 min later). The BC7 atlas is resolved first now,
+    // which is safe: it never depended on these tiles.
+    let built = null;
+    if (bc7Active) {
+      roadCanvas = await fetchRoadCanvasOnly(wasmExports);
+    } else {
+      const terrainTextures = await wasmExports.fetch_terrain_textures();
+      built = buildTerrainAtlasArrayBytes(terrainTextures);
+      roadCanvas = built.roadCanvas;
+    }
     if (bc7Active) {
       // The nra array is derived from the SAME retail albedo (normal XY,
       // roughness, AO), so uPbrEnabled can stay on with everything registered.
@@ -4062,35 +4100,30 @@ export async function resolveTerrainRingOpts(
     // selection per-sample so cross-tile bleed is structurally
     // impossible at any mip level, and each layer carries its own
     // mipmap chain.
-    atlasTexture = new THREE.DataArrayTexture(
-      built.atlasArrayBytes,
-      built.tileSize,
-      built.tileSize,
-      built.depth
-    );
-    atlasTexture.format = THREE.RGBAFormat;
-    atlasTexture.type = THREE.UnsignedByteType;
-    // sRGB so three.js linearises tile colours before the fragment
-    // shader's bilinear-on-control corner blend (same colour-space
-    // contract the prior CanvasTexture path had).
-    atlasTexture.colorSpace = THREE.SRGBColorSpace;
-    atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
-    atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
-    atlasTexture.magFilter = THREE.LinearFilter;
-    atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
-    atlasTexture.generateMipmaps = true;
-    atlasTexture.anisotropy = getAdapterMaxAnisotropy();
-    atlasTexture.needsUpdate = true;
-
-    // ?terrainBc7=on — swap in the compressed array. Done AFTER the RGBA8 build
-    // rather than instead of it, on purpose: `built.atlasArrayBytes` is needed
-    // for `roadCanvas` regardless, and leaving the default construction path
-    // untouched means the flag-off render cannot regress. The RGBA8 twin is
-    // disposed here and was never bound, so three never uploads it —
-    // `needsUpdate` only marks; the upload happens at first render.
     if (bc7Active) {
-      atlasTexture.dispose();
+      // The compressed arrays ARE the atlas (no RGBA8 twin is built at all
+      // since 2026-10-06 — see the fetch above).
       atlasTexture = bc7Atlas.atlasTexture;
+    } else {
+      atlasTexture = new THREE.DataArrayTexture(
+        built.atlasArrayBytes,
+        built.tileSize,
+        built.tileSize,
+        built.depth
+      );
+      atlasTexture.format = THREE.RGBAFormat;
+      atlasTexture.type = THREE.UnsignedByteType;
+      // sRGB so three.js linearises tile colours before the fragment
+      // shader's bilinear-on-control corner blend (same colour-space
+      // contract the prior CanvasTexture path had).
+      atlasTexture.colorSpace = THREE.SRGBColorSpace;
+      atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+      atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+      atlasTexture.magFilter = THREE.LinearFilter;
+      atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+      atlasTexture.generateMipmaps = true;
+      atlasTexture.anisotropy = getAdapterMaxAnisotropy();
+      atlasTexture.needsUpdate = true;
     }
 
     if (roadCanvas) {

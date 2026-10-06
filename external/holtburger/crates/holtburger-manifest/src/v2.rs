@@ -121,6 +121,8 @@
 //! - **obj 8-11** — smoke harness + native invariant + live-ACE
 //!   validation + docs.
 
+use std::collections::BTreeMap;
+
 use holtburger_dat::ResourceKey;
 use serde::{Deserialize, Serialize};
 
@@ -241,6 +243,75 @@ pub struct ManifestV2 {
     /// ([`DEFAULT_PACK_URL_TEMPLATE`]). Emitted iff `world_index` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack_url_template: Option<String>,
+    /// 2026-10-06 additive v2+ field: per-namespace REGIONAL catalogs,
+    /// keyed by namespace (in practice only `eor/cell`). The whole-namespace
+    /// `eor-cell.bin` is 805k entries / 15.4 MB (sha256 prefixes — it does
+    /// not compress: 14 MB on the wire), and the FIRST lookup of any cell
+    /// record — terrain heightmaps included — blocks on all of it; a
+    /// Holtburg session needed 296 of those entries. A regioned namespace
+    /// instead fetches the catalog of the landblock region a key falls in
+    /// (see [`CatalogRegions`]). Absent ⇒ the whole-namespace catalog, as
+    /// before; older clients ignore the field (no `deny_unknown_fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_regions: Option<BTreeMap<String, CatalogRegions>>,
+}
+
+/// Region split of one namespace's catalog (`catalog_regions` above).
+///
+/// Cell-dat file ids are landblock-keyed: `0xXXYYnnnn`, landblock
+/// `(lbx, lby) = (id >> 24, (id >> 16) & 0xFF)`. The 256×256 landblock grid
+/// is cut into `lb_block`×`lb_block` squares, numbered row-major on x:
+/// `region = (lbx / lb_block) * (256 / lb_block) + (lby / lb_block)`.
+/// Each region's catalog is an ordinary HBNS [`crate::catalog::NamespaceCatalog`]
+/// holding exactly the namespace entries whose ids fall in it; a region with
+/// no entries has no file (404 ⇒ empty region, every key in it absent).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CatalogRegions {
+    /// URL template with `{namespace_slug}` and `{region}` (3 lowercase
+    /// hex digits, zero-padded), relative to the manifest like every other
+    /// URL, e.g. `manifest/regions/{namespace_slug}/{region}.bin`.
+    pub url_template: String,
+    /// Region edge in landblocks. A power of two in `1..=256`.
+    pub lb_block: u16,
+}
+
+/// Default region-catalog URL template.
+pub const DEFAULT_CATALOG_REGION_URL_TEMPLATE: &str =
+    "manifest/regions/{namespace_slug}/{region}.bin";
+
+impl CatalogRegions {
+    /// True when `lb_block` is a power of two in `1..=256`.
+    pub fn is_valid(&self) -> bool {
+        self.lb_block >= 1 && self.lb_block <= 256 && self.lb_block.is_power_of_two()
+    }
+
+    /// Region index of `file_id`, or `None` for an invalid split.
+    pub fn region_of(&self, file_id: u32) -> Option<u32> {
+        if !self.is_valid() {
+            return None;
+        }
+        let b = u32::from(self.lb_block);
+        let per_axis = 256 / b;
+        let lbx = file_id >> 24;
+        let lby = (file_id >> 16) & 0xFF;
+        Some((lbx / b) * per_axis + (lby / b))
+    }
+
+    /// Number of regions the split defines (`(256 / lb_block)^2`).
+    pub fn region_count(&self) -> u32 {
+        if !self.is_valid() {
+            return 0;
+        }
+        let per_axis = 256 / u32::from(self.lb_block);
+        per_axis * per_axis
+    }
+
+    /// Render the catalog URL of `region` for `namespace`.
+    pub fn region_url(&self, namespace: &str, region: u32) -> String {
+        self.url_template
+            .replace("{namespace_slug}", &namespace_slug(namespace))
+            .replace("{region}", &format!("{region:03x}"))
+    }
 }
 
 /// Cheap version-only probe deserializer. The v2 connect path
@@ -293,6 +364,30 @@ impl ManifestV2 {
         self.catalog_url_template
             .as_ref()
             .map(|t| render_catalog_url(t, namespace))
+    }
+
+    /// The region split for `namespace`, if the manifest declares a valid one.
+    pub fn catalog_regions_for(&self, namespace: &str) -> Option<&CatalogRegions> {
+        self.catalog_regions
+            .as_ref()?
+            .get(namespace)
+            .filter(|r| r.is_valid())
+    }
+
+    /// Which catalog holds `file_id` of `namespace`: `(cache_key, url)`.
+    ///
+    /// Regioned namespace ⇒ `("<ns>#<region:03x>", region url)`; otherwise
+    /// `("<ns>", whole-namespace catalog url)`. `None` when the manifest
+    /// declares no catalog template at all (convention-URL mode). The cache
+    /// key is what a client keys its resident-catalog map by — a namespace
+    /// string never contains `#`, so the two key spaces cannot collide.
+    pub fn catalog_for_key(&self, namespace: &str, file_id: u32) -> Option<(String, String)> {
+        self.catalog_url_template.as_ref()?;
+        if let Some(r) = self.catalog_regions_for(namespace) {
+            let region = r.region_of(file_id)?;
+            return Some((format!("{namespace}#{region:03x}"), r.region_url(namespace, region)));
+        }
+        Some((namespace.to_string(), self.catalog_url(namespace)?))
     }
 }
 
@@ -373,6 +468,7 @@ mod tests {
             catalog_url_template: Some(DEFAULT_CATALOG_URL_TEMPLATE.into()),
             world_index: None,
             pack_url_template: None,
+            catalog_regions: None,
         }
     }
 
@@ -619,5 +715,104 @@ mod tests {
             "9f10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         );
         assert_eq!(url_with_hash, "shards/eor-portal/0x01000827.bin");
+    }
+
+    // ── 2026-10-06 regional catalogs ────────────────────────────────────
+
+    fn regions8() -> CatalogRegions {
+        CatalogRegions {
+            url_template: DEFAULT_CATALOG_REGION_URL_TEMPLATE.into(),
+            lb_block: 8,
+        }
+    }
+
+    #[test]
+    fn region_math_is_landblock_row_major() {
+        let r = regions8();
+        assert!(r.is_valid());
+        assert_eq!(r.region_count(), 1024);
+        // Holtburg 0xA9B4: lbx 0xA9 / 8 = 21, lby 0xB4 / 8 = 22 → 21*32 + 22.
+        assert_eq!(r.region_of(0xA9B4_0024), Some(21 * 32 + 22));
+        // LandBlockInfo / landblock records share the cell's region.
+        assert_eq!(r.region_of(0xA9B4_FFFE), r.region_of(0xA9B4_0100));
+        assert_eq!(r.region_of(0xA9B4_FFFF), r.region_of(0xA9B4_0100));
+        // Corners.
+        assert_eq!(r.region_of(0x0000_0001), Some(0));
+        assert_eq!(r.region_of(0xFFFF_FFFF), Some(1023));
+        // A neighbouring landblock across a region edge lands next door.
+        assert_eq!(r.region_of(0xA8B4_0001), Some(21 * 32 + 22));
+        assert_eq!(r.region_of(0xA7B4_0001), Some(20 * 32 + 22));
+    }
+
+    #[test]
+    fn region_split_rejects_bad_block_sizes() {
+        for b in [0u16, 3, 6, 257, 512] {
+            let r = CatalogRegions { url_template: "x".into(), lb_block: b };
+            assert!(!r.is_valid(), "lb_block {b} must be invalid");
+            assert_eq!(r.region_of(0x1234_5678), None);
+            assert_eq!(r.region_count(), 0);
+        }
+        for b in [1u16, 2, 16, 256] {
+            assert!(CatalogRegions { url_template: "x".into(), lb_block: b }.is_valid());
+        }
+    }
+
+    #[test]
+    fn region_url_renders_slug_and_padded_hex() {
+        let r = regions8();
+        assert_eq!(r.region_url("eor/cell", 0), "manifest/regions/eor-cell/000.bin");
+        assert_eq!(r.region_url("eor/cell", 0x2b6), "manifest/regions/eor-cell/2b6.bin");
+        assert_eq!(r.region_url("eor/cell", 1023), "manifest/regions/eor-cell/3ff.bin");
+    }
+
+    #[test]
+    fn catalog_for_key_routes_regioned_namespaces_only() {
+        let mut m = fixture_manifest_v2();
+        // No regions declared ⇒ whole-namespace catalog, keyed by namespace.
+        assert_eq!(
+            m.catalog_for_key("eor/cell", 0xA9B4_0024),
+            Some(("eor/cell".into(), "manifest/eor-cell.bin".into()))
+        );
+        let mut regions = BTreeMap::new();
+        regions.insert("eor/cell".to_string(), regions8());
+        m.catalog_regions = Some(regions);
+        assert_eq!(
+            m.catalog_for_key("eor/cell", 0xA9B4_0024),
+            Some(("eor/cell#2b6".into(), "manifest/regions/eor-cell/2b6.bin".into()))
+        );
+        // Other namespaces are untouched by a cell split.
+        assert_eq!(
+            m.catalog_for_key("eor/portal", 0x0100_0827),
+            Some(("eor/portal".into(), "manifest/eor-portal.bin".into()))
+        );
+        // An invalid split is ignored, not half-applied.
+        m.catalog_regions.as_mut().unwrap().get_mut("eor/cell").unwrap().lb_block = 6;
+        assert_eq!(
+            m.catalog_for_key("eor/cell", 0xA9B4_0024),
+            Some(("eor/cell".into(), "manifest/eor-cell.bin".into()))
+        );
+        // Convention-URL mode stays convention-URL mode.
+        m.catalog_url_template = None;
+        assert_eq!(m.catalog_for_key("eor/cell", 0xA9B4_0024), None);
+    }
+
+    #[test]
+    fn catalog_regions_is_additive_on_the_wire() {
+        // A manifest without the field (every deployed bake before 2026-10-06)
+        // parses with `None` and re-serializes WITHOUT the key.
+        let m = fixture_manifest_v2();
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("catalog_regions"));
+        let back: ManifestV2 = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.catalog_regions, None);
+        // With the field, it round-trips.
+        let mut m2 = fixture_manifest_v2();
+        let mut regions = BTreeMap::new();
+        regions.insert("eor/cell".to_string(), regions8());
+        m2.catalog_regions = Some(regions);
+        let json2 = serde_json::to_string(&m2).unwrap();
+        assert!(json2.contains("\"catalog_regions\""));
+        let back2: ManifestV2 = serde_json::from_str(&json2).unwrap();
+        assert_eq!(back2, m2);
     }
 }

@@ -61,6 +61,10 @@ import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // point below is inert unless the flag is on AND the GPU reports
 // EXT_texture_compression_bptc, so the RGBA8 path is unchanged by default.
 import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7 } from "./bc7_textures.js";
+// `?bandwidth` (2026-10-06) — on a LOW session the full-tier statics textures
+// (xu7 / BC7 / pre, ~109 MB on a Holtburg ring) are not fetched: surfaces keep
+// the retail-resolution albedo they already decoded from the DAT record.
+import { lowBandwidth } from "./bandwidth_tier.js";
 // ST5 (`?texCompressedOnly`, SPEC §3 T15; pass 5 D-05.5) — materials BORN
 // compressed from the resident PVW preview; scalars-only surface decode;
 // lane-T full-tier upgrade + worker NRA; demote-to-preview primitive. Every
@@ -2172,6 +2176,32 @@ function albedoFullyTransparent(tex) {
 
 /** One warn per RenderSurface id vetoed above (diagnostic, not spam). */
 const _bc7TransparentVeto = new Set();
+
+/**
+ * `?bandwidth` low-session veto for the statics full-tier upgrade. An explicit
+ * `?texXu7` (any value) is a deliberate texture-tier experiment and wins over
+ * the tier, like every per-feature flag does. Not memoised: the suites re-stub
+ * `window` per case; the tier itself is memoised in bandwidth_tier.js.
+ */
+let _bandwidthVetoLogged = false;
+export function bc7UpgradeVetoedByBandwidth(search) {
+  try {
+    const s = search !== undefined
+      ? search
+      : typeof window !== "undefined" && window.location ? window.location.search : "";
+    if (new URLSearchParams(s).get("texXu7") != null) return false;
+  } catch (_) { /* malformed search: fall through to the tier */ }
+  if (!lowBandwidth()) return false;
+  if (!_bandwidthVetoLogged) {
+    _bandwidthVetoLogged = true;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[bandwidth] low session: statics keep retail-resolution textures " +
+        "(no xu7/BC7 full-tier download; ?bandwidth=high or ?texXu7=on to override)"
+    );
+  }
+  return true;
+}
 
 /**
  * Write retail's ClipMap render state onto `target` — either a live material or
@@ -5730,6 +5760,11 @@ export class MaterialCache {
     // after the ask-once gate so a vetoed DID is settled for the session
     // (nothing is left waiting on a `__bc7Pending` that will never land —
     // `upgradeMaterialToBc7`, the only writer of that marker, is not called).
+    // `?bandwidth` low: settled on the retail albedo for the session, exactly
+    // like the transparent veto below — no `__bc7Pending` marker is ever set,
+    // so nothing (atlas feed, pool producer) waits on an upgrade that will not
+    // come; the surface lands in an `f8` (RGBA8) atlas bucket.
+    if (bc7UpgradeVetoedByBandwidth()) return;
     if (albedoFullyTransparent(mat.map)) {
       if (!_bc7TransparentVeto.has(rs)) {
         _bc7TransparentVeto.add(rs);

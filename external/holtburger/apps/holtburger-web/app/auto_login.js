@@ -7,6 +7,7 @@
 // accessor (D.activeHandle).
 
 import { netWorkerEnabled } from "../scene3d/net_worker_client.js";
+import { lowBandwidth } from "../scene3d/bandwidth_tier.js";
 
 export function initAutoLogin(D) {
   const { __resetEntDrainPending, loginForm, characterUl, setBootState, bootParams } = D;
@@ -115,7 +116,11 @@ export function initAutoLogin(D) {
     // the dance was the whole failure. Give attempt-0 enough runway
     // to clear the cold-bake (25s ≫ the measured 15s) so it succeeds
     // on the first try and the destructive dance never fires.
-    const connectTimeoutMs = opts.connectTimeoutMs ?? 25000;
+    // `?bandwidth` low (2026-10-06): on a 666 kbps link the cold-boot
+    // downloads share the line with the handshake — measured 27 s from
+    // Connect to CharacterList on the 1070, i.e. a false "timeout" right
+    // before the list arrived. 45 s keeps the single-clean-attempt shape.
+    const connectTimeoutMs = opts.connectTimeoutMs ?? (lowBandwidth() ? 45000 : 25000);
     // 10s was fine warm, but a cold-boot spawn (PVS stream + scene
     // bake still competing for the main thread) can take >10s to reach
     // EnteredWorld(kind=7); 20s gives it room without a false timeout.

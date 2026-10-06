@@ -46,6 +46,7 @@ import {
   FAM_DIRT,
   familyForCode,
 } from "./terrain_families.js";
+import { lowBandwidth } from "./bandwidth_tier.js";
 
 /** Slice order in the DataArrayTexture. MUST match FAMILY_ORDER in generate.py. */
 export const TERRAIN_MACRO_KEYS = Object.freeze([
@@ -108,7 +109,11 @@ function _search(search) {
 export function terrainMacroEnabled(search) {
   try {
     const v = new URLSearchParams(_search(search)).get("terrainMacro");
-    if (v == null) return true;
+    // `?bandwidth` low (2026-10-06): the far-macro set is seven 1024² PNGs
+    // (~9 MB) of optional distance modulation — skipped on a slow link unless
+    // `?terrainMacro` is given explicitly. Terrain renders macro-less, the
+    // same state every bake already starts in.
+    if (v == null) return !lowBandwidth();
     const t = String(v).toLowerCase();
     return !(t === "off" || t === "0" || t === "false" || t === "no");
   } catch (_) {

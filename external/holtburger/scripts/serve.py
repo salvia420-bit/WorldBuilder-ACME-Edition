@@ -518,7 +518,8 @@ BIN_COMPRESS_EXTS = {".wasm", ".bin", ".hba", ".hbc7"}
 # app-shell bundle tree. Two roots: the live build output
 # (scripts/build-shell.mjs -> apps/holtburger-web/shell/) and the deploy-staged
 # dist copy (scripts/deploy-shell.mjs -> <dist>/shell/, served at /dist/shell/).
-# Hash-named => immutable + identity, same tier as packs/ + index/.
+# Hash-named => immutable, same cache tier as packs/ + index/ — but compressed
+# like any JS (2026-10-06; see _maybe_send_compressed for why packs differ).
 SHELL_PREFIXES = ("/apps/holtburger-web/shell/", "/dist/shell/")
 
 # KTX2 file identifier (12 bytes, Khronos spec) — the same check
@@ -651,12 +652,13 @@ class Handler(SimpleHTTPRequestHandler):
         # the legacy shard store, so gate by path, not extension.
         if clean.startswith("/dist/packs/") or clean.startswith("/dist/index/"):
             return False
-        # T11 shell tree: the content-hashed app-shell bundles join the
-        # immutable-CAS class (SPEC §1.1 HTTP contract / D-12.2) — served
-        # IDENTITY like packs/index, .js extension notwithstanding. Covers
-        # the live-tree build output and the deploy-staged dist copy.
-        if clean.startswith(SHELL_PREFIXES):
-            return False
+        # T11 shell tree: content-hashed and immutable-cached (end_headers),
+        # but — unlike packs/index — COMPRESSED (2026-10-06). The identity
+        # rule exists because the pack client hash-verifies the bytes it
+        # receives; nothing verifies a shell bundle (the hash is only its
+        # NAME), and serving the 3.8 MB app bundle identity put ~2.8 MB of
+        # avoidable bytes on every cold boot (≈35 s at 666 kbps). Vary:
+        # Accept-Encoding keeps caches from mixing the encodings.
         ext = os.path.splitext(clean)[1].lower()
         if ext not in TEXT_COMPRESS_EXTS and ext not in BIN_COMPRESS_EXTS:
             return False

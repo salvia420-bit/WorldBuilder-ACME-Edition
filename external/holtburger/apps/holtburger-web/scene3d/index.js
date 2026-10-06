@@ -5966,7 +5966,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 : atmosphereRuntime.bakeMs?.toFixed?.(1);
               const tag = src === 'load' ? 'load' : 'bake';
               console.log(
-                `[sky-k.3] AtmosphereRuntime ready (${tag} ${ms}ms). ` +
+                `[sky-k.3] AtmosphereRuntime ready (${tag} ${ms}ms, plan ${atmosphereRuntime.plan ?? "?"}` +
+                  `${atmosphereRuntime.loadTimedOut ? ", download timed out" : ""}). ` +
                   "AerialPerspective + ToneMapping(AGX) + Dithering composer wired. " +
                   "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
                   "toneMappingExposure=5 — tune via __setExposure(v). " +

@@ -426,6 +426,28 @@ export function subdividedLandblockMeshToGeometry(wasmSub) {
  * canvas is then `getImageData`'d at the uniform 256×256 layer size
  * and the bytes are copied directly into the array texture buffer.
  */
+/**
+ * The RoadType (code 32) tile as its own canvas, at native resolution —
+ * preserves the texture's true dimensions for `RepeatWrapping` UVs in the
+ * road overlay (the road sampler wraps at the tile's authored period, not the
+ * atlas-layer dim). Shared by `buildTerrainAtlasArrayBytes` and the BC7
+ * terrain arm, which fetches ONLY this tile (2026-10-06). Does not free `tex`.
+ */
+export function buildRoadCanvasFromTile(tex) {
+  if (!tex || typeof document === "undefined") return null;
+  const w = tex.width;
+  const h = tex.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const rctx = canvas.getContext("2d");
+  // COPY, not a view over the wasm buffer: `ImageData` hard-rejects a
+  // shared-backed `Uint8ClampedArray` (AUDIT-sab-views-2026-07-24 must-fix 3).
+  const clamped = new Uint8ClampedArray(tex.pixels);
+  rctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+  return canvas;
+}
+
 export function buildTerrainAtlasArrayBytes(terrainTextures) {
   if (!Array.isArray(terrainTextures) || terrainTextures.length === 0) {
     throw new Error(
@@ -523,20 +545,7 @@ export function buildTerrainAtlasArrayBytes(terrainTextures) {
     }
 
     if (code === 32) {
-      // Standalone road tile at native resolution — preserves the
-      // texture's true dimensions for `RepeatWrapping` UVs in the road
-      // overlay. Even at the new 512x512 layer size the road overlay
-      // still gets its own canvas so the road sampler can wrap at the
-      // tile's authored period rather than the atlas-layer dim.
-      roadCanvas = document.createElement("canvas");
-      roadCanvas.width = w;
-      roadCanvas.height = h;
-      const rctx = roadCanvas.getContext("2d");
-      // COPY (see the slow-path note above) — this also subsumes the
-      // second `new Uint8ClampedArray(clamped)` that used to guard the
-      // `ImageData` here, since `clamped` is now already owned + non-shared.
-      const clamped = new Uint8ClampedArray(px);
-      rctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+      roadCanvas = buildRoadCanvasFromTile(tex);
     }
 
     if (typeof tex.free === "function") tex.free();

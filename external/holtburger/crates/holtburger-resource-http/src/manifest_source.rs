@@ -596,13 +596,15 @@ impl V2Source {
         if !self.manifest.namespaces.iter().any(|n| n == namespace) {
             return None;
         }
+        // Whole-namespace or regional catalog (2026-10-06) — same resolver
+        // the prefetch path uses, so both key the resident map identically.
+        let (cache_key, url) = self.manifest.catalog_for_key(namespace, file_id)?;
         let have = self
             .catalogs
             .lock()
             .expect("catalog cache mutex poisoned")
-            .contains_key(namespace);
+            .contains_key(&cache_key);
         if !have {
-            let url = self.manifest.catalog_url(namespace)?;
             let full_url = join_url(&self.base_url_with_slash(), &url);
             let result = {
                 let u = full_url.clone();
@@ -620,7 +622,7 @@ impl V2Source {
                     self.catalogs
                         .lock()
                         .expect("catalog cache mutex poisoned")
-                        .insert(namespace.to_string(), catalog);
+                        .insert(cache_key.clone(), catalog);
                 }
                 // 404 = namespace empty after bake pruning; transient
                 // errors likewise yield None — the caller's legacy route
@@ -629,7 +631,7 @@ impl V2Source {
             }
         }
         let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
-        let entry = catalogs.get(namespace)?.lookup(file_id)?;
+        let entry = catalogs.get(&cache_key)?.lookup(file_id)?;
         let hash_hex = hex_encode_16(&entry.sha256_truncated);
         let key = ResourceKey { namespace, file_id };
         let url = render_shard_url_full(&self.manifest.shard_url_template, key, &hash_hex);
@@ -679,34 +681,47 @@ impl V2Source {
             return Ok(());
         }
 
-        // Step B: figure out which namespace catalogs we still
-        // need to fetch (v2 catalog-mode only). Skip if the manifest
-        // declares no catalog template — that's convention-URL mode.
+        // Step B: figure out which catalogs we still need to fetch (v2
+        // catalog-mode only). Skip if the manifest declares no catalog
+        // template — that's convention-URL mode.
+        //
+        // 2026-10-06: a namespace the manifest REGIONS (`catalog_regions`,
+        // in practice `eor/cell`) is fetched per landblock region instead of
+        // as one 15 MB file — `catalog_for_key` names the catalog (cache key
+        // `"<ns>#<region>"` + its URL). Regioned catalogs are written for
+        // EVERY region (empty ones included), so a region 404 is a broken
+        // deploy and fails the round loudly like any other catalog error —
+        // it is never read as "these records don't exist".
         if self.manifest.catalog_url_template.is_some() {
-            let needed_namespaces: HashSet<String> = {
+            let needed: Vec<(String, String, String)> = {
                 let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
-                work_keys
-                    .iter()
-                    .map(|(ns, _)| ns.clone())
-                    .filter(|ns| !catalogs.contains_key(ns))
-                    .filter(|ns| self.manifest.namespaces.iter().any(|n| n == ns))
-                    .collect()
+                let mut seen: HashSet<String> = HashSet::new();
+                let mut out = Vec::new();
+                for (ns, file_id) in &work_keys {
+                    if !self.manifest.namespaces.iter().any(|n| n == ns) {
+                        continue;
+                    }
+                    let Some((cache_key, url)) = self.manifest.catalog_for_key(ns, *file_id) else {
+                        continue;
+                    };
+                    if catalogs.contains_key(&cache_key) || !seen.insert(cache_key.clone()) {
+                        continue;
+                    }
+                    out.push((cache_key, url, ns.clone()));
+                }
+                out
             };
 
-            if !needed_namespaces.is_empty() {
-                let catalog_fetches = needed_namespaces.iter().map(|ns| {
-                    let url = self
-                        .manifest
-                        .catalog_url(ns)
-                        .expect("template present; checked above");
+            if !needed.is_empty() {
+                let catalog_fetches = needed.into_iter().map(|(cache_key, url, ns)| {
                     let full_url = join_url(&self.base_url_with_slash(), &url);
-                    let ns = ns.clone();
+                    let regioned = cache_key != ns;
                     let inflight = self.inflight.clone();
                     async move {
                         // F.35: dedup via the per-URL in-flight map.
                         // Concurrent prefetch calls for the same
-                        // namespace catalog all latch onto a single
-                        // fetch resolution.
+                        // catalog all latch onto a single fetch
+                        // resolution.
                         let result = {
                             let full_url_for_fetch = full_url.clone();
                             inflight
@@ -717,24 +732,28 @@ impl V2Source {
                                 .await
                         };
                         match result {
-                            Ok(bytes) => Ok::<(String, Option<Vec<u8>>), PrefetchError>((
+                            Ok(bytes) => Ok::<(String, String, Option<Vec<u8>>), PrefetchError>((
+                                cache_key,
                                 ns,
                                 Some(bytes),
                             )),
                             Err(arc_err) => {
-                                // 404 on a declared namespace's catalog
-                                // means the namespace is empty after
-                                // bake-time pruning — treat as
-                                // "no catalog, fall through to
-                                // convention URLs".
-                                if matches!(
-                                    arc_err.as_ref(),
-                                    HttpError::Http { status: 404, .. }
-                                ) {
-                                    Ok((ns, None))
+                                // 404 on a declared namespace's WHOLE
+                                // catalog means the namespace is empty
+                                // after bake-time pruning — treat as "no
+                                // catalog, fall through to convention
+                                // URLs". A REGION 404 is a deploy fault
+                                // (every region is written), so it errors.
+                                if !regioned
+                                    && matches!(
+                                        arc_err.as_ref(),
+                                        HttpError::Http { status: 404, .. }
+                                    )
+                                {
+                                    Ok((cache_key, ns, None))
                                 } else {
                                     Err(PrefetchError::CatalogFetch {
-                                        namespace: ns,
+                                        namespace: cache_key,
                                         source: arc_to_http_error(arc_err),
                                     })
                                 }
@@ -745,15 +764,15 @@ impl V2Source {
 
                 let fetched = futures::future::try_join_all(catalog_fetches).await?;
                 let mut cs = self.catalogs.lock().expect("catalog cache mutex poisoned");
-                for (ns, bytes_opt) in fetched {
+                for (cache_key, ns, bytes_opt) in fetched {
                     if let Some(bytes) = bytes_opt {
                         let catalog = NamespaceCatalog::read_from(&bytes, ns.clone()).map_err(
                             |e| PrefetchError::CatalogParse {
-                                namespace: ns.clone(),
+                                namespace: cache_key.clone(),
                                 message: e.to_string(),
                             },
                         )?;
-                        cs.insert(ns, catalog);
+                        cs.insert(cache_key, catalog);
                     }
                     // 404 namespaces stay absent from the catalog
                     // map; the per-key lookup below will route
@@ -785,7 +804,12 @@ impl V2Source {
                     file_id: *file_id,
                 };
 
-                if let Some(catalog) = catalogs.get(ns) {
+                let cache_key = self
+                    .manifest
+                    .catalog_for_key(ns, *file_id)
+                    .map(|(k, _)| k)
+                    .unwrap_or_else(|| ns.clone());
+                if let Some(catalog) = catalogs.get(&cache_key) {
                     if let Some(entry) = catalog.lookup(*file_id) {
                         let hash_hex = hex_encode_16(&entry.sha256_truncated);
                         let url = render_shard_url_full(
@@ -1155,8 +1179,14 @@ impl V2Source {
         if self.manifest.catalog_url_template.is_none() {
             return false;
         }
+        // The catalog that would list the key (whole-namespace or its
+        // landblock region). A region catalog is authoritative for its
+        // region exactly as the whole one is for the namespace.
+        let Some((cache_key, _)) = self.manifest.catalog_for_key(key.namespace, key.file_id) else {
+            return false;
+        };
         let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
-        match catalogs.get(key.namespace) {
+        match catalogs.get(&cache_key) {
             Some(catalog) => catalog.lookup(key.file_id).is_none(),
             None => false,
         }

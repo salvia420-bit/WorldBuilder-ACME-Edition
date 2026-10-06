@@ -13,6 +13,8 @@
 // module does not import from any renderer subsystem so it can be
 // loaded in isolation (Node test harness, devtools console).
 
+import { lowBandwidth } from "./bandwidth_tier.js";
+
 // ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
 //
 // The nine terrain-VFX FAMILY MASTERS ship OFF on every tier (plan §5.9 "ship
@@ -559,6 +561,10 @@ export const PRESETS = {
 
 export const PRESET_NAMES = ["low", "mid", "high", "ultra"];
 
+/** Preset flags a `?bandwidth=low` session turns OFF (each is a large
+ *  optional download). Overridable per flag by localStorage / URL. */
+export const BANDWIDTH_LOW_FLAG_OFFS = Object.freeze(["terrainDetailNormal"]);
+
 // Boolean-typed flags. Values "on"/"true"/"1" → true; "off"/"false"/"0"
 // → false. Used by parseOverrides to coerce per-feature URL params.
 const BOOL_FLAGS = new Set([
@@ -920,6 +926,16 @@ export function getQuality(url, userAgent) {
     }
 
     const flags = { ...PRESETS[preset] };
+
+    // `?bandwidth` low (2026-10-06): the terrain detail-normal array is five
+    // 1024² PNGs (~9 MB) that init3D AWAITS before the scene exists — on a
+    // 666 kbps link that alone held the 3D scene back for minutes. Precedence
+    // is preset < bandwidth tier < saved Graphics setting < URL, so a player
+    // who ticks "Terrain detail normals" (or passes ?terrainDetailNormal=on)
+    // still gets it.
+    for (const k of BANDWIDTH_LOW_FLAG_OFFS) {
+        if (flags[k] && lowBandwidth()) flags[k] = false;
+    }
 
     // localStorage flag overrides (sanitized — only known flag names
     // with correct types are accepted; everything else is dropped).

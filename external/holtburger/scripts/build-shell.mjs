@@ -241,9 +241,8 @@ export function stripQueryFromRelativeImports(text) {
     .replace(/(\bimport\s*\(\s*)(["'])([^"']+)\2/g, (a, p, q, s) => `${p}${q}${fix(s)}${q}`);
 }
 
-/** scene3d-only: placeholder the worker URL sites, then re-base remaining
- *  "./" import.meta.url URLs onto "../scene3d/". */
-function transformScene3dUrls(text) {
+/** scene3d-only: placeholder the worker URL sites. */
+function placeholderWorkerUrls(text) {
   let out = text;
   for (const name of Object.keys(WORKER_ENTRIES)) {
     out = out.replace(
@@ -254,11 +253,38 @@ function transformScene3dUrls(text) {
       (m, q) => `new URL(${q}__SHELL_WORKER__${name}__${q}, import.meta.url)`,
     );
   }
-  out = out.replace(
-    /new URL\(\s*(["'])\.\/([^"']*)\1\s*,\s*import\.meta\.url/g,
-    (m, q, rest) => `new URL(${q}../scene3d/${rest}${q}, import.meta.url`,
-  );
   return out;
+}
+
+/** Re-base every RELATIVE `new URL(spec, import.meta.url)` in a staged file at
+ *  app-relative directory `relDir` onto the bundle's location (shell/ is a
+ *  sibling of scene3d/, plugins/, …): the target is resolved against the
+ *  file's OWN directory, then expressed from shell/ as `../<target>`.
+ *
+ *  2026-10-06 — generalised from the scene3d-only rewrite, which mapped every
+ *  `./X` to `../scene3d/X`: right for files directly in scene3d/, wrong for a
+ *  nested file, and absent for plugins/ui/rynth (`rynth/bot.js`'s
+ *  `new URL(".", import.meta.url)` resolved to shell/). For depth-1 scene3d
+ *  files the output is byte-identical to the old rewrite. Placeholders
+ *  (`__SHELL_WORKER__…`) and absolute/outside-the-app specifiers are left as
+ *  they are. */
+export function rebaseImportMetaUrls(text, relDir) {
+  const dir = relDir.split(path.sep).join("/");
+  return text.replace(
+    /new URL\(\s*(["'])(\.{1,2}(?:\/[^"']*)?)\1\s*,\s*import\.meta\.url/g,
+    (m, q, spec) => {
+      const qi = spec.indexOf("?");
+      const bare = qi >= 0 ? spec.slice(0, qi) : spec;
+      const query = qi >= 0 ? spec.slice(qi) : "";
+      const trailing = bare.endsWith("/") || bare === "." || bare === ".." ? "/" : "";
+      let target = path.posix.normalize(`${dir}/${bare}`);
+      if (target === "." ) target = "";
+      if (target.startsWith("..")) return m; // outside the app root — leave it
+      target = target.replace(/\/$/, "");
+      const rebased = `../${target}${target ? trailing : ""}${query}`;
+      return `new URL(${q}${rebased}${q}, import.meta.url`;
+    },
+  );
 }
 
 /** Entry-only: re-base pkg imports for a shell/-resident output. */
@@ -276,12 +302,52 @@ function stageTree(appRoot, stageSrc) {
       const rel = path.relative(appRoot, file);
       let text = fs.readFileSync(file, "utf8");
       text = stripQueryFromRelativeImports(text);
-      if (rel.startsWith("scene3d" + path.sep)) text = transformScene3dUrls(text);
+      if (rel.startsWith("scene3d" + path.sep)) text = placeholderWorkerUrls(text);
+      text = rebaseImportMetaUrls(text, path.dirname(rel));
       const dest = path.join(stageSrc, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, text);
     }
   }
+}
+
+/** T11-D4 fix (2026-10-06): the plugin loader imports most HUD plugins at
+ *  runtime via ABSOLUTE `modulePath` URLs (plugins/loader.js), which on the
+ *  bundled arm escaped the bundle and double-instanced every dep they share
+ *  with it. The bundle now carries a registry of LAZY loaders —
+ *  `() => import("./plugins/x.js")` — that esbuild compiles into deferred
+ *  initialisers inside the same file, so a plugin still evaluates only when
+ *  the loader asks for it (same timing as the unbundled page) but shares ONE
+ *  instance of every module with the rest of the app. Keys are app-relative
+ *  paths; loader.js `bundledPluginLoader` resolves `modulePath` against them.
+ *  @returns {{ code: string, keys: string[], sources: string[] }} */
+export function pluginRegistrySource(appRoot = APP_ROOT) {
+  const pluginsDir = path.join(appRoot, "plugins");
+  const idx = JSON.parse(fs.readFileSync(path.join(pluginsDir, "index.json"), "utf8"));
+  const descriptors = Array.isArray(idx) ? idx : idx.plugins || [];
+  const keys = [];
+  const sources = ["plugins/index.json"];
+  for (const d of descriptors) {
+    if (typeof d?.manifestPath !== "string") continue;
+    const manifestFile = path.join(pluginsDir, d.manifestPath);
+    sources.push(path.relative(appRoot, manifestFile).split(path.sep).join("/"));
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    const entryAbs = d.entry
+      ? path.resolve(pluginsDir, d.entry)
+      : manifest.entry
+        ? path.resolve(path.dirname(manifestFile), manifest.entry)
+        : null;
+    if (!entryAbs) continue;
+    const rel = path.relative(appRoot, entryAbs).split(path.sep).join("/").split("?")[0];
+    if (rel.startsWith("..") || !fs.existsSync(path.join(appRoot, rel))) continue;
+    if (!keys.includes(rel)) keys.push(rel);
+  }
+  keys.sort();
+  const lines = keys.map((k) => `  ${JSON.stringify(k)}: () => import(${JSON.stringify(`./${k}`)}),`);
+  const code =
+    "// ── T11-D4 bundled plugin registry (generated by scripts/build-shell.mjs) ──\n" +
+    "globalThis.__hbBundledPlugins = Object.freeze({\n" + lines.join("\n") + "\n});\n";
+  return { code, keys, sources };
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +374,10 @@ export function buildShell(opts = {}) {
   stageTree(appRoot, stageSrc);
 
   const script = extractInlineModuleScript(html);
-  const entryText = rebaseEntryPkgImports(stripQueryFromRelativeImports(script.inner));
+  // PREPENDED, not appended: the inline script awaits initPluginBar() part-way
+  // through its body, so the registry must exist before that statement runs.
+  const registry = pluginRegistrySource(appRoot);
+  const entryText = registry.code + rebaseEntryPkgImports(stripQueryFromRelativeImports(script.inner));
   fs.writeFileSync(path.join(stageSrc, "app.mjs"), entryText);
 
   // -- esbuild --------------------------------------------------------------
@@ -409,6 +478,24 @@ export function buildShell(opts = {}) {
   }
 
   // -- shell manifest (deterministic — no timestamps) -----------------------
+  // Freshness inputs (2026-10-06): content hash of every ORIGINAL source the
+  // bundle was built from (esbuild's own input list, the extracted entry
+  // mapped back to index.html, plus the plugin index/manifests the registry
+  // was generated from). proxy.cjs serves the bundled page only while every
+  // one of these still hashes the same — a stale bundle is never served.
+  const inputs = {};
+  const addInput = (rel) => {
+    const norm = rel.split(path.sep).join("/");
+    const abs = path.join(appRoot, norm);
+    if (inputs[norm] || !fs.existsSync(abs)) return;
+    inputs[norm] = sha256Hex(fs.readFileSync(abs));
+  };
+  addInput("index.html");
+  for (const k of Object.keys(meta.inputs || {})) {
+    if (k === "app.mjs" || k.startsWith("..") || path.isAbsolute(k)) continue;
+    addInput(k);
+  }
+  for (const k of registry.sources) addInput(k);
   const manifest = {
     schema: "hb-shell-manifest-v1",
     tool: { name: "esbuild", version },
@@ -416,6 +503,8 @@ export function buildShell(opts = {}) {
     externals,
     workerSites,
     entrySourceSha256: sha256Hex(script.inner),
+    bundledPlugins: registry.keys,
+    inputs: Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b))),
   };
   fs.writeFileSync(
     path.join(outRoot, "shell-manifest.json"),

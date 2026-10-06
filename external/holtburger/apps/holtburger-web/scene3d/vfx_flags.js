@@ -22,14 +22,17 @@
 // bloom/light governor (build spec §10/§11) can read a cap without a later
 // flag-plumbing change; nothing consumes it yet (queued-for-1070).
 //
-// Import-cycle-safe: imports ONLY visualEnabled from vfx_catalog.js, which
-// imports nothing from the scene3d graph. No back-edges → no static cycle.
+// Import-cycle-safe: imports ONLY visualEnabled from vfx_catalog.js and
+// lowBandwidth from bandwidth_tier.js, both of which import nothing from the
+// scene3d graph. No back-edges → no static cycle.
 // Lint-clean by construction (no Math.random / argless Date.now / .visible= /
 // wire / per-instance cache key); this module lives outside scene3d/vfx/
 // components/ so the legacy-safety component sweep does not scan it, but it is
 // kept clean regardless.
 
 import { visualEnabled } from "./vfx_catalog.js";
+// Leaf module (imports nothing) — keeps the no-back-edge property above.
+import { lowBandwidth } from "./bandwidth_tier.js";
 
 function _strFlag(name) {
   try {
@@ -65,6 +68,10 @@ export function materialBakeEnabled() {
   let on = true; // default-on; ?material=off is the escape
   const v = _strFlag("material");
   if (v != null) { const s = v.toLowerCase(); on = s !== "off" && s !== "0" && s !== "false" && s !== "no" && s !== ""; }
+  // `?bandwidth` low (2026-10-06): the texchan roughness/AO sidecars are ~24 MB
+  // over ~600 requests on a Holtburg ring — optional detail, skipped on a slow
+  // link. An explicit `?material` (any value) still decides.
+  else if (lowBandwidth()) on = false;
   return (_materialBake = on);
 }
 

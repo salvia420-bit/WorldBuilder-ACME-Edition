@@ -187,6 +187,7 @@ fn legacy_manifest_shape_is_unchanged_by_t10() {
         catalog_url_template: None,
         world_index: None,
         pack_url_template: None,
+        catalog_regions: None,
     })
     .unwrap();
     assert!(!json.contains("world_index"));

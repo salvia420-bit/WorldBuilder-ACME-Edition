@@ -26,7 +26,7 @@
 //            harness/lib/report.mjs (@scale-tagged, verdict EXPLORATORY —
 //            B2/B5 absolutes bind at ST5, SPEC §2.2).
 //   PART 6 — serve rules: spawns scripts/serve.py on an ephemeral port and
-//            asserts the shell tier (immutable + identity) and the unchanged
+//            asserts the shell tier (immutable + compressed) and the unchanged
 //            neighbour tiers. SKIPs (not fails) if the port cannot be bound.
 //
 // Run:  node harness/test_build_shell.mjs        (exit 0/1)
@@ -249,7 +249,10 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // ui/hud_kit.js, plugins/item_drag.js, plugins/examine_format.js)
   // → 300 non-app links. Keep this pinned to the GENERATOR's output:
   // `node scripts/gen-modulepreload.mjs --check` must pass first.
-  const NON_APP_PRELOADS = 300;
+  // 2026-10-06: + scene3d/bandwidth_tier.js + scene3d/atmosphere_lut_plan.js
+  // (slow-link boot) + scene3d/batched_material_variant.js (statically
+  // reachable but missing from the committed block until this re-run) → 303.
+  const NON_APP_PRELOADS = 303;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
@@ -369,7 +372,10 @@ await (async () => {
         (res.headers.get("cache-control") || "").includes("immutable"),
         `live shell/ served immutable (got ${res.headers.get("cache-control")})`,
       );
-      check(!res.headers.get("content-encoding"), "live shell/ served IDENTITY under Accept-Encoding gzip+zstd");
+      // 2026-10-06: shell bundles are COMPRESSED (still immutable) — nothing
+      // hash-verifies their bytes, and identity cost ~2.8 MB per cold boot.
+      check(!!res.headers.get("content-encoding"), `live shell/ served COMPRESSED under Accept-Encoding gzip+zstd (got ${res.headers.get("content-encoding")})`);
+      check((res.headers.get("vary") || "").toLowerCase().includes("accept-encoding"), "…with Vary: Accept-Encoding");
     } else {
       console.log("  [part 6 sub-check not run] no live shell/ build at APP_ROOT (gitignored) — run scripts/build-shell.mjs first");
     }

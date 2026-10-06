@@ -3,8 +3,9 @@
 // D-05.4/D-05.7 row 1 + D-12.6) node battery.
 //
 // What must hold:
-//   PART 1 — flag grammar: `terrainT1024` ABSENT ⇒ ladder OFF (the legacy
-//            t1024-first boot is the kill path); `defer`/`on`/`1`/`true`/
+//   PART 1 — flag grammar: `terrainT1024` ABSENT ⇒ `auto` (ladder ON —
+//            the default since 2026-10-06); `legacy` ⇒ ladder OFF (the
+//            t1024-first boot, the kill path); `defer`/`on`/`1`/`true`/
 //            `yes` ⇒ deferred promotion; `eager` ⇒ immediate; `off`/`0`/
 //            `false`/`no` ⇒ ladder ON but PINNED at t128 (NOT the legacy
 //            path); garbage ⇒ the ladder's own default. Not memoised.
@@ -46,10 +47,22 @@
 //            RETAINED t128 mip sets (no fetch), drops the released-mirror
 //            registrations with the bytes they described, and is a no-op at
 //            t128 / when the ladder never armed.
-//   PART 9 — OFF-arm identity: with the flag ABSENT `buildTerrainBc7Atlas`
-//            never consults the controller, never reads a slice, leaves
-//            every ladder counter 0, and fetches exactly the manifest + both
-//            full-tier channels — today's request set.
+//   PART 9 — LEGACY-arm identity: with `?terrainT1024=legacy`
+//            `buildTerrainBc7Atlas` never consults the controller, never
+//            reads a slice, leaves every ladder counter 0, and fetches
+//            exactly the manifest + both full-tier channels — the
+//            pre-2026-10-06 request set.
+//   PART 11 — the DEFAULT boot (flag absent, no pack controller): t128 comes
+//            from the STATIC derived tier (assets/terrain_bc7/t128), the
+//            atlas is live at t128 after manifest + 58 small payloads, the
+//            promotion fetches the full tier at LOW fetch priority, a stale
+//            static tier (rsId map ≠ full tier) is refused (counted
+//            fallback), a missing one falls back to legacy, and the
+//            scene-ready latch is the promotion signal with no controller;
+//            a `?bandwidth=low` session targets t512 first.
+//   PART 12 — scripts/derive-terrain-t128.mjs: mip-slicing yields the 128²
+//            chain byte-for-byte (21,892 B), refuses malformed sources, and
+//            the DEPLOYED static tier equals the deployed pack slices.
 //
 // Run:  cd apps/holtburger-web && node harness/test_terrain_tier_ladder.mjs
 
@@ -223,10 +236,13 @@ function resetAll() {
 console.log("\nPART 1 — flag grammar (`?terrainT1024`)");
 // ===========================================================================
 {
-  check("modes are the documented four", TERRAIN_LADDER_MODES.join(",") === "absent,defer,eager,off");
-  check("ABSENT ⇒ ladder off (the legacy t1024-first boot is the kill path)",
-    terrainT1024Mode("") === "absent" && terrainLadderArmed("") === false);
-  check("absent even with other flags present", terrainT1024Mode("?packSource=on&texWorkers=on") === "absent");
+  check("modes are the documented five", TERRAIN_LADDER_MODES.join(",") === "auto,legacy,defer,eager,off");
+  check("ABSENT ⇒ auto: the ladder is the default (2026-10-06)",
+    terrainT1024Mode("") === "auto" && terrainLadderArmed("") === true);
+  check("auto even with other flags present", terrainT1024Mode("?packSource=on&texWorkers=on") === "auto");
+  check("?terrainT1024=auto ⇒ auto", terrainT1024Mode("?terrainT1024=auto") === "auto");
+  check("?terrainT1024=legacy ⇒ ladder OFF (the t1024-first kill path)",
+    terrainT1024Mode("?terrainT1024=legacy") === "legacy" && terrainLadderArmed("?terrainT1024=legacy") === false);
   for (const v of ["defer", "on", "1", "true", "yes", "DEFER", "On"]) {
     check(`?terrainT1024=${v} ⇒ defer`, terrainT1024Mode(`?terrainT1024=${v}`) === "defer");
   }
@@ -243,7 +259,7 @@ console.log("\nPART 1 — flag grammar (`?terrainT1024`)");
   setSearch("?terrainT1024=eager");
   check("reads window.location.search when no arg is given", terrainT1024Mode() === "eager");
   setSearch("");
-  check("re-reads after the search changes (no memo)", terrainT1024Mode() === "absent");
+  check("re-reads after the search changes (no memo)", terrainT1024Mode() === "auto");
 }
 
 // ===========================================================================
@@ -490,8 +506,10 @@ function fullTierFixture(tier = "t1024") {
     !!legacy && legacy.tileSize === FULL_TILE && legacy.ladder === undefined);
   check("…counted as a ladder fallback, not a silent tier change",
     terrainBc7Stats().ladder.fallbacks === 1 && terrainBc7Stats().ladder.armed === false);
-  check("…and it fetched the full-tier payloads (29 × 2 + manifest)",
-    log2.length === 1 + 29 * 2, String(log2.length));
+  check("…after probing the static t128 tier once (absent in this fixture)",
+    log2.filter((u) => u.endsWith("terrain_bc7/t128/manifest.json")).length === 1, log2.slice(0, 3).join(","));
+  check("…and it fetched the full-tier payloads (29 × 2 + manifest + the static probe)",
+    log2.length === 1 + 1 + 29 * 2, String(log2.length));
 }
 
 // ===========================================================================
@@ -647,12 +665,12 @@ console.log("\nPART 8 — the demote rung (H-05.1 R1: terrain t1024→t128)");
 }
 
 // ===========================================================================
-console.log("\nPART 9 — OFF-arm identity (`?terrainT1024` absent)");
+console.log("\nPART 9 — LEGACY-arm identity (`?terrainT1024=legacy`)");
 // ===========================================================================
 {
   const fx = fullTierFixture();
   resetAll();
-  setSearch("?packSource=on"); // packs on, ladder flag ABSENT
+  setSearch("?packSource=on&terrainT1024=legacy"); // packs on, ladder explicitly OFF
   let sliceReads = 0;
   initTerrainTierLadder({
     controller: {
@@ -670,8 +688,8 @@ console.log("\nPART 9 — OFF-arm identity (`?terrainT1024` absent)");
     log.length === 1 + 29 * 2, String(log.length));
   check("…the t1024 aniso floor applies as it always did", atlas.atlasTexture.anisotropy === TERRAIN_BC7_HIRES_ANISO);
   check("…the controller was never consulted", sliceReads === 0);
-  check("…every ladder counter is 0 and the mode reads ABSENT",
-    st.ladder.mode === "absent" && st.ladder.armed === false && st.ladder.tier === null
+  check("…every ladder counter is 0 and the mode reads LEGACY",
+    st.ladder.mode === "legacy" && st.ladder.armed === false && st.ladder.tier === null
     && st.ladder.promotions === 0 && st.ladder.fallbacks === 0 && st.ladder.mirrorsReleased === 0);
   check("…and nothing registered a released texture (the restore path stays synchronous)",
     releasedTextureCount() === 0);
@@ -729,6 +747,155 @@ console.log("\nPART 10 — initTexture staging (SPEC §1.3's named primitive)");
       !!atlas && /stage t128: gl lost/.test(terrainBc7Stats().ladder.lastError || ""));
   })() instanceof Promise);
   globalThis.window.liveScene3d = null;
+}
+
+// ===========================================================================
+console.log("\nPART 11 — the DEFAULT boot: static t128 tier, no pack controller");
+// ===========================================================================
+{
+  const { _resetBandwidthTierForTest } = await import("../scene3d/bandwidth_tier.js");
+  const T128_BASE = "scene3d/assets/terrain_bc7/t128";
+  const withStatic = (fx, { staleLayer = -1 } = {}) => {
+    const map = new Map(fx.map);
+    const layers = JSON.parse(JSON.stringify(fx.layers));
+    if (staleLayer >= 0) layers[String(staleLayer)].rsId = "0x0600FFFF";
+    map.set(`${T128_BASE}/manifest.json`, new TextEncoder().encode(JSON.stringify({
+      pack: "terrain-bc7-v2", tier: "t128", tileSize: TERRAIN_T128_TILE, levels: T128_LEVELS, layers,
+    })));
+    uniqueRs(fx.layers).forEach((rs, i) => {
+      const hex = `0x${rs.toString(16).toUpperCase()}`;
+      map.set(`${T128_BASE}/${hex}_color.hbc7`, makeHbc7(TERRAIN_T128_TILE, TERRAIN_T128_TILE, i));
+      map.set(`${T128_BASE}/${hex}_nra.hbc7`, makeHbc7(TERRAIN_T128_TILE, TERRAIN_T128_TILE, i + 40));
+    });
+    return map;
+  };
+  /** Like stubFetch, but also records the fetch-priority hint. */
+  const stubFetchPrio = (map) => {
+    const log = [];
+    const inner = stubFetch(map);
+    const base = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      log.push({ url: String(url), priority: init?.priority ?? null });
+      return base(url, init);
+    };
+    return { log, inner };
+  };
+  const inert = { armed: false, getT128Slice: () => null, diag: { milestones: {} } };
+  const staging = (t) => t.onUpdate?.(t);
+
+  const fx = fullTierFixture();
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "high" });
+  setSearch(""); // the bare default URL
+  globalThis.window.__sceneReadyEverFired = false;
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  const { log } = stubFetchPrio(withStatic(fx));
+  const atlas = await buildTerrainBc7Atlas({ anisotropy: 4 });
+  let st = terrainBc7Stats();
+  check("bare default boots the ladder at t128 from the STATIC tier",
+    !!atlas && atlas.tileSize === TERRAIN_T128_TILE && atlas.ladder === "auto"
+    && st.ladder.mode === "auto" && st.ladder.sliceSource === "static" && st.ladder.tier === "t128",
+    JSON.stringify({ t: atlas?.tileSize, l: atlas?.ladder, src: st.ladder.sliceSource, e: st.ladder.lastError }));
+  check("…after ONLY the full manifest + the t128 manifest + 58 small payloads",
+    log.length === 2 + 29 * 2 && log.every((r) => r.url.endsWith("manifest.json") || r.url.startsWith(T128_BASE)),
+    String(log.length));
+  check("…none of them at low priority (this IS the first-paint path)", log.every((r) => r.priority === null));
+  check("…the promotion target is the full tier the manifest resolved", st.ladder.fullTier === "t1024");
+
+  // No controller ⇒ the scene-ready latch is the converged proxy.
+  await new Promise((r) => setTimeout(r, 2600));
+  check("no ready latch ⇒ still at t128 after the settle window (30 s ceiling applies)",
+    terrainBc7Stats().ladder.tier === "t128" && terrainBc7Stats().ladder.promotions === 0);
+  const before = log.length;
+  globalThis.window.__sceneReadyEverFired = true;
+  await new Promise((r) => setTimeout(r, 2600));
+  st = terrainBc7Stats();
+  check("ready latch ⇒ promoted to the full tier", st.ladder.tier === "t1024" && st.ladder.promotions === 1,
+    JSON.stringify({ tier: st.ladder.tier, e: st.ladder.lastError }));
+  const promo = log.slice(before);
+  check("…the promotion fetched the full tier (29 × 2) at LOW fetch priority",
+    promo.length === 29 * 2 && promo.every((r) => r.priority === "low" && r.url.includes("/t1024/")),
+    `${promo.length} ${promo[0]?.priority}`);
+  check("…into the SAME texture objects", atlas.atlasTexture.image.width === FULL_TILE);
+  globalThis.window.__sceneReadyEverFired = false;
+
+  // A stale static tier (re-baked t1024, not re-derived) is refused, counted.
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "high" });
+  setSearch("");
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  stubFetch(withStatic(fx, { staleLayer: 5 }));
+  const stale = await buildTerrainBc7Atlas({ anisotropy: 4 });
+  st = terrainBc7Stats();
+  check("a stale static tier is REFUSED (never mixed with another bake's layer map)",
+    !!stale && stale.tileSize === FULL_TILE && stale.ladder === undefined
+    && st.ladder.fallbacks === 1 && /re-derive/.test(st.ladder.lastError || ""), st.ladder.lastError);
+
+  // No static tier at all (un-derived checkout) ⇒ legacy boot, counted.
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "high" });
+  setSearch("");
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  stubFetch(fx.map);
+  const none = await buildTerrainBc7Atlas({ anisotropy: 4 });
+  check("no static tier ⇒ legacy full-tier boot (counted, terrain never missing)",
+    !!none && none.tileSize === FULL_TILE && terrainBc7Stats().ladder.fallbacks === 1
+    && /derive-terrain-t128/.test(terrainBc7Stats().ladder.lastError || ""), terrainBc7Stats().ladder.lastError);
+
+  // `?bandwidth=low` ⇒ the retail-native t512 is the promotion target.
+  const fx512 = fullTierFixture("t512");
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "low" });
+  setSearch("");
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  const both = withStatic(fx);
+  for (const [k, v] of fx512.map) both.set(k, v);
+  stubFetch(both);
+  const low = await buildTerrainBc7Atlas({ anisotropy: 4 });
+  check("low bandwidth: t128 first, promotion target t512 (not the 65 MB t1024)",
+    !!low && low.tileSize === TERRAIN_T128_TILE && terrainBc7Stats().ladder.fullTier === "t512");
+  resetAll();
+  _resetBandwidthTierForTest();
+}
+
+// ===========================================================================
+console.log("\nPART 12 — scripts/derive-terrain-t128.mjs");
+// ===========================================================================
+{
+  const { pathToFileURL } = await import("node:url");
+  const scriptPath = path.resolve(APP, "../../scripts/derive-terrain-t128.mjs");
+  const { sliceHbc7 } = await import(pathToFileURL(scriptPath).href);
+  const src = makeHbc7(1024, 1024, 7);
+  const r = sliceHbc7(src);
+  check("1024² chain slices to a 21,892 B 128² HBC7 with 8 levels",
+    r.bytes.byteLength === 21892 && r.levels === T128_LEVELS);
+  const dv = new DataView(r.bytes.buffer);
+  check("…header rewritten to 128² / 32×32 blocks",
+    dv.getUint32(0, true) === 0x37434248 && dv.getUint32(4, true) === 128 && dv.getUint32(8, true) === 128
+    && dv.getUint32(12, true) === 32 && dv.getUint32(16, true) === 32);
+  const tail = src.subarray(src.byteLength - (21892 - HBC7_HEADER_BYTES));
+  check("…and the levels are the source chain's tail, byte for byte (no re-encode)",
+    Buffer.from(r.bytes.subarray(HBC7_HEADER_BYTES)).equals(Buffer.from(tail)));
+  const throws = (fn, label) => { try { fn(); check(label, false, "no throw"); } catch (_) { check(label, true); } };
+  throws(() => sliceHbc7(makeHbc7(64, 64)), "a source smaller than 128² is refused");
+  throws(() => { const b = makeHbc7(256, 256); b[0] = 0; sliceHbc7(b); }, "bad magic is refused");
+  throws(() => sliceHbc7(makeHbc7(256, 256).subarray(0, 4000)), "a truncated chain is refused");
+
+  // The DEPLOYED static tier must equal the DEPLOYED pack slices.
+  const staticDir = path.join(APP, "scene3d/assets/terrain_bc7/t128");
+  if (existsSync(path.join(staticDir, "manifest.json")) && realSlices) {
+    for (const chan of ["color", "nra"]) {
+      const rows = parseTerrainSlicePack(realSlices[chan]);
+      let same = 0;
+      for (const [rs, payload] of rows) {
+        const f = path.join(staticDir, `0x${(rs >>> 0).toString(16).toUpperCase().padStart(8, "0")}_${chan}.hbc7`);
+        if (existsSync(f) && Buffer.from(readFileSync(f)).equals(Buffer.from(payload))) same += 1;
+      }
+      check(`deployed static t128 ${chan} == deployed pack slice (29/29 byte-identical)`, same === 29, `${same}/29`);
+    }
+  } else {
+    console.log("  (static t128 tier not derived on this checkout — deployed byte-identity not checked)");
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

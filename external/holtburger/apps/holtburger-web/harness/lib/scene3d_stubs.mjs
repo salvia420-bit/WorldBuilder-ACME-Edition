@@ -66,6 +66,10 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   unregisterFullTierMirror: "() => false",
   // ./xu7_textures.js — ST5 lane-T transcode entry; unreachable flag-OFF.
   transcodeXu7WithNra: "async () => null",
+  // ./bandwidth_tier.js — `?bandwidth` (2026-10-06). "Not a low session" is
+  // the default arm (fast link / no measurement), so the statics full-tier
+  // upgrade veto never fires and every suite sees today's behaviour.
+  lowBandwidth: "() => false",
   // ./texture_release.js — `?texFreeCpu` CPU-side release arming. Returns
   // false = "not armed", which is also what the real function returns with the
   // flag off, so no suite's assertions change shape. The one call site is

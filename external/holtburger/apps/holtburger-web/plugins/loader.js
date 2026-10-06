@@ -697,8 +697,12 @@ export async function loadPlugins(opts) {
       }
       if (entry.modulePath) {
         try {
+          // Bundled page (scripts/build-shell.mjs): resolve the plugin INSIDE
+          // the bundle so it shares one instance of every module with the app
+          // (T11-D4). Unbundled page: no registry ⇒ the plain import, as ever.
+          const bundled = bundledPluginLoader(entry.modulePath);
           // eslint-disable-next-line no-undef
-          moduleById.set(id, await import(entry.modulePath));
+          moduleById.set(id, await (bundled ? bundled() : import(entry.modulePath)));
         } catch (e) {
           importErrors.set(id, e);
         }
@@ -828,6 +832,41 @@ export function callHook(module, hook, ctx) {
 }
 
 // =============================================================================
+// [6b] Bundled-plugin registry lookup (T11-D4, 2026-10-06)
+// =============================================================================
+
+/**
+ * On the bundled page, scripts/build-shell.mjs prepends
+ * `globalThis.__hbBundledPlugins = { "plugins/x.js": () => import(...) }` —
+ * lazy loaders for every plugin entry, compiled INTO the bundle. Resolve an
+ * absolute `modulePath` to one of them (keyed by the path relative to the
+ * page's directory, query/hash stripped). Returns the loader function, or
+ * null (no registry, a path outside the app, or an unknown plugin ⇒ the caller
+ * falls back to the plain dynamic import).
+ *
+ * @param {string} modulePath
+ * @param {{registry?:Object, baseUrl?:string}} [opts] test seams
+ * @returns {(() => Promise<any>)|null}
+ */
+export function bundledPluginLoader(modulePath, opts = {}) {
+  const reg = opts.registry !== undefined ? opts.registry : globalThis.__hbBundledPlugins;
+  if (!reg || !modulePath) return null;
+  try {
+    const baseHref = opts.baseUrl
+      // eslint-disable-next-line no-undef
+      || globalThis.document?.baseURI || globalThis.location?.href;
+    if (!baseHref) return null;
+    const base = new URL('./', baseHref).href;
+    const abs = new URL(modulePath, base).href.split('#')[0].split('?')[0];
+    if (!abs.startsWith(base)) return null;
+    const fn = reg[abs.slice(base.length)];
+    return typeof fn === 'function' ? fn : null;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
 // [7] Manifest-index loader (browser-friendly)
 // =============================================================================
 
@@ -882,10 +921,15 @@ export async function fetchManifestIndex(opts) {
   const entries = [];
   const skipped = [];
 
-  for (const desc of descriptors) {
+  // 2026-10-06 — fetched CONCURRENTLY, assembled in descriptor order. This
+  // loop used to `await` each manifest in turn: ~49 sequential round-trips on
+  // the boot path (index.html awaits initPluginBar before it starts the wasm),
+  // measured at ~2.4 s on a 48 ms tunnel and ~5–7 s over a typical WAN —
+  // pure latency with the link idle. Results (entries AND skipped reasons)
+  // keep the exact pre-change order, so plugin load order is unchanged.
+  const fetchOne = async (desc) => {
     if (typeof desc?.manifestPath !== 'string') {
-      skipped.push({ reason: `index descriptor missing manifestPath: ${JSON.stringify(desc)}` });
-      continue;
+      return { skip: { reason: `index descriptor missing manifestPath: ${JSON.stringify(desc)}` } };
     }
     const manifestUrl = new URL(desc.manifestPath, base).href;
     let manifest;
@@ -894,8 +938,7 @@ export async function fetchManifestIndex(opts) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       manifest = await res.json();
     } catch (e) {
-      skipped.push({ reason: `failed to fetch ${manifestUrl}: ${e.message}` });
-      continue;
+      return { skip: { reason: `failed to fetch ${manifestUrl}: ${e.message}` } };
     }
     let dev = null;
     if (probeDev && typeof desc.devPath === 'string') {
@@ -910,7 +953,12 @@ export async function fetchManifestIndex(opts) {
     const modulePath = desc.entry
       ? new URL(desc.entry, base).href
       : (manifest.entry ? new URL(manifest.entry, new URL(manifestUrl)).href : '');
-    entries.push({ manifest, dev, modulePath });
+    return { entry: { manifest, dev, modulePath } };
+  };
+  const results = await Promise.all(descriptors.map(fetchOne));
+  for (const r of results) {
+    if (r.skip) skipped.push(r.skip);
+    else entries.push(r.entry);
   }
 
   return { entries, skipped };

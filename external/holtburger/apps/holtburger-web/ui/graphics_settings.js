@@ -8,6 +8,7 @@
 // the first persisted change in a session.
 
 import { mountFullscreenControl } from "./fullscreen_toggle.js";
+import { bandwidthSetting, setBandwidthSetting, bandwidthTier } from "../scene3d/bandwidth_tier.js";
 
 const LS_KEY = "holtburger_graphics_v1";
 const QUALITY_EVENT = "hb-quality-changed";
@@ -317,6 +318,30 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(boolRow("Cast-stability ring", state.extras.castStabilityRing, (v) => {
     setExtra(state, "castStabilityRing", v);
   }, { hint: "Draws the 6 m circle you must stay inside while casting." }));
+
+  // --- Downloads ------------------------------------------------------------
+  // `?bandwidth` (2026-10-06). "Small" skips the optional detail downloads
+  // (upscaled statics textures, 1024² terrain, roughness/AO sidecars,
+  // detail/macro maps, atmosphere LUTs) — ~250 MB on a fresh visit to a busy
+  // town; "Auto" measures this page's own download rate. Reload to apply.
+  containerEl.appendChild(makeSectionHeader("Downloads"));
+  let tierNote = "";
+  try {
+    const r = bandwidthTier();
+    tierNote = `This session: ${r.tier === "low" ? "small" : "full"}` +
+      (r.bps ? ` (measured ${(r.bps / 1024).toFixed(0)} KB/s)` : ` (${r.source})`);
+  } catch (_e) { /* tier unresolvable: no note */ }
+  containerEl.appendChild(selectRow({
+    label: "Download size",
+    options: [
+      ["auto", "Auto (match my connection)"],
+      ["low", "Small (slow connection)"],
+      ["high", "Full detail"],
+    ],
+    value: bandwidthSetting(),
+    hint: tierNote || undefined,
+    onChange: (v) => { setBandwidthSetting(v); markDirty(); },
+  }));
 
   // --- Display ---------------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Display"));

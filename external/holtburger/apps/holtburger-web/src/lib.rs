@@ -5291,13 +5291,39 @@ pub async fn fetch_landblock_surface_dids(lb_cell_id: u32) -> Result<Vec<u32>, J
 /// decompressed RGBA8 payload returned is roughly
 /// `33 × 256 × 256 × 4 = ~8.6 MB` worst case. JS atlas-packs into a
 /// single GPU texture and we drop the originals.
+/// Make the Region record (`eor/portal:0x13000000`) resident in the main
+/// source on the URGENT lane (2026-10-06). The terrain-setup exports
+/// (`fetch_terrain_textures`, `_modulation_ranges`, `_base_tex_tiling`,
+/// `_detail_textures`) read it with `get_file_by_key` and never prefetched it
+/// themselves — they relied on some other caller having fetched it first, which
+/// held only while the terrain chain was slow. Once the chain moved to the
+/// urgent lane it could run first and `fetch_terrain_detail_textures` failed
+/// with "record not prefetched" (measured live at 666 kbps). Idempotent and
+/// cheap when the record is already cached (prefetch skips cached keys);
+/// failure stays the callers' existing fail-soft path.
+#[cfg(target_arch = "wasm32")]
+async fn ensure_region_resident(source: &holtburger_resource_http::ManifestResourceSource) {
+    let _ = source
+        .prefetch_urgent(&[holtburger_dat::ResourceKey::new("eor/portal", 0x1300_0000)])
+        .await;
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
+pub async fn fetch_terrain_textures(
+    // 2026-10-06: optional terrain-code filter. `None` (every existing
+    // caller) = all 33 tiles, byte-identical. The BC7 terrain arm passes
+    // `[32]`: its compressed arrays replace the RGBA8 atlas wholesale, so the
+    // only retail tile it still needs is RoadType's, for the road overlay —
+    // the other 28 unique 512² tiles were ~11 MB of downloads (minutes at
+    // 666 kbps) standing between login and the first terrain mesh.
+    only_codes: Option<Vec<u32>>,
+) -> Result<Vec<TerrainTexture>, JsValue> {
     use holtburger_dat::file_type::{Palette, Region, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::{ResourceKey, ResourceSource};
 
     let source = global_source::global_source();
+    ensure_region_resident(&source).await;
 
     // C-2 (2026-06-20): resolve each type's base SurfaceTexture id from the LIVE
     // Region (`terrain_desc[].terrain_tex.tex_gid`) instead of the frozen
@@ -5323,17 +5349,41 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
     // graph here is well-known: 33 SurfaceTextures → 33
     // Textures → up to 33 Palettes. Hand-rolled rather than
     // RecordingSource-driven because the levels are predictable.
-    let surf_keys: Vec<ResourceKey<'_>> = surf_ids
+    //
+    // URGENT lane (2026-10-06): terrain cannot build until these ~100
+    // records land (`resolveTerrainRingOpts` awaits this export before the
+    // atlas), and on the normal lane all three rounds queued behind the
+    // ring's statics-texture flood at LOW fetch priority — measured through
+    // a shaped 666 kbps link: >1,500 statics shards went first and the
+    // ground under the player had still not started 4.5 min in. The ground
+    // is player-blocking by definition, which is exactly what
+    // `prefetch_urgent` (semaphore bypass, default fetch priority) is for —
+    // the same lane the player's 3×3 heightmaps already use.
+    // The terrain codes this call decodes, in ascending order.
+    let wanted: Vec<usize> = match &only_codes {
+        None => (0..surf_ids.len()).collect(),
+        Some(codes) => {
+            let mut v: Vec<usize> = codes
+                .iter()
+                .map(|c| *c as usize)
+                .filter(|c| *c < surf_ids.len())
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        }
+    };
+    let surf_keys: Vec<ResourceKey<'_>> = wanted
         .iter()
-        .map(|id| ResourceKey::new("eor/portal", *id))
+        .map(|i| ResourceKey::new("eor/portal", surf_ids[*i]))
         .collect();
     source
-        .prefetch(&surf_keys)
+        .prefetch_urgent(&surf_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch SurfaceTextures: {e}")))?;
 
-    let mut tex_ids: Vec<u32> = Vec::with_capacity(surf_ids.len());
-    for &surf_id in surf_ids.iter() {
+    let mut tex_ids: Vec<u32> = Vec::with_capacity(wanted.len());
+    for surf_id in wanted.iter().map(|i| surf_ids[*i]) {
         if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
             && let Ok(s) = SurfaceTexture::unpack(&b)
             && let Some(t) = s.highest_res()
@@ -5346,7 +5396,7 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     source
-        .prefetch(&tex_keys)
+        .prefetch_urgent(&tex_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch Textures: {e}")))?;
 
@@ -5365,13 +5415,13 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
             .map(|id| ResourceKey::new("eor/portal", *id))
             .collect();
         source
-            .prefetch(&pal_keys)
+            .prefetch_urgent(&pal_keys)
             .await
             .map_err(|e| JsValue::from_str(&format!("prefetch Palettes: {e}")))?;
     }
 
-    let mut out = Vec::with_capacity(surf_ids.len());
-    for (terrain_type, surf_id) in surf_ids.iter().copied().enumerate() {
+    let mut out = Vec::with_capacity(wanted.len());
+    for (terrain_type, surf_id) in wanted.iter().map(|i| (*i, surf_ids[*i])) {
         // SurfaceTexture (mip stack).
         let surf_bytes = source
             .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
@@ -5445,6 +5495,7 @@ pub async fn fetch_terrain_modulation_ranges() -> Result<Vec<u32>, JsValue> {
     use holtburger_dat::file_type::Region;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
+    ensure_region_resident(&source).await;
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
         .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
@@ -5491,6 +5542,7 @@ pub async fn fetch_terrain_base_tex_tiling() -> Result<Vec<u32>, JsValue> {
     use holtburger_dat::file_type::Region;
     use holtburger_dat::{ResourceKey, ResourceSource};
     let source = global_source::global_source();
+    ensure_region_resident(&source).await;
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", 0x1300_0000))
         .map_err(|e| JsValue::from_str(&format!("Region 0x13000000: {e}")))?;
@@ -5573,12 +5625,17 @@ fn build_detail_texture_luts(entries: &[(u32, u32, u32)]) -> (Vec<u32>, Vec<u32>
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, JsValue> {
+    // URGENT lane (2026-10-06): part of the one-time terrain setup chain that
+    // `resolveTerrainRingOpts` awaits before ANY terrain mesh can build — on the
+    // normal lane it queued behind the ring's statics-texture flood (see
+    // `fetch_terrain_textures`).
     use holtburger_dat::file_type::{
         Palette, Region, SurfaceTexture, Texture, TextureDecodeError,
     };
     use holtburger_dat::{ResourceKey, ResourceSource};
 
     let source = global_source::global_source();
+    ensure_region_resident(&source).await;
 
     // 1. Region → per-type detail DID + tiling.
     let region_bytes = source
@@ -5610,7 +5667,7 @@ pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, Js
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     source
-        .prefetch(&surf_keys)
+        .prefetch_urgent(&surf_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch detail SurfaceTextures: {e}")))?;
 
@@ -5628,7 +5685,7 @@ pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, Js
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     source
-        .prefetch(&tex_keys)
+        .prefetch_urgent(&tex_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch detail Textures: {e}")))?;
 
@@ -5647,7 +5704,7 @@ pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, Js
             .map(|id| ResourceKey::new("eor/portal", *id))
             .collect();
         source
-            .prefetch(&pal_keys)
+            .prefetch_urgent(&pal_keys)
             .await
             .map_err(|e| JsValue::from_str(&format!("prefetch detail Palettes: {e}")))?;
     }
@@ -5720,6 +5777,10 @@ pub async fn fetch_terrain_detail_textures() -> Result<TerrainDetailTextures, Js
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_terrain_alpha_masks() -> Result<TerrainAlphaMasks, JsValue> {
+    // URGENT lane (2026-10-06): part of the one-time terrain setup chain that
+    // `resolveTerrainRingOpts` awaits before ANY terrain mesh can build — on the
+    // normal lane it queued behind the ring's statics-texture flood (see
+    // `fetch_terrain_textures`).
     use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::{ResourceKey, ResourceSource};
 
@@ -5740,7 +5801,7 @@ pub async fn fetch_terrain_alpha_masks() -> Result<TerrainAlphaMasks, JsValue> {
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     source
-        .prefetch(&surf_keys)
+        .prefetch_urgent(&surf_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch alpha SurfaceTextures: {e}")))?;
 
@@ -5765,7 +5826,7 @@ pub async fn fetch_terrain_alpha_masks() -> Result<TerrainAlphaMasks, JsValue> {
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     source
-        .prefetch(&tex_keys)
+        .prefetch_urgent(&tex_keys)
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch alpha Textures: {e}")))?;
 
@@ -41101,9 +41162,13 @@ pub async fn start_session(
     // indefinitely (the "Session for Id 0" flood). On timeout we return
     // Err; `cmd_tx` drops with this scope, the recv loop sees its cmd
     // channel close and exits, and the transport Drop closes the WS.
+    // 30 s → 60 s (2026-10-06): on a 666 kbps link the cold-boot downloads
+    // share the line with the handshake; measured on the 1070, CharacterList
+    // took ~27 s after Connect — 30 s was a coin flip. Still bounded, so the
+    // flood fix above stands.
     let CharListReady { account_name } = match futures::future::select(
         charlist_rx,
-        Box::pin(gloo_timers::future::TimeoutFuture::new(30_000)),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(60_000)),
     )
     .await
     {
@@ -41112,7 +41177,7 @@ pub async fn start_session(
         })?,
         futures::future::Either::Right((_, _)) => {
             return Err(JsValue::from_str(
-                "start_session: no CharacterList within 30s (handshake timeout) — session torn down",
+                "start_session: no CharacterList within 60s (handshake timeout) — session torn down",
             ));
         }
     };

@@ -502,6 +502,16 @@ const TIER5 = [
   { tier: 5, flag: "remoteStickyRadius", file: "tests/remote_sticky_radius.test.mjs" },
   { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs",
     requires: "../../dist/manifest.json" },
+  // 2026-10-06 — slow-link boot (666 kbps measured on the 1070): bandwidth
+  // tier, atmosphere LUT plan, parallel plugin manifests + bundled-plugin
+  // registry, wasm preload stamp, proxy shell gate, regional cell catalogs.
+  { tier: 5, flag: "bandwidth_tier", file: "test_bandwidth_tier.mjs" },
+  { tier: 5, flag: "atmosphere_lut_plan", file: "test_atmosphere_lut_plan.mjs" },
+  { tier: 5, flag: "plugin_manifest_parallel", file: "test_plugin_manifest_parallel.mjs" },
+  { tier: 5, flag: "wasm_preload_stamp", file: "test_wasm_preload_stamp.mjs" },
+  { tier: 5, flag: "harness_shell_gate", file: "harness/test_shell_gate.mjs" },
+  { tier: 5, flag: "harness_catalog_regions", file: "harness/test_catalog_regions.mjs",
+    requires: "/mnt/wbterminal2/holtburger-dist" },
   { tier: 5, flag: "harness_tex_compressed_only", file: "harness/test_tex_compressed_only.mjs" },
   { tier: 5, flag: "harness_texchan_decode", file: "harness/test_texchan_decode.mjs",
     requires: "/mnt/wbterminal2/holtburger-dist/suite/texchan-manifest.json" },

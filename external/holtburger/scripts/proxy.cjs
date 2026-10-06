@@ -40,11 +40,25 @@
 
 const http = require("http");
 const net = require("net");
+const path = require("path");
 const url = require("url");
+const { createShellGate } = require("./shell_gate.cjs");
 
-const PROXY_PORT = 7080;
-const HTTP_BACKEND = { host: "127.0.0.1", port: 8765 };
-const WS_BACKEND = { host: "127.0.0.1", port: 8080 };
+// Ports are env-overridable (2026-10-06) so a second instance can be run for
+// testing next to the live one; defaults are the deployed contract.
+const PROXY_PORT = Number(process.env.PROXY_PORT || 7080);
+const HTTP_BACKEND = { host: "127.0.0.1", port: Number(process.env.HTTP_BACKEND_PORT || 8765) };
+const WS_BACKEND = { host: "127.0.0.1", port: Number(process.env.WS_BACKEND_PORT || 8080) };
+
+// The bundled app shell (2026-10-06, scripts/shell_gate.cjs): a request for
+// /apps/holtburger-web/index.html gets the T11 bundle (index-bundled.html,
+// ~1.1 MB gzip vs ~3.95 MB / ~376 requests unbundled) while — and only
+// while — it is provably current; otherwise the live page, plus a quiet-
+// period background rebuild. `?shell=off` / HB_SHELL=off are the escapes.
+// Every index response carries `x-hb-shell: bundled | unbundled; <reason>`.
+const shellGate = createShellGate({
+  appRoot: path.resolve(__dirname, "..", "apps", "holtburger-web"),
+});
 
 // Login-boot diagnosis 2026-06-11: the default global agent opens an
 // unbounded number of parallel upstream sockets (maxSockets=Infinity),
@@ -72,6 +86,16 @@ function proxyHttp(clientReq, clientRes) {
   // before so a fresh bake propagates immediately.
   const isImmutable = /^\/dist\/shards\/[0-9a-f]{2}\/[0-9a-f]+\.bin/i.test(targetPath);
 
+  let shellHeader = null;
+  if (clientReq.method === "GET" || clientReq.method === "HEAD") {
+    let d = null;
+    try { d = shellGate.decide(targetPath); } catch (e) { console.error(`[shell-gate] ${e.message}`); }
+    if (d) {
+      if (d.serveBundled) targetPath = d.path;
+      shellHeader = d.serveBundled ? "bundled" : `unbundled; ${d.reason}`.replace(/[^\x20-\x7e]/g, "?");
+    }
+  }
+
   const proxyReq = http.request(
     {
       host: HTTP_BACKEND.host,
@@ -86,6 +110,7 @@ function proxyHttp(clientReq, clientRes) {
       if (isImmutable && proxyRes.statusCode === 200) {
         outHeaders["cache-control"] = "public, max-age=31536000, immutable";
       }
+      if (shellHeader) outHeaders["x-hb-shell"] = shellHeader;
       clientRes.writeHead(proxyRes.statusCode, outHeaders);
       proxyRes.pipe(clientRes);
     }
