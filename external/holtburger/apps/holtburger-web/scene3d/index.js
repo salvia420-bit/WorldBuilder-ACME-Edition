@@ -1047,9 +1047,10 @@ export async function preInit3D(canvas) {
     // eslint-disable-next-line no-console
     console.log("[sync-tick] ?syncPhysicsTick=on — frame-top tickMovement enqueue + microtask flush before tickPerFrame");
     try {
-      if (!/[?&]posePublishPostTick=on/.test(window.location.search)) {
+      // posePublishPostTick is DEFAULT ON (2026-10-06); warn only on its escape.
+      if (/[?&]posePublishPostTick=off/.test(window.location.search)) {
         // eslint-disable-next-line no-console
-        console.warn("[sync-tick] ?syncPhysicsTick=on without ?posePublishPostTick=on — the camera still reads a pre-tick pose; the same-frame contract needs both flags");
+        console.warn("[sync-tick] ?syncPhysicsTick=on with ?posePublishPostTick=off — the camera still reads a pre-tick pose; the same-frame contract needs both");
       }
     } catch (_) { /* warning is best-effort */ }
   }

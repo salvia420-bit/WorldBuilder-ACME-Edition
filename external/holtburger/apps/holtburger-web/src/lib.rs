@@ -914,12 +914,15 @@ fn parse_maint_prune_flag(search: &str) -> bool {
 /// `SmartBox::PlayerPhysicsUpdatedCallback` immediately AFTER the
 /// player's own `update_object` (acclient.c:311375-311378), so consumers
 /// (camera, cell recenter) see the pose the SAME frame it was
-/// integrated. Default OFF = publish-before-tick (shadows one tick
-/// stale), byte-identical to before — survey A1 §3 row 2.
+/// integrated. DEFAULT ON since 2026-10-06 (its partner `?syncPhysicsTick`
+/// has been default-on for months, so the default build ran the frame-top
+/// tick but still published the pose one tick stale — survey A1 §3 row 2;
+/// owner chose the flip). `?posePublishPostTick=off` restores
+/// publish-before-tick, byte-identical to before.
 #[cfg(target_arch = "wasm32")]
 fn parse_pose_publish_post_tick_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "posePublishPostTick=on")
+    !trimmed.split('&').any(|kv| kv == "posePublishPostTick=off")
 }
 
 /// Movement bughunt 2026-06-19 ("stall → pull-back"): parse
