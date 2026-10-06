@@ -55,6 +55,14 @@ export const CELL_SHRINK_M = 0.3;
 export const ENTITY_PAD_M = 0.6;
 export const NEAR_GUARD_M = 1.0;
 export const HIDE_AFTER = 3;
+// Flip damping (eye-test 2026-10-06, 1070 street sweeps): a proxy grazing an
+// edge while the camera moves re-revealed every few frames (one Holtburg
+// cell 8+ times in one sweep), and each reveal lands 1-2 frames late — a
+// blink. A proxy revealed again within FLIP_WINDOW_FRAMES of its last reveal
+// doubles its hide delay (up to HIDE_AFTER_MAX); a quiet proxy starts over at
+// HIDE_AFTER. A still camera never flips, so steady culling is unchanged.
+export const HIDE_AFTER_MAX = 24;
+export const FLIP_WINDOW_FRAMES = 90;
 // A proxy not re-requested for this many frames is retired (box hidden, query
 // freed) — the cell left the render set / the entity left the frustum.
 const RETIRE_FRAMES = 30;
@@ -63,13 +71,19 @@ const RETIRE_FRAMES = 30;
  * Pure state machine for one proxy (exported for the node test).
  * `result` true = samples passed (visible), false = occluded.
  */
-export function stepProxyState(st, result) {
+export function stepProxyState(st, result, frame = 0) {
   if (result) {
+    if (!st.visible) {
+      st.hideAfter = frame - st.lastReveal <= FLIP_WINDOW_FRAMES
+        ? Math.min((st.hideAfter || HIDE_AFTER) * 2, HIDE_AFTER_MAX)
+        : HIDE_AFTER;
+      st.lastReveal = frame;
+    }
     st.occludedRun = 0;
     st.visible = true;
   } else {
     st.occludedRun += 1;
-    if (st.occludedRun >= HIDE_AFTER) st.visible = false;
+    if (st.occludedRun >= (st.hideAfter || HIDE_AFTER)) st.visible = false;
   }
   return st.visible;
 }
@@ -135,7 +149,7 @@ export class OcclusionCuller {
           p.queryPending = false;
           resolved += 1;
           // A result issued while disarmed (or before a re-arm) is stale.
-          if (p.issuedArmedEpoch === this._armEpoch) stepProxyState(p, passed);
+          if (p.issuedArmedEpoch === this._armEpoch) stepProxyState(p, passed, this.frame);
         } else {
           pending += 1;
         }
@@ -178,7 +192,7 @@ export class OcclusionCuller {
       mesh.visible = false;
       p = {
         key, mesh, query: null, queryPending: false, issuedFrame: -1, issuedArmedEpoch: -1,
-        visible: true, occludedRun: 0, lastWanted: this.frame,
+        visible: true, occludedRun: 0, lastWanted: this.frame, hideAfter: HIDE_AFTER, lastReveal: -Infinity,
       };
       const self = this;
       mesh.onBeforeRender = function (renderer, scene, camera) {

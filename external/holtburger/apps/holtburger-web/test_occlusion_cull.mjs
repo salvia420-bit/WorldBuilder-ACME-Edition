@@ -10,6 +10,8 @@ import {
   OcclusionCuller,
   stepProxyState,
   HIDE_AFTER,
+  HIDE_AFTER_MAX,
+  FLIP_WINDOW_FRAMES,
   NEAR_GUARD_M,
 } from "./scene3d/occlusion_cull.js";
 
@@ -76,6 +78,22 @@ console.log("PART 1 — state machine");
   check("one visible result shows it again", st.visible === true && st.occludedRun === 0);
   stepProxyState(st, false); stepProxyState(st, true); stepProxyState(st, false);
   check("an interrupted run does not hide", st.visible === true);
+}
+{
+  // Flip damping: a proxy that keeps re-revealing (grazing an edge while the
+  // camera moves) waits longer before hiding again; a quiet one starts over.
+  const st = { visible: true, occludedRun: 0, hideAfter: HIDE_AFTER, lastReveal: -Infinity };
+  const hideRun = (f) => { let n = 0; while (st.visible && n < 100) { stepProxyState(st, false, f); n++; } return n; };
+  check(`first hide still takes ${HIDE_AFTER} results`, hideRun(10) === HIDE_AFTER);
+  stepProxyState(st, true, 20); // first reveal: long after "the last" ⇒ no damping
+  check("a first reveal keeps the base delay", st.hideAfter === HIDE_AFTER);
+  hideRun(22);
+  stepProxyState(st, true, 30); // re-revealed 10 frames later ⇒ doubled
+  check("a quick re-reveal doubles the hide delay", st.hideAfter === HIDE_AFTER * 2 && hideRun(31) === HIDE_AFTER * 2);
+  for (let f = 40; f < 400; f += 10) { stepProxyState(st, true, f); hideRun(f + 1); }
+  check(`a flapping proxy is capped at ${HIDE_AFTER_MAX}`, st.hideAfter === HIDE_AFTER_MAX);
+  stepProxyState(st, true, 400 + FLIP_WINDOW_FRAMES + 1);
+  check("a reveal after a quiet spell starts over at the base delay", st.hideAfter === HIDE_AFTER);
 }
 
 console.log("PART 2 — query lifecycle");

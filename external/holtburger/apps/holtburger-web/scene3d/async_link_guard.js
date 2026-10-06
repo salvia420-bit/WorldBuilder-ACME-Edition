@@ -62,6 +62,19 @@ export const VERSION_DEFER_MAX = 2;
 // deferred EVERY time — a lifetime count let the third upgrade link
 // synchronously (1.1-1.3 s on the 1070, first street-level camera sweep).
 export const VERSION_DEFER_WINDOW_MS = 2000;
+// Version CHURN that never needs a link (eye-test 2026-10-06, 1070). three
+// draws a transparent DoubleSide material in two passes, each preceded by
+// `side = Back|Front; needsUpdate = true` (r184 renderObject), so `version`
+// moves twice per frame and both per-side programs are program-cache hits.
+// Two Holtburg static-atlas buckets (`stat-atlas-x-*|1|…`) did this: the
+// rate cap above let 2 deferrals through per window, so the bucket's statics
+// blinked out for a frame every ~2 s (107 skipped frames over a 23 s cold
+// Shoushi tour). A version-moved compile that added NO program to the
+// material's `programs` map is a no-op; after VERSION_NOOP_TRUST of those in a
+// row the material's version moves draw through. A trusted draw that does
+// create a program (a real key change) revokes the trust on the spot, so at
+// most that one link is synchronous — the pre-guard behaviour.
+export const VERSION_NOOP_TRUST = 2;
 const MAX_COMPILES_PER_DRAIN = 64;
 
 let _activeApi = null;
@@ -103,7 +116,10 @@ function mpCombo(mp) {
 
 /** Slow-path bookkeeping per material (never stored ON the material). */
 export function newLinkState() {
-  return { pending: false, ver: -1, verAtQueue: -1, comboAtQueue: 0, verDefers: 0, verDeferAt: -Infinity, combos: new Set() };
+  return {
+    pending: false, ver: -1, verAtQueue: -1, comboAtQueue: 0, verDefers: 0, verDeferAt: -Infinity, combos: new Set(),
+    verMoveAtQueue: false, progsAtQueue: 0, verNoop: 0,
+  };
 }
 
 /**
@@ -141,6 +157,7 @@ export function linkDecision(material, mp, combo = 0, st = undefined) {
   }
   if (material.version !== mp.__version) {
     if (st && st.ver === material.version) return 0; // we compiled this version
+    if (st && st.verNoop >= VERSION_NOOP_TRUST) return 0; // learned churn (see VERSION_NOOP_TRUST)
     if (st && st.verDefers >= VERSION_DEFER_MAX && _now() - st.verDeferAt < VERSION_DEFER_WINDOW_MS) return 0;
     return 1;
   }
@@ -168,7 +185,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
   // so one compile per material — not per object — keeps a burst of new trees
   // from becoming its own hitch.
   const queue = new Map(); // material -> { object, camera, scene, combo }
-  const stats = { deferred: 0, queued: 0, compiled: 0, failed: 0, drains: 0, inFlight: 0 };
+  const stats = { deferred: 0, queued: 0, compiled: 0, failed: 0, drains: 0, inFlight: 0, trustRevoked: 0 };
   let drainArmed = false;
 
   // compile()'s target scene only contributes isScene / fog / environment /
@@ -218,6 +235,11 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
         st.pending = false;
         st.ver = st.verAtQueue;
         st.combos.add(st.comboAtQueue);
+        if (st.verMoveAtQueue) {
+          let progs = 0;
+          try { progs = props.get(m).programs?.size ?? 0; } catch (_) { /* disposed */ }
+          st.verNoop = progs > st.progsAtQueue ? 0 : st.verNoop + 1;
+        }
         stats.compiled += 1;
         stats.inFlight -= 1;
       }
@@ -242,6 +264,12 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
       st.pending = true;
       st.verAtQueue = qm.version;
       st.comboAtQueue = ctx.combo | 0;
+      // A re-compile of a material that already has a program (a version or
+      // kind move, not a first link): the compile below tells us whether it
+      // needed a new program at all.
+      const qmp = props.get(qm);
+      st.verMoveAtQueue = !!qmp.currentProgram;
+      st.progsAtQueue = qmp.programs?.size ?? 0;
       objs.push(ctx.object);
       mats.push(qm);
       camera = camera || ctx.camera;
@@ -311,7 +339,16 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
             try { material.addEventListener("dispose", clearOk); } catch (_) {}
             material.__hbLinkOkListen = true;
           }
-          stateOf(material).combos.add(combo);
+          const st = stateOf(material);
+          st.combos.add(combo);
+          // Trusted churn draws through a version move: if three had to build
+          // a program for it after all, stop trusting (VERSION_NOOP_TRUST).
+          if (st.verNoop >= VERSION_NOOP_TRUST && mp && mp.__version !== material.version) {
+            const before = mp.programs?.size ?? 0;
+            const ret = orig.call(this, camera, scene, geometry, material, object, group);
+            if ((mp.programs?.size ?? 0) > before) { st.verNoop = 0; stats.trustRevoked += 1; }
+            return ret;
+          }
         }
       }
     }

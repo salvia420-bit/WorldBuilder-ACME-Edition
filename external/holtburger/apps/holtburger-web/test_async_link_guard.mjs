@@ -5,7 +5,7 @@
 //   cd apps/holtburger-web/
 //   node test_async_link_guard.mjs
 
-import { linkDecision, installAsyncLinkGuard, VERSION_DEFER_MAX, newLinkState } from "./scene3d/async_link_guard.js";
+import { linkDecision, installAsyncLinkGuard, VERSION_DEFER_MAX, VERSION_DEFER_WINDOW_MS, VERSION_NOOP_TRUST, newLinkState } from "./scene3d/async_link_guard.js";
 
 let failed = 0, passed = 0;
 function check(name, ok, detail) {
@@ -120,6 +120,49 @@ console.log("PART 2 — the renderBufferDirect wrapper");
   const own = Object.keys(member).filter((k) => k.startsWith("__hb"));
   check("only the 4 stamp fields are stored on the material, in one order",
     own.join(",") === "__hbLinkOk,__hbLinkOkOwner,__hbLinkOkCombo,__hbLinkOkListen", own.join(","));
+  api.uninstall();
+  delete globalThis.window;
+}
+
+console.log("PART 3 — version churn that never needs a link (three's transparent DoubleSide two-pass)");
+{
+  check(`${VERSION_NOOP_TRUST} no-op version compiles in a row ⇒ a moved version draws through`,
+    linkDecision({ version: 9, userData: {} }, { currentProgram: { isReady: () => true }, __version: 1 }, 0,
+      Object.assign(newLinkState(), { verNoop: VERSION_NOOP_TRUST })) === 0);
+  check("…but one no-op is not enough",
+    linkDecision({ version: 9, userData: {} }, { currentProgram: { isReady: () => true }, __version: 1 }, 0,
+      Object.assign(newLinkState(), { verNoop: VERSION_NOOP_TRUST - 1 })) === 1);
+  // Fake renderer with a per-material programs map: compile() and draws are
+  // program-cache hits unless `newKey` is set.
+  const props = new WeakMap();
+  const scene = { isScene: true };
+  let draws = 0, newKey = false;
+  const progFor = (mp) => { if (!mp.programs) mp.programs = new Map(); if (mp.programs.size === 0 || newKey) mp.programs.set("k" + mp.programs.size, { isReady: () => true }); mp.currentProgram = [...mp.programs.values()].at(-1); };
+  const renderer = {
+    properties: { get(m) { let p = props.get(m); if (!p) { p = {}; props.set(m, p); } return p; } },
+    renderBufferDirect(camera, sc, g, material) { draws++; const mp = this.properties.get(material); if (mp.__version !== material.version) progFor(mp); mp.__version = material.version; },
+    compile(root) { root.traverse((o) => progFor(this.properties.get(o.material))); },
+  };
+  globalThis.window = {};
+  const api = installAsyncLinkGuard(renderer, () => scene);
+  const mat = { type: "MeshStandardMaterial", version: 0, userData: {}, transparent: true };
+  const obj = { name: "stat-atlas-x-8x8|1", material: mat };
+  const frame = async () => { for (let pass = 0; pass < 2; pass++) { mat.version++; renderer.renderBufferDirect({}, scene, {}, mat, obj, null); } await sleep(30); };
+  for (let i = 0; i < 4; i++) await frame(); // first link + the learning deferrals
+  await sleep(VERSION_DEFER_WINDOW_MS + 50); // past the rate cap: what follows is the trust, not the cap
+  const skippedBefore = api.stats.deferred;
+  draws = 0;
+  for (let i = 0; i < 10; i++) await frame();
+  check("after learning, a two-pass material draws BOTH passes every frame (no blink)",
+    draws === 20 && api.stats.deferred === skippedBefore, `draws=${draws} deferred+=${api.stats.deferred - skippedBefore}`);
+  newKey = true;
+  await frame();
+  newKey = false;
+  check("a trusted draw that had to build a program revokes the trust", api.stats.trustRevoked === 1 && api.stateOf(mat).verNoop === 0, JSON.stringify({ ...api.stats, verNoop: api.stateOf(mat).verNoop }));
+  await sleep(VERSION_DEFER_WINDOW_MS + 50);
+  const d0 = api.stats.deferred;
+  await frame();
+  check("…so the next version move is deferred again", api.stats.deferred > d0);
   api.uninstall();
   delete globalThis.window;
 }
