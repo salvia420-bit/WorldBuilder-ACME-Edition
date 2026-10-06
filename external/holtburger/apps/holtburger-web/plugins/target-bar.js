@@ -1,322 +1,226 @@
-// Target bar — port of retail gmToolbarUI (layout 0x21000016) middle
-// rows: the panel-shortcut strip + the [Use | Target | Examine] row
-// with Pack on the right. The existing plugins/hotbar.js renders only
-// the bottom 9-slot row of gmToolbarUI; PR-KK adds the rest.
+// Toolbar controls — the top band of retail gmToolbarUI (LayoutDesc
+// 0x21000016): combat-mode button, the six panel buttons, the
+// [Use | Selected Object | Examine] row and the Inventory (backpack)
+// button.
 //
-// Layout decoded via target_bar_layout_dump (2026-05-24) — root
-// 0x10000191 is 300×122; panel-shortcut + action elements live inside:
-//   Row 1 (y=0,  h=27): 6 panel-shortcut buttons
-//     0x10000192-195 combat-stance variants (mutually exclusive,
-//                    each 55×58 at x=0, spans rows 1+2 — left edge)
-//     0x10000196 separator (55,0) 7×27
-//     (retail names per elementIdName in retail-layouts/0x21000016.json)
-//     0x10000197 PanelButton_Social           (55,0)  35×27  (0x0600111F / 0x06001121)
-//     0x10000198 PanelButton_Magic            (85,0)  34×27  (0x06001119 / 0x0600111B)
-//     0x10000199 PanelButton_SkillManagement  (115,0) 34×27  (0x06001122 / 0x06001124)
-//     0x1000055A PanelButton_QuestManagement  (145,0) 34×27  (0x060069AE / 0x060069AF — quill)
-//     0x1000019A PanelButton_World            (175,0) 34×27  (0x06001116 / 0x06001118 — compass rose)
-//     0x1000019B PanelButton_Options          (204,0) 39×27  (0x0600111C / 0x0600111E)
-//     0x1000019C separator         (236,0) 10×27
-//   Row 2 (y=27, h=31): action row
-//     0x1000019D Use Selected      (55,27)  23×31  (sprite 0x06001129 N / 0x0600112A P / 0x0600120E G)
-//     0x1000019E Target display    (78,27)  140×31 (sprite 0x06001126 frame + child icon/text)
-//     0x100001A5 Examine Selected  (218,27) 22×31  (sprite 0x06001127 N / 0x06001128 P)
-//   Right edge: 0x100001B1 Pack/Main-Pack (238,0) 63×58 (sprite 0x06004CF7 N / 0x06004CF8 H)
+// HUD overhaul 2026-10-05 — ONE toolbar. This file used to mount a
+// second, independently positioned overlay (#hb-target-bar, bottom:46px,
+// z-index 49) that sat 36 px out of line BEHIND the hotbar's frame, so
+// players saw a blurry strip instead of the panel buttons and the pack
+// ("there are seemingly two hotbars"). Retail draws all of this inside
+// the SAME floaty that holds the shortcut row — gmFloatyToolbarUI::PostInit
+// calls gmToolbarUI::PostInit on itself (acclient.c) — so this module is
+// now a pure builder: plugins/hotbar.js owns the single draggable
+// #hb-hotbar root and calls `mountToolbarControls(field)` to place these
+// controls inside its ToolbarField (0x1000001B). The plugin `mount()` at
+// the bottom is a no-op kept for the loader contract.
 //
-// Wires per acclient.c:241593-241627 retail dispatch:
-//   - Use Selected (0x1000019D)         → ItemHolder::UseObject(selectedID)
-//                                          → wasm handle.useObject(guid)
-//   - Examine Selected (0x100001A5)     → ClientUISystem::ExamineObject(selectedID)
-//                                          → main-panel toggleView("examine", {guid})
-//   - Combat toggle (0x10000192-5)      → ClientCombatSystem::ToggleCombatMode
-//                                          → handle.setCombatMode(1=peace / 2=combat)
-//   - Allegiance shortcut               → main-panel toggleView("allegiance")
-//   - Spellbook shortcut                → main-panel toggleView("spellbook")
-//   - Attributes shortcut               → main-panel toggleView("character")
-//   - Map shortcut                      → main-panel toggleView("map")
-//   - Options shortcut                  → main-panel toggleView("options")
-//   - Pack (0x100001B1)                 → main-panel toggleView("inventory")
+// Retail behaviour matched (acclient.c, read 2026-10-05):
+//   gmToolbarUI::PostInit — 6 PanelButtonInfo (Social/Magic/Skill/Quest/
+//     World/Options) + InventoryButton; health + mana meters and the
+//     stack-size box start HIDDEN.
+//   gmToolbarUI::ListenToElementMessage — 0x10000192-195 click →
+//     ClientCombatSystem::ToggleCombatMode; 0x1000019D Use →
+//     ItemHolder::UseObject(selectedID); 0x100001A5 Examine →
+//     ClientUISystem::ExamineObject(selectedID).
+//   gmToolbarUI::RecvNotice_SetCombatMode — exactly one of the four mode
+//     buttons is visible (mode 1/2/4/8) and the shortcut numbers are drawn
+//     GHOSTED in Magic mode (UIElement_UIItem::SetShortcutNum _ghosted).
+//   gmToolbarUI::RecvNotice_SetPanelVisibility — a panel button sits in
+//     its Highlight state (6) while its panel is open, Normal (1) else.
+//   gmToolbarUI::RecvNotice_UpdateObjectHealth — the ToolbarHealthMeter is
+//     made visible and filled when health arrives for the selected object.
+//   gmToolbarUI::HandleDropRelease — an item dropped on the InventoryButton
+//     goes into the main pack (CPlayerSystem::PlaceInBackpack when owned,
+//     ItemHolder::AttemptToPlaceInContainer(player) otherwise).
 //
-// Target name + selection state: polled at 4Hz from
-// liveScene3d.entityManager.getSelectedTarget() (api.js coverage row
-// 5 — `selectionChanged` bus event is MISSING; future PR replaces
-// the poll). Name resolved via the JS entity-store lookup.
+// Modern liberties: panel buttons/backpack also show their Highlight
+// sprite on hover, every control has a kit tooltip with its hotkey, and
+// the selected-object field shows a dim "No selection" instead of a blank
+// box. Not ported: the stack-split entry box/slider (0x100001A3/4) and
+// the selected item's mana meter (0x100001A2) — no consumer yet.
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
+import { listManifestBindings } from "../ui/keymap.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
+import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import {
+  COMBAT_MODE,
+  combatModeForStance,
+  stanceButtonFor,
+  stanceButtonTip,
+} from "./stance-toggle.js";
 
-/** gmToolbarUI — retail layout that drives the target-bar middle rows.
- *  Element-id map confirmed by target_bar_layout_dump 2026-05-24.
- *  Positions are relative to the root 0x10000191 (300×122 panel). */
-const TARGET_BAR_LAYOUT_ID = 0x21000016;
-const TB_ELEMS = {
-  stance:     0x10000192, // 4 stance variants (192-195) all share (0,0) 55×58
-  allegiance: 0x10000197, //  (55, 0)  35×27
-  spellbook:  0x10000198, //  (85, 0)  34×27
-  attributes: 0x10000199, //  (115,0)  34×27
-  map:        0x1000055A, //  (145,0)  34×27
-  options:    0x1000019A, //  (175,0)  34×27
-  use:        0x1000019D, //  (55, 27) 23×31
-  target:     0x1000019E, //  (78, 27) 140×31
-  examine:    0x100001A5, //  (218,27) 22×31
-  pack:       0x100001B1, //  (238,0)  63×58
-};
-
-const OVERLAY_ID = "hb-target-bar";
-const STYLE_ID   = "hb-target-bar-style";
+const STYLE_ID = "hb-toolbar-controls-style";
+const LEGACY_OVERLAY_ID = "hb-target-bar";
 const SP = "./data/ui-sprites";
+const sprite = (id) => `url("${SP}/${id}.png")`;
 
-// Retail combat-mode enum mirror. Stays in sync with
-// holtburger_common::CombatMode (NonCombat=0, Melee=1, Missile=2, Magic=3).
-// Toolbar's peace/combat toggle flips NonCombat ↔ last-melee/missile-stance.
-const COMBAT_MODE_NON_COMBAT = 1; // wasm setCombatMode arg for peace
-const COMBAT_MODE_MELEE_DEFAULT = 2; // wasm setCombatMode arg for combat-ready
+// ── Retail geometry ──────────────────────────────────────────────────
+// Every rect below is the element's StateDesc x/y/width/height from the
+// DAT dump data/retail-layouts/0x21000016.json, relative to the
+// gmToolbarUI root (= the gmFloatyToolbarUI ToolbarField 0x1000001B at
+// (5,5) of the 310×100 floaty). test_toolbar_unified.mjs re-reads that
+// JSON and fails if any number here drifts from the DAT.
+export const TOOLBAR_RECTS = Object.freeze({
+  stance:      Object.freeze({ id: 0x10000192, x: 0,   y: 0,  w: 55,  h: 58 }),
+  leftSpacer:  Object.freeze({ id: 0x10000196, x: 55,  y: 0,  w: 7,   h: 27, sprite: "0x0600112B" }),
+  rightSpacer: Object.freeze({ id: 0x1000019C, x: 236, y: 0,  w: 10,  h: 27, sprite: "0x0600112C" }),
+  use:         Object.freeze({ id: 0x1000019D, x: 55,  y: 27, w: 23,  h: 31 }),
+  target:      Object.freeze({ id: 0x1000019E, x: 78,  y: 27, w: 140, h: 31 }),
+  examine:     Object.freeze({ id: 0x100001A5, x: 218, y: 27, w: 22,  h: 31 }),
+  pack:        Object.freeze({ id: 0x100001B1, x: 238, y: 0,  w: 63,  h: 58 }),
+});
 
-// P1-31 (cross-find gap-025): 9-icon panel strip. The first 6 wear the
-// retail gmToolbarUI button sprite pairs (normal/hover), assigned by
-// the layout dump's elementIdNames — see the header table. Retail
-// semantics: Social→allegiance, Magic→spellbook, SkillManagement→
-// attributes (Character Info), QuestManagement→journal, World→map,
-// Options→options. The last 3 views have no retail toolbar
-// counterpart; they wear retail art that reads at strip size: the
-// Pack sprite (inventory — same view the Pack button opens), an open
-// tome 0x06004CFB (train-skills), and the paired-heads chat sprites
-// 0x06001366/67 (fellowship).
-// NOTE: these render as CSS background-image — a bad sprite path
-// shows a blank button (no <img>-style onerror fallback fires here).
-const TOP_BUTTONS = [
-  { id: "allegiance", view: "allegiance",   title: "Allegiance Panel", sprite: "0x0600111F", hover: "0x06001121" },
-  { id: "spellbook",  view: "spellbook",    title: "Spellbook Panel",  sprite: "0x06001119", hover: "0x0600111B" },
-  { id: "attributes", view: "character",    title: "Attributes Panel", sprite: "0x06001122", hover: "0x06001124" },
-  { id: "journal",    view: "journal",      title: "Journal Panel",    sprite: "0x060069AE", hover: "0x060069AF" },
-  { id: "map",        view: "map",          title: "Map Panel",        sprite: "0x06001116", hover: "0x06001118" },
-  { id: "options",    view: "options",      title: "Options Panel",    sprite: "0x0600111C", hover: "0x0600111E" },
-  { id: "inventory",  view: "inventory",    title: "Inventory Panel",  sprite: "0x06004CF7", hover: "0x06004CF8" },
-  { id: "skills",     view: "train-skills", title: "Skills Panel",     sprite: "0x06004CFB", hover: "0x06004CFB" },
-  { id: "fellowship", view: "fellowship",   title: "Fellowship Panel", sprite: "0x06001366", hover: "0x06001367" },
-];
+// The six PanelButtonInfo entries gmToolbarUI::PostInit registers, in
+// retail draw order. normal/highlight = the Normal (1) / Highlight (6)
+// state sprites. `views` = every main-panel view that counts as "this
+// panel is open" for the Highlight state (Social is our allegiance view,
+// whose tab strip also hosts Fellowship).
+export const PANEL_BUTTONS = Object.freeze([
+  Object.freeze({ key: "social",  id: 0x10000197, x: 55,  y: 0, w: 35, h: 27, normal: "0x0600111F", highlight: "0x06001121",
+    view: "social", views: ["social", "allegiance", "fellowship"], label: "Social",
+    sub: "Allegiance, fellowship, friends and squelch", hotkey: { plugin: "social-panel", id: "toggle", fallback: "Shift+F3" } }),
+  Object.freeze({ key: "magic",   id: 0x10000198, x: 85,  y: 0, w: 34, h: 27, normal: "0x06001119", highlight: "0x0600111B",
+    view: "spellbook", views: ["spellbook"], label: "Spellbook",
+    sub: null, hotkey: { plugin: "spellbook", id: "toggle", fallback: "F5" } }),
+  Object.freeze({ key: "skills",  id: 0x10000199, x: 115, y: 0, w: 34, h: 27, normal: "0x06001122", highlight: "0x06001124",
+    view: "character", views: ["character", "train-skills"], label: "Character Information",
+    sub: "Attributes, skills and training", hotkey: { plugin: "character-info", id: "toggle", fallback: "F1" } }),
+  Object.freeze({ key: "quests",  id: 0x1000055A, x: 145, y: 0, w: 34, h: 27, normal: "0x060069AE", highlight: "0x060069AF",
+    view: "journal", views: ["journal"], label: "Journal",
+    sub: null, hotkey: { plugin: "journal-panel", id: "toggle", fallback: "F6" } }),
+  Object.freeze({ key: "world",   id: 0x1000019A, x: 175, y: 0, w: 34, h: 27, normal: "0x06001116", highlight: "0x06001118",
+    view: "map", views: ["map"], label: "Map",
+    sub: null, hotkey: { plugin: "map-panel", id: "toggle", fallback: "F3" } }),
+  Object.freeze({ key: "options", id: 0x1000019B, x: 204, y: 0, w: 34, h: 27, normal: "0x0600111C", highlight: "0x0600111E",
+    view: "options", views: ["options"], label: "Options",
+    sub: null, hotkey: { plugin: "options-panel", id: "toggle", fallback: "F10" } }),
+]);
 
+export const INVENTORY_BUTTON = Object.freeze({
+  normal: "0x06004CF7", highlight: "0x06004CF8",
+  view: "inventory", views: ["inventory"], label: "Inventory",
+  hotkey: Object.freeze({ plugin: "inventory", id: "toggle", fallback: "F4" }),
+});
+
+// Backtick toggles combat mode (index.html gameplay keydown, retail
+// default keybind); not rebindable today.
+const COMBAT_TOGGLE_KEY = "`";
+
+// ── Pure helpers (unit-tested in test_toolbar_unified.mjs) ───────────
+
+/** Resolve the live key-string for a manifest hotkey. Before the loader
+ *  has registered any manifest bindings, show the manifest default; once
+ *  bindings exist, show only a key that really dispatches to this plugin
+ *  (a duplicate lost to another plugin shows no key rather than a lie). */
+export function pickHotkeyLabel(bindings, pluginId, hotkeyId, fallback = "") {
+  if (!Array.isArray(bindings) || bindings.length === 0) return fallback || "";
+  const hit = bindings.find((b) => b && b.pluginId === pluginId && b.hotkeyId === hotkeyId);
+  return hit ? String(hit.keyString || "") : "";
+}
+
+/** "Spellbook" + "F5" → "Spellbook (F5)". */
+export function formatTipLabel(label, key) {
+  return key ? `${label} (${key})` : String(label ?? "");
+}
+
+/** Retail Highlight state: the button's panel is the open main-panel view. */
+export function panelButtonIsActive(btn, isOpen, viewId) {
+  if (!isOpen || !viewId || !btn) return false;
+  const views = Array.isArray(btn.views) && btn.views.length ? btn.views : [btn.view];
+  return views.includes(viewId);
+}
+
+/** Health fraction → filled px of the 140-px ToolbarHealthMeter, or null
+ *  when the fraction is unknown (meter stays hidden, as retail PostInit
+ *  leaves it until UpdateObjectHealth). */
+export function healthFillWidth(frac, width = TOOLBAR_RECTS.target.w) {
+  if (frac == null || !Number.isFinite(frac) || frac < 0) return null;
+  return Math.round(Math.max(0, Math.min(1, frac)) * width);
+}
+
+function hotkeyFor(hk) {
+  let list = null;
+  try { list = listManifestBindings(); } catch (_) { list = null; }
+  return pickHotkeyLabel(list, hk.plugin, hk.id, hk.fallback);
+}
+
+// ── Styles ───────────────────────────────────────────────────────────
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
+  // Sprites are drawn at native size from the element's top-left and
+  // clipped by the element box (retail DrawMode Normal): e.g. the 146-px
+  // SelectedObjectField / meter sprites show their first 140 px, the
+  // 39-px Options sprite its first 34.
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      bottom: 46px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 49;
-      width: 300px;
-      height: 58px;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      /* Layout-driven: row 1 (.htb-top) + row 2 (.htb-action) +
-         stance/pack overlap both rows via absolute positioning. */
-    }
-    /* ─ Top row: 9 panel-shortcut sprites + combat stance ─
-       P1-31 (cross-find gap-025): expanded from the retail-DAT-driven
-       5 to a 9-icon strip. Flex layout because applyTargetBarLayout's
-       per-element absolute positions only cover the retail 6 — the
-       trailing icons need a self-distributing container. The padding
-       carves out the stance (0..55) and Pack (238..300) footprints —
-       both span rows 1+2 as absolute overlay children — while the
-       background/border still back the full 300px row. */
-    #${OVERLAY_ID} .htb-top {
+    .htb-btn, .htb-spacer, .htb-target {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 300px;
-      height: 27px;
       box-sizing: border-box;
-      padding: 0 62px 0 55px;
-      background: rgba(20, 14, 8, 0.85);
-      border: 1px solid var(--hb-border-brass-dim);
-      display: flex;
-      align-items: center;
-      gap: 1px;
-    }
-    #${OVERLAY_ID} .htb-panel-btn {
-      /* 9 buttons share the 183px between the stance and Pack
-         footprints (~20px each) — flex-distributed, not fixed-width,
-         so none of them lands under those two overlay children. */
-      flex: 1 1 0;
-      width: auto; min-width: 0; height: 25px;
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
+      margin: 0; padding: 0; border: 0;
+      background: var(--sp) left top no-repeat;
       image-rendering: pixelated;
-      border: 0; padding: 0; margin: 0;
-      cursor: pointer;
-      font-size: 0;
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
-      transition: filter 80ms;
-      position: static;
     }
-    #${OVERLAY_ID} .htb-panel-btn:hover { filter: brightness(1.4) drop-shadow(0 0 3px rgba(255, 220, 120, 0.55)); }
-    #${OVERLAY_ID} .htb-stance-btn {
-      width: 28px; height: 23px;
-      margin-left: auto;
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      image-rendering: pixelated;
-      border: 1px solid var(--hb-border-brass-dim);
-      padding: 0;
-      cursor: pointer;
-      background-color: rgba(0, 0, 0, 0.45);
-      font-size: 9px;
-      color: var(--hb-text-cream);
+    .htb-spacer { pointer-events: none; }
+    .htb-btn { cursor: pointer; outline: none; }
+    .htb-btn:focus-visible, .htb-target:focus-visible {
+      outline: 1px solid var(--hbk-gold-bright, #f3d27a);
+      outline-offset: -1px;
     }
-    #${OVERLAY_ID} .htb-stance-btn[data-mode="combat"] {
-      background-image: url("${SP}/0x06004CEE.png");
-      color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .htb-stance-btn[data-mode="peace"] {
-      background-image: url("${SP}/0x06004CEC.png");
-    }
-    #${OVERLAY_ID} .htb-stance-btn:hover { filter: brightness(1.3); }
+    .htb-panel-btn:hover, .htb-panel-btn.is-open,
+    .htb-pack:hover, .htb-pack.is-open, .htb-pack.is-drop-target,
+    .htb-stance:hover, .htb-stance:active { background-image: var(--sp-hi); }
+    .htb-panel-btn:active, .htb-pack:active { filter: brightness(0.85); }
+    .htb-pack.is-drop-target { filter: drop-shadow(0 0 4px rgba(243, 210, 122, 0.95)); }
+    .htb-use { --sp: ${sprite("0x06001129")}; }
+    .htb-use:active { background-image: ${sprite("0x0600112A")}; }
+    .htb-use:hover:not(:disabled), .htb-examine:hover:not(:disabled) { filter: brightness(1.25); }
+    .htb-use:disabled { background-image: ${sprite("0x0600120E")}; cursor: default; }
+    .htb-examine { --sp: ${sprite("0x06001127")}; }
+    .htb-examine:active { background-image: ${sprite("0x06001128")}; }
+    .htb-examine:disabled { opacity: 0.45; cursor: default; }
 
-    /* ─ Action row: Use | Target | Examine | Pack ─ */
-    #${OVERLAY_ID} .htb-action {
-      position: absolute;
-      top: 27px;
-      left: 0;
-      width: 300px;
-      height: 31px;
-    }
-    #${OVERLAY_ID} .htb-use,
-    #${OVERLAY_ID} .htb-examine {
-      width: 28px; height: 33px;
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      image-rendering: pixelated;
-      border: 0; padding: 0;
+    .htb-target {
+      --sp: ${sprite("0x06001126")};
+      overflow: hidden;
       cursor: pointer;
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
-      transition: filter 80ms;
     }
-    #${OVERLAY_ID} .htb-use { background-image: url("${SP}/0x06001129.png"); }
-    #${OVERLAY_ID} .htb-use:hover,
-    #${OVERLAY_ID} .htb-examine:hover {
-      filter: brightness(1.4) drop-shadow(0 0 3px rgba(255, 220, 120, 0.55));
+    .htb-target.is-empty { cursor: default; }
+    .htb-target:not(.is-empty):hover { filter: brightness(1.12); }
+    .htb-target > * { position: absolute; pointer-events: none; }
+    .htb-target-blink {
+      inset: 0;
+      background: ${sprite("0x06001937")} left top no-repeat;
+      opacity: 0;
     }
-    #${OVERLAY_ID} .htb-use:active { background-image: url("${SP}/0x0600112A.png"); }
-    #${OVERLAY_ID} .htb-use[disabled],
-    #${OVERLAY_ID} .htb-examine[disabled] {
-      filter: grayscale(0.7) opacity(0.45);
-      cursor: not-allowed;
+    .htb-target.is-blinking .htb-target-blink { animation: htb-select-blink 560ms ease-out 1; }
+    @keyframes htb-select-blink {
+      0% { opacity: 0; } 20% { opacity: 0.85; } 45% { opacity: 0.2; }
+      70% { opacity: 0.7; } 100% { opacity: 0; }
     }
-    #${OVERLAY_ID} .htb-use[disabled] { background-image: url("${SP}/0x0600120E.png"); }
-    #${OVERLAY_ID} .htb-examine { background-image: url("${SP}/0x06001127.png"); }
-    #${OVERLAY_ID} .htb-examine:active { background-image: url("${SP}/0x06001128.png"); }
-    #${OVERLAY_ID} .htb-pack {
-      width: 40px; height: 33px;
-      background-image: url("${SP}/0x06004CF7.png");
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      image-rendering: pixelated;
-      border: 0; padding: 0;
-      cursor: pointer;
-      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
-      transition: filter 80ms;
+    .htb-target-health { inset: 0; background: ${sprite("0x0600193E")} left top no-repeat; }
+    .htb-target-health-fill {
+      left: 0; top: 0; bottom: 0; width: 0;
+      background: ${sprite("0x0600193F")} left top no-repeat;
+      transition: width 180ms ease-out;
     }
-    #${OVERLAY_ID} .htb-pack:hover {
-      background-image: url("${SP}/0x06004CF8.png");
-      filter: brightness(1.2);
+    .htb-target-name {
+      left: 5px; right: 5px; top: 0; bottom: 4px;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; white-space: nowrap;
     }
-    #${OVERLAY_ID} .htb-target {
-      flex: 1 1 auto;
-      min-width: 0;
-      height: 33px;
-      background: rgba(20, 14, 8, 0.85);
-      border: 1px solid var(--hb-border-brass-dim);
-      display: flex;
-      align-items: center;
-      padding: 0 6px;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--hb-text-cream);
-      overflow: hidden;
-    }
-    #${OVERLAY_ID} .htb-target.empty {
-      color: var(--hb-text-muted-3);
-      font-style: italic;
-      justify-content: center;
-    }
-    #${OVERLAY_ID} .htb-target-name {
-      flex: 1 1 auto;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--hb-text-gold);
-      font-weight: 600;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    /* Name > bar > GUID: in the retail 140px field the old
-       grow-1 health bar + fixed-width GUID chip squeezed the
-       name to ~22px ("Gnawer Shreth" → "G…"). The chip
-       ellipsizes first, the bar is fixed, the name grows. */
-    #${OVERLAY_ID} .htb-target-meta {
-      flex: 0 1 auto;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 9px;
-      color: var(--hb-text-muted-2);
-    }
-    /* F10-1 — selected target health bar. */
-    #${OVERLAY_ID} .htb-target-health {
-      flex: 0 0 40px;
-      height: 6px;
-      margin-left: 6px;
-      border: 1px solid rgba(0, 0, 0, 0.6);
-      border-radius: 3px;
-      background: rgba(0, 0, 0, 0.45);
-      overflow: hidden;
-    }
-    #${OVERLAY_ID} .htb-target-health-fill {
-      height: 100%;
-      transition: width 180ms ease-out, background 180ms ease-out;
-    }
+    /* The meter sprites are black in rows 0-12, bar in 13-26, gold rule
+       27-30: with health showing, the name moves into the black top band
+       so it never sits on the red bar. */
+    .htb-target.has-health .htb-target-name { bottom: auto; height: 14px; }
   `;
   document.head.appendChild(s);
 }
 
-// Module state.
-let state = {
-  overlayEl: null,
-  selectedGuid: 0,
-  selectedName: "",
-  inCombat: false,
-  // F10-1 — selected target's health fraction in [0,1], or null until the
-  // QueryHealth reply (EntityHealthUpdated) arrives.
-  selectedHealth: null,
-};
-
-function lookupEntityName(guid) {
-  if (!guid) return null;
-  const handle = window.__sessionHandle;
-  // Try wasm entity store first (most authoritative).
-  try {
-    const ent = handle?.entityByGuid?.(guid >>> 0);
-    if (ent?.name) return ent.name;
-  } catch {}
-  // Fallback: scene3d's nameplate cache.
-  try {
-    const em = window.liveScene3d?.entityManager;
-    const e = em?.entityMap?.get(guid >>> 0);
-    if (e?.name) return e.name;
-  } catch {}
-  return null;
-}
-
+// ── Live-state readers ───────────────────────────────────────────────
 function getSelectedTargetGuid() {
   try {
     const em = window.liveScene3d?.entityManager;
@@ -324,348 +228,434 @@ function getSelectedTargetGuid() {
   } catch { return 0; }
 }
 
-function renderTarget() {
-  const ov = state.overlayEl;
-  if (!ov) return;
-  const guid = state.selectedGuid;
-  const name = state.selectedName;
-  const targetEl = ov.querySelector(".htb-target");
-  if (!guid) {
-    targetEl.classList.add("empty");
-    setAcText(targetEl, "— no target —");
-  } else {
-    targetEl.classList.remove("empty");
-    targetEl.innerHTML = "";
-    const nameEl = document.createElement("span");
-    nameEl.className = "htb-target-name";
-    setAcText(nameEl, name || `Entity 0x${guid.toString(16).toUpperCase().padStart(8, "0")}`);
-    targetEl.appendChild(nameEl);
-    const meta = document.createElement("span");
-    meta.className = "htb-target-meta";
-    setAcText(meta, `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`);
-    targetEl.appendChild(meta);
-    // F10-1 — selected target's health bar. Hidden until the QueryHealth
-    // reply lands (state.selectedHealth != null); shrinks as you damage it.
-    const frac = state.selectedHealth;
-    if (frac != null && Number.isFinite(frac)) {
-      const bar = document.createElement("div");
-      bar.className = "htb-target-health";
-      const fill = document.createElement("div");
-      fill.className = "htb-target-health-fill";
-      const pct = Math.max(0, Math.min(1, frac)) * 100;
-      fill.style.width = `${pct.toFixed(1)}%`;
-      // Green → yellow → red as health drops (hue 0=red .. 120=green).
-      fill.style.background = `hsl(${(pct * 1.2).toFixed(0)}, 70%, 45%)`;
-      bar.appendChild(fill);
-      bar.title = `${pct.toFixed(0)}% health`;
-      targetEl.appendChild(bar);
-    }
-  }
-  // Enable / disable use + examine based on target presence.
-  ov.querySelector(".htb-use").disabled = !guid;
-  ov.querySelector(".htb-examine").disabled = !guid;
+/** Display name for any tracked object: the wasm property bag
+ *  (`objectName`, populated at spawn — covers world objects AND pack
+ *  items), then scene3d's nameplate cache. */
+export function lookupObjectName(guid) {
+  if (!guid) return null;
+  const handle = window.__sessionHandle;
+  try {
+    const n = handle?.objectName?.(guid >>> 0);
+    if (typeof n === "string" && n) return n;
+  } catch {}
+  try {
+    const e = window.liveScene3d?.entityManager?.entityMap?.get(guid >>> 0);
+    if (e?.name) return e.name;
+    if (e?.meta?.name) return e.meta.name;
+  } catch {}
+  return null;
 }
 
-function renderStance() {
-  const ov = state.overlayEl;
-  if (!ov) return;
-  const btn = ov.querySelector(".htb-stance-btn");
-  if (!btn) return;
-  btn.dataset.mode = state.inCombat ? "combat" : "peace";
-  btn.title = state.inCombat ? "Combat Mode — click for Peace" : "Peace Mode — click for Combat";
+function cachedHealthFraction(guid) {
+  try {
+    const f = window.__sessionHandle?.objectHealthFraction?.(guid >>> 0);
+    return (Number.isFinite(f) && f >= 0) ? f : null;
+  } catch { return null; }
 }
 
-function build() {
-  const ov = document.createElement("div");
-  ov.id = OVERLAY_ID;
-  // Refs we hand to applyTargetBarLayout — one per layout-positioned element.
+function readStanceMode() {
+  let low = 0;
+  try {
+    low = (typeof window.__getCurrentStanceLow === "function") ? (window.__getCurrentStanceLow() >>> 0) : 0;
+  } catch { low = 0; }
+  if (low) return { low, mode: combatModeForStance(low) };
+  // No UpdateMotion confirmed yet — fall back to the server's CombatMode
+  // property if the wasm export exists, else Peace.
+  try {
+    const m = window.__sessionHandle?.combatMode?.();
+    if (m === 1 || m === 2 || m === 4 || m === 8) return { low: 0, mode: m };
+  } catch {}
+  return { low: 0, mode: COMBAT_MODE.NONCOMBAT };
+}
+
+// ── Builder ──────────────────────────────────────────────────────────
+
+/**
+ * Build the gmToolbarUI top-band controls inside `field` (an absolutely
+ * positioned 300-px-wide box whose origin is retail's ToolbarField).
+ * Elements carry `data-tip` + `_hbTip()` for the host's tooltip.
+ *
+ * @param {HTMLElement} field
+ * @param {{root?: HTMLElement}} [opts] root receives the
+ *   `hb-toolbar-magic` class while in Magic mode (shortcut numbers ghost).
+ * @returns {{dispose(): void, refs: object, getCombatMode(): number}}
+ */
+export function mountToolbarControls(field, opts = {}) {
+  ensureStyles();
+  // A pre-overhaul overlay left behind by a hot reload must not linger.
+  document.getElementById(LEGACY_OVERLAY_ID)?.remove();
+  const root = opts.root || null;
+  const created = [];
   const refs = { panelBtns: {} };
+  const state = {
+    selectedGuid: 0,
+    selectedName: "",
+    selectedHealth: null,
+    mode: COMBAT_MODE.NONCOMBAT,
+    // Optimistic combat-mode flip window: until the server's UpdateMotion
+    // changes the stance away from `pendingFromLow`, a poll that still
+    // reads the OLD stance must not snap the button back.
+    pendingFromLow: null,
+    optimisticUntil: 0,
+  };
 
-  // ── Top row — 9 panel shortcuts + combat-stance toggle ─────
-  const top = document.createElement("div");
-  top.className = "htb-top";
-  refs.topRow = top;
-  for (const b of TOP_BUTTONS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "htb-panel-btn";
-    btn.dataset.id = b.id;
-    btn.title = b.title;
-    btn.style.backgroundImage = `url("${SP}/${b.sprite}.png")`;
-    btn.addEventListener("mouseenter", () => {
-      btn.style.backgroundImage = `url("${SP}/${b.hover}.png")`;
-    });
-    btn.addEventListener("mouseleave", () => {
-      btn.style.backgroundImage = `url("${SP}/${b.sprite}.png")`;
-    });
+  const place = (el, r) => {
+    el.style.left = `${r.x}px`;
+    el.style.top = `${r.y}px`;
+    el.style.width = `${r.w}px`;
+    el.style.height = `${r.h}px`;
+    if (r.id != null) el.dataset.elementId = `0x${(r.id >>> 0).toString(16).toUpperCase()}`;
+  };
+  const add = (el) => { field.appendChild(el); created.push(el); return el; };
+  const mkButton = (cls, label) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `htb-btn ${cls}`;
+    b.setAttribute("aria-label", label);
+    b.dataset.tip = "";
+    return b;
+  };
+  const mkSpacer = (r) => {
+    const d = document.createElement("div");
+    d.className = "htb-spacer";
+    d.style.setProperty("--sp", sprite(r.sprite));
+    place(d, r);
+    return d;
+  };
+
+  // DOM order = retail draw order (data/retail-layouts readOrder): the left
+  // spacer sits under Social, the right spacer over the Options sprite's
+  // tail and under the backpack.
+  add(mkSpacer(TOOLBAR_RECTS.leftSpacer));
+  for (const b of PANEL_BUTTONS) {
+    const btn = mkButton("htb-panel-btn", b.label);
+    btn.dataset.panel = b.key;
+    btn.style.setProperty("--sp", sprite(b.normal));
+    btn.style.setProperty("--sp-hi", sprite(b.highlight));
+    place(btn, b);
+    btn._hbTip = () => ({ text: b.label, key: hotkeyFor(b.hotkey), sub: b.sub });
     btn.addEventListener("click", () => {
-      window.__mainPanel?.toggleView?.(b.view);
+      try {
+        // HUD overhaul 2026-10-05: Social opens the one social hub on its
+        // last-used tab (plugins/social-panel.js).
+        if (b.key === "social" && typeof window.__toggleSocialPanel === "function") window.__toggleSocialPanel();
+        else window.__mainPanel?.toggleView?.(b.view);
+      } catch (e) {
+        console.warn(`[toolbar] toggleView(${b.view}) failed`, e);
+      }
+      updatePanelHighlights();
     });
-    top.appendChild(btn);
-    refs.panelBtns[b.id] = btn;
+    refs.panelBtns[b.key] = add(btn);
   }
-  const stance = document.createElement("button");
-  stance.type = "button";
-  stance.className = "htb-stance-btn";
-  stance.dataset.mode = "peace";
-  stance.title = "Peace / Combat Mode";
-  stance.addEventListener("click", () => {
+  add(mkSpacer(TOOLBAR_RECTS.rightSpacer));
+
+  // ── Combat-mode button (0x10000192-195 share one rect) ─────────────
+  const stance = mkButton("htb-stance", "Combat mode");
+  place(stance, TOOLBAR_RECTS.stance);
+  stance._hbTip = () => stanceButtonTip(state.mode, COMBAT_TOGGLE_KEY);
+  stance.addEventListener("click", onStanceClick);
+  refs.stanceBtn = add(stance);
+
+  // ── Use | Selected object | Examine ────────────────────────────────
+  const useBtn = mkButton("htb-use", "Use selected");
+  place(useBtn, TOOLBAR_RECTS.use);
+  useBtn._hbTip = () => (state.selectedGuid
+    ? { text: "Use", sub: state.selectedName || null }
+    : { text: "Use", sub: "Select something first" });
+  useBtn.addEventListener("click", onUseClick);
+  refs.useBtn = add(useBtn);
+
+  const target = document.createElement("div");
+  target.className = "htb-target is-empty";
+  target.setAttribute("role", "button");
+  target.tabIndex = 0;
+  target.dataset.tip = "";
+  place(target, TOOLBAR_RECTS.target);
+  const blink = document.createElement("div");
+  blink.className = "htb-target-blink";
+  const health = document.createElement("div");
+  health.className = "htb-target-health";
+  health.hidden = true;
+  const healthFill = document.createElement("div");
+  healthFill.className = "htb-target-health-fill";
+  health.appendChild(healthFill);
+  const nameEl = document.createElement("div");
+  nameEl.className = "htb-target-name";
+  // Retail zLevels inside SelectedObjectField: meters 2, SelectionBlinkField
+  // 1, SelectedObjectText 0 (front) — so DOM order meter → blink → name.
+  target.append(health, blink, nameEl);
+  target._hbTip = () => {
+    if (!state.selectedGuid) return { text: "No selection", sub: "Click a creature, player or object" };
+    const pct = state.selectedHealth != null ? Math.round(state.selectedHealth * 100) : null;
+    return {
+      text: state.selectedName || "Unknown object",
+      sub: pct != null ? `${pct}% health — click to examine` : "Click to examine",
+    };
+  };
+  target.addEventListener("click", examineSelected);
+  target.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); examineSelected(); }
+  });
+  target.addEventListener("animationend", () => target.classList.remove("is-blinking"));
+  refs.targetEl = add(target);
+
+  const examineBtn = mkButton("htb-examine", "Examine selected");
+  place(examineBtn, TOOLBAR_RECTS.examine);
+  examineBtn._hbTip = () => (state.selectedGuid
+    ? { text: "Examine", sub: state.selectedName || null }
+    : { text: "Examine", sub: "Select something first" });
+  examineBtn.addEventListener("click", examineSelected);
+  refs.examineBtn = add(examineBtn);
+
+  // ── Inventory (backpack) button ────────────────────────────────────
+  const pack = mkButton("htb-pack", INVENTORY_BUTTON.label);
+  pack.style.setProperty("--sp", sprite(INVENTORY_BUTTON.normal));
+  pack.style.setProperty("--sp-hi", sprite(INVENTORY_BUTTON.highlight));
+  place(pack, TOOLBAR_RECTS.pack);
+  pack._hbTip = () => ({
+    text: INVENTORY_BUTTON.label,
+    key: hotkeyFor(INVENTORY_BUTTON.hotkey),
+    sub: "Drop an item here to put it in your main pack",
+  });
+  pack.addEventListener("click", () => {
+    try { window.__mainPanel?.toggleView?.(INVENTORY_BUTTON.view); } catch (_) {}
+    updatePanelHighlights();
+  });
+  // gmToolbarUI::HandleDropRelease (InventoryButton branch) — retail moves
+  // the dropped item into the player's main pack.
+  const acceptsDrop = (ev) => isDropAccepted(ev.dataTransfer?.types, DropItemFlags.CONTAINER);
+  pack.addEventListener("dragenter", (ev) => {
+    if (!acceptsDrop(ev)) return;
+    ev.preventDefault();
+    pack.classList.add("is-drop-target");
+  });
+  pack.addEventListener("dragover", (ev) => {
+    if (!acceptsDrop(ev)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+  });
+  pack.addEventListener("dragleave", () => pack.classList.remove("is-drop-target"));
+  pack.addEventListener("drop", (ev) => {
+    pack.classList.remove("is-drop-target");
+    if (!acceptsDrop(ev)) return;
+    ev.preventDefault();
+    const raw = ev.dataTransfer.getData("application/x-hb-inv-guid")
+      || ev.dataTransfer.getData("text/x-hb-item-guid");
+    const guid = parseInt(raw, 10) >>> 0;
+    const handle = window.__sessionHandle;
+    let me = 0;
+    try { me = (handle?.playerGuid?.() ?? window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch (_) {}
+    if (!me) { try { me = (window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch (_) {} }
+    if (!guid || !me || guid === me || typeof handle?.moveItem !== "function") return;
+    try { handle.moveItem(guid, me, 0); } catch (e) {
+      console.warn("[toolbar] backpack drop moveItem failed", e);
+    }
+  });
+  refs.packBtn = add(pack);
+
+  // ── Behaviour ──────────────────────────────────────────────────────
+  function onStanceClick() {
     const handle = window.__sessionHandle;
     if (!handle) return;
-    // Read authoritative current stance from window.__getCurrentStanceLow()
-    // (same source combat-bar uses). `world.player.combat_mode` is
-    // unreliable as a source per combat-bar.js:393-403; the
-    // motion-table-applied stance from kind=5 UpdateMotion is the
-    // truth. Toggle: !Peace → NonCombat(1); Peace → Melee(2).
-    let inCombatNow = state.inCombat;
-    try {
-      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
-        ? window.__getCurrentStanceLow()
-        : 0;
-      // Low 16 bits: Peace = 0x3D (61) per MotionStance; non-zero
-      // non-peace values mean combat stance. Treat any non-peace
-      // motion-stance as in-combat for toggle purposes.
-      // See plugins/combat-bar.js stanceWord() for the full table.
-      inCombatNow = stanceLow !== 0 && stanceLow !== 0x3D;
-    } catch {}
+    const now = Date.now();
+    const live = readStanceMode();
+    const curMode = now < state.optimisticUntil ? state.mode : live.mode;
+    const inCombatNow = curMode !== COMBAT_MODE.NONCOMBAT;
     // Leaving Peace: pick the mode from the equipped weapon (Missile/
     // Magic/Melee) so bow- and wand-wielders enter combat instead of a
     // hardcoded Melee that ACE silently reverts (F11-1).
-    let suggested = COMBAT_MODE_MELEE_DEFAULT;
-    try {
-      const inv = typeof handle.playerInventory === "function" ? handle.playerInventory() : [];
-      suggested = suggestedCombatModeFromInventory(inv);
-      // Copy-then-free (2026-08-03): `suggestedCombatModeFromInventory` only
-      // `.some()`s over `equipMask` primitives and returns a number, so no box
-      // escapes this scope. See the container-panel/buffs-hud precedent.
-      for (const it of inv) { try { it?.free?.(); } catch (_) {} }
-    } catch {}
-    const next = inCombatNow ? COMBAT_MODE_NON_COMBAT : suggested;
+    let suggested = COMBAT_MODE.MELEE;
+    if (!inCombatNow) {
+      try {
+        const inv = typeof handle.playerInventory === "function" ? handle.playerInventory() : [];
+        suggested = suggestedCombatModeFromInventory(inv);
+        // Copy-then-free (2026-08-03): only `equipMask` primitives are read.
+        for (const it of inv) { try { it?.free?.(); } catch (_) {} }
+      } catch {}
+    }
+    const next = inCombatNow ? COMBAT_MODE.NONCOMBAT : suggested;
     try {
       if (typeof handle.setCombatMode === "function") {
         // C8 — see ui/ac_combat_mode_intent.js (ACE LastCombatMode mirror).
         noteCombatModeRequest(next);
         handle.setCombatMode(next);
       } else if (typeof handle.toggleCombatMode === "function") {
-        // Untyped toggle: the server picks the mode, so record "unknown"
-        // (fail-open) rather than guessing.
+        // Untyped toggle: the server picks the mode — record "unknown".
         noteCombatModeRequest(null);
         handle.toggleCombatMode();
+      } else {
+        return;
       }
-      // Optimistic flip; the 500ms poll will reconcile from
-      // __getCurrentStanceLow when the server confirms.
-      state.inCombat = !inCombatNow;
-      renderStance();
+      state.pendingFromLow = live.low;
+      state.optimisticUntil = now + 2000;
+      setMode(next);
     } catch (e) {
-      console.warn("[target-bar] combat-mode toggle failed", e);
+      console.warn("[toolbar] combat-mode toggle failed", e);
     }
-  });
-  top.appendChild(stance);
-  refs.stanceBtn = stance;
-  ov.appendChild(top);
+  }
 
-  // ── Action row — Use | Target | Examine | Pack ─────────────
-  const action = document.createElement("div");
-  action.className = "htb-action";
-  refs.actionRow = action;
-
-  const useBtn = document.createElement("button");
-  useBtn.type = "button";
-  useBtn.className = "htb-use";
-  useBtn.title = "Use Selected";
-  useBtn.addEventListener("click", () => {
+  function onUseClick() {
     const handle = window.__sessionHandle;
     if (!handle?.useObject || !state.selectedGuid) return;
     const guid = state.selectedGuid >>> 0;
     try {
       handle.useObject(guid);
     } catch (e) {
-      console.warn("[target-bar] useObject failed", e);
+      console.warn("[toolbar] useObject failed", e);
     }
-    // HUD rec #180 (2026-06-16): if the target is a book (object-
-    // description flag BOOK = 0x100), fan out a bookData() request so
-    // the book-panel auto-opens once ACE's BookDataResponse lands.
-    // ACE's Use handler on a book object only sends the action ack,
-    // not the BookData payload — without this follow-up the book
-    // overlay only opens from the debug entry. Cheap to issue on
-    // non-books (server ignores BookData on non-book GUIDs).
+    // HUD rec #180 (2026-06-16): a book (object-description flag BOOK =
+    // 0x100) also needs a bookData() request — ACE's Use on a book only
+    // acks; the server ignores BookData on non-book GUIDs.
     try {
-      const em = window.liveScene3d?.entityManager;
-      const ent = em?.entityMap?.get?.(guid);
+      const ent = window.liveScene3d?.entityManager?.entityMap?.get?.(guid);
       const objDescFlags = ((ent?.meta?.objDescFlags ?? ent?.objDescFlags) ?? 0) >>> 0;
-      if ((objDescFlags & 0x100) !== 0 && handle.bookData) {
-        handle.bookData(guid);
-      }
+      if ((objDescFlags & 0x100) !== 0 && handle.bookData) handle.bookData(guid);
     } catch (_) { /* book auto-open is best-effort */ }
-  });
-  action.appendChild(useBtn);
-  refs.useBtn = useBtn;
+  }
 
-  const target = document.createElement("div");
-  target.className = "htb-target empty";
-  setAcText(target, "— no target —");
-  // Click-target = examine for convenience (mirrors retail behavior).
-  target.addEventListener("click", () => {
+  function examineSelected() {
     if (!state.selectedGuid) return;
-    window.__mainPanel?.toggleView?.("examine", {
-      guid: state.selectedGuid,
-      name: state.selectedName,
-      fromEntity: true,
-    });
-  });
-  action.appendChild(target);
-  refs.targetEl = target;
-
-  const examineBtn = document.createElement("button");
-  examineBtn.type = "button";
-  examineBtn.className = "htb-examine";
-  examineBtn.title = "Examine Selected";
-  examineBtn.addEventListener("click", () => {
-    if (!state.selectedGuid) return;
-    // Toggle: when the floaty is already open on the same target,
-    // close it. Otherwise route through __showExamineFor so the
-    // flag-gated floaty vs main-panel path (EX-03) is honored.
+    // Toggle: when the floaty is already open, close it. Otherwise route
+    // through __showExamineFor so the flag-gated floaty vs main-panel path
+    // (EX-03) is honored.
     if (window.__examineFloaty?.isOpen?.()) {
       window.__examineFloaty.close?.();
       return;
     }
+    const ctx = { name: state.selectedName, fromEntity: true };
     if (typeof window.__showExamineFor === "function") {
-      window.__showExamineFor(state.selectedGuid, {
-        name: state.selectedName,
-        fromEntity: true,
-      });
+      window.__showExamineFor(state.selectedGuid, ctx);
     } else {
-      window.__mainPanel?.toggleView?.("examine", {
-        guid: state.selectedGuid,
-        name: state.selectedName,
-        fromEntity: true,
-      });
+      window.__mainPanel?.toggleView?.("examine", { guid: state.selectedGuid, ...ctx });
     }
-  });
-  action.appendChild(examineBtn);
-  refs.examineBtn = examineBtn;
+  }
 
-  const packBtn = document.createElement("button");
-  packBtn.type = "button";
-  packBtn.className = "htb-pack";
-  packBtn.title = "Inventory Panel";
-  packBtn.addEventListener("click", () => {
-    window.__mainPanel?.toggleView?.("inventory");
-  });
-  action.appendChild(packBtn);
-  refs.packBtn = packBtn;
+  function setMode(mode) {
+    state.mode = mode;
+    const b = stanceButtonFor(mode);
+    stance.style.setProperty("--sp", sprite(b.normal));
+    stance.style.setProperty("--sp-hi", sprite(b.pressed));
+    stance.dataset.mode = String(mode);
+    stance.setAttribute("aria-label", `${b.label} — toggle combat`);
+    // RecvNotice_SetCombatMode: shortcut numbers ghost in Magic mode.
+    root?.classList.toggle("hb-toolbar-magic", mode === COMBAT_MODE.MAGIC);
+  }
 
-  ov.appendChild(action);
-  document.body.appendChild(ov);
-  return { overlay: ov, refs };
-}
+  function updateStance() {
+    const live = readStanceMode();
+    if (Date.now() < state.optimisticUntil && live.low === state.pendingFromLow) return;
+    state.optimisticUntil = 0;
+    state.pendingFromLow = null;
+    if (live.mode !== state.mode) setMode(live.mode);
+  }
 
-// Apply gmToolbarUI 0x21000016 layout to the target-bar plugin's
-// sub-elements. The retail layout uses absolute positioning within a
-// 300×122 frame; we switch each row container to `position: relative`
-// and each child to `position: absolute` with explicit x/y from the
-// LayoutDesc. CSS centering and flex-gap behavior are overridden via
-// `transform = "none"` (mirrors the radar pattern).
-function applyTargetBarLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    // target-bar mounts during early boot via mountBar(); eor/local
-    // shards may not yet be available. Retry every 2s up to 8 times.
-    if (!layout) {
-      if (attempt < 8) {
-        setTimeout(() => applyTargetBarLayout(refs, attempt + 1), 2000);
-      }
+  function renderTarget() {
+    const guid = state.selectedGuid;
+    target.classList.toggle("is-empty", !guid);
+    useBtn.disabled = !guid;
+    examineBtn.disabled = !guid;
+    target.dataset.guid = guid ? `0x${guid.toString(16).toUpperCase().padStart(8, "0")}` : "";
+    const px = guid ? healthFillWidth(state.selectedHealth) : null;
+    health.hidden = px == null;
+    target.classList.toggle("has-health", px != null);
+    if (px != null) healthFill.style.width = `${px}px`;
+    if (!guid) {
+      setAcText(nameEl, "No selection", { color: "#77705f", fit: true });
       return;
     }
-    // Layout positions are relative to the root 0x10000191. Row 1
-    // children have y=0; row 2 children have y=27; Pack spans
-    // both rows at y=0,h=58. To keep the existing two-row DOM
-    // structure (top + action), translate row 2's child y values
-    // by -27 (subtract the row offset) — but we keep .htb-top at
-    // height=27 + .htb-action at height=31, so the row layout
-    // remains visually aligned.
-    //
-    // The Pack button is special: it's a row-1 sibling spanning
-    // y=0..58, h=58, currently nested in .htb-action. We pop it
-    // out of the action row and parent to the overlay so it can
-    // overlap both rows. Done lazily here.
-    let applied = 0;
+    setAcText(nameEl, state.selectedName || "Unknown object", { color: "#ffffff", fit: true });
+  }
 
-    // Helper — apply x/y/w/h from a LayoutDesc element to a DOM ref,
-    // wiping CSS-driven margin/centering so absolute coords win.
-    // box-sizing: border-box so width/height match retail's outer box
-    // including any CSS border/padding the existing styles applied.
-    const applyEl = (el, desc, yOffset = 0) => {
-      if (!el || !desc) return 0;
-      el.style.position = "absolute";
-      el.style.margin = "0";
-      el.style.boxSizing = "border-box";
-      // Explicit "none" overrides any CSS translate centering. Empty
-      // string would let the cascade re-apply (per ac_layout.js gotcha).
-      el.style.transform = "none";
-      el.style.right = "";
-      el.style.bottom = "";
-      el.style.flex = "";
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y - yOffset}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      return 1;
-    };
-
-    // Both row containers are `position: absolute` per their CSS, so
-    // they're already containing blocks for their absolutely-positioned
-    // children AND removed from flow (so they don't push each other
-    // down). We don't touch position here — only clear any padding/gap
-    // P1-31 (cross-find gap-025): the top row is flex-distributed now
-    // so the 9 panel icons + stance share the 300px width. Don't
-    // clobber the flex gap/padding the CSS sets, and don't
-    // applyEl-position the 5 retail icons (would absolute-position
-    // them and break flow for the 4 new ones).
-    if (refs.actionRow) {
-      refs.actionRow.style.padding = "0";
-      refs.actionRow.style.gap = "0";
-    }
-
-    // Stance button — retail places this at (0,0) 55×58 spanning rows
-    // 1+2 on the LEFT. Our hand-tuned panel has stance on the right.
-    // Retail-faithful position is more semantically meaningful (the
-    // stance is mode-defining), but disrupts the top row's flow. Wire
-    // it to the retail x=0,y=0 with retail size 55×58. Since stance
-    // lives inside .htb-top (h=27), we'll detach + re-parent to overlay
-    // so it can span both rows. Stays inside refs map for restyling.
-    const stanceDesc = findElementById(layout, TB_ELEMS.stance);
-    if (refs.stanceBtn && stanceDesc) {
-      // Re-parent to overlay so it can span both rows.
-      if (refs.stanceBtn.parentElement !== refs.overlay && refs.overlay) {
-        refs.overlay.appendChild(refs.stanceBtn);
+  function updateSelection(nextOverride) {
+    const next = (nextOverride != null) ? (nextOverride >>> 0) : getSelectedTargetGuid();
+    if (next !== state.selectedGuid) {
+      state.selectedGuid = next;
+      state.selectedName = next ? (lookupObjectName(next) || "") : "";
+      // F10-1 — new target: seed from the cached health fraction, then ask
+      // the server (reply = `entityHealthUpdated`). HUD rec #98: the next
+      // bus event resyncs a stale in-flight reply.
+      state.selectedHealth = next ? cachedHealthFraction(next) : null;
+      if (next) {
+        try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
+        // SelectionBlinkField (0x100001A0) ObjectSelected state.
+        target.classList.remove("is-blinking");
+        void target.offsetWidth;
+        target.classList.add("is-blinking");
       }
-      refs.stanceBtn.style.marginLeft = "";
-      applied += applyEl(refs.stanceBtn, stanceDesc);
+      renderTarget();
+    } else if (next && !state.selectedName) {
+      const n = lookupObjectName(next);
+      if (n) { state.selectedName = n; renderTarget(); }
     }
+  }
 
-    // Row 2 — Use | Target | Examine. Layout y=27 but .htb-action is
-    // already at its own row anchor, so subtract 27 to get inner y=0.
-    applied += applyEl(refs.useBtn,     findElementById(layout, TB_ELEMS.use),     27);
-    applied += applyEl(refs.targetEl,   findElementById(layout, TB_ELEMS.target),  27);
-    applied += applyEl(refs.examineBtn, findElementById(layout, TB_ELEMS.examine), 27);
-
-    // Pack — retail says (238,0) 63×58 spanning both rows. Re-parent
-    // out of .htb-action to the overlay so it can overlap.
-    const packDesc = findElementById(layout, TB_ELEMS.pack);
-    if (refs.packBtn && packDesc) {
-      if (refs.packBtn.parentElement !== refs.overlay && refs.overlay) {
-        refs.overlay.appendChild(refs.packBtn);
-      }
-      applied += applyEl(refs.packBtn, packDesc);
-    }
-
+  function updatePanelHighlights() {
+    let open = false;
+    let viewId = null;
     try {
-      window.__diag?.layout?.onTargetBarApplied?.({ applied });
+      const mp = window.__mainPanel;
+      open = !!mp?.isOpen?.();
+      viewId = mp?.currentViewId?.() ?? null;
     } catch (_) {}
+    for (const b of PANEL_BUTTONS) {
+      refs.panelBtns[b.key].classList.toggle("is-open", panelButtonIsActive(b, open, viewId));
+    }
+    pack.classList.toggle("is-open", panelButtonIsActive(INVENTORY_BUTTON, open, viewId));
+  }
+
+  // ── Event wiring ───────────────────────────────────────────────────
+  const onSelectionChanged = (ev) => updateSelection((ev?.detail?.guid ?? ev?.guid ?? 0) >>> 0);
+  // F10-1 — selected target's health changed (QueryHealth reply / damage).
+  const onEntityHealth = (ev) => {
+    const d = ev?.detail ?? ev ?? {};
+    const guid = (d.guid ?? 0) >>> 0;
+    if (!guid || guid !== state.selectedGuid) return;
+    const f = d.fraction;
+    state.selectedHealth = Number.isFinite(f) && f >= 0 ? f : null;
+    renderTarget();
   };
-  const cached = getCachedLayout(TARGET_BAR_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(TARGET_BAR_LAYOUT_ID).then(apply).catch(() => {});
+  const onStatsUpdated = () => updateStance();
+  let bus = null;
+  const subscribe = (client) => {
+    if (!client?.events?.on || bus) return;
+    bus = client.events;
+    bus.on("selectionChanged", onSelectionChanged);
+    bus.on("playerStatsUpdated", onStatsUpdated);
+    bus.on("entityHealthUpdated", onEntityHealth);
+  };
+  if (window.__pluginClient?.events?.on) subscribe(window.__pluginClient);
+  else window.__pluginClientReady?.then?.(subscribe);
+
+  // One 250 ms tick: panel Highlight state every tick (main-panel has no
+  // visibility notice to subscribe to — two property reads), and a 1 Hz
+  // backstop for late name resolution / dropped bus events.
+  let tick = 0;
+  const timer = setInterval(() => {
+    updatePanelHighlights();
+    if ((tick++ & 3) === 0) { updateSelection(); updateStance(); }
+  }, 250);
+
+  setMode(readStanceMode().mode);
+  updateSelection();
+  renderTarget();
+  updatePanelHighlights();
+
+  return {
+    refs,
+    getCombatMode: () => state.mode,
+    dispose() {
+      clearInterval(timer);
+      if (bus?.off) {
+        try { bus.off("selectionChanged", onSelectionChanged); } catch (_) {}
+        try { bus.off("playerStatsUpdated", onStatsUpdated); } catch (_) {}
+        try { bus.off("entityHealthUpdated", onEntityHealth); } catch (_) {}
+      }
+      bus = null;
+      root?.classList.remove("hb-toolbar-magic");
+      for (const el of created) el.remove();
+      created.length = 0;
+    },
+  };
 }
 
 export const manifest = {
@@ -673,119 +663,15 @@ export const manifest = {
   name: "Target Bar",
   icon: "⊙",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Retail gmToolbarUI middle rows — 9 panel shortcuts + Use/Target/Examine + Pack",
+  version: "0.2.0",
+  description: "Retail gmToolbarUI controls (combat mode, 6 panel buttons, Use/Selected/Examine, backpack) — mounted inside the unified #hb-hotbar toolbar",
 };
 
+// HUD overhaul 2026-10-05: no standalone overlay any more — the controls
+// are mounted by plugins/hotbar.js into the single toolbar. Kept so the
+// loader's mount lifecycle (BAR_SLOT_ORDER "target-bar") stays valid; it
+// only clears a stale pre-overhaul #hb-target-bar.
 export function mount(_ctx) {
-  ensureStyles();
-  const existing = document.getElementById(OVERLAY_ID);
-  if (existing) existing.remove();
-  const { overlay, refs } = build();
-  state.overlayEl = overlay;
-  // Stash overlay on refs so applyTargetBarLayout can re-parent
-  // stance + Pack to it (they span both rows).
-  refs.overlay = overlay;
-
-  // Apply retail layout positions for sub-elements (5 panel shortcuts
-  // + Use/Target/Examine + Pack + stance). Mounts via mountBar() so
-  // includes the 8 × 2s retry loop for early-boot eor/local shards.
-  applyTargetBarLayout(refs);
-
-  // P3-41 — drive selection + stance off the bus (selectionChanged for
-  // target, playerStatsUpdated for stance). Keep a low-frequency timer
-  // (1Hz) ONLY as a backstop for late-name resolution and event-drop
-  // recovery; the previous 4Hz/2Hz polls were the primary loop.
-  const updateSelection = (nextOverride) => {
-    const next = (nextOverride != null) ? (nextOverride >>> 0) : getSelectedTargetGuid();
-    if (next !== state.selectedGuid) {
-      state.selectedGuid = next;
-      state.selectedName = next ? (lookupEntityName(next) || "") : "";
-      // F10-1 — new target: clear the stale health bar and ask the server
-      // for this target's current health fraction (reply arrives as the
-      // `entityHealthUpdated` bus event). Deselect (next===0) just clears.
-      //
-      // HUD rec #98 — there is a latency window between queryHealth() and
-      // the UpdateHealth reply. If the target dies / heals / gets
-      // damage_taken'd inside that window, the reply may carry a stale
-      // fraction. Follow-up: when ACE's UpdateHealth carries a timestamp,
-      // gate cache invalidation on it; for now the next bus event resyncs.
-      state.selectedHealth = null;
-      if (next) {
-        try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
-      }
-      renderTarget();
-    } else if (next && !state.selectedName) {
-      const n = lookupEntityName(next);
-      if (n) {
-        state.selectedName = n;
-        renderTarget();
-      }
-    }
-  };
-  const updateStance = () => {
-    let inCombat = state.inCombat;
-    try {
-      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
-        ? window.__getCurrentStanceLow()
-        : 0;
-      inCombat = stanceLow !== 0 && stanceLow !== 0x3D;
-    } catch {}
-    if (inCombat !== state.inCombat) {
-      state.inCombat = inCombat;
-      renderStance();
-    }
-  };
-  const onSelectionChanged = (ev) => {
-    const guid = (ev?.detail?.guid ?? 0) >>> 0;
-    updateSelection(guid);
-  };
-  // F10-1 — selected target's health changed (QueryHealth reply / damage
-  // broadcast). Update the bar only when it's for the current target.
-  const onEntityHealth = (ev) => {
-    const d = ev?.detail ?? ev ?? {};
-    const guid = (d.guid ?? 0) >>> 0;
-    if (!guid || guid !== state.selectedGuid) return;
-    const f = d.fraction;
-    state.selectedHealth = Number.isFinite(f) ? f : null;
-    renderTarget();
-  };
-  const onStatsUpdated = () => updateStance();
-  const pc = window.__pluginClient ?? null;
-  let pcSubscribed = false;
-  if (pc?.events?.on) {
-    pc.events.on("selectionChanged", onSelectionChanged);
-    pc.events.on("playerStatsUpdated", onStatsUpdated);
-    pc.events.on("entityHealthUpdated", onEntityHealth);
-    pcSubscribed = true;
-  } else if (window.__pluginClientReady?.then) {
-    window.__pluginClientReady.then((client) => {
-      if (client?.events?.on) {
-        client.events.on("selectionChanged", onSelectionChanged);
-        client.events.on("playerStatsUpdated", onStatsUpdated);
-        client.events.on("entityHealthUpdated", onEntityHealth);
-        pcSubscribed = true;
-      }
-    });
-  }
-  // Backstop — 1Hz catches late-name resolution + recovers from any
-  // dropped bus event.
-  const fallbackTimer = setInterval(() => { updateSelection(); updateStance(); }, 1000);
-
-  renderTarget();
-  renderStance();
-
-  return () => {
-    clearInterval(fallbackTimer);
-    const pcEnd = window.__pluginClient ?? null;
-    if (pcSubscribed && pcEnd?.events?.off) {
-      try { pcEnd.events.off("selectionChanged", onSelectionChanged); } catch (_) {}
-      try { pcEnd.events.off("playerStatsUpdated", onStatsUpdated); } catch (_) {}
-      try { pcEnd.events.off("entityHealthUpdated", onEntityHealth); } catch (_) {}
-    }
-    if (state.overlayEl) {
-      state.overlayEl.remove();
-      state.overlayEl = null;
-    }
-  };
+  document.getElementById(LEGACY_OVERLAY_ID)?.remove();
+  return () => {};
 }

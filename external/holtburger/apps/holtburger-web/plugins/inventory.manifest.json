@@ -14,5 +14,5 @@
     { "id": "toggle", "default": "F4", "label": "Toggle Inventory" }
   ],
   "clientApi": "^1.0",
-  "capabilities": ["GetPlayerInventory", "MoveItem", "DropItem", "WieldFromPack", "UnwieldToPack", "UseObject", "GetObjectAppraisal"]
+  "capabilities": ["GetPlayerInventory", "MoveItem", "DropItem", "WieldFromPack", "UnwieldToPack", "UseObject", "GetObjectAppraisal", "MergeStacks?", "SplitStackToContainer?", "GiveObject?"]
 }

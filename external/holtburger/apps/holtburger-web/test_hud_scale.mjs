@@ -1,0 +1,20 @@
+// HUD overhaul 2026-10-05 — ui/hud_scale.js effective-scale maths.
+import { computeAutoScale, computeEffectiveScale } from "./ui/hud_scale.js";
+let pass = 0, fail = 0;
+const eq = (name, got, want) => { if (Math.abs(got - want) < 1e-9) pass++; else { fail++; console.log(`  [FAIL] ${name}: got ${got}, want ${want}`); } };
+eq("720p auto", computeAutoScale(720), 1);
+eq("900p auto", computeAutoScale(900), 1.25);
+eq("1080p auto", computeAutoScale(1080), 1.5);
+eq("1440p auto", computeAutoScale(1440), 2);
+eq("2160p auto (capped 3)", computeAutoScale(2160), 3);
+eq("small window never below 1 (auto)", computeAutoScale(500), 1);
+eq("1600×900 default", computeEffectiveScale(1600, 900, 1), 1.25);
+eq("1920×1080 default", computeEffectiveScale(1920, 1080, 1), 1.5);
+eq("1600×900 ×1.6 clamped to keep 1024×640 HUD px", computeEffectiveScale(1600, 900, 1.6), 1.41);
+eq("1920×1080 ×2 clamped", computeEffectiveScale(1920, 1080, 2), 1.69);
+eq("3840×2160 ×1.6 clamped", computeEffectiveScale(3840, 2160, 1.6), 3.38);
+eq("shrink allowed (×0.6)", computeEffectiveScale(1920, 1080, 0.6), 0.9);
+eq("tiny window shrinks HUD", computeEffectiveScale(800, 600, 1), 0.78);
+eq("never below 0.6", computeEffectiveScale(400, 300, 1), 0.6);
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

@@ -31,13 +31,17 @@ const DIALOG_ID = "manastone:use";
 
 let _warnedMissingExport = false;
 
-function buildMessage(opts) {
-  const name = opts?.name || "this mana stone";
-  const charge = (opts?.charge != null) ? `${Math.round(Number(opts.charge))}% ` : "";
-  const mode = opts?.mode === "all" ? "every magic item in your pack" : "the selected item";
-  return `Consume ${name}?\n` +
-    `It will recharge ${mode} (${charge}restore)\n` +
-    `and the stone will be destroyed.`;
+// HUD overhaul 2026-10-05 — player-facing wording (the old text read
+// "(restore)" / "( restore)" when no charge was supplied) and exported so
+// test_manastone_confirm_message.mjs can pin it. The dialog chrome +
+// Enter/Esc handling come from modal-dialog.js.
+export function buildMessage(opts) {
+  const name = (typeof opts?.name === "string" && opts.name.trim()) ? opts.name.trim() : "this mana stone";
+  const target = opts?.mode === "all" ? "every magic item you are carrying" : "the selected item";
+  const pct = Number(opts?.charge);
+  const amount = Number.isFinite(pct) && pct > 0 ? ` at ${Math.round(pct)}% efficiency` : "";
+  return `Use ${name}?\n` +
+    `It will recharge ${target}${amount}, and the stone will be destroyed.`;
 }
 
 function fireConsume(opts) {
@@ -66,9 +70,9 @@ function fireConsume(opts) {
 
 export function show(opts) {
   modalConfirmCallback({
-    title: "Consume Mana Stone",
+    title: "Use Mana Stone",
     message: buildMessage(opts),
-    confirmLabel: "Consume",
+    confirmLabel: "Use Stone",
     cancelLabel: "Cancel",
     dialogId: DIALOG_ID,
     action: opts?.mode === "all" ? "use-all" : "use-single",

@@ -4,14 +4,14 @@
   "name": "Train Skills",
   "author": "holtburger",
   "version": "0.1.0",
-  "description": "Train + raise skills (Wave 4.A) — spend credits / XP. Surfaces gmSkillUI's TrainSkill + RaiseSelection methods on the wasm wire (RaiseSkill 0x0046, TrainSkill 0x0047).",
+  "description": "Skill train/raise maths for the character pane (RaiseSkill 0x0046, TrainSkill 0x0047). F11 opens the character pane on its Skills tab (app/plugin_bar.js).",
   "icon": "📜",
   "iconHidden": true,
   "entry": "./train-skills.js",
   "environments": ["browser"],
   "slots": ["panel"],
   "hotkeys": [
-    { "id": "toggle", "default": "F11", "label": "Toggle Train Skills" }
+    { "id": "toggle", "default": "F11", "label": "Open Skills (Character)" }
   ],
   "clientApi": "^1.0",
   "capabilities": ["RaiseSkill", "TrainSkill"]

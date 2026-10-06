@@ -8,21 +8,32 @@
 // Data: `./data/spells-catalog.json` (bundled metadata) +
 // `./data/spell-components.json` (Comp_N → display name).
 //
-// IIFE-style: module load wires up the close-button-only DOM (no
-// auto-open) and exposes `window.__openSpellResearchPanel()` /
-// `window.__closeSpellResearchPanel()`. Filter/render is lazy — the
-// panel only subscribes to playerStatsUpdated once it's opened.
+// Standalone floating window (Shift+F4) — `window.__openSpellResearchPanel()`
+// / `__closeSpellResearchPanel()` / `__toggleSpellResearchPanel()`.
+// Filter/render is lazy — the panel only subscribes to
+// playerStatsUpdated once it's opened.
+//
+// HUD overhaul 2026-10-05: rebuilt on the shared hbk-* kit — hbk-window
+// frame, retail trapezoid titlebar + ClosePanelButton (makeTitlebar),
+// hbk-select / hbk-input filters, rope scrollbar list, kit rows — and
+// dragged / persisted through attachWindowPosition (zoom-aware, edge
+// anchored) instead of a fixed right/top. Height is clamped to the
+// HUD-space viewport so it never runs off a 720p window.
 
-import { setAcText } from "../ui/ac_font.js";
 import { escapeHtml } from "../ui/ac_html.js";
 import {
   fetchIconDataUrl as fetchIconDataUrlShared,
   getIconImmediate as getIconImmediateShared,
 } from "../ui/ac_icon_cache.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import { makeTitlebar } from "../ui/hud_kit.js";
+import { attachWindowPosition } from "../ui/ac_window_position.js";
 
 const OVERLAY_ID = "hb-spell-research-panel";
 const STYLE_ID = "hb-spell-research-style";
+// Synthetic window id (no retail layout) — 0xFFFF01xx keeps clear of the
+// 0xFFFF00xx ids other floaties use (map 0x26, tinker 0x20, vitals orbs).
+const SPELL_RESEARCH_WINDOW_ID = 0xFFFF0132;
 
 const SCHOOL_NAMES = {
   0: "—",
@@ -43,7 +54,7 @@ const SCHOOL_GHOST_COLOR = {
   5: "#8a3a8a",
 };
 function schoolGhostColor(school) {
-  return SCHOOL_GHOST_COLOR[school] ?? "var(--hb-text-gold)";
+  return SCHOOL_GHOST_COLOR[school] ?? "var(--hbk-gold)";
 }
 
 // Module-level caches — shared across open/close cycles.
@@ -121,19 +132,23 @@ function formatComponentCost(components) {
   return sorted.map(([typeName, n]) => `${n}× ${typeName}`).join(", ");
 }
 
+// spell-components.json rows are `{ name, typeName, ... }` objects — return
+// the display NAME (the pre-overhaul code returned the row object, which
+// rendered as "[object Object]" in the components line and the
+// missing-component toast).
 function resolveComponentName(comp) {
-  if (typeof comp === "number") {
-    return componentNames?.[String(comp)] ?? `Comp_${comp}`;
-  }
-  if (typeof comp === "string") {
+  let id = null;
+  if (typeof comp === "number") id = String(comp);
+  else if (typeof comp === "string") {
     const m = comp.match(/^Comp_(\d+)$/);
-    if (m) {
-      const id = m[1];
-      return componentNames?.[id] ?? comp;
-    }
-    return comp;
+    if (!m) return comp;
+    id = m[1];
+  } else {
+    return String(comp);
   }
-  return String(comp);
+  const rec = componentNames?.[id];
+  if (rec && typeof rec === "object") return rec.name ?? `Component #${id}`;
+  return typeof rec === "string" ? rec : `Component #${id}`;
 }
 
 // Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
@@ -156,251 +171,86 @@ function ensureStyles() {
   s.id = STYLE_ID;
   s.textContent = `
     #${OVERLAY_ID} {
-      position: fixed;
-      top: 60px;
-      right: 32px;
-      width: 440px;
-      height: 500px;
+      top: 60px; right: 32px;
+      width: 340px;
+      height: 480px;
+      max-height: calc(100 * var(--hb-hud-vh, 7.2px) - 24px);
       z-index: 60;
       display: none;
       flex-direction: column;
-      font-family: var(--hb-font-serif);
-      background: rgba(20, 14, 8, 0.96);
-      border: 2px solid var(--hb-border-brass);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
-      color: var(--hb-text-cream);
-      box-sizing: border-box;
     }
     #${OVERLAY_ID}[data-open="1"] { display: flex; }
-    #${OVERLAY_ID} .hb-sr-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      background: linear-gradient(180deg, rgba(60, 45, 22, 0.9), rgba(34, 24, 12, 0.9));
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-      flex: 0 0 auto;
-    }
-    #${OVERLAY_ID} .hb-sr-title {
-      color: var(--hb-text-gold);
-      font-size: 14px;
-      letter-spacing: 0.04em;
-      font-weight: 600;
-    }
-    #${OVERLAY_ID} .hb-sr-close {
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      width: 22px;
-      height: 22px;
-      line-height: 18px;
-      text-align: center;
-      cursor: pointer;
-      font-family: var(--hb-font-serif);
-      font-size: 14px;
-      padding: 0;
-    }
-    #${OVERLAY_ID} .hb-sr-close:hover {
-      color: var(--hb-text-gold);
-      border-color: var(--hb-border-brass);
-    }
-    #${OVERLAY_ID} .hb-sr-filters {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px 6px;
-      padding: 6px 10px;
-      background: rgba(0, 0, 0, 0.25);
-      border-bottom: 1px solid var(--hb-border-brass-deep);
-      flex: 0 0 auto;
-    }
-    #${OVERLAY_ID} .hb-sr-filters label {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 10px;
-      color: var(--hb-text-label);
-    }
-    #${OVERLAY_ID} .hb-sr-filters select,
-    #${OVERLAY_ID} .hb-sr-filters input {
-      flex: 1 1 auto;
-      background: rgba(10, 6, 2, 0.85);
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: var(--hb-font-serif);
-      font-size: 11px;
-      padding: 2px 4px;
-      box-sizing: border-box;
-      min-width: 0;
-    }
-    #${OVERLAY_ID} .hb-sr-filters select:focus,
-    #${OVERLAY_ID} .hb-sr-filters input:focus {
-      outline: none;
-      border-color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hb-sr-search {
-      grid-column: 1 / -1;
-    }
-    #${OVERLAY_ID} .hb-sr-count {
-      grid-column: 1 / -1;
-      font-size: 10px;
-      color: var(--hb-text-muted);
-      text-align: right;
-    }
-    #${OVERLAY_ID} .hb-sr-list {
-      flex: 1 1 auto;
-      overflow-y: auto;
-      overflow-x: hidden;
-      padding: 4px 6px;
-    }
-    #${OVERLAY_ID} .hb-sr-empty {
-      color: var(--hb-text-muted-2);
-      font-style: italic;
-      font-size: 12px;
-      text-align: center;
-      padding: 40px 12px;
-    }
-    #${OVERLAY_ID} .hb-sr-row {
-      border: 1px solid transparent;
-      border-bottom: 1px solid rgba(120, 90, 50, 0.18);
-      padding: 4px 6px;
-      cursor: pointer;
-      transition: background 80ms, border-color 80ms;
-    }
-    #${OVERLAY_ID} .hb-sr-row:hover {
-      background: rgba(80, 60, 30, 0.25);
-      border-color: var(--hb-border-brass-dim);
-    }
-    #${OVERLAY_ID} .hb-sr-row[data-expanded="1"] {
-      background: rgba(60, 45, 22, 0.35);
-      border-color: var(--hb-border-brass-dim);
-    }
-    #${OVERLAY_ID} .hb-sr-row[data-focused="1"] {
-      border-left: 3px solid var(--hb-text-gold);
-      background: rgba(100, 75, 30, 0.32);
-    }
-    #${OVERLAY_ID} .hb-sr-row-main {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    #${OVERLAY_ID} .hb-sr-icon {
-      width: 32px;
-      height: 32px;
-      flex: 0 0 32px;
-      background: rgba(0, 0, 0, 0.6);
-      border: 1px solid var(--hb-border-brass-deep);
-      text-align: center;
-      line-height: 30px;
-      font-size: 16px;
-      color: var(--hb-text-gold-dim);
-    }
-    #${OVERLAY_ID} .hb-sr-icon img {
-      width: 100%;
-      height: 100%;
-      image-rendering: pixelated;
-      object-fit: contain;
-      display: block;
-    }
-    #${OVERLAY_ID} .hb-sr-text {
-      flex: 1 1 auto;
-      min-width: 0;
-    }
-    #${OVERLAY_ID} .hb-sr-name {
-      color: var(--hb-text-cream-bright);
-      font-size: 12px;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    #${OVERLAY_ID} .hb-sr-meta {
-      color: var(--hb-text-muted);
-      font-size: 10px;
-      margin-top: 1px;
-    }
-    #${OVERLAY_ID} .hb-sr-tag {
-      color: var(--hb-text-gold-dim);
-      font-variant-numeric: tabular-nums;
-    }
-    #${OVERLAY_ID} .hb-sr-sep {
-      color: var(--hb-text-muted-3);
-      margin: 0 4px;
-    }
-    #${OVERLAY_ID} .hb-sr-comp {
-      color: var(--hb-text-cream);
-      font-style: italic;
-    }
-    #${OVERLAY_ID} .hb-sr-detail {
-      display: none;
-      margin-top: 6px;
-      padding: 6px 8px;
-      background: rgba(10, 6, 2, 0.6);
-      border-left: 2px solid var(--hb-border-brass-dim);
-      font-size: 11px;
-      color: var(--hb-text-body);
-      line-height: 1.4;
-    }
-    #${OVERLAY_ID} .hb-sr-row[data-expanded="1"] .hb-sr-detail {
-      display: block;
-    }
-    #${OVERLAY_ID} .hb-sr-list::-webkit-scrollbar {
-      width: 8px;
-    }
-    #${OVERLAY_ID} .hb-sr-list::-webkit-scrollbar-track {
-      background: rgba(0, 0, 0, 0.4);
-    }
-    #${OVERLAY_ID} .hb-sr-list::-webkit-scrollbar-thumb {
-      background: var(--hb-border-brass-deep);
-      border: 1px solid var(--hb-border-brass-dim);
-    }
+    #${OVERLAY_ID} .hbk-titlebar { flex: 0 0 auto; gap: 6px; }
     #${OVERLAY_ID} .hb-sr-stance-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      margin-right: 6px;
-      background: #6a6a6a;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
-      flex: 0 0 8px;
+      flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%;
+      background: #6a6a6a; box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
     }
     #${OVERLAY_ID} .hb-sr-stance-dot[data-ready="1"] {
-      background: #ffd76a;
-      box-shadow: 0 0 4px #ffd76a, 0 0 1px #fff;
+      background: #ffd76a; box-shadow: 0 0 4px #ffd76a, 0 0 1px #fff;
     }
-    #${OVERLAY_ID} .hb-sr-title-row {
-      display: flex;
-      align-items: center;
-      flex: 1 1 auto;
-      min-width: 0;
+    #${OVERLAY_ID} .hb-sr-filters {
+      flex: 0 0 auto;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--hbk-gold-deep);
+      background: rgba(0, 0, 0, 0.3);
     }
+    #${OVERLAY_ID} .hb-sr-filters label {
+      display: flex; align-items: center; gap: 6px; min-width: 0;
+      font-size: 11px; color: var(--hbk-text-dim);
+    }
+    #${OVERLAY_ID} .hb-sr-filters .hbk-select,
+    #${OVERLAY_ID} .hb-sr-filters .hbk-input { flex: 1 1 auto; min-width: 0; }
+    #${OVERLAY_ID} .hb-sr-search { grid-column: 1 / -1; }
+    #${OVERLAY_ID} .hb-sr-count { grid-column: 1 / -1; font-size: 11px; color: var(--hbk-text-faint); text-align: right; }
+    #${OVERLAY_ID} .hb-sr-list { flex: 1 1 auto; min-height: 60px; padding: 2px 0; outline: none; }
+    #${OVERLAY_ID} .hb-sr-row {
+      padding: 4px 8px 4px 6px;
+      border-left: 2px solid transparent;
+      border-bottom: 1px solid rgba(243, 210, 122, 0.08);
+      cursor: pointer;
+    }
+    #${OVERLAY_ID} .hb-sr-row:hover { background: var(--hbk-hover); }
+    #${OVERLAY_ID} .hb-sr-row[data-expanded="1"] { background: rgba(243, 210, 122, 0.06); }
+    #${OVERLAY_ID} .hb-sr-row[data-focused="1"] { background: var(--hbk-sel); border-left-color: var(--hbk-gold); }
+    #${OVERLAY_ID} .hb-sr-row-main { display: flex; align-items: flex-start; gap: 8px; }
+    #${OVERLAY_ID} .hb-sr-icon {
+      flex: 0 0 32px; width: 32px; height: 32px;
+      background: #000; border: 1px solid #000;
+      box-shadow: inset 0 0 0 1px rgba(243, 210, 122, 0.15);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--hbk-gold-dim); font-size: 14px;
+    }
+    #${OVERLAY_ID} .hb-sr-icon img { width: 100%; height: 100%; image-rendering: pixelated; display: block; }
+    #${OVERLAY_ID} .hb-sr-text { flex: 1 1 auto; min-width: 0; }
+    #${OVERLAY_ID} .hb-sr-name {
+      color: var(--hbk-text); font-size: 13px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #${OVERLAY_ID} .hb-sr-meta { color: var(--hbk-text-dim); font-size: 11px; margin-top: 1px; overflow-wrap: anywhere; }
+    #${OVERLAY_ID} .hb-sr-tag { color: var(--hbk-gold); font-variant-numeric: tabular-nums; }
+    #${OVERLAY_ID} .hb-sr-sep { color: var(--hbk-text-faint); margin: 0 4px; }
+    #${OVERLAY_ID} .hb-sr-comp { color: var(--hbk-text); font-style: italic; }
+    #${OVERLAY_ID} .hb-sr-cost { color: var(--hbk-text-faint); }
+    #${OVERLAY_ID} .hb-sr-detail {
+      display: none; margin: 6px 0 2px 40px; padding: 5px 8px;
+      background: rgba(0, 0, 0, 0.45); border-left: 2px solid var(--hbk-gold-dim);
+      font-size: 12px; color: var(--hbk-text); line-height: 1.4;
+    }
+    #${OVERLAY_ID} .hb-sr-row[data-expanded="1"] .hb-sr-detail { display: block; }
     #${OVERLAY_ID} .hb-sr-toast {
-      position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: 6px;
-      padding: 4px 6px;
-      font-size: 11px;
-      text-align: center;
-      background: rgba(0, 0, 0, 0.78);
-      border: 1px solid var(--hb-border-brass);
-      color: var(--hb-text-gold);
-      pointer-events: none;
+      position: absolute; left: 10px; right: 10px; bottom: 8px;
+      padding: 4px 8px; font-size: 12px; text-align: center;
+      background: rgba(0, 0, 0, 0.85); border: 1px solid var(--hbk-gold-dim);
+      color: var(--hbk-gold-bright); pointer-events: none;
     }
     .hb-sr-drag-ghost {
-      position: absolute;
-      top: -1000px;
-      left: -1000px;
-      width: 32px;
-      height: 32px;
-      box-sizing: border-box;
-      border: 1px solid var(--hb-text-cream);
-      border-radius: 4px;
+      position: absolute; top: -1000px; left: -1000px;
+      width: 32px; height: 32px; box-sizing: border-box;
+      border: 1px solid var(--hbk-gold);
       background-color: rgba(0, 0, 0, 0.7);
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      filter: drop-shadow(0 0 4px var(--hb-text-gold));
-      image-rendering: pixelated;
-      pointer-events: none;
+      background-position: center; background-size: contain; background-repeat: no-repeat;
+      image-rendering: pixelated; pointer-events: none;
     }
   `;
   document.head.appendChild(s);
@@ -424,12 +274,16 @@ const state = {
   keydownHandler: null,
 };
 
+// Same wording as the spellbook rows (plugins/spellbook.js formatSpellDuration).
 function formatDuration(secs) {
   if (!Number.isFinite(secs) || secs <= 0) return null;
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
-  return `${Math.floor(secs / 86400)}d`;
+  if (secs < 60) return `${Math.round(secs)} sec`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  if (secs < 86400) {
+    const h = secs / 3600;
+    return `${Number.isInteger(h) ? h : h.toFixed(1)} hr`;
+  }
+  return `${Math.floor(secs / 86400)} days`;
 }
 
 function getFilters() {
@@ -630,13 +484,13 @@ function makeRow(id, meta) {
 
   const meta1 = document.createElement("div");
   meta1.className = "hb-sr-meta";
-  const lvlTag = `<span class="hb-sr-tag">L${meta.level ?? "?"} ${levelRoman}</span>`;
+  const lvlTag = `<span class="hb-sr-tag">Level ${levelRoman}</span>`;
   const schoolTag = `<span class="hb-sr-tag">${schoolName}</span>`;
   const manaTag = Number.isFinite(meta.mana)
-    ? `<span class="hb-sr-tag">mana ${meta.mana}</span>`
+    ? `<span class="hb-sr-tag">${meta.mana} mana</span>`
     : "";
   const durationTag = duration
-    ? `<span class="hb-sr-tag">duration ${duration}</span>`
+    ? `<span class="hb-sr-tag">${duration}</span>`
     : "";
   const tagParts = [lvlTag, schoolTag];
   if (manaTag) tagParts.push(manaTag);
@@ -650,7 +504,7 @@ function makeRow(id, meta) {
     const compHtml = compNames
       .map((n) => `<span class="hb-sr-comp">${escapeHtml(n)}</span>`)
       .join(", ");
-    meta2.innerHTML = `components: ${compHtml}`;
+    meta2.innerHTML = `Components: ${compHtml}`;
     text.appendChild(meta2);
     // Rec #93 — per-cast component cost line, grouped by component
     // typeName (Scarab / Herb / Powder / Potion / Talisman / Taper)
@@ -662,7 +516,6 @@ function makeRow(id, meta) {
     if (costStr) {
       const meta3 = document.createElement("div");
       meta3.className = "hb-sr-meta hb-sr-cost";
-      meta3.style.opacity = "0.78";
       meta3.textContent = `Cost: ${costStr}`;
       text.appendChild(meta3);
     }
@@ -705,7 +558,7 @@ function render() {
     state.rows = [];
     state.focusIdx = -1;
     state.emptyEl.style.display = "";
-    setAcText(state.emptyEl, "No spells learned. Learn a spell tome to research.");
+    state.emptyEl.textContent = "You have not learned any spells yet.";
     if (state.countEl) state.countEl.textContent = "0 known";
     return;
   }
@@ -733,7 +586,7 @@ function render() {
   if (rows.length === 0) {
     state.focusIdx = -1;
     state.emptyEl.style.display = "";
-    setAcText(state.emptyEl, "No spells match the current filter.");
+    state.emptyEl.textContent = "No spells match the current filter.";
   } else {
     state.emptyEl.style.display = "none";
     for (let i = 0; i < rows.length; i++) {
@@ -793,79 +646,58 @@ function ensurePanel() {
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  overlay.className = "hbk-window";
   overlay.dataset.open = "0";
   overlay.tabIndex = -1;
 
-  const header = document.createElement("div");
-  header.className = "hb-sr-header";
-  const titleRow = document.createElement("div");
-  titleRow.className = "hb-sr-title-row";
-  const stanceDot = document.createElement("div");
+  // Retail trapezoid titlebar + ClosePanelButton (hud_kit makeTitlebar);
+  // the stance dot sits inside it, left of the title.
+  const { bar, title } = makeTitlebar("Spell Research", { onClose: () => closePanel() });
+  const stanceDot = document.createElement("span");
   stanceDot.className = "hb-sr-stance-dot";
   stanceDot.dataset.ready = "0";
   stanceDot.title = "Enter a combat stance to cast";
-  const title = document.createElement("div");
-  title.className = "hb-sr-title";
-  title.textContent = "Spell Research";
-  titleRow.appendChild(stanceDot);
-  titleRow.appendChild(title);
-  const closeBtn = document.createElement("button");
-  closeBtn.className = "hb-sr-close";
-  closeBtn.type = "button";
-  closeBtn.textContent = "×";
-  closeBtn.title = "Close";
-  closeBtn.addEventListener("click", () => closePanel());
-  header.appendChild(titleRow);
-  header.appendChild(closeBtn);
-  overlay.appendChild(header);
+  bar.insertBefore(stanceDot, title);
+  overlay.appendChild(bar);
   state.stanceDotEl = stanceDot;
 
   const filters = document.createElement("div");
   filters.className = "hb-sr-filters";
 
-  const schoolLabel = document.createElement("label");
-  schoolLabel.textContent = "School";
-  const schoolSel = document.createElement("select");
-  for (const [val, label] of [
-    ["all", "All"],
-    ["1", "War"],
-    ["2", "Life"],
-    ["3", "Item"],
-    ["4", "Creature"],
-    ["5", "Void"],
-  ]) {
-    const opt = document.createElement("option");
-    opt.value = val;
-    opt.textContent = label;
-    schoolSel.appendChild(opt);
+  function labelled(text, control, cls) {
+    const l = document.createElement("label");
+    if (cls) l.className = cls;
+    const t = document.createElement("span");
+    t.textContent = text;
+    l.append(t, control);
+    return l;
   }
-  schoolLabel.appendChild(schoolSel);
-  filters.appendChild(schoolLabel);
-
-  const levelLabel = document.createElement("label");
-  levelLabel.textContent = "Level";
-  const levelSel = document.createElement("select");
+  function select(options) {
+    const sel = document.createElement("select");
+    sel.className = "hbk-select";
+    for (const [val, label] of options) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    }
+    return sel;
+  }
+  // Retail school order (gmSpellbookUI FilterBox): Creature, Item, Life, War, Void.
+  const schoolSel = select([["all", "All"], ["4", "Creature"], ["3", "Item"], ["2", "Life"], ["1", "War"], ["5", "Void"]]);
   const lvlOpts = [["all", "All"]];
   for (let i = 1; i <= 8; i++) lvlOpts.push([String(i), LEVEL_ROMAN[i]]);
-  for (const [val, label] of lvlOpts) {
-    const opt = document.createElement("option");
-    opt.value = val;
-    opt.textContent = label;
-    levelSel.appendChild(opt);
-  }
-  levelLabel.appendChild(levelSel);
-  filters.appendChild(levelLabel);
+  const levelSel = select(lvlOpts);
+  filters.appendChild(labelled("School", schoolSel));
+  filters.appendChild(labelled("Level", levelSel));
 
-  const searchLabel = document.createElement("label");
-  searchLabel.className = "hb-sr-search";
-  searchLabel.textContent = "Name";
   const searchInput = document.createElement("input");
   searchInput.type = "text";
-  searchInput.placeholder = "search…";
+  searchInput.className = "hbk-input";
+  searchInput.placeholder = "Search spell names…";
   searchInput.autocomplete = "off";
   searchInput.spellcheck = false;
-  searchLabel.appendChild(searchInput);
-  filters.appendChild(searchLabel);
+  filters.appendChild(labelled("Name", searchInput, "hb-sr-search"));
 
   const countEl = document.createElement("div");
   countEl.className = "hb-sr-count";
@@ -875,13 +707,25 @@ function ensurePanel() {
   overlay.appendChild(filters);
 
   const listEl = document.createElement("div");
-  listEl.className = "hb-sr-list";
+  listEl.className = "hb-sr-list hbk-scroll";
   const emptyEl = document.createElement("div");
-  emptyEl.className = "hb-sr-empty";
-  listEl.appendChild(emptyEl);
+  emptyEl.className = "hbk-empty hb-sr-empty";
+  overlay.appendChild(emptyEl);
   overlay.appendChild(listEl);
 
   document.body.appendChild(overlay);
+
+  // Drag by the titlebar, persisted + zoom-aware + edge-anchored
+  // (ui/ac_window_position.js). The close button is excluded.
+  try {
+    attachWindowPosition(overlay, {
+      windowId: SPELL_RESEARCH_WINDOW_ID,
+      dragHandle: bar,
+      ignoreSelector: ".hbk-close,button,input,select",
+    });
+  } catch (e) {
+    console.warn("[spell-research] window position attach failed:", e);
+  }
 
   state.overlayEl = overlay;
   state.listEl = listEl;

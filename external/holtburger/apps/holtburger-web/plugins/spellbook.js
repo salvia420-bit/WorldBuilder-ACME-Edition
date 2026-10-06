@@ -2,108 +2,49 @@
 // Phase J (delete-from-spellbook RemoveSpellFromBook 0x01A8 wire round-
 // trip + component name table), Phase K (multi-tab spell-bars).
 //
-// Wave 2 PR-Z refactor 2026-05-22: was an `activate(bodyEl, ctx)`
-// bar-plugin slot (📖 icon, F5 hotkey). Now a registered view of
-// plugins/main-panel.js — the shared right-side pane. Toggled via the
-// S key (and F5 for retail muscle-memory).
+// A registered view of plugins/main-panel.js (F5, F2 alt). HUD overhaul
+// 2026-10-05 rebuilt the view on the retail gmSpellbookUI anatomy
+// (LayoutDesc 0x21000032, 300×337) with the shared hbk-* kit:
 //
-// Layout-port 2026-05-24: wired retail gmSpellbookUI (LayoutDesc
-// 0x21000032, 300×337 inside main-panel's 300×337 body slot) — sizes
-// and positions for spell grid, scrollbar, filter panel, school
-// checkboxes (War/Life/Item/Creature/Void), level checkboxes I-VIII,
-// section labels, and the multi-state action button come from the DAT.
-// The 7 numbered spell-bar tabs at top are Holtburger Phase I.2 chrome
-// that has no retail analog — kept as-is. School/level checkbox text
-// is hand-tuned (v1 fetch_layout serializes geometry only — StateDesc
-// + BaseProperty text content is a follow-on).
+//   0x10000294 RootSpellbook_Field  dark field 0x06004CC2
+//   0x10000295 SpellBook_SpellList  280×224 — ItemSlot_SpellbookEntry rows
+//              (0x10000343, 280×32: field 0x06001396 / selected 0x06001397,
+//              icon 32×32 at x=0, text at x=42) + rope scrollbar 0x10000296
+//   0x10000297 FilterBox            300×113 slate 0x06002722:
+//              "Schools:" 0x100002A3 + Creature 0x10000298 / Item 0x10000299
+//              / Life 0x1000029A / War 0x1000029B / Void 0x100005C0;
+//              "Levels:" 0x100002A4 + I..VIII 0x1000029C..0x100002A2,
+//              0x1000054E; DeleteSpell_Button 0x100002A5 ("Delete")
 //
-// Element-id map (confirmed by spellbook_layout_dump 2026-05-24):
-//   0x10000294 — root panel (300×337)
-//   0x10000295 — spell grid area  (0,0)   280×224
-//   0x10000296 — right scrollbar  (280,0) 16×224
-//   0x10000297 — filter panel     (0,224) 300×113, type=3 (3D bevel)
-//     0x100002A3 — "School:" label (12,6)  90×19
-//     0x100002A4 — "Level:" label  (12,39) 90×19
-//     School row (y=22):
-//       0x10000298 War      (17,22) 90×14
-//       0x10000299 Life     (87,22)
-//       0x1000029A Item    (137,22)
-//       0x1000029B Creature(187,22)
-//       0x100005C0 Void    (237,22)
-//     Level rows (y=55/72/89):
-//       0x1000029C I    (17,55) 90×14
-//       0x1000029D II   (82,55)
-//       0x1000029E III (147,55)
-//       0x1000029F IV   (17,72)
-//       0x100002A0 V    (82,72)
-//       0x100002A1 VI  (147,72)
-//       0x100002A2 VII  (17,89)
-//       0x1000054E VIII (82,89)
-//     0x100002A5 multi-state button (187,61) 100×32, 2 states (Delete/Forget)
+// Layout is a flex column: the filter box keeps its height and the list
+// yields, so the VIII row can never be clipped (the pre-overhaul absolute
+// geometry assumed a 337-px body and lost its last filter row in the real
+// ~325-px one). Rows are fixed 32 px and virtualised (2026-07-04 perf fix).
 //
-// Preserved wiring (DO NOT regress):
-//   - loadCatalog() fetches ./data/spells-catalog.json (Phase G)
-//   - loadComponentNames() fetches ./data/spell-components.json (J.2)
-//   - client.player.knownSpells() populates the list (Phase G + wasm)
-//   - School filter check-bubbles (War/Life/Item/Creature/Void) — H.2
-//   - Level filter check-bubbles I-VIII — H.3
-//   - Spell rows draggable via "application/x-hb-spell-id" mime — H.5
-//   - Double-click row → add to first empty magic-bar slot — Phase G
-//   - Right-click row → detail popover (name/school/mana/comps) — H.4
-//   - Delete-from-spellbook → RemoveSpellFromBook 0x01A8 — J.1
-//   - Multi-tab spell-bars (7 numbered tabs × 8 slots) — Phase I.2
-//   - Subscriptions: playerStatsUpdated + hb-spellbar-changed, torn
-//     down on view-swap cleanup.
-//
-// Real DAT sprites (extracted from gmSpellbookUI layout 0x21000032):
-//   0x06002722 — dark stone/slate horizontal backdrop strip. Used as
-//                the filter-row header band.
-//   0x06004CDA — passive (dark-red, gold-bordered) button strip.
-//                Used as inactive spell-bar tab background.
-//   0x06004CDB — active/hover (bright-red, gold-bordered) button strip.
-//                Used as the currently-selected spell-bar tab background.
-//   0x06004CC2 — gray placeholder spacer (already in use elsewhere; not
-//                wired here — left as a TODO in case future Phase K
-//                wave-3 spell-component pouch needs it).
+// Behaviour (decomp-matched, acclient.c):
+//   * gmSpellbookUI::GetSortedInsertionPlace — ascending SpellBase
+//     _display_order.
+//   * gmSpellbookUI::IsFilteredOut — one filter bit per school/level
+//     button (PlayerModule spellbook filters); persisted per browser.
+//   * gmSpellbookUI::ListenToElementMessage — double-click adds the spell
+//     to the active spell bar (CM_Magic::SendNotice_AddSpellShortcut);
+//     single click selects; the Delete button / Delete key remove it after
+//     a confirmation (DeleteSpell → DeleteSpellDialogCallback).
+//   * Drag a row onto any bar slot — `application/x-hb-spell-id` mime.
+//   * Right-click — detail card (school / level / duration / mana /
+//     description / components).
+//   * "Components" swaps the list for the carried spell components
+//     (rec #46 pouch; retail had a sibling gmSpellComponentUI panel).
 //
 // Helpers re-exported at the bottom remain in scope for combat-bar.js:
 //   getSpellBarSlots, setSpellBarSlot, getActiveSpellBar,
 //   setActiveSpellBar, SPELL_BAR_SLOTS, SPELL_BAR_TABS, loadCatalog.
-// Their signatures are UNCHANGED — combat-bar.js does not need to be
-// touched as part of PR-Z.
 
-import { setAcText } from "../ui/ac_font.js";
+import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
-import { getIconImmediate } from "../ui/ac_icon_cache.js";
-
-// gmSpellbookUI — retail layout that drives the spellbook panel.
-// Element-id map confirmed by spellbook_layout_dump 2026-05-24.
-const SPELLBOOK_LAYOUT_ID = 0x21000032;
-const SB_ELEM_GRID        = 0x10000295;  // spell list / grid area
-const SB_ELEM_SCROLLBAR   = 0x10000296;  // right-side scrollbar
-const SB_ELEM_FILTERS     = 0x10000297;  // filter panel below grid
-const SB_ELEM_LBL_SCHOOL  = 0x100002A3;  // "School:" label
-const SB_ELEM_LBL_LEVEL   = 0x100002A4;  // "Level:" label
-const SB_ELEM_SCHOOL = {
-  1: 0x10000298,  // War
-  2: 0x10000299,  // Life
-  3: 0x1000029A,  // Item
-  4: 0x1000029B,  // Creature
-  5: 0x100005C0,  // Void
-};
-const SB_ELEM_LEVEL = {
-  1: 0x1000029C,
-  2: 0x1000029D,
-  3: 0x1000029E,
-  4: 0x1000029F,
-  5: 0x100002A0,
-  6: 0x100002A1,
-  7: 0x100002A2,
-  8: 0x1000054E,
-};
-const SB_ELEM_ACTION_BTN  = 0x100002A5;  // multi-state action button (Delete/Forget)
+import { getIconImmediate, fetchIconDataUrl } from "../ui/ac_icon_cache.js";
+import { hudPoint, hudViewport } from "../ui/hud_scale.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 // Task C follow-up (2026-07-01): retail-corrected counts, verified
@@ -296,19 +237,22 @@ function loadComponentNames() {
 }
 function resolveComponentName(comp, componentNames) {
   // `comp` may be a numeric ID, a "Comp_<id>" string from the spell
-  // catalog, or already a resolved name. Returns the human label.
-  if (typeof comp === "number") {
-    return componentNames?.[String(comp)] ?? `Component #${comp}`;
-  }
-  if (typeof comp === "string") {
+  // catalog, or already a resolved name. Returns the human label —
+  // spell-components.json rows are `{ name, typeName, ... }` objects, so
+  // return `.name` (HUD overhaul 2026-10-05: the row object used to leak
+  // through as "[object Object]").
+  let id = null;
+  if (typeof comp === "number") id = String(comp);
+  else if (typeof comp === "string") {
     const m = comp.match(/^Comp_(\d+)$/);
-    if (m) {
-      const id = m[1];
-      return componentNames?.[id] ?? `Component #${id}`;
-    }
-    return comp;
+    if (!m) return comp;
+    id = m[1];
+  } else {
+    return String(comp);
   }
-  return String(comp);
+  const rec = componentNames?.[id];
+  if (rec && typeof rec === "object") return rec.name ?? `Component #${id}`;
+  return typeof rec === "string" ? rec : `Component #${id}`;
 }
 
 const SCHOOL_NAMES = {
@@ -452,343 +396,165 @@ function addToFirstEmptySlot(spellId, barIdx) {
   return writeIdx;
 }
 
+// ─── Pure helpers (HUD overhaul 2026-10-05; exported for node tests) ──
+
+// Retail spellbook filter word (PlayerModule::GetSpellbookFilters, read by
+// gmSpellbookUI::IsFilteredOut, acclient.c): one bit per school button and
+// per level button. Persisted per browser here (retail kept it in the
+// character's PlayerModule).
+const SCHOOL_BIT = { 4: 0x1, 3: 0x2, 2: 0x4, 1: 0x8, 5: 0x2000 }; // Creature, Item, Life, War, Void
+const LEVEL_BIT = { 1: 0x10, 2: 0x20, 3: 0x40, 4: 0x80, 5: 0x100, 6: 0x200, 7: 0x400, 8: 0x800 };
+const FILTER_ALL = 0x2FFF;
+const FILTER_LS_KEY = "hb.spellbook.filterMask.v1";
+// Retail FilterBox button order (0x10000298.. = Creature, Item, Life, War,
+// Void — the pre-overhaul code labelled 0x10000298 "War").
+const SCHOOL_ORDER = [4, 3, 2, 1, 5];
+const ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII" };
+
+/** gmSpellbookUI::IsFilteredOut — true when `meta` is hidden by `mask`.
+ *  Uncatalogued spells (no school/level) always show — a liberty so a
+ *  learned-but-unknown id is never invisible. */
+export function isSpellFilteredOut(meta, mask) {
+  if (!meta || meta._uncatalogued) return false;
+  const sb = SCHOOL_BIT[meta.school];
+  const lb = LEVEL_BIT[meta.level];
+  if (!sb || !lb) return true;
+  return !(mask & sb) || !(mask & lb);
+}
+
+/** gmSpellbookUI::GetSortedInsertionPlace — ascending SpellBase
+ *  `_display_order`, name as the tie-break (and for JSON-only records
+ *  that carry no display order). */
+export function compareSpells(a, b) {
+  const da = Number.isFinite(a?.displayOrder) ? a.displayOrder : Number.MAX_SAFE_INTEGER;
+  const db = Number.isFinite(b?.displayOrder) ? b.displayOrder : Number.MAX_SAFE_INTEGER;
+  if (da !== db) return da - db;
+  return String(a?.name ?? "").localeCompare(String(b?.name ?? ""));
+}
+
+/** Spell duration (seconds) → "30 sec" / "15 min" / "1.5 hr"; "" for
+ *  instant (≤ 0). */
+export function formatSpellDuration(sec) {
+  const s = Number(sec);
+  if (!Number.isFinite(s) || s <= 0) return "";
+  if (s < 60) return `${Math.round(s)} sec`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  const h = s / 3600;
+  return `${Number.isInteger(h) ? h : h.toFixed(1)} hr`;
+}
+
+/** Secondary row text: "Level III · 15 min · 30 mana" (school is drawn
+ *  separately in its tint). */
+export function spellMetaLine(meta) {
+  if (!meta || meta._uncatalogued) return "Unknown spell";
+  const parts = [];
+  const roman = meta.levelRoman || ROMAN[meta.level];
+  if (roman) parts.push(`Level ${roman}`);
+  const dur = formatSpellDuration(meta.duration);
+  if (dur) parts.push(dur);
+  if (Number.isFinite(meta.mana) && meta.mana > 0) parts.push(`${meta.mana} mana`);
+  return parts.join(" · ");
+}
+
+function readFilterMask() {
+  try {
+    const raw = localStorage.getItem(FILTER_LS_KEY);
+    if (raw == null || raw === "") return FILTER_ALL;
+    const v = Number(raw);
+    return Number.isInteger(v) && v >= 0 ? (v & FILTER_ALL) : FILTER_ALL;
+  } catch (_) { return FILTER_ALL; }
+}
+function writeFilterMask(mask) {
+  try { localStorage.setItem(FILTER_LS_KEY, String(mask & FILTER_ALL)); } catch (_) {}
+}
+
+const SCHOOL_TINT = {
+  1: "#ff8c80", // War
+  2: "#8cdc8c", // Life
+  3: "#ffc878", // Item
+  4: "#8cc8ff", // Creature
+  5: "#c88cff", // Void
+};
+
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
   stylesInjected = true;
+  const SP = "./data/ui-sprites";
   const style = document.createElement("style");
   style.id = "hb-spellbook-style";
   style.textContent = `
-    /* Spellbook view — mounts inside main-panel's body slot (300×337).
-       The main-panel owns position/frame/title; we just lay out our
-       content inside parentEl. Retail gmSpellbookUI 0x21000032 places
-       the spell grid at (0,0) 280×224, the scrollbar at (280,0) 16×224,
-       and the filter panel at (0,224) 300×113. We add the Holtburger
-       Phase I.2 spell-bar tab strip on top of the grid area.
-
-       NOTE: applySpellbookLayout() overrides per-element x/y/w/h from
-       the LayoutDesc — these CSS rules are the fallback when the
-       layout fails to load. */
+    /* Spellbook — gmSpellbookUI 0x21000032 (RootSpellbook_Field
+       0x10000294 300×337: SpellList 0x10000295 over FilterBox 0x10000297).
+       Flex column so the filter box never clips: only the list yields
+       height. HUD overhaul 2026-10-05. */
     .hb-sb-root {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      box-sizing: border-box;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      overflow: hidden;
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      box-sizing: border-box; overflow: hidden;
+      pointer-events: auto; user-select: none;
+      color: var(--hbk-text); font-family: var(--hbk-font); font-size: 12px;
+      background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
     }
-    /* Spell-bar tab strip — real DAT 0x06004CDA (passive) /
-       0x06004CDB (active) brass-bordered red button textures.
-       7 numbered tabs (Phase I.2 — Holtburger chrome above retail's
-       spell-grid area). */
-    .hb-sb-tabs {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 16px;
-      height: 22px;
-      box-sizing: border-box;
-      display: flex;
-      gap: 2px;
-      padding: 4px 4px 0;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-    }
-    .hb-sb-tab {
-      flex: 1;
-      height: 18px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      font-weight: 600;
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      background: url("./data/ui-sprites/0x06004CDA.png") center/100% 100% no-repeat;
-      border: none;
-      cursor: pointer;
-      user-select: none;
-      letter-spacing: 0.04em;
-    }
-    .hb-sb-tab:hover { filter: brightness(1.25); }
-    .hb-sb-tab.active {
-      background: url("./data/ui-sprites/0x06004CDB.png") center/100% 100% no-repeat;
-      color: var(--hb-text-gold);
-    }
-    /* Spell list — retail 0x10000295 puts this at (0,0) 280×224.
-       We inset top by 22px to clear the Holtburger Phase I.2 tab strip,
-       and right by 0 (the scrollbar 0x10000296 sits at x=280, our
-       browser-managed scrollbar collapses into the same column). */
-    .hb-sb-list {
-      position: absolute;
-      top: 22px;
-      left: 0;
-      width: 280px;
-      height: 202px;
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      overflow-y: auto;
-      padding: 4px 4px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-    }
-    /* Scrollbar element — retail 0x10000296 (280,0) 16×224. We let the
-       browser render the actual scrollbar inside .hb-sb-list (scrollbar-
-       width: thin) and surface this as a decorative brass-trim slot so
-       the layout-port verifier can confirm the slot's geometry. */
-    .hb-sb-scrollbar {
-      position: absolute;
-      top: 22px;
-      left: 280px;
-      width: 16px;
-      height: 202px;
-      box-sizing: border-box;
-      border-left: 1px solid var(--hb-border-brass-dim);
-      background: rgba(0, 0, 0, 0.4);
-      pointer-events: none;
-    }
-    /* Filter panel — retail 0x10000297 (0,224) 300×113, type=3 (3D bevel).
-       Uses DAT 0x06002722 as a dark stone backdrop. Sub-elements
-       (school/level checkboxes, labels, action button) are positioned
-       absolutely inside via applySpellbookLayout(). */
-    .hb-sb-filters-band {
-      position: absolute;
-      top: 224px;
-      left: 0;
-      width: 300px;
-      height: 113px;
-      box-sizing: border-box;
-      padding: 0;
-      background: url("./data/ui-sprites/0x06002722.png") center/cover no-repeat;
-      border-top: 1px solid var(--hb-border-brass);
-    }
-    /* Component pouch — rec #46. Compact 2-column strip below the
-       filter band showing the player's component counts. Display
-       toggled in JS based on inventory snapshot. */
-    .hb-sb-components {
-      position: absolute;
-      top: 337px;
-      left: 0;
-      width: 300px;
-      max-height: 70px;
-      box-sizing: border-box;
-      padding: 4px 6px;
-      background: rgba(10, 6, 2, 0.72);
-      border-top: 1px solid var(--hb-border-brass-dim);
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      color: var(--hb-text-cream);
-      overflow-y: auto;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1px 8px;
-    }
-    .hb-sb-comp-row {
-      display: flex;
-      justify-content: space-between;
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .hb-sb-comp-row .name { color: var(--hb-text-muted-2, #b0a080); }
-    .hb-sb-comp-row .count { color: var(--hb-text-gold, #d4af37); margin-left: 6px; }
-    .hb-sb-filter-label {
-      position: absolute;
-      width: 90px;
-      height: 19px;
-      box-sizing: border-box;
-      font-size: 11px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-gold);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      letter-spacing: 0.04em;
-      pointer-events: none;
-      display: flex;
-      align-items: center;
-    }
-    .hb-sb-filter-cb {
-      position: absolute;
-      width: 90px;
-      height: 14px;
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      font-size: 10px;
-      color: var(--hb-text-cream-bright);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      cursor: pointer;
-      pointer-events: auto;
-    }
-    .hb-sb-filter-cb input[type="checkbox"] {
-      width: 10px;
-      height: 10px;
-      accent-color: var(--hb-text-gold);
-      margin: 0;
-    }
-    /* Retail-parity brass toggle — replaces the native browser
-       checkbox with a 10×10 brass-bordered button that paints filled
-       (gold sprite) when on / dim when off. CSS-only — no DAT
-       extraction needed because the spellbook's own sprite-set is the
-       same brass-trim used by .hb-sb-action-btn. */
-    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 10px;
-      height: 10px;
-      box-sizing: border-box;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      cursor: pointer;
-      position: relative;
-      padding: 0;
-      transition: background 80ms ease, border-color 80ms ease;
-    }
-    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:hover {
-      border-color: var(--hb-border-brass);
-    }
-    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:checked {
-      background: var(--hb-text-gold);
-      border-color: var(--hb-text-gold);
-      box-shadow: 0 0 2px rgba(255, 220, 120, 0.55) inset;
-    }
-    body[data-retail-parity="1"] .hb-sb-filter-cb input[type="checkbox"]:checked::after {
-      content: "";
-      position: absolute;
-      inset: 1px;
-      background: linear-gradient(135deg,
-        var(--hb-bg-stone-bottom) 0%,
-        var(--hb-text-gold) 50%,
-        var(--hb-bg-stone-top) 100%);
-    }
-    /* Multi-state action button — retail 0x100002A5 (187,61) 100×32.
-       2 states (idle / hover-or-disabled). Used as "Forget Spell"
-       trigger for the currently-selected row (Phase J.1 wire — was
-       previously bound to the Delete key only). */
-    .hb-sb-action-btn {
-      position: absolute;
-      width: 100px;
-      height: 32px;
-      box-sizing: border-box;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--hb-text-gold);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95);
-      background: url("./data/ui-sprites/0x06004CDA.png") center/100% 100% no-repeat;
-      border: none;
-      cursor: pointer;
-      user-select: none;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      pointer-events: auto;
-    }
-    .hb-sb-action-btn:hover {
-      background: url("./data/ui-sprites/0x06004CDB.png") center/100% 100% no-repeat;
-      color: var(--hb-text-cream-bright);
-    }
-    .hb-sb-action-btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      filter: grayscale(0.6);
-    }
+    .hb-sb-tabs { flex: 0 0 auto; }
+    .hb-sb-tabs .hbk-tab { padding: 1px 2px 2px; letter-spacing: 0; }
+    .hb-sb-list { flex: 1 1 auto; min-height: 64px; position: relative; outline: none; }
+    .hb-sb-spacer { flex: 0 0 auto; }
+    /* ItemSlot_SpellbookEntry 0x10000343 — 280×32 field 0x06001396,
+       selected 0x06001397; icon 32×32 at x=0, text at x=42. */
     .hb-sb-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 6px;
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--hb-border-brass-dim);
-      font-size: 10px;
+      flex: 0 0 32px; height: 32px; box-sizing: border-box;
+      display: flex; align-items: center; gap: 8px; padding: 0 8px 0 0;
+      background: url("${SP}/0x06001396.png") center / 100% 100% no-repeat;
       cursor: pointer;
-      transition: background 80ms ease, border-color 80ms ease;
     }
-    .hb-sb-row:hover {
-      background: var(--hb-overlay-hover);
-      border-color: var(--hb-border-brass);
+    .hb-sb-row:hover { filter: brightness(1.18); }
+    .hb-sb-row.selected { background-image: url("${SP}/0x06001397.png"); }
+    .hb-sb-icon {
+      position: relative; flex: 0 0 32px; width: 32px; height: 32px;
+      background: #000 center / 100% 100% no-repeat; image-rendering: pixelated;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.8);
     }
-    .hb-sb-row.on-bar {
-      border-color: rgba(160, 110, 255, 0.65);
-      box-shadow: 0 0 4px rgba(160, 110, 255, 0.25);
+    .hb-sb-slotnum {
+      position: absolute; right: 1px; bottom: 0;
+      font: 10px/1 var(--hbk-font); color: #fff;
+      text-shadow: 0 0 2px #000, 1px 1px 0 #000;
     }
-    .hb-sb-row.selected {
-      background: var(--hb-overlay-active);
-      border-color: var(--hb-text-gold);
+    .hb-sb-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+    .hb-sb-row-name { height: 16px; overflow: hidden; display: flex; align-items: center; }
+    .hb-sb-row-sub { height: 11px; overflow: hidden; display: flex; align-items: center; gap: 4px; }
+    .hb-sb-row-sub > span { display: flex; align-items: center; min-width: 0; }
+    .hb-sb-row-sub > .hb-sb-meta { flex: 1 1 auto; overflow: hidden; }
+    .hb-sb-empty { padding: 24px 12px; }
+    .hb-sb-comp-row { min-height: 20px; }
+    .hb-sb-comp-row .hbk-grow { display: flex; align-items: center; }
+    /* FilterBox 0x10000297 — 0x06002722 slate. */
+    .hb-sb-filters {
+      flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px;
+      padding: 4px 8px 5px 10px; box-sizing: border-box;
+      background: url("${SP}/0x06002722.png") center / 100% 100% no-repeat, #1a1a1a;
+      border-top: 1px solid var(--hbk-gold-dim);
     }
-    .hb-sb-row-name {
-      flex: 1;
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    .hb-sb-row-tag {
-      font-size: 8px;
-      padding: 1px 5px;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      font-variant-numeric: tabular-nums;
-    }
-    .hb-sb-row-tag.school-1 { color: rgba(255, 140, 140, 0.95); }
-    .hb-sb-row-tag.school-2 { color: rgba(140, 220, 140, 0.95); }
-    .hb-sb-row-tag.school-3 { color: rgba(255, 200, 120, 0.95); }
-    .hb-sb-row-tag.school-4 { color: rgba(140, 200, 255, 0.95); }
-    .hb-sb-row-tag.school-5 { color: rgba(200, 140, 255, 0.95); }
-    .hb-sb-empty {
-      color: var(--hb-text-muted);
-      font-style: italic;
-      padding: 16px 12px;
-      text-align: center;
-      font-size: 10px;
-    }
-    /* Right-click detail popover — floats over the page; positioned
-       at click coords. Lives outside the main-panel pane so it can
-       extend off the panel edge. */
-    .hb-sb-detail {
-      position: fixed;
-      z-index: 200;
-      max-width: 280px;
-      padding: 8px 10px;
-      background: rgba(28, 22, 14, 0.97);
-      border: 1px solid var(--hb-border-brass);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.65);
-      color: var(--hb-text-cream);
-      font-family: var(--hb-font-serif);
-      font-size: 11px;
-      line-height: 1.4;
-    }
-    .hb-sb-detail-name {
-      font-weight: 600;
-      font-size: 12px;
-      margin-bottom: 4px;
-      color: var(--hb-text-gold);
-    }
-    .hb-sb-detail-meta {
-      color: var(--hb-text-cream-bright);
-      margin-bottom: 6px;
-      font-size: 10px;
-    }
-    .hb-sb-detail-desc {
-      color: var(--hb-text-cream);
-      margin-bottom: 4px;
-    }
-    .hb-sb-detail-comps {
-      color: var(--hb-text-muted);
-      font-size: 9px;
-    }
+    .hb-sb-flabel { height: 12px; display: flex; align-items: center; }
+    .hb-sb-frow { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 2px 6px; padding-left: 4px; }
+    .hb-sb-fopt { display: inline-flex; align-items: center; gap: 2px; min-height: 15px; cursor: pointer; }
+    .hb-sb-fopt input.hbk-check { margin: 0 2px 0 0; }
+    .hb-sb-filters[data-mode="components"] .hb-sb-fsec { display: none; }
+    .hb-sb-factions { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+    .hb-sb-count { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
+    .hb-sb-delete { min-width: 76px; }
+    /* Right-click detail card — its own zoomed HUD root (#hb-sb-detail). */
+    #hb-sb-detail { max-width: 260px; line-height: 1.35; }
+    #hb-sb-detail .hb-sb-detail-name { color: var(--hbk-gold-bright); font-size: 13px; margin-bottom: 2px; }
+    #hb-sb-detail .hb-sb-detail-meta { color: var(--hbk-text-dim); font-size: 11px; margin-bottom: 4px; }
+    #hb-sb-detail .hb-sb-detail-desc { color: var(--hbk-text); font-size: 12px; margin-bottom: 4px; }
+    #hb-sb-detail .hb-sb-detail-comps { color: var(--hbk-text-faint); font-size: 11px; }
   `;
   document.head.appendChild(style);
 }
 
-// Right-click popover lifecycle — at most one open at a time. Lives
-// outside the view mount, so it can position freely over the page.
-// The mount() returned cleanup closes any open popover so view-swap
-// doesn't leave it dangling on screen.
+// Right-click detail card lifecycle — at most one open at a time, closed
+// by the mount() cleanup so a view swap never leaves it on screen.
 let openDetail = null;
 function closeDetail() {
   if (openDetail) {
@@ -797,101 +563,96 @@ function closeDetail() {
   }
 }
 
-function showSpellDetail(meta, anchorX, anchorY, componentNames) {
+function manaConvNote(meta) {
+  // Mana Conversion note (Task C step 3, 2026-07-01): the listed cost is
+  // BaseMana; when Mana Conversion is trained+ and the spell lacks
+  // SpellFlags.IgnoresManaConversion, ACE rolls a per-cast reduction
+  // (Creature_Magic.cs GetManaCost). Skills are the stride-6 [id, cur,
+  // base, ranks, training, next_cost] rows; ManaConversion = 16.
+  try {
+    if (meta?.flags?.ignoresManaConv === true) return "";
+    const snap = window.__sessionHandle?.playerStats?.();
+    const skills = snap?.skills;
+    try { snap?.free?.(); } catch (_) {}
+    if (!skills) return "";
+    for (let s = 0; s + 5 < skills.length; s += 6) {
+      if (skills[s] === 16) return skills[s + 4] >= 2 ? " (Mana Conversion may reduce)" : "";
+    }
+  } catch (_) {}
+  return "";
+}
+
+function showSpellDetail(meta, ev, componentNames) {
   closeDetail();
-  const el = document.createElement("div");
-  el.className = "hb-sb-detail";
+  const card = document.createElement("div");
+  card.id = "hb-sb-detail";
+  card.className = "hbk-tooltip";
 
   const name = document.createElement("div");
   name.className = "hb-sb-detail-name";
-  setAcText(name, meta.name);
-  el.appendChild(name);
+  name.textContent = meta.name;
+  card.appendChild(name);
 
-  const meta_str = document.createElement("div");
-  meta_str.className = "hb-sb-detail-meta";
-  const schoolName = SCHOOL_NAMES[meta.school] ?? "?";
-  const durStr = meta.duration && meta.duration > 0
-    ? ` · ${meta.duration >= 60 ? `${Math.round(meta.duration / 60)}m` : `${meta.duration}s`}`
-    : "";
-  // Mana Conversion note (Task C step 3, 2026-07-01): the listed cost
-  // is BaseMana; when the player has Mana Conversion trained+ and the
-  // spell doesn't carry SpellFlags.IgnoresManaConversion, ACE rolls a
-  // per-cast reduction (Creature_Magic.cs GetManaCost) — annotate
-  // rather than fake an exact number. skills[] layout is the flat
-  // [id, current, base, trained_state, xp] × N (character-info.js);
-  // ManaConversion = 16, Trained = 2.
-  let manaNote = "";
-  try {
-    const skills = window.__sessionHandle?.playerStats?.()?.skills;
-    if (skills && skills.length && !(meta?.flags?.ignoresManaConv === true)) {
-      for (let s = 0; s + 4 < skills.length; s += 5) {
-        if (skills[s] === 16) {
-          if (skills[s + 3] >= 2) manaNote = " (Mana Conv. may reduce)";
-          break;
-        }
-      }
-    }
-  } catch (_) {}
-  setAcText(
-    meta_str,
-    `${schoolName} · Level ${meta.level} · ${meta.mana} mana${manaNote}${durStr}` +
-      (meta.untargeted ? " · self-cast" : " · targeted"),
-  );
-  el.appendChild(meta_str);
+  const metaEl = document.createElement("div");
+  metaEl.className = "hb-sb-detail-meta";
+  const school = SCHOOL_NAMES[meta.school] ?? "Unknown school";
+  const bits = [school, spellMetaLine(meta) + manaConvNote(meta)];
+  bits.push(meta.untargeted ? "Self" : "Targeted");
+  metaEl.textContent = bits.filter(Boolean).join(" · ");
+  card.appendChild(metaEl);
 
   if (meta.desc) {
     const desc = document.createElement("div");
     desc.className = "hb-sb-detail-desc";
-    setAcText(desc, meta.desc);
-    el.appendChild(desc);
+    desc.textContent = meta.desc;
+    card.appendChild(desc);
   }
-
-  // Wave F.1 follow-on (2026-05-27) — SpellCategoryDB name lookup.
-  // Shows the stacking-group name (e.g. "StrengthRaising") so the
-  // player can see at a glance which spells conflict for the
-  // refresh-overwrites-existing-buff rule.
-  if (meta.category != null && typeof window?.getSpellCategoryName === "function") {
-    try {
-      const catName = window.getSpellCategoryName(meta.category >>> 0);
-      if (catName) {
-        const catRow = document.createElement("div");
-        catRow.className = "hb-sb-detail-meta";
-        setAcText(catRow, `Category: ${catName} (#${meta.category})`);
-        el.appendChild(catRow);
-      }
-    } catch (_) {}
-  }
-
   if (Array.isArray(meta.components) && meta.components.length > 0) {
     const comps = document.createElement("div");
     comps.className = "hb-sb-detail-comps";
     const names = meta.components.map((c) => resolveComponentName(c, componentNames));
-    setAcText(comps, `Components: ${names.join(", ")}`);
-    el.appendChild(comps);
+    comps.textContent = `Components: ${names.join(", ")}`;
+    card.appendChild(comps);
   }
 
-  // Position near the click; clamp to viewport.
-  const W = 280, H = 120;
-  let left = anchorX + 8;
-  let top = anchorY + 8;
-  if (left + W > window.innerWidth) left = window.innerWidth - W - 8;
-  if (top + H > window.innerHeight) top = anchorY - H - 8;
-  el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
-  document.body.appendChild(el);
-  openDetail = el;
+  // The card is a zoomed HUD root (id `hb-*`), so position it in HUD px:
+  // pointer → hudPoint, clamp against hudViewport (ui/hud_scale.js).
+  document.body.appendChild(card);
+  const p = hudPoint(ev);
+  const vp = hudViewport();
+  const w = card.offsetWidth || 260;
+  const h = card.offsetHeight || 120;
+  let left = p.x + 10;
+  let top = p.y + 10;
+  if (left + w > vp.width - 4) left = Math.max(4, p.x - w - 10);
+  if (top + h > vp.height - 4) top = Math.max(4, vp.height - h - 4);
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  openDetail = card;
+}
+
+async function confirmForget(name) {
+  const msg = `Remove ${name} from your spellbook? This cannot be undone.`;
+  try {
+    if (typeof window.__modalConfirm === "function") {
+      return !!(await window.__modalConfirm({
+        title: "Delete Spell", message: msg, confirmLabel: "Delete", cancelLabel: "Cancel",
+      }));
+    }
+  } catch (_) { /* fall through */ }
+  if (typeof window.confirm === "function") return window.confirm(msg);
+  return true;
 }
 
 // Manifest kept for backward-compat / debug, but iconHidden + no
-// activate — the bar slot was removed in PR-Z. The view is mounted
-// via main-panel.registerView("spellbook", view) in index.html.
+// activate — the view is mounted via main-panel.registerView("spellbook").
 export const manifest = {
   id: "spellbook",
   name: "Spellbook",
   icon: "📖",
   iconHidden: true,
   version: "0.2.0",
-  description: "Known spells — main-panel view (S / F5 hotkey).",
+  description: "Known spells — main-panel view (F5 / F2).",
 };
 
 export const view = {
@@ -900,371 +661,214 @@ export const view = {
   mount: (parentEl, ctx) => doMount(parentEl, ctx),
 };
 
-// Apply gmSpellbookUI 0x21000032 layout to the spellbook plugin's
-// sub-elements. Each ref gets explicit left/top/width/height from the
-// LayoutDesc. School/level checkbox labels stay hand-tuned (v1
-// fetch_layout serializes geometry only — StateDesc/BaseProperty text
-// content is a follow-on).
-//
-// The spellbook view mounts via user-initiated showView("spellbook")
-// AFTER wasm is ready, so no retry loop is needed (unlike radar /
-// chat-panel which mount during early boot). The cached-layout fast
-// path keeps re-opens synchronous.
-function applySpellbookLayout(refs) {
-  const apply = (layout) => {
-    if (!layout) return;
-    let applied = 0;
-    const pairs = [
-      [SB_ELEM_GRID,       refs.listEl],
-      [SB_ELEM_SCROLLBAR,  refs.scrollbarEl],
-      [SB_ELEM_FILTERS,    refs.filtersBandEl],
-    ];
-    for (const [id, el] of pairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      // Clear CSS `right`/`bottom` anchors that fight explicit positions.
-      el.style.right = "";
-      el.style.bottom = "";
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      applied += 1;
-    }
-
-    // Filter-panel children (school + level checkboxes, labels, action
-    // button) live INSIDE filtersBandEl whose position is `(0,224)`.
-    // Their layout x/y is relative to that parent — applyBoxRelative
-    // sets explicit left/top/width/height. Box-sizing: border-box on
-    // the targets keeps the row baseline aligned with the layout grid.
-    const labelPairs = [
-      [SB_ELEM_LBL_SCHOOL, refs.lblSchoolEl],
-      [SB_ELEM_LBL_LEVEL,  refs.lblLevelEl],
-    ];
-    for (const [id, el] of labelPairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      applyBoxRelative(el, desc);
-      applied += 1;
-    }
-    for (const [sid, cbEl] of Object.entries(refs.schoolCbEls)) {
-      const elemId = SB_ELEM_SCHOOL[Number(sid)];
-      if (!elemId || !cbEl) continue;
-      const desc = findElementById(layout, elemId);
-      if (!desc) continue;
-      applyBoxRelative(cbEl, desc);
-      applied += 1;
-    }
-    for (const [lv, cbEl] of Object.entries(refs.levelCbEls)) {
-      const elemId = SB_ELEM_LEVEL[Number(lv)];
-      if (!elemId || !cbEl) continue;
-      const desc = findElementById(layout, elemId);
-      if (!desc) continue;
-      applyBoxRelative(cbEl, desc);
-      applied += 1;
-    }
-    if (refs.actionBtnEl) {
-      const desc = findElementById(layout, SB_ELEM_ACTION_BTN);
-      if (desc) {
-        applyBoxRelative(refs.actionBtnEl, desc);
-        applied += 1;
-      }
-    }
-
-    try {
-      window.__diag?.layout?.onSpellbookApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(SPELLBOOK_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(SPELLBOOK_LAYOUT_ID).then(apply).catch(() => {});
-}
-
-function applyBoxRelative(el, layoutEl) {
-  el.style.right = "";
-  el.style.bottom = "";
-  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
-  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
-  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
-  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
-}
-
 function doMount(parentEl, ctx) {
   ensureStyles();
   const client = ctx?.client ?? window.__pluginClient ?? null;
 
   const root = document.createElement("div");
   root.className = "hb-sb-root";
+  root.dataset.el = "0x10000294";
 
-  // ── Spell-bar tab strip (Phase I.2 — Holtburger chrome, no retail
-  //    analog in gmSpellbookUI 0x21000032) ────────────────────────
-  // 7 numbered tabs. Clicking a tab activates it so the magic
-  // combat-bar mirrors that tab's slots. Highlighting follows.
-  // P3-42 (cross-find SB-01): retail-parity (DEFAULT-ON — `!== "off"`
-  // reader) hides this strip; `?retailParity=off` shows it — retail's
-  // spellbook has no 7-bar tab selector. The slot data persistence stays in place; SPELL_BAR_TABS
-  // can still be cycled via combat-bar.js shortcuts.
+  // ── Spell-bar tab strip (Phase I.2 — Holtburger chrome). P3-42: retail
+  //    parity (DEFAULT-ON, `?retailParity=off` shows it) hides it —
+  //    retail's spellbook has no bar selector; the bars stay reachable
+  //    from the combat bar. ─────────────────────────────────────────
   const retailParity = (() => {
     try { return new URLSearchParams(window.location.search).get("retailParity") !== "off"; }
-    catch (_) { return false; }
+    catch (_) { return true; }
   })();
   const tabsEl = document.createElement("div");
-  tabsEl.className = "hb-sb-tabs";
+  tabsEl.className = "hbk-tabs hb-sb-tabs";
   if (retailParity) tabsEl.style.display = "none";
-  // P3-44 (cross-find SB brass toggle) — flip a body data-attr so the
-  // sprite-style filter checkbox CSS rules above kick in only when
-  // retail parity is enabled.
-  if (retailParity) {
-    try { document.body.dataset.retailParity = "1"; } catch (_) {}
-  }
   const tabBtns = [];
   for (let i = 0; i < SPELL_BAR_TABS; i++) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "hb-sb-tab";
-    setAcText(btn, String(i + 1));
+    btn.className = "hbk-tab";
+    btn.textContent = ROMAN[i + 1] ?? String(i + 1);
     btn.dataset.tabIdx = String(i);
     btn.title = `Spell bar ${i + 1}`;
-    btn.addEventListener("click", () => {
-      setActiveSpellBar(i);
-      // writeCombatBarState fires hb-spellbar-changed → rerenderList
-      // updates the .on-bar highlights to match the new active tab.
-      refreshTabActiveClass();
-    });
+    btn.addEventListener("click", () => { setActiveSpellBar(i); refreshTabActiveClass(); });
     tabsEl.appendChild(btn);
     tabBtns.push(btn);
   }
   function refreshTabActiveClass() {
     const active = getActiveSpellBar();
     for (let i = 0; i < tabBtns.length; i++) {
-      tabBtns[i].classList.toggle("active", i === active);
+      tabBtns[i].setAttribute("aria-selected", i === active ? "true" : "false");
     }
   }
   refreshTabActiveClass();
   root.appendChild(tabsEl);
 
-  // ── List (retail 0x10000295) ──────────────────────────────────
+  // ── Spell list (0x10000295 + rope scrollbar 0x10000296) ──────────
   const listEl = document.createElement("div");
-  listEl.className = "hb-sb-list";
+  listEl.className = "hbk-scroll hbk-list hb-sb-list";
+  listEl.dataset.el = "0x10000295";
+  listEl.setAttribute("role", "listbox");
   root.appendChild(listEl);
 
-  // ── Scrollbar slot (retail 0x10000296, decorative) ────────────
-  const scrollbarEl = document.createElement("div");
-  scrollbarEl.className = "hb-sb-scrollbar";
-  root.appendChild(scrollbarEl);
+  // ── Filter box (0x10000297) ─────────────────────────────────────
+  const filtersEl = document.createElement("div");
+  filtersEl.className = "hb-sb-filters";
+  filtersEl.dataset.el = "0x10000297";
+  filtersEl.dataset.mode = "spells";
+  let filterMask = readFilterMask();
 
-  // ── Filter band (retail 0x10000297) — school + level checkboxes,
-  //    section labels, and multi-state action button. Sub-elements
-  //    positioned absolutely from their LayoutDesc x/y. ───────────
-  const filtersBand = document.createElement("div");
-  filtersBand.className = "hb-sb-filters-band";
-
-  const filters = {
-    schools: new Set([1, 2, 3, 4, 5]),
-    levels: new Set([1, 2, 3, 4, 5, 6, 7, 8]),
-  };
-
-  // Section labels.
-  const lblSchoolEl = document.createElement("div");
-  lblSchoolEl.className = "hb-sb-filter-label";
-  setAcText(lblSchoolEl, "School:", { color: "#f0d8a0" });
-  filtersBand.appendChild(lblSchoolEl);
-
-  const lblLevelEl = document.createElement("div");
-  lblLevelEl.className = "hb-sb-filter-label";
-  setAcText(lblLevelEl, "Level:", { color: "#f0d8a0" });
-  filtersBand.appendChild(lblLevelEl);
-
-  // School checkboxes — 5 of them (War/Life/Item/Creature/Void).
-  const schoolCbEls = {};
-  for (const sid of [1, 2, 3, 4, 5]) {
+  function filterLabel(text, elId) {
+    const l = document.createElement("div");
+    l.className = "hb-sb-flabel hb-sb-fsec";
+    l.dataset.el = elId;
+    setAcText(l, text, { color: "#f3d27a", fontId: COMPACT_FONT_ID });
+    return l;
+  }
+  function filterOption(text, bit, elId) {
     const lbl = document.createElement("label");
-    lbl.className = "hb-sb-filter-cb";
-    lbl.dataset.schoolId = String(sid);
+    lbl.className = "hb-sb-fopt";
+    lbl.dataset.el = elId;
+    lbl.dataset.bit = String(bit);
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = true;
+    cb.className = "hbk-check";
+    cb.checked = !!(filterMask & bit);
     cb.addEventListener("change", () => {
-      if (cb.checked) filters.schools.add(sid);
-      else filters.schools.delete(sid);
+      filterMask = cb.checked ? (filterMask | bit) : (filterMask & ~bit);
+      writeFilterMask(filterMask);
+      listEl.scrollTop = 0; // retail UpdateFilter → ScrollToShow(0)
       rerenderList();
     });
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(SCHOOL_NAMES[sid]));
-    filtersBand.appendChild(lbl);
-    schoolCbEls[sid] = lbl;
+    const t = document.createElement("span");
+    setAcText(t, text, { color: "#e8dfc8", fontId: COMPACT_FONT_ID });
+    lbl.append(cb, t);
+    return lbl;
   }
+  const SCHOOL_EL = { 4: "0x10000298", 3: "0x10000299", 2: "0x1000029A", 1: "0x1000029B", 5: "0x100005C0" };
+  const LEVEL_EL = { 1: "0x1000029C", 2: "0x1000029D", 3: "0x1000029E", 4: "0x1000029F",
+    5: "0x100002A0", 6: "0x100002A1", 7: "0x100002A2", 8: "0x1000054E" };
+  filtersEl.appendChild(filterLabel("Schools:", "0x100002A3"));
+  const schoolRow = document.createElement("div");
+  schoolRow.className = "hb-sb-frow hb-sb-fsec";
+  for (const sid of SCHOOL_ORDER) schoolRow.appendChild(filterOption(SCHOOL_NAMES[sid], SCHOOL_BIT[sid], SCHOOL_EL[sid]));
+  filtersEl.appendChild(schoolRow);
+  filtersEl.appendChild(filterLabel("Levels:", "0x100002A4"));
+  const levelRow = document.createElement("div");
+  levelRow.className = "hb-sb-frow hb-sb-fsec";
+  for (let lv = 1; lv <= 8; lv++) levelRow.appendChild(filterOption(ROMAN[lv], LEVEL_BIT[lv], LEVEL_EL[lv]));
+  filtersEl.appendChild(levelRow);
 
-  // Level checkboxes — Phase H.3 — I-VIII.
-  const levelCbEls = {};
-  const ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII" };
-  for (const lv of [1, 2, 3, 4, 5, 6, 7, 8]) {
-    const lbl = document.createElement("label");
-    lbl.className = "hb-sb-filter-cb";
-    lbl.dataset.levelId = String(lv);
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = true;
-    cb.addEventListener("change", () => {
-      if (cb.checked) filters.levels.add(lv);
-      else filters.levels.delete(lv);
-      rerenderList();
-    });
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(ROMAN[lv]));
-    filtersBand.appendChild(lbl);
-    levelCbEls[lv] = lbl;
-  }
-
-  // Multi-state action button — retail 0x100002A5 "Forget Spell".
-  // Disabled unless a row is selected.
-  const actionBtnEl = document.createElement("button");
-  actionBtnEl.type = "button";
-  actionBtnEl.className = "hb-sb-action-btn";
-  setAcText(actionBtnEl, "Forget", { color: "#f0d8a0" });
-  actionBtnEl.disabled = true;
-  actionBtnEl.title = "Remove the selected spell from your spellbook (also: Delete key)";
-  filtersBand.appendChild(actionBtnEl);
-
-  root.appendChild(filtersBand);
-
-  // Rec #46 — component-pouch widget (retail gmSpellbookUI lower-left).
-  // Compact two-column strip of "Component: N" rows for any spell
-  // component the player carries. Refreshed each playerStatsUpdated;
-  // hidden when the inventory snapshot has no components.
-  const componentPouchEl = document.createElement("div");
-  componentPouchEl.className = "hb-sb-components";
-  componentPouchEl.style.display = "none";
-  root.appendChild(componentPouchEl);
+  const actions = document.createElement("div");
+  actions.className = "hb-sb-factions";
+  const countEl = document.createElement("span");
+  countEl.className = "hb-sb-count";
+  const compBtn = document.createElement("button");
+  compBtn.type = "button";
+  compBtn.className = "hbk-btn-small hbk-brown hb-sb-comp-toggle";
+  compBtn.textContent = "Components";
+  compBtn.title = "Show the spell components you carry";
+  // Retail DeleteSpell_Button 0x100002A5 (red 0x06004CDA) + label
+  // 0x100002A6 "Delete" — kit hbk-btn is the same sprite family.
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "hbk-btn hb-sb-delete";
+  deleteBtn.dataset.el = "0x100002A5";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.disabled = true;
+  deleteBtn.title = "Remove the selected spell from your spellbook (Delete key)";
+  actions.append(countEl, compBtn, deleteBtn);
+  filtersEl.appendChild(actions);
+  root.appendChild(filtersEl);
 
   parentEl.appendChild(root);
-
-  // Apply retail layout AFTER elements are in the DOM so any future
-  // relative-anchor logic (none in spellbook v1, but mirrors the
-  // inventory port's pattern) can read computed styles.
-  applySpellbookLayout({
-    listEl,
-    scrollbarEl,
-    filtersBandEl: filtersBand,
-    lblSchoolEl,
-    lblLevelEl,
-    schoolCbEls,
-    levelCbEls,
-    actionBtnEl,
-  });
 
   let catalog = null;
   let componentNames = null;
   let knownIds = new Set();
-  // Phase J.1 — Delete-to-remove: when a row has focus and the user
-  // presses Delete, prompt to forget the spell.
   let selectedRowId = 0;
+  let mode = "spells"; // or "components"
 
-  // Perf F4 (2026-05-18) — diffed render. Build each row ONCE per
-  // spell id, keep refs in `rowMap`, and on filter/spellbar change
-  // toggle `display` + `on-bar` rather than tearing the list down
-  // and re-wiring drag/click/dblclick/contextmenu listeners. The
-  // persistent empty-state element below is reused too.
-  //
-  // Perf fix (2026-07-04, spellbook hang on @addallspells accounts) —
-  // `rowMap` used to hold one built row per KNOWN spell (all of them,
-  // simultaneously, in the DOM). On a Developer-account test character
-  // with ~2,000+ known spells that meant ~2,000 wasm lookups (now moot,
-  // see spellRecordCache above) PLUS ~6,000 synchronous <ac-text>
-  // canvas rasters (3 per row) in one microtask — a multi-minute
-  // freeze. `rowMap` now only ever holds rows for the currently
-  // *windowed* (visible + overscan) slice of the filtered id list;
-  // everything else is represented purely as an id in `filteredIds`
-  // and re-materialized into a row on demand as the user scrolls.
-  // Retail's own gmSpellbookUI (0x10000295, 280×224 with a real
-  // scrollbar 0x10000296) only ever paints the rows that fit its fixed
-  // grid area per frame — this mirrors that behavior instead of
-  // retail's "build everything up front" anti-pattern.
-  const rowMap = new Map(); // id (number) -> { row, meta } — WINDOWED rows only
-  let filteredIds = []; // full filtered/sorted id list, recomputed by rerenderList()
-  let rowHeight = 0; // measured from the first built row; 0 = not yet measured
-  const ROW_HEIGHT_FALLBACK = 28; // px incl. the 2px `gap` — matches .hb-sb-row's
-                                  // padding/border/font-size until we can measure
-  const LIST_ROW_GAP = 2; // must match `.hb-sb-list { gap: 2px; }` above
-  const OVERSCAN_ROWS = 10;
+  // Perf (2026-07-04, @addallspells accounts with ~2,000 spells): only the
+  // windowed slice of rows (visible + overscan) exists in the DOM; spacers
+  // carry the scroll height of the rest. Rows are a fixed 32 px (retail
+  // ItemSlot_SpellbookEntry), so no measuring is needed.
+  const ROW_H = 32;
+  const OVERSCAN_ROWS = 8;
+  const rowMap = new Map(); // id -> { row, meta }
+  let filteredIds = [];
 
   const emptyEl = document.createElement("div");
-  emptyEl.className = "hb-sb-empty";
+  emptyEl.className = "hbk-empty hb-sb-empty";
   emptyEl.style.display = "none";
-  listEl.appendChild(emptyEl);
-
-  // Spacers hold the scroll-height contributed by rows that are NOT
-  // currently built, so `.hb-sb-list`'s native scrollbar stays the
-  // correct length even though only a small window of rows exists in
-  // the DOM at any time. Real rows are always kept between these two.
   const topSpacerEl = document.createElement("div");
   topSpacerEl.className = "hb-sb-spacer hb-sb-spacer-top";
-  topSpacerEl.style.flex = "0 0 auto";
-  topSpacerEl.style.height = "0px";
-  listEl.appendChild(topSpacerEl);
   const bottomSpacerEl = document.createElement("div");
   bottomSpacerEl.className = "hb-sb-spacer hb-sb-spacer-bottom";
-  bottomSpacerEl.style.flex = "0 0 auto";
-  bottomSpacerEl.style.height = "0px";
-  listEl.appendChild(bottomSpacerEl);
+  listEl.append(emptyEl, topSpacerEl, bottomSpacerEl);
 
-  // Uncatalogued-spell placeholder + filter-pass helpers — pulled out
-  // of rerenderList so updateWindow() can build/refresh a row's meta
-  // on demand (scrolled-out rows aren't recomputed until they scroll
-  // back into the window).
   function computeMeta(id) {
     const meta = catalog ? catalog[String(id)] : null;
     if (meta) return meta;
-    // Uncatalogued (neither wasm DAT nor JSON has a record): show a
-    // placeholder so the user knows they've learned the spell.
-    return {
-      name: `Spell #${id}`,
-      school: 0,
-      level: 0,
-      untargeted: true,
-      mana: 0,
-      _uncatalogued: true,
-    };
+    return { name: `Spell #${id}`, school: 0, level: 0, untargeted: true, mana: 0, _uncatalogued: true };
   }
-  function passesFilters(meta) {
-    // Uncatalogued placeholders bypass school/level (school=0/level=0
-    // wouldn't match any active filter set).
-    return meta._uncatalogued
-      ? true
-      : (filters.schools.has(meta.school) && filters.levels.has(meta.level));
+
+  function selectRow(id) {
+    selectedRowId = id;
+    for (const [rid, slot] of rowMap) {
+      const on = rid === id;
+      slot.row.classList.toggle("selected", on);
+      slot.row.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    deleteBtn.disabled = !id || mode !== "spells";
   }
 
   function buildRow(id, meta) {
     const row = document.createElement("div");
     row.className = "hb-sb-row";
     row.dataset.spellId = String(id);
+    row.setAttribute("role", "option");
     row.draggable = true;
-    row.title = `${meta.name} — ${meta.untargeted ? "self-cast" : "targeted"}, ${meta.mana} mana, lvl ${meta.level}`;
+    row.title = `${meta.name}\nDouble-click: add to spell bar · Drag: place on a bar · Right-click: details`;
+
+    const icon = document.createElement("div");
+    icon.className = "hb-sb-icon";
+    const iconDid = (meta?.icon >>> 0) || 0;
+    const cached = iconDid ? getIconImmediate(iconDid) : null;
+    if (cached) icon.style.backgroundImage = `url("${cached}")`;
+    else if (iconDid) {
+      fetchIconDataUrl(iconDid, "spellbook").then((url) => {
+        if (url && icon.isConnected) icon.style.backgroundImage = `url("${url}")`;
+      }).catch(() => {});
+    }
+    const slotNum = document.createElement("span");
+    slotNum.className = "hb-sb-slotnum";
+    icon.appendChild(slotNum);
+    row.appendChild(icon);
+
+    const text = document.createElement("div");
+    text.className = "hb-sb-text";
+    const name = document.createElement("span");
+    name.className = "hb-sb-row-name";
+    setAcText(name, meta.name, { color: "#eadfc4", fit: true });
+    const sub = document.createElement("div");
+    sub.className = "hb-sb-row-sub";
+    if (SCHOOL_NAMES[meta.school]) {
+      const sch = document.createElement("span");
+      sch.className = "hb-sb-school";
+      setAcText(sch, SCHOOL_NAMES[meta.school], { color: SCHOOL_TINT[meta.school], fontId: COMPACT_FONT_ID });
+      sub.appendChild(sch);
+    }
+    const metaLine = document.createElement("span");
+    metaLine.className = "hb-sb-meta";
+    setAcText(metaLine, spellMetaLine(meta), { color: "#a8a090", fontId: COMPACT_FONT_ID, fit: true });
+    sub.appendChild(metaLine);
+    text.append(name, sub);
+    row.appendChild(text);
+
     row.addEventListener("dragstart", (ev) => {
-      // Phase H.5 — drag spell to populate a combat-bar slot.
+      // Phase H.5 — drag a spell onto a combat-bar / hotbar slot.
       ev.dataTransfer.effectAllowed = "copy";
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("text/plain", meta.name);
-      // Wave C / PR9 (2026-06-06): icon-driven Image ghost so the drag
-      // cursor reads as the spell icon. Source: meta.icon (the coerced
-      // wasm/JSON record's icon-DID field — see spellRecordFromWasm
-      // above, which maps raw.iconId -> record.icon) routed through
-      // the icon cache.
-      //
-      // Fix (2026-07-04): this previously called a nonexistent
-      // `window.__iconCache.getUrl` (no such global is ever set — see
-      // ac_icon_cache.js, which exports named functions instead) AND
-      // read the wrong field (`meta.iconId`, which is undefined on the
-      // coerced record; the real field is `meta.icon`), so the guard
-      // always short-circuited and drag ghosts silently never
-      // rendered. Use the real synchronous API — getIconImmediate
-      // returns a cached data-URL or null without kicking off a fetch,
-      // so this stays cheap even when the icon hasn't been decoded
-      // yet (fails soft: no ghost image, drag still works).
       try {
-        const iconDid = (meta?.icon >>> 0) || 0;
         const url = iconDid ? getIconImmediate(iconDid) : null;
         if (url) {
           const img = new Image();
@@ -1274,68 +878,22 @@ function doMount(parentEl, ctx) {
         }
       } catch (_) {}
     });
-
-    const name = document.createElement("span");
-    name.className = "hb-sb-row-name";
-    setAcText(name, meta.name);
-    row.appendChild(name);
-
-    const schoolTag = document.createElement("span");
-    schoolTag.className = `hb-sb-row-tag school-${meta.school}`;
-    // School-tinted text — pass concrete color so the AC-font canvas
-    // matches the CSS .school-N color (red/green/orange/blue/purple).
-    const schoolColor = {
-      1: "rgb(255, 140, 140)",
-      2: "rgb(140, 220, 140)",
-      3: "rgb(255, 200, 120)",
-      4: "rgb(140, 200, 255)",
-      5: "rgb(200, 140, 255)",
-    }[meta.school];
-    setAcText(schoolTag, SCHOOL_NAMES[meta.school] ?? "?", schoolColor ? { color: schoolColor } : undefined);
-    row.appendChild(schoolTag);
-
-    const manaTag = document.createElement("span");
-    manaTag.className = "hb-sb-row-tag";
-    setAcText(manaTag, `${meta.mana}m`);
-    row.appendChild(manaTag);
-
-    // Phase J.1 — single-click selects (highlights) the row.
-    row.addEventListener("click", () => {
-      selectedRowId = id;
-      for (const r of listEl.querySelectorAll(".hb-sb-row.selected")) {
-        r.classList.remove("selected");
-      }
-      row.classList.add("selected");
-      // Enable the multi-state action button now that a row is picked
-      // (retail 0x100002A5 'Forget Spell').
-      actionBtnEl.disabled = false;
-    });
-
+    row.addEventListener("click", () => selectRow(id));
+    // gmSpellbookUI::ListenToElementMessage (acclient.c): a double-click
+    // (dwParam1 == 10) on a list entry fires
+    // CM_Magic::SendNotice_AddSpellShortcut — add to the active spell tab.
     row.addEventListener("dblclick", () => {
       const slot = addToFirstEmptySlot(id);
-      row.classList.add("on-bar");
-      row.style.background = "rgba(160, 110, 255, 0.3)";
-      setTimeout(() => { row.style.background = ""; }, 200);
       console.log(`[spellbook] added ${meta.name} (id=${id}) to slot ${slot}`);
     });
-
     row.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
-      // Read the latest meta from the closure-captured slot so
-      // detail popover uses fresh component names.
       const slot = rowMap.get(id);
-      showSpellDetail(slot ? slot.meta : meta, ev.clientX, ev.clientY, componentNames);
+      showSpellDetail(slot ? slot.meta : meta, ev, componentNames);
     });
-
     return row;
   }
 
-  // Rebuild/refresh the small window of rows that actually intersect
-  // the `.hb-sb-list` viewport (+ OVERSCAN_ROWS above/below), sizing
-  // the top/bottom spacers so the scrollbar length still reflects the
-  // FULL `filteredIds` count. Called by rerenderList() (filters/known-
-  // spells changed) and by the rAF-throttled scroll listener (position
-  // changed only). Cheap either way — bounded by window size, not N.
   function updateWindow() {
     const total = filteredIds.length;
     if (total === 0) {
@@ -1345,275 +903,236 @@ function doMount(parentEl, ctx) {
       bottomSpacerEl.style.height = "0px";
       return;
     }
-
-    const rh = rowHeight || ROW_HEIGHT_FALLBACK;
-    const viewportH = listEl.clientHeight || 202;
-    const scrollTop = listEl.scrollTop;
-    const firstVisible = Math.floor(scrollTop / rh);
-    const visibleCount = Math.ceil(viewportH / rh) + 1;
+    const viewportH = listEl.clientHeight || 224;
+    const firstVisible = Math.floor(listEl.scrollTop / ROW_H);
+    const visibleCount = Math.ceil(viewportH / ROW_H) + 1;
     const startIdx = Math.max(0, firstVisible - OVERSCAN_ROWS);
     const endIdx = Math.min(total, firstVisible + visibleCount + OVERSCAN_ROWS);
-
-    // Drop rows that fell out of the window (or out of filteredIds
-    // entirely — same diffing path covers both a scroll and a
-    // filter/known-spells change).
     const windowIds = filteredIds.slice(startIdx, endIdx);
     const windowSet = new Set(windowIds);
     for (const [id, slot] of rowMap) {
-      if (!windowSet.has(id)) {
-        slot.row.remove();
-        rowMap.delete(id);
-      }
+      if (!windowSet.has(id)) { slot.row.remove(); rowMap.delete(id); }
     }
-
-    // `slotsNow` reflects the active spell-bar tab's on-bar highlight.
-    const slotsNow = new Set(getSpellBarSlots().filter((v) => v > 0));
-
-    // Build any rows newly entering the window; refresh meta + selected/
-    // on-bar state on ones that were already built. Re-append in the
-    // fragment in id order so DOM order always matches list order
-    // regardless of scroll direction.
+    // Shortcut number overlay (retail ItemSlot_Icon_ShortcutNum) for
+    // spells on the active bar.
+    const barSlots = getSpellBarSlots();
+    const slotOf = new Map();
+    barSlots.forEach((v, i) => { if (v > 0 && !slotOf.has(v)) slotOf.set(v, i); });
     const frag = document.createDocumentFragment();
     for (const id of windowIds) {
       const meta = computeMeta(id);
       let slot = rowMap.get(id);
       if (!slot) {
-        const row = buildRow(id, meta);
-        slot = { row, meta };
+        slot = { row: buildRow(id, meta), meta };
         rowMap.set(id, slot);
       } else {
         slot.meta = meta;
       }
-      const { row } = slot;
-      row.classList.toggle("selected", id === selectedRowId);
-      row.classList.toggle("on-bar", slotsNow.has(id));
-      frag.appendChild(row); // moves if already in listEl
+      const on = id === selectedRowId;
+      slot.row.classList.toggle("selected", on);
+      slot.row.setAttribute("aria-selected", on ? "true" : "false");
+      const idx = slotOf.get(id);
+      slot.row.classList.toggle("on-bar", idx != null);
+      const num = slot.row.querySelector(".hb-sb-slotnum");
+      if (num) num.textContent = idx != null && idx < 9 ? String(idx + 1) : (idx != null ? "•" : "");
+      frag.appendChild(slot.row);
     }
     listEl.insertBefore(frag, bottomSpacerEl);
-
-    topSpacerEl.style.height = `${startIdx * rh}px`;
-    bottomSpacerEl.style.height = `${(total - endIdx) * rh}px`;
-
-    // Measure the real row height off the first built row once, then
-    // re-run with the corrected height so the window range + spacer
-    // sizes aren't left keyed off the fallback estimate. Guarded by
-    // `rowHeight` being nonzero on the second pass so this can't loop.
-    if (!rowHeight) {
-      const anyRow = rowMap.values().next().value?.row;
-      const measured = anyRow ? anyRow.getBoundingClientRect().height : 0;
-      if (measured > 0) {
-        rowHeight = measured + LIST_ROW_GAP;
-        updateWindow();
-      }
-    }
+    topSpacerEl.style.height = `${startIdx * ROW_H}px`;
+    bottomSpacerEl.style.height = `${(total - endIdx) * ROW_H}px`;
   }
 
   let scrollRafPending = false;
   function onListScroll() {
-    if (scrollRafPending) return;
+    if (mode !== "spells" || scrollRafPending) return;
     scrollRafPending = true;
-    requestAnimationFrame(() => {
-      scrollRafPending = false;
-      updateWindow();
-    });
+    requestAnimationFrame(() => { scrollRafPending = false; updateWindow(); });
   }
   listEl.addEventListener("scroll", onListScroll);
 
+  function setCount(text) {
+    setAcText(countEl, text, { color: "#c8bfa8", fontId: COMPACT_FONT_ID, fit: true });
+  }
+
   function rerenderList() {
+    if (mode !== "spells") { renderComponents(); return; }
     if (!catalog) {
-      // Loading state — tear down any built rows + show the loader.
       filteredIds = [];
       updateWindow();
-      setAcText(emptyEl, "Loading spell catalog…");
+      emptyEl.textContent = "Loading spells…";
       emptyEl.style.display = "";
+      setCount("");
       return;
     }
-
-    // Materialize the filtered id list from the player's known-spells
-    // set. Wave F.1: we no longer iterate `Object.entries(catalog)` —
-    // the wasm-record overlay isn't enumerable, and the JSON catalog
-    // has ~6,266 entries we don't want to scan. Instead, look up each
-    // known spell ID directly against the hybrid catalog (Proxy
-    // handles wasm preference + JSON fallback; memoized per spellId
-    // via spellRecordCache, so this is O(knownIds) cheap lookups, not
-    // O(knownIds) wasm crossings). Order follows `knownIds`' insertion
-    // order, same as the pre-virtualization DOM order.
-    filteredIds = [];
+    const metas = [];
     for (const id of knownIds) {
       const meta = computeMeta(id);
-      if (passesFilters(meta)) filteredIds.push(id);
+      if (!isSpellFilteredOut(meta, filterMask)) metas.push({ id, meta });
     }
-
-    // Empty-state message.
+    metas.sort((a, b) => compareSpells(a.meta, b.meta) || a.id - b.id);
+    filteredIds = metas.map((m) => m.id);
+    if (selectedRowId && !knownIds.has(selectedRowId)) selectRow(0);
     if (filteredIds.length === 0) {
-      setAcText(
-        emptyEl,
-        knownIds.size === 0
-          ? "No spells known."
-          : "No spells match the current filter.",
-      );
+      emptyEl.textContent = knownIds.size === 0
+        ? "Your spellbook is empty. Learn spells from scrolls."
+        : "No spells match the selected schools and levels.";
       emptyEl.style.display = "";
     } else {
       emptyEl.style.display = "none";
     }
-
-    // Build/refresh only the rows intersecting the current scroll
-    // window (+ overscan) — see updateWindow() above. This is the fix
-    // for the multi-minute freeze on @addallspells accounts: instead
-    // of ~2,000+ rows (each 3 synchronous <ac-text> canvas rasters),
-    // only the ~15-25 rows that fit the 202px-tall .hb-sb-list plus a
-    // small overscan margin are ever built at once.
+    setCount(knownIds.size
+      ? `${filteredIds.length} of ${knownIds.size} spell${knownIds.size === 1 ? "" : "s"}`
+      : "");
     updateWindow();
   }
 
-  function refreshKnown() {
+  function refreshKnown({ force = false } = {}) {
+    let next = new Set();
     if (client?.player?.knownSpells) {
       try {
-        const arr = client.player.knownSpells();
-        knownIds = new Set(Array.from(arr));
+        next = new Set(Array.from(client.player.knownSpells() ?? []));
       } catch (e) {
         console.warn("[spellbook] knownSpells failed:", e);
+        next = knownIds;
       }
-    } else {
-      knownIds = new Set();
+    }
+    // playerStatsUpdated fires on every vital tick — skip the re-sort when
+    // the known set did not change.
+    const same = next.size === knownIds.size && [...next].every((id) => knownIds.has(id));
+    knownIds = next;
+    if (same && !force) {
+      if (mode === "spells") updateWindow(); else rerenderList();
+      return;
     }
     rerenderList();
   }
 
-  rerenderList();
-  loadCatalog().then((c) => {
-    // Wave F.1 — wrap the legacy JSON catalog in a Proxy that prefers
-    // wasm-decoded SpellBase records when available (post-EnteredWorld
-    // with WorldBootstrap loaded). Falls back to the JSON catalog for
-    // pre-login UI states and for spells the SpellTable doesn't have.
-    catalog = makeHybridCatalog(c);
-    refreshKnown();
-  });
-  // Phase J.2 — fetch component names in parallel.
-  loadComponentNames().then((m) => {
-    componentNames = m;
-    // Rec #46: as soon as the component table lands, populate the
-    // pouch strip — playerStatsUpdated may already have fired before
-    // the catalog load completed.
-    try { refreshComponentPouch(); } catch (_) {}
-  });
-
-  // Rec #46 — sum the player's spell-component stacks and render
-  // them into componentPouchEl. Matches inventory items to
-  // components by name; the spell-components.json table carries the
-  // canonical retail name for each id. Hidden when no components.
-  function refreshComponentPouch() {
-    const el = componentPouchEl;
-    if (!el || !componentNames) return;
+  // ── Components mode (rec #46 component pouch, retail gmSpellComponentUI
+  //    0x21000033 lives as a sibling panel; here it shares the list area).
+  function componentCounts() {
+    if (!componentNames) return null;
     let inv = null;
-    try {
-      const handle = window.__sessionHandle;
-      if (typeof handle?.playerInventory === "function") {
-        inv = handle.playerInventory();
-      }
-    } catch (_) { return; }
-    if (!inv || (Array.isArray(inv) && inv.length === 0)) {
-      el.style.display = "none";
-      return;
-    }
-    const items = Array.isArray(inv) ? inv : Array.from(inv);
+    try { inv = window.__sessionHandle?.playerInventory?.() ?? null; } catch (_) { return null; }
+    const items = inv ? (Array.isArray(inv) ? inv : Array.from(inv)) : [];
     const nameSet = new Set();
     for (const v of Object.values(componentNames)) {
       if (v && typeof v.name === "string") nameSet.add(v.name);
-    }
-    if (nameSet.size === 0) {
-      el.style.display = "none";
-      return;
     }
     const counts = new Map();
     for (const it of items) {
       const itName = it?.name;
       if (typeof itName !== "string" || !nameSet.has(itName)) continue;
-      const stack = (it?.stackSize >>> 0) || 1;
-      counts.set(itName, (counts.get(itName) || 0) + stack);
+      counts.set(itName, (counts.get(itName) || 0) + ((it?.stackSize >>> 0) || 1));
     }
-    while (el.firstChild) el.removeChild(el.firstChild);
-    if (counts.size === 0) {
-      el.style.display = "none";
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }
+  function renderComponents() {
+    for (const el of [...listEl.querySelectorAll(".hb-sb-comp-row")]) el.remove();
+    const rows = componentCounts();
+    if (!rows) {
+      emptyEl.textContent = "Loading components…";
+      emptyEl.style.display = "";
+      setCount("");
       return;
     }
-    el.style.display = "grid";
-    // Sort by descending count, then name — keeps the pyreal pile
-    // at the top where retail users expect it.
-    const rows = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    emptyEl.textContent = "You are not carrying any spell components.";
+    emptyEl.style.display = rows.length ? "none" : "";
+    setCount(rows.length ? `${rows.length} component type${rows.length === 1 ? "" : "s"}` : "");
+    const frag = document.createDocumentFragment();
     for (const [name, n] of rows) {
-      const row = document.createElement("div");
-      row.className = "hb-sb-comp-row";
-      const nameEl = document.createElement("span");
-      nameEl.className = "name";
-      setAcText(nameEl, name);
-      const countEl = document.createElement("span");
-      countEl.className = "count";
-      setAcText(countEl, String(n));
-      row.appendChild(nameEl);
-      row.appendChild(countEl);
-      el.appendChild(row);
+      const r = document.createElement("div");
+      r.className = "hbk-row hb-sb-comp-row";
+      const nm = document.createElement("span");
+      nm.className = "hbk-grow";
+      setAcText(nm, name, { color: "#eadfc4", fit: true });
+      const ct = document.createElement("span");
+      setAcText(ct, String(n), { color: "#8aef6d" });
+      r.append(nm, ct);
+      frag.appendChild(r);
     }
+    listEl.insertBefore(frag, bottomSpacerEl);
   }
+  function setMode(next) {
+    mode = next;
+    filtersEl.dataset.mode = next;
+    compBtn.textContent = next === "spells" ? "Components" : "Spells";
+    compBtn.title = next === "spells" ? "Show the spell components you carry" : "Back to the spell list";
+    listEl.scrollTop = 0;
+    if (next === "spells") {
+      for (const el of [...listEl.querySelectorAll(".hb-sb-comp-row")]) el.remove();
+    } else {
+      filteredIds = [];
+      updateWindow();
+    }
+    deleteBtn.disabled = !selectedRowId || next !== "spells";
+    rerenderList();
+  }
+  compBtn.addEventListener("click", () => setMode(mode === "spells" ? "components" : "spells"));
 
-  // ── Live subscriptions ─────────────────────────────────────────
-  let statsHandler = null;
-  if (client?.events?.on) {
-    statsHandler = () => {
-      refreshKnown();
-      try { refreshComponentPouch(); } catch (_) {}
-    };
-    client.events.on("playerStatsUpdated", statsHandler);
-  }
+  rerenderList();
+  loadCatalog().then((c) => {
+    // Wave F.1 — the JSON catalog wrapped in a Proxy that prefers
+    // wasm-decoded SpellBase records once WorldBootstrap is loaded.
+    catalog = makeHybridCatalog(c);
+    if (root.isConnected) refreshKnown({ force: true });
+  });
+  loadComponentNames().then((m) => {
+    componentNames = m;
+    if (root.isConnected && mode === "components") rerenderList();
+  });
+
+  // ── Live subscriptions ───────────────────────────────────────────
+  let statsRaf = 0;
+  const statsHandler = () => {
+    if (statsRaf) return;
+    statsRaf = requestAnimationFrame(() => {
+      statsRaf = 0;
+      if (root.isConnected) refreshKnown();
+    });
+  };
+  if (client?.events?.on) client.events.on("playerStatsUpdated", statsHandler);
   const spellbarHandler = () => {
     refreshTabActiveClass();
-    rerenderList();
+    if (mode === "spells") updateWindow();
   };
   window.addEventListener("hb-spellbar-changed", spellbarHandler);
 
-  // Phase J.1 — Delete key OR multi-state action button removes the
-  // currently-selected spell from the spellbook. Confirms first so a
-  // stray click/keypress doesn't lose the spell.
-  function forgetSelected() {
-    if (!selectedRowId) return;
-    if (!root.isConnected) return; // panel closed
-    // P3-42 (cross-find SB-08): retail confirms via a brass-themed
-    // ConfirmationResponse dialog (opcode 0x0275), not the browser
-    // chrome window.confirm(). Until the ConfirmationResponse path
-    // is wired, fall back to window.confirm() so the player has at
-    // least one stop-sign before an irreversible drop (HUD rec #33).
-    if (typeof window !== "undefined" && typeof window.confirm === "function") {
-      if (!window.confirm("Forget this spell? This action cannot be undone.")) return;
-    }
+  // Phase J.1 — Delete key OR the Delete button removes the selected
+  // spell (RemoveSpellFromBook 0x01A8) after a confirmation, like retail
+  // gmSpellbookUI::DeleteSpell → DeleteSpellDialogCallback.
+  let forgetting = false;
+  async function forgetSelected() {
+    if (!selectedRowId || forgetting || !root.isConnected || mode !== "spells") return;
+    const id = selectedRowId;
+    const meta = computeMeta(id);
+    forgetting = true;
+    let ok = false;
+    try { ok = await confirmForget(meta.name); } finally { forgetting = false; }
+    if (!ok || !root.isConnected) return;
     try {
       const handle = window.__sessionHandle ?? null;
       if (handle && typeof handle.removeSpellFromBook === "function") {
-        handle.removeSpellFromBook(selectedRowId >>> 0);
+        handle.removeSpellFromBook(id >>> 0);
       }
     } catch (e) {
-      console.warn(`[spellbook] forget(${selectedRowId}) failed: ${e?.message ?? e}`);
+      console.warn(`[spellbook] forget(${id}) failed: ${e?.message ?? e}`);
     }
-    // Optimistic local refresh; ACE will broadcast MagicRemoveSpell
-    // which lands as a stats refresh and re-pulls knownSpells.
-    knownIds.delete(selectedRowId);
-    selectedRowId = 0;
-    actionBtnEl.disabled = true;
+    // Optimistic local refresh; ACE's MagicRemoveSpell lands as a stats
+    // refresh and re-pulls knownSpells.
+    knownIds.delete(id);
+    selectRow(0);
     rerenderList();
   }
   function onDeleteKey(ev) {
     if (!matchesBinding(ev, resolveLocalBinding(LOCAL_ACTION_IDS.DELETE_SPELL, "Delete"))) return;
     if (!selectedRowId) return;
-    // Skip if user is typing in an input/textarea elsewhere.
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    forgetSelected();
+    void forgetSelected();
   }
-  // P-unification (2026-07-28): the forget-spell key is an ACTION on the ONE
-  // funnel — same gate as WASD. `when` = a row is selected in this mounted
-  // panel; priority 10 puts it ahead of combat-bar's MagicCombat "Previous
-  // Spell" (both default to Delete). Pre-funnel BOTH listeners fired on a
-  // single Delete press when the panel was open in magic stance with a row
-  // selected — a latent double-dispatch the first-match-wins funnel removes.
+  // P-unification (2026-07-28): the forget-spell key is an ACTION on the
+  // ONE input funnel — priority 10 puts it ahead of combat-bar's
+  // MagicCombat "Previous Spell" (both default to Delete).
   let unbindDeleteKey = null;
   if (inputFunnelV2On()) {
     unbindDeleteKey = getInputFunnel().bindAction(
@@ -1621,7 +1140,7 @@ function doMount(parentEl, ctx) {
       "Delete",
       onDeleteKey,
       {
-        when: () => !!selectedRowId,
+        when: () => !!selectedRowId && mode === "spells",
         priority: 10,
         source: "spellbook",
       },
@@ -1629,13 +1148,12 @@ function doMount(parentEl, ctx) {
   } else {
     window.addEventListener("keydown", onDeleteKey);
   }
-  actionBtnEl.addEventListener("click", () => {
-    if (actionBtnEl.disabled) return;
-    forgetSelected();
+  deleteBtn.addEventListener("click", () => {
+    if (deleteBtn.disabled) return;
+    void forgetSelected();
   });
 
-  // Popover lifecycle handlers — close on outside click or Esc.
-  // Scoped to mount() so they go away when the view swaps.
+  // Detail card lifecycle — close on outside click or Esc.
   function onPopoverMouseDown(ev) {
     if (openDetail && !openDetail.contains(ev.target)) closeDetail();
   }
@@ -1645,11 +1163,9 @@ function doMount(parentEl, ctx) {
   window.addEventListener("mousedown", onPopoverMouseDown, true);
   window.addEventListener("keydown", onPopoverEsc);
 
-  // ── Cleanup — torn down on view swap or container close ───────
   return () => {
-    if (statsHandler && client?.events?.off) {
-      client.events.off("playerStatsUpdated", statsHandler);
-    }
+    if (client?.events?.off) client.events.off("playerStatsUpdated", statsHandler);
+    if (statsRaf) cancelAnimationFrame(statsRaf);
     window.removeEventListener("hb-spellbar-changed", spellbarHandler);
     if (unbindDeleteKey) unbindDeleteKey();
     else window.removeEventListener("keydown", onDeleteKey);

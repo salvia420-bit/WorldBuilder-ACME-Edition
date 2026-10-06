@@ -50,8 +50,18 @@ function installDomShim() {
     body: mkEl(),
     createElement: () => mkEl(),
     getElementById: () => null,
+    // HUD overhaul 2026-10-05: hotbar.js now imports target-bar.js →
+    // ui/ac_font.js, which subscribes to hb-hud-scale-changed / resize at
+    // module load.
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return true; },
   };
   globalThis.window = globalThis;
+  if (typeof globalThis.addEventListener !== "function") globalThis.addEventListener = () => {};
+  if (typeof globalThis.removeEventListener !== "function") globalThis.removeEventListener = () => {};
+  globalThis.requestAnimationFrame = () => 0;
+  globalThis.cancelAnimationFrame = () => {};
   globalThis.setInterval = () => 0;
   globalThis.clearInterval = () => {};
   globalThis.setTimeout = () => 0;

@@ -1,55 +1,45 @@
-// Tinker panel — gmTinkerUI scaffolding. A two-slot floating panel
-// (tool slot + target item slot) that lets the player explicitly stage
-// a tinkering operation and fire it with the existing useWithTarget
-// (Wave 5.A) wasm primitive. Distinct from tradeskill.js — that plugin
-// listens for inventory-to-inventory drag-drop and fires immediately
-// with no confirmation, mirroring retail's tool-on-item flow. This
-// panel adds an explicit staging UI for users who want to inspect the
-// pair before committing (and for cases like context-menu invocation
-// where there's no item-on-item drag chain).
+// Tinker panel — a two-slot staging window (tool → target) that fires the
+// existing useWithTarget primitive.
+//
+// HUD overhaul 2026-10-05 — rebuilt on the shared HUD kit.
+//
+// Retail has no tinkering WINDOW: you drag the salvage bag (or tool) onto
+// the item, the client asks for confirmation and sends UseWithTarget
+// (tradeskill.js mirrors that silent drag path). This panel is the modern
+// convenience on top: two big kit slots you can drop onto — "Use" (the
+// salvage / tool) and "On" (the item being worked) — with the items' icons
+// and names (never hex ids), an Apply button, and a status line that
+// follows the outcome (dispatch → inventory change). Draggable, persisted
+// (synthetic window id 0xFFFF0020, no retail layout exists), Esc closes.
+//
+// Wire path: GameAction UseWithTarget → ACE Player_Use.HandleActionUseWithTarget
+// → Player_Crafting.UseObjectOnTarget. There is no dedicated result event;
+// the narrative arrives in chat and the target changes in inventory.
 //
 // Open paths:
 //   window.__openTinkerPanel({ toolGuid?, targetGuid? })
 //   window.__closeTinkerPanel()
 //   window.__toggleTinkerPanel(opts?)
-//
-// Window events:
-//   `hb:tinker-panel-opened`   detail: { toolGuid, targetGuid }
-//   `hb:tinker-panel-closed`
-//   `hb:tinker-panel-fired`    detail: { toolGuid, targetGuid }
-//
-// Wire path:
-//   GameAction UseWithTarget → ACE Player_Use.HandleActionUseWithTarget
-//   → Player_Crafting.UseObjectOnTarget (for tinkering tools). Outcome
-//   surfaces as a chat-message (success/failure text) + InventoryChange
-//   (target modified). There is no dedicated wire event analogous to
-//   SalvageOperationsResult; the panel shows a "dispatched" toast and
-//   auto-closes after a brief delay.
-//
-// References:
-//   - plugins/tradeskill.js (sibling — silent drag-drop dispatcher)
-//   - plugins/inventory.js:1170 (application/x-hb-inv-guid MIME)
-//   - Source/ACE.Server/WorldObjects/Player_Use.cs (HandleActionUseWithTarget)
-//   - Source/ACE.Server/WorldObjects/Player_Crafting.cs (UseObjectOnTarget)
+// Window events: hb:tinker-panel-opened {toolGuid,targetGuid},
+//   hb:tinker-panel-closed, hb:tinker-panel-fired {toolGuid,targetGuid}
 
 import { setAcText } from "../ui/ac_font.js";
+import { DropItemFlags } from "./drop_item_flags.js";
+import {
+  createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, kitButton, fillSlotIcon,
+  wireDropTarget, inventoryRows, objectDisplayName, objectIconId,
+} from "./commerce_window.js";
 
 const OVERLAY_ID = "hb-tinker-panel";
 const STYLE_ID = "hb-tinker-panel-style";
-const INV_MIME = "application/x-hb-inv-guid";
 
 const state = {
-  overlayEl: null,
-  toolSlotEl: null,
-  targetSlotEl: null,
-  fireBtn: null,
-  toastEl: null,
+  win: null,
+  refs: null,
   toolGuid: 0,
   targetGuid: 0,
   client: null,
   unsubInventory: null,
-  keydownHandler: null,
-  autoCloseTimer: null,
   pendingFire: false,
   warnedMissingSend: false,
 };
@@ -60,226 +50,101 @@ function ensureStyles() {
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      top: 80px;
-      right: 32px;
-      width: 320px;
-      z-index: 60;
-      display: none;
-      flex-direction: column;
-      font-family: var(--hb-font-serif);
-      background: rgba(20, 14, 8, 0.96);
-      border: 2px solid var(--hb-border-brass);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
-      color: var(--hb-text-cream);
-      box-sizing: border-box;
+    #${OVERLAY_ID} { width: 340px; }
+    #${OVERLAY_ID} .htk-slots {
+      display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr);
+      align-items: start; gap: 4px; padding: 10px 10px 6px;
     }
-    #${OVERLAY_ID}[data-open="1"] { display: flex; }
-    #${OVERLAY_ID} .hb-tk-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      background: linear-gradient(180deg, rgba(60, 45, 22, 0.9), rgba(34, 24, 12, 0.9));
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-    }
-    #${OVERLAY_ID} .hb-tk-title {
-      color: var(--hb-text-gold);
-      font-size: 14px;
-      letter-spacing: 0.04em;
-      font-weight: 600;
-    }
-    #${OVERLAY_ID} .hb-tk-close {
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      width: 22px;
-      height: 22px;
-      line-height: 18px;
-      text-align: center;
-      cursor: pointer;
-      font-family: var(--hb-font-serif);
-      font-size: 14px;
-      padding: 0;
-    }
-    #${OVERLAY_ID} .hb-tk-close:hover {
-      color: var(--hb-text-gold);
-      border-color: var(--hb-border-brass);
-    }
-    #${OVERLAY_ID} .hb-tk-slots {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      gap: 10px;
-      align-items: center;
-      padding: 14px 14px 10px 14px;
-    }
-    #${OVERLAY_ID} .hb-tk-slot {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-      padding: 8px 6px;
-      border: 1px dashed var(--hb-border-brass-dim);
-      background: rgba(10, 6, 2, 0.5);
-      min-height: 64px;
-      cursor: pointer;
-      transition: background 80ms, border-color 80ms;
-    }
-    #${OVERLAY_ID} .hb-tk-slot[data-filled="1"] {
-      border-style: solid;
-      border-color: var(--hb-border-brass);
-      background: rgba(40, 28, 16, 0.6);
-    }
-    #${OVERLAY_ID} .hb-tk-slot[data-drag-over="1"] {
-      background: rgba(80, 60, 30, 0.5);
-      border-color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hb-tk-slot-label {
-      font-size: 10px;
-      color: var(--hb-text-label);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    #${OVERLAY_ID} .hb-tk-slot-guid {
-      font-size: 11px;
-      color: var(--hb-text-cream);
-      font-variant-numeric: tabular-nums;
-      text-align: center;
-    }
-    #${OVERLAY_ID} .hb-tk-slot-empty {
-      font-size: 11px;
-      font-style: italic;
-      color: var(--hb-text-muted);
-      text-align: center;
-    }
-    #${OVERLAY_ID} .hb-tk-arrow {
-      color: var(--hb-text-gold-dim);
-      font-size: 18px;
-      text-align: center;
-      user-select: none;
-    }
-    #${OVERLAY_ID} .hb-tk-actions {
-      display: flex;
-      gap: 6px;
-      padding: 8px 14px 12px 14px;
-      justify-content: flex-end;
-    }
-    #${OVERLAY_ID} .hb-tk-clear,
-    #${OVERLAY_ID} .hb-tk-fire {
-      background: linear-gradient(180deg, rgba(60, 44, 24, 0.9) 0%, rgba(40, 28, 16, 0.9) 100%);
-      border: 1px solid var(--hb-border-brass);
-      color: var(--hb-text-cream);
-      font-family: inherit;
-      font-size: 12px;
-      padding: 4px 14px;
+    #${OVERLAY_ID} .htk-target {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 6px 4px 8px; min-height: 104px;
       cursor: pointer;
     }
-    #${OVERLAY_ID} .hb-tk-clear:hover:not([disabled]),
-    #${OVERLAY_ID} .hb-tk-fire:hover:not([disabled]) {
-      background: linear-gradient(180deg, rgba(80, 60, 30, 0.95) 0%, rgba(55, 40, 22, 0.95) 100%);
-      color: var(--hb-text-gold);
+    #${OVERLAY_ID} .htk-target .hbk-slot { width: 48px; height: 48px; }
+    #${OVERLAY_ID} .htk-target.is-drop-target .hbk-slot { box-shadow: 0 0 0 1px var(--hbk-gold-bright), 0 0 8px rgba(243, 210, 122, 0.6); }
+    #${OVERLAY_ID} .htk-role { min-height: 14px; }
+    #${OVERLAY_ID} .htk-name {
+      width: 100%; min-height: 28px; text-align: center;
+      color: var(--hbk-text); font-size: 12px; line-height: 14px;
+      overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     }
-    #${OVERLAY_ID} .hb-tk-fire[disabled],
-    #${OVERLAY_ID} .hb-tk-clear[disabled] {
-      opacity: 0.4;
-      cursor: not-allowed;
+    #${OVERLAY_ID} .htk-name.is-empty { color: var(--hbk-text-faint); font-style: italic; font-size: 11px; }
+    #${OVERLAY_ID} .htk-arrow {
+      align-self: center; margin-top: -10px;
+      color: var(--hbk-gold); font-size: 20px; text-align: center; text-shadow: 0 1px 0 #000;
     }
-    #${OVERLAY_ID} .hb-tk-toast {
-      padding: 6px 14px 10px 14px;
-      font-size: 11px;
-      color: var(--hb-text-gold);
-      text-align: center;
-      border-top: 1px solid var(--hb-border-brass-deep);
-      background: rgba(10, 6, 2, 0.5);
-      display: none;
-    }
-    #${OVERLAY_ID}[data-toast="1"] .hb-tk-toast { display: block; }
+    #${OVERLAY_ID} .htk-status { padding: 2px 10px 6px; min-height: 30px; color: var(--hbk-text-dim); font-size: 11px; line-height: 13px; }
+    #${OVERLAY_ID} .htk-status.is-good { color: var(--hbk-value); }
+    #${OVERLAY_ID} .htk-status.is-bad { color: var(--hbk-warn); }
   `;
   document.head.appendChild(s);
 }
 
-function makeSlot(role) {
-  const slot = document.createElement("div");
-  slot.className = "hb-tk-slot";
-  slot.dataset.role = role;
-  slot.dataset.filled = "0";
-  slot.setAttribute("role", "button");
-  slot.tabIndex = 0;
-
-  const label = document.createElement("div");
-  label.className = "hb-tk-slot-label";
-  label.textContent = role === "tool" ? "Tool" : "Target";
-  slot.appendChild(label);
-
-  const content = document.createElement("div");
-  content.className = "hb-tk-slot-empty";
-  content.textContent = "drop item";
-  slot.appendChild(content);
-
-  // Drag-drop handlers — accept inventory items via x-hb-inv-guid.
-  slot.addEventListener("dragenter", (ev) => {
-    if (!ev.dataTransfer?.types?.includes(INV_MIME)) return;
-    ev.preventDefault();
-    slot.dataset.dragOver = "1";
-  });
-  slot.addEventListener("dragover", (ev) => {
-    if (!ev.dataTransfer?.types?.includes(INV_MIME)) return;
-    ev.preventDefault();
-    ev.dataTransfer.dropEffect = "link";
-    slot.dataset.dragOver = "1";
-  });
-  slot.addEventListener("dragleave", () => {
-    slot.dataset.dragOver = "0";
-  });
-  slot.addEventListener("drop", (ev) => {
-    slot.dataset.dragOver = "0";
-    const guidStr = ev.dataTransfer?.getData(INV_MIME);
-    if (!guidStr) return;
-    const guid = parseInt(guidStr, 10) >>> 0;
-    if (!guid) return;
-    ev.preventDefault();
-    setSlotGuid(role, guid);
-  });
-
-  // Click to clear when filled.
-  slot.addEventListener("click", () => {
-    if (slot.dataset.filled === "1") setSlotGuid(role, 0);
-  });
-  slot.addEventListener("keydown", (ev) => {
-    if (ev.key === "Delete" || ev.key === "Backspace") {
-      if (slot.dataset.filled === "1") {
-        ev.preventDefault();
-        setSlotGuid(role, 0);
-      }
-    }
-  });
-
-  return slot;
+function el(tag, cls, parent) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (parent) parent.appendChild(e);
+  return e;
 }
 
-function renderSlot(slot, guid) {
-  while (slot.firstChild) slot.removeChild(slot.firstChild);
-  const role = slot.dataset.role;
-  const label = document.createElement("div");
-  label.className = "hb-tk-slot-label";
-  label.textContent = role === "tool" ? "Tool" : "Target";
-  slot.appendChild(label);
-  if (guid) {
-    slot.dataset.filled = "1";
-    slot.title = "Click to clear";
-    const guidEl = document.createElement("div");
-    guidEl.className = "hb-tk-slot-guid";
-    guidEl.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
-    slot.appendChild(guidEl);
-  } else {
-    slot.dataset.filled = "0";
-    slot.title = "Drag an inventory item here";
-    const empty = document.createElement("div");
-    empty.className = "hb-tk-slot-empty";
-    empty.textContent = "drop item";
-    slot.appendChild(empty);
+function makeTarget(parent, role) {
+  const box = el("div", "htk-target hb-cw-drop", parent);
+  box.dataset.role = role;
+  box.tabIndex = 0;
+  box.setAttribute("role", "button");
+  const roleEl = el("div", "htk-role", box);
+  setAcText(roleEl, role === "tool" ? "Use" : "On", { color: KIT_COLOR.gold });
+  const slot = el("div", "hbk-slot", box);
+  const name = el("div", "htk-name", box);
+  wireDropTarget(box, DropItemFlags.CONTAINER, (guid) => setFromDrop(role, guid));
+  box.addEventListener("click", () => {
+    if ((role === "tool" ? state.toolGuid : state.targetGuid)) setSlotGuid(role, 0);
+  });
+  box.addEventListener("keydown", (ev) => {
+    if ((ev.key === "Delete" || ev.key === "Backspace")) {
+      ev.preventDefault();
+      setSlotGuid(role, 0);
+    }
+  });
+  return { box, slot, name };
+}
+
+function setFromDrop(role, guid) {
+  const g = guid >>> 0;
+  const item = inventoryRows().find((r) => r.guid === g);
+  if (!item) {
+    state.win?.toast("You can only tinker with items you are carrying", "err");
+    return;
   }
+  const other = role === "tool" ? state.targetGuid : state.toolGuid;
+  if (g === other) {
+    state.win?.toast("Pick two different items", "err");
+    return;
+  }
+  setSlotGuid(role, g);
+}
+
+function renderTarget(t, guid, role) {
+  if (guid) {
+    const name = objectDisplayName(guid);
+    fillSlotIcon(t.slot, objectIconId(guid), name);
+    t.name.textContent = name;
+    t.name.classList.remove("is-empty");
+    t.box.title = `${name} — click to clear`;
+  } else {
+    fillSlotIcon(t.slot, 0, " ");
+    t.name.textContent = role === "tool" ? "Drop the salvage or tool here" : "Drop the item to work on here";
+    t.name.classList.add("is-empty");
+    t.box.title = "Drag an item from your pack here";
+  }
+}
+
+function setStatus(text, kind = "") {
+  const r = state.refs;
+  if (!r) return;
+  r.status.textContent = text;
+  r.status.classList.toggle("is-good", kind === "good");
+  r.status.classList.toggle("is-bad", kind === "bad");
 }
 
 function setSlotGuid(role, guid) {
@@ -287,32 +152,26 @@ function setSlotGuid(role, guid) {
   if (role === "tool") {
     if (g && g === state.targetGuid) return;
     state.toolGuid = g;
-    if (state.toolSlotEl) renderSlot(state.toolSlotEl, g);
-  } else if (role === "target") {
+    if (state.refs) renderTarget(state.refs.tool, g, "tool");
+  } else {
     if (g && g === state.toolGuid) return;
     state.targetGuid = g;
-    if (state.targetSlotEl) renderSlot(state.targetSlotEl, g);
+    if (state.refs) renderTarget(state.refs.target, g, "target");
   }
-  updateFireBtn();
+  state.pendingFire = false;
+  updateButtons();
 }
 
-function updateFireBtn() {
-  if (!state.fireBtn) return;
-  state.fireBtn.disabled = !(state.toolGuid && state.targetGuid);
-}
-
-function showToast(text, persist) {
-  const overlay = state.overlayEl;
-  const toast = state.toastEl;
-  if (!overlay || !toast) return;
-  setAcText(toast, text);
-  overlay.setAttribute("data-toast", "1");
-  if (!persist) {
-    setTimeout(() => {
-      try {
-        if (overlay.dataset.toast === "1") overlay.removeAttribute("data-toast");
-      } catch (_) {}
-    }, 2200);
+function updateButtons() {
+  const r = state.refs;
+  if (!r) return;
+  const ready = !!(state.toolGuid && state.targetGuid);
+  r.fireBtn.disabled = !ready;
+  r.clearBtn.disabled = !(state.toolGuid || state.targetGuid);
+  if (!state.pendingFire) {
+    setStatus(ready
+      ? `Apply ${objectDisplayName(state.toolGuid)} to ${objectDisplayName(state.targetGuid)}.`
+      : "Drag the salvage or tool into Use, and the item to improve into On.");
   }
 }
 
@@ -334,172 +193,97 @@ function fireTinker() {
   } catch (e) {
     console.warn("[tinker-panel] useWithTarget failed:", e);
   }
-
   if (!sent) {
     if (!state.warnedMissingSend) {
       state.warnedMissingSend = true;
       console.warn("[tinker-panel] no useWithTarget primitive available");
     }
-    showToast("No tinker send primitive — outcome unavailable.", true);
+    setStatus("Tinkering is not available right now.", "bad");
     return;
   }
-
   state.pendingFire = true;
-  showToast("Tinker dispatched — watch chat for outcome.", true);
+  setStatus("Working… the outcome appears in chat.", "");
   try {
-    window.dispatchEvent(new CustomEvent("hb:tinker-panel-fired", {
-      detail: { toolGuid: tool, targetGuid: target },
-    }));
+    window.dispatchEvent(new CustomEvent("hb:tinker-panel-fired", { detail: { toolGuid: tool, targetGuid: target } }));
   } catch (_) {}
-
-  // Auto-close shortly after dispatch. Outcome surfaces on chat-panel +
-  // inventory delta (no dedicated wire event). Leave 1.75s for the
-  // toast to be readable before closing.
-  if (state.autoCloseTimer) {
-    try { clearTimeout(state.autoCloseTimer); } catch (_) {}
-  }
-  state.autoCloseTimer = setTimeout(() => {
-    state.autoCloseTimer = null;
-    closePanel();
-  }, 1750);
 }
 
 function onInventoryChanged() {
-  // When the panel is mid-fire and the server acks with an inventory
-  // delta, the tinker resolved (or the target was consumed). Switch
-  // the toast to a "complete" line. The chat-message side has the
-  // actual narrative; we just confirm something happened.
+  // The server acks a resolved tinker with an inventory delta (tool
+  // consumed / target modified). Refresh the slots: a consumed tool
+  // leaves its slot.
   if (!state.pendingFire) return;
   state.pendingFire = false;
-  showToast("Inventory updated — tinker resolved.", true);
+  const owned = new Set(inventoryRows().map((r) => r.guid));
+  if (state.toolGuid && !owned.has(state.toolGuid)) setSlotGuid("tool", 0);
+  if (state.targetGuid && !owned.has(state.targetGuid)) setSlotGuid("target", 0);
+  if (state.refs?.target && state.targetGuid) renderTarget(state.refs.target, state.targetGuid, "target");
+  setStatus("Done — see chat for the result.", "good");
 }
 
 function ensurePanel() {
-  if (state.overlayEl) return state.overlayEl;
+  if (state.win) return state.win;
   ensureStyles();
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-label", "Tinker");
-  overlay.setAttribute("data-open", "0");
-  overlay.tabIndex = -1;
-
-  const header = document.createElement("div");
-  header.className = "hb-tk-header";
-  const title = document.createElement("div");
-  title.className = "hb-tk-title";
-  title.textContent = "Tinker";
-  header.appendChild(title);
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "hb-tk-close";
-  closeBtn.textContent = "×";
-  closeBtn.title = "Close";
-  closeBtn.addEventListener("click", () => closePanel());
-  header.appendChild(closeBtn);
-  overlay.appendChild(header);
-
-  const slots = document.createElement("div");
-  slots.className = "hb-tk-slots";
-  const toolSlot = makeSlot("tool");
-  const arrow = document.createElement("div");
-  arrow.className = "hb-tk-arrow";
+  const win = createKitWindow({
+    id: OVERLAY_ID,
+    title: "Tinkering",
+    windowId: COMMERCE_WINDOW_ID.TINKER,
+    defaultPos: {
+      left: "auto", bottom: "auto",
+      right: `max(4px, min(316px, calc(100 * var(--hb-hud-vw, 1vw) - 348px)))`,
+      top: `max(4px, min(200px, calc(100 * var(--hb-hud-vh, 1vh) - 220px)))`,
+    },
+    className: "hb-tinker",
+    onHide: () => {
+      state.pendingFire = false;
+      try { window.dispatchEvent(new CustomEvent("hb:tinker-panel-closed")); } catch (_) {}
+    },
+  });
+  state.win = win;
+  const slots = el("div", "htk-slots", win.body);
+  const tool = makeTarget(slots, "tool");
+  const arrow = el("div", "htk-arrow", slots);
   arrow.textContent = "→";
-  const targetSlot = makeSlot("target");
-  slots.appendChild(toolSlot);
-  slots.appendChild(arrow);
-  slots.appendChild(targetSlot);
-  overlay.appendChild(slots);
-
-  const actions = document.createElement("div");
-  actions.className = "hb-tk-actions";
-  const clearBtn = document.createElement("button");
-  clearBtn.type = "button";
-  clearBtn.className = "hb-tk-clear";
-  clearBtn.textContent = "Clear";
-  clearBtn.addEventListener("click", () => {
+  const target = makeTarget(slots, "target");
+  const status = el("div", "htk-status", win.body);
+  const footer = el("div", "hbk-footer", win.body);
+  const clearBtn = kitButton("Clear", "hbk-btn-small", () => {
     setSlotGuid("tool", 0);
     setSlotGuid("target", 0);
   });
-  const fireBtn = document.createElement("button");
-  fireBtn.type = "button";
-  fireBtn.className = "hb-tk-fire";
-  fireBtn.textContent = "Tinker";
-  fireBtn.disabled = true;
-  fireBtn.addEventListener("click", () => fireTinker());
-  actions.appendChild(clearBtn);
-  actions.appendChild(fireBtn);
-  overlay.appendChild(actions);
-
-  const toast = document.createElement("div");
-  toast.className = "hb-tk-toast";
-  overlay.appendChild(toast);
-
-  document.body.appendChild(overlay);
-
-  state.overlayEl = overlay;
-  state.toolSlotEl = toolSlot;
-  state.targetSlotEl = targetSlot;
-  state.fireBtn = fireBtn;
-  state.toastEl = toast;
-  return overlay;
+  const fireBtn = kitButton("Apply", "hbk-btn", () => fireTinker());
+  fireBtn.title = "Use the left item on the right item (Enter)";
+  footer.appendChild(clearBtn);
+  footer.appendChild(fireBtn);
+  win.root.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && state.toolGuid && state.targetGuid && !ev.target?.closest?.("button")) {
+      ev.preventDefault();
+      fireTinker();
+    }
+  });
+  state.refs = { tool, target, status, clearBtn, fireBtn };
+  return win;
 }
 
 export function openPanel(opts) {
-  const overlay = ensurePanel();
+  const win = ensurePanel();
   state.warnedMissingSend = false;
   state.pendingFire = false;
-  if (state.autoCloseTimer) {
-    try { clearTimeout(state.autoCloseTimer); } catch (_) {}
-    state.autoCloseTimer = null;
-  }
-  overlay.removeAttribute("data-toast");
-  if (state.toastEl) setAcText(state.toastEl, "");
-  const toolGuid = (opts?.toolGuid >>> 0) || 0;
-  const targetGuid = (opts?.targetGuid >>> 0) || 0;
-  state.toolGuid = toolGuid;
-  state.targetGuid = targetGuid;
-  if (state.toolSlotEl) renderSlot(state.toolSlotEl, toolGuid);
-  if (state.targetSlotEl) renderSlot(state.targetSlotEl, targetGuid);
-  updateFireBtn();
-  overlay.dataset.open = "1";
-  if (!state.keydownHandler) {
-    state.keydownHandler = (ev) => {
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        closePanel();
-      } else if (ev.key === "Enter" && state.toolGuid && state.targetGuid) {
-        ev.preventDefault();
-        fireTinker();
-      }
-    };
-    overlay.addEventListener("keydown", state.keydownHandler);
-  }
-  try { overlay.focus({ preventScroll: true }); } catch (_) {}
+  state.toolGuid = 0;
+  state.targetGuid = 0;
+  setSlotGuid("tool", (opts?.toolGuid >>> 0) || 0);
+  setSlotGuid("target", (opts?.targetGuid >>> 0) || 0);
+  win.open();
   try {
     window.dispatchEvent(new CustomEvent("hb:tinker-panel-opened", {
-      detail: { toolGuid, targetGuid },
+      detail: { toolGuid: state.toolGuid, targetGuid: state.targetGuid },
     }));
   } catch (_) {}
 }
 
 export function closePanel() {
-  const overlay = state.overlayEl;
-  if (!overlay) return;
-  if (overlay.dataset.open !== "1") return;
-  overlay.dataset.open = "0";
-  if (state.keydownHandler) {
-    overlay.removeEventListener("keydown", state.keydownHandler);
-    state.keydownHandler = null;
-  }
-  if (state.autoCloseTimer) {
-    try { clearTimeout(state.autoCloseTimer); } catch (_) {}
-    state.autoCloseTimer = null;
-  }
-  state.pendingFire = false;
-  try {
-    window.dispatchEvent(new CustomEvent("hb:tinker-panel-closed"));
-  } catch (_) {}
+  if (!state.win?.isOpen()) return;
+  state.win.close();
 }
 
 export const manifest = {
@@ -507,8 +291,8 @@ export const manifest = {
   name: "Tinker",
   icon: "🔧",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Tinker panel — two-slot staging UI for useWithTarget; gmTinkerUI scaffolding (no dedicated outcome event yet)",
+  version: "0.2.0",
+  description: "Tinkering window — two-slot staging (Use → On) for useWithTarget",
 };
 
 export function mount(ctx) {
@@ -518,24 +302,14 @@ export function mount(ctx) {
   ensureStyles();
   const client = ctx?.client ?? window.__pluginClient ?? null;
   state.client = client;
-
-  // Track inventory change as a proxy for tinker resolution (no
-  // dedicated GameEventUseWithTargetResult on the wire).
-  let unsub = null;
   try {
-    if (typeof client?.events?.on === "function") {
-      unsub = client.events.on("playerInventoryChanged", onInventoryChanged);
-    }
+    client?.events?.on?.("playerInventoryChanged", onInventoryChanged);
+    state.unsubInventory = () => client?.events?.off?.("playerInventoryChanged", onInventoryChanged);
   } catch (e) {
     console.warn("[tinker-panel] playerInventoryChanged subscribe failed:", e);
   }
-  state.unsubInventory = unsub;
-
   return () => {
-    try {
-      if (typeof state.unsubInventory === "function") state.unsubInventory();
-      else if (state.unsubInventory?.off) state.unsubInventory.off();
-    } catch (_) {}
+    try { state.unsubInventory?.(); } catch (_) {}
     state.unsubInventory = null;
     state.client = null;
   };
@@ -545,7 +319,7 @@ if (typeof window !== "undefined") {
   window.__openTinkerPanel = openPanel;
   window.__closeTinkerPanel = closePanel;
   window.__toggleTinkerPanel = (opts) => {
-    if (state.overlayEl?.dataset.open === "1") closePanel();
+    if (state.win?.isOpen()) closePanel();
     else openPanel(opts);
   };
 }

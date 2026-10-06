@@ -1,49 +1,47 @@
-// Examine view — mounts inside main-panel's body slot. Replaces the
-// PR-S standalone floating popup (gmFloatyExaminationUI 0x2100006B).
+// Examine view — retail gmExaminationUI (layout 0x2100001C) content,
+// mounted in main-panel's body slot or in the standalone floaty
+// (plugins/examine-floaty.js, gmFloatyExaminationUI 0x2100006B). Both
+// hosts call `mountExamineBody`; the host owns the outer chrome (title =
+// the examined thing's name, close button, frame).
 //
 // User direction 2026-05-22: examine and inventory share the same UI
 // pane — clicking an inventory item OR examining a creature in the
-// world transitions the same pane. main-panel owns the position +
-// title + close; we render the examine content inside its body slot.
+// world transitions the same pane.
 //
 // Two trigger paths:
 //   1. From inventory: inventory.js pushes view "examine" with ctx
 //      { srcLi, guid, name, fromInventory: true }. We pull stats from
 //      the source <li>'s dataset + window.__sessionHandle.playerInventory().
-//   2. From world picking: the rAF tick polls
-//      liveScene3d.entityManager.getSelectedTarget(); on
-//      0 → non-zero, pushes view "examine" with ctx { guid, name?,
-//      fromEntity: true }. EntityMap entry sourced for details.
+//   2. From the world / right-click menu / target bar:
+//      window.__showExamineFor(guid, { name?, fromEntity: true }).
+//      EntityMap entry sourced for details.
+// Both then request the AppraisalProfile (`requestAppraisal(guid)`) and
+// re-render when `objectAppraised` lands.
 //
-// Real DAT sprites:
-//   - 0x06004CFC : blue glowing orb (32x32) — examine icon at top-left.
-//
-// gmFloatyExaminationUI 0x2100006B — retail layout that drives the
-// examine popup. Element-id map confirmed by examine_target_layout_dump
-// 2026-05-24. Retail native size: 310×400 (popup) within 800×600 canvas;
-// our embed shrinks to main-panel's body (300×337 — 25-px title bar of
-// main-panel takes the place of retail's own 20-px title bar at y=5,
-// so popup-relative offsets land cleanly inside the body slot).
-//
-// Native popup root (0x100005F2, 310×400 at 20,20) holds:
-//   - 16 frame elements (0x10000673..0x10000682) — brass corners + edges
-//   - 0x1000012D / 0x10000529 — title backdrop band (300×20 at 5,5)
-//   - 0x10000528 — title separator (300×5 at 5,25)
-//   - 0x100005F3 — close button (14×14 at 284,8, 2 states)
-//   - Three alternative content panels (300×365 at 5,30):
-//     * 0x1000012E — text-list pane (inscribed-text / journal style)
-//     * 0x10000140 — armor/weapon detail pane (header + 3 stat rows +
-//       scrollable description + footer)
-//     * 0x10000153 — creature/identification pane (3 horizontal sections
-//       + large icon + content area + bottom-centre icon)
-//
-// v1 fetch_layout limitation: geometry only. StateDesc/BaseProperty
-// not serialized. We wire popup-frame geometry + header + content
-// region + scrollbar; the per-row label/value semantics stay
-// hand-tuned (driven by getItemByGuid / EntityMap, not by the layout).
+// HUD overhaul 2026-10-05 — retail examination layout. Anatomy, from the
+// ui-layout-render manifest of 0x2100001C (retail/m-1C.json, body-relative
+// = minus the 25-px title):
+//   ItemExamineUI 0x1000012E
+//     ItemValueText (4,5) 240×20 "Value: N"  ItemBurdenText (4,25) "Burden: N"
+//     ItemIcon (244,12) 32×32 over ItemIconBackground 0x060010F9
+//     gold divider 0x060012C5 + right cap 0x060012C4 at y=52
+//     ItemDisplayText (11,60) 264×192 + rope scrollbar 0x06004C5F
+//     lower divider y=252, parchment 0x0600126F (4,260) 292×73 holding
+//     ItemInscriptionText + ItemInscriptionSignatureText
+//   BasicCreatureExamineUI 0x10000140
+//     CreatureName (creature type) (10,2) 222×54 | vertical divider
+//     0x060012C6 at x=230 | LevelInfo "Character"/"Level"/value (237,2)
+//     divider y=60, attribute rows (BasicCreatureAttributeInfo 292×20)
+//   all on the stone field 0x0600128A.
+// Ours: the same top block (lines left, icon/level box right), gold
+// divider, a scrolling body of kit `hbk-kv` rows (label dim / value
+// retail green) grouped under `hbk-section-title`s in retail's
+// ItemExamineUI::SetAppraiseInfo order, the spell list with icons, and
+// the inscription on the parchment at the bottom — only when there is
+// one. Creatures/players get a health meter and the 3D paperdoll.
+// No wire ids / hex reach the player (they live in dev tooltips and the
+// `?debug=1` section).
 
-import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
 import { resolveBindingIcon, resolveSpellIcon } from "../ui/ac_entity_icon.js";
 import {
@@ -52,37 +50,14 @@ import {
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
-
-const EXAMINE_LAYOUT_ID = 0x2100006B;
-// Retail popup root is 310x400 inside an 800x600 canvas. Our embed
-// repurposes the body slot of main-panel (300x337) so popup-relative
-// child offsets land inside the body. The retail 25-px title region
-// (5+20) is consumed by main-panel's own 25-px title bar — we expose
-// the entire main-panel body as if it were the popup's content frame
-// (y=30 in popup-space) starting at y=0 in our parent's space.
-// Reference-only: popup-space y=30 is where the pane content begins
-// (main-panel's own title bar consumes the retail 25-px title region).
-const EXAMINE_ELEMS = {
-  popupRoot:    0x100005F2,  // outer popup frame (310x400)
-  titleBand:    0x1000012D,  // header backdrop strip (300x20 at 5,5)
-  titleSep:     0x10000528,  // title separator line (300x5 at 5,25)
-  closeBtn:     0x100005F3,  // close button (14x14 at 284,8, 2 states)
-  // Creature/identification pane (0x10000153 — 300x365 at popup 5,30):
-  creaturePane:    0x10000153,  // outer pane wrapper
-  creatureHeader:  0x1000015E,  // creature header (232x38 at 6,2)
-  creatureIcon:    0x1000015F,  // 32x32 icon top-right (at 244,6)
-  creatureSection1: 0x10000158,  // horizontal divider at y=42
-  creatureSection2: 0x1000015A,  // horizontal divider at y=92
-  creatureSection3: 0x1000015C,  // horizontal divider at y=268
-  creatureRow1:    0x10000160,  // first property row (278x19 at 11,52)
-  creatureRow2:    0x10000162,  // second property row (278x19 at 11,71)
-  creatureBody:    0x10000163,  // main scrollable body (264x168 at 11,100)
-  creatureScroll:  0x10000164,  // right-side scrollbar (16x171 at 284,99)
-  creatureFooter:  0x10000165,  // footer status line (278x19 at 11,276)
-  creatureBottomIcon: 0x1000032D, // centre bottom icon (32x32 at 134,298)
-};
+import {
+  itemTypeLabel, equipSlotsLabel, skillName, damageTypeLabel,
+  formatThousands, protectionText, weaponSpeedText, damageRangeText,
+  highlightState, healthModel, examineHeaderModel,
+} from "./examine_format.js";
 
 const VIEW_ID_STYLE = "hb-examine-view-style";
+const SP = "./data/ui-sprites";
 
 let stylesInjected = false;
 function ensureStyles() {
@@ -93,315 +68,212 @@ function ensureStyles() {
   style.textContent = `
     .hb-exa-root {
       position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      box-sizing: border-box;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      overflow: hidden;
-    }
-    /* Creature-pane sections — applyExamineLayout reasserts retail
-       offsets relative to .hb-exa-root. They're popup-relative offsets
-       in the layout but we map them into our parent (main-panel body)
-       by subtracting EXAMINE_POPUP_TITLE_Y so y=30 in popup-space
-       lands at y=0 in our space. */
-    .hb-exa-head {
-      position: absolute;
-      top: 6px;
-      left: 8px;
-      right: 8px;
-      height: 44px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      box-sizing: border-box;
-    }
-    .hb-exa-icon {
-      position: absolute;
-      width: 32px; height: 32px;
-      background: url("./data/ui-sprites/0x06004CFC.png") center/contain no-repeat;
-      filter: drop-shadow(0 0 4px rgba(80, 140, 255, 0.7));
-      image-rendering: pixelated;
-    }
-    .hb-exa-namecol {
+      inset: 0;
       display: flex;
       flex-direction: column;
-      flex: 1;
+      box-sizing: border-box;
+      pointer-events: auto;
+      overflow: hidden;
+      font-family: var(--hbk-font);
+      font-size: 12px;
+      color: var(--hbk-text);
+      /* Retail examination stone field (0x0600128A, tiled). */
+      background: url("${SP}/0x0600128A.png") 0 0 / 220px 77px repeat, #1d1912;
+    }
+    .hb-exa-head {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      min-height: 46px;
+      padding: 5px 8px 3px;
+      box-sizing: border-box;
+    }
+    .hb-exa-headtext {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
       gap: 2px;
     }
-    .hb-exa-name {
-      font-size: 13px;
-      color: var(--hb-text-gold);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      letter-spacing: 0.02em;
-    }
-    .hb-exa-guid {
-      font-size: 9px;
-      font-family: var(--hb-font-mono);
-      color: var(--hb-text-muted);
-    }
-    .hb-exa-body {
-      position: absolute;
-      top: 56px;
-      left: 8px;
-      right: 8px;
-      bottom: 8px;
-      overflow-y: auto;
-      padding: 4px;
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--hb-border-brass-dim);
-      box-sizing: border-box;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-    }
-    /* Section divider rendered as a hairline along the retail 4-px
-       separator's top edge. Layout 0x10000158/0x1000015A/0x1000015C
-       drive position via applyExamineLayout. */
-    .hb-exa-divider {
-      position: absolute;
-      left: 0;
-      background: var(--hb-border-brass-dim);
-      box-sizing: border-box;
-      pointer-events: none;
-    }
-    .hb-exa-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 2px 4px;
-      font-size: 10px;
-      line-height: 14px;
-      border-bottom: 1px solid rgba(138, 117, 68, 0.18);
-      box-sizing: border-box;
-    }
-    /* applyExamineLayout-driven property rows above the body. Border-box
-       so the layout's exact 278x19 lands without padding/border
-       inflating getBoundingClientRect.height. */
-    .hb-exa-row1, .hb-exa-row2 {
-      box-sizing: border-box;
+    .hb-exa-line {
       overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      text-shadow: 0 1px 0 #000;
     }
-    .hb-exa-row:last-child { border-bottom: none; }
-    .hb-exa-label {
-      color: var(--hb-text-cream);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      font-size: 9px;
+    .hb-exa-line.is-warn { color: var(--hbk-warn); }
+    .hb-exa-line.is-muted { color: var(--hbk-text-dim); font-style: italic; }
+    /* ItemIcon over ItemIconBackground 0x060010F9. */
+    .hb-exa-iconbox {
+      position: relative;
+      flex: 0 0 32px;
+      width: 32px;
+      height: 32px;
+      align-self: center;
+      background: url("${SP}/0x060010F9.png") center / 100% 100% no-repeat;
+      box-shadow: 0 0 0 1px #000, 0 0 6px rgba(0, 0, 0, 0.8);
+      image-rendering: pixelated;
     }
-    .hb-exa-value {
-      color: var(--hb-text-gold);
-      text-align: right;
+    .hb-exa-iconbox > img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
     }
-    .hb-exa-section {
-      font-size: 9px;
-      color: var(--hb-text-cream-bright);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 4px 0 2px;
-      margin-top: 4px;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
+    /* LevelInfo box behind the vertical divider 0x060012C6. */
+    .hb-exa-levelbox {
+      flex: 0 0 66px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding-left: 9px;
+      background: url("${SP}/0x060012C6.png") left center / 7px 100% no-repeat;
+      text-align: center;
     }
-    .hb-exa-insc-wrap { margin-top: 6px; }
-    .hb-exa-insc-head {
-      font-size: 9px;
-      color: var(--hb-text-gold);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 2px 0;
+    .hb-exa-levellabel { color: var(--hbk-text-dim); font-size: 10px; line-height: 1.15; letter-spacing: 0.03em; }
+    .hb-exa-levelvalue { color: var(--hbk-gold-bright); font-size: 18px; line-height: 1.2; text-shadow: 0 1px 0 #000; }
+    .hb-exa-root > .hbk-divider { flex: 0 0 auto; margin: 0 0 2px; }
+    .hb-exa-health { flex: 0 0 auto; height: 13px; margin: 2px 8px 4px; }
+    .hb-exa-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 2px 4px 8px 8px;
     }
-    .hb-exa-insc-body {
-      background: #2a1f15;
-      color: #f0e8d0;
-      border: 1px solid var(--hb-border-brass-dim);
-      font-family: var(--hb-font-serif);
-      font-style: italic;
-      font-size: 11px;
+    .hb-exa-body > * { flex-shrink: 0; }
+    /* Creatures: retail BasicCreatureExamineUI leads with the attribute
+       block; the gear/dye preview follows it. Players: the paperdoll
+       leads, like retail's Exam_PaperDoll page. */
+    .hb-exa-body.is-creature > .hb-exa-paperdoll-wrap { order: 2; margin-top: 6px; }
+    .hb-exa-body .hbk-section-title { margin: 7px 0 2px -4px; }
+    .hb-exa-body > .hbk-section-title:first-child,
+    .hb-exa-body > div:first-child > .hbk-section-title:first-child { margin-top: 1px; }
+    .hb-exa-body .hbk-kv { min-height: 17px; align-items: baseline; padding: 1px 2px; }
+    .hb-exa-body .hbk-kv > :first-child { flex: 0 1 auto; white-space: nowrap; }
+    .hb-exa-body .hbk-kv > :last-child { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .hb-exa-body .hbk-kv.is-buffed > :last-child { color: #c6ff9a; text-shadow: 0 0 4px rgba(138, 239, 109, 0.55); }
+    .hb-exa-body .hbk-kv.is-buffed > :last-child::after { content: " \\25B2"; font-size: 9px; }
+    .hb-exa-body .hbk-kv.is-debuffed > :last-child { color: var(--hbk-warn); }
+    .hb-exa-body .hbk-kv.is-debuffed > :last-child::after { content: " \\25BC"; font-size: 9px; }
+    .hb-exa-grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
+    .hb-exa-spells { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 2px; }
+    .hb-exa-spell { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+    .hb-exa-spell > i {
+      flex: 0 0 16px; width: 16px; height: 16px;
+      background: center / contain no-repeat;
+      image-rendering: pixelated;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+    }
+    .hb-exa-prose {
+      padding: 2px 2px 0;
       line-height: 1.4;
-      padding: 5px 7px;
-      word-wrap: break-word;
-      overflow-wrap: break-word;
       white-space: pre-wrap;
-      max-height: 80px;
-      overflow-y: auto;
+      overflow-wrap: anywhere;
+      user-select: text;
     }
-    .hb-exa-insc-btn {
-      margin-top: 4px;
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: inherit;
-      font-size: 10px;
-      padding: 3px 8px;
-      cursor: pointer;
-    }
-    .hb-exa-insc-btn:hover {
-      background: var(--hb-overlay-hover);
-      border-color: var(--hb-border-brass);
-      color: var(--hb-text-cream-bright);
-    }
-    /* Embedded PaperdollViewport (Wave 3.B) — renders the examined
-       entity's rig with their current equipped armor + dye palette
-       inside the scrollable body. Sits at the top of the body content
-       stack before the Identity section. Transparent background lets
-       the body's brass-bordered backdrop show through. */
+    .hb-exa-prose.is-flavor { font-style: italic; color: var(--hbk-text); }
+    .hb-exa-fail { padding: 8px 2px; color: var(--hbk-warn); font-style: italic; }
+    .hb-exa-pending { padding: 6px 2px; color: var(--hbk-text-dim); font-style: italic; }
+    /* Embedded PaperdollViewport (Wave 3.B) — the examined creature /
+       player rig with its equipped armor + dye palette, at the top of
+       the scrolling body (retail Exam_PaperDoll 0x10000148). */
     .hb-exa-paperdoll-wrap {
       position: relative;
       width: 100%;
       height: 180px;
-      margin: 0 0 6px 0;
-      background: linear-gradient(180deg, #2a2418, #1c160e 60%, #14110a);
-      border: 1px solid var(--hb-border-brass-dim);
+      margin: 0 0 4px 0;
+      background: radial-gradient(ellipse at 50% 60%, rgba(60, 50, 34, 0.55), rgba(10, 8, 6, 0.75));
+      border: 1px solid var(--hbk-gold-deep);
       box-sizing: border-box;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
     }
-    .hb-exa-paperdoll-wrap canvas {
-      display: block;
-      pointer-events: none;
-    }
+    .hb-exa-paperdoll-wrap canvas { display: block; pointer-events: none; }
     .hb-exa-paperdoll-empty {
-      font-size: 10px;
-      color: var(--hb-text-muted);
+      font-size: 11px;
+      color: var(--hbk-text-dim);
       font-style: italic;
       padding: 8px;
       text-align: center;
     }
+    /* Inscription parchment (ItemExamBackground_Paper 0x0600126F). */
+    .hb-exa-insc-wrap { flex: 0 0 auto; display: flex; flex-direction: column; }
+    .hb-exa-insc-wrap > .hbk-divider { margin: 0; }
+    .hb-exa-paper {
+      height: 72px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      padding: 5px 10px 4px;
+      background: url("${SP}/0x0600126F.png") center / 100% 100% no-repeat, #b9965a;
+      color: #2b1b08;
+      font-style: italic;
+      line-height: 1.35;
+    }
+    .hb-exa-paper-text {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      user-select: text;
+      scrollbar-width: thin;
+      scrollbar-color: #6b4a1e transparent;
+    }
+    .hb-exa-paper.is-blank .hb-exa-paper-text { opacity: 0.6; }
+    .hb-exa-paper-sig { flex: 0 0 auto; text-align: right; font-size: 11px; color: #4a3010; }
   `;
   document.head.appendChild(style);
 }
 
-// Apply retail gmFloatyExaminationUI 0x2100006B layout positions to
-// the examine pane's sub-elements. The popup-relative coordinates in
-// the LayoutDesc are translated into our parent's space by subtracting
-// EXAMINE_POPUP_TITLE_Y (30px) so popup y=30 (content top) lands at
-// our y=0. Pane lives inside main-panel's body which already strips
-// the retail title-bar rows.
-//
-// Examine view is mounted via user-initiated pushView("examine") AFTER
-// wasm is ready (inventory click / right-click world entity / debug
-// stub), so no retry loop is needed.
-function applyExamineLayout(refs) {
-  const apply = (layout) => {
-    if (!layout) return;
-    const popup = findElementById(layout, EXAMINE_ELEMS.popupRoot);
-    if (!popup) return;
-    let applied = 0;
-    // Per-element popup-relative descriptors translated by popup-title-y.
-    const applyPopupChild = (id, el, opts = {}) => {
-      if (!el) return false;
-      const desc = findElementById(popup, id) || findElementById(layout, id);
-      if (!desc) return false;
-      el.style.right = "";
-      el.style.bottom = "";
-      el.style.transform = "none";
-      const ox = opts.offsetX ?? 0;
-      const oy = opts.offsetY ?? 0;
-      if (typeof desc.x === "number") el.style.left = `${desc.x + ox}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y + oy}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      applied += 1;
-      return true;
-    };
-    // Creature-pane children land popup-relative; subtract the
-    // EXAMINE_POPUP_TITLE_Y so y=30 (popup content origin) lands at
-    // y=0 inside our root, and offset by the pane's own (5, 30) origin
-    // because the layout records its children relative to the pane
-    // itself, not the popup root. Net: subtract popup-title-y (30)
-    // from popup-space y, leaving children at the layout's pane-
-    // relative y. For the icon at popup (5+244, 5+30+6) = popup (249, 36)
-    // we want screen (244, 6) relative to our pane's content.
-    // The simplest mapping: take the *pane-child* coords directly as
-    // our root-relative coords (since the pane itself is at popup
-    // (5,30) and our root starts at popup (5,30) too).
-    applyPopupChild(EXAMINE_ELEMS.creatureHeader, refs.headEl);
-    applyPopupChild(EXAMINE_ELEMS.creatureIcon, refs.iconEl);
-    applyPopupChild(EXAMINE_ELEMS.creatureBody, refs.bodyEl);
-    applyPopupChild(EXAMINE_ELEMS.creatureRow1, refs.row1El);
-    applyPopupChild(EXAMINE_ELEMS.creatureRow2, refs.row2El);
-    applyPopupChild(EXAMINE_ELEMS.creatureFooter, refs.footerEl);
-    // Section dividers — render as hairlines along the top edge of
-    // each 4-px separator in the retail layout. Each gets explicit
-    // height = 1px after the layout's y is applied (the layout's 4-px
-    // separator height is its sprite gutter; we draw the actual rule
-    // at its top edge for a crisper retail-AC line).
-    const applyDivider = (id, el) => {
-      if (!el) return;
-      const desc = findElementById(popup, id) || findElementById(layout, id);
-      if (!desc) return;
-      el.style.right = "";
-      el.style.bottom = "";
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      el.style.height = "1px";
-      applied += 1;
-    };
-    applyDivider(EXAMINE_ELEMS.creatureSection1, refs.divider1El);
-    applyDivider(EXAMINE_ELEMS.creatureSection2, refs.divider2El);
-    applyDivider(EXAMINE_ELEMS.creatureSection3, refs.divider3El);
-    try {
-      window.__diag?.layout?.onExamineApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(EXAMINE_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(EXAMINE_LAYOUT_ID).then(apply).catch(() => {});
+// ── Small DOM builders ─────────────────────────────────────────────────
+
+function kvRow(parent, label, value, { tone = null, title = null } = {}) {
+  if (value == null || value === "") return null;
+  const row = document.createElement("div");
+  row.className = "hbk-kv";
+  if (tone === "buffed") { row.classList.add("is-buffed"); row.title = "Raised by an enchantment"; }
+  else if (tone === "debuffed") { row.classList.add("is-debuffed"); row.title = "Lowered by an enchantment"; }
+  if (title) row.title = title;
+  const l = document.createElement("span");
+  l.textContent = label;
+  const v = document.createElement("span");
+  v.textContent = String(value);
+  row.appendChild(l);
+  row.appendChild(v);
+  parent.appendChild(row);
+  return row;
 }
 
-// Type-bit → label (mirrors inventory.js TYPE_COLOR map).
-const TYPE_LABEL = {
-  "0x4":     "Weapon",
-  "0x2":     "Armor",
-  "0x10000": "Magic / Scroll",
-  "0x20":    "Currency (pyreal)",
-};
-
-// ACE.Entity.Enum.Skill order (Skill.cs) — index = wire skill id. Used to
-// label WeaponProfile.weapon_skill (retail ItemExamineUI weapon-skill row).
-const SKILL_NAMES = [
-  "None", "Axe", "Bow", "Crossbow", "Dagger", "Mace", "Melee Defense",
-  "Missile Defense", "Sling", "Spear", "Staff", "Sword", "Thrown Weapon",
-  "Unarmed Combat", "Arcane Lore", "Magic Defense", "Mana Conversion",
-  "Spellcraft", "Item Tinkering", "Assess Person", "Deception", "Healing",
-  "Jump", "Lockpick", "Run", "Awareness", "Arms and Armor Repair",
-  "Assess Creature", "Weapon Tinkering", "Armor Tinkering",
-  "Magic Item Tinkering", "Creature Enchantment", "Item Enchantment",
-  "Life Magic", "War Magic", "Leadership", "Loyalty", "Fletching",
-  "Alchemy", "Cooking", "Salvaging", "Two Handed Combat", "Gearcraft",
-  "Void Magic", "Heavy Weapons", "Light Weapons", "Finesse Weapons",
-  "Missile Weapons", "Shield", "Dual Wield", "Recklessness",
-  "Sneak Attack", "Dirty Fighting", "Challenge", "Summoning",
-];
-function skillName(id) {
-  const n = Number(id);
-  return SKILL_NAMES[n] || `Skill ${n}`;
+function sectionTitle(parent, text) {
+  const s = document.createElement("div");
+  s.className = "hbk-section-title";
+  s.textContent = text;
+  parent.appendChild(s);
+  return s;
 }
 
-// ACE.Entity.Enum.DamageType (DamageType.cs) — bitflags; WeaponProfile.
-// damage_type carries the weapon's dealt-damage type(s). Join set bits
-// (retail weapons are almost always single-bit, but render faithfully).
-const DAMAGE_TYPE_BITS = [
-  [0x1, "Slash"], [0x2, "Pierce"], [0x4, "Bludgeon"], [0x8, "Cold"],
-  [0x10, "Fire"], [0x20, "Acid"], [0x40, "Electric"], [0x400, "Nether"],
-];
-function damageTypeLabel(mask) {
-  const m = (Number(mask) >>> 0);
-  if (!m) return null;
-  const names = DAMAGE_TYPE_BITS.filter(([bit]) => (m & bit) !== 0).map(([, n]) => n);
-  return names.length > 0 ? names.join(" / ") : null;
+function prose(parent, text, cls = "") {
+  const d = document.createElement("div");
+  d.className = `hb-exa-prose${cls ? ` ${cls}` : ""}`;
+  d.textContent = String(text);
+  parent.appendChild(d);
+  return d;
 }
 
-// Body-location labels for ArmorLevels (per-slot armor level breakdown).
-// Order mirrors the wire struct (types.rs ArmorLevels) — retail's
-// ItemExamineUI armor-level table lists head→foot.
-const ARMOR_LEVEL_SLOTS = [
-  ["head", "Head"], ["chest", "Chest"], ["abdomen", "Abdomen"],
-  ["upper_arm", "Upper Arm"], ["lower_arm", "Lower Arm"], ["hand", "Hand"],
-  ["upper_leg", "Upper Leg"], ["lower_leg", "Lower Leg"], ["foot", "Foot"],
-];
+function debugEnabled() {
+  try { return new URLSearchParams(window.location?.search ?? "").get("debug") === "1"; }
+  catch (_) { return false; }
+}
+
+const hex8 = (n) => `0x${(Number(n) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 
 // Sync spell-name lookup mirroring plugins/spellbook.js's wasm-Map
 // normalization (getSpellRecord crosses the wasm boundary as a JS Map —
@@ -423,34 +295,32 @@ function getSpellName(spellId) {
   return name;
 }
 
-function r(parent, label, value) {
-  if (value == null || value === "") return;
-  const row = document.createElement("div");
-  row.className = "hb-exa-row";
-  const l = document.createElement("span");
-  l.className = "hb-exa-label";
-  setAcText(l, label);
-  const v = document.createElement("span");
-  v.className = "hb-exa-value";
-  setAcText(v, String(value));
-  row.appendChild(l);
-  row.appendChild(v);
-  parent.appendChild(row);
-}
-function section(parent, text) {
-  const s = document.createElement("div");
-  s.className = "hb-exa-section";
-  setAcText(s, text);
-  parent.appendChild(s);
+function getHandle() {
+  return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
 }
 
 function getItemByGuid(guid) {
   try {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    const handle = getHandle();
     if (!handle?.playerInventory) return null;
     const items = handle.playerInventory();
     return items.find((it) => String(it.guid) === String(guid)) || null;
   } catch (_) { return null; }
+}
+
+function getEntityEntry(guid) {
+  const em = window.liveScene3d?.entityManager;
+  return em?.entityMap?.get?.(guid) || em?.entityMap?.get?.(String(guid)) || null;
+}
+
+/** Parsed AppraisalProfile snapshot for `guid`, or null. */
+function readAppraisal(guid) {
+  if (!guid) return null;
+  try {
+    const json = getHandle()?.getObjectAppraisal?.(guid >>> 0);
+    if (typeof json === "string" && json.length > 0) return JSON.parse(json);
+  } catch (_) {}
+  return null;
 }
 
 // Data-source cascade for inscription on guid:
@@ -464,7 +334,7 @@ function getInscriptionForGuid(guid) {
   if (guid == null) return null;
   const g = (Number(guid) >>> 0);
   try {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+    const handle = getHandle();
     if (handle?.playerBook) {
       const book = handle.playerBook();
       if (book && (book.objectGuid >>> 0) === g && typeof book.inscription === "string") {
@@ -483,49 +353,62 @@ function getInscriptionForGuid(guid) {
   return null;
 }
 
+// Retail ItemInscriptionText + ItemInscriptionSignatureText on the
+// parchment. Read-only (P2-44: examine never prompts for an inscription;
+// the dedicated /inscribe path owns writing).
 function renderInscription(wrapEl, guid) {
   if (!wrapEl) return;
   wrapEl.innerHTML = "";
   const info = getInscriptionForGuid(guid);
   if (!info) { wrapEl.style.display = "none"; return; }
   wrapEl.style.display = "";
-  const head = document.createElement("div");
-  head.className = "hb-exa-insc-head";
-  setAcText(head, "Inscription");
-  wrapEl.appendChild(head);
-  const body = document.createElement("div");
-  body.className = "hb-exa-insc-body";
+  const divider = document.createElement("div");
+  divider.className = "hbk-divider";
+  wrapEl.appendChild(divider);
+  const paper = document.createElement("div");
+  paper.className = "hb-exa-paper";
   // Retail clamp at ~280 chars; ACE rejects longer payloads anyway.
   const trimmed = info.text.length > 280 ? info.text.slice(0, 280) : info.text;
-  setAcText(body, trimmed.length > 0 ? trimmed : "(blank)");
-  if (trimmed.length === 0) body.style.opacity = "0.6";
-  wrapEl.appendChild(body);
-  // P2-44 (cross-find EX-06): Set-Inscription button dropped. Retail
-  // examine is read-only; the user sets inscriptions via the
-  // dedicated UI command path (chat /si or item context menu), not
-  // a window.prompt() embedded in the examine popup. Inscription
-  // text remains displayed for read.
+  const text = document.createElement("div");
+  text.className = "hb-exa-paper-text";
+  text.textContent = trimmed.length > 0 ? trimmed : "(The inscription is blank.)";
+  if (trimmed.length === 0) paper.classList.add("is-blank");
+  paper.appendChild(text);
+  const scribe = readAppraisal(guid)?.properties?.strings?.ScribeName;
+  if (scribe && trimmed.length > 0) {
+    const sig = document.createElement("div");
+    sig.className = "hb-exa-paper-sig";
+    sig.textContent = `— ${scribe}`;
+    paper.appendChild(sig);
+  }
+  wrapEl.appendChild(paper);
 }
 
-function populateFromInventory(body, ctx, nameEl, guidEl) {
+// Inventory item → identity rows (the name/value/burden live in the
+// title + header). `model` collects what the header needs.
+function populateFromInventory(body, ctx, model) {
   const srcLi = ctx.srcLi;
   const guid = ctx.guid ?? srcLi?.dataset?.guid;
   const item = getItemByGuid(guid);
-  const tb = srcLi?.dataset?.typeBit ?? "0x0";
-  nameEl.textContent = srcLi?.querySelector?.(".name")?.textContent || item?.name || ctx.name || "(unnamed)";
-  guidEl.textContent = guid != null
-    ? `0x${(Number(guid) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`
-    : "";
-  section(body, "Identity");
-  r(body, "Kind", TYPE_LABEL[tb] || "Item");
+  model.kind = "item";
+  model.item = item;
+  model.name = srcLi?.querySelector?.(".name")?.textContent || item?.name || ctx.name || model.name;
+  const typeMask = item?.itemType ?? Number(srcLi?.dataset?.typeBit ?? 0);
+  const rows = document.createElement("div");
+  kvRow(rows, "Type", itemTypeLabel(typeMask));
   if (item) {
-    if (item.stackSize > 1) r(body, "Stack", item.stackSize);
-    if (item.value > 0) r(body, "Value", `${item.value} pyreals`);
-    if (item.equipMask) r(body, "Equip mask", `0x${item.equipMask.toString(16).toUpperCase().padStart(8, "0")}`);
-    if (item.burden != null) r(body, "Burden", item.burden);
-    if (item.itemType != null) r(body, "Item type bits", `0x${item.itemType.toString(16)}`);
+    if (item.stackSize > 1) kvRow(rows, "Stack", formatThousands(item.stackSize));
+    const equip = (item.equipMask >>> 0) || 0;
+    if (equip) kvRow(rows, "Equipped", equipSlotsLabel(equip));
+    else if ((item.validLocations >>> 0) && ((item.itemType >>> 0) & 0x0E)) {
+      // Armor / clothing / jewelry: where it can be worn.
+      kvRow(rows, "Worn on", equipSlotsLabel(item.validLocations));
+    }
   }
-  r(body, "GUID", guidEl.textContent);
+  if (rows.childElementCount ?? rows.children?.length) {
+    sectionTitle(body, "Item");
+    body.appendChild(rows);
+  }
 }
 
 // Wave 3.B (2026-05-28) — render the examined entity's full rig
@@ -551,6 +434,8 @@ function populateFromInventory(body, ctx, nameEl, guidEl) {
 // slots are excluded from the wire packet by retail design, so the
 // preview matches what's on-screen — no extra slots missing vs. the
 // nameplate visible rendering.
+function setNoteText(el, text) { el.textContent = text; }
+
 function renderEntityPaperdoll(wrapEl, guid) {
   if (!wrapEl) return null;
   wrapEl.innerHTML = "";
@@ -558,7 +443,7 @@ function renderEntityPaperdoll(wrapEl, guid) {
   if (!g) {
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
-    setAcText(note, "(no entity selected)");
+    setNoteText(note, "(nothing selected)");
     wrapEl.appendChild(note);
     return null;
   }
@@ -569,9 +454,9 @@ function renderEntityPaperdoll(wrapEl, guid) {
   if (!meta || setupId === 0) {
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
-    setAcText(note, meta
-      ? "(no model id — preview unavailable)"
-      : "(entity not in PVS — no preview)");
+    setNoteText(note, meta
+      ? "(no preview available)"
+      : "(too far away to preview)");
     wrapEl.appendChild(note);
     return null;
   }
@@ -587,7 +472,7 @@ function renderEntityPaperdoll(wrapEl, guid) {
   if (itemType !== 0 && (itemType & ITEM_TYPE_CREATURE) === 0) {
     const note = document.createElement("div");
     note.className = "hb-exa-paperdoll-empty";
-    setAcText(note, "(item — no paperdoll)");
+    setNoteText(note, "(no preview for items)");
     wrapEl.appendChild(note);
     return null;
   }
@@ -639,205 +524,111 @@ function renderEntityPaperdoll(wrapEl, guid) {
   return viewport;
 }
 
-function populateFromEntity(body, ctx, nameEl, guidEl) {
+// World entity → kind + header facts; wire ids / raw state only under
+// `?debug=1`. `model` collects what the header + health meter need.
+function populateFromEntity(body, ctx, model) {
   const guid = (ctx.guid >>> 0) || 0;
-  const em = window.liveScene3d?.entityManager;
-  const ent = em?.entityMap?.get?.(guid) || em?.entityMap?.get?.(String(guid)) || null;
+  const ent = guid ? getEntityEntry(guid) : null;
   // === Wave 6 polish — examine meta-vs-flat read (2026-05-28) ===
   // Real `EntityInstance` objects (entities.js:798) store their
   // wire-supplied fields (type/level/health/etc.) under `inst.meta` —
   // the spawn meta dict built by `toMeta(upd)` in scene3d/loop.js. The
-  // debug stub at `__examineTargetDebug.open` (line 826) flattens
-  // those onto the root for testability, hence the pre-fix accessors
-  // worked in dev but rendered an empty Combat + Position section for
-  // every live NPC. Read meta-first, fall back to flat for the debug
-  // stub. See Wave 3.B handoff for the original bug surface.
+  // debug stub at `__examineTargetDebug.open` flattens those onto the
+  // root for testability. Read meta-first, fall back to flat for the
+  // debug stub.
   const meta = ent?.meta || null;
   const v = (key) => meta?.[key] ?? ent?.[key];
-  const entName = ent?.name ?? meta?.name;
-  // No-target empty state: blank the identity strip and show a friendly
-  // prompt instead of "(unnamed) 0x00000000" — the panel often opens via
-  // the target-bar Examine button when nothing is selected.
   if (!guid) {
-    nameEl.textContent = "—";
-    guidEl.textContent = "";
-    section(body, "Status");
-    r(body, "Selection", "Click an entity or item to examine");
+    model.kind = "empty";
     return;
   }
-  nameEl.textContent = entName || ctx.name || "(unnamed)";
-  guidEl.textContent = `0x${guid.toString(16).toUpperCase().padStart(8, "0")}`;
-  if (!ent) {
-    section(body, "Status");
-    r(body, "Loading", "—");
-    return;
-  }
-  section(body, "Identity");
-  const type_ = v("type");
-  const classId = v("classId");
-  const wcid = v("wcid");
+  model.name = v("name") || ctx.name || model.name;
+  model.loading = !ent;
   // HUD rec #52 (2026-06-16) — player vs creature dispatch via
-  // `ObjectDescriptionFlag::PLAYER` (0x08). Replaces the CharExamineUI
-  // branch in retail's gmExamineUI::SetTargetGuid. PLAYER_KILLER
-  // (0x20) marks PK status — surfaced as an Identity row when set so
-  // the examiner sees the same UI affordance retail's nameplate
-  // showed via the red "Player Killer" tag.
+  // `ObjectDescriptionFlag::PLAYER` (0x08) — retail gmExamineUI::
+  // SetTargetGuid's CharExamineUI branch — plus the canonical
+  // WorldObjectManager class when it's populated. PLAYER_KILLER (0x20)
+  // → the red "Player Killer" line (retail PlayerKillerText).
   const objDescFlags = (v("objDescFlags") ?? 0) >>> 0;
-  const isPlayer = (objDescFlags & 0x08) !== 0;
-  const isPlayerKiller = (objDescFlags & 0x20) !== 0;
-  if (isPlayer) {
-    r(body, "Type", "Player");
-  } else if (type_ != null) {
-    r(body, "Type", String(type_));
-  }
-  if (classId != null) r(body, "Class", `0x${classId.toString(16)}`);
-  if (wcid != null) r(body, "Wcid", String(wcid));
-  if (isPlayer && isPlayerKiller) {
-    r(body, "PK Status", "Player Killer");
-  }
-  if (isPlayer) {
-    // Heritage / Profession / Allegiance arrive through the
-    // AppraisalProfile (`handle.getObjectAppraisal(guid)`) when ACE
-    // includes them on Identify. Read what's present and render the
-    // labels retail's CharExamineUI did; absent fields skip silently
-    // (server may not surface them for remote players).
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      const json = handle?.getObjectAppraisal?.(guid >>> 0);
-      if (typeof json === "string" && json.length > 0) {
-        const snapshot = JSON.parse(json);
-        const props = snapshot.properties || {};
-        const ints = props.ints || {};
-        const strings = props.strings || {};
-        const heritage = ints.HeritageGroup;
-        if (heritage != null) r(body, "Heritage", String(heritage));
-        const title = strings.Title || strings.CharacterTitle;
-        if (title) r(body, "Profession", String(title));
-        const allegianceName = strings.AllegianceName
-          ?? strings.MonarchsName
-          ?? strings.PatronsName;
-        if (allegianceName) r(body, "Allegiance", String(allegianceName));
-      }
-    } catch (_) { /* leave the player-specific rows empty on failure */ }
-  }
-  const position = v("position");
-  const landblock = v("landblock");
-  if (position) {
-    section(body, "Position");
-    const p = position;
-    r(body, "X", p.x?.toFixed?.(1) ?? p.x);
-    r(body, "Y", p.y?.toFixed?.(1) ?? p.y);
-    r(body, "Z", p.z?.toFixed?.(1) ?? p.z);
-    if (landblock != null) r(body, "Landblock", `0x${landblock.toString(16).padStart(8, "0").toUpperCase()}`);
-  }
-  section(body, "Combat");
-  const level = v("level");
-  const health = v("health");
-  const stamina = v("stamina");
-  const mana = v("mana");
-  if (level != null) r(body, "Level", String(level));
-  if (health != null) r(body, "Health", String(health));
-  if (stamina != null) r(body, "Stamina", String(stamina));
-  if (mana != null) r(body, "Mana", String(mana));
-  const motionState = v("motionState");
-  const heading = v("heading");
-  if (motionState != null) {
-    section(body, "Animation");
-    r(body, "Motion", String(motionState));
-    if (heading != null) r(body, "Heading", (heading * 180 / Math.PI).toFixed(1) + "°");
+  let womPlayer = false;
+  try {
+    const wo = window.__wom?.get?.(guid);
+    womPlayer = !!wo && (wo.canonicalObjectClass === "Player" || wo.className === "Player");
+  } catch (_) {}
+  model.isPlayer = (objDescFlags & 0x08) !== 0 || womPlayer;
+  model.isPK = model.isPlayer && (objDescFlags & 0x20) !== 0;
+  const itemType = (v("itemType") ?? 0) >>> 0;
+  const isCreature = (itemType & 0x10) !== 0 || (!itemType && Number(v("type")) === 16);
+  model.kind = model.isPlayer ? "player" : (isCreature ? "creature" : "item");
+  model.meta = { level: v("level") };
+  const hp = v("health");
+  const hpMax = v("maxHealth") ?? v("healthMax");
+  if (hp != null && hpMax != null) model.health = { cur: hp, max: hpMax };
+
+  if (debugEnabled()) {
+    sectionTitle(body, "Debug");
+    kvRow(body, "GUID", hex8(guid));
+    kvRow(body, "Class", v("classId") != null ? `0x${Number(v("classId")).toString(16)}` : null);
+    kvRow(body, "Wcid", v("wcid"));
+    kvRow(body, "Type", v("type"));
+    kvRow(body, "ItemType", itemType ? hex8(itemType) : null);
+    const p = v("position");
+    if (p) kvRow(body, "Position", `${p.x?.toFixed?.(1) ?? p.x}, ${p.y?.toFixed?.(1) ?? p.y}, ${p.z?.toFixed?.(1) ?? p.z}`);
+    const landblock = v("landblock");
+    if (landblock != null) kvRow(body, "Landblock", hex8(landblock));
+    kvRow(body, "Level", v("level"));
+    kvRow(body, "Health", v("health"));
+    kvRow(body, "Stamina", v("stamina"));
+    kvRow(body, "Mana", v("mana"));
+    const motionState = v("motionState");
+    if (motionState != null) kvRow(body, "Motion", hex8(motionState));
+    const heading = v("heading");
+    if (heading != null) kvRow(body, "Heading", (heading * 180 / Math.PI).toFixed(1) + "°");
   }
 }
 
-// Element-id map + layout id for callers that need to position chrome
-// around the examine body in a standalone floaty.
-export const EXAMINE_LAYOUT = {
-  layoutId: EXAMINE_LAYOUT_ID,
-  elements: EXAMINE_ELEMS,
-};
-
-// EX-05 (2026-06-05) — render the AppraisalProfile snapshot returned
-// by `getObjectAppraisal(guid)` (wasm-side) into `wrapEl`. JSON-parses
-// the snapshot and lays out three sections:
-//   • Attributes — CreatureProfile.attributes (Str/End/Coord/Quick/
-//     Focus/Self) + Health/Stamina/Mana via WorldObjectProperties.ints
-//   • Skills — CreatureProfile.skills (per-skill base/current/buffed
-//     mapping). The exact wire shape is preserved verbatim; UI just
-//     formats each entry.
-//   • Effects — armor/weapon/resist enchantment bitfields surfaced as
-//     hex chips; spell-book GUIDs printed as a short list.
-//
-// Wraps inside `wrapEl.innerHTML = ""` for re-render-on-event. Hidden
-// (display:none) when no appraisal has landed yet for this GUID.
-function renderAppraisal(wrapEl, guid) {
+// EX-05 (2026-06-05) — render the AppraisalProfile snapshot returned by
+// `getObjectAppraisal(guid)` into `wrapEl`, in retail
+// ItemExamineUI::SetAppraiseInfo order (acclient.c 235257): tinkering →
+// weapon & armor data → armor mods → magic → wield requirements →
+// properties / usage → spells → description. Creatures get
+// BasicCreatureExamineUI's attribute block instead.
+// Hidden (display:none) when no appraisal has landed yet for this GUID.
+function renderAppraisal(wrapEl, guid, snapshot, kind) {
   if (!wrapEl) return;
   wrapEl.innerHTML = "";
-  if (!guid) { wrapEl.style.display = "none"; return; }
-  let snapshot = null;
-  try {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    if (handle?.getObjectAppraisal) {
-      const json = handle.getObjectAppraisal(guid >>> 0);
-      if (typeof json === "string" && json.length > 0) {
-        snapshot = JSON.parse(json);
-      }
-    }
-  } catch (_) {}
-  if (!snapshot) { wrapEl.style.display = "none"; return; }
+  if (!guid || !snapshot) { wrapEl.style.display = "none"; return; }
   wrapEl.style.display = "";
 
   // HUD rec #53 (2026-06-16) — IdentifyResponse-level gating.
   // identifySuccess=false means ACE rolled an Identify check the
   // player's skill failed (Player_Skills.cs HandleIdentifyResponse).
-  // Render the AC failure line instead of the (potentially stale)
-  // appraisal sections. identifyFlags is the IdentifyResponseFlags
-  // bitmask — only render sections whose bit is set so we don't show
-  // stale data from a prior identify of a different target type.
-  // Snapshots NOT produced by an Identify (e.g. ViewContents on
-  // vendor items) default `identifySuccess=true` + flags=0 in wasm —
-  // which falls through to legacy behaviour (render everything).
+  // identifyFlags is the IdentifyResponseFlags bitmask — only render
+  // sections whose bit is set so we don't show stale data from a prior
+  // identify of a different target type. Snapshots NOT produced by an
+  // Identify (e.g. ViewContents) default `identifySuccess=true` + flags=0
+  // in wasm — which falls through to "render everything".
   const identifySuccess = snapshot.identifySuccess !== false;
   const identifyFlags = (snapshot.identifyFlags ?? 0) >>> 0;
-  const gated = identifyFlags !== 0; // 0 = "no Identify round-trip yet", render all
+  const gated = identifyFlags !== 0;
   const flagBit = (mask) => !gated || (identifyFlags & mask) !== 0;
+  const IDENTIFY_FLAG_SPELL_BOOK       = 0x0010;
   const IDENTIFY_FLAG_WEAPON_PROFILE   = 0x0020;
   const IDENTIFY_FLAG_HOOK_PROFILE     = 0x0040;
   const IDENTIFY_FLAG_ARMOR_PROFILE    = 0x0080;
   const IDENTIFY_FLAG_CREATURE_PROFILE = 0x0100;
   const IDENTIFY_FLAG_ARMOR_ENCH       = 0x0200;
-  const IDENTIFY_FLAG_RESIST_ENCH      = 0x0400;
   const IDENTIFY_FLAG_WEAPON_ENCH      = 0x0800;
-  const IDENTIFY_FLAG_SPELL_BOOK       = 0x0010;
   const IDENTIFY_FLAG_ARMOR_LEVELS     = 0x4000;
   if (!identifySuccess) {
     const fail = document.createElement("div");
     fail.className = "hb-exa-fail";
-    setAcText(fail, "Your skill is not high enough to identify this item.");
+    fail.textContent = (kind === "creature" || kind === "player")
+      ? "You fail to assess this creature. You will try again shortly."
+      : "Your skill is not high enough to identify this item. You will try again shortly.";
     wrapEl.appendChild(fail);
     return;
   }
-
-  // Helper: emit a "section header" + key/value rows table inside
-  // wrapEl, like populate*'s `section()`/`r()` but scoped to wrapEl.
-  const sec = (text) => {
-    const s = document.createElement("div");
-    s.className = "hb-exa-section";
-    setAcText(s, text);
-    wrapEl.appendChild(s);
-  };
-  const row = (label, value) => {
-    if (value == null || value === "") return;
-    const r = document.createElement("div");
-    r.className = "hb-exa-row";
-    const l = document.createElement("span");
-    l.className = "hb-exa-label";
-    setAcText(l, label);
-    const v = document.createElement("span");
-    v.className = "hb-exa-value";
-    setAcText(v, String(value));
-    r.appendChild(l);
-    r.appendChild(v);
-    wrapEl.appendChild(r);
-  };
 
   const props = snapshot.properties || {};
   const ints = props.ints || {};
@@ -848,15 +639,21 @@ function renderAppraisal(wrapEl, guid) {
   const wp = snapshot.weaponProfile || null;
   const hp = snapshot.hookProfile || null;
   const al = snapshot.armorLevels || null;
+  // Enchantment highlights (retail tints the line green / red).
+  const ah = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorHighlight : 0;
+  const ac = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorColor : 0;
+  const wh = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponHighlight : 0;
+  const wc = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponColor : 0;
+  const armorTone = (bit) => highlightState(ah, ac, bit);
+  const weaponTone = (bit) => highlightState(wh, wc, bit);
+  const sec = (text) => sectionTitle(wrapEl, text);
+  const row = (label, value, opts) => kvRow(wrapEl, label, value, opts);
 
   // === UiEffects magic-effect badges (Track A A0, 2026-06-24) ===
   // `?uiEffectIcons` (default OFF) — render the item's UiEffects (PropertyInt
   // 18) as colored badge(s). UiEffects is a 2D icon overlay in retail
   // (acclient IconData::RenderIcons), so this lives in the DOM/HUD layer and
-  // never touches the WebGL canvas. A0 uses the registry TINT; resolving the
-  // real `*_UIEffectImage` icon (EnumIDMap 0x25000009) is A1. The appraisal
-  // serializer may key ints by name or number — accept both. Flag-off =
-  // byte-identical (block never runs).
+  // never touches the WebGL canvas. Flag-off = byte-identical (block never runs).
   if (uiEffectIconsEnabled()) {
     const uiEffectsMask = ((ints.UiEffects ?? ints["18"] ?? 0) >>> 0);
     const fx = uiEffectIconsFor(uiEffectsMask);
@@ -872,13 +669,11 @@ function renderAppraisal(wrapEl, guid) {
           "display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:7px;" +
           `font-size:11px;color:#111;background:${uiEffectTintCss(f.tint)};`;
         b.title = f.name;
-        // real *_UIEffectImage icon (0x06 DID via the 0x25000009 map); tint pill
-        // is the fallback while it fetches / if it fails.
         const ic = document.createElement("span");
         ic.style.cssText = "width:14px;height:14px;display:inline-block;background:center/contain no-repeat;";
         b.appendChild(ic);
         const txt = document.createElement("span");
-        setAcText(txt, f.name);
+        txt.textContent = f.name;
         b.appendChild(txt);
         badges.appendChild(b);
         if (f.iconDid) {
@@ -891,135 +686,126 @@ function renderAppraisal(wrapEl, guid) {
     }
   }
 
-  // === Attributes ===
-  // HUD rec #53: only render the Creature-Profile-derived attributes
-  // section when the wire identify included CREATURE_PROFILE (0x0100).
-  // Without the gate a successful armor identify would leak stale
-  // attribute numbers from a prior creature identify.
-  //
-  // Field-name fix (2026-07-04): CreatureProfile (types.rs) has no
-  // `vitals` sub-object — health/health_max are top-level on the
-  // profile itself, and stamina/mana (+ their maxes) live nested under
-  // `attributes`, not a separate vitals struct. The prior `cp?.vitals`
-  // read always missed, so Health/Stamina/Mana silently fell back to
-  // (usually absent) top-level `ints.Max*` — this block effectively
-  // never rendered vitals for a creature identify.
+  // === Creature: BasicCreatureExamineUI attributes + vitals ===
+  // Field-name note (2026-07-04): CreatureProfile has no `vitals`
+  // sub-object — health/health_max are top-level, stamina/mana (+ maxes)
+  // live under `attributes`.
   if (flagBit(IDENTIFY_FLAG_CREATURE_PROFILE)
       && (cp?.attributes || cp?.health != null || ints.Strength != null
         || ints.Endurance != null || ints.Coordination != null
         || ints.Quickness != null || ints.Focus != null || ints.Self != null)) {
     sec("Attributes");
     const a = cp?.attributes || {};
-    row("Strength",     a.strength     ?? ints.Strength);
-    row("Endurance",    a.endurance    ?? ints.Endurance);
-    row("Coordination", a.coordination ?? ints.Coordination);
-    row("Quickness",    a.quickness    ?? ints.Quickness);
-    row("Focus",        a.focus        ?? ints.Focus);
-    row("Self",         a.self_        ?? a.self ?? ints.Self);
-    row("Health",       cp?.health_max != null ? `${cp.health}/${cp.health_max}` : (cp?.health ?? ints.MaxHealth));
-    row("Stamina",      a.stamina_max != null ? `${a.stamina}/${a.stamina_max}` : (a.stamina ?? ints.MaxStamina));
-    row("Mana",         a.mana_max != null ? `${a.mana}/${a.mana_max}` : (a.mana ?? ints.MaxMana));
+    const grid = document.createElement("div");
+    grid.className = "hb-exa-grid2";
+    kvRow(grid, "Strength",     a.strength     ?? ints.Strength);
+    kvRow(grid, "Endurance",    a.endurance    ?? ints.Endurance);
+    kvRow(grid, "Coordination", a.coordination ?? ints.Coordination);
+    kvRow(grid, "Quickness",    a.quickness    ?? ints.Quickness);
+    kvRow(grid, "Focus",        a.focus        ?? ints.Focus);
+    kvRow(grid, "Self",         a.self_        ?? a.self ?? ints.Self);
+    wrapEl.appendChild(grid);
+    const pair = (cur, max) => (max != null ? `${formatThousands(cur)} / ${formatThousands(max)}` : (cur != null ? formatThousands(cur) : null));
+    row("Health",  pair(cp?.health, cp?.health_max) ?? (ints.MaxHealth != null ? formatThousands(ints.MaxHealth) : null));
+    row("Stamina", pair(a.stamina, a.stamina_max) ?? (ints.MaxStamina != null ? formatThousands(ints.MaxStamina) : null));
+    row("Mana",    pair(a.mana, a.mana_max) ?? (ints.MaxMana != null ? formatThousands(ints.MaxMana) : null));
   }
+  // Skills: data-blocked — CreatureProfile carries no per-skill data on
+  // the wire (types.rs), so there is nothing to render until a
+  // SkillProfile lands.
 
-  // === Skills ===
-  // Skipped (data-blocked, 2026-07-04): CreatureProfile (types.rs:100)
-  // carries no `skills` field at all on the wire — only
-  // flags/health/health_max/attributes/buffs. The prior code read
-  // `cp.skills` as an object map, which never existed, so this section
-  // was permanently dead. There is no per-skill AppraisalProfile data
-  // to render until the wasm/protocol side adds a SkillProfile — see
-  // `crates/holtburger-protocol/src/messages/object/types.rs` if that
-  // lands later.
+  // === Tinkering (Appraisal_ShowTinkeringInfo) ===
+  const tinkerRows = [];
+  if (ints.ItemWorkmanship != null) tinkerRows.push(["Workmanship", ints.ItemWorkmanship]);
+  if (ints.NumTimesTinkered > 0) tinkerRows.push(["Tinkered", `${ints.NumTimesTinkered} time${ints.NumTimesTinkered === 1 ? "" : "s"}`]);
+  if (strings.TinkerName) tinkerRows.push(["Last tinkered by", strings.TinkerName]);
+  if (strings.ImbuerName) tinkerRows.push(["Imbued by", strings.ImbuerName]);
 
-  // === Equipment / Item profile ===
-  // HUD rec #53: each profile sub-section gated by its own
-  // IdentifyResponseFlags bit. ARMOR_LEVELS is a separate wire flag
-  // from ARMOR_PROFILE (per IdentifyResponseFlags 0x0080 vs 0x4000),
-  // so a body-armor identify that only sent ARMOR_PROFILE won't leak
-  // chest/head/foot levels from a stale armor-levels payload.
-  //
-  // Field-name fix (2026-07-04): the real wire ArmorProfile (types.rs:38)
-  // has no armor_level/physical_mod/acid_mod/fire_mod/cold_mod/
-  // electric_mod fields — it carries per-damage-type multipliers keyed
-  // `slashing/piercing/bludgeoning/cold/fire/acid/nether/lightning`.
-  // The overall Armor Level (a single number) is a WorldObjectProperties
-  // int (`ints.ArmorLevel`, PropertyInt.ArmorLevel=28), not part of
-  // ArmorProfile at all. Every `ap.*` read below was hitting undefined
-  // keys, so the whole Item/armor block was silently empty before this
-  // fix despite the data being present on the wire.
+  // === Weapon & armor data (Appraisal_ShowWeaponAndArmorData /
+  //     Appraisal_ShowArmorMods). ArmorProfile carries per-damage-type
+  //     multipliers; the overall AL is PropertyInt.ArmorLevel (28). ===
   const showArmor = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ap;
   const showWeapon = flagBit(IDENTIFY_FLAG_WEAPON_PROFILE) && wp;
   const showHook = flagBit(IDENTIFY_FLAG_HOOK_PROFILE) && hp;
   const showArmorLevels = flagBit(IDENTIFY_FLAG_ARMOR_LEVELS) && al;
   const showArmorLevelInt = flagBit(IDENTIFY_FLAG_ARMOR_PROFILE) && ints.ArmorLevel != null;
-  if (showArmor || showWeapon || showHook || showArmorLevels || showArmorLevelInt) {
-    sec("Item");
-    if (showArmorLevelInt) row("Armor Level", ints.ArmorLevel);
-    if (showArmor && ap.slashing != null)    row("Slash Mod",    Number(ap.slashing).toFixed(2));
-    if (showArmor && ap.piercing != null)    row("Pierce Mod",   Number(ap.piercing).toFixed(2));
-    if (showArmor && ap.bludgeoning != null) row("Bludgeon Mod", Number(ap.bludgeoning).toFixed(2));
-    if (showArmor && ap.cold != null)         row("Cold Mod",     Number(ap.cold).toFixed(2));
-    if (showArmor && ap.fire != null)         row("Fire Mod",     Number(ap.fire).toFixed(2));
-    if (showArmor && ap.acid != null)         row("Acid Mod",     Number(ap.acid).toFixed(2));
-    if (showArmor && ap.nether != null)       row("Nether Mod",   Number(ap.nether).toFixed(2));
-    if (showArmor && ap.lightning != null)    row("Electric Mod", Number(ap.lightning).toFixed(2));
-    // Weapon block — retail ItemExamineUI weapon row order: damage type,
-    // damage (+variance/mod), speed, skill.
-    if (showWeapon && damageTypeLabel(wp.damage_type)) row("Damage Type", damageTypeLabel(wp.damage_type));
-    if (showWeapon && wp.damage != null)       row("Damage",       wp.damage);
-    if (showWeapon && wp.damage_variance != null) row("Variance",  Number(wp.damage_variance).toFixed(2));
-    if (showWeapon && wp.damage_mod != null)   row("Damage Mod",   Number(wp.damage_mod).toFixed(2));
-    if (showWeapon && wp.weapon_time != null)  row("Weapon Speed", wp.weapon_time);
-    if (showWeapon && wp.weapon_skill != null) row("Weapon Skill", skillName(wp.weapon_skill));
-    // Per-slot armor-level breakdown (types.rs ArmorLevels — 9 body
-    // locations). Only render slots the wire actually populated.
-    if (showArmorLevels) {
-      for (const [key, label] of ARMOR_LEVEL_SLOTS) {
-        if (al[key] != null) row(label + " Armor", al[key]);
+  if (tinkerRows.length || showWeapon || showArmorLevelInt || showArmor) {
+    sec(showWeapon ? "Weapon" : (showArmor || showArmorLevelInt) ? "Armor" : "Craftsmanship");
+    for (const [l, val] of tinkerRows) row(l, val);
+    if (showWeapon) {
+      // Retail weapon block: Skill, Damage "min - max, Type", Speed.
+      const dmg = damageRangeText(wp.damage, wp.damage_variance);
+      const dtype = damageTypeLabel(wp.damage_type);
+      if (wp.weapon_skill != null) row("Skill", skillName(wp.weapon_skill), { tone: weaponTone(0x0001) });
+      if (dmg) row("Damage", dtype ? `${dmg}, ${dtype}` : dmg, { tone: weaponTone(0x0008) || weaponTone(0x0010) });
+      if (wp.weapon_time != null) row("Speed", weaponSpeedText(wp.weapon_time), { tone: weaponTone(0x0004) });
+      if (wp.damage_mod != null && Number(wp.damage_mod) !== 1) {
+        row("Damage bonus", `${Math.round((Number(wp.damage_mod) - 1) * 100)}%`, { tone: weaponTone(0x0020) });
       }
     }
-    if (showHook && hp.hook_type != null)    row("Hook Type",    hp.hook_type);
+    if (showArmorLevelInt) row("Armor Level", formatThousands(ints.ArmorLevel), { tone: armorTone(0x0001) });
+    if (showArmor) {
+      const AL = Number(ints.ArmorLevel);
+      const prot = (label, mod, bit) => {
+        if (mod == null) return;
+        row(label, protectionText(mod, Number.isFinite(AL) ? AL : null), { tone: armorTone(bit) });
+      };
+      prot("Slashing",    ap.slashing,    0x0002);
+      prot("Piercing",    ap.piercing,    0x0004);
+      prot("Bludgeoning", ap.bludgeoning, 0x0008);
+      prot("Fire",        ap.fire,        0x0020);
+      prot("Cold",        ap.cold,        0x0010);
+      prot("Acid",        ap.acid,        0x0040);
+      prot("Electric",    ap.lightning,   0x0080);
+      prot("Nether",      ap.nether,      0);
+    }
+  }
+  // Per-slot armor-level breakdown (ArmorLevels, 9 body locations).
+  if (showArmorLevels) {
+    const slots = [
+      ["head", "Head"], ["chest", "Chest"], ["abdomen", "Abdomen"],
+      ["upper_arm", "Upper Arms"], ["lower_arm", "Lower Arms"], ["hand", "Hands"],
+      ["upper_leg", "Upper Legs"], ["lower_leg", "Lower Legs"], ["foot", "Feet"],
+    ].filter(([k]) => al[k] != null);
+    if (slots.length) {
+      sec("Armor by Location");
+      const grid = document.createElement("div");
+      grid.className = "hb-exa-grid2";
+      for (const [key, label] of slots) kvRow(grid, label, formatThousands(al[key]));
+      wrapEl.appendChild(grid);
+    }
   }
 
-  // === Effects: enchantment bitfields + spell-book ===
-  // HUD rec #53: each enchantment bitfield is its own wire flag
-  // (ARMOR=0x0200, WEAPON=0x0800, RESIST=0x0400). Spell-book gated by
-  // SPELL_BOOK (0x0010). Gating prevents a fresh skill-fail wipe from
-  // showing stale enchantment / spell numbers from the prior identify.
-  const ah = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorHighlight : null;
-  const ac = flagBit(IDENTIFY_FLAG_ARMOR_ENCH) ? snapshot.armorColor : null;
-  const wh = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponHighlight : null;
-  const wc = flagBit(IDENTIFY_FLAG_WEAPON_ENCH) ? snapshot.weaponColor : null;
-  const rh = flagBit(IDENTIFY_FLAG_RESIST_ENCH) ? snapshot.resistHighlight : null;
-  const rc = flagBit(IDENTIFY_FLAG_RESIST_ENCH) ? snapshot.resistColor : null;
+  // === Magic (Appraisal_ShowMagicInfo: "Spellcraft: %d." "Mana: %d / %d."
+  //     + Appraisal_ShowActivationRequirements arcane-lore difficulty) ===
   const sb = flagBit(IDENTIFY_FLAG_SPELL_BOOK) && Array.isArray(snapshot.spellBook)
     ? snapshot.spellBook : [];
-  if (ah != null || wh != null || rh != null || sb.length > 0) {
-    sec("Effects");
-    const hex = (n) => `0x${(n >>> 0).toString(16).toUpperCase().padStart(4, "0")}`;
-    if (ah != null) row("Armor Ench.",  `${hex(ah)} / color ${hex(ac ?? 0)}`);
-    if (wh != null) row("Weapon Ench.", `${hex(wh)} / color ${hex(wc ?? 0)}`);
-    if (rh != null) row("Resist Ench.", `${hex(rh)} / color ${hex(rc ?? 0)}`);
+  const hasMagic = ints.ItemSpellcraft != null || ints.ItemMaxMana != null || ints.ItemDifficulty != null || sb.length > 0;
+  if (hasMagic) {
+    sec("Magic");
+    if (ints.ItemSpellcraft != null) row("Spellcraft", ints.ItemSpellcraft);
+    if (ints.ItemMaxMana != null) row("Mana", `${formatThousands(ints.ItemCurMana ?? 0)} / ${formatThousands(ints.ItemMaxMana)}`);
+    if (ints.ItemDifficulty != null) row("Arcane Lore to activate", ints.ItemDifficulty);
+    if (floats.ManaRate != null && Number(floats.ManaRate) < 0) {
+      const secs = Math.round(-1 / Number(floats.ManaRate));
+      if (Number.isFinite(secs) && secs > 0) row("Mana cost", `1 every ${secs} s`);
+    }
     if (sb.length > 0) {
       // Spell list with names + icons — retail's ItemExamineUI spell
       // strip. `spellBook` is a plain `Vec<u32>` of spell ids on the
-      // wire (types.rs) — no name/icon travels with it, so each is
-      // resolved locally via handle.getSpellRecord (sync name) +
-      // resolveSpellIcon (async icon, same path plugins/spellbook.js
-      // and ui/ac_entity_icon.js use for the hotbar/spellbook icons).
+      // wire — names resolve via handle.getSpellRecord (sync) and icons
+      // via resolveSpellIcon (async), same path as the spellbook/hotbar.
       const list = document.createElement("div");
-      list.className = "hb-exa-spelllist";
-      list.style.cssText = "display:flex;flex-direction:column;gap:2px;margin:2px 0;";
+      list.className = "hb-exa-spells hb-exa-spelllist";
       for (const spellId of sb) {
         const id = spellId >>> 0;
         const entry = document.createElement("div");
         entry.className = "hb-exa-spell";
-        entry.style.cssText = "display:flex;align-items:center;gap:6px;font-size:10px;";
-        const ic = document.createElement("span");
-        ic.style.cssText = "width:16px;height:16px;flex:0 0 auto;background:center/contain no-repeat;image-rendering:pixelated;";
+        const ic = document.createElement("i");
         entry.appendChild(ic);
         const label = document.createElement("span");
-        setAcText(label, getSpellName(id) || `Spell ${id}`);
+        label.textContent = getSpellName(id) || "Unknown spell";
+        if (debugEnabled()) label.title = `spell ${id}`;
         entry.appendChild(label);
         list.appendChild(entry);
         resolveSpellIcon(id).then((url) => {
@@ -1030,375 +816,425 @@ function renderAppraisal(wrapEl, guid) {
     }
   }
 
-  // === Requirements (wield gating) ===
-  // Ports retail ItemExamineUI::Appraisal_ShowWieldRequirements.
-  // WieldRequirements is the AC enum picking which check applies:
-  //   1=RawSkill, 2=AttribSkill, 3=RawAttrib, 4=Level, 5=RawAttrib2,
-  //   7=Heritage, 8=Faction (per acclient.h:54900-ish). When the wasm
-  //   side surfaces only the raw PropertyInts (no enum name), we
-  //   fall back to a generic "Skill <n> ≥ X" / "Attribute <n> ≥ X"
-  //   label so the player at least sees the bar.
+  // === Requirements (Appraisal_ShowWieldRequirements) ===
+  // WieldRequirements picks which check applies: 1=RawSkill,
+  // 2=AttribSkill (trained skill), 3=RawAttrib, 4=Level, 5=RawAttrib2,
+  // 7=Heritage, 8=Faction.
   const WIELD_REQ_LABELS = {
-    1: "Raw skill", 2: "Skill", 3: "Raw attribute",
-    4: "Level", 5: "Raw attribute (alt)",
+    1: "Skill", 2: "Skill", 3: "Attribute",
+    4: "Level", 5: "Attribute",
     7: "Heritage", 8: "Faction",
   };
-  if (ints.WieldDifficulty != null
-      || ints.WieldRequirements != null
-      || ints.ItemMinLevel != null
-      || ints.HeritageGroup != null
-      || ints.Faction1Bits != null) {
-    sec("Requirements");
+  const reqRows = [];
+  if (ints.WieldDifficulty != null || ints.WieldRequirements != null || ints.WieldSkillType != null) {
     const reqKind = ints.WieldRequirements >>> 0;
     const skillType = ints.WieldSkillType ?? null;
     const diff = ints.WieldDifficulty ?? null;
-    if (reqKind || diff != null || skillType != null) {
-      const label = WIELD_REQ_LABELS[reqKind] || "Wield req";
-      // reqKind 2 (AttribSkill)/1 (RawSkill) key off a Skill id — label
-      // it with the real skill name (mirrors WeaponProfile.weapon_skill
-      // handling above) instead of a bare numeric id.
-      const isSkillReq = reqKind === 1 || reqKind === 2;
-      const skillLabel = skillType != null ? (isSkillReq ? skillName(skillType) : `id ${skillType}`) : null;
-      if (skillLabel != null && diff != null) {
-        row(label, `${skillLabel} ≥ ${diff}`);
-      } else if (skillLabel != null) {
-        row(label, skillLabel);
-      } else if (diff != null) {
-        row(label, `≥ ${diff}`);
-      }
-    }
-    if (ints.ItemMinLevel != null) row("Min level", `${ints.ItemMinLevel}+`);
-    // Mirror requirements for the alt slot if present (some artifacts
-    // ship a second wield req block).
-    if (ints.WieldDifficulty2 != null || ints.WieldSkillType2 != null) {
-      const reqKind2 = ints.WieldRequirements2 >>> 0;
-      const label2 = WIELD_REQ_LABELS[reqKind2] || "Wield req (alt)";
-      if (ints.WieldSkillType2 != null && ints.WieldDifficulty2 != null) {
-        row(label2, `id ${ints.WieldSkillType2} ≥ ${ints.WieldDifficulty2}`);
-      }
-    }
-    if (ints.HeritageGroup != null) row("Heritage", String(ints.HeritageGroup));
+    const isSkillReq = reqKind === 1 || reqKind === 2;
+    const what = skillType != null && isSkillReq ? skillName(skillType) : null;
+    if (reqKind === 4 && diff != null) reqRows.push(["Wield", `Level ${diff}+`]);
+    else if (what && diff != null) reqRows.push(["Wield", `${what} ${diff}+`]);
+    else if (what) reqRows.push(["Wield", what]);
+    else if (diff != null) reqRows.push([`Wield (${WIELD_REQ_LABELS[reqKind] || "requirement"})`, `${diff}+`]);
+  }
+  if (ints.WieldDifficulty2 != null && ints.WieldSkillType2 != null) {
+    const reqKind2 = ints.WieldRequirements2 >>> 0;
+    const what2 = (reqKind2 === 1 || reqKind2 === 2) ? skillName(ints.WieldSkillType2) : null;
+    if (what2) reqRows.push(["Wield", `${what2} ${ints.WieldDifficulty2}+`]);
+  }
+  if (ints.ItemMinLevel != null) reqRows.push(["Minimum level", ints.ItemMinLevel]);
+  if (ints.ItemMaxLevel != null && kind === "item") reqRows.push(["Item level cap", ints.ItemMaxLevel]);
+  if (reqRows.length) {
+    sec("Requirements");
+    for (const [l, val] of reqRows) row(l, val);
   }
 
-  // === Description ===
-  // Retail ItemExamineUI's scrollable description area (armor/weapon
-  // pane 0x10000148/0x10000149 — see the gmFloatyExaminationUI layout
-  // comment at the top of this file). `strings.LongDesc` is
-  // PropertyString.LongDesc (=16) — the item/creature's flavour text.
-  // Previously only surfaced under `?debug=1`; retail always shows it
-  // when present, so it's promoted to a normal always-visible section.
-  if (strings.LongDesc) {
+  // === Properties (Appraisal_ShowSpecialProperties / Bonded/Attuned
+  //     status / "This item cannot be sold.") ===
+  const special = [];
+  if (Number(ints.Bonded) === 1) special.push("Bonded");
+  else if (Number(ints.Bonded) === -1) special.push("Destroyed on death");
+  if (Number(ints.Attuned) === 1) special.push("Attuned");
+  if (props.bools?.IsSellable === false) special.push("Cannot be sold");
+  if (props.bools?.Retained === true) special.push("Retained");
+  if (special.length) {
+    sec("Properties");
+    prose(wrapEl, special.join(" · "));
+  }
+  if (showHook && hp.hook_type != null && debugEnabled()) row("Hook type", hp.hook_type);
+
+  // === Usage + description (Appraisal_ShowUsage / ShowDescription) ===
+  const useText = strings.Use || strings.UseMessage;
+  if (useText) {
+    sec("Use");
+    prose(wrapEl, useText);
+  }
+  const desc = strings.LongDesc || strings.ShortDesc;
+  if (desc && desc !== snapshot?.properties?.strings?.Name) {
     sec("Description");
-    const desc = document.createElement("div");
-    desc.className = "hb-exa-desc";
-    desc.style.cssText = "font-size:11px;line-height:1.4;font-style:italic;padding:2px 4px;white-space:pre-wrap;";
-    setAcText(desc, String(strings.LongDesc));
-    wrapEl.appendChild(desc);
+    prose(wrapEl, desc, "is-flavor hb-exa-desc");
   }
 
-  // === Debug (gated) — Type/Class/Wcid/X/Y/Z/Landblock ===
-  // Reserved for `?debug=1` per the EX-05 plan; cheap to leave gated.
-  try {
-    const params = new URLSearchParams(window.location?.search ?? "");
-    if (params.get("debug") === "1") {
-      sec("Debug");
-      row("ItemType",    ints.ItemType);
-      row("CreatureType", ints.CreatureType);
-      if (strings.PluralName) row("Plural", strings.PluralName);
-      const flt = (k) => floats[k] != null ? Number(floats[k]).toFixed(2) : undefined;
-      row("Weight",  flt("EncumbranceVal"));
-      row("Value",   ints.Value);
-    }
-  } catch (_) {}
+  // === Debug (gated) ===
+  if (debugEnabled()) {
+    sec("Appraisal (debug)");
+    row("ItemType", ints.ItemType != null ? hex8(ints.ItemType) : null);
+    row("CreatureType", ints.CreatureType);
+    row("Identify flags", hex8(identifyFlags));
+    if (strings.PluralName) row("Plural", strings.PluralName);
+  }
 }
 
-// Resolve the title text for an examine context (matches view.nameFor).
-export function examineTitleFor(ctx) {
-  if (ctx?.name) return `Examine: ${ctx.name}`;
-  if (ctx?.srcLi) {
-    const n = ctx.srcLi.querySelector?.(".name")?.textContent;
-    if (n) return `Examine: ${n}`;
+// ── Header (value/burden or creature type/level) + health meter ───────
+
+function renderHeader(refs, model, snapshot) {
+  const ints = snapshot?.properties?.ints || {};
+  const strings = snapshot?.properties?.strings || {};
+  let kind = model.kind;
+  // An appraisal with a creature profile settles an unknown item/creature.
+  if (kind === "item" && !model.fromInventory && snapshot?.creatureProfile) kind = "creature";
+  model.kind = kind;
+  const head = examineHeaderModel({
+    kind, ints, strings, item: model.item, meta: model.meta, isPK: model.isPK,
+  });
+  refs.textEl.innerHTML = "";
+  if (kind === "empty") {
+    // The body's empty-state message explains; keep the head quiet.
+  } else if (!head.lines.length) {
+    const l = document.createElement("div");
+    l.className = "hb-exa-line is-muted";
+    l.textContent = model.loading ? "Looking closer…" : (kind === "player" ? "Player" : "Creature");
+    refs.textEl.appendChild(l);
   }
-  return "Examine";
+  for (const line of head.lines) {
+    const l = document.createElement("div");
+    l.className = "hb-exa-line" + (line.tone === "warn" ? " is-warn" : "");
+    l.textContent = line.text;
+    refs.textEl.appendChild(l);
+  }
+  refs.bodyEl?.classList.toggle("is-creature", kind === "creature");
+  // Right box: icon for items, level for creatures / players.
+  const showLevel = head.level != null;
+  refs.iconBox.style.display = (!showLevel && kind !== "empty") ? "" : "none";
+  refs.levelBox.style.display = showLevel ? "" : "none";
+  if (showLevel) {
+    refs.levelLabel.textContent = head.levelLabel || "Level";
+    refs.levelValue.textContent = head.level;
+  }
+  // Health meter (creatures / players): exact appraisal numbers beat a
+  // QueryHealth fraction beat nothing.
+  if (kind === "creature" || kind === "player") {
+    const cp = snapshot?.creatureProfile;
+    const hm = healthModel(cp?.health_max != null
+      ? { cur: cp.health, max: cp.health_max }
+      : (model.health ?? { fraction: model.healthFraction }));
+    if (hm) {
+      refs.healthEl.style.display = "";
+      refs.healthFill.style.setProperty("--hbk-fill", `${(hm.fraction * 100).toFixed(1)}%`);
+      refs.healthLabel.textContent = `Health ${hm.label}`;
+    } else {
+      refs.healthEl.style.display = "none";
+    }
+  } else {
+    refs.healthEl.style.display = "none";
+  }
+  // Title follows the best-known name (appraisal Name beats a guess).
+  const name = strings.Name || model.name;
+  if (name && name !== model.titleShown && typeof refs.setTitle === "function") {
+    model.titleShown = name;
+    try { refs.setTitle(name); } catch (_) {}
+  }
+}
+
+/** Best-known display name for an examine ctx (title bar text). */
+function resolveExamineName(ctx) {
+  if (ctx?.name) return ctx.name;
+  const fromLi = ctx?.srcLi?.querySelector?.(".name")?.textContent;
+  if (fromLi) return fromLi;
+  const guid = (Number(ctx?.guid ?? ctx?.srcLi?.dataset?.guid) >>> 0) || 0;
+  if (!guid) return null;
+  const inv = getItemByGuid(guid);
+  if (inv?.name) return inv.name;
+  const ent = getEntityEntry(guid);
+  return ent?.meta?.name || ent?.name || null;
+}
+
+// Resolve the title text for an examine context (matches view.nameFor):
+// the examined thing's name, like retail's DisplayedNameText — never
+// "Examine: X" plus the name again in the body.
+export function examineTitleFor(ctx) {
+  return resolveExamineName(ctx) || "Examine";
 }
 
 // Build the examine body DOM into `parentEl` and wire up paperdoll +
 // inscription + bus refresh subscriptions. Returns a cleanup function.
-// Used by BOTH the main-panel view (main-panel host) and the standalone
-// floaty (gmFloatyExaminationUI). Caller owns the outer chrome
-// (title bar / close button / frame); this only owns the body content.
-export function mountExamineBody(parentEl, ctx) {
+// Used by BOTH the main-panel view and the standalone floaty
+// (gmFloatyExaminationUI). Caller owns the outer chrome (title bar /
+// close button / frame); `opts.setTitle(text)` lets the body retitle it
+// once a better name arrives (appraisal / late entity spawn).
+export function mountExamineBody(parentEl, ctx, opts = {}) {
   ensureStyles();
   const root = document.createElement("div");
   root.className = "hb-exa-root";
 
-    // Head band — retail places the icon at (244, 6) (right side) and
-    // the header text block at (6, 2) 232x38. applyExamineLayout
-    // overrides these inline positions once the layout loads.
-    const head = document.createElement("div");
-    head.className = "hb-exa-head";
-    const nameCol = document.createElement("div");
-    nameCol.className = "hb-exa-namecol";
-    const nameEl = document.createElement("div");
-    nameEl.className = "hb-exa-name";
-    nameEl.textContent = "—";
-    const guidEl = document.createElement("div");
-    guidEl.className = "hb-exa-guid";
-    guidEl.textContent = "";
-    nameCol.appendChild(nameEl);
-    nameCol.appendChild(guidEl);
-    head.appendChild(nameCol);
-    root.appendChild(head);
+  const examineGuid = (ctx?.guid != null)
+    ? (Number(ctx.guid) >>> 0)
+    : ((ctx?.srcLi?.dataset?.guid != null)
+        ? (Number(ctx.srcLi.dataset.guid) >>> 0)
+        : null);
 
-    // Icon — separate from .hb-exa-head so applyExamineLayout can
-    // position it independently per retail (244, 6) 32x32. CSS still
-    // gives it a fallback position inside the head band for the
-    // wasm-not-yet-loaded paint frame.
-    const iconEl = document.createElement("div");
-    iconEl.className = "hb-exa-icon";
-    iconEl.style.right = "8px";
-    iconEl.style.top = "6px";
-    root.appendChild(iconEl);
-    // P2-44 (cross-find EX-02 / placeholder cluster): resolve the
-    // entity's real iconId via the shared resolver. Fire-and-forget;
-    // the icon paints in once the data URL arrives.
-    const exaGuid = (ctx?.guid ?? 0) >>> 0;
-    if (exaGuid) {
-      resolveBindingIcon({ itemGuid: exaGuid })
-        .then((url) => { if (url) iconEl.style.backgroundImage = `url("${url}")`; })
-        .catch(() => {});
-    }
+  // Head — retail ItemValueText/ItemBurdenText (or CreatureName / heritage
+  // lines) on the left, ItemIcon or LevelInfo on the right.
+  const head = document.createElement("div");
+  head.className = "hb-exa-head";
+  const textEl = document.createElement("div");
+  textEl.className = "hb-exa-headtext";
+  head.appendChild(textEl);
+  const iconBox = document.createElement("div");
+  iconBox.className = "hb-exa-iconbox";
+  iconBox.style.display = "none";
+  const iconImg = document.createElement("img");
+  iconImg.alt = "";
+  iconImg.style.display = "none";
+  iconBox.appendChild(iconImg);
+  head.appendChild(iconBox);
+  const levelBox = document.createElement("div");
+  levelBox.className = "hb-exa-levelbox";
+  levelBox.style.display = "none";
+  const levelLabel = document.createElement("div");
+  levelLabel.className = "hb-exa-levellabel";
+  const levelValue = document.createElement("div");
+  levelValue.className = "hb-exa-levelvalue";
+  levelBox.appendChild(levelLabel);
+  levelBox.appendChild(levelValue);
+  head.appendChild(levelBox);
+  root.appendChild(head);
+  if (examineGuid && debugEnabled()) head.title = hex8(examineGuid);
 
-    // Property rows above the main body — retail 0x10000160 (Row1) and
-    // 0x10000162 (Row2) at popup-space (11, 52) / (11, 71) 278x19.
-    // Optional summary lines — visibility:hidden when no content so the
-    // layout rectangle is preserved (for retail-faithful chrome anatomy)
-    // but no visual artifact appears.
-    const row1El = document.createElement("div");
-    row1El.className = "hb-exa-row hb-exa-row1";
-    row1El.style.position = "absolute";
-    row1El.style.left = "8px";
-    row1El.style.right = "8px";
-    row1El.style.visibility = "hidden";
-    root.appendChild(row1El);
-    const row2El = document.createElement("div");
-    row2El.className = "hb-exa-row hb-exa-row2";
-    row2El.style.position = "absolute";
-    row2El.style.left = "8px";
-    row2El.style.right = "8px";
-    row2El.style.visibility = "hidden";
-    root.appendChild(row2El);
+  // Gold divider (0x060012C5 + right cap 0x060012C4).
+  const divider = document.createElement("div");
+  divider.className = "hbk-divider";
+  root.appendChild(divider);
 
-    // Section dividers — three horizontal rules per retail at popup-
-    // space y={42, 92, 268} 300x4. applyExamineLayout overrides.
-    const divider1El = document.createElement("div");
-    divider1El.className = "hb-exa-divider hb-exa-divider-1";
-    divider1El.style.top = "44px";  // CSS fallback close to retail y=42
-    root.appendChild(divider1El);
-    const divider2El = document.createElement("div");
-    divider2El.className = "hb-exa-divider hb-exa-divider-2";
-    divider2El.style.top = "94px";  // CSS fallback close to retail y=92
-    root.appendChild(divider2El);
-    const divider3El = document.createElement("div");
-    divider3El.className = "hb-exa-divider hb-exa-divider-3";
-    divider3El.style.top = "270px";  // CSS fallback close to retail y=268
-    root.appendChild(divider3El);
+  const healthEl = document.createElement("div");
+  healthEl.className = "hbk-meter hb-exa-health";
+  healthEl.style.display = "none";
+  const healthFill = document.createElement("div");
+  healthFill.className = "hbk-meter-fill";
+  const healthLabel = document.createElement("div");
+  healthLabel.className = "hbk-meter-label";
+  healthEl.appendChild(healthFill);
+  healthEl.appendChild(healthLabel);
+  root.appendChild(healthEl);
 
-    const body = document.createElement("div");
-    body.className = "hb-exa-body";
-    root.appendChild(body);
+  // Scrolling display text (ItemDisplayText + rope scrollbar).
+  const body = document.createElement("div");
+  body.className = "hb-exa-body hbk-scroll";
+  root.appendChild(body);
 
-    // Wave 3.B (2026-05-28) — embedded paperdoll preview. Renders the
-    // examined entity's full rig with equipped armor + dye palette via
-    // the same PaperdollViewport that powers the inventory panel
-    // (`plugins/inventory.js:1389`). Sits at the top of the scrollable
-    // body so the player sees the dyed gear above the stats. Only
-    // populated for the `fromEntity` path; inventory items are NOT
-    // creatures so the paperdoll wrap stays hidden for that flow.
-    // Reference: `external/chorizite/ACBindings/Generated/UI/Elements/
-    // gmFloatyExaminationUI.cs` for the canonical retail layout (icon
-    // top-right + rig area + stat rows below).
-    const paperdollWrap = document.createElement("div");
-    paperdollWrap.className = "hb-exa-paperdoll-wrap";
-    paperdollWrap.style.display = "none"; // shown only on fromEntity below
-    body.appendChild(paperdollWrap);
+  // Wave 3.B (2026-05-28) — embedded paperdoll preview (creatures /
+  // players only — retail ItemExamineUI never shows a doll for items).
+  const paperdollWrap = document.createElement("div");
+  paperdollWrap.className = "hb-exa-paperdoll-wrap";
+  paperdollWrap.style.display = "none"; // shown only for creatures / players below
+  body.appendChild(paperdollWrap);
 
-    // Inscription section — appended at the tail of the scrollable
-    // body. Hidden when no inscription is present for the examined guid.
-    const inscWrap = document.createElement("div");
-    inscWrap.className = "hb-exa-insc-wrap";
-    inscWrap.style.display = "none";
-    body.appendChild(inscWrap);
+  // Identity rows (inventory facts / debug) then the appraisal block.
+  const identity = document.createElement("div");
+  identity.className = "hb-exa-identity";
+  body.appendChild(identity);
+  const appraisalWrap = document.createElement("div");
+  appraisalWrap.className = "hb-exa-appraisal-wrap";
+  appraisalWrap.style.display = "none";
+  body.appendChild(appraisalWrap);
+  const pending = document.createElement("div");
+  pending.className = "hb-exa-pending";
+  pending.style.display = "none";
+  body.appendChild(pending);
 
-    // Footer status line — retail 0x10000165 (278x19 at popup 11,276).
-    // We use it as an out-of-band "loading"/"action" line when present.
-    // Hidden via visibility (not display) to preserve the layout rectangle.
-    const footerEl = document.createElement("div");
-    footerEl.className = "hb-exa-footer";
-    footerEl.style.position = "absolute";
-    footerEl.style.left = "8px";
-    footerEl.style.right = "8px";
-    footerEl.style.bottom = "8px";
-    footerEl.style.height = "19px";
-    footerEl.style.fontSize = "10px";
-    footerEl.style.color = "var(--hb-text-muted)";
-    footerEl.style.textAlign = "center";
-    footerEl.style.boxSizing = "border-box";
-    footerEl.style.visibility = "hidden";
-    root.appendChild(footerEl);
+  // Inscription parchment — pinned under the scroll area, hidden when
+  // the examined thing has no inscription.
+  const inscWrap = document.createElement("div");
+  inscWrap.className = "hb-exa-insc-wrap";
+  inscWrap.style.display = "none";
+  root.appendChild(inscWrap);
 
-    parentEl.appendChild(root);
+  parentEl.appendChild(root);
 
-    // Apply retail layout positions to the popup-frame anatomy. Body,
-    // dividers, head, icon, optional summary rows + footer all pull
-    // x/y/w/h from the LayoutDesc. The per-row label/value content
-    // inside .hb-exa-body stays hand-tuned (v1 fetch_layout does not
-    // serialize StateDesc/BaseProperty, so the labels themselves
-    // aren't recoverable from the DAT yet).
-    applyExamineLayout({
-      headEl: head,
-      iconEl,
-      bodyEl: body,
-      row1El,
-      row2El,
-      divider1El,
-      divider2El,
-      divider3El,
-      footerEl,
-    });
+  const model = {
+    kind: "item", name: resolveExamineName(ctx), titleShown: null,
+    item: null, meta: null, isPlayer: false, isPK: false,
+    health: null, healthFraction: null, loading: false,
+    fromInventory: !!ctx?.fromInventory,
+  };
+  const refs = {
+    textEl, iconBox, levelBox, levelLabel, levelValue,
+    healthEl, healthFill, healthLabel, setTitle: opts.setTitle,
+    bodyEl: body,
+  };
+  model.titleShown = model.name;
 
-    const examineGuid = (ctx?.guid != null)
-      ? (Number(ctx.guid) >>> 0)
-      : ((ctx?.srcLi?.dataset?.guid != null)
-          ? (Number(ctx.srcLi.dataset.guid) >>> 0)
-          : null);
-
-    let paperdollViewport = null;
-    if (ctx?.fromInventory) {
-      populateFromInventory(body, ctx, nameEl, guidEl);
-    } else {
-      populateFromEntity(body, ctx ?? {}, nameEl, guidEl);
-      // Wave 3.B — render the entity's gear/dye preview at the top
-      // of the body. renderEntityPaperdoll handles the entity-missing
-      // / no-setupId fallbacks internally; returns null when the
-      // viewport couldn't be constructed (no entry to dispose then).
+  let paperdollViewport = null;
+  if (ctx?.fromInventory) {
+    populateFromInventory(identity, ctx, model);
+  } else {
+    populateFromEntity(identity, ctx ?? {}, model);
+    // Wave 3.B — render the creature / player gear + dye preview at the
+    // top of the body. renderEntityPaperdoll handles the entity-missing /
+    // no-setupId fallbacks internally; returns null when the viewport
+    // couldn't be constructed (no entry to dispose then).
+    if (model.kind === "creature" || model.kind === "player") {
       paperdollWrap.style.display = "";
       paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
     }
-    renderInscription(inscWrap, examineGuid);
+  }
 
-    // EX-05 (2026-06-05) — AppraisalProfile section. Adds a sub-block
-    // inside the scrollable body that renders the entity's full
-    // AppraisalProfile (AttributeInfoRegion / SkillInfoRegion /
-    // EffectInfoRegion analogues). Fires `requestAppraisal(guid)` on
-    // mount; subscribes to `objectAppraised` and reads back via
-    // `getObjectAppraisal(guid)` whenever the GUID matches our target.
-    const appraisalWrap = document.createElement("div");
-    appraisalWrap.className = "hb-exa-appraisal-wrap";
-    appraisalWrap.style.display = "none";
-    appraisalWrap.style.marginTop = "6px";
-    body.appendChild(appraisalWrap);
-    renderAppraisal(appraisalWrap, examineGuid);
-    if (examineGuid) {
-      try {
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        if (handle?.requestAppraisal) handle.requestAppraisal(examineGuid >>> 0);
-      } catch (_) {}
-    }
-
-    // Refresh inscription on bookUpdated (book panel pushes fresh
-    // BookSnapshot here) and on playerInventoryChanged (ownership
-    // gates the Set Inscription button).
-    const pc = window.__pluginClient ?? null;
-    const onRefresh = () => renderInscription(inscWrap, examineGuid);
-    // HUD rec #107 (2026-06-16) — RNG-based identify retry. ACE rolls
-    // an Identify skill check per Player_Skills.cs HandleIdentifyResponse;
-    // on failure the IdentifyResponse comes back with success=false and
-    // the panel falls through to the "Insufficient identification skill"
-    // banner (rec #53). Retail's awaiting_appraisal_ID gating retries
-    // automatically on failure (acclient.h:55670-ish). Mirror that with
-    // bounded exponential backoff: 3 attempts at 5s / 10s / 20s, then
-    // give up. Cancellation: any successful identify (or unmount) clears
-    // the pending timer so we don't double-fire.
-    const IDENTIFY_RETRY_DELAYS_MS = [5000, 10000, 20000];
-    let identifyRetryAttempt = 0;
-    let identifyRetryTimer = null;
-    const cancelIdentifyRetry = () => {
-      if (identifyRetryTimer !== null) {
-        clearTimeout(identifyRetryTimer);
-        identifyRetryTimer = null;
-      }
-    };
-    const scheduleIdentifyRetry = () => {
-      if (!examineGuid) return;
-      if (identifyRetryAttempt >= IDENTIFY_RETRY_DELAYS_MS.length) return;
-      const delay = IDENTIFY_RETRY_DELAYS_MS[identifyRetryAttempt];
-      identifyRetryAttempt++;
-      cancelIdentifyRetry();
-      identifyRetryTimer = setTimeout(() => {
-        identifyRetryTimer = null;
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        try { handle?.requestAppraisal?.(examineGuid >>> 0); } catch (_) {}
-      }, delay);
-    };
-    const onAppraised = (ev) => {
-      const guid = (ev?.detail?.u32Payload ?? 0) >>> 0;
-      if (!examineGuid || guid !== (examineGuid >>> 0)) return;
-      renderAppraisal(appraisalWrap, examineGuid);
-      try {
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        const json = handle?.getObjectAppraisal?.(guid >>> 0);
-        if (typeof json === "string" && json.length > 0) {
-          const snap = JSON.parse(json);
-          if (snap?.identifySuccess === false) {
-            scheduleIdentifyRetry();
-          } else {
-            cancelIdentifyRetry();
-            identifyRetryAttempt = 0;
-          }
+  // P2-44 — the item's real icon via the shared resolver (fire-and-forget).
+  if (examineGuid) {
+    resolveBindingIcon({ itemGuid: examineGuid })
+      .then((url) => {
+        if (url && iconImg.isConnected) {
+          iconImg.src = url;
+          iconImg.style.display = "";
         }
-      } catch (_) { /* leave retry state untouched on parse failure */ }
-    };
-    // Wave 3.B — refresh the paperdoll when the examined entity's
-    // appearance changes (e.g. NPC equips a new item via ACE's
-    // applyAppearance broadcast). Local-player-only events fire for
-    // `playerInventoryChanged`; non-player entities re-publish via
-    // ObjectCreate/EntityUpdate which flows through entity refresh.
-    const onAppearanceRefresh = () => {
-      if (!examineGuid || ctx?.fromInventory) return;
-      // Tear down + rebuild the viewport so the new substitutions land.
-      // PaperdollViewport's _lastLoadKey debounce will no-op when
-      // nothing meaningful changed.
-      if (paperdollViewport) {
-        try { paperdollViewport.dispose(); } catch (_) {}
-        paperdollViewport = null;
-      }
-      paperdollWrap.style.display = "";
-      paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
-    };
-    if (pc?.events?.on) {
-      pc.events.on("bookUpdated", onRefresh);
-      pc.events.on("playerInventoryChanged", onRefresh);
-      pc.events.on("entityAppearanceChanged", onAppearanceRefresh);
-      pc.events.on("objectAppraised", onAppraised);
-    }
+      })
+      .catch(() => {});
+  }
 
-    return () => {
-      if (pc?.events?.off) {
-        try { pc.events.off("bookUpdated", onRefresh); } catch (_) {}
-        try { pc.events.off("playerInventoryChanged", onRefresh); } catch (_) {}
-        try { pc.events.off("entityAppearanceChanged", onAppearanceRefresh); } catch (_) {}
-        try { pc.events.off("objectAppraised", onAppraised); } catch (_) {}
+  const refreshAll = () => {
+    const snap = readAppraisal(examineGuid);
+    renderHeader(refs, model, snap);
+    renderAppraisal(appraisalWrap, examineGuid, snap, model.kind);
+    const empty = model.kind === "empty";
+    pending.style.display = (!snap && !empty) ? "" : "none";
+    pending.textContent = model.loading ? "Too far away to see clearly." : "Appraising…";
+    if (empty && !body.querySelector(".hbk-empty")) {
+      const e = document.createElement("div");
+      e.className = "hbk-empty";
+      e.textContent = "Nothing is selected. Click something in the world or in your pack, then choose Examine.";
+      body.appendChild(e);
+    }
+  };
+  refreshAll();
+  renderInscription(inscWrap, examineGuid);
+  // Not everything answers an appraisal (scenery, some statics) — don't
+  // leave "Appraising…" up forever.
+  const pendingTimer = setTimeout(() => {
+    if (!readAppraisal(examineGuid)) pending.style.display = "none";
+  }, 6000);
+
+  // EX-05 (2026-06-05) — ask for the AppraisalProfile; `objectAppraised`
+  // re-renders when it lands. Creatures also get a QueryHealth so the
+  // meter fills before (or without) a full assess.
+  if (examineGuid) {
+    try {
+      const handle = getHandle();
+      if (handle?.requestAppraisal) handle.requestAppraisal(examineGuid >>> 0);
+      if ((model.kind === "creature" || model.kind === "player") && handle?.queryHealth) {
+        handle.queryHealth(examineGuid >>> 0);
       }
-      // HUD rec #107: drop any pending identify-retry timer so the
-      // backoff schedule doesn't outlive the panel's unmount.
+    } catch (_) {}
+  }
+
+  // Refresh inscription on bookUpdated (book panel pushes fresh
+  // BookSnapshot here) and on playerInventoryChanged (ownership).
+  const pc = window.__pluginClient ?? null;
+  const onRefresh = () => renderInscription(inscWrap, examineGuid);
+  // HUD rec #107 (2026-06-16) — RNG-based identify retry. ACE rolls
+  // an Identify skill check per Player_Skills.cs HandleIdentifyResponse;
+  // on failure the IdentifyResponse comes back with success=false and
+  // the panel shows the failure line (rec #53). Retail's
+  // awaiting_appraisal_ID gating retries automatically on failure.
+  // Mirror that with bounded backoff: 3 attempts at 5s / 10s / 20s, then
+  // give up. Any successful identify (or unmount) clears the timer.
+  const IDENTIFY_RETRY_DELAYS_MS = [5000, 10000, 20000];
+  let identifyRetryAttempt = 0;
+  let identifyRetryTimer = null;
+  const cancelIdentifyRetry = () => {
+    if (identifyRetryTimer !== null) {
+      clearTimeout(identifyRetryTimer);
+      identifyRetryTimer = null;
+    }
+  };
+  const scheduleIdentifyRetry = () => {
+    if (!examineGuid) return;
+    if (identifyRetryAttempt >= IDENTIFY_RETRY_DELAYS_MS.length) return;
+    const delay = IDENTIFY_RETRY_DELAYS_MS[identifyRetryAttempt];
+    identifyRetryAttempt++;
+    cancelIdentifyRetry();
+    identifyRetryTimer = setTimeout(() => {
+      identifyRetryTimer = null;
+      try { getHandle()?.requestAppraisal?.(examineGuid >>> 0); } catch (_) {}
+    }, delay);
+  };
+  const onAppraised = (ev) => {
+    const guid = (ev?.detail?.u32Payload ?? 0) >>> 0;
+    if (!examineGuid || guid !== (examineGuid >>> 0)) return;
+    const wasCreature = model.kind === "creature" || model.kind === "player";
+    refreshAll();
+    renderInscription(inscWrap, examineGuid);
+    // A late appraisal can reveal a creature the spawn data didn't flag.
+    if (!wasCreature && (model.kind === "creature" || model.kind === "player") && !paperdollViewport) {
+      onAppearanceRefresh();
+    }
+    const snap = readAppraisal(guid);
+    if (snap?.identifySuccess === false) {
+      scheduleIdentifyRetry();
+    } else if (snap) {
       cancelIdentifyRetry();
-      if (paperdollViewport) {
-        try { paperdollViewport.dispose(); } catch (_) {}
-        paperdollViewport = null;
-      }
-      root.remove();
-    };
+      identifyRetryAttempt = 0;
+    }
+  };
+  // QueryHealth reply / damage broadcast (target-bar's F10-1 channel).
+  const onEntityHealth = (ev) => {
+    const d = ev?.detail ?? ev ?? {};
+    if (!examineGuid || ((d.guid ?? 0) >>> 0) !== examineGuid) return;
+    if (!Number.isFinite(d.fraction)) return;
+    model.healthFraction = d.fraction;
+    renderHeader(refs, model, readAppraisal(examineGuid));
+  };
+  // Wave 3.B — refresh the paperdoll when the examined entity's
+  // appearance changes (e.g. NPC equips a new item via ACE's
+  // applyAppearance broadcast).
+  const onAppearanceRefresh = () => {
+    if (!examineGuid || ctx?.fromInventory) return;
+    if (!(model.kind === "creature" || model.kind === "player")) return;
+    // Tear down + rebuild the viewport so the new substitutions land.
+    // PaperdollViewport's _lastLoadKey debounce will no-op when
+    // nothing meaningful changed.
+    if (paperdollViewport) {
+      try { paperdollViewport.dispose(); } catch (_) {}
+      paperdollViewport = null;
+    }
+    paperdollWrap.style.display = "";
+    paperdollViewport = renderEntityPaperdoll(paperdollWrap, examineGuid);
+  };
+  if (pc?.events?.on) {
+    pc.events.on("bookUpdated", onRefresh);
+    pc.events.on("playerInventoryChanged", onRefresh);
+    pc.events.on("entityAppearanceChanged", onAppearanceRefresh);
+    pc.events.on("objectAppraised", onAppraised);
+    pc.events.on("entityHealthUpdated", onEntityHealth);
+  }
+
+  return () => {
+    if (pc?.events?.off) {
+      try { pc.events.off("bookUpdated", onRefresh); } catch (_) {}
+      try { pc.events.off("playerInventoryChanged", onRefresh); } catch (_) {}
+      try { pc.events.off("entityAppearanceChanged", onAppearanceRefresh); } catch (_) {}
+      try { pc.events.off("objectAppraised", onAppraised); } catch (_) {}
+      try { pc.events.off("entityHealthUpdated", onEntityHealth); } catch (_) {}
+    }
+    // HUD rec #107: drop any pending identify-retry timer so the
+    // backoff schedule doesn't outlive the panel's unmount.
+    cancelIdentifyRetry();
+    clearTimeout(pendingTimer);
+    if (paperdollViewport) {
+      try { paperdollViewport.dispose(); } catch (_) {}
+      paperdollViewport = null;
+    }
+    root.remove();
+  };
 }
 
 // View interface — registered with main-panel under id "examine".
@@ -1407,7 +1243,9 @@ export function mountExamineBody(parentEl, ctx) {
 export const view = {
   name: "Examine",
   nameFor: examineTitleFor,
-  mount: (parentEl, ctx) => mountExamineBody(parentEl, ctx),
+  mount: (parentEl, ctx) => mountExamineBody(parentEl, ctx, {
+    setTitle: (text) => window.__mainPanel?.setTitle?.(text),
+  }),
 };
 
 // Selection-poll module: watches getSelectedTarget() and pushes the

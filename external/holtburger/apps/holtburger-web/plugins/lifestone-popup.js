@@ -38,6 +38,13 @@
 // `decideLifestoneAction` + `nextStateForAction` cover all 5
 // transitions without DOM. Manifest shape is also asserted.
 
+// HUD overhaul 2026-10-05 — wears the shared retail DialogBox chrome
+// (`.hb-dlg`, plugins/modal-dialog.js) with kit buttons; keyboard: Esc
+// cancels, ↑/↓ walk Bind / Recall / Cancel, Enter activates the
+// highlighted choice (the first Enter just highlights "Bind" — nothing is
+// pre-focused, so Space-to-jump can never bind by accident).
+import { ensureDialogChromeStyles } from "./modal-dialog.js";
+
 const OVERLAY_ID = "hb-lifestone-popup";
 const STYLE_ID = "hb-lifestone-popup-style";
 
@@ -139,90 +146,30 @@ export const manifest = {
 // ─── DOM helpers ─────────────────────────────────────────────────
 function ensureStyles() {
   if (typeof document === "undefined") return;
+  ensureDialogChromeStyles();
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      left: 50%;
-      top: 38%;
-      transform: translate(-50%, -50%);
-      z-index: 60;
-      min-width: 240px;
-      padding: 14px 18px 12px 18px;
-      background: rgba(20, 14, 8, 0.96);
-      border: 1px solid var(--hb-border-brass, #b08a4a);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
-      font-family: var(--hb-font-serif, serif);
-      color: var(--hb-text-cream, #e8d8b0);
-      pointer-events: auto;
-      display: none;
-    }
-    #${OVERLAY_ID}[data-open="1"] { display: block; }
-    #${OVERLAY_ID} .hb-lifestone-title {
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--hb-text-gold, #d4af37);
-      margin: 0 0 8px 0;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--hb-border-brass-dim, rgba(176, 138, 74, 0.4));
-      text-align: center;
-    }
+    #${OVERLAY_ID} { z-index: 60; min-width: 250px; max-width: min(300px, calc(94 * var(--hb-hud-vw, 1vw))); }
     #${OVERLAY_ID} .hb-lifestone-row {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      margin-bottom: 10px;
+      align-items: stretch;
+      gap: 2px;
     }
-    #${OVERLAY_ID} button.hb-lifestone-btn {
-      display: block;
-      width: 100%;
-      padding: 6px 10px;
-      background: linear-gradient(180deg, rgba(60, 44, 24, 0.9) 0%, rgba(40, 28, 16, 0.9) 100%);
-      border: 1px solid var(--hb-border-brass, #b08a4a);
-      color: var(--hb-text-cream, #e8d8b0);
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      text-align: left;
-    }
-    #${OVERLAY_ID} button.hb-lifestone-btn:hover {
-      background: linear-gradient(180deg, rgba(80, 60, 30, 0.95) 0%, rgba(55, 40, 22, 0.95) 100%);
-      color: var(--hb-text-gold, #d4af37);
-    }
-    #${OVERLAY_ID} button.hb-lifestone-btn .hb-lifestone-hint {
-      display: block;
-      font-size: 10px;
-      color: var(--hb-text-muted-3, #a08868);
-      margin-top: 2px;
-    }
-    #${OVERLAY_ID} .hb-lifestone-cancel {
-      display: block;
-      width: 100%;
-      padding: 4px 8px;
-      background: rgba(40, 30, 18, 0.7);
-      border: 1px solid var(--hb-border-brass-dim, rgba(176, 138, 74, 0.4));
-      color: var(--hb-text-muted-3, #a08868);
-      font-family: inherit;
+    #${OVERLAY_ID} .hb-lifestone-btn { width: 100%; justify-content: center; }
+    #${OVERLAY_ID} .hb-lifestone-btn:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 1px; }
+    #${OVERLAY_ID} .hb-lifestone-hint {
+      margin: 0 0 6px;
+      color: var(--hbk-text-dim, #a8a090);
       font-size: 11px;
-      cursor: pointer;
       text-align: center;
     }
-    #${OVERLAY_ID} .hb-lifestone-cancel:hover {
-      color: var(--hb-text-cream, #e8d8b0);
-      border-color: var(--hb-border-brass, #b08a4a);
-    }
+    #${OVERLAY_ID} .hb-dlg-actions { margin-top: 4px; }
+    #${OVERLAY_ID} .hb-lifestone-cancel:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 1px; }
     /* HUD rec #56 — Sanctuary bind status line. */
-    #${OVERLAY_ID} .hb-lifestone-sanctuary-status {
-      font-size: 11px;
-      font-style: italic;
-      color: var(--hb-text-muted-3, #a08868);
-      text-align: center;
-      margin: 0 0 10px 0;
-      line-height: 1.3;
-    }
+    #${OVERLAY_ID} .hb-lifestone-sanctuary-status { line-height: 1.3; }
   `;
   document.head.appendChild(s);
 }
@@ -242,21 +189,26 @@ export function mount(ctx) {
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  overlay.className = "hb-dlg";
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-label", "Lifestone actions");
   overlay.setAttribute("data-open", "0");
 
   const title = document.createElement("div");
-  title.className = "hb-lifestone-title";
+  title.className = "hb-dlg-title hb-lifestone-title";
   title.textContent = "Lifestone";
   overlay.appendChild(title);
+
+  const divider = document.createElement("div");
+  divider.className = "hbk-divider";
+  overlay.appendChild(divider);
 
   // HUD rec #56 — Sanctuary bind status line. Reads the SessionHandle's
   // playerSanctuary() snapshot (refreshed by the recv loop on each Sanctuary
   // PrivateUpdatePosition) and shows the bound town + coords, or a
   // not-yet-bound fallback. Refreshed on mount and on every lifestone click.
   const sanctuaryStatus = document.createElement("div");
-  sanctuaryStatus.className = "hb-lifestone-sanctuary-status";
+  sanctuaryStatus.className = "hb-dlg-sub hb-lifestone-sanctuary-status";
   overlay.appendChild(sanctuaryStatus);
 
   function refreshSanctuaryStatus() {
@@ -275,30 +227,32 @@ export function mount(ctx) {
   const row = document.createElement("div");
   row.className = "hb-lifestone-row";
 
-  const bindBtn = document.createElement("button");
-  bindBtn.type = "button";
-  bindBtn.className = "hb-lifestone-btn";
-  bindBtn.dataset.action = "bind";
-  bindBtn.innerHTML =
-    `Bind here<span class="hb-lifestone-hint">Set this lifestone as your Sanctuary</span>`;
-
-  const recallBtn = document.createElement("button");
-  recallBtn.type = "button";
-  recallBtn.className = "hb-lifestone-btn";
-  recallBtn.dataset.action = "recall";
-  recallBtn.innerHTML =
-    `Recall to bound location<span class="hb-lifestone-hint">Teleport to your attuned Sanctuary</span>`;
-
-  row.appendChild(bindBtn);
-  row.appendChild(recallBtn);
+  const mkChoice = (action, label, hint) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hbk-btn hb-lifestone-btn";
+    btn.dataset.action = action;
+    btn.textContent = label;
+    const h = document.createElement("div");
+    h.className = "hb-lifestone-hint";
+    h.textContent = hint;
+    row.appendChild(btn);
+    row.appendChild(h);
+    return btn;
+  };
+  const bindBtn = mkChoice("bind", "Bind here", "Set this lifestone as your sanctuary.");
+  const recallBtn = mkChoice("recall", "Recall to lifestone", "Return to the lifestone you are bound to.");
   overlay.appendChild(row);
 
+  const actions = document.createElement("div");
+  actions.className = "hb-dlg-actions";
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
-  cancelBtn.className = "hb-lifestone-cancel";
+  cancelBtn.className = "hbk-btn-small hbk-brown hb-lifestone-cancel";
   cancelBtn.dataset.action = "cancel";
   cancelBtn.textContent = "Cancel";
-  overlay.appendChild(cancelBtn);
+  actions.appendChild(cancelBtn);
+  overlay.appendChild(actions);
 
   document.body.appendChild(overlay);
 
@@ -316,9 +270,26 @@ export function mount(ctx) {
     }
   }
 
+  let restoreFocusEl = null;
   function applyState(next) {
+    const wasOpen = state.kind === "open";
     state = next;
-    overlay.setAttribute("data-open", state.kind === "open" ? "1" : "0");
+    const open = state.kind === "open";
+    overlay.setAttribute("data-open", open ? "1" : "0");
+    if (wasOpen && !open) {
+      // Hand focus back (or drop it) so game keys work again.
+      const r = restoreFocusEl;
+      restoreFocusEl = null;
+      try {
+        if (r && r.isConnected) r.focus({ preventScroll: true });
+        else if (overlay.contains(document.activeElement)) document.activeElement.blur();
+      } catch (_) {}
+    } else if (!wasOpen && open) {
+      try {
+        const ae = document.activeElement;
+        restoreFocusEl = (ae && ae !== document.body && !overlay.contains(ae)) ? ae : null;
+      } catch (_) { restoreFocusEl = null; }
+    }
   }
 
   function handle(event) {
@@ -343,14 +314,33 @@ export function mount(ctx) {
   recallBtn.addEventListener("click", () => handle({ type: "recall" }));
   cancelBtn.addEventListener("click", () => handle({ type: "cancel" }));
 
-  // Escape key → cancel.
+  // Keyboard (capture phase so these keys don't also drive the game):
+  // Esc → cancel; ↑/↓ walk the three buttons; Enter activates the focused
+  // one, or highlights "Bind here" first when nothing is focused yet.
+  const choices = [bindBtn, recallBtn, cancelBtn];
   function onKeyDown(ev) {
-    if (state.kind === "open" && ev.key === "Escape") {
+    if (state.kind !== "open") return;
+    if (ev.key === "Escape") {
       ev.preventDefault();
+      ev.stopPropagation();
       handle({ type: "cancel" });
+      return;
+    }
+    const idx = choices.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const step = ev.key === "ArrowDown" ? 1 : -1;
+      const next = idx < 0 ? (step > 0 ? 0 : choices.length - 1) : (idx + step + choices.length) % choices.length;
+      try { choices[next].focus({ preventScroll: true }); } catch (_) {}
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (idx < 0) { try { bindBtn.focus({ preventScroll: true }); } catch (_) {} return; }
+      choices[idx].click();
     }
   }
-  document.addEventListener("keydown", onKeyDown);
+  document.addEventListener("keydown", onKeyDown, true);
 
   // Outside-click → cancel. Attached to document but only acts when
   // open and the click was outside the popup.
@@ -385,7 +375,7 @@ export function mount(ctx) {
   // Cleanup.
   return () => {
     if (busForCleanup?.off) try { busForCleanup.off("lifestoneClicked", onLifestoneClicked); } catch (_) {}
-    document.removeEventListener("keydown", onKeyDown);
+    document.removeEventListener("keydown", onKeyDown, true);
     document.removeEventListener("click", onDocClick, true);
     overlay.remove();
   };

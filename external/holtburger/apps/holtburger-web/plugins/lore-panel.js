@@ -1,4 +1,5 @@
-// Personal Library panel — HUD rec #181 (2026-06-16).
+// Personal Library panel — HUD rec #181 (2026-06-16); restyled on the
+// hud_kit vocabulary in the HUD overhaul 2026-10-05 (Shift+F8).
 //
 // SPEC PREMISE WAS BROKEN: the rec cited gmPageListUI (acclient.h:56020) as a
 // "lore entry catalog", but gmPageListUI is the journal page-LIST UI
@@ -15,14 +16,21 @@
 // already-wired book pipeline (handle.bookData(guid) → bookUpdated →
 // handle.playerBook()). JS-only — every wasm surface used here already ships.
 //
+// Layout (2026-10-05): kit search field, a rope-scroll title list, the
+// retail gold spacer, and the selected book's pages on the same parchment
+// (0x0600126F) the journal uses — reading a book reads like the book panel.
+//
 // Honest limitations: discovery is per-machine (localStorage, not server-side);
 // page text is only available while the item is actually held (bookData needs a
 // live guid); there is no way to show lore the player has never held.
 
-import { setAcText } from "../ui/ac_font.js";
+import {
+  ensureSocialStyles, el, makeSpacer, makeColHead, makeListRow, setRowSelected, onBus,
+} from "./social-panel.js";
 
 const LS_KEY = "hb.lore.discovered.v1";
 const ITEM_TYPE_WRITABLE = 0x2000;
+const SP = "./data/ui-sprites";
 
 // ─── Pure library accumulation (exported for tests) ──────────────────────
 /**
@@ -100,31 +108,37 @@ function fetchInventory() {
 
 let stylesInjected = false;
 function ensureStyles() {
+  ensureSocialStyles();
   if (stylesInjected || typeof document === "undefined") return;
   stylesInjected = true;
   const s = document.createElement("style");
   s.id = "hb-lore-panel-style";
   s.textContent = `
-    .hb-lore-root { position: absolute; inset: 0; display: flex; flex-direction: column;
-      font-family: var(--hb-font-serif, serif); color: var(--hb-text-cream, #e8d8b0); padding: 6px; box-sizing: border-box; }
-    .hb-lore-title { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
-      color: var(--hb-text-gold, #d4af37); text-align: center; margin-bottom: 6px;
-      border-bottom: 1px solid var(--hb-border-brass-dim, rgba(176,138,74,0.4)); padding-bottom: 4px; }
-    .hb-lore-search { width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 3px 6px;
-      background: rgba(20,14,8,0.8); border: 1px solid var(--hb-border-brass-dim, rgba(176,138,74,0.4));
-      color: var(--hb-text-cream, #e8d8b0); font-family: inherit; font-size: 11px; }
-    .hb-lore-list { flex: 1 1 50%; overflow-y: auto; border: 1px solid var(--hb-border-brass-dim, rgba(176,138,74,0.4)); }
-    .hb-lore-row { padding: 3px 6px; cursor: pointer; font-size: 11px; border-bottom: 1px solid rgba(176,138,74,0.15);
-      display: flex; justify-content: space-between; gap: 6px; }
-    .hb-lore-row:hover { background: rgba(80,60,30,0.5); }
-    .hb-lore-row.selected { background: rgba(100,76,38,0.6); color: var(--hb-text-gold, #d4af37); }
-    .hb-lore-row-when { color: var(--hb-text-muted-3, #a08868); font-size: 9px; white-space: nowrap; }
-    .hb-lore-detail { flex: 1 1 50%; overflow-y: auto; margin-top: 6px; padding: 6px;
-      background: rgba(20,14,8,0.6); border: 1px solid var(--hb-border-brass-dim, rgba(176,138,74,0.4)); font-size: 11px; line-height: 1.35; }
-    .hb-lore-detail-h { color: var(--hb-text-gold, #d4af37); margin-bottom: 4px; }
-    .hb-lore-detail-meta { color: var(--hb-text-muted-3, #a08868); font-style: italic; font-size: 10px; margin-bottom: 6px; }
-    .hb-lore-empty { color: var(--hb-text-muted-3, #a08868); font-style: italic; text-align: center; padding: 10px; font-size: 11px; }
-    .hb-lore-foot { color: var(--hb-text-muted-3, #a08868); font-size: 9px; text-align: center; margin-top: 4px; }
+    .hb-lore-root {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; gap: 3px;
+      padding: 6px 6px 5px; box-sizing: border-box;
+      font-family: var(--hbk-font); font-size: 12px; color: var(--hbk-text);
+      background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
+    }
+    .hb-lore-search { flex: 0 0 auto; width: 100%; height: 22px; }
+    .hb-lore-list { flex: 1 1 42%; min-height: 60px; }
+    .hb-lore-detail {
+      flex: 1 1 58%; min-height: 60px;
+      padding: 6px 9px; box-sizing: border-box;
+      color: #2a1a08; line-height: 1.35;
+      background: url("${SP}/0x0600126F.png") center / 265px 100px repeat;
+      border: 1px solid #000;
+      box-shadow: inset 0 0 6px rgba(60, 35, 10, 0.55);
+      scrollbar-color: rgba(90, 58, 24, 0.7) transparent;
+      user-select: text;
+    }
+    .hb-lore-detail-h { font-size: 13px; font-weight: 600; color: #6b3a0a; margin-bottom: 2px; }
+    .hb-lore-detail-meta { color: #5a3a18; font-style: italic; font-size: 11px; margin-bottom: 6px; }
+    .hb-lore-page { white-space: pre-wrap; margin-bottom: 8px; }
+    .hb-lore-page + .hb-lore-page { border-top: 1px solid rgba(80, 50, 20, 0.25); padding-top: 6px; }
+    .hb-lore-note { color: #5a3a18; font-style: italic; text-align: center; padding: 12px 6px; }
+    .hb-lore-foot { flex: 0 0 auto; text-align: center; font-size: 11px; color: var(--hbk-text-dim); }
   `;
   document.head.appendChild(s);
 }
@@ -132,36 +146,27 @@ function ensureStyles() {
 export const view = {
   name: "Library",
   nameFor: () => "Personal Library",
-  mount: (parentEl, ctx) => {
+  mount: (parentEl, _ctx) => {
     if (typeof document === "undefined") return () => {};
     ensureStyles();
 
-    const root = document.createElement("div");
-    root.className = "hb-lore-root";
-
-    const title = document.createElement("div");
-    title.className = "hb-lore-title";
-    setAcText(title, "Personal Library");
-    root.appendChild(title);
-
+    const root = el("div", "hb-lore-root");
     const search = document.createElement("input");
     search.type = "text";
-    search.className = "hb-lore-search";
+    search.className = "hbk-input hb-lore-search";
     search.placeholder = "Search your books & scrolls…";
+    search.setAttribute("aria-label", "Search your library");
     root.appendChild(search);
-
-    const list = document.createElement("div");
-    list.className = "hb-lore-list";
+    root.appendChild(makeColHead("Title", "First Seen"));
+    const list = el("div", "hbk-scroll hbk-list hb-soc-list hb-lore-list");
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Books and scrolls");
     root.appendChild(list);
-
-    const detail = document.createElement("div");
-    detail.className = "hb-lore-detail";
+    root.appendChild(makeSpacer());
+    const detail = el("div", "hbk-scroll hb-lore-detail");
     root.appendChild(detail);
-
-    const foot = document.createElement("div");
-    foot.className = "hb-lore-foot";
+    const foot = el("div", "hb-lore-foot");
     root.appendChild(foot);
-
     parentEl.appendChild(root);
 
     let library = loadLibrary();
@@ -187,99 +192,68 @@ export const view = {
     }
 
     function renderDetail() {
-      detail.innerHTML = "";
+      detail.textContent = "";
       if (!selectedWcid) {
-        const e = document.createElement("div");
-        e.className = "hb-lore-empty";
-        setAcText(e, "Select a book to read it.");
-        detail.appendChild(e);
+        detail.appendChild(el("div", "hb-lore-note", library.size ? "Select a book to read it." : "Books and scrolls you carry are added here automatically."));
         return;
       }
       const entry = library.get(selectedWcid >>> 0);
       if (!entry) return;
-      const h = document.createElement("div");
-      h.className = "hb-lore-detail-h";
-      setAcText(h, entry.name || `Item ${entry.wcid}`);
-      detail.appendChild(h);
+      detail.appendChild(el("div", "hb-lore-detail-h", entry.name || `Item ${entry.wcid}`));
 
       const handle = getHandle();
-      const book = (typeof handle?.playerBook === "function") ? (() => { try { return handle.playerBook(); } catch (_) { return null; } })() : null;
-      const haveBook = book && (book.objectGuid >>> 0) === (pendingBookGuid >>> 0) && pendingBookGuid;
+      let book = null;
+      try { book = typeof handle?.playerBook === "function" ? handle.playerBook() : null; } catch (_) {}
+      const haveBook = !!(book && pendingBookGuid && (book.objectGuid >>> 0) === (pendingBookGuid >>> 0));
 
-      const meta = document.createElement("div");
-      meta.className = "hb-lore-detail-meta";
-      if (haveBook && (book.authorName || book.inscription)) {
-        const bits = [];
-        if (book.inscription) bits.push(`Inscription: ${book.inscription}`);
-        if (book.authorName) bits.push(`Scribe: ${book.authorName}`);
-        setAcText(meta, bits.join("  ·  "));
-      } else {
-        setAcText(meta, `First seen ${(entry.firstSeenIso || "").slice(0, 10) || "—"}`);
-      }
-      detail.appendChild(meta);
+      const bits = [];
+      if (haveBook && book.inscription) bits.push(`Inscription: ${book.inscription}`);
+      if (haveBook && book.authorName) bits.push(`Scribe: ${book.authorName}`);
+      if (!bits.length) bits.push(`First seen ${(entry.firstSeenIso || "").slice(0, 10) || "—"}`);
+      detail.appendChild(el("div", "hb-lore-detail-meta", bits.join("  ·  ")));
 
       if (haveBook && Array.isArray(book.pages) && book.pages.length) {
-        for (const p of book.pages) {
-          const pg = document.createElement("div");
-          pg.style.marginBottom = "8px";
-          pg.style.whiteSpace = "pre-wrap";
-          pg.textContent = p.text || "";
-          detail.appendChild(pg);
-        }
+        for (const p of book.pages) detail.appendChild(el("div", "hb-lore-page", p.text || ""));
       } else {
-        const note = document.createElement("div");
-        note.className = "hb-lore-empty";
-        const held = heldGuidFor(selectedWcid);
-        setAcText(note, held
-          ? "Opening… (fetching pages from the server)"
-          : "Page text is only available while you are holding this item.");
-        detail.appendChild(note);
+        detail.appendChild(el("div", "hb-lore-note", heldGuidFor(selectedWcid)
+          ? "Opening the book…"
+          : "You can read this book's pages while you carry it."));
       }
     }
 
     function renderList() {
-      list.innerHTML = "";
+      list.textContent = "";
       const q = filterText.trim().toLowerCase();
       const entries = [...library.values()]
         .filter((e) => !q || (e.name || "").toLowerCase().includes(q))
         .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
       if (!entries.length) {
-        const e = document.createElement("div");
-        e.className = "hb-lore-empty";
-        setAcText(e, q ? "No books match your search."
-          : "Your library is empty. Pick up a book or scroll to add it.");
-        list.appendChild(e);
-      } else {
-        for (const entry of entries) {
-          const row = document.createElement("div");
-          row.className = "hb-lore-row";
-          if ((entry.wcid >>> 0) === (selectedWcid >>> 0)) row.classList.add("selected");
-          const nameEl = document.createElement("span");
-          setAcText(nameEl, entry.name || `Item ${entry.wcid}`);
-          const whenEl = document.createElement("span");
-          whenEl.className = "hb-lore-row-when";
-          setAcText(whenEl, (entry.firstSeenIso || "").slice(0, 10));
-          row.appendChild(nameEl);
-          row.appendChild(whenEl);
-          row.addEventListener("click", () => {
-            selectedWcid = entry.wcid >>> 0;
-            // If the item is currently held, request its pages.
-            const guid = heldGuidFor(selectedWcid);
-            const handle = getHandle();
-            if (guid && typeof handle?.bookData === "function") {
-              pendingBookGuid = guid;
-              try { handle.bookData(guid); } catch (_) { /* fetch failed → metadata only */ }
-            } else {
-              pendingBookGuid = 0;
-            }
-            renderList();
-            renderDetail();
-          });
-          list.appendChild(row);
-        }
+        list.appendChild(el("div", "hbk-empty", q
+          ? "No books match your search."
+          : "Your library is empty. Pick up a book or scroll to add it."));
+      }
+      for (const entry of entries) {
+        const row = makeListRow(entry.name || `Item ${entry.wcid}`, (entry.firstSeenIso || "").slice(0, 10), {
+          selected: (entry.wcid >>> 0) === (selectedWcid >>> 0),
+        });
+        row.addEventListener("click", () => {
+          selectedWcid = entry.wcid >>> 0;
+          setRowSelected(list, row);
+          // If the item is currently held, request its pages.
+          const guid = heldGuidFor(selectedWcid);
+          const handle = getHandle();
+          if (guid && typeof handle?.bookData === "function") {
+            pendingBookGuid = guid;
+            try { handle.bookData(guid); } catch (_) { /* fetch failed → metadata only */ }
+          } else {
+            pendingBookGuid = 0;
+          }
+          renderDetail();
+        });
+        list.appendChild(row);
       }
       const total = library.size;
-      setAcText(foot, `${total} item${total === 1 ? "" : "s"} · synthesized client-side catalog (per-machine)`);
+      foot.textContent = total ? `${total} book${total === 1 ? "" : "s"} and scroll${total === 1 ? "" : "s"} collected` : "";
     }
 
     function rerender() { renderList(); renderDetail(); }
@@ -290,21 +264,13 @@ export const view = {
     rerender();
 
     // Refresh on inventory changes (new writables) + book responses.
-    const bus = ctx?.client?.events
-      ?? (typeof window !== "undefined" ? window.__pluginClient?.events : null)
-      ?? null;
-    const onInventory = () => { syncFromInventory(); rerender(); };
-    const onBook = () => { renderDetail(); };
-    if (bus && typeof bus.on === "function") {
-      bus.on("playerInventoryChanged", onInventory);
-      bus.on("bookUpdated", onBook);
-    }
+    const offs = [
+      onBus("playerInventoryChanged", () => { syncFromInventory(); rerender(); }),
+      onBus("bookUpdated", () => { renderDetail(); }),
+    ];
 
     return () => {
-      if (bus && typeof bus.off === "function") {
-        try { bus.off("playerInventoryChanged", onInventory); } catch (_) {}
-        try { bus.off("bookUpdated", onBook); } catch (_) {}
-      }
+      for (const off of offs) { try { off(); } catch (_) {} }
       root.remove();
     };
   },
@@ -315,6 +281,6 @@ export const manifest = {
   name: "Library",
   icon: "📚",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Personal Library (synthesized client-side writable-item catalog — HUD rec #181)",
 };

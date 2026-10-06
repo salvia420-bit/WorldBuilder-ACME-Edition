@@ -136,15 +136,17 @@ function check(name, fn) {
     const r = formatBurdenText(0.45);
     assert.deepStrictEqual(r, { text: '45%', over: false });
   });
-  check('0.853 → 85% (rounds half-away-from-zero)', () => {
-    // Math.round half-to-even is false; JS uses half-away-from-zero
-    // and 0.853 * 100 = 85.3 which rounds to 85.
+  check('0.853 → 85% (floored)', () => {
+    // 0.853 * 100 = 85.3 → floor 85 (retail SetLoadLevel).
     const r = formatBurdenText(0.853);
     assert.deepStrictEqual(r, { text: '85%', over: false });
   });
-  check('0.999 → 100% (just below cap, NOT over)', () => {
+  // HUD overhaul 2026-10-05: retail gmBackpackUI::SetLoadLevel
+  // (acclient.c:222634) FLOORS the percent — 0.999 reads "99%", never a
+  // premature "100%".
+  check('0.999 → 99% (just below cap, NOT over — retail floors)', () => {
     const r = formatBurdenText(0.999);
-    assert.deepStrictEqual(r, { text: '100%', over: false });
+    assert.deepStrictEqual(r, { text: '99%', over: false });
   });
   check('1.0 → 100% AND over (at-cap is over)', () => {
     const r = formatBurdenText(1.0);
@@ -156,6 +158,10 @@ function check(name, fn) {
   });
   check('3.0 → 300% over (extreme over-encumbered)', () => {
     const r = formatBurdenText(3.0);
+    assert.deepStrictEqual(r, { text: '300%', over: true });
+  });
+  check('4.2 → 300% (retail caps the readout at 300%)', () => {
+    const r = formatBurdenText(4.2);
     assert.deepStrictEqual(r, { text: '300%', over: true });
   });
 

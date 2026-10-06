@@ -1,485 +1,399 @@
-// Wave F.6 (2026-05-27) — Emote Panel plugin.
+// Emote palette — a main-panel view (Shift+F2) of the retail soul emotes.
 //
-// Categorized emote picker built atop the wasm `getEmoteTaxonomy()`
-// export. Bridges the gap between Wave 9.5's narrow ChatPoseTable
-// soul-emote slash commands (303 user-facing pose tokens) and the
-// broader CEmoteTable wire taxonomy (39 categories × 122 action types).
+// HUD overhaul 2026-10-05 — why the old palette showed "0 of 0 actions":
+// it rendered `handle.getEmoteTaxonomy()`, which (a) crosses the wasm
+// boundary via serde_wasm_bindgen::to_value(serde_json::Value), so the
+// object arrives as a JS **Map** and `tax.types` was undefined → the view
+// never cached a taxonomy and rendered its empty state; and (b) even when
+// read correctly it is the wrong data — the 122 server-side EmoteType
+// script opcodes NPC weenies use (AwardXP, InqQuest, SetIntStat…), none of
+// which a player can perform.
 //
-// Architecture:
+// What players actually have is retail's soul-emote set: the DAT
+// ChatPoseTable (0x0E000007, 309 tokens → 74 poses; `/wave`, `/bow`,
+// `/sit` …; ACE Entity/SoulEmote.cs lists the same 74 MotionCommands).
+// This palette groups those poses the way players think about them, one
+// click per emote. Dispatch goes through the SAME path as typing the
+// slash command in chat (`window.__routeSlashCommand`, app/
+// slash_commands.js → resolveSoulEmote → sendSoulEmote (0x01E1) +
+// broadcastEmoteMotion + local motion prediction), so the panel can never
+// drift from chat behaviour. Tokens with a space (e.g. "warm hands") use
+// the same wasm calls directly. The free-text box at the bottom is
+// retail's `/me` (GameAction Emote 0x01DF).
 //
-//   * Wave 9.5 SoulEmoteCatalog → `handle.resolveSoulEmote(token)` →
-//     `handle.sendSoulEmote(text) + handle.broadcastEmoteMotion(motion)`.
-//     Lives in chat-panel's slash-command parser. Already shipped.
-//
-//   * Wave F.6 emote-panel (this file) → categorized UI palette
-//     surfacing the FULL EmoteType discriminant table per
-//     external/chorizite/Chorizite.Common/Enums/EmoteType.cs.
-//     Hover → tooltip with field-shape; click → dispatches via the
-//     existing Wave 9.5 wire path when the action is user-firable.
-//
-// The panel surfaces categories grouped under "Common" (vendor/death/
-// hear-chat/give/wield/etc., the 13 most-used in retail vendor weenies)
-// vs "All" (the full 39). Click an action → dispatches the matching
-// `/<token>` soul emote if one exists, or fires a system-only chat line
-// for action types that aren't user-firable (e.g. AwardXP, EraseQuest).
-//
-// References:
-//   * external/chorizite/Chorizite.Common/Enums/EmoteCategory.cs
-//   * external/chorizite/Chorizite.Common/Enums/EmoteType.cs
-//   * external/chorizite/Chorizite.ACProtocol/Types/Emote.generated.cs
-//   * apps/holtburger-web/src/lib.rs (getEmoteTaxonomy wasm export)
-//
-// Hotkey: Shift+F2 — declared in `emote-panel.manifest.json` and routed
-// via the manifest-hotkey path in index.html (Polish B's `matchHotkeyEvent`
-// dispatcher → `__mainPanel.toggleView("emote")`). The legacy
-// `window.__toggleEmotePanel` global was removed in Wave J1.A (2026-05-27)
-// as part of the orphan-hotkey cleanup: there were no remaining callers
-// after Polish B's manifest path took over, and a `FKEY_SHIFT_TOGGLES[F2]`
-// entry was never wired in index.html (Polish B audit finding).
+// Kit chrome: hbk-input filter, hbk-section-title categories, hbk-row
+// is-clickable entries in a two-column grid, hbk-scroll list.
 
-const PANEL_ID = "hb-emote-panel";
+import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
+
+const STYLE_ID = "hb-emote-panel-style";
+const SP = "./data/ui-sprites";
+
+// Token = the ChatPoseTable key (verified against the DAT 2026-10-05).
+// `pose` = the ChatPoseTable pose (ACE MotionCommand name), kept for
+// tests/tooltips. `held` marks *State poses that persist until you move.
+export const EMOTE_CATALOG = Object.freeze([
+  { category: "Greetings", items: [
+    { label: "Wave", token: "wave", pose: "Wave" },
+    { label: "Wave High", token: "wavehigh", pose: "WaveHigh" },
+    { label: "Wave Low", token: "wavelow", pose: "WaveLow" },
+    { label: "Waving", token: "waving", pose: "WaveState", held: true },
+    { label: "Beckon", token: "beckon", pose: "Beckon" },
+    { label: "Be Seeing You", token: "beseeingyou", pose: "BeSeeingYou" },
+    { label: "Bow", token: "bow", pose: "BowDeepState", held: true },
+    { label: "Curtsey", token: "curtsey", pose: "CurtseyState", held: true },
+    { label: "Salute", token: "salute", pose: "SaluteState", held: true },
+    { label: "Blow Kiss", token: "blowkiss", pose: "BlowKiss" },
+    { label: "Nod", token: "nod", pose: "Nod" },
+    { label: "Shake Head", token: "no", pose: "ShakeHead" },
+    { label: "Helper", token: "helper", pose: "Helper" },
+    { label: "Have a Seat", token: "haveaseat", pose: "HaveASeatState", held: true },
+  ] },
+  { category: "Reactions", items: [
+    { label: "Cheer", token: "cheer", pose: "Cheer" },
+    { label: "Laugh", token: "laugh", pose: "Laugh" },
+    { label: "Hearty Laugh", token: "heartylaugh", pose: "HeartyLaugh" },
+    { label: "Mock", token: "mock", pose: "Mock" },
+    { label: "Clap", token: "clap", pose: "ClapHands" },
+    { label: "Applaud", token: "clapping", pose: "ClapHandsState", held: true },
+    { label: "Cry", token: "cry", pose: "Cry" },
+    { label: "Cringe", token: "cringe", pose: "Cringe" },
+    { label: "Shrug", token: "shrug", pose: "Shrug" },
+    { label: "Scratch Head", token: "huh?", pose: "ScratchHead" },
+    { label: "Ponder", token: "hmm", pose: "ScratchHeadState", held: true },
+    { label: "Smack Head", token: "doh", pose: "SmackHead" },
+    { label: "Shake Fist", token: "shakefist", pose: "ShakeFist" },
+    { label: "Fume", token: "shakingfist", pose: "ShakeFistState", held: true },
+    { label: "Shiver", token: "shiver", pose: "Shiver" },
+    { label: "Warm Hands", token: "warm hands", pose: "WarmHands" },
+    { label: "Yawn", token: "yawn", pose: "YawnStretch" },
+    { label: "Spit", token: "spit", pose: "Spit" },
+    { label: "Plead", token: "plead", pose: "PleadState", held: true },
+    { label: "Surrender", token: "surrender", pose: "SurrenderState", held: true },
+    { label: "Tap Foot", token: "tapfoot", pose: "TapFootState", held: true },
+    { label: "Winded", token: "winded", pose: "WindedState", held: true },
+    { label: "Whoa", token: "whoa", pose: "WoahState", held: true },
+    { label: "Talk to the Hand", token: "talktothehand", pose: "TalktotheHandState", held: true },
+    { label: "Shoo", token: "shoo", pose: "Shoo" },
+  ] },
+  { category: "Pointing", items: [
+    { label: "Point", token: "point", pose: "PointState", held: true },
+    { label: "Point Left", token: "pointleft", pose: "PointLeft" },
+    { label: "Point Right", token: "pointright", pose: "PointRight" },
+    { label: "Point Down", token: "pointdown", pose: "PointDown" },
+    { label: "Nudge Left", token: "nudgeleft", pose: "NudgeLeft" },
+    { label: "Nudge Right", token: "nudgeright", pose: "NudgeRight" },
+    { label: "Scan Horizon", token: "scan", pose: "ScanHorizon" },
+    { label: "Knock", token: "knock", pose: "Knock" },
+  ] },
+  { category: "Poses", items: [
+    { label: "Sit", token: "sit", pose: "SitState", held: true },
+    { label: "Sit Back", token: "sitback", pose: "SitBackState", held: true },
+    { label: "Cross-Legged", token: "sitcrosslegged", pose: "SitCrossleggedState", held: true },
+    { label: "Kneel", token: "kneel", pose: "KneelState", held: true },
+    { label: "Pray", token: "pray", pose: "PrayState", held: true },
+    { label: "Meditate", token: "meditate", pose: "MeditateState", held: true },
+    { label: "Think", token: "think", pose: "ThinkerState", held: true },
+    { label: "Read", token: "read", pose: "ReadState", held: true },
+    { label: "Lean", token: "lean", pose: "LeanState", held: true },
+    { label: "Akimbo", token: "akimbo", pose: "AkimboState", held: true },
+    { label: "At Ease", token: "atease", pose: "AtEaseState", held: true },
+    { label: "Cross Arms", token: "crossarms", pose: "CrossArmsState", held: true },
+    { label: "Slouch", token: "slouch", pose: "SlouchState", held: true },
+    { label: "Play Dead", token: "playdead", pose: "PossumState", held: true },
+    { label: "Snow Angel", token: "snowangel", pose: "SnowAngelState", held: true },
+    { label: "Away (AFK)", token: "away", pose: "AFKState", held: true },
+  ] },
+  { category: "Fun", items: [
+    { label: "Dance", token: "dance", pose: "DrudgeDanceState", held: true },
+    { label: "Dance Step", token: "dancestep", pose: "DrudgeDance" },
+    { label: "YMCA", token: "ymca", pose: "YMCA" },
+    { label: "Teapot", token: "teapot", pose: "Teapot" },
+    { label: "Drink", token: "drink", pose: "MimeDrink" },
+    { label: "Eat", token: "eat", pose: "MimeEat" },
+    { label: "Musical Chair", token: "musicalchair", pose: "HaveASeat" },
+    { label: "ATOYOT", token: "atoyot", pose: "ATOYOT" },
+  ] },
+]);
+
+/** Case-insensitive filter over label + token; empty categories drop. */
+export function filterEmotes(catalog, text) {
+  const q = String(text ?? "").trim().toLowerCase();
+  const out = [];
+  for (const cat of catalog) {
+    const items = q
+      ? cat.items.filter((e) => e.label.toLowerCase().includes(q) || e.token.includes(q))
+      : cat.items.slice();
+    if (items.length) out.push({ category: cat.category, items });
+  }
+  return out;
+}
+
+/**
+ * Perform one emote. Returns `{ ok, echo?, error? }`.
+ *
+ * Single-word tokens go through `route(handle, "/token")` — the exact
+ * chat slash path (app/slash_commands.js routeSlashCommand). Tokens that
+ * contain a space cannot be typed as a slash command, so they replay the
+ * same three wasm calls directly: resolveSoulEmote → sendSoulEmote(other
+ * text) → broadcastEmoteMotion(motion).
+ */
+export function performEmote(entry, handle, route, predict) {
+  if (!handle) return { ok: false, error: "Enter the world to use emotes." };
+  const token = entry?.token ?? "";
+  if (!token) return { ok: false, error: "Unknown emote." };
+  // Pre-check against the DAT catalog: routeSlashCommand forwards an
+  // UNKNOWN token to the server as `@token`, which must never happen from
+  // a button (catalog not loaded yet / older client data).
+  if (typeof handle.resolveSoulEmote === "function") {
+    let probe = null;
+    try { probe = handle.resolveSoulEmote(token); } catch (_) { probe = null; }
+    const known = !!probe;
+    try { probe?.free?.(); } catch (_) {}
+    if (!known) return { ok: false, error: `${entry.label} is not available yet.` };
+  }
+  if (!/\s/.test(token) && typeof route === "function") {
+    let r;
+    try { r = route(handle, `/${token}`); } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+    if (r?.error) return { ok: false, error: r.error };
+    if (r?.dispatched) return { ok: true, echo: r.echo ?? null };
+    // Not a soul emote on this client — routeSlashCommand already sent it
+    // as a server command; report it rather than pretending.
+    return { ok: false, error: `/${token} is not available.` };
+  }
+  if (typeof handle.resolveSoulEmote !== "function") return { ok: false, error: "Emotes need a newer client build." };
+  let res = null;
+  try {
+    res = handle.resolveSoulEmote(token);
+    if (!res) return { ok: false, error: `${entry.label} is not available.` };
+    const other = res.otherEmote || token;
+    const mine = res.myEmote;
+    const motion = res.motionFull >>> 0;
+    const held = !!res.held;
+    handle.sendSoulEmote(other);
+    if (motion && typeof handle.broadcastEmoteMotion === "function") {
+      try { handle.broadcastEmoteMotion(motion); } catch (_) { /* chat already sent */ }
+    }
+    if (motion && typeof predict === "function") {
+      try { predict(motion, held); } catch (_) {}
+    }
+    return { ok: true, echo: mine ? `You ${mine}` : null };
+  } catch (e) {
+    return { ok: false, error: String(e?.message ?? e) };
+  } finally {
+    try { res?.free?.(); } catch (_) {}
+  }
+}
+
+// Local motion prediction for the direct path — the same calls
+// app/slash_commands.js makes (held *State poses loop via setMotion,
+// one-shots play via setSwingMotion).
+function predictLocal(motion, held) {
+  const em = window.liveScene3d?.entityManager;
+  const guid = typeof window.getLocalPlayerGuid === "function" ? window.getLocalPlayerGuid() : null;
+  if (!em || guid == null) return;
+  const g = guid >>> 0;
+  if (held) {
+    const NONCOMBAT_STANCE = 0x8000003D;
+    const stance = (typeof em.getStance === "function" ? em.getStance(g) >>> 0 : 0) || NONCOMBAT_STANCE;
+    em.setMotion?.(g, motion, stance);
+  } else {
+    em.setSwingMotion?.(g, motion);
+  }
+}
+
+function echo(text, category = null) {
+  try { window.__appendChatLine?.(text, category); } catch (_) {}
+}
 
 let stylesInjected = false;
-// R2 EDIT-D (BLOCKER): module-scope cache read at view-mount time (below).
-// Was referenced but never declared → strict-mode ReferenceError on first
-// mount, which main-panel swallowed as "view mount error (emote)" → blank.
-let cachedTaxonomy = null;
 function ensureStyles() {
-  if (stylesInjected) return;
+  if (stylesInjected || typeof document === "undefined") return;
+  if (document.getElementById(STYLE_ID)) { stylesInjected = true; return; }
   stylesInjected = true;
   const style = document.createElement("style");
-  style.id = "hb-emote-panel-style";
+  style.id = STYLE_ID;
   style.textContent = `
-    #${PANEL_ID} {
-      position: fixed;
-      top: 80px;
-      right: 40px;
-      width: 380px;
-      max-height: 70vh;
-      background: rgba(20, 18, 14, 0.94);
-      border: 1px solid rgba(180, 140, 80, 0.55);
-      border-radius: 4px;
-      color: #d8d2c4;
-      font-family: inherit;
-      font-size: 12px;
-      z-index: 6000;
-      display: none;
-      box-shadow: 0 4px 18px rgba(0,0,0,0.6);
+    .hb-ep-root {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; box-sizing: border-box;
+      pointer-events: auto; user-select: none; overflow: hidden;
+      color: var(--hbk-text); font-family: var(--hbk-font); font-size: 12px;
+      background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
     }
-    #${PANEL_ID}[data-open="1"] { display: flex; flex-direction: column; }
-    #${PANEL_ID} .hb-ep-title {
-      padding: 8px 12px;
-      background: linear-gradient(to bottom, rgba(80, 60, 30, 0.7), rgba(50, 40, 20, 0.7));
-      border-bottom: 1px solid rgba(180, 140, 80, 0.4);
-      font-size: 13px;
-      font-weight: 600;
-      color: #f0e6d0;
-      display: flex;
-      align-items: center;
-    }
-    #${PANEL_ID} .hb-ep-title-text { flex: 1; }
-    #${PANEL_ID} .hb-ep-close {
-      background: transparent;
-      color: #d8d2c4;
-      border: 1px solid rgba(180, 140, 80, 0.4);
-      border-radius: 3px;
-      width: 20px;
-      height: 20px;
-      cursor: pointer;
-      font-size: 12px;
-      line-height: 1;
-      padding: 0;
-    }
-    #${PANEL_ID} .hb-ep-close:hover {
-      background: rgba(180, 140, 80, 0.25);
-      border-color: rgba(220, 180, 100, 0.8);
-    }
-    #${PANEL_ID} .hb-ep-toolbar {
-      padding: 6px 10px;
-      border-bottom: 1px solid rgba(120, 100, 60, 0.3);
-      display: flex;
-      gap: 6px;
-      align-items: center;
-    }
-    #${PANEL_ID} .hb-ep-toolbar select,
-    #${PANEL_ID} .hb-ep-toolbar input[type="text"] {
-      flex: 1;
-      background: rgba(10, 10, 8, 0.7);
-      border: 1px solid rgba(120, 100, 60, 0.5);
-      color: #d8d2c4;
-      padding: 3px 6px;
-      font: inherit;
-      border-radius: 3px;
-    }
-    #${PANEL_ID} .hb-ep-toolbar label {
-      font-size: 11px;
-      color: rgba(216, 210, 196, 0.7);
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      cursor: pointer;
-      user-select: none;
-    }
-    #${PANEL_ID} .hb-ep-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 0;
-    }
-    #${PANEL_ID} .hb-ep-section {
-      border-bottom: 1px solid rgba(80, 70, 50, 0.4);
-    }
-    #${PANEL_ID} .hb-ep-section-head {
-      padding: 6px 12px;
-      background: rgba(60, 50, 30, 0.4);
-      font-weight: 600;
-      font-size: 12px;
-      color: #e8d8b0;
-      cursor: pointer;
-      user-select: none;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    #${PANEL_ID} .hb-ep-section-head:hover { background: rgba(80, 70, 40, 0.5); }
-    #${PANEL_ID} .hb-ep-section-head .hb-ep-caret { font-size: 10px; }
-    #${PANEL_ID} .hb-ep-section-head .hb-ep-count {
-      margin-left: auto;
-      font-weight: 400;
-      color: rgba(216, 210, 196, 0.5);
-      font-size: 11px;
-    }
-    #${PANEL_ID} .hb-ep-section-body {
-      padding: 4px 6px 8px 6px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-    }
-    #${PANEL_ID} .hb-ep-section[data-collapsed="1"] .hb-ep-section-body { display: none; }
-    #${PANEL_ID} .hb-ep-action {
-      padding: 4px 8px;
-      background: rgba(40, 35, 25, 0.6);
-      border: 1px solid rgba(120, 100, 60, 0.35);
-      border-radius: 3px;
-      color: #d8d2c4;
-      font-family: inherit;
-      font-size: 11px;
-      cursor: pointer;
-      text-align: left;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #${PANEL_ID} .hb-ep-action:hover {
-      background: rgba(80, 60, 30, 0.7);
-      border-color: rgba(220, 180, 100, 0.7);
-      color: #f4e8c8;
-    }
-    #${PANEL_ID} .hb-ep-action[data-dispatchable="1"] {
-      color: #f4e8c8;
-      border-color: rgba(160, 130, 70, 0.5);
-    }
-    #${PANEL_ID} .hb-ep-action[data-dispatchable="0"] {
-      color: rgba(216, 210, 196, 0.45);
-      font-style: italic;
-    }
-    #${PANEL_ID} .hb-ep-empty {
-      padding: 20px 12px;
-      text-align: center;
-      color: rgba(216, 210, 196, 0.5);
-      font-style: italic;
-    }
-    #${PANEL_ID} .hb-ep-status {
-      padding: 6px 12px;
-      border-top: 1px solid rgba(80, 70, 50, 0.5);
-      font-size: 10px;
-      color: rgba(216, 210, 196, 0.6);
-    }
+    .hb-ep-toolbar { flex: 0 0 auto; display: flex; gap: 6px; padding: 5px 8px 4px; }
+    .hb-ep-toolbar .hbk-input { flex: 1 1 auto; min-width: 0; }
+    .hb-ep-list { flex: 1 1 auto; min-height: 40px; }
+    .hb-ep-section { margin: 0; }
+    .hb-ep-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 2px; padding: 1px 2px 3px; }
+    .hb-ep-item { min-width: 0; height: 20px; box-sizing: border-box; padding: 0 6px; }
+    .hb-ep-item:nth-child(even) { background: transparent; }
+    .hb-ep-item:hover { background: var(--hbk-hover); }
+    .hb-ep-item:active { background: var(--hbk-sel); }
+    .hb-ep-item > .hbk-grow { display: flex; align-items: center; }
+    .hb-ep-held { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--hbk-gold-dim); opacity: 0.8; }
+    .hb-ep-foot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 6px; border-top: 1px solid var(--hbk-gold-deep); background: rgba(0, 0, 0, 0.35); }
+    .hb-ep-status { height: 12px; overflow: hidden; display: flex; align-items: center; }
+    .hb-ep-me { display: flex; gap: 6px; align-items: center; }
+    .hb-ep-me .hbk-input { flex: 1 1 auto; min-width: 0; }
   `;
   document.head.appendChild(style);
 }
-
-// Soul-emote token → EmoteType heuristic. Most pose tokens trigger
-// `Motion` (type 0x05); a handful (`/admit`, `/confess`, etc.) trigger
-// `Say` (type 0x08) per ACE's SoulEmote.cs. We don't load the full ACE
-// table here — Wave F.6 stretch could replace this with a map
-// generated from `external/ACE/Source/ACE.Server/Entity/SoulEmote.cs`.
-function inferSoulEmoteTypeId(tokenName) {
-  const SAY_TOKENS = new Set([
-    "admit", "confess", "duck", "duh", "no", "ok", "yes",
-    "hello", "goodbye", "thanks", "sorry", "huh", "wow",
-  ]);
-  return SAY_TOKENS.has(tokenName.toLowerCase()) ? 0x08 : 0x05;
-}
-
-// Tooltip text builder — concise summary of an action.
-function buildActionTooltip(t) {
-  const visibility = t.isUserVisible ? "user-visible" : "server-only";
-  const fieldsList = t.fields.length === 0 ? "(none)" : t.fields.join(", ");
-  return `${t.name} (0x${t.id.toString(16).padStart(2, "0")})\n`
-       + `shape: ${t.shape}\n`
-       + `fields: ${fieldsList}\n`
-       + `${visibility}`;
-}
-
-// Try to dispatch an emote action via the existing wire surface.
-// Returns { dispatched, echo, error }.
-function dispatchEmoteAction(t, ctx) {
-  const handle = ctx?.handle ?? window.__sessionHandle ?? null;
-  if (!handle) {
-    return { dispatched: false, error: "Not logged in." };
-  }
-  // Only `Motion`-type actions map onto SoulEmote / soul-emote slash
-  // (`/wave`, `/bow`, `/cheer`). Other types (`Say`, `CastSpell`, ...)
-  // either have no client-firable C2S surface (`AwardXP`, server-only)
-  // or are handled by their own UI (`CastSpell` via combat-bar magic
-  // mode, `Tell` via chat-panel's `/t name msg`, etc.).
-  if (t.id === 0x05 /* Motion */ || t.id === 0x34 /* ForceMotion */) {
-    // Map the action name to a soul-emote token. The taxonomy's
-    // `name` is something like "Motion" — that's the EmoteType
-    // discriminant name, not a specific pose. For a soul-emote
-    // catalog cross-match the user should use the slash command
-    // (`/wave`, `/bow`, etc.). We surface a hint here.
-    return {
-      dispatched: false,
-      info: `For pose emotes use slash commands in chat (e.g. /wave, /bow). Action type ${t.name} is dispatched per-pose.`,
-    };
-  }
-  if (t.id === 0x09 /* Sound */) {
-    // HUD rec #142 — local-only emote sound. ACE has no C2S "broadcast
-    // sound" GameAction (GameMessageSound 0xF750 is server-emitted only),
-    // so this plays the cue for the LOCAL player only; PVS-visible
-    // observers will NOT hear it. The panel surfaces the EmoteType
-    // taxonomy (not per-NPC emote records), so there is no specific sound
-    // bound to the generic Sound type — we play a representative cue that
-    // is verified to live in the local player's humanoid SoundTable
-    // (0x20000001). A future sound-picker could expose the full ACE Sound
-    // enum (external/melt/Source/Ace.Entity/Enum/Sound.cs).
-    if (typeof handle.broadcastEmoteSoundEffect !== "function") {
-      // Typeof-guard (F18-2): a pre-rec-#142 wasm bundle lacks this export.
-      return { dispatched: false, info: `Action ${t.name}: sound playback needs a newer client build.` };
-    }
-    const guid = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function")
-      ? (window.getLocalPlayerGuid() >>> 0) : 0;
-    if (!guid) {
-      return { dispatched: false, info: `Action ${t.name}: enter the world before playing a sound.` };
-    }
-    const soundEnum = 0x40; // Sound.Eat1 — representative in-humanoid-table cue.
-    try {
-      handle.broadcastEmoteSoundEffect(guid, soundEnum);
-    } catch (err) {
-      return { dispatched: false, error: `Sound dispatch failed: ${err?.message ?? err}` };
-    }
-    return {
-      dispatched: true,
-      echo: `Played Sound enum 0x${soundEnum.toString(16)} locally (remote players will not hear it).`,
-    };
-  }
-  if (t.id === 0x08 /* Say */) {
-    // Say is just a chat broadcast — pass through.
-    if (typeof handle.sendEmote === "function") {
-      // Without a specific message, we can't dispatch — surface help.
-      return {
-        dispatched: false,
-        info: `Action ${t.name}: use chat input "/me <text>" to dispatch.`,
-      };
-    }
-  }
-  // Server-only actions surface a system info line.
-  if (!t.isUserVisible) {
-    return {
-      dispatched: false,
-      info: `Action ${t.name} is server-only (no client-firable C2S surface).`,
-    };
-  }
-  return {
-    dispatched: false,
-    info: `Action ${t.name} (shape ${t.shape}) — wire dispatch deferred to Wave F.6 stretch.`,
-  };
-}
-
-function renderSections(body, taxonomy, ctx, opts) {
-  body.innerHTML = "";
-  const { showAll, filterText, statusEl } = opts;
-
-  // Filter types by user-visible + filter text. The picker only
-  // surfaces user-visible types by default (Motion / Say / CastSpell /
-  // PhysScript / Sound / etc.). Show-All toggles in all 122.
-  const matchingTypes = taxonomy.types.filter((t) => {
-    if (!showAll && !t.isUserVisible) return false;
-    if (filterText && !t.name.toLowerCase().includes(filterText)) return false;
-    return true;
-  });
-
-  if (matchingTypes.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "hb-ep-empty";
-    empty.textContent = filterText
-      ? "No matching actions."
-      : "No user-visible actions in this view.";
-    body.appendChild(empty);
-    statusEl.textContent = `0 of ${taxonomy.typeCount} actions visible.`;
-    return;
-  }
-
-  // Group matching types by category-style buckets. For Wave F.6 we
-  // surface a flat "All Actions" section (categories apply only to
-  // per-NPC tables, not the static type list); the action's own shape
-  // doubles as the sub-grouping signal.
-  const byShape = new Map();
-  for (const t of matchingTypes) {
-    const k = t.shape;
-    if (!byShape.has(k)) byShape.set(k, []);
-    byShape.get(k).push(t);
-  }
-  // Sort shape buckets alphabetically; sort types within each by id.
-  const sortedShapes = [...byShape.keys()].sort();
-  for (const shape of sortedShapes) {
-    const types = byShape.get(shape);
-    types.sort((a, b) => a.id - b.id);
-    const section = document.createElement("div");
-    section.className = "hb-ep-section";
-    section.dataset.shape = shape;
-
-    const head = document.createElement("div");
-    head.className = "hb-ep-section-head";
-    const caret = document.createElement("span");
-    caret.className = "hb-ep-caret";
-    caret.textContent = "▾";
-    head.appendChild(caret);
-    const label = document.createElement("span");
-    label.textContent = shape;
-    head.appendChild(label);
-    const count = document.createElement("span");
-    count.className = "hb-ep-count";
-    count.textContent = `${types.length}`;
-    head.appendChild(count);
-    head.addEventListener("click", () => {
-      const collapsed = section.dataset.collapsed === "1" ? "0" : "1";
-      section.dataset.collapsed = collapsed;
-      caret.textContent = collapsed === "1" ? "▸" : "▾";
-    });
-    section.appendChild(head);
-
-    const sectionBody = document.createElement("div");
-    sectionBody.className = "hb-ep-section-body";
-    for (const t of types) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "hb-ep-action";
-      btn.textContent = t.name;
-      btn.title = buildActionTooltip(t);
-      btn.dataset.typeId = t.id;
-      btn.dataset.dispatchable = t.isUserVisible ? "1" : "0";
-      btn.addEventListener("click", () => {
-        const result = dispatchEmoteAction(t, ctx);
-        statusEl.textContent =
-          result.dispatched
-            ? (result.echo || `Dispatched ${t.name}.`)
-            : (result.info || result.error || `${t.name}: see hint.`);
-      });
-      sectionBody.appendChild(btn);
-    }
-    section.appendChild(sectionBody);
-    body.appendChild(section);
-  }
-
-  statusEl.textContent =
-    `${matchingTypes.length} of ${taxonomy.typeCount} actions visible — ${sortedShapes.length} shape group(s).`;
-}
-
-// J1.A removed the standalone-overlay `toggle()` path: it wasn't
-// exported (module scope hid it from devtools too), wasn't called
-// internally, and the manifest's Shift+F2 routes through main-panel's
-// `view` (line 469 below). If a future need surfaces a separate
-// floating-overlay surface distinct from the main-panel view, re-derive
-// from git history rather than carrying speculative code.
 
 export const manifest = {
   id: "emote-panel",
   name: "Emote Palette",
   icon: "☺",
   // No dedicated retail "emote" button sprite exists (chat triggers emotes
-  // via slash). Falling back to the spellbook-style scroll sprite as a
-  // neutral DAT-themed placeholder; the emoji remains the load-fallback.
+  // via slash). The spellbook-style scroll sprite is a neutral DAT-themed
+  // placeholder; the emoji remains the load-fallback.
   iconSprite: "0x06001AAF",
-  version: "0.1.0",
-  description:
-    "Categorized emote action picker (Wave F.6, CEmoteTable taxonomy). " +
-    "Shift+F2 toggles the panel. Surfaces all 122 EmoteType discriminants " +
-    "with field-shape hints; click an action for dispatch (Motion routes " +
-    "through soul-emote slash commands).",
+  version: "0.2.0",
+  description: "Retail soul-emote palette (ChatPoseTable) — click to /wave, /bow, /sit … Shift+F2.",
 };
 
-// main-panel `view` export — object form `{name, nameFor, mount}` (mirrors
-// lore-panel). main-panel calls mount(bodyEl, ctx) and clears innerHTML in
-// _runCleanup, so the explicit append + remover is safe.
 export const view = {
-  name: "Emote Palette",
-  nameFor: () => "Emote Palette",
+  name: "Emotes",
+  nameFor: () => "Emotes",
   mount(parentEl, ctx) {
-  ensureStyles();
-  const handle = ctx?.handle ?? window.__sessionHandle ?? null;
-  if (!cachedTaxonomy && handle && typeof handle.getEmoteTaxonomy === "function") {
-    try {
-      const tax = handle.getEmoteTaxonomy();
-      if (tax && tax.types) cachedTaxonomy = tax;
-    } catch (e) {
-      console.warn("[emote-panel.view] getEmoteTaxonomy failed:", e);
+    ensureStyles();
+    const getHandle = () => ctx?.handle ?? window.__sessionHandle ?? null;
+
+    const root = document.createElement("div");
+    root.className = "hb-ep-root";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "hb-ep-toolbar";
+    const filterInput = document.createElement("input");
+    filterInput.type = "text";
+    filterInput.className = "hbk-input";
+    filterInput.placeholder = "Find an emote…";
+    filterInput.spellcheck = false;
+    filterInput.autocomplete = "off";
+    toolbar.appendChild(filterInput);
+    root.appendChild(toolbar);
+
+    const list = document.createElement("div");
+    list.className = "hbk-scroll hb-ep-list";
+    root.appendChild(list);
+
+    const foot = document.createElement("div");
+    foot.className = "hb-ep-foot";
+    const status = document.createElement("div");
+    status.className = "hb-ep-status";
+    const meRow = document.createElement("form");
+    meRow.className = "hb-ep-me";
+    const meInput = document.createElement("input");
+    meInput.type = "text";
+    meInput.className = "hbk-input";
+    meInput.placeholder = "Custom emote (/me)…";
+    meInput.maxLength = 200;
+    meInput.spellcheck = false;
+    meInput.autocomplete = "off";
+    const meBtn = document.createElement("button");
+    meBtn.type = "submit";
+    meBtn.className = "hbk-btn-small";
+    meBtn.textContent = "Emote";
+    meRow.append(meInput, meBtn);
+    foot.append(status, meRow);
+    root.appendChild(foot);
+
+    function setStatus(text, color = "#a8a090") {
+      setAcText(status, text, { color, fontId: COMPACT_FONT_ID, fit: true });
     }
-  }
-  const tax = cachedTaxonomy ?? { categories: [], types: [], categoryCount: 0, typeCount: 0 };
-  const container = document.createElement("div");
-  container.style.display = "flex";
-  container.style.flexDirection = "column";
-  container.style.height = "100%";
+    setStatus("Click an emote to perform it — or type /wave, /bow … in chat.");
 
-  const toolbar = document.createElement("div");
-  toolbar.className = "hb-ep-toolbar";
-  toolbar.style.borderTop = "none";
-  const filterInput = document.createElement("input");
-  filterInput.type = "text";
-  filterInput.placeholder = "Filter actions…";
-  toolbar.appendChild(filterInput);
-  const allLabel = document.createElement("label");
-  const allCheckbox = document.createElement("input");
-  allCheckbox.type = "checkbox";
-  allLabel.appendChild(allCheckbox);
-  allLabel.appendChild(document.createTextNode("All"));
-  toolbar.appendChild(allLabel);
-  container.appendChild(toolbar);
+    function run(entry) {
+      const r = performEmote(entry, getHandle(), window.__routeSlashCommand, predictLocal);
+      if (r.ok) {
+        if (r.echo) echo(r.echo, null);
+        setStatus(r.echo ?? `/${entry.token}`, "#e8dfc8");
+      } else {
+        setStatus(r.error ?? "Could not perform that emote.", "#ff8a70");
+      }
+    }
 
-  const body = document.createElement("div");
-  body.className = "hb-ep-body";
-  body.style.flex = "1";
-  body.style.overflowY = "auto";
-  container.appendChild(body);
+    function render() {
+      list.replaceChildren();
+      const groups = filterEmotes(EMOTE_CATALOG, filterInput.value);
+      if (!groups.length) {
+        const e = document.createElement("div");
+        e.className = "hbk-empty";
+        e.textContent = "No emote matches that name.";
+        list.appendChild(e);
+        return;
+      }
+      for (const g of groups) {
+        const section = document.createElement("section");
+        section.className = "hb-ep-section";
+        const head = document.createElement("div");
+        head.className = "hbk-section-title";
+        head.textContent = g.category;
+        const count = document.createElement("span");
+        count.className = "hbk-muted";
+        count.textContent = String(g.items.length);
+        head.appendChild(count);
+        section.appendChild(head);
+        const grid = document.createElement("div");
+        grid.className = "hb-ep-grid";
+        for (const entry of g.items) {
+          const row = document.createElement("div");
+          row.className = "hbk-row is-clickable hb-ep-item";
+          row.setAttribute("role", "button");
+          row.tabIndex = 0;
+          row.dataset.token = entry.token;
+          row.title = /\s/.test(entry.token)
+            ? `${entry.label}${entry.held ? " (held until you move)" : ""}`
+            : `/${entry.token}${entry.held ? " — held until you move" : ""}`;
+          const label = document.createElement("span");
+          label.className = "hbk-grow";
+          setAcText(label, entry.label, { color: "#eadfc4", fit: true });
+          row.appendChild(label);
+          if (entry.held) {
+            const dot = document.createElement("span");
+            dot.className = "hb-ep-held";
+            row.appendChild(dot);
+          }
+          row.addEventListener("click", () => run(entry));
+          row.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); run(entry); }
+          });
+          grid.appendChild(row);
+        }
+        section.appendChild(grid);
+        list.appendChild(section);
+      }
+    }
 
-  const status = document.createElement("div");
-  status.className = "hb-ep-status";
-  status.textContent = `Taxonomy: ${tax.categoryCount} categories × ${tax.typeCount} action types.`;
-  container.appendChild(status);
-
-  function render() {
-    renderSections(body, tax, ctx, {
-      showAll: allCheckbox.checked,
-      filterText: (filterInput.value || "").trim().toLowerCase(),
-      statusEl: status,
+    filterInput.addEventListener("input", render);
+    filterInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") { filterInput.value = ""; render(); filterInput.blur(); }
+      if (ev.key === "Enter") {
+        const first = filterEmotes(EMOTE_CATALOG, filterInput.value)[0]?.items?.[0];
+        if (first) run(first);
+      }
     });
-  }
-  filterInput.addEventListener("input", render);
-  allCheckbox.addEventListener("change", render);
-  render();
+    meRow.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const text = meInput.value.trim();
+      if (!text) return;
+      const handle = getHandle();
+      if (!handle?.sendEmote) { setStatus("Enter the world to use emotes.", "#ff8a70"); return; }
+      try {
+        handle.sendEmote(text);
+        echo(`> ${text}`, null);
+        setStatus(`You ${text}`, "#e8dfc8");
+        meInput.value = "";
+      } catch (e) {
+        setStatus(`Emote failed: ${e?.message ?? e}`, "#ff8a70");
+      }
+    });
 
-  parentEl.appendChild(container);
-  return () => container.remove();
+    render();
+    parentEl.appendChild(root);
+    return () => root.remove();
   },
 };
 
-// Test-only export (Wave F.6 unit tests in tests/emote_table.test.cjs).
-// Hidden behind a no-window guard so production bundles strip it.
-export const __test = {
-  inferSoulEmoteTypeId,
-  buildActionTooltip,
-  dispatchEmoteAction,
-  renderSections,
-};
+// Test seam (tests/emote_table.test.cjs).
+export const __test = { EMOTE_CATALOG, filterEmotes, performEmote };

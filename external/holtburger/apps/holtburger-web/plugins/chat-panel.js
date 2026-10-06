@@ -1,480 +1,415 @@
-// Bottom-left chat panel — retail port of gmFloatyMainChatUI
-// (LayoutDesc 0x2100006F, root element 0x10000600 at 410×100).
+// Bottom-left main chat window — retail port of gmFloatyMainChatUI
+// (LayoutDesc 0x2100006F, root RootFloatyMainChat_Field 0x10000600, 410×100).
 //
-// The non-agent-mode page already does all the heavy lifting:
+// HUD overhaul 2026-10-05 — rebuilt on the retail sprites + HUD kit.
 //
-//   - `appendChatLine(text, category)` (index.html:5926) is the
-//     canonical entry point.
-//   - The recv loop's kind=2 ChatReceived handler (index.html:7160+)
-//     formats every chat-bearing variant and tags it with a
-//     CHAT_CATEGORY_* id (0=system, 1=local, 2=tell, 3=channel,
-//     4=emote, 5=combat, 6=death, 7=magic, 8=advancement, 9=transient).
-//   - `#chat-log li.cat-N` per-category CSS colours already exist.
-//   - Outgoing chat goes through `#chat-input` (index.html:6755+).
+// Retail layout (ui-layout-render manifest m-6F.json, element-sprites.txt):
+//   frame        0,0 410×100   8 pieces: corners 0x06006129, top 0x0600612A,
+//                              left 0x0600612B, bottom 0x0600612C, right 0x0600612D
+//   ChatLogField 5,5 400×73    dark field 0x06004CC2
+//     FloatingChat1-4  5,5+17k 16×16   0x06006218 (lit 0x06006219), font 0x40000025
+//     ChatLog          21,5 368×73     the text pane
+//     NewNonVisibleTextIndicator 21,62 16×16 (Ghosted until text arrives off-screen)
+//     MaximizeButton   368,5 16×16     0x06005E65 (maximised 0x06005E64)
+//     ChatLogScrollbar 389,5 16×73     gold rope 0x06004C5F
+//   ChatEntryField 5,78 400×17 gold bar 0x0600113A
+//     ChatTarget   5,78 46×17  brass tag 0x06004D65 (hover 0x06004D66), "Chat" font 0x40000002
+//     ChatPanelTextEntry 51,78 306×17
+//     SendButton   359,78 46×17 0x06001915 (pressed 0x06001916), "Send" font 0x40000002
 //
-// Agent-mode `display:none`s the original `#chat-panel`, so this
-// plugin is the visible chat for agent-mode + wireframe sessions.
-// We mirror every `<li>` from `#chat-log` into our retail-framed
-// panel via MutationObserver, and forward our input's Enter key
-// to the existing `#chat-input` so all send paths stay in one
-// place (no duplicated wasm/ACE wiring).
+// What the "before" got wrong and how this version fixes it at the root:
+//   • filter-tab labels drawn BELOW 12-px tab boxes (a 16-px ac-text canvas in
+//     a 12-px button) and overlapping the first line → the four retail 16×16
+//     left-edge buttons, one 11×13-font glyph each (exactly what retail drew).
+//   • a yellow orb over the 3rd line → that was the hand-drawn "new messages"
+//     badge (retail ChatLogNewNonVisibleTextIndicator), lit because auto-scroll
+//     measured line heights before the per-line font canvases had rendered.
+//     Lines are now real wrapping text, the log tracks a PINNED flag from user
+//     scrolls (not a measurement at append time), and unread text raises a
+//     "N new messages" pill that never sits in the text column.
+//   • "Send" clipped / unfinished input row → the retail gold entry bar, brass
+//     tag and Send sprite, sized to the 17-px row.
 //
-// Retail layout source: gmFloatyMainChatUI 0x2100006F.
-// URL knob: `?chatFade=1` enables opacity-on-mouseout (45% at rest,
-// fades to 100% on hover). Persisted in localStorage `hb_chat_panel_fade`.
-// Per chat_panel_layout_dump 2026-05-24 the root element 0x10000600
-// holds 23 children:
-//   - 16 frame corners/edges (0x10000693-0x100006A2; decorative)
-//   - 0x10000010 chat-log container (5, 5) 400×73
-//     - 0x10000011 text area (16, 0) 368×73  (16-px left gutter
-//       clears the 4 left-edge filter buttons)
-//     - 0x1000048C "new messages" badge (0, 57) 16×16 (m_chatNew-
-//       NonVisibleTextIndicator per acclient.h gmMainChatUI:54906)
-//     - 0x10000012 right-side scrollbar (384, 0) 16×73
-//   - 0x1000046F top-right Maximize button (368, 5) 16×16
-//     (acclient.c:254293 GetChildRecursive(0x1000046Fu) → ToggleMaximize)
-//   - 0x10000522/3/4/5 left-edge filter buttons (5, 5+17k) 16×16
-//     (not referenced anywhere in acclient.c — pure layout artifacts;
-//      retail used them as filter-tab toggles bound to the
-//      gmMainChatUI::m_llTextTypeFilter bitmask via UIElement events.
-//      We bind them to All / Local / Tells / Channels per the default
-//      4-tab consolidation in layout-port-plan-2026-05-24.md.)
-//   - 0x10000013 input row (5, 78) 400×17
-//     - 0x10000014 channel selector (0, 0) 46×17 (talk-focus dropdown
-//       anchor per acclient.c:255043 GetChildRecursive(0x10000014u)
-//       → InitTalkFocusMenu populates m_aTalkFocusButtons SmartArray)
-//     - 0x10000016 text input (46, 0) 306×17 (m_chatEntry per
-//       acclient.c:287807 GetChildRecursive(0x10000011u))
-//     - 0x10000019 send button (354, 0) 46×17, 3 states
+// Modern liberties: wrapping, selectable text with a hanging indent; resizable
+// (top edge + corners), draggable by the frame and the left gutter; jump-to-
+// latest pill; click a sender's name to start a tell (retail StartTell);
+// coloured talk-focus menu; Enter focuses the chat bar, Esc leaves it.
 //
-// Per the Chat Interface wiki page (acpedia), the actual retail panel
-// is RESIZABLE — 410×100 is just the default. Resize-handle is kept.
+// Lines are mirrored from the canonical #chat-log (app/chat_log.js
+// appendChatLine), and sends are forwarded to #chat-form so the outbound
+// chat hook (plugins/chat-hooks.js), slash routing (app/slash_commands.js)
+// and echo stay on one path.
+//
+// URL knob: `?chatFade=1` (persisted `hb_chat_panel_fade`) — retail default/
+// active opacity: 45% at rest, opaque on hover or while typing.
 
-import { setAcText, CHAT_FONT_ID } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
-import { installDragPersistence } from "./main-panel.js";
-import { persistWindowSize, WINDOW_ID } from "../ui/ac_window_position.js";
+import { setAcText } from "../ui/ac_font.js";
+import {
+  attachWindowPosition, attachEdgeResizers, persistWindowSize, WINDOW_ID,
+} from "../ui/ac_window_position.js";
 import { attachCornerResizers } from "../ui/ac_resize_corners.js";
+import { hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
+import {
+  CHAT_FILTERS, normalizeFilterId, lineVisibleInFilter, filterGroupForCategory,
+  chatLineStyle, colorForCategory, TALK_FOCUSES, talkFocusById,
+  buildOutgoingLine, parseChatSender, isNearBottom, unreadLabel,
+  formatChatTimestamp, computeMaximizedRect, FILTER_GROUP,
+} from "../app/chat_log.js";
 
 const OVERLAY_ID = "hb-chat-panel";
-const WIDTH = 410;
+const STYLE_ID = "hb-chat-panel-style";
+const SP = "./data/ui-sprites";
+const WIDTH = 410;            // RootFloatyMainChat_Field 0x10000600
 const HEIGHT = 100;
-const MAX_LINES = 48;          // ring buffer; ~6x what fits on-screen
+// Retail's minimum is the default box: four 16-px filter buttons (67 px) +
+// 17-px entry row + 10-px frame.
+const MIN_W = 260;
+const MIN_H = 100;
+const MAX_W = 1000;
+const MAX_H = 640;
+const MAX_LINES = 300;        // scrollback; source #chat-log keeps 400
+const FILTER_FONT_ID = 0x40000025;  // FloatingChat1-4 label font (11×13)
+const BUTTON_FONT_ID = 0x40000002;  // ChatTargetButtonText / SendButton (16×16)
+const LABEL_COLOR = "#fff4dc";
+const LS_FILTER = "hb_chat_panel_filter";
+const LS_SAVED_HEIGHT = "hb_chat_panel_saved_height";   // maximise sentinel (pre-overhaul key)
+const LS_FADE = "hb_chat_panel_fade";
+const LS_CHAR_OPTIONS = "holtburger_character_options_v1"; // options-panel local cache
+const OPT_STAY_IN_CHAT = 0x0B;   // CharacterOption StayInChatModeAfterSendingMessage
+const OPT_TIMESTAMPS = 0x21;     // CharacterOption DisplayTimestamps
+// pointerdown on these never starts a window drag.
+const DRAG_IGNORE = "button, input, .hb-chat-log, .hb-chat-menu, .hb-chat-pill, .hb-resize-edge, .hb-resize-corner";
 
-// gmFloatyMainChatUI — retail layout that drives the chat panel.
-// Element-id map confirmed by chat_panel_layout_dump 2026-05-24:
-const CHAT_LAYOUT_ID         = 0x2100006F;
-// Root (0x10000600), inner log-text container (0x10000011), in-log badge
-// (0x1000048C), and explicit scrollbar (0x10000012) are intentionally NOT
-// wired today — our DOM places the log + scrollbar via CSS, and the badge
-// is a Holtburger-specific concept. Listed here for the next layout pass.
-const CHAT_ELEM_LOG_CONT     = 0x10000010;
-const CHAT_ELEM_TOPRIGHT_BTN = 0x1000046F;
-// Retail left-edge filter buttons — superseded by the horizontal 6-tab
-// strip below, but the element IDs stay for documentation.
-// Retail 4-edge filter buttons 0x10000522-0x10000525 superseded by the 6-tab
-// horizontal strip below — see header comment + TABS array. IDs preserved
-// in the header doc for future retail-layout work.
-const CHAT_ELEM_INPUT_ROW    = 0x10000013;
-const CHAT_ELEM_CHANNEL_SEL  = 0x10000014;
-const CHAT_ELEM_INPUT_FIELD  = 0x10000016;
-const CHAT_ELEM_SEND_BTN     = 0x10000019;
+const CSS = `
+  #${OVERLAY_ID} {
+    --hb-chat-text-font: "Times New Roman", Times, "Liberation Serif", "Nimbus Roman", serif;
+    position: fixed;
+    left: 8px;
+    bottom: 8px;
+    z-index: 50;
+    /* Retail 410, but never into the centred toolbar (310 wide) on a
+       narrow HUD viewport (HUD overhaul 2026-10-05; a persisted user size
+       still wins via the inline style). */
+    width: min(${WIDTH}px, calc(50 * var(--hb-hud-vw, 1vw) - 171px));
+    height: ${HEIGHT}px;
+    min-width: ${MIN_W}px;
+    min-height: ${MIN_H}px;
+    box-sizing: border-box;
+    padding: 5px;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) 17px;
+    color: var(--hbk-text, #e8dfc8);
+    font-family: var(--hbk-font, serif);
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    /* Retail 8-piece frame (MainChat*Corner/Border, 0x1000069B-6A2). */
+    background:
+      url("${SP}/0x06006129.png") left top / 5px 5px no-repeat,
+      url("${SP}/0x06006129.png") right top / 5px 5px no-repeat,
+      url("${SP}/0x06006129.png") left bottom / 5px 5px no-repeat,
+      url("${SP}/0x06006129.png") right bottom / 5px 5px no-repeat,
+      url("${SP}/0x0600612A.png") left top / 10px 5px repeat-x,
+      url("${SP}/0x0600612C.png") left bottom / 10px 5px repeat-x,
+      url("${SP}/0x0600612B.png") left top / 5px 10px repeat-y,
+      url("${SP}/0x0600612D.png") right top / 5px 10px repeat-y,
+      #0b0c10;
+    box-shadow: 0 0 0 1px #000, 0 6px 18px rgba(0, 0, 0, 0.6);
+  }
+  #${OVERLAY_ID}.hb-window-dragging { cursor: grabbing; }
+  #${OVERLAY_ID}[data-fade="1"] { opacity: 0.45; transition: opacity 0.3s ease-out; }
+  #${OVERLAY_ID}[data-fade="1"]:hover,
+  #${OVERLAY_ID}[data-fade="1"]:focus-within { opacity: 1; transition: opacity 0.15s ease-in; }
+  #${OVERLAY_ID} ac-text { line-height: 0; pointer-events: none; }
+  #${OVERLAY_ID} ac-text > canvas { display: block; }
 
-// 6-tab strip — explicit derivative of the retail 4-button layout
-// (0x10000522-0x10000525). P2-20 (cross-find chat-filter-count-and-
-// labels): truncated to 4 retail entries (A/L/T/C); Allegiance + Fellow-
-// ship remain selectable via the Channels popup (CHANNELS array below)
-// — retail folds those channels under the Chan dropdown, not as
-// independent filter buttons. The 4 retail buttons fit in the 100-px
-// panel height which the prior 6-button strip did not.
-const TABS = [
-  { id: "all",      label: "All"   },
-  { id: "local",    label: "Local" },
-  { id: "tell",     label: "Tell"  },
-  { id: "channels", label: "Chan"  },
-];
+  /* ChatLogField 0x10000010 — gutter column + text pane + rope. */
+  #${OVERLAY_ID} .hb-chat-body {
+    position: relative;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    background: url("${SP}/0x06004CC2.png") repeat, #0b0c10;
+  }
+  #${OVERLAY_ID} .hb-chat-gutter {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-height: 0;
+    overflow: hidden;
+    cursor: move;
+  }
+  /* FloatingChat1-4 (0x10000522-525) — one glyph each, retail font. */
+  #${OVERLAY_ID} .hb-chat-filter {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: url("${SP}/0x06006218.png") 0 0 / 100% 100% no-repeat;
+    color: ${LABEL_COLOR};
+    font: 10px/1 var(--hb-chat-text-font);
+    cursor: pointer;
+  }
+  #${OVERLAY_ID} .hb-chat-filter:hover { filter: brightness(1.2); }
+  #${OVERLAY_ID} .hb-chat-filter[aria-selected="true"] {
+    background-image: url("${SP}/0x06006219.png");
+    box-shadow: 0 0 4px rgba(243, 210, 122, 0.75);
+  }
+  #${OVERLAY_ID} .hb-chat-filter:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 0; }
 
-// CHAT_CATEGORY_* colours — mirror the index.html `#chat-log .cat-N`
-// palette but adjusted for legibility against our dark stone background
-// (the index.html version sits on a light #fafafa, ours on dark).
-// Concrete hex colors (no CSS vars) so canvas2d's fillStyle in
-// ac_font's renderAcText accepts them. The cream/tell-yellow values
-// mirror the `--hb-text-cream` / `--hb-text-tell-yellow` definitions
-// in index.html (theme variables).
-const CAT_COLORS = {
-  0: "#90d090",                            // system   (was #1a7f1a)
-  1: "#f0d8a0",                            // local    (--hb-text-cream)
-  2: "#ffe060",                            // tell     (--hb-text-tell-yellow per wiki)
-  3: "#7da6e0",                            // channel  (blue-grey per retail wiki)
-  4: "#bba696",                            // emote    (italic-grey)
-  5: "#ff6a4a",                            // combat
-  6: "#ff5050",                            // death
-  7: "#c060ff",                            // magic
-  8: "#f0c060",                            // advancement
-  9: "#888070",                            // transient
-  10: "#ff8080",                           // send-error
-};
-const ECHO_COLOR = "#f0e8d0";              // --hb-text-cream-bright
+  /* ChatLog 0x10000011 + ChatLogScrollbar 0x10000012 (the rope is the
+     kit's hbk-scroll track). Chrome ignores ::-webkit-scrollbar styling
+     whenever scrollbar-width/-color are set, so reset them to auto here and
+     keep the thin gold fallback for engines without the pseudo-elements. */
+  #${OVERLAY_ID} .hb-chat-log {
+    grid-column: 2;
+    min-height: 0;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    padding: 1px 18px 2px 4px;   /* right: keeps text clear of MaximizeButton */
+    font: 13px/15px var(--hb-chat-text-font);
+    cursor: auto;
+    user-select: text;
+    -webkit-user-select: text;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    #${OVERLAY_ID} .hb-chat-log { scrollbar-width: thin; scrollbar-color: var(--hbk-gold-dim, #8a7544) #0a0806; }
+  }
+  /* Retail's chat rope has no arrow caps. */
+  #${OVERLAY_ID} .hb-chat-log::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  #${OVERLAY_ID} .hb-chat-line {
+    margin: 0;
+    padding: 0 0 0 12px;
+    text-indent: -12px;          /* hanging indent: wrapped rows sit under the text */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    text-shadow: 0 1px 0 #000, 0 0 2px #000;
+  }
+  #${OVERLAY_ID} .hb-chat-ts { display: none; color: #8f8670; }
+  #${OVERLAY_ID} .hb-chat-log[data-ts="1"] .hb-chat-ts { display: inline; }
+  #${OVERLAY_ID} .hb-chat-name { cursor: pointer; }
+  #${OVERLAY_ID} .hb-chat-name:hover { text-decoration: underline; }
+  #${OVERLAY_ID} .hb-chat-log[data-filter="local"] > .hb-chat-line:not([data-grp="local"]),
+  #${OVERLAY_ID} .hb-chat-log[data-filter="tell"] > .hb-chat-line:not([data-grp="tell"]),
+  #${OVERLAY_ID} .hb-chat-log[data-filter="channels"] > .hb-chat-line:not([data-grp="chan"]) { display: none; }
+  #${OVERLAY_ID} .hb-chat-empty {
+    position: absolute;
+    left: 20px;
+    right: 36px;
+    top: 2px;
+    display: none;
+    color: var(--hbk-text-faint, #77705f);
+    font: italic 12px/15px var(--hb-chat-text-font);
+    pointer-events: none;
+  }
+  #${OVERLAY_ID}[data-empty="1"] .hb-chat-empty { display: block; }
+  /* MaximizeButton 0x1000046F — top-right of the text pane, beside the rope. */
+  #${OVERLAY_ID} .hb-chat-max {
+    position: absolute;
+    top: 0;
+    right: 16px;
+    z-index: 2;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: url("${SP}/0x06005E65.png") 0 0 / 100% 100% no-repeat;
+    cursor: pointer;
+  }
+  #${OVERLAY_ID}[data-maximized="1"] .hb-chat-max { background-image: url("${SP}/0x06005E64.png"); }
+  #${OVERLAY_ID} .hb-chat-max:hover { filter: brightness(1.25); }
+  #${OVERLAY_ID} .hb-chat-max:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); }
+  /* ChatLogNewNonVisibleTextIndicator 0x1000048C, as a jump-to-latest pill
+     in the bottom-right of the pane (only while scrolled up). */
+  #${OVERLAY_ID} .hb-chat-pill {
+    position: absolute;
+    right: 22px;
+    bottom: 3px;
+    z-index: 3;
+    display: none;
+    align-items: center;
+    gap: 4px;
+    height: 16px;
+    margin: 0;
+    padding: 0 8px;
+    box-sizing: border-box;
+    border: 1px solid var(--hbk-gold-dim, #8a7544);
+    border-radius: 8px;
+    background: rgba(12, 10, 6, 0.94);
+    box-shadow: 0 1px 4px #000;
+    color: var(--hbk-gold-bright, #f3d27a);
+    font: 11px/14px var(--hb-chat-text-font);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  #${OVERLAY_ID} .hb-chat-pill.is-visible { display: inline-flex; }
+  #${OVERLAY_ID} .hb-chat-pill:hover { border-color: var(--hbk-gold-bright, #f3d27a); }
 
-let stylesInjected = false;
+  /* ChatEntryField 0x10000013 — gold bar, brass tag, field, Send. */
+  #${OVERLAY_ID} .hb-chat-entry {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    height: 17px;
+    /* Retail draws the 500-px bar clipped at its native size; stretch only
+       once the window is wider than the sprite. */
+    background: url("${SP}/0x0600113A.png") left top / max(100%, 500px) 17px no-repeat, #6e5420;
+  }
+  #${OVERLAY_ID} .hb-chat-target {
+    flex: 0 0 auto;
+    min-width: 46px;
+    max-width: 110px;
+    height: 17px;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border-style: solid;
+    border-width: 0 8px 0 12px;
+    border-image: url("${SP}/0x06004D65.png") 0 8 0 12 fill / 0 8px 0 12px stretch;
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: ${LABEL_COLOR};
+    font: 11px/1 var(--hb-chat-text-font);
+    cursor: pointer;
+  }
+  #${OVERLAY_ID} .hb-chat-target:hover,
+  #${OVERLAY_ID} .hb-chat-target:focus-visible,
+  #${OVERLAY_ID} .hb-chat-target[aria-expanded="true"] { border-image-source: url("${SP}/0x06004D66.png"); outline: none; }
+  #${OVERLAY_ID} .hb-chat-input {
+    flex: 1 1 auto;
+    min-width: 60px;
+    height: 15px;
+    min-height: 0;
+    margin: 1px 2px 1px 1px;
+    padding: 0 5px;
+    box-sizing: border-box;
+    border: 1px solid rgba(0, 0, 0, 0.75);
+    background: rgba(10, 8, 3, 0.62);
+    box-shadow: inset 0 1px 2px #000;
+    color: #ffffff;
+    font: 12px/13px var(--hb-chat-text-font);
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  #${OVERLAY_ID} .hb-chat-input:focus {
+    border-color: var(--hbk-gold-bright, #f3d27a);
+    background: rgba(6, 5, 2, 0.8);
+    box-shadow: inset 0 1px 2px #000, 0 0 4px rgba(243, 210, 122, 0.45);
+  }
+  #${OVERLAY_ID} .hb-chat-input::placeholder { color: #cbbd8e; font-style: italic; opacity: 0.8; }
+  #${OVERLAY_ID} .hb-chat-input.is-error { border-color: var(--hbk-warn, #ff6a50); }
+  #${OVERLAY_ID} .hb-chat-send {
+    flex: 0 0 46px;
+    width: 46px;
+    height: 17px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: url("${SP}/0x06001915.png") 0 0 / 100% 100% no-repeat;
+    color: ${LABEL_COLOR};
+    font: 11px/1 var(--hb-chat-text-font);
+    cursor: pointer;
+  }
+  #${OVERLAY_ID} .hb-chat-send:hover,
+  #${OVERLAY_ID} .hb-chat-send:focus-visible { background-image: url("${SP}/0x06001916.png"); outline: none; }
+  #${OVERLAY_ID} .hb-chat-send:active { filter: brightness(0.85); }
+
+  /* Talk-focus popup (gmMainChatUI::InitTalkFocusMenu). */
+  #${OVERLAY_ID} .hb-chat-menu {
+    position: absolute;
+    left: 5px;
+    bottom: 24px;
+    z-index: 20;
+    display: none;
+    min-width: 170px;
+    max-height: 320px;
+    padding: 3px 0;
+    box-sizing: border-box;
+    background: url("${SP}/0x06004CC2.png") repeat, #0b0c10;
+    border: 1px solid var(--hbk-gold-dim, #8a7544);
+    box-shadow: inset 0 0 0 1px #1c160b, 0 0 0 1px #000, 0 8px 22px rgba(0, 0, 0, 0.75);
+    cursor: default;
+    touch-action: pan-y;
+  }
+  #${OVERLAY_ID} .hb-chat-menu[data-open="1"] { display: block; }
+  #${OVERLAY_ID} .hb-chat-menu .hbk-row { min-height: 18px; padding: 1px 8px; cursor: pointer; outline: none; }
+  #${OVERLAY_ID} .hb-chat-menu .hbk-row:focus-visible { background: var(--hbk-hover, rgba(243, 210, 122, 0.08)); }
+  #${OVERLAY_ID} .hb-chat-menu .hbk-row[aria-checked="true"] {
+    background: var(--hbk-sel, rgba(243, 210, 122, 0.16));
+    border-left-color: var(--hbk-gold, #d9b45a);
+  }
+  #${OVERLAY_ID} .hb-chat-menu .hbk-rule { margin: 3px 6px; }
+`;
+
 function ensureStyles() {
-  if (stylesInjected) return;
-  stylesInjected = true;
-  const style = document.createElement("style");
-  style.id = "hb-chat-panel-style";
-  style.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      bottom: 8px;
-      left: 8px;
-      z-index: 50;
-      width: ${WIDTH}px;
-      height: ${HEIGHT}px;
-      box-sizing: border-box;
-      pointer-events: none;
-      font-family: var(--hb-font-serif);
-      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-      border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
-      color: var(--hb-text-cream);
-    }
-    /* Horizontal tab strip — 6 equal-width buttons above the chat log.
-       Width 360 to clear the top-right Maximize button at (368,5).
-       Replaces the retail 4-button left-edge column to fit the
-       Alleg + Fell + Chan split. */
-    /* P2-39 (cross-find chat-filter-anchor-orientation): horizontal
-       tab strip at top, NOT retail's vertical 16x16 column on the
-       left. ACCEPTED DEVIATION — horizontal reads better at our
-       400-wide panel + matches contemporary chat UX (Discord/Slack/
-       game chat). Switch to vertical only if retail-parity QA flags
-       this as essential. */
-    #${OVERLAY_ID} .hb-chat-tab-strip {
-      position: absolute;
-      top: 0;
-      left: 5px;
-      width: 360px;
-      height: 12px;
-      display: flex;
-      gap: 1px;
-      pointer-events: auto;
-      z-index: 3;
-    }
-    #${OVERLAY_ID} .hb-chat-tab-btn {
-      flex: 1 1 0;
-      min-width: 0;
-      height: 12px;
-      box-sizing: border-box;
-      padding: 0;
-      font-size: 9px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid var(--hb-border-brass-dim);
-      cursor: pointer;
-      user-select: none;
-      text-align: center;
-      line-height: 10px;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-chat-tab-btn:hover {
-      background: var(--hb-overlay-hover);
-    }
-    #${OVERLAY_ID} .hb-chat-tab-btn.active {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-      border-color: var(--hb-border-brass);
-    }
-    /* Opt-in: panel fades to 45% at rest, snaps to full opacity on hover.
-       Toggled by ?chatFade=1 (persisted in hb_chat_panel_fade). */
-    #${OVERLAY_ID}[data-fade="1"] {
-      opacity: 0.45;
-      transition: opacity 0.3s ease-out;
-    }
-    #${OVERLAY_ID}[data-fade="1"]:hover {
-      opacity: 1;
-      transition: opacity 0.15s ease-in;
-    }
-    /* Top-right Maximize button (0x1000046F at 368,5 16×16). Per
-       acclient.c:254293 the retail behavior toggles m_Maximized →
-       expand/collapse the chat panel between collapsed (default
-       height) and m_OldHeight. We surface a placeholder click handler
-       (functional toggle is a follow-on; layout-port lands the
-       button geometry first). */
-    #${OVERLAY_ID} .hb-chat-topright-btn {
-      position: absolute;
-      width: 16px;
-      height: 16px;
-      box-sizing: border-box;
-      padding: 0;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--hb-border-brass-dim);
-      cursor: pointer;
-      user-select: none;
-      text-align: center;
-      line-height: 14px;
-      pointer-events: auto;
-      z-index: 2;
-    }
-    #${OVERLAY_ID} .hb-chat-topright-btn:hover {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    /* Chat scrollback container — per layout 0x10000010 it sits at
-       (5, 5) 400×73 inside the panel; per 0x10000011 the text area
-       is inset (16, 0) 368×73 to clear the 4 left-edge filter
-       buttons. We collapse the wrapper into one scrollable div and
-       use padding-left to mimic the 16-px gutter. The right-edge
-       16-px scrollbar gutter (0x10000012 at (384, 0) 16×73) is left
-       as a TODO — for now we use CSS scrollbar-width:thin and
-       trust the browser's renderer. */
-    #${OVERLAY_ID} .hb-chat-scroll {
-      position: absolute;
-      top: 5px;
-      left: 5px;
-      width: 400px;
-      height: 73px;
-      box-sizing: border-box;
-      padding: 14px 4px 0 5px;   /* top:14 clears the horizontal tab strip */
-      overflow-y: auto;
-      overflow-x: hidden;
-      font-size: 11px;
-      /* line-height 17px fits the chat-window font's 16px cell
-         (0x40000027) with 1px margin. Previously 13px for the compact
-         font's 12px cell. */
-      line-height: 17px;
-      color: var(--hb-text-cream);
-      pointer-events: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.4);
-    }
-    #${OVERLAY_ID} .hb-chat-line {
-      margin: 0;
-      padding: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    /* 4-tab retail filter chains. "all" shows everything; "local" keeps
-       cat-1 + cat-4 (spoken/emote); "tell" cat-2; "channels" — all
-       channel chatter INCLUDING allegiance (cat-17) and fellowship
-       (cat-16). Combat/Magic/System are subsumed by "all". Alleg / Fell
-       posting still works via the CHANNELS popup; just no dedicated
-       filter button. */
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="local"] .hb-chat-line:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="tell"] .hb-chat-line:not(.cat-2):not(.echo) { display: none; }
-    #${OVERLAY_ID} .hb-chat-scroll[data-tab="channels"] .hb-chat-line:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
-    /* Resize handle — bottom-right corner, drag to grow/shrink. Wiki
-       says retail chat windows are resizable, with size persisted
-       per-character. Persistence is a follow-on. */
-    /* Rec #80 — bespoke .hb-chat-resize replaced by attachCornerResizers
-       in the mount path; CSS removed. */
-    /* Input row container — per layout 0x10000013 at (5, 78) 400×17.
-       Sub-elements (channel selector, text input, send button) are
-       positioned absolutely inside via applyChatLayout(). */
-    #${OVERLAY_ID} .hb-chat-input-row {
-      position: absolute;
-      left: 5px;
-      top: 78px;
-      width: 400px;
-      height: 17px;
-      box-sizing: border-box;
-      font-size: 10px;
-      color: var(--hb-text-cream);
-    }
-    /* Channel selector — per layout 0x10000014 at (0, 0) 46×17 inside
-       the input row. Click opens the talk-focus dropdown menu above. */
-    #${OVERLAY_ID} .hb-chat-channel-btn {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 46px;
-      height: 17px;
-      box-sizing: border-box;
-      padding: 1px 4px 1px 4px;
-      font-family: var(--hb-font-serif);
-      font-size: 9px;
-      color: var(--hb-text-gold);
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
-      text-align: left;
-      pointer-events: auto;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* P2-20 (cross-find chat-channel-selector-chevron): retail's
-       channel button has no chevron decoration. Drop the inserted
-       ▾ glyph. */
-    #${OVERLAY_ID} .hb-chat-channel-btn:hover {
-      background: var(--hb-overlay-active);
-    }
-    #${OVERLAY_ID} .hb-chat-channel-menu {
-      position: absolute;
-      bottom: calc(100% + 2px);
-      left: 0;
-      min-width: 140px;
-      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-      border: 6px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
-      box-shadow: var(--hb-shadow-panel);
-      padding: 2px;
-      display: none;
-      z-index: 200;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-chat-channel-menu[data-open="1"] { display: block; }
-    #${OVERLAY_ID} .hb-chat-channel-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 3px 8px;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      color: var(--hb-text-cream);
-      cursor: pointer;
-      user-select: none;
-    }
-    #${OVERLAY_ID} .hb-chat-channel-item:hover {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    /* .hb-chat-channel-cmd CSS dropped together with the per-item
-       cmd span (P2-20 chat-channel-menu-slash-cmd-leak). */
-    #${OVERLAY_ID} .hb-chat-channel-item.selected {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    /* Text input — per layout 0x10000016 at (46, 0) 306×17 inside
-       the input row. */
-    #${OVERLAY_ID} .hb-chat-input {
-      position: absolute;
-      left: 46px;
-      top: 0;
-      width: 306px;
-      height: 17px;
-      box-sizing: border-box;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      padding: 1px 4px;
-      outline: none;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-chat-input:focus {
-      border-color: var(--hb-border-brass);
-    }
-    /* Send button — per layout 0x10000019 at (354, 0) 46×17 inside
-       the input row, 3 states (idle/hover/active). */
-    #${OVERLAY_ID} .hb-chat-send-btn {
-      position: absolute;
-      left: 354px;
-      top: 0;
-      width: 46px;
-      height: 17px;
-      box-sizing: border-box;
-      padding: 0;
-      font-family: var(--hb-font-serif);
-      font-size: 9px;
-      font-weight: 600;
-      color: var(--hb-text-gold);
-      background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      letter-spacing: 0.04em;
-      pointer-events: auto;
-      text-align: center;
-      line-height: 15px;
-    }
-    #${OVERLAY_ID} .hb-chat-send-btn:hover {
-      background: linear-gradient(180deg, rgba(150, 105, 40, 0.65) 0%, rgba(70, 50, 20, 0.75) 100%);
-      color: var(--hb-text-cream-bright);
-    }
-    #${OVERLAY_ID} .hb-chat-send-btn:active {
-      background: linear-gradient(180deg, rgba(40, 25, 10, 0.75) 0%, rgba(80, 55, 20, 0.6) 100%);
-    }
-  `;
-  document.head.appendChild(style);
+  let style = document.getElementById(STYLE_ID);
+  if (!style) {
+    style = document.createElement("style");
+    style.id = STYLE_ID;
+    document.head.appendChild(style);
+  }
+  if (style.textContent !== CSS) style.textContent = CSS;
 }
 
-function colorForCategory(catStr) {
-  // catStr is the dataset.cat attribute from the source <li> ("0".."9")
-  // or null/undefined for the .echo neutral class (outgoing local-echo).
-  if (catStr == null) return ECHO_COLOR;
-  const c = CAT_COLORS[catStr];
-  return c || "#f0d8a0";
+function readLocal(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
 }
+function writeLocal(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch (_) {}
+}
+
+// CharacterOption read — same source order as options-panel.js
+// readCharacterOption: the live wasm bitfield, else the local cache.
+function readCharOption(idx) {
+  const h = typeof window !== "undefined" ? window.__sessionHandle : null;
+  if (h && typeof h.isCharacterOptionEnabled === "function") {
+    try { return !!h.isCharacterOptionEnabled(idx >>> 0); } catch (_) {}
+  }
+  try {
+    const raw = readLocal(LS_CHAR_OPTIONS);
+    const obj = raw ? JSON.parse(raw) : null;
+    return !!(obj && obj[String(idx)]);
+  } catch (_) { return false; }
+}
+
+const GROUP_TO_FILTER = Object.freeze({
+  [FILTER_GROUP.LOCAL]: "local", [FILTER_GROUP.TELL]: "tell", [FILTER_GROUP.CHAN]: "channels",
+});
 
 export const manifest = {
   id: "chat-panel",
   name: "Chat",
   icon: "💬",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Bottom-left chat panel (retail gmFloatyMainChatUI 0x2100006F)",
 };
-
-// Apply gmFloatyMainChatUI 0x2100006F layout to the chat-panel's
-// sub-elements. Mirrors radar.js's applyRadarLayout — 8 × 2s retry
-// loop because chat-panel mounts via mountBar() before
-// init_resource_source has populated window.__hbWasm. The horizontal
-// 6-tab strip is CSS-positioned (no DAT slots for 6 buttons), so the
-// retail 0x10000522-0x10000525 element IDs are unused.
-function applyChatLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    if (!layout) {
-      if (attempt < 8) {
-        setTimeout(() => applyChatLayout(refs, attempt + 1), 2000);
-      }
-      return;
-    }
-    let applied = 0;
-    // Element pairs: (element_id, DOM ref). We apply x/y/width/height
-    // from the LayoutDesc. The chat-log container, input row, etc are
-    // already CSS-positioned to the layout values; this re-asserts
-    // them from the DAT so the asset stays source-of-truth.
-    // 6-tab horizontal strip is positioned via flex/CSS, not the DAT
-    // (the retail layout only has 4 filter slots at 0x10000522-0x10000525).
-    const pairs = [
-      [CHAT_ELEM_LOG_CONT,     refs.scrollEl],     // (5,5) 400×73
-      [CHAT_ELEM_INPUT_ROW,    refs.inputRowEl],   // (5,78) 400×17
-      [CHAT_ELEM_TOPRIGHT_BTN, refs.toprightEl],   // (368,5) 16×16
-      [CHAT_ELEM_CHANNEL_SEL,  refs.channelEl],    // (0,0) 46×17
-      [CHAT_ELEM_INPUT_FIELD,  refs.inputEl],      // (46,0) 306×17
-      [CHAT_ELEM_SEND_BTN,     refs.sendEl],       // (354,0) 46×17
-    ];
-    for (const [id, el] of pairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      // Clear any CSS `right`/`bottom` anchors that would fight an
-      // explicit `left`/`top` override.
-      el.style.right = "";
-      el.style.bottom = "";
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      applied += 1;
-    }
-    try {
-      window.__diag?.layout?.onChatApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(CHAT_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(CHAT_LAYOUT_ID).then(apply).catch(() => {});
-}
 
 export function mount(_ctx) {
   ensureStyles();
@@ -483,377 +418,355 @@ export function mount(_ctx) {
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  overlay.setAttribute("role", "region");
+  overlay.setAttribute("aria-label", "Chat");
+  overlay.dataset.maximized = "0";
 
   // Opt-in fade: `?chatFade=1` or persisted `hb_chat_panel_fade=1`.
   try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("chatFade") === "1") {
-      localStorage.setItem("hb_chat_panel_fade", "1");
-    } else if (params.get("chatFade") === "0") {
-      localStorage.removeItem("hb_chat_panel_fade");
-    }
-    if (localStorage.getItem("hb_chat_panel_fade") === "1") {
-      overlay.dataset.fade = "1";
-    }
+    const p = new URLSearchParams(window.location.search).get("chatFade");
+    if (p === "1") writeLocal(LS_FADE, "1");
+    else if (p === "0") writeLocal(LS_FADE, null);
   } catch (_) {}
+  if (readLocal(LS_FADE) === "1") overlay.dataset.fade = "1";
 
-  // Horizontal 6-tab strip — derivative of the retail 4-button column.
-  const tabStrip = document.createElement("div");
-  tabStrip.className = "hb-chat-tab-strip";
-  const tabBtns = {};
-  for (const t of TABS) {
+  // ── Body: gutter + log + maximize + pill + empty state ────────────────
+  const body = document.createElement("div");
+  body.className = "hb-chat-body";
+
+  const gutter = document.createElement("div");
+  gutter.className = "hb-chat-gutter";
+  gutter.setAttribute("role", "tablist");
+  gutter.setAttribute("aria-orientation", "vertical");
+  gutter.setAttribute("aria-label", "Chat filters");
+  const filterBtns = new Map();
+  for (const f of CHAT_FILTERS) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "hb-chat-tab-btn" + (t.id === "all" ? " active" : "");
-    btn.dataset.tab = t.id;
-    btn.title = t.label;
-    setAcText(btn, t.label);
-    tabStrip.appendChild(btn);
-    tabBtns[t.id] = btn;
+    btn.className = "hb-chat-filter";
+    btn.dataset.filter = f.id;
+    btn.title = f.title;
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-label", f.title);
+    btn.setAttribute("aria-selected", "false");
+    setAcText(btn, f.key, { fontId: FILTER_FONT_ID, color: LABEL_COLOR });
+    gutter.appendChild(btn);
+    filterBtns.set(f.id, btn);
   }
-  overlay.appendChild(tabStrip);
+  body.appendChild(gutter);
 
-  // Top-right Maximize button (0x1000046F at 368,5 16×16). Retail
-  // toggles the chat panel between collapsed (default height) and
-  // m_OldHeight per acclient.c:254293. Rec #100 — this is now the
-  // sole maximize toggle (the bespoke maxBtn below was consolidated
-  // away). State persists to hb_chat_panel_saved_height so a
-  // reloaded session restores the prior maximized/collapsed state
-  // mirroring chatFade persistence at line 501-507.
-  const toprightBtn = document.createElement("button");
-  toprightBtn.type = "button";
-  toprightBtn.className = "hb-chat-topright-btn";
-  toprightBtn.title = "Maximize / Restore";
-  setAcText(toprightBtn, "▲");
-  let _chatSavedHeight = null;
-  try {
-    const stored = localStorage.getItem("hb_chat_panel_saved_height");
-    if (stored != null && stored !== "") _chatSavedHeight = stored;
-  } catch (_) {}
-  function applyMaximizeState(maximized) {
-    overlay.dataset.maximized = maximized ? "1" : "0";
-    setAcText(toprightBtn, maximized ? "▼" : "▲");
-    if (maximized) {
-      // Save current height before expanding so restore returns to
-      // whatever the user had — mirrors retail m_OldHeight.
-      if (_chatSavedHeight == null) {
-        _chatSavedHeight = overlay.style.height
-          || `${Math.round(overlay.getBoundingClientRect().height)}px`;
-      }
-      overlay.style.height = `${Math.max(220, Math.floor(window.innerHeight * 0.5))}px`;
-      try { localStorage.setItem("hb_chat_panel_saved_height", _chatSavedHeight); } catch (_) {}
-    } else if (_chatSavedHeight != null) {
-      overlay.style.height = _chatSavedHeight;
-      _chatSavedHeight = null;
-      try { localStorage.removeItem("hb_chat_panel_saved_height"); } catch (_) {}
-    }
-  }
-  toprightBtn.addEventListener("click", () => {
-    applyMaximizeState(overlay.dataset.maximized !== "1");
-  });
-  // Inline default position (the layout override lands after wasm
-  // is ready; this prevents a 0,0 flicker on first paint).
-  toprightBtn.style.left = "368px";
-  toprightBtn.style.top = "5px";
-  overlay.appendChild(toprightBtn);
-  // Restore prior maximized state on construction. The saved-height
-  // sentinel doubles as the persisted "was maximized last session" bit:
-  // its presence means a maximize is pending; applyMaximizeState(true)
-  // will rehydrate the savedHeight from current dimensions and expand.
-  if (_chatSavedHeight != null) {
-    // Re-flip false so applyMaximizeState(true) treats the current
-    // height as the prior collapsed state (so a subsequent restore
-    // returns to today's overlay dimensions, not a stale captured row).
-    overlay.dataset.maximized = "0";
-    queueMicrotask(() => applyMaximizeState(true));
-  }
+  const log = document.createElement("div");
+  log.className = "hb-chat-log hbk-scroll";
+  log.setAttribute("role", "log");
+  log.setAttribute("aria-live", "polite");
+  log.setAttribute("aria-label", "Chat messages");
+  body.appendChild(log);
 
-  // Scrollback area — its [data-tab] drives the CSS filter chains
-  // defined alongside this block in ensureStyles().
-  const scroll = document.createElement("div");
-  scroll.className = "hb-chat-scroll";
-  scroll.dataset.tab = "all";
-  overlay.appendChild(scroll);
+  const emptyEl = document.createElement("div");
+  emptyEl.className = "hb-chat-empty";
+  body.appendChild(emptyEl);
 
-  function setTab(tabId) {
-    scroll.dataset.tab = tabId;
-    for (const id of Object.keys(tabBtns)) {
-      tabBtns[id].classList.toggle("active", id === tabId);
-    }
-    // Mirror the selection to the source #chat-log so the filter
-    // stays in sync if the agent-mode hide rule is ever removed.
-    const src = document.getElementById("chat-log");
-    if (src) src.dataset.tab = tabId;
-    // Re-pin to bottom on tab change.
-    scroll.scrollTop = scroll.scrollHeight;
-  }
-  // Single click handler delegated for all tab buttons.
-  overlay.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".hb-chat-tab-btn[data-tab]");
-    if (!btn) return;
-    setTab(btn.dataset.tab);
-  });
+  const maxBtn = document.createElement("button");
+  maxBtn.type = "button";
+  maxBtn.className = "hb-chat-max";
+  maxBtn.title = "Expand chat";
+  maxBtn.setAttribute("aria-label", "Expand chat");
+  body.appendChild(maxBtn);
 
-  // Channel selector — outgoing-chat channel + slash-prefix table.
-  // Sourced from acpedia Chat Interface page (channel tags + commands):
-  //   - Say   -> default, no prefix
-  //   - Tell  -> /tell <name>  (target is per-message; we surface "/tell ")
-  //   - General/Trade/LFG/Roleplay -> /cg /ct /clfg /crp (global channels)
-  //   - Allegiance/Fellowship -> /a /f
-  //   - Emote -> /me <action>
-  //   - Broadcast -> /b   (admin-gated; ACE may reject)
-  const CHANNELS = [
-    { id: "say",        label: "Local",      cmd: "" },
-    { id: "tell",       label: "Tell",       cmd: "/tell " },
-    { id: "general",    label: "General",    cmd: "/cg " },
-    { id: "trade",      label: "Trade",      cmd: "/ct " },
-    { id: "lfg",        label: "LFG",        cmd: "/clfg " },
-    { id: "roleplay",   label: "Roleplay",   cmd: "/crp " },
-    { id: "allegiance", label: "Allegiance", cmd: "/a " },
-    { id: "fellowship", label: "Fellowship", cmd: "/f " },
-    { id: "emote",      label: "Emote",      cmd: "/me " },
-    { id: "broadcast",  label: "Broadcast",  cmd: "/b " },
-  ];
-  let activeChannel = CHANNELS[0];
+  const pill = document.createElement("button");
+  pill.type = "button";
+  pill.className = "hb-chat-pill";
+  pill.title = "Jump to the latest message";
+  body.appendChild(pill);
 
-  // Input row container — per layout 0x10000013 at (5, 78) 400×17.
-  const inputRow = document.createElement("div");
-  inputRow.className = "hb-chat-input-row";
+  overlay.appendChild(body);
 
-  // Channel selector button — talk-focus dropdown anchor.
-  // Per retail (acclient.c:255043) this is element_id 0x10000014 and
-  // is `Container Type=6` in the layout (i.e. a popup-menu container).
-  const channelBtn = document.createElement("button");
-  channelBtn.type = "button";
-  channelBtn.className = "hb-chat-channel-btn";
-  setAcText(channelBtn, activeChannel.label);
-  inputRow.appendChild(channelBtn);
+  // ── Entry row: talk-focus tag, field, Send ────────────────────────────
+  const entry = document.createElement("div");
+  entry.className = "hb-chat-entry";
 
-  // Channel popup menu — opens above the button.
-  const channelMenu = document.createElement("div");
-  channelMenu.className = "hb-chat-channel-menu";
-  const channelItems = {};
-  for (const c of CHANNELS) {
-    const item = document.createElement("div");
-    item.className = "hb-chat-channel-item" + (c.id === activeChannel.id ? " selected" : "");
-    item.dataset.channel = c.id;
-    const lbl = document.createElement("span");
-    setAcText(lbl, c.label);
-    item.appendChild(lbl);
-    // P2-20 (cross-find chat-channel-menu-slash-cmd-leak): retail's
-    // channel popup shows just the label — the `/a` / `/f` slash
-    // commands aren't listed. Drop the per-item cmd span. The cmd is
-    // still applied when the user picks a channel (CHANNELS[i].cmd).
-    channelMenu.appendChild(item);
-    channelItems[c.id] = item;
-  }
-  inputRow.appendChild(channelMenu);
+  const targetBtn = document.createElement("button");
+  targetBtn.type = "button";
+  targetBtn.className = "hb-chat-target";
+  targetBtn.setAttribute("aria-haspopup", "menu");
+  targetBtn.setAttribute("aria-expanded", "false");
+  entry.appendChild(targetBtn);
 
-  // Rec #101 — channel-to-visible-tab follow. Retail gmMainChatUI
-  // collapses its m_llTextTypeFilter to the same axis as the speak-
-  // channel pick (acclient.h gmMainChatUI), so when the user picks
-  // an outgoing channel the visible filter snaps to the closest tab.
-  // Side channels (allegiance / fellowship / emote / broadcast) live
-  // under the Channels tab in our 4-button strip — same as retail's
-  // "Chan" filter.
-  const CHANNEL_TO_TAB = {
-    say:        "local",
-    tell:       "tell",
-    general:    "channels",
-    trade:      "channels",
-    lfg:        "channels",
-    roleplay:   "channels",
-    allegiance: "channels",
-    fellowship: "channels",
-    emote:      "local",
-    broadcast:  "channels",
-  };
-
-  function selectChannel(id) {
-    const c = CHANNELS.find((x) => x.id === id);
-    if (!c) return;
-    activeChannel = c;
-    setAcText(channelBtn, c.label);
-    for (const k of Object.keys(channelItems)) {
-      channelItems[k].classList.toggle("selected", k === id);
-    }
-    closeChannelMenu();
-    input.focus();
-    const targetTab = CHANNEL_TO_TAB[id];
-    if (targetTab && scroll.dataset.tab !== targetTab) {
-      setTab(targetTab);
-    }
-  }
-  function openChannelMenu()  { channelMenu.dataset.open = "1"; }
-  function closeChannelMenu() { channelMenu.dataset.open = "0"; }
-
-  channelBtn.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    if (channelMenu.dataset.open === "1") closeChannelMenu();
-    else openChannelMenu();
-  });
-  channelMenu.addEventListener("click", (ev) => {
-    const item = ev.target.closest("[data-channel]");
-    if (!item) return;
-    selectChannel(item.dataset.channel);
-  });
-  // Click anywhere else closes the menu. Named so teardown can remove it —
-  // an anonymous handler on `document` pins the whole detached overlay
-  // (and its closure) for the life of the page after an unmount.
-  const onDocClickCloseMenu = (ev) => {
-    if (channelMenu.dataset.open !== "1") return;
-    if (overlay.contains(ev.target)) return;
-    closeChannelMenu();
-  };
-  document.addEventListener("click", onDocClickCloseMenu);
-
-  // Text input — per layout 0x10000016 at (46, 0) 306×17.
   const input = document.createElement("input");
-  input.className = "hb-chat-input";
   input.type = "text";
-  input.placeholder = "type here…";
-  inputRow.appendChild(input);
+  input.className = "hb-chat-input hbk-input";
+  input.autocomplete = "off";
+  input.spellcheck = true;
+  input.maxLength = 240;
+  input.setAttribute("aria-label", "Chat message");
+  entry.appendChild(input);
 
-  // Send button — per layout 0x10000019 at (354, 0) 46×17, 3 states.
-  // PR-LL 2026-05-23: explicit Send button on the right of the input
-  // row. Same submit path as Enter.
   const sendBtn = document.createElement("button");
   sendBtn.type = "button";
-  sendBtn.className = "hb-chat-send-btn";
-  setAcText(sendBtn, "Send");
+  sendBtn.className = "hb-chat-send";
   sendBtn.title = "Send (Enter)";
-  inputRow.appendChild(sendBtn);
+  sendBtn.setAttribute("aria-label", "Send");
+  setAcText(sendBtn, "Send", { fontId: BUTTON_FONT_ID, color: LABEL_COLOR });
+  entry.appendChild(sendBtn);
 
-  overlay.appendChild(inputRow);
+  overlay.appendChild(entry);
 
-  // Rec #80 — corner-resize hotspots replace the bespoke bottom-right
-  // handle. attachCornerResizers gives all four corners with lock-
-  // state sync via WINDOW_ID.CHAT; persistWindowSize stores width /
-  // height alongside x / y in the unified hb.window.<id> entry.
-  // Legacy hb_chat_panel_width/height are migrated on first mount
-  // (see below) so the visual size carries over from prior versions.
-  const _chatSize = persistWindowSize(overlay, WINDOW_ID.CHAT, {
-    minW: 220, minH: 70, maxW: 900, maxH: 500,
+  const menu = document.createElement("div");
+  menu.className = "hb-chat-menu hbk-scroll";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Talk to");
+  const menuItems = new Map();
+  let lastSection = TALK_FOCUSES[0].section;
+  for (const f of TALK_FOCUSES) {
+    if (f.section !== lastSection) {
+      const rule = document.createElement("div");
+      rule.className = "hbk-rule";
+      rule.setAttribute("role", "separator");
+      menu.appendChild(rule);
+      lastSection = f.section;
+    }
+    const item = document.createElement("div");
+    item.className = "hbk-row is-clickable";
+    item.dataset.focus = f.id;
+    item.tabIndex = -1;
+    item.setAttribute("role", "menuitemradio");
+    item.setAttribute("aria-checked", "false");
+    item.setAttribute("aria-label", f.menu);
+    setAcText(item, f.menu, { color: colorForCategory(f.category) });
+    menu.appendChild(item);
+    menuItems.set(f.id, item);
+  }
+  overlay.appendChild(menu);
+
+  // ── Window chrome: size, resize, drag ─────────────────────────────────
+  // Size persists in the unified hb.window.<CHAT> entry (x/y written by
+  // attachWindowPosition below share it).
+  const sizeP = persistWindowSize(overlay, WINDOW_ID.CHAT, {
+    minW: MIN_W, minH: MIN_H, maxW: MAX_W, maxH: MAX_H,
   });
-  // Resizer handle stashed on overlay so a future plugin-loader dispose
-  // pass can drop the corner divs + lock-change listener.
-  overlay._chatCornerResizers = attachCornerResizers(overlay, {
-    windowId: WINDOW_ID.CHAT,
-    minWidth: 220, minHeight: 70,
-    maxWidth: 900, maxHeight: 500,
-    onSizeChange: ({ width, height }) => _chatSize.commit(width, height),
-  });
-
-  // Rec #100 — duplicate maxBtn removed. The top-right toprightBtn
-  // (rendered above) is the sole maximize/restore toggle and persists
-  // its state to hb_chat_panel_saved_height across reloads.
-
-  // No lock + move handles on chat — those are radar-only chrome per
-  // user direction 2026-05-22. Resize is on the bottom-right corner.
+  // One-shot migration of the pre-unification hb_chat_panel_width/height.
+  try {
+    const w = parseInt(readLocal("hb_chat_panel_width") ?? "", 10);
+    const h = parseInt(readLocal("hb_chat_panel_height") ?? "", 10);
+    if ((Number.isFinite(w) && w > 0) || (Number.isFinite(h) && h > 0)) {
+      sizeP.commit(Number.isFinite(w) && w > 0 ? w : null, Number.isFinite(h) && h > 0 ? h : null);
+      writeLocal("hb_chat_panel_width", null);
+      writeLocal("hb_chat_panel_height", null);
+    }
+  } catch (_) {}
+  // A size saved before the retail minimum existed (old min 220×70) would
+  // clip the filter column — lift it to the minimum once.
+  {
+    const s = sizeP.getSize();
+    if ((s.width != null && s.width < MIN_W) || (s.height != null && s.height < MIN_H)) {
+      sizeP.commit(s.width != null ? Math.max(MIN_W, s.width) : null,
+                   s.height != null ? Math.max(MIN_H, s.height) : null);
+    }
+  }
 
   document.body.appendChild(overlay);
 
-  // Drag-by-tab-strip + localStorage position persistence (Improvement C,
-  // 2026-05-29). The tab strip is the natural "grip" — chat-panel has no
-  // dedicated titlebar. Drag suppressed on clicks targeting the tab
-  // buttons themselves so a single click still selects a channel.
-  installDragPersistence(overlay, tabStrip, "chat-panel");
-
-  // HUD rec #47 — restore persisted size if present. Same clamp as the
-  // resize handler (220-900 wide, 70-500 tall) so corrupted/edge values
-  // can't escape viewport. Position is owned by installDragPersistence.
-  // Rec #80 — persistWindowSize (above) reads the unified hb.window
-  // entry on construction and applies the stored size automatically.
-  // The block below is now a one-shot legacy migration: if the bespoke
-  // hb_chat_panel_width / height keys still exist, commit them through
-  // the new persistor and remove the old keys so subsequent loads use
-  // the unified storage.
-  try {
-    const w = parseInt(localStorage.getItem("hb_chat_panel_width") ?? "", 10);
-    const h = parseInt(localStorage.getItem("hb_chat_panel_height") ?? "", 10);
-    if ((Number.isFinite(w) && w > 0) || (Number.isFinite(h) && h > 0)) {
-      _chatSize.commit(
-        Number.isFinite(w) && w > 0 ? Math.max(220, Math.min(900, w)) : null,
-        Number.isFinite(h) && h > 0 ? Math.max(70, Math.min(500, h)) : null,
-      );
-      try { localStorage.removeItem("hb_chat_panel_width"); } catch (_) {}
-      try { localStorage.removeItem("hb_chat_panel_height"); } catch (_) {}
+  // Keep the box docked to its nearer vertical edge after a resize or a
+  // maximise (the resizers write `top`; a bottom-docked chat must keep
+  // `bottom` so it stays docked when the browser or HUD scale changes).
+  function reanchorVertical() {
+    if (!overlay.isConnected) return;
+    const r = hudRect(overlay);
+    const vp = hudViewport();
+    if (r.top + r.height / 2 > vp.height / 2) {
+      overlay.style.bottom = `${Math.max(0, vp.height - r.bottom)}px`;
+      overlay.style.top = "auto";
+    } else {
+      overlay.style.top = `${Math.max(0, r.top)}px`;
+      overlay.style.bottom = "auto";
     }
-  } catch (_) {}
-
-  // Apply retail layout positions for sub-elements. The CSS values
-  // above already match retail; this re-asserts from the DAT so the
-  // asset stays the source of truth for future tweaks.
-  // NOTE: the right-side scrollbar (0x10000012 at 384,0 16×73) is
-  // currently expressed via CSS `scrollbar-width: thin` on the
-  // .hb-chat-scroll container; the layout's explicit scrollbar
-  // element is decorative-only here and not surfaced as DOM.
-  applyChatLayout({
-    scrollEl:     scroll,
-    inputRowEl:   inputRow,
-    toprightEl:   toprightBtn,
-    channelEl:    channelBtn,
-    inputEl:      input,
-    sendEl:       sendBtn,
+  }
+  function onUserResize({ width, height }) {
+    sizeP.commit(width, height);
+    if (overlay.dataset.maximized === "1") setMaximized(false, { keepSize: true });
+    reanchorVertical();
+    if (pinned) scrollToBottom();
+  }
+  const edgeResizers = attachEdgeResizers(overlay, {
+    edges: ["top"],
+    windowId: WINDOW_ID.CHAT,
+    minWidth: MIN_W, minHeight: MIN_H, maxWidth: MAX_W, maxHeight: MAX_H,
+    onSizeChange: onUserResize,
+  });
+  const cornerResizers = attachCornerResizers(overlay, {
+    windowId: WINDOW_ID.CHAT,
+    size: 6,
+    minWidth: MIN_W, minHeight: MIN_H, maxWidth: MAX_W, maxHeight: MAX_H,
+    onSizeChange: onUserResize,
+  });
+  // Drag by the frame, the gutter and the bar margins (zoom-aware,
+  // edge-anchored persistence). Same key the old installDragPersistence used.
+  attachWindowPosition(overlay, {
+    windowId: WINDOW_ID.CHAT,
+    dragHandle: overlay,
+    ignoreSelector: DRAG_IGNORE,
+    legacyKey: "hb_panel_pos_chat-panel",
   });
 
-  // Mirror an <li> from #chat-log into our retail scrollback. We tag
-  // each mirrored line with `data-empty` if the source was the empty
-  // placeholder so we can drop it the first time a real message lands
-  // (matches index.html's behaviour at line 5928).
-  function mirrorOne(srcLi) {
-    const isEmpty = srcLi.classList.contains("empty");
-    if (!isEmpty) {
-      // Drop any stale empty placeholders before appending the first
-      // real line — source #chat-log does the same.
-      scroll.querySelectorAll('[data-empty="1"]').forEach((el) => el.remove());
-    }
+  // Never larger than the HUD viewport (a box sized at HUD scale 1 can be
+  // too big once the scale or the window changes). Transient — not saved.
+  function fitToViewport() {
+    if (!overlay.isConnected) return;
+    const vp = hudViewport();
+    const r = hudRect(overlay);
+    const maxW = Math.max(MIN_W, Math.floor(vp.width - 8));
+    const maxH = Math.max(MIN_H, Math.floor(vp.height - 8));
+    if (r.width > maxW + 0.5) overlay.style.width = `${maxW}px`;
+    if (r.height > maxH + 0.5) overlay.style.height = `${maxH}px`;
+  }
+
+  // ── Log model ─────────────────────────────────────────────────────────
+  let filter = normalizeFilterId(readLocal(LS_FILTER));
+  let pinned = true;
+  let unread = 0;
+  const counts = { local: 0, tell: 0, chan: 0, other: 0 };
+
+  function visibleCount() {
+    if (filter === "all") return counts.local + counts.tell + counts.chan + counts.other;
+    return counts[filterGroupFor(filter)] ?? 0;
+  }
+  function filterGroupFor(id) {
+    return id === "local" ? "local" : id === "tell" ? "tell" : id === "channels" ? "chan" : null;
+  }
+  function updateEmpty() {
+    const f = CHAT_FILTERS.find((x) => x.id === filter) ?? CHAT_FILTERS[0];
+    const empty = visibleCount() === 0;
+    overlay.dataset.empty = empty ? "1" : "0";
+    if (empty && emptyEl.textContent !== f.empty) emptyEl.textContent = f.empty;
+  }
+  function showUnread() {
+    if (unread <= 0) { pill.classList.remove("is-visible"); return; }
+    pill.textContent = `${unreadLabel(unread)} ↓`;
+    pill.classList.add("is-visible");
+  }
+  function clearUnread() {
+    if (unread === 0 && !pill.classList.contains("is-visible")) return;
+    unread = 0;
+    showUnread();
+  }
+  function scrollToBottom() {
+    log.scrollTop = log.scrollHeight;
+    pinned = true;
+    clearUnread();
+  }
+  // Pinned is USER intent: only a scroll that leaves the bottom un-pins.
+  log.addEventListener("scroll", () => {
+    pinned = isNearBottom(log);
+    if (pinned) clearUnread();
+  }, { passive: true });
+  // Retail gmMainChatUI::ResizeTo (acclient.c:254374) keeps the log at its
+  // end across a resize when it was at the end.
+  let ro = null;
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => { if (pinned) log.scrollTop = log.scrollHeight; });
+    ro.observe(log);
+  }
+  pill.addEventListener("click", () => scrollToBottom());
+
+  function refreshTimestampFlag() {
+    const on = readCharOption(OPT_TIMESTAMPS) ? "1" : "0";
+    if (log.dataset.ts !== on) log.dataset.ts = on;
+  }
+
+  function setFilter(id, { persist = true } = {}) {
+    filter = normalizeFilterId(id);
+    log.dataset.filter = filter;
+    for (const [fid, btn] of filterBtns) btn.setAttribute("aria-selected", fid === filter ? "true" : "false");
+    if (persist) writeLocal(LS_FILTER, filter);
+    // Keep the dev-page #chat-log in step (same data-tab vocabulary).
+    const src = document.getElementById("chat-log");
+    if (src) src.dataset.tab = filter;
+    updateEmpty();
+    scrollToBottom();
+  }
+  gutter.addEventListener("click", (ev) => {
+    const btn = ev.target.closest?.(".hb-chat-filter[data-filter]");
+    if (btn) setFilter(btn.dataset.filter);
+  });
+  gutter.addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    const ids = CHAT_FILTERS.map((f) => f.id);
+    const i = ids.indexOf(filter);
+    const next = ids[(i + (ev.key === "ArrowDown" ? 1 : ids.length - 1)) % ids.length];
+    ev.preventDefault();
+    ev.stopPropagation();
+    setFilter(next);
+    filterBtns.get(next)?.focus();
+  });
+
+  function buildLine(text, cat, isEcho, ts) {
+    const style = chatLineStyle(cat, text, isEcho);
     const line = document.createElement("div");
     line.className = "hb-chat-line";
-    const cat = srcLi.dataset?.cat ?? null;
-    let lineColor = colorForCategory(cat);
-    if (cat != null) {
-      line.classList.add(`cat-${cat}`);
-      line.dataset.cat = cat;
+    line.dataset.grp = style.group;
+    line.dataset.cat = String(style.category);
+    if (isEcho) line.classList.add("is-echo");
+    line.style.color = style.color;
+    const tsEl = document.createElement("span");
+    tsEl.className = "hb-chat-ts";
+    tsEl.textContent = `${formatChatTimestamp(ts)} `;
+    line.appendChild(tsEl);
+    // Chat text is untrusted — text nodes only, never innerHTML.
+    const sender = isEcho ? null : parseChatSender(text);
+    if (sender) {
+      if (sender.start > 0) line.appendChild(document.createTextNode(text.slice(0, sender.start)));
+      const name = document.createElement("span");
+      name.className = "hb-chat-name";
+      name.dataset.name = sender.name;
+      name.title = `Send a tell to ${sender.name}`;
+      name.textContent = sender.name;
+      line.appendChild(name);
+      line.appendChild(document.createTextNode(text.slice(sender.end)));
+    } else {
+      line.appendChild(document.createTextNode(text));
     }
-    if (srcLi.classList.contains("echo")) {
-      line.classList.add("echo");
-      lineColor = ECHO_COLOR;
-    } else if (isEmpty) {
-      line.dataset.empty = "1";
-      line.style.opacity = "0.55";
-      line.style.fontStyle = "italic";
-    }
-    line.style.color = lineColor;
-    // Chat lines use the chat-window font (0x40000027, 16×15, 1419-
-    // glyph extended set) — covers accented Latin / smart quotes /
-    // symbols that compact's 1050-glyph set drops. Scroll line-height
-    // (17px) was bumped to accommodate the 16px cell.
-    setAcText(line, srcLi.textContent || "", { color: lineColor, fontId: CHAT_FONT_ID });
-    scroll.appendChild(line);
-    // Auto-scroll if pinned to bottom; otherwise raise the new-messages
-    // badge so the user knows there's chatter waiting (P2-29).
-    if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40) {
-      scroll.scrollTop = scroll.scrollHeight;
-    } else if (typeof overlay._hbChatMaybeFlag === "function") {
-      overlay._hbChatMaybeFlag();
-    }
-    // Cap our own mirror at MAX_LINES (insurance vs source-log resets).
-    while (scroll.childElementCount > MAX_LINES) {
-      scroll.firstElementChild.remove();
+    return line;
+  }
+
+  function trimLines() {
+    let n = log.childElementCount;
+    while (n > MAX_LINES) {
+      const first = log.firstElementChild;
+      if (!first) break;
+      const g = first.dataset.grp;
+      if (counts[g] != null) counts[g] = Math.max(0, counts[g] - 1);
+      first.remove();
+      n -= 1;
     }
   }
 
-  // Initial sync — pull whatever's already in #chat-log when we mount.
-  const sourceLog = document.getElementById("chat-log");
-  if (sourceLog) {
-    for (const li of sourceLog.children) mirrorOne(li);
+  // Mirror one #chat-log <li>. `batch` defers the scroll/empty bookkeeping
+  // to the caller (initial sync).
+  function mirrorOne(srcLi, batch = false) {
+    if (!srcLi || srcLi.classList?.contains("empty")) return;
+    const text = srcLi.textContent || "";
+    if (!text) return;
+    const isEcho = srcLi.classList.contains("echo");
+    const ts = Number(srcLi.dataset?.ts) || Date.now();
+    const line = buildLine(text, srcLi.dataset?.cat ?? null, isEcho, ts);
+    log.appendChild(line);
+    counts[line.dataset.grp] = (counts[line.dataset.grp] ?? 0) + 1;
+    trimLines();
+    if (batch) return;
+    refreshTimestampFlag();
+    updateEmpty();
+    // Your own message always brings you back to the latest line.
+    if (pinned || isEcho) scrollToBottom();
+    else if (lineVisibleInFilter(filter, line.dataset.grp)) { unread += 1; showUnread(); }
   }
 
-  // MutationObserver watches for new <li>s appended by appendChatLine.
   let observer = null;
   let retryTimer = null;
-  if (sourceLog) {
+  function attachSource(src) {
+    for (const li of src.children) mirrorOne(li, true);
+    refreshTimestampFlag();
+    updateEmpty();
+    scrollToBottom();
     observer = new MutationObserver((records) => {
       for (const r of records) {
         for (const node of r.addedNodes) {
@@ -861,176 +774,376 @@ export function mount(_ctx) {
         }
       }
     });
-    observer.observe(sourceLog, { childList: true });
+    observer.observe(src, { childList: true });
+  }
+  const sourceLog = document.getElementById("chat-log");
+  if (sourceLog) {
+    attachSource(sourceLog);
   } else {
-    // index.html hasn't mounted #chat-log yet (we ran first); retry.
-    // Held in a mount-scope handle so teardown can cancel it: a remount
-    // (mount() removes the prior overlay by id without running its
-    // disposer) would otherwise leave the orphan interval alive, and it
-    // would go on to attach a SECOND MutationObserver that mirrors every
-    // chat line into a detached subtree forever.
+    // index.html hasn't mounted #chat-log yet (we ran first); retry. The
+    // handle is mount-scoped so teardown cancels it (a remount must not
+    // leave an orphan interval that attaches a second observer).
     retryTimer = setInterval(() => {
-      const log = document.getElementById("chat-log");
-      if (!log) return;
+      const src = document.getElementById("chat-log");
+      if (!src) return;
       clearInterval(retryTimer);
       retryTimer = null;
-      for (const li of log.children) mirrorOne(li);
-      observer = new MutationObserver((records) => {
-        for (const r of records) {
-          for (const node of r.addedNodes) {
-            if (node?.tagName === "LI") mirrorOne(node);
-          }
-        }
-      });
-      observer.observe(log, { childList: true });
+      attachSource(src);
     }, 250);
   }
 
-  // Send: forward our input to the existing #chat-input so all the
-  // wasm/ACE wiring (Talk packet, error handling, local echo) stays in
-  // one place. Keypress on Enter mirrors index.html's Submit form
-  // behaviour at line 6755+.
-  function submitChat() {
-    const text = input.value.trim();
-    if (!text) return;
-    // If the user typed their own slash-command, honour it as-is
-    // (don't double-prefix). Otherwise prepend the active channel's
-    // command so e.g. selecting "Trade" + typing "WTS keys" sends
-    // "/ct WTS keys" through the existing chat-form submit handler.
-    const startsWithSlash = text.startsWith("/") || text.startsWith("@");
-    const outgoing = startsWithSlash ? text : (activeChannel.cmd + text);
-    const srcInput = document.getElementById("chat-input");
-    const srcForm = document.getElementById("chat-form");
-    if (srcInput && srcForm) {
-      srcInput.value = outgoing;
-      // Dispatch submit on the source form so all listeners (the
-      // existing Talk packet sender) fire.
-      const submitEv = new Event("submit", { bubbles: true, cancelable: true });
-      srcForm.dispatchEvent(submitEv);
-      input.value = "";
-    } else {
-      // Fallback: no source input found yet, just clear ours.
-      input.value = "";
+  // ── Talk focus (ChatTarget 0x10000014) ───────────────────────────────
+  let activeFocus = TALK_FOCUSES[0];
+  function placeholderFor(f) {
+    switch (f.id) {
+      case "say": return "Press Enter to chat";
+      case "emote": return "Describe an action, e.g. waves hello";
+      case "tell": return "Name, message";
+      case "reply": {
+        const who = typeof window !== "undefined" ? window.__chatLastIncomingTellSender : null;
+        return who ? `Reply to ${who}` : "No one has sent you a tell yet";
+      }
+      default: return `Message ${f.menu}`;
     }
   }
-  // P2-29 (cross-find chat-input-history-missing): retail's
-  // m_InputHistory ring buffer — Up/Down arrows recall recent sends.
-  // 64-entry ring is bigger than retail's docs cite (32) but cheap
-  // and gives users a less-frustrating recall window.
-  const inputHistory = [];
+  function setTalkFocus(id, { focusInput = true, widen = true } = {}) {
+    activeFocus = talkFocusById(id);
+    setAcText(targetBtn, activeFocus.label, { fontId: BUTTON_FONT_ID, color: LABEL_COLOR });
+    targetBtn.title = `Talking to: ${activeFocus.menu} (click to change)`;
+    targetBtn.setAttribute("aria-label", `Talk to: ${activeFocus.menu}`);
+    input.style.color = colorForCategory(activeFocus.category);
+    input.placeholder = placeholderFor(activeFocus);
+    for (const [fid, item] of menuItems) item.setAttribute("aria-checked", fid === activeFocus.id ? "true" : "false");
+    // You always see what you send: if the current filter would hide this
+    // channel, switch to the channel's own filter (player picks only — the
+    // initial "Chat" focus must not override a saved filter).
+    const g = filterGroupForCategory(activeFocus.category);
+    if (widen && !lineVisibleInFilter(filter, g)) setFilter(GROUP_TO_FILTER[g] ?? "all");
+    if (focusInput) activate();
+  }
+
+  let menuOpen = false;
+  function openMenu() {
+    if (menuOpen) return;
+    menuOpen = true;
+    menu.dataset.open = "1";
+    targetBtn.setAttribute("aria-expanded", "true");
+    // Open upward from the tag; flip below the bar when the window sits
+    // too close to the top of the HUD viewport. HUD px throughout.
+    const r = hudRect(overlay);
+    const vp = hudViewport();
+    const natural = menu.scrollHeight;
+    const above = r.bottom - 24 - 4;
+    const below = vp.height - r.bottom - 6;
+    if (above >= Math.min(natural, 160) || above >= below) {
+      menu.style.top = "auto";
+      menu.style.bottom = "24px";
+      menu.style.maxHeight = `${Math.max(80, Math.floor(above))}px`;
+    } else {
+      menu.style.bottom = "auto";
+      menu.style.top = "calc(100% + 2px)";
+      menu.style.maxHeight = `${Math.max(80, Math.floor(below))}px`;
+    }
+    (menuItems.get(activeFocus.id) ?? menu.querySelector(".hbk-row"))?.focus({ preventScroll: false });
+  }
+  function closeMenu({ refocus = false } = {}) {
+    if (!menuOpen) return;
+    menuOpen = false;
+    menu.dataset.open = "0";
+    targetBtn.setAttribute("aria-expanded", "false");
+    if (refocus) targetBtn.focus();
+  }
+  targetBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (menuOpen) closeMenu();
+    else openMenu();
+  });
+  menu.addEventListener("click", (ev) => {
+    const item = ev.target.closest?.("[data-focus]");
+    if (!item) return;
+    closeMenu();
+    setTalkFocus(item.dataset.focus);
+  });
+  menu.addEventListener("keydown", (ev) => {
+    ev.stopPropagation();
+    const items = [...menuItems.values()];
+    const i = items.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const n = items.length;
+      const next = items[(i < 0 ? 0 : i + (ev.key === "ArrowDown" ? 1 : n - 1)) % n];
+      next?.focus();
+    } else if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (i >= 0) { closeMenu(); setTalkFocus(items[i].dataset.focus); }
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeMenu({ refocus: true });
+    }
+  });
+  const onDocPointerDown = (ev) => {
+    if (!menuOpen) return;
+    if (menu.contains(ev.target) || targetBtn.contains(ev.target)) return;
+    closeMenu();
+  };
+  document.addEventListener("pointerdown", onDocPointerDown, true);
+
+  // ── Chat entry (ChatInterface Activate/DeactivateChatEntry) ───────────
+  function activate() {
+    refreshTimestampFlag();
+    if (activeFocus.id === "reply") input.placeholder = placeholderFor(activeFocus);
+    input.focus({ preventScroll: true });
+    const n = input.value.length;
+    try { input.setSelectionRange(n, n); } catch (_) {}
+  }
+  function deactivate() {
+    closeMenu();
+    input.blur();
+    const src = document.getElementById("chat-input");
+    if (src && document.activeElement === src) src.blur();
+  }
+
+  // Retail ChatInterface::StartTell (acclient.c:288028) — clicking a sender
+  // puts a tell to them in the entry.
+  function startTell(name) {
+    if (!name) return;
+    setTalkFocus("tell", { focusInput: false });
+    input.value = `${name}, `;
+    activate();
+  }
+  log.addEventListener("click", (ev) => {
+    const nameEl = ev.target.closest?.(".hb-chat-name");
+    if (!nameEl) return;
+    const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed) return;   // the player is selecting text
+    startTell(nameEl.dataset.name);
+  });
+
+  // Up/Down recall (retail ChatInterface::SelectCommandFromHistory,
+  // acclient.c:287558).
+  const history = [];
   const HISTORY_MAX = 64;
-  let historyCursor = -1;       // -1 = past the latest entry (typing fresh)
-  let historyDraft = "";        // saved while browsing history
+  let historyCursor = -1;
+  let historyDraft = "";
   function pushHistory(text) {
     const t = (text ?? "").trim();
     if (!t) return;
-    // Skip if same as latest entry (deduplicate consecutive resubmits).
-    if (inputHistory.length > 0 && inputHistory[inputHistory.length - 1] === t) return;
-    inputHistory.push(t);
-    if (inputHistory.length > HISTORY_MAX) inputHistory.shift();
+    if (history.length === 0 || history[history.length - 1] !== t) {
+      history.push(t);
+      if (history.length > HISTORY_MAX) history.shift();
+    }
     historyCursor = -1;
     historyDraft = "";
   }
   function recallHistory(direction) {
-    if (inputHistory.length === 0) return;
+    if (history.length === 0) return;
     if (historyCursor === -1) {
-      // Down with nothing recalled yet is a no-op — there is no "newer"
-      // entry to move to. Only Up enters the history and stashes the
-      // draft; the old code ignored `direction` here, so Down on a fresh
-      // draft behaved as Up and overwrote in-progress text.
+      // Down with nothing recalled yet has no newer entry to move to.
       if (direction !== "up") return;
       historyDraft = input.value;
-      historyCursor = inputHistory.length - 1;
+      historyCursor = history.length - 1;
     } else {
       historyCursor += direction === "up" ? -1 : 1;
-      historyCursor = Math.max(0, Math.min(inputHistory.length, historyCursor));
+      historyCursor = Math.max(0, Math.min(history.length, historyCursor));
     }
-    if (historyCursor >= inputHistory.length) {
-      // Past the latest — restore the draft.
+    if (historyCursor >= history.length) {
       input.value = historyDraft;
       historyCursor = -1;
       historyDraft = "";
     } else {
-      input.value = inputHistory[historyCursor];
+      input.value = history[historyCursor];
     }
-    // Place caret at end so the user can keep typing.
-    requestAnimationFrame(() => {
-      input.selectionStart = input.value.length;
-      input.selectionEnd = input.value.length;
-    });
+    const n = input.value.length;
+    requestAnimationFrame(() => { try { input.setSelectionRange(n, n); } catch (_) {} });
   }
-  function submitChatWithHistory() {
-    const outgoing = (input.value ?? "").trim();
-    pushHistory(outgoing);
-    submitChat();
+
+  let errorTimer = 0;
+  function flashError(msg) {
+    input.classList.add("is-error");
+    if (msg) input.title = msg;
+    clearTimeout(errorTimer);
+    errorTimer = setTimeout(() => {
+      input.classList.remove("is-error");
+      input.removeAttribute("title");
+    }, 900);
   }
+
+  // Forward to #chat-form so the outbound hook, slash routing and echo stay
+  // in index.html. The form's handler clears #chat-input on every handled
+  // path (sent, routed, eaten by a plugin hook) and leaves it untouched when
+  // the session is not in world or the send threw — that is our "accepted".
+  function submit({ fromKeyboard }) {
+    const typed = input.value.trim();
+    // Retail ChatInterface::HandleEnterKey (acclient.c:288853): Enter on an
+    // empty entry just leaves chat mode.
+    if (!typed) { if (fromKeyboard) deactivate(); return; }
+    const outgoing = buildOutgoingLine(activeFocus, typed);
+    const srcInput = document.getElementById("chat-input");
+    const srcForm = document.getElementById("chat-form");
+    if (!srcInput || !srcForm) { flashError("Chat is not connected yet."); return; }
+    srcInput.value = outgoing;
+    srcForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    const accepted = srcInput.value === "";
+    srcInput.value = "";
+    if (!accepted) { flashError("Not sent — you are not in the world yet."); return; }
+    pushHistory(typed);
+    input.value = "";
+    // HandleEnterKey leaves chat mode after sending unless the player set
+    // CharacterOption StayInChatModeAfterSendingMessage. A mouse Send keeps
+    // the caret where the player is working.
+    if (!fromKeyboard || readCharOption(OPT_STAY_IN_CHAT)) activate();
+    else deactivate();
+  }
+
   input.addEventListener("keydown", (ev) => {
-    // Stop the global keydown-driven movement from firing while typing.
-    // (Must run first, in this same bubble-phase listener — a separate
-    // capture-phase stopPropagation() on this node would starve this
-    // very handler, since the DOM dispatch algorithm skips a target's
-    // bubble invocation once its capture invocation stops propagation.)
+    // Typing never reaches gameplay keys (the funnel already gates on the
+    // focused <input>; this keeps document listeners out too).
     ev.stopPropagation();
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      submitChatWithHistory();
-      return;
+    if (ev.isComposing) return;
+    switch (ev.key) {
+      case "Enter": ev.preventDefault(); submit({ fromKeyboard: true }); return;
+      case "Escape": ev.preventDefault(); if (menuOpen) closeMenu(); else deactivate(); return;
+      case "ArrowUp": ev.preventDefault(); recallHistory("up"); return;
+      case "ArrowDown": ev.preventDefault(); recallHistory("down"); return;
+      case "PageUp": ev.preventDefault(); log.scrollBy(0, -Math.max(15, log.clientHeight - 15)); return;
+      case "PageDown": ev.preventDefault(); log.scrollBy(0, Math.max(15, log.clientHeight - 15)); return;
+      default: return;
     }
-    if (ev.key === "ArrowUp")   { ev.preventDefault(); recallHistory("up");   return; }
-    if (ev.key === "ArrowDown") { ev.preventDefault(); recallHistory("down"); return; }
-    if (ev.key === "Escape") {
-      // Retail ChatInterface::DeactivateChatEntry — close the entry
-      // without sending.
-      ev.preventDefault();
-      input.blur();
-      return;
-    }
+  });
+  input.addEventListener("focus", () => {
+    refreshTimestampFlag();
+    if (activeFocus.id === "reply") input.placeholder = placeholderFor(activeFocus);
   });
   sendBtn.addEventListener("click", (ev) => {
     ev.preventDefault();
-    submitChatWithHistory();
-    input.focus();
+    submit({ fromKeyboard: false });
   });
 
-  // P2-29 (cross-find chat-new-messages-badge-missing): retail's
-  // m_chatNewNonVisibleTextIndicator (element 0x1000048C, 16×16 at
-  // 0,57). Lights when new chat-log entries arrive while the scroll
-  // is NOT at the bottom (user is reviewing history). Clicking the
-  // badge scrolls to bottom + clears it. Hidden by default.
-  const badge = document.createElement("div");
-  badge.className = "hb-chat-new-badge";
-  badge.hidden = true;
-  badge.title = "New messages — click to scroll";
-  badge.style.cssText =
-    "position:absolute;left:6px;top:54px;width:16px;height:16px;cursor:pointer;" +
-    "background:linear-gradient(180deg,#ffd76a 0%,#a87830 100%);" +
-    "border:1px solid var(--hb-border-brass);border-radius:50%;z-index:20;" +
-    "box-shadow:0 0 6px rgba(255,200,80,0.7);";
-  overlay.appendChild(badge);
-  badge.addEventListener("click", () => {
-    scroll.scrollTop = scroll.scrollHeight;
-    badge.hidden = true;
-  });
-  function isScrollNearBottom() {
-    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 24;
+  // Enter anywhere in the game opens the chat bar (retail keymap "Chat Mode
+  // → Enter", ChatInterface::OnToggleChatEntry acclient.c:287616). Skipped
+  // when something else already handled the key or owns keyboard focus.
+  const onDocKeyDown = (ev) => {
+    if (ev.key !== "Enter" || ev.defaultPrevented || ev.repeat || ev.isComposing) return;
+    if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+    const ae = document.activeElement;
+    if (ae && ae !== document.body) {
+      const tag = ae.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || ae.isContentEditable) return;
+      // A button the player TABBED to keeps Enter; one merely left focused
+      // by a mouse click (no :focus-visible) must not swallow the chat key.
+      if (tag === "BUTTON" || tag === "A" || ae.getAttribute?.("tabindex") != null) {
+        let keyboardFocused = true;
+        try { keyboardFocused = ae.matches(":focus-visible"); } catch (_) {}
+        if (keyboardFocused) return;
+      }
+    }
+    if (!overlay.isConnected || overlay.getClientRects().length === 0) return;
+    ev.preventDefault();
+    activate();
+  };
+  document.addEventListener("keydown", onDocKeyDown);
+
+  // ── Maximise (MaximizeButton 0x1000046F) ─────────────────────────────
+  let restoreRect = null;
+  function applyRect({ top, height }) {
+    const vp = hudViewport();
+    overlay.style.height = `${Math.round(height)}px`;
+    if (top + height / 2 > vp.height / 2) {
+      overlay.style.top = "auto";
+      overlay.style.bottom = `${Math.max(0, Math.round(vp.height - (top + height)))}px`;
+    } else {
+      overlay.style.bottom = "auto";
+      overlay.style.top = `${Math.max(0, Math.round(top))}px`;
+    }
   }
-  // Hide the badge when the user scrolls back to bottom themselves.
-  scroll.addEventListener("scroll", () => {
-    if (isScrollNearBottom()) badge.hidden = true;
-  });
-  // The MutationObserver below already watches for new lines; expose a
-  // helper it can call to light the badge when warranted.
-  function maybeFlagNewMessages() {
-    if (!isScrollNearBottom()) badge.hidden = false;
+  function setMaximized(on, { keepSize = false, restoreHeight = null } = {}) {
+    if (!overlay.isConnected) return;
+    const isOn = overlay.dataset.maximized === "1";
+    if (on === isOn) return;
+    const vp = hudViewport();
+    const r = hudRect(overlay);
+    if (on) {
+      const h0 = restoreHeight ?? r.height;
+      restoreRect = { height: h0, top: r.bottom - h0 };
+      applyRect(computeMaximizedRect({ top: r.top, height: r.height }, vp.height));
+      writeLocal(LS_SAVED_HEIGHT, String(Math.round(h0)));
+    } else {
+      if (!keepSize) {
+        const h = Math.max(MIN_H, restoreRect?.height ?? sizeP.getSize().height ?? HEIGHT);
+        // Restore keeps the edge the window is docked to.
+        const bottomDocked = r.top + r.height / 2 > vp.height / 2;
+        const top = bottomDocked ? r.bottom - h : Math.min(r.top, Math.max(0, vp.height - h));
+        applyRect({ top, height: h });
+      }
+      restoreRect = null;
+      writeLocal(LS_SAVED_HEIGHT, null);
+    }
+    overlay.dataset.maximized = on ? "1" : "0";
+    const label = on ? "Restore chat size" : "Expand chat";
+    maxBtn.title = label;
+    maxBtn.setAttribute("aria-label", label);
+    if (pinned) requestAnimationFrame(() => { if (pinned) scrollToBottom(); });
   }
-  // Bind the helper so the observer block (below mount return) can see it.
-  overlay._hbChatMaybeFlag = maybeFlagNewMessages;
+  maxBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    setMaximized(overlay.dataset.maximized !== "1");
+  });
+
+  // ── Viewport / HUD-scale changes ─────────────────────────────────────
+  let reflowRaf = 0;
+  const onViewportChange = () => {
+    cancelAnimationFrame(reflowRaf);
+    reflowRaf = requestAnimationFrame(() => {
+      fitToViewport();
+      if (pinned) scrollToBottom();
+    });
+  };
+  window.addEventListener("resize", onViewportChange);
+  document.addEventListener(HUD_SCALE_EVENT, onViewportChange);
+
+  // ── Initial state ────────────────────────────────────────────────────
+  setTalkFocus(TALK_FOCUSES[0].id, { focusInput: false, widen: false });
+  setFilter(filter, { persist: false });
+  fitToViewport();
+  {
+    // Re-open maximised if the last session left it that way (the saved
+    // value is the height to restore to; pre-overhaul builds stored "123px").
+    const saved = parseFloat(readLocal(LS_SAVED_HEIGHT) ?? "");
+    if (Number.isFinite(saved) && saved > 0) {
+      requestAnimationFrame(() => setMaximized(true, { restoreHeight: Math.max(MIN_H, saved) }));
+    }
+  }
+
+  // Console / verification surface.
+  const api = {
+    focus: activate,
+    blur: deactivate,
+    setFilter: (id) => setFilter(id),
+    setTalkFocus: (id) => setTalkFocus(id, { focusInput: false }),
+    toggleMaximize: () => setMaximized(overlay.dataset.maximized !== "1"),
+    scrollToBottom,
+    startTell,
+    state: () => ({
+      filter, talkFocus: activeFocus.id, pinned, unread,
+      lines: log.childElementCount, maximized: overlay.dataset.maximized === "1",
+    }),
+  };
+  window.__chatPanel = api;
 
   return () => {
     if (observer) observer.disconnect();
     observer = null;
     if (retryTimer) { clearInterval(retryTimer); retryTimer = null; }
-    document.removeEventListener("click", onDocClickCloseMenu);
+    if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+    clearTimeout(errorTimer);
+    cancelAnimationFrame(reflowRaf);
+    document.removeEventListener("pointerdown", onDocPointerDown, true);
+    document.removeEventListener("keydown", onDocKeyDown);
+    document.removeEventListener(HUD_SCALE_EVENT, onViewportChange);
+    window.removeEventListener("resize", onViewportChange);
+    try { edgeResizers?.dispose?.(); } catch (_) {}
+    try { cornerResizers?.dispose?.(); } catch (_) {}
+    if (window.__chatPanel === api) window.__chatPanel = undefined;
     overlay.remove();
   };
 }

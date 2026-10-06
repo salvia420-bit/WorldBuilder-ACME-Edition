@@ -10,6 +10,11 @@
 // extract or server-side push), `formatLandblockMessage` is the only
 // hook that needs to swap to the friendly name.
 //
+// HUD overhaul 2026-10-05 — DEV-ONLY, opt-in `?lbMessages=on`. Retail never
+// printed a landblock-cross line (no such string in acclient.c), and the
+// hex id is debug output, not a player-facing message; by default this
+// plugin now mounts as a no-op so the chat window stays retail-clean.
+//
 // References:
 //   - plugins/api.js coverage table: landblockChanged is IMPLEMENTED
 //   - index.html appendChatLine (category 10 = system; not globalised,
@@ -70,8 +75,15 @@ export const manifest = {
   description: "Chat-log notice on each landblock cross (Entering Landblock 0x…).",
 };
 
+function lbMessagesEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get("lbMessages") === "on";
+  } catch (_) { return false; }
+}
+
 export function mount(ctx) {
   if (typeof window === "undefined") return () => {};
+  if (!lbMessagesEnabled()) return () => {};
   const client = ctx?.client ?? window.__pluginClient ?? null;
   try {
     if (typeof client?.events?.on === "function") {

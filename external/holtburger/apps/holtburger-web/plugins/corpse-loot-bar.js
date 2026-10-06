@@ -1,39 +1,72 @@
-// corpse-loot-bar — horizontal loot strip for corpse containers (2026-07-02).
+// corpse-loot-bar — the external-container window: retail
+// gmExternalContainerUI (layout 0x21000008) for corpses AND chests.
 //
-// Retail-flow: kill → corpse Container ObjectCreate (ODF Corpse bit 0x2000,
-// ACE Corpse.cs:56, loot pre-filled server-side by Creature_Death.
-// GenerateTreasure) → double-click sends GameAction::Use 0x0036 → ACE
-// Container.Open → GameEvent::ViewContents 0x0196 → client kind=21
-// ContainerOpened. container-panel.js routes CORPSE containers here (its
-// grid keeps chests/bags); this plugin renders the user-requested
-// HORIZONTAL bar — the vendor-ui icon-strip pattern (plugins/vendor-ui.js
-// `hvb-icon-cell` strip) applied to loot:
+// Retail flow: kill → corpse Container ObjectCreate (ODF Corpse 0x2000) →
+// Use (0x0036) → ACE Container.Open → GameEvent::ViewContents (0x0196) →
+// client kind=21 ContainerOpened. container-panel.js routes every ground
+// container here. Retail draws gmExternalContainerUI as a HORIZONTAL strip
+// (RootExternalContainer_Field 800×110 at the bottom: Ext_Container_ItemList
+// 784×32 with the horizontal rope scrollbar Ext_ItemListScroll 0x06004C7F),
+// closed by its button or by walking out of range
+// (gmExternalContainerUI::OnObjectRangeExit / RecvNotice_StopViewingObject).
 //
-//   [ Corpse of X ......................... Take | Close ]
-//   [ (icon) (icon) (icon) (icon) ...  horizontal strip  ]
+// HUD overhaul 2026-10-05 — "that hud element never fits in the screen
+// when we login with the login info in the url":
+//   * kit window chrome (hbk-window + trapezoid titlebar + close sprite),
+//     draggable + persisted through attachWindowPosition (window id
+//     0x10000063 = RootExternalContainer_Field);
+//   * sized in HUD units — `calc(96 * var(--hb-hud-vw))`, never `92vw`
+//     (vw is NOT divided by the HUD zoom, so the old `min(92vw, 700px)`
+//     overflowed whenever the HUD scale was > 1) — and clamped into the
+//     HUD viewport after every render, resize and HUD-scale change;
+//   * the item strip scrolls horizontally (mouse wheel too);
+//   * no click-outside dismissal — it closed the window the moment you
+//     pressed on your inventory to drag an item into the chest. Retail
+//     closes on range exit: the server's CloseGroundContainer
+//     (`containerClosed` bus event) and the corpse-despawn poll do that;
+//   * drag & drop through plugins/item_drag.js: drag a cell into the
+//     inventory grid / a pack / the paperdoll / the hotbar; drop an
+//     inventory item onto the strip to put it in the chest (corpses refuse,
+//     as ACE does). Takes are optimistic (ghosted until the server agrees).
+//   * double-click / Take / Loot all move items into the main pack exactly
+//     like radial-menu.js "Take From Container": moveItem(item, player, 0)
+//     → PutItemInContainer 0x0019. Loot all paces one take per server echo.
 //
-// Interactions:
-//   * single click a cell — select (brass highlight);
-//   * DOUBLE-click a cell (or Take on a selection) — loot it into the main
-//     pack: `handle.moveItem(itemGuid, localPlayerGuid, 0)` →
-//     PutItemInContainer 0x0019 (the exact call radial-menu.js's
-//     "Take From Container" uses);
-//   * refresh on `playerInventoryChanged` (ACE echoes the inventory update
-//     after each take — re-pull getContainerContents);
-//   * dismiss on Esc / click-outside / Close / corpse despawn (1 s poll of
-//     the entity map — the corpse's TimeToRot delete).
-//
-// Data feed is container-panel's exactly: `handle.getContainerContents(guid)`
-// (GUID list cached wasm-side before the kind=21 event) + per-item meta from
-// playerInventory → entityManager → getObjectIconId (see resolveItemMeta).
+// Data feed: `handle.getContainerContents(guid)` (GUID list cached
+// wasm-side before the kind=21 event) + per-item meta from playerInventory
+// → entityManager → getObjectIconId (see resolveItemMeta).
 
 import { setAcText } from "../ui/ac_font.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
-import { takeInventorySnapshot } from "./inventory_helpers.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared, getIconImmediate } from "../ui/ac_icon_cache.js";
+import { attachWindowPosition } from "../ui/ac_window_position.js";
+import { makeTitlebar } from "../ui/hud_kit.js";
+import {
+  uiEffectIconsEnabled,
+  uiEffectIconsFor,
+  uiEffectTintCss,
+} from "../scene3d/vfx/ui_effects_registry.js";
+import { takeInventorySnapshot, decideItemDrop, DROP_TARGET, MAIN_PACK_KEY, PACKS_KEY } from "./inventory_helpers.js";
+import {
+  beginItemDrag,
+  registerDropZone,
+  resolveDropAction,
+  executeItemAction,
+  pendingOps,
+  showItemTooltip,
+  hideItemTooltip,
+  showItemToast,
+  localPlayerGuid,
+} from "./item_drag.js";
 
 const OVERLAY_ID = "hb-corpse-loot-bar";
 const STYLE_ID = "hb-corpse-loot-bar-style";
 const DESPAWN_POLL_MS = 1000;
+// RootExternalContainer_Field element id — the persisted window key.
+const EXT_WINDOW_ID = 0x10000063;
+// Default placement: centred, clear of the bottom toolbar (HUD px).
+const DEFAULT_BOTTOM_GAP = 132;
+const LOOT_ALL_STEP_MS = 700;
+const SP = "./data/ui-sprites";
 
 let overlayEl = null;
 let state = {
@@ -44,7 +77,8 @@ let state = {
   despawnTimer: 0,
 };
 let onKeyDownHandler = null;
-let onDocMouseDownHandler = null;
+let windowCtl = null;
+let lootAll = null;
 
 async function fetchIconDataUrl(iconId) {
   return fetchIconDataUrlShared(iconId, "corpse-loot-bar");
@@ -58,11 +92,8 @@ function fmtGuid(guid) {
 // already owned), entityManager meta second, wasm icon cache last.
 //
 // `invSnapshot` is ONE `takeInventorySnapshot(handle).inv` array shared by the
-// whole refresh pass. It used to call `handle.playerInventory()` itself, i.e.
-// once per corpse item on top of refreshContents' own call, and freed none of
-// them — a 12-item corpse against a 100-item pack minted 1,300 wasm boxes,
-// repeated on every `playerInventoryChanged` (which each Take emits). See
-// inventory_helpers.takeInventorySnapshot for why that ratchets wasm memory.
+// whole refresh pass (see inventory_helpers.takeInventorySnapshot for why a
+// per-item playerInventory() ratchets wasm memory).
 function resolveItemMeta(guid, invSnapshot) {
   const g = guid >>> 0;
   const handle = window.__sessionHandle;
@@ -74,6 +105,9 @@ function resolveItemMeta(guid, invSnapshot) {
           name: it.name || fmtGuid(g),
           iconId: (it.iconId >>> 0) || 0,
           stackSize: it.stackSize || 1,
+          wcid: (it.wcid >>> 0) || 0,
+          itemType: (it.itemType >>> 0) || 0,
+          uiEffects: (it.uiEffects >>> 0) || 0,
         };
       }
     }
@@ -87,12 +121,15 @@ function resolveItemMeta(guid, invSnapshot) {
         guid: g,
         name: meta.name || ent.name || fmtGuid(g),
         iconId: (meta.iconId >>> 0) || 0,
-        stackSize: 1,
+        stackSize: Math.max(1, Number(meta.stackSize) || 1),
+        wcid: (meta.wcid >>> 0) || 0,
+        itemType: (meta.itemType >>> 0) || 0,
+        uiEffects: (meta.uiEffects >>> 0) || 0,
       };
     }
   } catch (_) {}
   const iconFromCache = (handle?.getObjectIconId?.(g) >>> 0) || 0;
-  return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1 };
+  return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1, wcid: 0, itemType: 0, uiEffects: 0 };
 }
 
 function ensureStyles() {
@@ -101,225 +138,420 @@ function ensureStyles() {
   s.id = STYLE_ID;
   s.textContent = `
     #${OVERLAY_ID} {
-      position: fixed;
-      left: 50%;
-      bottom: 130px;
-      transform: translateX(-50%);
-      width: min(92vw, 700px);
+      left: 0; top: 0;
       z-index: 66;
       display: none;
       flex-direction: column;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(20, 14, 8, 0.94);
-      border: 1px solid var(--hb-border-brass);
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
-      user-select: none;
-      box-sizing: border-box;
+      width: max-content;
+      min-width: 260px;
+      /* 640 keeps the centred default clear of the right-docked main
+         panel on any 16:9 window (HUD space is 1280 wide at every auto
+         scale); 96 HUD-vw keeps it on screen in narrow windows. */
+      max-width: min(640px, calc(96 * var(--hb-hud-vw, 12.8px)));
+      max-height: calc(100 * var(--hb-hud-vh, 7.2px) - 8px);
     }
     #${OVERLAY_ID}[data-open="1"] { display: flex; }
-    #${OVERLAY_ID} .hclb-header {
-      flex: 0 0 22px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0 6px 0 8px;
-      background: var(--hb-overlay-active);
-      border-bottom: 1px solid var(--hb-border-brass);
-      color: var(--hb-text-gold);
-      font-size: 12px;
-    }
-    #${OVERLAY_ID} .hclb-title {
-      flex: 1 1 auto;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      text-shadow: 0 1px 0 rgba(0,0,0,.85);
-    }
-    #${OVERLAY_ID} .hclb-btn {
-      flex: 0 0 auto;
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: inherit;
-      font-size: 10px;
-      line-height: 1;
-      padding: 1px 6px;
-      cursor: pointer;
-    }
-    #${OVERLAY_ID} .hclb-btn:hover {
-      background: var(--hb-overlay-hover);
-      color: var(--hb-text-cream-bright);
-      border-color: var(--hb-border-brass);
-    }
+    #${OVERLAY_ID} .hbk-titlebar { flex: 0 0 25px; }
+    /* Ext_Container_ItemList + Ext_ItemListScroll (0x06004C7F rope). */
     #${OVERLAY_ID} .hclb-strip {
-      flex: 1 1 auto;
+      flex: 0 0 auto;
+      min-width: 0;
       display: flex;
       flex-direction: row;
-      gap: 4px;
-      padding: 6px;
+      gap: 2px;
+      padding: 6px 6px 3px;
       overflow-x: auto;
       overflow-y: hidden;
-      min-height: 56px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0,0,0,.5);
-    }
-    #${OVERLAY_ID} .hclb-cell {
-      flex: 0 0 44px;
-      width: 44px; height: 44px;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid var(--hb-border-brass-dim);
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      font-size: 20px; line-height: 1;
+      min-height: 41px;
       box-sizing: border-box;
-      position: relative;
-      transition: border-color 80ms, background 80ms;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hbk-gold-dim, #8a7544) #0a0806;
+      overscroll-behavior: contain;
     }
-    #${OVERLAY_ID} .hclb-cell:hover {
-      border-color: var(--hb-text-gold);
-      background: var(--hb-overlay-hover);
+    #${OVERLAY_ID} .hclb-strip::-webkit-scrollbar { height: 16px; }
+    #${OVERLAY_ID} .hclb-strip::-webkit-scrollbar-track {
+      background: url("${SP}/0x06004C7F.png") left center / 32px 16px repeat-x, #0a0806;
     }
-    #${OVERLAY_ID} .hclb-cell[data-selected="1"] {
-      border-color: var(--hb-text-gold);
-      box-shadow: inset 0 0 0 1px var(--hb-text-gold);
+    #${OVERLAY_ID} .hclb-strip::-webkit-scrollbar-thumb {
+      border: 2px solid transparent; border-radius: 3px;
+      background: linear-gradient(180deg, #6b5426, #f3d27a 45%, #b08a3c 70%, #5a4520) padding-box;
     }
-    #${OVERLAY_ID} .hclb-cell img {
-      width: 100%; height: 100%;
-      image-rendering: pixelated;
-      object-fit: contain;
-    }
-    #${OVERLAY_ID} .hclb-stack {
-      position: absolute;
-      bottom: 0; right: 0;
-      background: rgba(0,0,0,.75);
-      color: var(--hb-text-cream-bright);
-      font-size: 9px; line-height: 1;
-      padding: 1px 2px;
-      font-variant-numeric: tabular-nums;
-    }
-    #${OVERLAY_ID} .hclb-empty {
-      flex: 1 1 auto;
-      align-self: center;
-      text-align: center;
-      color: var(--hb-text-muted-3, #807868);
-      font-style: italic;
-      font-size: 11px;
-      padding: 14px 0;
-    }
+    #${OVERLAY_ID} .hclb-strip > .hbk-empty { flex: 1 1 auto; padding: 8px 10px; }
+    #${OVERLAY_ID} .hbk-footer { justify-content: space-between; padding: 3px 6px; }
+    #${OVERLAY_ID} .hclb-count { color: var(--hbk-text-dim, #a8a090); font-size: 11px; white-space: nowrap; }
+    #${OVERLAY_ID} .hclb-actions { display: flex; gap: 6px; }
+    #${OVERLAY_ID} .hbk-btn-small[disabled] { opacity: 0.45; cursor: default; filter: none; }
   `;
   document.head.appendChild(s);
+}
+
+function zoomOf(el) {
+  const z = Number(el?.currentCSSZoom);
+  return Number.isFinite(z) && z > 0 ? z : 1;
 }
 
 function buildOverlay() {
   ensureStyles();
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  overlay.className = "hbk-window";
+  overlay.setAttribute("role", "dialog");
 
-  const header = document.createElement("div");
-  header.className = "hclb-header";
-  const title = document.createElement("div");
-  title.className = "hclb-title";
-  setAcText(title, "Corpse", { color: "#f0c87c" });
-  header.appendChild(title);
+  const { bar, title } = makeTitlebar("Corpse", { onClose: () => closeBar() });
+  overlay.appendChild(bar);
+
+  const strip = document.createElement("div");
+  strip.className = "hclb-strip";
+  // A vertical wheel scrolls the horizontal strip.
+  strip.addEventListener("wheel", (ev) => {
+    if (Math.abs(ev.deltaY) <= Math.abs(ev.deltaX)) return;
+    if (strip.scrollWidth <= strip.clientWidth) return;
+    strip.scrollLeft += ev.deltaY;
+    ev.preventDefault();
+  }, { passive: false });
+  overlay.appendChild(strip);
+
+  const foot = document.createElement("div");
+  foot.className = "hbk-footer";
+  const count = document.createElement("span");
+  count.className = "hclb-count";
+  const actions = document.createElement("div");
+  actions.className = "hclb-actions";
   const takeBtn = document.createElement("button");
   takeBtn.type = "button";
-  takeBtn.className = "hclb-btn";
-  takeBtn.title = "Take selected item";
-  setAcText(takeBtn, "Take");
+  takeBtn.className = "hbk-btn-small";
+  takeBtn.textContent = "Take";
+  takeBtn.title = "Move the selected item into your pack (or double-click it)";
   takeBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
     if (state.selectedGuid) takeItem(state.selectedGuid);
   });
-  header.appendChild(takeBtn);
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "hclb-btn";
-  closeBtn.title = "Close (Esc)";
-  setAcText(closeBtn, "Close");
-  closeBtn.addEventListener("click", (ev) => {
+  const allBtn = document.createElement("button");
+  allBtn.type = "button";
+  allBtn.className = "hbk-btn-small";
+  allBtn.textContent = "Loot all";
+  allBtn.title = "Take every item, one at a time";
+  allBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    closeBar();
+    if (lootAll) stopLootAll(); else startLootAll();
   });
-  header.appendChild(closeBtn);
-  overlay.appendChild(header);
-
-  const strip = document.createElement("div");
-  strip.className = "hclb-strip";
-  overlay.appendChild(strip);
+  actions.append(takeBtn, allBtn);
+  foot.append(count, actions);
+  overlay.appendChild(foot);
 
   overlay._titleEl = title;
   overlay._stripEl = strip;
+  overlay._countEl = count;
+  overlay._takeBtn = takeBtn;
+  overlay._allBtn = allBtn;
+  overlay._cells = new Map();
   document.body.appendChild(overlay);
+
+  windowCtl = attachWindowPosition(overlay, {
+    windowId: EXT_WINDOW_ID,
+    dragHandle: bar,
+    ignoreSelector: "button, .hbk-close",
+  });
+
+  registerDropZone(overlay, {
+    resolve(ev, s) {
+      const list = state.items.map((it) => it.guid >>> 0);
+      const cell = ev.target?.closest?.(".hb-islot");
+      let target;
+      if (cell && cell.dataset.guid) {
+        const g = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+        const at = list.indexOf(g);
+        target = {
+          kind: DROP_TARGET.ITEM_CELL, listKey: state.corpseGuid >>> 0, listKind: "ext",
+          index: at >= 0 ? at : list.length, count: list.length,
+          item: state.items.find((it) => (it.guid >>> 0) === g) || null,
+        };
+      } else {
+        target = { kind: DROP_TARGET.EMPTY_CELL, listKey: state.corpseGuid >>> 0, listKind: "ext", index: list.length, count: list.length };
+      }
+      const el = cell || strip;
+      if (!s) return { el, ok: true, target };
+      const action = decideItemDrop({ ...s, split: 0 }, target, { ...extCtx(), canUseWith: () => null });
+      return { el, ok: action.op !== "reject", reason: action.message, target };
+    },
+    async drop(ev, s, hit) {
+      const action = await resolveDropAction(s, hit.target, { ctx: extCtx(), anchor: ev });
+      if (!action || action.op === "noop") return;
+      executeItemAction(action, s);
+      render();
+    },
+  });
+
+  pendingOps.onChange((evt) => {
+    if (overlayEl?.dataset.open !== "1") return;
+    if (lootAll && evt?.type === "fail" && evt.guid === lootAll.waitGuid) {
+      stopLootAll();
+      showItemToast(`Loot all stopped — the ${evt.entry?.stub?.name || "item"} could not be taken.`);
+    }
+    render();
+  });
+
+  const reflow = () => {
+    if (overlayEl?.dataset.open === "1") requestAnimationFrame(placeWindow);
+  };
+  window.addEventListener("resize", reflow);
+  document.addEventListener("hb-hud-scale-changed", reflow);
   return overlay;
+}
+
+function extCtx() {
+  return {
+    playerGuid: localPlayerGuid(),
+    containerName: () => state.corpseName || "container",
+  };
+}
+
+// Keep the window on screen: centred above the toolbar until the player
+// drags it (attachWindowPosition then owns the saved spot), and always
+// clamped into the HUD viewport — the window grows/shrinks with its
+// contents, so this runs after every render too.
+function placeWindow() {
+  const el = overlayEl;
+  if (!el || el.dataset.open !== "1") return;
+  // HUD px throughout: rects are screen px, style values are HUD px.
+  const z = zoomOf(el);
+  const vw = window.innerWidth / z;
+  const vh = window.innerHeight / z;
+  const r = el.getBoundingClientRect();
+  const w = r.width / z;
+  const h = r.height / z;
+  const userPlaced = windowCtl?.getState?.().x != null;
+  if (!userPlaced) {
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    el.style.left = `${Math.max(4, Math.round((vw - w) / 2))}px`;
+    el.style.top = `${Math.max(4, Math.round(vh - h - DEFAULT_BOTTOM_GAP))}px`;
+    return;
+  }
+  const left = r.left / z;
+  const top = r.top / z;
+  const nl = Math.max(0, Math.min(left, vw - w));
+  const nt = Math.max(0, Math.min(top, vh - h));
+  if (Math.abs(nl - left) > 0.5 || Math.abs(nt - top) > 0.5) {
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    el.style.left = `${nl}px`;
+    el.style.top = `${nt}px`;
+  }
+}
+
+function playerHandle() {
+  return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
 }
 
 // The take wire — identical to radial-menu.js's "Take From Container":
 // moveItem(itemGuid, localPlayerGuid, 0) → PutItemInContainer (0x0019) into
-// the main pack; ACE answers with the pickup + inventory updates, and the
-// `playerInventoryChanged` subscription re-pulls the corpse contents.
+// the main pack (ACE overflows into side packs). Optimistic: the cell is
+// ghosted and a ghost lands at the front of the main pack until ACE echoes.
 function takeItem(itemGuid) {
-  const handle = window.__sessionHandle;
-  const me = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+  const me = localPlayerGuid();
   const g = (itemGuid >>> 0) || 0;
-  if (!handle || !me || !g || typeof handle.moveItem !== "function") return;
-  try {
-    handle.moveItem(g, me, 0);
-  } catch (e) {
-    console.warn("[corpse-loot-bar] moveItem failed:", e);
+  if (!me || !g || pendingOps.has(g)) return false;
+  const meta = state.items.find((it) => (it.guid >>> 0) === g);
+  if (!meta) return false;
+  const isPack = ((meta.itemType >>> 0) & 0x200) !== 0;
+  const action = {
+    op: "move", guid: g, container: me, placement: 0,
+    listKey: isPack ? PACKS_KEY : MAIN_PACK_KEY, index: 0, amount: meta.stackSize || 1,
+  };
+  const sent = executeItemAction(action, { guid: g, item: meta, owned: false }, {
+    stub: { name: meta.name, iconId: meta.iconId, stackSize: meta.stackSize || 1, wcid: meta.wcid || 0, itemType: meta.itemType || 0, equipMask: 0 },
+  });
+  if (!sent) {
+    // Pre-ledger fallback for a handle without the optimistic methods.
+    const handle = playerHandle();
+    if (typeof handle?.moveItem === "function") {
+      try { handle.moveItem(g, me, 0); return true; } catch (e) { console.warn("[corpse-loot-bar] moveItem failed:", e); }
+    }
+    return false;
   }
+  render();
+  return true;
+}
+
+function startLootAll() {
+  lootAll = { waitGuid: 0, timer: 0 };
+  render();
+  lootStep();
+}
+function stopLootAll() {
+  if (lootAll?.timer) clearTimeout(lootAll.timer);
+  lootAll = null;
+  render();
+}
+function lootStep() {
+  if (!lootAll) return;
+  if (lootAll.timer) { clearTimeout(lootAll.timer); lootAll.timer = 0; }
+  if (overlayEl?.dataset.open !== "1") { stopLootAll(); return; }
+  const next = state.items.find((it) => !pendingOps.has(it.guid >>> 0));
+  if (!next) {
+    // Everything taken or in flight — finish once the strip is empty.
+    if (!state.items.length) stopLootAll();
+    else lootAll.timer = setTimeout(lootStep, LOOT_ALL_STEP_MS);
+    return;
+  }
+  lootAll.waitGuid = next.guid >>> 0;
+  if (!takeItem(next.guid)) { stopLootAll(); return; }
+  lootAll.timer = setTimeout(lootStep, LOOT_ALL_STEP_MS);
+}
+
+function setCellIcon(cell, it) {
+  const iconId = (it.iconId >>> 0) || 0;
+  if (cell._iconId === iconId) return;
+  cell._iconId = iconId;
+  const icon = cell._icon;
+  icon.style.backgroundImage = "";
+  icon.style.backgroundColor = iconId ? "" : "rgba(60, 50, 34, 0.8)";
+  if (!iconId) return;
+  const hit = getIconImmediate(iconId);
+  if (hit) { icon.style.backgroundImage = `url("${hit}")`; return; }
+  fetchIconDataUrl(iconId).then((url) => {
+    if (url && cell._iconId === iconId) icon.style.backgroundImage = `url("${url}")`;
+  });
+}
+
+function makeCell() {
+  const cell = document.createElement("div");
+  cell.className = "hb-islot";
+  const icon = document.createElement("div");
+  icon.className = "hb-islot-icon";
+  cell.appendChild(icon);
+  cell._icon = icon;
+  cell._iconId = -1;
+  cell.draggable = true;
+  cell.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    state.selectedGuid = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+    render();
+  });
+  cell.addEventListener("dblclick", (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    takeItem(parseInt(cell.dataset.guid, 10) >>> 0);
+  });
+  cell.addEventListener("mouseenter", () => showItemTooltip(cell, cell._name || ""));
+  cell.addEventListener("mouseleave", hideItemTooltip);
+  cell.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const g = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+    if (!g || typeof window.__openContextMenuFor !== "function") return;
+    try {
+      window.__openContextMenuFor({
+        source: "container-panel",
+        guid: g,
+        containerGuid: state.corpseGuid >>> 0,
+        slotIndex: state.items.findIndex((it) => (it.guid >>> 0) === g),
+        name: cell._name || "",
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+      });
+    } catch (e) { console.warn("[corpse-loot-bar] context menu failed:", e); }
+  });
+  cell.addEventListener("dragstart", (ev) => {
+    const g = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+    const it = state.items.find((x) => (x.guid >>> 0) === g);
+    if (!it || pendingOps.has(g)) { ev.preventDefault(); return; }
+    hideItemTooltip();
+    beginItemDrag(ev, {
+      guid: g,
+      item: { ...it, isPack: ((it.itemType >>> 0) & 0x200) !== 0 },
+      owned: false,
+      sourceList: { key: state.corpseGuid >>> 0, kind: "ext" },
+      sourceIndex: state.items.indexOf(it),
+      sourceEl: cell,
+    });
+  });
+  return cell;
+}
+
+function setCellEffects(cell, bits) {
+  if (cell._fxBits === bits) return;
+  cell._fxBits = bits;
+  cell._fx?.remove();
+  cell._fx = null;
+  if (!bits || !uiEffectIconsEnabled()) return;
+  const fx = uiEffectIconsFor(bits);
+  if (!fx.length) return;
+  const wrap = document.createElement("span");
+  wrap.className = "hb-islot-fx";
+  for (const f of fx) {
+    const dot = document.createElement("span");
+    dot.title = f.name;
+    dot.style.backgroundColor = uiEffectTintCss(f.tint) || "";
+    wrap.appendChild(dot);
+    if (f.iconDid) {
+      fetchIconDataUrl(f.iconDid >>> 0).then((url) => {
+        if (url && dot.isConnected) { dot.style.backgroundColor = ""; dot.style.backgroundImage = `url("${url}")`; }
+      }).catch(() => {});
+    }
+  }
+  cell._fx = wrap;
+  cell.appendChild(wrap);
 }
 
 function render() {
   if (!overlayEl) return;
-  setAcText(overlayEl._titleEl, state.corpseName || "Corpse", { color: "#f0c87c" });
+  setAcText(overlayEl._titleEl, state.corpseName || "Container", { color: "#f3d27a" });
   const strip = overlayEl._stripEl;
-  strip.innerHTML = "";
-  if (!state.items.length) {
-    const empty = document.createElement("div");
-    empty.className = "hclb-empty";
-    setAcText(empty, "Empty.", { color: "#807868" });
-    strip.appendChild(empty);
+  const cache = overlayEl._cells;
+  const n = state.items.length;
+  overlayEl._countEl.textContent = n === 0 ? "Empty" : (n === 1 ? "1 item" : `${n} items`);
+  overlayEl._takeBtn.disabled = !state.selectedGuid || pendingOps.has(state.selectedGuid);
+  overlayEl._allBtn.disabled = n === 0 && !lootAll;
+  overlayEl._allBtn.textContent = lootAll ? "Stop" : "Loot all";
+
+  let empty = strip.querySelector(":scope > .hbk-empty");
+  if (!n) {
+    for (const el of cache.values()) el.remove();
+    cache.clear();
+    if (!empty) {
+      empty = document.createElement("div");
+      empty.className = "hbk-empty";
+      empty.textContent = "There is nothing inside.";
+      strip.appendChild(empty);
+    }
+    requestAnimationFrame(placeWindow);
     return;
   }
+  empty?.remove();
+  const want = [];
+  const used = new Set();
   for (const it of state.items) {
-    const cell = document.createElement("div");
-    cell.className = "hclb-cell";
-    cell.dataset.guid = String(it.guid);
-    if ((it.guid >>> 0) === (state.selectedGuid >>> 0)) cell.dataset.selected = "1";
-    cell.textContent = "\u{1F4E6}";
-    cell.title = it.name;
-    if (it.iconId) {
-      fetchIconDataUrl(it.iconId).then((url) => {
-        if (!url || !cell.isConnected) return;
-        cell.textContent = "";
-        const img = document.createElement("img");
-        img.src = url;
-        img.alt = it.name;
-        cell.appendChild(img);
-      });
-    }
+    const key = String(it.guid >>> 0);
+    let cell = cache.get(key);
+    if (!cell) { cell = makeCell(); cache.set(key, cell); }
+    cell.dataset.guid = key;
+    cell._name = it.stackSize > 1 ? `${it.name} (${it.stackSize})` : it.name;
+    setCellIcon(cell, it);
+    setCellEffects(cell, (it.uiEffects >>> 0) || 0);
     if (it.stackSize > 1) {
-      const badge = document.createElement("div");
-      badge.className = "hclb-stack";
-      setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
-      cell.appendChild(badge);
-    }
-    cell.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      state.selectedGuid = it.guid >>> 0;
-      for (const c of strip.children) {
-        if (c.dataset) c.dataset.selected = c.dataset.guid === String(it.guid) ? "1" : "0";
+      if (!cell._stack) {
+        cell._stack = document.createElement("span");
+        cell._stack.className = "hb-islot-stack";
+        cell.appendChild(cell._stack);
       }
-    });
-    cell.addEventListener("dblclick", (ev) => {
-      ev.stopPropagation();
-      ev.preventDefault();
-      takeItem(it.guid);
-    });
-    strip.appendChild(cell);
+      setAcText(cell._stack, String(it.stackSize), { color: "#ffffff" });
+    } else if (cell._stack) { cell._stack.remove(); cell._stack = null; }
+    cell.classList.toggle("is-selected", (it.guid >>> 0) === (state.selectedGuid >>> 0));
+    cell.classList.toggle("is-pending", pendingOps.has(it.guid >>> 0));
+    want.push(cell);
+    used.add(key);
   }
+  for (const [k, el] of cache) {
+    if (!used.has(k)) { el.remove(); cache.delete(k); }
+  }
+  let cur = strip.firstChild;
+  for (const el of want) {
+    if (el === cur) { cur = cur.nextSibling; continue; }
+    strip.insertBefore(el, cur);
+  }
+  requestAnimationFrame(placeWindow);
 }
 
 function refreshContents() {
@@ -332,17 +564,16 @@ function refreshContents() {
   } catch (e) {
     console.warn("[corpse-loot-bar] getContainerContents failed", e);
   }
-  // (2026-07-02) — the wasm ViewContents snapshot (`latest_container_contents`,
-  // src/lib.rs:28229) is NOT pruned when an item is picked up, so a just-taken
-  // item lingers in the GUID list. An item in `playerInventory()` is owned
-  // (moved out of the corpse into our pack) — filter those out so the strip
-  // refreshes to the true remaining contents after each Take. `playerInventory`
-  // is owned-items-only (open-corpse contents are NOT in it — verified: taking
-  // 1 grows it by exactly 1), so this never hides un-looted corpse items.
+  // (2026-07-02) — the wasm ViewContents snapshot (`latest_container_contents`)
+  // is NOT pruned when an item is picked up, so a just-taken item lingers in
+  // the GUID list. An item in `playerInventory()` is owned (moved out of the
+  // container into our pack) — filter those out so the strip shows the true
+  // remaining contents. `playerInventory` is owned-items-only, so this never
+  // hides un-looted items.
   //
   // ONE snapshot serves both the owned-filter and every per-item meta resolve;
-  // `free()` runs in a `finally` so a throw inside resolveItemMeta (e.g.
-  // getObjectIconId) still releases the boxes.
+  // `free()` runs in a `finally` so a throw inside resolveItemMeta still
+  // releases the boxes.
   const snap = takeInventorySnapshot(handle);
   try {
     const owned = new Set(snap.inv.map((it) => (it.guid >>> 0)));
@@ -355,37 +586,40 @@ function refreshContents() {
     state.selectedGuid = 0;
   }
   render();
+  if (lootAll && lootAll.waitGuid && !guids.some((x) => (x >>> 0) === lootAll.waitGuid)) {
+    // The awaited item arrived — take the next one promptly.
+    if (lootAll.timer) clearTimeout(lootAll.timer);
+    lootAll.timer = setTimeout(lootStep, 120);
+  }
 }
 
 function openFor(corpseGuid, corpseName) {
   const g = (corpseGuid >>> 0) || 0;
   if (!g) return;
   if (!overlayEl) overlayEl = buildOverlay();
+  if (state.corpseGuid !== g) {
+    stopLootAll();
+    overlayEl._stripEl.scrollLeft = 0;
+  }
   state.corpseGuid = g;
-  state.corpseName = corpseName || "Corpse";
+  state.corpseName = corpseName || "Container";
   state.selectedGuid = 0;
-  refreshContents();
   overlayEl.dataset.open = "1";
+  refreshContents();
+  // Place synchronously (offsetWidth forces layout) so the first painted
+  // frame is already on screen — no flash at the CSS default corner.
+  placeWindow();
 
   if (!onKeyDownHandler) {
     onKeyDownHandler = (ev) => {
-      if (overlayEl?.dataset.open !== "1") return;
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        ev.stopPropagation();
-        closeBar();
-      }
-    };
-    document.addEventListener("keydown", onKeyDownHandler, true);
-  }
-  if (!onDocMouseDownHandler) {
-    onDocMouseDownHandler = (ev) => {
-      if (!overlayEl || overlayEl.dataset.open !== "1") return;
-      if (overlayEl.contains(ev.target)) return;
-      if (window.__radialMenuOpen) return;
+      if (overlayEl?.dataset.open !== "1" || ev.key !== "Escape") return;
+      const tag = ev.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || window.__radialMenuOpen) return;
+      ev.preventDefault();
+      ev.stopPropagation();
       closeBar();
     };
-    document.addEventListener("mousedown", onDocMouseDownHandler, true);
+    document.addEventListener("keydown", onKeyDownHandler, true);
   }
   // Auto-close when the corpse despawns (TimeToRot delete → KIND_REMOVE
   // empties the entity map entry). Poll — despawn has no bus event.
@@ -398,18 +632,22 @@ function openFor(corpseGuid, corpseName) {
     }
     try {
       const em = window.liveScene3d?.entityManager;
-      if (em?.entityMap && !em.entityMap.has(state.corpseGuid >>> 0)) {
-        closeBar();
-      }
+      if (em?.entityMap && !em.entityMap.has(state.corpseGuid >>> 0)) closeBar();
     } catch (_) {}
   }, DESPAWN_POLL_MS);
 }
 
 function closeBar() {
   if (!overlayEl) return;
+  const g = state.corpseGuid >>> 0;
   overlayEl.dataset.open = "0";
+  hideItemTooltip();
+  stopLootAll();
   state.corpseGuid = 0;
   state.selectedGuid = 0;
+  // CM_Inventory::Event_NoLongerViewingContents — only if the wasm build
+  // exposes it (it does not yet; ACE then frees the chest on range exit).
+  try { if (g) playerHandle()?.noLongerViewingContents?.(g); } catch (_) {}
   if (state.despawnTimer) {
     clearInterval(state.despawnTimer);
     state.despawnTimer = 0;
@@ -418,25 +656,29 @@ function closeBar() {
     document.removeEventListener("keydown", onKeyDownHandler, true);
     onKeyDownHandler = null;
   }
-  if (onDocMouseDownHandler) {
-    document.removeEventListener("mousedown", onDocMouseDownHandler, true);
-    onDocMouseDownHandler = null;
-  }
 }
 
 function onInvChanged() {
   if (overlayEl?.dataset.open === "1" && state.corpseGuid) refreshContents();
 }
 
+// Server CloseGroundContainer (walked out of range / container closed) —
+// retail gmExternalContainerUI::RecvNotice_StopViewingObject.
+function onContainerClosed(ev) {
+  const p = ev?.detail ?? ev ?? {};
+  const g = (p.u32Payload >>> 0) || 0;
+  if (overlayEl?.dataset.open === "1" && g && g === (state.corpseGuid >>> 0)) closeBar();
+}
+
 // Subscribe at module-load (container-panel's poll-for-bus pattern). The
-// kind=21 routing itself lives in container-panel.js (it detects corpse vs
-// chest and delegates here via window.__corpseLootBar); this module only
-// needs the inventory-refresh feed.
+// kind=21 routing itself lives in container-panel.js (it delegates every
+// ground container here via window.__corpseLootBar).
 let _subscribeTimer = null;
 function trySubscribe() {
   const client = window.__pluginClient ?? null;
   if (!client?.events?.on) return false;
   client.events.on("playerInventoryChanged", onInvChanged);
+  client.events.on("containerClosed", onContainerClosed);
   return true;
 }
 if (typeof window !== "undefined") {
@@ -448,9 +690,9 @@ if (typeof window !== "undefined") {
       }
     }, 500);
   }
-  // The delegation surface container-panel.js routes corpse kind=21 events
-  // to, plus debug hooks mirroring __openContainerFor / __closeContainerPanel.
-  window.__corpseLootBar = { openFor, close: closeBar };
+  // The delegation surface container-panel.js routes kind=21 events to,
+  // plus debug hooks mirroring __openContainerFor / __closeContainerPanel.
+  window.__corpseLootBar = { openFor, close: closeBar, isOpen: () => overlayEl?.dataset.open === "1", current: () => state.corpseGuid >>> 0 };
   window.__openCorpseLootBarFor = (guid, name) =>
     openFor(guid >>> 0, name || `Corpse ${fmtGuid(guid)}`);
   window.__closeCorpseLootBar = closeBar;
@@ -458,9 +700,9 @@ if (typeof window !== "undefined") {
 
 export const manifest = {
   id: "corpse-loot-bar",
-  name: "Corpse Loot",
+  name: "External Container",
   icon: "\u{1F480}",
   iconHidden: true,
   version: "0.1.0",
-  description: "Horizontal corpse-loot bar (vendor-strip pattern) — container-panel routes corpse kind=21 ContainerOpened events here",
+  description: "External-container window (retail gmExternalContainerUI) for corpses and chests — container-panel routes kind=21 ContainerOpened events here",
 };

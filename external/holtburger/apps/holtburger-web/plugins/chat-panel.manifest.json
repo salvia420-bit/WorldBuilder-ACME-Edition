@@ -3,7 +3,7 @@
   "id": "chat-panel",
   "name": "Chat",
   "author": "holtburger",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bottom-left chat panel (retail gmFloatyMainChatUI 0x2100006F)",
   "icon": "💬",
   "iconHidden": true,

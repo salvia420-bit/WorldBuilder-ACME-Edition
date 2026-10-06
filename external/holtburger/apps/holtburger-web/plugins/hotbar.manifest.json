@@ -3,13 +3,13 @@
   "id": "hotbar",
   "name": "Hotbar",
   "author": "holtburger",
-  "version": "0.1.0",
-  "description": "Bottom-center 1-9 hotbar (gmFloatyToolbarUI 0x21000070)",
+  "version": "0.2.0",
+  "description": "Unified retail toolbar (gmFloatyToolbarUI 0x21000070 + gmToolbarUI 0x21000016): combat mode, panel buttons, selected object, backpack and the 1-9 shortcut row",
   "icon": "1",
   "iconHidden": true,
   "entry": "./hotbar.js",
   "environments": ["browser"],
   "slots": ["hud", "overlay"],
   "clientApi": "^1.0",
-  "capabilities": ["CastSpell", "UseObject", "GetPlayerInventory", "GetEnchantments"]
+  "capabilities": ["CastSpell", "UseObject", "GetPlayerInventory", "GetEnchantments", "ChangeCombatMode?", "ToggleCombatMode?", "QueryHealth?", "TakeObject?"]
 }

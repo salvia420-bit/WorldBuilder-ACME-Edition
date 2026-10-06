@@ -1,24 +1,27 @@
-// container-panel — floating panel for chests, corpses, salvage bags.
+// container-panel — routes ground containers (chests, corpses, salvage
+// bags) to the external-container window.
 //
-// Wave 3 follow-on to PR-HH (2026-05-23 ContainerOpened plumbing). ACE
-// fires GameEvent::ViewContents (0x0196) on UseObject(chest/corpse);
-// index.html drains `kind=21` and re-emits as the `containerOpened`
-// bus event with { stringPayload: name, u32Payload: guid, u32Payload2: count }.
+// ACE fires GameEvent::ViewContents (0x0196) on UseObject(chest/corpse);
+// index.html drains `kind=21` and re-emits it as the `containerOpened` bus
+// event with { stringPayload: name, u32Payload: guid, u32Payload2: count }.
 // The wasm side caches the GUID list before pushing the event so
-// `handle.getContainerContents(guid)` is fresh at the moment the
-// handler runs.
+// `handle.getContainerContents(guid)` is fresh when the handler runs.
 //
-// Per-item details (name / icon / value / itemType) are NOT returned
-// by getContainerContents — that surfaces Vec<u32> only. We resolve
-// each GUID against playerInventory() (for items the player owns that
-// sit in this container) then fall back to liveScene3d.entityManager
-// (for loose world items / corpse loot). Anything still unresolved
-// renders as a `0xGUID` placeholder, matching how the radial-menu
-// degrades when entity meta is missing.
+// HUD overhaul 2026-10-05 — retail has ONE external-container UI for
+// every ground container (gmExternalContainerUI, the bottom strip), so
+// chests now open in the same window as corpses
+// (plugins/corpse-loot-bar.js: kit chrome, draggable, always on screen,
+// drag & drop both ways). The old floating chest grid sat at top:80
+// right:24 — exactly on top of the inventory panel, so an item could not
+// be dragged between them — and closed on any click outside itself,
+// including the press that starts a drag. It survives below only as a
+// fallback for a session where corpse-loot-bar.js failed to load.
 //
-// Single-panel — opening a new container while one is open replaces
-// the previous contents. Esc / close-button / click-outside dismiss.
-// Click an item → routes to the existing Examine path (window.__showExamineFor).
+// `window.__openContainerFor(guid, name)` (radial-menu "Open", inventory
+// double-click on a nested pack) is now smart: one of the player's own
+// side packs opens IN THE INVENTORY (retail ItemList_OpenContainer —
+// selects that pack in the backpack column); anything else opens the
+// external-container window.
 
 import { setAcText } from "../ui/ac_font.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
@@ -37,7 +40,6 @@ const GRID_COLS = 6;
 
 let overlayEl = null;
 let onKeyDownHandler = null;
-let onDocMouseDownHandler = null;
 
 // Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
 // thin wrapper preserves the historical `[container-panel]` warn label.
@@ -479,17 +481,8 @@ function openContainer(containerGuid, containerName) {
     };
     document.addEventListener("keydown", onKeyDownHandler, true);
   }
-  if (!onDocMouseDownHandler) {
-    onDocMouseDownHandler = (ev) => {
-      if (!overlayEl || overlayEl.dataset.open !== "1") return;
-      if (overlayEl.contains(ev.target)) return;
-      // Race guard: if the context menu is open, let its docMouseDown
-      // close-handler win — we don't fight it.
-      if (window.__radialMenuOpen) return;
-      hidePanel();
-    };
-    document.addEventListener("mousedown", onDocMouseDownHandler, true);
-  }
+  // (HUD overhaul 2026-10-05: no click-outside dismissal — it closed the
+  // panel on the mousedown that starts a drag into the inventory.)
 }
 
 function hidePanel() {
@@ -499,10 +492,6 @@ function hidePanel() {
     document.removeEventListener("keydown", onKeyDownHandler, true);
     onKeyDownHandler = null;
   }
-  if (onDocMouseDownHandler) {
-    document.removeEventListener("mousedown", onDocMouseDownHandler, true);
-    onDocMouseDownHandler = null;
-  }
 }
 
 function onContainerOpened(ev) {
@@ -510,21 +499,39 @@ function onContainerOpened(ev) {
   const guid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
   if (!guid) return;
   const name = detail.stringPayload || "Container";
-  // (2026-07-02) — CORPSE containers route to the horizontal loot bar
-  // (plugins/corpse-loot-bar.js, the vendor-strip pattern the user asked
-  // for); chests/bags keep this grid. Detection = the same ODF Corpse bit
-  // 0x2000 / objectClass check the drop-INTO carve-out uses. Fail-soft: no
-  // bar plugin loaded → the grid opens as before.
-  if (_containerIsCorpse(guid) && typeof window.__corpseLootBar?.openFor === "function") {
+  openGround(guid, name);
+}
+
+// Every ground container → the retail external-container window
+// (corpse-loot-bar.js). Fail-soft: that plugin missing → the legacy grid.
+function openGround(guid, name) {
+  if (typeof window.__corpseLootBar?.openFor === "function") {
     try {
       window.__corpseLootBar.openFor(guid, name);
-      hidePanel(); // a stale grid from a prior chest must not linger under the bar
+      hidePanel(); // a stale fallback grid must not linger
       return;
     } catch (e) {
-      console.warn("[container-panel] corpse-loot-bar delegation failed:", e);
+      console.warn("[container-panel] external-container delegation failed:", e);
     }
   }
   openContainer(guid, name);
+}
+
+// One of the player's own top-level side packs? (containerId 0 + pack slot)
+function isOwnTopLevelPack(guid) {
+  const g = guid >>> 0;
+  const snap = takeInventorySnapshot(window.__sessionHandle);
+  try {
+    for (const it of snap.inv) {
+      if ((it.guid >>> 0) !== g) continue;
+      const pack = typeof it.requiresBackpackSlot === "boolean"
+        ? it.requiresBackpackSlot : (((it.itemType >>> 0) & 0x200) !== 0);
+      return pack && (it.containerId >>> 0) === 0 && (it.equipMask >>> 0) === 0;
+    }
+  } finally {
+    snap.free();
+  }
+  return false;
 }
 
 // Subscribe at module-load. Match radial-menu's pattern: poll for the
@@ -551,7 +558,18 @@ if (typeof window !== "undefined") {
   // cached for `guid` (or "No contents." when nothing). Mirrors
   // window.__vendorBarDebug.
   window.__openContainerFor = (guid, name) => {
-    openContainer(guid >>> 0, name || `Container ${fmtGuid(guid)}`);
+    const g = guid >>> 0;
+    if (!g) return;
+    if (isOwnTopLevelPack(g) && typeof window.__inventory?.openPack === "function") {
+      try {
+        // openPack first: a fresh inventory mount starts on that pack.
+        window.__inventory.openPack(g);
+        const mp = window.__mainPanel;
+        if (mp?.currentViewId?.() !== "inventory" || !mp?.isOpen?.()) mp?.showView?.("inventory");
+        return;
+      } catch (e) { console.warn("[container-panel] open own pack failed:", e); }
+    }
+    openGround(g, name || `Container ${fmtGuid(g)}`);
   };
   window.__closeContainerPanel = hidePanel;
 }
@@ -562,5 +580,5 @@ export const manifest = {
   icon: "📦",
   iconHidden: true,
   version: "0.1.0",
-  description: "Chest / corpse / bag contents panel — auto-opens on kind=21 ContainerOpened",
+  description: "Routes kind=21 ContainerOpened (chests, corpses) to the external-container window; own packs open in the inventory",
 };

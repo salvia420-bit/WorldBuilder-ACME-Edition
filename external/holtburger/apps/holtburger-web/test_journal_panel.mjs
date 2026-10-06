@@ -25,7 +25,10 @@ globalThis.document = {
   body: { appendChild() {} },
 };
 
-const { projectContractsToJournalEntries } = await import("./plugins/journal-panel.js");
+const {
+  projectContractsToJournalEntries, timerDurationMs, journalTimerText,
+  normalizeJournalPages, isBlankJournalPage,
+} = await import("./plugins/journal-panel.js");
 
 let passed = 0;
 let failed = 0;
@@ -33,6 +36,7 @@ function check(name, fn) {
   try { fn(); passed += 1; console.log(`  [PASS] ${name}`); }
   catch (err) { failed += 1; console.log(`  [FAIL] ${name} — ${err.message}`); }
 }
+function assert(cond, label) { if (!cond) throw new Error(label); }
 function assertEq(actual, expected, label) {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -65,16 +69,30 @@ check("stage 3 with no repeat timer → complete", () => {
   assertEq(out[0].status, "complete", "done");
 });
 
-check("stage 3 with future repeat → cooldown", () => {
-  const snap = { trackers: [{ contractId: 4, stage: 3, timeWhenRepeats: NOW + 3600 }] };
+// HUD overhaul 2026-10-05 — ACE's TimeWhenRepeats is SECONDS REMAINING at
+// send time (ContractTracker.cs: GetNextSolveTime().TotalSeconds), not an
+// epoch; retail subtracts the time since `_time_of_server_update`
+// (gmContractsUI::FillProgressString).
+check("stage 3 with repeat time remaining → cooldown", () => {
+  const snap = { trackers: [{ contractId: 4, stage: 3, timeWhenRepeats: 3600 }] };
   const out = projectContractsToJournalEntries(snap, () => null, NOW);
   assertEq(out[0].status, "cooldown", "cooldown");
+  assertEq(out[0].statusText, "Done (1h 0s to Repeat)", "retail status text (DeltaTimeToString drops zero units)");
 });
 
-check("stage 3 with past repeat → complete (ready again)", () => {
-  const snap = { trackers: [{ contractId: 5, stage: 3, timeWhenRepeats: NOW - 60 }] };
-  const out = projectContractsToJournalEntries(snap, () => null, NOW);
+check("stage 3 whose repeat time elapsed since receipt → complete (ready again)", () => {
+  const snap = { trackers: [{ contractId: 5, stage: 3, timeWhenRepeats: 3600 }] };
+  const out = projectContractsToJournalEntries(snap, () => null, NOW, { receivedAtSec: () => NOW - 7200 });
   assertEq(out[0].status, "complete", "past-repeat");
+});
+
+check("repeat time arriving as an i64 bit pattern of a double still decodes", () => {
+  // protocol crate reads ACE's double as i64: 3600.0 → 0x40AC200000000000.
+  const bits = Number(BigInt.asIntN(64, 0x40AC200000000000n));
+  const snap = { trackers: [{ contractId: 6, stage: 3, timeWhenRepeats: bits }] };
+  const out = projectContractsToJournalEntries(snap, () => null, NOW);
+  assertEq(out[0].status, "cooldown", "decoded cooldown");
+  assertEq(out[0].statusText, "Done (1h 0s to Repeat)", "decoded text");
 });
 
 check("title falls back to 'Contract <id>' when no DAT record", () => {
@@ -93,19 +111,60 @@ check("DAT record supplies name + description", () => {
   assertEq(out[0].body, "Seek the Aun elders.", "body");
 });
 
-check("descriptionProgress %d placeholders blanked + folded into body", () => {
+check("stage 2 shows retail 'In Progress' (no %d template filled)", () => {
   const snap = { trackers: [{ contractId: 8, stage: 2 }] };
   const lookup = () => ({ name: "Kill Quest", description: "Slay the drudges.", descriptionProgress: "%d/5 drudges" });
   const out = projectContractsToJournalEntries(snap, lookup, NOW);
-  assertEq(out[0].progressText, "?/5 drudges", "progress");
-  assertEq(out[0].body, "Slay the drudges.  •  ?/5 drudges", "body-with-progress");
+  assertEq(out[0].progressText, "", "no progress at stage 2");
+  assertEq(out[0].statusText, "In Progress", "status");
+  assertEq(out[0].body, "Slay the drudges.", "body");
+});
+
+check("progress-counter stage fills %d with stage − 4 and folds into body", () => {
+  const snap = { trackers: [{ contractId: 8, stage: 7 }] };
+  const lookup = () => ({ name: "Kill Quest", description: "Slay the drudges.", descriptionProgress: "%d/5 drudges" });
+  const out = projectContractsToJournalEntries(snap, lookup, NOW);
+  assertEq(out[0].progressText, "3/5 drudges", "progress");
+  assertEq(out[0].statusText, "3/5 drudges", "status");
+  assertEq(out[0].status, "active", "still active");
+  assertEq(out[0].body, "Slay the drudges.  •  3/5 drudges", "body-with-progress");
 });
 
 check("progress not duplicated when already in description", () => {
-  const snap = { trackers: [{ contractId: 9, stage: 2 }] };
-  const lookup = () => ({ name: "Q", description: "Find 3 gems", descriptionProgress: "Find 3 gems" });
+  const snap = { trackers: [{ contractId: 9, stage: 4 }] };
+  const lookup = () => ({ name: "Q", description: "Found 0 gems", descriptionProgress: "Found %d gems" });
   const out = projectContractsToJournalEntries(snap, lookup, NOW);
-  assertEq(out[0].body, "Find 3 gems", "no-dupe");
+  assertEq(out[0].body, "Found 0 gems", "no-dupe");
+});
+
+// ── retail gmJournalUI notebook helpers ──────────────────────────────────
+
+check("timerDurationMs = (d·24 + h)·60 + m minutes", () => {
+  assertEq(timerDurationMs(1, 2, 3), ((24 + 2) * 60 + 3) * 60000, "1d2h3m");
+  assertEq(timerDurationMs("", "", ""), 0, "blank");
+  assertEq(timerDurationMs("-4", "x", "5"), 5 * 60000, "garbage clamps");
+});
+
+check("journalTimerText: None / Ready / DeltaTimeToString", () => {
+  assertEq(journalTimerText(0, 1000), "None", "not running");
+  assertEq(journalTimerText(5000, 6000), "Ready", "elapsed");
+  assertEq(journalTimerText(1000 + 3725 * 1000, 1000), "1h 2m 5s", "running");
+});
+
+check("normalizeJournalPages always yields ≥1 well-formed page", () => {
+  const empty = normalizeJournalPages(null);
+  assertEq(empty.length, 1, "one page");
+  assert(isBlankJournalPage(empty[0]), "blank page");
+  const pages = normalizeJournalPages([
+    { label: "Aerbax", title: "Keys", notes: "Get 3 keys", loc: { ns: 42.1, ew: 33.6 }, timer: { d: "0", h: "20", m: "0", endsAt: 99 } },
+    { bogus: true },
+    7,
+  ]);
+  assertEq(pages.length, 2, "two pages (bogus object kept as blank, number dropped)");
+  assertEq(pages[0].loc, { ns: 42.1, ew: 33.6 }, "location kept");
+  assertEq(pages[0].timer.endsAt, 99, "timer kept");
+  assert(!isBlankJournalPage(pages[0]), "content page not blank");
+  assert(isBlankJournalPage(pages[1]), "bogus page blank");
 });
 
 console.log(`\n===========================================================`);

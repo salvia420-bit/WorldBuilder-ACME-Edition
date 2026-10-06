@@ -1,4 +1,4 @@
-// Modal dialog component — brass-themed Are-You-Sure prompt that
+// Modal dialog component — retail-chrome Are-You-Sure prompt that
 // replaces window.confirm() in HUD code. Provides two surfaces:
 //
 //   await modalConfirm({title, message, confirmLabel?, cancelLabel?})
@@ -21,94 +21,137 @@
 //   window.__modalConfirmCallback — callback-based
 //
 // References:
-//   - plugins/main-panel.js (panel.png border-image source)
 //   - plugins/lifestone-popup.js / salvage-confirm.js (sibling
 //     confirm modals; modal-dialog supersedes them for free-form
 //     confirms — they keep their domain-specific state machines)
-
-import { setAcText } from "../ui/ac_font.js";
+//
+// HUD overhaul 2026-10-05 — retail dialog chrome + keyboard:
+//   - frame = retail DialogBox (layout 0x21000042, element 0x100002AF):
+//     13×13 brass corner caps 0x06005D39/3A/3B/3C, silver edges
+//     0x06005D3D (top/bottom) / 0x06005D3E (left/right) over the navy
+//     field 0x06005DDB. Exposed as the shared `.hb-dlg` class
+//     (`ensureDialogChromeStyles()`) so salvage-confirm / lifestone-popup
+//     / options-panel prompts all wear the same chrome.
+//   - kit `hbk-btn` buttons (confirm first, like retail's Yes / No),
+//     gold `hbk-divider` under the title, CSS-text message that wraps
+//     (the old single-line <ac-text> canvas ran off the dialog edge).
+//   - Enter confirms (or activates the focused button), Esc cancels,
+//     Tab / ←→ cycle the two buttons, focus returns where it was.
+//   - no ui/ac_font.js import, so node tests can import the siblings
+//     that share the chrome.
 
 const OVERLAY_ID = "hb-modal-dialog";
 const STYLE_ID = "hb-modal-dialog-style";
+const CHROME_STYLE_ID = "hb-dialog-chrome-style";
+const SP = "./data/ui-sprites";
 
 let _activeQueue = [];
 let _processing = false;
 let _domRefs = null;
 let _keyHandler = null;
+let _restoreFocusEl = null;
+
+/** Retail DialogBox 8-piece frame + navy field as one multi-background
+ *  declaration. Exported for tests / ad-hoc reuse. */
+export const DIALOG_FRAME_BACKGROUND = [
+  `url("${SP}/0x06005D39.png") left top / 13px 13px no-repeat`,
+  `url("${SP}/0x06005D3A.png") right top / 13px 13px no-repeat`,
+  `url("${SP}/0x06005D3B.png") left bottom / 13px 14px no-repeat`,
+  `url("${SP}/0x06005D3C.png") right bottom / 13px 14px no-repeat`,
+  `url("${SP}/0x06005D3D.png") 13px top / calc(100% - 26px) 6px no-repeat`,
+  `url("${SP}/0x06005D3D.png") 13px bottom / calc(100% - 26px) 6px no-repeat`,
+  `url("${SP}/0x06005D3E.png") left 13px / 4px calc(100% - 27px) no-repeat`,
+  `url("${SP}/0x06005D3E.png") right 13px / 4px calc(100% - 27px) no-repeat`,
+  `url("${SP}/0x06005DDB.png") 0 0 / 297px 65px repeat`,
+  "#070a14",
+].join(",\n    ");
+
+/** Install the shared `.hb-dlg` chrome classes once. */
+export function ensureDialogChromeStyles() {
+  if (typeof document === "undefined" || !document.head) return;
+  if (document.getElementById?.(CHROME_STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = CHROME_STYLE_ID;
+  s.textContent = `
+  .hb-dlg {
+    position: fixed;
+    left: 50%;
+    top: 40%;
+    transform: translate(-50%, -50%);
+    box-sizing: border-box;
+    display: none;
+    flex-direction: column;
+    min-width: 260px;
+    max-width: min(400px, calc(94 * var(--hb-hud-vw, 1vw)));
+    max-height: calc(90 * var(--hb-hud-vh, 1vh));
+    padding: 12px 16px 13px;
+    color: var(--hbk-text, #e8dfc8);
+    font-family: var(--hbk-font, serif);
+    font-size: 12px;
+    background:
+    ${DIALOG_FRAME_BACKGROUND};
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75);
+    pointer-events: auto;
+    user-select: none;
+  }
+  .hb-dlg[data-open="1"] { display: flex; }
+  .hb-dlg:focus { outline: none; }
+  .hb-dlg-title {
+    flex: 0 0 auto;
+    color: var(--hbk-gold-bright, #f3d27a);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-align: center;
+    text-shadow: 0 1px 0 #000;
+    padding: 0 6px;
+  }
+  .hb-dlg > .hbk-divider { flex: 0 0 auto; margin: 4px -4px 8px; }
+  .hb-dlg-msg {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    line-height: 1.4;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+  .hb-dlg-sub {
+    color: var(--hbk-text-dim, #a8a090);
+    font-size: 11px;
+    font-style: italic;
+    text-align: center;
+    margin: 0 0 8px;
+  }
+  .hb-dlg-actions {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .hb-dlg-actions .hbk-btn { min-width: 76px; }
+  .hb-dlg-actions .hbk-btn:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 1px; }
+  .hb-dlg-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+  }
+  .hb-dlg-backdrop[data-open="1"] { display: block; }
+  `;
+  document.head.appendChild(s);
+}
 
 function ensureStyles() {
   if (typeof document === "undefined") return;
+  ensureDialogChromeStyles();
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID}-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 78;
-      background: rgba(0, 0, 0, 0.5);
-      display: none;
-    }
-    #${OVERLAY_ID}-backdrop[data-open="1"] { display: block; }
-    #${OVERLAY_ID} {
-      position: fixed;
-      left: 50%;
-      top: 38%;
-      transform: translate(-50%, -50%);
-      z-index: 79;
-      min-width: 280px;
-      max-width: 420px;
-      padding: 16px 22px 14px 22px;
-      box-sizing: border-box;
-      background: linear-gradient(180deg,
-        var(--hb-bg-stone-top, rgba(38, 26, 14, 0.97)) 0%,
-        var(--hb-bg-stone-bottom, rgba(20, 14, 8, 0.97)) 100%);
-      border: 5px solid transparent;
-      border-image: url("./sprites/acsprites/panel.png") 5 / 5px / 0 stretch;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
-      font-family: var(--hb-font-serif, serif);
-      color: var(--hb-text-cream, #e8d8b0);
-      pointer-events: auto;
-      display: none;
-    }
-    #${OVERLAY_ID}[data-open="1"] { display: block; }
-    #${OVERLAY_ID} .hb-md-title {
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--hb-text-gold, #d4af37);
-      margin: 0 0 8px 0;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--hb-border-brass-dim, rgba(176, 138, 74, 0.4));
-      text-align: center;
-    }
-    #${OVERLAY_ID} .hb-md-msg {
-      font-size: 12px;
-      margin-bottom: 12px;
-      line-height: 1.4;
-      white-space: pre-line;
-    }
-    #${OVERLAY_ID} .hb-md-row {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-    #${OVERLAY_ID} button.hb-md-btn {
-      padding: 6px 16px;
-      background: linear-gradient(180deg, rgba(60, 44, 24, 0.92) 0%, rgba(40, 28, 16, 0.92) 100%);
-      border: 1px solid var(--hb-border-brass, #b08a4a);
-      color: var(--hb-text-cream, #e8d8b0);
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    #${OVERLAY_ID} button.hb-md-btn:hover {
-      background: linear-gradient(180deg, rgba(80, 60, 30, 0.95) 0%, rgba(55, 40, 22, 0.95) 100%);
-      color: var(--hb-text-gold, #d4af37);
-    }
-    #${OVERLAY_ID} button.hb-md-btn[data-action="confirm"] {
-      border-color: var(--hb-text-gold, #d4af37);
-    }
+    #${OVERLAY_ID}-backdrop { z-index: 78; }
+    #${OVERLAY_ID} { z-index: 79; }
   `;
   document.head.appendChild(s);
 }
@@ -119,38 +162,48 @@ function ensureDom() {
 
   const backdrop = document.createElement("div");
   backdrop.id = `${OVERLAY_ID}-backdrop`;
+  backdrop.className = "hb-dlg-backdrop";
   backdrop.setAttribute("data-open", "0");
 
   const dialog = document.createElement("div");
   dialog.id = OVERLAY_ID;
-  dialog.setAttribute("role", "dialog");
+  dialog.className = "hb-dlg";
+  dialog.setAttribute("role", "alertdialog");
   dialog.setAttribute("aria-modal", "true");
   dialog.setAttribute("data-open", "0");
   dialog.tabIndex = -1;
 
   const titleEl = document.createElement("div");
-  titleEl.className = "hb-md-title";
+  titleEl.className = "hb-dlg-title";
+  titleEl.id = `${OVERLAY_ID}-title`;
   dialog.appendChild(titleEl);
+  dialog.setAttribute("aria-labelledby", titleEl.id);
+
+  const divider = document.createElement("div");
+  divider.className = "hbk-divider";
+  dialog.appendChild(divider);
 
   const msgEl = document.createElement("div");
-  msgEl.className = "hb-md-msg";
+  msgEl.className = "hb-dlg-msg hbk-scroll";
+  msgEl.id = `${OVERLAY_ID}-msg`;
   dialog.appendChild(msgEl);
+  dialog.setAttribute("aria-describedby", msgEl.id);
 
   const row = document.createElement("div");
-  row.className = "hb-md-row";
-
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "hb-md-btn";
-  cancelBtn.dataset.action = "cancel";
+  row.className = "hb-dlg-actions";
 
   const okBtn = document.createElement("button");
   okBtn.type = "button";
-  okBtn.className = "hb-md-btn";
+  okBtn.className = "hbk-btn";
   okBtn.dataset.action = "confirm";
 
-  row.appendChild(cancelBtn);
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "hbk-btn";
+  cancelBtn.dataset.action = "cancel";
+
   row.appendChild(okBtn);
+  row.appendChild(cancelBtn);
   dialog.appendChild(row);
 
   document.body.appendChild(backdrop);
@@ -162,8 +215,9 @@ function ensureDom() {
 
 function openCurrent(entry) {
   const refs = ensureDom();
-  setAcText(refs.titleEl, entry.title || "Confirm");
-  setAcText(refs.msgEl, entry.message || "");
+  refs.titleEl.textContent = entry.title || "Confirm";
+  refs.msgEl.textContent = entry.message || "";
+  refs.msgEl.scrollTop = 0;
   refs.okBtn.textContent = entry.confirmLabel || "OK";
   refs.cancelBtn.textContent = entry.cancelLabel || "Cancel";
   refs.backdrop.setAttribute("data-open", "1");
@@ -176,14 +230,27 @@ function openCurrent(entry) {
       if (refs.dialog.dataset.open !== "1") return;
       if (ev.key === "Escape") {
         ev.preventDefault();
+        ev.stopPropagation();
         resolve(entry, false);
       } else if (ev.key === "Enter") {
         ev.preventDefault();
-        resolve(entry, true);
+        ev.stopPropagation();
+        // Enter confirms — unless the player tabbed onto Cancel.
+        resolve(entry, document.activeElement !== refs.cancelBtn);
+      } else if (ev.key === "Tab" || ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+        // Keep focus inside the dialog: cycle the two buttons.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const next = document.activeElement === refs.okBtn ? refs.cancelBtn : refs.okBtn;
+        try { next.focus({ preventScroll: true }); } catch (_) {}
       }
     };
     document.addEventListener("keydown", _keyHandler, true);
   }
+  try {
+    const ae = document.activeElement;
+    _restoreFocusEl = (ae && ae !== document.body && !refs.dialog.contains(ae)) ? ae : null;
+  } catch (_) { _restoreFocusEl = null; }
   try { refs.okBtn.focus({ preventScroll: true }); } catch (_) {}
 }
 
@@ -199,6 +266,12 @@ function resolve(entry, accepted) {
     document.removeEventListener("keydown", _keyHandler, true);
     _keyHandler = null;
   }
+  const restore = _restoreFocusEl;
+  _restoreFocusEl = null;
+  try {
+    if (restore && restore.isConnected) restore.focus({ preventScroll: true });
+    else if (refs.dialog.contains(document.activeElement)) document.activeElement.blur();
+  } catch (_) {}
   try {
     if (accepted) entry.onConfirm?.();
     else entry.onCancel?.();
@@ -343,8 +416,8 @@ export const manifest = {
   name: "Modal Dialog",
   icon: "◆",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Brass-themed modal confirm replacement for window.confirm — both Promise + callback APIs.",
+  version: "0.2.0",
+  description: "Retail-chrome modal confirm replacement for window.confirm — both Promise + callback APIs.",
 };
 
 export function mount() {

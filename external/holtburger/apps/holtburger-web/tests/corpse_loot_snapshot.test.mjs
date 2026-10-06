@@ -141,6 +141,36 @@ const UI_STUBS = {
   takeInventorySnapshot: "globalThis.__realTakeInventorySnapshot",
 };
 
+// HUD overhaul 2026-10-05: corpse-loot-bar is now the kit-chrome external-
+// container window wired to plugins/item_drag.js. None of these are reached
+// by refreshContents() with no overlay built (render() returns early), so
+// each stub THROWS — a refactor that starts calling one on the snapshot
+// path fails loudly here instead of passing on a fake.
+const NOT_ON_SNAPSHOT_PATH = (name) =>
+  `() => { throw new Error("${name} must not run on the snapshot path"); }`;
+const CORPSE_STUBS = {
+  ...UI_STUBS,
+  getIconImmediate: "() => null",
+  attachWindowPosition: NOT_ON_SNAPSHOT_PATH("attachWindowPosition"),
+  makeTitlebar: NOT_ON_SNAPSHOT_PATH("makeTitlebar"),
+  uiEffectIconsEnabled: "() => false",
+  uiEffectIconsFor: "() => []",
+  uiEffectTintCss: "() => null",
+  decideItemDrop: NOT_ON_SNAPSHOT_PATH("decideItemDrop"),
+  DROP_TARGET: "Object.freeze({})",
+  MAIN_PACK_KEY: "0",
+  PACKS_KEY: "'packs'",
+  beginItemDrag: NOT_ON_SNAPSHOT_PATH("beginItemDrag"),
+  registerDropZone: NOT_ON_SNAPSHOT_PATH("registerDropZone"),
+  resolveDropAction: NOT_ON_SNAPSHOT_PATH("resolveDropAction"),
+  executeItemAction: NOT_ON_SNAPSHOT_PATH("executeItemAction"),
+  pendingOps: "Object.freeze({ has: () => false })",
+  showItemTooltip: NOT_ON_SNAPSHOT_PATH("showItemTooltip"),
+  hideItemTooltip: NOT_ON_SNAPSHOT_PATH("hideItemTooltip"),
+  showItemToast: NOT_ON_SNAPSHOT_PATH("showItemToast"),
+  localPlayerGuid: "() => 0",
+};
+
 // container-panel additionally pulls the drop-flag / ui-effect helpers.
 // Explicit, non-permissive stubs (splice_module contract): each returns the
 // value that keeps the render path on its ordinary branch, so nothing this
@@ -165,7 +195,7 @@ const CONTAINER_STUBS = {
   const mod = loadPlugin(
     "plugins/corpse-loot-bar.js",
     ["refreshContents", "state"],
-    UI_STUBS,
+    CORPSE_STUBS,
   );
   mod.state.corpseGuid = 0xC0FFEE01;
   mod.refreshContents();
@@ -206,7 +236,7 @@ const CONTAINER_STUBS = {
       contents: [0xA0000000, 0xA0000001, 0xB0000009],
     });
     installWindow(h2);
-    const m2 = loadPlugin("plugins/corpse-loot-bar.js", ["refreshContents", "state"], UI_STUBS);
+    const m2 = loadPlugin("plugins/corpse-loot-bar.js", ["refreshContents", "state"], CORPSE_STUBS);
     m2.state.corpseGuid = 0xC0FFEE02;
     m2.refreshContents();
     assert.deepEqual(

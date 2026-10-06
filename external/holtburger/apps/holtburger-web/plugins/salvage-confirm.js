@@ -31,6 +31,13 @@
 //   - plugins/tradeskill.js (sibling confirm popup with requireConfirm)
 //   - plugins/salvage-panel.js (sibling batch UI)
 
+// HUD overhaul 2026-10-05 — wears the shared retail DialogBox chrome
+// (`.hb-dlg`, plugins/modal-dialog.js) with kit buttons, a gold divider
+// and a scrolling item list; Enter confirms / Esc cancels (and no longer
+// leak to the game), Tab / ←→ cycle the buttons, and an unnamed item
+// reads "an unnamed item" instead of a raw 0x… guid.
+import { ensureDialogChromeStyles } from "./modal-dialog.js";
+
 const OVERLAY_ID = "hb-salvage-confirm";
 const STYLE_ID = "hb-salvage-confirm-style";
 
@@ -120,75 +127,30 @@ export function decideSalvageAction(action, callbacks) {
 
 function ensureStyles() {
   if (typeof document === "undefined") return;
+  ensureDialogChromeStyles();
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      left: 50%;
-      top: 38%;
-      transform: translate(-50%, -50%);
-      z-index: 70;
-      min-width: 280px;
-      max-width: 380px;
-      padding: 14px 18px 12px 18px;
-      background: rgba(20, 14, 8, 0.96);
-      border: 1px solid var(--hb-border-brass, #b08a4a);
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
-      font-family: var(--hb-font-serif, serif);
-      color: var(--hb-text-cream, #e8d8b0);
-      pointer-events: auto;
-      display: none;
-    }
-    #${OVERLAY_ID}[data-open="1"] { display: block; }
-    #${OVERLAY_ID} .hb-sc-title {
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--hb-text-gold, #d4af37);
-      margin: 0 0 8px 0;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--hb-border-brass-dim, rgba(176, 138, 74, 0.4));
-      text-align: center;
-    }
-    #${OVERLAY_ID} .hb-sc-body {
-      font-size: 12px;
-      margin-bottom: 10px;
-      line-height: 1.45;
-    }
+    #${OVERLAY_ID} { z-index: 70; max-width: min(380px, calc(94 * var(--hb-hud-vw, 1vw))); }
     #${OVERLAY_ID} .hb-sc-item-list {
-      margin: 6px 0 6px 0;
-      padding: 4px 0 4px 12px;
+      flex: 0 1 auto;
+      min-height: 0;
       max-height: 120px;
-      overflow-y: auto;
+      margin: 6px 0 0;
+      padding: 2px 0;
+      list-style: none;
+      border: 1px solid var(--hbk-gold-deep, #4e3f1f);
+      background: rgba(0, 0, 0, 0.35);
       font-size: 11px;
-      color: var(--hb-text-muted, #b0a080);
-      list-style: disc;
     }
+    #${OVERLAY_ID} .hb-sc-item-list > li { min-height: 16px; padding: 0 6px; }
     #${OVERLAY_ID} .hb-sc-warn {
+      margin-top: 8px;
+      color: var(--hbk-warn, #ff6a50);
       font-size: 11px;
-      color: var(--hb-text-warn, #d6a060);
       font-style: italic;
-      margin-top: 4px;
-    }
-    #${OVERLAY_ID} .hb-sc-row {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-    #${OVERLAY_ID} button.hb-sc-btn {
-      padding: 6px 14px;
-      background: linear-gradient(180deg, rgba(60, 44, 24, 0.9) 0%, rgba(40, 28, 16, 0.9) 100%);
-      border: 1px solid var(--hb-border-brass, #b08a4a);
-      color: var(--hb-text-cream, #e8d8b0);
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    #${OVERLAY_ID} button.hb-sc-btn:hover {
-      background: linear-gradient(180deg, rgba(80, 60, 30, 0.95) 0%, rgba(55, 40, 22, 0.95) 100%);
-      color: var(--hb-text-gold, #d4af37);
+      text-align: center;
     }
   `;
   document.head.appendChild(s);
@@ -205,10 +167,12 @@ const state = {
   current: { kind: "idle" },
   callbacks: null,
   keydownHandler: null,
+  restoreFocusEl: null,
 };
 
-function formatGuid(g) {
-  return `0x${(g >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+function itemName(it) {
+  const label = typeof it?.label === "string" ? it.label.trim() : "";
+  return label || "an unnamed item";
 }
 
 function renderBody(toolLabel, items) {
@@ -217,21 +181,22 @@ function renderBody(toolLabel, items) {
   const toolName = toolLabel ? toolLabel : "the salvage tool";
   if (items.length === 1) {
     const it = items[0];
-    const itemName = it.label || formatGuid(it.guid);
+    const name = itemName(it);
     state.bodyEl.textContent =
-      `Are you sure you want to apply ${toolName} to ${itemName}? The item may be destroyed.`;
+      `Apply ${toolName} to ${name}? The item will be destroyed.`;
     state.itemListEl.style.display = "none";
   } else if (items.length > 1) {
     state.bodyEl.textContent =
-      `Are you sure you want to apply ${toolName} to ${items.length} items?`;
+      `Apply ${toolName} to these ${items.length} items? They will be destroyed.`;
     state.itemListEl.style.display = "";
     for (const it of items) {
       const li = document.createElement("li");
-      li.textContent = it.label || formatGuid(it.guid);
+      li.textContent = itemName(it);
+      li.className = "hbk-row";
       state.itemListEl.appendChild(li);
     }
   } else {
-    state.bodyEl.textContent = `Confirm salvage operation with ${toolName}?`;
+    state.bodyEl.textContent = `Salvage with ${toolName}?`;
     state.itemListEl.style.display = "none";
   }
 }
@@ -241,21 +206,28 @@ function ensurePopup() {
   ensureStyles();
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
-  overlay.setAttribute("role", "dialog");
+  overlay.className = "hb-dlg";
+  overlay.setAttribute("role", "alertdialog");
+  overlay.setAttribute("aria-modal", "true");
   overlay.setAttribute("aria-label", "Confirm salvage");
   overlay.setAttribute("data-open", "0");
+  overlay.tabIndex = -1;
 
   const title = document.createElement("div");
-  title.className = "hb-sc-title";
+  title.className = "hb-dlg-title";
   title.textContent = "Confirm Salvage";
   overlay.appendChild(title);
 
+  const divider = document.createElement("div");
+  divider.className = "hbk-divider";
+  overlay.appendChild(divider);
+
   const body = document.createElement("div");
-  body.className = "hb-sc-body";
+  body.className = "hb-dlg-msg hb-sc-body";
   overlay.appendChild(body);
 
   const list = document.createElement("ul");
-  list.className = "hb-sc-item-list";
+  list.className = "hb-sc-item-list hbk-list hbk-scroll";
   overlay.appendChild(list);
 
   const warn = document.createElement("div");
@@ -264,21 +236,21 @@ function ensurePopup() {
   overlay.appendChild(warn);
 
   const row = document.createElement("div");
-  row.className = "hb-sc-row";
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "hb-sc-btn";
-  cancelBtn.dataset.action = "cancel";
-  cancelBtn.textContent = "Cancel";
-  cancelBtn.addEventListener("click", () => dispatch({ type: "cancel" }));
+  row.className = "hb-dlg-actions hb-sc-row";
   const okBtn = document.createElement("button");
   okBtn.type = "button";
-  okBtn.className = "hb-sc-btn";
+  okBtn.className = "hbk-btn hb-sc-btn";
   okBtn.dataset.action = "confirm";
   okBtn.textContent = "Salvage";
   okBtn.addEventListener("click", () => dispatch({ type: "confirm" }));
-  row.appendChild(cancelBtn);
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "hbk-btn hb-sc-btn";
+  cancelBtn.dataset.action = "cancel";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", () => dispatch({ type: "cancel" }));
   row.appendChild(okBtn);
+  row.appendChild(cancelBtn);
   overlay.appendChild(row);
 
   document.body.appendChild(overlay);
@@ -300,6 +272,12 @@ function dispatch(event) {
     state.overlayEl.dataset.open = next.kind === "open" ? "1" : "0";
   }
   if (action.kind === "none") return;
+  const restore = state.restoreFocusEl;
+  state.restoreFocusEl = null;
+  try {
+    if (restore && restore.isConnected) restore.focus({ preventScroll: true });
+    else if (state.overlayEl?.contains(document.activeElement)) document.activeElement.blur();
+  } catch (_) {}
 
   const callbacks = state.callbacks;
   const decision = decideSalvageAction(action, callbacks ?? {});
@@ -349,14 +327,27 @@ export function show(opts) {
       if (state.current.kind !== "open") return;
       if (ev.key === "Escape") {
         ev.preventDefault();
+        ev.stopPropagation();
         dispatch({ type: "cancel" });
       } else if (ev.key === "Enter") {
         ev.preventDefault();
-        dispatch({ type: "confirm" });
+        ev.stopPropagation();
+        // Enter confirms — unless the player tabbed onto Cancel.
+        dispatch({ type: document.activeElement === state.cancelBtn ? "cancel" : "confirm" });
+      } else if (ev.key === "Tab" || ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const next = document.activeElement === state.okBtn ? state.cancelBtn : state.okBtn;
+        try { next?.focus({ preventScroll: true }); } catch (_) {}
       }
     };
-    document.addEventListener("keydown", state.keydownHandler);
+    // Capture phase so Enter/Esc never reach the chat / game handlers.
+    document.addEventListener("keydown", state.keydownHandler, true);
   }
+  try {
+    const ae = document.activeElement;
+    state.restoreFocusEl = (ae && ae !== document.body && !state.overlayEl?.contains(ae)) ? ae : null;
+  } catch (_) { state.restoreFocusEl = null; }
   try { state.okBtn?.focus({ preventScroll: true }); } catch (_) {}
 }
 
@@ -370,7 +361,7 @@ export const manifest = {
   name: "Salvage Confirm",
   icon: "⚠",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Are-You-Sure modal before a salvage operation destroys the source items.",
 };
 
@@ -395,7 +386,7 @@ export function mount() {
   return () => {
     window.removeEventListener("hb:salvage-confirm-request", onRequest);
     if (state.keydownHandler) {
-      document.removeEventListener("keydown", state.keydownHandler);
+      document.removeEventListener("keydown", state.keydownHandler, true);
       state.keydownHandler = null;
     }
   };

@@ -273,6 +273,46 @@ const AC_TEXT_VIS_GUARD = !/[?&]tipPerf=off(?:&|$)/i.test(
   (typeof location !== "undefined" && location.search) || ""
 );
 
+// HUD overhaul 2026-10-05 — backing resolution for <ac-text>. The HUD
+// roots are magnified with CSS `zoom` (ui/hud_scale.js) and HiDPI screens
+// magnify again by devicePixelRatio; a 1:1 glyph canvas blown up 1.5–3×
+// is mush. <ac-text> therefore rasterises at an INTEGER multiple
+// R = ceil(hudScale × dpr) with nearest-neighbour glyph blits (the font
+// stays a crisp bitmap font) and CSS-sizes the canvas back to its 1×
+// box, so the browser only ever DOWN-samples. Read from the document
+// (no import) so this module stays loadable in the node test stubs.
+// `?acTextHiRes=off` restores the 1:1 canvases.
+const AC_TEXT_HIRES = !/[?&]acTextHiRes=off(?:&|$)/i.test(
+  (typeof location !== "undefined" && location.search) || ""
+);
+function _acTextResolution() {
+  if (!AC_TEXT_HIRES || typeof window === "undefined") return 1;
+  const s = Number(window.__hudScale?.get?.()) || 1;
+  const dpr = Number(window.devicePixelRatio) || 1;
+  return Math.max(1, Math.min(4, Math.ceil(s * dpr - 0.01)));
+}
+// Live <ac-text> elements, re-rendered when the resolution changes
+// (HUD scale event, or a dpr change surfacing as a window resize).
+const _liveAcText = new Set();
+let _lastAcTextRes = 0;
+function _rerenderAllAcText() {
+  const res = _acTextResolution();
+  if (res === _lastAcTextRes) return;
+  _lastAcTextRes = res;
+  for (const el of _liveAcText) {
+    try { el._render(true); } catch (_) {}
+  }
+}
+if (typeof document !== "undefined" && typeof document.addEventListener === "function"
+    && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  document.addEventListener("hb-hud-scale-changed", _rerenderAllAcText);
+  let _resRaf = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(_resRaf);
+    _resRaf = requestAnimationFrame(_rerenderAllAcText);
+  });
+}
+
 // Perf (F-2026-06-29): reusable scratch canvases for renderAcText's shadow
 // + foreground temp passes. These are internal-only (never returned or
 // inserted into the DOM), and renderAcText is fully synchronous with no
@@ -515,12 +555,20 @@ export function setAcText(el, text, opts) {
       break;
     }
   }
+  const str = String(text ?? "");
   if (!inner) {
     el.textContent = "";
     inner = el.ownerDocument.createElement("ac-text");
+    // HUD overhaul 2026-10-05 — set the text BEFORE attaching. On a host
+    // that is already in the document, appendChild runs connectedCallback
+    // synchronously: it rendered an EMPTY canvas, paused its observer, and
+    // the textContent write below then replaced that canvas while nobody
+    // was listening — leaving the raw text node (CSS-coloured, usually
+    // black) and a detached `_canvas` that made the idempotence guard skip
+    // every later call. (Hit by the radar coords strip.)
+    inner.textContent = str;
     el.appendChild(inner);
   }
-  const str = String(text ?? "");
   // Idempotence (F-2026-06-29): per-frame callers (radar coords re-set every
   // rAF at radar.js:839, combat HUD) re-set IDENTICAL text. Setting
   // textContent replaces the rendered <canvas> with a text node and forces a
@@ -532,7 +580,8 @@ export function setAcText(el, text, opts) {
   const key = opts
     ? `${str} ${opts.color ?? ""} ${opts.scale ?? ""} ${opts.fontId ?? ""} ${opts.maxWidth ?? ""} ${opts.fitMode ?? ""} ${opts.fit ?? ""}`
     : str;
-  if (AC_TEXT_VIS_GUARD && inner._acSetKey === key && inner._canvas) return;
+  if (AC_TEXT_VIS_GUARD && inner._acSetKey === key && inner._canvas
+      && inner._canvas.parentNode === inner) return;
   inner._acSetKey = key;
   if (opts) {
     if (opts.color !== undefined) inner.setAttribute("color", String(opts.color));
@@ -687,23 +736,32 @@ function _measure(runtime, text) {
     penX += g.h_off_before;
     const right = penX + g.width;
     penX = right + g.h_off_after;
-    // Rec #63 — per-font baselineOffset shifts the glyph's vertical
-    // origin so descenders + ascenders don't get cropped. Applied
-    // identically in _drawGlyphs so the canvas reservation matches
-    // what gets painted. Border pixels (num_horizontal/vertical_border)
-    // aren't surfaced from the wasm side yet — a follow-on would
-    // inset the atlas sample rect by those values; here we conservatively
-    // assume zero so the shadow render at oy=1 doesn't bleed past
-    // the foreground.
-    const baseY = (gRuntime.baselineOffset >>> 0) || 0;
-    const bottom = baseY + g.v_off_before + g.height;
+    // HUD overhaul 2026-10-05 — glyph vertical placement, retail-exact.
+    // A CharDesc's verticalOffsetBefore is already measured from the CELL
+    // TOP (font 0x40000000: baselineOffset 12, 'A' = height 8 at vOff 4 →
+    // bottom exactly on the baseline). Retail CSurface::DrawCharacter
+    // (acclient.c:126967) draws at y + vOffBefore and only SUBTRACTS
+    // m_BaselineOffset when the caller passes a baseline y (flag 2); it
+    // never adds it. Rec #63 (2026-06-16) added it, which drew every label
+    // ~12 px low inside a canvas nearly twice the cell height — the root
+    // of the "labels hang below their buttons/tabs" HUD bugs. The baseline
+    // is now used only to align a FALLBACK font's glyph (CJK) to the
+    // primary font's baseline.
+    const dy = _baselineDelta(runtime, gRuntime);
+    const bottom = dy + g.v_off_before + g.height;
     if (bottom > maxY) maxY = bottom;
-    if ((gRuntime.maxCharHeight + baseY) > maxY) maxY = gRuntime.maxCharHeight + baseY;
   }
   return {
     width: Math.max(1, penX),
-    height: Math.max(runtime.maxCharHeight + ((runtime.baselineOffset >>> 0) || 0), maxY),
+    height: Math.max(runtime.maxCharHeight, maxY),
   };
+}
+
+/** Vertical shift that puts a fallback-font glyph on the primary font's
+ *  baseline (0 for the primary font itself). */
+function _baselineDelta(primary, glyphRuntime) {
+  if (!glyphRuntime || glyphRuntime === primary) return 0;
+  return ((primary.baselineOffset >>> 0) || 0) - ((glyphRuntime.baselineOffset >>> 0) || 0);
 }
 
 function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) {
@@ -741,15 +799,8 @@ function _drawGlyphs(ctx, runtime, atlasCanvas, text, scale, ox, oy, atlasKind) 
     const atlas = pickAtlas(gRuntime);
     penX += g.h_off_before;
     if (g.width > 0 && g.height > 0 && atlas) {
-      // Rec #63 — same baselineOffset shift _measure applies. The
-      // shadow render path uses oy=1 (and the fg path oy=0) so the
-      // shadow ends up exactly one pixel below the foreground at the
-      // baseline-adjusted y, matching retail bitmap-font output. The
-      // num_horizontal/vertical_border_pixels atlas inset isn't
-      // wired (defer-wasm: not surfaced from FontData yet) — when it
-      // lands, subtract from offset_x/y and width/height to skip
-      // border padding.
-      const baseY = (gRuntime.baselineOffset >>> 0) || 0;
+      // Cell-top-relative placement — see _measure (HUD overhaul 2026-10-05).
+      const baseY = _baselineDelta(runtime, gRuntime);
       ctx.drawImage(
         atlas,
         g.offset_x,
@@ -836,6 +887,7 @@ function _registerAcTextImpl() {
       this._observer = new MutationObserver(() => this._render());
     }
     connectedCallback() {
+      _liveAcText.add(this);
       this.style.display = this.style.display || "inline-block";
       // Capture the initial text before the first render strips it out.
       this._sourceText = (this.textContent ?? "").trim();
@@ -846,6 +898,7 @@ function _registerAcTextImpl() {
       this._unsubFontLoad = addFontLoadListener(() => this._render());
     }
     disconnectedCallback() {
+      _liveAcText.delete(this);
       this._observer.disconnect();
       if (typeof this._unsubFontLoad === "function") {
         try { this._unsubFontLoad(); } catch (_) {}
@@ -855,7 +908,7 @@ function _registerAcTextImpl() {
     attributeChangedCallback() {
       this._render();
     }
-    _render() {
+    _render(forceRes = false) {
       // Read text from a) explicit `data-text` attribute (callers that
       // want to bypass mutation re-entry can use this), b) the current
       // textContent if it differs from the canvas we already drew, or
@@ -867,7 +920,9 @@ function _registerAcTextImpl() {
       // with a canvas, textContent becomes "" and the mutation observer
       // fires; without this check we'd recurse.
       const text = explicit ?? (currentText.length > 0 ? currentText : this._sourceText);
-      if (this._canvas && text === this._sourceText && !explicit) {
+      const res = _acTextResolution();
+      if (this._canvas && this._acRes !== res) forceRes = true;
+      if (this._canvas && text === this._sourceText && !explicit && !forceRes) {
         // Either the observer fired on our own canvas append (textContent
         // is now "") or nothing changed. Skip.
         if (currentText.length === 0) return;
@@ -975,17 +1030,41 @@ function _registerAcTextImpl() {
         }
         return;
       }
+      // HUD overhaul 2026-10-05 — rasterise at the integer backing
+      // resolution, then CSS-size back to the 1× box (see
+      // _acTextResolution). Every pixel quantity handed to renderAcText
+      // is in canvas px, so the box/fit limits scale with it.
+      if (res > 1) {
+        opts.scale = Math.max(1, Math.floor(opts.scale || 1)) * res;
+        if (opts.maxWidth) opts.maxWidth *= res;
+        if (opts.boxWidth) opts.boxWidth *= res;
+        if (opts.boxHeight) opts.boxHeight *= res;
+      }
       const canvas = renderAcText(text, opts);
       if (!canvas) return;
+      this._acRes = res;
+      // HUD overhaul 2026-10-05 — block-level glyph canvas. As an inline
+      // replaced element the canvas sat on the text baseline and the host
+      // line box added a descender gap beneath it, pushing every label a
+      // few px below the centre of its button/tab (the "labels hang below
+      // their tab boxes" chat bug; clipped "Send"/"Chat" captions).
+      if (canvas.style) canvas.style.display = "block";
+      if (res > 1 && canvas.style) {
+        canvas.style.width = `${canvas.width / res}px`;
+        canvas.style.height = `${canvas.height / res}px`;
+      }
 
       // Pause observation while we mutate children so our own DOM ops
       // don't re-trigger _render().
       this._observer.disconnect();
-      if (this._canvas) {
+      if (this._canvas && this._canvas.parentNode === this) {
         this._canvas.replaceWith(canvas);
       } else {
+        // First render, OR the previous canvas was detached by a textContent
+        // write (replaceWith on a detached node is a silent no-op — that
+        // looped the re-render guard below forever).
         for (const node of [...this.childNodes]) {
-          if (node.nodeType === Node.TEXT_NODE) node.remove();
+          if (node.nodeType === Node.TEXT_NODE || node.nodeName === "CANVAS") node.remove();
         }
         this.appendChild(canvas);
       }
@@ -995,6 +1074,14 @@ function _registerAcTextImpl() {
       queueMicrotask(() => {
         if (this.isConnected) {
           this._observer.observe(this, { childList: true, characterData: true, subtree: true });
+          // A synchronous textContent write between our render and this
+          // re-observe is invisible to the observer — catch it here. Bounded:
+          // at most one catch-up render per real render, so a pathological
+          // host can never spin the microtask queue.
+          if (this._canvas && this._canvas.parentNode !== this && !this._catchUp) {
+            this._catchUp = true;
+            try { this._render(true); } finally { this._catchUp = false; }
+          }
         }
       });
     }

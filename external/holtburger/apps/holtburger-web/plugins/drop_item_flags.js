@@ -18,7 +18,12 @@
 //
 // References:
 //   - acclient_2013.bndb_pseudo_c.txt:174274 OnItemListDragOver
-//   - plugins/inventory.js:1170 application/x-hb-inv-guid (item drag source)
+//   - plugins/item_drag.js beginItemDrag — application/x-hb-inv-guid +
+//     text/x-hb-item-guid, effectAllowed "all" (inventory grid, paperdoll,
+//     backpack column, external-container window; HUD overhaul 2026-10-05).
+//     Those panels resolve their own drops through item_drag.js drop zones
+//     + inventory_helpers.decideItemDrop; this table is for the OTHER
+//     targets (vendor, trade, hotbar, salvage) that read the same MIMEs.
 //   - plugins/spellbook.js application/x-hb-spell-id (spell drag source)
 //   - plugins/hotbar.js application/x-hb-hotbar-slot (slot-swap source)
 

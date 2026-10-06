@@ -1146,8 +1146,12 @@ function installHitGate(paneList) {
     if (!r.geo) return false;
     if (!r.rect) r.rect = r.el.getBoundingClientRect();
     const g = r.geo;
-    const x = (px - r.rect.left) / g.scale;
-    const y = (py - r.rect.top) / g.scale;
+    // HUD overhaul 2026-10-05 — the pane sits inside the HUD's CSS zoom
+    // (ui/hud_scale.js): pointer + rect are screen px, the measured
+    // geometry is the pane's own px, so divide by both scales.
+    const z = Number(r.el.currentCSSZoom) > 0 ? Number(r.el.currentCSSZoom) : 1;
+    const x = (px - r.rect.left) / (g.scale * z);
+    const y = (py - r.rect.top) / (g.scale * z);
     if (x < 0 || y < 0 || x > PANE_W || y > PANE_H) return false;
     const dx = x - g.cx, dy = y - g.cy;
     if (dx * dx + dy * dy <= g.cr * g.cr) return true;
@@ -1189,6 +1193,7 @@ function installHitGate(paneList) {
   document.addEventListener("pointerup", onUp, true);
   document.addEventListener("pointercancel", onUp, true);
   window.addEventListener("resize", onResize);
+  document.addEventListener("hb-hud-scale-changed", onResize);
 
   // Exposed for the headless tests: "is (x, y) over art?" without a
   // synthetic pointer event.
@@ -1200,6 +1205,7 @@ function installHitGate(paneList) {
     document.removeEventListener("pointerup", onUp, true);
     document.removeEventListener("pointercancel", onUp, true);
     window.removeEventListener("resize", onResize);
+    document.removeEventListener("hb-hud-scale-changed", onResize);
     installHitGate.probe = null;
   };
 }

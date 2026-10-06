@@ -1,14 +1,39 @@
 // Wave B3 — right-click context menu (retail's "radial" was internally a
 // vertical entry list; we adopt the same pattern). Spawned by
 // scene3d/camera.js's onMouseUp when a right-click-no-drag lands on an
-// entity. Replaces Wave A3's direct __showExamineFor invocation.
+// entity, and by the inventory / container / hotbar / paperdoll slots.
 //
-// Entry-point: window.__openRadialMenuFor(guid, clientX, clientY).
+// Entry-point: window.__openContextMenuFor({source, guid, clientX,
+// clientY, ...}) (legacy: window.__openRadialMenuFor(guid, x, y)).
 // Closes on: outside click, Escape, entry selection, right-click again.
+//
+// HUD overhaul 2026-10-05:
+//   - kit chrome: `.hbk-window` dark field + gold edge, `.hbk-row` entries
+//     with the kit hover/selected treatment, a gold rule under the name,
+//     dimmed disabled entries, the ▸ arrow split out of the label.
+//   - ZOOM-AWARE placement: `#hb-radial-menu` / `#hb-radial-submenu` are
+//     zoomed HUD roots (ui/hud_scale.js), so the screen-px click point is
+//     converted with hudPoint(), the box measured in HUD px and placed
+//     with the shared `placeNearPointer` rule (hover-tooltip.js), clamped
+//     to hudViewport(). Before this the menu opened at (x·s, y·s) — far
+//     from the pointer — and could leave the screen at HUD scale > 1.
+//     Tall lists (Add To Hotbar ▸ has 18 slots) scroll instead of
+//     overflowing the viewport.
+//   - keyboard: ↑/↓ (Home/End) move, Enter/Space activate, → opens a
+//     submenu, ←/Esc backs out, a letter jumps to the next entry starting
+//     with it. Handled keys are swallowed so they don't also walk the
+//     character. Typing into the Split Stack field is left alone.
+//   - the Bonded-drop confirm uses the shared retail dialog
+//     (modal-dialog.js) instead of an unstyled native-button overlay.
+//   - fixed: `focusAction: "split"` (shift-click a stack) armed the wrong
+//     row — it indexed overlay.children, whose [0] is the header.
 
-import { setAcText } from "../ui/ac_font.js";
+import { hudPoint, hudRect, hudViewport, getHudScale } from "../ui/hud_scale.js";
+import { placeNearPointer } from "./hover-tooltip.js";
+import { modalConfirmCallback } from "./modal-dialog.js";
 
 const OVERLAY_ID = "hb-radial-menu";
+const SUBMENU_ID = "hb-radial-submenu";
 const STYLE_ID = "hb-radial-menu-style";
 
 const ITEM_TYPE_CREATURE = 0x00000010;
@@ -19,58 +44,75 @@ function ensureStyles() {
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
+    #${OVERLAY_ID}, #${SUBMENU_ID} {
       z-index: 80;
-      min-width: 100px;
-      padding: 2px 0;
-      font-family: var(--hb-font-serif);
-      background: rgba(20, 14, 8, 0.94);
-      border: 1px solid var(--hb-border-brass);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-      user-select: none;
-      pointer-events: auto;
+      display: flex;
+      flex-direction: column;
+      min-width: 128px;
+      max-width: 260px;
+      max-height: calc(100 * var(--hb-hud-vh, 1vh) - 8px);
+      padding: 2px 0 3px;
+      box-sizing: border-box;
     }
+    #${SUBMENU_ID} { z-index: 81; }
     #${OVERLAY_ID} .hb-rm-header {
-      padding: 2px 8px 3px;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-gold);
-      font-size: 11px;
+      flex: 0 0 auto;
+      padding: 2px 10px 1px;
+      color: var(--hbk-gold-bright);
+      font-size: 12px;
       letter-spacing: 0.02em;
-      max-width: 240px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      text-shadow: 0 1px 0 #000;
     }
-    #${OVERLAY_ID} .hb-rm-item {
-      padding: 2px 12px;
-      height: 18px;
-      line-height: 18px;
-      color: var(--hb-text-cream);
+    #${OVERLAY_ID} .hbk-rule { flex: 0 0 auto; margin: 2px 4px 2px; }
+    .hb-rm-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .hb-rm-list > .hb-rm-item {
+      min-height: 19px;
+      padding: 0 10px 0 8px;
       font-size: 12px;
       cursor: pointer;
+      white-space: nowrap;
     }
-    #${OVERLAY_ID} .hb-rm-item:hover,
-    #${OVERLAY_ID} .hb-rm-item[data-focus="1"] {
-      background: var(--hb-overlay-hover);
-      color: var(--hb-text-cream-bright);
-    }
-    #${OVERLAY_ID} .hb-rm-item[data-focus="1"]:active {
-      background: var(--hb-overlay-active);
-    }
+    .hb-rm-list > .hb-rm-item:nth-child(even) { background: transparent; }
+    .hb-rm-list > .hb-rm-item:hover { background: transparent; }
+    .hb-rm-list > .hb-rm-item.is-selected { background: var(--hbk-sel); }
+    .hb-rm-list > .hb-rm-item.is-disabled { color: var(--hbk-text-faint); cursor: default; }
+    .hb-rm-list > .hb-rm-item.is-disabled.is-selected { background: var(--hbk-hover); color: var(--hbk-text-faint); border-left-color: transparent; }
+    .hb-rm-list .hb-rm-arrow { flex: 0 0 auto; color: var(--hbk-gold); font-size: 10px; }
+    .hb-rm-list .hb-rm-split { display: flex; align-items: center; gap: 4px; width: 100%; }
+    .hb-rm-list .hb-rm-split-input { width: 56px; min-height: 17px; padding: 0 4px; }
   `;
   document.head.appendChild(s);
 }
 
 let state = {
   overlayEl: null,
+  listEl: null,
   guid: 0,
   items: [],
+  rows: [],
   focusIdx: -1,
+  sub: null, // { el, rows, items, focusIdx, anchorIdx }
   onKeyDown: null,
   onDocMouseDown: null,
   onContextMenu: null,
 };
+
+function closeSubmenu() {
+  if (state.sub?.el) {
+    try { state.sub.el.remove(); } catch (_) {}
+  }
+  state.sub = null;
+  // Orphans from an older build / an Escape race.
+  try { document.getElementById(SUBMENU_ID)?.remove(); } catch (_) {}
+}
 
 function closeMenu() {
   if (!state.overlayEl) {
@@ -78,47 +120,115 @@ function closeMenu() {
     // orphaned submenu DOM (Escape path can leave it) are cleared so
     // container-panel's outside-click handler isn't permanently stuck.
     window.__radialMenuOpen = false;
-    try { document.getElementById("hb-radial-submenu")?.remove(); } catch (_) {}
+    closeSubmenu();
     return;
   }
   if (state.onKeyDown) document.removeEventListener("keydown", state.onKeyDown, true);
   if (state.onDocMouseDown) document.removeEventListener("mousedown", state.onDocMouseDown, true);
   if (state.onContextMenu) document.removeEventListener("contextmenu", state.onContextMenu, true);
+  closeSubmenu();
   state.overlayEl.remove();
   state.overlayEl = null;
+  state.listEl = null;
   state.items = [];
+  state.rows = [];
   state.focusIdx = -1;
   state.onKeyDown = null;
   state.onDocMouseDown = null;
   state.onContextMenu = null;
   state.guid = 0;
-  try { document.getElementById("hb-radial-submenu")?.remove(); } catch (_) {}
   window.__radialMenuOpen = false;
+}
+
+function paintFocus(rows, idx) {
+  rows.forEach((r, i) => {
+    const on = i === idx;
+    r.classList.toggle("is-selected", on);
+    if (on) {
+      try { r.scrollIntoView({ block: "nearest" }); } catch (_) {}
+    }
+  });
 }
 
 function setFocus(idx) {
   state.focusIdx = idx;
   if (!state.overlayEl) return;
-  const rows = state.overlayEl.querySelectorAll(".hb-rm-item");
-  rows.forEach((r, i) => {
-    if (i === idx) r.dataset.focus = "1";
-    else delete r.dataset.focus;
-  });
+  paintFocus(state.rows, idx);
+  const row = state.rows[idx];
+  if (row && state.listEl) state.listEl.setAttribute("aria-activedescendant", row.id);
+}
+
+/** Next index from `from` stepping `delta`, skipping disabled entries
+ *  (wraps; returns `from` when every entry is disabled). */
+function stepIndex(items, from, delta) {
+  const n = items.length;
+  if (n === 0) return -1;
+  let i = from < 0 ? (delta > 0 ? -1 : n) : from;
+  for (let k = 0; k < n; k++) {
+    i = (i + delta + n) % n;
+    if (!items[i]?.disabled) return i;
+  }
+  return from;
 }
 
 function moveFocus(delta) {
   if (state.items.length === 0) return;
-  let i = state.focusIdx;
-  if (i < 0) i = delta > 0 ? 0 : state.items.length - 1;
-  else i = (i + delta + state.items.length) % state.items.length;
-  setFocus(i);
+  setFocus(stepIndex(state.items, state.focusIdx, delta));
 }
 
-function activateFocused() {
-  if (state.focusIdx < 0 || state.focusIdx >= state.items.length) return;
-  const item = state.items[state.focusIdx];
+function activateIndex(idx, { viaKeyboard = false } = {}) {
+  const it = state.items[idx];
+  const row = state.rows[idx];
+  if (!it || !row || it.disabled) return;
+  setFocus(idx);
+  if (it.splitPrompt) { openSplitPrompt(row, it); return; }
+  if (Array.isArray(it.children) && it.children.length > 0) {
+    openSubmenu(row, it.children, idx, { focusFirst: viaKeyboard });
+    return;
+  }
   closeMenu();
-  try { item.action(); } catch (e) { console.warn("[radial-menu] action threw:", e); }
+  try { it.action(); } catch (e) { console.warn("[radial-menu] action threw:", e); }
+}
+
+/** Display text for an entry: the ▸ arrow is drawn separately. */
+function entryLabel(it) {
+  return String(it.label ?? "").replace(/\s*▸\s*$/, "");
+}
+
+function buildRow(it, idx, idPrefix) {
+  const row = document.createElement("div");
+  row.className = "hbk-row hb-rm-item";
+  row.id = `${idPrefix}-${idx}`;
+  row.setAttribute("role", "menuitem");
+  if (it.disabled) {
+    row.classList.add("is-disabled");
+    row.setAttribute("aria-disabled", "true");
+  }
+  const label = document.createElement("span");
+  label.className = "hbk-grow";
+  label.textContent = entryLabel(it);
+  row.appendChild(label);
+  if (Array.isArray(it.children) && it.children.length > 0) {
+    row.setAttribute("aria-haspopup", "menu");
+    const arrow = document.createElement("span");
+    arrow.className = "hb-rm-arrow";
+    arrow.textContent = "▸";
+    row.appendChild(arrow);
+  }
+  return row;
+}
+
+/** Measure a zoomed HUD root and place it beside a HUD-space point. */
+function placeAt(el, hx, hy, opts) {
+  el.style.left = "0px";
+  el.style.top = "0px";
+  const s = Number(el.currentCSSZoom) || getHudScale() || 1;
+  const r = el.getBoundingClientRect();
+  const vp = hudViewport();
+  const pos = placeNearPointer(hx, hy, r.width / s, r.height / s, vp.width, vp.height, opts);
+  el.style.left = `${Math.round(pos.x)}px`;
+  el.style.top = `${Math.round(pos.y)}px`;
+  return pos;
 }
 
 function getEntity(guid) {
@@ -161,33 +271,17 @@ function getInventoryItem(guid) {
   } catch (_) { return null; }
 }
 
-// Inline Bonded-confirm overlay used by the Drop action. Owns its own
-// capture-phase Escape listener so it preempts the menu's Esc handler.
+// Bonded-drop confirm — the shared retail dialog (modal-dialog.js owns
+// Enter/Esc, focus and the chrome). The menu is already closed when an
+// action runs, so its own Esc handler can't race this one.
 function confirmBondedDrop(name, onConfirm) {
-  const ov = document.createElement("div");
-  ov.id = "hb-rm-bonded-confirm";
-  ov.style.cssText = "position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);pointer-events:auto;";
-  const box = document.createElement("div");
-  box.style.cssText = "background:rgba(20,14,8,0.96);border:1px solid var(--hb-border-brass,#8a6f3c);padding:12px 16px;color:var(--hb-text-cream,#f0e8d0);font-family:var(--hb-font-serif,serif);min-width:280px;";
-  box.innerHTML = `<div style="margin-bottom:10px;">Drop <b>${(name||"this item").replace(/[<>&]/g,"")}</b>? It is bonded and may be lost.</div>`;
-  const yes = document.createElement("button");
-  yes.textContent = "Drop";
-  yes.style.cssText = "margin-right:8px;";
-  const no = document.createElement("button");
-  no.textContent = "Cancel";
-  box.appendChild(yes); box.appendChild(no);
-  ov.appendChild(box);
-  function cleanup() {
-    document.removeEventListener("keydown", onEsc, true);
-    ov.remove();
-  }
-  function onEsc(ev) {
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cleanup(); }
-  }
-  yes.addEventListener("click", () => { cleanup(); try { onConfirm(); } catch (_) {} });
-  no.addEventListener("click", cleanup);
-  document.addEventListener("keydown", onEsc, true);
-  document.body.appendChild(ov);
+  modalConfirmCallback({
+    title: "Drop Bonded Item",
+    message: `Drop ${name || "this item"}? It is bonded and may be lost.`,
+    confirmLabel: "Drop",
+    cancelLabel: "Cancel",
+    onConfirm: () => { try { onConfirm(); } catch (_) {} },
+  });
 }
 
 function itemTypeIsContainer(invItem) {
@@ -209,11 +303,18 @@ function pickWieldSlotMaskShared(vl) {
 function enumerateEquipSlots(vl) {
   const v = (vl >>> 0) || 0;
   const out = [];
+  // HUD overhaul 2026-10-05 — the left/right jewelry pairs (EquipMask
+  // WristWearLeft/Right 0x10000/0x20000, FingerWearLeft/Right
+  // 0x40000/0x80000) were missing, so the ring case this splitter exists
+  // for never produced a flyout. Armor coverage bits stay out on purpose:
+  // armor occupies all of its locations at once, it doesn't pick one.
   const NAMES = {
+    0x00010000: "Left Wrist", 0x00020000: "Right Wrist",
+    0x00040000: "Left Finger", 0x00080000: "Right Finger",
     0x00100000: "Melee",   0x00200000: "Shield",  0x00400000: "Missile",
     0x00800000: "Ammo",    0x01000000: "Held",    0x02000000: "Two-Handed",
     0x04000000: "Trinket", 0x08000000: "Cloak",
-    0x10000000: "Sigil Blue", 0x20000000: "Sigil Yellow", 0x40000000: "Sigil Red",
+    0x10000000: "Blue Aetheria", 0x20000000: "Yellow Aetheria", 0x40000000: "Red Aetheria",
   };
   for (const bit of Object.keys(NAMES).map((k) => +k)) {
     if ((v & bit) !== 0) out.push({ mask: bit, name: NAMES[bit] });
@@ -360,9 +461,12 @@ function buildItems(ctx) {
   if (invItem && window.__hotbar && typeof window.__hotbar.bindItemToSlot === "function") {
     const first = (typeof window.__hotbar.findFirstEmpty === "function") ? window.__hotbar.findFirstEmpty() : null;
     const children = [];
-    for (let i = 0; i < 18; i++) {
+    // HUD overhaul 2026-10-05: offer only the visible toolbar slots.
+    const n = (typeof window.__hotbar?.slotCount === "function") ? window.__hotbar.slotCount() : 18;
+    for (let i = 0; i < n; i++) {
       const slot = window.__hotbar.getSlot(i);
-      const label = `Slot ${i + 1}` + (slot ? (slot.itemGuid ? " (item)" : slot.spellId ? " (spell)" : "") : " (empty)") + (i === first ? " *" : "");
+      const what = slot ? (slot.itemGuid ? "item" : slot.spellId ? "spell" : "in use") : "empty";
+      const label = `Slot ${i + 1} — ${what}` + (i === first ? " (first free)" : "");
       children.push({
         label,
         action: () => { try { window.__hotbar.bindItemToSlot(i, guid); } catch (e) { console.warn("[ctx-menu] bind failed:", e); } },
@@ -452,60 +556,44 @@ function openContextMenuFor(ctxArg) {
 
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  overlay.className = "hbk-window hb-rm";
 
-  const headerName = ctx.name || ent?.meta?.name || (g ? `0x${g.toString(16).toUpperCase().padStart(8, "0")}` : "Menu");
+  // The thing's name; never a raw guid (dev tooltip only).
+  const headerName = ctx.name || ent?.meta?.name || "Item";
   const header = document.createElement("div");
   header.className = "hb-rm-header";
-  setAcText(header, headerName);
+  header.textContent = headerName;
+  if (g) header.title = `0x${g.toString(16).toUpperCase().padStart(8, "0")}`;
   overlay.appendChild(header);
+  const rule = document.createElement("div");
+  rule.className = "hbk-rule";
+  overlay.appendChild(rule);
 
-  items.forEach((it, idx) => {
-    const row = document.createElement("div");
-    row.className = "hb-rm-item";
-    if (it.disabled) row.dataset.disabled = "1";
-    setAcText(row, it.label);
-    row.addEventListener("mouseenter", () => setFocus(idx));
+  const list = document.createElement("div");
+  list.className = "hb-rm-list hbk-scroll";
+  list.setAttribute("role", "menu");
+  list.setAttribute("aria-label", headerName);
+  overlay.appendChild(list);
+
+  const rows = items.map((it, idx) => {
+    const row = buildRow(it, idx, "hb-rm-item");
+    row.addEventListener("mouseenter", () => {
+      setFocus(idx);
+      // Hovering a different entry closes an open flyout (unless it's
+      // the entry that owns it).
+      if (state.sub && state.sub.anchorIdx !== idx) closeSubmenu();
+      if (Array.isArray(it.children) && it.children.length > 0 && !it.disabled && state.sub?.anchorIdx !== idx) {
+        openSubmenu(row, it.children, idx, { focusFirst: false });
+      }
+    });
     row.addEventListener("click", (ev) => {
       ev.stopPropagation();
       ev.preventDefault();
-      if (it.disabled) return;
-      // Split-Stack inline prompt: replace the row with a numeric input + Confirm.
-      if (it.splitPrompt) {
-        if (row.querySelector(".hb-rm-split-input")) return;
-        row.innerHTML = "";
-        const inp = document.createElement("input");
-        inp.type = "number";
-        inp.min = "1";
-        inp.max = String(it.splitPrompt.max);
-        inp.value = "1";
-        inp.className = "hb-rm-split-input";
-        inp.style.width = "56px";
-        const btn = document.createElement("span");
-        btn.textContent = "OK";
-        btn.style.cssText = "margin-left:6px;cursor:pointer;color:var(--hb-text-gold,#f0c060);";
-        row.appendChild(inp); row.appendChild(btn);
-        const confirm = (e) => {
-          e?.stopPropagation?.();
-          e?.preventDefault?.();
-          const n = Math.max(1, Math.min(parseInt(inp.value, 10) || 1, it.splitPrompt.max));
-          closeMenu();
-          try { it.action(n); } catch (err) { console.warn("[ctx-menu] split action threw:", err); }
-        };
-        btn.addEventListener("click", confirm);
-        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") confirm(e); });
-        inp.focus();
-        try { inp.select(); } catch (_) {}
-        return;
-      }
-      // Submenu children: open a flyout to the right.
-      if (Array.isArray(it.children) && it.children.length > 0) {
-        openSubmenu(row, it.children);
-        return;
-      }
-      setFocus(idx);
-      activateFocused();
+      if (row.querySelector(".hb-rm-split-input")) return;
+      activateIndex(idx);
     });
-    overlay.appendChild(row);
+    list.appendChild(row);
+    return row;
   });
 
   // Suppress browser context menu inside the overlay.
@@ -513,49 +601,92 @@ function openContextMenuFor(ctxArg) {
 
   document.body.appendChild(overlay);
   state.overlayEl = overlay;
+  state.listEl = list;
   state.guid = g;
   state.items = items;
+  state.rows = rows;
   state.focusIdx = -1;
 
-  // Position: clamp to viewport. If menu would clip the right/bottom
-  // edge, render left of / above the cursor.
-  const margin = 4;
-  const vw = window.innerWidth || document.documentElement.clientWidth;
-  const vh = window.innerHeight || document.documentElement.clientHeight;
-  const rect = overlay.getBoundingClientRect();
-  const cx = (ctx.clientX | 0) || 0;
-  const cy = (ctx.clientY | 0) || 0;
-  let x = cx;
-  let y = cy;
-  if (x + rect.width + margin > vw) x = Math.max(margin, cx - rect.width);
-  if (y + rect.height + margin > vh) y = Math.max(margin, cy - rect.height);
-  overlay.style.left = `${x}px`;
-  overlay.style.top = `${y}px`;
+  // Position: top-left just past the pointer, flipped left/up when it
+  // would cross the right/bottom edge — all in HUD px (see header).
+  const p = hudPoint({ clientX: Number(ctx.clientX) || 0, clientY: Number(ctx.clientY) || 0 });
+  placeAt(overlay, p.x, p.y, { dx: 2, dy: 2, margin: 4 });
 
   // Auto-expand a target row if the opener requested focus on a specific
   // action (e.g. shift-click on a stack opens the menu pre-armed for Split).
   if (ctx.focusAction === "split") {
     const idx = items.findIndex((it) => it.splitPrompt);
-    if (idx >= 0) {
-      const row = overlay.children[idx];
-      try { row?.dispatchEvent(new MouseEvent("click", { bubbles: true })); } catch (_) {}
-    }
+    if (idx >= 0 && !items[idx].disabled) activateIndex(idx);
   }
 
   state.onKeyDown = (ev) => {
-    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closeMenu(); return; }
-    if (ev.key === "ArrowDown") { ev.preventDefault(); ev.stopPropagation(); moveFocus(1); return; }
-    if (ev.key === "ArrowUp")   { ev.preventDefault(); ev.stopPropagation(); moveFocus(-1); return; }
-    if (ev.key === "Enter")     { ev.preventDefault(); ev.stopPropagation(); activateFocused(); return; }
+    if (!state.overlayEl) return;
+    const inField = ev.target?.classList?.contains?.("hb-rm-split-input");
+    if (ev.key === "Escape") {
+      ev.preventDefault(); ev.stopPropagation();
+      if (state.sub) { const a = state.sub.anchorIdx; closeSubmenu(); setFocus(a); }
+      else closeMenu();
+      return;
+    }
+    if (inField) return; // Split Stack field owns its own keys.
+    const sub = state.sub;
+    const handled = () => { ev.preventDefault(); ev.stopPropagation(); };
+    if (sub && sub.focusIdx >= 0) {
+      if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        handled();
+        sub.focusIdx = stepIndex(sub.items, sub.focusIdx, ev.key === "ArrowDown" ? 1 : -1);
+        paintFocus(sub.rows, sub.focusIdx);
+        return;
+      }
+      if (ev.key === "ArrowLeft") { handled(); const a = sub.anchorIdx; closeSubmenu(); setFocus(a); return; }
+      if (ev.key === "Enter" || ev.key === " ") { handled(); activateSubmenuIndex(sub.focusIdx); return; }
+    }
+    switch (ev.key) {
+      case "ArrowDown": handled(); moveFocus(1); return;
+      case "ArrowUp": handled(); moveFocus(-1); return;
+      case "Home": handled(); setFocus(stepIndex(state.items, -1, 1)); return;
+      case "End": handled(); setFocus(stepIndex(state.items, state.items.length, -1)); return;
+      case "ArrowRight": {
+        handled();
+        const it = state.items[state.focusIdx];
+        if (it && Array.isArray(it.children) && it.children.length > 0 && !it.disabled) {
+          openSubmenu(state.rows[state.focusIdx], it.children, state.focusIdx, { focusFirst: true });
+        }
+        return;
+      }
+      case "Enter":
+      case " ":
+        handled();
+        if (state.focusIdx >= 0) activateIndex(state.focusIdx, { viaKeyboard: true });
+        return;
+      default:
+        break;
+    }
+    // Type-ahead: jump to the next entry starting with that letter.
+    if (ev.key.length === 1 && /\S/.test(ev.key) && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+      const ch = ev.key.toLowerCase();
+      const n = state.items.length;
+      for (let k = 1; k <= n; k++) {
+        const i = (Math.max(state.focusIdx, -1) + k + n) % n;
+        const it = state.items[i];
+        if (!it.disabled && entryLabel(it).toLowerCase().startsWith(ch)) {
+          handled();
+          setFocus(i);
+          return;
+        }
+      }
+    }
   };
   state.onDocMouseDown = (ev) => {
     if (!state.overlayEl) return;
     if (state.overlayEl.contains(ev.target)) return;
+    if (state.sub?.el?.contains(ev.target)) return;
     closeMenu();
   };
   state.onContextMenu = (ev) => {
     if (!state.overlayEl) return;
     if (state.overlayEl.contains(ev.target)) return;
+    if (state.sub?.el?.contains(ev.target)) { ev.preventDefault(); return; }
     closeMenu();
   };
   document.addEventListener("keydown", state.onKeyDown, true);
@@ -563,30 +694,107 @@ function openContextMenuFor(ctxArg) {
   document.addEventListener("contextmenu", state.onContextMenu, true);
 }
 
-// Minimal flyout submenu renderer (one level deep).
-function openSubmenu(anchorRow, children) {
-  const existing = document.getElementById("hb-radial-submenu");
-  if (existing) existing.remove();
+// Split-Stack inline prompt: the row becomes a number field + OK.
+function openSplitPrompt(row, it) {
+  if (row.querySelector(".hb-rm-split-input")) return;
+  closeSubmenu();
+  row.textContent = "";
+  const wrap = document.createElement("div");
+  wrap.className = "hb-rm-split";
+  const lbl = document.createElement("span");
+  lbl.textContent = "Split";
+  const inp = document.createElement("input");
+  inp.type = "number";
+  inp.min = "1";
+  inp.max = String(it.splitPrompt.max);
+  inp.value = "1";
+  inp.className = "hbk-input hb-rm-split-input";
+  inp.setAttribute("aria-label", `Amount to split off (1–${it.splitPrompt.max})`);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "hbk-btn-small";
+  btn.textContent = "OK";
+  wrap.appendChild(lbl);
+  wrap.appendChild(inp);
+  wrap.appendChild(btn);
+  row.appendChild(wrap);
+  const confirm = (e) => {
+    e?.stopPropagation?.();
+    e?.preventDefault?.();
+    const n = Math.max(1, Math.min(parseInt(inp.value, 10) || 1, it.splitPrompt.max));
+    closeMenu();
+    try { it.action(n); } catch (err) { console.warn("[ctx-menu] split action threw:", err); }
+  };
+  btn.addEventListener("click", confirm);
+  inp.addEventListener("click", (e) => e.stopPropagation());
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") confirm(e);
+    // Keep digits / arrows from steering the character while typing.
+    else if (e.key !== "Escape") e.stopPropagation();
+  });
+  try { inp.focus(); inp.select(); } catch (_) {}
+}
+
+function activateSubmenuIndex(i) {
+  const sub = state.sub;
+  const c = sub?.items?.[i];
+  if (!c || c.disabled) return;
+  closeMenu();
+  try { c.action(); } catch (err) { console.warn("[ctx-menu] submenu action threw:", err); }
+}
+
+// Flyout submenu (one level deep), placed beside its entry in HUD px:
+// right of the menu, or left of it when that would leave the screen.
+function openSubmenu(anchorRow, children, anchorIdx, { focusFirst = false } = {}) {
+  closeSubmenu();
   const sub = document.createElement("div");
-  sub.id = "hb-radial-submenu";
-  sub.style.cssText = "position:fixed;z-index:81;min-width:120px;padding:2px 0;background:rgba(20,14,8,0.94);border:1px solid var(--hb-border-brass,#8a6f3c);pointer-events:auto;font-family:var(--hb-font-serif,serif);";
-  for (const c of children) {
-    const row = document.createElement("div");
-    row.className = "hb-rm-item";
-    setAcText(row, c.label);
-    row.style.cssText = "padding:2px 12px;height:18px;line-height:18px;color:var(--hb-text-cream,#f0e8d0);font-size:12px;cursor:pointer;";
+  sub.id = SUBMENU_ID;
+  sub.className = "hbk-window hb-rm";
+  const list = document.createElement("div");
+  list.className = "hb-rm-list hbk-scroll";
+  list.setAttribute("role", "menu");
+  sub.appendChild(list);
+  const rows = children.map((c, i) => {
+    const row = buildRow(c, i, "hb-rm-sub");
+    row.addEventListener("mouseenter", () => {
+      if (!state.sub) return;
+      state.sub.focusIdx = i;
+      paintFocus(rows, i);
+    });
     row.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      sub.remove();
-      closeMenu();
-      try { c.action(); } catch (err) { console.warn("[ctx-menu] submenu action threw:", err); }
+      ev.preventDefault();
+      activateSubmenuIndex(i);
     });
-    sub.appendChild(row);
-  }
+    list.appendChild(row);
+    return row;
+  });
+  sub.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); });
   document.body.appendChild(sub);
-  const r = anchorRow.getBoundingClientRect();
-  sub.style.left = `${r.right + 2}px`;
-  sub.style.top = `${r.top}px`;
+  state.sub = { el: sub, rows, items: children, focusIdx: -1, anchorIdx };
+
+  const a = hudRect(anchorRow);
+  const menu = state.overlayEl ? hudRect(state.overlayEl) : a;
+  const s = Number(sub.currentCSSZoom) || getHudScale() || 1;
+  sub.style.left = "0px";
+  sub.style.top = "0px";
+  const r = sub.getBoundingClientRect();
+  const w = r.width / s;
+  const h = r.height / s;
+  const vp = hudViewport();
+  const m = 4;
+  let x = menu.right + 1;
+  if (x + w + m > vp.width) x = menu.left - w - 1;
+  x = Math.max(m, Math.min(x, vp.width - w - m));
+  let y = a.top - 3;
+  y = Math.max(m, Math.min(y, vp.height - h - m));
+  sub.style.left = `${Math.round(x)}px`;
+  sub.style.top = `${Math.round(y)}px`;
+
+  if (focusFirst) {
+    state.sub.focusIdx = stepIndex(children, -1, 1);
+    paintFocus(rows, state.sub.focusIdx);
+  }
 }
 
 if (typeof window !== "undefined") {
@@ -603,6 +811,6 @@ export const manifest = {
   name: "Radial menu",
   icon: "◎",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "Right-click context menu for entity actions (Examine/Wield/Use/Drop/Trade/Attack).",
 };

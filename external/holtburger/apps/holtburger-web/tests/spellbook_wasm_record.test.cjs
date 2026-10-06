@@ -357,6 +357,71 @@ check('Wave J4.A: tier-VIII spell with Mana scarab → level=8', () => {
   assert.equal(spell.levelRoman, 'VIII');
 });
 
+// ─── HUD overhaul 2026-10-05 — real spellbook.js pure helpers ──────────
+// The plugin's view helpers are DOM-free at import time (the shared ui/*
+// modules only touch window/document lazily), so these run against the
+// REAL module rather than a local copy.
+async function realHelpers() {
+  const path = require('node:path');
+  const { pathToFileURL } = require('node:url');
+  globalThis.window = globalThis.window || globalThis;
+  if (typeof window.addEventListener !== 'function') window.addEventListener = () => {};
+  if (typeof window.removeEventListener !== 'function') window.removeEventListener = () => {};
+  if (typeof window.dispatchEvent !== 'function') window.dispatchEvent = () => true;
+  globalThis.document = globalThis.document || {
+    createElement: () => ({ style: {}, dataset: {}, classList: { add() {}, remove() {} }, appendChild() {}, setAttribute() {}, addEventListener() {} }),
+    getElementById: () => null, head: { appendChild() {}, prepend() {} }, body: { appendChild() {} },
+    addEventListener() {}, removeEventListener() {}, documentElement: { style: { setProperty() {} } },
+  };
+  globalThis.localStorage = globalThis.localStorage || { getItem: () => null, setItem() {} };
+  const url = pathToFileURL(path.join(__dirname, '..', 'plugins', 'spellbook.js')).href;
+  const m = await import(url);
+  const ALL = 0x2FFF;
+  check('IsFilteredOut: every school/level bit on → nothing hidden', () => {
+    for (const school of [1, 2, 3, 4, 5]) {
+      for (let level = 1; level <= 8; level++) {
+        assert.equal(m.isSpellFilteredOut({ school, level }, ALL), false, `school ${school} lvl ${level}`);
+      }
+    }
+  });
+  check('IsFilteredOut: retail bit layout (Creature 0x1, War 0x8, Void 0x2000, L1 0x10, L8 0x800)', () => {
+    assert.equal(m.isSpellFilteredOut({ school: 4, level: 1 }, ALL & ~0x1), true, 'creature off');
+    assert.equal(m.isSpellFilteredOut({ school: 1, level: 1 }, ALL & ~0x8), true, 'war off');
+    assert.equal(m.isSpellFilteredOut({ school: 5, level: 1 }, ALL & ~0x2000), true, 'void off');
+    assert.equal(m.isSpellFilteredOut({ school: 2, level: 1 }, ALL & ~0x10), true, 'level I off');
+    assert.equal(m.isSpellFilteredOut({ school: 2, level: 8 }, ALL & ~0x800), true, 'level VIII off');
+    assert.equal(m.isSpellFilteredOut({ school: 2, level: 7 }, ALL & ~0x800), false, 'VII unaffected');
+    assert.equal(m.isSpellFilteredOut({ school: 9, level: 1 }, ALL), true, 'unknown school hidden (retail default branch)');
+    assert.equal(m.isSpellFilteredOut({ _uncatalogued: true }, 0), false, 'uncatalogued always shown');
+  });
+  check('GetSortedInsertionPlace: display order, then name', () => {
+    const rows = [
+      { name: 'B', displayOrder: 5 }, { name: 'A', displayOrder: 5 },
+      { name: 'Z', displayOrder: 1 }, { name: 'C' },
+    ].sort(m.compareSpells);
+    assert.deepEqual(rows.map((r) => r.name), ['Z', 'A', 'B', 'C']);
+  });
+  check('row meta line + duration formatting', () => {
+    assert.equal(m.formatSpellDuration(0), '');
+    assert.equal(m.formatSpellDuration(-1), '');
+    assert.equal(m.formatSpellDuration(45), '45 sec');
+    assert.equal(m.formatSpellDuration(1800), '30 min');
+    assert.equal(m.formatSpellDuration(5400), '1.5 hr');
+    assert.equal(m.spellMetaLine({ level: 3, duration: 900, mana: 30 }), 'Level III · 15 min · 30 mana');
+    assert.equal(m.spellMetaLine({ level: 1, levelRoman: 'I', duration: 0, mana: 0 }), 'Level I');
+    assert.equal(m.spellMetaLine({ _uncatalogued: true }), 'Unknown spell');
+  });
+  check('spell-bar helpers keep their combat-bar contract', () => {
+    for (const k of ['getSpellBarSlots', 'setSpellBarSlot', 'getActiveSpellBar', 'setActiveSpellBar', 'addToFirstEmptySlot', 'loadCatalog']) {
+      assert.equal(typeof m[k], 'function', k);
+    }
+    assert.equal(m.SPELL_BAR_SLOTS, 18);
+    assert.equal(m.SPELL_BAR_TABS, 8);
+  });
+}
+
+(async () => {
+await realHelpers();
 console.log(`\n## Summary: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('\n## Failures:');
@@ -366,3 +431,4 @@ if (failed > 0) {
   process.exit(1);
 }
 process.exit(0);
+})();

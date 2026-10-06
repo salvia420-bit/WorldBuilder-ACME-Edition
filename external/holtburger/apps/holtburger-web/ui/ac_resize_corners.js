@@ -138,9 +138,15 @@ export function attachCornerResizers(element, opts) {
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();
       ev.stopPropagation();
-      const rect = element.getBoundingClientRect();
+      // HUD overhaul 2026-10-05 — the element may be CSS-zoomed
+      // (ui/hud_scale.js): rect + pointer deltas are screen px, the
+      // style values written below are the element's own px.
+      const z = Number(element.currentCSSZoom) > 0 ? Number(element.currentCSSZoom) : 1;
+      const r = element.getBoundingClientRect();
+      const rect = { left: r.left / z, top: r.top / z, width: r.width / z, height: r.height / z };
       drag = {
         corner: key,
+        z,
         startX: ev.clientX,
         startY: ev.clientY,
         x0: rect.left,
@@ -152,8 +158,8 @@ export function attachCornerResizers(element, opts) {
     });
     div.addEventListener("pointermove", (ev) => {
       if (!drag || drag.corner !== key) return;
-      const dx = ev.clientX - drag.startX;
-      const dy = ev.clientY - drag.startY;
+      const dx = (ev.clientX - drag.startX) / drag.z;
+      const dy = (ev.clientY - drag.startY) / drag.z;
       let newW = drag.w0 + spec.widthSign * dx;
       let newH = drag.h0 + spec.heightSign * dy;
       newW = clamp(newW, minW, maxW);

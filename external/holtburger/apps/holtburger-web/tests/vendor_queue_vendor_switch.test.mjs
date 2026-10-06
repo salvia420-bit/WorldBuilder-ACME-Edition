@@ -44,6 +44,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spliceModule } from "../harness/lib/splice_module.mjs";
+import * as commerceLogic from "../plugins/commerce_logic.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.join(HERE, "..");
@@ -70,6 +71,10 @@ function makeEl() {
     options: [],   // <select> stub — renderItemsPane walks refs.cat.options
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     appendChild(c) { if (c) el.children.push(c); return c; },
+    // HUD overhaul 2026-10-05 — the kit-window rebuild uses these.
+    replaceChildren(...c) { el.children = c.filter(Boolean); },
+    prepend(c) { if (c) el.children.unshift(c); return c; },
+    contains: () => false,
     removeChild(c) { const i = el.children.indexOf(c); if (i >= 0) el.children.splice(i, 1); return c; },
     remove() {},
     addEventListener() {}, removeEventListener() {},
@@ -117,29 +122,49 @@ globalThis.fetch = () => Promise.reject(new Error("no network in this suite"));
 
 const INERT = "() => undefined";
 const src = readFileSync(path.join(APP, "plugins", "vendor-ui.js"), "utf8");
+// HUD overhaul 2026-10-05 — vendor-ui now builds on plugins/commerce_window.js
+// (kit window + drop/icon helpers, stubbed here: no DOM) and prices through
+// plugins/commerce_logic.js (pure — the REAL module is passed in, so the
+// assertions below run against the shipped price rules).
+const LOGIC_NAMES = [
+  "vendorPurchasePrice", "vendorSaleCredit", "vendorAcceptability", "vendorRejectText",
+  "VENDOR_ACCEPT", "countCurrency", "PYREAL_WCID", "fmtNumber", "fmtCompact",
+];
 const body = spliceModule(src, {
   label: "plugins/vendor-ui.js",
-  provided: [],
+  provided: LOGIC_NAMES,
   stubs: {
     setAcText: "(el, text) => { if (el) el.textContent = String(text ?? ''); }",
-    HEADING_FONT_ID: "0",
-    resolveLocalBinding: "() => null",
-    matchesBinding: "() => false",
-    LOCAL_ACTION_IDS: "Object.freeze({})",
-    loadLayout: "() => Promise.resolve(null)",
-    findElementById: "() => null",
-    getCachedLayout: "() => null",
-    fetchIconDataUrlShared: "() => Promise.resolve(null)",
-    clearPlaceholderGlyph: INERT,
-    DropItemFlags: "Object.freeze({ None: 0 })",
-    isDropAccepted: "() => true",
     formatAppraisalTooltip: "() => null",
+    DropItemFlags: "Object.freeze({ VENDOR: 0x02 })",
+    createKitWindow: `(o) => {
+      const root = document.createElement('div');
+      root.dataset.open = '0';
+      const body = document.createElement('div');
+      return {
+        root, body,
+        open() { root.dataset.open = '1'; },
+        close() { root.dataset.open = '0'; if (o.onHide) o.onHide(); },
+        isOpen: () => root.dataset.open === '1',
+        setTitle() {}, toast() {},
+      };
+    }`,
+    COMMERCE_WINDOW_ID: "Object.freeze({ VENDOR: 0x100000B7 })",
+    KIT_COLOR: "Object.freeze({})",
+    kitButton: "() => document.createElement('button')",
+    fillSlotIcon: INERT,
+    wireDropTarget: INERT,
+    inventoryRows: "() => []",
+    entityWorldPos: "() => null",
+    localPlayerWorldPos: "() => null",
+    devHex: "(g) => String(g >>> 0)",
   },
 });
 // eslint-disable-next-line no-new-func
 const mod = new Function(
+  ...LOGIC_NAMES,
   body + "\nreturn { mount, state, handleConfirmBuy };\n",
-)();
+)(...LOGIC_NAMES.map((n) => commerceLogic[n]));
 
 mod.mount({ client: null });
 const dbg = window.__vendorPluginDebugMount;

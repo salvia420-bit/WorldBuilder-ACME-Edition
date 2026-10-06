@@ -1,66 +1,48 @@
-// Options view — main-panel port of retail's gmConfigUI (layout
-// 0x21000029, ClassID 0x10000028).
+// Options view — main-panel port of retail's gmOptionsUI (layout
+// 0x2100002B) and its pages.
 //
-// Retail layout decoded via chorizite-dump-layout-tree:
-//   Root 0x100001FF — 292x600 panel
-//     0x10000200 — 276x560 type-5 tab list with 8 tab entries
-//                  (StringId → child element ID pairs)
-//     0x10000201 — 16x560 scrollbar
-//     0x100001FC — 80x32 button (StringId 163200057)  ← Apply
-//     0x100001FD — 80x32 button (StringId 164267204)  ← OK
-//     0x100001FE — 80x32 button (StringId 253245491)  ← Cancel
-//   No image DIDs — the floaty-panel chrome (border + title) is
-//   provided by the wrapping gmFloatyPanelUI, which we mirror with
-//   main-panel's container slot (the same one that hosts Inventory /
-//   Skills / Magic etc.).
+// HUD overhaul 2026-10-05 — rebuilt on the shared HUD kit (ui/hud_kit.js).
+// Before: eight cramped tabs wrapped onto two rows, native blue range
+// sliders / native checkboxes / native selects next to brass chrome, and
+// the view resized the shared main panel to retail's 292×600 config page
+// so Apply/OK/Cancel hung off the bottom of a 720-px window.
 //
-// Follows the standard main-panel convention shared with
-// plugins/character-info.js, inventory.js, journal-panel.js, etc:
-//   - export `const view = { name, nameFor(ctx), mount(parentEl, ctx) }`
-//   - main-panel owns the brass border + title strip + close X
-//   - view body fills `parentEl` (absolute inset:0)
-//   - styles use the shared `--hb-*` token system (brass / stone /
-//     cream / serif) — not bar.js's older glass-morphism chrome
+// Retail anatomy (ui-layout-render of client_local_English.dat, see
+// /mnt/wbterminal2/hud-compare-2026-10-05/retail/m-2B.json):
+//   0x1000020D GameplayOptionsTab  "Gameplay Options"  106×25
+//   0x1000020E CharacterSettingsTab "Character"          64×25
+//   0x1000050B ChatTab              "Chat"               50×25
+//   0x1000020F ConfigTab            "Config"             56×25
+//   pages 298×575 on the dark field 0x06004CC2, built from templates:
+//     OptionHeaderTemplate 292×22, OptionSeperatorTemplate 0x060012C5,
+//     BoolOptionTemplate (orb checkbox 0x06004D15, text right of it),
+//     FloatOptionTemplate (130-px label + 120-px slider 0x06001285 with
+//     the 7×12 thumb 0x06001286), MenuOptionTemplate (label + dropdown).
+//   gmCharacterSettingsUI 0x21000028 / gmConfigUI 0x21000029 put three
+//   80×32 buttons under the list (retail: Apply / Reset / Defaults).
 //
-// Tabs:
-//   1. Graphics  — embeds the existing ui/graphics_settings.js form
-//                  (renderer flags + quality preset + subdiv level)
-//   2. Audio     — real AudioManager Master/Effect/Ambient gain
-//                  sliders (scene3d/audio/audio_manager.js), persisted
-//                  to `hb.options.audio.v1`. No CharacterOption exists
-//                  for audio (checked holtburger-common character.rs).
-//   3. Mouse     — the one wire-supported mouse CharacterOption
-//                  (UseMouseTurning, 0x31); sensitivity/invert/FOV are
-//                  honestly flagged as unwired (no plumbing exists).
-//   4. Controls  — full keybind rebind UI (capture + persist + reset
-//                  to retail default); see the Controls-tab block
-//                  below and ui/keymap.js for the storage/lookup layer.
-//   5. Chat      — chat-channel + chat-behavior CharacterOptions
-//                  (Listen to */Stay in chat mode/Timestamps/Filter
-//                  language), split out of the Character tab.
-//   6. Network   — AutoReconnect toggle (rec #199); RTT/loss stats
-//                  still pending a stats-stream wire.
-//   7. Character — the remaining CharacterOption groups (Combat,
-//                  Movement, Interface, Social, Privacy, Inventory,
-//                  Visual).
-//   8. About     — static build/source info.
-// Retail sub-layout positions (gmConfigUI tab content layout DataId
-// 0x21000293) are still not ported — see G3 in
-// docs/layout-port-plan-2026-05-24.md — so all tab bodies use our own
-// flex layout rather than retail-exact widget placement.
+// This view keeps retail's FOUR tabs (one clean strip — "Gameplay",
+// "Character", "Chat", "Config") and fits the shared 300-wide main-panel
+// body: tab strip on top, a scrolling page (`hbk-scroll`, gold rope
+// scrollbar), and a footer that is always visible. Footer semantics:
+//   - Apply  — commit: every control already applies live; Apply makes
+//              the current values the new Cancel baseline.
+//   - OK     — commit + close.
+//   - Cancel — revert everything changed since the view opened (or since
+//              the last Apply) and close: HUD scale, graphics, audio,
+//              camera, key bindings and character options.
 //
-// Apply / OK / Cancel semantics match retail:
-//   - Apply  — persist + keep panel open (so users can preview)
-//   - OK     — persist + close
-//   - Cancel — discard pending edits + close
-//
-// The graphics tab delegates persistence to ui/graphics_settings.js
-// which already owns the `holtburger_graphics_v1` localStorage shape
-// and the `hb-quality-changed` event. Other tabs are stubs and have
-// no pending state to persist yet.
+// Pages:
+//   Gameplay  — Interface (HUD scale, reset window positions), Mouse &
+//               Camera (UseMouseTurning 0x31 + ui/camera_settings.js),
+//               Keyboard ("Configure keyboard…" → bindings page, like
+//               retail's GameplayOptions_Keyboard_Button), About.
+//   Character — CharacterOption groups (wire: setCharacterOption).
+//   Chat      — chat-channel / chat-behaviour CharacterOptions.
+//   Config    — Sound (AudioManager buses) + ui/graphics_settings.js.
 
 import * as graphicsSettings from "../ui/graphics_settings.js";
-import { setAcText } from "../ui/ac_font.js";
+import * as cameraSettings from "../ui/camera_settings.js";
 import {
   LOCAL_ACTIONS,
   getKeybindings,
@@ -72,46 +54,117 @@ import {
   lookupRetailDefault,
   getManifestHotkeyConflicts,
 } from "../ui/keymap.js";
-import { loadLayout, findElementById, getCachedLayout, resolveElementLabel } from "../ui/ac_layout.js";
-import { loadStringTable } from "../ui/ac_strings.js";
+import {
+  getHudScale,
+  getHudScaleMultiplier,
+  setHudScaleMultiplier,
+  onHudScaleChange,
+  computeAutoScale,
+  HUD_SCALE_MULT_MIN,
+  HUD_SCALE_MULT_MAX,
+} from "../ui/hud_scale.js";
+import * as windowPosition from "../ui/ac_window_position.js";
+import { modalConfirmCallback } from "./modal-dialog.js";
 
 const VIEW_STYLE_ID = "hb-options-view-style";
+const SP = "./data/ui-sprites";
 
-// gmConfigUI — retail layout that drives the options panel.
-// Element-id map confirmed by options_panel_layout_dump 2026-05-24:
-//   0x100001FF — root panel (292×600 at 0,0)
-//   0x10000200 — type-5 tab list (276×560 at 0,0)
-//                In retail this is the combined tab strip + content
-//                area (the 8 tab buttons live INSIDE the type-5
-//                container, populated from StringId pairs via
-//                StateDesc — which v1 fetch_layout does not yet
-//                serialize, see G3 in layout-port-plan-2026-05-24.md).
-//                Our impl splits this into a flex `.hb-opt-tabs`
-//                strip on top + a scrollable `.hb-opt-body` below,
-//                both contained within this layout-driven rectangle.
-//   0x10000201 — scrollbar track (16×560 at 276,0)
-//                Retail had an explicit scrollbar element to the
-//                right of the tab list; we use CSS scrollbar on
-//                .hb-opt-body so this element is intentionally
-//                non-DOM (geometry stays available for future
-//                explicit-scrollbar pass).
-//   0x100001FC — Apply button   (80×32 at 16,564)  StringId 163200057
-//   0x100001FD — OK button      (80×32 at 106,564) StringId 164267204
-//   0x100001FE — Cancel button  (80×32 at 196,564) StringId 253245491
-//
-// Per the plugin head-comment, sub-layout 0x21000293 holds per-tab
-// content templates. That layout is referenced via StateDesc inside
-// 0x10000200 (the type-5 tab list) and is NOT surfaced by v1
-// fetch_layout (G3). Tab-label strings + per-tab content layouts
-// remain hand-tuned until G3 lands.
-const OPTIONS_LAYOUT_ID         = 0x21000029;
-// Reference-only:
-//   0x100001FF — 292×600 root (size applied via main-panel overlay resize).
-//   0x10000201 — (276,0) 16×560 scrollbar slot, replaced by CSS scrollbar.
-const OPT_ELEM_TAB_LIST         = 0x10000200;
-const OPT_ELEM_BTN_APPLY        = 0x100001FC;
-const OPT_ELEM_BTN_OK           = 0x100001FD;
-const OPT_ELEM_BTN_CANCEL       = 0x100001FE;
+// ---------------------------------------------------------------------
+// Pure helpers (exported for test_options_panel_helpers.mjs).
+
+/** HUD-scale slider range, in percent of the auto scale. */
+export const HUD_SCALE_PCT_MIN = Math.round(HUD_SCALE_MULT_MIN * 100);
+export const HUD_SCALE_PCT_MAX = Math.round(HUD_SCALE_MULT_MAX * 100);
+export const HUD_SCALE_PCT_STEP = 5;
+
+/** Multiplier (0.6–2.0) → slider percent, snapped to the 5 % step. */
+export function hudScalePercentFromMultiplier(mult) {
+  const m = Number(mult);
+  const pct = Number.isFinite(m) ? m * 100 : 100;
+  const snapped = Math.round(pct / HUD_SCALE_PCT_STEP) * HUD_SCALE_PCT_STEP;
+  return Math.max(HUD_SCALE_PCT_MIN, Math.min(HUD_SCALE_PCT_MAX, snapped));
+}
+
+/** Slider percent → multiplier, clamped to the hud_scale.js range. */
+export function hudScaleMultiplierFromPercent(pct) {
+  const p = Number(pct);
+  const clamped = Math.max(HUD_SCALE_PCT_MIN, Math.min(HUD_SCALE_PCT_MAX, Number.isFinite(p) ? p : 100));
+  return clamped / 100;
+}
+
+/** "1.88× (window 1.25× × 150 %)" — the effective-scale readout. */
+export function describeHudScale({ effective, auto, percent, forced = null }) {
+  const fx = (n) => `${(Math.round(Number(n) * 100) / 100).toFixed(2)}×`;
+  if (forced != null) return `Fixed at ${fx(forced)} by the ?hudScale= link option.`;
+  return `Effective size ${fx(effective)} (window ${fx(auto)} × ${Math.round(percent)}%)`;
+}
+
+/** localStorage prefixes ui/ac_window_position.js persists under. */
+export const WINDOW_POSITION_KEY_PREFIXES = Object.freeze(["hb.window.", "hb_panel_pos_"]);
+
+/**
+ * Remove every saved window position / size / lock (`hb.window.<id>`, plus
+ * the pre-consolidation `hb_panel_pos_<id>` keys) from `storage`. Returns
+ * the number of keys removed.
+ */
+export function clearWindowPositionKeys(storage) {
+  if (!storage || typeof storage.key !== "function") return 0;
+  const doomed = [];
+  for (let i = 0; i < (storage.length | 0); i++) {
+    const k = storage.key(i);
+    if (typeof k === "string" && WINDOW_POSITION_KEY_PREFIXES.some((p) => k.startsWith(p))) doomed.push(k);
+  }
+  for (const k of doomed) {
+    try { storage.removeItem(k); } catch (_) {}
+  }
+  return doomed.length;
+}
+
+/** Copy the raw values of `keys` (null when absent). */
+export function snapshotStorage(storage, keys) {
+  const snap = {};
+  for (const k of keys) {
+    let v = null;
+    try { v = storage?.getItem?.(k) ?? null; } catch (_) {}
+    snap[k] = v;
+  }
+  return snap;
+}
+
+/** Write a snapshot back; returns the keys whose value actually changed. */
+export function restoreStorage(storage, snap) {
+  const changed = [];
+  for (const [k, v] of Object.entries(snap || {})) {
+    let cur = null;
+    try { cur = storage?.getItem?.(k) ?? null; } catch (_) {}
+    if (cur === v) continue;
+    try {
+      if (v == null) storage.removeItem(k);
+      else storage.setItem(k, v);
+      changed.push(k);
+    } catch (_) {}
+  }
+  return changed;
+}
+
+/** Old (8-tab) ids → the retail 4-tab ids, so `showView("options", {tab})`
+ *  callers written against the old layout still land somewhere sensible. */
+export function resolveTabId(id) {
+  const LEGACY = {
+    graphics: "config", audio: "config", sound: "config",
+    mouse: "gameplay", controls: "gameplay", keys: "gameplay", network: "gameplay",
+    about: "gameplay", interface: "gameplay", hud: "gameplay",
+    char: "character",
+  };
+  const s = String(id || "").toLowerCase();
+  if (TAB_IDS.includes(s)) return s;
+  return LEGACY[s] || null;
+}
+
+const TAB_IDS = ["gameplay", "character", "chat", "config"];
+
+// ---------------------------------------------------------------------
+// Styles.
 
 function ensureStyles() {
   if (document.getElementById(VIEW_STYLE_ID)) return;
@@ -120,224 +173,312 @@ function ensureStyles() {
   style.textContent = `
     .hb-opt-root {
       position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      box-sizing: border-box;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      overflow: hidden;
-    }
-    /* Tab strip + body live inside the retail tab-list area
-       (0x10000200 — 276×560 at 0,0). applyOptionsPanelLayout()
-       positions .hb-opt-tablist absolutely; .hb-opt-tabs is the
-       fixed-height strip on top (28px) and .hb-opt-body fills the
-       remaining height inside the tablist box. */
-    .hb-opt-tablist {
-      position: absolute;
-      box-sizing: border-box;
+      inset: 0;
       display: flex;
       flex-direction: column;
+      box-sizing: border-box;
+      pointer-events: auto;
+      font-family: var(--hbk-font);
+      font-size: 12px;
+      color: var(--hbk-text);
+      /* Retail option pages sit on the dark field 0x06004CC2. */
+      background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink);
       overflow: hidden;
     }
     .hb-opt-tabs {
       flex: 0 0 auto;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1px;
-      padding: 4px 6px 0;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
-    .hb-opt-tab {
-      padding: 3px 8px;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--hb-border-brass-dim);
-      border-bottom: none;
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+    .hb-opt-tabs::-webkit-scrollbar { display: none; }
+    .hb-opt-tabs .hbk-tab {
+      flex: 1 0 auto;
+      padding: 3px 6px 3px;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      text-transform: none;
     }
-    .hb-opt-tab:hover { background: var(--hb-overlay-hover); }
-    .hb-opt-tab.active {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-      border-color: var(--hb-border-brass);
-    }
+    .hb-opt-tabs .hbk-tab:focus-visible { outline: 1px solid var(--hbk-gold); outline-offset: -2px; }
     .hb-opt-body {
       flex: 1 1 auto;
-      overflow-y: auto;
-      padding: 8px 10px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-      color: var(--hb-text-cream);
-      font-size: 11px;
+      min-height: 0;
+      padding: 2px 2px 10px 4px;
+      outline: none;
     }
-    .hb-opt-body .hb-opt-section {
-      font-size: 9px;
-      color: var(--hb-text-gold);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-      padding-bottom: 3px;
-      margin: 8px 0 6px;
-    }
-    .hb-opt-body .hb-opt-section:first-child { margin-top: 2px; }
-    .hb-opt-body .hb-opt-row,
-    .hb-opt-body .hb-settings-row,
-    .hb-opt-body .hb-graphics-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 6px;
-      font-size: 11px;
-    }
-    .hb-opt-body label {
+    .hb-opt-footer { flex: 0 0 auto; padding: 4px 6px; gap: 4px; }
+    .hb-opt-footer .hbk-btn { min-width: 58px; padding: 0 8px; }
+    .hb-opt-status {
       flex: 1 1 auto;
-      color: var(--hb-text-cream);
-    }
-    .hb-opt-body input[type="checkbox"] {
-      flex: 0 0 auto;
-      width: 14px; height: 14px;
-      accent-color: var(--hb-text-gold);
-    }
-    .hb-opt-body input[type="range"] {
-      flex: 1 1 90px;
       min-width: 0;
-    }
-    .hb-opt-body select,
-    .hb-opt-body .hb-graphics-select {
-      flex: 0 0 auto;
-      background: var(--hb-overlay-dark-deep);
-      color: var(--hb-text-cream);
-      border: 1px solid var(--hb-border-brass-dim);
-      border-radius: 2px;
-      font-family: inherit;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      color: var(--hbk-text-dim);
       font-size: 11px;
-      padding: 1px 3px;
+      font-style: italic;
     }
-    .hb-opt-body .hb-settings-val {
-      flex: 0 0 36px;
-      text-align: right;
-      color: var(--hb-text-gold-dim);
-      font-variant-numeric: tabular-nums;
-      font-size: 10px;
-    }
-    .hb-opt-body .hb-graphics-tag {
-      flex: 0 0 auto;
-      color: var(--hb-text-muted-3);
-      font-size: 9px;
-      margin-left: 4px;
-    }
-    .hb-opt-body .hb-graphics-reload {
+    .hb-opt-root .hbk-section-title { margin: 8px 0 3px; }
+    .hb-opt-body > .hbk-section-title:first-child,
+    .hb-opt-body > :first-child > .hbk-section-title:first-child { margin-top: 2px; }
+
+    /* Rows — retail BoolOptionTemplate / FloatOptionTemplate /
+       MenuOptionTemplate (272×20). Shared by our own rows and the rows
+       ui/graphics_settings.js + ui/camera_settings.js build. */
+    .hb-opt-root .hb-opt-row,
+    .hb-opt-root .hb-graphics-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-top: 10px;
-      padding: 6px 8px;
-      background: rgba(120, 84, 32, 0.18);
-      border: 1px solid var(--hb-border-brass);
-      border-radius: 3px;
-      color: var(--hb-text-cream-bright);
-      font-size: 10px;
-    }
-    .hb-opt-body .hb-settings-btnrow {
-      display: flex;
       gap: 6px;
-      margin-top: 10px;
-    }
-    .hb-opt-body .hb-settings-btn {
-      padding: 3px 10px;
-      background: linear-gradient(180deg, rgba(120, 84, 32, 0.45) 0%, rgba(50, 35, 15, 0.55) 100%);
-      color: var(--hb-text-cream-bright);
-      border: 1px solid var(--hb-border-brass);
-      border-radius: 2px;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      letter-spacing: 0.04em;
-      cursor: pointer;
-    }
-    .hb-opt-body .hb-settings-btn:hover {
-      background: linear-gradient(180deg, rgba(150, 105, 40, 0.55) 0%, rgba(70, 50, 20, 0.65) 100%);
-      color: var(--hb-text-gold);
-    }
-    .hb-opt-body .hb-settings-btn:active {
-      background: linear-gradient(180deg, rgba(40, 25, 10, 0.7) 0%, rgba(80, 55, 20, 0.5) 100%);
-    }
-    .hb-opt-body .hb-settings-btn.active {
-      background: linear-gradient(180deg, rgba(180, 130, 50, 0.6) 0%, rgba(90, 60, 25, 0.7) 100%);
-      color: var(--hb-text-gold);
-      border-color: var(--hb-text-gold-dim);
-    }
-    .hb-opt-stub {
-      padding: 20px 8px;
-      text-align: center;
-      color: var(--hb-text-muted-3);
-      font-style: italic;
-      font-size: 11px;
-      line-height: 1.6;
-    }
-    .hb-opt-stub b {
-      color: var(--hb-text-cream);
-      font-style: normal;
-    }
-    /* Cancel / Apply / OK buttons live as direct root children
-       (matching retail's gmConfigUI 0x100001FC/FD/FE — siblings of
-       the tab list 0x10000200 under panel root 0x100001FF).
-       applyOptionsPanelLayout writes their explicit x/y/w/h
-       (80×32 at 16/106/196, y=564). */
-    .hb-opt-btn {
-      position: absolute;
+      min-height: 20px;
+      margin: 0;
+      padding: 1px 6px;
       box-sizing: border-box;
-      padding: 0;
-      background: linear-gradient(180deg, rgba(120, 84, 32, 0.55) 0%, rgba(50, 35, 15, 0.7) 100%);
-      color: var(--hb-text-cream-bright);
-      border: 1px solid var(--hb-border-brass);
-      border-radius: 2px;
-      font-family: var(--hb-font-serif);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
+    }
+    .hb-opt-root .hb-opt-row:hover,
+    .hb-opt-root .hb-graphics-row:hover { background: var(--hbk-hover); }
+    .hb-opt-root .hb-opt-row > label,
+    .hb-opt-root .hb-graphics-row > label {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      color: var(--hbk-text);
       cursor: pointer;
     }
-    .hb-opt-btn:hover {
-      background: linear-gradient(180deg, rgba(150, 105, 40, 0.65) 0%, rgba(70, 50, 20, 0.75) 100%);
-      color: var(--hb-text-gold);
+    /* Retail puts the orb LEFT of its text (OptionCheckboxTemplate). */
+    .hb-opt-root .hb-graphics-bool > input.hbk-check { order: -1; }
+    .hb-opt-root .hb-opt-row.is-disabled,
+    .hb-opt-root .hb-opt-row.is-disabled > label { opacity: 0.55; cursor: not-allowed; }
+    .hb-opt-root .hb-graphics-range > label { flex: 0 0 104px; }
+    .hb-opt-root .hb-graphics-range > input.hbk-range { flex: 1 1 auto; min-width: 60px; }
+    .hb-opt-root .hb-settings-val {
+      flex: 0 0 44px;
+      text-align: right;
+      color: var(--hbk-value);
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+      white-space: nowrap;
     }
-    .hb-opt-btn:active {
-      background: linear-gradient(180deg, rgba(40, 25, 10, 0.75) 0%, rgba(80, 55, 20, 0.6) 100%);
+    .hb-opt-root .hb-graphics-selectrow > select { flex: 0 1 auto; max-width: 128px; }
+
+    /* Retail slider art: SliderOption track 0x06001285 + thumb 0x06001286. */
+    .hb-opt-root input.hbk-range { height: 16px; }
+    .hb-opt-root input.hbk-range::-webkit-slider-runnable-track {
+      height: 12px; border: 0;
+      background: url("${SP}/0x06001285.png") center / 100% 100% no-repeat;
+      box-shadow: 0 0 0 1px #000;
     }
-    .hb-opt-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
-    .hb-opt-btn.primary { color: var(--hb-text-gold); }
+    .hb-opt-root input.hbk-range::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 7px; height: 12px; margin-top: 0;
+      border: 0; border-radius: 0;
+      background: url("${SP}/0x06001286.png") center / 100% 100% no-repeat;
+      box-shadow: 0 0 3px #000;
+    }
+    .hb-opt-root input.hbk-range::-moz-range-track {
+      height: 12px; border: 0;
+      background: url("${SP}/0x06001285.png") center / 100% 100% no-repeat;
+    }
+    .hb-opt-root input.hbk-range::-moz-range-thumb {
+      width: 7px; height: 12px; border: 0; border-radius: 0;
+      background: url("${SP}/0x06001286.png") center / 100% 100% no-repeat;
+    }
+    .hb-opt-root input.hbk-range:focus-visible { outline: 1px solid var(--hbk-gold); outline-offset: 1px; }
+    .hb-opt-root input.hbk-range:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .hb-opt-note {
+      padding: 2px 6px 4px;
+      color: var(--hbk-text-dim);
+      font-size: 11px;
+      font-style: italic;
+      line-height: 1.35;
+    }
+    .hb-opt-note.is-warn { color: var(--hbk-gold-bright); font-style: normal; }
+    .hb-opt-btnrow {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 6px;
+    }
+    .hb-opt-btnrow > .hb-opt-note { padding: 0; flex: 1 1 auto; min-width: 0; }
+    .hb-opt-root .hbk-btn-small:disabled { filter: grayscale(0.8) brightness(0.7); cursor: default; }
+
+    /* Graphics module extras (preset tags, reload pill, reset row). */
+    .hb-opt-root .hb-graphics-presets { display: flex; gap: 4px; padding: 2px 6px 4px; margin: 0; }
+    .hb-opt-root .hb-graphics-presets > .hbk-btn-brass { flex: 1 1 0; min-width: 0; }
+    .hb-opt-root .hb-graphics-reload {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin: 8px 6px 2px; padding: 4px 6px;
+      border: 1px solid var(--hbk-gold-dim);
+      background: rgba(243, 210, 122, 0.08);
+      color: var(--hbk-gold-bright); font-size: 11px;
+    }
+    .hb-opt-root .hb-graphics-resetrow { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 6px 2px; margin: 0; }
+    .hb-opt-root .hb-graphics-fullscreen { flex-wrap: wrap; row-gap: 3px; }
+    .hb-opt-root .hb-graphics-fullscreen > .hb-graphics-note {
+      flex: 1 1 100%; color: var(--hbk-text-dim); font-size: 11px; font-style: italic;
+    }
+    .hb-opt-root .hb-graphics-fullscreen:hover { background: transparent; }
+
+    /* Key bindings page. */
+    .hb-opt-pagehead {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 4px 4px;
+      border-bottom: 1px solid var(--hbk-gold-deep);
+      color: var(--hbk-gold-bright);
+      font-size: 13px; letter-spacing: 0.04em;
+    }
+    .hb-opt-keyrow { gap: 4px; }
+    .hb-opt-keyrow > .hb-opt-keylabel {
+      flex: 1 1 auto; min-width: 0;
+      overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+    .hb-opt-key {
+      flex: 0 0 86px;
+      overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+      text-align: right;
+      color: var(--hbk-value);
+      font-size: 11px;
+    }
+    .hb-opt-key.is-default { color: var(--hbk-text-dim); }
+    .hb-opt-key.is-capturing { color: var(--hbk-gold-bright); font-style: italic; }
+    .hb-opt-keyrow .hbk-btn-small { min-width: 40px; }
+    .hb-opt-keyrow .hbk-icon-btn { width: 16px; height: 16px; font-size: 11px; line-height: 1; }
+    .hb-opt-keyrow .hbk-icon-btn:disabled { opacity: 0.3; cursor: default; }
+    .hb-opt-subhead {
+      padding: 6px 6px 1px;
+      color: var(--hbk-gold);
+      font-size: 11px; letter-spacing: 0.06em;
+      border-bottom: 1px solid rgba(243, 210, 122, 0.18);
+    }
+    .hb-opt-conflicts {
+      margin: 4px 6px 6px; padding: 4px 6px;
+      border: 1px solid #802020;
+      background: rgba(120, 32, 32, 0.25);
+      font-size: 11px;
+    }
+    .hb-opt-conflicts > div { color: var(--hbk-text); }
+    .hb-opt-conflicts > .hb-opt-conflicts-title { color: #f0a060; margin-bottom: 2px; }
   `;
   document.head.appendChild(style);
 }
 
-// Tab definitions. Order mirrors retail's 8-tab list in gmConfigUI's
-// 0x10000200 element. Labels are descriptive placeholders until the
-// retail StringIds (~0x10000256+) are decoded from a per-tab layout
-// content lookup.
-const TABS = [
-  { id: "graphics", label: "Graphics", render: renderGraphicsTab },
-  { id: "audio",    label: "Audio",    render: renderAudioTab },
-  { id: "mouse",    label: "Mouse",    render: renderMouseTab },
-  { id: "controls", label: "Controls", render: renderControlsTab },
-  { id: "chat",     label: "Chat",     render: renderChatTab },
-  { id: "network",  label: "Network",  render: renderNetworkTab },
-  { id: "char",     label: "Character",render: renderCharacterTab },
-  { id: "about",    label: "About",    render: renderAboutTab },
-];
+// ---------------------------------------------------------------------
+// Small DOM builders.
+
+let _idSeq = 0;
+function nextId(prefix = "hb-opt") {
+  _idSeq += 1;
+  return `${prefix}-${_idSeq}`;
+}
+
+function sectionTitle(text) {
+  const h = document.createElement("div");
+  h.className = "hbk-section-title";
+  h.textContent = text;
+  return h;
+}
+
+function note(text, { warn = false } = {}) {
+  const n = document.createElement("div");
+  n.className = "hb-opt-note" + (warn ? " is-warn" : "");
+  n.textContent = text;
+  return n;
+}
+
+function boolOptionRow(label, checked, onChange, { disabled = false, hint = null } = {}) {
+  const row = document.createElement("div");
+  row.className = "hb-opt-row hb-opt-bool";
+  const id = nextId();
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.className = "hbk-check";
+  cb.id = id;
+  cb.checked = !!checked;
+  const lbl = document.createElement("label");
+  lbl.htmlFor = id;
+  lbl.textContent = label;
+  lbl.title = hint || label;
+  if (disabled) {
+    cb.disabled = true;
+    row.classList.add("is-disabled");
+  }
+  cb.addEventListener("change", () => onChange(!!cb.checked, cb));
+  row.appendChild(cb);
+  row.appendChild(lbl);
+  return { row, cb };
+}
 
 // ---------------------------------------------------------------------
-// Controls tab — keybinding capture + persist UI.
+// Session — what Cancel reverts to (HUD overhaul 2026-10-05).
+
+const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
+const LS_AUDIO_KEY = "hb.options.audio.v1";
+const SNAPSHOT_KEYS = Object.freeze([
+  "holtburger_graphics_v1",
+  "holtburger_camera_v1",
+  LS_AUDIO_KEY,
+]);
+
+function safeStorage() {
+  try { return typeof localStorage !== "undefined" ? localStorage : null; } catch (_) { return null; }
+}
+
+function createSession() {
+  const q = (typeof window !== "undefined") ? window.__quality : null;
+  return {
+    storage: snapshotStorage(safeStorage(), SNAPSHOT_KEYS),
+    hudMult: getHudScaleMultiplier(),
+    keybindings: cloneJson(getKeybindings()),
+    quality: q ? { preset: q.preset, flags: q.flags ? { ...q.flags } : null } : null,
+    // CharacterOption index → its value before the first toggle this session.
+    charOptions: new Map(),
+  };
+}
+
+function cloneJson(v) {
+  try { return JSON.parse(JSON.stringify(v ?? {})); } catch (_) { return {}; }
+}
+
+function revertSession(session) {
+  // 1. Client-local blobs, then push them back onto the live systems.
+  restoreStorage(safeStorage(), session.storage);
+  if (session.quality && window.__quality) {
+    window.__quality.preset = session.quality.preset;
+    if (session.quality.flags && window.__quality.flags) {
+      Object.assign(window.__quality.flags, session.quality.flags);
+    }
+  }
+  try { graphicsSettings.reapplyLiveGraphics(); } catch (_) {}
+  try { cameraSettings.applyCameraState(cameraSettings.loadCameraState()); } catch (_) {}
+  applyAudioGains(loadAudioGains());
+  if (getHudScaleMultiplier() !== session.hudMult) setHudScaleMultiplier(session.hudMult);
+  // 2. Key bindings through the keymap API (keeps its cache + diag hooks).
+  const before = session.keybindings || {};
+  const now = getKeybindings() || {};
+  for (const k of Object.keys(now)) {
+    if (!(k in before)) clearBinding(k);
+  }
+  for (const [k, v] of Object.entries(before)) {
+    if (JSON.stringify(now[k]) !== JSON.stringify(v)) setBinding(k, v);
+  }
+  // 3. Character options are server-side — re-send the originals.
+  const handle = window.__sessionHandle ?? null;
+  for (const [idx, orig] of session.charOptions) {
+    saveCharacterOption(idx, orig);
+    try { handle?.setCharacterOption?.(idx >>> 0, orig); } catch (_) {}
+  }
+  session.charOptions.clear();
+}
+
+// ---------------------------------------------------------------------
+// Key bindings (Gameplay → Configure keyboard…).
 //
 // Data layer (storage, defaults, matchers, the LOCAL_ACTIONS table)
 // lives in ../ui/keymap.js. This block owns capture orchestration and
-// the row-rendering helper.
+// the row rendering.
 
 let captureFor = null; // labelHash (hex string) currently in capture mode
 let captureHandler = null;
@@ -387,53 +528,41 @@ function startCapture(labelHashHex, refresh) {
   window.addEventListener("keydown", captureHandler, true);
 }
 
-// Build one row in the keybinding table. Used for both the local
-// (functional) actions and the read-only retail-ActionMap rows.
-// `defaultBinding` is what's shown when no user override exists. It
-// accepts:
-//   - a string (KeyboardEvent.code, e.g. "Digit1") — for local actions
-//     that ship hard-coded defaults;
-//   - a {code, shift, ctrl, alt, meta} object — for retail-KeyMap
-//     defaults that may carry modifiers;
-//   - null — for retail actions with no default in the loaded KeyMap.
+// One row in the keybinding table. `defaultBinding` accepts a
+// KeyboardEvent.code string (local actions), a {code,shift,ctrl,alt,meta}
+// object (retail KeyMap defaults) or null (no default).
 function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh) {
   const defaultBindingObj = (typeof defaultBinding === "string")
     ? { code: defaultBinding, shift: false, ctrl: false, alt: false, meta: false }
     : defaultBinding;
 
   const row = document.createElement("div");
-  row.style.display = "flex";
-  row.style.alignItems = "center";
-  row.style.gap = "8px";
-  row.style.padding = "2px 4px";
-  row.style.borderBottom = "1px solid rgba(138, 117, 68, 0.15)";
+  row.className = "hb-opt-row hb-opt-keyrow";
 
   const l = document.createElement("span");
-  l.style.flex = "1 1 auto";
-  setAcText(l, label);
+  l.className = "hb-opt-keylabel";
+  l.textContent = label;
+  l.title = label;
   row.appendChild(l);
 
-  const k = document.createElement("span");
-  k.style.flex = "0 0 110px";
-  k.style.textAlign = "right";
-  k.style.opacity = "0.85";
   const inCapture = captureFor === labelHashHex;
   const userBinding = bindings[labelHashHex];
   const effectiveBinding = userBinding ?? defaultBindingObj;
   const isDefault = !userBinding && !!defaultBindingObj;
-  const text = inCapture
-    ? "Press a key… (Esc=cancel)"
-    : (effectiveBinding ? formatBinding(effectiveBinding) + (isDefault ? " (default)" : "") : "—");
-  setAcText(k, text, { color: inCapture ? "#f0c87c" : (isDefault ? "#a8a090" : "#f0d8a0") });
+  const k = document.createElement("span");
+  k.className = "hb-opt-key" + (inCapture ? " is-capturing" : (isDefault ? " is-default" : ""));
+  k.textContent = inCapture
+    ? "Press a key…"
+    : (effectiveBinding ? formatBinding(effectiveBinding) : "—");
+  k.title = inCapture
+    ? "Press the new key (Esc cancels)"
+    : (isDefault ? "Retail default" : (userBinding ? "Your binding" : "Unbound"));
   row.appendChild(k);
 
   const bindBtn = document.createElement("button");
   bindBtn.type = "button";
-  bindBtn.style.flex = "0 0 auto";
-  bindBtn.style.padding = "1px 6px";
-  bindBtn.style.fontSize = "10px";
-  bindBtn.style.cursor = "pointer";
-  setAcText(bindBtn, inCapture ? "Cancel" : "Bind");
+  bindBtn.className = "hbk-btn-small";
+  bindBtn.textContent = inCapture ? "Cancel" : "Bind";
   bindBtn.addEventListener("click", () => {
     if (inCapture) { endCapture(); refresh(); }
     else startCapture(labelHashHex, refresh);
@@ -442,176 +571,24 @@ function buildBindingRow(labelHashHex, label, defaultBinding, bindings, refresh)
 
   const clearBtn = document.createElement("button");
   clearBtn.type = "button";
-  clearBtn.style.flex = "0 0 auto";
-  clearBtn.style.padding = "1px 6px";
-  clearBtn.style.fontSize = "10px";
-  clearBtn.style.cursor = "pointer";
+  clearBtn.className = "hbk-icon-btn";
+  clearBtn.textContent = "×";
+  clearBtn.title = userBinding ? "Restore the default key" : "Using the default key";
+  clearBtn.setAttribute("aria-label", `Restore default key for ${label}`);
   clearBtn.disabled = !userBinding;
-  setAcText(clearBtn, "×");
   clearBtn.addEventListener("click", () => { if (clearBinding(labelHashHex)) refresh(); });
   row.appendChild(clearBtn);
 
   return row;
 }
 
-function renderControlsTab(bodyEl) {
-  bodyEl.innerHTML = "";
-
-  const title = document.createElement("div");
-  title.className = "hb-opt-section";
-  setAcText(title, "Key Bindings");
-  bodyEl.appendChild(title);
-
-  const note = document.createElement("div");
-  note.style.marginBottom = "8px";
-  note.style.opacity = "0.75";
-  setAcText(note, "Click Bind, press a key (Esc to cancel). Local actions below route through live JS handlers. Retail actions are grouped by their ActionMap category and show their factory-default key (from KeyMap 0x14000000 / gmDefaultMap).");
-  bodyEl.appendChild(note);
-
-  // HUD rec #113 — surface plugin-manifest hotkey conflicts so the
-  // player can spot accidental F-key collisions (e.g. F2 + F5 both
-  // open the same panel). A conflict here means TWO+ plugin manifests
-  // declared the same default key; the host's last-wins resolution
-  // dispatches only one. Intentional aliases can be ignored; real
-  // conflicts can be rebound via the rows below.
-  const conflicts = getManifestHotkeyConflicts();
-  if (conflicts.length > 0) {
-    const cWrap = document.createElement("div");
-    cWrap.style.background = "rgba(120, 32, 32, 0.25)";
-    cWrap.style.border = "1px solid #802020";
-    cWrap.style.padding = "6px 8px";
-    cWrap.style.marginBottom = "8px";
-    cWrap.style.fontSize = "11px";
-    const cTitle = document.createElement("div");
-    setAcText(cTitle, `Plugin hotkey conflicts (${conflicts.length})`, { color: "#f0a060" });
-    cTitle.style.marginBottom = "4px";
-    cWrap.appendChild(cTitle);
-    for (const c of conflicts) {
-      const row = document.createElement("div");
-      row.style.fontFamily = "var(--hb-font-mono)";
-      setAcText(row, `  ${c.keyString} → ${c.conflicts.join(", ")}`, { color: "#e0d0a0" });
-      cWrap.appendChild(row);
-    }
-    const cHint = document.createElement("div");
-    cHint.style.marginTop = "4px";
-    cHint.style.fontStyle = "italic";
-    cHint.style.opacity = "0.75";
-    setAcText(cHint, "If unintended, rebind one side via Local Actions below.");
-    cWrap.appendChild(cHint);
-    bodyEl.appendChild(cWrap);
-  }
-
-  const bindings = getKeybindings();
-  const refresh = () => renderControlsTab(bodyEl);
-
-  // Local (functional) actions — JS handlers consult these.
-  const localHeader = document.createElement("div");
-  localHeader.className = "hb-opt-section";
-  localHeader.style.marginTop = "0";
-  setAcText(localHeader, "Local Actions");
-  bodyEl.appendChild(localHeader);
-
-  const localList = document.createElement("div");
-  localList.style.background = "rgba(0, 0, 0, 0.35)";
-  localList.style.border = "1px solid var(--hb-border-brass-dim)";
-  localList.style.padding = "4px 6px";
-  localList.style.marginBottom = "12px";
-  localList.style.fontFamily = "var(--hb-font-mono)";
-  localList.style.fontSize = "11px";
-  bodyEl.appendChild(localList);
-
-  for (const action of LOCAL_ACTIONS) {
-    localList.appendChild(buildBindingRow(action.labelHash, action.label, action.defaultCode, bindings, refresh));
-  }
-
-  // Retail ActionMap actions — grouped by inputMap category. Each entry
-  // in __acKeybindings carries an `inputMap` field (ActionMap outer-dict
-  // key — categories like Movement / Camera / Magic). Defaults for each
-  // action come from the retail KeyMap (gmDefaultMap, DAT 0x14000000),
-  // joined by (inputMap, actionHash) — the action_hash field in KeyMap
-  // mappings matches ActionMap's inner-dict key 114-hit / 0-miss across
-  // gmDefaultMap (see external/holtburger/docs/keymap_actionmap_xcheck).
-  const retailHeader = document.createElement("div");
-  retailHeader.className = "hb-opt-section";
-  setAcText(retailHeader, "Retail Actions (grouped by ActionMap category)");
-  bodyEl.appendChild(retailHeader);
-
-  const list = document.createElement("div");
-  list.style.maxHeight = "240px";
-  list.style.overflowY = "auto";
-  list.style.background = "rgba(0, 0, 0, 0.35)";
-  list.style.border = "1px solid var(--hb-border-brass-dim)";
-  list.style.padding = "4px 6px";
-  list.style.fontFamily = "var(--hb-font-mono)";
-  list.style.fontSize = "11px";
-  bodyEl.appendChild(list);
-
-  const actions = window.__acKeybindings;
-  if (!Array.isArray(actions) || actions.length === 0) {
-    setAcText(list, "(loading — open the Controls tab again in a few seconds)");
-    return;
-  }
-
-  // Kick off retail KeyMap load if it hasn't started yet. Defaults are
-  // shown only when the load completes — re-render once loaded so users
-  // who open the tab during the (~1s) wasm fetch see the "(default)" col
-  // appear without manual refresh.
-  if (!getRetailKeyMap()) {
-    loadRetailKeyMap().then((km) => { if (km) refresh(); }).catch(() => {});
-  }
-
-  // Group by (inputMap category) → Map<labelHash, {label, actionHash}>.
-  // Deduping by labelHash collapses alt-bindings into one row; we keep
-  // the first actionHash seen so KeyMap lookup has a join key.
-  const byCategory = new Map();
-  for (const a of actions) {
-    if (!a.label) continue;
-    let group = byCategory.get(a.inputMap);
-    if (!group) { group = new Map(); byCategory.set(a.inputMap, group); }
-    if (!group.has(a.labelHash)) {
-      group.set(a.labelHash, { label: a.label, actionHash: a.actionHash });
-    }
-  }
-
-  // Stable category ordering: numerically by inputMap (0x000000xx first
-  // then 0x100000xx) so Movement/Camera lead, then combat/magic/etc.
-  const orderedCats = [...byCategory.keys()].sort((a, b) => a - b);
-
-  for (const inputMap of orderedCats) {
-    const group = byCategory.get(inputMap);
-    if (group.size === 0) continue;
-    const catName = ACTION_CATEGORY_NAMES[inputMap]
-      ?? `Category 0x${inputMap.toString(16).toUpperCase().padStart(8, "0")}`;
-
-    const catHeader = document.createElement("div");
-    catHeader.style.padding = "6px 4px 2px";
-    catHeader.style.fontSize = "10px";
-    catHeader.style.color = "#6acaca";
-    catHeader.style.textTransform = "uppercase";
-    catHeader.style.letterSpacing = "0.08em";
-    catHeader.style.borderBottom = "1px solid rgba(106, 202, 202, 0.3)";
-    catHeader.style.marginTop = "4px";
-    setAcText(catHeader, `${catName} — ${group.size}`, { color: "#6acaca" });
-    list.appendChild(catHeader);
-
-    const sortedActions = [...group.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label));
-    for (const [labelHash, info] of sortedActions) {
-      const hashHex = `0x${labelHash.toString(16).toUpperCase().padStart(8, "0")}`;
-      const retailDefault = lookupRetailDefault(inputMap, info.actionHash);
-      list.appendChild(buildBindingRow(hashHex, info.label, retailDefault, bindings, refresh));
-    }
-  }
-}
-
 // inputMap (ActionMap outer-key) → human-readable category name.
-// Derived from the action labels in each category (see
-// /mnt/wbterminal1/tmp/claude-scratch/actionmap/ for the survey).
-// Categories with no named actions are omitted; renderer falls back to
-// "Category 0x…" for any unmapped value that does carry actions.
+// Derived from the action labels in each category. Categories with no
+// named actions are omitted; unmapped ones fall back to "Other".
 const ACTION_CATEGORY_NAMES = {
   0x00000004: "Movement",
   0x00000005: "Camera",
-  0x00000006: "Camera (alt)",
+  0x00000006: "Camera (alternate)",
   0x10000002: "Combat Mode",
   0x10000003: "Melee Combat",
   0x10000004: "Missile Combat",
@@ -626,38 +603,109 @@ const ACTION_CATEGORY_NAMES = {
   0x1000000D: "Chat Mode",
 };
 
+function renderKeysPage(bodyEl, env) {
+  bodyEl.innerHTML = "";
+  const refresh = () => {
+    const top = bodyEl.scrollTop;
+    renderKeysPage(bodyEl, env);
+    bodyEl.scrollTop = top;
+  };
+
+  const head = document.createElement("div");
+  head.className = "hb-opt-pagehead";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "hbk-btn-small hbk-brown";
+  back.textContent = "‹ Back";
+  back.addEventListener("click", () => { endCapture(); env.showPage(null); });
+  head.appendChild(back);
+  const t = document.createElement("span");
+  t.textContent = "Key Bindings";
+  head.appendChild(t);
+  bodyEl.appendChild(head);
+
+  bodyEl.appendChild(note("Click Bind, then press the new key. Esc cancels. × restores the default."));
+
+  // HUD rec #113 — plugin-manifest hotkey conflicts (two manifests
+  // declaring the same default key; the host's last-wins resolution
+  // dispatches only one).
+  const conflicts = getManifestHotkeyConflicts();
+  if (conflicts.length > 0) {
+    const box = document.createElement("div");
+    box.className = "hb-opt-conflicts";
+    const title = document.createElement("div");
+    title.className = "hb-opt-conflicts-title";
+    title.textContent = `${conflicts.length} key${conflicts.length === 1 ? " is" : "s are"} claimed by more than one window:`;
+    box.appendChild(title);
+    for (const c of conflicts) {
+      const r = document.createElement("div");
+      r.textContent = `${c.keyString} — ${c.conflicts.join(", ")}`;
+      box.appendChild(r);
+    }
+    bodyEl.appendChild(box);
+  }
+
+  const bindings = getKeybindings();
+
+  bodyEl.appendChild(sectionTitle("Quick actions"));
+  for (const action of LOCAL_ACTIONS) {
+    bodyEl.appendChild(buildBindingRow(action.labelHash, action.label, action.defaultCode, bindings, refresh));
+  }
+
+  // Retail ActionMap actions grouped by their inputMap category. Defaults
+  // come from the retail KeyMap (gmDefaultMap, DAT 0x14000000) joined by
+  // (inputMap, actionHash).
+  bodyEl.appendChild(sectionTitle("Game actions"));
+  const actions = window.__acKeybindings;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    bodyEl.appendChild(note("The game's key map is still loading — reopen this page in a moment."));
+    return;
+  }
+  if (!getRetailKeyMap()) {
+    loadRetailKeyMap().then((km) => { if (km && bodyEl.isConnected) refresh(); }).catch(() => {});
+  }
+  const byCategory = new Map();
+  for (const a of actions) {
+    if (!a.label) continue;
+    let group = byCategory.get(a.inputMap);
+    if (!group) { group = new Map(); byCategory.set(a.inputMap, group); }
+    if (!group.has(a.labelHash)) group.set(a.labelHash, { label: a.label, actionHash: a.actionHash });
+  }
+  const orderedCats = [...byCategory.keys()].sort((a, b) => a - b);
+  for (const inputMap of orderedCats) {
+    const group = byCategory.get(inputMap);
+    if (group.size === 0) continue;
+    const sub = document.createElement("div");
+    sub.className = "hb-opt-subhead";
+    sub.textContent = ACTION_CATEGORY_NAMES[inputMap] ?? "Other";
+    bodyEl.appendChild(sub);
+    const sorted = [...group.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label));
+    for (const [labelHash, info] of sorted) {
+      const hashHex = `0x${labelHash.toString(16).toUpperCase().padStart(8, "0")}`;
+      const retailDefault = lookupRetailDefault(inputMap, info.actionHash);
+      bodyEl.appendChild(buildBindingRow(hashHex, info.label, retailDefault, bindings, refresh));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------
-// Character tab — CharacterOption bitfield toggles.
+// CharacterOption rows (Character / Chat / Gameplay→Mouse).
 //
 // Each row sends `sessionHandle.setCharacterOption(option, value)` on
 // change (wasm fan-out: SessionCommand::SetCharacterOption →
 // GameAction::SetSingleCharacterOption sub-opcode 0x0167, ACE handler
 // `Player_Character.cs:80-106`). ACE persists to the Character row's
 // `CharacterOptions1` / `CharacterOptions2` columns and echoes back via
-// `Private/PublicUpdatePropertyInt`; the existing player-stats pipeline
-// consumes the echo.
+// `Private/PublicUpdatePropertyInt`.
 //
-// The `option` value is the `holtburger_common::CharacterOption` enum
-// INDEX (0..0x36 — `crates/holtburger-common/src/character.rs:117`),
-// NOT the retail bitfield mask (which uses 0x2 / 0x200000 / 0x10000000
-// style bit values). The wasm side validates the index via FromRepr
-// before serializing.
-//
-// We hold the last user click in `LS_CHAR_OPTIONS_KEY` so the panel
-// can render the right checkbox state on reopen. Server-side authority
-// remains the truth — a future follow-up will reconcile by reading
-// CharacterOptions1/2 off the player-stats stream.
+// `idx` is the `holtburger_common::CharacterOption` enum INDEX
+// (0..0x36 — `crates/holtburger-common/src/character.rs:117`), NOT the
+// retail bitfield mask. The wasm side validates it via FromRepr.
 
-const LS_CHAR_OPTIONS_KEY = "holtburger_character_options_v1";
-
-// Subset of CharacterOption indices exposed in v1 of the Character tab.
-// Grouped roughly by retail's gmConfigUI Character sub-panel layout.
-// Add more entries as the panel matures.
-// Rec #89 — full ACE CharacterOption catalog (0x00-0x34 inclusive)
-// per ace-server Source/ACE.Entity/Enum/CharacterOption.cs. Indices
-// not listed below are intentionally excluded: 0x0E
-// VividTargetingIndicator routes through scene3d/target_ring.js
-// (pass-1 #129 fable-skip). 0x35 / 0x36 are *Default sentinels.
+// Rec #89 — full ACE CharacterOption catalog (0x00-0x34 inclusive) per
+// ace-server Source/ACE.Entity/Enum/CharacterOption.cs. 0x0E
+// VividTargetingIndicator routes through scene3d/target_ring.js; 0x35 /
+// 0x36 are *Default sentinels.
 const CHARACTER_OPTION_GROUPS = [
   {
     section: "Combat",
@@ -673,10 +721,7 @@ const CHARACTER_OPTION_GROUPS = [
     ],
   },
   {
-    // Rec (2026-07-04) — Use mouse turning (0x31) moved to the Mouse
-    // tab (mouse-specific) so it isn't duplicated across two tabs;
-    // Run as default movement stays here (general movement default,
-    // not mouse-specific).
+    // Use mouse turning (0x31) lives on Gameplay → Mouse & Camera.
     section: "Movement",
     options: [
       { idx: 0x0A, label: "Run as default movement" },
@@ -722,8 +767,6 @@ const CHARACTER_OPTION_GROUPS = [
     ],
   },
   {
-    // Rec (2026-07-04) — chat-channel + chat-behavior options moved to
-    // the Chat tab (see CHAT_OPTION_GROUPS below / renderChatTab).
     section: "Inventory",
     options: [
       { idx: 0x22, label: "Salvage multiple materials at once" },
@@ -743,135 +786,7 @@ const CHARACTER_OPTION_GROUPS = [
   },
 ];
 
-function loadCharacterOptions() {
-  try {
-    const raw = localStorage.getItem(LS_CHAR_OPTIONS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === "object") ? parsed : {};
-  } catch (_) { return {}; }
-}
-
-function saveCharacterOption(idx, value) {
-  try {
-    const state = loadCharacterOptions();
-    state[String(idx)] = !!value;
-    localStorage.setItem(LS_CHAR_OPTIONS_KEY, JSON.stringify(state));
-  } catch (_) {}
-}
-
-// Pull the current state of a CharacterOption — prefer the server-
-// authoritative bits exposed by `isCharacterOptionEnabled` (hydrated by
-// `PlayerDescription` on login, optimistically updated in the wasm
-// SetCharacterOption arm). Fall back to the localStorage cache when
-// offline (pre-login or wasm method absent — older bundle).
-function readCharacterOption(idx, handle, localCache) {
-  if (handle && typeof handle.isCharacterOptionEnabled === "function") {
-    try { return !!handle.isCharacterOptionEnabled(idx >>> 0); }
-    catch (_) { /* unknown index — fall back to local cache */ }
-  }
-  return !!localCache[String(idx)];
-}
-
-// Shared context (handle/offline/localCache) for any tab that renders
-// CharacterOption checkbox rows — Character, Chat, Mouse all use this
-// so the offline / local-state banners + persistence stay consistent.
-function getCharacterOptionContext() {
-  const localCache = loadCharacterOptions();
-  const handle = window.__sessionHandle ?? null;
-  const offline = !handle || typeof handle.setCharacterOption !== "function";
-  const hasServerState =
-    !!handle && typeof handle.isCharacterOptionEnabled === "function";
-  return { localCache, handle, offline, hasServerState };
-}
-
-function renderCharacterOptionBanner(bodyEl, ctx) {
-  const { offline, hasServerState } = ctx;
-  if (offline) {
-    const banner = document.createElement("div");
-    banner.className = "hb-opt-stub";
-    banner.style.marginBottom = "10px";
-    banner.innerHTML =
-      "<b>Offline preview</b><br>Toggles record locally but won't sync to the server until login completes.";
-    bodyEl.appendChild(banner);
-  } else if (!hasServerState) {
-    const banner = document.createElement("div");
-    banner.className = "hb-opt-stub";
-    banner.style.marginBottom = "10px";
-    banner.innerHTML =
-      "<b>Local-state mode</b><br>Wasm bundle predates the <code>isCharacterOptionEnabled</code> getter — toggles still sync via <code>setCharacterOption</code> but checkboxes read from localStorage. Refresh after the next wasm rebuild.";
-    bodyEl.appendChild(banner);
-  }
-}
-
-// Build one CharacterOption checkbox row. Shared by Character / Chat /
-// Mouse tabs — each only differs by which `opt.idx` subset it lists.
-function buildCharacterOptionRow(opt, ctx) {
-  const { handle, localCache, offline } = ctx;
-  const row = document.createElement("label");
-  row.className = "hb-opt-row";
-  row.style.cssText =
-    "display:flex;align-items:center;gap:10px;padding:4px 8px;cursor:pointer;";
-  const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = readCharacterOption(opt.idx, handle, localCache);
-  cb.style.cssText = "accent-color: var(--hb-text-gold);";
-  // HUD rec #106 — when offline, the banner above already tells the
-  // player toggles won't sync. Enforce that by disabling the inputs
-  // so flipping a checkbox doesn't write a localStorage row that the
-  // next login could then push to the server unexpectedly.
-  if (offline) {
-    cb.disabled = true;
-    row.style.opacity = "0.6";
-    row.style.cursor = "not-allowed";
-  }
-  cb.addEventListener("change", () => {
-    const value = cb.checked;
-    saveCharacterOption(opt.idx, value);
-    try {
-      handle?.setCharacterOption?.(opt.idx >>> 0, value);
-    } catch (e) {
-      // Wire failure is best-effort — keep local state, log only.
-      console.warn(
-        `[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`,
-        e,
-      );
-    }
-  });
-  const label = document.createElement("ac-text");
-  setAcText(label, opt.label, { fit: true });
-  row.appendChild(cb);
-  row.appendChild(label);
-  return row;
-}
-
-// Render a list of {section, options:[{idx,label}]} groups as
-// CharacterOption checkbox rows into bodyEl (no innerHTML reset — the
-// caller owns clearing bodyEl / prepending banners first).
-function renderCharacterOptionGroups(bodyEl, groups, ctx) {
-  for (const group of groups) {
-    const sec = document.createElement("div");
-    sec.className = "hb-opt-section";
-    setAcText(sec, group.section);
-    bodyEl.appendChild(sec);
-    for (const opt of group.options) {
-      bodyEl.appendChild(buildCharacterOptionRow(opt, ctx));
-    }
-  }
-}
-
-function renderCharacterTab(bodyEl) {
-  bodyEl.innerHTML = "";
-  const ctx = getCharacterOptionContext();
-  renderCharacterOptionBanner(bodyEl, ctx);
-  renderCharacterOptionGroups(bodyEl, CHARACTER_OPTION_GROUPS, ctx);
-}
-
-// ---------------------------------------------------------------------
-// Chat tab — chat-channel + chat-behavior CharacterOptions. These are
-// real wire-supported options (same setCharacterOption path as the
-// Character tab) that retail groups under its own Chat config page
-// rather than under Character, so we mirror that split here.
+// Retail splits chat channel / behaviour options onto their own Chat page.
 const CHAT_OPTION_GROUPS = [
   {
     section: "Channels",
@@ -895,92 +810,90 @@ const CHAT_OPTION_GROUPS = [
   },
 ];
 
-function renderChatTab(bodyEl) {
-  bodyEl.innerHTML = "";
-  const title = document.createElement("div");
-  title.className = "hb-opt-section";
-  title.style.marginTop = "0";
-  setAcText(title, "Chat");
-  bodyEl.appendChild(title);
+const MOUSE_TURNING_OPTION = { idx: 0x31, label: "Use mouse turning" };
 
-  const ctx = getCharacterOptionContext();
-  renderCharacterOptionBanner(bodyEl, ctx);
-  renderCharacterOptionGroups(bodyEl, CHAT_OPTION_GROUPS, ctx);
+function loadCharacterOptions() {
+  try {
+    const raw = localStorage.getItem(LS_CHAR_OPTIONS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === "object") ? parsed : {};
+  } catch (_) { return {}; }
+}
 
-  const note = document.createElement("div");
-  note.className = "hb-opt-stub";
-  note.style.marginTop = "10px";
-  note.style.fontStyle = "italic";
-  note.innerHTML =
-    "Per-channel text colours + timestamps formatting are not yet wired — " +
-    "plugins/chat-panel.js owns the tab filters; channel on/off above is " +
-    "real (routes through <code>setCharacterOption</code>).";
-  bodyEl.appendChild(note);
+function saveCharacterOption(idx, value) {
+  try {
+    const state = loadCharacterOptions();
+    state[String(idx)] = !!value;
+    localStorage.setItem(LS_CHAR_OPTIONS_KEY, JSON.stringify(state));
+  } catch (_) {}
+}
+
+// Server-authoritative bits via `isCharacterOptionEnabled` (hydrated by
+// PlayerDescription on login, optimistically updated by the wasm
+// SetCharacterOption arm); localStorage cache when offline.
+function readCharacterOption(idx, handle, localCache) {
+  if (handle && typeof handle.isCharacterOptionEnabled === "function") {
+    try { return !!handle.isCharacterOptionEnabled(idx >>> 0); }
+    catch (_) { /* unknown index — fall back to local cache */ }
+  }
+  return !!localCache[String(idx)];
+}
+
+function getCharacterOptionContext() {
+  const localCache = loadCharacterOptions();
+  const handle = window.__sessionHandle ?? null;
+  const offline = !handle || typeof handle.setCharacterOption !== "function";
+  return { localCache, handle, offline };
+}
+
+function renderOfflineBanner(bodyEl, ctx) {
+  // HUD rec #106 — offline toggles are disabled (a local-only flip could
+  // otherwise be pushed to the server unexpectedly on the next login).
+  if (ctx.offline) {
+    bodyEl.appendChild(note("You are not in the world — character options can be changed after you log in.", { warn: true }));
+  }
+}
+
+function buildCharacterOptionRow(opt, ctx, env) {
+  const { handle, localCache, offline } = ctx;
+  const { row, cb } = boolOptionRow(
+    opt.label,
+    readCharacterOption(opt.idx, handle, localCache),
+    (value) => {
+      if (env?.session && !env.session.charOptions.has(opt.idx)) {
+        env.session.charOptions.set(opt.idx, !value);
+      }
+      saveCharacterOption(opt.idx, value);
+      try {
+        handle?.setCharacterOption?.(opt.idx >>> 0, value);
+      } catch (e) {
+        // Wire failure is best-effort — keep local state, log only.
+        console.warn(`[options-panel] setCharacterOption(0x${opt.idx.toString(16)}=${value}) failed:`, e);
+      }
+    },
+    { disabled: offline },
+  );
+  env?.charBoxes?.set(opt.idx, cb);
+  return row;
+}
+
+function renderCharacterOptionGroups(bodyEl, groups, ctx, env) {
+  for (const group of groups) {
+    bodyEl.appendChild(sectionTitle(group.section));
+    for (const opt of group.options) bodyEl.appendChild(buildCharacterOptionRow(opt, ctx, env));
+  }
 }
 
 // ---------------------------------------------------------------------
-// Mouse tab — the only wire-supported mouse-specific CharacterOption is
-// UseMouseTurning (0x31). Turn sensitivity / invert-Y / camera distance
-// / FOV have no plumbing in this client yet (checked scene3d/picking.js
-// + ui/graphics_settings.js — neither exposes a sensitivity or FOV
-// control despite an earlier stub claiming otherwise); surfaced here
-// honestly rather than wiring a fake slider.
-const MOUSE_OPTION_GROUPS = [
-  {
-    section: "Camera",
-    options: [
-      { idx: 0x31, label: "Use mouse turning" },
-    ],
-  },
-];
-
-function renderMouseTab(bodyEl) {
-  bodyEl.innerHTML = "";
-  const title = document.createElement("div");
-  title.className = "hb-opt-section";
-  title.style.marginTop = "0";
-  setAcText(title, "Mouse & Camera");
-  bodyEl.appendChild(title);
-
-  const ctx = getCharacterOptionContext();
-  renderCharacterOptionBanner(bodyEl, ctx);
-  renderCharacterOptionGroups(bodyEl, MOUSE_OPTION_GROUPS, ctx);
-
-  const note = document.createElement("div");
-  note.className = "hb-opt-stub";
-  note.style.marginTop = "10px";
-  note.style.fontStyle = "italic";
-  note.innerHTML =
-    "Mouse-turn sensitivity / invert / camera distance / FOV are <b>not yet " +
-    "supported</b> — no sensitivity or FOV control exists in scene3d/picking.js " +
-    "or ui/graphics_settings.js today. \"Use mouse turning\" above is real " +
-    "(CharacterOption 0x31, routes through <code>setCharacterOption</code>).";
-  bodyEl.appendChild(note);
-}
-
-// ---------------------------------------------------------------------
-// Audio tab — real AudioManager gain controls (Master / Effect /
-// Ambient buses). AudioManager (scene3d/audio/audio_manager.js) is
-// instantiated by scene3d/index.js as `liveScene3d.audioManager` with
-// setMasterGain/setEffectGain/setAmbientGain already implemented and
-// mirroring retail's effect_sound_volume/ambient_sound_volume. There
-// is no CharacterOption for audio (checked holtburger-common
-// character.rs — the CharacterOption/CharacterOption2 bitflags have no
-// volume bits), so this persists to its own localStorage key instead
-// of the setCharacterOption path used by the other tabs.
-//
-// Seam / known gap: AudioManager is constructed once, early, with a
-// hardcoded `masterGain: 1.0` (scene3d/index.js ~3946) — this file
-// only owns plugins/options-panel.js + new ui/ helpers, so it cannot
-// thread the persisted value into that constructor call. Instead we
-// re-apply the saved gains to the live AudioManager every time this
-// tab is opened (covers "changed this session, reopened panel later")
-// and on slider input (live preview). A full fix would read
-// LS_AUDIO_KEY at AudioManager construction time in scene3d/index.js.
-const LS_AUDIO_KEY = "hb.options.audio.v1";
+// Audio — real AudioManager gain buses (scene3d/audio/audio_manager.js,
+// `liveScene3d.audioManager`). No CharacterOption exists for audio, so
+// it persists to `hb.options.audio.v1` (read at AudioManager
+// construction — tests/audio_manager_retail.test.mjs) and is re-applied
+// to the live mixer on slider input.
 const AUDIO_BUSES = [
-  { key: "master", label: "Master volume", setter: "setMasterGain" },
-  { key: "effect", label: "Sound effects",  setter: "setEffectGain" },
+  { key: "master",  label: "Master volume", setter: "setMasterGain" },
+  { key: "effect",  label: "Sound effects", setter: "setEffectGain" },
   { key: "ambient", label: "Ambient sound", setter: "setAmbientGain" },
 ];
 
@@ -1006,426 +919,378 @@ function getAudioManager() {
   return window.liveScene3d?.audioManager ?? null;
 }
 
-function renderAudioTab(bodyEl) {
-  bodyEl.innerHTML = "";
-  const title = document.createElement("div");
-  title.className = "hb-opt-section";
-  title.style.marginTop = "0";
-  setAcText(title, "Volume");
-  bodyEl.appendChild(title);
-
+function applyAudioGains(gains) {
   const manager = getAudioManager();
-  const gains = loadAudioGains();
+  if (!manager) return;
+  for (const bus of AUDIO_BUSES) {
+    try { manager[bus.setter]?.(gains[bus.key]); } catch (_) {}
+  }
+}
 
-  if (!manager) {
-    const banner = document.createElement("div");
-    banner.className = "hb-opt-stub";
-    banner.style.marginBottom = "10px";
-    banner.innerHTML =
-      "<b>Audio engine not ready</b><br>Sliders record your preference locally; " +
-      "they'll apply to the live mixer once the world audio context has started " +
-      "(first click/keypress after entering the world).";
-    bodyEl.appendChild(banner);
-  } else {
-    // Re-apply saved preferences to the live mixer every time the tab
-    // opens — see the seam note above for why this can't happen at
-    // AudioManager construction time from this file.
-    for (const bus of AUDIO_BUSES) {
-      try { manager[bus.setter]?.(gains[bus.key]); } catch (_) {}
+function renderSoundSection(bodyEl) {
+  bodyEl.appendChild(sectionTitle("Sound"));
+  const gains = loadAudioGains();
+  if (getAudioManager()) applyAudioGains(gains);
+  for (const bus of AUDIO_BUSES) {
+    bodyEl.appendChild(graphicsSettings.rangeRow({
+      label: bus.label,
+      min: 0, max: 100, step: 1,
+      value: Math.round((gains[bus.key] ?? 1.0) * 100),
+      format: (v) => `${Math.round(v)}%`,
+      onInput: (pct) => {
+        const g = pct / 100;
+        saveAudioGain(bus.key, g);
+        try { getAudioManager()?.[bus.setter]?.(g); } catch (_) {}
+      },
+    }));
+  }
+  if (!getAudioManager()) {
+    bodyEl.appendChild(note("Sound starts with your first click in the world; your levels are saved until then."));
+  }
+}
+
+// ---------------------------------------------------------------------
+// Interface section — HUD scale + window layout (HUD overhaul 2026-10-05).
+
+function urlHudScaleOverride() {
+  try {
+    const v = new URLSearchParams(window.location.search).get("hudScale");
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0.25 && n <= 6 ? n : null;
+  } catch (_) { return null; }
+}
+
+function renderInterfaceSection(bodyEl, env) {
+  bodyEl.appendChild(sectionTitle("Interface"));
+  const forced = urlHudScaleOverride();
+
+  // Applied on `change` (release / each keyboard step), previewed in the
+  // readout on `input`: the slider lives INSIDE the zoomed HUD, so
+  // re-zooming on every pointer move would slide the track out from
+  // under the cursor and make the drag fight itself.
+  const row = graphicsSettings.rangeRow({
+    label: "HUD scale",
+    min: HUD_SCALE_PCT_MIN, max: HUD_SCALE_PCT_MAX, step: HUD_SCALE_PCT_STEP,
+    value: hudScalePercentFromMultiplier(getHudScaleMultiplier()),
+    format: (v) => `${Math.round(v)}%`,
+    hint: "Size of every window and bar, on top of the automatic size for your window height.",
+    onInput: (pct) => updateReadout(pct),
+    onChange: (pct) => {
+      setHudScaleMultiplier(hudScaleMultiplierFromPercent(pct));
+      updateReadout(pct);
+    },
+  });
+  const slider = row.querySelector("input");
+  if (forced != null && slider) slider.disabled = true;
+  bodyEl.appendChild(row);
+
+  const readout = note("");
+  bodyEl.appendChild(readout);
+  function updateReadout(pct) {
+    const auto = computeAutoScale(window.innerHeight);
+    const p = pct ?? hudScalePercentFromMultiplier(getHudScaleMultiplier());
+    // Once applied, show the live getHudScale(); mid-drag, the preview.
+    const applied = Math.abs(p / 100 - getHudScaleMultiplier()) < 1e-6;
+    readout.textContent = describeHudScale({
+      effective: forced ?? (applied ? getHudScale() : Math.round(auto * (p / 100) * 100) / 100),
+      auto,
+      percent: p,
+      forced,
+    });
+  }
+  updateReadout();
+  env.addCleanup(onHudScaleChange(() => {
+    if (slider && document.activeElement !== slider) {
+      slider.value = String(hudScalePercentFromMultiplier(getHudScaleMultiplier()));
+      slider.dispatchEvent(new Event("input"));
+    }
+    updateReadout();
+  }));
+  const onResize = () => updateReadout();
+  window.addEventListener("resize", onResize);
+  env.addCleanup(() => window.removeEventListener("resize", onResize));
+
+  const btnRow = document.createElement("div");
+  btnRow.className = "hb-opt-btnrow";
+  const resetSize = document.createElement("button");
+  resetSize.type = "button";
+  resetSize.className = "hbk-btn-small hbk-brown";
+  resetSize.textContent = "Default size";
+  resetSize.title = "Set the HUD scale back to 100%";
+  resetSize.disabled = forced != null;
+  resetSize.addEventListener("click", () => {
+    setHudScaleMultiplier(1);
+    if (slider) {
+      slider.value = "100";
+      slider.dispatchEvent(new Event("input"));
+    }
+  });
+  const resetPos = document.createElement("button");
+  resetPos.type = "button";
+  resetPos.className = "hbk-btn-small";
+  resetPos.textContent = "Reset window positions";
+  resetPos.title = "Move every window back to where it starts";
+  resetPos.addEventListener("click", () => resetWindowPositions(env));
+  btnRow.appendChild(resetSize);
+  btnRow.appendChild(resetPos);
+  bodyEl.appendChild(btnRow);
+}
+
+function resetWindowPositions(env) {
+  const removed = clearWindowPositionKeys(safeStorage());
+  // Live reset when ui/ac_window_position.js offers it; otherwise the
+  // cleared keys take effect on the next load.
+  if (typeof windowPosition.resetAllWindowPositions === "function") {
+    try {
+      windowPosition.resetAllWindowPositions();
+      env.setStatus("Windows moved back to their default positions.");
+      return;
+    } catch (e) {
+      console.warn("[options-panel] resetAllWindowPositions failed:", e);
     }
   }
-
-  for (const bus of AUDIO_BUSES) {
-    const row = document.createElement("div");
-    row.className = "hb-settings-row";
-
-    const label = document.createElement("ac-text");
-    setAcText(label, bus.label, { fit: true });
-    row.appendChild(label);
-
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = "0";
-    slider.max = "100";
-    slider.step = "1";
-    slider.value = String(Math.round((gains[bus.key] ?? 1.0) * 100));
-
-    const val = document.createElement("span");
-    val.className = "hb-settings-val";
-    setAcText(val, `${slider.value}%`);
-
-    slider.addEventListener("input", () => {
-      const pct = Number(slider.value);
-      const g = pct / 100;
-      setAcText(val, `${pct}%`);
-      saveAudioGain(bus.key, g);
-      try { getAudioManager()?.[bus.setter]?.(g); } catch (_) {}
-    });
-
-    row.appendChild(slider);
-    row.appendChild(val);
-    bodyEl.appendChild(row);
-  }
-
-  const note = document.createElement("div");
-  note.className = "hb-opt-stub";
-  note.style.marginTop = "10px";
-  note.style.fontStyle = "italic";
-  note.innerHTML =
-    "Music / voice buses don't exist in AudioManager yet — only " +
-    "Master/Effect/Ambient are real (scene3d/audio/audio_manager.js).";
-  bodyEl.appendChild(note);
-}
-
-// Rec #199 — Network tab. AutoReconnect persists today (localStorage,
-// readable by the disconnect-handler when that wiring lands); RTT +
-// packet-loss are placeholder surfaces until the wasm/SessionHandle
-// stats stream is wired. Surfaced now so the tab stops being a stub
-// and the AutoReconnect preference is at least capturable.
-const LS_NETWORK_AUTO_RECONNECT_KEY = "hb.options.autoReconnect";
-
-function networkAutoReconnectEnabled() {
-  try { return window.localStorage?.getItem?.(LS_NETWORK_AUTO_RECONNECT_KEY) === "1"; }
-  catch (_) { return false; }
-}
-function setNetworkAutoReconnect(on) {
-  try { window.localStorage?.setItem?.(LS_NETWORK_AUTO_RECONNECT_KEY, on ? "1" : "0"); }
-  catch (_) {}
-}
-
-function renderNetworkTab(bodyEl) {
-  bodyEl.innerHTML = `
-    <div class="hb-opt-section">Connection</div>
-    <div class="hb-opt-row">
-      <label><input type="checkbox" id="hb-net-autoreconnect"> Reconnect automatically on disconnect</label>
-    </div>
-    <div class="hb-opt-section" style="margin-top:14px">Statistics</div>
-    <div class="hb-opt-row">Round-trip time: <span id="hb-net-rtt">—</span></div>
-    <div class="hb-opt-row">Packet loss: <span id="hb-net-loss">—</span></div>
-    <div class="hb-opt-stub" style="margin-top:10px;font-style:italic;opacity:0.7">
-      RTT / loss surfacing pending — needs Login_WorldInfo bus event +
-      PacketLossMonitor on SessionHandle (api.js coverage row 8).
-    </div>
-  `;
-  const cb = bodyEl.querySelector("#hb-net-autoreconnect");
-  if (cb) {
-    cb.checked = networkAutoReconnectEnabled();
-    cb.addEventListener("change", () => setNetworkAutoReconnect(!!cb.checked));
-  }
-}
-
-function renderAboutTab(bodyEl) {
-  bodyEl.innerHTML = `
-    <div class="hb-opt-section">Holtburger</div>
-    <div>Asheron's Call retail client port — Wave 2.</div>
-    <div class="hb-opt-section" style="margin-top:14px">Sources</div>
-    <div>ACE.Server &middot; Chorizite.ACProtocol &middot; DatReaderWriter &middot; acclient.c</div>
-    <div class="hb-opt-section" style="margin-top:14px">UI</div>
-    <div>Retail gmConfigUI (layout 0x21000029) + brass / stone / serif theme tokens.</div>
-  `;
-}
-
-function renderGraphicsTab(bodyEl) {
-  // Delegate to ui/graphics_settings.js — it already owns the form
-  // building + localStorage persistence + `hb-quality-changed`
-  // events. Pass the body element directly; its CSS class names
-  // (hb-graphics-row, hb-settings-btn, etc.) are re-styled by our
-  // .hb-opt-body scoped rules above so they pick up the brass /
-  // stone palette instead of bar.js's older glass chrome.
-  graphicsSettings.renderGraphicsTab(bodyEl, {
-    onAnyChange: () => { /* persistence handled inside graphics_settings */ },
+  modalConfirmCallback({
+    title: "Reset Window Positions",
+    message: removed > 0
+      ? "Saved window positions were cleared. Reload now to put every window back in its default place?"
+      : "No window has been moved from its default place. Reload anyway?",
+    confirmLabel: "Reload",
+    cancelLabel: "Later",
+    onConfirm: () => { try { window.location.reload(); } catch (_) {} },
+    onCancel: () => { if (removed > 0) env.setStatus("Window positions reset on next reload."); },
   });
 }
 
-// Apply gmConfigUI 0x21000029 layout to the options-panel sub-elements.
-// Options panel mounts via main-panel.showView() (user-initiated), so
-// wasm IS ready by then — no 8 × 2s retry loop needed. We still guard
-// against a transient null layout (G3 / shard prefetch) by retrying
-// 3 × 1s; if it never lands we keep the hand-tuned fallback positions
-// from CSS.
-//
-// Retail dims:
-//   - root (panel): 292×600 — sized via parentEl resize in view.mount
-//   - tab list (combined tab strip + content area): 276×560 at (0,0)
-//   - Apply/OK/Cancel buttons: 80×32 at (16/106/196, 564)
-//
-// Geometry is applied relative to the view root (the main-panel
-// body), so .hb-opt-root spans the full 292×600 body and child
-// elements get layout-driven x/y/width/height.
-function applyOptionsPanelLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    if (!layout) {
-      if (attempt < 3) {
-        setTimeout(() => applyOptionsPanelLayout(refs, attempt + 1), 1000);
-      }
-      return;
-    }
-    let applied = 0;
-    // Pairs: (element_id, DOM ref). We map retail elements to our DOM:
-    //   - tab list (0x10000200) → .hb-opt-tablist wrapper (which holds
-    //     both the tab strip and the scrolled body)
-    //   - Apply/OK/Cancel buttons → direct children of .hb-opt-root
-    //     (same as retail; the buttons are root-level, not nested in
-    //     a footer wrapper)
-    // Root (0x100001FF) and scrollbar (0x10000201) are intentionally
-    // NOT in this map: root sizing is applied to the main-panel
-    // overlay directly (so the retail chrome dims drive both the
-    // visible window and the body); the scrollbar element is replaced
-    // by a CSS scrollbar on .hb-opt-body, per the head-comment.
-    const pairs = [
-      [OPT_ELEM_TAB_LIST,   refs.tablistEl],
-      [OPT_ELEM_BTN_APPLY,  refs.applyBtnEl],
-      [OPT_ELEM_BTN_OK,     refs.okBtnEl],
-      [OPT_ELEM_BTN_CANCEL, refs.cancelBtnEl],
-    ];
-    for (const [id, el] of pairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      // Clear conflicting CSS anchors (right/bottom) so explicit
-      // left/top win — same pattern as radar/chat-panel ports.
-      el.style.right = "";
-      el.style.bottom = "";
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      // HUD rec #154 — swap the hardcoded English placeholder for the
-      // retail-localized label when the element carries a StringInfo (resolved
-      // against UI_Options 0x23000004). Keeps the placeholder when the table
-      // isn't cached yet or the element has no StringInfo label; the re-apply
-      // after the StringTable preload (in mount) fills it in.
-      const label = resolveElementLabel(desc);
-      if (label && label.resolved && label.text) {
-        setAcText(el, label.text);
-      }
-      applied += 1;
-    }
-    // Per-tab content (0x21000293) is NOT applied here — that
-    // layout drives the inner widgets per tab (Graphics radio
-    // buttons, Audio sliders, etc) and is gated by StateDesc which
-    // v1 fetch_layout does not yet serialize. See G3 in
-    // docs/layout-port-plan-2026-05-24.md.
-    try {
-      window.__diag?.layout?.onOptionsPanelApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(OPTIONS_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(OPTIONS_LAYOUT_ID).then(apply).catch(() => {});
+// ---------------------------------------------------------------------
+// Pages.
+
+function renderGameplayTab(bodyEl, env) {
+  bodyEl.innerHTML = "";
+  renderInterfaceSection(bodyEl, env);
+
+  // Mouse & Camera — UseMouseTurning (CharacterOption 0x31, the one wire
+  // mouse option) plus the live camera controls from camera_settings.js.
+  const ctx = getCharacterOptionContext();
+  const camWrap = document.createElement("div");
+  camWrap.className = "hb-opt-camera";
+  const disposeCam = cameraSettings.renderCameraTab(camWrap, {
+    extraMouseRows: () => [buildCharacterOptionRow(MOUSE_TURNING_OPTION, ctx, env)],
+  });
+  env.addCleanup(disposeCam);
+  bodyEl.appendChild(camWrap);
+
+  // Keyboard — retail GameplayOptions_Keyboard_Button "Configure Keyboard".
+  bodyEl.appendChild(sectionTitle("Keyboard"));
+  const keyRow = document.createElement("div");
+  keyRow.className = "hb-opt-btnrow";
+  const keyBtn = document.createElement("button");
+  keyBtn.type = "button";
+  keyBtn.className = "hbk-btn";
+  keyBtn.textContent = "Configure keyboard…";
+  keyBtn.addEventListener("click", () => env.showPage("keys"));
+  keyRow.appendChild(keyBtn);
+  const conflicts = getManifestHotkeyConflicts();
+  if (conflicts.length > 0) {
+    keyRow.appendChild(note(`${conflicts.length} key conflict${conflicts.length === 1 ? "" : "s"}`, { warn: true }));
+  }
+  bodyEl.appendChild(keyRow);
+
+  bodyEl.appendChild(sectionTitle("About"));
+  bodyEl.appendChild(note("Holtburger — an Asheron's Call client that runs in your browser, built against the retail client and the ACE server."));
 }
 
-// Resize the main-panel overlay to match retail's 292×600 root
-// while this view is mounted; restore previous dims on cleanup.
-// Border-box accounts for the 6-px border on each side; the
-// 25-px title strip is part of main-panel's chrome (gmFloatyPanelUI
-// equivalent) and sits ABOVE the body — so overlay height = 25
-// (title) + 600 (body) + 12 (top/bottom border) = 637.
-//
-// retail width = 292 + 12 (border) = 304 (overlay box-sizing:border-box
-//   makes the inner content area = 292).
-const OPTIONS_OVERLAY_WIDTH = 292 + 12;   // 304
-const OPTIONS_OVERLAY_HEIGHT = 25 + 600 + 12; // 637
-
-function resizeMainPanelForOptions() {
-  const overlay = document.getElementById("hb-main-panel");
-  if (!overlay) return null;
-  const prev = {
-    width: overlay.style.width,
-    height: overlay.style.height,
-  };
-  overlay.style.width = `${OPTIONS_OVERLAY_WIDTH}px`;
-  overlay.style.height = `${OPTIONS_OVERLAY_HEIGHT}px`;
-  return prev;
+function renderCharacterTab(bodyEl, env) {
+  bodyEl.innerHTML = "";
+  const ctx = getCharacterOptionContext();
+  renderOfflineBanner(bodyEl, ctx);
+  renderCharacterOptionGroups(bodyEl, CHARACTER_OPTION_GROUPS, ctx, env);
 }
 
-function restoreMainPanelSize(prev) {
-  if (!prev) return;
-  const overlay = document.getElementById("hb-main-panel");
-  if (!overlay) return;
-  overlay.style.width = prev.width;
-  overlay.style.height = prev.height;
+function renderChatTab(bodyEl, env) {
+  bodyEl.innerHTML = "";
+  const ctx = getCharacterOptionContext();
+  renderOfflineBanner(bodyEl, ctx);
+  renderCharacterOptionGroups(bodyEl, CHAT_OPTION_GROUPS, ctx, env);
 }
 
-// Public view export — main-panel registration site is in index.html
+function renderConfigTab(bodyEl, env) {
+  bodyEl.innerHTML = "";
+  renderSoundSection(bodyEl);
+  // graphics_settings clears its container on every (re-)render — give it
+  // its own wrapper.
+  const gfx = document.createElement("div");
+  gfx.className = "hb-opt-graphics";
+  bodyEl.appendChild(gfx);
+  const first = graphicsSettings.renderGraphicsTab(gfx, {});
+  // A preset click re-renders in place and swaps the dispose hook — always
+  // dispose whichever render is current.
+  env.addCleanup(() => (gfx.__hbGraphicsDispose || first)?.());
+}
+
+const TABS = [
+  { id: "gameplay",  label: "Gameplay",  render: renderGameplayTab },
+  { id: "character", label: "Character", render: renderCharacterTab },
+  { id: "chat",      label: "Chat",      render: renderChatTab },
+  { id: "config",    label: "Config",    render: renderConfigTab },
+];
+
+// Last tab the player looked at (per page-session convenience).
+let _lastTab = "gameplay";
+
+// ---------------------------------------------------------------------
+// Public view export — registered in app/plugin_bar.js
 // (`mainPanelPlugin.registerView("options", optionsPanelPlugin.view)`).
 export const view = {
   name: "Options",
-  nameFor: (ctx) => {
-    const t = TABS.find((x) => x.id === (ctx?.tab || "graphics"));
-    return t ? `Options — ${t.label}` : "Options";
-  },
+  nameFor: () => "Options",
   mount: (parentEl, ctx) => {
     ensureStyles();
-    // Resize main-panel to retail's 292×600 root for the duration of
-    // this view (restored in cleanup).
-    const prevMainPanelSize = resizeMainPanelForOptions();
+    let session = createSession();
 
     const root = document.createElement("div");
     root.className = "hb-opt-root";
 
-    // Tab list wrapper — corresponds to retail element 0x10000200
-    // (the type-5 tab list container). applyOptionsPanelLayout()
-    // positions it absolutely (276×560 at 0,0). Holds both the tab
-    // strip and the scrolled body in our impl (retail puts both
-    // inside the type-5 element, populated via StateDesc).
-    const tablistEl = document.createElement("div");
-    tablistEl.className = "hb-opt-tablist";
-    // Fallback CSS-driven dims if layout doesn't load.
-    tablistEl.style.left = "0";
-    tablistEl.style.top = "0";
-    tablistEl.style.width = "276px";
-    tablistEl.style.height = "560px";
-
-    // Tab strip
     const tabsEl = document.createElement("div");
-    tabsEl.className = "hb-opt-tabs";
-    const tabBtns = {};
-    let activeId = ctx?.tab || "graphics";
+    tabsEl.className = "hbk-tabs hb-opt-tabs";
+    tabsEl.setAttribute("role", "tablist");
+    tabsEl.setAttribute("aria-label", "Options pages");
+    root.appendChild(tabsEl);
 
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "hb-opt-body hbk-scroll";
+    bodyEl.setAttribute("role", "tabpanel");
+    bodyEl.tabIndex = -1;
+    root.appendChild(bodyEl);
+
+    const footer = document.createElement("div");
+    footer.className = "hbk-footer hb-opt-footer";
+    const status = document.createElement("span");
+    status.className = "hb-opt-status";
+    status.setAttribute("aria-live", "polite");
+    footer.appendChild(status);
+    const mkBtn = (label, title, onClick) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "hbk-btn";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", onClick);
+      footer.appendChild(b);
+      return b;
+    };
+    let statusTimer = 0;
+    const setStatus = (text) => {
+      status.textContent = text || "";
+      clearTimeout(statusTimer);
+      if (text) statusTimer = setTimeout(() => { status.textContent = ""; }, 4000);
+    };
+    mkBtn("Apply", "Keep the current settings (Cancel will no longer undo them)", () => {
+      session = createSession();
+      env.session = session;
+      setStatus("Settings saved.");
+    });
+    mkBtn("OK", "Keep the current settings and close", () => {
+      window.__mainPanel?.closeView?.();
+    });
+    mkBtn("Cancel", "Undo changes made since the window opened (or since Apply) and close", () => {
+      endCapture();
+      try { revertSession(session); } catch (e) { console.warn("[options-panel] revert failed:", e); }
+      window.__mainPanel?.closeView?.();
+    });
+    root.appendChild(footer);
+
+    // Per-page cleanups (graphics fullscreen listener, HUD-scale listener…).
+    let pageCleanups = [];
+    const runPageCleanups = () => {
+      for (const fn of pageCleanups) {
+        try { if (typeof fn === "function") fn(); } catch (_) {}
+      }
+      pageCleanups = [];
+    };
+    const env = {
+      session,
+      charBoxes: new Map(),
+      addCleanup: (fn) => { if (typeof fn === "function") pageCleanups.push(fn); },
+      setStatus,
+      showPage: (page) => renderActive(page),
+    };
+
+    const tabBtns = new Map();
+    let activeId = resolveTabId(ctx?.tab) || _lastTab || "gameplay";
     for (const t of TABS) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "hb-opt-tab" + (t.id === activeId ? " active" : "");
+      b.className = "hbk-tab";
+      b.id = nextId("hb-opt-tab");
       b.dataset.tab = t.id;
-      // bug-effects-text Part B — tab strip is `flex-wrap:wrap` at
-      // `font-size:10px` (CSS is inert on the canvas); `fit` auto-shrinks
-      // to the button's own laid-out width so the 5 tabs stay one row
-      // instead of wrapping to a 16px-canvas multi-row strip.
-      setAcText(b, t.label, { fit: true });
+      b.setAttribute("role", "tab");
+      b.textContent = t.label;
       b.addEventListener("click", () => switchTo(t.id));
       tabsEl.appendChild(b);
-      tabBtns[t.id] = b;
+      tabBtns.set(t.id, b);
     }
-    tablistEl.appendChild(tabsEl);
-
-    // Body — re-rendered per tab. Lives inside tablistEl so the
-    // tab strip + body together form the type-5 area.
-    const bodyEl = document.createElement("div");
-    bodyEl.className = "hb-opt-body";
-    tablistEl.appendChild(bodyEl);
-
-    root.appendChild(tablistEl);
-
-    // Cancel / Apply / OK buttons as direct root children (same as
-    // retail — they're siblings of the tab list under panel root).
-    // Layout positions them at (16/106/196, 564) all 80×32. Per
-    // the head-comment dump:
-    //   0x100001FC ← Apply  (left)
-    //   0x100001FD ← OK     (middle)
-    //   0x100001FE ← Cancel (right)
-    const applyBtn = document.createElement("button");
-    applyBtn.type = "button";
-    applyBtn.className = "hb-opt-btn";
-    setAcText(applyBtn, "Apply");
-    // Fallback CSS dims (layout overrides these).
-    applyBtn.style.left = "16px";
-    applyBtn.style.top = "564px";
-    applyBtn.style.width = "80px";
-    applyBtn.style.height = "32px";
-    applyBtn.addEventListener("click", () => {
-      // Persistence is per-control today; explicit Apply is a no-op
-      // pending the diff-based pending-state model. Flash the button
-      // to acknowledge the click.
-      applyBtn.classList.add("active");
-      setTimeout(() => applyBtn.classList.remove("active"), 200);
+    // Retail-style keyboard: ←/→ (Home/End) walk the tab strip.
+    tabsEl.addEventListener("keydown", (ev) => {
+      const order = TABS.map((t) => t.id);
+      let i = order.indexOf(activeId);
+      if (ev.key === "ArrowRight") i = (i + 1) % order.length;
+      else if (ev.key === "ArrowLeft") i = (i - 1 + order.length) % order.length;
+      else if (ev.key === "Home") i = 0;
+      else if (ev.key === "End") i = order.length - 1;
+      else return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      switchTo(order[i]);
+      tabBtns.get(order[i])?.focus({ preventScroll: true });
     });
 
-    const okBtn = document.createElement("button");
-    okBtn.type = "button";
-    okBtn.className = "hb-opt-btn primary";
-    setAcText(okBtn, "OK");
-    okBtn.style.left = "106px";
-    okBtn.style.top = "564px";
-    okBtn.style.width = "80px";
-    okBtn.style.height = "32px";
-    okBtn.addEventListener("click", () => {
-      window.__mainPanel?.closeView?.();
-    });
+    function renderActive(page) {
+      endCapture();
+      runPageCleanups();
+      env.charBoxes.clear();
+      bodyEl.scrollTop = 0;
+      if (page === "keys") {
+        renderKeysPage(bodyEl, env);
+        return;
+      }
+      const t = TABS.find((x) => x.id === activeId) || TABS[0];
+      t.render(bodyEl, env);
+    }
 
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "hb-opt-btn";
-    setAcText(cancelBtn, "Cancel");
-    cancelBtn.style.left = "196px";
-    cancelBtn.style.top = "564px";
-    cancelBtn.style.width = "80px";
-    cancelBtn.style.height = "32px";
-    cancelBtn.addEventListener("click", () => {
-      // graphics_settings.js commits on each control change, so a
-      // pure "cancel = discard pending edits" path would need an
-      // explicit pending-vs-saved diff. For now: close panel.
-      window.__mainPanel?.closeView?.();
-    });
-
-    // Append in retail read-order: Apply, OK, Cancel.
-    root.appendChild(applyBtn);
-    root.appendChild(okBtn);
-    root.appendChild(cancelBtn);
+    function switchTo(tabId, page = null) {
+      activeId = tabId;
+      _lastTab = tabId;
+      for (const [id, b] of tabBtns) {
+        const on = id === tabId;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+        b.tabIndex = on ? 0 : -1;
+        if (on) bodyEl.setAttribute("aria-labelledby", b.id);
+      }
+      renderActive(page);
+      try { tabBtns.get(tabId)?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); } catch (_) {}
+    }
 
     parentEl.appendChild(root);
+    switchTo(activeId, ctx?.page === "keys" ? "keys" : null);
 
-    // Apply retail layout positions to tab list + 3 buttons.
-    // Wasm is ready at this point (view mounted via user-initiated
-    // showView, not early-boot mountBar), so layout typically lands
-    // on first call. 3 × 1s retry covers transient null from a
-    // late-arriving eor/local shard.
-    const optionsLayoutRefs = {
-      tablistEl,
-      applyBtnEl: applyBtn,
-      okBtnEl: okBtn,
-      cancelBtnEl: cancelBtn,
-    };
-    applyOptionsPanelLayout(optionsLayoutRefs);
-    // HUD rec #154 — make sure the UI_Options StringTable (0x23000004) is
-    // loaded so the Apply/OK/Cancel labels resolve to retail-localized text,
-    // then re-apply once it lands (the first apply above can run on a cached
-    // layout before the table is in cache). Fire-and-forget.
-    loadStringTable(0x23000004)
-      .then(() => applyOptionsPanelLayout(optionsLayoutRefs))
-      .catch(() => {});
-
-    function switchTo(tabId) {
-      // Cancel any in-flight keybind capture when leaving Controls.
-      if (activeId === "controls" && tabId !== "controls") endCapture();
-      activeId = tabId;
-      for (const id of Object.keys(tabBtns)) {
-        tabBtns[id].classList.toggle("active", id === tabId);
-      }
-      bodyEl.innerHTML = "";
-      const t = TABS.find((x) => x.id === tabId);
-      if (t) t.render(bodyEl);
-      // Update main-panel title strip via nameFor convention.
-      window.__mainPanel?.refreshTitle?.();
-    }
-
-    // Initial render
-    const initial = TABS.find((x) => x.id === activeId) || TABS[0];
-    initial.render(bodyEl);
-
-    // Rec #90 — re-render the Character tab whenever the player's
-    // CharacterOptions bits change server-side. The wasm side fires
-    // playerStatsUpdated on each PlayerDescription drain + after every
-    // accepted SetCharacterOption echo, so this catches both the login
-    // hydration ("server truth replaces empty localStorage on first
-    // arrival") and any out-of-band toggle from /options-style command
-    // flows. Only refresh when the tab is the one actually visible to
-    // avoid wasting render cycles on other tabs.
-    let _charStatsUnsub = null;
+    // Rec #90 — keep CharacterOption checkboxes in sync with server truth
+    // (PlayerDescription on login, SetCharacterOption echoes). Updates the
+    // live boxes in place so the page keeps its scroll position.
+    let unsubStats = null;
     try {
       const client = window.__pluginClient ?? null;
       if (typeof client?.events?.on === "function") {
         const onStats = () => {
-          if (activeId !== "char") return;
-          const t = TABS.find((x) => x.id === "char");
-          if (!t) return;
-          bodyEl.innerHTML = "";
-          t.render(bodyEl);
+          if (env.charBoxes.size === 0) return;
+          const c = getCharacterOptionContext();
+          for (const [idx, cb] of env.charBoxes) {
+            cb.checked = readCharacterOption(idx, c.handle, c.localCache);
+          }
         };
         client.events.on("playerStatsUpdated", onStats);
-        _charStatsUnsub = () => {
-          try { client.events.off?.("playerStatsUpdated", onStats); } catch (_) {}
-        };
+        unsubStats = () => { try { client.events.off?.("playerStatsUpdated", onStats); } catch (_) {} };
       }
     } catch (e) {
       console.warn("[options-panel] playerStatsUpdated subscribe failed:", e);
@@ -1433,9 +1298,10 @@ export const view = {
 
     return () => {
       endCapture();
-      try { _charStatsUnsub?.(); } catch (_) {}
+      runPageCleanups();
+      clearTimeout(statusTimer);
+      try { unsubStats?.(); } catch (_) {}
       root.remove();
-      restoreMainPanelSize(prevMainPanelSize);
     };
   },
 };

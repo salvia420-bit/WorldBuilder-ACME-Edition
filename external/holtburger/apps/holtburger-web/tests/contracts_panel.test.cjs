@@ -1,26 +1,27 @@
 // =============================================================================
-// Wave F.5 (2026-05-27) — contracts panel pure-helpers tests
+// Contracts panel pure-helper tests — Wave F.5 (2026-05-27), rewritten for
+// the HUD overhaul 2026-10-05 retail port of gmContractsUI.
 // =============================================================================
 //
-// Validates `plugins/contracts-panel.js::buildContractsViewModel` and
-// the related stage/countdown logic against the Wave F.5 spec:
+// Validates `plugins/contracts-panel.js` against retail (acclient.c) + ACE:
 //
-//   [1] Empty snapshot (null + 0-entry) → 0 rows, "0 / 7" header
-//   [2] Single-tracker projection (id, stageLabel, cooldown)
-//   [3] Multi-tracker sort preservation (wasm sorts; panel preserves)
-//   [4] ContractStage label mapping (1/2/3 → New/Active/Done)
-//   [5] Cooldown countdown formatting (HH:MM:SS / "ready" / "—")
-//   [6] Display-cap is 7 (retail panel header convention)
-//   [7] displayContractId pass-through from snapshot
+//   [1] Empty / null snapshot → no rows
+//   [2] Single-tracker projection
+//   [3] Status text = gmContractsUI::FillProgressString per ContractStage
+//       (1 Available / 2 In Progress / 3 Done | Available | "Done (x to
+//       Repeat)" / ≥4 description_progress with stage − 4)
+//   [4] ClientUISystem::DeltaTimeToString formatting
+//   [5] Time fields are SECONDS REMAINING (ACE ContractTracker.cs), counted
+//       down from receipt; i64 bit patterns of the wire double decode
+//   [6] LandDefs::gid_to_lcoord coordinates + "Indoors"
+//   [7] Contact NPC choice + Timed text (gmContractsUI::UpdateButtons)
+//   [8] Sort by name / status with reverse (SortContractList)
+//   [9] DAT record lookup via window.__hbWasm (and Map-shaped records)
+//  [10] Receive-time stamping
+//  [11] manifest / view exports
 //
 // Run from apps/holtburger-web/:
 //   node tests/contracts_panel.test.cjs
-//
-// The plugin file imports from `../ui/ac_font.js` and `../ui/ac_layout.js`
-// (CSS-touching DOM utilities). The test only exercises the pure helper
-// `buildContractsViewModel` via dynamic import after the jsdom-lite shim
-// keeps top-level `document` / `window` accesses from crashing the
-// module evaluation.
 // =============================================================================
 
 const path = require('node:path');
@@ -47,9 +48,9 @@ function check(name, fn) {
   }
 }
 
-// jsdom-lite stub — contracts-panel.js touches `document`, `window`,
-// and `setAcText` (which reads from ac_font.js → document operations).
-// Just enough to keep top-level module evaluation from throwing.
+// jsdom-lite stub — just enough that module evaluation (contracts-panel.js
+// → social-panel.js → modal-dialog.js / ac_window_position.js / hud_kit.js)
+// does not throw. Only pure helpers are exercised.
 function installDomShim() {
   if (typeof globalThis.document !== 'undefined') return;
   const proto = {
@@ -66,25 +67,12 @@ function installDomShim() {
     querySelector() { return null; },
     querySelectorAll() { return []; },
     cloneNode() { return makeEl(); },
-    style: {},
-    classList: {
-      add() {},
-      remove() {},
-      toggle() {},
-      contains() { return false; },
-    },
-    dataset: {},
   };
   function makeEl() {
     const el = Object.create(proto);
     el.children = [];
     el.style = {};
-    el.classList = {
-      add() {},
-      remove() {},
-      toggle() {},
-      contains() { return false; },
-    };
+    el.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
     el.dataset = {};
     el.attrs = {};
     return el;
@@ -104,219 +92,231 @@ function installDomShim() {
   };
   globalThis.setInterval = () => 0;
   globalThis.clearInterval = () => {};
-  globalThis.setTimeout = (fn) => { try { fn(); } catch (_) {} return 0; };
+  globalThis.setTimeout = () => 0;
   globalThis.clearTimeout = () => {};
 }
 
-async function loadPanel() {
-  installDomShim();
-  const mod = await import(PANEL_URL);
-  return mod;
-}
-
 async function main() {
-  console.log('Wave F.5 — Contracts panel pure-helpers tests');
+  console.log('Contracts panel pure-helpers tests (gmContractsUI retail port)');
   console.log('═══════════════════════════════════════════════════════════════');
+  installDomShim();
+  const panel = await import(PANEL_URL);
+  const {
+    buildContractsViewModel, contractStatusText, deltaTimeToString, decodeWireSeconds,
+    cellToMapCoords, worldToMapCoords, formatMapCoords, contractContact, contractTimedText,
+    sortContractRows, formatProgressTemplate, normalizeContractRecord, lookupContractRecord,
+    noteContractTrackers, CONTRACT_STAGE,
+  } = panel;
+  const NOW = 1_712_000_000;
+  const noRec = () => null;
 
-  const panel = await loadPanel();
-  const { buildContractsViewModel } = panel;
-  assert.ok(typeof buildContractsViewModel === 'function',
-    'buildContractsViewModel exported');
-
-  // [1] Empty snapshot — null
-  check('null snapshot → 0 rows, 0/7 header', () => {
-    const vm = buildContractsViewModel(null, 1_712_000_000);
+  // [1]
+  check('null snapshot → no rows', () => {
+    const vm = buildContractsViewModel(null, NOW, { lookup: noRec });
     assert.equal(vm.count, 0);
-    assert.equal(vm.displayCap, 7);
     assert.deepEqual(vm.rows, []);
     assert.equal(vm.displayContractId, 0);
   });
-
-  // [1b] Empty snapshot — present but empty trackers
-  check('empty trackers → 0 rows', () => {
-    const snap = { trackers: [], displayContractId: 0 };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
+  check('empty trackers → no rows', () => {
+    const vm = buildContractsViewModel({ trackers: [], displayContractId: 0 }, NOW, { lookup: noRec });
     assert.equal(vm.count, 0);
-    assert.deepEqual(vm.rows, []);
   });
 
-  // [2] Single-tracker projection
-  check('single tracker → 1 row, fields populated', () => {
-    const snap = {
-      trackers: [
-        { contractId: 0x0014, stage: 2, version: 1, timeWhenDone: 0, timeWhenRepeats: 0 },
-      ],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
+  // [2]
+  check('single tracker → one row with retail fields', () => {
+    const snap = { trackers: [{ contractId: 0x14, stage: 2, timeWhenDone: 0, timeWhenRepeats: 0 }] };
+    const vm = buildContractsViewModel(snap, NOW, { lookup: noRec });
     assert.equal(vm.rows.length, 1);
     const r = vm.rows[0];
-    assert.equal(r.id, 0x0014);
-    assert.equal(r.stage, 2);
-    assert.equal(r.stageLabel, 'Active');
-    assert.equal(r.progress, 'Active');
+    assert.equal(r.id, 0x14);
+    assert.equal(r.name, 'Contract 20');
+    assert.equal(r.status, 'In Progress');
+    assert.equal(r.timed, 'None');
+    assert.equal(r.contact, 'None');
     assert.equal(r.complete, false);
-    assert.equal(r.cooldown, '—'); // InProgress = no cooldown column
-    assert.ok(r.name.includes(String(0x0014)));
+  });
+  check('displayContractId passes through', () => {
+    const vm = buildContractsViewModel({ trackers: [], displayContractId: 8 }, NOW, { lookup: noRec });
+    assert.equal(vm.displayContractId, 8);
   });
 
-  // [3] Multi-tracker sort preservation (wasm pre-sorted ascending)
-  check('multi tracker → preserves wasm sort', () => {
-    const snap = {
-      trackers: [
-        { contractId: 0x0001, stage: 1, version: 1, timeWhenDone: 0, timeWhenRepeats: 0 },
-        { contractId: 0x0014, stage: 2, version: 1, timeWhenDone: 0, timeWhenRepeats: 0 },
-        { contractId: 0x0042, stage: 3, version: 1, timeWhenDone: 1_712_086_400, timeWhenRepeats: 1_712_172_800 },
-      ],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows.length, 3);
-    assert.equal(vm.rows[0].id, 0x0001);
-    assert.equal(vm.rows[1].id, 0x0014);
-    assert.equal(vm.rows[2].id, 0x0042);
+  // [3]
+  check('stage 1 → "Available", stage 2 → "In Progress"', () => {
+    assert.equal(contractStatusText(CONTRACT_STAGE.Available, null, 0), 'Available');
+    assert.equal(contractStatusText(CONTRACT_STAGE.InProgress, null, 0), 'In Progress');
+  });
+  check('stage 3 with no repeat flag → "Done"; with a repeat flag and no wait → "Available"', () => {
+    assert.equal(contractStatusText(3, null, 0), 'Done');
+    assert.equal(contractStatusText(3, { questflagRepeatTime: 'q_repeat' }, 0), 'Available');
+  });
+  check('stage 3 waiting to repeat → "Done (<delta> to Repeat)"', () => {
+    assert.equal(contractStatusText(3, { questflagRepeatTime: 'q' }, 3725), 'Done (1h 2m 5s to Repeat)');
+  });
+  check('stage ≥4 fills description_progress with stage − 4', () => {
+    assert.equal(contractStatusText(7, { descriptionProgress: '%d/5 Drudges Slain' }, 0), '3/5 Drudges Slain');
+    assert.equal(contractStatusText(4, { descriptionProgress: '' }, 0), 'In Progress');
+  });
+  check('formatProgressTemplate handles %% and only the first conversion', () => {
+    assert.equal(formatProgressTemplate('%d%% done, %d left', 40), '40% done, %d left');
+    assert.equal(formatProgressTemplate('%i of 9', 2), '2 of 9');
   });
 
-  // [4] Stage label mapping
-  check('stage 1 → "New"', () => {
-    const snap = { trackers: [{ contractId: 1, stage: 1 }], displayContractId: 0 };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].stageLabel, 'New');
-    assert.equal(vm.rows[0].progress, 'New');
-    assert.equal(vm.rows[0].complete, false);
-  });
-  check('stage 2 → "Active"', () => {
-    const snap = { trackers: [{ contractId: 1, stage: 2 }], displayContractId: 0 };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].stageLabel, 'Active');
-    assert.equal(vm.rows[0].complete, false);
-  });
-  check('stage 3 → "Done" + complete=true', () => {
-    const snap = { trackers: [{ contractId: 1, stage: 3 }], displayContractId: 0 };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].stageLabel, 'Done');
-    assert.equal(vm.rows[0].complete, true);
-  });
-  check('stage 5 (contract-specific) → "Stage 5"', () => {
-    const snap = { trackers: [{ contractId: 1, stage: 5 }], displayContractId: 0 };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].stageLabel, 'Stage 5');
+  // [4]
+  check('deltaTimeToString matches ClientUISystem::DeltaTimeToString', () => {
+    assert.equal(deltaTimeToString(0), '0s');
+    assert.equal(deltaTimeToString(45), '45s');
+    assert.equal(deltaTimeToString(3600), '1h 0s');
+    assert.equal(deltaTimeToString(3725), '1h 2m 5s');
+    assert.equal(deltaTimeToString(90061), '1d 1h 1m 1s');
+    assert.equal(deltaTimeToString(2592000 + 5), '1mo 5s');
+    assert.equal(deltaTimeToString(-10), '0s');
   });
 
-  // [5] Cooldown formatting (DoneOrPendingRepeat with future repeat)
-  check('countdown 1h30m45s', () => {
-    const now = 1_712_000_000;
-    const repeats = now + 3600 + 30 * 60 + 45; // 01:30:45
-    const snap = {
-      trackers: [{ contractId: 1, stage: 3, timeWhenDone: now - 100, timeWhenRepeats: repeats }],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, now);
-    assert.equal(vm.rows[0].cooldown, '01:30:45');
+  // [5]
+  check('decodeWireSeconds: plain seconds pass through, junk → 0', () => {
+    assert.equal(decodeWireSeconds(3600), 3600);
+    assert.equal(decodeWireSeconds(0), 0);
+    assert.equal(decodeWireSeconds(-5), 0);
+    assert.equal(decodeWireSeconds(NaN), 0);
+    assert.equal(decodeWireSeconds(undefined), 0);
   });
-  check('countdown 0 padding HH:MM:SS', () => {
-    const now = 1_712_000_000;
-    const repeats = now + 65; // 00:01:05
-    const snap = {
-      trackers: [{ contractId: 1, stage: 3, timeWhenDone: now - 100, timeWhenRepeats: repeats }],
-      displayContractId: 0,
+  check('decodeWireSeconds: i64 bit pattern of a double decodes (protocol reads f64 as i64)', () => {
+    const bits = (d) => {
+      const dv = new DataView(new ArrayBuffer(8));
+      dv.setFloat64(0, d, true);
+      return Number(dv.getBigInt64(0, true));
     };
-    const vm = buildContractsViewModel(snap, now);
-    assert.equal(vm.rows[0].cooldown, '00:01:05');
+    assert.equal(decodeWireSeconds(bits(3600)), 3600);
+    assert.ok(Math.abs(decodeWireSeconds(bits(86399.873)) - 86399.873) < 1e-6);
+    assert.equal(decodeWireSeconds(bits(-1)), 0, 'negative double (unlimited/expired) → 0');
   });
-  check('countdown past → "ready"', () => {
-    const now = 1_712_000_000;
-    const repeats = now - 100; // past
-    const snap = {
-      trackers: [{ contractId: 1, stage: 3, timeWhenDone: now - 200, timeWhenRepeats: repeats }],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, now);
-    assert.equal(vm.rows[0].cooldown, 'ready');
+  check('repeat countdown subtracts time since receipt', () => {
+    const snap = { trackers: [{ contractId: 1, stage: 3, timeWhenRepeats: 3600 }] };
+    const vm = buildContractsViewModel(snap, NOW, { lookup: noRec, receivedAtSec: () => NOW - 100 });
+    assert.equal(vm.rows[0].repeatRemaining, 3500);
+    assert.equal(vm.rows[0].status, 'Done (58m 20s to Repeat)');
+    assert.equal(vm.rows[0].ticking, true);
   });
-  check('cooldown column empty on non-Done stage', () => {
-    const now = 1_712_000_000;
-    const snap = {
-      trackers: [{ contractId: 1, stage: 2, timeWhenDone: 0, timeWhenRepeats: now + 100 }],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, now);
-    assert.equal(vm.rows[0].cooldown, '—');
+  check('repeat elapsed since receipt → not ticking, status no longer counts down', () => {
+    const snap = { trackers: [{ contractId: 1, stage: 3, timeWhenRepeats: 60 }] };
+    const vm = buildContractsViewModel(snap, NOW, { lookup: () => ({ questflagRepeatTime: 'q' }), receivedAtSec: () => NOW - 120 });
+    assert.equal(vm.rows[0].repeatRemaining, 0);
+    assert.equal(vm.rows[0].status, 'Available');
+    assert.equal(vm.rows[0].ticking, false);
   });
 
-  // [6] Display cap is 7
-  check('displayCap is 7', () => {
-    const vm = buildContractsViewModel(null, 0);
-    assert.equal(vm.displayCap, 7);
+  // [6]
+  check('cellToMapCoords: outdoor cell → retail lcoord coordinates', () => {
+    const c = cellToMapCoords(0xA9B4001F);
+    assert.ok(c);
+    assert.equal(formatMapCoords(c), '42.7N, 33.6E');
+  });
+  check('cellToMapCoords: dungeon cell / 0 → null → "Indoors"', () => {
+    assert.equal(cellToMapCoords(0x01D90108), null);
+    assert.equal(cellToMapCoords(0), null);
+    assert.equal(formatMapCoords(null), 'Indoors');
+  });
+  check('worldToMapCoords: global/240 − 102 (ACE GetMapCoords), indoors → null', () => {
+    assert.equal(formatMapCoords(worldToMapCoords(0xA9B4001F, 96, 96)), '42.4N, 33.6E');
+    assert.equal(worldToMapCoords(0x01D90108, 10, 10), null);
+    assert.equal(formatMapCoords({ ns: -12.25, ew: -0.04 }), '12.3S, 0.0W');
   });
 
-  // [7] displayContractId pass-through
-  check('displayContractId pass-through', () => {
-    const snap = {
-      trackers: [{ contractId: 0x0008, stage: 2 }],
-      displayContractId: 0x0008,
+  // [7]
+  check('contractContact: start NPC unless in progress with an end NPC', () => {
+    const rec = {
+      nameNpcStart: 'Avarin', nameNpcEnd: 'Turnin', locationNpcStart: { cellId: 1 }, locationNpcEnd: { cellId: 2 },
     };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.displayContractId, 0x0008);
+    assert.deepEqual(contractContact(1, rec), { name: 'Avarin', cellId: 1 });
+    assert.deepEqual(contractContact(2, rec), { name: 'Turnin', cellId: 2 });
+    assert.deepEqual(contractContact(5, rec), { name: 'Turnin', cellId: 2 });
+    assert.deepEqual(contractContact(3, rec), { name: 'Avarin', cellId: 1 });
+    assert.deepEqual(contractContact(2, { nameNpcStart: 'Solo', locationNpcStart: { cellId: 9 } }), { name: 'Solo', cellId: 9 });
+  });
+  check('contractTimedText: None / remaining / Finished', () => {
+    assert.equal(contractTimedText({}, 100), 'None');
+    assert.equal(contractTimedText({ questflagTimer: 't' }, 65), '1m 5s');
+    assert.equal(contractTimedText({ questflagTimer: 't' }, 0), 'Finished');
   });
 
-  // [8] Manifest version bump
-  check('manifest version is 0.3.0', () => {
-    assert.equal(panel.manifest.version, '0.3.0',
-      'Wave F.5 bumps from 0.2.0 to 0.3.0');
+  // [8]
+  check('sortContractRows: name asc, reverse, status', () => {
+    const rows = [
+      { id: 1, name: 'Bravo', status: 'In Progress' },
+      { id: 2, name: 'alpha', status: 'Available' },
+      { id: 3, name: 'Charlie', status: 'Available' },
+    ];
+    assert.deepEqual(sortContractRows(rows, 'name').map((r) => r.id), [2, 1, 3]);
+    assert.deepEqual(sortContractRows(rows, 'name', true).map((r) => r.id), [3, 1, 2]);
+    assert.deepEqual(sortContractRows(rows, 'status').map((r) => r.id), [2, 3, 1]);
+  });
+
+  // [9]
+  check('no wasm table → "Contract N" placeholder', () => {
+    assert.equal(lookupContractRecord(200), null);
+    const vm = buildContractsViewModel({ trackers: [{ contractId: 200, stage: 2 }] }, NOW);
+    assert.equal(vm.rows[0].name, 'Contract 200');
+  });
+  check('window.__hbWasm.getContractRecord supplies name / NPC / locations', () => {
+    globalThis.window.__hbWasm = {
+      getContractRecord: (id) => (id === 0xC8 ? {
+        id: 0xC8,
+        name: 'Jailbreak: Ardent Leader',
+        nameNpcStart: 'Avarin',
+        nameNpcEnd: '',
+        description: 'Defeat the Large Ardent Moarsman in the Freebooter Prison.',
+        descriptionProgress: '%d/1 Large Ardent Moarsman',
+        questflagTimer: '',
+        locationNpcStart: { cellId: 0xA9B4001F },
+        locationQuestArea: { cellId: 0x69010100 },
+      } : null),
+    };
+    const vm = buildContractsViewModel({ trackers: [{ contractId: 0xC8, stage: 4 }] }, NOW);
+    const r = vm.rows[0];
+    assert.equal(r.name, 'Jailbreak: Ardent Leader');
+    assert.equal(r.status, '0/1 Large Ardent Moarsman');
+    assert.equal(r.contact, 'Avarin');
+    assert.equal(r.contactLoc, '42.7N, 33.6E');
+    assert.equal(r.questLoc, 'Indoors');
+    assert.equal(r.timed, 'None');
+    assert.ok(r.notes.startsWith('Defeat the Large'));
+    delete globalThis.window.__hbWasm;
+  });
+  check('legacy window.getContractRecord + Map-shaped record (serde_wasm_bindgen)', () => {
+    globalThis.window.getContractRecord = () => new Map([
+      ['name', 'Map Contract'],
+      ['nameNpcStart', 'Mapper'],
+      ['locationNpcStart', new Map([['cellId', 0xA9B4001F]])],
+    ]);
+    const rec = lookupContractRecord(5);
+    assert.equal(rec.name, 'Map Contract');
+    assert.equal(rec.locationNpcStart.cellId, 0xA9B4001F);
+    const vm = buildContractsViewModel({ trackers: [{ contractId: 5, stage: 1 }] }, NOW);
+    assert.equal(vm.rows[0].contact, 'Mapper');
+    delete globalThis.window.getContractRecord;
+  });
+  check('normalizeContractRecord leaves plain objects alone', () => {
+    const o = { name: 'x' };
+    assert.equal(normalizeContractRecord(o), o);
+    assert.equal(normalizeContractRecord(null), null);
+  });
+
+  // [10]
+  check('noteContractTrackers stamps new / changed trackers only', () => {
+    const m = new Map();
+    noteContractTrackers([{ contractId: 1, stage: 3, timeWhenDone: 0, timeWhenRepeats: 100 }], 10, m);
+    noteContractTrackers([{ contractId: 1, stage: 3, timeWhenDone: 0, timeWhenRepeats: 100 }], 20, m);
+    assert.equal(m.get(1).atSec, 10, 'unchanged tracker keeps its stamp');
+    noteContractTrackers([{ contractId: 1, stage: 3, timeWhenDone: 0, timeWhenRepeats: 90 }], 30, m);
+    assert.equal(m.get(1).atSec, 30, 'changed tracker re-stamped');
+  });
+
+  // [11]
+  check('manifest + view exports', () => {
     assert.equal(panel.manifest.id, 'contracts-panel');
-  });
-
-  // [9] view.name + view.nameFor
-  check('view exports name + nameFor', () => {
+    assert.equal(panel.manifest.version, '0.4.0');
     assert.equal(panel.view.name, 'Contracts');
-    assert.equal(typeof panel.view.nameFor, 'function');
     assert.equal(panel.view.nameFor(), 'Contracts');
-  });
-
-  // [10] Wave F.5 follow-on (2026-05-27) — DAT-backed name lookup.
-  // Without `window.getContractRecord` (pre-prefetch) the panel falls
-  // back to `Contract #N` placeholders.
-  check('falls back to placeholder name when DAT not prefetched', () => {
-    const snap = {
-      trackers: [{ contractId: 0x00C8, stage: 2 }],
-      displayContractId: 0,
-    };
-    delete globalThis.window.getContractRecord;
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].name, 'Contract #200',
-      'falls back to placeholder when getContractRecord not exposed');
-  });
-
-  // [11] With a stubbed `getContractRecord` exposed (post-prefetch),
-  // the panel surfaces the DAT-backed name + NPC.
-  check('uses DAT name when getContractRecord returns a record', () => {
-    globalThis.window.getContractRecord = (id) => {
-      if (id === 0x00C8) {
-        return {
-          id: 0x00C8,
-          name: 'Jailbreak: Ardent Leader',
-          nameNpcStart: 'Avarin',
-          nameNpcEnd: 'Avarin',
-          description: 'Defeat the Large Ardent Moarsman in the Freebooter Prison.',
-          descriptionProgress: '%d/1 Large Ardent Moarsman',
-          locationNpcStart: { cellId: 0x69010100, origin: [0, 0, 0], orientation: [1, 0, 0, 0] },
-        };
-      }
-      return null;
-    };
-    const snap = {
-      trackers: [{ contractId: 0x00C8, stage: 2 }],
-      displayContractId: 0,
-    };
-    const vm = buildContractsViewModel(snap, 1_712_000_000);
-    assert.equal(vm.rows[0].name, 'Jailbreak: Ardent Leader');
-    assert.equal(vm.rows[0].npc, 'Avarin');
-    assert.equal(vm.rows[0].descriptionProgress, '%d/1 Large Ardent Moarsman');
-    assert.ok(vm.rows[0].desc.includes('Defeat the Large'));
-    assert.ok(vm.rows[0].desc.includes('Avarin'));
-    // Cleanup.
-    delete globalThis.window.getContractRecord;
   });
 
   console.log('═══════════════════════════════════════════════════════════════');

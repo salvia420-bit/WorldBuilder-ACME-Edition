@@ -1,4 +1,6 @@
-// Camera settings tab for the bar's gear-icon popover.
+// Camera settings — rendered by the Options view's Gameplay tab
+// ("Mouse & Camera", plugins/options-panel.js) and the legacy bar gear
+// popover (ui/bar.js).
 //
 // Mirrors retail AC's camera/input options (PlayerOptionPage sliders:
 // Camera.Stiffness, Input.MouseLookSensitivity, Input.MouseLookSmoothingAmount,
@@ -13,6 +15,11 @@
 // = hard-lock, smoothing off, sensitivity 1.0, no auto-follow) so an untouched
 // install is unchanged; retail's own default stiffness is ~0.44 (noted in the
 // UI as a hint). Ranges follow the decomp: Camera.Stiffness ∈ [0.2857, 1.0].
+
+// HUD overhaul 2026-10-05 — the row widgets are the shared kit-styled
+// ones from graphics_settings.js (retail orb checkbox, kit slider, <label
+// for>), not a private copy.
+import { boolRow, rangeRow, makeSectionHeader } from "./graphics_settings.js";
 
 const LS_KEY = "holtburger_camera_v1";
 
@@ -65,7 +72,27 @@ function applyCam(fn, value) {
   }
 }
 
-export function renderCameraTab(containerEl, { onAnyChange } = {}) {
+/**
+ * Push a camera-settings object onto the live camera (every setter is
+ * guarded). Used by Restore defaults and by the Options view's Cancel,
+ * which restores the on-open snapshot (HUD overhaul 2026-10-05).
+ */
+export function applyCameraState(s) {
+  const st = { ...DEFAULTS, ...(s || {}) };
+  applyCam("__setAutoFollow", st.autoFollow);
+  applyCam("__setAutoFollowRate", st.autoFollowRate);
+  applyCam("__setCamDistance", st.distance);
+  applyCam("__setCamStiffness", st.stiffness);
+  applyCam("__setMouseSens", st.mouseSens);
+  applyCam("__setMouseSmooth", st.mouseSmooth);
+  applyCam("__setMouseInvertY", st.invertY);
+}
+
+// `extraMouseRows` (optional) returns extra row elements to place at the
+// top of the "Mouse look" section — the Options view puts the
+// server-side "Use mouse turning" CharacterOption there. It is a
+// function so a Restore-defaults re-render rebuilds fresh rows.
+export function renderCameraTab(containerEl, { onAnyChange, extraMouseRows } = {}) {
   const state = loadCameraState();
   const touch = () => {
     if (typeof onAnyChange === "function") onAnyChange();
@@ -80,20 +107,19 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
   containerEl.classList.add("hb-graphics"); // reuse the graphics-tab styling
 
   // --- Follow camera -------------------------------------------------------
-  containerEl.appendChild(makeSectionHeader("Follow camera"));
+  containerEl.appendChild(makeSectionHeader("Camera"));
   containerEl.appendChild(
-    boolRow("Auto-follow behind character", state.autoFollow, (v) => {
+    boolRow("Follow behind character", state.autoFollow, (v) => {
       set("autoFollow", v);
       applyCam("__setAutoFollow", v);
     }),
   );
   containerEl.appendChild(
     rangeRow({
-      label: "Auto-follow speed",
+      label: "Follow speed",
       min: 1, max: 15, step: 0.5,
       value: state.autoFollowRate,
       format: (v) => v.toFixed(1),
-      note: "live",
       onInput: (v) => {
         set("autoFollowRate", v);
         applyCam("__setAutoFollowRate", v);
@@ -106,7 +132,6 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
       min: 2, max: 15, step: 0.5,
       value: state.distance,
       format: (v) => `${v.toFixed(1)} m`,
-      note: "live",
       onInput: (v) => {
         set("distance", v);
         applyCam("__setCamDistance", v);
@@ -119,7 +144,7 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
       min: 0.2857, max: 1.0, step: 0.01,
       value: state.stiffness,
       format: (v) => (v >= 1.0 ? "instant" : v.toFixed(2)),
-      note: "live · retail ~0.44",
+      hint: "Lower values let the camera trail more smoothly. Retail default ≈ 0.44.",
       onInput: (v) => {
         set("stiffness", v);
         applyCam("__setCamStiffness", v);
@@ -129,13 +154,19 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
 
   // --- Mouse look ----------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Mouse look"));
+  if (typeof extraMouseRows === "function") {
+    try {
+      for (const row of extraMouseRows() || []) {
+        if (row) containerEl.appendChild(row);
+      }
+    } catch (_e) { /* caller rows are best-effort */ }
+  }
   containerEl.appendChild(
     rangeRow({
       label: "Sensitivity",
       min: 0.1, max: 3.0, step: 0.05,
       value: state.mouseSens,
       format: (v) => `${v.toFixed(2)}×`,
-      note: "live",
       onInput: (v) => {
         set("mouseSens", v);
         applyCam("__setMouseSens", v);
@@ -148,7 +179,6 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
       min: 0, max: 1.0, step: 0.05,
       value: state.mouseSmooth,
       format: (v) => (v <= 0 ? "off" : v.toFixed(2)),
-      note: "live",
       onInput: (v) => {
         set("mouseSmooth", v);
         applyCam("__setMouseSmooth", v);
@@ -164,22 +194,16 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
 
   // --- Reset ---------------------------------------------------------------
   const resetRow = document.createElement("div");
-  resetRow.className = "hb-settings-btnrow";
+  resetRow.className = "hb-settings-btnrow hb-graphics-resetrow";
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
-  resetBtn.className = "hb-settings-btn";
-  resetBtn.textContent = "Reset to defaults";
+  resetBtn.className = "hbk-btn-small hbk-brown";
+  resetBtn.textContent = "Restore defaults";
   resetBtn.addEventListener("click", () => {
     const fresh = { ...DEFAULTS };
     saveCameraState(fresh);
-    applyCam("__setAutoFollow", fresh.autoFollow);
-    applyCam("__setAutoFollowRate", fresh.autoFollowRate);
-    applyCam("__setCamDistance", fresh.distance);
-    applyCam("__setCamStiffness", fresh.stiffness);
-    applyCam("__setMouseSens", fresh.mouseSens);
-    applyCam("__setMouseSmooth", fresh.mouseSmooth);
-    applyCam("__setMouseInvertY", fresh.invertY);
-    renderCameraTab(containerEl, { onAnyChange });
+    applyCameraState(fresh);
+    renderCameraTab(containerEl, { onAnyChange, extraMouseRows });
     touch();
   });
   resetRow.appendChild(resetBtn);
@@ -189,58 +213,4 @@ export function renderCameraTab(containerEl, { onAnyChange } = {}) {
     // Listeners live on children of containerEl and are GC'd when it is
     // emptied/replaced. No-op kept so the activation contract is uniform.
   };
-}
-
-// --- widgets (same shape as ui/graphics_settings.js) -----------------------
-
-function makeSectionHeader(text) {
-  const h = document.createElement("div");
-  h.className = "hb-graphics-section";
-  h.textContent = text;
-  return h;
-}
-
-function boolRow(label, value, onChange) {
-  const row = document.createElement("div");
-  row.className = "hb-settings-row hb-graphics-row";
-  const lbl = document.createElement("label");
-  lbl.textContent = label;
-  const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = !!value;
-  cb.addEventListener("change", () => onChange(!!cb.checked));
-  row.appendChild(lbl);
-  row.appendChild(cb);
-  return row;
-}
-
-function rangeRow({ label, min, max, step, value, format, onInput, note }) {
-  const row = document.createElement("div");
-  row.className = "hb-settings-row hb-graphics-row";
-  const lbl = document.createElement("label");
-  lbl.textContent = label;
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(value);
-  const val = document.createElement("span");
-  val.className = "hb-settings-val";
-  val.textContent = format ? format(Number(value)) : String(value);
-  input.addEventListener("input", () => {
-    const v = Number(input.value);
-    val.textContent = format ? format(v) : String(v);
-    onInput(v);
-  });
-  row.appendChild(lbl);
-  row.appendChild(input);
-  row.appendChild(val);
-  if (note) {
-    const tag = document.createElement("span");
-    tag.className = "hb-graphics-tag";
-    tag.textContent = `(${note})`;
-    row.appendChild(tag);
-  }
-  return row;
 }

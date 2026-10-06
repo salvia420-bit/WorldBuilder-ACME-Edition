@@ -243,7 +243,14 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   const appMods = mp.filter((h) => h.startsWith("./app/")).length;
   check(appMods === fs.readdirSync(path.join(APP_ROOT, "app")).filter((f) => f.endsWith(".js")).length,
     `every app/*.js module is modulepreloaded (got ${appMods})`);
-  check(mp.length === 263 + appMods, `unbundled modulepreload block == 263 + ${appMods} app/ link elements (got ${mp.length})`);
+  // HUD overhaul 2026-10-05: gen-modulepreload re-run. The committed block
+  // had drifted (37 statically reachable modules missing, 4 listed that are
+  // no longer reachable); plus 4 new HUD modules (ui/hud_scale.js,
+  // ui/hud_kit.js, plugins/item_drag.js, plugins/examine_format.js)
+  // → 300 non-app links. Keep this pinned to the GENERATOR's output:
+  // `node scripts/gen-modulepreload.mjs --check` must pass first.
+  const NON_APP_PRELOADS = 300;
+  check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
   const coldUnbundledBare = 1 + mp.length + 1 + 1 + (workersInMp ? 0 : 1);

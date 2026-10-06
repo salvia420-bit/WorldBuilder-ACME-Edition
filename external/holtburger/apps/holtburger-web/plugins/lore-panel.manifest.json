@@ -3,7 +3,7 @@
   "id": "lore-panel",
   "name": "Library",
   "author": "holtburger",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Personal Library — synthesized client-side catalog of writable items (books/scrolls) the player has held, with lazy page-text fetch (HUD rec #181)",
   "icon": "📚",
   "iconHidden": true,

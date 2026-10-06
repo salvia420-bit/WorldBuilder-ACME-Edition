@@ -4,7 +4,7 @@
   "name": "Spell Research",
   "author": "holtburger",
   "version": "0.1.0",
-  "description": "Spell Research panel — read-only metadata view of known spells with school/level/name filtering (enriched derivative of retail AC's Magic tab). Shift+F4 toggles; standalone overlay (not a main-panel view).",
+  "description": "Spell Research — floating, draggable kit window of known spells with school/level/name filters, components and descriptions; double-click casts. Shift+F4 toggles.",
   "icon": "📜",
   "iconHidden": true,
   "entry": "./spell-research-panel.js",

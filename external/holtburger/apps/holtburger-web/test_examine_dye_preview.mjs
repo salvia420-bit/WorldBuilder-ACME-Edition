@@ -244,15 +244,17 @@ check("reads modelId / setupId / mtableId / paletteId / subPalettes from meta", 
   }
 });
 
+// HUD overhaul 2026-10-05 — the sentinels became player-facing text
+// ("PVS" / "model id" were developer jargon on a player's screen).
 check("handles missing entity (no PVS entry)", () => {
   // Sentinel message must render when entity is null.
-  if (!examineSrc.includes("(entity not in PVS — no preview)")) {
+  if (!examineSrc.includes("(too far away to preview)")) {
     throw new Error("missing-entity sentinel message absent");
   }
 });
 
 check("handles entity-present-but-no-setupId case", () => {
-  if (!examineSrc.includes("(no model id — preview unavailable)")) {
+  if (!examineSrc.includes("(no preview available)")) {
     throw new Error("no-setupId sentinel message absent");
   }
 });

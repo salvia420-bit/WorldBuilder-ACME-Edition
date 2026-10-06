@@ -8,8 +8,7 @@
 //     localStorage `holtburger_combat_bar_v1` and seeded at import time.
 //   * combat-hud.js — the HUD strip slider, via `syncPowerFill()`.
 //
-// combat-hud's `state.power` is a module local initialised to 1.0
-// (combat-hud.js:404) that NOTHING ever seeded from the shared state, and
+// combat-hud's `state.power` is a module local initialised to 1.0 that NOTHING ever seeded from the shared state, and
 // `syncPowerFill()` wrote it into `__combatBarState.powerLevel`
 // unconditionally. `syncPowerFill()` runs from `recomputeVisible`, which is
 // wired to BOTH a 1 Hz `setInterval` (combat-hud.js:1138) and every
@@ -72,14 +71,25 @@ const body = spliceModule(src, {
   provided: [],
   stubs: {
     setAcText: "(el, text) => { if (el) el.__text = text; }",
-    loadLayout: "() => Promise.resolve(null)",
-    findElementById: "() => null",
-    getCachedLayout: "() => null",
-    // Not exercised by this suite (it never calls updateDamageRating);
-    // throwing stub so a future change that reaches it fails loudly.
-    computeDamageRatingRollup: "() => { throw new Error('computeDamageRatingRollup must not be reached'); }",
-    attachDefaultTopDragHandle: "() => {}",
-    WINDOW_ID: "Object.freeze({ COMBAT_HUD: 'combat-hud' })",
+    // HUD overhaul 2026-10-05 — combat-hud now reads the Recklessness band
+    // + training straight from ui/ac_damage_rating.js, persists through
+    // attachWindowPosition and binds the melee/missile attack keys on the
+    // input funnel. None of that is reached by syncPowerFill(); the stubs
+    // are explicit and inert (a throwing stub where reaching it would be
+    // a contract change).
+    readTrainingLevel: "() => { throw new Error('readTrainingLevel must not be reached'); }",
+    SKILL_RECKLESSNESS: "50",
+    TRAINING_TRAINED: "2",
+    TRAINING_SPECIALIZED: "3",
+    RECKLESSNESS_BAND_MIN: "0.10",
+    RECKLESSNESS_BAND_MAX: "0.90",
+    attachWindowPosition: "() => ({ getState: () => ({ x: null, y: null }) })",
+    WINDOW_ID: "Object.freeze({ COMBAT_HUD: 0x1000004B })",
+    setAutoRepeatAttacks: "() => {}",
+    isCharacterOptionEnabled: "() => null",
+    CHARACTER_OPTION: "Object.freeze({ AutoRepeatAttacks: 0 })",
+    getInputFunnel: "() => null",
+    inputFunnelV2On: "() => false",
   },
 });
 // eslint-disable-next-line no-new-func
@@ -113,8 +123,8 @@ check("repeated 1 Hz syncs keep the value stable", () => {
 
 /* ── [2] the HUD's own slider still wins ──────────────────────────────── */
 
-// This is verbatim what combat-hud's `setFromEv` does (combat-hud.js:703-704)
-// when the user drags the HUD strip slider.
+// The HUD's own input lands in `state.power` (combat-hud setPowerFromHud) —
+// the next sync must publish it rather than re-adopt the stale shared value.
 mod.state.power = 0.7;
 mod.syncPowerFill();
 check("combat-hud's own slider drag publishes to the shared state", () => {

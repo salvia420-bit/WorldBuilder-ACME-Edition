@@ -541,7 +541,11 @@ export async function initPluginBar(D) {
     // the pane when it's already open on any character tab; showView resets
     // the stack and re-mounts honoring ctx.tab, so F11 always lands on
     // Skills even mid-Attributes.
-    "train-skills": () => window.__mainPanel?.showView?.("character", { tab: "skills" }),
+    // HUD overhaul 2026-10-05: F11 opens Character Information on its Skills
+    // tab (train-skills was folded into it); __openCharacterTab toggles.
+    "train-skills": () => (window.__openCharacterTab
+      ? window.__openCharacterTab("skills")
+      : window.__mainPanel?.showView?.("character", { tab: "skills" })),
   };
   window.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;

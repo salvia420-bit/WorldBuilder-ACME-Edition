@@ -1,1524 +1,957 @@
-// Character info view — Attributes / Skills / Titles tabs.
-// Port of retail gmCharacterInfoUI (0x2100001A parent) with child
-// tabs gmAttributeUI (0x2100002C), gmSkillUI (0x2100002D),
-// gmCharacterTitleUI (0x2100005E).
+// Character view — Attributes / Skills / Titles in ONE pane.
 //
-// Wave 2 surface — mounts as a view of plugins/main-panel.js
-// (the shared right-side pane). Toggled via the C key.
+// Retail anatomy (HUD overhaul 2026-10-05): gmAttributeUI (0x2100002C)
+// and gmSkillUI (0x2100002D) are both gmStatManagementUI subclasses that
+// draw the StatManagement_Template (layout 0x21000045, 300×337):
 //
-// Per-skill icons come from SkillTable DAT 0xE000004 (38 skills,
-// each with `iconIdHex`). Dump pipeline: WB.Terminal
-// `chorizite-dump-skill-table` → `apps/holtburger-web/data/
-// skill-table.json` + extracted PNGs under data/ui-sprites/.
+//   header  0x10000230 300×105  Name 0x10000231 / Title 0x10000232 /
+//                               PKStatus 0x10000233 / TotalXP 0x10000234-5 /
+//                               XPToLevelMeter 0x10000236 (frame 0x060011A6,
+//                               red fill 0x060011A5) | divider 0x10000239
+//                               (0x06004CB8) | "Character Level" 0x1000023A
+//                               + big value 0x1000023B
+//   divider 0x1000023C 300×7  (0x06004CC7)
+//   list    0x1000023D 300×160 InfoRegion rows 282×20: icon 0x10000129
+//                               20×20, label 0x1000012A @25, value
+//                               0x1000012B @175; section headers
+//                               Specialized 0x06000F90 / Trained 0x06000F86 /
+//                               Untrained 0x06000F98 / Unusable 0x06000F89
+//   divider 0x1000023F 300×7
+//   footer  0x10000240 300×55   Title 0x1000024E, LineOne 0x10000242/43,
+//                               LineTwo 0x10000244/45, Raise10 0x100005EB
+//                               (0x0600712B) above Raise 0x10000246
+//                               (0x06004CB6), both 30×26 at x=260
 //
-// Player skill/attribute values come from
-// `client.player.stats.skills` and `.attributes` — flat int arrays
-// the wasm SessionHandle owns. Per the player-stats inspection at
-// 1070 runtime: skills = [id, current, base, trained_state, xp]
-// per skill, attributes = [id, current, base, buffed_max] per attr.
+// Holtburger keeps the shared main-panel title strip, so the template
+// mounts in the ~300×325 body below it; a kit tab strip on top switches
+// Attributes / Skills / Titles (retail opened these as separate panels
+// from the toolbar). The pane is a flex column — header, list and footer
+// keep their retail proportions and only the list (hbk-scroll) gives up
+// height, so nothing is ever clipped off the bottom.
 //
-// Retail layout source per character_info_layout_dump 2026-05-24:
+// Behaviour (decomp-matched):
+//   * gmSkillUI::RebuildSkillList — Specialized / Trained / Untrained /
+//     Unusable sections, alphabetical inside each (AddSortedSkill);
+//     SAC 1 with min_level > 1 counts as Unusable.
+//   * gmStatManagementUI::UpdateExperience — "XP for next level" =
+//     ExperienceToLevel(lvl+1) − total; the red meter fills by progress
+//     through the current level.
+//   * gm{Skill,Attribute}UI::DisplayDefaultFooter / DisplaySelection
+//     Footer_{Trained,Untrained,Attribute,Vital} — the footer shows the
+//     selected stat ("Name: value"), its raise cost and the pool it
+//     spends; +1 (RaiseSelection) and +10 (Raise10Selection, cost from
+//     GetCostToRaise10) send ONE request with the XP amount. Untrained
+//     skills train for credits after a confirmation
+//     (gmSkillUI::TrainSkill → TrainSkillDialogCallback); +10 is hidden.
 //
-//   gmCharacterInfoUI 0x2100001A — 300×362 parent panel.
-//     0x1000011B root (300×362)
-//       0x100000FC close button (276,0) 24×25, 2 states
-//       0x100000FE title bar strip (0,0) 276×25
-//       0x1000011C content area type=3 (0,25) 300×337
-//         0x1000011D inner content (8,0) 262×337 — main text region
-//         0x1000011E right scrollbar (280,0) 16×337
-//   gmAttributeUI 0x2100002C — wrapper, child rows populated by runtime
-//     0x10000225 root type=268435498 (0,0) 300×337, 3 states
-//       0x10000226 inner (0,0) 300×337
-//   gmSkillUI 0x2100002D — wrapper, same shape
-//     0x1000022E root type=268435499 (0,0) 300×337, 3 states
-//       0x10000226 inner (0,0) 300×337
-//   gmCharacterTitleUI 0x2100005E — 300×600, standalone in retail
-//     0x1000052D outer (300×600)
-//       0x1000052E header row 1 (8,20) 270×18
-//       0x1000052F header row 2 (8,40) 270×18
-//       0x10000530 separator (0,60) 300×9
-//       0x10000531 header row 3 (8,70) 270×18
-//       0x10000532 list area type=5 (8,90) 270×455
-//       0x10000533 scrollbar (280,90) 16×455
-//       0x10000534 separator (0,550) 300×9
-//       0x10000535 bottom button (53,560) 200×32
+// Hotkeys: F1 toggles this view (last-used tab, Attributes first time);
+// F11 opens it on the Skills tab (train-skills manifest hotkey →
+// app/plugin_bar.js). `window.__openCharacterTab(tab)` is the shared
+// entry point for toolbar buttons (Attributes / Skills).
 //
-// v1 fetch_layout caveat: only geometry is serialized. Tab labels,
-// row labels, sprite IDs etc. are hand-tuned. Retail rows of
-// Attribute/Skill UIs live in a state-controlled child layout that
-// fetch_layout v1 does not yet expand (G3 in layout-port-plan).
-// We hand-pitch attribute rows (24px) and skill rows (18px) within
-// the content area; the layout supplies the OUTER content-area
-// dimensions and the Title-tab row positions.
+// Data: `client.player.stats` stride arrays (src/lib.rs
+// publish_player_stats_snapshot): attributes [type, current, base,
+// ranks]×6, vitals [type, current, base, buffed_max]×3, skills [type,
+// current, base, ranks, training, next_rank_cost]×N, levelInfo [level,
+// xp_lo, xp_hi, unspent_lo, unspent_hi, lum_lo, lum_hi]. Skill names /
+// icons / costs from data/skill-table.json (SkillTable 0x0E000004); XP
+// curves from data/xp-tables-full.json (ExperienceTable 0x0E000018).
 
-import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
-// BAND-B S2 — the gmStatManagementUI improve-footer lives in this pane now.
-// These pure helpers stay exported from train-skills.js even after S3 retires
-// that view; importing them here keeps the raise/train math single-sourced.
-import { TRAINING, computeNextRaiseCost, decideTrainAction } from "./train-skills.js";
+import { setAcText, COMPACT_FONT_ID, HEADING_FONT_ID } from "../ui/ac_font.js";
+import {
+  TRAINING, decideTrainAction, statRaiseCost, skillSpentXp,
+  estimateVitalRanks, levelProgress, skillGroupFor,
+} from "./train-skills.js";
 
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
+const SP = "./data/ui-sprites";
 
-// gmCharacterInfoUI parent panel — outer 300×362 (the entire
-// floating panel: title bar + content area). Our DOM lives inside
-// main-panel's body slot which is already at y=25; so element
-// 0x1000011C (content area at 0,25 of 300×337) maps to body (0,0,
-// 300,337). 0x1000011D (inner content 262×337 inset 8px from the
-// left) is where text/tabs live.
-const CI_LAYOUT_ID            = 0x2100001A;
-// Reference-only element_ids for the outer panel chrome — owned by
-// main-panel (close button, title bar) or by the wrapping floating
-// panel (root). Kept here so the layout map stays complete for
-// future ports:
-//   0x1000011B — 300×362 outer (whole panel)
-//   0x100000FC — (276,0) 24×25 close button
-//   0x100000FE — (0,0) 276×25 title bar
-const CI_ELEM_CONTENT         = 0x1000011C; // (0,25) 300×337 — main-panel.body
-const CI_ELEM_INNER           = 0x1000011D; // (8,0 of content) 262×337 — text/rows
-const CI_ELEM_SCROLLBAR       = 0x1000011E; // (280,0 of content) 16×337
+// Retail text colours (StatManagement InfoRegion label / value).
+const C_NAME = "#eadfc4";
+const C_DIM = "#a8a090";
+const C_GOLD = "#f3d27a";
+const C_VALUE = "#8aef6d";
+const C_BUFFED = "#7fd6ff";
+const C_DEBUFFED = "#ff7a5c";
+const C_UNUSABLE = "#8a8270";
 
-// gmAttributeUI / gmSkillUI tab content layouts — wrappers only;
-// retail populates row UIElements at runtime via per-stat code paths
-// (gmStatManagementUI::PostInit at acclient.c:284203 uses
-// GetChildRecursive on element_ids 0x10000231 … 0x100005C6 that don't
-// exist in the LayoutDesc's static tree). We use the wrapper's outer
-// dims to confirm the body sizing matches our content area.
-const ATTR_LAYOUT_ID          = 0x2100002C;
-const ATTR_ELEM_ROOT          = 0x10000225; // 300×337
-const ATTR_ELEM_INNER         = 0x10000226; // 300×337
+const TABS = [
+  { id: "attributes", label: "Attributes", title: "Attributes" },
+  { id: "skills", label: "Skills", title: "Skills" },
+  { id: "titles", label: "Titles", title: "Character Titles" },
+];
+const TAB_IDS = new Set(TABS.map((t) => t.id));
 
-const SKILL_LAYOUT_ID         = 0x2100002D;
-const SKILL_ELEM_ROOT         = 0x1000022E; // 300×337
-const SKILL_ELEM_INNER        = 0x10000226; // 300×337
-
-// gmCharacterTitleUI — rich structured layout (the only one of the
-// three tab layouts with explicit row geometry in the LayoutDesc).
-// Native size 300×600; we squeeze into 300×337 by SCALING vertical
-// offsets via a constant: scaleY = 337 / (top-bottom of the layout's
-// effective vertical span). Holding x unchanged for crispness.
-const TITLE_LAYOUT_ID         = 0x2100005E;
-// Reference-only: 0x1000052D is the 300×600 native panel root —
-// scaling is applied per-row by applyCharacterInfoLayout instead.
-const TITLE_ELEM_HEADER_1     = 0x1000052E; // (8,20) 270×18
-const TITLE_ELEM_HEADER_2     = 0x1000052F; // (8,40) 270×18
-const TITLE_ELEM_SEP_1        = 0x10000530; // (0,60) 300×9
-const TITLE_ELEM_HEADER_3     = 0x10000531; // (8,70) 270×18
-const TITLE_ELEM_LIST         = 0x10000532; // (8,90) 270×455
-const TITLE_ELEM_SCROLLBAR    = 0x10000533; // (280,90) 16×455
-const TITLE_ELEM_SEP_2        = 0x10000534; // (0,550) 300×9
-const TITLE_ELEM_BOTTOM_BTN   = 0x10000535; // (53,560) 200×32
-
-// Native height of the Title-tab layout in the LayoutDesc. Retail
-// opens it as its own 300×600 floating panel; in Holtburger it lives
-// as a tab inside the 300×337 character-info panel, so we compress
-// the vertical range to fit. Horizontal positions (x, width) are
-// applied unchanged — they're already 300px-wide.
-const TITLE_NATIVE_H = 600;
+// Last tab the player looked at — F1 reopens it (retail remembered the
+// open sub-panel per session). First open defaults to Attributes.
+let lastTab = "attributes";
+function resolveTab(ctx) {
+  const t = ctx?.tab;
+  return TAB_IDS.has(t) ? t : lastTab;
+}
+function tabMeta(id) { return TABS.find((t) => t.id === id) ?? TABS[0]; }
 
 let stylesInjected = false;
 function ensureStyles() {
-  if (stylesInjected) return;
+  if (stylesInjected || typeof document === "undefined") return;
+  if (document.getElementById(VIEW_STYLE_ID)) { stylesInjected = true; return; }
   stylesInjected = true;
   const style = document.createElement("style");
   style.id = VIEW_STYLE_ID;
   style.textContent = `
     .hb-ci-root {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      box-sizing: border-box;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      overflow: hidden;
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      box-sizing: border-box; overflow: hidden;
+      pointer-events: auto; user-select: none;
+      color: var(--hbk-text); font-family: var(--hbk-font); font-size: 12px;
+      background: url("${SP}/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
     }
-    /* Tab strip — Holtburger UX addition (retail gmCharacterInfoUI
-       has no tabs; it's a single wall-of-text panel). 3 buttons at
-       the top of our content area, slimmed to leave maximum room
-       for the content below. */
-    .hb-ci-tabs {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 20px;
-      box-sizing: border-box;
-      display: flex;
-      gap: 1px;
-      padding: 2px 4px 0;
-      border-bottom: 1px solid var(--hb-border-brass-dim);
+    .hb-ci-tabs { flex: 0 0 auto; }
+    /* Header — StatManagement_Header (0x10000230), compressed from 105px. */
+    .hb-ci-head { flex: 0 0 auto; display: flex; align-items: stretch; padding: 3px 0 3px 6px; }
+    .hb-ci-head-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding-right: 6px; }
+    .hb-ci-name { height: 16px; overflow: hidden; display: flex; align-items: center; }
+    .hb-ci-sub { height: 11px; overflow: hidden; display: flex; align-items: center; }
+    .hb-ci-sub:empty, .hb-ci-sub[data-empty="1"] { display: none; }
+    .hb-ci-kv { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 13px; overflow: hidden; }
+    .hb-ci-kv > * { display: flex; align-items: center; min-width: 0; }
+    .hb-ci-xpmeter {
+      position: relative; height: 15px; margin-top: 1px;
+      background: url("${SP}/0x060011A6.png") center / 100% 100% no-repeat;
     }
-    .hb-ci-tab {
-      padding: 2px 8px;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--hb-border-brass-dim);
-      border-bottom: none;
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+    .hb-ci-xpmeter-fill {
+      position: absolute; left: 1px; right: 1px; top: 1px; bottom: 1px;
+      background: url("${SP}/0x060011A5.png") center / 100% 100% no-repeat;
+      clip-path: inset(0 calc(100% - var(--hb-ci-fill, 0%)) 0 0);
+      transition: clip-path 200ms ease-out;
     }
-    .hb-ci-tab:hover { background: var(--hb-overlay-hover); }
-    .hb-ci-tab.active {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-      border-color: var(--hb-border-brass);
+    .hb-ci-xpmeter-label {
+      position: absolute; inset: 0; padding: 0 4px;
+      display: flex; align-items: center; justify-content: space-between; gap: 4px;
     }
-    /* Header strip — character name + level. Sized by hand below the
-       tab strip; retail's gmStatManagementUI::PostInit binds these to
-       UIElement_Text fields at runtime (element ids 0x10000231 name,
-       0x1000023B level) which v1 fetch_layout doesn't surface yet. */
-    .hb-ci-head {
-      position: absolute;
-      top: 20px;
-      left: 0;
-      right: 0;
-      height: 22px;
-      box-sizing: border-box;
-      padding: 3px 8px;
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      background: rgba(0, 0, 0, 0.3);
-      border-bottom: 1px solid var(--hb-border-brass-dim);
+    .hb-ci-xpmeter[data-hidden="1"] { display: none; }
+    .hb-ci-vdiv { flex: 0 0 5px; background: url("${SP}/0x06004CB8.png") center top / 5px 10px repeat-y; }
+    .hb-ci-level {
+      flex: 0 0 62px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px;
     }
-    .hb-ci-head-name {
-      font-size: 12px;
-      color: var(--hb-text-gold);
-      letter-spacing: 0.02em;
+    .hb-ci-rule { flex: 0 0 7px; background: url("${SP}/0x06004CC7.png") left center / 10px 7px repeat-x; }
+    /* List — StatManagement_List (0x1000023D). */
+    .hb-ci-list { flex: 1 1 auto; min-height: 40px; outline: none; }
+    .hb-ci-group {
+      flex: 0 0 20px; height: 20px; box-sizing: border-box;
+      display: flex; align-items: center; padding-left: 6px;
+      background: url("${SP}/0x06000F98.png") left center / 100% 100% no-repeat;
     }
-    .hb-ci-head-level {
-      font-size: 10px;
-      color: var(--hb-text-cream);
+    .hb-ci-group[data-group="specialized"] { background-image: url("${SP}/0x06000F90.png"); }
+    .hb-ci-group[data-group="trained"] { background-image: url("${SP}/0x06000F86.png"); }
+    .hb-ci-group[data-group="untrained"] { background-image: url("${SP}/0x06000F98.png"); }
+    .hb-ci-group[data-group="unusable"] { background-image: url("${SP}/0x06000F89.png"); }
+    .hb-ci-group[data-group="plain"] {
+      background: linear-gradient(90deg, rgba(243, 210, 122, 0.16), transparent 85%);
+      border-top: 1px solid rgba(243, 210, 122, 0.25);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.8);
     }
-    /* Body — fills the area below the tab strip + header strip, above
-       the footer. applyCharacterInfoLayout overrides left/width using
-       the parent layout's inner-content element 0x1000011D so the
-       8-px left inset matches retail anatomy. */
-    .hb-ci-body {
-      position: absolute;
-      top: 42px;
-      left: 0;
-      right: 0;
-      bottom: 18px;
-      overflow-y: auto;
-      box-sizing: border-box;
-      padding: 4px 4px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-    }
-    /* Scrollbar gutter — retail puts a dedicated 16-px scrollbar
-       element (0x1000011E) at the right edge of the content area.
-       Our DOM uses the browser's native scrollbar inside .hb-ci-body,
-       so we mark the layout-derived scrollbar dims on a phantom div
-       (.hb-ci-scrollbar) for diagnostic visibility — kept invisible
-       to avoid double scrollbars. The verifier reads its bounding box
-       to confirm layout-driven placement. */
-    .hb-ci-scrollbar {
-      position: absolute;
-      pointer-events: none;
-      background: transparent;
-    }
-    /* Per-row pieces shared across all tabs. */
-    .hb-ci-section {
-      font-size: 9px;
-      color: #6acaca;
-      background: rgba(0, 60, 70, 0.35);
-      padding: 3px 8px;
-      margin: 4px 0 2px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      border-bottom: 1px solid rgba(106, 202, 202, 0.4);
-    }
-    .hb-ci-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 1px 6px;
-      font-size: 10px;
-      line-height: 18px;
-    }
-    .hb-ci-row:hover { background: var(--hb-overlay-hover); }
+    .hb-ci-row { height: 20px; min-height: 20px; box-sizing: border-box; padding: 0 6px 0 4px; gap: 5px; }
     .hb-ci-icon {
-      width: 20px;
-      height: 20px;
-      flex: 0 0 20px;
-      background-repeat: no-repeat;
-      background-size: contain;
-      background-position: center;
-      image-rendering: pixelated;
+      flex: 0 0 20px; width: 20px; height: 20px;
+      background: center / contain no-repeat; image-rendering: pixelated;
       filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7));
     }
-    .hb-ci-name {
-      flex: 1 1 auto;
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
+    .hb-ci-rname { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
+    .hb-ci-rval { flex: 0 0 auto; min-width: 34px; display: flex; justify-content: flex-end; align-items: center; }
+    .hb-ci-row[data-current-title="1"] .hb-ci-rval { min-width: 0; }
+    .hb-ci-list .hbk-empty { padding: 22px 12px; }
+    /* Footer — StatManagement_Footer (0x10000240). */
+    .hb-ci-foot {
+      flex: 0 0 auto; display: flex; align-items: stretch; gap: 6px;
+      min-height: 54px; box-sizing: border-box; padding: 2px 6px 3px 8px;
     }
-    .hb-ci-value {
-      flex: 0 0 auto;
-      color: var(--hb-text-numeric-green);
-      font-variant-numeric: tabular-nums;
-      text-align: right;
-      min-width: 30px;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    /* Raise controls — DAT sprites 0x06001282/83 (UP button) and
-       0x06004D17/19 (green/red eligibility dot) from gmStatManagementUI
-       layout 0x2100002B. The dot shows the can/can't-raise state; the
-       button dispatches RaiseAttribute / RaiseVital to the server. */
-    .hb-ci-dot {
-      width: 13px; height: 13px;
-      flex: 0 0 13px;
-      background: center/contain no-repeat;
-      image-rendering: pixelated;
-    }
+    .hb-ci-foot-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+    .hb-ci-foot-title { height: 16px; overflow: hidden; display: flex; align-items: center; }
+    .hb-ci-foot-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; height: 14px; overflow: hidden; }
+    .hb-ci-foot-line > * { display: flex; align-items: center; min-width: 0; }
+    .hb-ci-foot-btns { flex: 0 0 30px; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+    .hb-ci-foot-btns[data-mode="title"] { flex: 0 0 auto; }
     .hb-ci-raise {
-      width: 24px; height: 25px;
-      flex: 0 0 24px;
-      padding: 0;
-      border: 0;
-      background: center/contain no-repeat;
+      width: 30px; height: 26px; padding: 0; margin: 0; border: 0;
+      background: center / 100% 100% no-repeat; cursor: pointer;
       image-rendering: pixelated;
-      cursor: pointer;
     }
-    .hb-ci-raise[disabled] { opacity: 0.45; cursor: not-allowed; }
-    .hb-ci-raise:hover:not([disabled]) { filter: brightness(1.2); }
-    /* Title-tab specific structure — uses absolute layout from
-       gmCharacterTitleUI 0x2100005E (compressed to fit our body).
-       Mounted in the .hb-ci-body when the Titles tab is active. */
-    .hb-ci-titles {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+    .hb-ci-raise[data-step="1"] { background-image: url("${SP}/0x06004CB6.png"); }
+    .hb-ci-raise[data-step="10"] { background-image: url("${SP}/0x0600712B.png"); }
+    .hb-ci-raise:hover:not(:disabled), .hb-ci-raise:focus-visible:not(:disabled) {
+      filter: brightness(1.18) drop-shadow(0 0 3px rgba(140, 255, 110, 0.55));
     }
-    .hb-ci-titles-header {
-      position: absolute;
-      box-sizing: border-box;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-      padding: 0 4px;
-      display: flex;
-      align-items: center;
-    }
-    .hb-ci-titles-sep {
-      position: absolute;
-      box-sizing: border-box;
-      background:
-        linear-gradient(180deg,
-          transparent 0%,
-          var(--hb-border-brass-dim) 40%,
-          var(--hb-border-brass) 50%,
-          var(--hb-border-brass-dim) 60%,
-          transparent 100%);
-      opacity: 0.7;
-    }
-    .hb-ci-titles-list {
-      position: absolute;
-      box-sizing: border-box;
-      overflow-y: auto;
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--hb-border-brass-dim);
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-    }
-    .hb-ci-titles-list-empty {
-      padding: 14px 12px;
-      color: var(--hb-text-muted);
-      font-style: italic;
-      text-align: center;
-      font-size: 10px;
-    }
-    .hb-ci-titles-bottom {
-      position: absolute;
-      box-sizing: border-box;
-      padding: 2px 6px;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      text-align: center;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .hb-ci-titles-bottom:hover {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    /* Rec #51 — selectable title rows. The .current row carries the
-       server-confirmed display title; .selected is the pending pick
-       the user has clicked but not committed. */
-    .hb-ci-titles-row {
-      padding: 2px 6px;
-      font-size: 10px;
-      cursor: pointer;
-      user-select: none;
-      transition: background 80ms;
-    }
-    .hb-ci-titles-row:hover {
-      background: rgba(120, 90, 50, 0.18);
-    }
-    .hb-ci-titles-row.current {
-      background: rgba(60, 40, 12, 0.45);
-    }
-    .hb-ci-titles-row.selected {
-      background: linear-gradient(90deg,
-        rgba(212, 175, 55, 0.18) 0%,
-        rgba(176, 138, 74, 0.32) 100%);
-      outline: 1px solid var(--hb-border-brass);
-      outline-offset: -1px;
-    }
-    .hb-ci-footer {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 18px;
-      box-sizing: border-box;
-      padding: 4px 8px;
-      background: rgba(0, 0, 0, 0.45);
-      border-top: 1px solid var(--hb-border-brass-dim);
-      font-size: 9px;
-      color: var(--hb-text-muted);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .hb-ci-empty {
-      padding: 14px 12px;
-      color: var(--hb-text-muted);
-      font-style: italic;
-      text-align: center;
-    }
-    /* BAND-B S2 — selectable skill/attribute/vital rows. Clicking a row
-       pins it as the footer's "improve" target. Mirrors the title-row
-       .selected gold-gradient treatment for a coherent look. */
-    .hb-ci-selectable { cursor: pointer; }
-    .hb-ci-row.selected {
-      background: linear-gradient(90deg,
-        rgba(212, 175, 55, 0.18) 0%,
-        rgba(176, 138, 74, 0.32) 100%);
-      outline: 1px solid var(--hb-border-brass);
-      outline-offset: -1px;
-    }
-    /* BAND-B S2 — retail gmStatManagementUI improve-footer band, mounted
-       ABOVE the 18-px status footer (so .hb-ci-body bottom shifts to 82px
-       on the Skills + Attributes tabs). Element-id provenance (decompiled):
-       StatManagement_Footer_Default 0x10000240, _Text 0x10000241,
-       _LineOne 0x10000242, _LineTwo 0x10000244, _RaiseButton 0x10000246. */
-    .hb-ci-improve {
-      position: absolute;
-      bottom: 18px;
-      left: 0;
-      right: 0;
-      height: 64px;
-      box-sizing: border-box;
-      padding: 4px 8px;
-      background: rgba(0, 0, 0, 0.55);
-      border-top: 1px solid var(--hb-border-brass);
-    }
-    .hb-ci-improve-title {
-      font-size: 11px;
-      color: var(--hb-text-gold);
-      letter-spacing: 0.02em;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    .hb-ci-improve-line {
-      font-size: 9px;
-      line-height: 13px;
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-    }
-    .hb-ci-improve-btn {
-      position: absolute;
-      right: 8px;
-      bottom: 8px;
-      padding: 2px 14px;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      color: var(--hb-text-cream-bright);
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .hb-ci-improve-btn:hover:not([disabled]) {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    .hb-ci-improve-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+    .hb-ci-raise[data-step="1"]:active:not(:disabled) { background-image: url("${SP}/0x06004CB7.png"); }
+    .hb-ci-raise[data-step="10"]:active:not(:disabled) { background-image: url("${SP}/0x0600712C.png"); }
+    .hb-ci-raise:disabled { filter: grayscale(1) brightness(0.5); cursor: default; }
+    .hb-ci-raise[data-hidden="1"] { visibility: hidden; }
+    .hb-ci-setbtn { min-width: 74px; }
   `;
   document.head.appendChild(style);
 }
 
-// Cached skill table — fetched once, reused across mounts.
+// ─── Data ────────────────────────────────────────────────────────────
+
 let skillTablePromise = null;
+let skillTable = null;
 function loadSkillTable() {
   if (!skillTablePromise) {
     skillTablePromise = fetch("./data/skill-table.json")
       .then((r) => r.json())
-      .catch((e) => { console.warn("[char-info] skill-table load failed", e); return { skills: [] }; });
+      .then((t) => { skillTable = t; return t; })
+      .catch((e) => {
+        console.warn("[char-info] skill-table load failed", e);
+        skillTablePromise = null; // retryable
+        return null;
+      });
   }
   return skillTablePromise;
 }
 
-// AC skill state encoding (player.stats.skills[i*6+4] value, stride-6 tuple):
-//   0 = Unusable (some Magic skills if class can't learn)
-//   1 = Untrained (default for usable)
-//   2 = Trained
-//   3 = Specialized
+// XP curves. xp-tables-full.json carries levels + skill curves; the
+// boot-time xp-tables.json prefetch (attributes + vitals only, see
+// app/plugin_bar.js) is the fallback so raises still work if the full
+// table 404s on an old dist.
+let xpTables = null;
+let xpTablesPromise = null;
+function loadXpTables() {
+  if (xpTables) return Promise.resolve(xpTables);
+  if (xpTablesPromise) return xpTablesPromise;
+  xpTablesPromise = fetch("./data/xp-tables-full.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then(async (full) => {
+      if (full && Array.isArray(full.attributes)) { xpTables = full; return full; }
+      const basic = (typeof window !== "undefined" && window.__xpTablesPromise)
+        ? await window.__xpTablesPromise
+        : await fetch("./data/xp-tables.json").then((r) => r.json()).catch(() => null);
+      if (basic) xpTables = basic;
+      else xpTablesPromise = null; // retryable
+      return basic;
+    });
+  return xpTablesPromise;
+}
 
-// Attribute name table — matches ACE's PropertyAttribute enum
-// (Source/ACE.Entity/Enum/Properties/PropertyAttribute.cs) and the
-// retail DBObj.EnumIDMap UIAttributeIcons table (0x25000006). Pre-fix
-// the table had Coordination=3 / Quickness=4 swapped — diag char's
-// values for those two are both 100 so the bug was invisible until the
-// hex DID extraction matched up.
 const ATTR_NAMES = {
   1: "Strength", 2: "Endurance", 3: "Quickness",
   4: "Coordination", 5: "Focus", 6: "Self",
 };
+// Retail attribute panel order (Str, End, Coord, Quick, Focus, Self).
+const ATTR_ORDER = [1, 2, 4, 3, 5, 6];
 const VITAL_NAMES = { 1: "Health", 3: "Stamina", 5: "Mana" };
-
-// Canonical retail attribute icon DIDs, sourced from DAT DBObj.EnumIDMap
-// `UIAttributeIcons` (0x25000006) + `UIAttribute2ndIcons` (0x25000007),
-// dumped via WB.Terminal chorizite-parse-dat-record. Extracted to
-// data/ui-sprites/ as 25×25 PFID_R8G8B8 PNGs.
+// DBObj.EnumIDMap UIAttributeIcons (0x25000006) / UIAttribute2ndIcons
+// (0x25000007), exported to data/ui-sprites/.
 const ATTR_ICONS = {
-  1: "0x060002C8", // Strength    — flexed arm
-  2: "0x060002C4", // Endurance   — armored fighter
-  3: "0x060002C6", // Quickness
-  4: "0x060002C9", // Coordination
-  5: "0x060002C5", // Focus
-  6: "0x060002C7", // Self
+  1: "0x060002C8", 2: "0x060002C4", 3: "0x060002C6",
+  4: "0x060002C9", 5: "0x060002C5", 6: "0x060002C7",
 };
-const VITAL_ICONS = {
-  1: "0x06004C3B", // Health   — red heart
-  3: "0x06004C3C", // Stamina  — yellow leaf
-  5: "0x06004C3D", // Mana
-};
-const ATTR_ICON_URL = (id) =>
-  ATTR_ICONS[id] ? `./data/ui-sprites/${ATTR_ICONS[id]}.png` : null;
-const VITAL_ICON_URL = (id) =>
-  VITAL_ICONS[id] ? `./data/ui-sprites/${VITAL_ICONS[id]}.png` : null;
+const VITAL_ICONS = { 1: "0x06004C3B", 3: "0x06004C3C", 5: "0x06004C3D" };
 
-// 2026-05-30 — ExperienceTable (DAT 0x0E000018) lazy-loaded once.
-// `attributes[N]` is the cumulative XP to reach rank N (191 ranks);
-// `vitals[N]` likewise (197 ranks). Cost from current → next rank is
-// `arr[r+1] - arr[r]`. The same table that
-// `ACE.Server.WorldObjects.Player.HandleActionRaiseAttribute` consults
-// via `DatManager.PortalDat.XpTable.AttributeXpList` (so the JS preview
-// matches what the server will accept).
-let _xpTablesPromise = null;
-function loadXpTables() {
-  if (_xpTablesPromise) return _xpTablesPromise;
-  _xpTablesPromise = (typeof window !== "undefined" && window.__xpTablesPromise) ||
-    fetch("./data/xp-tables.json").then((r) => r.json()).catch(() => null);
-  return _xpTablesPromise;
-}
-function nextRankCost(table, ranks) {
-  if (!Array.isArray(table)) return null;
-  if (ranks == null || ranks < 0) ranks = 0;
-  if (ranks >= table.length - 1) return null; // max
-  return (table[ranks + 1] >>> 0) - (table[ranks] >>> 0);
+// CharacterTitle display names (ACE CharacterTitle enum 0..30, spelled
+// as the client's CharacterTitle StringTable 0x2300000E shows them).
+// Ids past this range fall back to "Title #N" until the string table is
+// wired (the DAT keys titles by hashed enum name).
+const TITLE_NAMES = {
+  1: "Adventurer", 2: "Archer", 3: "Blademaster", 4: "Enchanter",
+  5: "Life Mage", 6: "Sorcerer", 7: "Vagabond", 8: "Warrior",
+  9: "Bow Hunter", 10: "Life Caster", 11: "Soldier", 12: "Swashbuckler",
+  13: "War Mage", 14: "Wayfarer", 15: "Abhorrent Warrior", 16: "Alchemist",
+  17: "Annihilator", 18: "Apothecary", 19: "Arctic Adventurer",
+  20: "Arctic Mattekar Annihilator", 21: "Artifex", 22: "Axe Warrior",
+  23: "Ballisteer", 24: "Bane of the Remoran", 25: "Blood Shreth Butcher",
+  26: "Bookbinder", 27: "Brawler", 28: "Butcher of the North", 29: "Cabalist",
+  30: "Carpenter",
+};
+function titleName(id) {
+  if (!id) return "";
+  return TITLE_NAMES[id] ?? `Title #${id}`;
 }
 
-// Pull the player's unspent XP from levelInfo[3,4] (the lo/hi pair of
-// `holtburger_world::context::WorldContextExt::player_unspent_xp`). Safe
-// up to 2^53 — AC caps well below that.
+function toArray(a) {
+  if (!a) return [];
+  if (Array.isArray(a)) return a;
+  try { return Array.from(a); } catch (_) { return []; }
+}
+
+// Snapshot → plain arrays. `client.player.stats` is a fresh wasm
+// PlayerStatsSnapshot per call (rynth/webhost.js `call` is live, not
+// cached), so it is freed once copied.
+function getStats() {
+  let s = null;
+  try { s = window.__pluginClient?.player?.stats ?? null; } catch (_) { s = null; }
+  if (!s) return null;
+  try {
+    return {
+      name: s.name || "",
+      attributes: toArray(s.attributes),
+      vitals: toArray(s.vitals),
+      skills: toArray(s.skills),
+      levelInfo: toArray(s.levelInfo),
+    };
+  } catch (_) {
+    return null;
+  } finally {
+    try { s.free?.(); } catch (_) {}
+  }
+}
+
+function u64(lo, hi) { return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0); }
 function getAvailableXp(stats) {
   const lv = stats?.levelInfo;
-  if (!lv) return 0;
-  const lo = tupleArrayAt(lv, 3) ?? 0;
-  const hi = tupleArrayAt(lv, 4) ?? 0;
-  return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0);
+  return lv && lv.length >= 5 ? u64(lv[3], lv[4]) : 0;
 }
-
-// BAND-B S2 — unspent skill credits for the improve-footer's "Cost to Train"
-// gate. Mirrors train-skills.js:getAvailableCredits (same wasm accessor).
+function getTotalXp(stats) {
+  const lv = stats?.levelInfo;
+  return lv && lv.length >= 3 ? u64(lv[1], lv[2]) : 0;
+}
+function getLevel(stats) {
+  const lv = stats?.levelInfo;
+  return lv && lv.length >= 1 ? (lv[0] >>> 0) : 0;
+}
 function getAvailableCredits() {
   try { return window.__pluginClient?.player?.skillCredits >>> 0; }
   catch (_) { return 0; }
 }
-
-function tupleArrayAt(arr, i) {
-  // Wasm flat-array stat tuples are exposed as `{ "0": v, "1": v, ... }`
-  // when read from a JS Object accessor. Coerce to a real array.
-  if (Array.isArray(arr)) return arr[i];
-  if (arr && typeof arr === "object") return arr[i];
-  return undefined;
+function getHandle() {
+  return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
+}
+function fmt(n) {
+  return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "—";
 }
 
-function getStats() {
-  const s = window.__pluginClient?.player?.stats;
-  if (!s) return null;
+function readTitleSnapshot() {
+  const out = { currentId: 0, ids: [] };
+  let snap = null;
   try {
-    return {
-      name: s.name,
-      attributes: s.attributes,   // [id, cur, base, buffed_max] × 6 + vitals appended?
-      skills: s.skills,           // stride-6: [type, cur, base, ranks, training, next_rank_cost]
-      vitals: s.vitals,           // [type, cur, base, buffed_max] × 3
-      levelInfo: s.levelInfo,     // [level, xp_total, xp_to_next, ...]
-    };
-  } catch (_) { return null; }
-}
-
-// Apply gmCharacterInfoUI / gmAttributeUI / gmSkillUI / gmCharacterTitleUI
-// layouts to the character-info view. Mounted via main-panel.showView,
-// which only fires AFTER wasm-ready (user-initiated panel open), so no
-// retry loop is needed; the layouts resolve on the first call.
-//
-// refs:
-//   rootEl       — .hb-ci-root (top-level container, sized to main-panel body)
-//   tabsEl       — .hb-ci-tabs (Holtburger tab strip; not in retail layout)
-//   headEl       — .hb-ci-head (character name + level header strip)
-//   bodyEl       — .hb-ci-body (per-tab content area; layout-anchored to
-//                  parent layout's inner-content element 0x1000011D)
-//   scrollbarEl  — .hb-ci-scrollbar (invisible phantom for retail scrollbar
-//                  geometry confirmation; native browser scrollbar handles
-//                  the actual scrolling)
-//   titleRefs    — { headerEls[3], sepEls[2], listEl, bottomBtnEl } —
-//                  per-element refs for the Title-tab structured layout.
-function applyCharacterInfoLayout(refs) {
-  const apply = ([parent, attr, skill, title]) => {
-    let appliedRegions = 0;
-
-    // ── Parent panel (gmCharacterInfoUI 0x2100001A) ─────────────────
-    // Main-panel owns the title bar (0x100000FE) and close button
-    // (0x100000FC) — we don't apply those. Element 0x1000011C is the
-    // content area; its dimensions should already match main-panel's
-    // body (300×337). Element 0x1000011D supplies the 8-px left inset
-    // for the inner content region — we apply that to .hb-ci-body so
-    // the tabs/header/body all share the retail content anatomy.
-    let innerInset = { x: 8, w: 262 };
-    if (parent) {
-      const content = findElementById(parent, CI_ELEM_CONTENT);
-      const inner = findElementById(parent, CI_ELEM_INNER);
-      const scrollbar = findElementById(parent, CI_ELEM_SCROLLBAR);
-      if (content) appliedRegions += 1;
-      if (inner && refs.bodyEl) {
-        // Apply the 8-px left inset + 262-px width to the body region.
-        // The CSS rule uses `left:0; right:0` for full-width; we
-        // explicit-override left + width here.
-        refs.bodyEl.style.right = "";
-        if (typeof inner.x === "number") refs.bodyEl.style.left = `${inner.x}px`;
-        if (typeof inner.width === "number") refs.bodyEl.style.width = `${inner.width}px`;
-        if (typeof inner.x === "number") innerInset.x = inner.x;
-        if (typeof inner.width === "number") innerInset.w = inner.width;
-        appliedRegions += 1;
-      }
-      // Also anchor the tabs + head strip to the same x/width so the
-      // tab strip lines up with the body's left edge (retail content
-      // is fully inset 8 px — applying the same anchor to all three
-      // bands keeps the panel coherent).
-      if (inner && refs.tabsEl) {
-        refs.tabsEl.style.right = "";
-        if (typeof inner.x === "number") refs.tabsEl.style.left = `${inner.x}px`;
-        if (typeof inner.width === "number") refs.tabsEl.style.width = `${inner.width}px`;
-      }
-      if (inner && refs.headEl) {
-        refs.headEl.style.right = "";
-        if (typeof inner.x === "number") refs.headEl.style.left = `${inner.x}px`;
-        if (typeof inner.width === "number") refs.headEl.style.width = `${inner.width}px`;
-      }
-      if (scrollbar && refs.scrollbarEl) {
-        if (typeof scrollbar.x === "number") refs.scrollbarEl.style.left = `${scrollbar.x}px`;
-        if (typeof scrollbar.y === "number") refs.scrollbarEl.style.top = `${scrollbar.y}px`;
-        if (typeof scrollbar.width === "number") refs.scrollbarEl.style.width = `${scrollbar.width}px`;
-        if (typeof scrollbar.height === "number") refs.scrollbarEl.style.height = `${scrollbar.height}px`;
-        appliedRegions += 1;
-      }
-    }
-
-    // ── Attribute / Skill tab layouts ────────────────────────────────
-    // gmAttributeUI 0x2100002C + gmSkillUI 0x2100002D are wrapper
-    // containers only. The per-stat rows aren't in the LayoutDesc's
-    // static tree (retail populates them at runtime via UIElement
-    // factory calls referenced by ids 0x10000231-0x100005C6, which
-    // v1 fetch_layout does not yet expand — see layout-port-plan G3).
-    // Confirm the outer dims match our body for diagnostic visibility.
-    if (attr) {
-      const root = findElementById(attr, ATTR_ELEM_ROOT);
-      const inner = findElementById(attr, ATTR_ELEM_INNER);
-      if (root) appliedRegions += 1;
-      if (inner) appliedRegions += 1;
-    }
-    if (skill) {
-      const root = findElementById(skill, SKILL_ELEM_ROOT);
-      const inner = findElementById(skill, SKILL_ELEM_INNER);
-      if (root) appliedRegions += 1;
-      if (inner) appliedRegions += 1;
-    }
-
-    // ── Title tab layout (gmCharacterTitleUI 0x2100005E) ─────────────
-    // Native size 300×600. Compressed to fit our body (~ 277-px tall
-    // after tabs/header/footer). Per-element scaleY = bodyH / 600.
-    if (title && refs.titleRefs) {
-      const titleRefMap = [
-        [TITLE_ELEM_HEADER_1, refs.titleRefs.headerEls?.[0]],
-        [TITLE_ELEM_HEADER_2, refs.titleRefs.headerEls?.[1]],
-        [TITLE_ELEM_HEADER_3, refs.titleRefs.headerEls?.[2]],
-        [TITLE_ELEM_SEP_1,    refs.titleRefs.sepEls?.[0]],
-        [TITLE_ELEM_SEP_2,    refs.titleRefs.sepEls?.[1]],
-        [TITLE_ELEM_LIST,     refs.titleRefs.listEl],
-        [TITLE_ELEM_BOTTOM_BTN, refs.titleRefs.bottomBtnEl],
-      ];
-      const bodyH = refs.bodyEl?.getBoundingClientRect().height || 277;
-      const scaleY = bodyH / TITLE_NATIVE_H;
-      for (const [id, el] of titleRefMap) {
-        if (!el) continue;
-        const desc = findElementById(title, id);
-        if (!desc) continue;
-        if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-        if (typeof desc.y === "number") el.style.top = `${Math.round(desc.y * scaleY)}px`;
-        if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-        if (typeof desc.height === "number") el.style.height = `${Math.max(1, Math.round(desc.height * scaleY))}px`;
-        appliedRegions += 1;
-      }
-      // Also wire the Title-tab scrollbar geometry on a phantom div if
-      // we have one (kept invisible — native scrollbar handles
-      // scrolling).
-      const titleScroll = findElementById(title, TITLE_ELEM_SCROLLBAR);
-      if (titleScroll && refs.titleRefs.scrollbarEl) {
-        if (typeof titleScroll.x === "number") refs.titleRefs.scrollbarEl.style.left = `${titleScroll.x}px`;
-        if (typeof titleScroll.y === "number") refs.titleRefs.scrollbarEl.style.top = `${Math.round(titleScroll.y * scaleY)}px`;
-        if (typeof titleScroll.width === "number") refs.titleRefs.scrollbarEl.style.width = `${titleScroll.width}px`;
-        if (typeof titleScroll.height === "number") refs.titleRefs.scrollbarEl.style.height = `${Math.max(1, Math.round(titleScroll.height * scaleY))}px`;
-        appliedRegions += 1;
-      }
-    }
-
-    try {
-      window.__diag?.layout?.onCharacterInfoApplied?.({
-        appliedRegions,
-        parentLoaded: !!parent,
-        attrLoaded: !!attr,
-        skillLoaded: !!skill,
-        titleLoaded: !!title,
-        innerInset,
-      });
-    } catch (_) {}
-  };
-
-  const cachedParent = getCachedLayout(CI_LAYOUT_ID);
-  const cachedAttr   = getCachedLayout(ATTR_LAYOUT_ID);
-  const cachedSkill  = getCachedLayout(SKILL_LAYOUT_ID);
-  const cachedTitle  = getCachedLayout(TITLE_LAYOUT_ID);
-  if (cachedParent && cachedAttr && cachedSkill && cachedTitle) {
-    apply([cachedParent, cachedAttr, cachedSkill, cachedTitle]);
-    return;
-  }
-  Promise.all([
-    loadLayout(CI_LAYOUT_ID),
-    loadLayout(ATTR_LAYOUT_ID),
-    loadLayout(SKILL_LAYOUT_ID),
-    loadLayout(TITLE_LAYOUT_ID),
-  ]).then(apply).catch(() => {});
-}
-
-function renderHead(headEl, stats) {
-  headEl.innerHTML = "";
-  const nameEl = document.createElement("div");
-  nameEl.className = "hb-ci-head-name";
-  setAcText(nameEl, stats?.name || "—", { color: "#f0c87c" });
-  headEl.appendChild(nameEl);
-  const levelEl = document.createElement("div");
-  levelEl.className = "hb-ci-head-level";
-  const level = stats?.levelInfo ? (tupleArrayAt(stats.levelInfo, 0) ?? 1) : 1;
-  setAcText(levelEl, `Level ${level}`, { color: "#f0d8a0" });
-  headEl.appendChild(levelEl);
-}
-
-// BAND-B S2 — wire a rendered stat row for improve-footer selection. Clicking
-// the row pins it as the footer's target; clicks that land on the shipped
-// per-row raise button (attributes/vitals, FORK-D) are left to that button.
-// `rec` is stashed in selectCtx.statIndex under the composite `${kind}:${id}`
-// key — skill id 6 / attribute id 6, and attribute id 1 / vital id 1, collide
-// on the bare id, so the kind prefix disambiguates.
-function wireSelectableRow(el, selectCtx, id, kind, rec) {
-  el.classList.add("hb-ci-selectable");
-  el.dataset.statId = String(id);
-  el.dataset.statKind = kind;
-  if (kind === "skill") el.dataset.skillId = String(id);
-  if (!selectCtx) return;
-  selectCtx.statIndex.set(kind + ":" + id, rec);
-  el.classList.toggle(
-    "selected",
-    selectCtx.selectedStatId === id && selectCtx.selectedStatKind === kind,
-  );
-  el.addEventListener("click", (ev) => {
-    if (ev.target?.closest?.(".hb-ci-raise")) return;
-    selectCtx.onSelect(id, kind);
-  });
-}
-
-function renderAttributes(bodyEl, stats, _skillTable, selectCtx) {
-  bodyEl.innerHTML = "";
-  if (selectCtx) selectCtx.statIndex.clear();
-  const a = stats?.attributes;
-  if (!a) {
-    const e = document.createElement("div");
-    e.className = "hb-ci-empty";
-    setAcText(e, "No attributes yet.", { color: "#a8a090" });
-    bodyEl.appendChild(e);
-    return;
-  }
-  bodyEl.appendChild(section("Attributes"));
-  // Rust src/lib.rs:16183 — attributes layout is
-  // `[type, current, base, ranks]` (4-tuple × 6). NO `buffed_max` field;
-  // pre-2026-05-29 the JS read index 3 as `max` and rendered "40/0" for
-  // every attribute (the diag char has ranks=0). Show `current` alone,
-  // and if `current` ≠ `base` (e.g. a debuff or item bonus is active)
-  // also show the base in parentheses.
-  const availableXp = getAvailableXp(stats);
-  const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-  // Cached XP tables (lazy-loaded). The render runs before fetch resolves
-  // on first open, so we may pass null cost on initial paint and refresh
-  // on the next playerStatsUpdated drain.
-  const xpTables = _xpTablesPromise?._cached ?? null;
-  if (!xpTables) loadXpTables().then((t) => { if (t) _xpTablesPromise._cached = t; });
-  for (let i = 0; i < 24; i += 4) {
-    const id = tupleArrayAt(a, i);
-    if (id == null) break;
-    const cur = tupleArrayAt(a, i + 1);
-    const base = tupleArrayAt(a, i + 2);
-    const ranks = tupleArrayAt(a, i + 3) ?? 0;
-    const display = (cur != null && base != null && cur !== base)
-      ? `${cur} (${base})`
-      : `${cur ?? "—"}`;
-    const cost = xpTables ? nextRankCost(xpTables.attributes, ranks) : null;
-    const raise = (cost != null && handle?.raiseAttribute) ? {
-      cost,
-      canAfford: cost <= availableXp,
-      isMax: false,
-      availableXp,
-      onClick: () => {
-        try {
-          handle.raiseAttribute(id >>> 0, cost >>> 0);
-        } catch (e) {
-          // HUD rec #140 — surface the failure on the client bus +
-          // toast so other panels (and the player) know. The wasm
-          // returns sync Err only on cmd-channel closure; ACE-side
-          // rejection (insufficient XP, max rank) would come back as
-          // a separate response opcode and is deferred until that
-          // wire surfaces. JS-side here is enough for the chrome.
-          console.warn("[raiseAttribute]", e);
-          try {
-            window.__pluginClient?.events?.emit?.("raiseAttributeFailed", {
-              detail: { attributeId: id >>> 0, cost: cost >>> 0, error: String(e?.message ?? e) },
-            });
-          } catch (_) {}
-        }
-      },
-    } : (xpTables ? { cost: 0, canAfford: false, isMax: true, availableXp, onClick: () => {} } : null);
-    const name = ATTR_NAMES[id] || `Attr ${id}`;
-    const el = row(ATTR_ICON_URL(id), name, display, raise);
-    wireSelectableRow(el, selectCtx, id, "attribute",
-      { kind: "attribute", name, cost: cost != null ? cost : null, isMax: cost == null });
-    bodyEl.appendChild(el);
-  }
-  const v = stats?.vitals;
-  if (v) {
-    bodyEl.appendChild(section("Vitals"));
-    // Vitals (src/lib.rs:16174) DO have `buffed_max` at index 3.
-    for (let i = 0; i + 3 < (v.length ?? 12); i += 4) {
-      const id = tupleArrayAt(v, i);
-      if (id == null) break;
-      const cur = tupleArrayAt(v, i + 1);
-      const base = tupleArrayAt(v, i + 2);
-      const max = tupleArrayAt(v, i + 3);
-      // Vitals carry current/buffed_max instead of ranks; ranks is
-      // (base - intrinsic_start) — fall back to base for the lookup.
-      const ranks = base ?? 0;
-      const cost = xpTables ? nextRankCost(xpTables.vitals, ranks) : null;
-      const raise = (cost != null && handle?.raiseVital) ? {
-        cost,
-        canAfford: cost <= availableXp,
-        isMax: false,
-        availableXp,
-        onClick: () => {
-          try {
-            handle.raiseVital(id >>> 0, cost >>> 0);
-          } catch (e) {
-            // HUD rec #140 — symmetric raiseVital fail-surface.
-            console.warn("[raiseVital]", e);
-            try {
-              window.__pluginClient?.events?.emit?.("raiseVitalFailed", {
-                detail: { vitalId: id >>> 0, cost: cost >>> 0, error: String(e?.message ?? e) },
-              });
-            } catch (_) {}
-          }
-        },
-      } : null;
-      const name = VITAL_NAMES[id] || `Vital ${id}`;
-      const el = row(VITAL_ICON_URL(id), name, `${cur}/${max}`, raise);
-      wireSelectableRow(el, selectCtx, id, "vital",
-        { kind: "vital", name, cost: cost != null ? cost : null, isMax: cost == null });
-      bodyEl.appendChild(el);
-    }
-  }
-}
-
-function renderSkills(bodyEl, stats, skillTable, selectCtx) {
-  bodyEl.innerHTML = "";
-  if (selectCtx) selectCtx.statIndex.clear();
-  if (!skillTable?.skills?.length) {
-    bodyEl.appendChild(emptyMsg("Skill table not loaded."));
-    return;
-  }
-  // Player skills: stride-6 per entry — `[type, current, base, ranks,
-  // training, next_rank_cost]` (Rust src/lib.rs publish_player_stats_snapshot).
-  // `training` (index 4) is ACE's `SkillAdvancementClass`: Inactive=0,
-  // Untrained=1, Trained=2, Specialized=3 — matches the TRAINING enum in
-  // train-skills.js. Index 5 is the MARGINAL next-rank cost (0 = max).
-  const playerSkills = stats?.skills;
-  const valueByLine = new Map();   // skillId → "cur/base"
-  const stateByLine = new Map();
-  const xpByLine = new Map();      // skillId → MARGINAL next-rank cost (S2 footer)
-  if (playerSkills) {
-    const len = playerSkills.length ?? 0;
-    for (let i = 0; i + 5 < len; i += 6) {
-      const id = tupleArrayAt(playerSkills, i);
-      const cur = tupleArrayAt(playerSkills, i + 1);
-      const base = tupleArrayAt(playerSkills, i + 2);
-      const trained = tupleArrayAt(playerSkills, i + 4);
-      const xp = tupleArrayAt(playerSkills, i + 5);
-      valueByLine.set(id, base != null && cur != null ? `${base}` : "—");
-      stateByLine.set(id, trained ?? 0);
-      xpByLine.set(id, xp ?? 0);
-    }
-  }
-  // Group by trained state — Specialized first, then Trained, then Untrained.
-  const tiers = { 3: [], 2: [], 1: [], 0: [], 4: [] };
-  for (const skill of skillTable.skills) {
-    const idInt = skill.skillIdInt;
-    const trained = stateByLine.get(idInt) ?? 1;
-    (tiers[trained] || tiers[1]).push(skill);
-  }
-  const tierOrder = [
-    { key: 3, label: "Specialized Skills" },
-    { key: 2, label: "Trained Skills" },
-    { key: 1, label: "Untrained Skills" },
-    { key: 0, label: "Unusable" },
-    { key: 4, label: "Unusable" },
-  ];
-  for (const t of tierOrder) {
-    const items = tiers[t.key];
-    if (!items || items.length === 0) continue;
-    bodyEl.appendChild(section(t.label));
-    for (const skill of items) {
-      const iconUrl = `./data/ui-sprites/${skill.iconIdHex}.png`;
-      const id = skill.skillIdInt;
-      const value = valueByLine.get(id) ?? "—";
-      // BAND-B S2 — Skills rows carry NO per-row button (retail puts the
-      // action in the shared footer); they're selectable instead.
-      const el = row(iconUrl, skill.name, value);
-      wireSelectableRow(el, selectCtx, id, "skill", {
-        kind: "skill",
-        name: skill.name,
-        training: stateByLine.get(id) ?? TRAINING.UNTRAINED,
-        xp: xpByLine.get(id) ?? 0,
-        trainedCost: skill.trainedCost ?? 0,
-      });
-      bodyEl.appendChild(el);
-    }
-  }
-}
-
-// Top-30 entries of ACE's CharacterTitle enum (Source/ACE.Entity/Enum/
-// CharacterTitle.cs). Used to label the current title and earned-list
-// rows by name when the id is in range; falls back to "Title N" otherwise.
-// Full enum has 1000+ entries — porting the whole thing would warrant
-// a generated string table.
-const TITLE_NAMES = {
-  0: "Invalid",   1: "Adventurer",  2: "Archer",        3: "Blademaster",
-  4: "Enchanter", 5: "LifeMage",    6: "Sorcerer",      7: "Vagabond",
-  8: "Warrior",   9: "BowHunter",  10: "LifeCaster",   11: "Soldier",
-  12: "Swashbuckler", 13: "WarMage", 14: "Wayfarer",   15: "AbhorrentWarrior",
-  16: "Alchemist",17: "Annihilator",18: "Apothecary",  19: "ArcticAdventurer",
-  20: "ArcticMattekarAnnihilator",  21: "Artifex",     22: "AxeWarrior",
-  23: "Ballisteer",24: "BaneoftheRemoran",25: "BloodShrethButcher",
-  26: "Bookbinder",27: "Brawler",   28: "ButcheroftheNorth",29: "Cabalist",
-  30: "Carpenter",
-};
-
-// Title tab — uses the gmCharacterTitleUI 0x2100005E structured layout.
-// Three header rows (display info / counts / column heading), 2
-// separators, a scrollable list area, and a bottom action button.
-//
-// 2026-05-30 — wired to the real server snapshot via
-// `__sessionHandle.playerTitle()` (TitleSnapshotJs at src/lib.rs:23960
-// with `currentTitleId` + `titleIds` map). Refreshed on every recv-loop
-// `kind=28 titleUpdated` drain.
-function renderTitles(bodyEl, _stats, titleRefs) {
-  bodyEl.innerHTML = "";
-  const wrap = document.createElement("div");
-  wrap.className = "hb-ci-titles";
-
-  // Pull the snapshot once for this render. Wasm-bindgen exposes the two
-  // fields as getters so the snapshot has to be live-read.
-  let currentId = 0;
-  const earnedIds = [];
-  try {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    const snap = handle?.playerTitle?.();
+    snap = getHandle()?.playerTitle?.() ?? null;
     if (snap) {
-      currentId = snap.currentTitleId >>> 0;
-      const ids = snap.titleIds;
-      if (ids && typeof ids === "object") {
-        for (const k of Object.keys(ids)) {
-          const v = (ids[k] >>> 0);
-          if (v) earnedIds.push(v);
-        }
-      }
+      out.currentId = snap.currentTitleId >>> 0;
+      for (const v of toArray(snap.titleIds)) if (v >>> 0) out.ids.push(v >>> 0);
     }
-  } catch (_) { /* pre-snapshot: render the empty-state */ }
-  const currentName = TITLE_NAMES[currentId] || (currentId ? `Title ${currentId}` : "—");
+  } catch (_) { /* pre-snapshot */ }
+  finally { try { snap?.free?.(); } catch (_) {} }
+  return out;
+}
 
-  const header1 = document.createElement("div");
-  header1.className = "hb-ci-titles-header";
-  setAcText(header1, `Display Title: ${currentName}`, { color: "#f0d8a0" });
-  wrap.appendChild(header1);
+// ─── Row models ──────────────────────────────────────────────────────
 
-  const header2 = document.createElement("div");
-  header2.className = "hb-ci-titles-header";
-  setAcText(header2, `Earned: ${earnedIds.length}`, { color: "#f0d8a0" });
-  wrap.appendChild(header2);
+function valueColor(cur, base) {
+  if (cur > base) return C_BUFFED;
+  if (cur < base) return C_DEBUFFED;
+  return C_VALUE;
+}
 
-  const header3 = document.createElement("div");
-  header3.className = "hb-ci-titles-header";
-  setAcText(header3, "Title", { color: "#6acaca" });
-  wrap.appendChild(header3);
-
-  const sep1 = document.createElement("div");
-  sep1.className = "hb-ci-titles-sep";
-  sep1.dataset.sep = "1";
-  wrap.appendChild(sep1);
-
-  const sep2 = document.createElement("div");
-  sep2.className = "hb-ci-titles-sep";
-  sep2.dataset.sep = "2";
-  wrap.appendChild(sep2);
-
-  const list = document.createElement("div");
-  list.className = "hb-ci-titles-list";
-  if (earnedIds.length === 0) {
-    const listEmpty = document.createElement("div");
-    listEmpty.className = "hb-ci-titles-list-empty";
-    setAcText(listEmpty, "No titles earned yet.", { color: "#a8a090" });
-    list.appendChild(listEmpty);
-  } else {
-    // One row per earned title id, current title highlighted gold +
-    // .current class. selectedTitleId tracks the user's pending pick;
-    // it seeds to currentId so the current title looks selected on
-    // first render. Click flips .selected onto the clicked row.
-    let selectedTitleId = currentId;
-    const rowEls = [];
-    function applySelectedClass() {
-      for (const el of rowEls) {
-        const idNum = (parseInt(el.dataset.titleId, 10) >>> 0) || 0;
-        el.classList.toggle("selected", idNum === selectedTitleId);
-      }
-    }
-    for (const id of earnedIds.sort((a, b) => a - b)) {
-      const r = document.createElement("div");
-      r.className = "hb-ci-titles-row" + (id === currentId ? " current" : "");
-      r.dataset.titleId = String(id);
-      const name = TITLE_NAMES[id] || `Title ${id}`;
-      setAcText(r, name, { color: id === currentId ? "#f0c87c" : "#f0d8a0" });
-      r.addEventListener("click", () => {
-        selectedTitleId = id;
-        applySelectedClass();
+function buildAttributeModel(stats, xp) {
+  const items = [];
+  const a = stats?.attributes ?? [];
+  const byId = new Map();
+  const attrBase = {};
+  for (let i = 0; i + 3 < a.length; i += 4) {
+    byId.set(a[i], { cur: a[i + 1], base: a[i + 2], ranks: a[i + 3] });
+    attrBase[a[i]] = a[i + 2];
+  }
+  if (byId.size === 0) return items;
+  items.push({ key: "h:attributes", kind: "header", group: "plain", label: "Attributes" });
+  for (const id of ATTR_ORDER) {
+    const r = byId.get(id);
+    if (!r) continue;
+    const table = xp?.attributes ?? null;
+    const spent = Array.isArray(table) ? (table[r.ranks] ?? 0) : 0;
+    items.push({
+      key: `attribute:${id}`, kind: "attribute", id,
+      name: ATTR_NAMES[id] ?? `Attribute ${id}`,
+      icon: ATTR_ICONS[id] ? `${SP}/${ATTR_ICONS[id]}.png` : null,
+      value: String(r.cur), valueColor: valueColor(r.cur, r.base),
+      current: r.cur, base: r.base,
+      tip: r.cur !== r.base ? `Base ${r.base}, currently ${r.cur}` : `Base ${r.base}`,
+      cost1: statRaiseCost(table, r.ranks, spent, 1),
+      cost10: statRaiseCost(table, r.ranks, spent, 10),
+    });
+  }
+  const v = stats?.vitals ?? [];
+  if (v.length >= 4) {
+    items.push({ key: "h:vitals", kind: "header", group: "plain", label: "Vitals" });
+    for (let i = 0; i + 3 < v.length; i += 4) {
+      const id = v[i], cur = v[i + 1], base = v[i + 2], max = v[i + 3];
+      const table = xp?.vitals ?? null;
+      const ranks = estimateVitalRanks(id, base, attrBase);
+      const spent = Array.isArray(table) ? (table[ranks] ?? 0) : 0;
+      items.push({
+        key: `vital:${id}`, kind: "vital", id,
+        name: VITAL_NAMES[id] ?? `Vital ${id}`,
+        icon: VITAL_ICONS[id] ? `${SP}/${VITAL_ICONS[id]}.png` : null,
+        value: `${cur}/${max}`, valueColor: valueColor(max, base),
+        current: max, base,
+        tip: `Maximum ${max} (base ${base}), currently ${cur}`,
+        cost1: statRaiseCost(table, ranks, spent, 1),
+        cost10: statRaiseCost(table, ranks, spent, 10),
       });
-      list.appendChild(r);
-      rowEls.push(r);
     }
-    applySelectedClass();
-    // Stash the getter onto the list element so the bottomBtn handler
-    // attached below can read the live selection without juggling
-    // closures across the wrap → list → button chain.
-    list.dataset.selectedTitleId = String(selectedTitleId);
-    list._getSelectedTitleId = () => selectedTitleId;
   }
-  wrap.appendChild(list);
+  return items;
+}
 
-  // Invisible phantom for the layout-derived scrollbar geometry.
-  const titleScrollbar = document.createElement("div");
-  titleScrollbar.className = "hb-ci-scrollbar";
-  wrap.appendChild(titleScrollbar);
+const SKILL_GROUPS = [
+  { key: "specialized", label: "Specialized Skills" },
+  { key: "trained", label: "Trained Skills" },
+  { key: "untrained", label: "Untrained Skills" },
+  { key: "unusable", label: "Unusable Skills" },
+];
 
-  const bottomBtn = document.createElement("div");
-  bottomBtn.className = "hb-ci-titles-bottom";
-  setAcText(bottomBtn, "Set Display Title", { color: "#f0d8a0" });
-  // Rec #51 — fire the wasm setTitle binding when available
-  // (pass-1 rec #133 is fable-skip wiring), with optimistic update so
-  // the .current highlight moves immediately. The recv-loop kind=28
-  // drain re-renders renderTitles with the server-authoritative
-  // currentTitleId so a server reject naturally rolls back.
-  bottomBtn.addEventListener("click", () => {
-    let id = 0;
-    try { id = (list._getSelectedTitleId?.() >>> 0) || 0; } catch (_) { id = 0; }
-    if (!id) return;
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (typeof handle?.setTitle === "function") {
-        handle.setTitle(id);
-      } else {
-        console.warn("[character-info] setTitle wasm export missing (pass-1 rec #133)");
+function buildSkillModel(stats, table, xp) {
+  const catalog = table?.skills ?? [];
+  if (!catalog.length) return [];
+  const s = stats?.skills ?? [];
+  const snap = new Map();
+  for (let i = 0; i + 5 < s.length; i += 6) {
+    snap.set(s[i], { cur: s[i + 1], base: s[i + 2], ranks: s[i + 3], training: s[i + 4], marginal: s[i + 5] });
+  }
+  const groups = { specialized: [], trained: [], untrained: [], unusable: [] };
+  for (const sk of catalog) {
+    const id = sk.skillIdInt;
+    const r = snap.get(id) ?? null;
+    const training = r?.training ?? TRAINING.UNUSABLE;
+    const group = skillGroupFor(training, sk.minLevel);
+    let cost1 = null, cost10 = null;
+    if (r && (training === TRAINING.TRAINED || training === TRAINING.SPECIALIZED)) {
+      const curve = training === TRAINING.SPECIALIZED ? xp?.specializedSkills : xp?.trainedSkills;
+      if (r.marginal > 0) {
+        cost1 = { cost: r.marginal >>> 0, ranks: 1 };
+        const spent = skillSpentXp(curve, r.ranks, r.marginal);
+        cost10 = statRaiseCost(curve, r.ranks, spent, 10);
+        // The server's marginal is authoritative; if the local curve
+        // disagrees with it (stale dist data) never offer a +10 that is
+        // cheaper than +1 — hide it instead of sending a wrong amount.
+        if (cost10 && cost10.cost < cost1.cost) cost10 = null;
       }
-    } catch (e) {
-      console.warn("[character-info] setTitle failed:", e);
     }
-  });
-  wrap.appendChild(bottomBtn);
-
-  bodyEl.appendChild(wrap);
-
-  // Stash refs back on titleRefs so applyCharacterInfoLayout can
-  // populate the per-element positions.
-  if (titleRefs) {
-    titleRefs.headerEls = [header1, header2, header3];
-    titleRefs.sepEls    = [sep1, sep2];
-    titleRefs.listEl    = list;
-    titleRefs.scrollbarEl = titleScrollbar;
-    titleRefs.bottomBtnEl = bottomBtn;
+    const cur = r?.cur ?? 0, base = r?.base ?? 0;
+    groups[group].push({
+      key: `skill:${id}`, kind: "skill", id, group, training,
+      name: sk.name ?? `Skill ${id}`,
+      icon: sk.iconIdHex ? `${SP}/${sk.iconIdHex}.png` : null,
+      value: r ? String(cur) : "",
+      valueColor: group === "unusable" ? C_UNUSABLE : valueColor(cur, base),
+      nameColor: group === "unusable" ? C_UNUSABLE : C_NAME,
+      current: cur, base,
+      tip: [sk.name, sk.description, r ? (cur !== base ? `Base ${base}, currently ${cur}` : `Base ${base}`) : ""]
+        .filter(Boolean).join("\n"),
+      trainedCost: sk.trainedCost ?? 0,
+      cost1, cost10,
+    });
   }
+  const items = [];
+  for (const g of SKILL_GROUPS) {
+    const rows = groups[g.key];
+    if (!rows.length) continue;
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+    items.push({ key: `h:${g.key}`, kind: "header", group: g.key, label: g.label });
+    items.push(...rows);
+  }
+  return items;
 }
 
-function section(text) {
-  const el = document.createElement("div");
-  el.className = "hb-ci-section";
-  setAcText(el, text, { color: "#6acaca" });
-  return el;
-}
-function emptyMsg(text) {
-  const el = document.createElement("div");
-  el.className = "hb-ci-empty";
-  setAcText(el, text, { color: "#a8a090" });
-  return el;
-}
-function row(iconUrl, name, value, raise) {
-  const el = document.createElement("div");
-  el.className = "hb-ci-row";
-  const ic = document.createElement("div");
-  ic.className = "hb-ci-icon";
-  if (iconUrl) ic.style.backgroundImage = `url("${iconUrl}")`;
-  el.appendChild(ic);
-  const n = document.createElement("div");
-  n.className = "hb-ci-name";
-  setAcText(n, name, { color: "#f0d8a0" });
-  el.appendChild(n);
-  const v = document.createElement("div");
-  v.className = "hb-ci-value";
-  setAcText(v, String(value), { color: "#8aef6d" });
-  el.appendChild(v);
-  // 2026-05-30 — optional raise control. `raise` is
-  // `{ cost: number, canAfford: boolean, isMax: boolean, onClick: fn }`.
-  // gmStatManagementUI 0x2100002B element 0x10000210 — Normal sprite
-  // 0x06001282, Pressed 0x06001283 + green/red eligibility dots
-  // 0x06004D17 / 0x06004D19.
-  if (raise) {
-    const dot = document.createElement("div");
-    dot.className = "hb-ci-dot";
-    dot.style.backgroundImage = `url("./data/ui-sprites/${raise.canAfford ? "0x06004D17" : "0x06004D19"}.png")`;
-    el.appendChild(dot);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "hb-ci-raise";
-    btn.disabled = raise.isMax || !raise.canAfford;
-    btn.title = raise.isMax
-      ? "Already at max rank"
-      : raise.canAfford
-        ? `Spend ${raise.cost} XP to raise this rank`
-        : `Needs ${raise.cost} XP (you have ${raise.availableXp ?? 0})`;
-    btn.style.backgroundImage = `url("./data/ui-sprites/0x06001282.png")`;
-    btn.addEventListener("pointerdown", () => {
-      btn.style.backgroundImage = `url("./data/ui-sprites/0x06001283.png")`;
+function buildTitleModel(titles) {
+  const items = [];
+  const ids = [...titles.ids].sort((a, b) => titleName(a).localeCompare(titleName(b)));
+  for (const id of ids) {
+    items.push({
+      key: `title:${id}`, kind: "title", id,
+      name: titleName(id),
+      value: id === titles.currentId ? "Current" : "",
+      valueColor: C_GOLD,
+      tip: id === titles.currentId ? "Your displayed title" : "Select, then Set Title to display it",
     });
-    btn.addEventListener("pointerup", () => {
-      btn.style.backgroundImage = `url("./data/ui-sprites/0x06001282.png")`;
-    });
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      try { raise.onClick?.(); } catch (e) { console.warn("[raise]", e); }
-      // HUD rec #141 — disable optimistically after click. The
-      // `playerStatsUpdated` subscription in mount() re-renders the
-      // whole pane once the server confirms the spend, which rebuilds
-      // every row (this button is dropped). Until then we want to
-      // prevent the player double-clicking on a now-stale cost. The
-      // ~250ms timer is a fallback if the server never acks (lost
-      // packet); rerender will overwrite us before then in the happy
-      // path.
-      btn.disabled = true;
-      btn.title = "Waiting for server confirm…";
-      setTimeout(() => {
-        if (btn.isConnected) {
-          btn.disabled = raise.isMax || !raise.canAfford;
-          btn.title = raise.isMax
-            ? "Already at max rank"
-            : raise.canAfford
-              ? `Spend ${raise.cost} XP to raise this rank`
-              : `Needs ${raise.cost} XP (you have ${raise.availableXp ?? 0})`;
-        }
-      }, 1500);
-    });
-    el.appendChild(btn);
   }
-  return el;
+  return items;
+}
+
+// ─── Footer model (pure — exported for tests) ────────────────────────
+
+/**
+ * Footer contents for the current selection, mirroring retail
+ * gmSkillUI / gmAttributeUI DisplayDefaultFooter / DisplaySelectionFooter_*.
+ * Returns `{ title, line1:[label,value], line2:[label,value], raise1,
+ * raise10 }` where raise* is `{ enabled, hidden, cost, ranks, action }`.
+ */
+export function footerModel(tab, rec, pools) {
+  const xp = pools?.availableXp ?? 0;
+  const credits = pools?.credits ?? 0;
+  const off = { enabled: false, hidden: false };
+  const hidden = { enabled: false, hidden: true };
+  const xpLine = ["Unassigned XP:", fmt(xp)];
+  const credLine = ["Skill Credits:", fmt(credits)];
+  if (!rec) {
+    if (tab === "skills") {
+      return { title: "Select a Skill to Improve", line1: credLine, line2: xpLine, raise1: off, raise10: off };
+    }
+    return { title: "Select an Attribute to Improve", line1: xpLine, line2: credLine, raise1: off, raise10: off };
+  }
+  if (rec.kind === "skill" && rec.group === "untrained") {
+    const cost = rec.trainedCost >>> 0;
+    return {
+      title: rec.name,
+      line1: ["Credits to Train:", cost ? fmt(cost) : "—"],
+      line2: credLine,
+      raise1: { enabled: cost > 0 && cost <= credits, hidden: false, cost, ranks: 0, action: "train" },
+      raise10: hidden,
+    };
+  }
+  if (rec.kind === "skill" && rec.group === "unusable") {
+    return { title: rec.name, line1: ["Cannot be trained", ""], line2: credLine, raise1: off, raise10: hidden };
+  }
+  const c1 = rec.cost1, c10 = rec.cost10;
+  const atMax = !c1;
+  return {
+    // DisplaySelectionFooter_Trained: SetText(title, "%s: %d", name, buffed value).
+    title: `${rec.name}: ${rec.current}`,
+    line1: ["XP to Raise:", atMax ? "Maximum" : fmt(c1.cost)],
+    line2: xpLine,
+    raise1: { enabled: !atMax && c1.cost <= xp, hidden: false, cost: c1?.cost ?? 0, ranks: 1, action: "raise" },
+    raise10: c10 && c10.ranks > 1
+      ? { enabled: c10.cost <= xp, hidden: false, cost: c10.cost, ranks: c10.ranks, action: "raise" }
+      : { enabled: false, hidden: atMax, cost: 0, ranks: 0, action: "raise" },
+  };
+}
+
+// ─── Confirm helper ──────────────────────────────────────────────────
+
+async function confirmAction(title, message, confirmLabel) {
+  try {
+    if (typeof window.__modalConfirm === "function") {
+      return !!(await window.__modalConfirm({ title, message, confirmLabel, cancelLabel: "Cancel" }));
+    }
+  } catch (_) { /* fall through */ }
+  if (typeof window.confirm === "function") return window.confirm(message);
+  return true;
+}
+
+// ─── View ────────────────────────────────────────────────────────────
+
+let activeInstance = null;
+
+/**
+ * Open the character pane on `tab`. Toggles closed when the pane is
+ * already showing that tab (toolbar-button semantics); switches tab in
+ * place when it is showing another one.
+ */
+export function openCharacterTab(tab, { toggle = true } = {}) {
+  const want = TAB_IDS.has(tab) ? tab : "attributes";
+  const mp = window.__mainPanel;
+  if (!mp) return;
+  if (activeInstance && mp.isOpen?.() && mp.currentViewId?.() === "character") {
+    if (toggle && activeInstance.getTab() === want) { mp.closeView?.(); return; }
+    activeInstance.setTab(want);
+    return;
+  }
+  mp.showView?.("character", { tab: want });
+}
+if (typeof window !== "undefined") window.__openCharacterTab = openCharacterTab;
+
+function el(tag, cls) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  return e;
 }
 
 export const view = {
-  name: "Character",
-  nameFor: (ctx) => {
-    const stats = getStats();
-    const tabLabel = ctx?.tab === "skills" ? "Skills"
-                   : ctx?.tab === "titles" ? "Titles"
-                   : "Attributes";
-    return stats?.name ? `${stats.name} — ${tabLabel}` : tabLabel;
-  },
+  name: "Attributes",
+  nameFor: (ctx) => tabMeta(resolveTab(ctx)).title,
   mount: (parentEl, ctx) => {
     ensureStyles();
-    const root = document.createElement("div");
-    root.className = "hb-ci-root";
+    let activeTab = resolveTab(ctx);
+    lastTab = activeTab;
 
-    const tabsEl = document.createElement("div");
-    tabsEl.className = "hb-ci-tabs";
+    const root = el("div", "hb-ci-root");
+
+    // Tabs — kit tabs; the selected one mirrors the panel title.
+    const tabsEl = el("div", "hbk-tabs hb-ci-tabs");
+    tabsEl.setAttribute("role", "tablist");
     const tabBtns = {};
-    const TABS = [
-      { id: "attributes", label: "Attributes" },
-      { id: "skills",     label: "Skills" },
-      { id: "titles",     label: "Titles" },
-    ];
-    let activeTab = ctx?.tab || "skills";
     for (const t of TABS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "hb-ci-tab" + (t.id === activeTab ? " active" : "");
-      btn.dataset.tab = t.id;
-      // Stash the display label. `setTab()` used to re-derive it from
-      // `btn.textContent`, which is EMPTY once the AC font has registered:
-      // setAcText puts an `<ac-text>` inside the button and `<ac-text>
-      // ._render()` replaces its children with a <canvas> — its own re-entry
-      // guard says so ("when _render() replaces children with a canvas,
-      // textContent becomes ''", ui/ac_font.js). The `|| k` fallback then
-      // relabelled every tab with its lowercase id.
-      btn.dataset.label = t.label;
-      setAcText(btn, t.label, { color: t.id === activeTab ? "#f0c87c" : "#f0e8d0" });
-      btn.addEventListener("click", () => setTab(t.id));
-      tabsEl.appendChild(btn);
-      tabBtns[t.id] = btn;
+      const b = el("button", "hbk-tab");
+      b.type = "button";
+      b.dataset.tab = t.id;
+      b.dataset.label = t.label;
+      b.setAttribute("role", "tab");
+      b.textContent = t.label;
+      b.addEventListener("click", () => setTab(t.id));
+      tabsEl.appendChild(b);
+      tabBtns[t.id] = b;
     }
     root.appendChild(tabsEl);
 
-    const headEl = document.createElement("div");
-    headEl.className = "hb-ci-head";
-    root.appendChild(headEl);
+    // Header.
+    const head = el("div", "hb-ci-head");
+    head.dataset.el = "0x10000230";
+    const headMain = el("div", "hb-ci-head-main");
+    const nameEl = el("div", "hb-ci-name"); nameEl.dataset.el = "0x10000231";
+    const subEl = el("div", "hb-ci-sub"); subEl.dataset.el = "0x10000232";
+    const xpRow = el("div", "hb-ci-kv");
+    const xpK = el("span"); const xpV = el("span");
+    xpRow.append(xpK, xpV);
+    const meter = el("div", "hb-ci-xpmeter"); meter.dataset.el = "0x10000236";
+    const meterFill = el("div", "hb-ci-xpmeter-fill");
+    const meterLabel = el("div", "hb-ci-xpmeter-label");
+    const meterK = el("span"); const meterV = el("span");
+    meterLabel.append(meterK, meterV);
+    meter.append(meterFill, meterLabel);
+    headMain.append(nameEl, subEl, xpRow, meter);
+    const vdiv = el("div", "hb-ci-vdiv"); vdiv.dataset.el = "0x10000239";
+    const levelBox = el("div", "hb-ci-level");
+    const levelK = el("span"); levelK.dataset.el = "0x1000023A";
+    const levelV = el("span"); levelV.dataset.el = "0x1000023B";
+    levelBox.append(levelK, levelV);
+    head.append(headMain, vdiv, levelBox);
+    root.appendChild(head);
+    setAcText(xpK, "Total Experience (XP):", { color: C_DIM, fontId: COMPACT_FONT_ID });
+    setAcText(meterK, "XP for next level:", { color: "#ffffff", fontId: COMPACT_FONT_ID });
+    setAcText(levelK, "Level", { color: C_GOLD, fontId: COMPACT_FONT_ID });
 
-    const bodyEl = document.createElement("div");
-    bodyEl.className = "hb-ci-body";
-    root.appendChild(bodyEl);
+    const ruleTop = el("div", "hb-ci-rule"); ruleTop.dataset.el = "0x1000023C";
+    root.appendChild(ruleTop);
 
-    // Invisible scrollbar geometry phantom — applyCharacterInfoLayout
-    // writes the retail scrollbar dimensions here so the e2e verifier
-    // can confirm placement without our DOM showing a double scrollbar.
-    const scrollbarEl = document.createElement("div");
-    scrollbarEl.className = "hb-ci-scrollbar";
-    root.appendChild(scrollbarEl);
+    const list = el("div", "hbk-scroll hbk-list hb-ci-list");
+    list.dataset.el = "0x1000023D";
+    list.setAttribute("role", "listbox");
+    root.appendChild(list);
 
-    const footerEl = document.createElement("div");
-    footerEl.className = "hb-ci-footer";
-    const footL = document.createElement("span");
-    setAcText(footL, "—", { color: "#a8a090" });
-    const footR = document.createElement("span");
-    setAcText(footR, "", { color: "#a8a090" });
-    footerEl.appendChild(footL);
-    footerEl.appendChild(footR);
-    root.appendChild(footerEl);
+    const ruleBot = el("div", "hb-ci-rule"); ruleBot.dataset.el = "0x1000023F";
+    root.appendChild(ruleBot);
 
-    // BAND-B S2 — gmStatManagementUI improve-footer band (above the status
-    // footer). Shown only on the Skills + Attributes tabs; the body bottom
-    // shifts to 82px for those tabs so it doesn't overlap. data-el tags carry
-    // the decompiled retail element ids for test_ac_layout_strings.mjs.
-    const improveEl = document.createElement("div");
-    improveEl.className = "hb-ci-improve";
-    improveEl.dataset.el = "0x10000240";
-    const improveTitle = document.createElement("div");
-    improveTitle.className = "hb-ci-improve-title";
-    improveTitle.dataset.el = "0x10000241";
-    const improveLine1 = document.createElement("div");
-    improveLine1.className = "hb-ci-improve-line";
-    improveLine1.dataset.el = "0x10000242";
-    const improveLine2 = document.createElement("div");
-    improveLine2.className = "hb-ci-improve-line";
-    improveLine2.dataset.el = "0x10000244";
-    const improveBtn = document.createElement("button");
-    improveBtn.type = "button";
-    improveBtn.className = "hb-ci-improve-btn";
-    improveBtn.dataset.el = "0x10000246";
-    setAcText(improveBtn, "Improve", { color: "#f0e8d0" });
-    improveEl.appendChild(improveTitle);
-    improveEl.appendChild(improveLine1);
-    improveEl.appendChild(improveLine2);
-    improveEl.appendChild(improveBtn);
-    root.appendChild(improveEl);
+    // Footer.
+    const foot = el("div", "hb-ci-foot"); foot.dataset.el = "0x10000240";
+    const footText = el("div", "hb-ci-foot-text");
+    const footTitle = el("div", "hb-ci-foot-title"); footTitle.dataset.el = "0x1000024E";
+    const line1 = el("div", "hb-ci-foot-line");
+    const l1k = el("span"); l1k.dataset.el = "0x10000242";
+    const l1v = el("span"); l1v.dataset.el = "0x10000243";
+    line1.append(l1k, l1v);
+    const line2 = el("div", "hb-ci-foot-line");
+    const l2k = el("span"); l2k.dataset.el = "0x10000244";
+    const l2v = el("span"); l2v.dataset.el = "0x10000245";
+    line2.append(l2k, l2v);
+    footText.append(footTitle, line1, line2);
+    const btns = el("div", "hb-ci-foot-btns");
+    const raise10 = el("button", "hb-ci-raise");
+    raise10.type = "button"; raise10.dataset.step = "10"; raise10.dataset.el = "0x100005EB";
+    raise10.setAttribute("aria-label", "Raise 10");
+    const raise1 = el("button", "hb-ci-raise");
+    raise1.type = "button"; raise1.dataset.step = "1"; raise1.dataset.el = "0x10000246";
+    raise1.setAttribute("aria-label", "Raise 1");
+    const setTitleBtn = el("button", "hbk-btn hb-ci-setbtn");
+    setTitleBtn.type = "button";
+    setTitleBtn.textContent = "Set Title";
+    btns.append(raise10, raise1, setTitleBtn);
+    foot.append(footText, btns);
+    root.appendChild(foot);
 
     parentEl.appendChild(root);
 
-    // Apply retail layouts: parent panel anchors + Title-tab structured
-    // rows. The view mounts via main-panel.showView which only fires
-    // after wasm-ready, so no retry loop is required.
-    const titleRefs = {};
-    applyCharacterInfoLayout({
-      rootEl: root,
-      tabsEl,
-      headEl,
-      bodyEl,
-      scrollbarEl,
-      titleRefs,
-    });
+    // ── State ──
+    let stats = null;
+    let model = [];             // current list items
+    let renderedKeys = "";      // key signature of the rendered list
+    const rowEls = new Map();   // key → row element
+    let selectedKey = null;
+    let awaitingRaise = false;  // gmStatManagementUI::m_bAwaitingRaise
+    let awaitTimer = 0;
+    let titles = { currentId: 0, ids: [] };
+    let titlesSig = "";
 
-    let skillTable = null;
-
-    // BAND-B S2 — improve-footer selection model. statIndex maps the
-    // composite `${kind}:${id}` key (rebuilt every render) to the footer
-    // descriptor; selectedStat* is the pinned target.
-    const statIndex = new Map();
-    let selectedStatId = null;
-    let selectedStatKind = null;
-    const selectCtx = {
-      statIndex,
-      get selectedStatId() { return selectedStatId; },
-      get selectedStatKind() { return selectedStatKind; },
-      onSelect: (id, kind) => {
-        selectedStatId = id;
-        selectedStatKind = kind;
-        renderImproveFooter();
-        reapplySelectedClass();
-      },
-    };
-
-    function reapplySelectedClass() {
-      bodyEl.querySelectorAll("[data-stat-id]").forEach((r) => {
-        const id = Number(r.dataset.statId);
-        const kind = r.dataset.statKind;
-        r.classList.toggle(
-          "selected", id === selectedStatId && kind === selectedStatKind);
-      });
+    function selectedRec() {
+      return selectedKey ? model.find((m) => m.key === selectedKey) ?? null : null;
     }
 
-    // Skill train/raise — lifted from train-skills.js dispatch(): the pure
-    // decideTrainAction picks the wasm method + u32-coerced args, gated on
-    // credits/xp; we invoke it. ACE echoes a PrivateUpdateSkill that drives
-    // a playerStatsUpdated rerender.
-    function fireImprove(action) {
-      const client = window.__pluginClient;
-      const decision = decideTrainAction(action, client);
-      if (decision.called === "trainSkill") {
-        try { client.player.trainSkill(...decision.args); }
-        catch (e) { console.warn("[char-info] trainSkill failed:", e); }
-      } else if (decision.called === "raiseSkill") {
-        try { client.player.raiseSkill(...decision.args); }
-        catch (e) { console.warn("[char-info] raiseSkill failed:", e); }
-      } else if (decision.reason) {
-        console.log(`[char-info] improve no-op (${decision.reason})`);
+    function renderHeader() {
+      const level = getLevel(stats);
+      setAcText(nameEl, stats?.name || "—", { color: C_GOLD, fit: true });
+      const tName = titleName(titles.currentId);
+      subEl.dataset.empty = tName ? "0" : "1";
+      if (tName) setAcText(subEl, tName, { color: C_DIM, fontId: COMPACT_FONT_ID, fit: true });
+      const total = getTotalXp(stats);
+      setAcText(xpV, stats ? fmt(total) : "—", { color: C_VALUE, fontId: COMPACT_FONT_ID });
+      const prog = (stats && xpTables?.levels) ? levelProgress(xpTables.levels, level, total) : null;
+      if (prog) {
+        meter.dataset.hidden = "0";
+        meter.style.setProperty("--hb-ci-fill", `${(prog.fraction * 100).toFixed(1)}%`);
+        setAcText(meterV, prog.isMax ? "Max level" : fmt(prog.toNext), { color: "#ffffff", fontId: COMPACT_FONT_ID });
+      } else {
+        meter.dataset.hidden = "1";
+      }
+      setAcText(levelV, level ? String(level) : "—", { color: C_NAME, fontId: HEADING_FONT_ID });
+    }
+
+    function buildModel() {
+      if (activeTab === "attributes") return buildAttributeModel(stats, xpTables);
+      if (activeTab === "skills") return buildSkillModel(stats, skillTable, xpTables);
+      return buildTitleModel(titles);
+    }
+
+    function emptyText() {
+      if (!stats && activeTab !== "titles") return "Waiting for character data…";
+      if (activeTab === "skills" && !skillTable) return "Loading skills…";
+      if (activeTab === "titles") return "You have not earned any titles yet.";
+      return "No data.";
+    }
+
+    function makeRow(item) {
+      if (item.kind === "header") {
+        const h = el("div", "hb-ci-group");
+        h.dataset.group = item.group;
+        h.setAttribute("role", "presentation");
+        setAcText(h, item.label, { color: "#ffffff" });
+        return h;
+      }
+      const r = el("div", "hbk-row is-clickable hb-ci-row");
+      r.dataset.key = item.key;
+      r.dataset.statId = String(item.id);
+      r.dataset.statKind = item.kind;
+      if (item.kind === "skill") r.dataset.skillId = String(item.id);
+      r.setAttribute("role", "option");
+      if (item.kind !== "title") {
+        const ic = el("span", "hb-ci-icon");
+        if (item.icon) ic.style.backgroundImage = `url("${item.icon}")`;
+        r.appendChild(ic);
+      }
+      const n = el("span", "hb-ci-rname");
+      const v = el("span", "hb-ci-rval");
+      r.append(n, v);
+      r._nameEl = n; r._valEl = v;
+      r.addEventListener("click", () => select(item.key));
+      return r;
+    }
+
+    function paintRow(r, item) {
+      setAcText(r._nameEl, item.name, { color: item.nameColor ?? C_NAME, fit: true });
+      setAcText(r._valEl, item.value ?? "", { color: item.valueColor ?? C_VALUE });
+      r.title = item.tip ?? "";
+      const sel = item.key === selectedKey;
+      r.classList.toggle("is-selected", sel);
+      r.setAttribute("aria-selected", sel ? "true" : "false");
+    }
+
+    function renderList() {
+      model = buildModel();
+      if (selectedKey && !model.some((m) => m.key === selectedKey)) selectedKey = null;
+      const sig = activeTab + "|" + (model.length ? model.map((m) => m.key).join(",") : `empty:${emptyText()}`);
+      if (sig !== renderedKeys) {
+        // Structure changed (tab switch, a skill changed section, titles
+        // earned) — rebuild. Otherwise the in-place repaint below keeps
+        // the canvases (setAcText is idempotent on identical text).
+        renderedKeys = sig;
+        const keepScroll = list.scrollTop;
+        list.replaceChildren();
+        rowEls.clear();
+        if (!model.length) {
+          const e = el("div", "hbk-empty");
+          e.textContent = emptyText();
+          list.appendChild(e);
+        }
+        for (const item of model) {
+          const r = makeRow(item);
+          rowEls.set(item.key, r);
+          list.appendChild(r);
+        }
+        list.scrollTop = keepScroll;
+      }
+      for (const item of model) {
+        if (item.kind === "header") continue;
+        const r = rowEls.get(item.key);
+        if (r) paintRow(r, item);
       }
     }
 
-    function renderImproveFooter() {
-      const stats = getStats();
-      const credits = getAvailableCredits();
-      const availableXp = getAvailableXp(stats);
-      const rec = (selectedStatId != null)
-        ? statIndex.get(selectedStatKind + ":" + selectedStatId)
-        : null;
+    function applyButton(btn, spec, step) {
+      const show = !(spec?.hidden);
+      btn.dataset.hidden = show ? "0" : "1";
+      btn.disabled = !spec?.enabled || awaitingRaise;
+      if (!show) { btn.title = ""; return; }
+      if (spec.action === "train") btn.title = `Train for ${fmt(spec.cost)} skill credits`;
+      else if (spec.cost) {
+        const n = spec.ranks || step;
+        btn.title = `Raise ${n} rank${n === 1 ? "" : "s"} for ${fmt(spec.cost)} XP`;
+      } else btn.title = step === 10 ? "Raise 10 ranks" : "Raise 1 rank";
+    }
 
-      // Default — DisplayDefaultFooter (no selection / off-tab selection).
-      if (!rec) {
-        setAcText(improveTitle, "Select a Skill to Improve", { color: "#f0c87c" });
-        setAcText(improveLine1, `Skill Credits Available: ${credits}`, { color: "#e8d8b0" });
-        setAcText(improveLine2, `Unassigned Experience: ${availableXp.toLocaleString()}`, { color: "#e8d8b0" });
-        setAcText(improveBtn, "Improve", { color: "#f0e8d0" });
-        improveBtn.disabled = true;
-        improveBtn.onclick = null;
+    function renderFooter() {
+      const rec = selectedRec();
+      if (activeTab === "titles") {
+        btns.dataset.mode = "title";
+        raise1.style.display = "none"; raise10.style.display = "none";
+        setTitleBtn.style.display = "";
+        const pick = rec?.kind === "title" ? rec : null;
+        setAcText(footTitle, pick ? pick.name : "Display Title", { color: C_GOLD, fit: true });
+        setAcText(l1k, "Current:", { color: C_DIM, fontId: COMPACT_FONT_ID });
+        setAcText(l1v, titleName(titles.currentId) || "None", { color: C_VALUE, fontId: COMPACT_FONT_ID });
+        setAcText(l2k, "Titles Earned:", { color: C_DIM, fontId: COMPACT_FONT_ID });
+        setAcText(l2v, String(titles.ids.length), { color: C_VALUE, fontId: COMPACT_FONT_ID });
+        setTitleBtn.disabled = !pick || pick.id === titles.currentId;
         return;
       }
+      btns.dataset.mode = "raise";
+      raise1.style.display = ""; raise10.style.display = "";
+      setTitleBtn.style.display = "none";
+      const f = footerModel(activeTab, rec, { availableXp: getAvailableXp(stats), credits: getAvailableCredits() });
+      setAcText(footTitle, f.title, { color: C_GOLD, fit: true });
+      setAcText(l1k, f.line1[0], { color: C_DIM, fontId: COMPACT_FONT_ID });
+      setAcText(l1v, f.line1[1], { color: C_VALUE, fontId: COMPACT_FONT_ID });
+      setAcText(l2k, f.line2[0], { color: C_DIM, fontId: COMPACT_FONT_ID });
+      setAcText(l2v, f.line2[1], { color: C_VALUE, fontId: COMPACT_FONT_ID });
+      applyButton(raise1, f.raise1, 1);
+      applyButton(raise10, f.raise10, 10);
+      raise1._spec = f.raise1;
+      raise10._spec = f.raise10;
+    }
 
-      let line1 = "", line2 = "", btnLabel = "Improve", enabled = false, onClick = null;
-      if (rec.kind === "skill") {
-        if (rec.training === TRAINING.UNTRAINED) {
-          const cost = rec.trainedCost ?? 0;
-          line1 = `Cost to Train: ${cost} credits`;
-          line2 = `Skill Credits Available: ${credits}`;
-          btnLabel = "Train";
-          enabled = cost > 0 && cost <= credits;
-          onClick = () => fireImprove({
-            kind: "train", skillId: selectedStatId, cost,
-            availableXp, availableCredits: credits,
-          });
-        } else if (rec.training === TRAINING.TRAINED || rec.training === TRAINING.SPECIALIZED) {
-          // snap.xp is S1's MARGINAL cost — computeNextRaiseCost returns it
-          // verbatim (no further JS subtraction), or null at max rank.
-          const cost = computeNextRaiseCost({ training: rec.training, xp: rec.xp });
-          line1 = `Cost to Raise: ${cost == null ? "Max" : cost.toLocaleString()} XP`;
-          line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
-          enabled = cost != null && cost <= availableXp;
-          onClick = () => fireImprove({
-            kind: "raise", skillId: selectedStatId, cost,
-            availableXp, availableCredits: credits,
-          });
-        } else {
-          line1 = "Unusable";
-          line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
-        }
-      } else {
-        // Attribute / vital — raise through the same wasm handle the shipped
-        // per-row buttons use (cost precomputed in renderAttributes).
-        const cost = rec.cost;
-        line1 = `Cost to Raise: ${cost == null ? "Max" : cost.toLocaleString()} XP`;
-        line2 = `Unassigned Experience: ${availableXp.toLocaleString()}`;
-        enabled = cost != null && cost <= availableXp;
-        onClick = () => {
-          const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-          try {
-            if (rec.kind === "attribute") handle?.raiseAttribute?.(selectedStatId >>> 0, cost >>> 0);
-            else handle?.raiseVital?.(selectedStatId >>> 0, cost >>> 0);
-          } catch (e) { console.warn("[char-info] improve attr/vital", e); }
-        };
+    function refreshTitles() {
+      titles = readTitleSnapshot();
+      const sig = `${titles.currentId}:${titles.ids.join(",")}`;
+      const changed = sig !== titlesSig;
+      titlesSig = sig;
+      return changed;
+    }
+
+    function rerender() {
+      stats = getStats();
+      refreshTitles();
+      renderHeader();
+      renderList();
+      renderFooter();
+    }
+
+    function select(key) {
+      selectedKey = key;
+      for (const item of model) {
+        if (item.kind === "header") continue;
+        const r = rowEls.get(item.key);
+        if (!r) continue;
+        const sel = item.key === key;
+        r.classList.toggle("is-selected", sel);
+        r.setAttribute("aria-selected", sel ? "true" : "false");
       }
-
-      setAcText(improveTitle, rec.name, { color: "#f0c87c" });
-      setAcText(improveLine1, line1, { color: "#e8d8b0" });
-      setAcText(improveLine2, line2, { color: "#e8d8b0" });
-      setAcText(improveBtn, btnLabel, { color: "#f0e8d0" });
-      improveBtn.disabled = !enabled;
-      improveBtn.onclick = enabled
-        ? () => {
-            if (improveBtn.disabled) return;
-            try { onClick?.(); } catch (e) { console.warn("[improve]", e); }
-            // Optimistic disable; the playerStatsUpdated rerender (or the
-            // 1.5s fallback) re-evaluates affordability against fresh stats.
-            improveBtn.disabled = true;
-            setTimeout(() => { if (improveBtn.isConnected) renderImproveFooter(); }, 1500);
-          }
-        : null;
+      renderFooter();
     }
 
     function setTab(id) {
+      if (!TAB_IDS.has(id)) return;
       activeTab = id;
-      // Reset the footer selection on every tab switch (skill ids and
-      // attribute/vital ids overlap, so a stale pin would mis-resolve).
-      selectedStatId = null;
-      selectedStatKind = null;
-      for (const k of Object.keys(tabBtns)) {
-        const btn = tabBtns[k];
-        btn.classList.toggle("active", k === id);
-        // Label comes from the stash set at build time, NEVER from live DOM
-        // text (see the dataset.label note above).
-        setAcText(btn, btn.dataset.label || k, { color: k === id ? "#f0c87c" : "#f0e8d0" });
+      lastTab = id;
+      selectedKey = null; // ids overlap across tabs (skill 6 vs attribute 6)
+      for (const t of TABS) {
+        const on = t.id === id;
+        tabBtns[t.id].setAttribute("aria-selected", on ? "true" : "false");
+        tabBtns[t.id].classList.toggle("is-active", on);
       }
+      try { window.__mainPanel?.setTitle?.(tabMeta(id).title); } catch (_) {}
+      list.scrollTop = 0;
       rerender();
     }
-    function rerender() {
-      const stats = getStats();
-      renderHead(headEl, stats);
-      // The improve-footer band only applies to the stat tabs; the Titles
-      // tab keeps the full body (its structured layout assumes bottom:18px).
-      const showImprove = activeTab === "skills" || activeTab === "attributes";
-      improveEl.style.display = showImprove ? "" : "none";
-      bodyEl.style.bottom = showImprove ? "82px" : "18px";
-      switch (activeTab) {
-        case "attributes": renderAttributes(bodyEl, stats, skillTable, selectCtx); break;
-        case "skills":     renderSkills(bodyEl, stats, skillTable, selectCtx); break;
-        case "titles":
-          renderTitles(bodyEl, stats, titleRefs);
-          // After Title-tab DOM lands, re-apply the structured layout
-          // positions for its header rows / separators / list / button.
-          applyCharacterInfoLayout({
-            rootEl: root,
-            tabsEl,
-            headEl,
-            bodyEl,
-            scrollbarEl,
-            titleRefs,
+
+    function holdForServer() {
+      awaitingRaise = true;
+      renderFooter();
+      clearTimeout(awaitTimer);
+      // Fallback release if the server never echoes (lost packet / reject).
+      awaitTimer = setTimeout(() => { awaitingRaise = false; if (root.isConnected) renderFooter(); }, 1500);
+    }
+
+    async function fire(step) {
+      const rec = selectedRec();
+      const spec = step === 10 ? raise10._spec : raise1._spec;
+      if (!rec || !spec?.enabled || awaitingRaise) return;
+      const client = window.__pluginClient;
+      const handle = getHandle();
+      try {
+        if (rec.kind === "skill" && spec.action === "train") {
+          const ok = await confirmAction("Train Skill",
+            `Train ${rec.name} for ${fmt(spec.cost)} skill credit${spec.cost === 1 ? "" : "s"}?`, "Train");
+          if (!ok || !root.isConnected) return;
+          const d = decideTrainAction({ kind: "train", skillId: rec.id, cost: spec.cost,
+            availableXp: getAvailableXp(stats), availableCredits: getAvailableCredits() }, client);
+          if (d.called === "trainSkill") client.player.trainSkill(...d.args);
+          else { console.log(`[char-info] train no-op (${d.reason})`); return; }
+        } else if (rec.kind === "skill") {
+          const d = decideTrainAction({ kind: "raise", skillId: rec.id, cost: spec.cost,
+            availableXp: getAvailableXp(stats), availableCredits: getAvailableCredits() }, client);
+          if (d.called === "raiseSkill") client.player.raiseSkill(...d.args);
+          else { console.log(`[char-info] raise no-op (${d.reason})`); return; }
+        } else if (rec.kind === "attribute") {
+          handle?.raiseAttribute?.(rec.id >>> 0, spec.cost >>> 0);
+        } else if (rec.kind === "vital") {
+          handle?.raiseVital?.(rec.id >>> 0, spec.cost >>> 0);
+        } else {
+          return;
+        }
+      } catch (e) {
+        console.warn(`[char-info] ${spec.action} ${rec.kind} ${rec.id} failed:`, e);
+        try {
+          window.__pluginClient?.events?.emit?.(rec.kind === "vital" ? "raiseVitalFailed" : "raiseAttributeFailed", {
+            detail: { id: rec.id >>> 0, cost: spec.cost >>> 0, error: String(e?.message ?? e) },
           });
-          break;
+        } catch (_) {}
+        return;
       }
-      if (showImprove) renderImproveFooter();
-      // Footer: XP if available.
-      const lv = stats?.levelInfo;
-      setAcText(footL, lv ? `XP: ${tupleArrayAt(lv, 1) ?? 0}` : "—", { color: "#a8a090" });
-      setAcText(footR, lv ? `Next: ${tupleArrayAt(lv, 2) ?? 0}` : "", { color: "#a8a090" });
+      holdForServer();
     }
+    raise1.addEventListener("click", () => { void fire(1); });
+    raise10.addEventListener("click", () => { void fire(10); });
 
-    // Load skill table + XP-rank tables, then render. Both async — the
-    // initial rerender paints without raise costs; the .then() triggers
-    // a second paint once tables resolve.
-    loadSkillTable().then((st) => { skillTable = st; rerender(); });
-    loadXpTables().then((t) => {
-      if (t) { _xpTablesPromise._cached = t; rerender(); }
+    setTitleBtn.addEventListener("click", () => {
+      const rec = selectedRec();
+      if (rec?.kind !== "title" || rec.id === titles.currentId) return;
+      try {
+        const h = getHandle();
+        if (typeof h?.setTitle === "function") h.setTitle(rec.id >>> 0);
+        else console.warn("[character-info] setTitle wasm export missing");
+      } catch (e) { console.warn("[character-info] setTitle failed:", e); }
     });
-    rerender();
 
-    // Subscribe to player stats updates so live skill changes reflect.
-    let off = null;
-    const client = window.__pluginClient;
-    if (client?.events?.on) {
-      const onStats = () => rerender();
-      client.events.on("playerStatsUpdated", onStats);
-      off = () => { try { client.events.off("playerStatsUpdated", onStats); } catch (_) {} };
-    }
+    // Initial paint, then again as the async tables land.
+    setTab(activeTab);
+    loadSkillTable().then(() => { if (root.isConnected) rerender(); });
+    loadXpTables().then(() => { if (root.isConnected) rerender(); });
 
-    // Rec #105 — title-tab scaleY = bodyH / 600 depends on bodyEl's
-    // current height. Tabs/header/footer thickness varies with theme,
-    // window zoom, and the user-resized panel envelope, so latch a
-    // ResizeObserver to re-apply the layout whenever bodyEl's box
-    // changes. Debounced to one rAF so a rapid drag-resize doesn't
-    // burn layout cost. Observer is null in non-Resize-aware
-    // environments (older Safari, headless test harness) — fall back
-    // to a window resize listener.
-    let resizeObserver = null;
-    let resizeRaf = 0;
-    const scheduleResizeApply = () => {
-      if (resizeRaf) return;
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = 0;
-        // Only the titles tab depends on the scaleY math today, but
-        // re-apply unconditionally — applyCharacterInfoLayout is
-        // idempotent and other tabs absorb the work cheaply.
-        applyCharacterInfoLayout({
-          rootEl: root,
-          tabsEl,
-          headEl,
-          bodyEl,
-          scrollbarEl,
-          titleRefs,
-        });
-      });
+    // Live updates — coalesced to one repaint per frame (vital regen
+    // fires playerStatsUpdated several times a second).
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      const run = () => {
+        raf = 0;
+        if (!root.isConnected) return;
+        awaitingRaise = false;
+        clearTimeout(awaitTimer);
+        rerender();
+      };
+      raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 16);
     };
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(scheduleResizeApply);
-      resizeObserver.observe(bodyEl);
-    } else {
-      window.addEventListener("resize", scheduleResizeApply, { passive: true });
+    const client = window.__pluginClient;
+    let off = null;
+    if (client?.events?.on) {
+      client.events.on("playerStatsUpdated", schedule);
+      client.events.on("titleUpdated", schedule);
+      off = () => {
+        try { client.events.off("playerStatsUpdated", schedule); } catch (_) {}
+        try { client.events.off("titleUpdated", schedule); } catch (_) {}
+      };
     }
+
+    const instance = { getTab: () => activeTab, setTab };
+    activeInstance = instance;
 
     return () => {
       if (off) off();
-      if (resizeObserver) { try { resizeObserver.disconnect(); } catch (_) {} }
-      else { try { window.removeEventListener("resize", scheduleResizeApply); } catch (_) {} }
-      if (resizeRaf) { try { cancelAnimationFrame(resizeRaf); } catch (_) {} }
+      if (raf) { try { cancelAnimationFrame(raf); } catch (_) { clearTimeout(raf); } }
+      clearTimeout(awaitTimer);
+      if (activeInstance === instance) activeInstance = null;
       root.remove();
     };
   },
 };
+
+// Test seam (node): pure model builders.
+export const __test = { buildAttributeModel, buildSkillModel, buildTitleModel, resolveTab, titleName };

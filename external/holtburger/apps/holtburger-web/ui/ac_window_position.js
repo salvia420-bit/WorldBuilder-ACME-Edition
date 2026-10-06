@@ -29,6 +29,49 @@
 // callers; the keys above are the canonical mapping.
 
 const STORAGE_PREFIX = "hb.window.";
+
+// HUD overhaul 2026-10-05 — zoom awareness. HUD roots are magnified with
+// CSS `zoom` (ui/hud_scale.js). Pointer coords and getBoundingClientRect()
+// are SCREEN px; style.left/top on a zoomed element are HUD px. Every
+// coordinate written below goes through the element's own effective zoom
+// (`Element.currentCSSZoom`, Chrome 128+/Firefox 126+), so the maths is
+// right for zoomed and unzoomed windows alike.
+function zoomOf(el) {
+  const z = Number(el?.currentCSSZoom);
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+/** Element rect in its own (zoomed) CSS px. */
+function localRect(el) {
+  const z = zoomOf(el);
+  const r = el.getBoundingClientRect();
+  return { left: r.left / z, top: r.top / z, width: r.width / z, height: r.height / z, z };
+}
+/** The viewport in an element's own CSS px. */
+function localViewport(el) {
+  const z = zoomOf(el);
+  const iw = typeof window !== "undefined" && Number.isFinite(window.innerWidth) ? window.innerWidth : 1e6;
+  const ih = typeof window !== "undefined" && Number.isFinite(window.innerHeight) ? window.innerHeight : 1e6;
+  return { w: iw / z, h: ih / z };
+}
+// Live windows, re-clamped when the browser window or HUD scale changes so
+// a docked panel stays docked and nothing is stranded off-screen.
+const _liveWindows = new Set();
+let _reflowRaf = 0;
+function _reflowAll() {
+  for (const w of _liveWindows) {
+    if (!w.element.isConnected) { _liveWindows.delete(w); continue; }
+    try { w.reflow(); } catch (_) {}
+  }
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function"
+    && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  const schedule = () => {
+    cancelAnimationFrame(_reflowRaf);
+    _reflowRaf = requestAnimationFrame(_reflowAll);
+  };
+  window.addEventListener("resize", schedule);
+  document.addEventListener("hb-hud-scale-changed", schedule);
+}
 const LOCK_EVENT = "hb-ui-lock-changed";
 // Rec #79 — pixel band within which an absolute-position drag-release
 // snaps to the matching viewport edge. Matches the retail floaty
@@ -101,9 +144,32 @@ export function attachWindowPosition(element, options) {
     const cur = readPersisted(storageKey) || {};
     writePersisted(storageKey, {
       x: state.x, y: state.y, locked: state.locked,
+      ax: state.ax ?? null, ay: state.ay ?? null,
+      vw: state.vw ?? null, vh: state.vh ?? null,
+      w: state.w ?? null, h: state.h ?? null,
       width: cur.width ?? null, height: cur.height ?? null,
     });
   }
+
+  // Re-apply after a viewport / HUD-scale change: a saved position is
+  // re-anchored to its edge and clamped into the (new) viewport.
+  const live = {
+    element,
+    reflow() {
+      if (state.x == null || state.y == null) return;
+      if (clampToViewport) clampStateToViewport(state, element);
+      applyPosition(element, state, defaultPos);
+    },
+    // Options → "Reset window positions" (resetAllWindowPositions below).
+    reset() {
+      state.x = null; state.y = null; state.ax = null; state.ay = null;
+      state.vw = null; state.vh = null;
+      for (const p of ["left", "top", "right", "bottom"]) element.style[p] = "";
+      persistPosition();
+      applyPosition(element, state, defaultPos);
+    },
+  };
+  _liveWindows.add(live);
 
   let drag = null;
   let saveDebounce = 0;
@@ -122,20 +188,22 @@ export function attachWindowPosition(element, options) {
           && ev.target !== dragHandle) return;
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();
-      const rect = element.getBoundingClientRect();
-      drag = { ox: ev.clientX - rect.left, oy: ev.clientY - rect.top };
+      const r = localRect(element);
+      const z = r.z;
+      drag = { ox: ev.clientX / z - r.left, oy: ev.clientY / z - r.top, z };
       // Switch to absolute left/top before drag so subsequent moves
       // measure from the unanchored position.
-      element.style.left = `${rect.left}px`;
-      element.style.top = `${rect.top}px`;
+      element.style.left = `${r.left}px`;
+      element.style.top = `${r.top}px`;
       element.style.right = "auto";
       element.style.bottom = "auto";
+      element.classList.add("hb-window-dragging");
       try { dragHandle.setPointerCapture(ev.pointerId); } catch (_) {}
     });
     dragHandle.addEventListener("pointermove", (ev) => {
       if (!drag) return;
-      const x = ev.clientX - drag.ox;
-      const y = ev.clientY - drag.oy;
+      const x = ev.clientX / drag.z - drag.ox;
+      const y = ev.clientY / drag.z - drag.oy;
       element.style.left = `${x}px`;
       element.style.top = `${y}px`;
     });
@@ -144,30 +212,43 @@ export function attachWindowPosition(element, options) {
         // Rec #79 — snap to screen edge on release when within
         // EDGE_SNAP_PX. Only when clampToViewport is on so a caller
         // that opted out of clamping doesn't get implicit docking.
-        // Docked windows persist via the same scheduleSave + the
-        // clampStateToViewport pass on next mount, so a viewport
-        // resize re-anchors them to the same edge.
         let nx = parseFloat(element.style.left) || 0;
         let ny = parseFloat(element.style.top) || 0;
+        const r = localRect(element);
+        const vp = localViewport(element);
         if (clampToViewport) {
-          const r = element.getBoundingClientRect();
-          const vw = window.innerWidth;
-          const vh = window.innerHeight;
           if (nx < EDGE_SNAP_PX) nx = 0;
-          else if (nx + r.width > vw - EDGE_SNAP_PX) nx = Math.max(0, vw - r.width);
+          else if (nx + r.width > vp.w - EDGE_SNAP_PX) nx = Math.max(0, vp.w - r.width);
           if (ny < EDGE_SNAP_PX) ny = 0;
-          else if (ny + r.height > vh - EDGE_SNAP_PX) ny = Math.max(0, vh - r.height);
+          else if (ny + r.height > vp.h - EDGE_SNAP_PX) ny = Math.max(0, vp.h - r.height);
+          nx = Math.max(0, Math.min(nx, Math.max(0, vp.w - r.width)));
+          ny = Math.max(0, Math.min(ny, Math.max(0, vp.h - r.height)));
           element.style.left = `${nx}px`;
           element.style.top  = `${ny}px`;
         }
+        // Anchor to the nearer edge on each axis (HUD overhaul
+        // 2026-10-05): a window dropped in the right half keeps its
+        // distance from the RIGHT edge when the browser is resized,
+        // instead of drifting toward the middle.
         state.x = nx;
         state.y = ny;
+        state.ax = (nx + r.width / 2) > vp.w / 2 ? "r" : "l";
+        state.ay = (ny + r.height / 2) > vp.h / 2 ? "b" : "t";
+        state.vw = vp.w;
+        state.vh = vp.h;
+        state.w = r.width;
+        state.h = r.height;
+        applyPosition(element, state, defaultPos);
         scheduleSave();
       }
       drag = null;
+      element.classList.remove("hb-window-dragging");
       try { dragHandle.releasePointerCapture(ev.pointerId); } catch (_) {}
     });
-    dragHandle.addEventListener("pointercancel", () => { drag = null; });
+    dragHandle.addEventListener("pointercancel", () => {
+      drag = null;
+      element.classList.remove("hb-window-dragging");
+    });
   }
 
   function fireLockChanged() {
@@ -216,10 +297,36 @@ export function attachWindowPosition(element, options) {
 
 function applyPosition(element, state, defaultPos) {
   if (state.x !== null && state.y !== null) {
-    element.style.left = `${state.x}px`;
-    element.style.top = `${state.y}px`;
-    element.style.right = "auto";
-    element.style.bottom = "auto";
+    // Edge-anchored saves (ax/ay, HUD overhaul 2026-10-05) are written as
+    // right/bottom offsets so the window tracks its edge across resizes.
+    // `x`/`y` stay the left/top origin for legacy readers; the offset
+    // from the anchored edge is recomputed from the saved viewport.
+    const vp = localViewport(element);
+    const r = element.isConnected ? localRect(element) : null;
+    const w = r?.width || state.w || 0;
+    const h = r?.height || state.h || 0;
+    if (state.ax === "r" && state.vw) {
+      const rightOff = Math.max(0, state.vw - (state.x + (state.w || w)));
+      element.style.right = `${rightOff}px`;
+      element.style.left = "auto";
+      state.x = vp.w - rightOff - w;
+    } else {
+      element.style.left = `${state.x}px`;
+      element.style.right = "auto";
+    }
+    if (state.ay === "b" && state.vh) {
+      const bottomOff = Math.max(0, state.vh - (state.y + (state.h || h)));
+      element.style.bottom = `${bottomOff}px`;
+      element.style.top = "auto";
+      state.y = vp.h - bottomOff - h;
+    } else {
+      element.style.top = `${state.y}px`;
+      element.style.bottom = "auto";
+    }
+    if (state.ax === "r") state.vw = vp.w;
+    if (state.ay === "b") state.vh = vp.h;
+    if (w) state.w = w;
+    if (h) state.h = h;
     return;
   }
   if (defaultPos) {
@@ -245,13 +352,27 @@ function readLegacyPanelPos(key) {
 
 function clampStateToViewport(state, element) {
   if (state.x == null || state.y == null) return;
-  const r = element.getBoundingClientRect();
-  const w = r.width || 300;
-  const h = r.height || 200;
-  const maxLeft = Math.max(0, window.innerWidth - w);
-  const maxTop = Math.max(0, window.innerHeight - h);
+  const r = element.isConnected ? localRect(element) : null;
+  const vp = localViewport(element);
+  const w = r?.width || state.w || 300;
+  const h = r?.height || state.h || 200;
+  // Resolve an edge-anchored save into the current viewport first.
+  if (state.ax === "r" && state.vw) {
+    const rightOff = Math.max(0, state.vw - (state.x + (state.w || w)));
+    state.x = vp.w - rightOff - w;
+    state.vw = vp.w;
+  }
+  if (state.ay === "b" && state.vh) {
+    const bottomOff = Math.max(0, state.vh - (state.y + (state.h || h)));
+    state.y = vp.h - bottomOff - h;
+    state.vh = vp.h;
+  }
+  const maxLeft = Math.max(0, vp.w - w);
+  const maxTop = Math.max(0, vp.h - h);
   state.x = Math.max(0, Math.min(state.x, maxLeft));
   state.y = Math.max(0, Math.min(state.y, maxTop));
+  state.w = w;
+  state.h = h;
 }
 
 function readPersisted(key) {
@@ -264,6 +385,12 @@ function readPersisted(key) {
       x: typeof parsed.x === "number" ? parsed.x : null,
       y: typeof parsed.y === "number" ? parsed.y : null,
       locked: !!parsed.locked,
+      ax: parsed.ax === "r" || parsed.ax === "l" ? parsed.ax : null,
+      ay: parsed.ay === "b" || parsed.ay === "t" ? parsed.ay : null,
+      vw: typeof parsed.vw === "number" ? parsed.vw : null,
+      vh: typeof parsed.vh === "number" ? parsed.vh : null,
+      w: typeof parsed.w === "number" ? parsed.w : null,
+      h: typeof parsed.h === "number" ? parsed.h : null,
       width: typeof parsed.width === "number" ? parsed.width : null,
       height: typeof parsed.height === "number" ? parsed.height : null,
     };
@@ -276,6 +403,12 @@ function writePersisted(key, state) {
       x: state.x,
       y: state.y,
       locked: state.locked,
+      ax: state.ax ?? null,
+      ay: state.ay ?? null,
+      vw: state.vw ?? null,
+      vh: state.vh ?? null,
+      w: state.w ?? null,
+      h: state.h ?? null,
       width: state.width ?? null,
       height: state.height ?? null,
     }));
@@ -490,9 +623,10 @@ export function attachEdgeResizers(element, opts) {
       if (ev.button != null && ev.button !== 0) return;
       ev.preventDefault();
       ev.stopPropagation();
-      const rect = element.getBoundingClientRect();
+      const rect = localRect(element);
       drag = {
         edge,
+        z: rect.z,
         startX: ev.clientX,
         startY: ev.clientY,
         x0: rect.left,
@@ -504,8 +638,8 @@ export function attachEdgeResizers(element, opts) {
     });
     div.addEventListener("pointermove", (ev) => {
       if (!drag || drag.edge !== edge) return;
-      const dx = ev.clientX - drag.startX;
-      const dy = ev.clientY - drag.startY;
+      const dx = (ev.clientX - drag.startX) / drag.z;
+      const dy = (ev.clientY - drag.startY) / drag.z;
       let newW = drag.w0;
       let newH = drag.h0;
       if (spec.axis === "w") newW = drag.w0 + spec.sign * dx;
@@ -587,6 +721,15 @@ export function attachEdgeResizers(element, opts) {
     isLocked: () => locked,
     getHandles: () => ({ ...handles }),
   };
+}
+
+/** Put every live floaty back at its default position (Options → Reset
+ *  window positions). Saved positions are cleared as each resets. */
+export function resetAllWindowPositions() {
+  for (const w of _liveWindows) {
+    if (!w.element.isConnected) { _liveWindows.delete(w); continue; }
+    try { w.reset?.(); } catch (_) {}
+  }
 }
 
 /**
@@ -693,4 +836,14 @@ export const WINDOW_ID = Object.freeze({
   VITALS_ORB_HP:     0xFFFF0003, // vitals-orbs v2 health pane
   VITALS_ORB_STAM:   0xFFFF0004, // vitals-orbs v2 stamina pane
   VITALS_ORB_MANA:   0xFFFF0005, // vitals-orbs v2 mana pane
+  // HUD overhaul 2026-10-05 — commerce/crafting windows
+  // (plugins/commerce_window.js) use their retail layout root ids.
+  VENDOR:            0x100000B7, // gmVendorUI root
+  TRADE:             0x1000007A, // gmSecureTradeUI root
+  SALVAGE:           0x10000073, // gmSalvageUI root
+  BOOK:              0x1000010D, // gmBookUI root
+  HOUSE:             0x100001E5, // gmHouseUI root
+  TINKER:            0xFFFF0020, // tinker panel (no retail window — synthetic)
+  SPELL_RESEARCH:    0xFFFF0132, // spell-research panel (synthetic)
+  EXT_CONTAINER:     0x10000063, // gmExternalContainerUI root (corpse/chest loot)
 });

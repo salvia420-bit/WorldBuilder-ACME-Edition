@@ -1,10 +1,11 @@
-// Graphics settings tab for the bar's gear-icon popover.
+// Graphics settings — rendered by the Options view's Config tab
+// (plugins/options-panel.js) and the legacy bar gear popover (ui/bar.js).
 //
 // Reads/writes a `holtburger_graphics_v1` localStorage payload and
 // mirrors changes onto `window.__quality.flags` so any consumer that
 // re-reads them (or any consumer that re-initializes) picks up the new
-// value. Most consumers cache at init, so a "Reload to apply" pill
-// appears after the first persisted change in a session.
+// value. Most consumers cache at init, so a "Reload" pill appears after
+// the first persisted change in a session.
 
 import { mountFullscreenControl } from "./fullscreen_toggle.js";
 
@@ -34,9 +35,13 @@ const QUALITY_BOOL_FLAGS = [
 ];
 const QUALITY_INT_FLAGS = ["subdivLevel"];
 
-// Stub flags — UI controls that persist to localStorage but aren't
-// consumed by the renderer yet. Listed for visibility so future wiring
-// has a place to land.
+// Non-quality extras persisted alongside the flags. Only `renderScale`
+// (live, window.__setRenderScale) and `castStabilityRing` (live,
+// scene3d/spell_shape_preview.js) have readers today; the rest have NO
+// consumer and their controls were removed from the panel (HUD overhaul
+// 2026-10-05). The keys stay so previously-saved blobs keep their shape
+// and a future wiring has a place to land — re-add a control only
+// together with its reader.
 const EXTRA_DEFAULTS = Object.freeze({
   renderScale: 1.0,
   toneMapping: "default",
@@ -148,31 +153,40 @@ function applyRenderScaleLive(scale) {
   } catch (_e) { /* live setter may not be ready yet */ }
 }
 
+/**
+ * Re-apply the live-applicable extras from the persisted blob. The Options
+ * view's Cancel button restores `holtburger_graphics_v1` to its on-open
+ * snapshot and then calls this so render scale + the cast ring snap back
+ * without a reload (HUD overhaul 2026-10-05).
+ */
+export function reapplyLiveGraphics() {
+  const s = loadGraphicsState();
+  applyRenderScaleLive(Number(s.extras.renderScale) || 1);
+  dispatchQualityChanged({ kind: "restore" });
+}
+
 // ---------------------------------------------------------------------------
 // Rendering ------------------------------------------------------------------
+//
+// HUD overhaul 2026-10-05 — every control is a shared-kit control
+// (`input.hbk-check` retail orb checkbox, `input.hbk-range`,
+// `select.hbk-select`, `hbk-btn-brass` preset tags, `hbk-btn-small`),
+// labels are real <label for> elements so clicking the text toggles the
+// box, and the controls that NOTHING reads were removed (R9 / #153
+// precedent — "removal is the no-op"): Tone mapping, Exposure, Shadow map
+// size, the five "Entities & particles" caps and the three "Debug"
+// toggles were persisted into `extras` but no consumer ever read them
+// (`?exposure=` / `?targetFps=` / `?wireframe=` are URL-only gates in
+// scene3d), so the panel advertised settings that silently did nothing.
+// EXTRA_DEFAULTS keeps their keys so saved blobs stay well-formed.
 
-const TONE_MAPPING_OPTIONS = [
-  ["default", "Default"],
-  ["none", "None"],
-  ["linear", "Linear"],
-  ["reinhard", "Reinhard"],
-  ["cineon", "Cineon"],
-  ["aces", "ACES"],
-  ["agx", "AGX"],
-];
 const SUBDIV_OPTIONS = [1, 2, 4, 8];
-const SHADOW_SIZES = [512, 1024, 2048, 4096];
-const PARTICLE_CAPS = [64, 128, 256, 512, 1024, 2048];
-const LIGHT_CAPS = [16, 32, 64, 128, 256];
-const TARGET_FPS = [
-  [0, "Unlimited"],
-  [30, "30"],
-  [60, "60"],
-  [120, "120"],
-  [144, "144"],
-];
 
 export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
+  // A preset click / reset re-renders in place — dispose the previous
+  // render's document-level listeners (fullscreenchange) first so they
+  // don't stack up one per re-render.
+  try { containerEl.__hbGraphicsDispose?.(); } catch (_e) { /* stale */ }
   const state = loadGraphicsState();
   const activePreset = currentActivePreset(state);
   let dirty = false;
@@ -187,25 +201,27 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.classList.add("hb-graphics");
 
   // --- Preset row ----------------------------------------------------------
+  // Retail-familiar brass tags (gmCombatUI High/Medium/Low 0x06004D1C/1D).
   containerEl.appendChild(makeSectionHeader("Preset"));
   const presetRow = document.createElement("div");
-  presetRow.className = "hb-settings-btnrow";
+  presetRow.className = "hb-settings-btnrow hb-graphics-presets";
+  presetRow.setAttribute("role", "radiogroup");
+  presetRow.setAttribute("aria-label", "Graphics preset");
   for (const p of ["low", "mid", "high", "ultra"]) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "hb-settings-btn";
-    if (p === activePreset) btn.classList.add("active");
+    btn.className = "hbk-btn-brass hb-graphics-preset";
+    const on = p === activePreset;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("role", "radio");
+    btn.setAttribute("aria-checked", on ? "true" : "false");
     btn.textContent = capitalize(p);
     btn.dataset.preset = p;
     btn.addEventListener("click", () => {
       setPreset(state, p);
-      presetRow.querySelectorAll("button").forEach((b) => {
-        b.classList.toggle("active", b.dataset.preset === p);
-      });
       // Re-render the controls so toggles reflect the new preset defaults.
-      const target = containerEl;
-      renderGraphicsTab(target, { onAnyChange });
-      markDirty();
+      renderGraphicsTab(containerEl, { onAnyChange });
+      containerEl.__hbGraphicsMarkDirty?.();
     });
     presetRow.appendChild(btn);
   }
@@ -217,7 +233,7 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
 
   // --- Renderer ------------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Renderer"));
-  containerEl.appendChild(boolRow("Antialias", "antialias", effective.antialias, (v) => {
+  containerEl.appendChild(boolRow("Antialiasing", effective.antialias, (v) => {
     setQualityFlag(state, "antialias", v);
     markDirty();
   }));
@@ -225,25 +241,12 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
     label: "Render scale",
     min: 0.5, max: 1.5, step: 0.05,
     value: state.extras.renderScale,
-    format: (v) => v.toFixed(2),
-    note: "live",
+    format: (v) => `${Math.round(v * 100)}%`,
+    hint: "Applies immediately",
     onInput: (v) => {
       setExtra(state, "renderScale", v);
       applyRenderScaleLive(v);
     },
-  }));
-  containerEl.appendChild(selectRow({
-    label: "Tone mapping",
-    options: TONE_MAPPING_OPTIONS,
-    value: state.extras.toneMapping,
-    onChange: (v) => { setExtra(state, "toneMapping", v); markDirty(); },
-  }));
-  containerEl.appendChild(rangeRow({
-    label: "Exposure",
-    min: 0.2, max: 2.0, step: 0.05,
-    value: state.extras.exposure,
-    format: (v) => v.toFixed(2),
-    onInput: (v) => { setExtra(state, "exposure", v); markDirty(); },
   }));
 
   // --- Shadows -------------------------------------------------------------
@@ -259,30 +262,24 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   // into localStorage since it shipped, so honouring the key would silently
   // switch shadow maps ON for every returning user — a ship-visible render
   // change with no GPU measurement behind it. Removal is the no-op.
-  // CSM + shadow-map size below are real, sanitizer-backed controls and stay.
+  // CSM below is a real, sanitizer-backed control and stays.
   containerEl.appendChild(makeSectionHeader("Shadows"));
-  containerEl.appendChild(boolRow("Cascaded shadows (CSM)", "csm", effective.csm, (v) => {
+  containerEl.appendChild(boolRow("Cascaded shadows (CSM)", effective.csm, (v) => {
     setQualityFlag(state, "csm", v); markDirty();
-  }));
-  containerEl.appendChild(selectRow({
-    label: "Shadow map",
-    options: SHADOW_SIZES.map((n) => [String(n), `${n}×${n}`]),
-    value: String(state.extras.shadowMapSize),
-    onChange: (v) => { setExtra(state, "shadowMapSize", Number(v)); markDirty(); },
   }));
 
   // --- Materials -----------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Materials"));
-  containerEl.appendChild(boolRow("Normal maps", "normalMaps", effective.normalMaps, (v) => {
+  containerEl.appendChild(boolRow("Normal maps", effective.normalMaps, (v) => {
     setQualityFlag(state, "normalMaps", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Detail flag", "detailFlag", effective.detailFlag, (v) => {
+  containerEl.appendChild(boolRow("Detail textures", effective.detailFlag, (v) => {
     setQualityFlag(state, "detailFlag", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Triplanar", "triplanar", effective.triplanar, (v) => {
+  containerEl.appendChild(boolRow("Triplanar mapping", effective.triplanar, (v) => {
     setQualityFlag(state, "triplanar", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Parallax occlusion (POM)", "pom", effective.pom, (v) => {
+  containerEl.appendChild(boolRow("Parallax occlusion", effective.pom, (v) => {
     setQualityFlag(state, "pom", v); markDirty();
   }));
   // "Hero models" checkbox REMOVED 2026-08: `hero` was a preset key with zero
@@ -291,11 +288,11 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
 
   // --- Terrain -------------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Terrain"));
-  containerEl.appendChild(boolRow("Terrain detail normals", "terrainDetailNormal", effective.terrainDetailNormal, (v) => {
+  containerEl.appendChild(boolRow("Terrain detail normals", effective.terrainDetailNormal, (v) => {
     setQualityFlag(state, "terrainDetailNormal", v); markDirty();
   }));
   containerEl.appendChild(selectRow({
-    label: "Subdivision level",
+    label: "Terrain subdivision",
     options: SUBDIV_OPTIONS.map((n) => [String(n), `${n}×`]),
     value: String(effective.subdivLevel),
     onChange: (v) => { setQualityFlag(state, "subdivLevel", Number(v)); markDirty(); },
@@ -303,177 +300,166 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
 
   // --- Post-processing -----------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Post-processing"));
-  containerEl.appendChild(boolRow("Bloom", "bloom", effective.bloom, (v) => {
+  containerEl.appendChild(boolRow("Bloom", effective.bloom, (v) => {
     setQualityFlag(state, "bloom", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Vignette", "vignette", effective.vignette, (v) => {
+  containerEl.appendChild(boolRow("Vignette", effective.vignette, (v) => {
     setQualityFlag(state, "vignette", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Light shafts", "lightShafts", effective.lightShafts, (v) => {
+  containerEl.appendChild(boolRow("Light shafts", effective.lightShafts, (v) => {
     setQualityFlag(state, "lightShafts", v); markDirty();
-  }));
-
-  // --- Entities & particles (stubs — UI persists; renderer wires later) ---
-  containerEl.appendChild(makeSectionHeader("Entities & particles"));
-  containerEl.appendChild(rangeRow({
-    label: "Entity tick distance",
-    min: 30, max: 240, step: 5,
-    value: state.extras.entityTickDistance,
-    format: (v) => `${v} m`,
-    onInput: (v) => { setExtra(state, "entityTickDistance", v); markDirty(); },
-  }));
-  containerEl.appendChild(rangeRow({
-    label: "Nameplate distance",
-    min: 20, max: 160, step: 5,
-    value: state.extras.nameplateDistance,
-    format: (v) => `${v} m`,
-    onInput: (v) => { setExtra(state, "nameplateDistance", v); markDirty(); },
-  }));
-  containerEl.appendChild(selectRow({
-    label: "Max particles / emitter",
-    options: PARTICLE_CAPS.map((n) => [String(n), String(n)]),
-    value: String(state.extras.maxParticles),
-    onChange: (v) => { setExtra(state, "maxParticles", Number(v)); markDirty(); },
-  }));
-  containerEl.appendChild(selectRow({
-    label: "Max dynamic lights",
-    options: LIGHT_CAPS.map((n) => [String(n), String(n)]),
-    value: String(state.extras.maxDynamicLights),
-    onChange: (v) => { setExtra(state, "maxDynamicLights", Number(v)); markDirty(); },
-  }));
-  containerEl.appendChild(selectRow({
-    label: "Target FPS cap",
-    options: TARGET_FPS.map(([n, label]) => [String(n), label]),
-    value: String(state.extras.targetFps),
-    onChange: (v) => { setExtra(state, "targetFps", Number(v)); markDirty(); },
-  }));
-
-  // --- Debug ---------------------------------------------------------------
-  containerEl.appendChild(makeSectionHeader("Debug"));
-  containerEl.appendChild(boolRow("FPS counter", "fpsCounter", state.extras.fpsCounter, (v) => {
-    setExtra(state, "fpsCounter", v); markDirty();
-  }));
-  containerEl.appendChild(boolRow("Render stats overlay", "showRenderStats", state.extras.showRenderStats, (v) => {
-    setExtra(state, "showRenderStats", v); markDirty();
-  }));
-  containerEl.appendChild(boolRow("Wireframe", "wireframe", state.extras.wireframe, (v) => {
-    setExtra(state, "wireframe", v); markDirty();
   }));
 
   // --- Combat --------------------------------------------------------------
   // Cast-stability ring applies live (no reload) — spell_shape_preview.js
   // re-reads the persisted value on the hb-quality-changed event.
-  containerEl.appendChild(makeSectionHeader("Combat"));
-  containerEl.appendChild(boolRow("Cast-stability ring", "castStabilityRing", state.extras.castStabilityRing, (v) => {
+  containerEl.appendChild(makeSectionHeader("Combat aids"));
+  containerEl.appendChild(boolRow("Cast-stability ring", state.extras.castStabilityRing, (v) => {
     setExtra(state, "castStabilityRing", v);
-  }));
+  }, { hint: "Draws the 6 m circle you must stay inside while casting." }));
 
   // --- Display ---------------------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Display"));
   const fullscreenRow = document.createElement("div");
-  fullscreenRow.className = "hb-graphics-row";
+  fullscreenRow.className = "hb-graphics-row hb-graphics-fullscreen";
   const disposeFullscreen = mountFullscreenControl(fullscreenRow);
+  // ui/fullscreen_toggle.js styles its button/status inline (glass-era
+  // chrome); swap those for the kit so the row matches the panel.
+  restyleFullscreenControl(fullscreenRow);
   containerEl.appendChild(fullscreenRow);
 
   // --- Reload banner + reset ----------------------------------------------
   const reloadBanner = document.createElement("div");
   reloadBanner.className = "hb-graphics-reload";
   reloadBanner.style.display = "none";
-  reloadBanner.innerHTML = `
-    <span>Some changes apply on reload.</span>
-    <button type="button" class="hb-settings-btn hb-graphics-reload-btn">Reload</button>
-  `;
-  reloadBanner.querySelector(".hb-graphics-reload-btn").addEventListener("click", () => {
+  const reloadText = document.createElement("span");
+  reloadText.textContent = "Some changes take effect after a reload.";
+  const reloadBtn = document.createElement("button");
+  reloadBtn.type = "button";
+  reloadBtn.className = "hbk-btn-small hb-graphics-reload-btn";
+  reloadBtn.textContent = "Reload";
+  reloadBtn.addEventListener("click", () => {
     if (typeof window !== "undefined") window.location.reload();
   });
+  reloadBanner.appendChild(reloadText);
+  reloadBanner.appendChild(reloadBtn);
   containerEl.appendChild(reloadBanner);
+  // A preset click re-renders (new closure) — let it re-show the banner.
+  containerEl.__hbGraphicsMarkDirty = markDirty;
 
   const resetRow = document.createElement("div");
-  resetRow.className = "hb-settings-btnrow";
+  resetRow.className = "hb-settings-btnrow hb-graphics-resetrow";
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
-  resetBtn.className = "hb-settings-btn";
-  resetBtn.textContent = "Reset to preset defaults";
+  resetBtn.className = "hbk-btn-small hbk-brown";
+  resetBtn.textContent = "Restore defaults";
   resetBtn.addEventListener("click", () => {
     clearOverrides(state);
+    applyRenderScaleLive(EXTRA_DEFAULTS.renderScale);
     renderGraphicsTab(containerEl, { onAnyChange });
-    markDirty();
+    containerEl.__hbGraphicsMarkDirty?.();
   });
   resetRow.appendChild(resetBtn);
   containerEl.appendChild(resetRow);
 
-  return function dispose() {
+  function dispose() {
     // Event listeners on the rows above are attached to DOM nodes inside
     // containerEl; they're garbage-collected when the container is emptied
     // or removed. The fullscreen control attaches a document-level
     // `fullscreenchange` listener that outlives containerEl, so it needs
     // an explicit dispose to avoid stacking listeners on every re-render.
     disposeFullscreen();
-  };
+    if (containerEl.__hbGraphicsDispose === dispose) containerEl.__hbGraphicsDispose = null;
+  }
+  containerEl.__hbGraphicsDispose = dispose;
+  return dispose;
 }
 
 // ---------------------------------------------------------------------------
-// Helpers --------------------------------------------------------------------
+// Row widgets — shared with ui/camera_settings.js (and styled by both the
+// Options view (plugins/options-panel.js) and the legacy bar popover).
+// HUD overhaul 2026-10-05: kit classes + <label for> association.
 
-function makeSectionHeader(text) {
+let _rowSeq = 0;
+function nextRowId() {
+  _rowSeq += 1;
+  return `hb-set-${_rowSeq}`;
+}
+
+export function makeSectionHeader(text) {
   const h = document.createElement("div");
-  h.className = "hb-graphics-section";
+  h.className = "hb-graphics-section hbk-section-title";
   h.textContent = text;
   return h;
 }
 
-function boolRow(label, _flagKey, value, onChange) {
+export function boolRow(label, value, onChange, { hint } = {}) {
   const row = document.createElement("div");
-  row.className = "hb-settings-row hb-graphics-row";
+  row.className = "hb-settings-row hb-graphics-row hb-graphics-bool";
+  const id = nextRowId();
   const lbl = document.createElement("label");
+  lbl.htmlFor = id;
   lbl.textContent = label;
   const cb = document.createElement("input");
   cb.type = "checkbox";
+  cb.className = "hbk-check";
+  cb.id = id;
   cb.checked = !!value;
   cb.addEventListener("change", () => onChange(!!cb.checked));
+  if (hint) row.title = hint;
   row.appendChild(lbl);
   row.appendChild(cb);
   return row;
 }
 
-function rangeRow({ label, min, max, step, value, format, onInput, note }) {
+export function rangeRow({ label, min, max, step, value, format, onInput, onChange, hint }) {
   const row = document.createElement("div");
-  row.className = "hb-settings-row hb-graphics-row";
+  row.className = "hb-settings-row hb-graphics-row hb-graphics-range";
+  const id = nextRowId();
   const lbl = document.createElement("label");
+  lbl.htmlFor = id;
   lbl.textContent = label;
   const input = document.createElement("input");
   input.type = "range";
+  input.className = "hbk-range";
+  input.id = id;
   input.min = String(min);
   input.max = String(max);
   input.step = String(step);
   input.value = String(value);
   const val = document.createElement("span");
   val.className = "hb-settings-val";
-  val.textContent = format ? format(Number(value)) : String(value);
+  const show = (v) => {
+    const text = format ? format(Number(v)) : String(v);
+    val.textContent = text;
+    input.setAttribute("aria-valuetext", text);
+  };
+  show(value);
   input.addEventListener("input", () => {
     const v = Number(input.value);
-    val.textContent = format ? format(v) : String(v);
-    onInput(v);
+    show(v);
+    if (typeof onInput === "function") onInput(v);
   });
+  if (typeof onChange === "function") {
+    input.addEventListener("change", () => onChange(Number(input.value)));
+  }
+  if (hint) row.title = hint;
   row.appendChild(lbl);
   row.appendChild(input);
   row.appendChild(val);
-  if (note) {
-    const tag = document.createElement("span");
-    tag.className = "hb-graphics-tag";
-    tag.textContent = `(${note})`;
-    row.appendChild(tag);
-  }
   return row;
 }
 
-function selectRow({ label, options, value, onChange }) {
+export function selectRow({ label, options, value, onChange, hint }) {
   const row = document.createElement("div");
-  row.className = "hb-settings-row hb-graphics-row";
+  row.className = "hb-settings-row hb-graphics-row hb-graphics-selectrow";
+  const id = nextRowId();
   const lbl = document.createElement("label");
+  lbl.htmlFor = id;
   lbl.textContent = label;
   const sel = document.createElement("select");
-  sel.className = "hb-graphics-select";
+  sel.className = "hb-graphics-select hbk-select";
+  sel.id = id;
   for (const [v, text] of options) {
     const opt = document.createElement("option");
     opt.value = v;
@@ -482,9 +468,22 @@ function selectRow({ label, options, value, onChange }) {
     sel.appendChild(opt);
   }
   sel.addEventListener("change", () => onChange(sel.value));
+  if (hint) row.title = hint;
   row.appendChild(lbl);
   row.appendChild(sel);
   return row;
+}
+
+function restyleFullscreenControl(rowEl) {
+  for (const child of Array.from(rowEl.children || [])) {
+    if (child.tagName === "BUTTON") {
+      child.style.cssText = "";
+      child.className = "hbk-btn hb-graphics-fullscreen-btn";
+    } else {
+      child.style.cssText = "";
+      child.className = "hb-graphics-note";
+    }
+  }
 }
 
 function capitalize(s) {

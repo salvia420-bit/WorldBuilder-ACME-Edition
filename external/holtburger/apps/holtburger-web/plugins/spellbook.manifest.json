@@ -4,7 +4,7 @@
   "name": "Spellbook",
   "author": "holtburger",
   "version": "0.2.0",
-  "description": "Known spells — main-panel view (S / F5 hotkey).",
+  "description": "Known spells — main-panel view (F5, F2 alt): retail 32-px spell rows, school/level filters, Delete, drag to a spell bar.",
   "icon": "📖",
   "iconHidden": true,
   "entry": "./spellbook.js",

@@ -36,47 +36,38 @@ function ensureStyles() {
   stylesInjected = true;
   const style = document.createElement("style");
   style.id = STYLE_ID;
-  // AC red-accent aesthetic — matches the Recklessness band overlay in
-  // `plugins/combat-bar.js` (`.hb-cb-power-band` rgba(220,80,40,*) +
-  // `.hb-cb-power-band-spec` rgba(240,100,60,*)). The text uses the
-  // brighter "spec" border-orange so it pops against typical world
-  // backgrounds while still reading as the same colour family.
-  //
-  // Positioned top-center: 84px from top so it clears the vitals HUD
-  // (which sits at ~6px top in `plugins/vitals-hud.js`); transform
-  // centers horizontally. Pointer-events: none so it never blocks
-  // mouse interaction with the combat HUD beneath.
+  // HUD overhaul 2026-10-05 — kit plaque (dark field 0x06004CC2 + brass
+  // rule) with the red sneak accent, placed at 30% of the HUD viewport's
+  // height (`--hb-hud-vh`, zoom-correct) so it clears the vitals orbs at
+  // every HUD scale — the old `top: 84px` sat on the orb plaques once the
+  // HUD was zoomed. `left: 50%` + translateX(-50%) is zoom-safe (the
+  // percentage resolves against the zoomed viewport and the element's own
+  // width). Pointer-events: none so it never blocks the combat HUD.
   style.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
-      top: 84px;
+      top: calc(30 * var(--hb-hud-vh, 1vh));
       left: 50%;
       transform: translate(-50%, -6px);
       z-index: 60;
       pointer-events: none;
-      padding: 6px 14px;
-      font-family: var(--hb-font-serif, serif);
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      color: rgb(255, 220, 200);
-      background: linear-gradient(
-        180deg,
-        rgba(60, 18, 6, 0.85) 0%,
-        rgba(35, 10, 4, 0.85) 100%
-      );
-      border: 1px solid rgba(240, 100, 60, 0.55);
-      border-radius: 3px;
+      padding: 5px 16px 6px;
+      font-family: var(--hbk-font, var(--hb-font-serif, serif));
+      font-size: 15px;
+      letter-spacing: 0.06em;
+      color: #ffd9c8;
+      background: url("./data/ui-sprites/0x06004CC2.png") repeat, rgba(20, 8, 4, 0.92);
+      border: 1px solid rgba(220, 90, 50, 0.75);
       box-shadow:
-        0 0 12px rgba(220, 80, 40, 0.45),
-        inset 0 0 4px rgba(255, 180, 140, 0.18);
-      text-shadow: 0 0 4px rgba(255, 100, 40, 0.6),
-                   0 1px 2px rgba(0, 0, 0, 0.95);
+        inset 0 0 0 1px #1c0b06,
+        0 0 0 1px #000,
+        0 0 14px rgba(220, 80, 40, 0.45);
+      text-shadow: 0 0 4px rgba(255, 100, 40, 0.6), 0 1px 2px rgba(0, 0, 0, 0.95);
       opacity: 0;
       transition: opacity 220ms ease-out, transform 220ms ease-out;
       white-space: nowrap;
     }
+    #${OVERLAY_ID} .hb-sneak-dr { color: var(--hbk-gold-bright, #f3d27a); margin-left: 6px; }
     #${OVERLAY_ID}.hb-sneak-show {
       opacity: 1;
       transform: translate(-50%, 0);
@@ -92,8 +83,8 @@ export const manifest = {
   // No bar icon — the overlay IS the presentation. iconHidden tells
   // `mountBar` to skip the bar-button render but still call `mount`.
   iconHidden: true,
-  version: "0.1.0",
-  description: "Transient 'Sneak Attack +N DR' overlay on facing-gated swings",
+  version: "0.2.0",
+  description: "Transient 'Sneak Attack! +N damage rating' overlay on facing-gated swings",
 };
 
 export function mount(ctx) {
@@ -127,8 +118,14 @@ export function mount(ctx) {
     return rollupModulePromise;
   }
 
-  function show(text) {
+  function show(text, drText) {
     overlay.textContent = text;
+    if (drText) {
+      const dr = document.createElement("span");
+      dr.className = "hb-sneak-dr";
+      dr.textContent = drText;
+      overlay.appendChild(dr);
+    }
     // Force layout flush so the transition picks up the class add
     // even when timers fire back-to-back within a single frame.
     overlay.offsetHeight;
@@ -166,7 +163,7 @@ export function mount(ctx) {
       // upstream predicate ran on facing alone; this is the place we
       // gate on actual skill state.
       if (rollup.sneak <= 0) return;
-      show(`Sneak Attack +${rollup.sneak} DR`);
+      show("Sneak Attack!", `+${rollup.sneak} damage rating`);
     } catch (e) {
       // Never let a prediction fault leak to the console as an
       // unhandled rejection. The overlay simply stays hidden.
@@ -211,7 +208,7 @@ export function mount(ctx) {
   // undefined (Node import for tests).
   if (typeof window !== "undefined") {
     window.__sneakHudDebug = function (n = 10) {
-      show(`Sneak Attack +${n} DR`);
+      show("Sneak Attack!", `+${n} damage rating`);
     };
   }
 

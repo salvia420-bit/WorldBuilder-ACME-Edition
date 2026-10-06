@@ -1,467 +1,339 @@
-// trade-panel — floating peer-to-peer trade window.
+// trade-panel — the Secure Trade window (retail gmSecureTradeUI, layout
+// 0x2100000D).
 //
-// AC Trade (2026-05-25, Discord deficiency #3). Subscribes to the
-// `tradeUpdated` bus event (emitted by index.html's kind=23 arm) and
-// renders the live snapshot from `handle.playerTrade()`. Snapshot is
-// null pre-open and post-close, so the panel auto-shows / auto-hides
-// as the trade state machine transitions.
+// HUD overhaul 2026-10-05 — rebuilt on the shared HUD kit.
 //
-// Retail "Trade Window" layout (mirrored loosely — DAT layout port is
-// a future wave): two side-by-side grids — "You" on the left, partner
-// name on the right — each 4 cols × 3 rows (12 slots). Accept /
-// Decline / Reset buttons across the bottom. X-close in the header.
+// Retail: an 800×110 strip split into two 400×110 halves divided by a
+// bevel (0x06004CB8) — the PARTNER on the left (name, "trade accepted"
+// indicator, total-items label, one 32-px item row with a rope scroll),
+// YOU on the right with the green-arrow Trade button (0x06004CBC, 46×30)
+// pointing at the partner, a small green Clear All (0x06001DC6) in the
+// middle and the close (0x060012AA) at the far right.
 //
-// Drag-drop: drop an inventory item onto the "You" grid → wires
-// `handle.addToTrade(itemGuid, 0)`. Mime is `application/x-hb-inv-guid`
-// to match inventory.js's dragstart payload (see inventory.js:734).
+// Ours keeps that two-halves arrangement (partner left, you right) in a
+// draggable kit window: each half has its own name, item count, accept
+// badge and a wrapping 32-px slot grid; your half is the drop target for
+// inventory drags. The footer carries a plain-English status line ("Waiting
+// for Bob to accept.") so the accept state can't be misread, the green
+// Clear All, and the retail green-arrow Trade toggle.
 //
-// Keyboard: Esc closes via `handle.closeTrade()`.
+// Retail behaviour mirrored:
+//   • Trade is a TOGGLE (gmSecureTradeUI::ListenToElementMessage): pressed
+//     = you accepted (AcceptTheTrade); pressing again un-accepts
+//     (DeclineTheTrade). It is ghosted while neither side has offered
+//     anything (UpdateTradeButtonState, state 13).
+//   • Any change to the offer clears both acceptances server-side
+//     (RecvNotice_ClearTradeAcceptance → Reset) — the snapshot carries it.
+//   • Drops: only items you carry (DragItemAcceptable: "You can only trade
+//     items you are carrying"), never the same item twice.
+//   • Range: the partner is registered at range 5.0 with use-cylinders
+//     (RecvNotice_RegisterTrade); OnObjectRangeExit closes the
+//     negotiation (CloseTradeNegotiations). The old 24-m decline was not
+//     retail.
 //
-// Debug entry points (no UI gating yet — see CHORIZITE_PORTING_PLAN
-// §13 for the radial-menu wiring follow-on):
-//   window.__openTradePanel() — calls handle.openTrade(targetGuid)
-//     against the currently-selected entity, or logs "no target".
-//   window.__closeTradePanel() — closes the trade.
+// Wire (DO NOT regress): snapshot via `tradeUpdated` / `kind:23` bus event →
+// handle.playerTrade() (null = closed); addToTrade(itemGuid, 0) on drop
+// (mime `application/x-hb-inv-guid`, DropItemFlags.TRADE); acceptTrade /
+// declineTrade / resetTrade / closeTrade.
+//
+// Debug: window.__openTradePanel() opens a trade with the selected target;
+// window.__closeTradePanel() closes it.
 
 import { setAcText } from "../ui/ac_font.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
-import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import { DropItemFlags } from "./drop_item_flags.js";
+import {
+  createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, fillSlotIcon, wireDropTarget,
+  inventoryRows, entityWorldPos, localPlayerWorldPos, selectedTargetGuid,
+  objectDisplayName, objectIconId, chatNotice,
+} from "./commerce_window.js";
+import { tradeStatus, isOutOfRange, TRADE_RANGE, fmtNumber } from "./commerce_logic.js";
 
 const OVERLAY_ID = "hb-trade-panel";
 const STYLE_ID = "hb-trade-panel-style";
-const GRID_COLS = 4;
-const GRID_ROWS = 3;
-const GRID_SLOTS = GRID_COLS * GRID_ROWS;
-
-let overlayEl = null;
-let onKeyDownHandler = null;
-
-// Trade-partner range enforcement. Retail auto-declines if either side
-// walks > ~24m from the other. ACE has no dedicated "partner left
-// range" wire event yet, so we poll partner + local-player world pos
-// while the panel is open and call handle.declineTrade() ourselves
-// when the threshold is crossed. The server-side decline is still
-// authoritative — this is the client-side mirror of retail behavior.
-const TRADE_MAX_RANGE_M = 24;
+const SP = "./data/ui-sprites";
 const TRADE_RANGE_POLL_MS = 500;
+
+let win = null;
+let refs = null;
+let lastSnap = null;
 let currentPartnerGuid = 0;
 let rangeTimerId = 0;
 let rangeBreachFired = false;
 
-// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js`. Local
-// thin wrapper preserves the historical `[trade-panel]` warn label.
-async function fetchIconDataUrl(iconId) {
-  return fetchIconDataUrlShared(iconId, "trade-panel");
-}
-
 function ensureStyles() {
+  if (typeof document === "undefined") return;
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    #${OVERLAY_ID} {
-      position: fixed;
-      top: 90px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 360px;
-      height: 280px;
-      z-index: 70;
-      display: none;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(20, 14, 8, 0.94);
-      border: 1px solid var(--hb-border-brass);
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
-      user-select: none;
-      box-sizing: border-box;
+    #${OVERLAY_ID} { width: 620px; }
+    #${OVERLAY_ID} .htp-halves {
+      flex: 1 1 auto; min-height: 0;
+      display: grid; grid-template-columns: minmax(0, 1fr) 5px minmax(0, 1fr);
+      padding: 6px 6px 4px;
     }
-    #${OVERLAY_ID}[data-open="1"] { display: flex; flex-direction: column; }
-    #${OVERLAY_ID} .htp-header {
-      flex: 0 0 22px;
-      display: flex;
-      align-items: center;
-      padding: 0 6px 0 8px;
-      background: var(--hb-overlay-active);
-      border-bottom: 1px solid var(--hb-border-brass);
-      color: var(--hb-text-gold);
-      font-size: 12px;
-      letter-spacing: 0.02em;
+    /* Retail TradeOtherRightSideBevel 0x06004CB8 between the halves. */
+    #${OVERLAY_ID} .htp-bevel {
+      background: url("${SP}/0x06004CB8.png") center top / 5px 10px repeat-y;
+      margin: 0 3px;
     }
-    #${OVERLAY_ID} .htp-title {
-      flex: 1 1 auto;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      text-shadow: 0 1px 0 rgba(0,0,0,.85);
-    }
-    #${OVERLAY_ID} .htp-close {
-      flex: 0 0 auto;
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: inherit;
-      font-size: 10px;
-      line-height: 1;
-      padding: 1px 6px;
-      cursor: pointer;
-    }
-    #${OVERLAY_ID} .htp-close:hover {
-      background: var(--hb-overlay-hover);
-      color: var(--hb-text-cream-bright);
-      border-color: var(--hb-border-brass);
-    }
-    #${OVERLAY_ID} .htp-body {
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: row;
-      gap: 4px;
-      padding: 6px;
-      overflow: hidden;
-    }
-    #${OVERLAY_ID} .htp-side {
-      flex: 1 1 50%;
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--hb-border-brass-dim);
-      background: rgba(0,0,0,0.25);
-    }
-    #${OVERLAY_ID} .htp-side.htp-drop-active {
-      border-color: var(--hb-text-gold);
-      background: rgba(80, 60, 20, 0.35);
-    }
-    #${OVERLAY_ID} .htp-side-header {
-      flex: 0 0 18px;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 0 4px;
-      background: rgba(0,0,0,0.45);
-      border-bottom: 1px solid var(--hb-border-brass-dim);
-      font-size: 11px;
-    }
-    #${OVERLAY_ID} .htp-side-name {
-      flex: 1 1 auto;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #${OVERLAY_ID} .htp-accept-dot {
-      flex: 0 0 8px;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-    }
-    #${OVERLAY_ID} .htp-accept-dot[data-on="1"] {
-      background: #4caf50;
-      border-color: #6bcf6b;
-      box-shadow: 0 0 4px rgba(76, 175, 80, 0.7);
-    }
-    #${OVERLAY_ID} .htp-grid {
-      flex: 1 1 auto;
-      display: grid;
-      grid-template-columns: repeat(${GRID_COLS}, 1fr);
-      grid-template-rows: repeat(${GRID_ROWS}, 1fr);
-      gap: 2px;
-      padding: 3px;
-      box-sizing: border-box;
-    }
-    #${OVERLAY_ID} .htp-slot {
+    #${OVERLAY_ID} .htp-half { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    #${OVERLAY_ID} .htp-head { display: flex; align-items: center; gap: 6px; min-height: 18px; padding: 0 2px; }
+    #${OVERLAY_ID} .htp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+    #${OVERLAY_ID} .htp-badge {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+      padding: 1px 6px; border: 1px solid #3a2f18; border-radius: 2px;
       background: rgba(0, 0, 0, 0.45);
-      border: 1px solid var(--hb-border-brass-dim);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
-      box-sizing: border-box;
-      font-size: 14px;
-      line-height: 1;
-      min-height: 0;
-      min-width: 0;
     }
-    #${OVERLAY_ID} .htp-slot[data-empty="1"] {
-      background: rgba(0, 0, 0, 0.25);
-      border-style: dashed;
-      border-color: var(--hb-border-brass-dim);
+    #${OVERLAY_ID} .htp-badge::before {
+      content: ""; width: 8px; height: 8px; border-radius: 50%;
+      background: #2a2418; box-shadow: inset 0 0 0 1px #000;
     }
-    #${OVERLAY_ID} .htp-slot img {
-      width: 100%;
-      height: 100%;
-      image-rendering: pixelated;
-      object-fit: contain;
+    #${OVERLAY_ID} .htp-badge.is-on {
+      border-color: #4f8a2a; background: rgba(40, 90, 20, 0.35);
+      box-shadow: 0 0 6px rgba(110, 200, 60, 0.35);
     }
-    #${OVERLAY_ID} .htp-stack {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      background: rgba(0, 0, 0, 0.75);
-      color: var(--hb-text-cream-bright);
-      font-size: 8px;
-      line-height: 1;
-      padding: 1px 2px;
-      font-variant-numeric: tabular-nums;
+    #${OVERLAY_ID} .htp-badge.is-on::before { background: #8aef6d; box-shadow: 0 0 5px #8aef6d; }
+    #${OVERLAY_ID} .htp-count { padding: 0 2px; min-height: 14px; }
+    #${OVERLAY_ID} .htp-well { flex: 1 1 auto; min-height: 76px; height: 116px; overflow-y: auto; }
+    #${OVERLAY_ID} .htp-well .hb-cw-grid { gap: 3px; }
+    #${OVERLAY_ID} .htp-footer { justify-content: flex-start; gap: 8px; }
+    #${OVERLAY_ID} .htp-status { flex: 1 1 auto; min-width: 0; color: var(--hbk-text); font-size: 12px; }
+    #${OVERLAY_ID} .htp-status.is-ready { color: var(--hbk-value); }
+    #${OVERLAY_ID} .htp-clear {
+      background-image: url("${SP}/0x06001DC6.png");
+      min-width: 60px; min-height: 14px; color: #f0f6e0;
     }
-    #${OVERLAY_ID} .htp-footer {
-      flex: 0 0 30px;
-      display: flex;
-      align-items: center;
-      justify-content: space-around;
-      gap: 6px;
-      padding: 0 8px 6px;
-    }
-    #${OVERLAY_ID} .htp-btn {
-      flex: 1 1 0;
-      background: transparent;
-      border: 1px solid var(--hb-border-brass-dim);
-      color: var(--hb-text-cream);
-      font-family: inherit;
-      font-size: 11px;
-      padding: 4px 0;
+    /* Retail TradeSelfTradeButton: the green arrow 0x06004CBC (hover
+       0x06004CBD) pointing LEFT at the partner, label beside it. */
+    #${OVERLAY_ID} .htp-trade {
+      display: inline-flex; align-items: center; gap: 4px;
+      height: 30px; padding: 0 8px 0 0; border: 0; background: transparent;
       cursor: pointer;
     }
-    #${OVERLAY_ID} .htp-btn:hover {
-      background: var(--hb-overlay-hover);
-      border-color: var(--hb-border-brass);
-      color: var(--hb-text-cream-bright);
+    #${OVERLAY_ID} .htp-trade .htp-arrow {
+      width: 46px; height: 30px; flex: 0 0 46px;
+      background: url("${SP}/0x06004CBC.png") center / 100% 100% no-repeat;
     }
-    #${OVERLAY_ID} .htp-btn-accept[data-on="1"] {
-      background: rgba(120, 90, 20, 0.5);
-      border-color: var(--hb-text-gold);
-      color: var(--hb-text-gold);
+    #${OVERLAY_ID} .htp-trade:hover .htp-arrow,
+    #${OVERLAY_ID} .htp-trade:focus-visible .htp-arrow { background-image: url("${SP}/0x06004CBD.png"); }
+    #${OVERLAY_ID} .htp-trade.is-pressed .htp-arrow {
+      background-image: url("${SP}/0x06004CBD.png");
+      filter: drop-shadow(0 0 5px rgba(140, 240, 100, 0.85)) brightness(1.15);
     }
+    #${OVERLAY_ID} .htp-trade:disabled { cursor: default; }
+    #${OVERLAY_ID} .htp-trade:disabled .htp-arrow { filter: grayscale(1) brightness(0.55); }
   `;
   document.head.appendChild(s);
 }
 
-function fmtGuid(guid) {
-  return `0x${(guid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+function el(tag, cls, parent) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function buildHalf(parent, who) {
+  const half = el("div", `htp-half htp-${who}`, parent);
+  const head = el("div", "htp-head", half);
+  const name = el("div", "htp-name", head);
+  const badge = el("div", "htp-badge", head);
+  const badgeText = el("span", "", badge);
+  const count = el("div", "htp-count", half);
+  const well = el("div", "htp-well hbk-scroll hb-cw-drop", half);
+  return { half, name, badge, badgeText, count, well };
 }
 
 function buildOverlay() {
   ensureStyles();
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-
-  const header = document.createElement("div");
-  header.className = "htp-header";
-  const title = document.createElement("div");
-  title.className = "htp-title";
-  setAcText(title, "Trade Window", { color: "#f0c87c" });
-  header.appendChild(title);
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "htp-close";
-  closeBtn.title = "Close (Esc)";
-  setAcText(closeBtn, "X");
-  closeBtn.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    requestClose();
+  win = createKitWindow({
+    id: OVERLAY_ID,
+    title: "Secure Trade",
+    windowId: COMMERCE_WINDOW_ID.TRADE,
+    // Upper middle, clear of the vitals row (y≈130) and the radar.
+    defaultPos: {
+      left: "0px", right: "0px", bottom: "auto",
+      top: `max(4px, min(150px, calc(100 * var(--hb-hud-vh, 1vh) - 240px)))`,
+    },
+    className: "hb-trade",
+    // Close button / Esc end the negotiation on the server too.
+    onRequestClose: () => requestClose(),
+    onHide: () => {
+      stopRangeWatcher();
+      currentPartnerGuid = 0;
+      rangeBreachFired = false;
+    },
   });
-  header.appendChild(closeBtn);
-  overlay.appendChild(header);
+  // Centred by default via left:0/right:0 + auto margins (no transform —
+  // attachWindowPosition converts to left/top px on the first drag).
+  win.root.style.marginLeft = "auto";
+  win.root.style.marginRight = "auto";
 
-  const body = document.createElement("div");
-  body.className = "htp-body";
+  const halves = el("div", "htp-halves", win.body);
+  const partner = buildHalf(halves, "partner");
+  el("div", "htp-bevel", halves);
+  const mine = buildHalf(halves, "mine");
 
-  // "You" side — drop-zone for inventory drags.
-  const mySide = document.createElement("div");
-  mySide.className = "htp-side htp-mine";
-  const myHeader = document.createElement("div");
-  myHeader.className = "htp-side-header";
-  const myName = document.createElement("div");
-  myName.className = "htp-side-name";
-  setAcText(myName, "You", { color: "#f0c87c" });
-  myHeader.appendChild(myName);
-  const myDot = document.createElement("div");
-  myDot.className = "htp-accept-dot";
-  myDot.title = "You accepted";
-  myHeader.appendChild(myDot);
-  mySide.appendChild(myHeader);
-  const myGrid = document.createElement("div");
-  myGrid.className = "htp-grid";
-  mySide.appendChild(myGrid);
-  body.appendChild(mySide);
-
-  // Drag-drop wiring on the "You" side only (you can't drop into the
-  // partner's grid — that's mirrored from the server).
-  mySide.addEventListener("dragenter", onMyDragEnter);
-  mySide.addEventListener("dragover", onMyDragOver);
-  mySide.addEventListener("dragleave", onMyDragLeave);
-  mySide.addEventListener("drop", onMyDrop);
-
-  // Partner side — read-only mirror of the server-pushed AddToTrade
-  // events with `trade_side=PartnerSide`.
-  const partnerSide = document.createElement("div");
-  partnerSide.className = "htp-side htp-partner";
-  const partnerHeader = document.createElement("div");
-  partnerHeader.className = "htp-side-header";
-  const partnerName = document.createElement("div");
-  partnerName.className = "htp-side-name";
-  setAcText(partnerName, "Partner", { color: "#f0c87c" });
-  partnerHeader.appendChild(partnerName);
-  const partnerDot = document.createElement("div");
-  partnerDot.className = "htp-accept-dot";
-  partnerDot.title = "Partner accepted";
-  partnerHeader.appendChild(partnerDot);
-  partnerSide.appendChild(partnerHeader);
-  const partnerGrid = document.createElement("div");
-  partnerGrid.className = "htp-grid";
-  partnerSide.appendChild(partnerGrid);
-  body.appendChild(partnerSide);
-
-  overlay.appendChild(body);
-
-  // Footer: Accept / Decline / Reset buttons.
-  const footer = document.createElement("div");
-  footer.className = "htp-footer";
-  const acceptBtn = document.createElement("button");
-  acceptBtn.type = "button";
-  acceptBtn.className = "htp-btn htp-btn-accept";
-  setAcText(acceptBtn, "Accept");
-  acceptBtn.addEventListener("click", (ev) => {
+  const footer = el("div", "hbk-footer htp-footer", win.body);
+  const status = el("div", "htp-status", footer);
+  const clearBtn = el("button", "hbk-btn-small htp-clear", footer);
+  clearBtn.type = "button";
+  clearBtn.title = "Take back everything you offered (resets both acceptances)";
+  setAcText(clearBtn, "Clear All", { color: "#f0f6e0" });
+  clearBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    window.__sessionHandle?.acceptTrade?.();
+    try { window.__sessionHandle?.resetTrade?.(); } catch (e) { console.warn("[trade-panel] resetTrade failed:", e); }
   });
-  footer.appendChild(acceptBtn);
-  const declineBtn = document.createElement("button");
-  declineBtn.type = "button";
-  declineBtn.className = "htp-btn htp-btn-decline";
-  setAcText(declineBtn, "Decline");
-  declineBtn.addEventListener("click", (ev) => {
+  const tradeBtn = el("button", "htp-trade", footer);
+  tradeBtn.type = "button";
+  el("span", "htp-arrow", tradeBtn);
+  const tradeLabel = el("span", "", tradeBtn);
+  tradeBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    window.__sessionHandle?.declineTrade?.();
+    onTradeButton();
   });
-  footer.appendChild(declineBtn);
-  const resetBtn = document.createElement("button");
-  resetBtn.type = "button";
-  resetBtn.className = "htp-btn htp-btn-reset";
-  setAcText(resetBtn, "Reset");
-  resetBtn.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    window.__sessionHandle?.resetTrade?.();
-  });
-  footer.appendChild(resetBtn);
-  overlay.appendChild(footer);
 
-  overlay._titleEl = title;
-  overlay._myNameEl = myName;
-  overlay._myDotEl = myDot;
-  overlay._myGridEl = myGrid;
-  overlay._mySideEl = mySide;
-  overlay._partnerNameEl = partnerName;
-  overlay._partnerDotEl = partnerDot;
-  overlay._partnerGridEl = partnerGrid;
-  overlay._acceptBtnEl = acceptBtn;
+  // Drops: your half, or anywhere on the window (it's the only drop that
+  // makes sense here).
+  const onDrop = (guid) => offerItem(guid);
+  wireDropTarget(mine.well, DropItemFlags.TRADE, onDrop);
+  wireDropTarget(win.root, DropItemFlags.TRADE, onDrop);
 
-  document.body.appendChild(overlay);
-  return overlay;
+  refs = { partner, mine, status, clearBtn, tradeBtn, tradeLabel };
 }
 
-function renderSlots(gridEl, items) {
-  gridEl.innerHTML = "";
-  for (let i = 0; i < GRID_SLOTS; i++) {
-    const slot = document.createElement("div");
-    slot.className = "htp-slot";
-    const it = items[i];
-    if (!it) {
-      slot.dataset.empty = "1";
-    } else {
-      slot.dataset.guid = String(it.guid);
-      slot.title = it.name || fmtGuid(it.guid);
-      slot.textContent = "·";
-      if (it.iconId) {
-        fetchIconDataUrl(it.iconId).then((url) => {
-          if (!url || !slot.isConnected) return;
-          slot.textContent = "";
-          const img = document.createElement("img");
-          img.src = url;
-          img.alt = it.name || "";
-          slot.appendChild(img);
-        });
-      }
-      if (it.stackSize > 1) {
-        const badge = document.createElement("div");
-        badge.className = "htp-stack";
-        setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
-        slot.appendChild(badge);
-      }
-    }
-    gridEl.appendChild(slot);
+function onTradeButton() {
+  const h = window.__sessionHandle;
+  if (!h) return;
+  try {
+    if (lastSnap?.myAccepted) h.declineTrade?.();
+    else h.acceptTrade?.();
+  } catch (e) {
+    console.warn("[trade-panel] accept/decline failed:", e);
   }
+}
+
+function offerItem(guid) {
+  const g = guid >>> 0;
+  const mineGuids = new Set((lastSnap?.myItems || []).map((i) => i.guid >>> 0));
+  if (mineGuids.has(g)) {
+    win?.toast("That item is already in the trade.", "err");
+    return;
+  }
+  const item = inventoryRows().find((r) => r.guid === g);
+  if (!item) {
+    win?.toast("You can only trade items you are carrying", "err");
+    return;
+  }
+  if ((item.equipMask >>> 0) !== 0) {
+    win?.toast(`Unequip ${item.name} before trading it`, "err");
+    return;
+  }
+  const h = window.__sessionHandle;
+  try { h?.addToTrade?.(g, 0); }
+  catch (e) { console.warn("[trade-panel] addToTrade failed:", e); }
+}
+
+function toRows(list) {
+  const out = [];
+  try {
+    for (const it of Array.from(list || [])) {
+      out.push({
+        guid: it.guid >>> 0,
+        name: it.name || "",
+        iconId: it.iconId >>> 0,
+        stackSize: it.stackSize ?? 1,
+      });
+    }
+  } catch (_) {}
+  return out;
+}
+
+function renderWell(well, items, emptyText) {
+  well.replaceChildren();
+  if (items.length === 0) {
+    const hint = el("div", "hb-cw-hint", well);
+    hint.textContent = emptyText;
+    return;
+  }
+  const grid = el("div", "hb-cw-grid", well);
+  for (const it of items) {
+    const name = it.name || objectDisplayName(it.guid);
+    const slot = el("div", "hbk-slot", grid);
+    fillSlotIcon(slot, it.iconId || objectIconId(it.guid), name);
+    if ((it.stackSize || 1) > 1) {
+      const st = el("span", "hbk-stack", slot);
+      st.textContent = fmtNumber(it.stackSize);
+    }
+    slot.title = (it.stackSize || 1) > 1 ? `${name} (${fmtNumber(it.stackSize)})` : name;
+    slot.dataset.guid = String(it.guid);
+  }
+}
+
+function renderHalf(r, label, items, accepted, emptyText) {
+  setAcText(r.name, label, { color: KIT_COLOR.gold, fit: true });
+  r.badge.classList.toggle("is-on", !!accepted);
+  setAcText(r.badgeText, accepted ? "Accepted" : "Not accepted", {
+    color: accepted ? KIT_COLOR.value : KIT_COLOR.faint,
+  });
+  r.badge.title = accepted ? `${label} accepted the trade` : `${label} has not accepted yet`;
+  setAcText(r.count, `Items offered: ${items.length}`, { color: KIT_COLOR.dim });
+  renderWell(r.well, items, emptyText);
 }
 
 function renderSnapshot(snapshot) {
-  if (!overlayEl) return;
   if (!snapshot) {
-    hidePanel();
+    lastSnap = null;
+    win?.close();
     return;
   }
-  // Pull arrays of items via getter — wasm wrappers return Vec<TradeItemJs>.
-  let myItems = [];
-  let partnerItems = [];
-  try {
-    myItems = Array.from(snapshot.myItems || []);
-  } catch (_) {}
-  try {
-    partnerItems = Array.from(snapshot.partnerItems || []);
-  } catch (_) {}
-  renderSlots(overlayEl._myGridEl, myItems);
-  renderSlots(overlayEl._partnerGridEl, partnerItems);
+  if (!win) buildOverlay();
+  const myItems = toRows(snapshot.myItems);
+  const partnerItems = toRows(snapshot.partnerItems);
+  const partnerGuid = (snapshot.partnerGuid >>> 0) || 0;
+  const partnerName = snapshot.partnerName || objectDisplayName(partnerGuid, "Your partner");
+  lastSnap = {
+    myItems, partnerItems,
+    myAccepted: !!snapshot.myAccepted,
+    partnerAccepted: !!snapshot.partnerAccepted,
+    partnerName, partnerGuid,
+  };
+  if (partnerGuid !== currentPartnerGuid) rangeBreachFired = false;
+  currentPartnerGuid = partnerGuid;
 
-  const partnerLabel = snapshot.partnerName || fmtGuid(snapshot.partnerGuid || 0);
-  setAcText(overlayEl._partnerNameEl, partnerLabel, { color: "#f0c87c" });
-  currentPartnerGuid = (snapshot.partnerGuid >>> 0) || 0;
-  rangeBreachFired = false;
+  win.setTitle(`Trading with ${partnerName}`);
+  renderHalf(refs.partner, partnerName, partnerItems, lastSnap.partnerAccepted,
+    `Nothing offered by ${partnerName} yet.`);
+  renderHalf(refs.mine, "You", myItems, lastSnap.myAccepted,
+    "Drag items here from your pack to offer them.");
 
-  overlayEl._myDotEl.dataset.on = snapshot.myAccepted ? "1" : "0";
-  overlayEl._partnerDotEl.dataset.on = snapshot.partnerAccepted ? "1" : "0";
-  overlayEl._acceptBtnEl.dataset.on = snapshot.myAccepted ? "1" : "0";
-  setAcText(
-    overlayEl._acceptBtnEl,
-    snapshot.myAccepted ? "Accepted" : "Accept",
-    { color: snapshot.myAccepted ? "#f0c87c" : "#f0e8d0" },
-  );
+  const st = tradeStatus({
+    myCount: myItems.length,
+    partnerCount: partnerItems.length,
+    myAccepted: lastSnap.myAccepted,
+    partnerAccepted: lastSnap.partnerAccepted,
+    partnerName,
+  });
+  refs.status.textContent = st.text;
+  refs.status.classList.toggle("is-ready", lastSnap.partnerAccepted && !lastSnap.myAccepted);
+  refs.tradeBtn.disabled = st.buttonDisabled;
+  refs.tradeBtn.classList.toggle("is-pressed", st.buttonPressed);
+  refs.tradeBtn.setAttribute("aria-pressed", st.buttonPressed ? "true" : "false");
+  refs.tradeBtn.title = st.buttonPressed
+    ? "You accepted. Click again to withdraw your acceptance."
+    : "Accept this trade";
+  setAcText(refs.tradeLabel, st.buttonPressed ? "Accepted" : "Trade", {
+    color: st.buttonPressed ? KIT_COLOR.value : KIT_COLOR.text,
+  });
+  refs.clearBtn.disabled = myItems.length === 0;
 
-  showPanel();
-}
-
-function showPanel() {
-  if (!overlayEl) return;
-  overlayEl.dataset.open = "1";
-  if (!onKeyDownHandler) {
-    onKeyDownHandler = (ev) => {
-      if (overlayEl?.dataset.open !== "1") return;
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        ev.stopPropagation();
-        requestClose();
-      }
-    };
-    document.addEventListener("keydown", onKeyDownHandler, true);
-  }
+  win.open();
   startRangeWatcher();
 }
 
-function hidePanel() {
-  if (!overlayEl) return;
-  overlayEl.dataset.open = "0";
-  if (onKeyDownHandler) {
-    document.removeEventListener("keydown", onKeyDownHandler, true);
-    onKeyDownHandler = null;
-  }
-  stopRangeWatcher();
-  currentPartnerGuid = 0;
-  rangeBreachFired = false;
-}
-
-// Distance enforcement — polls partner + local-player world pos and
-// fires handle.declineTrade() if the trade partner moves > 24m away.
-// The trade snapshot's partnerGuid is captured in renderSnapshot; the
-// scene3d entityMap resolves it to a world position (read-only —
-// matches the radar/picking access pattern).
+// Range enforcement — retail closes the negotiation once the partner
+// leaves 5.0 cylinder units (see header). We poll at 2 Hz (retail 1 Hz).
 function startRangeWatcher() {
   if (rangeTimerId) return;
   rangeTimerId = setInterval(checkPartnerRange, TRADE_RANGE_POLL_MS);
@@ -474,96 +346,33 @@ function stopRangeWatcher() {
 }
 
 function checkPartnerRange() {
-  if (!overlayEl || overlayEl.dataset.open !== "1") return;
-  if (rangeBreachFired) return;
-  if (!currentPartnerGuid) return;
-  const sw = window.liveScene3d?.cameraSwitcher;
-  const em = window.liveScene3d?.entityManager;
-  const playerPos = sw?.getPlayerWorldPos?.();
-  const partnerInst = em?.entityMap?.get?.(currentPartnerGuid >>> 0)
-    ?? em?.entityMap?.get?.(String(currentPartnerGuid >>> 0));
-  const partnerPos = partnerInst?.root?.position;
-  if (!playerPos || !partnerPos) return;
-  const dx = partnerPos.x - playerPos.x;
-  const dy = partnerPos.y - playerPos.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist <= TRADE_MAX_RANGE_M) return;
+  if (!win?.isOpen() || rangeBreachFired || !currentPartnerGuid) return;
+  const me = localPlayerWorldPos();
+  const them = entityWorldPos(currentPartnerGuid);
+  if (!me || !them) return;
+  if (!isOutOfRange(me, them, TRADE_RANGE)) return;
   rangeBreachFired = true;
-  const handle = window.__sessionHandle;
-  try { handle?.declineTrade?.(); }
-  catch (e) { console.warn("[trade-panel] declineTrade on range-breach failed:", e); }
-  showRangeToast();
-}
-
-function showRangeToast() {
-  if (!overlayEl) return;
-  const old = overlayEl.querySelector(".htp-range-toast");
-  if (old) old.remove();
-  const t = document.createElement("div");
-  t.className = "htp-range-toast";
-  t.style.cssText =
-    "position:absolute;left:50%;bottom:8px;transform:translateX(-50%);" +
-    "padding:4px 12px;font-size:11px;background:rgba(20,14,8,0.92);" +
-    "border:1px solid var(--hb-border-brass,#b08a4a);color:var(--hb-text-gold,#d4af37);" +
-    "pointer-events:none;z-index:5;";
-  setAcText(t, "Trade partner moved away");
-  overlayEl.appendChild(t);
-  setTimeout(() => { try { t.remove(); } catch (_) {} }, 2000);
+  chatNotice(`${lastSnap?.partnerName || "Your trade partner"} is too far away. The trade was closed.`);
+  requestClose();
 }
 
 function requestClose() {
-  // Server-driven close: the kind=23 TradeUpdated with snapshot=None
-  // will hide the panel; we just fire the wire request.
+  // Retail's close button hides the window at once (SetVisible(0)) and
+  // ends the negotiation; the kind=23 snapshot=None reply then confirms.
+  // Hiding locally too means a stale window can never get stuck open when
+  // the server has nothing to close.
   const handle = window.__sessionHandle;
   if (handle?.closeTrade) {
-    try {
-      handle.closeTrade();
-    } catch (e) {
-      console.warn("[trade-panel] closeTrade failed:", e);
-    }
-  } else {
-    hidePanel();
+    try { handle.closeTrade(); } catch (e) { console.warn("[trade-panel] closeTrade failed:", e); }
   }
-}
-
-function onMyDragEnter(ev) {
-  if (isDropAccepted(ev.dataTransfer?.types, DropItemFlags.TRADE)) {
-    ev.preventDefault();
-    overlayEl?._mySideEl?.classList.add("htp-drop-active");
-  }
-}
-function onMyDragOver(ev) {
-  if (isDropAccepted(ev.dataTransfer?.types, DropItemFlags.TRADE)) {
-    ev.preventDefault();
-    ev.dataTransfer.dropEffect = "move";
-  }
-}
-function onMyDragLeave(ev) {
-  if (ev.target === overlayEl?._mySideEl) {
-    overlayEl?._mySideEl?.classList.remove("htp-drop-active");
-  }
-}
-function onMyDrop(ev) {
-  overlayEl?._mySideEl?.classList.remove("htp-drop-active");
-  const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
-  if (!guidStr) return;
-  ev.preventDefault();
-  const guid = parseInt(guidStr, 10) >>> 0;
-  if (!guid) return;
-  const handle = window.__sessionHandle;
-  if (handle?.addToTrade) {
-    try {
-      handle.addToTrade(guid, 0);
-    } catch (e) {
-      console.warn("[trade-panel] addToTrade failed:", e);
-    }
-  }
+  lastSnap = null;
+  win?.close();
 }
 
 function onTradeUpdated() {
   const handle = window.__sessionHandle;
   if (!handle?.playerTrade) {
-    hidePanel();
+    win?.close();
     return;
   }
   let snapshot = null;
@@ -571,15 +380,13 @@ function onTradeUpdated() {
     snapshot = handle.playerTrade();
   } catch (e) {
     console.warn("[trade-panel] playerTrade getter failed:", e);
-    hidePanel();
+    win?.close();
     return;
   }
-  if (!overlayEl) overlayEl = buildOverlay();
   renderSnapshot(snapshot);
 }
 
-// Subscribe at module-load. Mirror container-panel's pattern — poll
-// for the bus until login wires it.
+// Subscribe at module-load; wait for the plugin bus.
 let _subscribeTimer = null;
 function trySubscribe() {
   const client = window.__pluginClient ?? null;
@@ -590,40 +397,48 @@ function trySubscribe() {
 }
 if (typeof window !== "undefined") {
   if (!trySubscribe()) {
-    _subscribeTimer = setInterval(() => {
-      if (trySubscribe()) {
-        clearInterval(_subscribeTimer);
-        _subscribeTimer = null;
-      }
-    }, 500);
+    if (window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { trySubscribe(); });
+    } else {
+      _subscribeTimer = setInterval(() => {
+        if (trySubscribe()) {
+          clearInterval(_subscribeTimer);
+          _subscribeTimer = null;
+        }
+      }, 500);
+    }
   }
 
-  // Debug entry — open a trade against the currently-selected entity.
-  // Selection lookup mirrors radial-menu / examine-target: prefer
-  // window.__selectedEntityGuid (set by picking.js click handler),
-  // fall back to window.__lastSelectedGuid for legacy paths.
+  // Open a trade with the currently-selected entity.
   window.__openTradePanel = () => {
     const handle = window.__sessionHandle;
     if (!handle?.openTrade) {
       console.warn("[trade-panel] no session handle");
       return;
     }
-    const targetGuid =
-      (window.__selectedEntityGuid >>> 0) ||
-      (window.__lastSelectedGuid >>> 0) ||
-      0;
+    const targetGuid = selectedTargetGuid();
     if (!targetGuid) {
-      console.warn("[trade-panel] no target selected — click an entity first");
+      console.warn("[trade-panel] no target selected — click a player first");
       return;
     }
     try {
       handle.openTrade(targetGuid);
-      console.log(`[trade-panel] openTrade(${fmtGuid(targetGuid)})`);
     } catch (e) {
       console.warn("[trade-panel] openTrade failed:", e);
     }
   };
   window.__closeTradePanel = () => requestClose();
+  // Verifier hook: render a synthetic snapshot without a server.
+  window.__tradePanelDebug = {
+    render: (snap) => renderSnapshot(snap ?? {
+      partnerGuid: 0x50000002, partnerName: "Bob the Trader",
+      myAccepted: false, partnerAccepted: true,
+      myItems: [{ guid: 1, name: "Pyreal", iconId: 0, stackSize: 250 }],
+      partnerItems: [{ guid: 2, name: "Iron Sword", iconId: 0, stackSize: 1 },
+        { guid: 3, name: "Healing Kit", iconId: 0, stackSize: 1 }],
+    }),
+    close: () => win?.close(),
+  };
 }
 
 export const manifest = {
@@ -631,6 +446,6 @@ export const manifest = {
   name: "Trade",
   icon: "T",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Peer-to-peer trade window — auto-opens on kind=23 TradeUpdated",
+  version: "0.2.0",
+  description: "Secure Trade window — auto-opens on kind=23 TradeUpdated",
 };

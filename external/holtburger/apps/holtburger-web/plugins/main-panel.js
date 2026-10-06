@@ -19,7 +19,14 @@
 // gmInventoryUI + gmExaminationUI relationship — different
 // gmXxxUI instances mount into the same container slot.
 
-import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
+import { setAcText } from "../ui/ac_font.js";
+
+// HUD overhaul 2026-10-05 — retail TitleText font. Every gm*UI title
+// (gmCharacterInfoUI 0x2100001A "Character Information", the inventory /
+// examination titles) is drawn in font 0x40000001 per the DAT layouts
+// (ui-layout-render manifests); the 21×22 heading font read far heavier
+// than retail.
+const TITLE_FONT_ID = 0x40000001;
 import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import {
@@ -159,7 +166,10 @@ function ensureStyles() {
   style.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
-      top: 160px;
+      /* HUD overhaul 2026-10-05: below the radar, but never off the bottom
+         of a short window at a large HUD scale (--hb-hud-vh = 1% of the
+         viewport in HUD px, ui/hud_scale.js). */
+      top: max(4px, min(160px, calc(100 * var(--hb-hud-vh, 1vh) - 366px)));
       right: 8px;
       z-index: 50;
       width: 300px;
@@ -181,22 +191,35 @@ function ensureStyles() {
       border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
+    /* HUD overhaul 2026-10-05 — retail per-panel title chrome: the
+       276×25 trapezoid TitleText sprite (0x06004CFA, gmCharacterInfoUI /
+       gmInventoryUI / gmExaminationUI all draw it) as a 9-slice so the
+       angled ends keep their shape, the title CENTRED like retail, and
+       the 24×25 ClosePanelButton sprite (0x06001393 / hover 0x06001394)
+       in the top-right corner instead of the old 14-px brass square. */
     #${OVERLAY_ID} .hb-mp-title {
       position: absolute;
-      top: 0; left: 0; right: 0;
+      top: 0; left: 0; right: 24px;
       height: 25px;
+      box-sizing: border-box;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
-      padding: 0 6px;
-      background: url("./data/ui-sprites/0x06004CFA.png") center/100% 100% no-repeat;
+      padding: 0 8px;
+      border-style: solid;
+      border-width: 0 14px;
+      border-image: url("./data/ui-sprites/0x06004CFA.png") 0 14 0 14 fill / 0 14px stretch;
       font-size: 11px;
       color: var(--hb-text-cream-bright);
       text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
       pointer-events: auto;
       user-select: none;
+      touch-action: none;
     }
     #${OVERLAY_ID} .hb-mp-back {
+      position: absolute;
+      left: 2px; top: 5px;
       width: 18px; height: 14px;
       font-size: 10px;
       line-height: 14px;
@@ -213,22 +236,28 @@ function ensureStyles() {
     #${OVERLAY_ID}[data-stack-depth="4"] .hb-mp-back { visibility: visible; }
     #${OVERLAY_ID} .hb-mp-back:hover { background: var(--hb-overlay-active); color: var(--hb-text-gold); }
     #${OVERLAY_ID} .hb-mp-title-name {
-      flex: 1;
+      /* flex:1 so the ac-text "fit" measure sees the real available
+         width (a shrink-to-content box measured ~0 and the title came
+         out microscopic); the canvas is centred inside it. */
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      justify-content: center;
       letter-spacing: 0.04em;
       overflow: hidden;
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
     #${OVERLAY_ID} .hb-mp-close {
-      width: 14px; height: 14px;
-      background: var(--hb-border-brass);
-      color: var(--hb-bg-stone-bottom);
-      font-size: 9px;
-      line-height: 14px;
-      text-align: center;
+      position: absolute;
+      top: 0; right: 0;
+      width: 24px; height: 25px;
+      background: url("./data/ui-sprites/0x06001393.png") center / 100% 100% no-repeat;
+      font-size: 0;
       cursor: pointer;
+      pointer-events: auto;
     }
-    #${OVERLAY_ID} .hb-mp-close:hover { background: var(--hb-text-gold); }
+    #${OVERLAY_ID} .hb-mp-close:hover { background-image: url("./data/ui-sprites/0x06001394.png"); }
+    #${OVERLAY_ID} .hb-mp-close:active { filter: brightness(0.8); }
     #${OVERLAY_ID} .hb-mp-body {
       position: absolute;
       top: 25px;
@@ -268,7 +297,7 @@ function _mountCurrent() {
     // destroying the panel. The caller should have checked first.
     console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
     _runCleanup();
-    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: HEADING_FONT_ID, fit: true });
+    setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: TITLE_FONT_ID, fit: true });
     bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
     currentCleanup = null;
     overlay.dataset.stackDepth = String(stack.length);
@@ -277,7 +306,7 @@ function _mountCurrent() {
   }
   _runCleanup();
   const name = (typeof view.nameFor === "function") ? view.nameFor(ctx) : (view.name ?? id);
-  setAcText(titleName, name, { fontId: HEADING_FONT_ID, fit: true });
+  setAcText(titleName, name, { fontId: TITLE_FONT_ID, fit: true });
   try {
     currentCleanup = view.mount(bodyEl, ctx) || null;
   } catch (e) {
@@ -346,7 +375,7 @@ export function currentViewId() {
 // silently if the panel isn't mounted (titleName=null).
 export function setTitle(text) {
   if (!titleName) return false;
-  setAcText(titleName, text, { fontId: HEADING_FONT_ID, fit: true });
+  setAcText(titleName, text, { fontId: TITLE_FONT_ID, fit: true });
   return true;
 }
 
@@ -554,15 +583,16 @@ export function mount(_ctx) {
   // (CSS can't clip a replaced <canvas>) never actually truncated the
   // 21-22px HEADING_FONT_ID canvas. `fit` auto-measures the span's own
   // laid-out width every render and shrinks/ellipsizes to it instead.
-  setAcText(titleName, "Panel", { fontId: HEADING_FONT_ID, fit: true });
+  setAcText(titleName, "Panel", { fontId: TITLE_FONT_ID, fit: true });
   titleEl.appendChild(titleName);
   closeBtn = document.createElement("span");
   closeBtn.className = "hb-mp-close";
-  setAcText(closeBtn, "×");
   closeBtn.title = "Close";
+  closeBtn.setAttribute("role", "button");
+  closeBtn.setAttribute("aria-label", "Close");
   closeBtn.addEventListener("click", () => hide());
-  titleEl.appendChild(closeBtn);
   overlay.appendChild(titleEl);
+  overlay.appendChild(closeBtn);
 
   bodyEl = document.createElement("div");
   bodyEl.className = "hb-mp-body";

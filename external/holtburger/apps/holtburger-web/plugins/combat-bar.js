@@ -166,17 +166,27 @@ function ensureStyles() {
   stylesInjected = true;
   const style = document.createElement("style");
   style.id = "hb-combat-bar-style";
+  // HUD overhaul 2026-10-05 — the Combat panel (≡ bar → Combat) moved off its
+  // white-glass bespoke look onto the HUD kit: kit text tokens, retail brass
+  // height tags (0x06004D1C, selected 0x06004D1E), kit orb checkboxes and
+  // range slider (hbk-check / hbk-range on the inputs), kit tabs + rows for
+  // the spell picker, and the retail red-wave meter (0x06001200) for the
+  // swing refill. Class names are unchanged so every behaviour hook stays.
+  const SP = "./data/ui-sprites";
   style.textContent = `
     .hb-cb-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       font-size: 12px;
+      font-family: var(--hbk-font, var(--hb-font-serif));
+      color: var(--hbk-text, #e8dfc8);
     }
     .hb-cb-row label {
       flex: 0 0 auto;
-      color: rgba(255, 255, 255, 0.75);
+      min-width: 52px;
+      color: var(--hbk-text-dim, #a8a090);
     }
     .hb-cb-heights {
       display: flex;
@@ -184,24 +194,21 @@ function ensureStyles() {
       flex: 1;
     }
     .hb-cb-height-btn {
-      flex: 1;
-      padding: 4px 6px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: rgba(255, 255, 255, 0.8);
-      border-radius: 4px;
-      font-size: 12px;
-      font-family: inherit;
+      flex: 1 1 0;
+      min-width: 0;
+      height: 19px;
+      padding: 0 6px;
+      border: 0;
+      background: url("${SP}/0x06004D1C.png") center / 100% 100% no-repeat;
+      color: #fff4dc;
+      font: 11px var(--hbk-font, serif);
+      text-shadow: 0 1px 0 #000, 0 0 3px #000;
       cursor: pointer;
+      white-space: nowrap;
     }
-    .hb-cb-height-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-    }
-    .hb-cb-height-btn.active {
-      background: rgba(255, 120, 60, 0.4);
-      border-color: rgba(255, 140, 80, 0.7);
-      color: #fff;
-    }
+    .hb-cb-height-btn:hover { background-image: url("${SP}/0x06004D1D.png"); }
+    .hb-cb-height-btn.active { background-image: url("${SP}/0x06004D1E.png"); color: #fff; }
+    .hb-cb-height-btn:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 1px; }
     .hb-cb-power-row input[type="range"] {
       flex: 1;
       position: relative;
@@ -220,77 +227,58 @@ function ensureStyles() {
       position: relative;
       z-index: 1;
     }
-    /* Recklessness active-band overlay — drawn between 10%–90% of
-       the track width when the local player has Recklessness Trained
-       (2) or Specialized (3) AND is in a melee / missile stance.
-       Sits BEHIND the slider thumb (z-index 0 vs thumb's 1) so the
-       thumb is always visible on top. Visual-only — never enforced
-       as a cap; see acpedia Recklessness page + Combat omnibus. */
+    /* Recklessness active band — 10%–90% of the track (retail
+       basic_recklessness_fill 0x0600715E spans the same stretch), shown
+       when Recklessness is Trained/Specialized in melee/missile. */
     .hb-cb-power-band {
       position: absolute;
       top: 50%;
       transform: translateY(-50%);
-      height: 10px;
+      height: 8px;
       left: 10%;
       width: 80%;
-      background: rgba(220, 80, 40, 0.18);
-      border: 1px solid rgba(220, 80, 40, 0.32);
-      border-radius: 2px;
+      background: url("${SP}/0x0600715E.png") left center / 60px 8px repeat-x;
+      opacity: 0.85;
       pointer-events: auto;
       z-index: 0;
       cursor: help;
     }
-    .hb-cb-power-band.hb-cb-power-band-spec {
-      background: rgba(220, 80, 40, 0.26);
-      border-color: rgba(240, 100, 60, 0.45);
-    }
+    .hb-cb-power-band.hb-cb-power-band-spec { opacity: 1; filter: brightness(1.2); }
     .hb-cb-power-val {
       flex: 0 0 36px;
       text-align: right;
       font-variant-numeric: tabular-nums;
-      color: rgba(255, 255, 255, 0.7);
+      color: var(--hbk-value, #8aef6d);
     }
     .hb-cb-toggle {
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 2px;
+      margin: 0 12px 4px 0;
       font-size: 12px;
-      color: rgba(255, 255, 255, 0.75);
+      color: var(--hbk-text, #e8dfc8);
       cursor: pointer;
     }
     .hb-cb-stance-row {
-      margin-bottom: 6px;
+      margin-bottom: 8px;
       padding-bottom: 6px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      border-bottom: 1px solid var(--hbk-gold-deep, #4e3f1f);
     }
     .hb-cb-stance-val {
       flex: 1;
-      font-weight: 600;
-      color: #fff;
-    }
-    .hb-cb-stance-btn {
-      padding: 4px 10px;
-      background: rgba(255, 255, 255, 0.10);
-      border: 1px solid rgba(255, 255, 255, 0.22);
-      border-radius: 3px;
-      color: #fff;
-      font: inherit;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .hb-cb-stance-btn:hover {
-      background: rgba(255, 255, 255, 0.18);
+      color: var(--hbk-gold-bright, #f3d27a);
     }
     .hb-cb-hint {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.45);
+      color: var(--hbk-text-faint, #77705f);
+      font-style: italic;
       margin-top: 6px;
       line-height: 1.4;
     }
     .hb-cb-feed {
       margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      padding-top: 6px;
+      border-top: 1px solid var(--hbk-gold-deep, #4e3f1f);
       display: flex;
       flex-direction: column;
       gap: 2px;
@@ -298,84 +286,82 @@ function ensureStyles() {
       line-height: 1.35;
       max-height: 90px;
       overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hbk-gold-dim, #8a7544) #0a0806;
     }
     .hb-cb-feed-line {
-      color: rgba(255, 255, 255, 0.65);
+      color: var(--hbk-text-dim, #a8a090);
       font-variant-numeric: tabular-nums;
     }
-    .hb-cb-feed-line.hb-cb-feed-hit { color: rgba(255, 200, 120, 0.9); }
-    .hb-cb-feed-line.hb-cb-feed-taken { color: rgba(255, 130, 130, 0.9); }
-    .hb-cb-feed-line.hb-cb-feed-miss { color: rgba(180, 180, 180, 0.7); font-style: italic; }
+    .hb-cb-feed-line.hb-cb-feed-hit { color: #ffc878; }
+    .hb-cb-feed-line.hb-cb-feed-taken { color: #ff8a80; }
+    .hb-cb-feed-line.hb-cb-feed-miss { color: var(--hbk-text-faint, #77705f); font-style: italic; }
     .hb-cb-feed-empty {
-      color: rgba(255, 255, 255, 0.35);
+      color: var(--hbk-text-faint, #77705f);
       font-style: italic;
     }
     .hb-cb-spells {
       display: flex;
       flex-direction: column;
-      gap: 3px;
+      gap: 1px;
       margin-bottom: 8px;
       max-height: 200px;
       overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--hbk-gold-dim, #8a7544) #0a0806;
     }
     .hb-cb-spell {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 6px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 4px;
+      min-height: 20px;
+      padding: 1px 6px;
+      background: transparent;
+      border: 0;
+      border-left: 2px solid transparent;
       cursor: pointer;
-      font-size: 11px;
-      color: rgba(255, 255, 255, 0.8);
-      font-family: inherit;
+      font: 11px var(--hbk-font, serif);
+      color: var(--hbk-text, #e8dfc8);
       text-align: left;
     }
-    .hb-cb-spell:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
+    .hb-cb-spell:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
+    .hb-cb-spell:hover { background: var(--hbk-hover, rgba(243, 210, 122, 0.08)); }
     .hb-cb-spell.armed {
-      background: rgba(160, 110, 255, 0.4);
-      border-color: rgba(180, 130, 255, 0.7);
-      color: #fff;
+      background: var(--hbk-sel, rgba(243, 210, 122, 0.16));
+      border-left-color: var(--hbk-gold, #d9b45a);
+      color: var(--hbk-gold-bright, #f3d27a);
     }
     .hb-cb-spell-action {
-      flex: 0 0 38px;
-      font-weight: 600;
+      flex: 0 0 34px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       font-size: 9px;
-      color: rgba(255, 255, 255, 0.55);
+      color: var(--hbk-text-dim, #a8a090);
     }
-    .hb-cb-spell.armed .hb-cb-spell-action {
-      color: #fff;
-    }
+    .hb-cb-spell.armed .hb-cb-spell-action { color: var(--hbk-gold-bright, #f3d27a); }
     .hb-cb-spell-name {
       flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .hb-cb-spell-tag {
       flex: 0 0 auto;
       font-size: 9px;
-      padding: 1px 5px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 3px;
-      color: rgba(255, 255, 255, 0.45);
+      padding: 0 4px;
+      border: 1px solid var(--hbk-gold-deep, #4e3f1f);
+      color: var(--hbk-text-dim, #a8a090);
     }
-    /* Wave 6 / Phase 17 — spell-shape badge. Sits between the action
-       column and the spell name so the column-width stays fixed even
-       when the table hasn't loaded yet (badge becomes a blank span). */
+    /* Wave 6 / Phase 17 — spell-shape badge. Fixed column so rows don't
+       jitter while the shape table loads. */
     .hb-cb-spell-shape {
       flex: 0 0 14px;
-      font-family: var(--ac-mono, ui-monospace, monospace);
       font-size: 10px;
-      font-weight: 700;
       text-align: center;
       line-height: 14px;
-      border-radius: 3px;
       background: rgba(0, 0, 0, 0.35);
-      color: rgba(255, 255, 255, 0.65);
+      color: var(--hbk-text-dim, #a8a090);
     }
     .hb-cb-spell-shape[data-shape="Bolt"]   { color: rgba(170, 200, 255, 0.95); }
     .hb-cb-spell-shape[data-shape="Arc"]    { color: rgba(200, 170, 255, 0.95); }
@@ -384,47 +370,45 @@ function ensureStyles() {
     .hb-cb-spell-shape[data-shape="Wall"]   { color: rgba(170, 230, 200, 0.95); }
     .hb-cb-spell-shape[data-shape="Ring"]   { color: rgba(230, 230, 130, 0.95); }
     .hb-cb-spell-shape[data-shape="Blast"]  { color: rgba(255, 140, 100, 0.95); }
-    .hb-cb-spell-shape[data-shape="Self"]   { color: rgba(255, 255, 255, 0.35); background: transparent; }
+    .hb-cb-spell-shape[data-shape="Self"]   { color: var(--hbk-text-faint, #77705f); background: transparent; }
     .hb-cb-magic-hint {
       margin-bottom: 8px;
       font-size: 11px;
-      color: rgba(180, 130, 255, 0.85);
+      color: var(--hbk-text-dim, #a8a090);
     }
     .hb-cb-tabs {
       display: flex;
       gap: 2px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid var(--hbk-gold-dim, #8a7544);
     }
     .hb-cb-tab {
       flex: 1;
-      padding: 3px 0;
-      font-size: 11px;
-      font-family: inherit;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 3px;
-      color: rgba(255, 255, 255, 0.55);
+      padding: 2px 0 3px;
+      font: 11px var(--hbk-font, serif);
+      background: linear-gradient(180deg, #2a2418 0%, #15120c 100%);
+      border: 1px solid #3a2f18;
+      border-bottom: 0;
+      border-radius: 3px 3px 0 0;
+      color: var(--hbk-text-dim, #a8a090);
       cursor: pointer;
       text-align: center;
     }
-    .hb-cb-tab:hover {
-      background: rgba(255, 255, 255, 0.1);
-      color: rgba(255, 255, 255, 0.85);
-    }
+    .hb-cb-tab:hover { color: var(--hbk-text, #e8dfc8); }
     .hb-cb-tab.active {
-      background: rgba(160, 110, 255, 0.4);
-      border-color: rgba(180, 130, 255, 0.7);
-      color: #fff;
-      font-weight: 600;
+      color: var(--hbk-gold-bright, #f3d27a);
+      border-color: var(--hbk-gold-dim, #8a7544);
+      background: linear-gradient(180deg, #4a3c1e 0%, #1d180d 100%);
     }
+    .hb-cb-tab.is-drop-target { color: #fff; border-color: var(--hbk-gold-bright, #f3d27a); }
     .hb-cb-power-meter {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--hbk-gold-deep, #4e3f1f);
     }
     .hb-cb-power-meter-label {
       font-size: 10px;
-      color: rgba(255, 255, 255, 0.55);
+      color: var(--hbk-text-dim, #a8a090);
       margin-bottom: 4px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -432,29 +416,21 @@ function ensureStyles() {
     .hb-cb-power-meter-bar {
       position: relative;
       height: 12px;
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 3px;
+      background: url("${SP}/0x060074CA.png") left center / 60px 12px repeat-x, #000;
+      box-shadow: 0 0 0 1px #000, 0 0 0 2px rgba(138, 117, 68, 0.55);
       overflow: hidden;
     }
     .hb-cb-power-meter-fill {
       position: absolute;
       top: 0; left: 0; bottom: 0;
       width: 0%;
-      background: linear-gradient(180deg, #ffaa44, #cc6622);
+      background: url("${SP}/0x06001200.png") left center / 60px 12px repeat-x;
       transition: width 100ms linear;
     }
-    .hb-cb-power-meter.refilling .hb-cb-power-meter-fill {
-      background: linear-gradient(180deg, #ffaa44, #cc6622);
-    }
-    .hb-cb-power-meter.ready .hb-cb-power-meter-fill {
-      background: linear-gradient(180deg, #88ff88, #44cc44);
-    }
-    /* AttackHook strike-frame pulse — flashes the meter when the
-       LOCAL player's swing reaches its hookType=3 AttackHook (the
-       retail strike-frame moment, ~halfway through the swing clip).
-       Subscriber lives in attachPowerMeter; class auto-removes after
-       the 220ms animation completes. */
+    .hb-cb-power-meter.refilling .hb-cb-power-meter-fill { filter: brightness(0.8) saturate(0.8); }
+    .hb-cb-power-meter.ready .hb-cb-power-meter-fill { filter: none; }
+    /* AttackHook strike-frame pulse — flashes the meter when the LOCAL
+       player's swing reaches its hookType=3 AttackHook. */
     @keyframes hb-cb-strike-pulse {
       0%   { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
       40%  { box-shadow: 0 0 8px 2px rgba(255, 220, 120, 0.95); transform: scaleY(1.35); }
@@ -928,107 +904,216 @@ function installSpellBarHotkeys() {
 }
 
 // ============================================================================
-// Task C follow-up (2026-07-01) — the retail spellcasting STRIP
-// (#hb-spell-strip). Reference: live retail capture
-// (Spell-Casting-Panel-Live.jpg, 717×81): a compact horizontal bar shown
-// ONLY in magic stance, where retail REPLACED the melee/missile
-// High/Med/Low + Recklessness panel (combat-hud.js now hides itself on
-// stance 0x49 to make room — its recomputeVisible keys on
-// stanceIsMeleeOrMissile). Layout matches the capture:
+// The retail spellcasting STRIP (#hb-spell-strip) — gmSpellcastingUI
+// (layout 0x21000010, 800×80) as a floaty (gmFloatyCombatUI's Spellcasting
+// child, 610×90 frame). Shown ONLY in the magic stance, where retail REPLACES
+// the melee/missile power bar + High/Medium/Low panel (combat-hud.js hides
+// itself on stance 0x49 to make room).
 //
-//   [tab row I..VIII, active lit]
-//   [orb] [18 icon slots — gold hotkey digits on the first 9] [Cast]
-//   selected-spell name label underneath ("Horizon's Blades" spot)
+// HUD overhaul 2026-10-05 — restyled onto the retail art + HUD kit (it was a
+// hand-coloured bar with a decorative blue orb as its drag grip). Retail
+// layout (data/retail-layouts dump of 0x21000010):
+//   Spellcast_Tab1..8   0x100000A3-A9/0x100005C2  47×20 roman numerals I…VIII
+//                        across the top (one favourite-spell bar per tab)
+//   BuiltInSpell        0x100000B1  32×32 current-spell well at the left, its
+//                        _Selected overlay 0x06004D09
+//   Spellcasting_BankN  0x100000AA… 685×36 the active tab's spell slots
+//   CastSpellButton     0x100000B2  75×32 "Cast"
+//   Spellcast_SpellName 0x1000048B  450×18 name line under the bank
+// so the strip is now:
 //
-// The slots are the SAME per-tab storage the side panel, spellbook and
-// digit hotkeys use (spellbook.js spellBars in
-// holtburger_combat_bar_v1), so every surface stays in sync:
-//   - drag a spell icon from the 📖 Spellbook onto any cell to bind it
-//     (application/x-hb-spell-id, the existing drag mime)
-//   - drag cell → cell to move/swap a binding within the strip
-//   - right-click a cell to clear it
-//   - click: self-spell casts immediately, targeted spell arms (then
-//     click an enemy to fire) — identical to the panel rows / hotkeys
-//   - Cast button: fires the armed spell at the selected target
-//     (self-spells just cast) — retail's CastCurrentSpell.
+//   ┌ floaty frame ────────────────────────────────────────────────────┐
+//   │      I   II  III  IV   V   VI  VII VIII                          │
+//   │ [◇] [1][2][3][4][5][6][7][8][9][ ][ ]…18 slots…        [ Cast ]  │
+//   │     Horizon's Blades                    1-9 cast · Del/PgDn …    │
+//   └──────────────────────────────────────────────────────────────────┘
+//
+// The slots are the SAME per-tab storage the side panel, spellbook and digit
+// hotkeys use (spellbook.js spellBars in holtburger_combat_bar_v1):
+//   - drag a spell from the Spellbook onto any cell to bind it
+//     (application/x-hb-spell-id), or onto a tab numeral to file it there
+//   - drag cell → cell to swap; drag a cell off the strip (or right-click)
+//     to clear it
+//   - click / digit: self spells cast at once; targeted spells cast at the
+//     selected target, else arm for click-to-cast
+//   - Cast / End: retail CastCurrentSpell on the selection.
+// Until the player drags it (by the frame), the strip docks centred just
+// above the bottom-centre toolbar — measured live, like combat-hud.js.
+
+/** Retail floaty frame — corner 0x06006129, edges 0x0600612A-D. */
+function spellStripFrameCss(sel) {
+  const SP = "./data/ui-sprites";
+  const u = (id) => `url("${SP}/${id}.png")`;
+  return `
+    ${sel} {
+      background:
+        ${u("0x06006129")} left top / 5px 5px no-repeat,
+        ${u("0x06006129")} right top / 5px 5px no-repeat,
+        ${u("0x06006129")} left bottom / 5px 5px no-repeat,
+        ${u("0x06006129")} right bottom / 5px 5px no-repeat,
+        ${u("0x0600612A")} left top / 10px 5px repeat-x,
+        ${u("0x0600612C")} left bottom / 10px 5px repeat-x,
+        ${u("0x0600612B")} left top / 5px 10px repeat-y,
+        ${u("0x0600612D")} right top / 5px 10px repeat-y,
+        ${u("0x06004CC2")} left top / 48px 48px repeat,
+        #0b0c10;
+      image-rendering: pixelated;
+    }`;
+}
+
+// Bottom offset (in `el`'s own HUD px) that clears every bottom-anchored,
+// centre-straddling `#hb-*` HUD root (the toolbar / target-bar stack). Twin of
+// combat-hud.js computeDockBottom — the two panels share one dock spot.
+// (installSpellStrip runs at module load, above this point — keep every
+// value this needs function-local so nothing sits in a TDZ.)
+function spellStripDockBottom(el, fallback = 124) {
+  const SKIP = new Set([
+    "hb-spell-strip", "hb-combat-hud", "hb-combat-hud-death", "hb-sneak-hud", "hb-portal-storm-pulse",
+  ]);
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const zRaw = Number(el?.currentCSSZoom);
+  const z = Number.isFinite(zRaw) && zRaw > 0 ? zRaw : 1;
+  let top = vh;
+  for (const c of document.body.children) {
+    const id = c.id || "";
+    // Transient roots (tooltips over the toolbar, drag ghosts, toasts,
+    // menus) must not shove the strip up and down while they live.
+    if (!id.startsWith("hb-") || SKIP.has(id)
+        || /tooltip|tip\b|ghost|drag|toast|popup|menu|confirm|dialog/i.test(id)) continue;
+    const r = c.getBoundingClientRect?.();
+    if (!r || !r.width || !r.height) continue;
+    if (r.height > vh * 0.5 || r.width > vw * 0.9) continue;
+    if (r.bottom < vh * 0.7) continue;
+    if (r.left > vw / 2 + 40 || r.right < vw / 2 - 40) continue;
+    top = Math.min(top, r.top);
+  }
+  if (top >= vh) return fallback;
+  return Math.round(Math.min((vh - top) / z + 6, (vh / z) * 0.5));
+}
+
 function installSpellStrip() {
   if (typeof window === "undefined" || typeof document === "undefined") return;
   const STRIP_ID = "hb-spell-strip";
   if (document.getElementById(STRIP_ID)) return;
   const ROMAN_TABS = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
   const STANCE_MAGIC = 0x49;
+  const SP = "./data/ui-sprites";
+  const SLOT = 32;
 
   const style = document.createElement("style");
   style.id = "hb-spell-strip-style";
   style.textContent = `
     #${STRIP_ID} {
-      /* left/top (or the centered default) are owned by
-         attachWindowPosition — drag the orb to move, position persists
-         + clamps to the viewport. */
+      /* Docked default: left/right 0 + auto margins centre it without a
+         transform (attachWindowPosition owns left/top once dragged). */
       position: fixed; z-index: 1400; user-select: none;
+      left: 0; right: 0; margin-left: auto; margin-right: auto;
+      bottom: 124px;
+      width: fit-content;
+      max-width: calc(100 * var(--hb-hud-vw, 1vw) - 8px);
+      box-sizing: border-box;
+      padding: 5px;
+      color: var(--hbk-text, #e8dfc8);
+      font-family: var(--hbk-font, var(--hb-font-serif));
+      font-size: 11px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
     }
-    #${STRIP_ID} .hb-ss-tabs { display: flex; gap: 2px; margin-left: 42px; }
+    ${spellStripFrameCss(`#${STRIP_ID}`)}
+    #${STRIP_ID} .hb-ss-body {
+      display: grid;
+      grid-template-columns: ${SLOT}px minmax(0, 1fr) auto;
+      grid-template-rows: 17px ${SLOT}px 15px;
+      column-gap: 8px;
+      row-gap: 2px;
+      padding: 1px 4px 2px;
+      align-items: center;
+    }
+    /* Spellcast_Tab1..8 — roman numerals over the bank. */
+    #${STRIP_ID} .hb-ss-tabs {
+      grid-column: 2; grid-row: 1;
+      display: flex; gap: 2px; align-self: end;
+      border-bottom: 1px solid var(--hbk-gold-deep, #4e3f1f);
+    }
     #${STRIP_ID} .hb-ss-tab {
-      width: 42px; height: 17px; padding: 0; cursor: pointer;
-      background: linear-gradient(#3a2f22, #241c12);
-      border: 1px solid #6b5433; border-bottom: none;
-      border-radius: 6px 6px 0 0;
-      color: #c9b27a; font: 600 10px Georgia, serif; line-height: 16px;
+      width: 36px; height: 16px; padding: 0;
+      border: 1px solid transparent; border-bottom: 0;
+      border-radius: 3px 3px 0 0;
+      background: transparent;
+      color: var(--hbk-text-dim, #a8a090);
+      font: 11px var(--hbk-font, serif); line-height: 15px;
+      cursor: pointer;
     }
+    #${STRIP_ID} .hb-ss-tab:hover { color: var(--hbk-text, #e8dfc8); background: var(--hbk-hover, rgba(243, 210, 122, 0.08)); }
     #${STRIP_ID} .hb-ss-tab.active {
-      background: linear-gradient(#6e5a35, #4a3a20); color: #ffe9b0;
+      color: var(--hbk-gold-bright, #f3d27a);
+      border-color: var(--hbk-gold-dim, #8a7544);
+      background: linear-gradient(180deg, #4a3c1e 0%, #1d180d 100%);
+      box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.25);
     }
     #${STRIP_ID} .hb-ss-tab.drag-over {
-      border-color: #a06eff; color: #d9c2ff;
-      background: linear-gradient(#54418a, #37285e);
+      color: #fff; border-color: var(--hbk-gold-bright, #f3d27a);
+      box-shadow: 0 0 6px rgba(243, 210, 122, 0.6);
     }
-    #${STRIP_ID} .hb-ss-main {
-      display: flex; align-items: center; gap: 3px; padding: 3px 5px;
-      background: linear-gradient(#2a2118, #171108);
-      border: 2px solid #6b5433; border-radius: 4px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    #${STRIP_ID} .hb-ss-tab:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); }
+    /* BuiltInSpell — the current-spell well (retail _Selected 0x06004D09). */
+    #${STRIP_ID} .hb-ss-current { grid-column: 1; grid-row: 2; }
+    #${STRIP_ID} .hb-ss-current .hb-ss-icon { opacity: 1; }
+    #${STRIP_ID} .hb-ss-current::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: url("${SP}/0x06004D09.png") center / 100% 100% no-repeat;
+      opacity: 0.35;
     }
-    #${STRIP_ID} .hb-ss-orb {
-      flex: none; width: 30px; height: 30px; border-radius: 50%;
-      border: 1px solid #0b1e33; margin-right: 3px; cursor: grab;
-      background: radial-gradient(circle at 35% 30%, #cfe8ff, #4d86c8 45%, #123055 80%);
+    #${STRIP_ID} .hb-ss-current.has-spell::after { opacity: 1; }
+    /* Spellcasting_Bank — the active tab's 18 slots; scrolls on narrow HUDs. */
+    #${STRIP_ID} .hb-ss-slots {
+      grid-column: 2; grid-row: 2;
+      display: flex; gap: 2px;
+      overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: none;
     }
-    #${STRIP_ID} .hb-ss-orb:active { cursor: grabbing; }
-    #${STRIP_ID} .hb-ss-slots { display: flex; gap: 2px; }
-    #${STRIP_ID} .hb-ss-slot {
-      position: relative; width: 32px; height: 32px; box-sizing: border-box;
-      background: #0d0a06; border: 1px solid #4a3a24; cursor: pointer;
+    #${STRIP_ID} .hb-ss-slots::-webkit-scrollbar { display: none; }
+    #${STRIP_ID} .hb-ss-slot { flex: 0 0 ${SLOT}px; cursor: pointer; }
+    #${STRIP_ID} .hb-ss-slot.bound:hover { box-shadow: 0 0 0 1px var(--hbk-gold-dim, #8a7544); }
+    /* .selected = retail's current-spell highlight (0x06004D09); an armed
+       targeted spell shares it and glows until it fires. ::before (z 2), so
+       the WS14 cast-busy sweep keeps ::after to itself. */
+    #${STRIP_ID} .hb-ss-slot.selected::before,
+    #${STRIP_ID} .hb-ss-slot.armed::before {
+      content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+      background: url("${SP}/0x06004D09.png") center / 100% 100% no-repeat;
     }
-    #${STRIP_ID} .hb-ss-slot.bound:hover { border-color: #caa955; }
-    /* .selected = retail's current-spell highlight (Delete/PageDown
-       cycling, UseSpellSlot, or a click land here); armed targeted
-       spells share the same ring. */
-    #${STRIP_ID} .hb-ss-slot.selected,
-    #${STRIP_ID} .hb-ss-slot.armed {
-      border-color: #ffd76a; box-shadow: inset 0 0 6px rgba(255, 215, 106, 0.6);
-    }
-    #${STRIP_ID} .hb-ss-slot.drag-over { border-color: #a06eff; }
+    #${STRIP_ID} .hb-ss-slot.armed { box-shadow: 0 0 6px rgba(243, 210, 122, 0.75); }
     #${STRIP_ID} .hb-ss-icon {
-      position: absolute; inset: 1px; opacity: 0;
+      position: absolute; inset: 0; opacity: 0;
       background-size: cover; background-position: center;
-      image-rendering: pixelated;
+      image-rendering: pixelated; pointer-events: none;
     }
     #${STRIP_ID} .hb-ss-slot.bound .hb-ss-icon { opacity: 1; }
     #${STRIP_ID} .hb-ss-num {
-      position: absolute; top: -1px; left: 1px; z-index: 1;
-      font: 700 9px monospace; color: #ffd76a;
-      text-shadow: 0 1px 2px #000; pointer-events: none;
+      position: absolute; top: 0; left: 2px; z-index: 1;
+      font: 10px var(--hbk-font, serif); line-height: 1;
+      color: var(--hbk-gold-bright, #f3d27a);
+      text-shadow: 0 0 2px #000, 1px 1px 0 #000; pointer-events: none;
     }
-    #${STRIP_ID} .hb-ss-cast {
-      margin-left: 6px; height: 26px; padding: 0 14px; cursor: pointer;
-      background: linear-gradient(#7a1c14, #4b0e09);
-      border: 1px solid #a8623c; border-radius: 3px;
-      color: #f3d9a8; font: 600 12px Georgia, serif;
+    #${STRIP_ID} .hb-ss-castcol {
+      grid-column: 3; grid-row: 2;
+      display: flex; align-items: center;
     }
-    #${STRIP_ID} .hb-ss-cast:hover { background: linear-gradient(#93261b, #5d130c); }
+    #${STRIP_ID} .hb-ss-cast { height: ${SLOT}px; min-width: 70px; font-size: 13px; }
+    /* Spellcast_SpellName line + key hints, under the bank. */
+    #${STRIP_ID} .hb-ss-foot {
+      grid-column: 2 / 4; grid-row: 3;
+      display: flex; align-items: center; gap: 10px; min-width: 0;
+    }
     #${STRIP_ID} .hb-ss-name {
-      margin: 2px 0 0 44px; min-height: 15px;
-      color: #fff; font: 12px Georgia, serif; text-shadow: 0 1px 2px #000;
+      flex: 1 1 auto;
+      min-width: 0; height: 15px; overflow: hidden;
+      color: #fff; white-space: nowrap;
+    }
+    #${STRIP_ID} .hb-ss-keys {
+      flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      color: var(--hbk-text-faint, #77705f); font-size: 10px; white-space: nowrap;
     }
   `;
   document.head.appendChild(style);
@@ -1036,6 +1121,12 @@ function installSpellStrip() {
   const root = document.createElement("div");
   root.id = STRIP_ID;
   root.style.display = "none";
+  root.setAttribute?.("role", "toolbar");
+  root.setAttribute?.("aria-label", "Spellcasting");
+
+  const body = document.createElement("div");
+  body.className = "hb-ss-body";
+  root.appendChild(body);
 
   const tabsEl = document.createElement("div");
   tabsEl.className = "hb-ss-tabs";
@@ -1045,11 +1136,11 @@ function installSpellStrip() {
     t.type = "button";
     t.className = "hb-ss-tab";
     t.textContent = ROMAN_TABS[i] ?? String(i + 1);
-    t.title = `Spell tab ${ROMAN_TABS[i] ?? i + 1}  (Insert/PageUp cycle — drop a spell here to move it to this tab)`;
+    t.title = `Spell bar ${ROMAN_TABS[i] ?? i + 1} — Insert / PageUp cycle tabs; drop a spell here to file it on this bar`;
     t.addEventListener("click", () => setActiveSpellBar(i));
-    // Drop a spell on the numeral to move it to that tab (user spec).
-    // From the strip: the source cell empties (move). From the
-    // spellbook: plain add. addToFirstEmptySlot dedupes per-tab.
+    // Drop a spell on the numeral to file it on that tab. From the strip:
+    // the source cell empties (move). From the spellbook: plain add.
+    // addToFirstEmptySlot dedupes per-tab.
     t.addEventListener("dragover", (ev) => {
       if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
         ev.preventDefault();
@@ -1074,18 +1165,22 @@ function installSpellStrip() {
     tabEls.push(t);
     tabsEl.appendChild(t);
   }
-  root.appendChild(tabsEl);
+  body.appendChild(tabsEl);
 
-  const mainEl = document.createElement("div");
-  mainEl.className = "hb-ss-main";
-  const orbEl = document.createElement("div");
-  orbEl.className = "hb-ss-orb";
-  orbEl.title = "Spellcasting — drag the orb to move the bar";
-  mainEl.appendChild(orbEl);
+  // BuiltInSpell — current-spell well.
+  const currentEl = document.createElement("div");
+  currentEl.className = "hbk-slot hb-ss-current";
+  currentEl.title = "Current spell — Delete / PageDown choose, End casts";
+  const currentIcon = document.createElement("div");
+  currentIcon.className = "hb-ss-icon";
+  currentEl.appendChild(currentIcon);
+  currentEl.addEventListener("click", () => castCurrent());
+  body.appendChild(currentEl);
 
   const slotsWrap = document.createElement("div");
   slotsWrap.className = "hb-ss-slots";
   const slotEls = [];
+  const iconEls = [];
 
   let catalog = null;
   const metaFor = (id) => (catalog ? catalog[String(id)] : null);
@@ -1098,13 +1193,11 @@ function installSpellStrip() {
   };
 
   // === Retail selection model (Task C v2, 2026-07-02) ================
-  // One "current spell" per the MagicCombat map: Delete/PageDown cycle
-  // it, End (or the Cast button) casts it, UseSpellSlot digits and
-  // clicks land on it too. Selection is index-based (a tab may show
-  // the same icon art on different spells; index is unambiguous).
-  // Selecting a TARGETED spell also arms it (armedSpellId — the same
-  // storage picking.js's click-to-cast reads); selecting a self spell
-  // clears the armed state so a stale bolt can't fire on entity click.
+  // One "current spell" per the MagicCombat map: Delete/PageDown cycle it,
+  // End (or Cast / the well) casts it, UseSpellSlot digits and clicks land
+  // on it too. Selection is index-based. Selecting a TARGETED spell also
+  // arms it (armedSpellId — the storage picking.js's click-to-cast reads);
+  // selecting a self spell clears the armed state.
   let selectedIdx = -1;
 
   function writeArmed(spellId) {
@@ -1159,7 +1252,7 @@ function installSpellStrip() {
     const slots = getSpellBarSlots();
     const id = (slots[selectedIdx] | 0) || armedId();
     if (!id) {
-      setName("(no spell selected — Delete/PageDown to choose)");
+      setName("No spell selected — click a slot or press Delete / PageDown.");
       return;
     }
     const meta = metaFor(id);
@@ -1172,11 +1265,9 @@ function installSpellStrip() {
     const tgt =
       (window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0) || 0;
     if (!tgt) {
-      setName("(no target selected)");
+      setName(`${meta?.name ?? `Spell ${id}`} — select a target first`);
       // WS14 — surface the retail client string (acclient.c:404772) on the
-      // shared toast surface, not just the strip name label. This is the
-      // End-key / Cast-button path (no click-to-cast follow-up implied); the
-      // fireSlot() armed-no-target path keeps its "click a target" name hint.
+      // shared toast surface, not just the strip name label.
       try {
         window.__pluginClient?.events?.emit?.("clientActionRejected", {
           message: "You must select a suitable target before casting this spell.",
@@ -1188,9 +1279,9 @@ function installSpellStrip() {
     setName(meta?.name ?? `Spell ${id}`);
   }
 
-  // UseSpellSlot_N / cell click: select the cell, then act — self
-  // spells cast immediately; targeted spells cast when a target is
-  // already selected, else stay armed for the click-to-cast flow.
+  // UseSpellSlot_N / cell click: select the cell, then act — self spells
+  // cast immediately; targeted spells cast when a target is already
+  // selected, else stay armed for the click-to-cast flow.
   function fireSlot(idx) {
     const id = (getSpellBarSlots()[idx] | 0);
     if (!id) return;
@@ -1212,9 +1303,16 @@ function installSpellStrip() {
     }
   }
 
+  // Hovering a cell previews its name on the name line; leaving the bank
+  // restores the current selection's name (retail Spellcast_SpellName).
+  function selectionName() {
+    const id = (getSpellBarSlots()[selectedIdx] | 0) || armedId();
+    return id ? (metaFor(id)?.name ?? `Spell ${id}`) : "";
+  }
+
   for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
     const el = document.createElement("div");
-    el.className = "hb-ss-slot";
+    el.className = "hbk-slot hb-ss-slot";
     el.dataset.slot = String(i);
     const icon = document.createElement("div");
     icon.className = "hb-ss-icon";
@@ -1228,8 +1326,9 @@ function installSpellStrip() {
     el.addEventListener("click", () => fireSlot(i));
     el.addEventListener("mouseenter", () => {
       const id = (getSpellBarSlots()[i] | 0);
-      if (id) setName(metaFor(id)?.name ?? `Spell ${id}`);
+      setName(id ? (metaFor(id)?.name ?? `Spell ${id}`) : "Empty — drag a spell here from the Spellbook");
     });
+    el.addEventListener("mouseleave", () => setName(selectionName()));
     const clearCell = () => {
       const id = (getSpellBarSlots()[i] | 0);
       if (!id) return;
@@ -1249,28 +1348,26 @@ function installSpellStrip() {
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("application/x-hb-ss-slot", String(i));
     });
-    // Dragging a spell OFF the bar removes it (user spec — retail
-    // behavior). If no drop target accepted the drag, the browser
-    // reports dropEffect "none" on dragend: the strip's own cells /
-    // tabs and the hotbar all set copy, so an internal move or a
-    // hotbar shortcut-bind never triggers the removal.
+    // Dragging a spell OFF the bar removes it (retail behaviour). When no
+    // drop target accepted the drag the browser reports dropEffect "none";
+    // the strip's own cells / tabs and the hotbar all set copy.
     el.addEventListener("dragend", (ev) => {
       if (ev.dataTransfer && ev.dataTransfer.dropEffect === "none") {
         clearCell();
-        setName("(spell removed from the bar)");
+        setName("Spell removed from the bar.");
       }
     });
     el.addEventListener("dragover", (ev) => {
       if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
         ev.preventDefault();
         ev.dataTransfer.dropEffect = "copy";
-        el.classList.add("drag-over");
+        el.classList.add("is-drop-target");
       }
     });
-    el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+    el.addEventListener("dragleave", () => el.classList.remove("is-drop-target"));
     el.addEventListener("drop", (ev) => {
       ev.preventDefault();
-      el.classList.remove("drag-over");
+      el.classList.remove("is-drop-target");
       const id = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
       if (!Number.isFinite(id) || id <= 0) return;
       const srcRaw = ev.dataTransfer.getData("application/x-hb-ss-slot");
@@ -1285,62 +1382,90 @@ function installSpellStrip() {
       }
     });
     slotEls.push(el);
+    iconEls.push(icon);
     slotsWrap.appendChild(el);
   }
-  mainEl.appendChild(slotsWrap);
+  body.appendChild(slotsWrap);
 
+  const castCol = document.createElement("div");
+  castCol.className = "hb-ss-castcol";
   const castBtn = document.createElement("button");
   castBtn.type = "button";
-  castBtn.className = "hb-ss-cast";
+  castBtn.className = "hbk-btn hb-ss-cast";
   castBtn.textContent = "Cast";
-  castBtn.title = "Cast the armed spell at your selected target";
-  // Cast button = retail CombatCastCurrentSpell (End key), same code path.
+  castBtn.title = "Cast the current spell (End) — targeted spells fire at your selected target";
+  // Cast button = retail CastSpellButton → CombatCastCurrentSpell (End key).
   castBtn.addEventListener("click", () => castCurrent());
-  mainEl.appendChild(castBtn);
-  root.appendChild(mainEl);
-  root.appendChild(nameEl);
+  castCol.appendChild(castBtn);
+  body.appendChild(castCol);
+  const footEl = document.createElement("div");
+  footEl.className = "hb-ss-foot";
+  footEl.appendChild(nameEl);
+  const keysEl = document.createElement("div");
+  keysEl.className = "hb-ss-keys";
+  keysEl.textContent = "1-9 cast · Del/PgDn pick · End cast · Ins/PgUp bar";
+  keysEl.title = "Ctrl+Delete / Ctrl+PageDown jump to the first / last spell · Ctrl+Insert / Ctrl+PageUp first / last bar";
+  footEl.appendChild(keysEl);
+  body.appendChild(footEl);
   document.body.appendChild(root);
 
-  // Draggable frame (user spec) — the orb is the grip. Position
-  // persists per the shared hb.window.* store and clamps back into
-  // the viewport on restore. 0x21000031 is a synthetic window id in
-  // the retail gm-UI id space (gmSpellbookUI = 0x21000032 per the
-  // spellbook port; the spellcasting panel's exact retail id is
-  // unverified). Default: centered above the chat/target bars.
+  // Draggable by the frame; position persists per the shared hb.window.*
+  // store. 0x21000031 is a synthetic id in the gm-UI id space (kept from the
+  // 2026-07 strip so saved positions survive).
   let posCtl = null;
   try {
     posCtl = attachWindowPosition(root, {
       windowId: 0x21000031,
-      dragHandle: orbEl,
-      defaultPos: { left: "calc(50% - 372px)", bottom: "96px" },
-    });
+      dragHandle: root,
+      ignoreSelector: "button, .hb-ss-slot, .hb-ss-current",
+      defaultPos: { left: "0px", right: "0px", bottom: "124px", top: "auto" },
+    }) || null;
   } catch (_) { /* position helper failure must never kill the strip */ }
 
-  // The strip mounts display:none (magic-stance gating), so
-  // attachWindowPosition's restore-time viewport clamp measures a 0×0
-  // element and can't catch a stale/bogus saved position. Re-check on
-  // every show transition with REAL geometry; a strip parked outside
-  // the viewport snaps back to the centered default.
-  function reclampIntoViewport() {
-    try {
-      const r = root.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      const off =
-        r.left < 0 || r.top < 0 ||
-        r.right > window.innerWidth + 4 ||
-        r.bottom > window.innerHeight + 4;
-      if (off) {
-        if (posCtl?.resetPosition) {
-          posCtl.resetPosition();
-        }
-        root.style.left = "calc(50% - 372px)";
-        root.style.top = "auto";
-        root.style.bottom = "96px";
-      }
-    } catch (_) {}
+  const userPlaced = () => {
+    const st = posCtl?.getState?.();
+    return !!st && st.x != null && st.y != null;
+  };
+
+  // Docked default — centred above the bottom-centre toolbar, re-measured
+  // on every show (and each visibility tick) so a taller toolbar or another
+  // HUD scale never overlaps it. A saved (dragged) position is left alone,
+  // except that one stranded off-screen snaps back to the dock.
+  function dockStrip() {
+    if (root.style.display === "none") return;
+    if (userPlaced()) {
+      try {
+        const r = root.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        const off = r.left < 0 || r.top < 0 ||
+          r.right > window.innerWidth + 4 || r.bottom > window.innerHeight + 4;
+        if (!off) return;
+        posCtl?.resetPosition?.();
+      } catch (_) { return; }
+    }
+    root.style.left = "0px";
+    root.style.right = "0px";
+    root.style.top = "auto";
+    root.style.bottom = `${spellStripDockBottom(root)}px`;
   }
+  try {
+    window.addEventListener("resize", () => dockStrip());
+    document.addEventListener("hb-hud-scale-changed", () => dockStrip());
+  } catch (_) {}
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
+
+  function paintIcon(icon, id) {
+    const key = id ? `spell:${id}` : "";
+    if (icon.dataset.boundKey === key) return;
+    icon.dataset.boundKey = key;
+    if (!id) { icon.style.backgroundImage = ""; return; }
+    // Same shared resolver + in-flight guard as the hotbar slots.
+    Promise.resolve(resolveBindingIcon({ spellId: id })).then((url) => {
+      if (icon.dataset.boundKey !== key) return;
+      if (url) icon.style.backgroundImage = `url("${url}")`;
+    }).catch(() => { /* resolver logs; cell stays dark */ });
+  }
 
   function render() {
     const active = getActiveSpellBar();
@@ -1355,24 +1480,18 @@ function installSpellStrip() {
       const meta = id ? metaFor(id) : null;
       el.classList.toggle("bound", !!id);
       const isTargeted = !!id && !((meta?.untargeted ?? true) === true);
-      // Current-spell ring: index selection (keyboard/click) OR the
-      // armed targeted spell (click-to-cast flow).
+      // Current-spell ring: index selection (keyboard/click) OR the armed
+      // targeted spell (click-to-cast flow).
       el.classList.toggle("selected", !!id && i === selectedIdx);
       el.classList.toggle("armed", !!id && isTargeted && id === armed);
       el.title = id
-        ? `${meta?.name ?? `Spell ${id}`}${isTargeted ? " — click to cast at your target" : " — click to cast"} (drag off the bar to remove)`
-        : "(empty — drag a spell here from the Spellbook)";
-      const icon = el.querySelector(".hb-ss-icon");
-      const key = id ? `spell:${id}` : "";
-      if (icon.dataset.boundKey === key) continue; // no repaint churn
-      icon.dataset.boundKey = key;
-      if (!id) { icon.style.backgroundImage = ""; continue; }
-      // Same shared resolver + in-flight guard as the hotbar slots.
-      resolveBindingIcon({ spellId: id }).then((url) => {
-        if (icon.dataset.boundKey !== key) return;
-        if (url) icon.style.backgroundImage = `url("${url}")`;
-      }).catch(() => { /* resolver logs; cell stays dark */ });
+        ? `${meta?.name ?? `Spell ${id}`}${i < 9 ? ` (${i + 1})` : ""} — ${isTargeted ? "casts at your target" : "click to cast"}; right-click or drag off to remove`
+        : "Empty — drag a spell here from the Spellbook";
+      paintIcon(iconEls[i], id);
     }
+    const curId = (slots[selectedIdx] | 0) || armed;
+    currentEl.classList.toggle("has-spell", !!curId);
+    paintIcon(currentIcon, curId);
   }
 
   window.addEventListener("hb-spellbar-changed", render);
@@ -1380,25 +1499,27 @@ function installSpellStrip() {
   // Hotkey handler + any external caller reach the strip through this
   // module-scope surface (declared above installSpellBarHotkeys).
   __stripApi = { render, fireSlot, selectDelta, selectEdge, castCurrent };
+  window.__spellStripDebug = (pin = true) => { window.__spellStripPinned = pin !== false; };
 
   // Visibility: magic stance only (retail swaps this strip in where the
-  // melee power panel lived). 500 ms poll mirrors combat-hud's fallback
-  // cadence; the poll also diffs armed/active/selected state so a
-  // panel-row arm (which doesn't dispatch hb-spellbar-changed) still
-  // refreshes us.
+  // melee power panel lived). 500 ms poll mirrors combat-hud's cadence; it
+  // also diffs armed/active/selected state so a panel-row arm (which doesn't
+  // dispatch hb-spellbar-changed) still refreshes us.
   let lastVisible = false;
   let lastPanelMagic = null;
   let lastArmed = -1;
   let lastActive = -1;
   let lastSelected = -2;
+  let dockTick = 0;
   setInterval(() => {
     let on = false;
     try { on = window.__getCurrentStanceLow?.() === STANCE_MAGIC; } catch (_) {}
+    // `window.__spellStripDebug()` pins the strip open outside the magic
+    // stance for visual checks; `__spellStripDebug(false)` releases it.
+    const pinned = !!window.__spellStripPinned;
+    if (pinned) on = true;
     // WS14 (patch B) — refresh the OPEN spellbook panel's armed/wrong-stance
-    // amber cue on any Magic-stance transition. The panel is a separate closure
-    // from this strip and may be open while not in Magic stance; its cue only
-    // updates on re-render, so drive one here. (Strip visibility below is
-    // separate.) No-op when the panel is closed (hook nulled on dispose).
+    // amber cue on any Magic-stance transition.
     if (on !== lastPanelMagic) {
       lastPanelMagic = on;
       try { window.__combatBarPanelRerender?.(); } catch (_) {}
@@ -1409,15 +1530,18 @@ function installSpellStrip() {
       if (!on) setName("");
       if (on) {
         render();
-        reclampIntoViewport();
+        setName(selectionName());
+        dockStrip();
       }
+    } else if (on && (++dockTick % 2) === 0) {
+      dockStrip(); // ~1 Hz: track the toolbar below growing / shrinking
     }
     if (on) {
       const a = armedId();
       const act = getActiveSpellBar();
       if (act !== lastActive && lastActive !== -1) {
-        // Selection is per-tab — changing tabs drops the current-spell
-        // ring rather than silently pointing at a different spell.
+        // Selection is per-tab — changing tabs drops the current-spell ring
+        // rather than silently pointing at a different spell.
         selectedIdx = -1;
         if (window.__combatBarState) window.__combatBarState.selectedSlotIdx = -1;
       }
@@ -1517,14 +1641,16 @@ function renderStanceHeader(bodyEl, client) {
   row.appendChild(val);
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "hb-cb-stance-btn";
+  btn.className = "hbk-btn hb-cb-stance-btn";
   row.appendChild(btn);
   bodyEl.appendChild(row);
 
   function refresh() {
     const w = stanceWord();
     setAcText(val, w);
-    setAcText(btn, w === "Peace" ? "Combat" : "Peace");
+    // Plain kit-button text (an ac-text canvas inside the 22-px kit button
+    // clipped its descenders — HUD overhaul 2026-10-05).
+    btn.textContent = w === "Peace" ? "Enter Combat" : "Peace";
   }
   btn.addEventListener("click", () => {
     try {
@@ -1591,16 +1717,17 @@ function renderAttackControls(bodyEl, state) {
   const heightGroup = document.createElement("div");
   heightGroup.className = "hb-cb-heights";
   const HEIGHTS = [
-    { value: 1, label: "Hi" },
-    { value: 2, label: "Mid" },
-    { value: 3, label: "Lo" },
+    { value: 1, label: "High" },
+    { value: 2, label: "Medium" },
+    { value: 3, label: "Low" },
   ];
   const heightButtons = new Map();
   for (const h of HEIGHTS) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "hb-cb-height-btn";
-    setAcText(btn, h.label);
+    btn.textContent = h.label;
+    btn.title = `${h.label} attack at your selected target`;
     btn.dataset.value = String(h.value);
     if (state.attackHeight === h.value) btn.classList.add("active");
     btn.addEventListener("click", () => {
@@ -1647,6 +1774,7 @@ function renderAttackControls(bodyEl, state) {
   powerWrap.className = "hb-cb-power-wrap";
   const powerSlider = document.createElement("input");
   powerSlider.type = "range";
+  powerSlider.className = "hbk-range";
   powerSlider.min = "0";
   powerSlider.max = "100";
   powerSlider.step = "1";
@@ -1749,6 +1877,7 @@ function renderAttackControls(bodyEl, state) {
   repeatLabel.className = "hb-cb-toggle";
   const repeatBox = document.createElement("input");
   repeatBox.type = "checkbox";
+  repeatBox.className = "hbk-check";
   repeatBox.checked = !!state.autoRepeat;
   repeatBox.addEventListener("change", () => {
     state.autoRepeat = repeatBox.checked;
@@ -1801,6 +1930,7 @@ function renderAttackControls(bodyEl, state) {
   chargeLabel.className = "hb-cb-toggle";
   const chargeBox = document.createElement("input");
   chargeBox.type = "checkbox";
+  chargeBox.className = "hbk-check";
   chargeBox.checked = state.chargeAttack !== false;
   chargeBox.addEventListener("change", () => {
     state.chargeAttack = chargeBox.checked;
@@ -1834,6 +1964,7 @@ function renderAttackControls(bodyEl, state) {
       "CharacterOption bit to be set on your ACE character (TODO).";
     const fastMissileBox = document.createElement("input");
     fastMissileBox.type = "checkbox";
+    fastMissileBox.className = "hbk-check";
     fastMissileBox.checked = state.useFastMissiles === true;
     fastMissileBox.addEventListener("change", () => {
       state.useFastMissiles = fastMissileBox.checked;
@@ -2083,9 +2214,9 @@ function renderSpellPicker(bodyEl, state) {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.className = "hb-cb-tab";
-    setAcText(tab, String(i + 1));
+    tab.textContent = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"][i] ?? String(i + 1);
     tab.dataset.tabIndex = String(i);
-    tab.title = `Spell bar ${i + 1}`;
+    tab.title = `Spell bar ${tab.textContent}`;
     tab.addEventListener("click", () => {
       setActiveSpellBar(i);
       // Re-highlight; renderRows fires from the spellbar-changed event.
@@ -2098,15 +2229,15 @@ function renderSpellPicker(bodyEl, state) {
       if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
         ev.preventDefault();
         ev.dataTransfer.dropEffect = "copy";
-        tab.style.background = "rgba(160, 110, 255, 0.5)";
+        tab.classList.add("is-drop-target");
       }
     });
     tab.addEventListener("dragleave", () => {
-      tab.style.background = "";
+      tab.classList.remove("is-drop-target");
     });
     tab.addEventListener("drop", (ev) => {
       ev.preventDefault();
-      tab.style.background = "";
+      tab.classList.remove("is-drop-target");
       const draggedId = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
       if (!Number.isFinite(draggedId) || draggedId <= 0) return;
       // Drop onto an inactive tab: switch to it, add to first empty slot.

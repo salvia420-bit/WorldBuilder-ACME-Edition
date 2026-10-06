@@ -391,9 +391,9 @@ function installDomShim() {
   // ─── [7] Manifest + manifest version stamp ───
   console.log('\n[7] manifest');
 
-  check('manifest reports Wave F.2 version', () => {
+  check('manifest reports the HUD-overhaul (2026-10-05) version', () => {
     assert.equal(manifest.id, 'buffs-hud');
-    assert.equal(manifest.version, '0.3.0');
+    assert.equal(manifest.version, '0.4.0');
     assert.ok(manifest.iconHidden);
   });
 

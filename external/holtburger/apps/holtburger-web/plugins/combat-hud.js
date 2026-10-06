@@ -1,1016 +1,760 @@
-// Combat HUD — retail port of gmCombatUI (layout 0x21000007, class
-// 0x1000000C, 800x80 design canvas). Auto-shows when the player
-// enters combat stance, auto-hides when peace.
+// Combat HUD — retail gmCombatUI (layout 0x21000007, class 0x1000000C) as a
+// floaty combat panel (gmFloatyCombatUI 0x21000073, 610×90 frame). Shows in
+// the melee and missile combat stances only; in the magic stance the
+// spellcasting strip (#hb-spell-strip, plugins/combat-bar.js) takes this spot
+// — retail swaps the two panels the same way.
 //
-// Layout decoded (combat_hud_layout_dump 2026-05-24 on 0x21000007):
-//   Root 0x1000004B (type=268435468) 800x80  outer wrapper @ (0, 464)
-//     0x1000004C (type=3)  10x80     left edge spacer       @ (0, 0)
-//     0x1000004D (type=3)  690x80    main content area      @ (10, 0)
-//     0x1000004E (type=3)  100x80    right edge spacer      @ (700, 0)
-//     0x1000004F (type=11) 707x14    meter parent           @ (8, 9)
-//       0x10000050 (type=7) 707x14   meter inner track
-//         0x100005EF (type=3) 567x14 slider thumb / fill    @ (70, 0)
-//     0x10000051 (type=0) 100x15     "Speed" label          @ (12, 9)
-//     0x10000052 (type=0) 100x15     Speed value            @ (611, 9)
-//     0x10000053 (type=0) 100x14     second-row label       @ (5, 29)
-//     0x10000054 (type=0)  80x14     second-row value       @ (110, 29)
-//     0x10000055 (type=0) 100x14     "Accuracy" label       @ (195, 29)
-//     0x10000056 (type=17) 72x57     right button column    @ (722, 4)
-//       0x10000057 (type=0) 72x19    High                   @ (0, 0)
-//       0x10000058 (type=0) 72x19    Med                    @ (0, 19)
-//       0x10000059 (type=0) 72x19    Low                    @ (0, 38)
-//   0x1000005A (type=0) 72x19 (detached template, 4 states):
-//     Normal=0x06004D1C  Pressed=0x06004D1D  Highlight=0x06004D1E
+// HUD overhaul 2026-10-05 — rebuilt. The previous HUD was an 800-px strip of
+// hand-placed absolute labels: a gold "Recklessness … 100%" bar, a duplicated
+// "Accuracy — Accuracy" row (two elements of the layout labelled the same)
+// and three High/Medium/Low buttons whose bitmap labels were clipped inside
+// 19-px sprites. It also sat on a `left:50%; margin-left:-400px` anchor that
+// jumped 400 px the moment you dragged it. Now:
 //
-// Behaviour vs existing plugins:
-//   - plugins/combat-bar.js — bar-slot popover with Hi/Med/Lo +
-//     power + auto-repeat controls. Stays available in the bar.
-//   - plugins/target-bar.js — Peace/Combat toggle + Use/Target/
-//     Examine row. Stance toggle still lives there.
-//   - plugins/combat-hud.js (THIS) — the horizontal wide bar that
-//     auto-shows in combat. Power slider on left, 3 height buttons
-//     on right. The user's "proper combat bar from the data".
+//   ┌ retail floaty frame (0x06006129 + 0x0600612A-D) ───────────────────┐
+//   │ [Speed ═══════════ red wave power bar ═══◆══ Power 75%]  PgDn [High] │
+//   │ ☐ Auto Repeat   Recklessness +10                         End [Medium]│
+//   │ Ins / PgUp: adjust power                                 Del [Low]   │
+//   └─────────────────────────────────────────────────────────────────────┘
 //
-// Authoritative stance source: window.__getCurrentStanceLow()
-// (set by applyConfirmedStance on every kind=5 UpdateMotion).
-// Low 16 bits == 0x3D = Peace; any other non-zero = in-combat stance.
+// Retail layout facts (data/retail-layouts/0x21000007.json):
+//   PowerSlider 0x1000004F  track sprite 0x060074CA; thumb 0x06001923 (12×14)
+//   PowerMeter  0x10000050  meter sprite 0x06001200 (bright red wave)
+//   basic_recklessness_fill 0x100005EF  0x0600715E spanning 10%-90% of the bar
+//   Speed 0x10000051  left-end label "Speed" (every stance)
+//   Power 0x10000052  right-end label — MeleeCombat "Power", MissileCombat
+//                     "Accuracy" (state-dependent string; ONE label per end)
+//   AutoRepeatAttack 0x10000053  player-option checkbox
+//   AttackButtonGroup 0x10000056  High/Medium/Low 72×19 — Normal 0x06004D1C,
+//     pressed 0x06004D1D, Highlight (selected height, yellow arrows) 0x06004D1E,
+//     Highlight_pressed 0x06004D1F
 //
-// Click Hi/Med/Lo → window.__fireAttackOnTarget(heightId) — same
-// path the existing combat-bar popover uses. The heightId values
-// (Hi=2, Med=1, Lo=0) match scene3d/picking.js's expected enum.
+// Retail behaviour matched (acclient.c):
+//   gmCombatUI::ListenToElementMessage — msg 1 (click) on High/Medium/Low →
+//     ClientCombatSystem::EndAttackRequest(height, USE_POWER_BAR_LEVEL): attack
+//     at the slider's power; msg 10 (slider moved) → m_rUIRequestedPower =
+//     dwParam1 × 0.001 clamped 0..1.
+//   gmCombatUI::RecvNotice_AttackHeightChanged — the button group highlights
+//     the requested height (attribute 0xB1 = selected child).
+//   gmCombatUI::RecvNotice_SetCombatMode — MeleeCombat / MissileCombat states,
+//     hidden otherwise; the recklessness fill is shown only when Recklessness
+//     (skill 0x32) is Trained or better (InqSkillAdvancementClass ≥ 2).
+//   Input actions HighAttack / MediumAttack / LowAttack / DecreasePowerSetting /
+//     IncreasePowerSetting (retail input-action name table) — bound to the
+//     nav cluster here (PgDn / End / Del, Ins / PgUp), scoped to melee/missile
+//     exactly like the magic map's Insert/PgUp/Delete/PgDn/End is scoped to
+//     the magic stance (plugins/combat-bar.js installSpellBarHotkeys).
+//
+// The shared truth is window.__combatBarState (seeded by combat-bar.js from
+// localStorage `holtburger_combat_bar_v1`): powerLevel, attackHeight,
+// autoRepeat. scene3d/picking.js reads powerLevel for every swing.
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
-import { computeDamageRatingRollup } from "../ui/ac_damage_rating.js";
-import { attachDefaultTopDragHandle, WINDOW_ID } from "../ui/ac_window_position.js";
-
-/** gmCombatUI — retail layout that drives the combat HUD horizontal bar.
- *  Element-id map confirmed by combat_hud_layout_dump 2026-05-24:
- *    0x1000004B — root wrapper (800×80)
- *    0x1000004D — main content area (690×80 at 10,0)
- *    0x1000004F — meter parent (Speed/Power slider, 707×14 at 8,9)
- *    0x100005EF — slider fill/thumb (567×14 at 70,0 inside track)
- *    0x10000051 — "Speed" / Power label (100×15 at 12,9)
- *    0x10000052 — Speed/Power value text (100×15 at 611,9)
- *    0x10000053 — second-row label e.g. "Accuracy:" (100×14 at 5,29)
- *    0x10000054 — second-row value (80×14 at 110,29)
- *    0x10000055 — "Accuracy" label (100×14 at 195,29)
- *    0x10000056 — right button column container (72×57 at 722,4)
- *    0x10000057 — High button (72×19 at 0,0 in column)
- *    0x10000058 — Med  button (72×19 at 0,19)
- *    0x10000059 — Low  button (72×19 at 0,38)
- */
-const COMBAT_HUD_LAYOUT_ID = 0x21000007;
-const COMBAT_HUD_ELEMS = {
-  root:        0x1000004B,
-  main:        0x1000004D,
-  slider:      0x1000004F,
-  sliderFill:  0x100005EF,
-  powerLabel:  0x10000051,
-  powerValue:  0x10000052,
-  row2Label:   0x10000053,
-  row2Value:   0x10000054,
-  accLabel:    0x10000055,
-  buttonCol:   0x10000056,
-  high:        0x10000057,
-  med:         0x10000058,
-  low:         0x10000059,
-};
+import {
+  readTrainingLevel,
+  SKILL_RECKLESSNESS,
+  TRAINING_TRAINED,
+  TRAINING_SPECIALIZED,
+  RECKLESSNESS_BAND_MIN,
+  RECKLESSNESS_BAND_MAX,
+} from "../ui/ac_damage_rating.js";
+import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
+import {
+  setAutoRepeatAttacks,
+  isCharacterOptionEnabled,
+  CHARACTER_OPTION,
+} from "../ui/ac_character_options.js";
+import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 
 const OVERLAY_ID = "hb-combat-hud";
 const STYLE_ID   = "hb-combat-hud-style";
 const DEATH_OVERLAY_ID = "hb-combat-hud-death";
 const DEATH_STYLE_ID   = "hb-combat-hud-death-style";
 const SP = "./data/ui-sprites";
+const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 
-// MotionStance enum values (low 16 bits). Peace = 0x3D (61), Magic
-// combat = 0x49 (73). Magic stance is excluded from the DR readout
-// because the rollup helper's `base`/`reckless` math is melee/missile-
-// specific (Recklessness power-band + per-weapon DamageMod don't apply
-// to spellcasting). See `plugins/combat-bar.js:464` and
-// `ui/ac_damage_rating.js` header for canonical sources.
+// MotionStance low words. Peace = 0x3D, Magic = 0x49.
 const STANCE_PEACE = 0x3D;
 const STANCE_MAGIC = 0x0049;
+// Ranged stances (bow / crossbow / thrown / atlatl families) — the right end
+// of the bar reads "Accuracy" there. Mirrors combat-bar.js RANGED_STANCES.
+const RANGED_STANCES_HUD = new Set([
+  0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c,
+]);
 
-// How long the transient sneak component stays in the rollup after a
-// `sneakAttackPredicted` event before we drop it back to the baseline
-// (`hasSneak: false`). Matches `plugins/sneak-hud.js`'s TOTAL_MS so the
-// inline readout fades the [SNEAK!] marker in sync with the floating
-// overlay's exit transition.
-const SNEAK_HOLD_MS = 1500;
+// ATTACK_HEIGHT (acclient.h): 1 High, 2 Medium, 3 Low — the wasm attack()
+// rejects anything else.
+const HEIGHTS = Object.freeze([
+  Object.freeze({ id: "high",   label: "High",   value: 1, code: "PageDown", key: "PgDn" }),
+  Object.freeze({ id: "medium", label: "Medium", value: 2, code: "End",      key: "End" }),
+  Object.freeze({ id: "low",    label: "Low",    value: 3, code: "Delete",   key: "Del" }),
+]);
+const POWER_KEYS = Object.freeze({ Insert: -0.1, PageUp: +0.1 });
+// Width of the docked panel (retail gmFloatyCombatUI root is 610×90).
+const PANEL_W = 610;
+// Gap left between the panel and whatever bottom-centre HUD it docks above.
+const DOCK_GAP = 6;
+const DOCK_FALLBACK_BOTTOM = 124;
 
-// Wave 15 / Phase 46 — server-resolved damage readout.
-//
-// Ring-buffer depth for the running average. Sized to match the user-
-// facing copy ("Avg (last 5)") so the displayed window === computed
-// window. We keep the buffer trimmed to this size on push so summary()
-// math is a one-pass sum / length without re-slicing.
-const LAST_HIT_RING_CAPACITY = 5;
-// How long the readout stays visible after the most recent damageDealt
-// event before fading out (idle / out of combat). 30s window covers the
-// long inter-attack gaps when chasing a fleeing target or repositioning
-// without making the readout feel stale. On expiry we clear the buffer
-// AND blank the DOM — re-entering combat starts fresh.
-const LAST_HIT_IDLE_MS = 30_000;
-// CSS fade duration (matches the .hch-last-hit `transition: opacity ...`
-// declaration in ensureStyles()). Tracked here so the fade-out timer
-// and the CSS stay in sync if either is tuned later.
-const LAST_HIT_FADE_MS = 320;
-// Bit 0x4 of AttackConditions = SneakAttack (set by ACE when
-// DamageEvent.SneakAttackMod > 1.0f, see ACE.Server/Entity/DamageEvent.cs:693).
-// Diag/combat.js documents the same constant — kept local here so the
-// plugin doesn't import diag-only state.
-const ATTACK_CONDITIONS_BIT_SNEAK_ATTACK = 0x4;
+/** Retail floaty frame — corner 0x06006129, edges 0x0600612A-D. */
+function floatyFrameCss(sel) {
+  const u = (id) => `url("${SP}/${id}.png")`;
+  return `
+    ${sel} {
+      background:
+        ${u("0x06006129")} left top / 5px 5px no-repeat,
+        ${u("0x06006129")} right top / 5px 5px no-repeat,
+        ${u("0x06006129")} left bottom / 5px 5px no-repeat,
+        ${u("0x06006129")} right bottom / 5px 5px no-repeat,
+        ${u("0x0600612A")} left top / 10px 5px repeat-x,
+        ${u("0x0600612C")} left bottom / 10px 5px repeat-x,
+        ${u("0x0600612B")} left top / 5px 10px repeat-y,
+        ${u("0x0600612D")} right top / 5px 10px repeat-y,
+        ${u("0x06004CC2")} left top / 48px 48px repeat,
+        #0b0c10;
+      image-rendering: pixelated;
+    }`;
+}
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement("style");
   s.id = STYLE_ID;
   s.textContent = `
-    /* Retail gmCombatUI is 800×80 at design size; the layout applies
-     * explicit child positions, so the overlay is just an anchored
-     * pixel-accurate frame. CSS centering trap avoided per radar.js:
-     * we use left:50% + margin-left:-400px instead of transform, so
-     * applyCombatHudLayout's per-element transform overrides have a
-     * clean baseline. */
     #${OVERLAY_ID} {
       position: fixed;
-      bottom: 116px;  /* above target-bar (bottom:46) + hotbar (bottom:8) stack */
-      left: 50%;
-      margin-left: -400px;
-      transform: none;
-      width: 800px;
-      height: 80px;
-      z-index: 48;
-      pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      /* P1-24 (cross-find combat-hud-chrome-background): retail
-       * gmCombatUI is a child of gmFloatyPowerBarUI whose chrome
-       * (border + frame) wraps the 8 outer sprites; this overlay
-       * carries no synthetic background of its own. Was a solid
-       * rgba(20,14,8,0.92) panel + brass border. */
-      background: transparent;
-      box-shadow: none;
-      display: none;
+      left: 0; right: 0;          /* + auto margins = centred, no transform */
+      margin-left: auto; margin-right: auto;
+      bottom: ${DOCK_FALLBACK_BOTTOM}px;
+      width: ${PANEL_W}px;
+      max-width: calc(100 * var(--hb-hud-vw, 1vw) - 8px);
       box-sizing: border-box;
+      padding: 5px;
+      z-index: 48;
+      display: none;
+      color: var(--hbk-text, #e8dfc8);
+      font-family: var(--hbk-font, var(--hb-font-serif));
+      font-size: 11px;
+      user-select: none;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
-    /* Main content area (gmCombatUI 0x1000004D 690×80 @ 10,0). */
+    ${floatyFrameCss(`#${OVERLAY_ID}`)}
+    #${OVERLAY_ID} .hch-inner {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      padding: 3px 4px 3px 5px;
+    }
     #${OVERLAY_ID} .hch-main {
-      position: absolute;
-      left: 10px; top: 0;
-      width: 690px; height: 80px;
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 5px;
     }
-    /* Power/Speed slider parent (0x1000004F 707×14 @ 8,9). */
-    #${OVERLAY_ID} .hch-slider {
-      position: absolute;
-      left: 8px; top: 9px;
-      width: 707px; height: 14px;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      box-sizing: border-box;
+    /* ── Power bar (PowerSlider + PowerMeter + recklessness fill) ── */
+    #${OVERLAY_ID} .hch-bar {
+      position: relative;
+      height: 14px;
+      margin-top: 2px;
+      background: url("${SP}/0x060074CA.png") left center / 60px 14px repeat-x, #000;
+      box-shadow: 0 0 0 1px #000, 0 0 0 2px rgba(138, 117, 68, 0.55);
       cursor: pointer;
+      touch-action: none;
+      outline: none;
     }
-    /* Slider fill (0x100005EF 567×14 @ 70,0 inside the track). Width
-     * is set imperatively to track the current power level; left
-     * anchor stays at 0 so the fill grows from the left edge. */
-    #${OVERLAY_ID} .hch-slider-fill {
-      position: absolute;
-      top: 1px; left: 1px; bottom: 1px;
-      width: 50%;
-      background: linear-gradient(90deg,
-        rgba(180, 130, 50, 0.7) 0%,
-        rgba(220, 180, 80, 0.9) 100%);
-      transition: width 80ms linear;
+    #${OVERLAY_ID} .hch-bar:focus-visible { box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--hbk-gold-bright, #f3d27a); }
+    #${OVERLAY_ID} .hch-band {
+      position: absolute; top: 0; bottom: 0;
+      left: ${RECKLESSNESS_BAND_MIN * 100}%;
+      width: ${(RECKLESSNESS_BAND_MAX - RECKLESSNESS_BAND_MIN) * 100}%;
+      background: url("${SP}/0x0600715E.png") left center / 60px 14px repeat-x;
+      display: none;
       pointer-events: none;
     }
-    /* "Power" label (0x10000051 100×15 @ 12,9). */
-    #${OVERLAY_ID} .hch-power-label {
-      position: absolute;
-      left: 12px; top: 9px;
-      width: 100px; height: 15px;
-      color: var(--hb-text-gold-dim);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      font-size: 10px;
+    #${OVERLAY_ID}[data-reck="1"] .hch-band,
+    #${OVERLAY_ID}[data-reck="2"] .hch-band { display: block; }
+    #${OVERLAY_ID} .hch-fill {
+      position: absolute; top: 0; bottom: 0; left: 0;
+      width: 100%;
+      background: url("${SP}/0x06001200.png") left center / 60px 14px repeat-x;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hch-fill.is-charging { filter: brightness(0.85) saturate(0.8); }
+    #${OVERLAY_ID} .hch-thumb {
+      position: absolute; top: 0;
+      left: 100%;
+      width: 12px; height: 14px;
+      margin-left: -6px;
+      background: url("${SP}/0x06001923.png") center / 12px 14px no-repeat;
+      pointer-events: none;
+      filter: drop-shadow(0 0 1px #000);
+    }
+    #${OVERLAY_ID} .hch-end {
+      position: absolute; top: 0;
+      height: 14px;
+      display: flex; align-items: center;
+      color: #fff;
+      font-size: 11px;
       line-height: 14px;
+      text-shadow: 0 0 2px #000, 1px 1px 0 #000;
       pointer-events: none;
+      white-space: nowrap;
     }
-    /* Power-value readout (0x10000052 100×15 @ 611,9). */
-    #${OVERLAY_ID} .hch-slider-val {
-      position: absolute;
-      left: 611px; top: 9px;
-      width: 100px; height: 15px;
-      color: var(--hb-text-gold);
-      font-variant-numeric: tabular-nums;
-      font-size: 10px;
-      line-height: 14px;
-      text-align: right;
-      pointer-events: none;
+    #${OVERLAY_ID} .hch-end-l { left: 14px; }
+    #${OVERLAY_ID} .hch-end-r { right: 8px; }
+    /* ── Option + hint rows ── */
+    #${OVERLAY_ID} .hch-row {
+      display: flex; align-items: center; gap: 12px;
+      min-height: 16px;
+      white-space: nowrap;
+      overflow: hidden;
     }
-    /* Row-2 label "Accuracy:" (0x10000053 100×14 @ 5,29). */
-    #${OVERLAY_ID} .hch-acc-label {
-      position: absolute;
-      left: 5px; top: 29px;
-      width: 100px; height: 14px;
-      color: var(--hb-text-gold-dim);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      font-size: 10px;
-      line-height: 14px;
-      pointer-events: none;
-    }
-    /* Row-2 value (0x10000054 80×14 @ 110,29). */
-    #${OVERLAY_ID} .hch-acc-val {
-      position: absolute;
-      left: 110px; top: 29px;
-      width: 80px; height: 14px;
-      color: var(--hb-text-gold);
-      font-size: 10px;
-      line-height: 14px;
-      pointer-events: none;
-    }
-    /* Trailing "Accuracy" label (0x10000055 100×14 @ 195,29). */
-    #${OVERLAY_ID} .hch-acc-trailing {
-      position: absolute;
-      left: 195px; top: 29px;
-      width: 100px; height: 14px;
-      color: var(--hb-text-gold-dim);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      font-size: 10px;
-      line-height: 14px;
-      pointer-events: none;
-    }
-    /* Damage Rating readout (Phase 35) — shares the row-2 y-baseline
-     * with the Accuracy labels. The dead space between the trailing
-     * "Accuracy" label (x=195 + width=100 = 295) and the right button
-     * column (x=722) is ~427px, more than enough for the breakdown
-     * text. Tabular nums so the digits don't jitter as the rollup
-     * components flip between single-digit (sneak +0) and double-digit
-     * (reckless +20) values. */
-    /* P1-24 (cross-find combat-hud-panel-dr-row): retail gmCombatUI
-     * has no on-bar damage-rating breakdown — DR is shown in the
-     * combat log + character sheet, not as a HUD row. The DOM stays
-     * (the DR-rollup math is consumed by other panels via
-     * computeDamageRatingRollup) but the row is hidden. */
-    #${OVERLAY_ID} .hch-dr-row {
+    #${OVERLAY_ID} .hch-row .hbk-label { color: var(--hbk-text, #e8dfc8); font-size: 11px; }
+    #${OVERLAY_ID} .hch-reck {
+      color: #ff9a7a;
+      text-shadow: 0 0 4px rgba(220, 80, 40, 0.5);
       display: none;
     }
-    /* The "DR: +N" total — slightly brighter gold so the headline
-     * value reads cleanly against the dim breakdown. */
-    #${OVERLAY_ID} .hch-dr-total {
-      color: var(--hb-text-gold);
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
+    #${OVERLAY_ID} .hch-reck.is-on { display: inline; }
+    #${OVERLAY_ID} .hch-hints {
+      display: block;
+      line-height: 16px;
+      color: var(--hbk-text-faint, #77705f);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    /* Breakdown text (base/sneak/reckless components). Dim by default;
-     * the sneak slice picks up the red accent when armed. */
-    #${OVERLAY_ID} .hch-dr-break {
-      color: var(--hb-text-gold-dim);
-      margin-left: 6px;
+    #${OVERLAY_ID} .hch-hints kbd, #${OVERLAY_ID} .hch-key {
+      font-family: inherit;
+      font-size: 10px;
+      color: var(--hbk-text-dim, #a8a090);
     }
-    /* Sneak component when the predictor has fired — matches the
-     * sneak-hud overlay's rgba(220, 80, 40, *) accent so the inline
-     * readout and the floating overlay read as the same beat. */
-    #${OVERLAY_ID} .hch-dr-row[data-sneak="1"] .hch-dr-sneak {
-      color: rgb(255, 180, 140);
-      text-shadow: 0 0 4px rgba(220, 80, 40, 0.55);
+    /* ── High / Medium / Low (AttackButtonGroup) ── */
+    #${OVERLAY_ID} .hch-heights {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: auto 72px;
+      grid-auto-rows: 19px;
+      column-gap: 5px;
+      row-gap: 2px;
+      align-items: center;
     }
-    /* The transient [SNEAK!] tail tag. Inline so it pushes the trailing
-     * accuracy whitespace inward instead of overlapping the buttons. */
-    #${OVERLAY_ID} .hch-dr-flag {
-      display: none;
-      margin-left: 8px;
-      color: rgb(255, 200, 160);
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-shadow: 0 0 4px rgba(220, 80, 40, 0.6);
-    }
-    #${OVERLAY_ID} .hch-dr-row[data-sneak="1"] .hch-dr-flag {
-      display: inline;
-    }
-    /* Wave 15 / Phase 46 — "Last hit" readout row.
-     *
-     * Sits immediately below the DR row (which lives at y=29, height
-     * 14, so bottom edge is 43). We anchor the last-hit row at y=48
-     * (5px breathing-room gap so the two readouts don't visually
-     * collide) and give it the same 14px height + tabular-nums treatment
-     * the DR row uses. Width stops at x=710 to clear the right button
-     * column container (which lives at x=722,top=4,height=57 → bottom 61).
-     *
-     * Idle-fade: opacity transitions over LAST_HIT_FADE_MS so the line
-     * dims smoothly when no damageDealt arrives inside LAST_HIT_IDLE_MS
-     * (30s) instead of popping out. Pointer-events:none so the slider
-     * drag-rect underneath remains clickable (defensive — the DR row
-     * does the same). */
-    /* P1-24 (cross-find combat-hud-panel-last-hit): retail's last-hit
-     * readout lives in the chat log, not on the combat HUD. DOM stays
-     * (the JS still tracks damageDealt for any downstream consumers)
-     * but the row is hidden. */
-    #${OVERLAY_ID} .hch-last-hit {
-      display: none;
-    }
-    /* Idle / out-of-combat fade-out state. data-idle is flipped by
-     * the JS idle timer; the CSS transition handles the visual fade. */
-    #${OVERLAY_ID} .hch-last-hit[data-idle="1"] {
-      opacity: 0;
-    }
-    /* The "Last hit:" label — dim gold, uppercase, matches the row-2
-     * trailing label aesthetic so the two readouts read as a stack. */
-    #${OVERLAY_ID} .hch-lh-label {
-      color: var(--hb-text-gold-dim);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      margin-right: 6px;
-    }
-    /* Damage value — slightly brighter gold + bold to anchor the line. */
-    #${OVERLAY_ID} .hch-lh-dmg {
-      color: var(--hb-text-gold);
-      font-weight: 600;
-    }
-    /* [SneakAttack] tag. Uses the same red-accent family as the DR
-     * row's sneak slice + sneak-hud floating overlay
-     * (rgba(220, 80, 40, *)) so all three signals read as one beat
-     * when the server confirms a sneak hit. Display:none until JS
-     * flips data-sneak=1 on the parent. */
-    #${OVERLAY_ID} .hch-lh-sneak {
-      display: none;
-      margin-left: 8px;
-      color: rgb(255, 180, 140);
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-shadow: 0 0 4px rgba(220, 80, 40, 0.55);
-    }
-    #${OVERLAY_ID} .hch-last-hit[data-sneak="1"] .hch-lh-sneak {
-      display: inline;
-    }
-    /* Running-average tail — pushed to the right of the [SneakAttack]
-     * tag so the visual rhythm is: label, damage, [tag], avg. Same
-     * tabular-nums treatment so the digits don't jitter across hits. */
-    #${OVERLAY_ID} .hch-lh-avg {
-      margin-left: 18px;
-      color: var(--hb-text-gold-dim);
-    }
-    #${OVERLAY_ID} .hch-lh-avg-val {
-      color: var(--hb-text-gold);
-      font-weight: 600;
-    }
-    /* Right button column (0x10000056 72×57 @ 722,4). */
-    #${OVERLAY_ID} .hch-buttons {
-      position: absolute;
-      left: 722px; top: 4px;
-      width: 72px; height: 57px;
-    }
-    /* Hi/Med/Lo buttons (0x10000057..9 72×19 each, stacked at y=0/19/38). */
+    #${OVERLAY_ID} .hch-key { text-align: right; }
     #${OVERLAY_ID} .hch-height {
-      position: absolute;
-      left: 0;
-      width: 72px; height: 19px;
-      background: url("${SP}/0x06004D1C.png") no-repeat center / 100% 100%;
-      border: 0; padding: 0; margin: 0;
-      font-family: var(--hb-font-serif);
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--hb-text-cream);
-      letter-spacing: 0.04em;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.85);
-      cursor: pointer;
+      width: 72px; min-width: 72px; height: 19px; min-height: 19px;
+      padding: 0 10px;
+      font-size: 11px;
     }
-    #${OVERLAY_ID} .hch-height[data-height="high"]   { top: 0; }
-    #${OVERLAY_ID} .hch-height[data-height="medium"] { top: 19px; }
-    #${OVERLAY_ID} .hch-height[data-height="low"]    { top: 38px; }
-    #${OVERLAY_ID} .hch-height:hover {
-      background-image: url("${SP}/0x06004D1E.png");
-      color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hch-height:active {
-      background-image: url("${SP}/0x06004D1D.png");
-    }
-    #${OVERLAY_ID} .hch-height.armed {
-      background-image: url("${SP}/0x06004D1E.png");
-      color: var(--hb-text-gold);
-    }
+    /* Selected (requested) height — retail Highlight state, the sprite with
+       the yellow end arrows; hover keeps the kit's pressed look. */
+    #${OVERLAY_ID} .hch-height.is-selected { background-image: url("${SP}/0x06004D1E.png"); color: #fff; }
+    #${OVERLAY_ID} .hch-height.is-selected:active { background-image: url("${SP}/0x06004D1F.png"); }
+    #${OVERLAY_ID} .hch-height:focus-visible { outline: 1px solid var(--hbk-gold-bright, #f3d27a); outline-offset: 1px; }
   `;
   document.head.appendChild(s);
 }
 
 // Module state (singleton).
-let state = {
+const state = {
   overlayEl: null,
+  refs: null,          // DOM refs built by build()
+  posCtl: null,        // attachWindowPosition control surface
   visible: false,
-  power: 1.0,         // 0..1, drives __combatBarState.powerLevel
+  power: 1.0,          // 0..1, drives __combatBarState.powerLevel
   // Last value syncPowerFill() wrote into __combatBarState.powerLevel.
   // `null` = never published, so the FIRST sync always adopts whatever the
   // combat-bar seeded (its persisted localStorage value) instead of
   // stomping it with this module's 1.0 default. See syncPowerFill().
   lastPublishedPower: null,
-  // DR readout state (Phase 35). drHasSneak flips to true when
-  // `sneakAttackPredicted` fires and back to false ~SNEAK_HOLD_MS later
-  // via drSneakTimer. drLastPower remembers the last polled power value
-  // so the rAF poll skips repaints when nothing changed.
-  drRowEl: null,
-  drTotalEl: null,
-  drBreakEl: null,
-  drHasSneak: false,
-  drSneakTimer: null,
-  drLastPower: -1,
-  drLastSneakFlag: -1,
-  drLastStance: -1,
-  // Wave 15 / Phase 46 — "Last hit" readout state.
-  //  - lhRowEl / lhDmgEl / lhAvgEl: cached DOM refs so the update path
-  //    is allocation-free.
-  //  - lhRing: ring buffer of recent damageDealt events (capped at
-  //    LAST_HIT_RING_CAPACITY); newest at the tail. Each entry is
-  //    `{ damage, attackConditions, ts }` per the task spec.
-  //  - lhIdleTimer: setTimeout id that fires LAST_HIT_IDLE_MS after the
-  //    most recent event to flip the row into the faded-out state.
-  lhRowEl: null,
-  lhDmgEl: null,
-  lhSneakEl: null,
-  lhAvgValEl: null,
-  lhRing: [],
-  lhIdleTimer: null,
+  reckTraining: null,  // cached Recklessness SAC (0..3) / null
+  charging: false,     // a swing's refill animation is running
+  debugPinned: false,  // window.__combatHudDebug() — keep open outside combat
 };
 
-// (stanceIsCombat — any non-peace stance — removed 2026-07-01: its only
-// caller, recomputeVisible, now keys on stanceIsMeleeOrMissile so the
-// magic stance shows the spellcasting strip instead of this meter.)
+function clamp01(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
 
-// True when the player is in a melee OR missile combat stance — i.e.
-// in combat but NOT in the magic-combat stance (0x49). The DR rollup's
-// reckless component is gated on a melee/missile power band; magic
-// stance uses a different damage path entirely, so we hide the readout
-// to avoid showing misleading numbers.
+function stanceLow() {
+  try {
+    const fn = window.__getCurrentStanceLow;
+    return typeof fn === "function" ? (fn() | 0) : 0;
+  } catch { return 0; }
+}
+
+// True when the player is in a melee OR missile combat stance — i.e. in
+// combat but NOT in the magic-combat stance (0x49), where the spellcasting
+// strip owns this spot.
 function stanceIsMeleeOrMissile() {
-  try {
-    const fn = window.__getCurrentStanceLow;
-    if (typeof fn !== "function") return false;
-    const low = fn() || 0;
-    return low !== 0 && low !== STANCE_PEACE && low !== STANCE_MAGIC;
-  } catch { return false; }
+  const low = stanceLow();
+  return low !== 0 && low !== STANCE_PEACE && low !== STANCE_MAGIC;
 }
 
-// HUD rec #97 — ranged stance enum values; in ranged the power slider
-// drives Accuracy, not Recklessness. Mirrors combat-bar.js:448-450.
-const RANGED_STANCES_HUD = new Set([
-  0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c,
-]);
 function stanceIsRanged() {
-  try {
-    const fn = window.__getCurrentStanceLow;
-    if (typeof fn !== "function") return false;
-    return RANGED_STANCES_HUD.has(fn());
-  } catch { return false; }
+  return RANGED_STANCES_HUD.has(stanceLow());
 }
 
-function syncPowerFill() {
-  const ov = state.overlayEl;
-  if (!ov) return;
-  // TWO widgets drive the same value: this HUD slider and the combat-bar
-  // PANEL slider (combat-bar.js:1692 `powerSlider` -> syncWindowState ->
-  // window.__combatBarState.powerLevel), which is also the value persisted in
-  // localStorage `holtburger_combat_bar_v1` and the one scene3d/picking.js
-  // reads as the real swing power (picking.js:1244).
-  //
-  // This function used to write `state.power` into the shared state
-  // unconditionally, and `state.power` is a module local seeded to 1.0 that
-  // NOTHING ever reads back from the shared state. Because syncPowerFill is
-  // called from `recomputeVisible` — a 1 Hz setInterval AND every
-  // `playerStatsUpdated` — the HUD silently reset the shared powerLevel to
-  // 1.0 within a second of any combat-bar slider change (and on boot, over
-  // the persisted value). Every swing then fired at full power.
-  //
-  // Adopt-then-publish: if the shared value has moved since WE last published
-  // it, the other widget (or the persisted seed) changed it and wins.
+/** Merge one field into combat-bar's persisted record so the panel, the
+ *  HUD and the next session agree (combat-bar.js loadState()/saveState()). */
+function persistCombatBarField(key, value) {
+  try {
+    const raw = localStorage.getItem(COMBAT_BAR_STORAGE_KEY);
+    const rec = raw ? JSON.parse(raw) : {};
+    rec[key] = value;
+    localStorage.setItem(COMBAT_BAR_STORAGE_KEY, JSON.stringify(rec));
+  } catch (_) { /* private mode / quota — the live state still applies */ }
+}
+
+function recklessnessTier() {
+  const lvl = state.reckTraining;
+  if (lvl === TRAINING_SPECIALIZED) return 2;
+  if (lvl === TRAINING_TRAINED) return 1;
+  return 0;
+}
+
+// Paint the bar and its end labels from state.power + stance. Null-safe on
+// every ref (the power-ownership test drives syncPowerFill with no DOM).
+function paintPower() {
+  const r = state.refs;
+  if (!r) return;
+  const pct = Math.round(state.power * 100);
+  const ranged = stanceIsRanged();
+  const rightLabel = ranged ? "Accuracy" : "Power";
+  if (!state.charging && r.fill) r.fill.style.width = `${pct}%`;
+  if (r.thumb) r.thumb.style.left = `${pct}%`;
+  if (r.bar) {
+    r.bar.setAttribute?.("aria-valuenow", String(pct));
+    r.bar.setAttribute?.("aria-valuetext", `${rightLabel} ${pct}%`);
+  }
+  // ONE right-end label carrying the value ("Power 75%" / "Accuracy 75%") —
+  // the old HUD printed the stance word twice ("Accuracy — Accuracy").
+  const endText = `${rightLabel} ${pct}%`;
+  if (r.endR && r.endR.dataset.label !== endText) {
+    r.endR.dataset.label = endText;
+    setAcText(r.endR, endText);
+  }
+  const tier = recklessnessTier();
+  if (state.overlayEl?.dataset) state.overlayEl.dataset.reck = String(tier);
+  if (r.reck) {
+    const inBand = state.power >= RECKLESSNESS_BAND_MIN && state.power <= RECKLESSNESS_BAND_MAX;
+    const bonus = tier === 2 ? 20 : 10;
+    const on = tier > 0 && inBand;
+    r.reck.classList.toggle("is-on", on);
+    if (on) {
+      r.reck.textContent = `Recklessness +${bonus}`;
+      r.reck.title =
+        `Recklessness is active between ${Math.round(RECKLESSNESS_BAND_MIN * 100)}% and ` +
+        `${Math.round(RECKLESSNESS_BAND_MAX * 100)}%: +${bonus} damage rating on non-critical hits ` +
+        `(you also take +${bonus} from non-critical hits).`;
+    }
+  }
+}
+
+/** Adopt-then-publish, half 1 (round-9 finding R9-4): if the shared value
+ *  has moved since WE last published it, the other widget (the combat-bar
+ *  PANEL slider, or the persisted seed) changed it and wins. */
+function adoptSharedPower() {
   const shared = Number(window.__combatBarState?.powerLevel);
   if (Number.isFinite(shared) && shared !== state.lastPublishedPower) {
-    state.power = Math.max(0, Math.min(1, shared));
+    state.power = clamp01(shared);
   }
-  const fill = ov.querySelector(".hch-slider-fill");
-  const val = ov.querySelector(".hch-slider-val");
-  if (fill) fill.style.width = `${Math.round(state.power * 100)}%`;
-  if (val) setAcText(val, `${Math.round(state.power * 100)}%`);
-  // HUD rec #97 — re-label the slider per current stance.
-  const label = ov.querySelector(".hch-power-label");
-  if (label) setAcText(label, stanceIsRanged() ? "Accuracy" : "Recklessness");
-  // Propagate to the shared combat bar state so picking.js's
-  // fireAttackOnTarget honours the power level set here.
+}
+
+/** Half 2: publish our value as the swing power scene3d/picking.js reads. */
+function publishPower() {
   if (window.__combatBarState) {
     window.__combatBarState.powerLevel = state.power;
     state.lastPublishedPower = state.power;
   }
 }
 
-// Format a signed integer with an explicit `+` for non-negative values
-// (matches the acpedia DR display convention: "+0" / "+10" / "+20").
-function _fmtSigned(n) {
-  return n >= 0 ? `+${n}` : `${n}`;
+function syncPowerFill() {
+  const ov = state.overlayEl;
+  if (!ov) return;
+  // TWO widgets drive the same value: this HUD bar and the combat-bar PANEL
+  // slider (combat-bar.js `powerSlider` → syncWindowState →
+  // window.__combatBarState.powerLevel), which is also the value persisted in
+  // localStorage `holtburger_combat_bar_v1`.
+  adoptSharedPower();
+  paintPower();
+  publishPower();
 }
 
-// Recompute the Damage Rating rollup and paint the row-2 readout. Pure
-// rendering — caller (rAF poll, event handlers) decides WHEN to call.
-// Reads the current power-bar slider value from window.__combatBarState
-// (combat-bar.js and our own slider both write that global); falls back
-// to 1.0 (full power) when the bar hasn't initialized yet. Same default
-// sneak-hud.js uses on line 161, so both consumers agree.
-function updateDamageRating() {
-  const row = state.drRowEl;
-  if (!row) return;
-  // Stance gate. When magic / peace, blank the row so the user doesn't
-  // see stale melee numbers while reading a fireball. The overlay's
-  // own visibility (data-open) is driven by stanceIsCombat; this guard
-  // covers the magic-stance case (in-combat but DR math doesn't apply).
-  if (!stanceIsMeleeOrMissile()) {
-    if (state.drTotalEl) setAcText(state.drTotalEl, "");
-    if (state.drBreakEl) setAcText(state.drBreakEl, "");
-    row.dataset.sneak = "0";
-    state.drLastPower = -1;
-    state.drLastSneakFlag = -1;
-    return;
-  }
-  const power =
-    (typeof window !== "undefined")
-      ? (Number(window.__combatBarState?.powerLevel ?? 1.0) || 0)
-      : 1.0;
-  const hasSneak = !!state.drHasSneak;
-  let rollup;
-  try {
-    rollup = computeDamageRatingRollup({
-      powerLevel: power,
-      hasSneak,
-      sessionHandle:
-        (typeof window !== "undefined") ? window.__sessionHandle : null,
-    });
-  } catch (_) {
-    // Defensive — never let a transient session-handle hiccup wipe the
-    // bar. Leave the existing text in place.
-    return;
-  }
-  if (!rollup) return;
-  const { base = 0, sneak = 0, reckless = 0, total = 0 } = rollup;
-  if (state.drTotalEl) {
-    setAcText(state.drTotalEl, `DR: ${_fmtSigned(total)}`);
-  }
-  if (state.drBreakEl) {
-    // Span the sneak component in its own <span> so the CSS [data-sneak]
-    // selector can color it red on arm without rebuilding the parent.
-    // setAcText only handles text content, so use innerHTML with safe
-    // numeric interpolation (all three values come from the rollup
-    // helper as integers).
-    const baseStr = `${_fmtSigned(base)}`;
-    const sneakStr = `${_fmtSigned(sneak)}`;
-    const recklessStr = `${_fmtSigned(reckless)}`;
-    state.drBreakEl.innerHTML =
-      `(base ${baseStr}, ` +
-      `<span class="hch-dr-sneak">sneak ${sneakStr}</span>, ` +
-      `reckless ${recklessStr})`;
-  }
-  row.dataset.sneak = hasSneak ? "1" : "0";
-  state.drLastPower = power;
-  state.drLastSneakFlag = hasSneak ? 1 : 0;
+/** HUD-driven power change (drag, click, Ins/PgUp, arrows) — the player's
+ *  own input always wins: paint, publish, persist. */
+function setPowerFromHud(v, { persist = true } = {}) {
+  state.power = clamp01(Math.round(clamp01(v) * 100) / 100);
+  paintPower();
+  publishPower();
+  if (persist) persistCombatBarField("powerLevel", state.power);
 }
 
-// Handler for the `sneakAttackPredicted` event from picking.js. Arms
-// the transient sneak component for ~SNEAK_HOLD_MS, mirroring
-// `plugins/sneak-hud.js`'s 1500ms TOTAL_MS so the inline readout fades
-// in sync with the floating overlay. Re-arming (rapid back-to-back
-// swings in the rear cone) resets the timer so the marker keeps
-// reading "on".
-function onSneakAttackPredicted(_payload) {
-  state.drHasSneak = true;
-  if (state.drSneakTimer) {
-    clearTimeout(state.drSneakTimer);
-    state.drSneakTimer = null;
+/** Relative step (Ins/PgUp, arrow keys) from the CURRENT shared power, so a
+ *  panel-slider change made since our last tick is stepped from, not lost. */
+function stepPowerFromHud(delta) {
+  adoptSharedPower();
+  setPowerFromHud(state.power + delta);
+}
+
+function selectedHeight() {
+  const v = Number(window.__combatBarState?.attackHeight);
+  return v === 1 || v === 2 || v === 3 ? v : 2;
+}
+
+function syncHeightHighlight() {
+  const els = state.refs?.heightEls;
+  if (!els) return;
+  const v = selectedHeight();
+  for (const h of HEIGHTS) {
+    const b = els[h.id];
+    if (!b) continue;
+    const on = h.value === v;
+    b.classList.toggle("is-selected", on);
+    b.setAttribute?.("aria-pressed", on ? "true" : "false");
   }
-  state.drSneakTimer = setTimeout(() => {
-    state.drHasSneak = false;
-    state.drSneakTimer = null;
-    updateDamageRating();
-  }, SNEAK_HOLD_MS);
-  updateDamageRating();
 }
 
-// Handler for `playerStatsUpdated` — re-runs the rollup so a mid-
-// session training-level change (Recklessness / Sneak Attack rank-up)
-// flows into the readout immediately. Vitals churn (HP/mana fluctuation)
-// fires this event too, but `computeDamageRatingRollup` is pure +
-// cheap — one stats-snapshot read per event — so we don't bother
-// gating on a diff.
-function onPlayerStatsUpdated(_payload) {
-  updateDamageRating();
-}
-
-// Wave 15 / Phase 46 — repaint the "Last hit" row from the current ring
-// buffer. Pure DOM — caller (idle-timer expiry, onDamageDealt) decides
-// WHEN to call. Empty buffer leaves the placeholder dashes in place
-// (the row's opacity is what controls visibility; we don't blank text
-// on idle because that would re-trigger CSS transitions if a fresh
-// event lands during the fade).
-function updateLastHitRow() {
-  const row = state.lhRowEl;
-  if (!row) return;
-  const ring = state.lhRing;
-  if (!ring || ring.length === 0) {
-    if (state.lhDmgEl) setAcText(state.lhDmgEl, "—");
-    if (state.lhAvgValEl) setAcText(state.lhAvgValEl, "—");
-    row.dataset.sneak = "0";
-    return;
+/** ClientCombatSystem::EndAttackRequest(height, USE_POWER_BAR_LEVEL). */
+function attackAtHeight(value) {
+  if (window.__combatBarState) window.__combatBarState.attackHeight = value;
+  persistCombatBarField("attackHeight", value);
+  syncHeightHighlight();
+  if (typeof window.__fireAttackOnTarget === "function") {
+    try { window.__fireAttackOnTarget(value); } catch (e) {
+      console.warn(`[combat-hud] attack failed: ${e?.message ?? e}`);
+    }
+  } else {
+    console.warn("[combat-hud] __fireAttackOnTarget not exposed");
   }
-  const latest = ring[ring.length - 1];
-  const dmg = Math.max(0, latest.damage | 0);
-  // Bit 0x4 set on the MOST RECENT hit drives the [SneakAttack] tag —
-  // per the task spec. Averaging is over the whole ring; the tag
-  // tracks the latest event only.
-  const hasSneakBit =
-    (Number(latest.attackConditions) & ATTACK_CONDITIONS_BIT_SNEAK_ATTACK) !== 0;
-  // Running average over the buffer (1..LAST_HIT_RING_CAPACITY hits).
-  let sum = 0;
-  for (let i = 0; i < ring.length; i += 1) sum += (ring[i].damage | 0);
-  const avg = Math.round(sum / ring.length);
-  if (state.lhDmgEl) setAcText(state.lhDmgEl, `${dmg} dmg`);
-  if (state.lhAvgValEl) setAcText(state.lhAvgValEl, `${avg}`);
-  row.dataset.sneak = hasSneakBit ? "1" : "0";
 }
 
-// Wave 15 / Phase 46 — `damageDealt` handler. Pure consumer of the
-// existing event surface: src/lib.rs:23601 emits
-// `{ defenderName, damage, damageType, severity, criticalHit,
-//    attackConditions }` against `kind=19` CombatEvent (`severity` =
-//    damage / MaxHealth, F10-2 — NOT remaining health); the plugin
-// client republishes as a CustomEvent-shaped object so `.detail`
-// carries the payload (see combat-bar.js:1467 for the same pattern).
-//
-// Stance-gate: hide while in magic stance OR peace. Magic damage flows
-// through a different ACE event family (per the task notes), so showing
-// a melee/missile-only readout there would mislead. Peace is already
-// covered by overlay visibility — but if the bus delivers a stale hit
-// after `hide()` we still don't want to bump the idle timer.
-function onDamageDealt(ev) {
-  const d = ev?.detail ?? {};
-  // Defensive: ignore well-formed-but-zero-damage events (evades come
-  // through a separate `evadedTarget` channel; a `damageDealt` with
-  // damage=0 is rare but cleaner to drop than to log "0 dmg" as the
-  // "last hit").
-  const damage = (d.damage | 0);
-  if (damage <= 0) return;
-  if (!stanceIsMeleeOrMissile()) return;
-
-  // Push to ring + trim to capacity (oldest drops off the head).
-  const conditionsRaw = d.attackConditions ?? 0;
-  const conditions = typeof conditionsRaw === "bigint"
-    ? Number(conditionsRaw)
-    : Number(conditionsRaw);
-  state.lhRing.push({
-    damage,
-    attackConditions: Number.isFinite(conditions) ? conditions : 0,
-    ts: performance.now(),
-  });
-  while (state.lhRing.length > LAST_HIT_RING_CAPACITY) state.lhRing.shift();
-
-  // Wake the row out of any in-progress fade-out and re-arm the idle
-  // timer. data-idle=0 flips opacity back to 1 via the CSS transition;
-  // if the row was already fully faded, this same transition fades it
-  // back in.
-  if (state.lhRowEl) state.lhRowEl.dataset.idle = "0";
-  if (state.lhIdleTimer) {
-    clearTimeout(state.lhIdleTimer);
-    state.lhIdleTimer = null;
+function syncAutoRepeat() {
+  const box = state.refs?.repeatBox;
+  if (!box) return;
+  const server = isCharacterOptionEnabled(CHARACTER_OPTION.AutoRepeatAttacks, null);
+  const local = window.__combatBarState?.autoRepeat;
+  const v = server ?? (local == null ? true : !!local);
+  if (box.checked !== v) box.checked = v;
+  if (server != null && window.__combatBarState && window.__combatBarState.autoRepeat !== server) {
+    window.__combatBarState.autoRepeat = server;
+    persistCombatBarField("autoRepeat", server);
   }
-  state.lhIdleTimer = setTimeout(() => {
-    if (state.lhRowEl) state.lhRowEl.dataset.idle = "1";
-    state.lhIdleTimer = null;
-  }, LAST_HIT_IDLE_MS);
-
-  updateLastHitRow();
 }
 
-// Returns { overlay, refs } where refs is the element map applyCombatHudLayout
-// walks. DOM mirrors the 0x21000007 element tree:
-//   overlay (root 0x1000004B)
-//   ├─ .hch-main (0x1000004D)
-//   ├─ .hch-slider (0x1000004F)
-//   │   └─ .hch-slider-fill (0x100005EF)
-//   ├─ .hch-power-label (0x10000051)
-//   ├─ .hch-slider-val (0x10000052)
-//   ├─ .hch-acc-label (0x10000053)
-//   ├─ .hch-acc-val (0x10000054)
-//   ├─ .hch-acc-trailing (0x10000055)
-//   └─ .hch-buttons (0x10000056)
-//       ├─ .hch-height[data-height="high"]   (0x10000057)
-//       ├─ .hch-height[data-height="medium"] (0x10000058)
-//       └─ .hch-height[data-height="low"]    (0x10000059)
+// playerStats() walks the wasm entity's property bag — not free, and
+// playerStatsUpdated fires on every vitals tick in a fight — so the
+// Recklessness training read is throttled (it changes only on a skill
+// raise / redistribution).
+let lastTrainingReadMs = -Infinity;
+function refreshTraining({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastTrainingReadMs < 2000) return;
+  lastTrainingReadMs = now;
+  state.reckTraining = readTrainingLevel(SKILL_RECKLESSNESS);
+}
+
+// ── Swing refill animation (retail PowerMeter, RecvNotice_SetPowerbarLevel) ──
+// The meter empties when a swing commences and refills to the requested power
+// over the swing, mirroring the combat-bar panel meter's cadence (detail
+// swingDurationMs when picking.js resolved the clip, else ~0.6 s…1.8 s).
+function onCommenceAttack(ev) {
+  const fill = state.refs?.fill;
+  if (!fill || !state.visible) return;
+  const swingMs = Number(ev?.detail?.swingDurationMs);
+  const dur = Number.isFinite(swingMs) && swingMs > 0 ? swingMs : 600 + state.power * 1200;
+  state.charging = true;
+  fill.classList.add("is-charging");
+  fill.style.transition = "none";
+  fill.style.width = "0%";
+  void fill.offsetWidth;
+  fill.style.transition = `width ${Math.round(dur)}ms linear`;
+  fill.style.width = `${Math.round(state.power * 100)}%`;
+}
+function onAttackDone() {
+  const fill = state.refs?.fill;
+  state.charging = false;
+  if (!fill) return;
+  fill.classList.remove("is-charging");
+  fill.style.transition = "width 80ms linear";
+  fill.style.width = `${Math.round(state.power * 100)}%`;
+}
+
 function build() {
   const ov = document.createElement("div");
   ov.id = OVERLAY_ID;
   ov.dataset.open = "0";
+  ov.dataset.reck = "0";
+  ov.setAttribute("role", "group");
+  ov.setAttribute("aria-label", "Combat");
+
+  const inner = document.createElement("div");
+  inner.className = "hch-inner";
+  ov.appendChild(inner);
 
   const main = document.createElement("div");
   main.className = "hch-main";
-  // main holds the slider, labels, and button column; using pointer-events:
-  // none on .main would prevent the slider drag from working, so leave it on.
-  ov.appendChild(main);
+  inner.appendChild(main);
 
-  // Power slider (0x1000004F at 8,9). Fill child is 0x100005EF.
-  const powerSlider = document.createElement("div");
-  powerSlider.className = "hch-slider";
-  const powerFill = document.createElement("div");
-  powerFill.className = "hch-slider-fill";
-  powerSlider.appendChild(powerFill);
-  ov.appendChild(powerSlider);
+  // Power bar.
+  const bar = document.createElement("div");
+  bar.className = "hch-bar";
+  bar.tabIndex = 0;
+  bar.setAttribute("role", "slider");
+  bar.setAttribute("aria-label", "Attack power");
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", "100");
+  bar.title = "Drag to set attack power — left is faster, right hits harder.";
+  const band = document.createElement("div");
+  band.className = "hch-band";
+  const fill = document.createElement("div");
+  fill.className = "hch-fill";
+  const thumb = document.createElement("div");
+  thumb.className = "hch-thumb";
+  const endL = document.createElement("span");
+  endL.className = "hch-end hch-end-l";
+  setAcText(endL, "Speed");
+  const endR = document.createElement("span");
+  endR.className = "hch-end hch-end-r";
+  bar.appendChild(band);
+  bar.appendChild(fill);
+  bar.appendChild(thumb);
+  bar.appendChild(endL);
+  bar.appendChild(endR);
+  main.appendChild(bar);
 
-  // Slider drag → update power. Hit-rect is the slider element, not the fill.
+  // Pointer → power. clientX and the bar's rect are both SCREEN px, so the
+  // ratio is zoom-independent (HUD scale 1-3).
   let dragging = false;
-  function setFromEv(ev) {
-    const r = powerSlider.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
-    state.power = f;
-    syncPowerFill();
-  }
-  powerSlider.addEventListener("pointerdown", (ev) => {
+  const setFromEv = (ev) => {
+    const r = bar.getBoundingClientRect();
+    if (!r.width) return;
+    setPowerFromHud((ev.clientX - r.left) / r.width, { persist: false });
+  };
+  bar.addEventListener("pointerdown", (ev) => {
+    if (ev.button != null && ev.button !== 0) return;
     dragging = true;
-    powerSlider.setPointerCapture?.(ev.pointerId);
+    ev.preventDefault();
+    ev.stopPropagation();
+    try { bar.setPointerCapture(ev.pointerId); } catch (_) {}
     setFromEv(ev);
   });
-  powerSlider.addEventListener("pointermove", (ev) => {
-    if (dragging) setFromEv(ev);
-  });
-  powerSlider.addEventListener("pointerup", (ev) => {
+  bar.addEventListener("pointermove", (ev) => { if (dragging) setFromEv(ev); });
+  const endDrag = (ev) => {
+    if (!dragging) return;
     dragging = false;
-    powerSlider.releasePointerCapture?.(ev.pointerId);
+    try { bar.releasePointerCapture(ev.pointerId); } catch (_) {}
+    persistCombatBarField("powerLevel", state.power);
+  };
+  bar.addEventListener("pointerup", endDrag);
+  bar.addEventListener("pointercancel", endDrag);
+  bar.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowDown") { stepPowerFromHud(-0.05); ev.preventDefault(); ev.stopPropagation(); }
+    else if (ev.key === "ArrowRight" || ev.key === "ArrowUp") { stepPowerFromHud(+0.05); ev.preventDefault(); ev.stopPropagation(); }
   });
 
-  // P1-24 (cross-find combat-hud-identity-recklessness): retail
-  // gmCombatUI's m_RecklessnessField (acclient.h:54502) labels this as
-  // "Recklessness" — the slider drives the Recklessness skill +
-  // power-bar value, not a generic "Power". The 0x10000051 element_id
-  // is the same UIElement holding the label.
-  const powerLabel = document.createElement("div");
-  powerLabel.className = "hch-power-label";
-  setAcText(powerLabel, "Recklessness");
-  ov.appendChild(powerLabel);
+  // Row 2 — Auto Repeat (retail AutoRepeatAttack option) + Recklessness status.
+  const row = document.createElement("div");
+  row.className = "hch-row";
+  const repeatLabel = document.createElement("label");
+  repeatLabel.className = "hbk-label";
+  repeatLabel.title = "Keep attacking the same target after each swing.";
+  const repeatBox = document.createElement("input");
+  repeatBox.type = "checkbox";
+  repeatBox.className = "hbk-check";
+  repeatBox.addEventListener("change", () => {
+    const v = !!repeatBox.checked;
+    if (window.__combatBarState) window.__combatBarState.autoRepeat = v;
+    persistCombatBarField("autoRepeat", v);
+    // F11-2 — the option is server-side (ACE re-fires on AttackDone).
+    setAutoRepeatAttacks(v);
+  });
+  const repeatText = document.createElement("span");
+  repeatText.textContent = "Auto Repeat";
+  repeatLabel.appendChild(repeatBox);
+  repeatLabel.appendChild(repeatText);
+  row.appendChild(repeatLabel);
+  const reck = document.createElement("span");
+  reck.className = "hch-reck";
+  row.appendChild(reck);
+  main.appendChild(row);
 
-  // Power-value readout (0x10000052).
-  const powerVal = document.createElement("div");
-  powerVal.className = "hch-slider-val";
-  setAcText(powerVal, "100%");
-  ov.appendChild(powerVal);
+  // Row 3 — keyboard hints.
+  const hints = document.createElement("div");
+  hints.className = "hch-row hch-hints";
+  hints.innerHTML = "<kbd>Ins</kbd> / <kbd>PgUp</kbd> lower / raise power · click a height or press its key to attack";
+  main.appendChild(hints);
 
-  // Row-2 label e.g. "Accuracy:" (0x10000053).
-  const row2Label = document.createElement("div");
-  row2Label.className = "hch-acc-label";
-  setAcText(row2Label, "Accuracy");
-  ov.appendChild(row2Label);
-
-  // Row-2 value (0x10000054).
-  const row2Val = document.createElement("div");
-  row2Val.className = "hch-acc-val";
-  setAcText(row2Val, "—");
-  ov.appendChild(row2Val);
-
-  // Trailing accuracy label (0x10000055).
-  const accLabel = document.createElement("div");
-  accLabel.className = "hch-acc-trailing";
-  setAcText(accLabel, "Accuracy");
-  ov.appendChild(accLabel);
-
-  // Damage Rating readout (Phase 35). Lives in the row-2 dead space
-  // between the trailing accuracy label and the height-button column.
-  // Three child spans:
-  //   - .hch-dr-total   "DR: +N"        (headline; brighter gold)
-  //   - .hch-dr-break   "(base ..., sneak ..., reckless ...)"
-  //   - .hch-dr-flag    "[SNEAK!]"      (display:none unless data-sneak)
-  // updateDamageRating() rebuilds the contents on a poll + on
-  // playerStatsUpdated/sneakAttackPredicted. data-sneak=1 toggles the
-  // sneak-arm accent + [SNEAK!] tail tag.
-  const drRow = document.createElement("div");
-  drRow.className = "hch-dr-row";
-  drRow.dataset.sneak = "0";
-  const drTotal = document.createElement("span");
-  drTotal.className = "hch-dr-total";
-  drRow.appendChild(drTotal);
-  const drBreak = document.createElement("span");
-  drBreak.className = "hch-dr-break";
-  drRow.appendChild(drBreak);
-  const drFlag = document.createElement("span");
-  drFlag.className = "hch-dr-flag";
-  setAcText(drFlag, "[SNEAK!]");
-  drRow.appendChild(drFlag);
-  ov.appendChild(drRow);
-  state.drRowEl = drRow;
-  state.drTotalEl = drTotal;
-  state.drBreakEl = drBreak;
-
-  // Wave 15 / Phase 46 — "Last hit" readout row. Sibling to drRow,
-  // anchored one line below it (y=48). DOM mirror of the DR row's
-  // sub-span pattern so the CSS sneak-accent selector + average-tail
-  // styling can target individual slices without rebuilds:
-  //   .hch-lh-label   — "LAST HIT:"      (dim gold, uppercase)
-  //   .hch-lh-dmg     — "47 dmg"         (brighter gold, bold)
-  //   .hch-lh-sneak   — "[SneakAttack]"  (display:none unless data-sneak)
-  //   .hch-lh-avg     — "Avg (last 5):"  (dim gold)
-  //     └─ .hch-lh-avg-val "38"          (brighter gold inside the same span)
-  // The row starts faded-out (data-idle="1") until the first
-  // damageDealt arrives — no point flashing empty placeholders into
-  // view on each combat-stance entry.
-  const lhRow = document.createElement("div");
-  lhRow.className = "hch-last-hit";
-  lhRow.dataset.sneak = "0";
-  lhRow.dataset.idle = "1";
-
-  const lhLabel = document.createElement("span");
-  lhLabel.className = "hch-lh-label";
-  setAcText(lhLabel, "Last hit:");
-  lhRow.appendChild(lhLabel);
-
-  const lhDmg = document.createElement("span");
-  lhDmg.className = "hch-lh-dmg";
-  setAcText(lhDmg, "—");
-  lhRow.appendChild(lhDmg);
-
-  const lhSneak = document.createElement("span");
-  lhSneak.className = "hch-lh-sneak";
-  setAcText(lhSneak, "[SneakAttack]");
-  lhRow.appendChild(lhSneak);
-
-  const lhAvg = document.createElement("span");
-  lhAvg.className = "hch-lh-avg";
-  // Build the "Avg (last N):" label + value as two adjacent text nodes
-  // so updates only repaint the numeric child via setAcText.
-  lhAvg.appendChild(document.createTextNode(`Avg (last ${LAST_HIT_RING_CAPACITY}): `));
-  const lhAvgVal = document.createElement("span");
-  lhAvgVal.className = "hch-lh-avg-val";
-  setAcText(lhAvgVal, "—");
-  lhAvg.appendChild(lhAvgVal);
-  lhRow.appendChild(lhAvg);
-
-  ov.appendChild(lhRow);
-  state.lhRowEl = lhRow;
-  state.lhDmgEl = lhDmg;
-  state.lhSneakEl = lhSneak;
-  state.lhAvgValEl = lhAvgVal;
-
-  // Right button column (0x10000056).
-  const buttons = document.createElement("div");
-  buttons.className = "hch-buttons";
-  // AC AttackHeight enum is 1=High, 2=Medium, 3=Low (wasm `attack()` rejects
-  // anything else — a 0 here threw "invalid attack_height 0" and killed the
-  // swing). Matches combat-bar.js HEIGHTS and holtburger_protocol AttackHeight.
-  const HEIGHTS = [
-    { id: "high",   label: "High",   value: 1 },
-    { id: "medium", label: "Medium", value: 2 },
-    { id: "low",    label: "Low",    value: 3 },
-  ];
-  const heightEls = { high: null, medium: null, low: null };
-  // P1-24 (cross-find combat-hud-states-armed): mirror retail
-  // `UIElement::SetState(Highlight)` when a height is selected so the
-  // sprite swap visually anchors the user's choice. Synced from
-  // `window.__combatBarState.attackHeight` (the cross-plugin truth set
-  // by picking.js + combat-bar) AND from local clicks.
-  function syncArmedFromState() {
-    const v = window.__combatBarState?.attackHeight;
-    if (v == null) return;
-    for (const h of HEIGHTS) {
-      if (heightEls[h.id]) heightEls[h.id].classList.toggle("armed", v === h.value);
-    }
-  }
+  // AttackButtonGroup.
+  const heights = document.createElement("div");
+  heights.className = "hch-heights";
+  const heightEls = {};
   for (const h of HEIGHTS) {
+    const key = document.createElement("span");
+    key.className = "hch-key";
+    key.textContent = h.key;
+    heights.appendChild(key);
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "hch-height";
+    btn.className = "hbk-btn-brass hch-height";
     btn.dataset.height = h.id;
     btn.dataset.heightValue = String(h.value);
-    setAcText(btn, h.label);
-    btn.title = `Attack at ${h.label} height`;
-    btn.addEventListener("click", () => {
-      // Mirrors plugins/combat-bar.js's Hi/Med/Lo wiring — calls
-      // the global exposed by picking.js (line 375).
-      if (typeof window.__fireAttackOnTarget === "function") {
-        window.__fireAttackOnTarget(h.value);
-      } else {
-        console.warn("[combat-hud] __fireAttackOnTarget not exposed");
-      }
-      if (window.__combatBarState) {
-        window.__combatBarState.attackHeight = h.value;
-      }
-      syncArmedFromState();
-    });
-    buttons.appendChild(btn);
+    btn.textContent = h.label;
+    btn.title = `${h.label} attack (${h.key}) — attacks your selected target`;
+    btn.addEventListener("click", () => attackAtHeight(h.value));
+    heights.appendChild(btn);
     heightEls[h.id] = btn;
   }
-  syncArmedFromState();
-  ov.appendChild(buttons);
+  inner.appendChild(heights);
 
   document.body.appendChild(ov);
-  attachDefaultTopDragHandle(ov, WINDOW_ID.COMBAT_HUD);
 
-  // Apply retail layout positions for sub-elements once the DOM is wired.
-  applyCombatHudLayout({
-    mainEl: main,
-    sliderEl: powerSlider,
-    fillEl: powerFill,
-    powerLabelEl: powerLabel,
-    powerValEl: powerVal,
-    row2LabelEl: row2Label,
-    row2ValEl: row2Val,
-    accLabelEl: accLabel,
-    buttonsEl: buttons,
-    heightEls,
-  });
+  state.refs = {
+    bar, band, fill, thumb, endL, endR,
+    repeatBox, reck, heightEls,
+  };
 
+  // Drag by the frame / empty panel area; controls keep their own input.
+  try {
+    state.posCtl = attachWindowPosition(ov, {
+      windowId: WINDOW_ID.COMBAT_HUD,
+      dragHandle: ov,
+      ignoreSelector: "button, input, label, .hch-bar, kbd",
+      defaultPos: { left: "0px", right: "0px", bottom: `${DOCK_FALLBACK_BOTTOM}px`, top: "auto" },
+    });
+    // A position saved by the pre-2026-10-05 800-px strip (dragged by its
+    // 6-px top handle) would strand the new 610-px panel off-centre; drop
+    // it once so the panel docks above the toolbar again.
+    const raw = localStorage.getItem(`hb.window.${(WINDOW_ID.COMBAT_HUD >>> 0).toString(16)}`);
+    const saved = raw ? JSON.parse(raw) : null;
+    if (saved && Number(saved.w) > PANEL_W + 60) state.posCtl?.resetPosition?.();
+  } catch (e) {
+    console.warn("[combat-hud] window position attach failed", e);
+  }
   return ov;
 }
 
-// Apply gmCombatUI 0x21000007 layout to the combat-hud's sub-elements.
-// Sizes + positions come from the LayoutDesc; the hand-tuned CSS values
-// in ensureStyles() are very close already (no 1-2px deltas; they were
-// derived from the dump comment, but applying the layout at runtime
-// makes the DAT the source of truth so future tweaks come from the
-// asset rather than the plugin).
-//
-// Boot-order note: combat-hud mounts via mountBar() — same race window
-// as radar. Retry every 2s up to 8 times (~16s) before giving up.
-function applyCombatHudLayout(refs, attempt = 0) {
-  const apply = (layout) => {
-    if (!layout) {
-      if (attempt < 8) {
-        setTimeout(() => applyCombatHudLayout(refs, attempt + 1), 2000);
-      }
-      return;
-    }
-    let applied = 0;
-    const pairs = [
-      [COMBAT_HUD_ELEMS.main,        refs.mainEl],
-      [COMBAT_HUD_ELEMS.slider,      refs.sliderEl],
-      [COMBAT_HUD_ELEMS.sliderFill,  refs.fillEl],
-      [COMBAT_HUD_ELEMS.powerLabel,  refs.powerLabelEl],
-      [COMBAT_HUD_ELEMS.powerValue,  refs.powerValEl],
-      [COMBAT_HUD_ELEMS.row2Label,   refs.row2LabelEl],
-      [COMBAT_HUD_ELEMS.row2Value,   refs.row2ValEl],
-      [COMBAT_HUD_ELEMS.accLabel,    refs.accLabelEl],
-      [COMBAT_HUD_ELEMS.buttonCol,   refs.buttonsEl],
-      [COMBAT_HUD_ELEMS.high,        refs.heightEls?.high],
-      [COMBAT_HUD_ELEMS.med,         refs.heightEls?.medium],
-      [COMBAT_HUD_ELEMS.low,         refs.heightEls?.low],
-    ];
-    for (const [id, el] of pairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      // Slider fill: x is the rest-position of the thumb (567×14 @ 70,0).
-      // We DON'T want to apply that x as left — width is driven by
-      // syncPowerFill(). Skip the x-write for the fill ref; width
-      // comes from syncPowerFill at runtime.
-      if (el === refs.fillEl) {
-        if (typeof desc.y === "number") el.style.top = `${desc.y + 1}px`;
-        if (typeof desc.height === "number") el.style.height = `${desc.height - 2}px`;
-        applied += 1;
-        continue;
-      }
-      // Hi/Med/Lo buttons: positions are relative to the .hch-buttons
-      // container, which lives at (722, 4). Apply x/y as-is.
-      if (typeof desc.x === "number") el.style.left = `${desc.x}px`;
-      if (typeof desc.y === "number") el.style.top = `${desc.y}px`;
-      if (typeof desc.width === "number") el.style.width = `${desc.width}px`;
-      if (typeof desc.height === "number") el.style.height = `${desc.height}px`;
-      applied += 1;
-    }
-    // After re-applying widths/positions, refresh the fill width to
-    // honor the new slider track width.
-    syncPowerFill();
-    try {
-      window.__diag?.layout?.onCombatHudApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(COMBAT_HUD_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(COMBAT_HUD_LAYOUT_ID).then(apply).catch(() => {});
+// ── Docking ───────────────────────────────────────────────────────────
+// Until the player drags it, the panel docks centred just above whatever
+// bottom-centre HUD is showing (the toolbar / target bar stack), measured
+// live so a taller toolbar or a different HUD scale never overlaps it.
+const DOCK_SKIP = new Set([
+  OVERLAY_ID, "hb-spell-strip", DEATH_OVERLAY_ID, "hb-sneak-hud", "hb-portal-storm-pulse",
+]);
+// Transient roots (hover tooltips over the toolbar, drag ghosts, toasts,
+// context menus) must not shove the panel up and down while they live.
+const DOCK_SKIP_RE = /tooltip|tip\b|ghost|drag|toast|popup|menu|confirm|dialog/i;
+
+function zoomOf(el) {
+  const z = Number(el?.currentCSSZoom);
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+
+/** Bottom offset (in `el`'s own HUD px) that clears every bottom-anchored,
+ *  centre-straddling `#hb-*` HUD root. Exported for the spell strip twin. */
+function computeDockBottom(el) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const z = zoomOf(el);
+  let top = vh;
+  for (const c of document.body.children) {
+    const id = c.id || "";
+    if (!id.startsWith("hb-") || DOCK_SKIP.has(id) || DOCK_SKIP_RE.test(id)) continue;
+    const r = c.getBoundingClientRect?.();
+    if (!r || !r.width || !r.height) continue;
+    if (r.height > vh * 0.5 || r.width > vw * 0.9) continue;   // overlays / full-width
+    if (r.bottom < vh * 0.7) continue;                          // not bottom-anchored
+    if (r.left > vw / 2 + 40 || r.right < vw / 2 - 40) continue; // not centre column
+    top = Math.min(top, r.top);
+  }
+  if (top >= vh) return DOCK_FALLBACK_BOTTOM;
+  const bottom = (vh - top) / z + DOCK_GAP;
+  // Never climb past mid-screen, whatever the neighbours do.
+  return Math.round(Math.min(bottom, (vh / z) * 0.5));
+}
+
+function userPlaced() {
+  const st = state.posCtl?.getState?.();
+  return !!st && st.x != null && st.y != null;
+}
+
+function dock() {
+  const ov = state.overlayEl;
+  if (!ov || !state.visible || userPlaced()) return;
+  ov.style.left = "0px";
+  ov.style.right = "0px";
+  ov.style.top = "auto";
+  ov.style.bottom = `${computeDockBottom(ov)}px`;
 }
 
 function show() {
   if (!state.overlayEl) state.overlayEl = build();
+  refreshTraining({ force: true });
   state.overlayEl.dataset.open = "1";
   state.visible = true;
   syncPowerFill();
-  // Phase 35: paint the DR readout immediately on open. The rAF poll
-  // covers slider drags during the visible window; show() handles the
-  // initial frame so the readout isn't blank for one rAF tick.
-  state.drLastPower = -1;  // force a repaint regardless of prior value
-  updateDamageRating();
+  syncHeightHighlight();
+  syncAutoRepeat();
+  dock();
+  // A second pass once the toolbar's own layout has settled.
+  window.requestAnimationFrame?.(() => dock());
 }
 
 function hide() {
   if (!state.overlayEl) return;
   state.overlayEl.dataset.open = "0";
   state.visible = false;
+  onAttackDone();
 }
 
-// Q1a (2026-05-26): "You died." overlay — fires off the kind=29
-// Death bus event when victim matches local player. Cream serif on
-// black-tinted backdrop, brass border, 3s auto-fade. No respawn
-// button here (deferred to Wave R).
+// ── Keyboard (melee / missile only) ───────────────────────────────────
+// The spellbook's "Forget selected spell" action (keymap DELETE_SPELL,
+// 0xFF000011) also defaults to Delete; while it is armed (spellbook open with
+// a spell selected) the focused panel owns the key and Low attack stands down.
+function deleteKeyOwnedByPanel() {
+  try {
+    const f = getInputFunnel();
+    return !!f?.actions?.some?.((a) => a.labelHash === "0xFF000011" && typeof a.when === "function" && a.when());
+  } catch (_) { return false; }
+}
+
+function onCombatKey(ev) {
+  if (!state.visible || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+  if (!stanceIsMeleeOrMissile()) return;
+  const h = HEIGHTS.find((x) => x.code === ev.code);
+  if (h && h.code === "Delete" && deleteKeyOwnedByPanel()) return;
+  if (h) {
+    ev.preventDefault();
+    if (!ev.repeat) attackAtHeight(h.value);
+    return;
+  }
+  const delta = POWER_KEYS[ev.code];
+  if (delta) {
+    ev.preventDefault();
+    stepPowerFromHud(delta);
+  }
+}
+
+function installKeys() {
+  if (inputFunnelV2On()) {
+    return getInputFunnel()?.bindRaw?.("combat-hud.attackKeys", onCombatKey) || (() => {});
+  }
+  const legacy = (ev) => {
+    const t = ev.target;
+    const tag = (t?.tagName || "").toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) return;
+    onCombatKey(ev);
+  };
+  window.addEventListener("keydown", legacy);
+  return () => window.removeEventListener("keydown", legacy);
+}
+
+// Q1a (2026-05-26): "You died." overlay — fires off the kind=29 Death bus
+// event when the victim is the local player. Kit plaque, 5.5 s narrative.
 function ensureDeathStyles() {
   if (document.getElementById(DEATH_STYLE_ID)) return;
   const s = document.createElement("style");
@@ -1022,13 +766,14 @@ function ensureDeathStyles() {
       left: 50%;
       transform: translate(-50%, -50%);
       min-width: 320px;
-      padding: 28px 48px;
-      background: rgba(0, 0, 0, 0.78);
-      border: 2px solid var(--hb-border-brass);
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      font-size: 28px;
+      padding: 24px 48px;
+      box-sizing: border-box;
+      background: url("${SP}/0x06004CC2.png") repeat, rgba(0, 0, 0, 0.85);
+      border: 1px solid var(--hbk-gold-dim, #8a7544);
+      box-shadow: inset 0 0 0 1px #1c160b, 0 0 0 1px #000, 0 10px 28px rgba(0, 0, 0, 0.75);
+      font-family: var(--hbk-font, var(--hb-font-serif));
+      color: var(--hbk-gold-bright, #f3d27a);
+      font-size: 26px;
       letter-spacing: 0.08em;
       text-align: center;
       text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9);
@@ -1056,18 +801,9 @@ function clearDeathSequence() {
   }
 }
 
-// Multi-phase death narrative (rec #166). The real
-// `portalSpaceEntered` / `applyEffectsPlayerTeleport` bus events that
-// retail gmFloatyPowerBarUI gates on are pending wasm-side surfacing
-// (pass-1 rec #168), so the phase progression here is driven by a
-// timer chain seeded by the death event. Phases:
-//   t=0   "You died."                  (1500 ms)
-//   t=1.5 "Entering portal space..."   (2500 ms)
-//   t=4.0 "Resurrecting..."            (1500 ms)
-//   t=5.5 fade
-// Listeners on the local Character bus can call advanceDeathPhase()
-// once the matching events become surface-side; until then the timer
-// approximates the retail cadence.
+// Multi-phase death narrative (rec #166), timer-driven until the
+// portalSpaceEntered / player-teleport bus events surface:
+//   t=0 "You died." · t=1.5 "Entering portal space…" · t=4.0 "Resurrecting…" · t=5.5 fade
 function setDeathMessage(ov, message) {
   setAcText(ov, message || "You died.");
   ov.dataset.open = "0";
@@ -1085,7 +821,6 @@ function showDeathOverlay(message) {
   }
   clearDeathSequence();
   setDeathMessage(ov, message || "You died.");
-
   const sequence = [
     { at: 1500, text: "Entering portal space…" },
     { at: 4000, text: "Resurrecting…" },
@@ -1097,7 +832,6 @@ function showDeathOverlay(message) {
     }, step.at);
     deathPhaseTimers.push(t);
   }
-  // Fade kick-off — give "Resurrecting…" ~1.5 s before fading.
   deathOverlayTimer = setTimeout(() => {
     ov.dataset.open = "0";
     deathOverlayTimer = setTimeout(() => {
@@ -1121,8 +855,8 @@ export const manifest = {
   name: "Combat HUD",
   icon: "⚔",
   iconHidden: true,
-  version: "0.1.0",
-  description: "Retail gmCombatUI horizontal bar — auto-shows when in combat stance",
+  version: "0.2.0",
+  description: "Retail gmCombatUI power bar + High/Medium/Low — shows in melee/missile stance",
 };
 
 export function mount(_ctx) {
@@ -1131,182 +865,101 @@ export function mount(_ctx) {
   if (existing) existing.remove();
   state.overlayEl = build();
   syncPowerFill();
-  updateDamageRating();
+  syncHeightHighlight();
 
-  // P3-41 — drive show/hide off `playerStatsUpdated` (kind=8 covers
-  // every stance refresh sourced via PrivateUpdateAttribute2nd /
-  // applyConfirmedStance). 1Hz fallback timer guards against any
-  // dropped bus event so the combat-hud always converges.
+  // Show in melee/missile, hide otherwise. playerStatsUpdated (kind=8)
+  // covers every stance refresh; the 1 Hz tick is the convergence backstop.
   const recomputeVisible = () => {
-    // Task C follow-up (2026-07-01): melee/missile ONLY — retail
-    // REPLACES this High/Med/Low + Recklessness panel with the
-    // spellcasting strip in magic stance (see combat-bar.js
-    // installSpellStrip; reference capture Spell-Casting-Panel-Live).
-    // Recklessness/Accuracy have no meaning for casts anyway.
-    const inCombat = stanceIsMeleeOrMissile();
+    const inCombat = stanceIsMeleeOrMissile() || state.debugPinned;
     if (inCombat && !state.visible) show();
     else if (!inCombat && state.visible) hide();
-    // HUD rec #97 — stance may have flipped melee↔ranged; refresh the
-    // power slider label so Recklessness/Accuracy tracks the new stance.
     syncPowerFill();
+    if (state.visible) {
+      syncHeightHighlight();
+      dock();   // the toolbar / target bar below may have grown or shrunk
+    }
   };
-  const onStatsForCombatVisible = () => recomputeVisible();
-  const pcStanceClient = window.__pluginClient ?? null;
-  if (pcStanceClient?.events?.on) {
-    pcStanceClient.events.on("playerStatsUpdated", onStatsForCombatVisible);
-  } else if (window.__pluginClientReady?.then) {
-    window.__pluginClientReady.then((client) => {
-      if (client?.events?.on) {
-        client.events.on("playerStatsUpdated", onStatsForCombatVisible);
-      }
-    });
-  }
   const t = setInterval(recomputeVisible, 1000);
 
-  // Phase 35: rAF-poll the powerLevel / stance pair so a combat-bar
-  // slider drag (which DOES NOT emit an event — see combat-bar.js:733
-  // input handler that only writes the window state, no broadcast)
-  // flows into the DR readout in real time. We diff against the last
-  // observed power + stance and skip the rebuild when nothing changed,
-  // so the per-frame cost is one global read + two integer compares.
-  //
-  // Why rAF instead of hooking into combat-bar.js's slider listener?
-  // Two reasons: (a) avoids cross-plugin coupling (combat-bar's slider
-  // DOM element isn't exposed); (b) covers BOTH sliders — our own
-  // .hch-slider (build() lines 297-323) and combat-bar's — without
-  // double-wiring. Cost is ~1 µs/frame; well under the rAF budget.
-  let drRafId = 0;
-  function drPollFrame() {
-    drRafId = 0;
-    if (!state.overlayEl) return;
-    // Only repaint when visible — the overlay is display:none in
-    // peace stance, so there's no point recomputing.
-    if (state.visible) {
-      const power = Number(window.__combatBarState?.powerLevel ?? 1.0) || 0;
-      const stance = (typeof window.__getCurrentStanceLow === "function")
-        ? (window.__getCurrentStanceLow() | 0)
-        : 0;
-      const sneakFlag = state.drHasSneak ? 1 : 0;
-      if (
-        power !== state.drLastPower
-        || stance !== state.drLastStance
-        || sneakFlag !== state.drLastSneakFlag
-      ) {
-        state.drLastStance = stance;
-        updateDamageRating();
-      }
-    }
-    drRafId = requestAnimationFrame(drPollFrame);
-  }
-  drRafId = requestAnimationFrame(drPollFrame);
-
-  // Subscribe to the plugin event bus for reactive updates. The
-  // pluginClient is created post-login, so mountBar may call us before
-  // it exists. Poll until available, matching sneak-hud.js's pattern.
-  //
-  // Wave 15 / Phase 46 added `damageDealt` to the same hook block so
-  // the three subscriptions share the post-login readiness gate — no
-  // separate retry loop for the last-hit row.
-  let drPluginPoll = null;
-  let drUnsubStats = null;
-  let drUnsubSneak = null;
-  let lhUnsubDamage = null;
-  function drTryHookEvents() {
+  const subs = [];
+  let clientPoll = null;
+  function tryHook() {
     const client = window.__pluginClient;
     if (!client?.events?.on) return false;
-    client.events.on("playerStatsUpdated", onPlayerStatsUpdated);
-    client.events.on("sneakAttackPredicted", onSneakAttackPredicted);
-    client.events.on("damageDealt", onDamageDealt);
-    drUnsubStats = () => {
-      try { client.events.off("playerStatsUpdated", onPlayerStatsUpdated); } catch (_) {}
+    const onStats = () => {
+      if (state.visible) refreshTraining();
+      recomputeVisible();
+      if (state.visible) syncAutoRepeat();
     };
-    drUnsubSneak = () => {
-      try { client.events.off("sneakAttackPredicted", onSneakAttackPredicted); } catch (_) {}
-    };
-    lhUnsubDamage = () => {
-      try { client.events.off("damageDealt", onDamageDealt); } catch (_) {}
-    };
-    // Recompute now that we can read fresh stats.
-    updateDamageRating();
+    client.events.on("playerStatsUpdated", onStats);
+    client.events.on("combatCommenceAttack", onCommenceAttack);
+    client.events.on("attackDone", onAttackDone);
+    client.events.on("death", onDeath);
+    subs.push(() => {
+      try { client.events.off("playerStatsUpdated", onStats); } catch (_) {}
+      try { client.events.off("combatCommenceAttack", onCommenceAttack); } catch (_) {}
+      try { client.events.off("attackDone", onAttackDone); } catch (_) {}
+      try { client.events.off("death", onDeath); } catch (_) {}
+    });
+    recomputeVisible();
     return true;
   }
-  // P3-41 — replace 500ms client-discovery poll with one-shot await
-  // on the pluginClient bootstrap promise. Falls back to the poll for
-  // older index.html or tests that don't install the promise.
-  if (!drTryHookEvents()) {
-    if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
-      window.__pluginClientReady.then(() => { drTryHookEvents(); });
+  if (!tryHook()) {
+    if (window.__pluginClientReady?.then) {
+      window.__pluginClientReady.then(() => { tryHook(); });
     } else {
-      drPluginPoll = setInterval(() => {
-        if (drTryHookEvents()) {
-          clearInterval(drPluginPoll);
-          drPluginPoll = null;
-        }
+      clientPoll = setInterval(() => {
+        if (tryHook()) { clearInterval(clientPoll); clientPoll = null; }
       }, 500);
     }
   }
 
-  // Q1a: subscribe to the Death bus event for the self-death overlay.
-  const pc = window.__pluginClient;
-  if (pc?.events?.on) {
-    pc.events.on("death", onDeath);
-  }
+  const unbindKeys = installKeys();
+
+  // Re-dock on viewport / HUD-scale changes (user-placed windows are
+  // re-clamped by attachWindowPosition itself).
+  let dockRaf = 0;
+  const scheduleDock = () => {
+    cancelAnimationFrame(dockRaf);
+    dockRaf = requestAnimationFrame(dock);
+  };
+  window.addEventListener("resize", scheduleDock);
+  document.addEventListener("hb-hud-scale-changed", scheduleDock);
 
   return () => {
     clearInterval(t);
-    if (drRafId) cancelAnimationFrame(drRafId);
-    drRafId = 0;
-    if (drPluginPoll) clearInterval(drPluginPoll);
-    drPluginPoll = null;
-    if (state.drSneakTimer) {
-      clearTimeout(state.drSneakTimer);
-      state.drSneakTimer = null;
-    }
-    state.drHasSneak = false;
-    // Phase 46: tear down the last-hit subscription + idle timer.
-    // Clear the ring + DOM refs so a remount starts fresh (the new
-    // `build()` call replaces them; the explicit nulling here keeps
-    // the state object honest for tests / debug snapshots).
-    if (state.lhIdleTimer) {
-      clearTimeout(state.lhIdleTimer);
-      state.lhIdleTimer = null;
-    }
-    state.lhRing.length = 0;
-    state.lhRowEl = null;
-    state.lhDmgEl = null;
-    state.lhSneakEl = null;
-    state.lhAvgValEl = null;
-    if (drUnsubStats) drUnsubStats();
-    if (drUnsubSneak) drUnsubSneak();
-    if (lhUnsubDamage) lhUnsubDamage();
-    drUnsubStats = null;
-    drUnsubSneak = null;
-    lhUnsubDamage = null;
-    const pcEnd2 = window.__pluginClient ?? null;
-    if (pcEnd2?.events?.off) {
-      try { pcEnd2.events.off("playerStatsUpdated", onStatsForCombatVisible); } catch (_) {}
-    }
+    if (clientPoll) clearInterval(clientPoll);
+    for (const u of subs) u();
+    try { unbindKeys(); } catch (_) {}
+    cancelAnimationFrame(dockRaf);
+    window.removeEventListener("resize", scheduleDock);
+    document.removeEventListener("hb-hud-scale-changed", scheduleDock);
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;
     }
-    if (pc?.events?.off) {
-      pc.events.off("death", onDeath);
-    }
-    if (deathOverlayTimer) {
-      clearTimeout(deathOverlayTimer);
-      deathOverlayTimer = null;
-    }
-    const dov = document.getElementById(DEATH_OVERLAY_ID);
-    if (dov) dov.remove();
+    state.refs = null;
+    state.posCtl = null;
+    state.visible = false;
+    clearDeathSequence();
+    document.getElementById(DEATH_OVERLAY_ID)?.remove();
   };
 }
 
-// Debug: pop the bar without needing combat stance.
+// Debug: pop the panel without needing a combat stance. `__combatHudDebug()`
+// pins it open (the 1 Hz stance check would otherwise hide it again within a
+// second); `__combatHudDebug(false)` releases it back to the stance gate.
 if (typeof window !== "undefined") {
-  window.__combatHudDebug = function () {
+  window.__combatHudDebug = function (pin = true) {
     ensureStyles();
+    state.debugPinned = pin !== false;
+    if (!state.debugPinned) {
+      if (!stanceIsMeleeOrMissile()) hide();
+      return;
+    }
     if (!state.overlayEl) state.overlayEl = build();
     show();
   };
 }
+
+export const __test = Object.freeze({ computeDockBottom, HEIGHTS, POWER_KEYS, PANEL_W });

@@ -1,53 +1,33 @@
 /**
- * vendor-ui — Standalone horizontal vendor bar.
+ * vendor-ui — the Vendor window (retail gmVendorUI, layout 0x21000012).
  *
- * Wave 2 PR-GG rewrite 2026-05-23: was a registered view inside
- * plugins/main-panel.js (PR-CC, 2026-05-22). Now a standalone
- * overlay div, matching retail's gmVendorUI (layout 0x21000012,
- * 800×110 horizontal bar at design-canvas y=500). The dual-pane
- * revert (PR-FF) re-grounded the project on "main-panel is for
- * Inventory/Skills/Magic/etc."; vendor is its OWN top-level floaty
- * window in acclient.c, never sharing the main-panel slot.
+ * HUD overhaul 2026-10-05 — rebuilt on the shared HUD kit.
  *
- * Layout 0x21000012 — gmVendorUI. Full port via applyVendorLayout()
- * (2026-05-24); element_id → purpose map confirmed by
- * vendor_ui_layout_dump:
+ * Retail draws gmVendorUI as an 800×110 strip at the bottom of the
+ * 800×600 canvas: a 20-px tab strip (Items / Buying / Selling, sprite
+ * 0x06005F10) with the 22×20 close (0x060012AA) at the right, and each
+ * page = item-name/cost text at the top, a 32-px item list with a
+ * horizontal rope scrollbar (0x06004C7F), red 64×22 Buy / Add to List /
+ * Buy All / Sell All buttons (0x06004C4C) on the right and small
+ * Clear Item / Clear List buttons (0x060012BA / brown 0x06001927).
  *
- *   Root 0x100000B7 — 800×110, design-canvas y=500.
- *   Outer panel 0x100000B8 — 800×110 wrapper for tabs + panes.
- *   Tabs (3): 92×20 each, top-left.
- *     0x100000B9 Items   (  0,0)
- *     0x100000BA Buying  ( 92,0)
- *     0x100000BB Selling (184,0)
- *   Top strip background 0x1000008D — 800×20, sprite 0x06005F10.
- *   Close X 0x100000D6 — 22×20 at (776,0), 2 states (0x060012A9/AA).
+ * We keep that identity — a wide, short strip docked low on the screen,
+ * the same three tabs, red buttons on the right, the item list in the
+ * middle — and take the modern liberties the single 32-px row could not
+ * carry: a wrapping item grid with a price under every icon (red when
+ * you can't afford it), a details column that always shows the selected
+ * item's price, your purse, and the buy/sell totals, quantity inputs, and
+ * an always-visible purse on the tab strip. The window docks bottom-left
+ * above the chat/toolbar and stops short of the right-hand main panel so
+ * inventory → vendor drags never have to cross it; it is draggable and
+ * remembers where you put it (attachWindowPosition, id 0x100000B7 =
+ * RootVendor_Field).
  *
- *   Items pane 0x100000BC — 800×90 at (0,20).
- *     0x100000BF category dropdown — 117×18 at (4,4)
- *     0x100000C0 selected-item name — 590×15 at (125,0)
- *     0x100000C1 selected-item price — 590×15 at (125,15)
- *     0x100000BD icon strip — 710×32 at (10,30)
- *     0x100000BE rates / status line — 710×16 at (10,63)
- *     0x100000C2 Buy button — 64×22 at (732,4)
- *     0x100000C3 Add to List button — 64×22 at (732,30)
- *
- *   Buying pane 0x100000C4 — 800×90 at (0,20).
- *     0x100000C5 queue list area — 710×32 at (10,30)
- *     0x100000C6 queue footer (total) — 710×16 at (10,63)
- *     0x100000C7 selected-name (590×15 at 125,0)
- *     0x100000C8 selected-price (590×15 at 125,15)
- *     0x100000C9 Confirm — 64×22 at (732,4)
- *     0x100000CA Clear — 64×22 at (732,30)
- *     0x100000CB Total label — 65×14 at (4,1)
- *     0x100000CC Sub-total label — 65×14 at (4,15)
- *
- *   Selling pane 0x100000CD — mirrors Buying (0x100000CE-D5).
- *
- *   Standalone sprites: 0x100000DA-DC (800×90 pane backgrounds);
- *   0x100000DD-E1 (button state-sprite refs); 0x1000048E (orphan,
- *   2 states; likely a sound/animation cue not yet mapped).
- *
- * Buttons use sprite 0x06004C4C (normal) / 4D (pressed) / 4E (ghosted).
+ * PRICES — fixed 2026-10-05 (see plugins/commerce_logic.js): the player
+ * pays ShopSystem::SellPrice(unit, type, sell_price, n) and is paid
+ * ShopSystem::BuyPrice(unit, type, buy_price, n). The old bar had the
+ * two vendor rates swapped, so every price it showed was wrong by the
+ * vendor's spread.
  *
  * Wire wiring (DO NOT regress):
  *   - Buy:  handle.buyFromVendor(vendorGuid, [vendorItemGuid…], [amount…])
@@ -56,90 +36,37 @@
  *           DefaultItemsForSale/UniqueItemsForSale by ObjectGuid in
  *           Vendor.BuyItems_ValidateTransaction (PR-EE 2026-05-22 fix).
  *           Multi-item per call to mirror retail's atomic
- *           gmVendorUI::SendShopEvent flush (acclient.c:4582).
+ *           gmVendorUI::SendShopEvent flush.
  *   - Sell: handle.sellToVendor(vendorGuid, [itemGuid…], [amount…])
  *           wire: GameAction::Sell 0x0060, object_guid per profile = player's
  *           inventory item GUID.
  *   - Vendor list via `kind=12 VendorOpened` → handle.getVendorState(guid).
- *   - Auto-refresh on `kind=11 InventoryUpdated` (subscriber re-pulls
- *     vendor state so multipliers / stock / alt-currency stay accurate
- *     after buy or sell — PR-EE 2026-05-22 bus emit).
- *
- * Two flows per retail's button layout:
- *   - Buy / Sell button: instant single-item action (no queue).
- *   - Add to List: append to Buying or Selling tab queue.
- *     Confirm in the queue tab flushes via the multi-item wire op.
+ *   - Auto-refresh on `playerInventoryChanged` (re-pull vendor state so
+ *     stock / alt-currency stay accurate after a buy or sell).
+ *   - Drops: `application/x-hb-inv-guid` / `text/x-hb-item-guid`
+ *     (DropItemFlags.VENDOR) anywhere on the window → Selling tab, like
+ *     retail VendorSellUI::AddItemToSell (UIElement_Panel::OpenTab
+ *     0x100000BB, then gmVendorUI::AddItem), gated by
+ *     VendorSellUI::DragItemAcceptable's retail rejection strings.
  */
 
-import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
-import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
-import { clearPlaceholderGlyph } from "../ui/ac_html.js";
-import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import { setAcText } from "../ui/ac_font.js";
 import { formatAppraisalTooltip } from "./inventory_helpers.js";
+import { DropItemFlags } from "./drop_item_flags.js";
+import {
+  createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, kitButton, fillSlotIcon,
+  wireDropTarget, inventoryRows, entityWorldPos, localPlayerWorldPos, devHex,
+} from "./commerce_window.js";
+import {
+  vendorPurchasePrice, vendorSaleCredit, vendorAcceptability, vendorRejectText,
+  VENDOR_ACCEPT, countCurrency, PYREAL_WCID, fmtNumber, fmtCompact,
+} from "./commerce_logic.js";
 
-// gmVendorUI 0x21000012 — element_id constants from
-// vendor_ui_layout_dump 2026-05-24. See head-comment block above for
-// the full element-purpose mapping.
-const VENDOR_LAYOUT_ID = 0x21000012;
-const VENDOR_ELEMS = {
-  // Outer panel wrapper inside the root.
-  outer:        0x100000B8,
-  // Tabs (top-left row).
-  tabItems:     0x100000B9,
-  tabBuying:    0x100000BA,
-  tabSelling:   0x100000BB,
-  // Top strip + close (sit outside the panes).
-  topStrip:     0x1000008D,
-  closeBtn:     0x100000D6,
-  // Items pane + its 7 children.
-  itemsPane:    0x100000BC,
-  itemsCat:     0x100000BF,  // category dropdown
-  itemsName:    0x100000C0,  // selected-item name
-  itemsPrice:   0x100000C1,  // selected-item price
-  itemsStrip:   0x100000BD,  // icon strip
-  itemsRates:   0x100000BE,  // rates / status line
-  itemsBuyBtn:  0x100000C2,  // Buy
-  itemsAddBtn:  0x100000C3,  // Add to List
-  // Buying pane + its 8 children.
-  buyingPane:    0x100000C4,
-  buyingList:    0x100000C5,
-  buyingFooter:  0x100000C6,
-  buyingName:    0x100000C7,
-  buyingPrice:   0x100000C8,
-  buyingConfirmBtn: 0x100000C9,
-  buyingClearBtn:   0x100000CA,
-  buyingTotalLbl:   0x100000CB,
-  buyingSubLbl:     0x100000CC,
-  // Selling pane + its 8 children.
-  sellingPane:    0x100000CD,
-  sellingList:    0x100000CE,
-  sellingFooter:  0x100000CF,
-  sellingName:    0x100000D0,
-  sellingPrice:   0x100000D1,
-  sellingConfirmBtn: 0x100000D2,
-  sellingClearBtn:   0x100000D3,
-  sellingTotalLbl:   0x100000D4,
-  sellingSubLbl:     0x100000D5,
-};
-
-const STYLE_ID = "hb-vendor-bar-styles";
 const OVERLAY_ID = "hb-vendor-bar";
-
-// AC ItemType bit → emoji fallback for icons that don't resolve.
-const ITEM_TYPE_EMOJI = {
-  0x01: "⚔", 0x02: "🛡", 0x04: "👕", 0x08: "💍",
-  0x10: "🧬", 0x20: "🍞", 0x40: "💰", 0x80: "📦",
-  0x100: "🎯", 0x200: "🏹", 0x400: "🔮", 0x800: "🎒",
-  0x1000: "📜", 0x2000: "🔑", 0x4000: "🍷", 0x8000: "🍴",
-  0x10000: "📖", 0x20000: "🗒", 0x40000: "💵", 0x80000: "🪄",
-  0x100000: "⚗", 0x200000: "🎵",
-};
+const STYLE_ID = "hb-vendor-bar-styles";
 
 // AC ItemType bit → category dropdown label. Order = retail VendorItemsUI
-// AddTypeFilter calls (acclient.c:4597). Vendor stock is sparse across
-// these — we hide categories with 0 items at render time.
+// AddTypeFilter calls. Categories this vendor doesn't stock are hidden.
 const CATEGORY_TABLE = [
   { id: "all",       label: "All Items", mask: 0xFFFFFFFF },
   { id: "melee",     label: "Melee",     mask: 0x000001 },
@@ -161,36 +88,20 @@ const CATEGORY_TABLE = [
   { id: "manastone", label: "Mana Stone",mask: 0x080000 },
 ];
 
-function emojiForItemType(itemType) {
-  if (!itemType) return "📦";
-  const bit = itemType & (~itemType + 1);
-  return ITEM_TYPE_EMOJI[bit] || "📦";
-}
-
-// Wave 15 — icon cache consolidated into `ui/ac_icon_cache.js` so the
-// vendor / container / trade / buffs / inventory plugins all share the
-// same cache (a fetch for icon X anywhere benefits everywhere on the
-// next request). Local thin wrapper preserves the historical
-// `[vendor-ui]` warn label.
-async function fetchIconDataUrl(iconId) {
-  return fetchIconDataUrlShared(iconId, "vendor-ui");
-}
-
-function fmtPrice(n) {
-  if (!Number.isFinite(n)) return "?";
-  return Math.round(n).toLocaleString();
-}
+const MAX_QTY = 9999;
 
 function snapshotFromWasm(state) {
   return {
     vendorGuid: state.vendorGuid,
     vendorName: state.vendorName,
-    buyMultiplier: state.buyMultiplier,    // vendor sells at this × value
-    sellMultiplier: state.sellMultiplier,  // vendor pays this × value
+    // Wire VendorProfile order: buy_price (what the vendor PAYS you),
+    // sell_price (what it CHARGES you) — see commerce_logic.js.
+    buyMultiplier: state.buyMultiplier,
+    sellMultiplier: state.sellMultiplier,
     alternateCurrencyWcid: state.alternateCurrencyWcid,
     alternateCurrencyAmount: state.alternateCurrencyAmount,
     alternateCurrencyName: state.alternateCurrencyName,
-    items: state.items.map((i) => ({
+    items: Array.from(state.items || []).map((i) => ({
       itemGuid: i.itemGuid,
       wcid: i.wcid,
       name: i.name,
@@ -199,9 +110,8 @@ function snapshotFromWasm(state) {
       itemType: i.itemType,
       iconId: i.iconId,
     })),
-    // Wave F.4 (2026-05-27): typed-profile fields. populated by
-    // `enrichWithProfile()` after the wasm getCurrentVendorProfile call.
-    // Defaults match retail "no restriction" sentinels.
+    // Wave F.4 (2026-05-27) typed-profile fields, filled by
+    // enrichWithProfile(). Defaults = retail "no restriction" sentinels.
     buyAcceptCategories: 0xFFFFFFFF,
     buyAcceptCategoryNames: [],
     dealsMagic: true,
@@ -214,20 +124,10 @@ function snapshotFromWasm(state) {
 
 /**
  * Wave F.4 (2026-05-27) — merge a `getCurrentVendorProfile` payload
- * (typed VendorProfile, includes buyAcceptCategories / dealsMagic /
- * minValue / maxValue / pre-computed per-item buyPrice) onto an
- * existing `snapshotFromWasm` snapshot. The two wasm calls share the
- * same `latest_vendor_state` cache, so the data is consistent.
- *
- * If `profile` is null (no F.4 export available, or the cache is
- * stale), the snapshot keeps its Wave-7 shape with default "no
- * restriction" sentinels in the new fields. Vendor-ui then degrades
- * gracefully to the Wave-7 behavior.
- *
- * Cross-references:
- *   - `apps/holtburger-web/src/lib.rs::SessionHandle::getCurrentVendorProfile`
- *   - `crates/holtburger-protocol/src/messages/trade/profile.rs::VendorProfile`
- *   - `external/chorizite/Chorizite.ACProtocol/.../VendorProfile.generated.cs`
+ * (accept categories / magic flag / min-max caps) onto a snapshot.
+ * NOTE: the profile's per-stock `buyPrice` is ShopSystem::BuyPrice at
+ * the vendor's buy_price — the BUY-BACK price — so it is deliberately
+ * not used as the purchase price any more (commerce_logic.js).
  */
 function enrichWithProfile(snapshot, profile) {
   if (!profile) return snapshot;
@@ -238,1193 +138,230 @@ function enrichWithProfile(snapshot, profile) {
   snapshot.maxValue = profile.maxValue ?? 0xFFFFFFFF;
   snapshot.hasNoMin = !!profile.hasNoMin;
   snapshot.hasNoMax = !!profile.hasNoMax;
-  // Profile stock has pre-computed buyPrice + categoryBit per entry.
-  // Index by itemGuid so we can copy into the existing items array
-  // (which was built first from the flat Wave-7 path).
   const byGuid = new Map();
   for (const s of (profile.stock || [])) byGuid.set(s.itemGuid >>> 0, s);
   for (const it of snapshot.items) {
     const m = byGuid.get(it.itemGuid >>> 0);
     if (!m) continue;
-    it.buyPrice = m.buyPrice;
+    it.buyBackPrice = m.buyPrice;
     it.categoryBit = m.categoryBit;
   }
   return snapshot;
 }
 
-/**
- * Wave F.4 (2026-05-27) — retail-formula buy price for a vendor stock
- * entry. Mirrors `ShopSystem::BuyPrice` from acclient.c:719870.
- *
- * Promissory notes (item type 0x40000) ignore the per-vendor
- * multiplier — retail uses a flat 1.0. Other types: floor(unit_value *
- * num_item * buy_multiplier + 0.1). Result is at least 1 pyreal
- * (vendors don't give items away).
- *
- * Used for fallback display when the wasm typed export isn't available
- * (e.g. pre-bake JS-only smoke tests).
- */
-function shopBuyPrice(unitValue, itemType, buyMultiplier, numItem) {
-  const PROMISSORY_NOTE_BIT = 0x40000;
-  const multiplier = itemType === PROMISSORY_NOTE_BIT ? 1.0 : buyMultiplier;
-  const raw = Math.floor(multiplier * unitValue * numItem + 0.1);
-  if (raw === 0) return 1;
-  if (raw < 0 || raw > 0x7FFFFFFF) return -1;
-  return raw;
-}
-
 function ensureStyles() {
+  if (typeof document === "undefined") return;
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
-  // Sprite paths — DAT-extracted retail chrome.
-  // 0x06005F10 — top strip background (64×20, tiled horizontally)
-  // 0x06005F11 — active tab (92×20, alpha)
-  // 0x06005F12 — inactive tab (92×20, alpha)
-  // 0x06004C4C/D/E — button normal/pressed/ghosted (64×22, alpha)
-  // 0x060012A9/AA — close X pressed/normal (22×20)
-  // 0x06004CC2 — body strip placeholder (48×48, tiled)
-  const SP = "./data/ui-sprites";
-  // Retail port (2026-05-24): every visual element uses the
-  // gmVendorUI 0x21000012 element positions as the source of truth.
-  // CSS sets sensible defaults so the panel is usable before
-  // applyVendorLayout() lands; absolute positioning everywhere so the
-  // layout-driven overrides land cleanly. Panel matches retail
-  // 800×110 dims (was 720×136 in the hand-tuned version which added a
-  // separate 26px title bar — retail folds the vendor identity into
-  // the active tab + close button, so the title bar is gone).
+  // Layout in HUD px (the root is zoomed by ui/hud_scale.js). Width
+  // leaves room for the 300-px main panel on the right (inventory drags
+  // must not cross the vendor), floor 520, and never exceeds the HUD
+  // viewport (hb-cw max-width). No raw vw/vh — --hb-hud-vw only.
   style.textContent = `
 #${OVERLAY_ID} {
-  position: fixed;
-  left: 50%; bottom: 220px;
-  transform: translateX(-50%);
-  width: 800px; height: 110px;
-  z-index: 60;
-  pointer-events: auto;
-  font-family: var(--hb-font-serif);
-  color: var(--hb-text-cream);
-  display: none;
-  user-select: none;
-  box-sizing: border-box;
+  width: max(520px, min(800px, calc(100 * var(--hb-hud-vw, 1vw) - 332px)));
+  height: 192px;
 }
-#${OVERLAY_ID}[data-open="1"] { display: block; }
-/* Top strip background — element 0x1000008D, 800×20 at (0,0).
-   Sprite 0x06005F10 tiles horizontally. */
-#${OVERLAY_ID} .hvb-top-strip {
-  position: absolute;
-  left: 0; top: 0;
-  width: 800px; height: 20px;
-  background: url("${SP}/0x06005F10.png") repeat-x;
-  background-size: auto 20px;
-  box-sizing: border-box;
-  z-index: 1;
+#${OVERLAY_ID} .hvb-tabs { flex: 0 0 auto; }
+#${OVERLAY_ID} .hvb-tabs .hbk-tab { flex: 0 0 92px; }
+#${OVERLAY_ID} .hvb-purse {
+  margin-left: auto; align-self: center;
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 6px; white-space: nowrap;
 }
-/* Tabs — each 92×20, layout-positioned (0x100000B9/BA/BB at
-   x = 0/92/184, y=0). The CSS default just sets sizing; applyVendorLayout
-   overrides left/top from the LayoutDesc. */
-#${OVERLAY_ID} .hvb-tab {
-  position: absolute;
-  top: 0;
-  width: 92px; height: 20px;
-  background: url("${SP}/0x06005F12.png") no-repeat center / 100% 100%;
-  color: var(--hb-text-cream);
-  font-family: inherit; font-size: 11px; font-weight: 600;
-  border: 0; cursor: pointer; padding: 0 6px;
-  text-shadow: 0 1px 0 rgba(0,0,0,.85);
-  line-height: 20px;
-  z-index: 3;
-  box-sizing: border-box;
-  /* 2026-08-02 dropdown fix — the Items tab label carries the vendor
-     name ("Items — Randall Sandaw"), which is far wider than the 92px
-     tab. With overflow visible the inline-block ac-text spilled out of
-     the tab (measured 80x40 — it WRAPS to a second line in the
-     plain-text fallback, bottom y=510) and, because .hvb-tab sits at
-     z-index 3 while .hvb-body is z-index auto, that spill painted ON
-     TOP of the category dropdown button (y 495..513) and swallowed
-     every click on it. Clip + single-line the label so it can never
-     leave the tab box; setAcText passes fit:true so the AC font
-     condenses / ellipsizes instead of being hard-cut once the atlas
-     is loaded. (No backticks in here — this block lives inside a JS
-     template literal.) */
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-/* Belt-and-braces for the same bug class: every <ac-text> inside the
-   vendor bar is a pure text rasterizer owned by an interactive host
-   (tab / button / menu row). Pointer events belong to the host, never
-   to the label — so an oversized glyph canvas can never eat a click
-   meant for a widget underneath it. */
-#${OVERLAY_ID} ac-text,
-#${OVERLAY_ID} ac-text canvas {
-  pointer-events: none;
-}
-#${OVERLAY_ID} .hvb-tab[data-tab="items"]   { left: 0; }
-#${OVERLAY_ID} .hvb-tab[data-tab="buying"]  { left: 92px; }
-#${OVERLAY_ID} .hvb-tab[data-tab="selling"] { left: 184px; }
-#${OVERLAY_ID} .hvb-tab.active {
-  background-image: url("${SP}/0x06005F11.png");
-  color: var(--hb-text-gold);
-}
-#${OVERLAY_ID} .hvb-tab:hover:not(.active) { color: var(--hb-text-cream-bright); }
-/* Close button — element 0x100000D6, 22×20 at (776,0). */
-#${OVERLAY_ID} .hvb-close {
-  position: absolute;
-  left: 776px; top: 0;
-  width: 22px; height: 20px;
-  background: url("${SP}/0x060012AA.png") no-repeat center / contain;
-  border: 0; cursor: pointer; padding: 0;
-  font-size: 0; color: transparent;
-  z-index: 4;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-close:active {
-  background-image: url("${SP}/0x060012A9.png");
-}
-/* Body — 800×90 at (0,20). Hosts the 3 panes. */
-#${OVERLAY_ID} .hvb-body {
-  position: absolute;
-  left: 0; top: 20px;
-  width: 800px; height: 90px;
-  background: url("${SP}/0x06004CC2.png") repeat;
-  background-color: #2a1d12;
-  background-blend-mode: multiply;
-  border-top: 1px solid var(--hb-border-brass);
-  border-bottom: 1px solid var(--hb-border-brass-deep);
-  border-left: 1px solid var(--hb-border-brass-deep);
-  border-right: 1px solid var(--hb-border-brass-deep);
-  overflow: visible;
-  box-sizing: border-box;
-}
-/* Each pane is sized 800×90 with absolute children pinned to retail
-   x/y inside the body. The pane itself stays at (0, 0) inside .hvb-body
-   so layout-driven children compute relative to the pane origin. */
-#${OVERLAY_ID} .hvb-pane {
-  position: absolute;
-  left: 0; top: 0;
-  width: 800px; height: 90px;
-  display: none;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-pane.active { display: block; }
-
-/* Items pane — children are absolute and positioned via layout. */
-/* P3-45 — UIElement_Menu port. The category dropdown is a custom
-   div+ul rather than a native <select> so the brass-trim aesthetic
-   matches the rest of the vendor frame. Keyboard accessible: Enter
-   opens, ArrowUp/Down moves, Enter commits, Escape closes. The
-   underlying <select> is hidden but kept in place so existing
-   applyVendorLayout positioning + change-event semantics still work. */
-#${OVERLAY_ID} .hvb-category {
-  display: none;
-}
-#${OVERLAY_ID} .hvb-menu {
-  position: absolute;
-  left: 4px; top: 4px;
-  width: 117px; height: 18px;
-  /* Above the tabs (z-index 3) and the close button (4) — the dropdown
-     button lives in .hvb-body, which is z-index auto, so without this
-     ANY absolutely-positioned overlay-root chrome wins the hit test
-     where the boxes overlap. Stays below .hvb-menu-panel (80). */
-  z-index: 5;
-  background: var(--hb-overlay-dark-deep);
-  color: var(--hb-text-cream);
-  border: 1px solid var(--hb-border-brass-dim);
-  font-family: inherit;
-  font-size: 10px;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  padding: 0 4px;
-  cursor: pointer;
-  user-select: none;
-  outline: none;
-}
-#${OVERLAY_ID} .hvb-menu:hover,
-#${OVERLAY_ID} .hvb-menu:focus {
-  border-color: var(--hb-border-brass);
-  color: var(--hb-text-cream-bright);
-}
-#${OVERLAY_ID} .hvb-menu-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#${OVERLAY_ID} .hvb-menu-chevron {
-  margin-left: 4px;
-  color: var(--hb-border-brass);
-  font-size: 8px;
-  line-height: 1;
-}
-#${OVERLAY_ID} .hvb-menu-panel {
-  position: absolute;
-  left: 4px;
-  top: 22px;
-  width: 117px;
-  max-height: 240px;
-  overflow-y: auto;
-  background: var(--hb-overlay-dark-deep);
-  border: 1px solid var(--hb-border-brass);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
-  z-index: 80;
-  font-family: inherit;
-  font-size: 10px;
-  padding: 2px;
-  display: none;
-  box-sizing: border-box;
-  scrollbar-width: thin;
-  scrollbar-color: var(--hb-border-brass) var(--hb-overlay-dark-deep);
-}
-#${OVERLAY_ID} .hvb-menu-panel[data-open="1"] {
-  display: block;
-}
-#${OVERLAY_ID} .hvb-menu-item {
-  padding: 2px 6px;
-  cursor: pointer;
-  color: var(--hb-text-cream);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid transparent;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-menu-item:hover,
-#${OVERLAY_ID} .hvb-menu-item[data-focused="1"] {
-  background: var(--hb-overlay-hover);
-  border-color: var(--hb-border-brass-dim);
-  color: var(--hb-text-cream-bright);
-}
-#${OVERLAY_ID} .hvb-menu-item[data-selected="1"] {
-  color: var(--hb-text-gold);
-  background: var(--hb-overlay-active);
-}
-#${OVERLAY_ID} .hvb-selected-name {
-  position: absolute;
-  left: 125px; top: 0;
-  width: 590px; height: 15px;
-  color: var(--hb-text-gold);
-  font-size: 13px; font-weight: 600;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-align: center;
-  text-shadow: 0 1px 0 rgba(0,0,0,.85);
-  line-height: 15px;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-selected-price {
-  position: absolute;
-  left: 125px; top: 15px;
-  width: 590px; height: 15px;
-  color: var(--hb-text-cream-bright);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  line-height: 15px;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-icon-strip {
-  position: absolute;
-  left: 10px; top: 30px;
-  width: 710px; height: 32px;
-  display: flex; gap: 2px;
-  overflow-x: auto; overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--hb-border-brass) rgba(0,0,0,.5);
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-icon-cell {
-  flex: 0 0 32px;
-  width: 32px; height: 32px;
-  background: rgba(0,0,0,.45);
-  border: 1px solid var(--hb-border-brass-dim);
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
-  font-size: 18px; line-height: 1;
-  position: relative;
-  transition: border-color 80ms, background 80ms;
-}
-#${OVERLAY_ID} .hvb-icon-cell:hover {
-  border-color: var(--hb-text-gold);
-  background: rgba(60,40,20,.7);
-}
-#${OVERLAY_ID} .hvb-icon-cell.selected {
-  border-color: var(--hb-text-gold);
-  box-shadow: inset 0 0 0 1px rgba(240,200,124,.6);
-  background: rgba(80,55,25,.7);
-}
-#${OVERLAY_ID} .hvb-icon-cell img {
-  width: 100%; height: 100%;
-  image-rendering: pixelated;
-  object-fit: contain;
-}
-#${OVERLAY_ID} .hvb-icon-cell .hvb-stack-badge {
-  position: absolute;
-  bottom: 0; right: 0;
-  background: rgba(0,0,0,.75);
-  color: var(--hb-text-cream-bright);
-  font-size: 8px; line-height: 1;
-  padding: 1px 2px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Action buttons — absolute-positioned per the pane's layout
-   children. Items pane: 0x100000C2 Buy at (732,4), 0x100000C3 Add
-   at (732,30); both 64×22. Buying/Selling panes mirror at
-   0x100000C9/CA + 0x100000D2/D3. CSS defaults pin them at the
-   retail offsets; applyVendorLayout re-asserts from the DAT. */
-#${OVERLAY_ID} .hvb-btn {
-  position: absolute;
-  width: 64px; height: 22px;
-  background: url("${SP}/0x06004C4C.png") no-repeat center / contain;
-  border: 0;
-  font-family: inherit; font-size: 11px; font-weight: 700;
-  color: var(--hb-text-cream); text-shadow: 0 1px 0 rgba(0,0,0,.85);
-  cursor: pointer; padding: 0;
-  letter-spacing: .02em;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-btn[data-slot="top"]    { left: 732px; top: 4px; }
-#${OVERLAY_ID} .hvb-btn[data-slot="bottom"] { left: 732px; top: 30px; }
-#${OVERLAY_ID} .hvb-btn:active:not(:disabled) {
-  background-image: url("${SP}/0x06004C4D.png");
-  color: #b22;
-}
-#${OVERLAY_ID} .hvb-btn:disabled {
-  background-image: url("${SP}/0x06004C4E.png");
-  color: #888; cursor: not-allowed;
-}
-
-/* Queue (Buying / Selling) panes — the queue list maps to the
-   icon-strip rect 0x100000C5/CE (710×32 at 10,30). The narrow row
-   layout means at most 2 rows are visible at a time without scrolling. */
-#${OVERLAY_ID} .hvb-queue-list {
-  position: absolute;
-  left: 10px; top: 30px;
-  width: 710px; height: 32px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--hb-border-brass) rgba(0,0,0,.5);
-  border: 1px solid var(--hb-border-brass-dim);
-  background: rgba(0,0,0,.35);
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-queue-row {
+#${OVERLAY_ID} .hvb-main {
+  flex: 1 1 auto; min-height: 0;
   display: grid;
-  grid-template-columns: 24px 1fr auto auto 18px;
-  gap: 6px; align-items: center;
-  padding: 1px 4px;
-  border-bottom: 1px solid rgba(138,117,68,.12);
-  font-size: 11px;
+  grid-template-columns: 178px minmax(0, 1fr) 78px;
+  gap: 6px; padding: 6px;
 }
-#${OVERLAY_ID} .hvb-queue-row:hover { background: rgba(80,55,25,.4); }
-#${OVERLAY_ID} .hvb-queue-icon {
-  width: 22px; height: 22px;
-  background: rgba(0,0,0,.4);
-  border: 1px solid var(--hb-border-brass-deep);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px;
+#${OVERLAY_ID} .hvb-info {
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0; overflow: hidden;
 }
-#${OVERLAY_ID} .hvb-queue-icon img {
-  width: 100%; height: 100%;
-  image-rendering: pixelated; object-fit: contain;
+#${OVERLAY_ID} .hvb-info select.hbk-select { width: 100%; height: 20px; padding: 0 4px; font-size: 11px; }
+#${OVERLAY_ID} .hvb-line { min-height: 14px; line-height: 14px; overflow: hidden; white-space: nowrap; }
+#${OVERLAY_ID} .hvb-line.hvb-name { min-height: 16px; }
+#${OVERLAY_ID} .hvb-hint { color: var(--hbk-text-faint); font-style: italic; font-size: 11px; white-space: normal; line-height: 13px; }
+#${OVERLAY_ID} .hvb-kv { display: flex; justify-content: space-between; gap: 6px; min-height: 14px; align-items: center; }
+#${OVERLAY_ID} .hvb-rates { margin-top: auto; color: var(--hbk-text-dim); font-size: 10px; line-height: 12px; white-space: normal; }
+#${OVERLAY_ID} .hvb-list { min-width: 0; min-height: 0; overflow-y: auto; }
+#${OVERLAY_ID} .hvb-actions {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px;
 }
-#${OVERLAY_ID} .hvb-queue-name {
-  color: var(--hb-text-cream-bright);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-#${OVERLAY_ID} .hvb-queue-qty {
-  width: 38px; padding: 0 3px;
-  background: var(--hb-overlay-dark-deep);
-  color: var(--hb-text-cream);
-  border: 1px solid var(--hb-border-brass-dim);
-  font-family: inherit; font-size: 10px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-#${OVERLAY_ID} .hvb-queue-price {
-  color: var(--hb-text-gold);
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-#${OVERLAY_ID} .hvb-queue-remove {
-  background: transparent;
-  border: 0; color: #c66;
-  font-size: 14px; cursor: pointer;
-  padding: 0; line-height: 1;
-}
-#${OVERLAY_ID} .hvb-queue-remove:hover { color: #f44; }
-#${OVERLAY_ID} .hvb-queue-empty {
-  padding: 4px; text-align: center;
-  color: var(--hb-text-muted-3); font-style: italic;
-  font-size: 10px;
-}
-/* Queue footer — element 0x100000C6/CF (710×16 at 10,63). */
-#${OVERLAY_ID} .hvb-queue-footer {
-  position: absolute;
-  left: 10px; top: 63px;
-  width: 710px; height: 16px;
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-queue-total {
-  color: var(--hb-text-gold);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  margin-right: auto;
-}
-
-/* Sell drop zone — sits at the top-left of the selling pane, mapping
-   into the queue list area. Visual cue when an inventory item is being
-   dragged over the panel. */
-#${OVERLAY_ID} .hvb-sell-drop {
-  position: absolute;
-  left: 10px; top: 30px;
-  width: 710px; height: 32px;
-  border: 1px dashed var(--hb-border-brass-dim);
-  background: rgba(0,0,0,.2);
-  text-align: center;
-  line-height: 30px;
-  color: var(--hb-text-muted-3); font-size: 9px;
-  font-style: italic;
-  transition: all 120ms;
+#${OVERLAY_ID} .hvb-actions .hbk-btn { min-width: 0; padding: 0 4px; }
+#${OVERLAY_ID} .hvb-actions .hbk-btn-small { min-width: 0; }
+#${OVERLAY_ID} .hvb-qty { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+#${OVERLAY_ID} .hvb-qty input { width: 46px; min-height: 18px; padding: 0 4px; text-align: right; font-size: 11px; }
+#${OVERLAY_ID} .hvb-cell.is-selected > .hbk-slot::after {
+  content: ""; position: absolute; inset: 0;
+  background: url("./data/ui-sprites/0x06004D09.png") center / 100% 100% no-repeat;
   pointer-events: none;
-  z-index: 1;
-  box-sizing: border-box;
 }
-#${OVERLAY_ID}.hvb-drag-over .hvb-sell-drop {
-  background: rgba(120,200,120,.2);
-  border-color: var(--hb-text-gold);
-  color: var(--hb-text-cream); font-style: normal; font-weight: 600;
-}
-
-/* Rates strip — element 0x100000BE (710×16 at 10,63). */
-#${OVERLAY_ID} .hvb-rates {
-  position: absolute;
-  left: 10px; top: 63px;
-  width: 710px; height: 16px;
-  font-size: 10px;
-  color: var(--hb-text-muted-2);
-  letter-spacing: .02em;
-  line-height: 16px;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-rates b { color: var(--hb-text-gold-dim); font-weight: 600; }
-/* Total / Sub-total labels on Buying/Selling panes — elements
-   0x100000CB/CC + 0x100000D4/D5 (65×14 at 4,1 / 4,15). */
-#${OVERLAY_ID} .hvb-total-lbl,
-#${OVERLAY_ID} .hvb-sub-lbl {
-  position: absolute;
-  left: 4px;
-  width: 65px; height: 14px;
-  font-size: 9px;
-  color: var(--hb-text-muted-2);
-  letter-spacing: .02em;
-  line-height: 14px;
-  box-sizing: border-box;
-}
-#${OVERLAY_ID} .hvb-total-lbl { top: 1px; }
-#${OVERLAY_ID} .hvb-sub-lbl   { top: 15px; }
-
-/* Toast */
-#${OVERLAY_ID} .hvb-toast {
-  position: absolute;
-  top: -22px; left: 50%; transform: translateX(-50%);
-  padding: 3px 10px;
-  background: rgba(40,90,40,.95);
-  color: var(--hb-text-cream);
-  border: 1px solid #6a9a4a;
-  border-radius: 3px;
-  font-size: 10px;
-  pointer-events: none;
-  animation: hvb-toast 1700ms ease-out forwards;
-}
-#${OVERLAY_ID} .hvb-toast.err {
-  background: rgba(120,40,40,.95);
-  border-color: #c06060;
-}
-@keyframes hvb-toast {
-  0%   { opacity: 0; transform: translate(-50%, 4px); }
-  15%  { opacity: 1; transform: translate(-50%, 0); }
-  85%  { opacity: 1; transform: translate(-50%, 0); }
-  100% { opacity: 0; transform: translate(-50%, -8px); }
-}
-  `;
+#${OVERLAY_ID} .hvb-row { gap: 5px; min-height: 26px; }
+#${OVERLAY_ID} .hvb-row .hbk-slot { width: 24px; height: 24px; flex: 0 0 24px; }
+#${OVERLAY_ID} .hvb-row input.hbk-input { width: 50px; min-height: 18px; padding: 0 4px; text-align: right; font-size: 11px; }
+#${OVERLAY_ID} .hvb-row .hvb-row-price { flex: 0 0 68px; text-align: right; overflow: hidden; }
+#${OVERLAY_ID} .hvb-row .hbk-icon-btn { width: 18px; height: 18px; font-size: 12px; line-height: 1; }
+#${OVERLAY_ID} .hvb-empty { padding: 14px 10px; }
+`;
   document.head.appendChild(style);
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Singleton state (one vendor bar overlay per page)
+// Singleton state (one vendor window per page)
 // ─────────────────────────────────────────────────────────────────
 
 let state = {
   overlayEl: null,
+  win: null,
+  refs: null,
   vendorState: null,         // snapshot from getVendorState
   currentTab: "items",
   selectedItemGuid: null,
   categoryFilter: "all",
+  qty: 1,
+  gridKey: "",
   buyQueue: [],              // [{ itemGuid, name, value, amount, iconId, itemType, stackSize, wcid }]
-  sellQueue: [],             // [{ itemGuid, name, value, amount, iconId, itemType, stackSize, wcid }]
+  sellQueue: [],             // same shape, inventory items
   rangeCheckTimer: null,     // HUD rec #18 — 2Hz approach-distance watchdog
 };
 
-function setItemIcon(iconEl, item) {
-  iconEl.textContent = emojiForItemType(item.itemType);
-  if (!item.iconId) return;
-  fetchIconDataUrl(item.iconId).then((url) => {
-    if (!url || !iconEl.isConnected) return;
-    // Glyph only — the strip cell's stack-count badge is appended by the
-    // caller after this promise is created and must survive it.
-    clearPlaceholderGlyph(iconEl);
-    const img = document.createElement("img");
-    img.src = url;
-    img.alt = item.name || "";
-    iconEl.appendChild(img);
-  });
-}
-
 function toast(text, kind = "ok") {
-  if (!state.overlayEl) return;
-  const t = document.createElement("div");
-  t.className = "hvb-toast" + (kind === "err" ? " err" : "");
-  t.textContent = text;
-  state.overlayEl.appendChild(t);
-  setTimeout(() => t.remove(), 1750);
+  state.win?.toast?.(text, kind);
+}
+
+function currencyInfo() {
+  const vs = state.vendorState;
+  const alt = (vs?.alternateCurrencyWcid >>> 0) || 0;
+  const inv = inventoryRows();
+  if (alt) {
+    return {
+      balance: countCurrency(inv, alt),
+      unit: vs.alternateCurrencyName || "tokens",
+      short: vs.alternateCurrencyName || "tokens",
+      alt: true,
+    };
+  }
+  // Retail gmVendorUI::UpdateTotalValue reads PlayerDesc InqInt 0x14
+  // (CoinValue); summing the pyreal stacks gives the same number.
+  return { balance: countCurrency(inv, PYREAL_WCID), unit: "pyreals", short: "p", alt: false };
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Build the overlay DOM once
+// Build the window DOM once
 // ─────────────────────────────────────────────────────────────────
+
+function el(tag, cls, parent) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (parent) parent.appendChild(e);
+  return e;
+}
 
 function buildOverlay() {
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
+  ensureStyles();
+  const win = createKitWindow({
+    id: OVERLAY_ID,
+    title: "Vendor",
+    windowId: COMMERCE_WINDOW_ID.VENDOR,
+    // Docked bottom-left above the chat (410×100 @ bottom 8) and the
+    // toolbar (310×132 @ bottom 8): clear of both, and clear of the
+    // 300-px main panel on the right.
+    defaultPos: {
+      left: "8px", top: "auto", right: "auto",
+      // 148 px clears the toolbar; shrinks toward the bottom edge when the
+      // HUD viewport is too short to fit the 192-px strip above it.
+      bottom: `max(4px, min(148px, calc(100 * var(--hb-hud-vh, 1vh) - 200px)))`,
+    },
+    className: "hb-vendor",
+    onHide: () => onHidden(),
+  });
+  state.win = win;
+  const overlay = win.root;
+  const body = win.body;
 
-  // Top strip background (0x1000008D, 800×20 at 0,0). Behind tabs.
-  const topStrip = document.createElement("div");
-  topStrip.className = "hvb-top-strip";
-  overlay.appendChild(topStrip);
-
-  // Tabs — Items / Buying / Selling. CSS defaults pin them at the
-  // retail (0/92/184, 0) offsets; applyVendorLayout re-asserts.
+  // Tab strip — retail TabBackground 0x06005F10 is the kit tab-strip
+  // background; tabs are Items / Buying / Selling like retail.
+  const tabs = el("div", "hbk-tabs hvb-tabs", body);
+  tabs.setAttribute("role", "tablist");
   const tabEls = {};
-  for (const t of [
-    { id: "items",   label: "Items"   },
-    { id: "buying",  label: "Buying"  },
-    { id: "selling", label: "Selling" },
-  ]) {
-    const b = document.createElement("button");
+  for (const t of [{ id: "items", label: "Items" }, { id: "buying", label: "Buying" }, { id: "selling", label: "Selling" }]) {
+    const b = el("button", "hbk-tab", tabs);
     b.type = "button";
-    b.className = "hvb-tab" + (t.id === "items" ? " active" : "");
     b.dataset.tab = t.id;
-    setAcText(b, t.label, { color: t.id === "items" ? "#f0c87c" : "#f0d8a0" });
+    b.setAttribute("role", "tab");
+    setAcText(b, t.label, { color: KIT_COLOR.text });
     b.addEventListener("click", () => switchTab(t.id));
-    overlay.appendChild(b);
     tabEls[t.id] = b;
   }
+  const purse = el("div", "hvb-purse", tabs);
+  purse.title = "Your money";
 
-  // Close X — sits at (776, 0). Vendor name is conveyed by the active
-  // tab + the selected-name field; no separate title bar (retail
-  // doesn't have one).
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "hvb-close";
-  closeBtn.title = "Close (Esc)";
-  closeBtn.textContent = "x";
-  closeBtn.addEventListener("click", hideOverlay);
-  overlay.appendChild(closeBtn);
+  const main = el("div", "hvb-main", body);
+  const info = el("div", "hvb-info", main);
+  const list = el("div", "hvb-list hbk-scroll hb-cw-drop", main);
+  const actions = el("div", "hvb-actions", main);
 
-  // Body — hosts the 3 panes. Each pane is absolute-positioned at
-  // (0,0) inside the body so layout-driven child positions land
-  // relative to the pane origin (which is the retail layout's
-  // pane origin).
-  const body = document.createElement("div");
-  body.className = "hvb-body";
-
-  // ── Items pane ──────────────────────────────────────────────────
-  // Build DOM imperatively so we can stash refs for applyVendorLayout.
-  const itemsPane = document.createElement("div");
-  itemsPane.className = "hvb-pane hvb-pane-items active";
-  itemsPane.dataset.pane = "items";
-
-  // P3-45 — UIElement_Menu port. The native <select> is kept (hidden)
-  // so applyVendorLayout's positioning still works on the underlying
-  // ref. A custom dropdown panel renders on top of it with retail-style
-  // brass chrome. Keyboard accessible via Tab + Enter + arrow keys.
-  const itemsCat = document.createElement("select");
-  itemsCat.className = "hvb-category";
+  // Category filter — kit-styled native <select> (popup renders at OS
+  // scale, no zoom maths). Hidden on the Buying / Selling pages.
+  const cat = el("select", "hbk-select hvb-category");
   for (const c of CATEGORY_TABLE) {
     const opt = document.createElement("option");
-    opt.value = c.id; opt.textContent = c.label;
-    itemsCat.appendChild(opt);
+    opt.value = c.id;
+    opt.textContent = c.label;
+    cat.appendChild(opt);
   }
-  itemsCat.addEventListener("change", (e) => {
+  cat.addEventListener("change", (e) => {
     state.categoryFilter = e.target.value;
     state.selectedItemGuid = null;
-    syncMenuFromSelect();
     render();
   });
-  itemsPane.appendChild(itemsCat);
-
-  // Custom menu button + dropdown panel.
-  const menuBtn = document.createElement("div");
-  menuBtn.className = "hvb-menu";
-  menuBtn.setAttribute("role", "combobox");
-  menuBtn.setAttribute("aria-haspopup", "listbox");
-  menuBtn.setAttribute("aria-expanded", "false");
-  menuBtn.setAttribute("tabindex", "0");
-  const menuLabel = document.createElement("span");
-  menuLabel.className = "hvb-menu-label";
-  menuBtn.appendChild(menuLabel);
-  const menuChevron = document.createElement("span");
-  menuChevron.className = "hvb-menu-chevron";
-  menuChevron.textContent = "▾";
-  menuBtn.appendChild(menuChevron);
-  itemsPane.appendChild(menuBtn);
-
-  const menuPanel = document.createElement("div");
-  menuPanel.className = "hvb-menu-panel";
-  menuPanel.setAttribute("role", "listbox");
-  for (const c of CATEGORY_TABLE) {
-    const item = document.createElement("div");
-    item.className = "hvb-menu-item";
-    item.dataset.value = c.id;
-    item.setAttribute("role", "option");
-    setAcText(item, c.label);
-    item.addEventListener("click", () => {
-      itemsCat.value = c.id;
-      itemsCat.dispatchEvent(new Event("change", { bubbles: true }));
-      closeMenu();
-      menuBtn.focus();
-    });
-    menuPanel.appendChild(item);
-  }
-  itemsPane.appendChild(menuPanel);
-
-  let menuFocusIdx = 0;
-  // Rows for categories this vendor doesn't stock are hidden by
-  // syncCategoryMenuToStock(); keyboard nav must skip them or ArrowDown
-  // walks onto invisible entries.
-  function visibleMenuItems() {
-    return Array.from(menuPanel.querySelectorAll(".hvb-menu-item"))
-      .filter((el) => el.style.display !== "none");
-  }
-  function syncMenuFromSelect() {
-    const v = itemsCat.value;
-    const found = CATEGORY_TABLE.find((c) => c.id === v) ?? CATEGORY_TABLE[0];
-    setAcText(menuLabel, found.label);
-    const items = menuPanel.querySelectorAll(".hvb-menu-item");
-    items.forEach((el) => {
-      const selected = el.dataset.value === v;
-      el.dataset.selected = selected ? "1" : "0";
-    });
-  }
-  function openMenu() {
-    menuPanel.dataset.open = "1";
-    menuBtn.setAttribute("aria-expanded", "true");
-    // Move focus to the currently selected option.
-    const items = visibleMenuItems();
-    menuFocusIdx = Math.max(0, items.findIndex((el) => el.dataset.selected === "1"));
-    updateFocusVisible(items);
-    items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
-    document.addEventListener("mousedown", onDocMouseDown, true);
-  }
-  function closeMenu() {
-    menuPanel.dataset.open = "0";
-    menuBtn.setAttribute("aria-expanded", "false");
-    document.removeEventListener("mousedown", onDocMouseDown, true);
-  }
-  function updateFocusVisible(items) {
-    items.forEach((el, i) => {
-      el.dataset.focused = i === menuFocusIdx ? "1" : "0";
-    });
-  }
-  function onDocMouseDown(ev) {
-    if (!menuPanel.contains(ev.target) && !menuBtn.contains(ev.target)) {
-      closeMenu();
-    }
-  }
-  menuBtn.addEventListener("click", () => {
-    if (menuPanel.dataset.open === "1") closeMenu();
-    else openMenu();
+  cat.addEventListener("keydown", (ev) => {
+    // Esc while the dropdown has focus just blurs it; the window-stack
+    // handler sees the Esc next time.
+    if (ev.key === "Escape") { ev.stopPropagation(); cat.blur(); }
   });
-  menuBtn.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" || ev.key === " " || ev.key === "ArrowDown") {
-      ev.preventDefault();
-      if (menuPanel.dataset.open !== "1") openMenu();
-    } else if (ev.key === "Escape" && menuPanel.dataset.open === "1") {
-      closeMenu();
-    }
+
+  // Quantity for the Items page (retail stack slider).
+  const qtyWrap = el("label", "hvb-qty");
+  const qtyLbl = el("span", "hbk-muted", qtyWrap);
+  setAcText(qtyLbl, "Qty", { color: KIT_COLOR.dim });
+  const qtyInput = el("input", "hbk-input", qtyWrap);
+  qtyInput.type = "number";
+  qtyInput.min = "1";
+  qtyInput.max = String(MAX_QTY);
+  qtyInput.value = "1";
+  qtyInput.addEventListener("input", () => {
+    state.qty = clampQty(qtyInput.value);
+    renderInfo();
   });
-  menuPanel.addEventListener("keydown", (ev) => {
-    const items = visibleMenuItems();
-    if (ev.key === "ArrowDown") {
-      ev.preventDefault();
-      menuFocusIdx = Math.min(items.length - 1, menuFocusIdx + 1);
-      updateFocusVisible(items);
-      items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
-    } else if (ev.key === "ArrowUp") {
-      ev.preventDefault();
-      menuFocusIdx = Math.max(0, menuFocusIdx - 1);
-      updateFocusVisible(items);
-      items[menuFocusIdx]?.scrollIntoView?.({ block: "nearest" });
-    } else if (ev.key === "Enter" || ev.key === " ") {
-      ev.preventDefault();
-      items[menuFocusIdx]?.click();
-    } else if (ev.key === "Escape") {
-      ev.preventDefault();
-      closeMenu();
-      menuBtn.focus();
-    }
-  });
-  // Keyboard nav while the button is focused: ArrowDown opens; if the
-  // panel is open and the user presses ArrowDown again, hand focus to
-  // the panel so the keydown handler above takes over.
-  menuPanel.setAttribute("tabindex", "-1");
-  menuBtn.addEventListener("keydown", (ev) => {
-    if (menuPanel.dataset.open === "1" && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
-      menuPanel.focus();
-    }
-  });
-  syncMenuFromSelect();
+  qtyInput.addEventListener("change", () => { qtyInput.value = String(state.qty); });
 
-  const itemsName = document.createElement("div");
-  itemsName.className = "hvb-selected-name";
-  setAcText(itemsName, "— select an item —", { color: "#f0c87c" });
-  itemsPane.appendChild(itemsName);
-
-  const itemsPrice = document.createElement("div");
-  itemsPrice.className = "hvb-selected-price";
-  itemsPane.appendChild(itemsPrice);
-
-  const itemsStrip = document.createElement("div");
-  itemsStrip.className = "hvb-icon-strip";
-  itemsPane.appendChild(itemsStrip);
-
-  const itemsRates = document.createElement("div");
-  itemsRates.className = "hvb-rates";
-  itemsPane.appendChild(itemsRates);
-
-  // Items-pane action buttons (Buy + Add to List).
-  const itemsBuyBtn = document.createElement("button");
-  itemsBuyBtn.type = "button";
-  itemsBuyBtn.className = "hvb-btn hvb-btn-buy";
-  itemsBuyBtn.dataset.slot = "top";
-  itemsBuyBtn.disabled = true;
-  setAcText(itemsBuyBtn, "Buy", { color: "#f0d8a0" });
-  itemsBuyBtn.addEventListener("click", handleBuyInstant);
-  itemsPane.appendChild(itemsBuyBtn);
-
-  const itemsAddBtn = document.createElement("button");
-  itemsAddBtn.type = "button";
-  itemsAddBtn.className = "hvb-btn hvb-btn-add";
-  itemsAddBtn.dataset.slot = "bottom";
-  itemsAddBtn.disabled = true;
-  setAcText(itemsAddBtn, "Add to List", { color: "#f0d8a0" });
-  itemsAddBtn.addEventListener("click", handleAddToBuying);
-  itemsPane.appendChild(itemsAddBtn);
-
-  body.appendChild(itemsPane);
-
-  // ── Buying pane ─────────────────────────────────────────────────
-  const buyingPane = document.createElement("div");
-  buyingPane.className = "hvb-pane hvb-pane-buying";
-  buyingPane.dataset.pane = "buying";
-
-  const buyingTotalLbl = document.createElement("div");
-  buyingTotalLbl.className = "hvb-total-lbl";
-  setAcText(buyingTotalLbl, "Total", { color: "#a89870" });
-  buyingPane.appendChild(buyingTotalLbl);
-
-  const buyingSubLbl = document.createElement("div");
-  buyingSubLbl.className = "hvb-sub-lbl";
-  setAcText(buyingSubLbl, "Sub", { color: "#a89870" });
-  buyingPane.appendChild(buyingSubLbl);
-
-  const buyingName = document.createElement("div");
-  buyingName.className = "hvb-selected-name";
-  buyingPane.appendChild(buyingName);
-
-  const buyingPrice = document.createElement("div");
-  buyingPrice.className = "hvb-selected-price";
-  buyingPane.appendChild(buyingPrice);
-
-  const buyingList = document.createElement("div");
-  buyingList.className = "hvb-queue-list";
-  buyingPane.appendChild(buyingList);
-
-  const buyingFooter = document.createElement("div");
-  buyingFooter.className = "hvb-queue-footer";
-  const buyingTotal = document.createElement("span");
-  buyingTotal.className = "hvb-queue-total";
-  setAcText(buyingTotal, "Cost: 0 p", { color: "#f0c87c" });
-  buyingFooter.appendChild(buyingTotal);
-  buyingPane.appendChild(buyingFooter);
-
-  const buyingConfirmBtn = document.createElement("button");
-  buyingConfirmBtn.type = "button";
-  buyingConfirmBtn.className = "hvb-btn hvb-btn-confirm-buy";
-  buyingConfirmBtn.dataset.slot = "top";
-  buyingConfirmBtn.disabled = true;
-  setAcText(buyingConfirmBtn, "Confirm", { color: "#f0d8a0" });
-  buyingConfirmBtn.addEventListener("click", handleConfirmBuy);
-  buyingPane.appendChild(buyingConfirmBtn);
-
-  const buyingClearBtn = document.createElement("button");
-  buyingClearBtn.type = "button";
-  buyingClearBtn.className = "hvb-btn hvb-btn-clear-buy";
-  buyingClearBtn.dataset.slot = "bottom";
-  buyingClearBtn.disabled = true;
-  setAcText(buyingClearBtn, "Clear", { color: "#f0d8a0" });
-  buyingClearBtn.addEventListener("click", () => {
-    state.buyQueue = []; render();
-  });
-  buyingPane.appendChild(buyingClearBtn);
-
-  body.appendChild(buyingPane);
-
-  // ── Selling pane ────────────────────────────────────────────────
-  const sellingPane = document.createElement("div");
-  sellingPane.className = "hvb-pane hvb-pane-selling";
-  sellingPane.dataset.pane = "selling";
-
-  const sellingTotalLbl = document.createElement("div");
-  sellingTotalLbl.className = "hvb-total-lbl";
-  setAcText(sellingTotalLbl, "Total", { color: "#a89870" });
-  sellingPane.appendChild(sellingTotalLbl);
-
-  const sellingSubLbl = document.createElement("div");
-  sellingSubLbl.className = "hvb-sub-lbl";
-  setAcText(sellingSubLbl, "Sub", { color: "#a89870" });
-  sellingPane.appendChild(sellingSubLbl);
-
-  const sellingName = document.createElement("div");
-  sellingName.className = "hvb-selected-name";
-  sellingPane.appendChild(sellingName);
-
-  const sellingPrice = document.createElement("div");
-  sellingPrice.className = "hvb-selected-price";
-  sellingPane.appendChild(sellingPrice);
-
-  // Drop-zone hint (visible only when dragging). Sits OVER the queue
-  // list but pointer-events: none so it never blocks pointer activity.
-  const sellingDrop = document.createElement("div");
-  sellingDrop.className = "hvb-sell-drop";
-  setAcText(sellingDrop, "Drag inventory items here to sell", { color: "#807868" });
-  sellingPane.appendChild(sellingDrop);
-
-  const sellingList = document.createElement("div");
-  sellingList.className = "hvb-queue-list";
-  sellingPane.appendChild(sellingList);
-
-  const sellingFooter = document.createElement("div");
-  sellingFooter.className = "hvb-queue-footer";
-  const sellingTotal = document.createElement("span");
-  sellingTotal.className = "hvb-queue-total";
-  setAcText(sellingTotal, "Credit: 0 p", { color: "#f0c87c" });
-  sellingFooter.appendChild(sellingTotal);
-  sellingPane.appendChild(sellingFooter);
-
-  const sellingConfirmBtn = document.createElement("button");
-  sellingConfirmBtn.type = "button";
-  sellingConfirmBtn.className = "hvb-btn hvb-btn-confirm-sell";
-  sellingConfirmBtn.dataset.slot = "top";
-  sellingConfirmBtn.disabled = true;
-  setAcText(sellingConfirmBtn, "Confirm", { color: "#f0d8a0" });
-  sellingConfirmBtn.addEventListener("click", handleConfirmSell);
-  sellingPane.appendChild(sellingConfirmBtn);
-
-  const sellingClearBtn = document.createElement("button");
-  sellingClearBtn.type = "button";
-  sellingClearBtn.className = "hvb-btn hvb-btn-clear-sell";
-  sellingClearBtn.dataset.slot = "bottom";
-  sellingClearBtn.disabled = true;
-  setAcText(sellingClearBtn, "Clear", { color: "#f0d8a0" });
-  sellingClearBtn.addEventListener("click", () => {
-    state.sellQueue = []; render();
-  });
-  sellingPane.appendChild(sellingClearBtn);
-
-  body.appendChild(sellingPane);
-  overlay.appendChild(body);
-  document.body.appendChild(overlay);
-
-  // Stash a complete element-ref bundle on the overlay so
-  // applyVendorLayout() can walk them at render time. Lifetime mirrors
-  // the singleton state.overlayEl.
-  state.refs = {
-    tabs: tabEls,
-    closeBtn,
-    topStrip,
-    body,
-    panes: { items: itemsPane, buying: buyingPane, selling: sellingPane },
-    items: {
-      pane:    itemsPane,
-      cat:     itemsCat,
-      menu:    menuBtn,
-      menuPanel,
-      syncMenu: syncMenuFromSelect,
-      name:    itemsName,
-      price:   itemsPrice,
-      strip:   itemsStrip,
-      rates:   itemsRates,
-      buyBtn:  itemsBuyBtn,
-      addBtn:  itemsAddBtn,
-    },
-    buying: {
-      pane:       buyingPane,
-      list:       buyingList,
-      footer:     buyingFooter,
-      name:       buyingName,
-      price:      buyingPrice,
-      confirmBtn: buyingConfirmBtn,
-      clearBtn:   buyingClearBtn,
-      totalLbl:   buyingTotalLbl,
-      subLbl:     buyingSubLbl,
-    },
-    selling: {
-      pane:       sellingPane,
-      list:       sellingList,
-      footer:     sellingFooter,
-      name:       sellingName,
-      price:      sellingPrice,
-      confirmBtn: sellingConfirmBtn,
-      clearBtn:   sellingClearBtn,
-      totalLbl:   sellingTotalLbl,
-      subLbl:     sellingSubLbl,
-    },
+  const btn = {
+    buy: kitButton("Buy", "hbk-btn", handleBuyInstant),
+    add: kitButton("Add to List", "hbk-btn", handleAddToBuying),
+    buyAll: kitButton("Buy All", "hbk-btn", handleConfirmBuy),
+    sellAll: kitButton("Sell All", "hbk-btn", handleConfirmSell),
+    clearBuy: kitButton("Clear List", "hbk-btn-small", () => { state.buyQueue = []; render(); }),
+    clearSell: kitButton("Clear List", "hbk-btn-small hbk-brown", () => { state.sellQueue = []; render(); }),
   };
+  btn.buy.title = "Buy now (double-click an item does the same)";
+  btn.add.title = "Add to your buying list";
 
-  // Drag-drop for Sell — accepts inventory drags from inventory.js.
-  overlay.addEventListener("dragenter", onDragEnter);
-  overlay.addEventListener("dragover", onDragOver);
-  overlay.addEventListener("dragleave", onDragLeave);
-  overlay.addEventListener("drop", onDrop);
+  // Drag-to-sell anywhere on the window (retail VendorSellUI drop).
+  wireDropTarget(overlay, DropItemFlags.VENDOR, (guid) => stageSell(guid));
+  // Sub-highlight the list well too so the target reads clearly.
+  wireDropTarget(list, DropItemFlags.VENDOR, (guid) => stageSell(guid));
 
-  // Esc to close.
-  document.addEventListener("keydown", onKeyDown);
-
-  // Apply retail layout. vendor-ui opens on a VendorOpened server event
-  // — wasm is guaranteed ready by then, so no retry loop (unlike
-  // mountBar-loaded plugins). Falls through to CSS defaults if the
-  // layout fetch fails.
-  applyVendorLayout(state.refs);
-
+  state.refs = { tabs: tabEls, purse, info, list, actions, cat, qtyWrap, qtyInput, btn };
   return overlay;
 }
 
-/**
- * Apply gmVendorUI 0x21000012 layout to every wirable element in the
- * vendor bar. Mirrors applyRadarLayout / applyInventoryLayout.
- *
- * Layout coordinates are relative to:
- *   - The overlay root for top-strip, close, tabs.
- *   - The pane root for each pane's children (the pane itself is at
- *     (0, 20) of the outer panel = (0, 0) of the body).
- *
- * Because the pane's own (0, 20) translation is baked into CSS via
- * the .hvb-body container's `top: 20px`, layout-driven children of
- * the pane land at the same screen position they would with the
- * retail panel.
- */
-function applyVendorLayout(refs) {
-  const apply = (layout) => {
-    if (!layout) return;
-    let applied = 0;
-    // Top-level pairs: positioned relative to the overlay root.
-    const topPairs = [
-      [VENDOR_ELEMS.topStrip,   refs.topStrip],
-      [VENDOR_ELEMS.closeBtn,   refs.closeBtn],
-      [VENDOR_ELEMS.tabItems,   refs.tabs.items],
-      [VENDOR_ELEMS.tabBuying,  refs.tabs.buying],
-      [VENDOR_ELEMS.tabSelling, refs.tabs.selling],
-    ];
-    for (const [id, el] of topPairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      applyBox(el, desc);
-      applied += 1;
-    }
-    // Items pane + 7 children. Pane itself anchors at (0, 20) of the
-    // outer panel — but we host the panes inside .hvb-body which is
-    // already at (0, 20). So we DON'T re-apply pane x/y/w/h —
-    // applyBox would clobber the CSS that pins the pane at (0,0)
-    // inside .hvb-body. Layout x/y on pane children is taken at face
-    // value (relative to the pane), which matches our absolute-
-    // positioned children.
-    const itemsPairs = [
-      [VENDOR_ELEMS.itemsCat,    refs.items.cat],
-      [VENDOR_ELEMS.itemsName,   refs.items.name],
-      [VENDOR_ELEMS.itemsPrice,  refs.items.price],
-      [VENDOR_ELEMS.itemsStrip,  refs.items.strip],
-      [VENDOR_ELEMS.itemsRates,  refs.items.rates],
-      [VENDOR_ELEMS.itemsBuyBtn, refs.items.buyBtn],
-      [VENDOR_ELEMS.itemsAddBtn, refs.items.addBtn],
-    ];
-    for (const [id, el] of itemsPairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      applyBox(el, desc);
-      applied += 1;
-      // P3-45 — keep the menu button (UIElement_Menu port) in sync with
-      // the hidden <select>'s layout position so the brass dropdown
-      // tracks any retail layout overrides.
-      if (id === VENDOR_ELEMS.itemsCat && refs.items.menu) {
-        applyBox(refs.items.menu, desc);
-        if (refs.items.menuPanel) {
-          if (typeof desc.x === "number") refs.items.menuPanel.style.left = `${desc.x}px`;
-          if (typeof desc.y === "number" && typeof desc.height === "number") {
-            refs.items.menuPanel.style.top = `${desc.y + desc.height}px`;
-          }
-          if (typeof desc.width === "number") refs.items.menuPanel.style.width = `${desc.width}px`;
-        }
-      }
-    }
-    // Buying pane children.
-    const buyingPairs = [
-      [VENDOR_ELEMS.buyingList,        refs.buying.list],
-      [VENDOR_ELEMS.buyingFooter,      refs.buying.footer],
-      [VENDOR_ELEMS.buyingName,        refs.buying.name],
-      [VENDOR_ELEMS.buyingPrice,       refs.buying.price],
-      [VENDOR_ELEMS.buyingConfirmBtn,  refs.buying.confirmBtn],
-      [VENDOR_ELEMS.buyingClearBtn,    refs.buying.clearBtn],
-      [VENDOR_ELEMS.buyingTotalLbl,    refs.buying.totalLbl],
-      [VENDOR_ELEMS.buyingSubLbl,      refs.buying.subLbl],
-    ];
-    for (const [id, el] of buyingPairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      applyBox(el, desc);
-      applied += 1;
-    }
-    // Selling pane children.
-    const sellingPairs = [
-      [VENDOR_ELEMS.sellingList,        refs.selling.list],
-      [VENDOR_ELEMS.sellingFooter,      refs.selling.footer],
-      [VENDOR_ELEMS.sellingName,        refs.selling.name],
-      [VENDOR_ELEMS.sellingPrice,       refs.selling.price],
-      [VENDOR_ELEMS.sellingConfirmBtn,  refs.selling.confirmBtn],
-      [VENDOR_ELEMS.sellingClearBtn,    refs.selling.clearBtn],
-      [VENDOR_ELEMS.sellingTotalLbl,    refs.selling.totalLbl],
-      [VENDOR_ELEMS.sellingSubLbl,      refs.selling.subLbl],
-    ];
-    for (const [id, el] of sellingPairs) {
-      if (!el) continue;
-      const desc = findElementById(layout, id);
-      if (!desc) continue;
-      applyBox(el, desc);
-      applied += 1;
-    }
-    try {
-      window.__diag?.layout?.onVendorApplied?.({ applied });
-    } catch (_) {}
-  };
-  const cached = getCachedLayout(VENDOR_LAYOUT_ID);
-  if (cached) { apply(cached); return; }
-  loadLayout(VENDOR_LAYOUT_ID).then(apply).catch(() => {});
-}
-
-// Apply a LayoutDesc Element's geometry to a DOM element. Clears
-// CSS `right`/`bottom` anchors so explicit left/top wins, and uses
-// `transform: none` to defeat any centering translates in the
-// underlying CSS rule. box-sizing on the target element is set to
-// border-box upstream so the layout's width/height land cleanly.
-function applyBox(el, layoutEl) {
-  el.style.right = "";
-  el.style.bottom = "";
-  // Defeat any CSS-rule transforms that would offset the element.
-  el.style.transform = "none";
-  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
-  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
-  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
-  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
-}
-
-function onKeyDown(ev) {
-  if (state.overlayEl?.dataset.open !== "1") return;
-  const binding = resolveLocalBinding(LOCAL_ACTION_IDS.CLOSE, "Escape");
-  if (matchesBinding(ev, binding)) hideOverlay();
-}
-
-// Wave D (2026-06-06): accept BOTH the legacy text/x-hb-item-guid
-// and the polymorphic application/x-hb-inv-guid mimes so the bag-tab
-// drag surfaces dual-mime'd in inventory.js + index.html route here.
-// Rec #161 (2026-06-16): MIME table moved into ./drop_item_flags.js
-// (DropItemFlags.VENDOR) — local wrapper kept for the existing call
-// sites in this module so the diff stays bounded.
-function _hasInvMime(dt) {
-  return isDropAccepted(dt?.types, DropItemFlags.VENDOR);
-}
-function onDragEnter(ev) {
-  if (_hasInvMime(ev.dataTransfer)) {
-    ev.preventDefault();
-    state.overlayEl.classList.add("hvb-drag-over");
-  }
-}
-function onDragOver(ev) {
-  if (_hasInvMime(ev.dataTransfer)) {
-    ev.preventDefault();
-    // Sources now uniformly set effectAllowed='move' (legacy <li> +
-    // polymorphic items-grid + container-panel). Per WHATWG drag-drop
-    // spec, dropEffect='copy' is incompatible with effectAllowed='move'
-    // and the operation gets cancelled — the user sees a not-allowed
-    // cursor and drop never fires. Match the source intent.
-    ev.dataTransfer.dropEffect = "move";
-  }
-}
-function onDragLeave(ev) {
-  if (ev.target === state.overlayEl) state.overlayEl.classList.remove("hvb-drag-over");
-}
-function onDrop(ev) {
-  state.overlayEl.classList.remove("hvb-drag-over");
-  const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid")
-    || ev.dataTransfer?.getData("text/x-hb-item-guid");
-  if (!guidStr) return;
-  ev.preventDefault();
-  const guid = parseInt(guidStr, 10) >>> 0;
-  if (!guid) return;
-  // Pull item details from the live wasm inventory snapshot.
-  const handle = window.__sessionHandle;
-  const inv = handle?.playerInventory?.() || [];
-  const item = inv.find((i) => (i.guid >>> 0) === guid);
-  if (!item) {
-    toast(`drop: item 0x${guid.toString(16)} not in inventory`, "err");
-    return;
-  }
-  // Wave D (2026-06-06): ACE rejects sells of equipped items
-  // (Player_Commerce.cs disallows the wire); reject client-side so the
-  // staging queue stays clean. Flash the drop zone red + toast the user.
-  if ((item.equipMask >>> 0) !== 0) {
-    state.overlayEl.querySelector?.(".hvb-sell-drop")?.classList?.add?.("hb-server-rejected");
-    setTimeout(() => {
-      state.overlayEl?.querySelector?.(".hvb-sell-drop")?.classList?.remove?.("hb-server-rejected");
-    }, 400);
-    toast(`Unequip "${item.name}" first`, "err");
-    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
-    return;
-  }
-  // Switch to Selling tab and stage the item.
-  state.currentTab = "selling";
-  const existing = state.sellQueue.find((q) => q.itemGuid === guid);
-  if (existing) {
-    existing.amount = Math.min(existing.amount + 1, item.stackSize || 1);
-  } else {
-    state.sellQueue.push({
-      itemGuid: guid,
-      wcid: item.wcid,
-      name: item.name,
-      value: item.value,
-      stackSize: item.stackSize || 1,
-      itemType: 0,
-      iconId: 0,
-      amount: 1,
-    });
-  }
-  render();
-  toast(`Staged "${item.name}" for sale`);
+function clampQty(v) {
+  const n = parseInt(v, 10);
+  return Math.max(1, Math.min(MAX_QTY, Number.isFinite(n) ? n : 1));
 }
 
 function switchTab(tabId) {
@@ -1434,12 +371,15 @@ function switchTab(tabId) {
 
 function showOverlay() {
   if (!state.overlayEl) state.overlayEl = buildOverlay();
-  state.overlayEl.dataset.open = "1";
+  state.win.open();
 }
 
 function hideOverlay() {
   if (!state.overlayEl) return;
-  state.overlayEl.dataset.open = "0";
+  state.win.close();
+}
+
+function onHidden() {
   // Drop queues on close so reopening a different vendor is clean.
   state.buyQueue = [];
   state.sellQueue = [];
@@ -1447,106 +387,93 @@ function hideOverlay() {
   stopVendorRangeWatchdog();
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Drag-to-sell staging
+// ─────────────────────────────────────────────────────────────────
+
+function stageSell(guid) {
+  const vs = state.vendorState;
+  if (!vs) return;
+  const item = inventoryRows().find((i) => i.guid === (guid >>> 0));
+  if (!item) {
+    // VendorSellUI::DragItemAcceptable — not owned.
+    toast("You can only sell items you are carrying", "err");
+    return;
+  }
+  // ACE rejects sells of wielded items (Player_Commerce); retail never
+  // lets them into the list either.
+  if ((item.equipMask >>> 0) !== 0) {
+    toast(`Unequip ${item.name} before selling it`, "err");
+    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+    return;
+  }
+  const code = vendorAcceptability(vs, item);
+  if (code !== VENDOR_ACCEPT.OK) {
+    toast(vendorRejectText(code), "err");
+    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+    return;
+  }
+  state.currentTab = "selling";
+  const stack = Math.max(1, item.stackSize || 1);
+  const existing = state.sellQueue.find((q) => q.itemGuid === item.guid);
+  if (existing) {
+    existing.amount = stack; // re-dropping a stack re-stages the whole stack
+  } else {
+    // Retail VendorSellUI::AddItemToSell stages the whole stack; the
+    // quantity box on the row trims it.
+    state.sellQueue.push({
+      itemGuid: item.guid,
+      wcid: item.wcid,
+      name: item.name,
+      value: item.value,
+      stackSize: stack,
+      itemType: item.itemType,
+      iconId: item.iconId,
+      amount: stack,
+    });
+  }
+  render();
+}
+
 // HUD rec #18 — vendor approach-distance enforcement.
 //
-// 2026-08-04 CORRECTION. The previous constant here was 24.0, justified by
-// "Retail Trade/Vendor.cs sets MaxInteractDistance≈24 units
-// (acclient.h:55268 ObjectRangeHandler / OnObjectRangeExit)". BOTH halves of
-// that citation are fabricated: `MaxInteractDistance` appears NOWHERE in the
-// ACE source tree or in acclient.c (0 hits each), and there is no ACE file
-// named "Trade/Vendor.cs". The real authorities:
-//
-//   RETAIL (client owns the close; there is no close packet in either
-//   direction — `CM_Vendor::SendNotice_CloseVendor` acclient.c:707232 is a
-//   LOCAL notice dispatch, not a send):
-//     `gmVendorUI::OpenVendor` (acclient.c:246660) registers an object-range
-//     handler with the VENDOR'S OWN wire use-radius —
-//       `_range = *(float *)&v9[18].hash_next;`            (:246708)
-//       `CPlayerSystem::RegisterObjectRangeHandler(v12, …, _range,
-//                                                  /*useRadii*/1,
-//                                                  /*ignoreZDelta*/0,
-//                                                  /*timeInterval*/1.0, 0.0)`
-//     where byte offset 220 = `ACCWeenieObject.pwd` (+152) +
-//     `PublicWeenieDesc::_useRadius` (+68). `CPlayerSystem::
-//     CalculateObjectRangeChecks` (:397612) polls it once per second and
-//     calls `gmVendorUI::OnObjectRangeExit` (:242550) → `CloseVendor`
-//     (:245102) once `ACCWeenieObject::ObjectsInRange` (:436730) reports
-//     `get_distance_to_object(use_cyls=1) > _range`.
-//
-//   ACE (server side, independent, emote-only): `Vendor.CheckClose()`
-//     (Vendor.cs:330-367) re-arms every `closeInterval = 1.5f`
-//     (Vendor.cs:322) and on `GetCylinderDistance(lastPlayer) > UseRadius`
-//     (Vendor.cs:350-352) only plays the goodbye emote + clears
-//     `LastOpenedContainerId`. It never tells the client to close, so the
-//     client-side threshold below IS the whole mechanism.
-//
-//   THE VALUE: `UseRadius` is `PropertyFloat.UseRadius` (54) on the vendor
-//     weenie. In ACE-World v0.9.292 all 1179 `WeenieType.Vendor` weenies
-//     carry an explicit UseRadius: 3.0 ×1108, 5.0 ×47, 6.0 ×23, 4.0 ×1.
-//     So 3.0 is the correct default (~94% of vendors), not 24.
-//
-// SEMANTICS GAP: retail/ACE both measure CYLINDER distance —
-// `Position.CylinderDistance` (ACE Physics/Common/Position.cs:100) is
-// `|offset| - (radius + otherRadius)` with a Z term. Our watchdog only has
-// world-frame root positions, so it measures CENTRE-to-CENTRE horizontally.
-// Add back the radii sum so the two agree: retail's player collision sphere
-// is `PLAYER_SETUP_SPHERE_RADIUS` = 0.48 (Setup 0x02000001; surfaced as
-// `playerRadius` in the wasm .d.ts), and a humanoid vendor's is the same
-// order, so 2 × 0.48 ≈ 0.96 is the allowance. Erring high here only makes us
-// marginally MORE permissive than the server, which is the safe direction —
-// closing the window while the server would still accept a trade is the
-// annoying failure.
-//
-// TODO (needs Rust): `PublicWeenieDescription.use_radius` IS already parsed
-// (crates/holtburger-protocol/.../description.rs:200/:363) but is not
-// surfaced to JS, so we cannot use the PER-VENDOR radius the retail client
-// reads. Plumb it onto the spawn meta and this constant becomes a fallback.
-//
-// The wasm side doesn't surface a per-frame ObjectRangeExit callback, so we
-// poll the live scene at 2 Hz (retail polls at 1.0 s — a faster poll only
-// closes sooner within retail's own jitter): read the vendor's
-// `root.position` from entityManager + the local player entity's
-// `root.position`, compute horizontal distance, and if it crosses the
-// threshold while the overlay is open we hide it + show a single toast.
-// Started by openWith() and torn down by hideOverlay() / mount disposer.
+// RETAIL (client owns the close; there is no close packet in either
+// direction): `gmVendorUI::OpenVendor` (acclient.c:246660) registers an
+// object-range handler with the VENDOR'S OWN wire use-radius
+// (`_range = PublicWeenieDesc::_useRadius`, useRadii=1, 1.0 s poll);
+// `CPlayerSystem::CalculateObjectRangeChecks` (:397612) fires
+// `gmVendorUI::OnObjectRangeExit` (:242550) → `CloseVendor` (:245102)
+// once the cylinder distance exceeds it.
+// ACE (independent, emote-only): Vendor.CheckClose() every 1.5 s plays
+// the goodbye emote past UseRadius; it never tells the client to close.
+// THE VALUE: ACE-World vendors carry UseRadius 3.0 (×1108 of 1179), so
+// 3.0 is the default until the per-vendor `use_radius` (parsed in
+// crates/holtburger-protocol description.rs, not yet surfaced to JS) is
+// plumbed through. We measure centre-to-centre, so the two collision
+// radii (2 × 0.48) are added back.
 const VENDOR_USE_RADIUS = 3.0;
 const VENDOR_CYLINDER_RADII_ALLOWANCE = 0.96;
-const VENDOR_MAX_INTERACT_RANGE =
-  VENDOR_USE_RADIUS + VENDOR_CYLINDER_RADII_ALLOWANCE;
+const VENDOR_MAX_INTERACT_RANGE = VENDOR_USE_RADIUS + VENDOR_CYLINDER_RADII_ALLOWANCE;
 function startVendorRangeWatchdog() {
   stopVendorRangeWatchdog();
   state.rangeCheckTimer = setInterval(() => {
-    const ov = state.overlayEl;
-    if (!ov || ov.dataset.open !== "1") {
+    if (!state.win?.isOpen()) {
       stopVendorRangeWatchdog();
       return;
     }
     const vendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
     if (!vendorGuid) return;
-    const em = window.liveScene3d?.entityManager;
-    const inst = em?.entityMap?.get?.(vendorGuid);
-    const vendorPos = inst?.root?.position;
-    if (!vendorPos) return; // vendor not in scene; let server timeout
-    // B4 fix (2026-06-27): `vendorPos` is the vendor entity's root.position in
-    // WORLD frame (lbX*192 + local). `getLocalPlayerPose()` returns LANDBLOCK-
-    // LOCAL coords (0..192), so the old subtraction mixed frames → distance
-    // ~30000 ≫ 24 on the first tick → the watchdog closed the store window
-    // almost immediately. Use the local player ENTITY's root.position so both
-    // sides are world-frame (verified live: pose={94,7} vs entityRoot={30430,34183}).
-    const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
-    const pp = em?.entityMap?.get?.(localGuid)?.root?.position;
-    if (!pp || pp.x == null || pp.y == null) return;
-    const dx = vendorPos.x - pp.x;
-    const dy = vendorPos.y - pp.y;
-    const dist = Math.hypot(dx, dy);
+    const vendorPos = entityWorldPos(vendorGuid);
+    if (!vendorPos) return; // vendor not in scene; let the server time out
+    const pp = localPlayerWorldPos();
+    if (!pp) return;
+    const dist = Math.hypot(vendorPos.x - pp.x, vendorPos.y - pp.y);
     if (dist > VENDOR_MAX_INTERACT_RANGE) {
       console.info(
-        `[vendor-ui] vendor 0x${vendorGuid.toString(16)} out of range ` +
-        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE.toFixed(2)}m) — closing overlay`,
+        `[vendor-ui] vendor ${devHex(vendorGuid)} out of range ` +
+        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE.toFixed(2)}m) — closing`,
       );
-      toast("Vendor moved away.", "err");
-      // Defer the close one tick so the toast has a parent to animate in.
-      setTimeout(hideOverlay, 50);
+      hideOverlay();
     }
   }, 500);
 }
@@ -1558,69 +485,49 @@ function stopVendorRangeWatchdog() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Render — diff-free full re-render. Cheap (max 53 items per vendor).
+// Render
 // ─────────────────────────────────────────────────────────────────
 
 function render() {
-  const ov = state.overlayEl;
-  if (!ov) return;
+  if (!state.overlayEl || !state.refs) return;
   const vs = state.vendorState;
   if (!vs) return;
+  const r = state.refs;
+  state.win.setTitle(vs.vendorName || "Vendor");
 
-  // Tabs — Items always shows just "Items"; Buying / Selling show the
-  // vendor name on first tab (so the user can identify the vendor) +
-  // queue count on the others. The retail panel has no separate title
-  // bar — vendor identity sits inside the active tab + selected-name
-  // field, which we mirror here.
+  const labels = {
+    items: "Items",
+    buying: state.buyQueue.length ? `Buying (${state.buyQueue.length})` : "Buying",
+    selling: state.sellQueue.length ? `Selling (${state.sellQueue.length})` : "Selling",
+  };
   for (const id of ["items", "buying", "selling"]) {
-    const b = state.refs.tabs[id];
-    if (!b) continue;
-    let label;
-    if (id === "items") {
-      label = vs.vendorName ? `Items — ${vs.vendorName}` : "Items";
-    } else if (id === "buying") {
-      label = state.buyQueue.length ? `Buying (${state.buyQueue.length})` : "Buying";
-    } else {
-      label = state.sellQueue.length ? `Selling (${state.sellQueue.length})` : "Selling";
-    }
-    setAcText(b, label, {
-      color: id === state.currentTab ? "#f0c87c" : "#f0d8a0",
-      fontId: id === "items" && id === state.currentTab ? HEADING_FONT_ID : undefined,
-      // 2026-08-02 — the Items label embeds the vendor name and used to
-      // overflow the 92px tab (see the .hvb-tab CSS note). `fit` makes
-      // the AC-font ladder condense/ellipsize into the tab's own content
-      // width instead; CSS clips the plain-text fallback.
-      fit: true,
-    });
-    b.classList.toggle("active", id === state.currentTab);
+    const b = r.tabs[id];
+    const active = id === state.currentTab;
+    b.setAttribute("aria-selected", active ? "true" : "false");
+    setAcText(b, labels[id], { color: active ? KIT_COLOR.gold : KIT_COLOR.text });
   }
 
-  // Show only the active pane. Buttons live inside their owning pane,
-  // so pane visibility hides/shows their action buttons too.
-  for (const id of ["items", "buying", "selling"]) {
-    const pane = state.refs.panes[id];
-    if (pane) pane.classList.toggle("active", id === state.currentTab);
-  }
+  const cur = currencyInfo();
+  setAcText(r.purse, `${fmtNumber(cur.balance)} ${cur.short}`, { color: KIT_COLOR.value });
+  r.purse.title = `You have ${fmtNumber(cur.balance)} ${cur.unit}`;
 
-  if (state.currentTab === "items") renderItemsPane();
-  else if (state.currentTab === "buying") renderQueuePane("buying");
-  else if (state.currentTab === "selling") renderQueuePane("selling");
+  if (state.currentTab === "items") renderItemsPane(cur);
+  else renderQueuePane(state.currentTab, cur);
+}
+
+function filteredStock() {
+  const vs = state.vendorState;
+  const cat = CATEGORY_TABLE.find((c) => c.id === state.categoryFilter) ?? CATEGORY_TABLE[0];
+  return vs.items.filter((it) => state.categoryFilter === "all" || (it.itemType & cat.mask));
 }
 
 /**
  * Retail's `VendorItemsUI` only calls `AddTypeFilter` for the item
- * types the vendor actually stocks (acclient.c:4597) — the CATEGORY_TABLE
- * comment above has always claimed we "hide categories with 0 items at
- * render time", but nothing ever did it. The full 18-row list is 688px
- * tall inside a 240px panel, so most of what a player could pick was
- * both scrolled out of reach AND guaranteed to show an empty strip.
- *
- * Hide the dead rows (in the custom menu AND the hidden native select
- * that backs it) so every selectable entry leads to real offerings.
- * "All Items" always stays. If the live filter's category disappears
- * across a restock, fall back to "all" before the caller reads it.
+ * types the vendor actually stocks — hide the dead categories so every
+ * entry leads to real offerings. "All Items" always stays.
  */
-function syncCategoryMenuToStock(refs, vs) {
+function syncCategoryOptions() {
+  const vs = state.vendorState;
   const present = new Set();
   for (const it of vs.items || []) {
     const t = it.itemType | 0;
@@ -1629,283 +536,224 @@ function syncCategoryMenuToStock(refs, vs) {
     }
   }
   const keep = (id) => id === "all" || present.has(id);
-  if (!keep(state.categoryFilter)) {
-    state.categoryFilter = "all";
-    if (refs.cat) refs.cat.value = "all";
+  if (!keep(state.categoryFilter)) state.categoryFilter = "all";
+  const cat = state.refs.cat;
+  for (const opt of cat.options || []) {
+    opt.hidden = !keep(opt.value);
+    opt.disabled = !keep(opt.value);
   }
-  if (refs.menuPanel) {
-    for (const el of refs.menuPanel.querySelectorAll(".hvb-menu-item")) {
-      el.style.display = keep(el.dataset.value) ? "" : "none";
-    }
-  }
-  if (refs.cat) {
-    for (const opt of refs.cat.options) opt.hidden = !keep(opt.value);
-  }
-  try { refs.syncMenu?.(); } catch (_) {}
+  cat.value = state.categoryFilter;
 }
 
-function renderItemsPane() {
-  const refs = state.refs.items;
-  const vs = state.vendorState;
-  syncCategoryMenuToStock(refs, vs);
-  const cat = CATEGORY_TABLE.find((c) => c.id === state.categoryFilter) ?? CATEGORY_TABLE[0];
-  const items = vs.items.filter((it) => state.categoryFilter === "all" || (it.itemType & cat.mask));
+function kv(parent, label, value, color = KIT_COLOR.value) {
+  const row = el("div", "hvb-kv", parent);
+  const a = el("span", "", row);
+  setAcText(a, label, { color: KIT_COLOR.dim });
+  const b = el("span", "", row);
+  setAcText(b, value, { color });
+  return row;
+}
 
-  // Selected item header (within items pane).
-  const sel = items.find((i) => i.itemGuid === state.selectedItemGuid);
-  const myPyreals = countPyreals();
+function renderItemsPane(cur) {
+  const r = state.refs;
+  const vs = state.vendorState;
+  syncCategoryOptions();
+  const items = filteredStock();
+
+  // Grid — rebuilt only when the stock/filter/affordability changes, so
+  // clicking around never resets the scroll position.
+  const key = `${vs.vendorGuid}|${state.categoryFilter}|${cur.balance}|` +
+    items.map((i) => `${i.itemGuid}:${i.value}:${i.stackSize}`).join(",");
+  if (key !== state.gridKey || !r.list.querySelector(".hb-cw-grid")) {
+    state.gridKey = key;
+    r.list.replaceChildren();
+    if (items.length === 0) {
+      const empty = el("div", "hbk-empty hvb-empty", r.list);
+      empty.textContent = vs.items.length
+        ? "This vendor has nothing in that category."
+        : "This vendor has nothing for sale.";
+    } else {
+      const grid = el("div", "hb-cw-grid", r.list);
+      for (const it of items) grid.appendChild(buildStockCell(it, cur));
+    }
+  }
+  for (const cell of r.list.querySelectorAll(".hvb-cell")) {
+    cell.classList.toggle("is-selected", Number(cell.dataset.itemGuid) === state.selectedItemGuid);
+  }
+
+  renderInfo(cur);
+
+  r.actions.replaceChildren(r.qtyWrap, r.btn.buy, r.btn.add);
+  const sel = findSelectedItem();
+  r.btn.buy.disabled = !sel;
+  r.btn.add.disabled = !sel;
+}
+
+function buildStockCell(it, cur) {
+  const vs = state.vendorState;
+  const price = vendorPurchasePrice(it, vs, 1);
+  const cell = el("div", "hb-cw-cell hvb-cell");
+  cell.dataset.itemGuid = String(it.itemGuid);
+  if (price > cur.balance) cell.classList.add("is-unaffordable");
+  const slot = el("div", "hbk-slot", cell);
+  fillSlotIcon(slot, it.iconId, it.name);
+  if ((it.stackSize || 1) > 1) {
+    const st = el("span", "hbk-stack", slot);
+    st.textContent = String(it.stackSize);
+  }
+  const cap = el("div", "hb-cw-caption", cell);
+  cap.textContent = fmtCompact(price);
+  const basic = `${it.name} — ${fmtNumber(price)} ${cur.unit}`;
+  cell.title = basic;
+  // Rec #69 — upgrade the tooltip with the appraisal body on first hover.
+  let upgraded = false;
+  cell.addEventListener("mouseenter", () => {
+    if (upgraded) return;
+    try {
+      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      const json = handle?.getObjectAppraisal?.((it.itemGuid >>> 0) || 0);
+      if (typeof json !== "string" || !json) return;
+      const bodyText = formatAppraisalTooltip(it.name, JSON.parse(json));
+      cell.title = bodyText ? `${bodyText}\nPrice: ${fmtNumber(price)} ${cur.unit}` : basic;
+      upgraded = true;
+    } catch (_) {}
+  });
+  cell.addEventListener("click", () => {
+    state.selectedItemGuid = it.itemGuid;
+    render();
+  });
+  cell.addEventListener("dblclick", () => {
+    state.selectedItemGuid = it.itemGuid;
+    handleBuyInstant();
+  });
+  return cell;
+}
+
+function renderInfo(cur = currencyInfo()) {
+  if (state.currentTab !== "items") return;
+  const r = state.refs;
+  const vs = state.vendorState;
+  const sel = findSelectedItem();
+  // Keep the <select> node in place (re-inserting it would slam shut an
+  // open dropdown whenever an inventory refresh re-renders the pane).
+  if (r.info.firstChild !== r.cat) r.info.replaceChildren(r.cat);
+  while (r.info.lastChild && r.info.lastChild !== r.cat) r.info.lastChild.remove();
+  const name = el("div", "hvb-line hvb-name", r.info);
   if (sel) {
-    // Wave F.4 (2026-05-27): prefer the wasm-precomputed `buyPrice`
-    // (retail ShopSystem::BuyPrice — includes promissory-note
-    // special-case + +0.1 floor offset). Falls back to the legacy
-    // value*multiplier calc when the F.4 export isn't available.
-    const price = (typeof sel.buyPrice === "number" && sel.buyPrice >= 0)
-      ? sel.buyPrice
-      : shopBuyPrice(
-          sel.value || 0,
-          sel.itemType || 0,
-          vs.buyMultiplier || 1,
-          1,
-        );
-    setAcText(refs.name, sel.name || `wcid ${sel.wcid}`, { color: "#f0c87c" });
-    setAcText(refs.price, `costs ${fmtPrice(price)} p (you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
+    setAcText(name, sel.name || "Unnamed item", { color: KIT_COLOR.gold, fit: true });
+    const price = vendorPurchasePrice(sel, vs, state.qty);
+    kv(r.info, state.qty > 1 ? `Price (${state.qty})` : "Price",
+      `${fmtNumber(price)} ${cur.short}`, price > cur.balance ? KIT_COLOR.warn : KIT_COLOR.gold);
+    kv(r.info, "You have", `${fmtNumber(cur.balance)} ${cur.short}`, KIT_COLOR.value);
   } else {
-    // The tab label is now clipped to its 92px box, so surface the
-    // vendor's name here (590px, empty whenever nothing is selected)
-    // rather than losing the identity entirely.
-    const who = vs.vendorName ? `${vs.vendorName} ` : "";
-    setAcText(
-      refs.name,
-      items.length ? `${who}— select an item —` : `${who}— no items in this category —`,
-      { color: "#f0c87c" },
-    );
-    setAcText(refs.price, `(you have ${fmtPrice(myPyreals)} p)`, { color: "#f0e8d0" });
+    name.className = "hvb-hint";
+    name.textContent = "Click an item to see its price. Double-click buys one.";
   }
-
-  // Icon strip
-  refs.strip.innerHTML = "";
-  for (const it of items) {
-    const cell = document.createElement("div");
-    cell.className = "hvb-icon-cell";
-    cell.dataset.itemGuid = String(it.itemGuid);
-    if (it.itemGuid === state.selectedItemGuid) cell.classList.add("selected");
-    setItemIcon(cell, it);
-    if ((it.stackSize || 1) > 1) {
-      const badge = document.createElement("div");
-      badge.className = "hvb-stack-badge";
-      setAcText(badge, String(it.stackSize), { color: "#f0e8d0" });
-      cell.appendChild(badge);
-    }
-    // Wave F.4: prefer pre-computed retail buyPrice over the
-    // value*multiplier estimate (which doesn't account for the
-    // promissory-note special-case or +0.1 floor adjust).
-    const tipPrice = (typeof it.buyPrice === "number" && it.buyPrice >= 0)
-      ? it.buyPrice
-      : shopBuyPrice(it.value || 0, it.itemType || 0, vs.buyMultiplier || 1, 1);
-    const basicTitle = `${it.name} — ${fmtPrice(tipPrice)}p`;
-    cell.title = basicTitle;
-    // Rec #69 — vendor cell hover upgrades cell.title with a multi-line
-    // appraisal body via the shared formatAppraisalTooltip helper.
-    // Browsers show HTML title with their own delay so we don't need a
-    // setTimeout here — the upgrade happens on the FIRST mouseenter,
-    // which the OS-level tooltip will pick up by the time it paints.
-    // No richer DOM tooltip (yet); plain text keeps the diff bounded
-    // and matches the inventory tooltip's content. Falls back to the
-    // basic name/price line if getObjectAppraisal returns nothing.
-    let _vendorTooltipReady = false;
-    cell.addEventListener("mouseenter", () => {
-      if (_vendorTooltipReady) return;
-      try {
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        if (typeof handle?.getObjectAppraisal !== "function") return;
-        const json = handle.getObjectAppraisal((it.itemGuid >>> 0) || 0);
-        if (typeof json !== "string" || json.length === 0) return;
-        let snap = null;
-        try { snap = JSON.parse(json); } catch (_) { return; }
-        const body = formatAppraisalTooltip(it.name, snap);
-        const priceLine = `Price: ${fmtPrice(tipPrice)} p`;
-        cell.title = body ? `${body}\n${priceLine}` : `${basicTitle}\n${priceLine}`;
-        _vendorTooltipReady = true;
-      } catch (_) {}
-    });
-    cell.addEventListener("click", () => {
-      state.selectedItemGuid = it.itemGuid;
-      render();
-    });
-    cell.addEventListener("dblclick", () => {
-      state.selectedItemGuid = it.itemGuid;
-      handleBuyInstant();
-    });
-    refs.strip.appendChild(cell);
-  }
-
-  // Rates strip — Wave F.4 (2026-05-27): surface the typed-profile
-  // acceptance hints when available (deals-magic flag + min/max
-  // value caps + categorized accept list). The categories list mirrors
-  // what `VendorItemsUI::AddTypeFilter` does in retail
-  // (acclient.c:4597) for the dropdown but here in flat text.
-  let extras = "";
+  const rates = el("div", "hvb-rates", r.info);
+  const parts = [
+    `Sells at ${Math.round((vs.sellMultiplier || 1) * 100)}%`,
+    `buys at ${Math.round((vs.buyMultiplier || 1) * 100)}%`,
+  ];
+  if (vs.dealsMagic === false) parts.push("no magic items");
+  if (cur.alt) parts.push(`trades in ${cur.unit}`);
+  rates.textContent = parts.join(" · ");
   if (Array.isArray(vs.buyAcceptCategoryNames) && vs.buyAcceptCategoryNames.length) {
-    // Show the typed categories the vendor will BUY back from you.
-    // Limited to first 3 so the rates strip doesn't overflow.
-    const top = vs.buyAcceptCategoryNames.slice(0, 3).join("/").toLowerCase();
-    const more = vs.buyAcceptCategoryNames.length > 3 ? "…" : "";
-    extras += ` · Accepts: ${top}${more}`;
+    // Wire enum names ("MeleeWeapon") → "Melee Weapon" for the tooltip.
+    rates.title = `Buys: ${vs.buyAcceptCategoryNames
+      .map((n) => String(n).replace(/([a-z])([A-Z])/g, "$1 $2")).join(", ")}`;
   }
-  if (vs.dealsMagic === false) extras += " · No magic";
-  if (vs.hasNoMax === false && Number.isFinite(vs.maxValue)) {
-    extras += ` · Cap ${fmtPrice(vs.maxValue)} p`;
-  }
-  // HUD rec #50 — surface alt currency (e.g. Trade Notes) when this
-  // vendor doesn't pay in pyreals. Amount > 0 signals an active alt
-  // currency contract; render label + amount alongside the multipliers.
-  if ((vs.alternateCurrencyWcid >>> 0) !== 0 && Number(vs.alternateCurrencyAmount) > 0) {
-    const altName = vs.alternateCurrencyName || `wcid 0x${(vs.alternateCurrencyWcid >>> 0).toString(16)}`;
-    extras += ` · Pays in: ${altName} (${vs.alternateCurrencyAmount})`;
-  }
-  // XSS invariant (2026-08-03): `extras` is built above from WIRE
-  // PropertyStrings (`alternateCurrencyName`, `buyAcceptCategoryNames`) and
-  // carries no markup of its own, so it is appended as a TEXT NODE rather
-  // than interpolated into the template. Only the two multiplier percentages
-  // — both `Math.round`ed numbers — stay inside the innerHTML, because the
-  // <b> emphasis is real markup we want to keep.
-  refs.rates.innerHTML =
-    `Sells <b>${Math.round((vs.buyMultiplier || 1) * 100)}%</b> · ` +
-    `Buys <b>${Math.round((vs.sellMultiplier || 1) * 100)}%</b>`;
-  if (extras) refs.rates.append(extras);
-
-  // Enable Buy / Add buttons only when something is selected.
-  refs.buyBtn.disabled = !sel;
-  refs.addBtn.disabled = !sel;
 }
 
-function renderQueuePane(which) {
-  const refs = state.refs[which];
+function renderQueuePane(which, cur) {
+  const r = state.refs;
   const vs = state.vendorState;
-  const queue = which === "buying" ? state.buyQueue : state.sellQueue;
-  // Rec #179 — audited against ACE Vendor.cs GetBuyCost/GetSellCost
-  // (Source/ACE.Server/WorldObjects/Vendor.cs:577-599) +
-  // Player_Commerce.cs:63-112. Alt-currency vendors use vendor.AlternateCurrency
-  // to pick the wcid the player pays WITH; the cost rate is still
-  // vendor.BuyPrice / vendor.SellPrice regardless. No altCurrencyMultiplier
-  // exists on the server side, so the same mult covers both pyreal and
-  // alt-currency queue totals.
-  const mult = which === "buying" ? (vs.buyMultiplier || 1) : (vs.sellMultiplier || 1);
+  const buying = which === "buying";
+  const queue = buying ? state.buyQueue : state.sellQueue;
+  const linePrice = (q) => (buying
+    ? vendorPurchasePrice(q, vs, q.amount)
+    : vendorSaleCredit(q, vs, q.amount));
 
-  refs.list.innerHTML = "";
-  if (queue.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "hvb-queue-empty";
-    setAcText(empty, which === "buying"
-      ? "Empty. Click an item in the Items tab + \"Add to List\"."
-      : "Empty. Drag inventory items onto this panel.", { color: "#807868" });
-    refs.list.appendChild(empty);
-  }
-
-  const label = which === "buying" ? "Cost" : "Credit";
-
-  // The BUYING queue must price with the same retail formula the Items
-  // pane shows (`shopBuyPrice` = ShopSystem::BuyPrice): floor(+0.1) and
-  // the promissory-note flat-1.0 carve-out. The old `Math.round(value *
-  // mult * amount)` disagreed with the header on both counts — a Trade
-  // Note read 100 p selected and 110 p queued at a 1.1× vendor.
-  // SELLING keeps the multiplier form: ACE prices sell-backs with
-  // Vendor.GetSellCost (no note carve-out) and the sell queue's entries
-  // carry `itemType: 0` anyway, so the buy formula would not apply.
-  const linePrice = (q) => (which === "buying"
-    ? shopBuyPrice(q.value || 0, q.itemType || 0, mult, q.amount)
-    : Math.round((q.value || 0) * mult * q.amount));
-
-  // Shared by the initial paint and by `repriceInPlace` so the two can
-  // never drift.
-  const writeTotals = (sum) => {
-    const totalEl = refs.footer.querySelector(".hvb-queue-total");
-    setAcText(totalEl, `${label}: ${fmtPrice(sum)} p`, { color: "#f0c87c" });
-    // Mirror the running total into the per-pane selected-price field
-    // so it lines up with the layout-driven 590×15 slot at (125,15).
-    setAcText(refs.price, `${vs.vendorName || "Vendor"} — ${label.toLowerCase()} ${fmtPrice(sum)} p`, { color: "#f0e8d0" });
-    setAcText(refs.name, queue.length
-      ? `${queue.length} item${queue.length === 1 ? "" : "s"} on the list`
-      : (which === "buying" ? "Buying list" : "Selling list"),
-      { color: "#f0c87c" });
-  };
-
-  // Qty edits must NOT go through `render()`: it opens with
-  // `refs.list.innerHTML = ""`, destroying the very <input> being typed
-  // into — focus drops to <body>, the second keystroke is lost, and any
-  // quantity above 9 is untypeable. Reprice in place instead; the
-  // structural re-render is deferred to `change` (blur/Enter), when the
-  // field is no longer being edited, which also normalizes the clamp.
+  state.gridKey = "";
+  r.list.replaceChildren();
   const priceCells = [];
-  const repriceInPlace = () => {
-    let sum = 0;
-    for (const cell of priceCells) {
-      const n = linePrice(cell.q);
-      sum += n;
-      setAcText(cell.el, `${fmtPrice(n)} p`, { color: "#f0c87c" });
+  if (queue.length === 0) {
+    const empty = el("div", "hbk-empty hvb-empty", r.list);
+    empty.textContent = buying
+      ? "Your buying list is empty. Pick items on the Items tab and press Add to List."
+      : "Drag items from your pack onto this window to sell them.";
+  } else {
+    const listEl = el("div", "hbk-list", r.list);
+    for (const q of queue) {
+      const row = el("div", "hbk-row hvb-row", listEl);
+      const slot = el("div", "hbk-slot", row);
+      fillSlotIcon(slot, q.iconId, q.name);
+      const nm = el("div", "hbk-grow", row);
+      setAcText(nm, q.name || "Unnamed item", { color: KIT_COLOR.text, fit: true });
+      nm.title = q.name || "";
+      const qty = el("input", "hbk-input", row);
+      qty.type = "number";
+      qty.min = "1";
+      qty.max = String(buying ? MAX_QTY : Math.max(1, q.stackSize || 1));
+      qty.value = String(q.amount);
+      qty.title = "Quantity";
+      // Reprice in place while typing — a full render() would destroy
+      // the focused <input> and eat the next keystroke.
+      qty.addEventListener("input", () => {
+        const max = buying ? MAX_QTY : Math.max(1, q.stackSize || 1);
+        const n = parseInt(qty.value, 10);
+        q.amount = Math.max(1, Math.min(max, Number.isFinite(n) ? n : 1));
+        repaintTotals();
+      });
+      qty.addEventListener("change", () => render());
+      const pr = el("div", "hvb-row-price", row);
+      priceCells.push({ q, el: pr });
+      const rm = el("button", "hbk-icon-btn", row);
+      rm.type = "button";
+      rm.textContent = "×";
+      rm.title = "Remove from list";
+      rm.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const i = queue.indexOf(q);
+        if (i >= 0) queue.splice(i, 1);
+        render();
+      });
     }
-    writeTotals(sum);
-  };
-
-  let total = 0;
-  for (const q of queue) {
-    const lineTotal = linePrice(q);
-    total += lineTotal;
-    const row = document.createElement("div");
-    row.className = "hvb-queue-row";
-    const iconEl = document.createElement("div");
-    iconEl.className = "hvb-queue-icon";
-    setItemIcon(iconEl, q);
-    const nameEl = document.createElement("div");
-    nameEl.className = "hvb-queue-name";
-    setAcText(nameEl, q.name, { color: "#f0e8d0" });
-    const qtyEl = document.createElement("input");
-    qtyEl.className = "hvb-queue-qty";
-    qtyEl.type = "number";
-    qtyEl.min = 1;
-    qtyEl.max = q.stackSize || 9999;
-    qtyEl.value = q.amount;
-    qtyEl.addEventListener("input", (e) => {
-      const v = parseInt(e.target.value, 10);
-      q.amount = Math.max(1, Math.min(v || 1, q.stackSize || 9999));
-      repriceInPlace();
-    });
-    // Blur / Enter — safe to rebuild now, and it snaps the field back to
-    // the clamped value (e.g. an emptied box shows 1 again).
-    qtyEl.addEventListener("change", () => { render(); });
-    const priceEl = document.createElement("div");
-    priceEl.className = "hvb-queue-price";
-    setAcText(priceEl, `${fmtPrice(lineTotal)} p`, { color: "#f0c87c" });
-    priceCells.push({ q, el: priceEl });
-    const rmEl = document.createElement("button");
-    rmEl.className = "hvb-queue-remove";
-    rmEl.textContent = "×";
-    rmEl.title = "Remove from list";
-    rmEl.addEventListener("click", () => {
-      const idx = queue.indexOf(q);
-      if (idx >= 0) queue.splice(idx, 1);
-      render();
-    });
-    row.appendChild(iconEl);
-    row.appendChild(nameEl);
-    row.appendChild(qtyEl);
-    row.appendChild(priceEl);
-    row.appendChild(rmEl);
-    refs.list.appendChild(row);
   }
 
-  // Queue-footer "Cost: …" / "Credit: …" total label + mirrors.
-  writeTotals(total);
+  // Details column: totals against the purse.
+  const totalsHost = el("div", "");
+  totalsHost.style.display = "contents";
+  r.info.replaceChildren(totalsHost);
+  const btnPrimary = buying ? r.btn.buyAll : r.btn.sellAll;
+  function repaintTotals() {
+    let sum = 0;
+    for (const c of priceCells) {
+      const n = linePrice(c.q);
+      sum += n;
+      setAcText(c.el, `${fmtNumber(n)} ${cur.short}`, { color: buying ? KIT_COLOR.gold : KIT_COLOR.value });
+    }
+    totalsHost.replaceChildren();
+    const head = el("div", "hvb-line hvb-name", totalsHost);
+    const count = queue.reduce((a, q) => a + (q.amount | 0), 0);
+    setAcText(head, queue.length
+      ? `${buying ? "Buying" : "Selling"} ${count} item${count === 1 ? "" : "s"}`
+      : (buying ? "Buying list" : "Selling list"), { color: KIT_COLOR.gold, fit: true });
+    kv(totalsHost, buying ? "Total cost" : "Total value", `${fmtNumber(sum)} ${cur.short}`, KIT_COLOR.gold);
+    kv(totalsHost, "You have", `${fmtNumber(cur.balance)} ${cur.short}`, KIT_COLOR.value);
+    const after = buying ? cur.balance - sum : cur.balance + sum;
+    kv(totalsHost, buying ? "Remaining" : "After sale", `${fmtNumber(after)} ${cur.short}`,
+      after < 0 ? KIT_COLOR.warn : KIT_COLOR.value);
+    if (buying && after < 0) {
+      const warn = el("div", "hvb-hint", totalsHost);
+      warn.style.color = "var(--hbk-warn)";
+      warn.textContent = `You need ${fmtNumber(-after)} more ${cur.unit}.`;
+    }
+    btnPrimary.disabled = queue.length === 0;
+  }
+  repaintTotals();
 
-  refs.confirmBtn.disabled = queue.length === 0;
-  refs.clearBtn.disabled = queue.length === 0;
-}
-
-function countPyreals() {
-  const inv = window.__sessionHandle?.playerInventory?.() || [];
-  let n = 0;
-  for (const i of inv) if (i.wcid === 273) n += i.stackSize || 0;
-  return n;
+  r.actions.replaceChildren(btnPrimary, buying ? r.btn.clearBuy : r.btn.clearSell);
+  (buying ? r.btn.clearBuy : r.btn.clearSell).disabled = queue.length === 0;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1920,30 +768,32 @@ function findSelectedItem() {
 
 function handleBuyInstant() {
   const handle = window.__sessionHandle;
-  if (!handle?.buyFromVendor) return toast("buy: no session handle", "err");
+  if (!handle?.buyFromVendor) return toast("Not connected", "err");
   const vs = state.vendorState;
   if (!vs?.vendorGuid) return;
   const sel = findSelectedItem();
-  if (!sel) return toast("buy: select an item first", "err");
+  if (!sel) return toast("Select an item first", "err");
+  const qty = clampQty(state.qty);
   try {
     handle.buyFromVendor(
       vs.vendorGuid >>> 0,
       new Uint32Array([sel.itemGuid >>> 0]),
-      new Int32Array([1]),
+      new Int32Array([qty]),
     );
-    toast(`Buying 1 × ${sel.name}…`);
+    toast(`Buying ${qty > 1 ? `${qty} × ` : ""}${sel.name}…`);
   } catch (err) {
     console.warn("[vendor-ui] buy failed", err);
-    toast(`buy error: ${err.message || err}`, "err");
+    toast("The purchase could not be sent", "err");
   }
 }
 
 function handleAddToBuying() {
   const sel = findSelectedItem();
   if (!sel) return;
+  const qty = clampQty(state.qty);
   const existing = state.buyQueue.find((q) => q.itemGuid === sel.itemGuid);
   if (existing) {
-    existing.amount = Math.min(existing.amount + 1, sel.stackSize || 9999);
+    existing.amount = Math.min(existing.amount + qty, MAX_QTY);
   } else {
     state.buyQueue.push({
       itemGuid: sel.itemGuid,
@@ -1953,16 +803,16 @@ function handleAddToBuying() {
       stackSize: sel.stackSize || 1,
       itemType: sel.itemType,
       iconId: sel.iconId,
-      amount: 1,
+      amount: qty,
     });
   }
-  toast(`Added "${sel.name}" to buy list`);
+  toast(`Added ${sel.name} to your buying list`);
   render();
 }
 
 function handleConfirmBuy() {
   const handle = window.__sessionHandle;
-  if (!handle?.buyFromVendor) return toast("buy: no session handle", "err");
+  if (!handle?.buyFromVendor) return toast("Not connected", "err");
   const vs = state.vendorState;
   if (!vs?.vendorGuid || state.buyQueue.length === 0) return;
   const guids = new Uint32Array(state.buyQueue.map((q) => q.itemGuid >>> 0));
@@ -1975,13 +825,13 @@ function handleConfirmBuy() {
     render();
   } catch (err) {
     console.warn("[vendor-ui] confirm-buy failed", err);
-    toast(`buy error: ${err.message || err}`, "err");
+    toast("The purchase could not be sent", "err");
   }
 }
 
 function handleConfirmSell() {
   const handle = window.__sessionHandle;
-  if (!handle?.sellToVendor) return toast("sell: no session handle", "err");
+  if (!handle?.sellToVendor) return toast("Not connected", "err");
   const vs = state.vendorState;
   if (!vs?.vendorGuid || state.sellQueue.length === 0) return;
   const guids = new Uint32Array(state.sellQueue.map((q) => q.itemGuid >>> 0));
@@ -1994,7 +844,7 @@ function handleConfirmSell() {
     render();
   } catch (err) {
     console.warn("[vendor-ui] confirm-sell failed", err);
-    toast(`sell error: ${err.message || err}`, "err");
+    toast("The sale could not be sent", "err");
   }
 }
 
@@ -2007,12 +857,8 @@ export const manifest = {
   name: "Vendor Bar",
   icon: "💰",
   iconHidden: true,
-  // Wave F.4 (2026-05-27): typed VendorProfile consumption + retail
-  // buy/sell-price formula port. Adds categorized accept-list display,
-  // deal-magic flag surfacing, and per-stock-entry buyPrice using
-  // ShopSystem::BuyPrice (acclient.c:719870).
-  version: "0.5.0",
-  description: "Retail-style horizontal vendor bar — auto-opens on kind=12 VendorOpened",
+  version: "0.6.0",
+  description: "Retail-style vendor window (gmVendorUI) — auto-opens on kind=12 VendorOpened; retail buy/sell price direction",
 };
 
 export function mount(ctx) {
@@ -2026,10 +872,8 @@ export function mount(ctx) {
     if (!client?.events?.on || !handle?.getVendorState) return false;
 
     const pullProfile = (vendorGuid) => {
-      // Wave F.4 (2026-05-27): pair with getCurrentVendorProfile for the
-      // typed-profile fields (buyAcceptCategories, dealsMagic, min/max,
-      // pre-computed buyPrice per stock entry). Falls back gracefully
-      // when the export isn't present (older wasm build).
+      // Wave F.4 (2026-05-27): typed-profile fields (accept categories,
+      // magic flag, min/max). Absent on older wasm builds.
       if (typeof handle.getCurrentVendorProfile !== "function") return null;
       try {
         return handle.getCurrentVendorProfile(vendorGuid >>> 0);
@@ -2058,15 +902,12 @@ export function mount(ctx) {
     };
 
     const onInvChanged = () => {
-      if (!state.vendorState?.vendorGuid) return;
+      if (!state.vendorState?.vendorGuid || !state.win?.isOpen()) return;
       try {
         const vendorGuid = state.vendorState.vendorGuid >>> 0;
         const raw = handle.getVendorState(vendorGuid);
         if (raw) {
-          state.vendorState = enrichWithProfile(
-            snapshotFromWasm(raw),
-            pullProfile(vendorGuid),
-          );
+          state.vendorState = enrichWithProfile(snapshotFromWasm(raw), pullProfile(vendorGuid));
           render();
         }
       } catch (e) {
@@ -2074,21 +915,12 @@ export function mount(ctx) {
       }
     };
 
-    // HUD rec #18 follow-up (2026-08-02) — teleport/death auto-close.
-    // The 2Hz range watchdog covers WALKING out of the 24-unit
-    // interact radius, but a teleport that lands near the vendor
-    // (lifestone or portal drop inside the same 24 units) never trips
-    // it, and after a far teleport the vendor entity reaps out of the
-    // scene, which parks the watchdog on its `!vendorPos` early-return
-    // with the bar still open. Retail tears the vendor window down on
-    // ANY portal transit (Character.OnPortalSpaceEntered) and on death
-    // — kind=33 PlayerTeleport rides every teleport flavour (portal
-    // use, gems, recall/teleport spells, the death recall), so one
-    // subscription covers "portal away by any means"; the death event
-    // additionally closes at the moment of death, before the recall.
+    // HUD rec #18 follow-up (2026-08-02) — retail tears the vendor
+    // window down on ANY portal transit and on death; kind=33
+    // PlayerTeleport rides every teleport flavour.
     const closeIfOpen = (why) => {
-      if (state.overlayEl?.dataset.open !== "1") return;
-      console.info(`[vendor-ui] ${why} — closing overlay`);
+      if (!state.win?.isOpen()) return;
+      console.info(`[vendor-ui] ${why} — closing`);
       hideOverlay();
     };
     const onPortalSpace = () => closeIfOpen("portal space entered (teleport)");
@@ -2118,53 +950,39 @@ export function mount(ctx) {
 
   function openWith(rawState, profilePayload = null) {
     const prevVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
-    state.vendorState = enrichWithProfile(
-      snapshotFromWasm(rawState),
-      profilePayload,
-    );
+    state.vendorState = enrichWithProfile(snapshotFromWasm(rawState), profilePayload);
     const nextVendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
-    // Reset transient UI state on (re)open of a vendor.
-    state.currentTab = "items";
-    state.selectedItemGuid = null;
-    state.categoryFilter = "all";
-    // Preserve buy/sell queues across re-fires of the SAME vendor —
-    // ACE refreshes kind=12 after every buy. Drop the queues only
-    // when switching vendors.
-    //
-    // That second sentence was a comment with no code behind it: there was no
-    // vendorGuid comparison and no queue reset anywhere in openWith, and the
-    // only place the queues are dropped is hideOverlay(). With two vendors
-    // inside the range watchdog's radius (a shop with two NPCs, a bazaar row)
-    // you could queue items at A, use B WITHOUT closing the bar, and
-    // handleConfirmBuy would then send A's itemGuids against B's vendorGuid:
-    //   handle.buyFromVendor(vs.vendorGuid >>> 0, guids, amounts)
-    // ACE rejects that, so the user gets a "Buying N items…" toast and
-    // nothing bought.
+    // ACE re-sends kind=12 after every buy: preserve the queues for the
+    // SAME vendor, drop them when switching vendors — otherwise vendor A's
+    // item guids would be sent against vendor B's guid and ACE rejects
+    // the whole purchase (tests/vendor_queue_vendor_switch.test.mjs).
+    const wasOpen = !!state.win?.isOpen();
     if (nextVendorGuid !== prevVendorGuid) {
       state.buyQueue = [];
       state.sellQueue = [];
     }
-    showOverlay();
-    // Rec #18 — start range polling when vendor opens.
-    startVendorRangeWatchdog();
-    if (state.refs?.items?.cat) {
-      state.refs.items.cat.value = "all";
-      try { state.refs.items.syncMenu?.(); } catch (_) {}
+    // A fresh open (or a different vendor) starts on the Items tab; a
+    // same-vendor refresh while open keeps the player's tab, selection
+    // and filter (ACE refreshes after every purchase).
+    if (!wasOpen || nextVendorGuid !== prevVendorGuid) {
+      state.currentTab = "items";
+      state.selectedItemGuid = null;
+      state.categoryFilter = "all";
+      state.qty = 1;
+      state.gridKey = "";
+      if (state.refs?.qtyInput) state.refs.qtyInput.value = "1";
     }
+    showOverlay();
+    if (!wasOpen || nextVendorGuid !== prevVendorGuid) startVendorRangeWatchdog();
     render();
   }
 
-  // Expose the REAL kind=12 entry point for the e2e verifier and
-  // tests/vendor_queue_vendor_switch.test.mjs. The module-scope
-  // `__vendorPluginDebug` below only offers `openDebug`, which
-  // unconditionally clears the queues and therefore cannot observe the
-  // preserve-same-vendor / drop-on-switch behaviour at all.
+  // The REAL kind=12 entry point for the e2e verifier and
+  // tests/vendor_queue_vendor_switch.test.mjs.
   if (typeof window !== "undefined") {
     window.__vendorPluginDebugMount = { openWith, close: () => hideOverlay() };
   }
 
-  // P3-41 — replace 500ms client-discovery poll with one-shot await on
-  // the global pluginClient bootstrap promise installed by index.html.
   if (!tryHook()) {
     if (typeof window !== "undefined" && window.__pluginClientReady?.then) {
       window.__pluginClientReady.then(() => { tryHook(); });
@@ -2181,27 +999,26 @@ export function mount(ctx) {
   return () => {
     if (pollTimer) clearInterval(pollTimer);
     if (unsubscribe) unsubscribe();
-    document.removeEventListener("keydown", onKeyDown);
     stopVendorRangeWatchdog();
     if (state.overlayEl) {
+      state.win?.close();
       state.overlayEl.remove();
       state.overlayEl = null;
+      state.win = null;
+      state.refs = null;
     }
   };
 }
 
 // Debug helpers: pop a synthetic vendor from DevTools / e2e verifier.
-//   __vendorBarDebug()  — legacy, fake "Lin the Trader" w/ a handful of stock
-//   __vendorPluginDebug — namespaced API for e2e verifier (open / close /
-//     switchTab / refs). Also exposed inside mount() for parity once the
-//     poll-hook completes; this module-scope copy lets the verifier
-//     drive the plugin even when wasm/__sessionHandle isn't wired.
+//   __vendorBarDebug()  — fake "Lin the Trader" with a handful of stock
+//   __vendorPluginDebug — open / close / switchTab / refs
 if (typeof window !== "undefined") {
   const DEBUG_SNAPSHOT = {
     vendorGuid: 0xDEADBEEF,
     vendorName: "Lin the Trader (debug)",
-    buyMultiplier: 1.1,
-    sellMultiplier: 0.4,
+    buyMultiplier: 0.9,
+    sellMultiplier: 1.5,
     alternateCurrencyWcid: 0,
     alternateCurrencyAmount: 0,
     alternateCurrencyName: "",
@@ -2217,19 +1034,15 @@ if (typeof window !== "undefined") {
   };
   const openDebug = (snapshot) => {
     ensureStyles();
-    state.vendorState = snapshot || DEBUG_SNAPSHOT;
+    state.vendorState = snapshotFromWasm(snapshot || DEBUG_SNAPSHOT);
     state.currentTab = "items";
     state.selectedItemGuid = null;
     state.buyQueue = [];
     state.sellQueue = [];
     state.categoryFilter = "all";
+    state.qty = 1;
     showOverlay();
-    // Rec #18 — start range polling when vendor opens.
-    startVendorRangeWatchdog();
-    if (state.refs?.items?.cat) {
-      state.refs.items.cat.value = "all";
-      try { state.refs.items.syncMenu?.(); } catch (_) {}
-    }
+    if (state.refs?.qtyInput) state.refs.qtyInput.value = "1";
     render();
   };
   window.__vendorBarDebug = () => openDebug();
@@ -2238,5 +1051,6 @@ if (typeof window !== "undefined") {
     close: () => hideOverlay(),
     switchTab: (id) => { state.currentTab = id; render(); },
     refs: () => state.refs,
+    stageSell: (guid) => stageSell(guid),
   };
 }

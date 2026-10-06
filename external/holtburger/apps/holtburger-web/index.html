@@ -465,7 +465,18 @@
          listed; `#hb-vitals-orbs-defs` is the zero-size shared <defs>
          SVG the vessels' filters resolve against and must stay in the
          render tree with them. */
-      html.agent-mode body > *:not(#stage):not(.hb-bar):not(#hb-vitals-hud):not(#hb-vitals-orb-hp):not(#hb-vitals-orb-stam):not(#hb-vitals-orb-mana):not(#hb-vitals-orbs-defs):not(.hb-pill):not(#hb-radar):not(#hb-chat-panel):not(#hb-status-indicators):not(#hb-hotbar):not(#hb-main-panel):not(#hb-vendor-bar):not(#hb-buffs-hud):not(#hb-target-bar):not(#hb-combat-hud):not(#hb-sneak-hud):not(#hb-dye-preview-tooltip):not(.hb-panel):not(#hb-spell-strip):not(#hb-thought-overlay) { display: none !important; }
+      /* HUD overhaul 2026-10-05: the per-id allowlist above had silently
+         drifted — every HUD root added since (container / corpse-loot /
+         trade / book / tinker / salvage panels, the modal confirm, the
+         right-click radial menu, the hover tooltip, the lifestone popup,
+         the standalone social/allegiance/fellowship windows …) was
+         display:none'd in every autoLogin session, so looting a chest
+         from the desktop shortcut showed nothing. The rule is now the
+         naming convention instead of a list: a direct <body> child is
+         HUD iff its id starts `hb-` (or it carries .hb-bar / .hb-pill /
+         .hb-panel). Dev chrome (#ui-shell-bar, #plugin-bar, the legacy
+         #chat-log, …) never used the prefix, so it stays hidden. */
+      html.agent-mode body > *:not(#stage):not([id^="hb-"]):not(.hb-bar):not(.hb-pill):not(.hb-panel) { display: none !important; }
       html.agent-mode body #stage {
         position: fixed; inset: 0; margin: 0; padding: 0;
         display: block; width: 100vw; height: 100vh;
@@ -535,7 +546,8 @@
          the swing meter and jump meter read as the same UI language. */
       #hb-jump-charge {
         position: fixed;
-        bottom: 96px;
+        /* HUD overhaul 2026-10-05: clear the unified toolbar (bottom:8 + 100). */
+        bottom: 116px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 60;
@@ -993,7 +1005,7 @@
     <link rel="modulepreload" href="./app/plugin_bar.js">
     <link rel="modulepreload" href="./app/server_picker.js">
     <link rel="modulepreload" href="./app/slash_commands.js">
-    <link rel="modulepreload" href="./pkg/holtburger_web.js?v=wasmrev-20260803">
+    <link rel="modulepreload" href="./pkg/holtburger_web.js?v=wasmrev-20261005c">
     <link rel="modulepreload" href="./pkg/snippets/holtburger-web-35e2cc366b0a5b65/inline0.js">
     <link rel="modulepreload" href="./plugins/allegiance-panel.js">
     <link rel="modulepreload" href="./plugins/api.js">
@@ -1004,9 +1016,11 @@
     <link rel="modulepreload" href="./plugins/contracts-panel.js">
     <link rel="modulepreload" href="./plugins/emote-panel.js">
     <link rel="modulepreload" href="./plugins/examine-target.js">
+    <link rel="modulepreload" href="./plugins/examine_format.js">
     <link rel="modulepreload" href="./plugins/fellowship-panel.js">
     <link rel="modulepreload" href="./plugins/inventory.js">
     <link rel="modulepreload" href="./plugins/inventory_helpers.js">
+    <link rel="modulepreload" href="./plugins/item_drag.js">
     <link rel="modulepreload" href="./plugins/journal-panel.js">
     <link rel="modulepreload" href="./plugins/loader.js">
     <link rel="modulepreload" href="./plugins/lore-panel.js">
@@ -1015,6 +1029,7 @@
     <link rel="modulepreload" href="./plugins/modal-dialog.js">
     <link rel="modulepreload" href="./plugins/options-panel.js">
     <link rel="modulepreload" href="./plugins/rejection_feedback.js">
+    <link rel="modulepreload" href="./plugins/social-panel.js">
     <link rel="modulepreload" href="./plugins/spellbook.js">
     <link rel="modulepreload" href="./plugins/stance-toggle.js">
     <link rel="modulepreload" href="./plugins/train-skills.js">
@@ -1067,10 +1082,14 @@
     <link rel="modulepreload" href="./scene3d/atmosphere_pipeline.js">
     <link rel="modulepreload" href="./scene3d/atmosphere_runtime.js?v=lutbake">
     <link rel="modulepreload" href="./scene3d/atmosphere_sky.js">
+    <link rel="modulepreload" href="./scene3d/audio/ambient_model.js">
     <link rel="modulepreload" href="./scene3d/audio/ambient_runtime.js">
     <link rel="modulepreload" href="./scene3d/audio/audio_manager.js">
     <link rel="modulepreload" href="./scene3d/audio/baked_ambient_source.js">
+    <link rel="modulepreload" href="./scene3d/audio/retail_mixer.js">
+    <link rel="modulepreload" href="./scene3d/audio/retail_sound_rules.js">
     <link rel="modulepreload" href="./scene3d/audio/sound_table_cache.js">
+    <link rel="modulepreload" href="./scene3d/audio/voice_pool.js">
     <link rel="modulepreload" href="./scene3d/bake_prewarm.js">
     <link rel="modulepreload" href="./scene3d/bake_transfer.js">
     <link rel="modulepreload" href="./scene3d/bake_worker_client.js">
@@ -1078,14 +1097,14 @@
     <link rel="modulepreload" href="./scene3d/buildings.js?v=phase-d-batch">
     <link rel="modulepreload" href="./scene3d/camera.js">
     <link rel="modulepreload" href="./scene3d/camera_math.js">
+    <link rel="modulepreload" href="./scene3d/cell_fusion.js">
     <link rel="modulepreload" href="./scene3d/cells.js">
-    <link rel="modulepreload" href="./scene3d/client_event_dispatch.js">
+    <link rel="modulepreload" href="./scene3d/client_event_kinds.js">
     <link rel="modulepreload" href="./scene3d/cloud_overlay.js">
     <link rel="modulepreload" href="./scene3d/cloud_storm_look.js">
     <link rel="modulepreload" href="./scene3d/cloud_volume.js">
     <link rel="modulepreload" href="./scene3d/csm.js">
     <link rel="modulepreload" href="./scene3d/culling.js">
-    <link rel="modulepreload" href="./scene3d/daygroup_weather.js">
     <link rel="modulepreload" href="./scene3d/diag.js">
     <link rel="modulepreload" href="./scene3d/diag/assets.js">
     <link rel="modulepreload" href="./scene3d/diag/cast.js">
@@ -1106,6 +1125,7 @@
     <link rel="modulepreload" href="./scene3d/diag/pvs.js">
     <link rel="modulepreload" href="./scene3d/diag/strings.js">
     <link rel="modulepreload" href="./scene3d/diag/wire.js">
+    <link rel="modulepreload" href="./scene3d/draw_sort_program.js">
     <link rel="modulepreload" href="./scene3d/entities.js">
     <link rel="modulepreload" href="./scene3d/entity_dispatch.js">
     <link rel="modulepreload" href="./scene3d/entity_owned_tally.js">
@@ -1113,10 +1133,12 @@
     <link rel="modulepreload" href="./scene3d/far_terrain.js">
     <link rel="modulepreload" href="./scene3d/far_terrain_flags.js">
     <link rel="modulepreload" href="./scene3d/fixed_grid.js">
+    <link rel="modulepreload" href="./scene3d/frame_pose.js">
     <link rel="modulepreload" href="./scene3d/frame_split.js">
+    <link rel="modulepreload" href="./scene3d/frame_work.js">
+    <link rel="modulepreload" href="./scene3d/geom_bundles.js">
     <link rel="modulepreload" href="./scene3d/gfx_relief.js">
     <link rel="modulepreload" href="./scene3d/ground_fog.js">
-    <link rel="modulepreload" href="./scene3d/hook_windows.js">
     <link rel="modulepreload" href="./scene3d/hud.js">
     <link rel="modulepreload" href="./scene3d/ibl_environment.js">
     <link rel="modulepreload" href="./scene3d/index.js?v=diag-followons-2026-05-23">
@@ -1128,17 +1150,28 @@
     <link rel="modulepreload" href="./scene3d/lighting.js">
     <link rel="modulepreload" href="./scene3d/limbs.js">
     <link rel="modulepreload" href="./scene3d/lod_prewarm.js">
-    <link rel="modulepreload" href="./scene3d/loop.js">
     <link rel="modulepreload" href="./scene3d/materials.js">
     <link rel="modulepreload" href="./scene3d/mem_census.js">
     <link rel="modulepreload" href="./scene3d/motion/motion_sequence.js">
+    <link rel="modulepreload" href="./scene3d/motion_queue.js">
     <link rel="modulepreload" href="./scene3d/nameplate_sprite.js">
     <link rel="modulepreload" href="./scene3d/net_worker_client.js">
     <link rel="modulepreload" href="./scene3d/night_ramp.js">
+    <link rel="modulepreload" href="./scene3d/object_radius.js">
+    <link rel="modulepreload" href="./scene3d/pack_fetch_controller.js">
     <link rel="modulepreload" href="./scene3d/particles/owner_registry.js">
     <link rel="modulepreload" href="./scene3d/particles/time_rng.js">
     <link rel="modulepreload" href="./scene3d/picking.js">
     <link rel="modulepreload" href="./scene3d/play_effect_vfx.js">
+    <link rel="modulepreload" href="./scene3d/pool_class_key.js">
+    <link rel="modulepreload" href="./scene3d/pool_envcells.js">
+    <link rel="modulepreload" href="./scene3d/pool_material.js">
+    <link rel="modulepreload" href="./scene3d/pool_prewarm.js">
+    <link rel="modulepreload" href="./scene3d/pool_producer.js">
+    <link rel="modulepreload" href="./scene3d/pool_registry.js">
+    <link rel="modulepreload" href="./scene3d/pool_stream.js">
+    <link rel="modulepreload" href="./scene3d/portal_clip.js">
+    <link rel="modulepreload" href="./scene3d/portal_pass2.js">
     <link rel="modulepreload" href="./scene3d/portal_punch.js">
     <link rel="modulepreload" href="./scene3d/portal_space.js">
     <link rel="modulepreload" href="./scene3d/portal_stencil.js">
@@ -1146,11 +1179,14 @@
     <link rel="modulepreload" href="./scene3d/quality.js">
     <link rel="modulepreload" href="./scene3d/ragdoll.js">
     <link rel="modulepreload" href="./scene3d/recolor_flag.js">
+    <link rel="modulepreload" href="./scene3d/residency.js">
+    <link rel="modulepreload" href="./scene3d/residency_grid.js">
     <link rel="modulepreload" href="./scene3d/rust_pose.js">
     <link rel="modulepreload" href="./scene3d/script_manager.js">
     <link rel="modulepreload" href="./scene3d/selection_brackets.js">
     <link rel="modulepreload" href="./scene3d/server_turn.js">
     <link rel="modulepreload" href="./scene3d/setup_rig.js">
+    <link rel="modulepreload" href="./scene3d/shader_logdepth.js">
     <link rel="modulepreload" href="./scene3d/shader_prewarm.js">
     <link rel="modulepreload" href="./scene3d/sky_dome.js">
     <link rel="modulepreload" href="./scene3d/sky_lighting.js">
@@ -1159,12 +1195,16 @@
     <link rel="modulepreload" href="./scene3d/spell_range.js">
     <link rel="modulepreload" href="./scene3d/spell_shape_preview.js">
     <link rel="modulepreload" href="./scene3d/splatter_decode.js">
+    <link rel="modulepreload" href="./scene3d/stall_probe.js">
+    <link rel="modulepreload" href="./scene3d/static_array_pool.js">
     <link rel="modulepreload" href="./scene3d/static_atlas.js">
     <link rel="modulepreload" href="./scene3d/static_batch_x.js">
+    <link rel="modulepreload" href="./scene3d/static_geom_cache.js">
     <link rel="modulepreload" href="./scene3d/statics.js?v=phase7-par">
     <link rel="modulepreload" href="./scene3d/stream_bake_guard.js">
     <link rel="modulepreload" href="./scene3d/suite_assets.js">
     <link rel="modulepreload" href="./scene3d/sun_direction.js">
+    <link rel="modulepreload" href="./scene3d/surface_planes.js">
     <link rel="modulepreload" href="./scene3d/target_cycle.js">
     <link rel="modulepreload" href="./scene3d/terrain.js?v=phase-d-batch">
     <link rel="modulepreload" href="./scene3d/terrain_batch.js">
@@ -1184,7 +1224,11 @@
     <link rel="modulepreload" href="./scene3d/terrain_vfx.js">
     <link rel="modulepreload" href="./scene3d/terrain_volcano.js">
     <link rel="modulepreload" href="./scene3d/tex_overrides.js">
+    <link rel="modulepreload" href="./scene3d/texture_census.js">
+    <link rel="modulepreload" href="./scene3d/texture_rehydrate.js">
+    <link rel="modulepreload" href="./scene3d/texture_release.js">
     <link rel="modulepreload" href="./scene3d/three_batchedmesh_colortexture_fix.js">
+    <link rel="modulepreload" href="./scene3d/tile_plan.js">
     <link rel="modulepreload" href="./scene3d/trail_map.js">
     <link rel="modulepreload" href="./scene3d/tree_wind.js">
     <link rel="modulepreload" href="./scene3d/vfx/components/brazierEmbers.js">
@@ -1225,13 +1269,16 @@
     <link rel="modulepreload" href="./scene3d/weather_state.js">
     <link rel="modulepreload" href="./scene3d/webgl_context_recovery.js">
     <link rel="modulepreload" href="./scene3d/wind_rig.js">
+    <link rel="modulepreload" href="./scene3d/wireframe_flag.js">
     <link rel="modulepreload" href="./scene3d/world_stream.js">
+    <link rel="modulepreload" href="./scene3d/xu7_textures.js">
     <link rel="modulepreload" href="./ui/ac_aim_level_for_velocity.js">
     <link rel="modulepreload" href="./ui/ac_attack_type_for_weapon.js">
     <link rel="modulepreload" href="./ui/ac_cast_precheck.js">
     <link rel="modulepreload" href="./ui/ac_cast_spell.js">
     <link rel="modulepreload" href="./ui/ac_clothing.js">
     <link rel="modulepreload" href="./ui/ac_combat_maneuver.js">
+    <link rel="modulepreload" href="./ui/ac_combat_mode_intent.js">
     <link rel="modulepreload" href="./ui/ac_dye_preview.js">
     <link rel="modulepreload" href="./ui/ac_entity_icon.js">
     <link rel="modulepreload" href="./ui/ac_floaty_frame.js">
@@ -1254,6 +1301,8 @@
     <link rel="modulepreload" href="./ui/cast_reject_policy.js">
     <link rel="modulepreload" href="./ui/fullscreen_toggle.js">
     <link rel="modulepreload" href="./ui/graphics_settings.js">
+    <link rel="modulepreload" href="./ui/hud_kit.js">
+    <link rel="modulepreload" href="./ui/hud_scale.js">
     <link rel="modulepreload" href="./ui/input-funnel.js">
     <link rel="modulepreload" href="./ui/keymap.js">
     <!-- END modulepreload -->
@@ -1465,12 +1514,12 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js?v=wasmrev-20260803";
+      } from "./pkg/holtburger_web.js?v=wasmrev-20261005c";
       // F18-2 — namespace import for the stale-pkg handshake. A NAMED import of
       // a possibly-missing export would throw a module-link error on the exact
       // stale bundle we're trying to detect; namespace access yields `undefined`
       // for a missing export instead, so the boot check can run safely.
-      import * as __hbWasmNs from "./pkg/holtburger_web.js?v=wasmrev-20260803";
+      import * as __hbWasmNs from "./pkg/holtburger_web.js?v=wasmrev-20261005c";
 
       // pixi.js import REMOVED 2026-06-18 (item 8) — the 2D PIXI renderer is
       // retired to legacy/. Zero live PIXI.* references remain in index.html.
@@ -1508,6 +1557,14 @@
       // module can never break chat.
       import "./plugins/chat-hooks.js";
       import { mountBar } from "./ui/bar.js";
+      // HUD overhaul 2026-10-05: responsive HUD scale (CSS zoom on every
+      // #hb-* HUD root, auto from window height × Options multiplier) and
+      // the shared retail component kit (hbk-* classes from DAT sprites).
+      // Both install before any plugin mounts.
+      import { installHudScale } from "./ui/hud_scale.js";
+      import { installHudKit } from "./ui/hud_kit.js";
+      installHudScale();
+      installHudKit();
       // Polish A (2026-05-27) + J1.C (2026-05-27): PR 8 plugin loader
       // wired into runtime. J1.C consolidated the static-import set: only
       // plugins whose JS exports something other than `mount`/`activate`
@@ -1737,7 +1794,7 @@
           // pass it in; `memory` comes back out of InitOutput, which avoids
           // hardcoding the module's minimum page count.
           const __hbWasmUrl = new URL(
-            "./pkg/holtburger_web_bg.wasm?v=wasmrev-20260803",
+            "./pkg/holtburger_web_bg.wasm?v=wasmrev-20261005c",
             window.location.href,
           );
           const __hbModule = await WebAssembly.compileStreaming(fetch(__hbWasmUrl));
@@ -1761,7 +1818,7 @@
           // old binary (the 2026-08-02 limp/ragdoll staleness hole).
           const __hbOutMain = await init({
             module_or_path: new URL(
-              "./pkg/holtburger_web_bg.wasm?v=wasmrev-20260803",
+              "./pkg/holtburger_web_bg.wasm?v=wasmrev-20261005c",
               window.location.href,
             ),
           });
@@ -1939,6 +1996,15 @@
           // stale pkg/ yields `undefined` and the JS surface reads null.
           ...(typeof __hbWasmNs?.castArbitrationDiag === "function"
             ? { castArbitrationDiag: () => __hbWasmNs.castArbitrationDiag() >>> 0 }
+            : {}),
+          // HUD overhaul 2026-10-05 — DAT ContractTable for
+          // plugins/contracts-panel.js + journal (contract names, contact NPC,
+          // location). typeof-guarded for a stale pkg/.
+          ...(typeof __hbWasmNs?.getContractRecord === "function"
+            ? {
+                prefetchContractTable: () => __hbWasmNs.prefetchContractTable(),
+                getContractRecord: (id) => __hbWasmNs.getContractRecord(id >>> 0),
+              }
             : {}),
           // ORACLE rider (2026-08-11; rides v6, no manifest bump): drain the
           // per-tick movement telemetry ring as JSONL, plus a packed status

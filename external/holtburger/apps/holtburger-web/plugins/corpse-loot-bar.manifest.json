@@ -1,15 +1,15 @@
 {
   "$schema": "./schemas/plugin-manifest.json",
   "id": "corpse-loot-bar",
-  "name": "Corpse Loot",
+  "name": "External Container",
   "author": "holtburger",
   "version": "0.1.0",
-  "description": "Horizontal corpse-loot bar (vendor-strip pattern) — container-panel routes corpse kind=21 ContainerOpened events here",
+  "description": "External-container window (retail gmExternalContainerUI) for corpses and chests — container-panel routes kind=21 ContainerOpened events here",
   "icon": "💀",
   "iconHidden": true,
   "entry": "./corpse-loot-bar.js",
   "environments": ["browser"],
   "slots": ["panel"],
   "clientApi": "^1.0",
-  "capabilities": ["GetContainerContents", "MoveItem", "GetPlayerInventory"]
+  "capabilities": ["GetContainerContents", "MoveItem", "GetPlayerInventory", "MergeStacks?", "SplitStackToContainer?"]
 }

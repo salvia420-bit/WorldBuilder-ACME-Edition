@@ -4,7 +4,7 @@
   "name": "Character",
   "author": "holtburger",
   "version": "0.1.0",
-  "description": "Character info view — Attributes / Skills / Titles tabs (gmCharacterInfoUI 0x2100001A). Toggled via F1; mounts as a view of plugins/main-panel.js.",
+  "description": "Character view — Attributes / Skills / Titles in one pane (retail gmStatManagementUI template 0x21000045: header with level + XP meter, sectioned list, +1/+10 raise footer). F1 toggles (last-used tab); F11 opens the Skills tab. Mounts as a view of plugins/main-panel.js.",
   "icon": "👤",
   "iconHidden": true,
   "entry": "./character-info.js",

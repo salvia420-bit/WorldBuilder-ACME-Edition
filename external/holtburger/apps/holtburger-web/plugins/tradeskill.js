@@ -11,9 +11,19 @@
 // material consumption, and result-notification.
 //
 // **What this plugin does:** subscribe to the `hb:inventory-item-on-
-// item-drop` window event that inventory.js emits when the user drops
-// one inventory item onto another (source != target). On each drop,
-// call `client.player.useWithTarget(sourceGuid, targetGuid)`.
+// item-drop` window event and call
+// `client.player.useWithTarget(sourceGuid, targetGuid)`.
+//
+// HUD overhaul 2026-10-05: the event now comes from plugins/item_drag.js
+// (executeItemAction "usewith") and only when the drop decision
+// (inventory_helpers.decideItemDrop) found the dragged item to be a tool
+// the Rust `canUseWith` port (retail TargetCompatibleWithObject) accepts
+// for that target. Retail's item-list drop (UIElement_ItemList::
+// AcceptDragObject, acclient.c:274286) merges stacks or re-orders; it
+// combines via the targeting cursor (ItemHolder::UseObject →
+// TargetAcquired → Event_UseWithTargetEvent). Gating keeps BOTH working:
+// dragging a dye pot onto armour still dyes it, dragging a sword onto a
+// shield just re-arranges the pack instead of attempting a recipe.
 //
 // **Visibility surface:** the success / failure message comes back
 // through ACE's existing chat-message + InventoryChange paths, which

@@ -240,7 +240,11 @@ function _flashSlotForGuid(itemGuid) {
 function _renderToast(message) {
   if (!message) return;
   _ensureStyles();
+  // HUD overhaul 2026-10-05: an `hb-` id keeps the toast visible in
+  // ?autoLogin=1 agent-mode (index.html hides id-less body children).
+  document.getElementById("hb-rejection-toast")?.remove();
   const t = document.createElement("div");
+  t.id = "hb-rejection-toast";
   t.className = "hb-rejection-toast";
   t.textContent = message;
   document.body.appendChild(t);

@@ -4,7 +4,7 @@
   "name": "Container",
   "author": "holtburger",
   "version": "0.1.0",
-  "description": "Chest / corpse / bag contents panel — auto-opens on kind=21 ContainerOpened",
+  "description": "Routes kind=21 ContainerOpened (chests, corpses) to the external-container window; own packs open in the inventory",
   "icon": "📦",
   "iconHidden": true,
   "entry": "./container-panel.js",

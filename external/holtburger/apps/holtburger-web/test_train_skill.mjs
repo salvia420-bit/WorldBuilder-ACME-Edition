@@ -62,7 +62,15 @@ const {
   decideTrainAction,
   TRAINING,
   manifest,
+  statRaiseCost,
+  skillSpentXp,
+  estimateVitalRanks,
+  levelProgress,
+  skillGroupFor,
+  view,
 } = await import(url);
+const { readFileSync } = await import("node:fs");
+const XP_FULL = JSON.parse(readFileSync(resolvePath(__dirname, "data/xp-tables-full.json"), "utf8"));
 
 let passed = 0;
 let failed = 0;
@@ -234,6 +242,68 @@ check("cancel → no-op", () => {
   );
   assertEq(out.called, null, "no method");
   assertEq(out.reason, "noop", "noop reason");
+});
+
+console.log("\n[7] HUD overhaul 2026-10-05 — raise maths (GetCostToRaise / GetCostToRaise10)");
+
+check("xp-tables-full.json carries the five ExperienceTable curves", () => {
+  for (const k of ["levels", "attributes", "vitals", "trainedSkills", "specializedSkills"]) {
+    if (!Array.isArray(XP_FULL[k]) || XP_FULL[k].length < 100) throw new Error(`missing ${k}`);
+  }
+  assertEq(XP_FULL.levels[2], 1000, "level 2 costs 1000 xp (retail)");
+  assertEq(XP_FULL.levels.length, 276, "levels 0..275");
+});
+
+check("statRaiseCost +1 / +10 from a whole rank", () => {
+  const t = XP_FULL.attributes;
+  assertEq(statRaiseCost(t, 0, 0, 1), { cost: t[1], ranks: 1 }, "+1 from rank 0");
+  assertEq(statRaiseCost(t, 5, t[5], 10), { cost: t[15] - t[5], ranks: 10 }, "+10 from rank 5");
+});
+
+check("statRaiseCost near the cap buys only the ranks left; at the cap → null", () => {
+  const t = XP_FULL.trainedSkills;
+  const max = t.length - 1;
+  assertEq(statRaiseCost(t, max - 3, t[max - 3], 10), { cost: t[max] - t[max - 3], ranks: 3 }, "3 left");
+  assertEq(statRaiseCost(t, max, t[max], 1), null, "maxed");
+  assertEq(statRaiseCost(null, 1, 0, 1), null, "no table");
+});
+
+check("skillSpentXp recovers partial spend from the marginal next-rank cost", () => {
+  const t = XP_FULL.specializedSkills;
+  assertEq(skillSpentXp(t, 10, t[11] - t[10]), t[10], "whole rank");
+  assertEq(skillSpentXp(t, 10, 5), t[11] - 5, "partial rank");
+  assertEq(skillSpentXp(t, 10, 0), t[10], "unknown marginal → rank floor");
+});
+
+check("estimateVitalRanks: Health = End/2 (round half up), Stamina = End, Mana = Self", () => {
+  const attrs = { 2: 101, 6: 90 };
+  assertEq(estimateVitalRanks(1, 51 + 7, attrs), 7, "health: 101/2 → 51 (floor(x+0.5))");
+  assertEq(estimateVitalRanks(3, 101 + 12, attrs), 12, "stamina");
+  assertEq(estimateVitalRanks(5, 90, attrs), 0, "mana, unraised");
+  assertEq(estimateVitalRanks(5, 80, attrs), 0, "never negative");
+});
+
+check("levelProgress mirrors gmStatManagementUI::UpdateExperience", () => {
+  const L = XP_FULL.levels;
+  const p = levelProgress(L, 2, 1000 + (L[3] - L[2]) / 2);
+  assertEq(p.toNext, L[3] - (1000 + (L[3] - L[2]) / 2), "xp for next level");
+  if (Math.abs(p.fraction - 0.5) > 1e-9) throw new Error(`fraction ${p.fraction}`);
+  assertEq(levelProgress(L, 275, L[275]).isMax, true, "max level");
+  assertEq(levelProgress(null, 5, 0), null, "no table");
+});
+
+check("skillGroupFor follows gmSkillUI::RebuildSkillList", () => {
+  assertEq(skillGroupFor(3), "specialized", "sac 3");
+  assertEq(skillGroupFor(2), "trained", "sac 2");
+  assertEq(skillGroupFor(1, 1), "untrained", "sac 1");
+  assertEq(skillGroupFor(1, 20), "unusable", "sac 1 gated by min_level");
+  assertEq(skillGroupFor(0), "unusable", "inactive");
+});
+
+check("legacy view id redirects instead of rendering a second skills UI", () => {
+  if (typeof view?.mount !== "function") throw new Error("view.mount missing");
+  const r = view.mount();
+  assertEq(r, null, "no DOM, no cleanup");
 });
 
 console.log("\n===========================================================");

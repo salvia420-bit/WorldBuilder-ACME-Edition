@@ -1,61 +1,42 @@
 // Right-side inventory window — port of retail gmInventoryUI (layout
-// 0x21000023, 300x362) + gmPaperDollUI (layout 0x21000037, 800x600).
+// 0x21000023, 300x362): gmPaperDollUI (0x21000024 frame + the 24 equip
+// slots, positions from the retail render manifest m-24), gmBackpackUI
+// (0x21000022: burden meter + main-pack slot + side-pack list) and
+// gm3DItemsUI (the item grid of whichever container is open).
 //
-// Wave 16 audit: Wave 12 mistakenly read body-slot positions from
-// LayoutDesc 0x21000024 (the 224×214 paperdoll-root that only carries
-// frame chrome). The retail inventory paperdoll element forest actually
-// lives in LayoutDesc 0x21000037 (800×600 "gmInventoryUI" — the
-// inventory window's element template tree), which exposes all 24
-// equipment slots PLUS their hint-icon image DIDs as direct top-level
-// elements (each 32×32, IncorporationFlags 0x1E — Width/Height/ZLevel
-// authoritative; X positions come from this plugin's hand-tuned table).
+// HUD overhaul 2026-10-05 — rebuilt around the retail interaction model:
 //
-// Strategy mirrors the chat panel (PR-L): index.html already has full
-// inventory wiring — `#inventory-panel` + `#inv-equipped` + `#inv-pack`
-// (line 691-711), `renderInventoryPanel(handle)` (line 6192) re-reads
-// SessionHandle.playerInventory() on every kind=11 InventoryUpdated
-// ClientEvent and rebuilds the rows with `data-guid`, `data-type-bit`,
-// `draggable`. We mirror those rows into a retail-framed panel via
-// MutationObserver — no duplicated wasm/inventory code.
-//
-// Real DAT sprites in use (extracted 2026-05-22 from layout 0x21000023):
-//   - 0x06004D0A : 300x362-ish stone/leather backdrop (the panel interior!)
-//   - 0x06004CFA : brass title bar strip (276x25)
-//   - 0x06004D0B/0C/0D : corner + chrome pieces
-//   - 0x06004CC2 : 48x48 placeholder spacer
-//
-// Layout: 300 wide x 362 tall.
-//   - Top 25px: title bar with character name + close button.
-//   - Left 224x214 (below title): paperdoll area for equipped items.
-//   - Right 61x339: bag-tab column (1 main pack + 7 side packs = 8 tabs,
-//     per the Inventory Panel wiki article; 9 with the Shadow of the
-//     Seventh Mule augmentation, gated on server-side state).
-//   - Lower 234x120: items grid for pack items (32x32 slots).
-//
-// Burden meter lives in `plugins/status-indicators.js` (the real retail
-// indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071, anchored at
-// the top-left status strip). This panel does NOT render a duplicate
-// burden bar — Wave 12 originally mistook PAPERDOLL_ELEM_BURDEN
-// (0x100005BE) for the burden indicator, but that element is actually
-// a paperdoll button/checkbox (Wave 13 audit finding).
-//
-// Paperdoll has 24 slots total (per retail GetLocationInfoFromElementID
-// at acclient.c:219835 + the Wave 16 survey of LayoutDesc 0x21000037):
-// head/chest/abdomen/upper-arm/lower-arm/glove (HandWear)/upper-leg/
-// lower-leg/foot armor; head/chest/upper-leg undershirts; necklace + 2
-// bracelets + 2 rings (jewelry); cloak; weapon-ready + ammo-ready +
-// shield-ready (the three "ReadySlot" hand slots); trinket; 3 Aetheria
-// (SigilOne/Two/Three, hidden until the Aetheria Quest AetheriaBits
-// attribute unlocks them). Wave 12 surveyed the wrong layout
-// (0x21000024) and so missed WeaponReady (0x1000044B) / AmmoReady
-// (0x1000044C) and conflated ShieldReady (0x1000044D, retail element
-// in 0x21000037) with the layout-0x21000024 element 0x100001E1 — Wave
-// 16 dedupes onto the canonical 0x21000037 elementIds.
+//   * Layout FITS the main-panel body (300×337 / 288×325 with the frame):
+//     paperdoll 224×214 top-left, gmBackpackUI column 61 px flush right
+//     (full height), item grid fills the rest and scrolls internally with
+//     the rope scrollbar. Retail's layout coords are relative to a 362-tall
+//     panel whose top 23 px are the title — main-panel draws that title,
+//     so the raw 0x21000023 y-offsets are no longer applied (they pushed
+//     the grid 25 px past the bottom: the "only 2.5 rows, no scrollbar" bug).
+//   * Burden meter + percent moved back where retail has them: the top of
+//     the backpack column (gmBackpackUI::SetLoadLevel, acclient.c:222634 —
+//     meter full at 300 %, text floored). No more BURDEN/SLOTS overlap on
+//     the paperdoll; the Slots checkbox sits at retail (42,190).
+//   * Side packs are retail ItemSlot_Backpack cells with the open-container
+//     arrow (0x06005D9C) and per-pack capacity bar (0x06004D22/23); empty
+//     pack slots pad to ContainersCapacity; the list scrolls.
+//   * Drag & drop goes through plugins/item_drag.js + the pure retail rules
+//     in inventory_helpers.decideItemDrop (UIElement_ItemList::
+//     AcceptDragObject, ItemHolder::AttemptToPlaceInContainer/AttemptMerge,
+//     gmPaperDollUI::AcceptPaperDollDragObject). Moves are OPTIMISTIC: the
+//     icon lands at once, ghosted (ItemSlot_Icon_Ghosted) until the server
+//     echoes; a server refusal (InventoryServerSaveFailed) reverts it.
+//   * The grid is a keyed diff/patch (cells are reused, only changed
+//     attributes touched, reordered with insertBefore) — no innerHTML wipe
+//     per inventory packet, so no flicker and a drag source never vanishes
+//     mid-drag.
+//   * A client-side PlacementPosition model (createPackOrder) keeps items
+//     where the player put them — the wasm snapshot is name-sorted and
+//     carries no placement yet (see the report's Rust patch).
 
 import { setAcText } from "../ui/ac_font.js";
-import { loadLayout, findElementById, getCachedLayout } from "../ui/ac_layout.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared, getIconImmediate } from "../ui/ac_icon_cache.js";
 import {
   uiEffectIconsEnabled,
   uiEffectIconsFor,
@@ -72,112 +53,68 @@ import "./rejection_feedback.js";
 import {
   aetheriaSlotIsLocked,
   formatBurdenText,
+  burdenMeterFraction,
   computeInventoryTitle,
   parseSlotsViewChecked,
   canEquipInSlot,
   buildPlayerEquipState,
   formatAppraisalTooltip,
+  takeInventoryRows,
+  rowUsesPackSlot,
+  pickWieldSlotMask,
+  createPackOrder,
+  packCapacity,
+  mergeAmount,
+  DROP_TARGET,
+  MAIN_PACK_KEY,
+  PACKS_KEY,
+  decideItemDrop,
 } from "./inventory_helpers.js";
+import {
+  beginItemDrag,
+  registerDropZone,
+  resolveDropAction,
+  executeItemAction,
+  pendingOps,
+  showItemTooltip,
+  hideItemTooltip,
+  localPlayerGuid,
+} from "./item_drag.js";
 
-/** Retail LayoutDescs covering the inventory window.
- *
- *  - `gmInventoryUI` (0x21000023, 300×362) — outer-window children
- *    laying out the paperdoll area, bag column, items grid, title,
- *    and close button. Top-level element 0x100001CC.
- *  - `gmInventoryPaperdollElements` (0x21000037, 800×600) — body-slot
- *    element templates (24 entries) referenced by the inventory layout
- *    via element IDs 0x10000446-0x100005EA. Each top-level element
- *    here is a 32×32 template carrying a single child whose ImageDids
- *    list contains the per-slot hint icon DID (helmet/sword/ring/etc.
- *    silhouette). Per the Wave 16 layout-0x21000037 survey + the
- *    Wave-1 UI-port extraction of the 24 hint PNGs into
- *    data/ui-sprites/slot-hints/. The real burden indicator lives in
- *    `gmFloatyIndicatorsUI` 0x21000071 (status-indicators.js).
- *
- *  Per ElementDesc.element_id mapping (cross-checked against the Wave
- *  16 layout-0x21000037 dump + retail-anatomy validation):
- */
-const INVENTORY_LAYOUT_ID = 0x21000023;
-// LayoutDesc 0x21000037 holds the 24 paperdoll-slot ElementId templates
-// (see PAPERDOLL_SLOTS' elemId column + hintIconDid extraction in
-// data/ui-sprites/slot-hints/). Not loaded at runtime — its elements
-// carry no positioning info (Wave 16 survey: IncorporationFlags 0x1E
-// excludes the X bit on every entry), so applyInventoryLayout reads
-// only the outer 0x21000023 region positions; PAPERDOLL_SLOTS' (x, y)
-// columns are authoritative for body-slot positions.
-// (PAPERDOLL_LAYOUT_ID = 0x21000037 — doc-only constant retired Wave 16)
-const INV_ELEM_PAPERDOLL_AREA = 0x100001CD;
-const INV_ELEM_BAG_COLUMN    = 0x100001CE;
-const INV_ELEM_ITEMS_GRID    = 0x100001CF;
-
-
+/** Retail LayoutDescs covering the inventory window (documentation; the
+ *  region boxes are now CSS — see the header note on the title offset).
+ *    gmInventoryUI 0x21000023: PaperDollField 0x100001CD (0,23,224,214),
+ *    BackpackField 0x100001CE (239,23,61,339), ThreeDItemsField
+ *    0x100001CF (0,237,234,120). gmBackpackUI 0x21000022 children:
+ *    Inv_BurdenTextBegin (0,7), Inv_BurdenText (0,18), Inv_BurdenBar
+ *    (44,8,11,58), Inv_MainPackSlot (6,32,36,36), Inv_ContainerList
+ *    (6,73,36,252) + its scrollbar (41,73,16,252). */
 const OVERLAY_ID = "hb-inventory";
-// Title bar is now owned by main-panel (see plugins/main-panel.js).
-// TITLE_H = 0 hides the inline title-bar element since main-panel
-// provides chrome; the other vertical offsets in the inventory CSS
-// are inlined to retail values from LayoutDesc 0x21000023 (see
-// data/retail-layouts/0x21000023.json — PaperDollField y=23,
-// ThreeDItemsField y=237, BackpackField y=23 / h=339) so the cold
-// open renders at retail proportions without a snap when
-// loadLayout resolves and applyBox re-applies the same values.
-const TITLE_H = 0;
 const PAPERDOLL_W = 224;
 const PAPERDOLL_H = 214;
 const BAG_COL_W = 61;
-const SLOT_SIZE = 32;
-// P2-21 (cross-find inv-items-grid-cols): retail gmInventoryUI uses 6
-// columns. Was 7. Hand-tuned to fit our 300px content frame minus
-// 8px padding minus 16px bag column = 276/6 = 46px-wide cells with
-// the 32×32 slot icon centered. The visible item grid feels tighter
-// than retail at 7 cols.
-const GRID_COLS = 6;
+// Generic "Pack" icon (LSD weenie 70016 Icon DID) for the main-pack slot.
+const MAIN_PACK_ICON = 0x06001BAF;
+// Retail human defaults when the snapshot has not surfaced the property
+// yet (ACE human weenie: ItemsCapacity 102, ContainersCapacity 7).
+const DEFAULT_MAIN_CAP = 102;
+const DEFAULT_PACKS_CAP = 7;
+const SP = "./data/ui-sprites";
 
-// Wave 13.2 — ItemType bit for the Container subclass (side packs).
-// Source: external/ACE/Source/ACE.Entity/Enum/ItemType.cs:18
-//     Container = 0x00000200,
-// Surfaced on the wire via PropertyInt::ItemType and snapshot-published
-// as `InventoryItem.itemType` (src/lib.rs:14263-14266).
-const ITEM_TYPE_CONTAINER = 0x00000200;
-
-// HUD bug-pack P1 (2026-07-04) — retail's real "does this item eat a
-// container-slot (bag-tab strip) vs an item-slot (main grid)" rule is
-// `WeenieType == Container || RequiresPackSlot`
-// (external/ACE/Source/ACE.Server/WorldObjects/WorldObject_Properties.cs:2056
-// UseBackpackSlot), NOT the ItemType.Container bit alone — a pack-slot
-// item that isn't ItemType.Container (e.g. some foci) was previously
-// double-counted against the 102-item main-pack pool and mis-placed
-// into the item grid instead of the bag-tab strip.
-//
-// src/lib.rs now surfaces `InventoryItem.requiresBackpackSlot`, derived
-// Rust-side from `WorldObjectExt::uses_player_container_slot()`
-// (`requires_backpack_slot() || can_hold_items()` — see the field's doc
-// comment in src/lib.rs for why `can_hold_items()` stands in for
-// `WeenieType == Container`: WeenieType never crosses the live
-// PublicWeenieDescription wire, so there's no live `weenieType` to
-// compare against an ordinal here). `usesBackpackSlot()` trusts that
-// field when present and only falls back to the raw ItemType bit test
-// for a stale wasm build (pre-rebuild `requiresBackpackSlot === undefined`).
-function usesBackpackSlot(item) {
-  if (!item) return false;
-  if (typeof item.requiresBackpackSlot === "boolean") return item.requiresBackpackSlot;
-  return ((item.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+// Item-type-bit → placeholder tint while the real icon fetches.
+const TYPE_COLOR = {
+  0x1: "#7da6e0", 0x2: "#7dd9a0", 0x10000: "#c060ff", 0x40: "#f0c060",
+};
+function typeTint(itemType) {
+  const t = (itemType >>> 0) || 0;
+  const low = t & (~t + 1);
+  return TYPE_COLOR[low] || "#3a3a40";
 }
 
-// Bag tabs: 1 main + 7 side packs (per the Inventory Panel wiki article:
-// "The top bag is your main inventory, and below it are slots for 7
-// additional containers."). The Shadow of the Seventh Mule augmentation
-// can add a 9th — surfaced when its wire event lands. Slots without an
-// owned pack stay dim/empty.
-const BAG_COUNT = 8;
-
-// Item-type-bit → color (mirrors index.html's #inventory-panel cat
-// CSS but adapted for our dark backdrop).
-const TYPE_COLOR = {
-  "0x4":     "#7da6e0",   // Weapon
-  "0x2":     "#7dd9a0",   // Armor
-  "0x10000": "#c060ff",   // Magic / scroll
-  "0x20":    "#f0c060",   // Money / pyreal
-};
+// Module-level so the player's arrangement and open pack survive closing
+// and reopening the panel (retail keeps both on the client).
+const packOrder = createPackOrder();
+let lastSelectedPack = 0;
 
 // Paperdoll equipment slot table — element IDs + equipMask bits from
 // the Wave 16 LayoutDesc 0x21000037 dump (24 top-level 32×32 element
@@ -292,10 +229,15 @@ const PAPERDOLL_SLOTS = [
   //     (canEquipInSlot: validLocations & slotMask == 0 → "cannot be worn in
   //     that slot"). Ammo still has its own slot below; Shield its own.
   //   AmmoReady     (MissileAmmo bit 0x00800000) — quiver/quarrel slot.
+  //   HUD overhaul 2026-10-05: x positions corrected to the retail render
+  //   manifest (m-24.json: Inv_ShieldReadySlot 8,172 / Inv_FootSlot
+  //   120,172 / Inv_WeaponReadySlot 156,172 / Inv_AmmoReadySlot 190,172).
+  //   The old table had Weapon at 48 and Ammo at 156; the freed (42,190)
+  //   band is where retail's Paperdoll_Slots_Checkbox sits.
   { elemId: "0x1000044D", equipMask: 0x00200000, hintIconDid: 0x06000F6C, x: 8,   y: 172, name: "Shield" },
-  { elemId: "0x1000044B", equipMask: 0x03500000, hintIconDid: 0x06000F66, x: 48,  y: 172, name: "Weapon" },
+  { elemId: "0x1000044B", equipMask: 0x03500000, hintIconDid: 0x06000F66, x: 156, y: 172, name: "Weapon" },
   { elemId: "0x100005BD", equipMask: 0x00000100, hintIconDid: 0x06006D85, x: 120, y: 172, name: "Boots" },
-  { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 156, y: 172, name: "Ammo" },
+  { elemId: "0x1000044C", equipMask: 0x00800000, hintIconDid: 0x06000F5E, x: 190, y: 172, name: "Ammo" },
 ];
 
 // The 9 body-armor slots that retail's "Slots" checkbox SWAPS with
@@ -327,19 +269,6 @@ const ARMOR_SLOT_ELEMIDS = new Set([
   "0x100005BD", // Foot (Boots)
 ]);
 
-// Wave D.1 follow-on (2026-05-27) — pure helpers (aetheriaSlotIsLocked,
-// formatBurdenText, computeInventoryTitle) live in inventory_helpers.js
-// so they can be unit-tested in Node without pulling three.js. The
-// in-doMount() refresh functions below delegate to them; the unit tests
-// at tests/inventory_paperdoll_helpers.test.cjs exercise them directly.
-
-// Wave 15 — both paperdoll-slot AND items-grid cells route their icon
-// fetches through the shared `ui/ac_icon_cache.js` cache so a fetch
-// triggered in one plugin (vendor-ui, container-panel, etc.) is reused
-// elsewhere on the next request. Also enables the opt-in
-// `?preloadIcons=1` bulk-preload (4,224 icons via icon-manifest.json)
-// to back this same cache. Local thin wrapper preserves the historical
-// label so failure warnings still cite the inventory plugin.
 async function fetchPaperdollIconDataUrl(iconId) {
   return fetchIconDataUrlShared(iconId, "inventory");
 }
@@ -351,672 +280,190 @@ function ensureStyles() {
   const style = document.createElement("style");
   style.id = "hb-inventory-style";
   style.textContent = `
-    /* Inventory view — mounts inside main-panel's body slot. The
-       main-panel owns position/frame/title; we just lay out our
-       content (paperdoll + bag column + items / examine swap)
-       inside the provided bodyEl. Burden indicator lives in
-       plugins/status-indicators.js (top-left status strip). */
+    /* Inventory view — mounts inside main-panel's body slot (title +
+       close are main-panel's). Every region is anchored to the body's
+       edges so the view fits 300×337 and the framed 288×325 alike. */
     #${OVERLAY_ID} {
       position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+      inset: 0;
       box-sizing: border-box;
+      overflow: hidden;
       pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      background: url("./data/ui-sprites/0x06004D0A.png") center/cover no-repeat;
-      color: var(--hb-text-cream);
+      font-family: var(--hbk-font, var(--hb-font-serif));
+      color: var(--hbk-text, var(--hb-text-cream));
+      background: url("${SP}/0x06004D0A.png") center/cover no-repeat;
     }
-    /* Title bar — real DAT 0x06004CFA brass strip. */
-    #${OVERLAY_ID} .hb-inv-title {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: ${TITLE_H}px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 8px;
-      background: url("./data/ui-sprites/0x06004CFA.png") center/100% 100% no-repeat;
-      font-size: 11px;
-      color: var(--hb-text-cream-bright);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      pointer-events: auto;
-      user-select: none;
-    }
-    #${OVERLAY_ID} .hb-inv-title-name { letter-spacing: 0.04em; }
-    #${OVERLAY_ID} .hb-inv-close {
-      width: 14px;
-      height: 14px;
-      background: var(--hb-border-brass);
-      color: var(--hb-bg-stone-bottom);
-      font-size: 9px;
-      line-height: 14px;
-      text-align: center;
-      cursor: pointer;
-      user-select: none;
-    }
-    #${OVERLAY_ID} .hb-inv-close:hover { background: var(--hb-text-gold); }
-    /* Paperdoll area — equipped items positioned at body-slot positions.
-       Retail PaperDollField (LayoutDesc 0x21000023): x=0, y=23, w=224, h=214. */
+
+    /* ── gmPaperDollUI (224×214, retail slot coords from m-24) ── */
     #${OVERLAY_ID} .hb-inv-paperdoll {
       position: absolute;
-      top: 23px;
-      left: 0;
-      width: ${PAPERDOLL_W}px;
-      height: ${PAPERDOLL_H}px;
-      pointer-events: auto;
+      left: 0; top: 0;
+      width: ${PAPERDOLL_W}px; height: ${PAPERDOLL_H}px;
     }
-    /* P2-21 (cross-find inv-paperdoll-backdrop): retail's paperdoll
-       background is flat (no gradient, no border) — the slot frame
-       sprites already carry the brass anatomy. Dropped the radial-
-       gradient + brass-dim border. */
-    #${OVERLAY_ID} .hb-inv-paperdoll-bg {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      background: transparent;
-      z-index: 0;
-    }
-    /* P2-21 (cross-find inv-paperdoll-3d-doll): dim the 3D rig so the
-       slot icons read first. Retail has no 3D ragdoll figure here —
-       this is a Holtburger addition. opacity:0.25 keeps it visible
-       enough to indicate equipped armor without distracting from
-       slot interaction. */
     #${OVERLAY_ID} .hb-inv-paperdoll-viewport {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
+      position: absolute; inset: 0;
       z-index: 1;
       pointer-events: none;
       opacity: 0.25;
     }
-    #${OVERLAY_ID} .hb-inv-paperdoll-viewport canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-    /* Each paperdoll body-slot — 28x28 brass-trim square positioned at
-       the (x, y) from the PAPERDOLL_SLOTS table. Smaller than 32 to
-       fit more slots in the 224x214 anatomy box. The per-slot hint
-       icon (helmet/sword/ring silhouette from
-       data/ui-sprites/slot-hints/0x06xxxxxx.png) is set via inline
-       background-image during slot creation — see PAPERDOLL_SLOTS
-       entries' hintIconDid field. Each PNG is the retail 32×32
-       child-ImageMedia from LayoutDesc 0x21000037 and already
-       includes the dark stone frame, so we DON'T layer a separate
-       slot-bg image underneath. */
-    /* P2-21 (cross-find inv-doll-slot-size + inv-doll-slot-opacity):
-       slot size 28→32 (retail PAPERDOLL_SLOTS slot ImageMedia is 32×32);
-       drop opacity:0.6 default — slots are fully opaque at rest. */
-    body.hb-armed-item, body.hb-armed-item * { cursor: crosshair !important; }
-    #${OVERLAY_ID} .hb-inv-slot.armed {
-      box-shadow: 0 0 0 2px var(--hb-text-gold, #f0c060) inset;
-    }
-    #${OVERLAY_ID} .hb-inv-slot.armed::after {
-      content: "i";
-      position: absolute;
-      top: 1px; right: 2px;
-      font-family: var(--hb-font-serif, serif);
-      font-size: 10px;
-      color: var(--hb-text-gold, #f0c060);
-      pointer-events: none;
-    }
+    #${OVERLAY_ID} .hb-inv-paperdoll-viewport canvas { display: block; width: 100%; height: 100%; }
     #${OVERLAY_ID} .hb-inv-doll-slot {
       position: absolute;
-      width: 32px;
-      height: 32px;
+      width: 32px; height: 32px;
+      box-sizing: border-box;
       background-color: rgba(0, 0, 0, 0.4);
       background-size: 100% 100%;
       background-repeat: no-repeat;
-      background-position: center;
-      border: 1px solid var(--hb-border-brass-dim);
+      border: 1px solid rgba(78, 63, 31, 0.9);
       image-rendering: pixelated;
       cursor: pointer;
-      transition: filter 120ms ease;
       z-index: 2;
     }
-    #${OVERLAY_ID} .hb-inv-doll-slot:hover { filter: brightness(1.3); }
-    #${OVERLAY_ID} .hb-inv-doll-slot.equipped {
-      opacity: 1;
-      filter: drop-shadow(0 0 3px var(--hb-text-gold));
+    #${OVERLAY_ID} .hb-inv-doll-slot:hover { filter: brightness(1.25); }
+    #${OVERLAY_ID} .hb-inv-doll-slot.equipped { background-image: none !important; border-color: var(--hbk-gold-dim, #8a7544); }
+    #${OVERLAY_ID} .hb-inv-doll-icon {
+      position: absolute; inset: 0;
+      background: transparent center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+      pointer-events: none;
     }
-    #${OVERLAY_ID} .hb-inv-doll-slot.drag-target {
-      filter: drop-shadow(0 0 4px rgba(120, 220, 120, 0.9));
+    #${OVERLAY_ID} .hb-inv-doll-slot.is-pending::before {
+      content: ""; position: absolute; inset: 0; z-index: 3;
+      background: url("${SP}/0x0600109A.png") center / 100% 100% no-repeat;
+      pointer-events: none;
     }
-    #${OVERLAY_ID} .hb-inv-doll-slot.drag-reject {
-      filter: drop-shadow(0 0 4px rgba(220, 80, 80, 0.95));
-      animation: hb-inv-drag-reject-flash 200ms ease-out;
-    }
-    @keyframes hb-inv-drag-reject-flash {
-      0%   { background-color: rgba(180, 40, 40, 0.6); }
-      100% { background-color: rgba(0, 0, 0, 0.4); }
-    }
-    #${OVERLAY_ID} .hb-inv-slot.reject {
-      animation: hb-inv-source-reject 250ms ease-out;
-    }
-    @keyframes hb-inv-source-reject {
-      0%   { box-shadow: 0 0 0 2px rgba(220, 80, 80, 0.95) inset; }
-      100% { box-shadow: none; }
-    }
-    #${OVERLAY_ID} .hb-inv-doll-slot.speculative {
-      border-color: var(--hb-text-gold, #f0c060);
+    #${OVERLAY_ID} .hb-inv-doll-slot.is-drag-source { opacity: 0.4; }
+    /* Aetheria sigil slots are hidden until PropertyInt::AetheriaBitfield
+       unlocks them (gmPaperDollUI::UpdateAetheria). */
+    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked { display: none; }
+    /* m_SlotCheckbox swaps the 3D figure for the nine armour slot icons
+       (acclient.c:221698-221728); unchecked (default) = figure. */
+    #${OVERLAY_ID} .hb-inv-doll-slot.armor { display: none; }
+    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot.armor { display: block; }
+    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-viewport { display: none; }
+    /* Retail Paperdoll_Slots_Checkbox at (42,190) — kit orb checkbox. */
+    #${OVERLAY_ID} .hb-inv-slots-toggle {
+      position: absolute;
+      left: 44px; top: 190px;
+      height: 14px;
+      display: inline-flex; align-items: center; gap: 2px;
+      z-index: 5;
+      cursor: pointer;
+      user-select: none;
     }
     #${OVERLAY_ID} .hb-inv-paperdoll-toast {
       position: absolute;
-      left: 8px; right: 8px;
-      bottom: 4px;
+      left: 6px; right: 6px; bottom: 2px;
       padding: 3px 6px;
-      font-family: var(--hb-font-serif, serif);
       font-size: 11px;
       background: rgba(20, 14, 8, 0.92);
-      border: 1px solid var(--hb-border-brass-dim, #6a4f1c);
+      border: 1px solid var(--hbk-gold-deep, #4e3f1f);
       text-align: center;
       pointer-events: none;
       opacity: 0;
       transition: opacity 120ms ease;
       z-index: 10;
     }
-    #${OVERLAY_ID} .hb-inv-paperdoll-toast[data-show="1"] {
-      opacity: 1;
-    }
-    #${OVERLAY_ID} .hb-inv-doll-icon {
-      position: absolute;
-      top: 4px; left: 4px;
-      width: 20px;
-      height: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      pointer-events: none;
-      z-index: 3;
-    }
-    #${OVERLAY_ID} .hb-inv-doll-tip {
-      position: absolute;
-      top: calc(100% + 3px);
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 2px 5px;
-      font-size: 9px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(10, 8, 4, 0.96);
-      border: 1px solid var(--hb-border-brass);
-      white-space: nowrap;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 120ms ease;
-      z-index: 70;
-    }
-    #${OVERLAY_ID} .hb-inv-doll-slot:hover .hb-inv-doll-tip { opacity: 1; }
-    /* Bag column — narrow vertical strip on the right. Tall enough
-       to fit 8 tabs (main + 7 side packs) plus future Mule-aug 9th.
-       Retail's LayoutDesc 0x21000023 sets this to 61×339; the CSS
-       fallback uses a similar height in case the layout doesn't load. */
-    /* Retail BackpackField (LayoutDesc 0x21000023): x=239 (flush-right
-       in 300-wide frame), y=23, w=61, h=339. */
+    #${OVERLAY_ID} .hb-inv-paperdoll-toast[data-show="1"] { opacity: 1; }
+    body.hb-armed-item, body.hb-armed-item * { cursor: crosshair !important; }
+    #${OVERLAY_ID} .hb-inv-slot.armed { box-shadow: inset 0 0 0 2px rgba(120, 200, 120, 0.85); }
+
+    /* ── gmBackpackUI column (61 px, retail 0x21000022 coords) ── */
     #${OVERLAY_ID} .hb-inv-bagcol {
       position: absolute;
-      top: 23px;
-      right: 0;
+      top: 0; right: 0; bottom: 0;
       width: ${BAG_COL_W}px;
-      height: 339px;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      padding: 4px;
-      pointer-events: auto;
-      border: 1px solid var(--hb-border-brass-dim);
-      background: rgba(0, 0, 0, 0.35);
-    }
-    #${OVERLAY_ID} .hb-inv-bagtab {
-      position: relative;
-      width: ${SLOT_SIZE - 4}px;
-      height: ${SLOT_SIZE - 4}px;
-      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
-      cursor: pointer;
-      image-rendering: pixelated;
-      opacity: 1;
-    }
-    /* Empty tab (no pack equipped) — dimmed, non-interactive. */
-    #${OVERLAY_ID} .hb-inv-bagtab.empty {
-      opacity: 0.35;
-      cursor: default;
-    }
-    #${OVERLAY_ID} .hb-inv-bagtab:not(.empty):hover {
-      filter: brightness(1.25);
-    }
-    #${OVERLAY_ID} .hb-inv-bagtab.selected {
-      opacity: 1;
-      filter: drop-shadow(0 0 3px var(--hb-text-gold));
-    }
-    #${OVERLAY_ID} .hb-inv-bagtab.hb-inv-bagtab-drop-over {
-      outline: 2px solid var(--hb-text-gold, #f0c060);
-      outline-offset: -2px;
-    }
-    #${OVERLAY_ID} .hb-inv-bagtab.reject {
-      animation: hb-inv-source-reject 400ms ease-out;
-    }
-    /* Pack icon overlay inside the tab (~24×24 centered in 28×28). */
-    #${OVERLAY_ID} .hb-inv-bagtab-icon {
-      position: absolute;
-      top: 2px; left: 2px;
-      width: 24px;
-      height: 24px;
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      pointer-events: none;
-      image-rendering: pixelated;
-    }
-    /* Burden meter + label — retail gmBackpackUI's m_burdenMeter
-       (UIElement_Meter, ACBindings gmBackpackUI.cs:102) and m_burdenText
-       (UIElement_Text, gmBackpackUI.cs:101), updated in unison by
-       SetLoadLevel(fNewLoad) (cs:151-156). Retail positions these at
-       RUNTIME in C++ (not in LayoutDesc 0x21000023), so we follow the
-       user's eye-witness retail anatomy: the meter sits at the right
-       of the first pack tab — a thin vertical fill strip, ~6px wide
-       (matching the dark inter-pack margin), aligned with the first
-       pack's 28px height. The fill color ramps green→red as the
-       playerBurden ratio rises from 0.0 to 3.0 (300% = full red);
-       refreshBurdenText() writes the --burden-fill (0-100%) and
-       --burden-color (hsl) custom properties. The numeric percent
-       label sits below the bag tabs in the empty lower band of the
-       bag column. Both are children of .hb-inv-bagcol so their
-       absolute positions resolve inside that 61×339 box. */
-    /* P1-30 (cross-find inv-burden-*): horizontal 3-cell row under the
-       paperdoll — label | pct | bar. Was a 6x28 vertical strip on the
-       bag column (overlapped the bag-tab meter) + a numeric label
-       perched above. The new row sits in the previously-empty band at
-       y=222 between the paperdoll body (ends y=204) and the items
-       grid (starts y=237). */
-    #${OVERLAY_ID} .hb-inv-burden-row {
-      position: absolute;
-      top: 222px;
-      left: 6px;
-      right: 73px;             /* clear the 61px bag column on the right */
-      height: 14px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      font-size: 10px;
-      z-index: 3;
-      pointer-events: auto;
-      user-select: none;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-row .label {
-      flex: 0 0 auto;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--hb-text-cream);
-    }
-    #${OVERLAY_ID} .hb-inv-burden-row .pct {
-      flex: 0 0 38px;
-      text-align: right;
-      font-variant-numeric: tabular-nums;
-      color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hb-inv-burden-meter {
-      flex: 1 1 auto;
-      position: relative;
-      height: 8px;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      overflow: hidden;
-      pointer-events: none;
-    }
-    #${OVERLAY_ID} .hb-inv-burden-meter::after {
-      content: "";
-      position: absolute;
-      top: 0; bottom: 0; left: 0;
-      width: var(--burden-fill, 0%);
-      background: var(--burden-color, hsl(120, 70%, 45%));
-      transition: width 0.18s ease-out, background 0.18s ease-out;
-    }
-    /* The .hb-inv-burden-text class is kept for the over-encumbered red
-       tint cue (.over) on the wrapping row. Was a free-floating label
-       above the bag column; now a no-op positional container — the row
-       above does the layout work. */
-    #${OVERLAY_ID} .hb-inv-burden-text {
-      display: contents;
-    }
-    /* Over-encumbered cue — .over toggled on the row by
-       refreshBurdenText(). Mirrored on .hb-inv-burden-text for any
-       legacy consumers that still look up that class. */
-    #${OVERLAY_ID} .hb-inv-burden-row.over,
-    #${OVERLAY_ID} .hb-inv-burden-text.over { color: #ff8060; }
-    #${OVERLAY_ID} .hb-inv-burden-row.over .pct,
-    #${OVERLAY_ID} .hb-inv-burden-text.over .pct { color: #ff8060; }
-    /* Aetheria-gated sigil slots — hidden when their AetheriaBitfield
-       (PropertyInt 322) bit is unset. Port of retail
-       gmPaperDollUI::UpdateAetheria (ACBindings gmPaperDollUI.cs:217-222).
-       display:none keeps the slot fully invisible AND ineligible for
-       drag-targeting (vs visibility:hidden which would still intercept
-       events). */
-    /* Locked aetheria slots — keep visible as gray placeholders (user
-       feedback 2026-05-29: "there should be three"). Retail hid them
-       until quest unlock, but we render them as faded slot frames so the
-       player understands they exist and where they'll appear once
-       unlocked. Lock icon overlay via :after. */
-    /* P2-21 (cross-find inv-slots-toggle-presence): retail HIDES the
-       aetheria slot frame entirely when the quest isn't unlocked
-       (PropertyInt::AetheriaBitfield bit is 0). Prior impl showed a
-       grayed-out lock icon — non-retail. */
-    #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked {
-      display: none;
-    }
-    /* "Slots" toggle button — port of retail gmPaperDollUI::m_SlotCheckbox
-       (ACBindings gmPaperDollUI.cs:134 + acclient.c:221636,221667,
-       221698-221728 — retail element 0x100005BE, default unchecked).
-       SWAPS between the 3D ragdoll figure and the 9 body-armor slot
-       icons (see ARMOR_SLOT_ELEMIDS). Default (unchecked): viewport
-       visible + armor icons hidden, ragdoll figure shows equipped
-       armor visually. Checked: viewport hidden + armor icons visible,
-       so each armor slot is clean and interactive. The 15
-       always-visible slots (jewelry / ready / shirt / pants / cloak
-       / trinket / aetheria) stay anchored in their anatomical
-       positions in both modes.
-
-       Anchored to the inventory overlay (NOT the paperdoll) so it sits
-       on the burden-text row at y=222 (which retail-prop fix made
-       overlap the empty bottom of paperdoll body — no slot conflict
-       because the bottom Boots row ends at paperdoll-y=204), left of
-       the bag column. Earlier wording mentioned a "28px gap between
-       paperdoll bottom and items grid top" — retail has no such gap
-       (both flush at y=237); the y=222 spot still works because the
-       paperdoll has 15px of empty body area below the lowest slot row.
-       Horizontal anchor is unchanged: clear of the bag column on the
-       right, and the slots-toggle's 50px width starts at x=177 (=300 -
-       BAG_COL_W - 12 - 50), well clear of the Aetheria Red top-row
-       slot which ends at x=222. */
-    #${OVERLAY_ID} .hb-inv-slots-toggle {
-      position: absolute;
-      top: 222px;
-      right: ${BAG_COL_W + 12}px;
-      width: 50px;
-      height: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 3px;
-      padding: 0 4px;
-      font-size: 9px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(10, 8, 4, 0.85);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      z-index: 5;
-      pointer-events: auto;
-    }
-    #${OVERLAY_ID} .hb-inv-slots-toggle:hover {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hb-inv-slots-toggle .check {
-      width: 8px;
-      height: 8px;
-      border: 1px solid var(--hb-border-brass);
-      background: rgba(0, 0, 0, 0.6);
       box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.28);
+      border-left: 1px solid rgba(78, 63, 31, 0.8);
     }
-    #${OVERLAY_ID} .hb-inv-slots-toggle.checked .check {
-      background: var(--hb-text-gold);
+    #${OVERLAY_ID} .hb-inv-burden-label,
+    #${OVERLAY_ID} .hb-inv-burden-pct {
+      position: absolute; left: 3px; width: 40px; height: 13px;
+      overflow: hidden; white-space: nowrap;
     }
-    /* Slots view — retail's m_SlotCheckbox at acclient.c:221700-221728
-       SWAPS between the 3D ragdoll figure and the 9 body-armor slot
-       icons (Head, Chest, Abdomen, Upper/Lower arm, Hand, Upper/Lower
-       leg, Foot). They're mutually exclusive: the figure carries the
-       armor visual when it's there, and the armor icons take over
-       (unimpeded by the figure) when the player wants to interact
-       with each slot directly.
+    #${OVERLAY_ID} .hb-inv-burden-label { top: 5px; }
+    #${OVERLAY_ID} .hb-inv-burden-pct { top: 18px; }
+    /* Inv_BurdenBar: 0x0600121D frame, 0x0600121C red→yellow→green fill
+       revealed from the bottom (full = 300 %). */
+    #${OVERLAY_ID} .hb-inv-burden-meter {
+      position: absolute; left: 44px; top: 8px;
+      width: 11px; height: 58px;
+      background: url("${SP}/0x0600121D.png") center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+    }
+    #${OVERLAY_ID} .hb-inv-burden-meter > i {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: var(--fill, 0%);
+      background: url("${SP}/0x0600121C.png") center bottom / 11px 58px no-repeat;
+      image-rendering: pixelated;
+      transition: height 180ms ease-out;
+    }
+    #${OVERLAY_ID} .hb-inv-mainpack { position: absolute; left: 6px; top: 32px; }
+    #${OVERLAY_ID} .hb-inv-packlist {
+      position: absolute;
+      left: 6px; top: 73px; bottom: 0;
+      width: 54px;
+      display: flex; flex-direction: column; align-items: flex-start;
+    }
+    /* ItemSlot_Backpack 36×36: icon in the 32×32 active region at (2,2),
+       capacity bar ItemSlot_Icon_CapacityBar at icon (26,1) 5×30. */
+    #${OVERLAY_ID} .hb-inv-bag {
+      position: relative;
+      flex: 0 0 36px;
+      width: 36px; height: 36px;
+      box-sizing: border-box;
+      background: url("./sprites/acsprites/icon-slot-bg.png") 2px 2px / 32px 32px no-repeat;
+      image-rendering: pixelated;
+      cursor: pointer;
+    }
+    #${OVERLAY_ID} .hb-inv-bag.is-empty { opacity: 0.5; cursor: default; }
+    #${OVERLAY_ID} .hb-inv-bag:not(.is-empty):hover { filter: brightness(1.2); }
+    #${OVERLAY_ID} .hb-inv-bag > .hb-inv-bag-icon {
+      position: absolute; left: 2px; top: 2px; width: 32px; height: 32px;
+      background: transparent center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag > .hb-inv-bag-cap {
+      position: absolute; left: 28px; top: 3px; width: 5px; height: 30px;
+      background: url("${SP}/0x06004D22.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag > .hb-inv-bag-cap > i {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: var(--cap, 0%);
+      background: url("${SP}/0x06004D23.png") center bottom / 5px 30px no-repeat;
+    }
+    #${OVERLAY_ID} .hb-inv-bag.is-open::after {
+      content: ""; position: absolute; inset: 0; z-index: 3;
+      background: url("${SP}/0x06005D9C.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag.is-pending::before {
+      content: ""; position: absolute; left: 2px; top: 2px; width: 32px; height: 32px; z-index: 2;
+      background: url("${SP}/0x0600109A.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag.is-drag-source { opacity: 0.4; }
 
-       Default (unchecked, "ragdoll" mode): viewport visible + armor
-       icons hidden — equipped armor renders on the figure.
-       Checked: viewport hidden + armor icons visible — the figure
-       disappears so the slot icons are clean.
-
-       In both modes the 15 always-visible slots (jewelry, ready,
-       shirt, pants, cloak, trinket, aetheria) stay anchored at their
-       anatomical positions around the paperdoll area, and the
-       paperdoll-bg dark gradient frame stays as the container so the
-       slot icons have a defined backdrop in slots-view. */
-    #${OVERLAY_ID} .hb-inv-doll-slot.armor {
-      display: none;
-    }
-    #${OVERLAY_ID}.slots-view .hb-inv-doll-slot.armor {
-      display: block;
-    }
-    #${OVERLAY_ID}.slots-view .hb-inv-paperdoll-viewport {
-      display: none;
-    }
-    /* Items grid — pack contents below the paperdoll. Retail LayoutDesc
-       0x100001CF is 120px tall (gmInventoryUI 0x21000023). Wave 12 used
-       top/bottom anchors which computed to 114px; Wave 13 switches to a
-       fixed 120px height to match retail. */
-    /* Retail ThreeDItemsField (LayoutDesc 0x21000023): x=0, y=237,
-       w=234, h=120. Flush against paperdoll bottom (paperdoll ends at
-       y=23+214=237). The 5px gap to the right of the items grid
-       (234→239) is intentional retail breathing room before bagcol. */
+    /* ── gm3DItemsUI grid: fills the space under the paperdoll, left of
+       the backpack column (retail ThreeDItemsField 234 wide), and scrolls
+       with the rope scrollbar. ── */
     #${OVERLAY_ID} .hb-inv-items {
       position: absolute;
-      top: 237px;
-      left: 0;
-      width: 234px;
-      height: 120px;
-      overflow-y: auto;
-      pointer-events: auto;
-      padding: 4px;
+      left: 0; top: ${PAPERDOLL_H}px; right: ${BAG_COL_W + 5}px; bottom: 0;
+      box-sizing: border-box;
+      padding: 3px 2px;
       display: grid;
-      grid-template-columns: repeat(${GRID_COLS}, ${SLOT_SIZE}px);
+      grid-template-columns: repeat(auto-fill, 32px);
+      grid-auto-rows: 32px;
       gap: 2px;
       align-content: start;
       background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--hb-border-brass-dim);
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
+      border-top: 1px solid var(--hbk-gold-deep, #4e3f1f);
     }
-    #${OVERLAY_ID} .hb-inv-slot {
-      position: relative;
-      width: ${SLOT_SIZE}px;
-      height: ${SLOT_SIZE}px;
-      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
-      image-rendering: pixelated;
-      cursor: pointer;
-      transition: filter 120ms ease;
-    }
-    #${OVERLAY_ID} .hb-inv-slot:hover { filter: brightness(1.25); }
-    #${OVERLAY_ID} .hb-inv-slot.selected {
-      filter: drop-shadow(0 0 4px var(--hb-text-gold)) brightness(1.2);
-    }
-    /* TRACK B8 (2026-06-08): empty drop-target cells padding the items
-       grid up to the selected pack's capacity. Same 32x32 slot art as a
-       filled cell but dimmed (no icon) so the grid reads as a full pack
-       with vacant slots — matching retail's fixed-size pack grid. Still a
-       valid drop target (drag an item onto a vacant cell to move it into
-       the selected pack). */
-    #${OVERLAY_ID} .hb-inv-slot.empty {
-      opacity: 0.45;
-      cursor: default;
-    }
-    #${OVERLAY_ID} .hb-inv-slot.empty:hover { filter: brightness(1.15); opacity: 0.7; }
-    /* Item icon — colored square keyed by type-bit until we wire
-       fetch_surface_pixels for the real icon DID. */
-    #${OVERLAY_ID} .hb-inv-icon {
-      position: absolute;
-      top: 6px; left: 6px;
-      width: ${SLOT_SIZE - 12}px;
-      height: ${SLOT_SIZE - 12}px;
-      border: 1px solid rgba(255, 255, 255, 0.25);
-    }
-    #${OVERLAY_ID} .hb-inv-stack {
-      position: absolute;
-      bottom: 1px;
-      right: 2px;
-      font-size: 8px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.95);
-      line-height: 1;
-      pointer-events: none;
-    }
-    #${OVERLAY_ID} .hb-inv-tip {
-      position: absolute;
-      bottom: calc(100% + 4px);
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 2px 6px;
-      font-size: 10px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(10, 8, 4, 0.96);
-      border: 1px solid var(--hb-border-brass);
-      white-space: nowrap;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 120ms ease;
-      z-index: 60;
-    }
-    /* Appraisal-upgraded variant — fires after a 250 ms hover when the
-       wasm-side AppraisalProfile snapshot is cached. Allows multi-line
-       content (name + stats) and stays a touch wider. */
-    #${OVERLAY_ID} .hb-inv-tip[data-appraised="1"] {
-      white-space: pre-line;
-      text-align: left;
-      max-width: 220px;
-      line-height: 1.35;
-    }
-    #${OVERLAY_ID} .hb-inv-slot:hover .hb-inv-tip { opacity: 1; }
-    /* In-place examine view — overlays the items grid when an inventory
-       item is selected (retail's gm3DItemsUI swap behaviour, see
-       docs/examine-architecture-2026-05-22.md). Hidden by default;
-       toggled via data-view="examine" on the parent #hb-inventory. */
-    #${OVERLAY_ID}[data-view="examine"] .hb-inv-items { display: none; }
-    /* Examine pane occupies the same slot as the items grid (retail
-       ThreeDItemsField x=0, y=237, w=234, h=120) — when toggled on
-       via data-view="examine", items hides and examine takes over. */
-    #${OVERLAY_ID} .hb-inv-examine {
-      position: absolute;
-      top: 237px;
-      left: 0;
-      width: 234px;
-      height: 120px;
-      pointer-events: auto;
-      padding: 6px;
-      display: none;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid var(--hb-border-brass-dim);
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--hb-border-brass) rgba(0, 0, 0, 0.5);
-    }
-    #${OVERLAY_ID}[data-view="examine"] .hb-inv-examine { display: block; }
-    #${OVERLAY_ID} .hb-inv-examine-head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-icon {
-      width: 48px;
-      height: 48px;
-      background: url("./sprites/acsprites/icon-slot-bg.png") center/100% 100% no-repeat;
-      image-rendering: pixelated;
-      position: relative;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-icon-fill {
-      position: absolute;
-      top: 8px; left: 8px;
-      width: 32px; height: 32px;
-      border: 1px solid rgba(255, 255, 255, 0.3);
-    }
-    #${OVERLAY_ID} .hb-inv-examine-namecol {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-name {
-      font-size: 12px;
-      color: var(--hb-text-gold);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
-      letter-spacing: 0.02em;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-guid {
-      font-size: 9px;
-      font-family: var(--hb-font-mono);
-      color: var(--hb-text-muted);
-    }
-    #${OVERLAY_ID} .hb-inv-examine-back {
-      padding: 2px 6px;
-      font-size: 9px;
-      font-family: var(--hb-font-serif);
-      color: var(--hb-text-cream);
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid var(--hb-border-brass);
-      cursor: pointer;
-      user-select: none;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-back:hover {
-      background: var(--hb-overlay-active);
-      color: var(--hb-text-gold);
-    }
-    #${OVERLAY_ID} .hb-inv-examine-body {
-      margin-top: 4px;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 2px 4px;
-      font-size: 10px;
-      line-height: 14px;
-      border-bottom: 1px solid rgba(138, 117, 68, 0.18);
-    }
-    #${OVERLAY_ID} .hb-inv-examine-row:last-child { border-bottom: none; }
-    #${OVERLAY_ID} .hb-inv-examine-label {
-      color: var(--hb-text-cream);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      font-size: 9px;
-    }
-    #${OVERLAY_ID} .hb-inv-examine-value {
-      color: var(--hb-text-gold);
-      text-align: right;
-    }
-
-    /* Wave C / PR9 (2026-06-06): paperdoll slot equipped-state fade +
-       magic halo + multi-state precedence + stack-count font consistency. */
-
-    .hb-inv-doll-slot.equipped { background-image: none !important; transition: background-image 200ms ease-out; }
-
-    .hb-inv-doll-slot.magic-glow::after {
-      content: ""; position: absolute; inset: -3px; border-radius: 6px;
-      pointer-events: none; box-shadow: 0 0 8px 2px rgba(80, 140, 255, 0.55);
-      animation: hb-magic-pulse 1800ms ease-in-out infinite;
-    }
-    @keyframes hb-magic-pulse {
-      0%, 100% { box-shadow: 0 0 6px 1px rgba(80, 140, 255, 0.45); }
-      50%      { box-shadow: 0 0 12px 3px rgba(120, 170, 255, 0.75); }
-    }
-
-    /* Multi-state precedence: selected beats armed beats reject beats target
-       beats hover. */
-    .hb-inv-slot.hover       { outline: 1px solid rgba(240, 216, 160, 0.35); }
-    .hb-inv-slot.drag-target { outline: 1px solid rgba(255, 200, 80, 0.7); z-index: 2; }
-    .hb-inv-slot.drag-reject { outline: 1px solid rgba(255, 128, 128, 0.85); z-index: 3; }
-    .hb-inv-slot.armed       { outline: 2px solid rgba(120, 200, 120, 0.85); z-index: 4; }
-    .hb-inv-slot.selected    { outline: 2px solid rgba(240, 216, 160, 0.95); z-index: 5; }
-
-    /* Stack-count font consistency between legacy <ul> grid + polymorphic grid */
-    .hb-inv-slot .hb-inv-stack,
-    #inv-pack li .stack {
-      font-family: "AC", "Trebuchet MS", sans-serif;
-      font-size: 11px; line-height: 12px;
-      text-shadow: 0 1px 1px rgba(0,0,0,0.85);
-    }
+    #${OVERLAY_ID} .hb-inv-items.is-drop-target { outline-offset: -2px; }
   `;
   document.head.appendChild(style);
 }
@@ -1030,1143 +477,68 @@ export const manifest = {
   description: "Right-side inventory window (gmInventoryUI 0x21000023)",
 };
 
-// Apply retail layout to the inventory window — outer-window region
-// positions from gmInventoryUI. Refs:
-//   - paperdollEl  → top-level paperdoll panel container
-//   - bagcolEl     → narrow right-side bag-tab column
-//   - itemsEl      → grid of pack-content slots below the paperdoll
-//   - dollSlotEls  → map of equipMask → { el, slot } for body slots
-//
-// Retail anatomy (from inventory_layouts_dump 2026-05-24):
-//   - Paperdoll area at (0, 23) inside the 300×362 window
-//   - Bag column at (239, 23), 61×339 — extends past paperdoll
-//   - Items grid at (0, 237), 234×120 — directly below paperdoll
-//
-// Burden indicator is owned by plugins/status-indicators.js (real
-// retail indicator 0x100000F7 in gmFloatyIndicatorsUI 0x21000071);
-// the Wave 12 attempt to anchor 0x100005BE here was an audit-flagged
-// mislabel (that element is actually a paperdoll button/checkbox).
-//
-// Body-slot positions are hand-tuned per PAPERDOLL_SLOTS' (x, y).
-// The retail layout that holds the slot ElementIds — LayoutDesc
-// 0x21000037 — has IncorporationFlags 0x1E on every slot element
-// (Y/Width/Height/ZLevel meaningful, X explicitly omitted) per the
-// Wave 16 dump, so it carries 32×32 templates with no useful XY for
-// positioning. Wave 16 therefore skips the paperdoll-layout load
-// entirely; the slot ElemIds on PAPERDOLL_SLOTS still cite layout
-// 0x21000037 for the hint-icon DID correspondence, but
-// applySlotPositions is no longer invoked.
-//
-// Both layouts cache after the first call; re-mounts re-apply
-// synchronously. Falls through silently if either layout fails to
-// load — the hand-tuned defaults in CSS stay in effect.
-function applyInventoryLayout(refs) {
-  const apply = (inv) => {
-    let appliedRegions = 0;
-
-    if (inv) {
-      const paperdollArea = findElementById(inv, INV_ELEM_PAPERDOLL_AREA);
-      const bagcol = findElementById(inv, INV_ELEM_BAG_COLUMN);
-      const itemsGrid = findElementById(inv, INV_ELEM_ITEMS_GRID);
-
-      if (paperdollArea && refs.paperdollEl) {
-        applyBox(refs.paperdollEl, paperdollArea);
-        appliedRegions += 1;
-      }
-      if (bagcol && refs.bagcolEl) {
-        // CSS uses `right: 6px` to anchor; clear so explicit left wins.
-        refs.bagcolEl.style.right = "";
-        applyBox(refs.bagcolEl, bagcol);
-        appliedRegions += 1;
-      }
-      if (itemsGrid && refs.itemsEl) {
-        refs.itemsEl.style.right = "";
-        // Bottom is no longer in CSS (Wave 13: fixed height 120px),
-        // but defensively clear anyway in case the rule comes back.
-        refs.itemsEl.style.bottom = "";
-        applyBox(refs.itemsEl, itemsGrid);
-        appliedRegions += 1;
-      }
-    }
-
-    try {
-      window.__diag?.layout?.onInventoryApplied?.({
-        appliedRegions,
-        // Slot positions are hand-tuned (see PAPERDOLL_SLOTS docstring);
-        // layout 0x21000037 carries no useful XY for the slot elements.
-        slotUpdates: { updated: 0, missed: 0, source: "hand-tuned" },
-        invLoaded: !!inv,
-        dollLoaded: false,
-      });
-    } catch (_) {}
-  };
-
-  const cachedInv = getCachedLayout(INVENTORY_LAYOUT_ID);
-  if (cachedInv) { apply(cachedInv); return; }
-  loadLayout(INVENTORY_LAYOUT_ID).then(apply).catch(() => {});
-}
-
-function applyBox(el, layoutEl) {
-  if (typeof layoutEl.x === "number") el.style.left = `${layoutEl.x}px`;
-  if (typeof layoutEl.y === "number") el.style.top = `${layoutEl.y}px`;
-  if (typeof layoutEl.width === "number") el.style.width = `${layoutEl.width}px`;
-  if (typeof layoutEl.height === "number") el.style.height = `${layoutEl.height}px`;
-}
-
 // Inventory view — mounted inside main-panel's body slot. Returns
 // a cleanup fn the container calls on view swap.
 export const view = {
   name: "Inventory",
   nameFor: (_ctx) => {
-    const sn = document.getElementById("char-name")?.textContent
-      || window.__pluginClient?.player?.stats?.name
-      || null;
+    const sn = playerName();
     return sn ? `Inventory of ${sn}` : "Inventory";
   },
   mount: (parentEl, ctx) => doMount(parentEl, ctx),
 };
 
-function doMount(parentEl, _ctx) {
-  ensureStyles();
-  const existing = document.getElementById(OVERLAY_ID);
-  if (existing) existing.remove();
+function playerName() {
+  return document.getElementById("char-name")?.textContent
+    || window.__pluginClient?.player?.stats?.name
+    || "";
+}
 
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-  // Title + close are owned by main-panel (the shared container).
-
-  // Paperdoll backdrop + body-slot squares per PAPERDOLL_SLOTS table.
-  const paperdoll = document.createElement("div");
-  paperdoll.className = "hb-inv-paperdoll";
-  const paperdollBg = document.createElement("div");
-  paperdollBg.className = "hb-inv-paperdoll-bg";
-  paperdoll.appendChild(paperdollBg);
-  // Wave 14 — 3D character doll viewport (mirrors retail
-  // gmPaperDollUI::RedressCreature at acclient.c:4146). Renders the
-  // local player rig BEHIND the slot squares so equipped armor shows on
-  // the body AND the slot frame still shows its icon. Loaded once the
-  // local player guid + meta are known; reloaded whenever the inventory
-  // snapshot changes (equip / dye / applyAppearance).
-  const paperdollViewport = new PaperdollViewport({
-    width: PAPERDOLL_W, height: PAPERDOLL_H,
-  });
-  const viewportWrap = document.createElement("div");
-  viewportWrap.className = "hb-inv-paperdoll-viewport";
-  viewportWrap.appendChild(paperdollViewport.dom);
-  paperdoll.appendChild(viewportWrap);
-  const dollSlotEls = {};
-  // Wave D.1 follow-on (2026-05-27) — track aetheria slots separately
-  // so the AetheriaBits gating pass can address them by bit. Mirrors
-  // retail's `m_sigilOneSlot`/`m_sigilTwoSlot`/`m_sigilThreeSlot`
-  // direct references in `gmPaperDollUI::UpdateAetheria` (ACBindings
-  // `gmPaperDollUI.cs:217-222`).
-  const aetheriaSlotEls = [];
-  for (const s of PAPERDOLL_SLOTS) {
-    const el = document.createElement("div");
-    el.className = "hb-inv-doll-slot";
-    el.dataset.equipMask = String(s.equipMask);
-    el.dataset.name = s.name;
-    el.dataset.elemId = s.elemId;
-    if (ARMOR_SLOT_ELEMIDS.has(s.elemId)) {
-      // Hidden by default ("ragdoll" view = unchecked m_SlotCheckbox);
-      // CSS reveals (and hides the 3D viewport) when .slots-view is on.
-      el.classList.add("armor");
-    }
-    if (s.aetheriaBit) {
-      el.dataset.aetheriaBit = String(s.aetheriaBit);
-      aetheriaSlotEls.push({ el, bit: s.aetheriaBit >>> 0 });
-    }
-    el.style.left = `${s.x}px`;
-    el.style.top = `${s.y}px`;
-    // Wave 16 — per-slot hint icon (helmet / sword / ring / etc.
-    // silhouette) drawn under any equipped item. Sourced from
-    // data/ui-sprites/slot-hints/0xXXXXXXXX.png, extracted via
-    // WB.Terminal's chorizite-extract-ui-textures from each retail
-    // 0x21000037 element's child ImageMedia DID. Stored on the slot
-    // dataset so placeEquippedInDoll can restore it on unequip.
-    const hintDid = (s.hintIconDid >>> 0) || 0;
-    if (hintDid) {
-      const hintHex = "0x" + hintDid.toString(16).toUpperCase().padStart(8, "0");
-      const hintUrl = `./data/ui-sprites/slot-hints/${hintHex}.png`;
-      el.style.backgroundImage = `url("${hintUrl}")`;
-      el.dataset.hintUrl = hintUrl;
-    }
-    const icon = document.createElement("div");
-    icon.className = "hb-inv-doll-icon";
-    icon.style.display = "none";
-    el.appendChild(icon);
-    const tip = document.createElement("span");
-    tip.className = "hb-inv-doll-tip";
-    setAcText(tip, s.name, { color: "#f0d8a0" });
-    el.appendChild(tip);
-    // Wave-D4: drag-source for equipped items (set when occupied via
-    // placeEquippedInDoll). The dragstart hands off the inventory mime
-    // shared with pack rows + trade-panel + vendor-ui so any drop
-    // target that accepts inventory items works uniformly.
-    el.addEventListener("dragstart", (ev) => {
-      const guid = el.dataset.itemGuid;
-      if (!guid) { ev.preventDefault(); return; }
-      ev.dataTransfer.setData("application/x-hb-inv-guid", guid);
-      ev.dataTransfer.setData("text/x-hb-item-guid", guid);
-      ev.dataTransfer.effectAllowed = "move";
-      overlay.dataset.draggingGuid = guid;
-      // Wave C / PR9 (2026-06-06): iconId-driven 32x32 Image ghost so
-      // the drag cursor reads as the item icon, not a styled slot box.
-      // Source: the item's iconId from the inventory snapshot routed
-      // through the existing icon cache.
-      try {
-        const item = getItemByGuid(parseInt(guid, 10) >>> 0);
-        const iconDid = (item?.iconId >>> 0) || 0;
-        if (iconDid && typeof window.__iconCache?.getUrl === "function") {
-          const url = window.__iconCache.getUrl(iconDid);
-          if (url) {
-            const img = new Image();
-            img.src = url;
-            img.width = 32; img.height = 32;
-            ev.dataTransfer.setDragImage(img, 16, 16);
-          }
-        }
-      } catch (_) {}
-    });
-    // Wave-D4: drop-target for pack→paperdoll wield. Allow drop only
-    // when the mime is present. On enter/over highlight in brass; on
-    // leave/drop clear. Wire WieldFromPack with this slot's equip_mask.
-    el.addEventListener("dragenter", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-        el.classList.add("drag-target");
-      }
-    });
-    el.addEventListener("dragover", (ev) => {
-      if (!ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) return;
-      ev.preventDefault();
-      // Reject feedback: validate the dragged item against this slot mask.
-      const draggedGuid = (parseInt(overlay.dataset.draggingGuid, 10) >>> 0) || 0;
-      const item = draggedGuid ? getItemByGuid(draggedGuid) : null;
-      const playerState = buildPlayerEquipState(inventorySnapshot, {
-        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
-        inCombatMode: !!window.__combatBarState?.inCombatMode,
-      });
-      const verdict = canEquipInSlot(item, s.equipMask >>> 0, playerState);
-      if (!verdict.ok) {
-        ev.dataTransfer.dropEffect = "none";
-        el.classList.add("drag-reject");
-        el.classList.remove("drag-target");
-        setAcText(el.querySelector(".hb-inv-doll-tip"), verdict.reason, { color: "#ff8080" });
-        return;
-      }
-      el.classList.remove("drag-reject");
-      el.classList.add("drag-target");
-      ev.dataTransfer.dropEffect = "move";
-    });
-    el.addEventListener("dragleave", () => {
-      el.classList.remove("drag-target");
-      el.classList.remove("drag-reject");
-      setAcText(el.querySelector(".hb-inv-doll-tip"), s.name, { color: "#f0d8a0" });
-    });
-    // Paperdoll-slot double-click → unwield back to main pack.
-    // Uses Wave A export handle.unwieldToPack; falls back to chat hint if
-    // the wasm bundle predates Wave A.
-    el.addEventListener("dblclick", (ev) => {
-      if (ev.button !== 0) return;
-      const guidStr = el.dataset.itemGuid;
-      if (!guidStr) return;
-      const guid = (parseInt(guidStr, 10) >>> 0) || 0;
-      if (!guid) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      // Wave C / PR10 (2026-06-06): optimistic UnwieldObject sound BEFORE
-      // the wire send. The server-broadcast echo is suppressed via the
-      // recent-fire ring in plugins/audio_optimistic.js. The Apply agent
-      // applies the same pattern at the paperdoll drop site (wield = 0x8C)
-      // and the grid double-click equip site in inventory.js.
-      try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
-      if (typeof handle?.unwieldToPack === "function") {
-        try { handle.unwieldToPack(guid); }
-        catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
-      } else {
-        const src = document.getElementById("chat-log");
-        if (src) {
-          const li = document.createElement("li");
-          li.dataset.cat = "0"; li.className = "cat-0";
-          li.textContent = "Cannot unwield: server build too old.";
-          src.appendChild(li);
-        }
-      }
-    });
-    // Paperdoll right-click → polymorphic context menu.
-    el.addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const guidStr = el.dataset.itemGuid;
-      if (!guidStr) return;
-      const guid = (parseInt(guidStr, 10) >>> 0) || 0;
-      if (!guid) return;
-      if (typeof window.__openContextMenuFor === "function") {
-        try {
-          window.__openContextMenuFor({
-            source: "inv-paperdoll",
-            guid,
-            name: el.dataset.itemName || s.name,
-            clientX: ev.clientX,
-            clientY: ev.clientY,
-          });
-        } catch (e) { console.warn("[paperdoll-rc] context menu failed:", e); }
-      }
-    });
-    el.addEventListener("drop", (ev) => {
-      el.classList.remove("drag-target");
-      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
-      if (!guidStr) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const guid = (parseInt(guidStr, 10) >>> 0);
-      if (!guid) return;
-      // Don't fire if the source slot already has this item (no-op
-      // self-drop on a re-arrange).
-      if (el.dataset.itemGuid && String(el.dataset.itemGuid) === String(guid)) return;
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      // Wave 1.D (2026-05-27): prefer `setWielded` (C# Character.cs:757-762
-      // `SetWielded(weenie, slot)` naming). Falls back to legacy
-      // `wieldFromPack` if the wasm pkg is pre-Wave-1.D so a stale build
-      // doesn't break paperdoll wield.
-      // Drop-time defensive re-validation. Stance can change mid-drag.
-      const dropItem = getItemByGuid(guid);
-      const dropState = buildPlayerEquipState(inventorySnapshot, {
-        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
-        inCombatMode: !!window.__combatBarState?.inCombatMode,
-      });
-      const dropVerdict = canEquipInSlot(dropItem, s.equipMask >>> 0, dropState);
-      if (!dropVerdict.ok) {
-        try { paperdollToast(dropVerdict.reason); } catch (_) {}
-        try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
-        try {
-          const srcSlot = overlay.querySelector(`.hb-inv-slot[data-guid="${String(guid)}"]`);
-          if (srcSlot) {
-            srcSlot.classList.add("reject");
-            setTimeout(() => srcSlot.classList.remove("reject"), 250);
-          }
-        } catch (_) {}
-        return;
-      }
-      // Speculative path (Wave A may not have populated validLocations yet).
-      if (dropVerdict.speculative) {
-        try { paperdollToast("Equipping speculatively (item attributes pending).", { speculative: true }); } catch (_) {}
-      }
-      // Wield to the item's SPECIFIC location, not the (possibly multi-bit)
-      // slot mask. The main-hand Weapon slot accepts Melee|Missile|Held|
-      // TwoHanded (0x03500000), but ACE stores CurrentWieldedLocation verbatim
-      // and a multi-bit location breaks server-side combat-stance derivation
-      // (the combat toggle flashes then reverts to Peace — the bow/wand bug).
-      // `validLocations & slotMask` collapses to the item's real bit
-      // (crossbow → 0x400000); identical to the old single-bit-slot behavior
-      // for armor, and falls back to the slot mask if validLocations isn't
-      // hydrated yet.
-      // `|| slotMask` is what makes that last sentence true — without it
-      // the speculative path (validLocations === 0, the only shape that
-      // yields speculative:true) ANDs to 0 and wields to location 0. It
-      // cannot reintroduce the multi-bit bug: with validLocations hydrated
-      // canEquipInSlot has already rejected any `vl & slotMask === 0`, so
-      // the AND is non-zero and the fallback is dead — and weapons, the
-      // only multi-bit masks, never reach the speculative path (WEAPON_BITS).
-      const slotMask = (s.equipMask >>> 0);
-      const wieldLoc =
-        ((((dropItem.validLocations >>> 0) & slotMask) >>> 0) || slotMask);
-      if (handle?.setWielded) {
-        try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-        try { handle.setWielded(guid, wieldLoc); }
-        catch (e) { console.warn("[paperdoll] setWielded failed:", e); }
-      } else if (handle?.wieldFromPack) {
-        try { handle.wieldFromPack(guid, wieldLoc); }
-        catch (e) { console.warn("[paperdoll] wieldFromPack failed:", e); }
-      }
-    });
-    paperdoll.appendChild(el);
-    dollSlotEls[s.equipMask] = { el, icon, tip, slot: s };
-  }
-
-  overlay.appendChild(paperdoll);
-
-  // m_SlotCheckbox port — "Slots" toggle button anchored to the
-  // inventory overlay (NOT the paperdoll) in the y=222 band left of
-  // the bag column. SWAPS between the 3D ragdoll figure and the 9
-  // body-armor slot icons (ARMOR_SLOT_ELEMIDS): default-unchecked =
-  // ragdoll visible + armor icons hidden; checked = ragdoll viewport
-  // hidden + armor icons visible (unimpeded by the figure). The 15
-  // always-visible slots (jewelry, ready, shirt, pants, cloak,
-  // trinket, aetheria) stay shown in both modes; the paperdoll-bg
-  // frame stays in both modes so slots have a defined backdrop.
-  // State persists across mounts via localStorage so the player's
-  // preference survives view swaps + page reloads.
-  //
-  // Mirrors retail gmPaperDollUI::m_SlotCheckbox (ACBindings
-  // gmPaperDollUI.cs:134, retail wiring at acclient.c:221636 — child
-  // 0x100005BE; default-unchecked via SetAttribute_Bool at :221667;
-  // toggle dispatch at :221698-221728 hiding/showing 9 paperdoll
-  // child elements — the same 9 armor slots). Our DOM-side equivalent
-  // toggles the .slots-view class on the overlay; CSS hides the
-  // viewport AND shows .hb-inv-doll-slot.armor accordingly.
-  //
-  // Reading-guide compliance (ACBindings/READING_GUIDE.md §5
-  // anti-pattern #1): no retail element-ID constants are ported —
-  // 0x100005BE is mentioned in the citation comment only, not used as
-  // a runtime literal. Anti-pattern #5 (no UI framework port): we use
-  // a plain <div> click target, not UIElement_Button, since the DOM
-  // already provides hit-testing.
-  const SLOTS_VIEW_STORAGE_KEY = "hb-inv.slots-view.checked.v1";
-  let slotsViewChecked = false;
+function sessionHandleNow() {
+  return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
+}
+function readHandleNumber(name) {
+  const h = sessionHandleNow();
   try {
-    slotsViewChecked = parseSlotsViewChecked(
-      window.localStorage?.getItem?.(SLOTS_VIEW_STORAGE_KEY) ?? null
-    );
-  } catch (_) { slotsViewChecked = false; }
+    if (typeof h?.[name] === "number") return h[name];
+    if (typeof h?.[name] === "function") return Number(h[name]()) || 0;
+  } catch (_) {}
+  return 0;
+}
 
-  const slotsToggle = document.createElement("div");
-  slotsToggle.className = "hb-inv-slots-toggle";
-  slotsToggle.title = "Toggle armor slot icons (default off — ragdoll shows armor visually)";
-  const slotsCheckBox = document.createElement("span");
-  slotsCheckBox.className = "check";
-  const slotsLabel = document.createElement("span");
-  slotsLabel.className = "slots-label";
-  setAcText(slotsLabel, "Slots", { color: "#f0d8a0" });
-  slotsToggle.appendChild(slotsCheckBox);
-  slotsToggle.appendChild(slotsLabel);
-  overlay.appendChild(slotsToggle);
+// Armed-item namespace (shift-click "Use With" etc.). Module-level so
+// hotbar.js's `window.__inventory.setArmedItem(0)` works whether or not
+// the inventory view is mounted.
+function setArmedItem(guid) {
+  const g = (guid >>> 0) || 0;
+  window.__inventory.armedGuid = g;
+  window.__inventory_armedGuid = g;
+  try { document.body.classList.toggle("hb-armed-item", g !== 0); } catch (_) {}
+  try {
+    document.querySelectorAll(`#${OVERLAY_ID} .hb-inv-slot.armed`).forEach((s) => s.classList.remove("armed"));
+    if (g) document.querySelector(`#${OVERLAY_ID} .hb-inv-slot[data-guid="${g}"]`)?.classList.add("armed");
+  } catch (_) {}
+}
 
-  function applySlotsViewClass() {
-    overlay.classList.toggle("slots-view", slotsViewChecked);
-    slotsToggle.classList.toggle("checked", slotsViewChecked);
-  }
-  // Reflect persisted state immediately so the first frame matches
-  // the user's last choice (avoids a flash of paperdoll on reload).
-  applySlotsViewClass();
+// Retail ItemList_OpenContainer from outside the view (container-panel's
+// "Open" on one of the player's own packs, radial "Open").
+let mountedApi = null;
+function openPack(guid) {
+  lastSelectedPack = (guid >>> 0) || 0;
+  if (mountedApi) mountedApi.selectPack(lastSelectedPack);
+  return true;
+}
 
-  slotsToggle.addEventListener("click", () => {
-    slotsViewChecked = !slotsViewChecked;
-    applySlotsViewClass();
-    try {
-      window.localStorage?.setItem?.(
-        SLOTS_VIEW_STORAGE_KEY,
-        slotsViewChecked ? "1" : "0",
-      );
-    } catch (_) { /* localStorage blocked → in-memory toggle only */ }
-  });
-
-  // Bag column — see BAG_COUNT (8). The first tab is the main pack
-  // (containerId 0 — items the player owns directly). The remaining 7
-  // slots are reserved for side packs (Container items in the player's
-  // inventory, identified by ItemType bit 0x200). Slots without an
-  // owned pack stay dim/empty until the player drags a pack in.
-  //
-  // Wave 13.2 — the items grid is now filtered by the currently
-  // selected pack's container_id. `selectedPackContainerId` defaults
-  // to 0 (main pack). `bagSlots` is rebuilt on each `rebuild()` pass
-  // from the wasm snapshot: index 0 always = main pack; indices 1..7
-  // populated dynamically with whichever Container items are in the
-  // player's main inventory.
-  let selectedPackContainerId = 0;
-  let bagSlots = new Array(BAG_COUNT).fill(null);
-  bagSlots[0] = { containerId: 0, name: "Main Pack", iconId: 0 };
-
-  const bagCol = document.createElement("div");
-  bagCol.className = "hb-inv-bagcol";
-  // HUD bug-pack P3 (2026-07-04): "packs used/ContainersCapacity" strip
-  // above the tab column — surfaces the server-driven container-slot
-  // limit (ACE PropertyInt::ContainersCapacity, human default 20 on this
-  // server; classic retail = 7) instead of silently capping at 8.
-  // Updated by renderBagTabs().
-  const bagColHeader = document.createElement("div");
-  bagColHeader.className = "hb-inv-bagcol-header";
-  bagColHeader.style.fontSize = "9px";
-  bagColHeader.style.opacity = "0.7";
-  bagColHeader.style.textAlign = "center";
-  bagColHeader.style.padding = "1px 0 2px";
-  bagColHeader.title = "Packs used / ContainersCapacity";
-  bagCol.appendChild(bagColHeader);
-  const bagTabEls = [];
-  // HUD bug-pack P3: bagTabEls/bagSlots grow past the BAG_COUNT (8)
-  // default when the server's PropertyInt::ContainersCapacity exceeds 7
-  // (this box's ACE serves 20) — previously rebuildBagSlots() hard-broke
-  // at BAG_COUNT, silently dropping any side pack past index 7. buildBagTab
-  // factors the per-tab DOM+wiring out of the old fixed-length `for` loop
-  // so ensureBagTabCount() can append more tabs on demand.
-  function buildBagTab(i) {
-    const tab = document.createElement("div");
-    // Initial state: tab 0 (main pack) is selected, tabs 1..7 are empty.
-    // renderBagTabs() rebuilds these classes whenever the snapshot
-    // changes; this is just the pre-snapshot initial render.
-    const classes = ["hb-inv-bagtab"];
-    if (i === 0) classes.push("selected");
-    else classes.push("empty");
-    tab.className = classes.join(" ");
-    tab.dataset.bag = String(i);
-    tab.title = i === 0 ? "Main Pack" : "Empty pack slot";
-    // Icon overlay slot — populated when a side pack is equipped.
-    const tabIcon = document.createElement("div");
-    tabIcon.className = "hb-inv-bagtab-icon";
-    tabIcon.style.display = "none";
-    tab.appendChild(tabIcon);
-    tab.addEventListener("click", () => {
-      const slot = bagSlots[i];
-      if (!slot) return; // empty slot — nothing to switch to
-      if (selectedPackContainerId === slot.containerId) return; // no-op
-      selectedPackContainerId = slot.containerId >>> 0;
-      bagCol.querySelectorAll(".hb-inv-bagtab").forEach((t) => t.classList.remove("selected"));
-      tab.classList.add("selected");
-      rebuildItemsGrid();
-      // Wave D.1 follow-on (2026-05-27) — port of retail
-      // `gmInventoryUI::RecvNotice_NewParentContainer` (ACBindings
-      // `gmInventoryUI.cs:218-223`): retitle the inventory window when
-      // the active container changes. "Inventory of <player>" on main
-      // pack; "Contents of <pack name>" on side pack.
-      refreshPanelTitle();
-    });
-    // Wave D / PR11 (2026-06-06): bag-tab as drop target. Three cases:
-    //   A) Container dropped on tab i (i>=1) -> moveItem(g, playerGuid, i)
-    //      sets PlacementPosition (Container.cs:179 sort order).
-    //   B) Non-container on a populated tab -> moveItem(g, containerId, 0)
-    //      moves the item INTO the pack at that tab.
-    //   C) Non-container on an empty tab -> 400ms .reject flash; no wire.
-    tab.addEventListener("dragenter", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")
-          || ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
-        ev.preventDefault();
-        tab.classList.add("hb-inv-bagtab-drop-over");
-      }
-    });
-    tab.addEventListener("dragover", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")
-          || ev.dataTransfer?.types?.includes("text/x-hb-item-guid")) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = "move";
-      }
-    });
-    tab.addEventListener("dragleave", () => {
-      tab.classList.remove("hb-inv-bagtab-drop-over");
-    });
-    tab.addEventListener("drop", (ev) => {
-      tab.classList.remove("hb-inv-bagtab-drop-over");
-      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid")
-        || ev.dataTransfer?.getData("text/x-hb-item-guid");
-      if (!guidStr) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
-      if (!sourceGuid) return;
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle || typeof handle.moveItem !== "function") return;
-      const srcItem = getItemByGuid(sourceGuid);
-      const srcIsContainer = usesBackpackSlot(srcItem);
-      const me = (typeof window.getLocalPlayerGuid === "function")
-        ? (window.getLocalPlayerGuid() >>> 0) : 0;
-      const slotData = bagSlots[i];
-      // Case A: drop a container onto a tab — reorder via PlacementPosition.
-      if (srcIsContainer && i >= 1 && me) {
-        try { handle.moveItem(sourceGuid, me, i); }
-        catch (e) { console.warn("[inv-bag-tab] reorder failed:", e); }
-        return;
-      }
-      // Case B: non-container onto a populated tab -> into that pack.
-      // For i=0 (main pack), substitute the player guid — slotData.containerId
-      // is 0 there and ACE rejects moveItem with container_guid=0.
-      if (!srcIsContainer && slotData) {
-        const dest = (i === 0) ? me : (slotData.containerId >>> 0);
-        if (!dest) return;
-        // HUD bug-pack P4 (2026-07-04): placement = the destination pack's
-        // current item count (append-at-end), not a hardcoded 0 — mirrors
-        // the empty-cell drop path's `placement` (see makeEmptySlot).
-        const destContainerId = (i === 0) ? 0 : (slotData.containerId >>> 0);
-        let placement = 0;
-        for (const it of inventorySnapshot) {
-          if ((it.containerId >>> 0) === destContainerId) placement++;
-        }
-        try { handle.moveItem(sourceGuid, dest, placement); }
-        catch (e) { console.warn("[inv-bag-tab] move-into failed:", e); }
-        return;
-      }
-      // Case C: non-container onto an empty tab -> reject flash.
-      tab.classList.add("reject");
-      try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
-      setTimeout(() => tab.classList.remove("reject"), 400);
-    });
-    bagCol.appendChild(tab);
-    bagTabEls.push({ tabEl: tab, iconEl: tabIcon });
-  }
-
-  // HUD bug-pack P3: grow the tab column (and the parallel `bagSlots`
-  // array) to `n` entries if it isn't there already. Never shrinks (a
-  // shrink would have to evict a populated slot — rebuildBagSlots() only
-  // ever asks for max(BAG_COUNT, containersCap + 1), which can't regress
-  // below what's already built in the same session).
-  function ensureBagTabCount(n) {
-    while (bagTabEls.length < n) {
-      buildBagTab(bagTabEls.length);
-    }
-    if (bagSlots.length < bagTabEls.length) {
-      const grown = new Array(bagTabEls.length).fill(null);
-      for (let i = 0; i < bagSlots.length; i++) grown[i] = bagSlots[i];
-      bagSlots = grown;
-    }
-  }
-  ensureBagTabCount(BAG_COUNT);
-  overlay.appendChild(bagCol);
-
-  // Burden meter (icon) lives in plugins/status-indicators.js — the
-  // retail `0x100000F7` indicator in gmFloatyIndicatorsUI 0x21000071.
-  // Wave 12 had mistaken paperdoll element 0x100005BE for the burden
-  // indicator; audit caught the mislabel.
-  //
-  // Burden meter + numeric label — retail gmBackpackUI's
-  // m_burdenMeter (UIElement_Meter) + m_burdenText (UIElement_Text)
-  // pair, updated together by SetLoadLevel(fNewLoad) in
-  // ACBindings gmBackpackUI.cs:151-156. The meter is a thin vertical
-  // fill strip positioned at the right of the first pack tab (size
-  // matches the dark margin between pack tabs); fill color ramps
-  // green → red across the 0..3.0 ratio (300% = max burden = full
-  // red). The text shows the precise percentage. Both are children
-  // of bagCol so absolute positions resolve inside the 61×339 box;
-  // refreshBurdenText() below writes both. Reads from
-  // `handle.playerBurden` (0.0..N float, encumbrance / capacity per
-  // ACE EncumbranceSystem.GetBurden); refreshed on every
-  // `playerStatsUpdated` event AND every rebuild() pass.
-  // P1-30 (cross-find inv-burden-*): 3-cell horizontal row mounted
-  // BELOW the paperdoll (y=222 in CSS), spanning the inventory width
-  // up to the bag column. Avoids the bag-tab-meter overlap the prior
-  // 6×28 vertical strip caused.
-  const burdenRow = document.createElement("div");
-  burdenRow.className = "hb-inv-burden-row";
-  const burdenLabel = document.createElement("span");
-  burdenLabel.className = "label";
-  setAcText(burdenLabel, "Burden", { color: "#f0d8a0" });
-  const burdenPct = document.createElement("span");
-  burdenPct.className = "pct";
-  setAcText(burdenPct, "—", { color: "#f0c060" });
-  const burdenMeter = document.createElement("div");
-  burdenMeter.className = "hb-inv-burden-meter";
-  burdenRow.appendChild(burdenLabel);
-  burdenRow.appendChild(burdenPct);
-  burdenRow.appendChild(burdenMeter);
-  overlay.appendChild(burdenRow);
-  // Keep the .hb-inv-burden-text element around as the "over" CSS
-  // hook; legacy code in refreshBurdenText toggles `.over` on it.
-  // Now a `display: contents` shim that holds the same per-row state
-  // tag without affecting layout.
-  const burdenText = burdenRow; // alias — refreshBurdenText below toggles .over on this
-
-  // Items grid (pack contents)
-  const itemsGrid = document.createElement("div");
-  itemsGrid.className = "hb-inv-items";
-  overlay.appendChild(itemsGrid);
-
-  // PR-T's in-place examine swap is replaced by main-panel.pushView
-  // ("examine", ctx) — the WHOLE pane transitions, not just our lower
-  // region. The user's eyes don't have to move because main-panel sits
-  // in the same screen position regardless of which view is mounted.
-
-  // Apply retail layout: body slots + paperdoll/bagcol/items region
-  // boxes. Falls through to CSS defaults if the layouts can't load.
-  applyInventoryLayout({
-    paperdollEl: paperdoll,
-    bagcolEl: bagCol,
-    itemsEl: itemsGrid,
-    dollSlotEls,
-  });
-
-  parentEl.appendChild(overlay);
-
-  // Track the currently selected inventory <li> (for E-key fire).
-  let selectedSrcLi = null;
-  function setSelected(srcLi) {
-    if (selectedSrcLi) {
-      const prevSlot = itemsGrid.querySelector(`[data-guid="${selectedSrcLi.dataset.guid}"]`);
-      prevSlot?.classList.remove("selected");
-    }
-    selectedSrcLi = srcLi;
-    if (srcLi) {
-      const slot = itemsGrid.querySelector(`[data-guid="${srcLi.dataset.guid}"]`);
-      slot?.classList.add("selected");
-    }
-  }
-
-  // Expose to other plugins so the floating examine popup can skip
-  // when the selection is an inventory item.
-  window.__isInventoryItem = (guid) => {
-    const g = String(guid >>> 0);
-    const eq = document.getElementById("inv-equipped");
-    const pk = document.getElementById("inv-pack");
-    for (const list of [eq, pk]) {
-      if (!list) continue;
-      for (const li of list.children) {
-        if (String(li.dataset.guid >>> 0) === g) return true;
-      }
-    }
-    return false;
-  };
-
-  // ── Mirror from index.html's #inv-equipped + #inv-pack ────────────
-  function makeSlot(srcLi) {
-    const slot = document.createElement("div");
-    slot.className = "hb-inv-slot";
-    const guidStr = srcLi.dataset?.guid ?? "";
-    slot.dataset.guid = guidStr;
-    const tb = srcLi.dataset?.typeBit ?? "0x0";
-    slot.dataset.typeBit = tb;
-    const icon = document.createElement("div");
-    icon.className = "hb-inv-icon";
-    // TYPE_COLOR is the fallback while the real icon fetches (mirrors
-    // vendor-ui.js:623-634's emoji-first/icon-on-resolve pattern). The
-    // iconId arrives via the cached wasm snapshot — InventoryItem
-    // (src/lib.rs:14185-14227) carries `iconId` per
-    // `PublicWeenieDescription.icon_id`, so the items-grid path is
-    // symmetric with the paperdoll slot at L974-981.
-    icon.style.background = TYPE_COLOR[tb] || "#444";
-    const item = guidStr ? getItemByGuid(guidStr) : null;
-    // Resolution chain mirrors container-panel resolveItemMeta (commit
-    // caf9d445): inventory snapshot → entityManager (PVS) → wasm icon
-    // cache populated at ViewContents time. Helps when iconId is missing
-    // from playerInventory() but cached separately.
-    let iconId = (item?.iconId >>> 0) || 0;
-    if (!iconId && guidStr) {
-      const g = (parseInt(guidStr, 10) >>> 0);
-      const em = window.liveScene3d?.entityManager;
-      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
-      iconId = ((ent?.meta?.iconId ?? ent?.iconId) >>> 0) || 0;
-      if (!iconId) {
-        const handle = window.__sessionHandle;
-        iconId = (handle?.getObjectIconId?.(g) >>> 0) || 0;
-      }
-    }
-    if (iconId) {
-      fetchPaperdollIconDataUrl(iconId).then((url) => {
-        // Skip if the slot has been swapped out or replaced mid-fetch
-        // (rebuildItemsGrid wipes innerHTML on every inventory delta).
-        if (!icon.isConnected) return;
-        if (slot.dataset.guid !== guidStr) return;
-        if (url) icon.style.background = `url("${url}") center/contain no-repeat`;
-      });
-    }
-    slot.appendChild(icon);
-    // Track A A1 (2026-06-24): UiEffects magic-effect badge dot(s). Gated
-    // `?uiEffectIcons`, which is default **ON** — docs/url-flags.md:835
-    // ("**on** (2026-06-24)") and the reader itself
-    // (scene3d/vfx/ui_effects_registry.js: absent param => true, only
-    // off/0/false/no opt out). This comment used to say "default OFF" and
-    // "flag-off = byte-identical (block never runs)", which is exactly
-    // backwards: with no URL param the block runs on every grid cell of
-    // every rebuild. `?uiEffectIcons=off` is the escape.
-    // Reads InventoryItem.uiEffects (PropertyInt 18; 0 pre-rebuild → no
-    // badge). Same registry + tint as the examine A0 badge. DOM-only, never
-    // touches WebGL. The slot is position:relative (see
-    // `.hb-inv-slot.armed::after`), so the corner dots anchor within it.
-    if (uiEffectIconsEnabled()) {
-      const uiFx = uiEffectIconsFor((item?.uiEffects >>> 0) || 0);
-      if (uiFx.length) {
-        const fxWrap = document.createElement("span");
-        fxWrap.className = "hb-inv-uifx";
-        fxWrap.style.cssText =
-          "position:absolute;top:2px;left:2px;display:flex;gap:2px;pointer-events:none;z-index:3;";
-        for (const f of uiFx) {
-          const dot = document.createElement("span");
-          dot.title = f.name;
-          // real *_UIEffectImage icon (0x06 DID via the 0x25000009 map); tint is
-          // the instant fallback while the icon fetches / if it fails.
-          dot.style.cssText =
-            "width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,0.55);" +
-            `background:${uiEffectTintCss(f.tint)} center/contain no-repeat;`;
-          fxWrap.appendChild(dot);
-          if (f.iconDid) {
-            fetchIconDataUrlShared(f.iconDid >>> 0).then((url) => {
-              if (url && dot.isConnected) dot.style.background = `url("${url}") center/contain no-repeat`;
-            }).catch(() => {});
-          }
-        }
-        slot.appendChild(fxWrap);
-      }
-    }
-    // Stack count (if the source row has a ×N badge)
-    const stack = srcLi.querySelector(".stack");
-    if (stack) {
-      const s = document.createElement("span");
-      s.className = "hb-inv-stack";
-      setAcText(s, stack.textContent, { color: "#f0d8a0" });
-      slot.appendChild(s);
-    }
-    // Tooltip
-    const tip = document.createElement("span");
-    tip.className = "hb-inv-tip";
-    const name = srcLi.querySelector(".name");
-    const tipName = name?.textContent ?? "(unnamed)";
-    setAcText(tip, tipName, { color: "#f0d8a0" });
-    slot.appendChild(tip);
-    // Appraisal-upgrade: after 250 ms hover (retail m_tooltipDelay),
-    // fetch the cached AppraisalProfile snapshot via getObjectAppraisal
-    // and rewrite the tip body with formatted stats. Reverts to the
-    // plain name on mouseleave so the next hover re-fetches (in case
-    // the snapshot grew between hovers). All sync — getObjectAppraisal
-    // returns a string immediately and we JSON.parse here.
-    let _tipDelayTimer = 0;
-    slot.addEventListener("mouseenter", () => {
-      _tipDelayTimer = setTimeout(() => {
-        _tipDelayTimer = 0;
-        try {
-          const guid = (parseInt(slot.dataset.guid, 10) >>> 0) || 0;
-          if (!guid) return;
-          const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-          if (typeof handle?.getObjectAppraisal !== "function") return;
-          const json = handle.getObjectAppraisal(guid);
-          if (typeof json !== "string" || json.length === 0) return;
-          let snap = null;
-          try { snap = JSON.parse(json); } catch (_) { return; }
-          const body = formatAppraisalTooltip(tipName, snap);
-          if (!body) return;
-          setAcText(tip, body, { color: "#f0d8a0" });
-          tip.dataset.appraised = "1";
-        } catch (_) {}
-      }, 250);
-    });
-    slot.addEventListener("mouseleave", () => {
-      if (_tipDelayTimer) { try { clearTimeout(_tipDelayTimer); } catch (_) {} _tipDelayTimer = 0; }
-      if (tip.dataset.appraised === "1") {
-        setAcText(tip, tipName, { color: "#f0d8a0" });
-        delete tip.dataset.appraised;
-      }
-    });
-    // Forward draggable (vendor sells use the same pattern as the
-    // source <li> with draggable=true).
-    if (srcLi.getAttribute("draggable") === "true") {
-      slot.draggable = true;
-      slot.addEventListener("dragstart", (ev) => {
-        ev.dataTransfer.setData("application/x-hb-inv-guid", slot.dataset.guid);
-        ev.dataTransfer.setData("text/x-hb-item-guid", slot.dataset.guid);
-        ev.dataTransfer.effectAllowed = "move";
-        // Wave C / PR9 (2026-06-06): iconId-driven Image ghost (matches
-        // the paperdoll-slot pattern). Replaces the prior DOM-element
-        // ghost at line 1650 which read as a styled slot box.
-        try {
-          const item = getItemByGuid(parseInt(slot.dataset.guid, 10) >>> 0);
-          const iconDid = (item?.iconId >>> 0) || 0;
-          if (iconDid && typeof window.__iconCache?.getUrl === "function") {
-            const url = window.__iconCache.getUrl(iconDid);
-            if (url) {
-              const img = new Image();
-              img.src = url;
-              img.width = 32; img.height = 32;
-              ev.dataTransfer.setDragImage(img, 16, 16);
-            }
-          }
-        } catch (_) {}
-      });
-    }
-    // === Wave 5.C — tradeskill drag-end hook (2026-05-28) ===
-    // Items-grid slots act as drop targets for any inventory item with
-    // the application/x-hb-inv-guid mime. When the source GUID !=
-    // the slot's own GUID, we emit `hb:inventory-item-on-item-drop`
-    // (source + target are both items, never paperdoll/equip slots —
-    // those route via the paperdoll drop handler at L929 instead).
-    // Subscriber: plugins/tradeskill.js → useWithTarget(src, tgt).
-    slot.addEventListener("dragenter", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-      }
-    });
-    slot.addEventListener("dragover", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = "move";
-      }
-    });
-    slot.addEventListener("drop", (ev) => {
-      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
-      if (!guidStr) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
-      const targetGuid = (parseInt(slot.dataset.guid, 10) >>> 0);
-      // Self-drop (e.g. re-arrange) is a no-op for tradeskill.
-      if (!sourceGuid || !targetGuid || sourceGuid === targetGuid) return;
-      try {
-        window.dispatchEvent(new CustomEvent("hb:inventory-item-on-item-drop", {
-          detail: {
-            sourceGuid,
-            targetGuid,
-            sourceIsEquipSlot: false,
-            targetIsEquipSlot: false,
-          },
-        }));
-      } catch (_) {}
-    });
-    // Click dispatcher. Single LMB selects; ctrl-click or dblclick uses/equips/opens;
-    // shift-click opens the context menu pre-armed for Split Stack; right-click hands off
-    // to the polymorphic context menu. Legacy examine-on-single-click is gated behind
-    // localStorage 'hb-inv.legacy-click-examine' = '1' for regression A/B.
-    slot.addEventListener("click", (ev) => {
-      if (ev.button !== 0) return;
-      setSelected(srcLi);
-      const guid = (parseInt(srcLi.dataset?.guid, 10) >>> 0) || 0;
-      const name = srcLi.querySelector(".name")?.textContent || "Item";
-      const item = getItemByGuid(guid);
-      const legacy = (() => {
-        try { return window.localStorage?.getItem?.("hb-inv.legacy-click-examine") === "1"; }
-        catch (_) { return false; }
-      })();
-      // Dispatcher: dblclick (ev.detail >= 2) OR Ctrl-click → USE / EQUIP / OPEN.
-      if ((ev.detail >= 2 || ev.ctrlKey) && guid) {
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        // Container items open into a side panel rather than equipping.
-        // usesBackpackSlot() (retail UseBackpackSlot parity — see the
-        // helper's doc comment) replaces the raw ItemType bit test so a
-        // non-Container pack-slot item (e.g. a focus) also opens correctly.
-        if (usesBackpackSlot(item)) {
-          try { window.__openContainerFor?.(guid, item?.name || name); }
-          catch (_) { /* container plugin may be down */ }
-          return;
-        }
-        const validLocs = (item?.validLocations >>> 0) || 0;
-        // Fall through to a heuristic slot when validLocations isn't on the
-        // snapshot yet (ACE only ships the WeenieHeaderFlag.ValidLocations
-        // bit when the weenie has it set in the database — items where the
-        // property is null/0 arrive with vl=0 even though they ARE wieldable).
-        // Heuristic: equippable bit in itemType → pick a sane slot per type.
-        // Without this fallback, ctrl/dbl-click on a hammer with vl=0 hits
-        // the `if (validLocs && ...)` guard and silently does nothing.
-        const itemTypeBits = (item?.itemType >>> 0) || 0;
-        const ITEM_TYPE_MELEE = 0x00000001;
-        const ITEM_TYPE_ARMOR = 0x00000002;
-        const ITEM_TYPE_CLOTHING = 0x00000004;
-        const ITEM_TYPE_JEWELRY = 0x00000008;
-        const ITEM_TYPE_MISSILE = 0x00000100;
-        const ITEM_TYPE_CASTER = 0x00010000;
-        const fallbackMask =
-          (itemTypeBits & ITEM_TYPE_MELEE) ? 0x00100000 :
-          (itemTypeBits & ITEM_TYPE_MISSILE) ? 0x00400000 :
-          (itemTypeBits & ITEM_TYPE_CASTER) ? 0x01000000 :
-          0;
-        const effectiveVL = validLocs || fallbackMask;
-        if (effectiveVL && handle?.setWielded) {
-          const mask = pickWieldSlotMask(effectiveVL);
-          const playerState = buildPlayerEquipState(inventorySnapshot, {
-            stance: window.__combatBarState?.stance,
-            inCombatMode: !!window.__combatBarState?.inCombatMode,
-          });
-          const verdict = canEquipInSlot(item, mask >>> 0, playerState);
-          if (verdict && verdict.ok === false) {
-            try { paperdollToast(verdict.reason || "Cannot equip there."); } catch (_) {}
-            try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
-            try { srcLi.classList.add("reject"); setTimeout(() => srcLi.classList.remove("reject"), 250); } catch (_) {}
-            return;
-          }
-          try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-          try { handle.setWielded(guid, mask >>> 0); }
-          catch (e) { console.warn("[inv-click] setWielded failed:", e); }
-          return;
-        }
-        // R13: a tinkering/salvage tool opens the salvage panel locally on use
-        // (retail UsingItem → SendNotice_OpenSalvagePanel). IT_TINKERING_TOOL =
-        // 0x20000000 (canonical_classify.js / chorizite enum), NOT 0x00020000
-        // (= IT_LOCKABLE). A non-tool falls through to useObject (no regress).
-        if ((((item?.itemType >>> 0) & 0x20000000) !== 0)
-            && typeof window.__openSalvagePanel === "function") {
-          try { window.__openSalvagePanel(guid); return; } catch (_) {}
-        }
-        if (typeof handle?.useObject === "function") {
-          try { handle.useObject(guid); }
-          catch (e) { console.warn("[inv-click] useObject failed:", e); }
-          // HUD rec #180 (2026-06-16): writable items (books, signs,
-          // shop journals) need an explicit bookData follow-up — ACE's
-          // Use handler acks the action but doesn't auto-send the
-          // BookDataResponse. Detect via the ItemType WRITABLE bit
-          // (0x00002000) on the inventory snapshot row.
-          try {
-            const ITEM_TYPE_WRITABLE = 0x00002000;
-            const isBook = (((item?.itemType ?? itemTypeBits) >>> 0) & ITEM_TYPE_WRITABLE) !== 0;
-            if (isBook && handle.bookData) handle.bookData(guid);
-          } catch (_) { /* best-effort */ }
-          return;
-        }
-        return;
-      }
-      // Shift-click → open context menu pre-focused on Split Stack so the
-      // inline numeric prompt is the user's next click.
-      if (ev.shiftKey && guid) {
-        const count = (item?.stackSize >>> 0) || (item?.stackCount >>> 0) || 1;
-        if (count > 1 && typeof window.__openContextMenuFor === "function") {
-          try {
-            window.__openContextMenuFor({
-              source: "inv-grid",
-              guid,
-              srcLi,
-              name,
-              clientX: ev.clientX,
-              clientY: ev.clientY,
-              focusAction: "split",
-            });
-          } catch (e) { console.warn("[inv-click] split-via-menu failed:", e); }
-          return;
-        }
-      }
-      // Single LMB: SELECT only. Legacy users can opt back into examine-on-click.
-      if (legacy) {
-        if (typeof window.__showExamineFor === "function") {
-          window.__showExamineFor(guid, { name, fromInventory: true, srcLi });
-        } else {
-          window.__mainPanel?.pushView?.("examine", { guid, name, fromInventory: true, srcLi });
-        }
-      }
-    });
-    // Right-click → polymorphic context menu. preventDefault so the
-    // browser menu never shows; feature-detect __openContextMenuFor so the
-    // legacy main-panel examine still works if the menu plugin isn't loaded.
-    slot.addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      const guid = (parseInt(srcLi.dataset?.guid, 10) >>> 0) || 0;
-      if (!guid) return;
-      setSelected(srcLi);
-      const name = srcLi.querySelector(".name")?.textContent || "Item";
-      if (typeof window.__openContextMenuFor === "function") {
-        try {
-          window.__openContextMenuFor({
-            source: "inv-grid",
-            guid,
-            srcLi,
-            name,
-            clientX: ev.clientX,
-            clientY: ev.clientY,
-          });
-        } catch (e) { console.warn("[inv-click] context menu failed:", e); }
-      }
-    });
-    // Wave C / PR9 (2026-06-06): Image-ghost path moved into the primary
-    // dragstart above. Browsers honor the LAST setDragImage in the
-    // dragstart event chain, so leaving this as a no-op preserves the
-    // primary handler's iconId-driven ghost.
-    // (intentionally empty — primary dragstart owns the ghost)
-    return slot;
-  }
-
-  // TRACK B8 (2026-06-08): build a vacant 32x32 drop-target cell to pad the
-  // items grid up to the selected pack's capacity. No item GUID/icon — it
-  // reads as an empty pack slot and accepts a drag-drop that MOVES the
-  // dragged item into the currently selected pack (main pack =
-  // selectedPackContainerId 0 → destination is the player guid; a side pack
-  // → its containerId). Mirrors the populated slot's dragenter/dragover/drop
-  // wiring but routes through `handle.moveItem(sourceGuid, dest, placement)`
-  // (the same move the bag-tab drop path at L1464 uses for "drop into this
-  // pack") instead of the item-on-item tradeskill event (no target item
-  // here). HUD bug-pack P4 (2026-07-04): `placement` is this cell's grid
-  // index (its ordinal among `padItemsGridToCapacity`'s `occupied..cap`
-  // loop — see the call site), NOT a hardcoded 0, so the drop preserves a
-  // PlacementPosition sort index instead of always landing at slot 0.
-  function makeEmptySlot(placement) {
-    const slot = document.createElement("div");
-    slot.className = "hb-inv-slot empty";
-    slot.dataset.empty = "1";
-    slot.dataset.placement = String((placement >>> 0) || 0);
-    const icon = document.createElement("div");
-    icon.className = "hb-inv-icon";
-    icon.style.background = "transparent";
-    icon.style.border = "1px dashed rgba(255, 255, 255, 0.12)";
-    slot.appendChild(icon);
-    slot.addEventListener("dragenter", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-      }
-    });
-    slot.addEventListener("dragover", (ev) => {
-      if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = "move";
-      }
-    });
-    slot.addEventListener("drop", (ev) => {
-      const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
-      if (!guidStr) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const sourceGuid = (parseInt(guidStr, 10) >>> 0);
-      if (!sourceGuid) return;
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle || typeof handle.moveItem !== "function") return;
-      // Main pack (selectedPackContainerId 0) takes the player guid as the
-      // destination container (containerId 0 is rejected by ACE moveItem,
-      // same caveat as the bag-tab drop path); a side pack takes its own id.
-      let dest = (selectedPackContainerId >>> 0);
-      if (dest === 0) {
-        const me = (typeof window.getLocalPlayerGuid === "function")
-          ? (window.getLocalPlayerGuid() >>> 0) : 0;
-        if (!me) return;
-        dest = me;
-      }
-      const placement = (parseInt(slot.dataset.placement, 10) >>> 0) || 0;
-      try { handle.moveItem(sourceGuid, dest, placement); }
-      catch (e) { console.warn("[inv-empty] moveItem failed:", e); }
-    });
-    return slot;
-  }
-
-  // Isolate a single-bit equip slot mask from a multi-bit ValidLocations
-  // value, with explicit precedence mirroring retail acclient.c:220400
-  // (gmPaperDollUI's WhichSlotForItem). A weapon that fits Melee + Held
-  // resolves to Melee; a held caster that fits Held + TwoHanded resolves
-  // to Held; rings/sigils fall through to lowest-set-bit. Pure function,
-  // safe to call with 0 (returns 0).
-  function pickWieldSlotMask(validLocations) {
-    const v = (validLocations >>> 0) || 0;
-    if (v === 0) return 0;
-    // Single-bit fast path.
-    if ((v & (v - 1)) === 0) return v;
-    const PRECEDENCE = [
-      0x00100000, // MeleeWeapon
-      0x00200000, // Shield
-      0x00400000, // MissileWeapon
-      0x00800000, // MissileAmmo
-      0x01000000, // Held
-      0x02000000, // TwoHanded
-      0x04000000, // TrinketOne
-      0x08000000, // Cloak
-      0x10000000, // Sigil Blue
-      0x20000000, // Sigil Yellow
-      0x40000000, // Sigil Red
-    ];
-    for (const bit of PRECEDENCE) {
-      if ((v & bit) !== 0) return bit;
-    }
-    return v & -v; // lowest set bit
-  }
-
-  // Armed-item namespace. armedGuid is the current grid-armed item (a future addition may add
-  // armedSpellId here). Backward-compat alias on window.__inventory_armedGuid
-  // keeps old consumers working.
+if (typeof window !== "undefined") {
   if (!window.__inventory) window.__inventory = { armedGuid: 0 };
-  function setArmedItem(guid) {
-    const g = (guid >>> 0) || 0;
-    window.__inventory.armedGuid = g;
-    window.__inventory_armedGuid = g;
-    try { document.body.classList.toggle("hb-armed-item", g !== 0); }
-    catch (_) {}
-    // Toggle the per-slot 'i' badge in this overlay; other panels read
-    // the body class for the cursor change.
-    try {
-      overlay.querySelectorAll(".hb-inv-slot.armed").forEach((s) => s.classList.remove("armed"));
-      if (g) {
-        const sel = overlay.querySelector(`.hb-inv-slot[data-guid="${String(g)}"]`);
-        if (sel) sel.classList.add("armed");
-      }
-    } catch (_) {}
-  }
   window.__inventory.setArmedItem = setArmedItem;
+  window.__inventory.openPack = openPack;
+  window.__inventory.selectedPack = () => lastSelectedPack;
+}
 
-  // Imports for slot-typing validation. Pure helpers; safe to call
-  // before login (return ok with no info).
-  // (canEquipInSlot/canBindToHotbar/buildPlayerEquipState live in
-  //  inventory_helpers.js.)
-
-  // Inline reject-feedback overlay anchored to the paperdoll, modelled
-  // on vendor-ui.js:751. Auto-dismisses after 1500ms. NOT a global toast
-  // bus — strictly scoped to the inventory overlay.
-  function paperdollToast(text, opts) {
-    if (!paperdoll) return;
+// Inline note anchored to the paperdoll (speculative-equip notice).
+function makePaperdollToast(paperdoll) {
+  return function paperdollToast(text, opts) {
     const speculative = !!opts?.speculative;
     let el = paperdoll.querySelector(".hb-inv-paperdoll-toast");
     if (!el) {
@@ -2178,426 +550,723 @@ function doMount(parentEl, _ctx) {
     el.dataset.show = "1";
     clearTimeout(el._dismiss);
     el._dismiss = setTimeout(() => { el.dataset.show = "0"; }, 1500);
+  };
+}
+
+function legacyLi(guid, fallback) {
+  const g = String(guid >>> 0);
+  return document.querySelector(`#inv-pack li[data-guid="${g}"], #inv-equipped li[data-guid="${g}"]`) || fallback;
+}
+
+function doMount(parentEl, _ctx) {
+  ensureStyles();
+  document.getElementById(OVERLAY_ID)?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = OVERLAY_ID;
+
+  // ── live data ────────────────────────────────────────────────────
+  let rows = [];
+  let rowsByGuid = new Map();
+  let stubs = new Map();
+  let orders = new Map();
+  let orphanEquipped = [];
+  let selectedPackContainerId = lastSelectedPack >>> 0;
+  let selectedGuid = 0;
+
+  function displayRow(guid) {
+    const g = guid >>> 0;
+    return rowsByGuid.get(g) || stubs.get(g) || null;
+  }
+  function withPack(row) { return row ? { ...row, isPack: rowUsesPackSlot(row) } : null; }
+  function gridKey() { return selectedPackContainerId === 0 ? MAIN_PACK_KEY : selectedPackContainerId; }
+  function mainCap() { return (readHandleNumber("playerItemsCapacity") >>> 0) || DEFAULT_MAIN_CAP; }
+  function packsCap() { return (readHandleNumber("playerContainersCapacity") >>> 0) || DEFAULT_PACKS_CAP; }
+  function capacityOf(key) { return packCapacity(rows, key, { mainCap: mainCap(), packsCap: packsCap() }); }
+
+  // ── gmPaperDollUI ───────────────────────────────────────────────
+  const paperdoll = document.createElement("div");
+  paperdoll.className = "hb-inv-paperdoll";
+  const paperdollToast = makePaperdollToast(paperdoll);
+  // Wave 14 — 3D character doll viewport (retail gmPaperDollUI::
+  // RedressCreature). Renders BEHIND the slot squares.
+  const paperdollViewport = new PaperdollViewport({ width: PAPERDOLL_W, height: PAPERDOLL_H });
+  const viewportWrap = document.createElement("div");
+  viewportWrap.className = "hb-inv-paperdoll-viewport";
+  viewportWrap.appendChild(paperdollViewport.dom);
+  paperdoll.appendChild(viewportWrap);
+
+  const dollSlotEls = {};
+  const aetheriaSlotEls = [];
+  for (const s of PAPERDOLL_SLOTS) {
+    const el = document.createElement("div");
+    el.className = "hb-inv-doll-slot";
+    el.dataset.equipMask = String(s.equipMask);
+    el.dataset.name = s.name;
+    el.dataset.elemId = s.elemId;
+    if (ARMOR_SLOT_ELEMIDS.has(s.elemId)) el.classList.add("armor");
+    if (s.aetheriaBit) {
+      el.dataset.aetheriaBit = String(s.aetheriaBit);
+      aetheriaSlotEls.push({ el, bit: s.aetheriaBit >>> 0 });
+    }
+    el.style.left = `${s.x}px`;
+    el.style.top = `${s.y}px`;
+    // Per-slot hint silhouette (data/ui-sprites/slot-hints/, the child
+    // ImageMedia of each 0x21000037 template), drawn while empty.
+    const hintDid = (s.hintIconDid >>> 0) || 0;
+    if (hintDid) {
+      const hintHex = "0x" + hintDid.toString(16).toUpperCase().padStart(8, "0");
+      el.style.backgroundImage = `url("./data/ui-sprites/slot-hints/${hintHex}.png")`;
+    }
+    const icon = document.createElement("div");
+    icon.className = "hb-inv-doll-icon";
+    el.appendChild(icon);
+    el.addEventListener("mouseenter", () => {
+      const nm = el.dataset.itemName;
+      showItemTooltip(el, nm ? `${nm}\n${s.name}` : s.name);
+    });
+    el.addEventListener("mouseleave", hideItemTooltip);
+    // Equipped item → drag source (to a pack, the grid, the world, the hotbar…).
+    el.addEventListener("dragstart", (ev) => {
+      const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
+      const row = guid ? rowsByGuid.get(guid) : null;
+      if (!row) { ev.preventDefault(); return; }
+      hideItemTooltip();
+      beginItemDrag(ev, {
+        guid, item: withPack(row), owned: true,
+        sourceList: null, sourceIndex: -1, sourceEl: el,
+      });
+    });
+    // Double-click → unwield back to the main pack.
+    el.addEventListener("dblclick", (ev) => {
+      if (ev.button !== 0) return;
+      const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
+      if (!guid) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const h = sessionHandleNow();
+      try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
+      if (typeof h?.unwieldToPack === "function") {
+        try { h.unwieldToPack(guid); } catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
+      } else if (typeof h?.moveItem === "function" && localPlayerGuid()) {
+        try { h.moveItem(guid, localPlayerGuid(), 0); } catch (_) {}
+      }
+    });
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
+      if (!guid || typeof window.__openContextMenuFor !== "function") return;
+      try {
+        window.__openContextMenuFor({
+          source: "inv-paperdoll", guid,
+          name: el.dataset.itemName || s.name,
+          clientX: ev.clientX, clientY: ev.clientY,
+        });
+      } catch (e) { console.warn("[paperdoll-rc] context menu failed:", e); }
+    });
+    paperdoll.appendChild(el);
+    dollSlotEls[s.equipMask] = { el, icon, slot: s };
   }
 
-  // Cached snapshot of the most recent SessionHandle.playerInventory()
-  // call (refreshed at the top of rebuild()). Wave 13.2 — keeping the
-  // snapshot lets the bag-tab click path filter the items grid without
-  // re-querying wasm. The snapshot already carries each item's
-  // containerId / itemType / iconId / name (see src/lib.rs:21208-21221).
-  let inventorySnapshot = [];
-  function refreshInventorySnapshot() {
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (!handle?.playerInventory) { inventorySnapshot = []; return; }
-      inventorySnapshot = handle.playerInventory();
-    } catch (_) { inventorySnapshot = []; }
+  // m_SlotCheckbox (retail Paperdoll_Slots_Checkbox 0x100005BE at
+  // (42,190), default unchecked = 3D figure). Persisted per browser.
+  const SLOTS_VIEW_STORAGE_KEY = "hb-inv.slots-view.checked.v1";
+  let slotsViewChecked = false;
+  try {
+    slotsViewChecked = parseSlotsViewChecked(window.localStorage?.getItem?.(SLOTS_VIEW_STORAGE_KEY) ?? null);
+  } catch (_) { slotsViewChecked = false; }
+  const slotsToggle = document.createElement("label");
+  slotsToggle.className = "hb-inv-slots-toggle hbk-label";
+  slotsToggle.title = "Show the armour slots instead of the figure";
+  const slotsCheck = document.createElement("input");
+  slotsCheck.type = "checkbox";
+  slotsCheck.className = "hbk-check";
+  slotsCheck.checked = slotsViewChecked;
+  const slotsLabel = document.createElement("span");
+  setAcText(slotsLabel, "Slots", { color: "#e8dfc8" });
+  slotsToggle.appendChild(slotsCheck);
+  slotsToggle.appendChild(slotsLabel);
+  paperdoll.appendChild(slotsToggle);
+  function applySlotsViewClass() { overlay.classList.toggle("slots-view", slotsViewChecked); }
+  applySlotsViewClass();
+  slotsCheck.addEventListener("change", () => {
+    slotsViewChecked = slotsCheck.checked;
+    applySlotsViewClass();
+    try { window.localStorage?.setItem?.(SLOTS_VIEW_STORAGE_KEY, slotsViewChecked ? "1" : "0"); } catch (_) {}
+  });
+  overlay.appendChild(paperdoll);
+
+  // ── gmBackpackUI ────────────────────────────────────────────────
+  const bagCol = document.createElement("div");
+  bagCol.className = "hb-inv-bagcol";
+  const burdenLabel = document.createElement("div");
+  burdenLabel.className = "hb-inv-burden-label";
+  setAcText(burdenLabel, "Burden", { color: "#e8dfc8" });
+  const burdenPct = document.createElement("div");
+  burdenPct.className = "hb-inv-burden-pct";
+  setAcText(burdenPct, "—", { color: "#f3d27a" });
+  const burdenMeter = document.createElement("div");
+  burdenMeter.className = "hb-inv-burden-meter";
+  burdenMeter.appendChild(document.createElement("i"));
+  bagCol.append(burdenLabel, burdenPct, burdenMeter);
+
+  function makeBagCell() {
+    const cell = document.createElement("div");
+    cell.className = "hb-inv-bag";
+    const icon = document.createElement("div");
+    icon.className = "hb-inv-bag-icon";
+    const cap = document.createElement("div");
+    cap.className = "hb-inv-bag-cap";
+    cap.appendChild(document.createElement("i"));
+    cell.append(icon, cap);
+    cell._icon = icon;
+    cell._cap = cap;
+    cell._iconId = -1;
+    return cell;
+  }
+  function setBagIcon(cell, iconId) {
+    if (cell._iconId === iconId) return;
+    cell._iconId = iconId;
+    cell._icon.style.backgroundImage = "";
+    if (!iconId) return;
+    const hit = getIconImmediate(iconId);
+    if (hit) { cell._icon.style.backgroundImage = `url("${hit}")`; return; }
+    fetchPaperdollIconDataUrl(iconId).then((url) => {
+      if (url && cell._iconId === iconId) cell._icon.style.backgroundImage = `url("${url}")`;
+    });
+  }
+  function setBagCapacity(cell, used, cap) {
+    const frac = cap > 0 ? Math.max(0, Math.min(1, used / cap)) : 0;
+    cell._cap.style.display = cap > 0 ? "" : "none";
+    cell._cap.firstChild.style.setProperty("--cap", `${Math.round(frac * 100)}%`);
   }
 
-  // Find the inventory item record for a given source <li> via wasm.
-  // The source <li>'s data-guid lets us look up the item's equipMask
-  // from the SessionHandle.playerInventory() snapshot.
-  function getItemByGuid(guid) {
-    if (!inventorySnapshot || inventorySnapshot.length === 0) return null;
-    return inventorySnapshot.find((it) => String(it.guid) === String(guid)) || null;
+  // Inv_MainPackSlot.
+  const mainSlot = makeBagCell();
+  mainSlot.classList.add("hb-inv-mainpack");
+  setBagIcon(mainSlot, MAIN_PACK_ICON);
+  mainSlot.addEventListener("click", () => selectPack(0));
+  mainSlot.addEventListener("mouseenter", () => {
+    const c = capacityOf(MAIN_PACK_KEY);
+    showItemTooltip(mainSlot, `Main Pack\n${c.used} / ${c.cap} items`);
+  });
+  mainSlot.addEventListener("mouseleave", hideItemTooltip);
+  bagCol.appendChild(mainSlot);
+
+  // Inv_ContainerList (+ rope scrollbar).
+  const packList = document.createElement("div");
+  packList.className = "hb-inv-packlist hbk-scroll";
+  bagCol.appendChild(packList);
+  overlay.appendChild(bagCol);
+  const bagCache = new Map();
+
+  function onBagEnter(ev) {
+    const cell = ev.currentTarget;
+    const g = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+    if (!g) { showItemTooltip(cell, "Empty pack slot"); return; }
+    const row = displayRow(g);
+    const c = capacityOf(g);
+    showItemTooltip(cell, `${row?.name || "Pack"}\n${c.used} / ${c.cap || "?"} items`);
   }
 
-  // Clear any equipped icon from every paperdoll slot.
+  function renderBagColumn() {
+    mainSlot.classList.toggle("is-open", selectedPackContainerId === 0);
+    const mc = capacityOf(MAIN_PACK_KEY);
+    setBagCapacity(mainSlot, mc.used, mc.cap);
+    const packGuids = (orders.get(PACKS_KEY) || []).filter((g) => displayRow(g));
+    const slots = Math.max(packsCap(), packGuids.length);
+    const want = [];
+    const used = new Set();
+    packGuids.forEach((g, i) => {
+      const key = "p" + g;
+      let cell = bagCache.get(key);
+      if (!cell) {
+        cell = makeBagCell();
+        cell.draggable = true;
+        cell.addEventListener("click", () => {
+          const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+          if (pg) selectPack(pg);
+        });
+        cell.addEventListener("mouseenter", onBagEnter);
+        cell.addEventListener("mouseleave", hideItemTooltip);
+        cell.addEventListener("dragstart", (ev) => {
+          const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+          const row = rowsByGuid.get(pg);
+          if (!row) { ev.preventDefault(); return; }
+          hideItemTooltip();
+          beginItemDrag(ev, {
+            guid: pg, item: withPack(row), owned: true,
+            sourceList: { key: PACKS_KEY, kind: "packs" },
+            sourceIndex: (orders.get(PACKS_KEY) || []).indexOf(pg),
+            sourceEl: cell,
+          });
+        });
+        cell.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault();
+          const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+          if (!pg || typeof window.__openContextMenuFor !== "function") return;
+          try {
+            window.__openContextMenuFor({
+              source: "inv-grid", guid: pg, srcLi: legacyLi(pg, cell),
+              name: displayRow(pg)?.name || "Pack", clientX: ev.clientX, clientY: ev.clientY,
+            });
+          } catch (_) {}
+        });
+        bagCache.set(key, cell);
+      }
+      const row = displayRow(g);
+      cell.classList.remove("is-empty");
+      cell.dataset.packGuid = String(g);
+      cell.dataset.guid = String(g);
+      cell.dataset.index = String(i);
+      setBagIcon(cell, (row?.iconId >>> 0) || 0);
+      const c = capacityOf(g);
+      setBagCapacity(cell, c.used, c.cap);
+      cell.classList.toggle("is-open", selectedPackContainerId === g);
+      cell.classList.toggle("is-pending", pendingOps.has(g));
+      want.push(cell);
+      used.add(key);
+    });
+    for (let i = packGuids.length; i < slots; i++) {
+      const key = "pe" + (i - packGuids.length);
+      let cell = bagCache.get(key);
+      if (!cell) {
+        cell = makeBagCell();
+        cell.classList.add("is-empty");
+        cell.addEventListener("mouseenter", onBagEnter);
+        cell.addEventListener("mouseleave", hideItemTooltip);
+        bagCache.set(key, cell);
+      }
+      cell.dataset.index = String(i);
+      setBagCapacity(cell, 0, 0);
+      want.push(cell);
+      used.add(key);
+    }
+    patchChildren(packList, want, bagCache, used);
+  }
+
+  // ── gm3DItemsUI grid ────────────────────────────────────────────
+  const itemsGrid = document.createElement("div");
+  itemsGrid.className = "hb-inv-items hbk-scroll";
+  overlay.appendChild(itemsGrid);
+  const cellCache = new Map();
+
+  function setCellIcon(cell, row) {
+    const iconId = (row.iconId >>> 0) || 0;
+    if (cell._iconId === iconId) return;
+    cell._iconId = iconId;
+    const icon = cell._icon;
+    icon.style.backgroundColor = "";
+    icon.style.backgroundImage = "";
+    if (!iconId) { icon.style.backgroundColor = typeTint(row.itemType); return; }
+    const hit = getIconImmediate(iconId);
+    if (hit) { icon.style.backgroundImage = `url("${hit}")`; return; }
+    icon.style.backgroundColor = typeTint(row.itemType);
+    fetchPaperdollIconDataUrl(iconId).then((url) => {
+      if (!url || cell._iconId !== iconId) return;
+      icon.style.backgroundColor = "";
+      icon.style.backgroundImage = `url("${url}")`;
+    });
+  }
+  function setCellStack(cell, n) {
+    if (cell._stackN === n) return;
+    cell._stackN = n;
+    if (n > 1) {
+      if (!cell._stack) {
+        cell._stack = document.createElement("span");
+        cell._stack.className = "hb-islot-stack hb-inv-stack";
+        cell.appendChild(cell._stack);
+      }
+      setAcText(cell._stack, String(n), { color: "#ffffff" });
+    } else if (cell._stack) {
+      cell._stack.remove();
+      cell._stack = null;
+    }
+  }
+  function setCellEffects(cell, bits) {
+    if (cell._fxBits === bits) return;
+    cell._fxBits = bits;
+    cell._fx?.remove();
+    cell._fx = null;
+    if (!bits || !uiEffectIconsEnabled()) return;
+    // Track A A1: UiEffects (PropertyInt 18) magic badge(s); `?uiEffectIcons=off` escape.
+    const fx = uiEffectIconsFor(bits);
+    if (!fx.length) return;
+    const wrap = document.createElement("span");
+    wrap.className = "hb-islot-fx";
+    for (const f of fx) {
+      const dot = document.createElement("span");
+      dot.title = f.name;
+      dot.style.backgroundColor = uiEffectTintCss(f.tint) || "";
+      wrap.appendChild(dot);
+      if (f.iconDid) {
+        fetchIconDataUrlShared(f.iconDid >>> 0).then((url) => {
+          if (url && dot.isConnected) { dot.style.backgroundColor = ""; dot.style.backgroundImage = `url("${url}")`; }
+        }).catch(() => {});
+      }
+    }
+    cell._fx = wrap;
+    cell.appendChild(wrap);
+  }
+
+  function makeItemCell() {
+    const cell = document.createElement("div");
+    cell.className = "hb-inv-slot hb-islot";
+    const icon = document.createElement("div");
+    icon.className = "hb-islot-icon";
+    cell.appendChild(icon);
+    cell._icon = icon;
+    cell._iconId = -1;
+    cell._stackN = 0;
+    cell._fxBits = -1;
+    cell.draggable = true;
+    cell.addEventListener("dragstart", onCellDragStart);
+    cell.addEventListener("click", onCellClick);
+    cell.addEventListener("contextmenu", onCellContext);
+    cell.addEventListener("mouseenter", onCellEnter);
+    cell.addEventListener("mouseleave", onCellLeave);
+    return cell;
+  }
+  function makeEmptyCell() {
+    const cell = document.createElement("div");
+    cell.className = "hb-inv-slot hb-islot is-empty";
+    cell.dataset.empty = "1";
+    return cell;
+  }
+  function updateItemCell(cell, e) {
+    const g = String(e.guid);
+    if (cell.dataset.guid !== g) {
+      cell.dataset.guid = g;
+      cell._iconId = -1;
+    }
+    cell.dataset.index = String(e.index);
+    const tb = ((e.row.itemType >>> 0) & (~(e.row.itemType >>> 0) + 1)) >>> 0;
+    cell.dataset.typeBit = "0x" + tb.toString(16);
+    cell._name = e.row.name || "(unnamed)";
+    setCellIcon(cell, e.row);
+    let n = Math.max(1, e.row.stackSize | 0 || 1);
+    if (e.pendingOp && (e.pendingOp.op === "split" || e.pendingOp.op === "merge" || e.pendingOp.op === "give"
+        || e.pendingOp.op === "drop" || e.pendingOp.op === "wield") && e.pendingOp.amount < n) {
+      n -= e.pendingOp.amount;
+    }
+    setCellStack(cell, n);
+    setCellEffects(cell, (e.row.uiEffects >>> 0) || 0);
+    cell.classList.toggle("is-selected", e.guid === selectedGuid);
+    cell.classList.toggle("armed", e.guid === ((window.__inventory?.armedGuid >>> 0) || 0));
+    cell.classList.toggle("is-pending", !!e.pending);
+    cell.draggable = !e.row.stub;
+  }
+
+  function buildGridEntries() {
+    const key = gridKey();
+    const list = orders.get(key) || [];
+    const entries = [];
+    list.forEach((g, i) => {
+      const row = displayRow(g);
+      if (!row) return;
+      const p = pendingOps.get(g);
+      // A whole-stack wield in flight is drawn on the paperdoll, not here.
+      if (p && p.op === "wield" && p.amount >= (row.stackSize || 1)) return;
+      entries.push({ key: "g" + g, guid: g, row, index: i, pending: !!p || !!row.stub, pendingOp: p });
+    });
+    if (key === MAIN_PACK_KEY) {
+      // Equipped items no paperdoll slot claims (unknown EquipMask) stay
+      // visible in the main pack, after the ordered items.
+      for (const r of orphanEquipped) {
+        entries.push({ key: "g" + r.guid, guid: r.guid, row: r, index: list.length, pending: pendingOps.has(r.guid) });
+      }
+    }
+    // ItemList_AddEmptySlot / UpdateEmptySlots: pad to the pack capacity
+    // so the grid reads as a fixed-size pack (and every vacant cell is a
+    // drop target). Unknown capacity → at least one spare row.
+    const cap = capacityOf(key).cap;
+    const count = entries.length;
+    const target = cap > 0 ? Math.max(cap, count) : Math.max(18, Math.ceil((count + 6) / 6) * 6);
+    for (let i = count; i < target; i++) entries.push({ key: "e" + (i - count), empty: true, index: list.length });
+    return entries;
+  }
+
+  function renderGrid() {
+    const entries = buildGridEntries();
+    const want = [];
+    const used = new Set();
+    for (const e of entries) {
+      let cell = cellCache.get(e.key);
+      if (!cell) {
+        cell = e.empty ? makeEmptyCell() : makeItemCell();
+        cellCache.set(e.key, cell);
+      }
+      if (e.empty) cell.dataset.index = String(e.index);
+      else updateItemCell(cell, e);
+      want.push(cell);
+      used.add(e.key);
+    }
+    patchChildren(itemsGrid, want, cellCache, used);
+  }
+
+  // Item-cell interaction (retail UIElement_ItemList::ListenToElementMessage:
+  // click selects, double-click uses, right-click examines — here the
+  // polymorphic context menu).
+  function cellGuid(cell) { return (parseInt(cell?.dataset?.guid, 10) >>> 0) || 0; }
+  function onCellDragStart(ev) {
+    const cell = ev.currentTarget;
+    const g = cellGuid(cell);
+    const row = g ? rowsByGuid.get(g) : null;
+    if (!row) { ev.preventDefault(); return; }
+    hideItemTooltip();
+    const key = gridKey();
+    const list = orders.get(key) || [];
+    const inList = list.indexOf(g);
+    beginItemDrag(ev, {
+      guid: g, item: withPack(row), owned: true,
+      sourceList: (row.equipMask >>> 0) === 0 ? { key, kind: "inventory" } : null,
+      sourceIndex: inList,
+      sourceEl: cell,
+    });
+  }
+  function setSelectedGuid(g) {
+    selectedGuid = g >>> 0;
+    for (const cell of cellCache.values()) {
+      if (cell.dataset.empty) continue;
+      cell.classList.toggle("is-selected", cellGuid(cell) === selectedGuid);
+    }
+  }
+  function onCellClick(ev) {
+    if (ev.button !== 0) return;
+    const cell = ev.currentTarget;
+    const g = cellGuid(cell);
+    const row = displayRow(g);
+    if (!g || !row || row.stub) return;
+    setSelectedGuid(g);
+    const name = row.name || "Item";
+    if (ev.detail >= 2 || ev.ctrlKey) { useOrEquip(row, cell); return; }
+    if (ev.shiftKey && (row.stackSize | 0) > 1 && typeof window.__openContextMenuFor === "function") {
+      try {
+        window.__openContextMenuFor({
+          source: "inv-grid", guid: g, srcLi: legacyLi(g, cell), name,
+          clientX: ev.clientX, clientY: ev.clientY, focusAction: "split",
+        });
+      } catch (e) { console.warn("[inv-click] split-via-menu failed:", e); }
+      return;
+    }
+    let legacy = false;
+    try { legacy = window.localStorage?.getItem?.("hb-inv.legacy-click-examine") === "1"; } catch (_) {}
+    if (legacy) {
+      if (typeof window.__showExamineFor === "function") {
+        window.__showExamineFor(g, { name, fromInventory: true, srcLi: legacyLi(g, cell) });
+      } else {
+        window.__mainPanel?.pushView?.("examine", { guid: g, name, fromInventory: true, srcLi: legacyLi(g, cell) });
+      }
+    }
+  }
+  function onCellContext(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const cell = ev.currentTarget;
+    const g = cellGuid(cell);
+    const row = displayRow(g);
+    if (!g || !row || row.stub) return;
+    setSelectedGuid(g);
+    if (typeof window.__openContextMenuFor === "function") {
+      try {
+        window.__openContextMenuFor({
+          source: "inv-grid", guid: g, srcLi: legacyLi(g, cell), name: row.name || "Item",
+          clientX: ev.clientX, clientY: ev.clientY,
+        });
+      } catch (e) { console.warn("[inv-click] context menu failed:", e); }
+    }
+  }
+  function onCellEnter(ev) {
+    const cell = ev.currentTarget;
+    const g = cellGuid(cell);
+    const name = cell._name || "";
+    showItemTooltip(cell, name);
+    // After the retail 250 ms m_tooltipDelay, upgrade to the cached
+    // AppraisalProfile stats when the wasm has one.
+    clearTimeout(cell._tipTimer);
+    cell._tipTimer = setTimeout(() => {
+      if (!cell.matches(":hover")) return;
+      try {
+        const h = sessionHandleNow();
+        if (!g || typeof h?.getObjectAppraisal !== "function") return;
+        const json = h.getObjectAppraisal(g);
+        if (typeof json !== "string" || !json) return;
+        const body = formatAppraisalTooltip(name, JSON.parse(json));
+        if (body) showItemTooltip(cell, body);
+      } catch (_) {}
+    }, 250);
+  }
+  function onCellLeave(ev) {
+    clearTimeout(ev.currentTarget._tipTimer);
+    hideItemTooltip();
+  }
+
+  // Double-click / Ctrl-click: container → open, wieldable → equip,
+  // tinkering tool → salvage panel, else UseObject (+ book follow-up).
+  function useOrEquip(row, cell) {
+    const g = row.guid >>> 0;
+    const h = sessionHandleNow();
+    if (rowUsesPackSlot(row)) {
+      if ((row.containerId >>> 0) === 0) { selectPack(g); return; }
+      try { window.__openContainerFor?.(g, row.name); } catch (_) {}
+      return;
+    }
+    const validLocs = (row.validLocations >>> 0) || 0;
+    // validLocations is 0 for weenies whose DB row lacks the property;
+    // fall back to a sane slot per ItemType so double-click still equips.
+    const it = (row.itemType >>> 0) || 0;
+    const fallbackMask = (it & 0x1) ? 0x00100000 : (it & 0x100) ? 0x00400000 : (it & 0x10000) ? 0x01000000 : 0;
+    const effectiveVL = validLocs || fallbackMask;
+    if (effectiveVL && (h?.setWielded || h?.wieldFromPack) && (row.equipMask >>> 0) === 0) {
+      const mask = pickWieldSlotMask(effectiveVL);
+      const verdict = canEquipInSlot(row, mask >>> 0, equipState());
+      if (verdict && verdict.ok === false) {
+        paperdollToast(verdict.reason || "Cannot equip there.");
+        try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+        cell?.classList.add("hb-server-rejected");
+        setTimeout(() => cell?.classList.remove("hb-server-rejected"), 420);
+        return;
+      }
+      const action = { op: "wield", guid: g, slotMask: mask >>> 0, amount: row.stackSize };
+      executeItemAction(action, { guid: g, item: withPack(row), owned: true, sourceEl: cell });
+      scheduleRebuild();
+      return;
+    }
+    // R13: tinkering tool (IT_TINKERING_TOOL 0x20000000) opens salvage.
+    if (((it & 0x20000000) !== 0) && typeof window.__openSalvagePanel === "function") {
+      try { window.__openSalvagePanel(g); return; } catch (_) {}
+    }
+    if (typeof h?.useObject === "function") {
+      try { h.useObject(g); } catch (e) { console.warn("[inv-click] useObject failed:", e); }
+      // HUD rec #180: writable items (ItemType WRITABLE 0x2000) need an
+      // explicit bookData follow-up.
+      try { if ((it & 0x00002000) !== 0 && h.bookData) h.bookData(g); } catch (_) {}
+    }
+  }
+
+  // ── packs / title ───────────────────────────────────────────────
+  function selectPack(containerId) {
+    const c = (containerId >>> 0) || 0;
+    if (c !== 0 && !(orders.get(PACKS_KEY) || []).includes(c)) return;
+    if (c === selectedPackContainerId) return;
+    selectedPackContainerId = c;
+    lastSelectedPack = c;
+    itemsGrid.scrollTop = 0; // retail ScrollToHome on a new parent container
+    renderBagColumn();
+    renderGrid();
+    refreshPanelTitle();
+  }
+
+  // gmInventoryUI::RecvNotice_NewParentContainer: "Inventory of <player>"
+  // on the main pack, "Contents of <pack>" on a side pack.
+  function refreshPanelTitle() {
+    let next;
+    if (selectedPackContainerId !== 0) {
+      const packs = (orders.get(PACKS_KEY) || []).map((g) => ({ containerId: g, name: displayRow(g)?.name || "" }));
+      next = computeInventoryTitle(selectedPackContainerId, packs, null);
+    } else {
+      next = view.nameFor({});
+    }
+    try { window.__mainPanel?.setTitle?.(next); } catch (_) {}
+  }
+
+  // ── paperdoll state ─────────────────────────────────────────────
   function clearPaperdoll() {
     for (const k of Object.keys(dollSlotEls)) {
       const e = dollSlotEls[k];
-      e.el.classList.remove("equipped");
-      e.el.classList.remove("drag-target");
+      e.el.classList.remove("equipped", "is-pending");
       delete e.el.dataset.itemGuid;
       delete e.el.dataset.itemName;
+      delete e.el.dataset.guid;
       e.el.draggable = false;
-      e.icon.style.display = "none";
-      e.icon.style.background = "";
-      setAcText(e.tip, e.slot.name, { color: "#f0d8a0" });
+      e.icon.style.backgroundImage = "";
+      e.icon.dataset.iconId = "";
     }
   }
-
-  // Place an equipped item into the matching paperdoll slot. equipMask
-  // may have multiple bits set — find the first slot whose mask AND'd
-  // with the item's equipMask is non-zero.
-  function placeEquippedInDoll(srcLi, item) {
-    const em = (item?.equipMask >>> 0) || 0;
-    if (em === 0) return false;
-    let matched = null;
+  function dollSlotFor(mask) {
+    const m = mask >>> 0;
+    if (!m) return null;
     for (const k of Object.keys(dollSlotEls)) {
-      const slotMask = Number(k) >>> 0;
-      if ((em & slotMask) !== 0) {
-        matched = dollSlotEls[k];
-        break;
-      }
+      if ((m & (Number(k) >>> 0)) !== 0) return dollSlotEls[k];
     }
-    if (!matched) return false;
-    matched.el.classList.add("equipped");
-    const tb = srcLi.dataset?.typeBit ?? "0x0";
-    const guid = String(item?.guid ?? srcLi.dataset?.guid ?? "");
-    matched.el.dataset.itemGuid = guid;
-    matched.el.dataset.itemName = item?.name || matched.slot.name;
-    // Wave-D4: equipped items are drag-sources so the user can drag
-    // them off the paperdoll onto the 3D canvas to drop them.
-    matched.el.draggable = true;
-    matched.icon.style.display = "block";
-    matched.icon.style.background = TYPE_COLOR[tb] || "#777";
-    setAcText(matched.tip, `${item.name || matched.slot.name} — ${matched.slot.name}`, { color: "#f0d8a0" });
-    const iconId = (item?.iconId >>> 0) || 0;
-    if (iconId) {
-      fetchPaperdollIconDataUrl(iconId).then((url) => {
-        // Skip if the user has swapped items mid-fetch.
-        if (matched.el.dataset.itemGuid !== guid) return;
-        if (url) matched.icon.style.background = `url("${url}") center/contain no-repeat`;
-      });
-    }
+    return null;
+  }
+  function showInDoll(slotEntry, row, pending) {
+    const el = slotEntry.el;
+    const g = String(row.guid >>> 0);
+    el.classList.add("equipped");
+    el.classList.toggle("is-pending", !!pending);
+    el.dataset.itemGuid = g;
+    el.dataset.guid = g;
+    el.dataset.itemName = row.name || slotEntry.slot.name;
+    el.draggable = !pending;
+    const iconId = (row.iconId >>> 0) || 0;
+    if (slotEntry.icon.dataset.iconId === String(iconId)) return;
+    slotEntry.icon.dataset.iconId = String(iconId);
+    const hit = iconId ? getIconImmediate(iconId) : null;
+    if (hit) { slotEntry.icon.style.backgroundImage = `url("${hit}")`; return; }
+    if (!iconId) return;
+    fetchPaperdollIconDataUrl(iconId).then((url) => {
+      if (url && el.dataset.itemGuid === g) slotEntry.icon.style.backgroundImage = `url("${url}")`;
+    });
+  }
+  function placeEquippedInDoll(row) {
+    const slotEntry = dollSlotFor(row.equipMask);
+    if (!slotEntry) return false;
+    const p = pendingOps.get(row.guid);
+    // An equipped item being moved / dropped / given away waits ghosted.
+    const leaving = !!p && p.op !== "wield";
+    if (leaving && p.op === "move" && p.toKey != null && !p.external) return true; // drawn in the grid
+    showInDoll(slotEntry, row, leaving);
     return true;
   }
-
-  // HUD bug-pack P3 (2026-07-04): read the server-driven
-  // PropertyInt::ContainersCapacity off the handle (surfaced as the
-  // `playerContainersCapacity` getter/fn — same shape as
-  // `playerItemsCapacity`) and size the tab column to
-  // max(BAG_COUNT, containersCap + 1) — the +1 accounts for slot 0 being
-  // the main pack, which doesn't consume a container-slot itself. Falls
-  // back to the BAG_COUNT (8) default when the getter/property is
-  // unavailable (pre-spawn / stale wasm).
-  function desiredBagTabCount() {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    let containersCap = 0;
-    try {
-      if (handle && typeof handle.playerContainersCapacity === "number") {
-        containersCap = handle.playerContainersCapacity >>> 0;
-      } else if (handle && typeof handle.playerContainersCapacity === "function") {
-        containersCap = (handle.playerContainersCapacity() >>> 0) || 0;
-      }
-    } catch (_) { containersCap = 0; }
-    return Math.max(BAG_COUNT, containersCap + 1);
-  }
-
-  // Wave 13.2 — recompute bagSlots from the wasm snapshot. Index 0 is
-  // always the main pack; the remaining indices are populated dynamically
-  // with pack-slot items (usesBackpackSlot()) in the player's main
-  // inventory (containerId === 0). Equipped items are excluded — side
-  // packs in retail show up under the main pack regardless of equip
-  // state. Selection survives a rebuild if the previously-selected
-  // container is still present; otherwise we fall back to the main pack.
-  //
-  // HUD bug-pack P3: previously hard-capped at the hardcoded BAG_COUNT
-  // (8), silently dropping any side pack past index 7 even though this
-  // server's ContainersCapacity is 20. Now grows the tab column via
-  // ensureBagTabCount() before laying out `next`.
-  function rebuildBagSlots() {
-    ensureBagTabCount(desiredBagTabCount());
-    const tabCount = bagTabEls.length;
-    const next = new Array(tabCount).fill(null);
-    next[0] = { containerId: 0, name: "Main Pack", iconId: 0 };
-    let nextIdx = 1;
-    for (const it of inventorySnapshot) {
-      // HUD bug-pack P1: usesBackpackSlot() (retail UseBackpackSlot
-      // parity) replaces the raw ItemType 0x200 (Container) bit test.
-      // We only list packs that the PLAYER directly owns (containerId 0).
-      // Nested packs (a pack inside a pack — rare but legal in retail)
-      // are unsupported by this UI; they'll surface as items under their
-      // parent pack just like any other inventoried item.
-      if (usesBackpackSlot(it)) {
-        if ((it.containerId >>> 0) !== 0) continue;
-        if (nextIdx >= tabCount) break;
-        next[nextIdx++] = {
-          containerId: it.guid >>> 0,
-          name: it.name || `Side pack ${nextIdx - 1}`,
-          iconId: (it.iconId >>> 0) || 0,
-        };
-      }
-    }
-    bagSlots = next;
-    // If the previously-selected container vanished (pack dropped/sold),
-    // fall back to the main pack.
-    if (selectedPackContainerId !== 0
-        && !bagSlots.some((s) => s && s.containerId === selectedPackContainerId)) {
-      selectedPackContainerId = 0;
-    }
-    renderBagTabs();
-  }
-
-  function renderBagTabs() {
-    // HUD bug-pack P3: "packs used/ContainersCapacity" header — used =
-    // count of populated non-main slots in bagSlots (nextIdx - 1
-    // equivalent); cap = the real ContainersCapacity when known, else the
-    // tab column's current length - 1 (BAG_COUNT-derived fallback).
-    const packsUsed = bagSlots.reduce(
-      (n, s, idx) => n + ((idx > 0 && s) ? 1 : 0), 0);
-    let packsCap = bagTabEls.length - 1;
-    try {
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-      if (handle && typeof handle.playerContainersCapacity === "number") {
-        packsCap = handle.playerContainersCapacity >>> 0 || packsCap;
-      } else if (handle && typeof handle.playerContainersCapacity === "function") {
-        packsCap = (handle.playerContainersCapacity() >>> 0) || packsCap;
-      }
-    } catch (_) { /* keep fallback */ }
-    bagColHeader.textContent = `packs ${packsUsed}/${packsCap}`;
-    for (let i = 0; i < bagTabEls.length; i++) {
-      const { tabEl, iconEl } = bagTabEls[i];
-      const slot = bagSlots[i];
-      if (!slot) {
-        // Empty slot — dim, no icon, no tooltip beyond "Empty pack slot".
-        tabEl.classList.add("empty");
-        tabEl.classList.remove("selected");
-        tabEl.title = "Empty pack slot";
-        iconEl.style.display = "none";
-        iconEl.style.backgroundImage = "";
-        continue;
-      }
-      tabEl.classList.remove("empty");
-      // Wave D / PR11 (2026-06-06): enrich tooltip with (n/m) capacity.
-      // n is computed from the snapshot by counting items whose
-      // containerId matches this pack.
-      // TRACK B8 (2026-06-08): the main-pack tab now reads the real
-      // player-level ItemsCapacity (via the `playerItemsCapacity` getter)
-      // instead of the hardcoded 24 — the same surfacing gap that left the
-      // items grid capped at 24. A side pack reads its own per-item
-      // `itemsCapacity` (item-slot count), falling back to
-      // `containersCapacity` for older snapshots. HUD bug-pack P2
-      // (2026-07-04): the pre-real-value fallback now matches retail per
-      // tab kind — 102 for the main pack (ACE human weenie ItemsCapacity;
-      // see memory/bug-pack findings), 24 for a side pack (standard ACE
-      // side-pack ItemsCapacity) — instead of a flat 24 that under-showed
-      // the main pack's cap before the player snapshot landed.
-      const containerId = slot.containerId >>> 0;
-      let cap = containerId === 0 ? 102 : 24;
-      let used = 0;
-      if (containerId === 0) {
-        // Main pack: count items at containerId 0 that aren't themselves
-        // containers (those occupy the side-tab strip, not main-pack capacity).
-        for (const it of inventorySnapshot) {
-          if ((it.containerId >>> 0) !== 0) continue;
-          if (usesBackpackSlot(it)) continue;
-          used++;
-        }
-        const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-        let mainCap = 0;
-        try {
-          if (handle && typeof handle.playerItemsCapacity === "number") {
-            mainCap = handle.playerItemsCapacity >>> 0;
-          } else if (handle && typeof handle.playerItemsCapacity === "function") {
-            mainCap = (handle.playerItemsCapacity() >>> 0) || 0;
-          }
-        } catch (_) { mainCap = 0; }
-        if (mainCap > 0) cap = mainCap;
-      } else {
-        for (const it of inventorySnapshot) {
-          if ((it.containerId >>> 0) === containerId) used++;
-          if ((it.guid >>> 0) === containerId) {
-            const items = (it.itemsCapacity >>> 0) | 0;
-            const c = items > 0 ? items : ((it.containersCapacity >>> 0) | 0);
-            if (c > 0) cap = c;
-          }
-        }
-      }
-      tabEl.title = `${slot.name} (${used}/${cap})`;
-      tabEl.classList.toggle("selected", slot.containerId === selectedPackContainerId);
-      // Phase 13.4 — pack icon overlay. Side packs (containerId !== 0)
-      // have an iconId from PublicWeenieDescription. Main pack uses the
-      // built-in slot art (no overlay).
-      if (slot.containerId !== 0 && slot.iconId) {
-        iconEl.style.display = "block";
-        fetchPaperdollIconDataUrl(slot.iconId).then((url) => {
-          // Skip if the slot's containerId changed mid-fetch.
-          if (bagSlots[i]?.containerId !== slot.containerId) return;
-          if (url) iconEl.style.backgroundImage = `url("${url}")`;
-        });
-      } else {
-        iconEl.style.display = "none";
-        iconEl.style.backgroundImage = "";
-      }
+  function applyPendingWieldsToDoll() {
+    for (const e of pendingOps.all()) {
+      if (e.op !== "wield" || !e.slotMask) continue;
+      const row = displayRow(e.guid);
+      if (!row || (row.equipMask >>> 0) !== 0) continue;
+      const slotEntry = dollSlotFor(e.slotMask);
+      if (slotEntry) showInDoll(slotEntry, row, true);
     }
   }
 
-  // Wave 13.2 — render only the items whose containerId matches the
-  // currently selected pack. Pack <li>s come from index.html's #inv-pack
-  // list, but containerId is on the wasm snapshot — we cross-reference
-  // via the cached `inventorySnapshot` (see refreshInventorySnapshot).
-  //
-  // Wave D / PR11 (2026-06-06): containers (ItemType bit 0x200) surface
-  // ONLY via the bag-tab strip; suppress them from the main-pack grid so
-  // a side pack doesn't double-render (once as a slot, once as a tab).
-  // The skip is gated on selectedPackContainerId === 0 — inside a side
-  // pack a nested container would still render (rare, but legal).
-  function rebuildItemsGrid() {
-    itemsGrid.innerHTML = "";
-    const pack = document.getElementById("inv-pack");
-    if (!pack) return;
-    for (const li of pack.children) {
-      const guidStr = li.dataset?.guid;
-      if (!guidStr) continue;
-      const item = getItemByGuid(guidStr);
-      // Snapshot may not have caught up yet — fall back to main-pack
-      // visibility so we never silently hide everything.
-      const itemContainerId = item ? (item.containerId >>> 0) : 0;
-      if (itemContainerId !== selectedPackContainerId) continue;
-      if (selectedPackContainerId === 0
-          && item
-          && usesBackpackSlot(item)) {
-        continue;
-      }
-      itemsGrid.appendChild(makeSlot(li));
-    }
-    // TRACK B8 (2026-06-08): pad the grid with empty drop cells up to the
-    // selected pack's capacity. The bag-tab click path (L1416) calls this
-    // function directly (no orphan-equipped append follows), so padding
-    // here covers it; the full rebuild() path re-pads after appending the
-    // orphaned-equipped cells (padItemsGridToCapacity is idempotent — it
-    // strips existing empties first).
-    padItemsGridToCapacity();
+  function equipState() {
+    return buildPlayerEquipState(rows, {
+      stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+      inCombatMode: !!window.__combatBarState?.inCombatMode,
+    });
   }
 
-  // TRACK B8 (2026-06-08): resolve the selected pack's item-slot capacity.
-  // Main pack (selectedPackContainerId 0) reads the player-level
-  // `playerItemsCapacity` getter (the verified-missing surfacing — the
-  // grid previously fell back to a hardcoded 24). A side pack reads its
-  // own per-item `itemsCapacity` (item-slot count) off the snapshot,
-  // falling back to `containersCapacity` for older snapshots that only
-  // carried that field. Returns 0 when capacity is unknown (pre-spawn /
-  // property absent) so the caller can degrade to occupied-only — see the
-  // prerequisite-check note: a 0 here on the MAIN pack means the player
-  // CreateObject lacked the ITEMS_CAPACITY weenie-flag (a deeper bug), so
-  // we surface it honestly rather than faking a full grid.
-  function selectedPackItemCapacity() {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    if (selectedPackContainerId === 0) {
-      // Main pack — player-level ItemsCapacity (getter or fn form).
-      let cap = 0;
-      try {
-        if (handle && typeof handle.playerItemsCapacity === "number") {
-          cap = handle.playerItemsCapacity >>> 0;
-        } else if (handle && typeof handle.playerItemsCapacity === "function") {
-          cap = (handle.playerItemsCapacity() >>> 0) || 0;
-        }
-      } catch (_) { cap = 0; }
-      // HUD rec #40 — canonical retail default for the main pack is 102,
-      // not 120 (fixed HUD bug-pack P2, 2026-07-04 — verified against the
-      // live ACE world DB: human weenie ItemsCapacity = 102). We do NOT auto-fill
-      // here: a 0 on the main pack means CreateObject lacked the
-      // ITEMS_CAPACITY weenie-flag (a deeper bug), so surface it honestly
-      // via the diag stream so the boot harness can flag the anomaly.
-      if (cap === 0) {
-        try {
-          window.__diag?.layout?.onInventoryCapacity?.({ mainPackCap: 0, isAnomalous: true });
-        } catch (_) {}
-      }
-      return cap;
-    }
-    // Side pack — its own per-item ItemsCapacity (fall back to the
-    // ContainersCapacity field for snapshots predating itemsCapacity).
-    //
-    // HUD rec #41 — ACE Container.cs:116-117 sets ContainerCapacity to 0
-    // by default; Chest.cs:79 overrides to 10. The .containersCapacity
-    // fallback below may be dead code in the modern schema (itemsCapacity
-    // always populated), but we keep it for snapshot compatibility. If it
-    // ever fires, emit a diag event so we can identify the weenie class
-    // that's still missing itemsCapacity.
-    const cid = selectedPackContainerId >>> 0;
-    for (const it of inventorySnapshot) {
-      if ((it.guid >>> 0) !== cid) continue;
-      const items = (it.itemsCapacity >>> 0) || 0;
-      if (items > 0) return items;
-      const fallback = (it.containersCapacity >>> 0) || 0;
-      try {
-        window.__diag?.layout?.onInventoryCapacity?.({
-          sidePackFallback: true,
-          containerId: cid,
-          weenieType: it.weenieType ?? null,
-          fallbackValue: fallback,
-        });
-      } catch (_) {}
-      return fallback;
-    }
-    return 0;
-  }
-
-  // TRACK B8 (2026-06-08): pad the items grid with empty drop-target cells
-  // up to the selected pack's capacity. Idempotent: strips any prior
-  // `.empty` cells first so it can run after the orphaned-equipped append.
-  // Capacity 0 (unknown — pre-spawn or a CreateObject missing the
-  // ITEMS_CAPACITY flag) renders NO empty cells (occupied-only) so we
-  // never paint a misleading full empty grid; capacity-full (occupied >=
-  // cap) likewise adds none.
-  function padItemsGridToCapacity() {
-    itemsGrid.querySelectorAll(".hb-inv-slot.empty").forEach((el) => el.remove());
-    // Drop any previous capacity-pending placeholder before recomputing.
-    itemsGrid.querySelectorAll(".hb-inv-cap-pending").forEach((el) => el.remove());
-    const cap = selectedPackItemCapacity() >>> 0;
-    if (cap === 0) {
-      // HUD rec #96 — render a single placeholder row instead of an
-      // empty grid so the player understands the pack is still loading
-      // rather than thinking it's been wiped. Removed automatically on
-      // the next pad pass once capacity arrives.
-      const placeholder = document.createElement("div");
-      placeholder.className = "hb-inv-slot empty hb-inv-cap-pending";
-      placeholder.style.gridColumn = "1 / -1";
-      placeholder.style.textAlign = "center";
-      placeholder.style.opacity = "0.55";
-      placeholder.style.fontStyle = "italic";
-      placeholder.textContent = "(capacity pending…)";
-      itemsGrid.appendChild(placeholder);
-      return;
-    }
-    const occupied = itemsGrid.querySelectorAll(".hb-inv-slot:not(.empty)").length;
-    for (let i = occupied; i < cap; i++) {
-      itemsGrid.appendChild(makeEmptySlot(i));
-    }
-  }
-
-  // Wave 14 — pull the local player's setup + substitution set from
-  // the live entity manager and (re)load the paperdoll viewport. The
-  // local-player meta path matches what dye-preview.js does for its
-  // half-scale player rig (see plugins/dye-preview.js:325-340): look up
-  // `window.getLocalPlayerGuid()` then resolve `entityMap.get(lpg).meta`
-  // which carries {modelId/setupId, mtableId, paletteId, subPalettes}
-  // populated by the spawn path + kept up to date by applyAppearance
-  // (entities.js:3846). PaperdollViewport.loadPlayer is idempotent on
-  // (setupId, mtableId, paletteId, subPalettes) so repeated rebuild()
-  // calls with no equip change are cheap.
+  // Wave 14 — load / refresh the 3D doll from the local player's meta
+  // (setup, palettes, wielded held items). loadPlayer is idempotent.
   function refreshPaperdollViewport() {
     try {
-      const lpg = (typeof window.getLocalPlayerGuid === "function")
-        ? (window.getLocalPlayerGuid() >>> 0) : 0;
-      if (lpg === 0) return;
+      const lpg = localPlayerGuid();
+      if (!lpg) return;
       const em = window.liveScene3d?.entityManager;
-      const inst = em?.entityMap?.get?.(lpg);
-      const meta = inst?.meta;
+      const meta = em?.entityMap?.get?.(lpg)?.meta;
       if (!meta) return;
       const setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
-      if (setupId === 0) return;
-      // Wave C / PR8 (2026-06-06): collect wielded-item descriptors so
-      // the paperdoll renders weapons in-hand. Source of truth is the
-      // wasm wielder_index (entityWieldedItems(playerGuid)); per-item
-      // meta (setupId/mtableId/paletteId/subPalettes) comes from the
-      // entity's own spawn meta in entityMap (populated by ObjectCreate).
-      const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+      if (!setupId) return;
+      const h = sessionHandleNow();
       let wieldedItems = [];
-      if (handle && typeof handle.entityWieldedItems === "function") {
+      if (typeof h?.entityWieldedItems === "function") {
         try {
-          const raw = handle.entityWieldedItems(lpg) || [];
-          for (const w of raw) {
-            // Held items only (Selectable mask) — armor/ammo ride ObjDesc.
+          for (const w of (h.entityWieldedItems(lpg) || [])) {
             if (((w.equipMask >>> 0) & 0x3700000) === 0) continue;
             const childInst = em?.entityMap?.get?.(w.guid >>> 0);
             if (!childInst?.meta) continue;
             wieldedItems.push({
               itemGuid: w.guid >>> 0,
-              parentLocation: (typeof w.parentLocation === "number")
-                ? (w.parentLocation >>> 0) : 0,
-              placement: (typeof w.placement === "number")
-                ? (w.placement >>> 0) : 0,
+              parentLocation: (typeof w.parentLocation === "number") ? (w.parentLocation >>> 0) : 0,
+              placement: (typeof w.placement === "number") ? (w.placement >>> 0) : 0,
               meta: childInst.meta,
             });
           }
         } catch (_) { wieldedItems = []; }
       }
-      const stanceLow = (typeof window.__getCurrentStanceLow === "function")
-        ? (window.__getCurrentStanceLow() >>> 0) : 0;
+      const stanceLow = (typeof window.__getCurrentStanceLow === "function") ? (window.__getCurrentStanceLow() >>> 0) : 0;
       paperdollViewport.loadPlayer(
         setupId,
         (meta.mtableId ?? 0) >>> 0,
@@ -2605,391 +1274,307 @@ function doMount(parentEl, _ctx) {
         meta.subPalettes ?? new Uint32Array(0),
         wieldedItems,
         stanceLow,
-      ).then((ok) => {
-        // 2026-05-29 — loadPlayer's "single render" can hit an empty
-        // back-buffer when the panel was display:none at load time
-        // (Three.js WebGLRenderer needs the canvas attached + sized).
-        // Enable the rAF loop so the rig keeps re-rendering after the
-        // panel becomes visible. Cost is negligible (224×214 transparent
-        // canvas, 34 part-groups, no animation mixer).
-        if (ok) paperdollViewport.start?.();
-      }).catch(() => {});
+      ).then((ok) => { if (ok) paperdollViewport.start?.(); }).catch(() => {});
     } catch (_) { /* viewport is best-effort */ }
   }
 
-  // Wave D.1 follow-on (2026-05-27) — gating helper for the three
-  // aetheria sigil slots. Ports retail `gmPaperDollUI::UpdateAetheria`
-  // (ACBindings `gmPaperDollUI.cs:217-222`): each of the three slots
-  // (Blue=0x1, Yellow=0x2, Red=0x4) is hidden when its bit is unset in
-  // PropertyInt::AetheriaBitfield (322). The bitfield is exposed by
-  // SessionHandle::playerAetheriaBits (lib.rs ~18105) — refreshed on
-  // every `kind=8 playerStatsUpdated` drain by the recv loop's
-  // `publish_player_stats_snapshot` block. `0` (pre-quest / pre-spawn)
-  // hides all three slots, which matches retail behaviour for a fresh
-  // character — the slots are revealed at levels 75/150/225 after the
-  // Aetheria Quest unlocks each color (wiki: "Inventory Panel").
+  // gmPaperDollUI::UpdateAetheria — hide the sigil slots whose
+  // AetheriaBitfield (PropertyInt 322) bit is unset.
   function refreshAetheriaGating() {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    let bits = 0 >>> 0;
-    try {
-      if (handle && typeof handle.playerAetheriaBits === "number") {
-        bits = handle.playerAetheriaBits >>> 0;
-      } else if (handle && typeof handle.playerAetheriaBits === "function") {
-        bits = (handle.playerAetheriaBits() | 0) >>> 0;
-      }
-    } catch (_) { bits = 0 >>> 0; }
-    for (const { el, bit } of aetheriaSlotEls) {
-      // Delegate to the pure helper so the bit-test logic stays
-      // tested in lockstep (tests/inventory_paperdoll_helpers.test.cjs).
-      el.classList.toggle("aetheria-locked", aetheriaSlotIsLocked(bits, bit));
-    }
+    const bits = (readHandleNumber("playerAetheriaBits") | 0) >>> 0;
+    for (const { el, bit } of aetheriaSlotEls) el.classList.toggle("aetheria-locked", aetheriaSlotIsLocked(bits, bit));
   }
 
-  // Wave D.1 follow-on (2026-05-27) — port of retail
-  // `gmBackpackUI::SetLoadLevel` (ACBindings `gmBackpackUI.cs:151-156`)
-  // numeric-label leg: render the player's current burden as a
-  // percentage. Reads `handle.playerBurden` (0.0..N float — under capacity
-  // when <1.0, over-encumbered when >=1.0; mirrors ACE
-  // `EncumbranceSystem.GetBurden`). Shows "—" pre-spawn / before any
-  // stats hydration. Adds `.over` modifier when at or over capacity for
-  // a red color cue (retail does the same with `m_burdenMeter` state
-  // 4-5 swap, see status-indicators.js INDICATORS row "burden").
-  function refreshBurdenText() {
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
+  // gmBackpackUI::SetLoadLevel.
+  function refreshBurden() {
     let burden = NaN;
+    const h = sessionHandleNow();
     try {
-      if (handle && typeof handle.playerBurden === "number") {
-        burden = handle.playerBurden;
-      } else if (handle && typeof handle.playerBurden === "function") {
-        burden = handle.playerBurden();
-      }
+      if (typeof h?.playerBurden === "number") burden = h.playerBurden;
+      else if (typeof h?.playerBurden === "function") burden = h.playerBurden();
     } catch (_) { burden = NaN; }
-    // Delegate to the pure helper so percent/rounding/cap-color logic
-    // stays tested in lockstep (tests/inventory_paperdoll_helpers.test.cjs).
     const { text, over } = formatBurdenText(burden);
-    setAcText(burdenPct, text, { color: over ? "#ff8060" : "#f0c060" });
-    burdenText.classList.toggle("over", over);
-
-    // Burden meter — vertical fill 0..100% across the 0..3.0 ratio
-    // (300% burden = full red, per retail anatomy). Hue interpolates
-    // from 120 (green) at 0% to 0 (red) at 300%. Clamps to [0, 3.0]
-    // so over-300% (theoretically impossible per ACE encumbrance
-    // caps, but defensive) stays fully red.
-    if (Number.isFinite(burden) && burden > 0) {
-      const clamped = Math.min(burden, 3.0);
-      const fillPct = (clamped / 3.0) * 100;
-      const hue = Math.max(120 - clamped * 40, 0);
-      burdenMeter.style.setProperty("--burden-fill", `${fillPct}%`);
-      burdenMeter.style.setProperty("--burden-color", `hsl(${hue}, 75%, 45%)`);
-    } else {
-      burdenMeter.style.setProperty("--burden-fill", `0%`);
-      burdenMeter.style.setProperty("--burden-color", `hsl(120, 70%, 45%)`);
-    }
+    setAcText(burdenPct, text, { color: over ? "#ff8060" : "#f3d27a" });
+    burdenMeter.firstChild.style.setProperty("--fill", `${(burdenMeterFraction(burden) * 100).toFixed(1)}%`);
+    burdenMeter.title = over ? `Burden ${text} — over capacity` : `Burden ${text}`;
   }
 
-  // Wave D.1 follow-on (2026-05-27) — port of retail
-  // `gmInventoryUI::RecvNotice_NewParentContainer` (ACBindings
-  // `gmInventoryUI.cs:218-223`). When a side pack tab is selected the
-  // panel title swaps to "Contents of <pack name>"; when the main pack
-  // is selected it reverts to "Inventory of <player>". Driven by the
-  // bag-tab click handler. Falls back to "Inventory" if neither the
-  // main-panel nor the player name is available yet.
-  function refreshPanelTitle() {
-    // For the main-pack branch, reuse the view's nameFor() so the
-    // title matches the one the main-panel registry sets on initial
-    // mount (avoids drift between the two paths).
-    let next;
-    if (selectedPackContainerId !== 0) {
-      next = computeInventoryTitle(selectedPackContainerId, bagSlots, null);
-    } else {
-      next = view.nameFor({});
+  // ── rebuild ─────────────────────────────────────────────────────
+  function buildGroups() {
+    const groups = new Map([[MAIN_PACK_KEY, []], [PACKS_KEY, []]]);
+    for (const r of rows) {
+      if ((r.equipMask >>> 0) === 0 && (r.containerId >>> 0) === 0 && rowUsesPackSlot(r)) groups.set(r.guid, []);
     }
-    try { window.__mainPanel?.setTitle?.(next); } catch (_) {}
+    const push = (key, row) => {
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    };
+    for (const r of rows) {
+      const p = pendingOps.get(r.guid);
+      const optimistic = p && p.op === "move" && p.toKey !== null && p.toKey !== undefined && !p.external;
+      if ((r.equipMask >>> 0) !== 0) {
+        if (optimistic) push(p.toKey, r);
+        continue;
+      }
+      let key = (r.containerId >>> 0) ? (r.containerId >>> 0) : (rowUsesPackSlot(r) ? PACKS_KEY : MAIN_PACK_KEY);
+      if (optimistic) key = p.toKey;
+      push(key, r);
+    }
+    for (const [g, s] of stubs) {
+      const p = pendingOps.get(g);
+      if (p && p.toKey !== null && p.toKey !== undefined) push(p.toKey, s);
+    }
+    return groups;
   }
 
   function rebuild() {
-    refreshInventorySnapshot();
-    const equipped = document.getElementById("inv-equipped");
+    rows = takeInventoryRows(sessionHandleNow());
+    rowsByGuid = new Map(rows.map((r) => [r.guid, r]));
+    stubs = new Map();
+    for (const e of pendingOps.all()) {
+      if (e.stub && !rowsByGuid.has(e.guid)) stubs.set(e.guid, { ...e.stub, guid: e.guid, stub: true });
+    }
+    // An item we asked the server to bring in from outside the panel
+    // (a corpse / chest take) lands where it was dropped — or at the
+    // front, ACE's placement 0 — not in its alphabetical slot.
+    for (const e of pendingOps.all()) {
+      if (e.toKey === null || e.toKey === undefined || e.external) continue;
+      if (packOrder.locate(e.guid)) continue;
+      packOrder.hintArrival(e.guid, e.toKey, e.index | 0);
+    }
+    orders = packOrder.reconcile(buildGroups());
+    if (selectedPackContainerId !== 0 && !(orders.get(PACKS_KEY) || []).includes(selectedPackContainerId)) {
+      selectedPackContainerId = 0;
+      lastSelectedPack = 0;
+    }
     clearPaperdoll();
-    rebuildBagSlots();
-    // Equipped → paperdoll body slots. Items that don't match any
-    // paperdoll slot (unknown equipMask) fall through to the items grid,
-    // but only when the main pack is selected (mirrors retail —
-    // unknown-slot items live in the player's main inventory).
-    const orphanedEquipped = [];
-    if (equipped) {
-      for (const li of equipped.children) {
-        const item = getItemByGuid(li.dataset.guid);
-        const placed = placeEquippedInDoll(li, item);
-        if (!placed) orphanedEquipped.push(li);
-      }
+    orphanEquipped = [];
+    for (const r of rows) {
+      if ((r.equipMask >>> 0) === 0) continue;
+      if (!placeEquippedInDoll(r)) orphanEquipped.push(r);
     }
-    rebuildItemsGrid();
-    if (selectedPackContainerId === 0) {
-      for (const li of orphanedEquipped) {
-        itemsGrid.appendChild(makeSlot(li));
-      }
-      // TRACK B8 (2026-06-08): the orphaned-equipped cells are occupied
-      // items appended AFTER rebuildItemsGrid's own pad — re-pad so the
-      // empty drop cells land last (padItemsGridToCapacity strips the
-      // prior empties first, so this is a no-op when there were no orphans).
-      padItemsGridToCapacity();
-    }
-    // Wave 14 — refresh the 3D doll from the current local-player meta.
-    // Idempotent on unchanged (setupId, mtableId, paletteId, subPalettes);
-    // hot-swaps the rig when applyAppearance (entities.js:3846) has
-    // updated the player's substitution set.
+    applyPendingWieldsToDoll();
+    renderBagColumn();
+    renderGrid();
     refreshPaperdollViewport();
-    // Wave D.1 follow-on (2026-05-27): aetheria-slot visibility + numeric
-    // burden readout + panel title. All three refresh on each rebuild
-    // pass; the playerStatsUpdated bus event subscription below adds a
-    // separate refresh for cases where stats change without a #inv-equipped
-    // / #inv-pack DOM delta (Strength change → burden % shifts, etc.).
     refreshAetheriaGating();
-    refreshBurdenText();
+    refreshBurden();
     refreshPanelTitle();
   }
 
-  let observers = [];
+  let rebuildQueued = false;
+  function scheduleRebuild() {
+    if (rebuildQueued) return;
+    rebuildQueued = true;
+    queueMicrotask(() => {
+      rebuildQueued = false;
+      if (!overlay.isConnected) return;
+      try { rebuild(); } catch (e) { console.warn("[inventory] rebuild failed:", e); }
+    });
+  }
+
+  // ── drop zones ──────────────────────────────────────────────────
+  function dropCtx() {
+    return {
+      playerGuid: localPlayerGuid(),
+      capacity: (key) => capacityOf(key),
+      containerName: (key) => ((key === MAIN_PACK_KEY || key === PACKS_KEY)
+        ? (playerName() || "You") : (displayRow(key)?.name || "pack")),
+      canEquip: (item, mask) => canEquipInSlot(item, mask >>> 0, equipState()),
+      packWithRoom: () => {
+        for (const g of orders.get(PACKS_KEY) || []) {
+          const c = capacityOf(g);
+          if (c.cap === 0 || c.used < c.cap) return g;
+        }
+        return 0;
+      },
+      // ItemHolder::AttemptAutoMerge — only with an exact stack limit.
+      autoMergeTarget: (item, amount, key) => {
+        if (!Number.isFinite(item?.maxStackSize)) return 0;
+        const keys = key === MAIN_PACK_KEY ? [MAIN_PACK_KEY, ...(orders.get(PACKS_KEY) || [])] : [key];
+        for (const k of keys) {
+          for (const g of orders.get(k) || []) {
+            const r = rowsByGuid.get(g);
+            if (r && mergeAmount(item, r, amount) >= amount) return g;
+          }
+        }
+        return 0;
+      },
+    };
+  }
+  // Re-derive the source index at drop time (the list may have changed
+  // under a long drag).
+  function dragFor(s) {
+    const key = s?.sourceList?.key;
+    if (key === undefined || key === null || s.sourceList.kind === "ext") return s;
+    const idx = (orders.get(key) || []).indexOf(s.guid >>> 0);
+    return { ...s, sourceIndex: idx };
+  }
+  function hitFor(el, s, target, scope) {
+    if (!s) return { el, ok: true, target, scope };
+    const action = decideItemDrop({ ...dragFor(s), split: 0 }, target, { ...dropCtx(), canUseWith: () => null });
+    const ok = action.op !== "reject";
+    // Passing a weapon over the figure on its way to a ready slot should
+    // not flash the whole paperdoll red; the release still explains.
+    const hl = (!ok && target.kind === DROP_TARGET.DOLL) ? null : el;
+    return { el: hl, ok, reason: action.message, target, scope };
+  }
+  async function performDrop(ev, s, target) {
+    const drag = dragFor(s);
+    const action = await resolveDropAction(drag, target, { ctx: dropCtx(), anchor: ev });
+    if (!action || action.op === "noop") return;
+    runAction(action, drag);
+  }
+  function runAction(action, s) {
+    let undo = null;
+    let stub = null;
+    if (action.op === "move" && !action.external && action.listKey !== undefined) {
+      const stack = Math.max(1, s.item?.stackSize | 0 || 1);
+      const split = (action.amount ?? stack) < stack;
+      const mv = packOrder.move(s.guid, action.listKey, action.index | 0, { split });
+      if (!mv.noop && mv.undo) undo = () => { packOrder.undo(mv.undo); scheduleRebuild(); };
+      if (!s.owned) {
+        stub = {
+          name: s.item?.name || "", iconId: (s.item?.iconId >>> 0) || 0,
+          stackSize: action.amount ?? stack, wcid: s.item?.wcid || 0,
+          itemType: s.item?.itemType || 0, equipMask: 0,
+        };
+      }
+    }
+    if (action.op === "wield" && action.speculative) {
+      paperdollToast("Equipping speculatively (item attributes pending).", { speculative: true });
+    }
+    executeItemAction(action, s, { undo, stub });
+    scheduleRebuild();
+  }
+
+  const unregisterZones = [
+    registerDropZone(itemsGrid, {
+      resolve(ev, s) {
+        const key = gridKey();
+        const list = orders.get(key) || [];
+        const cell = ev.target?.closest?.(".hb-inv-slot");
+        let target;
+        if (cell && !cell.dataset.empty && cell.dataset.guid) {
+          const g = cellGuid(cell);
+          const at = list.indexOf(g);
+          target = {
+            kind: DROP_TARGET.ITEM_CELL, listKey: key, listKind: "inventory",
+            index: at >= 0 ? at : list.length, count: list.length, item: withPack(displayRow(g)),
+          };
+        } else {
+          target = { kind: DROP_TARGET.EMPTY_CELL, listKey: key, listKind: "inventory", index: list.length, count: list.length };
+        }
+        return hitFor(cell || itemsGrid, s, target, "items");
+      },
+      drop: (ev, s, hit) => performDrop(ev, s, hit.target),
+    }),
+    registerDropZone(bagCol, {
+      resolve(ev, s) {
+        const packs = orders.get(PACKS_KEY) || [];
+        if (ev.target?.closest?.(".hb-inv-mainpack")) {
+          return hitFor(mainSlot, s, { kind: DROP_TARGET.MAIN_PACK }, null);
+        }
+        const bag = ev.target?.closest?.(".hb-inv-bag");
+        if (!bag) return null;
+        const pg = (parseInt(bag.dataset.packGuid, 10) >>> 0) || 0;
+        if (pg && !bag.classList.contains("is-empty")) {
+          return hitFor(bag, s, {
+            kind: DROP_TARGET.PACK_SLOT, packGuid: pg, packName: displayRow(pg)?.name || "pack",
+            index: packs.indexOf(pg), count: packs.length,
+          }, null);
+        }
+        return hitFor(bag, s, { kind: DROP_TARGET.EMPTY_PACK_SLOT, count: packs.length }, null);
+      },
+      drop: (ev, s, hit) => performDrop(ev, s, hit.target),
+    }),
+    registerDropZone(paperdoll, {
+      resolve(ev, s) {
+        const slot = ev.target?.closest?.(".hb-inv-doll-slot");
+        if (slot) {
+          return hitFor(slot, s, { kind: DROP_TARGET.DOLL_SLOT, slotMask: Number(slot.dataset.equipMask) >>> 0 }, "paperdoll");
+        }
+        // gmPaperDollUI's PaperDollDragMask — the figure itself.
+        return hitFor(paperdoll, s, { kind: DROP_TARGET.DOLL }, "paperdoll");
+      },
+      drop: (ev, s, hit) => performDrop(ev, s, hit.target),
+    }),
+  ];
+
+  parentEl.appendChild(overlay);
+
+  // Other plugins: is this guid one of my items?
+  window.__isInventoryItem = (guid) => rowsByGuid.has(guid >>> 0);
+
+  mountedApi = { selectPack: (g) => { selectPack(g); } };
+
+  // ── event wiring ────────────────────────────────────────────────
+  // Every source funnels into ONE microtask-coalesced rebuild: the
+  // kind=11 → renderInventoryPanel → MutationObserver tick and the
+  // `playerInventoryChanged` bus event of the same packet used to cost
+  // two full rebuilds.
+  const observers = [];
   function tryHook() {
     const equipped = document.getElementById("inv-equipped");
     const pack = document.getElementById("inv-pack");
     if (!equipped || !pack) return false;
-    rebuild();
     for (const list of [equipped, pack]) {
-      const o = new MutationObserver(() => rebuild());
+      const o = new MutationObserver(scheduleRebuild);
       o.observe(list, { childList: true, subtree: false });
       observers.push(o);
     }
     return true;
   }
+  rebuild();
   let pollTimer = null;
   if (!tryHook()) {
     pollTimer = setInterval(() => {
-      if (tryHook()) { clearInterval(pollTimer); pollTimer = null; }
+      if (tryHook()) { clearInterval(pollTimer); pollTimer = null; scheduleRebuild(); }
     }, 500);
   }
 
-  // Wave 14 — if the local player isn't spawned yet at mount time (or
-  // the inventory snapshot arrives before the entity instance), the
-  // initial rebuild()'s refreshPaperdollViewport call is a no-op. Poll
-  // until the player meta surfaces in the entity manager so the doll
-  // appears as soon as the spawn completes. Stops after first successful
-  // load (PaperdollViewport.loadPlayer remembers the load key).
+  // Wave 14 — retry the doll until the local player's meta exists.
   let viewportLoadTimer = null;
   function tryLoadViewport() {
-    const lpg = (typeof window.getLocalPlayerGuid === "function")
-      ? (window.getLocalPlayerGuid() >>> 0) : 0;
-    if (lpg === 0) return false;
-    const em = window.liveScene3d?.entityManager;
-    const inst = em?.entityMap?.get?.(lpg);
+    const lpg = localPlayerGuid();
+    if (!lpg) return false;
+    const inst = window.liveScene3d?.entityManager?.entityMap?.get?.(lpg);
     const setupId = (inst?.meta?.modelId ?? inst?.meta?.setupId ?? 0) >>> 0;
-    if (setupId === 0) return false;
+    if (!setupId) return false;
     refreshPaperdollViewport();
     return true;
   }
   if (!tryLoadViewport()) {
     viewportLoadTimer = setInterval(() => {
-      if (tryLoadViewport()) {
-        clearInterval(viewportLoadTimer);
-        viewportLoadTimer = null;
-      }
+      if (tryLoadViewport()) { clearInterval(viewportLoadTimer); viewportLoadTimer = null; }
     }, 500);
   }
 
-  // ESC clears any armed-item state (armed via menu "Use With" / shift-click).
-  // Skip when focused on a text input so chat editing isn't intercepted.
+  // ESC clears the armed-item state (skip while typing).
   function onKey(ev) {
     if (ev?.key !== "Escape") return;
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    if ((window.__inventory?.armedGuid >>> 0) !== 0) {
-      setArmedItem(0);
-    }
+    if ((window.__inventory?.armedGuid >>> 0) !== 0) setArmedItem(0);
   }
   window.addEventListener("keydown", onKey);
 
-  // Wave 7.9 — dragover event dispatch for plugins that want to react
-  // to drag interactions (currently: dye-preview plugin shows a
-  // tooltip when a dye-pot is dragged over a dyeable armor). The
-  // event fires continuously during drag; subscribers debounce as
-  // needed. Drop is still a no-op in inventory.js (recipe-use wire
-  // is a separate piece of work); this dispatch is for visual
-  // feedback only.
-  function dispatchInventoryDragOver(ev, scope) {
-    // dataTransfer.getData returns "" during dragover (only readable
-    // on drop per the HTML5 spec). Subscribers identify the dragged
-    // item via the dragstart-time stash on overlay.dataset
-    // .draggingGuid below. We still preventDefault on every
-    // dragover that hits the panel so the drop indicator is correct.
-    ev.preventDefault();
-    const hoveredSlot = ev.target.closest?.(".hb-inv-doll-slot, .hb-inv-slot, [data-guid]") ?? null;
-    try {
-      window.dispatchEvent(new CustomEvent("hb:inventory-drag-over", {
-        detail: {
-          scope,
-          hoveredElement: ev.target,
-          hoveredSlot,
-          hoveredGuid: hoveredSlot?.dataset?.guid ?? null,
-          // The currently-being-dragged GUID is captured at dragstart
-          // time + stashed on the overlay for retrieval here (W7.9
-          // workaround for the dataTransfer.getData drag-over
-          // restriction in HTML5).
-          draggedGuid: overlay.dataset.draggingGuid ?? null,
-          clientX: ev.clientX,
-          clientY: ev.clientY,
-          // Wave 7.9.B — shiftKey carries through so the dye-preview
-          // plugin can route Shift+drag-over into the whole-mesh
-          // applyAppearance local preview path.
-          shiftKey: !!ev.shiftKey,
-          altKey: !!ev.altKey,
-          ctrlKey: !!ev.ctrlKey,
-        },
-      }));
-    } catch (_) {}
-  }
-  // Capture dragstart on the overlay so we know what's being dragged
-  // during subsequent dragover events (dataTransfer.getData isn't
-  // available outside drop per the HTML5 spec).
-  //
-  // Rec #173 — also publish a canonical drag-state object on
-  // window.__inventory.dragState + fire hb:inventory-drag-state-change
-  // so consumers (dye-preview, map, future cross-plugin reactivity)
-  // can read the live state instead of subscribing to two separate
-  // dragstart / dragend events. The dataset.draggingGuid attribute
-  // stays in place so existing readers keep working.
-  function _publishDragState(state) {
-    if (!window.__inventory) window.__inventory = {};
-    window.__inventory.dragState = state;
-    try {
-      window.dispatchEvent(new CustomEvent("hb:inventory-drag-state-change", {
-        detail: state,
-      }));
-    } catch (_) {}
-  }
-  overlay.addEventListener("dragstart", (ev) => {
-    // Paperdoll slots use dataset.itemGuid; grid uses dataset.guid. Fall
-    // back to closest() for elements that put the guid on an ancestor.
-    const t = ev.target;
-    const guid = t?.dataset?.itemGuid
-      ?? t?.dataset?.guid
-      ?? t?.closest?.("[data-item-guid]")?.dataset?.itemGuid
-      ?? t?.closest?.("[data-guid]")?.dataset?.guid;
-    if (guid) overlay.dataset.draggingGuid = guid;
-    _publishDragState({
-      guid: (parseInt(guid, 10) >>> 0) || 0,
-      startX: ev.clientX,
-      startY: ev.clientY,
-      isDragging: !!guid,
-    });
-  }, true);
-  overlay.addEventListener("dragend", () => {
-    delete overlay.dataset.draggingGuid;
-    _publishDragState({ guid: 0, startX: 0, startY: 0, isDragging: false });
-    try {
-      window.dispatchEvent(new CustomEvent("hb:inventory-drag-end"));
-    } catch (_) {}
-  }, true);
-  paperdoll.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "paperdoll"));
-  itemsGrid.addEventListener("dragover", (ev) => dispatchInventoryDragOver(ev, "items"));
-
-  // Wave-D4: 3D canvas drop target — drag any inventory item onto the
-  // viewport (NOT onto another inventory/paperdoll slot) to drop it on
-  // the ground at the player's feet. ACE handles drop-position +
-  // unequip-if-needed sequencing.
-  const canvasEl = document.getElementById("canvas");
-  function onCanvasDragOver(ev) {
-    if (ev.dataTransfer?.types?.includes("application/x-hb-inv-guid")) {
-      ev.preventDefault();
-      ev.dataTransfer.dropEffect = "move";
-    }
-  }
-  function onCanvasDrop(ev) {
-    const guidStr = ev.dataTransfer?.getData("application/x-hb-inv-guid");
-    if (!guidStr) return;
-    ev.preventDefault();
-    const guid = (parseInt(guidStr, 10) >>> 0);
-    if (!guid) return;
-    const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
-    if (handle?.dropItem) {
-      try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
-      try { handle.dropItem(guid); }
-      catch (e) { console.warn("[paperdoll] dropItem failed:", e); }
-    }
-  }
-  if (canvasEl) {
-    canvasEl.addEventListener("dragover", onCanvasDragOver);
-    canvasEl.addEventListener("drop", onCanvasDrop);
-  }
-
-  // Wave D.1 follow-on (2026-05-27): burden + aetheria-gating refresh
-  // on the `playerStatsUpdated` bus event. Inventory deltas (kind=11)
-  // already drive rebuild() via the MutationObserver on
-  // #inv-equipped/#inv-pack, but pure stats deltas (kind=8) like a
-  // Strength change can shift burden % without altering the
-  // inventory DOM. Subscribing here keeps burden + aetheria visibility
-  // live in those cases. Pattern matches buffs-hud.js + spellbook.js.
-  let unsubscribeStats = null;
+  const unsubs = [];
+  unsubs.push(pendingOps.onChange(scheduleRebuild));
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {
-      const onStats = () => {
-        refreshBurdenText();
-        refreshAetheriaGating();
-      };
-      client.events.on("playerStatsUpdated", onStats);
-      unsubscribeStats = () => {
-        try { client.events.off?.("playerStatsUpdated", onStats); } catch (_) {}
-      };
-    }
-  } catch (_) { /* bus may not be initialized yet */ }
-
-  // Wave C / PR8 (2026-06-06): rebuild the paperdoll when the wielder
-  // state changes (kind=47 EntityDetached / kind=49 EntityAttached).
-  // Coalesced via rAF so dual-wield swaps + bulk equip cause ONE
-  // rebuild() per tick instead of N. The MutationObserver-driven
-  // rebuild() already covers kind=11 inventory deltas; this hook adds
-  // the wielder-property channel.
-  let wieldedRebuildScheduled = false;
-  function scheduleWieldedRebuild() {
-    if (wieldedRebuildScheduled) return;
-    wieldedRebuildScheduled = true;
-    requestAnimationFrame(() => {
-      wieldedRebuildScheduled = false;
-      try { rebuild(); } catch (_) {}
-    });
-  }
-  let unsubscribeAttach = null;
-  let unsubscribeDetach = null;
-  // Wave D / PR11 (2026-06-06): coalesce playerInventoryChanged-driven
-  // rebuilds via microtask debounce so the MutationObserver tick AND the
-  // bus event fire ONE rebuild per tick instead of two. Reuses
-  // scheduleWieldedRebuild's rAF gate via a sibling scheduler.
-  let inventoryRebuildScheduled = false;
-  function scheduleInventoryRebuild() {
-    if (inventoryRebuildScheduled) return;
-    inventoryRebuildScheduled = true;
-    queueMicrotask(() => {
-      inventoryRebuildScheduled = false;
-      try { rebuild(); } catch (_) {}
-    });
-  }
-  let unsubscribeInventory = null;
-  try {
-    const client = window.__pluginClient;
-    if (client?.events?.on) {
-      client.events.on("kind:47", scheduleWieldedRebuild);
-      client.events.on("kind:49", scheduleWieldedRebuild);
-      client.events.on("playerInventoryChanged", scheduleInventoryRebuild);
-      unsubscribeAttach = () => {
-        try { client.events.off?.("kind:49", scheduleWieldedRebuild); } catch (_) {}
-      };
-      unsubscribeDetach = () => {
-        try { client.events.off?.("kind:47", scheduleWieldedRebuild); } catch (_) {}
-      };
-      unsubscribeInventory = () => {
-        try { client.events.off?.("playerInventoryChanged", scheduleInventoryRebuild); } catch (_) {}
-      };
+      const onStats = () => { refreshBurden(); refreshAetheriaGating(); };
+      const evs = [
+        ["playerStatsUpdated", onStats],
+        ["playerInventoryChanged", scheduleRebuild],
+        ["kind:47", scheduleRebuild],
+        ["kind:49", scheduleRebuild],
+      ];
+      for (const [name, fn] of evs) {
+        client.events.on(name, fn);
+        unsubs.push(() => { try { client.events.off?.(name, fn); } catch (_) {} });
+      }
     }
   } catch (_) { /* bus may not be initialized yet */ }
 
@@ -2998,19 +1583,35 @@ function doMount(parentEl, _ctx) {
     delete window.__isInventoryItem;
     if (pollTimer) clearInterval(pollTimer);
     if (viewportLoadTimer) clearInterval(viewportLoadTimer);
-    if (canvasEl) {
-      canvasEl.removeEventListener("dragover", onCanvasDragOver);
-      canvasEl.removeEventListener("drop", onCanvasDrop);
-    }
-    if (unsubscribeStats) unsubscribeStats();
-    if (unsubscribeAttach) unsubscribeAttach();
-    if (unsubscribeDetach) unsubscribeDetach();
-    if (unsubscribeInventory) unsubscribeInventory();
+    for (const u of unsubs) { try { u(); } catch (_) {} }
+    for (const u of unregisterZones) { try { u(); } catch (_) {} }
     for (const o of observers) o.disconnect();
-    // Wave 14 — release the WebGL context. Chrome caps live contexts
-    // around 16; without this the inventory view can leak a context
-    // per open/close cycle and eventually black-screen the doll.
+    if (mountedApi) mountedApi = null;
+    hideItemTooltip();
+    // Wave 14 — release the WebGL context (Chrome caps live contexts ~16).
     try { paperdollViewport.dispose(); } catch (_) {}
     overlay.remove();
   };
+}
+
+/**
+ * Keyed child patch: make `parent`'s children exactly `want` (in order),
+ * moving only nodes that are out of place and removing cache entries not
+ * in `used`. Nodes are reused, so state (icons, timers, a live drag
+ * source) survives an inventory refresh.
+ */
+function patchChildren(parent, want, cache, used) {
+  for (const [k, el] of cache) {
+    if (!used.has(k)) { el.remove(); cache.delete(k); }
+  }
+  let cur = parent.firstChild;
+  for (const el of want) {
+    if (el === cur) { cur = cur.nextSibling; continue; }
+    parent.insertBefore(el, cur);
+  }
+  while (cur) {
+    const next = cur.nextSibling;
+    if (!want.includes(cur)) cur.remove();
+    cur = next;
+  }
 }

@@ -13,6 +13,7 @@
 //   buffs / debuffs  ← world.enchantmentAdded/Removed
 //   vitae            ← Character.vitaeChanged + playerStatsUpdated fallback
 //   burden           ← playerStatsUpdated → sessionHandle.playerBurden
+//                      (retail load bands: <1.0 / 1.0-2.0 / >=2.0, HUD overhaul 2026-10-05)
 //   linkstatus       ← 1Hz internal poll (not exercised here — covered by SS / SS.1)
 //   minigame         ← client.events.miniGameChanged (no upstream emit yet)
 //
@@ -200,26 +201,32 @@ check("MULTIPLICATIVE <1.0 → debuff", () => {
 
 console.log("\n[3] Pure helpers — burden / vitae thresholds");
 
-check("burden ratio 0.0 → inactive", () => {
+// HUD overhaul 2026-10-05 — retail thresholds. gmUIElement_BurdenIndicator::
+// Update (acclient.c) reads CACQualities::InqLoad and picks state 14
+// Unencumbered (< 1.0), 16 Heavily_encumbered (>= 2.0), else 15 Encumbered.
+// The previous 0.5 "active" gate was invented; under it a half-full pack lit
+// the indicator that retail only lights past 100% burden.
+check("burden ratio 0.0 → unencumbered (inactive)", () => {
   if (__test.isBurdenActive(0.0) !== false) throw new Error("0.0 is active");
+  if (__test.burdenStateFor(0.0) !== "unencumbered") throw new Error(__test.burdenStateFor(0.0));
 });
 
-check("burden ratio 0.49 → inactive", () => {
-  if (__test.isBurdenActive(0.49) !== false) throw new Error("0.49 is active");
-});
-
-check("burden ratio 0.5 → active", () => {
-  if (__test.isBurdenActive(0.5) !== true) throw new Error("0.5 not active");
-});
-
-check("burden ratio 0.99 → active, not over", () => {
-  if (__test.isBurdenActive(0.99) !== true) throw new Error("0.99 not active");
+check("burden ratio 0.5 / 0.99 → still unencumbered (retail lights at 100%)", () => {
+  if (__test.isBurdenActive(0.5) !== false) throw new Error("0.5 is active");
+  if (__test.isBurdenActive(0.99) !== false) throw new Error("0.99 is active");
   if (__test.isBurdenOver(0.99) !== false) throw new Error("0.99 marked over");
 });
 
-check("burden ratio 1.0 → active AND over", () => {
+check("burden ratio 1.0 → encumbered (active AND over)", () => {
   if (__test.isBurdenActive(1.0) !== true) throw new Error("1.0 not active");
   if (__test.isBurdenOver(1.0) !== true) throw new Error("1.0 not over");
+  if (__test.burdenStateFor(1.0) !== "encumbered") throw new Error(__test.burdenStateFor(1.0));
+});
+
+check("burden ratio 1.99 → encumbered; 2.0 → heavily-encumbered", () => {
+  if (__test.burdenStateFor(1.99) !== "encumbered") throw new Error(__test.burdenStateFor(1.99));
+  if (__test.burdenStateFor(2.0) !== "heavily-encumbered") throw new Error(__test.burdenStateFor(2.0));
+  if (__test.burdenStateFor(NaN) !== "unencumbered") throw new Error("NaN must read as unencumbered");
 });
 
 check("vitae 1.0 → inactive (no death penalty)", () => {
@@ -255,6 +262,52 @@ check("minigame indicator uses resolved layout sprites 0x060074A5/A6 (rec #149)"
   if (mg.active !== "0x060074A5" || mg.inactive !== "0x060074A6") {
     throw new Error(`minigame sprites got active=${mg.active} inactive=${mg.inactive}, want 0x060074A5/0x060074A6`);
   }
+});
+
+check("every slot draws its retail StateDesc sprite (data/retail-layouts/0x21000071.json)", () => {
+  // Normal / Ghosted (and per-state) image DIDs, verbatim from the layout
+  // dump. The pre-2026-10-05 table drew the link plug for vitae and burden.
+  const want = {
+    buffs:   ["0x0600749C", "0x0600749D"],
+    debuffs: ["0x0600749E", "0x0600749F"],
+    vitae:   ["0x060074A0", "0x060074A1"],
+    minigame:["0x060074A5", "0x060074A6"],
+  };
+  for (const [id, [active, inactive]] of Object.entries(want)) {
+    const ind = __test.INDICATORS.find(i => i.id === id);
+    if (ind.active !== active || ind.inactive !== inactive) {
+      throw new Error(`${id}: got ${ind.active}/${ind.inactive}, want ${active}/${inactive}`);
+    }
+  }
+  const burden = __test.INDICATORS.find(i => i.id === "burden");
+  const b = burden.states;
+  if (b.unencumbered !== "0x060074A2" || b.encumbered !== "0x060074A3" || b["heavily-encumbered"] !== "0x060074A4") {
+    throw new Error(`burden states wrong: ${JSON.stringify(b)}`);
+  }
+  const link = __test.INDICATORS.find(i => i.id === "linkstatus").states;
+  if (link.good !== "0x06007498" || link.uncertain !== "0x06007499" || link.bad !== "0x0600749A") {
+    throw new Error(`link states wrong: ${JSON.stringify(link)}`);
+  }
+});
+
+check("link tier follows retail UpdateLinkState staleness bands (5 / 20 / 40 s)", () => {
+  const MAX = 0xFFFFFFFF;
+  const t = __test.linkTierFor;
+  if (t(200, MAX) !== "good") throw new Error("200ms stale should be good");
+  if (t(5000, MAX) !== "good") throw new Error("5s stale should still be good");
+  if (t(5001, MAX) !== "uncertain") throw new Error("5.001s should be uncertain");
+  if (t(20001, MAX) !== "bad") throw new Error("20.001s should be bad");
+  if (t(40001, MAX) !== "disconnected") throw new Error("40.001s should be disconnected");
+  if (t(MAX, MAX) !== "disconnected") throw new Error("no data should be disconnected");
+});
+
+check("a slow ping can only degrade a fresh link, never upgrade a stale one", () => {
+  const t = __test.linkTierFor;
+  if (t(100, 50) !== "good") throw new Error("fast ping, fresh link → good");
+  if (t(100, 1500) !== "uncertain") throw new Error("1.5s ping should degrade to uncertain");
+  if (t(100, 4000) !== "bad") throw new Error("4s ping should degrade to bad");
+  if (t(25000, 20) !== "bad") throw new Error("a fast ping must not hide a 25s-stale link");
+  if (t(100, 1500, { middlingMs: 2000 }) !== "good") throw new Error("legacy middlingMs override ignored");
 });
 
 check("no phantom portalstorm indicator slot (rec #197)", () => {
@@ -343,36 +396,30 @@ check("indicators start inactive (no active class)", () => {
 
 console.log("\n[6] Burden — playerStatsUpdated reads sessionHandle.playerBurden");
 
-check("burden 0.6 → burden indicator active", () => {
+check("burden 1.3 → burden indicator active, Encumbered sprite state", () => {
+  burdenValue = 1.3;
+  fakeClient.events.emit("playerStatsUpdated", {});
+  const el = getIndicator("burden");
+  if (!el.classList.contains("active")) throw new Error("burden not active at 1.3");
+  if (el.dataset.over !== "1") throw new Error("burden not over at 1.3");
+  if (el.dataset.state !== "encumbered") throw new Error(`state=${el.dataset.state}`);
+});
+
+check("burden 2.1 → Heavily_encumbered sprite state", () => {
+  burdenValue = 2.1;
+  fakeClient.events.emit("playerStatsUpdated", {});
+  const el = getIndicator("burden");
+  if (!el.classList.contains("active")) throw new Error("burden not active at 2.1");
+  if (el.dataset.state !== "heavily-encumbered") throw new Error(`state=${el.dataset.state}`);
+});
+
+check("burden 0.6 (under 100%) → back to Unencumbered, inactive", () => {
   burdenValue = 0.6;
   fakeClient.events.emit("playerStatsUpdated", {});
-  if (!getIndicator("burden").classList.contains("active")) {
-    throw new Error("burden not active at 0.6");
-  }
-  if (getIndicator("burden").dataset.over === "1") {
-    throw new Error("burden falsely marked over at 0.6");
-  }
-});
-
-check("burden 1.1 → burden indicator active AND over", () => {
-  burdenValue = 1.1;
-  fakeClient.events.emit("playerStatsUpdated", {});
-  if (!getIndicator("burden").classList.contains("active")) {
-    throw new Error("burden not active at 1.1");
-  }
-  if (getIndicator("burden").dataset.over !== "1") {
-    throw new Error("burden not over at 1.1");
-  }
-});
-
-// Rec #183 tier ramp: "light" (inactive) is ratio < 0.20; 0.20 itself is the
-// first "moderate" tier and lights the icon, so drop back BELOW the boundary.
-check("burden 0.1 (light tier, < 0.20) → burden indicator inactive again", () => {
-  burdenValue = 0.1;
-  fakeClient.events.emit("playerStatsUpdated", {});
-  if (getIndicator("burden").classList.contains("active")) {
-    throw new Error("burden still active at 0.1");
-  }
+  const el = getIndicator("burden");
+  if (el.classList.contains("active")) throw new Error("burden still active at 0.6");
+  if (el.dataset.over === "1") throw new Error("burden falsely marked over at 0.6");
+  if (el.dataset.state !== "unencumbered") throw new Error(`state=${el.dataset.state}`);
 });
 
 console.log("\n[7] Vitae — Character.vitaeChanged + playerStatsUpdated fallback");
@@ -465,6 +512,15 @@ check("enchantments emptied → both indicators inactive", () => {
   if (getIndicator("debuffs").classList.contains("active")) {
     throw new Error("debuffs still active");
   }
+});
+
+check("__setStatusIndicator(id, active, {count}) (buffs-hud path) drives the slot", () => {
+  if (typeof window.__setStatusIndicator !== "function") throw new Error("hook missing");
+  if (window.__setStatusIndicator("debuffs", true, { count: 3 }) !== true) throw new Error("returned false");
+  if (!getIndicator("debuffs").classList.contains("active")) throw new Error("debuffs not lit");
+  window.__setStatusIndicator("debuffs", false, { count: 0 });
+  if (getIndicator("debuffs").classList.contains("active")) throw new Error("debuffs still lit");
+  if (window.__setStatusIndicator("portalstorm", true) !== false) throw new Error("unknown id must return false");
 });
 
 console.log("\n[9] Portal storm / mini-game — speculative bus hooks");

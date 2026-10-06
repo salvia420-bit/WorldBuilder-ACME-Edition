@@ -120,6 +120,19 @@ const body = spliceModule(src, {
     // Not reachable from the presence path; throwing stub so a future
     // change that DOES reach it fails loudly rather than silently passing.
     modalConfirmCallback: "() => { throw new Error('modalConfirmCallback must not be reached'); }",
+    // HUD overhaul 2026-10-05 — the allegiance page now builds on the
+    // social hub (plugins/social-panel.js) + kit floaty helpers. Module
+    // load registers the page (no-op stub); every UI helper is a throwing
+    // stub because the presence path must not reach any of them.
+    registerSocialPage: "() => {}",
+    onSocialBoot: "() => {}",
+    ...Object.fromEntries([
+      "mountSocialHub", "ensureSocialStyles", "el", "makeKitButton", "makeOrb",
+      "makeSpacer", "makeColHead", "makeListRow", "setRowSelected", "withSession",
+      "selectedTargetGuid", "selectedTargetName", "localPlayerGuid",
+      "isPlayerGuid", "onBus", "confirmAction", "readCharacterOption", "fmtInt",
+      "socialEmit", "uid", "attachWindowPosition", "makeTitlebar",
+    ].map((n) => [n, `() => { throw new Error('${n} must not be reached from the presence path'); }`])),
   },
 });
 // eslint-disable-next-line no-new-func

@@ -114,6 +114,10 @@ export const LOCAL_ACTIONS = [
   { labelHash: "0xFF000028", label: "Next Monster",     defaultCode: "Tab" },
   { labelHash: "0xFF000029", label: "Previous Monster", defaultCode: { code: "Tab", shift: true } },
   { labelHash: "0xFF00002A", label: "Closest Monster",  defaultCode: "KeyT" },
+  // HUD overhaul 2026-10-05 — expanded world map (plugins/map-panel.js
+  // #hb-map-overlay); retail only had the F3 gmMapUI panel. M is free
+  // (movement WASDQE, T = target) and is ignored while typing.
+  { labelHash: "0xFF00002B", label: "World Map (toggle)", defaultCode: "KeyM" },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -163,6 +167,7 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   NEXT_MONSTER: "0xFF000028",
   PREV_MONSTER: "0xFF000029",
   CLOSEST_MONSTER: "0xFF00002A",
+  WORLD_MAP: "0xFF00002B",
 });
 
 let cache = null;

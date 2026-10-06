@@ -20,11 +20,19 @@
 //   0x10000528 — title separator (300×5 at 5,25)
 //   0x100005F3 — close button (14×14 at 284,8, 2 states)
 //
+// HUD overhaul 2026-10-05 — retail floaty chrome: the title band is the
+// dark field 0x06004CC2 (DisplayedNameText) with the examined thing's
+// name centred in gold, the 14×14 X button 0x06006215 (hover 0x06006216),
+// the 0x0600612A separator under it; the window shrinks to fit short /
+// zoomed viewports (max-height in HUD vh, body scrolls) and opens
+// centred instead of at a fixed 80 px that ran off a 720-px screen at
+// HUD scale ≥ 1.5. Esc closes it unless a menu / dialog consumed Esc
+// first (they stop propagation in the capture phase).
+//
 // Opt-out: `?examineFloaty=0` reverts to the legacy main-panel view
 // (window.__mainPanel.pushView("examine", ctx)). On by default so
 // retail behavior is the path of least surprise.
 
-import { setAcText, HEADING_FONT_ID } from "../ui/ac_font.js";
 import {
   loadLayout, findElementById, getCachedLayout,
 } from "../ui/ac_layout.js";
@@ -74,11 +82,13 @@ function ensureStyles() {
       z-index: 60;
       width: ${FLOATY_WIDTH}px;
       height: ${FLOATY_HEIGHT}px;
+      max-height: calc(100 * var(--hb-hud-vh, 1vh) - 16px);
       box-sizing: border-box;
       pointer-events: auto;
-      font-family: var(--hb-font-serif);
-      background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
-      color: var(--hb-text-cream);
+      font-family: var(--hbk-font);
+      background: url("./data/ui-sprites/0x0600128A.png") 0 0 / 220px 77px repeat, #1d1912;
+      color: var(--hbk-text);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.7);
       display: none;
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
@@ -89,9 +99,8 @@ function ensureStyles() {
       border: 5px solid transparent;
       border-image: url("./sprites/acsprites/panel.png") 5 / 5px / 0 stretch;
     }
-    /* Title band — retail 0x1000012D (300×20 at 5,5). applyExamineFloatyLayout
-       overrides the inline left/top/width/height once the layout loads.
-       Also serves as the drag handle. */
+    /* Title band — retail 0x1000012D DisplayedNameText (300×20 at 5,5)
+       on the dark field 0x06004CC2. Also the drag handle. */
     #${OVERLAY_ID} .hb-exa-floaty-title {
       position: absolute;
       top: 5px;
@@ -100,65 +109,63 @@ function ensureStyles() {
       height: 20px;
       display: flex;
       align-items: center;
-      padding: 0 6px;
+      justify-content: center;
+      padding: 0 22px;
       box-sizing: border-box;
-      background: url("./data/ui-sprites/0x06004CFA.png") center/100% 100% no-repeat;
-      font-size: 11px;
-      color: var(--hb-text-cream-bright);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9);
+      background: url("./data/ui-sprites/0x06004CC2.png") repeat, #0b0c10;
+      color: var(--hbk-gold-bright);
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      text-shadow: 0 1px 0 #000;
       cursor: move;
       user-select: none;
       z-index: 2;
     }
     #${OVERLAY_ID} .hb-exa-floaty-title-name {
-      flex: 1;
-      letter-spacing: 0.04em;
+      flex: 0 1 auto;
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    /* Close button — retail 0x100005F3 (14×14 at 284,8). */
+    /* Close button — retail 0x100005F3 (14×14 at 284,8), sprite 0x06006215. */
     #${OVERLAY_ID} .hb-exa-floaty-close {
       position: absolute;
       top: 8px;
       left: 284px;
       width: 14px;
       height: 14px;
-      background: var(--hb-border-brass);
-      color: var(--hb-bg-stone-bottom);
-      font-size: 9px;
-      line-height: 14px;
-      text-align: center;
-      cursor: pointer;
-      box-sizing: border-box;
-      border: 0;
       padding: 0;
+      border: 0;
+      background: url("./data/ui-sprites/0x06006215.png") center / 100% 100% no-repeat;
+      cursor: pointer;
+      image-rendering: pixelated;
       z-index: 3;
     }
-    #${OVERLAY_ID} .hb-exa-floaty-close:hover { background: var(--hb-text-gold); }
-    /* Title separator — retail 0x10000528 (300×5 at 5,25). Drawn as
-       a 1px hairline along its top edge for crispness. */
+    #${OVERLAY_ID} .hb-exa-floaty-close:hover,
+    #${OVERLAY_ID} .hb-exa-floaty-close:focus-visible { background-image: url("./data/ui-sprites/0x06006216.png"); }
+    #${OVERLAY_ID} .hb-exa-floaty-close:active { filter: brightness(0.8); }
+    /* Title separator — retail 0x10000528 TopSeperator (300×5 at 5,25),
+       sprite 0x0600612A tiled. */
     #${OVERLAY_ID} .hb-exa-floaty-title-sep {
       position: absolute;
       top: 25px;
       left: 5px;
       width: 300px;
-      height: 1px;
-      background: var(--hb-border-brass-dim);
+      height: 5px;
+      background: url("./data/ui-sprites/0x0600612A.png") 0 0 / 10px 5px repeat-x;
       z-index: 2;
       pointer-events: none;
     }
-    /* Body slot — sits below title separator. examine-target.js's
-       mountExamineBody fills this with its own .hb-exa-root tree. The
-       body slot is positioned popup-relative (5, 30) to 300×365 per
-       retail; the body's contents lay out as if it were the popup
-       content frame (top-of-pane at y=0). */
+    /* Body slot — below the separator; mountExamineBody fills it with
+       its .hb-exa-root (flex column with its own scroll area), so the
+       window can shrink without clipping content. */
     #${OVERLAY_ID} .hb-exa-floaty-body {
       position: absolute;
       top: 30px;
       left: 5px;
-      width: 300px;
-      height: 365px;
+      right: 5px;
+      bottom: 5px;
       overflow: hidden;
       box-sizing: border-box;
     }
@@ -257,7 +264,7 @@ function buildOverlay() {
   closeBtn.className = "hb-exa-floaty-close";
   closeBtn.type = "button";
   closeBtn.setAttribute("aria-label", "Close");
-  closeBtn.textContent = "✕";
+  closeBtn.title = "Close";
   overlay.appendChild(closeBtn);
 
   const bodyEl = document.createElement("div");
@@ -270,7 +277,10 @@ function buildOverlay() {
     windowId: WINDOW_ID.EXAMINE,
     dragHandle: titleEl,
     ignoreSelector: ".hb-exa-floaty-close,button,input,select,textarea,[data-drag-ignore]",
-    defaultPos: { left: `calc(50% - ${FLOATY_WIDTH / 2}px)`, top: "80px" },
+    defaultPos: {
+      left: `calc(50% - ${FLOATY_WIDTH / 2}px)`,
+      top: `max(8px, calc(50% - ${FLOATY_HEIGHT / 2}px))`,
+    },
   });
 
   state.overlay = overlay;
@@ -308,13 +318,14 @@ export function openFloaty(ctx = {}) {
   }
   if (!state.overlay) buildOverlay();
   runCleanup();
-  setAcText(
-    state.titleNameEl,
-    examineTitleFor(ctx),
-    { fontId: HEADING_FONT_ID },
-  );
+  const setTitle = (text) => {
+    if (!state.titleNameEl) return;
+    state.titleNameEl.textContent = text || "Examine";
+    state.titleNameEl.title = text || "";
+  };
+  setTitle(examineTitleFor(ctx));
   try {
-    state.cleanup = mountExamineBody(state.bodyEl, ctx) || null;
+    state.cleanup = mountExamineBody(state.bodyEl, ctx, { setTitle }) || null;
   } catch (e) {
     console.error("[examine-floaty] body mount error", e);
   }
@@ -349,7 +360,7 @@ export const manifest = {
   name: "Examine Floaty",
   icon: "🔎",
   iconHidden: true,
-  version: "0.1.0",
+  version: "0.2.0",
   description: "gmFloatyExaminationUI 0x2100006B — standalone 310×400 examine window",
 };
 

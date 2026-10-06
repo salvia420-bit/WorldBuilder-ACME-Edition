@@ -53,15 +53,67 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
-const MELEE_STANCES = new Set([0x003c, 0x003e, 0x0040, 0x0044, 0x0046]);
+// MotionStance low words (ACE.Entity/Enum/MotionStance.cs). HUD overhaul
+// 2026-10-05: 0x45 TwoHandedStaffCombat added to the melee set — it was
+// missing, so a two-handed-staff wielder classified as "other".
+const MELEE_STANCES = new Set([0x003c, 0x003e, 0x0040, 0x0044, 0x0045, 0x0046]);
 const RANGED_STANCES = new Set([0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c]);
 
-function classifyStance(low) {
+export function classifyStance(low) {
   if (low === 0x003d) return "peace";
   if (low === 0x0049) return "magic";
   if (RANGED_STANCES.has(low)) return "ranged";
   if (MELEE_STANCES.has(low)) return "melee";
   return "other";
+}
+
+// ── Toolbar combat-mode button (HUD overhaul 2026-10-05) ─────────────
+// Retail COMBAT_MODE (acclient.h `enum COMBAT_MODE`): the toolbar shows
+// exactly one of four 55×58 buttons — gmToolbarUI::RecvNotice_SetCombatMode
+// (acclient.c) sets 0x10000192 visible iff mode==1, 0x10000193 iff 2,
+// 0x10000194 iff 4, 0x10000195 iff 8. Each button has a Normal and a
+// Normal_pressed sprite (data/retail-layouts/0x21000016.json). Clicking
+// any of them is ClientCombatSystem::ToggleCombatMode
+// (gmToolbarUI::ListenToElementMessage).
+export const COMBAT_MODE = Object.freeze({
+  NONCOMBAT: 1,
+  MELEE: 2,
+  MISSILE: 4,
+  MAGIC: 8,
+});
+
+export const STANCE_BUTTONS = Object.freeze({
+  1: Object.freeze({ elementId: 0x10000192, label: "Peace Mode",   normal: "0x06004CEC", pressed: "0x06004CED" }),
+  2: Object.freeze({ elementId: 0x10000193, label: "Melee Mode",   normal: "0x06004CEE", pressed: "0x06004CEF" }),
+  4: Object.freeze({ elementId: 0x10000194, label: "Missile Mode", normal: "0x06004CF0", pressed: "0x06004CF1" }),
+  8: Object.freeze({ elementId: 0x10000195, label: "Magic Mode",   normal: "0x06004CF2", pressed: "0x06004CF3" }),
+});
+
+/** MotionStance low word → retail COMBAT_MODE. 0 (no UpdateMotion seen
+ *  yet) and NonCombat read as Peace; any non-peace stance that is not
+ *  magic or missile reads as Melee (ACE only has those four modes). */
+export function combatModeForStance(low) {
+  const l = (low >>> 0) & 0xffff;
+  if (!l) return COMBAT_MODE.NONCOMBAT;
+  const kind = classifyStance(l);
+  if (kind === "peace") return COMBAT_MODE.NONCOMBAT;
+  if (kind === "magic") return COMBAT_MODE.MAGIC;
+  if (kind === "ranged") return COMBAT_MODE.MISSILE;
+  return COMBAT_MODE.MELEE;
+}
+
+/** Button descriptor for a COMBAT_MODE; unknown values fall back to Peace. */
+export function stanceButtonFor(mode) {
+  return STANCE_BUTTONS[mode] || STANCE_BUTTONS[COMBAT_MODE.NONCOMBAT];
+}
+
+/** Tooltip copy for the toolbar combat-mode button. */
+export function stanceButtonTip(mode, key = "`") {
+  const b = stanceButtonFor(mode);
+  const verb = (mode === COMBAT_MODE.NONCOMBAT || !STANCE_BUTTONS[mode])
+    ? "Click to enter combat"
+    : "Click to return to peace";
+  return { text: b.label, key, sub: verb };
 }
 
 export const manifest = {
@@ -73,8 +125,11 @@ export const manifest = {
   // makeIcon picks up `slot.iconSprite` once on mount; for cross-mode
   // swap we'll wire a `setIconSprite()` call in a follow-on.
   iconSprite: "0x0600111E",
-  version: "0.0.1",
-  description: "Peace ↔ Combat toggle (retail dove icon equivalent)",
+  version: "0.1.0",
+  // HUD overhaul 2026-10-05: the on-screen combat-mode button lives in the
+  // unified toolbar (plugins/target-bar.js → plugins/hotbar.js) and reads
+  // the COMBAT_MODE / STANCE_BUTTONS helpers exported above.
+  description: "Combat-mode helpers for the toolbar stance button + bar-icon stance tint",
 };
 
 export function activate(bodyEl, ctx) {
