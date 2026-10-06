@@ -1698,6 +1698,15 @@ function sampleHorizonSkyRadiance(scene3d) {
           _fogProbeFailed(err);
         },
       );
+      // three r184 leaves its PIXEL_PACK_BUFFER bound while it awaits the
+      // fence, so every synchronous readPixels into an array for the rest of
+      // the frame fails with INVALID_OPERATION and returns zeros (1070,
+      // 2026-10-06: every 12th frame read back pure black). three re-binds its
+      // own buffer before getBufferSubData, so unbinding here is safe.
+      try {
+        const gl = renderer.getContext();
+        if (gl && gl.PIXEL_PACK_BUFFER !== undefined) gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      } catch (_) {}
       return null; // the caller keeps `_fogProbeLast` until this read lands
     }
     renderer.readRenderTargetPixels(

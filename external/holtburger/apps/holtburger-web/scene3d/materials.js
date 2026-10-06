@@ -913,7 +913,14 @@ export function applyBakedVertexLightPatch(material, opts = {}) {
           // flatter than the same lamp run live. Piecewise EOTF is inlined
           // rather than taken from a three chunk so this does not depend on
           // colorspace_pars_fragment being included by the host material.
+          // The CLAMP is load-bearing (2026-10-06, 1070): the interpolated
+          // varying lands a hair outside [0,1] on a few edge samples, pow() of
+          // a negative base is NaN, and mix() keeps it even where step() picks
+          // the linear branch (NaN * 0 = NaN). Two such pixels in Holtburg
+          // (surface 0x08000371) were the NaN that bloom smeared over the whole
+          // frame — NanScrub only hid it. Exact for every in-range value.
           "vec3 acBakedEotf(vec3 c) {",
+          "  c = clamp(c, 0.0, 1.0);",
           "  return mix(",
           "    pow((c + 0.055) / 1.055, vec3(2.4)),",
           "    c / 12.92,",

@@ -447,6 +447,7 @@ const TIER5 = [
   { tier: 5, flag: "particle_inst_alpha", file: "test_particle_inst_alpha.mjs" },
   { tier: 5, flag: "nra_pack_lut", file: "test_nra_pack_lut.mjs" },
   { tier: 5, flag: "batch_mat_variant_clone", file: "test_batch_mat_variant_clone.mjs" },
+  { tier: 5, flag: "fog_probe_pbo_unbind", file: "test_fog_probe_pbo_unbind.mjs" },
   { tier: 5, flag: "frame_split_probe", file: "test_frame_split_probe.mjs" },
   { tier: 5, flag: "landblock_lru_frame_slot", file: "test_landblock_lru_frame_slot.mjs" },
   { tier: 5, flag: "mem_census", file: "test_mem_census.mjs" },

@@ -175,6 +175,23 @@ check(
   BASE_KEY,
 );
 
+// === NaN GUARD IN THE BAKE DECODE (2026-10-06, 1070) =======================
+// The baked varying lands a hair outside [0,1] on a few edge samples; pow()
+// of a negative base is NaN and mix() keeps it even where step() selects the
+// linear branch. Two such pixels blacked the whole Holtburg frame through
+// bloom. The decode must clamp its input BEFORE the pow.
+{
+  const eotf = slice("scene3d/materials.js", '"vec3 acBakedEotf(vec3 c) {",', '"}",');
+  const clampAt = eotf.indexOf("c = clamp(c, 0.0, 1.0);");
+  const powAt = eotf.indexOf("pow(");
+  check("bake sRGB decode clamps its input before pow()", clampAt > 0 && powAt > clampAt, eotf.replace(/\s+/g, " ").slice(0, 160));
+  // GLSL pow(x<0, y) is undefined (NaN on ANGLE/D3D11) — same as JS here.
+  const glslMix = (a, b, t) => a * (1 - t) + b * t;
+  const decode = (c, clampIt) => { if (clampIt) c = Math.min(Math.max(c, 0), 1); return glslMix(Math.pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045 ? 1 : 0); };
+  check("model: an out-of-range sample (-0.06) is NaN unclamped …", Number.isNaN(decode(-0.06, false)));
+  check("… and finite (0) once clamped", decode(-0.06, true) === 0);
+}
+
 console.log("=========================================");
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
