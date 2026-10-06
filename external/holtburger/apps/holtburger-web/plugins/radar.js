@@ -58,7 +58,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
-import { getHudScale, hudRect, hudViewport } from "../ui/hud_scale.js";
+import { getHudScale, hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
 import { readLocalPlayerPose } from "../scene3d/frame_pose.js";
 import { blipColorForEntity, readFellowshipRoster } from "../scene3d/selection_brackets.js";
 
@@ -803,10 +803,25 @@ export function mount(_ctx) {
     }
   }
 
+  // `canvas.currentCSSZoom` is a computed-style read; update() calls this right
+  // after placeTokens() writes token styles, so reading it every frame forced a
+  // synchronous style recalc per radar frame (1.3% of main-thread self time at
+  // Holtburg on the 1070). Cache it; drop the cache when the HUD zoom changes
+  // (hud_scale.js fires HUD_SCALE_EVENT), on resize (covers DPR / browser
+  // zoom), and every 2 s as a safety net for anything else that moves it.
+  let _backingK = 0;
+  let _backingAt = 0;
+  const _dropBacking = () => { _backingK = 0; };
+  if (typeof document !== "undefined") document.addEventListener(HUD_SCALE_EVENT, _dropBacking);
+  if (typeof window !== "undefined") window.addEventListener("resize", _dropBacking);
   function backingScale() {
+    const t = performance.now();
+    if (_backingK > 0 && t - _backingAt < 2000) return _backingK;
     const z = Number(canvas.currentCSSZoom) > 0 ? Number(canvas.currentCSSZoom) : getHudScale();
     const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
-    return Math.max(1, Math.min(8, Math.round(z * dpr)));
+    _backingK = Math.max(1, Math.min(8, Math.round(z * dpr)));
+    _backingAt = t;
+    return _backingK;
   }
 
   function drawPixels(k, offsets, x, y, color) {
