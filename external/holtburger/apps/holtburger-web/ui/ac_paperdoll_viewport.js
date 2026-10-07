@@ -28,6 +28,27 @@ import { surfacePixelsToTexture } from "../scene3d/adapter.js";
 const DEFAULT_W = 224;
 const DEFAULT_H = 214;
 
+// Bug 13 (2026-10-07) — retail paperdoll framing. `gmPaperDollUI` turns the
+// doll to a fixed heading (`CPhysicsObj::set_heading(doll, 191.3679)`,
+// acclient.c:220051 — facing the viewer, turned 11.37°), and the viewport
+// camera is fixed, not fitted: `UIElement_Viewport::SetCamera` with eye
+// (0.12, -2.4, 0.88) looking straight along +Y (acclient.c:221604-221611) at
+// `CreatureMode::m_fFOVRadians` = 0.785398 (45°, :145328). Heritages with a
+// bigger body pull the eye back (`gmPaperDollUI::UpdateForRace`,
+// acclient.c:220179). OpenAC: DollEntityBuilder / DollCamera /
+// PaperdollHeritagePresentation (same values).
+export const PAPERDOLL_HEADING_DEG = 191.3679;
+export const PAPERDOLL_FOV_DEG = 45;
+/** Retail eye (AC frame, Z up) for a HeritageGroup (PropertyInt 188). */
+export function paperdollEyeForHeritage(heritage) {
+  switch (heritage >>> 0) {
+    case 6: case 7: return [0.12, -3.0, 0.88];
+    case 8: return [0.12, -3.4, 1.0];
+    case 9: case 12: case 13: return [0.12, -3.4, 0.88];
+    default: return [0.12, -2.4, 0.88];
+  }
+}
+
 export class PaperdollViewport {
   /**
    * @param {{width?: number, height?: number}} [opts]
@@ -62,9 +83,8 @@ export class PaperdollViewport {
     // front-3/4 paperdoll framing. `_frameRig` retargets after the rig
     // bounds are known; these starting values just keep us from peeking
     // through an empty scene.
-    this.camera = new THREE.PerspectiveCamera(28, width / height, 0.05, 50);
-    this.camera.position.set(0, 1.05, 2.4);
-    this.camera.lookAt(0, 0.95, 0);
+    this.camera = new THREE.PerspectiveCamera(PAPERDOLL_FOV_DEG, width / height, 0.05, 50);
+    this._placeRetailCamera(0);
 
     // Lighting: ambient + front-key + cool back fill. Warm tint matches
     // the dye-viewport so the inventory doll reads the same as the
@@ -77,15 +97,22 @@ export class PaperdollViewport {
     fill.position.set(-1.5, 1, -1.5);
     this.scene.add(fill);
 
-    this.rigRoot = new THREE.Group();
     // AC body-local space is Z-up (X east, Y north, Z up). Three.js is
     // Y-up. The world entity rig handles this via its outer
-    // `acQuatToThree` root rotation (entities.js:1131); here we apply the
-    // equivalent fixed rotation on rigRoot so the partGroup positions
-    // (raw AC `restOrigins`) render upright instead of lying on their
-    // back. Rotating −π/2 around X maps AC.z → Three.y (up).
-    this.rigRoot.rotation.x = -Math.PI / 2;
-    this.scene.add(this.rigRoot);
+    // `acQuatToThree` root rotation (entities.js:1131); here `dollRoot`
+    // applies the equivalent fixed rotation so the partGroup positions
+    // (raw AC `restOrigins`) render upright. Rotating −π/2 around X maps
+    // AC.z → Three.y (up) and AC.y → Three −z.
+    this.dollRoot = new THREE.Group();
+    this.dollRoot.rotation.x = -Math.PI / 2;
+    this.scene.add(this.dollRoot);
+    // `rigRoot` lives in the AC frame and carries the retail doll heading
+    // (bug 13): AC heading h (degrees, clockwise from +Y/north) is a
+    // rotation of −h about AC +Z. Before this fix there was no heading at
+    // all: the model faced AC +Y = three −Z, away from the camera.
+    this.rigRoot = new THREE.Group();
+    this.rigRoot.rotation.z = -PAPERDOLL_HEADING_DEG * Math.PI / 180;
+    this.dollRoot.add(this.rigRoot);
 
     this._ownedMaterials = [];
     this._ownedTextures = [];
@@ -112,10 +139,15 @@ export class PaperdollViewport {
    * Build a stable key for the (setupId, mtableId, paletteId, subPalettes)
    * tuple so callers can debounce no-op reloads.
    */
-  _loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow) {
+  _loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance) {
     const sp = subPalettes
       ? Array.from(subPalettes).join(",")
       : "";
+    // Bug 13: the worn armour / clothing (ObjDesc part + texture swaps) is
+    // part of the key, so equipping a piece reloads the doll.
+    const mc = appearance?.modelChanges ? Array.from(appearance.modelChanges).join(",") : "";
+    const tc = appearance?.textureChanges ? Array.from(appearance.textureChanges).join(",") : "";
+    const her = (appearance?.heritage >>> 0) || 0;
     // Wave C / PR8 (2026-06-06): include wielded tuple + stance so equip
     // deltas + combat-mode toggle hot-swap the cached rig instead of
     // no-op'ing on the body-only key.
@@ -127,7 +159,7 @@ export class PaperdollViewport {
         .map((w) => `${(w?.itemGuid >>> 0)}-${(w?.parentLocation >>> 0)}-${(w?.placement >>> 0)}`);
       wt = sorted.join(";");
     }
-    return `${setupId >>> 0}:${mtableId >>> 0}:${paletteId >>> 0}:${sp}|w=${wt}|s=${(stanceLow >>> 0)}`;
+    return `${setupId >>> 0}:${mtableId >>> 0}:${paletteId >>> 0}:${sp}|w=${wt}|s=${(stanceLow >>> 0)}|mc=${mc}|tc=${tc}|h=${her}`;
   }
 
   /**
@@ -161,10 +193,10 @@ export class PaperdollViewport {
    *   may key off this. Caching uses it so a combat-mode toggle
    *   forces a re-render.
    */
-  async loadPlayer(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow) {
+  async loadPlayer(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance = null) {
     if (this._disposed) return false;
     if (!setupId) return false;
-    const key = this._loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow);
+    const key = this._loadKey(setupId, mtableId, paletteId, subPalettes, wieldedItems, stanceLow, appearance);
     if (key === this._lastLoadKey) return true;
     // Wave C / PR8 — race-cancel token captured at entry.
     const token = ++this._inflightLoadToken;
@@ -176,17 +208,30 @@ export class PaperdollViewport {
 
     let animEntry;
     try {
+      // Bug 13 (2026-10-07): bake WITH the player's ObjDesc part + texture
+      // swaps — the worn armour. Retail redresses the doll from the player's
+      // visual desc (`gmPaperDollUI::RedressCreature` →
+      // `DoObjDescChangesFromDefault(doll, get_player_visualdesc)`,
+      // acclient.c:220061); this used to pass empty swaps (a bare body).
       animEntry = await em.animationCache.get(
         setupId >>> 0, mtableId >>> 0, 0, 0, fetchKeyframes,
         {
-          modelChanges: new Uint32Array(0),
-          textureChanges: new Uint32Array(0),
+          modelChanges: appearance?.modelChanges ?? new Uint32Array(0),
+          textureChanges: appearance?.textureChanges ?? new Uint32Array(0),
           paletteId: paletteId >>> 0,
           paletteSubsFlat: subPalettes ?? new Uint32Array(0),
         },
       );
     } catch (_) { return false; }
+    if (token !== this._inflightLoadToken) return false;
     if (!animEntry || !Array.isArray(animEntry.partGroups)) return false;
+    // eslint-disable-next-line no-console
+    console.info(
+      `[paperdoll] load setup=0x${(setupId >>> 0).toString(16)} heading=${PAPERDOLL_HEADING_DEG} ` +
+      `fov=${PAPERDOLL_FOV_DEG} heritage=${(appearance?.heritage >>> 0) || 0} ` +
+      `modelChanges=${appearance?.modelChanges?.length ?? 0} textureChanges=${appearance?.textureChanges?.length ?? 0} ` +
+      `subPalettes=${subPalettes?.length ?? 0}`,
+    );
 
     // Tear down prior rig + owned materials/textures before rebuild.
     // Geometries are AnimationCache-shared — do NOT dispose those.
@@ -278,10 +323,11 @@ export class PaperdollViewport {
     // silhouette. A held two-hander pushes the unbiased bounds out by
     // ~1m and would shrink the doll's apparent size; retail's
     // gmPaperDollUI frames on the body and lets the weapon overflow.
-    this.rigRoot.updateMatrixWorld(true);
-    const bounds = new THREE.Box3().setFromObject(this.rigRoot);
-
-    this._frameRig(bounds);
+    // Bug 13: retail framing is FIXED (no bounds fit) — doll at the origin,
+    // feet on the floor, the heritage eye from UpdateForRace.
+    this.rigRoot.position.set(0, 0, 0);
+    this._placeRetailCamera(appearance?.heritage >>> 0);
+    this.dollRoot.updateMatrixWorld(true);
 
     // Wave C / PR8 (2026-06-06): wielded-children pass. For each wielded
     // item, build a child rig from its meta and parent it under the
@@ -397,8 +443,19 @@ export class PaperdollViewport {
     this.rigRoot.updateMatrixWorld(true);
   }
 
+  /** Retail camera: the heritage eye, looking straight along AC +Y. AC
+   *  (x, y, z) is three (x, z, −y) here (dollRoot's −π/2 about X). */
+  _placeRetailCamera(heritage) {
+    const [ex, ey, ez] = paperdollEyeForHeritage(heritage);
+    this.camera.fov = PAPERDOLL_FOV_DEG;
+    this.camera.position.set(ex, ez, -ey);
+    this.camera.lookAt(ex, ez, -ey - 1);
+    this.camera.updateProjectionMatrix();
+  }
+
   /**
-   * Auto-fit camera + center rig. Translates the rig so its xz-center
+   * Legacy auto-fit (kept for reference; retail framing is fixed — see
+   * `_placeRetailCamera`). Translates the rig so its xz-center
    * is at world origin + its feet sit at y=0, then positions the camera
    * front-3/4 above eye height, framing the full body height with ~10%
    * padding top/bottom.

@@ -5296,73 +5296,115 @@ function reconcileTerrainLodForCentre(scene3d, newLbKey) {
   }
 }
 
-// Tear down only the TERRAIN layer for one queued LB and re-bake it at the
-// new level. LandblockLRU.evict is intentionally NOT used — it would also
-// drop the LB's buildings / statics / EnvCells, which a terrain LOD swap must
-// leave in place. 2026-08-03: the swapped-out refs are UNTRACKED from the LRU
-// before we dispose them (the old "stale refs are harmless, dispose() is a
-// try/caught no-op" claim was false — the RP4 texture pool's dispose returns a
-// texture to the free list, so a second one hands a live LB's texture to the
-// next bake). The fresh bake's track() then appends the new refs. The new
-// mesh arrives async, so the LB shows a brief terrain gap; the integrator
-// holds pose Z from the cached heights so the player never falls through.
+// Re-bake only the TERRAIN layer for one queued LB at its new level.
+// LandblockLRU.evict is intentionally NOT used — it would also drop the LB's
+// buildings / statics / EnvCells, which a terrain LOD swap must leave in
+// place. 2026-08-03: the swapped-out refs are UNTRACKED from the LRU before we
+// dispose them (the RP4 texture pool's dispose returns a texture to the free
+// list, so a second dispose hands a live LB's texture to the next bake).
+//
+// Bug 5 (2026-10-07, "large holes in the terrain while walking"): this used to
+// tear the old mesh (and its terrain-batch row) down FIRST and then fire an
+// async re-bake. Every LB crossing queues ~6 of these; a re-bake the stream
+// guard refused (bake cap / failure cooldown) produced no mesh and no baked
+// mark — a hole beside the player until something else re-requested it — and
+// every successful one blinked out for the bake's duration. Now the OLD mesh
+// stays drawn until the replacement has landed: the batch absorb of the new
+// mesh replaces the LB's batch row in place (terrain_batch.js
+// `_absorbMeshIntoState`), and only then are the old proxies disposed. A
+// refused re-bake keeps the old mesh, restores the baked mark and retries
+// after a short backoff.
+const LOD_REBAKE_RETRY_MS = 1000;
+
+function _teardownTerrainChildren(scene3d, lbKey, kids) {
+  const group = scene3d.terrainGroup;
+  for (const c of kids) {
+    if (group && c.parent === group) group.remove(c);
+    const m = c.material;
+    const ownMat = m && !(m.userData && m.userData.__cacheOwned) ? m : null;
+    const vtTex = c.userData && c.userData.vertexTypesTexture;
+    const mdTex = c.userData && c.userData.mergeDataTexture;
+    try {
+      scene3d.landblockLru?.untrackDisposables?.(lbKey, {
+        geometries: c.geometry ? [c.geometry] : [],
+        materials: ownMat ? [ownMat] : [],
+        textures: [vtTex, mdTex].filter(Boolean),
+      });
+    } catch (_) { /* fail-soft */ }
+    try { c.geometry && c.geometry.dispose && c.geometry.dispose(); } catch (_) {}
+    if (ownMat) {
+      unregisterTerrainMaterial(scene3d, ownMat);
+      try { ownMat.dispose && ownMat.dispose(); } catch (_) {}
+    }
+    try { vtTex && vtTex.dispose(); } catch (_) {}
+    try { mdTex && mdTex.dispose(); } catch (_) {}
+  }
+}
+
 function drainOneTerrainLodRebake(scene3d) {
   const queue = scene3d._lodRebakeQueue;
   if (!(queue instanceof Set) || queue.size === 0) return;
-  const lbKey = queue.values().next().value;
+  const inflight = scene3d._lodRebakeInFlight instanceof Set
+    ? scene3d._lodRebakeInFlight
+    : (scene3d._lodRebakeInFlight = new Set());
+  const backoff = scene3d._lodRebakeBackoff instanceof Map
+    ? scene3d._lodRebakeBackoff
+    : (scene3d._lodRebakeBackoff = new Map());
+  const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  let lbKey = null;
+  for (const k of queue) {
+    if (inflight.has(k)) continue;
+    const until = backoff.get(k);
+    if (until !== undefined && now < until) continue;
+    lbKey = k;
+    break;
+  }
+  if (lbKey == null) return;
   queue.delete(lbKey);
+  backoff.delete(lbKey);
+  if (typeof scene3d.loadTerrainForLandblock !== "function") return;
   const lbX = (lbKey >>> 24) & 0xff;
   const lbY = (lbKey >>> 16) & 0xff;
   const group = scene3d.terrainGroup;
+  const old = [];
   if (group && group.children) {
-    const kill = [];
     for (const c of group.children) {
       const ud = c.userData;
-      if (ud && ud.lbX === lbX && ud.lbY === lbY) kill.push(c);
-    }
-    for (const c of kill) {
-      group.remove(c);
-      const m = c.material;
-      const ownMat = m && !(m.userData && m.userData.__cacheOwned) ? m : null;
-      const vtTex = c.userData && c.userData.vertexTypesTexture;
-      const mdTex = c.userData && c.userData.mergeDataTexture;
-      // 2026-08-03 — we dispose these HERE, so the LRU must stop tracking them
-      // first (one dispose per resource; see untrackDisposables). Without it
-      // eviction disposes them a second time, which for the RP4-pooled
-      // DataTextures returns a texture another LB has already checked out.
-      try {
-        scene3d.landblockLru?.untrackDisposables?.(lbKey, {
-          geometries: c.geometry ? [c.geometry] : [],
-          materials: ownMat ? [ownMat] : [],
-          textures: [vtTex, mdTex].filter(Boolean),
-        });
-      } catch (_) { /* fail-soft */ }
-      try { c.geometry && c.geometry.dispose && c.geometry.dispose(); } catch (_) {}
-      if (ownMat) {
-        unregisterTerrainMaterial(scene3d, ownMat);
-        try { ownMat.dispose && ownMat.dispose(); } catch (_) {}
-      }
-      try { vtTex && vtTex.dispose(); } catch (_) {}
-      try { mdTex && mdTex.dispose(); } catch (_) {}
+      if (ud && ud.lbX === lbX && ud.lbY === lbY) old.push(c);
     }
   }
-  // ?terrainBatch — also excise this LB's geometry from the cross-LB terrain
-  // BatchedMesh (the kill loop above only removed the hidden proxy). The hook
-  // is installed by terrain_batch.js only when the flag is on; absent ⇒ this
-  // typeof guard no-ops (flag-off behaviour unchanged). Mirrors the
-  // _evictStaticAtlasForLb idiom in landblock_lru.evict.
-  if (typeof scene3d._evictTerrainBatchForLb === "function") {
-    try { scene3d._evictTerrainBatchForLb(lbKey); } catch (_) { /* fail-soft */ }
-  }
+  const baked = scene3d.terrainBakedLbs instanceof Set ? scene3d.terrainBakedLbs : null;
   // Clear the idempotency gate so the lazy baker re-bakes (it short-circuits
   // on terrainBakedLbs.has(lbKey)); opts.playerLbKey was updated in reconcile
-  // so the re-bake's pickSubdivLevelForLb picks the upgraded level.
-  if (scene3d.terrainBakedLbs instanceof Set) scene3d.terrainBakedLbs.delete(lbKey);
+  // so the re-bake's pickSubdivLevelForLb picks the new level.
+  if (baked) baked.delete(lbKey);
+  inflight.add(lbKey);
+  const refused = () => {
+    // Keep the old (still drawn) mesh; restore the gate; retry later.
+    if (baked && old.length > 0) baked.add(lbKey);
+    backoff.set(lbKey, ((typeof performance !== "undefined") ? performance.now() : Date.now()) + LOD_REBAKE_RETRY_MS);
+    queue.add(lbKey);
+    scene3d._lodRebakeRefused = (scene3d._lodRebakeRefused | 0) + 1;
+  };
+  let p = null;
   try {
-    if (typeof scene3d.loadTerrainForLandblock === "function") {
-      scene3d.loadTerrainForLandblock(lbX, lbY);
+    p = scene3d.loadTerrainForLandblock(lbX, lbY);
+  } catch (_) {
+    p = null;
+  }
+  Promise.resolve(p).then((mesh) => {
+    inflight.delete(lbKey);
+    if (!mesh || !(baked ? baked.has(lbKey) : true)) {
+      refused();
+      return;
     }
-  } catch (_) { /* fire-and-forget; never break the frame on a re-bake */ }
+    // The replacement is in (and, under ?terrainBatch, absorbed in place of
+    // the old batch row). Now retire the old meshes only.
+    _teardownTerrainChildren(scene3d, lbKey, old.filter((c) => c !== mesh));
+  }).catch(() => {
+    inflight.delete(lbKey);
+    refused();
+  });
 }
 
 /**

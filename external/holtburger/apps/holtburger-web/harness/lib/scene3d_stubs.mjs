@@ -128,7 +128,13 @@ export function entitiesCtorPrelude() {
   const pcb = readFileSync(new URL("../../scene3d/pre_create_buffer.js", import.meta.url), "utf8");
   const pd = readFileSync(new URL("../../scene3d/part_degrade.js", import.meta.url), "utf8");
   const mld = readFileSync(new URL("../../scene3d/motion_link_diag.js", import.meta.url), "utf8");
+  // Bugs 2/15/18 (2026-10-07): `fullMotionCommand` (setMotion's canonical
+  // full-command boundary). Pure; wrapped so its private tables cannot
+  // collide with entities.js top-level names.
+  const mcf = readFileSync(new URL("../../scene3d/motion/motion_command_full.js", import.meta.url), "utf8");
   return "// === pre_create_buffer.js (genuine) ===\n" + stripExports(pcb) + "\n" +
     "// === part_degrade.js (genuine) ===\n" + stripExports(pd) + "\n" +
-    "// === motion_link_diag.js (genuine) ===\n" + stripExports(mld) + "\n";
+    "// === motion_link_diag.js (genuine) ===\n" + stripExports(mld) + "\n" +
+    "// === motion/motion_command_full.js (genuine) ===\n" +
+    "const fullMotionCommand = (() => {\n" + stripExports(mcf) + "\nreturn fullMotionCommand;\n})();\n";
 }

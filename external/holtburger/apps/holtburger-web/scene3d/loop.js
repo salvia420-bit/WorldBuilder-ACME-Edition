@@ -35,6 +35,7 @@
 // `init3D`'s render loop calls this once per requestAnimationFrame
 // frame, BEFORE `renderer.render(scene, camera)`.
 
+import { shouldDeferDeathRemove, deathHoldVerdict, DEATH_CLAIM_POLL_MS } from "./death_hold.js";
 import { asyncLinkBusy } from "./async_link_guard.js";
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion, noteEntityLandcell } from "./cells.js";
@@ -3302,6 +3303,9 @@ export function noteLocalPlayerLandblockForSpawnFlush(lbIdOrKey) {
   for (const [g, entry] of _deferredSpawns) {
     const mLb = entry?.meta?.landblockId;
     if (mLb == null) continue;
+    // A landblock-0 spawn is a held/contained item riding its owner, not a
+    // piece of the departed area (bug 14).
+    if ((mLb >>> 0) === 0) continue;
     if (lbChebyshev(lbKeyOf(mLb >>> 0), key) > _SPAWN_FLUSH_RADIUS) {
       _deferredSpawns.delete(g);
       flushed += 1;
@@ -3396,31 +3400,57 @@ function _armRemove(scene3d, em, upd) {
       const holdMs = (typeof inst._deathDurationMs === "number" && inst._deathDurationMs > 0)
         ? inst._deathDurationMs : DEATH_HOLD_MS;
       const remaining = deadAt + holdMs - nowMs;
-      if (remaining > 0 && !inst._removePending) {
+      // Bug 6 (2026-10-07): a RAGDOLLED creature is held for the corpse claim
+      // even when the authored collapse already ended — ACE deletes it at
+      // ~the link length, so `remaining` is ≈ 0 and the old `remaining > 0`
+      // gate removed the ragdoll before the corpse could copy its pose
+      // (scene3d/death_hold.js has the full timeline).
+      if (shouldDeferDeathRemove({
+        remainingMs: remaining,
+        ragdoll: !!inst._ragdoll,
+        ragdollArming: !!inst._ragdollArming,
+        removePending: !!inst._removePending,
+      })) {
         inst._removePending = true;
         // Re-check the corpse-handoff claim AT FIRE TIME: the claim is made
         // by the corpse's async TIME-SLICED spawn, which lands after this
         // timer was armed (ACE sends CreateCorpse+Destroy in one action) —
         // the arm-time check alone destroyed the ragdolling creature before
-        // finishReveal could copy its pose (2026-08-02 trace, bug #2). And
-        // when the corpse spawn is SLOW (busy dungeon queue), DEFER while
-        // the ragdoll sim is still live so the claim can still arrive — the
-        // final removal is bounded (~8s) so nothing leaks. finishReveal owns
-        // removal once the claim exists.
-        let deferrals = 12;
+        // finishReveal could copy its pose (2026-08-02 trace, bug #2).
+        // finishReveal owns removal once the claim exists; the wait for it
+        // is bounded (death_hold.js) so nothing leaks.
+        const deleteAtMs = nowMs;
+        const rd = inst._ragdoll
+          ? (inst._ragdoll.sim?.done ? "settled" : "live")
+          : (inst._ragdollArming ? "arming" : "none");
+        if (rd !== "none") {
+          console.info(`[handoff] delete 0x${g.toString(16)} remaining=${Math.round(remaining)}ms ragdoll=${rd} → hold for corpse claim`);
+        }
         const fire = () => {
           try {
             const cur = em?.entityMap?.get?.(g);
             if (!cur || !cur._removePending) return;
-            if (cur._corpseHandoffGuid) return; // finishReveal owns it now
-            if (cur._ragdoll && !cur._ragdoll.sim?.done && deferrals-- > 0) {
-              setTimeout(fire, 700);
+            const now2 = (typeof performance !== "undefined" && performance.now)
+              ? performance.now() : Date.now();
+            const verdict = deathHoldVerdict({
+              claimed: !!cur._corpseHandoffGuid,
+              ragdoll: !!cur._ragdoll,
+              ragdollArming: !!cur._ragdollArming,
+              ragdollDone: !!cur._ragdoll?.sim?.done,
+              waitedMs: now2 - deleteAtMs,
+            });
+            if (verdict === "yield") return; // finishReveal owns it now
+            if (verdict === "keep") {
+              setTimeout(fire, DEATH_CLAIM_POLL_MS);
               return;
+            }
+            if (cur._ragdoll || cur._ragdollArming) {
+              console.info(`[handoff] delete 0x${g.toString(16)}: no corpse claimed it after ${Math.round(now2 - deleteAtMs)}ms — removed`);
             }
             em.remove(g);
           } catch (_) {}
         };
-        setTimeout(fire, remaining);
+        setTimeout(fire, Math.max(0, remaining));
         // Bookkeeping is pruned immediately — only the rig disposal waits.
         if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
         _actionStamps.delete(g);
@@ -3713,7 +3743,8 @@ function _armAppearance(scene3d, em, upd) {
   // so the respawn doesn't orphan their binding. PENDING 1070 eye-test:
   // confirm no visible local-rig flicker on equip during normal play
   // (enable hot-swap if it does).
-  em.applyAppearance?.(upd.guid >>> 0, {
+  const g = upd.guid >>> 0;
+  const p = em.applyAppearance?.(g, {
     modelChanges: _sliceFromScratch(upd.modelChanges, 0),
     textureChanges: _sliceFromScratch(upd.textureChanges, 1),
     subPalettes: _sliceFromScratch(upd.subPalettes, 2),
@@ -3723,6 +3754,13 @@ function _armAppearance(scene3d, em, upd) {
     objScale: +(upd.objScale ?? 0),
     physicsTranslucency: +(upd.physicsTranslucency ?? -1),
   });
+  // Bug 13 (2026-10-07): redress the inventory paperdoll once the LOCAL
+  // player's new ObjDesc is on the rig meta.
+  if (p && typeof p.then === "function" && isLocalPlayerGuid(g)) {
+    p.then(() => {
+      try { window.__refreshPaperdoll?.(); } catch (_) {}
+    }).catch(() => {});
+  }
 }
 
 function _armAttach(scene3d, em, upd) {
@@ -3734,12 +3772,48 @@ function _armAttach(scene3d, em, upd) {
   // resolved holding-location frame.
   const childGuid = upd.guid >>> 0;
   const parentGuid = (upd.modelId ?? 0) >>> 0;
+  // Bug 14 (2026-10-07): a held item's spawn (pushed just before this
+  // attach in the same batch) used to wait its turn in the time-sliced spawn
+  // queue, then build at the WIELDER's pose — which sent it through the
+  // distance-LOD lookup on the low-priority fetch lane, behind world
+  // streaming: the 3-4 s before the weapon appeared. Build it NOW, poseless
+  // like the server's own parented CreateObject (landblock 0), which makes
+  // `_spawnImpl` skip the LOD walk and use the urgent lanes; the rig stays
+  // hidden until the (parked) attach mounts it. Retail attaches on the spot
+  // (SmartBox::HandleParentEvent → DoParentEvent → set_parent); so does
+  // OpenAC (EquippedChildRenderController.OnParentEvent → TryRealize).
+  if (parentGuid !== 0) {
+    const q = _deferredSpawns.get(childGuid);
+    if (q && q.em === em) {
+      _deferredSpawns.delete(childGuid);
+      _makeHeldChildMeta(q.meta);
+      _heldAttachT0.set(childGuid, (typeof performance !== "undefined") ? performance.now() : 0);
+      _doSpawn(em, q.meta);
+    } else if (!em.entityMap?.has?.(childGuid)) {
+      _heldAttachT0.set(childGuid, (typeof performance !== "undefined") ? performance.now() : 0);
+    }
+  }
   em.attachChildToParent?.(
     childGuid,
     parentGuid,
     (upd.motionCommand ?? 0) >>> 0,
     (upd.motionStance ?? 0) >>> 0
   );
+}
+
+// Bug 14 — attach timing diag (`[held-attach]`, read by entities.js when the
+// parked attach mounts): guid → attach time.
+const _heldAttachT0 = new Map();
+if (typeof window !== "undefined") window.__heldAttachT0 = _heldAttachT0;
+
+/** A held item has no world pose of its own (retail: a child's position is
+ *  its parent's frame) — spawn it the way ACE's parented CreateObject
+ *  arrives: landblock 0, origin, identity rotation. */
+function _makeHeldChildMeta(meta) {
+  meta.heldChild = true;
+  meta.landblockId = 0;
+  meta.x = 0; meta.y = 0; meta.z = 0;
+  meta.qw = 1; meta.qx = 0; meta.qy = 0; meta.qz = 0;
 }
 
 function _armMetaRefresh(scene3d, em, upd) {

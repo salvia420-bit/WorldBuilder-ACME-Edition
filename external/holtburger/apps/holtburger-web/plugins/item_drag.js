@@ -34,7 +34,7 @@
 //   * optimistic ledger + server-failure revert (InventoryServerSaveFailed
 //     → `inventoryActionFailed`, see rejection_feedback.js).
 
-import { getIconImmediate } from "../ui/ac_icon_cache.js";
+import { getIconImmediate, getItemIconImmediate, fetchItemIconDataUrl } from "../ui/ac_icon_cache.js";
 import {
   createPendingLedger,
   decideItemDrop,
@@ -291,9 +291,29 @@ export function beginItemDrag(ev, payload) {
   };
   lastDragOverAt = performance.now();
   const g = ghostEl();
-  const url = payload.iconUrl || getIconImmediate(item.iconId >>> 0) || "";
+  // Bug 12 (2026-10-07): the ghost is retail's DRAG icon — icon + overlay
+  // with the white key replaced by the UI-effect tile, no type background
+  // (`IconData::RenderIcons` m_pDragIcon).
+  const dragMeta = {
+    iconId: item.iconId >>> 0,
+    itemType: item.itemType >>> 0,
+    uiEffects: item.uiEffects >>> 0,
+    iconOverlay: item.iconOverlay >>> 0,
+    iconUnderlay: item.iconUnderlay >>> 0,
+  };
+  const url = payload.iconUrl || getItemIconImmediate(dragMeta, true)
+    || getItemIconImmediate(dragMeta) || getIconImmediate(item.iconId >>> 0) || "";
   g.style.backgroundImage = url ? `url("${url}")` : "";
   g.style.backgroundColor = url ? "" : "rgba(40, 34, 24, 0.85)";
+  if (!payload.iconUrl && dragMeta.iconId && !getItemIconImmediate(dragMeta, true)) {
+    const want = guid;
+    fetchItemIconDataUrl(dragMeta, "item-drag", { drag: true }).then((u) => {
+      if (typeof u === "string" && session && session.guid === want) {
+        g.style.backgroundImage = `url("${u}")`;
+        g.style.backgroundColor = "";
+      }
+    }).catch(() => {});
+  }
   const n = Math.max(1, item.stackSize | 0 || 1);
   g.firstChild.textContent = n > 1 ? String(n) : "";
   g.dataset.show = "1";

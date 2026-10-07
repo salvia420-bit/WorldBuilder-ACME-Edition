@@ -509,7 +509,30 @@ function buildItems(ctx) {
       items.push({ label: "Trade", action: () => { try { window.__sessionHandle.openTrade(guid); } catch (e) { console.warn("[ctx-menu] trade failed:", e); } } });
     }
     const stanceLow = (typeof window.__getCurrentStanceLow === "function") ? (window.__getCurrentStanceLow() >>> 0) : 0;
-    if (isCreature(ent) && stanceLow !== 0 && typeof window.__fireAttackOnTarget === "function") {
+    // Bug 9 (2026-10-07): Attack only for an ATTACK TARGET (retail
+    // `ClientCombatSystem::ObjectIsAttackable` — the Reformed Bandit is not
+    // one) and only out of peace mode (0x3D); Use for any usable world
+    // object (retail double-click = `ItemHolder::UseObject`, every stance).
+    const attackable = typeof window.__entityIsAttackableTarget === "function"
+      ? window.__entityIsAttackableTarget(guid) === true
+      : isCreature(ent);
+    const usable = typeof window.__entityIsUsable === "function"
+      ? window.__entityIsUsable(guid) === true
+      : false;
+    if (!invItem && guid !== localPlayerGuid && usable && !attackable
+        && typeof handle?.useObject === "function") {
+      items.splice(1, 0, {
+        label: isCreature(ent) ? "Talk" : "Use",
+        action: () => {
+          try {
+            window.liveScene3d?.entityManager?.setSelectedTarget?.(guid);
+            console.info(`[use-or-attack] 0x${(guid >>> 0).toString(16)} use (radial)`);
+            handle.useObject(guid);
+          } catch (e) { console.warn("[ctx-menu] use failed:", e); }
+        },
+      });
+    }
+    if (attackable && stanceLow !== 0 && stanceLow !== 0x3d && typeof window.__fireAttackOnTarget === "function") {
       items.push({
         label: "Attack",
         action: () => {

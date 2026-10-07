@@ -5387,6 +5387,151 @@ mod camera_cell_space_clip {
     }
 }
 
+/// Bug 4 (2026-10-07): `resolve_viewer_cell` — retail's viewer cell (the
+/// camera's cell), which decides the render path instead of the player's.
+/// Same AABB-only fixtures as `camera_cell_space_clip`.
+mod viewer_cell {
+    use super::super::scene::SpatialScene;
+    use crate::CellPortalPolygon;
+    use holtburger_common::{Aabb, Vector3};
+    use holtburger_dat::transition::objcell::lcoord_to_cellid;
+
+    const LB: u32 = 0x1234_0000;
+    const CELL_A: u32 = LB | 0x0101;
+    const CELL_B: u32 = LB | 0x0102;
+    const OUTDOOR: u32 = LB | 0x000A;
+    const RADIUS: f32 = 0.3;
+    const OX: f32 = 3456.0;
+    const OY: f32 = 9984.0;
+
+    fn p(x: f32, y: f32, z: f32) -> Vector3 {
+        Vector3::new(OX + x, OY + y, z)
+    }
+
+    /// The landcell id under a landblock-local point.
+    fn landcell_at(x: f32, y: f32) -> u32 {
+        lcoord_to_cellid(((OX + x) / 24.0).floor() as i32, ((OY + y) / 24.0).floor() as i32)
+    }
+
+    /// A = local [0,10]×[0,10]×[0,5] with B east of it ([10,20]) through an
+    /// interior portal, and a doorway in A's south face (y = 0) leading
+    /// outdoors. The building's portal into A is registered on its origin's
+    /// landcell, as `CLandBlock::init_buildings` does.
+    fn barn() -> SpatialScene {
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_aabb(CELL_A, Aabb::new(p(0.0, 0.0, 0.0), p(10.0, 10.0, 5.0)));
+        scene.insert_cell_aabb(CELL_B, Aabb::new(p(10.0, 0.0, 0.0), p(20.0, 10.0, 5.0)));
+        scene.insert_cell_portal(CELL_A, CELL_B);
+        scene.insert_cell_portal(CELL_B, CELL_A);
+        scene.insert_cell_portal_polygon(
+            CELL_A,
+            CellPortalPolygon {
+                other_cell_id: LB | 0xFFFF,
+                vertices: vec![
+                    p(3.0, 0.0, 0.0),
+                    p(7.0, 0.0, 0.0),
+                    p(7.0, 0.0, 4.0),
+                    p(3.0, 0.0, 4.0),
+                ],
+                portal_side: false,
+            },
+        );
+        scene.set_landblock_building_portals(
+            LB,
+            &[(Vector3::new(5.0, 5.0, 0.0), vec![(0x0101, 0)])],
+        );
+        scene
+    }
+
+    #[test]
+    fn eye_in_the_players_cell_is_that_cell() {
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(5.0, 5.0, 2.0), p(8.0, 5.0, 2.0), RADIUS),
+            CELL_A,
+        );
+    }
+
+    #[test]
+    fn eye_through_an_interior_portal_is_the_neighbour() {
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(5.0, 5.0, 2.0), p(15.0, 5.0, 2.0), RADIUS),
+            CELL_B,
+        );
+    }
+
+    #[test]
+    fn player_inside_eye_out_the_door_is_outdoors() {
+        // 4b: the eye left through the doorway, so the viewer is outdoors.
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(5.0, 5.0, 2.0), p(5.0, -5.0, 2.0), RADIUS),
+            landcell_at(5.0, -5.0),
+        );
+    }
+
+    #[test]
+    fn player_inside_eye_against_a_wall_stays_inside() {
+        // North wall has no doorway: the camera clip stops the eye there, and
+        // the viewer stays in the room.
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(5.0, 5.0, 2.0), p(5.0, 15.0, 2.0), RADIUS),
+            CELL_A,
+        );
+    }
+
+    #[test]
+    fn player_outside_eye_inside_the_building_is_indoors() {
+        // 4a: the eye is in the room the doorway leads into, and in the room
+        // behind it (reached by flooding the building's portal graph).
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(OUTDOOR, p(5.0, -5.0, 2.0), p(5.0, 3.0, 2.0), RADIUS),
+            CELL_A,
+        );
+        assert_eq!(
+            scene.resolve_viewer_cell(OUTDOOR, p(15.0, -5.0, 2.0), p(15.0, 3.0, 2.0), RADIUS),
+            CELL_B,
+        );
+    }
+
+    #[test]
+    fn player_outside_eye_outside_is_the_landcell_under_the_eye() {
+        let scene = barn();
+        assert_eq!(
+            scene.resolve_viewer_cell(OUTDOOR, p(5.0, -5.0, 2.0), p(5.0, -9.0, 2.0), RADIUS),
+            landcell_at(5.0, -9.0),
+        );
+        // Off the world grid → the player's cell, unchanged.
+        assert_eq!(
+            scene.resolve_viewer_cell(
+                OUTDOOR,
+                p(5.0, -5.0, 2.0),
+                Vector3::new(-100.0, -100.0, 0.0),
+                RADIUS,
+            ),
+            OUTDOOR,
+        );
+    }
+
+    #[test]
+    fn degenerate_inputs_return_the_player_cell() {
+        let scene = barn();
+        assert_eq!(scene.resolve_viewer_cell(0, p(5.0, 5.0, 2.0), p(8.0, 5.0, 2.0), RADIUS), 0);
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(5.0, 5.0, 2.0), p(f32::NAN, 5.0, 2.0), RADIUS),
+            CELL_A,
+        );
+        // Head outside the player's own cell (spawn/teleport edge) → fail open.
+        assert_eq!(
+            scene.resolve_viewer_cell(CELL_A, p(50.0, 50.0, 2.0), p(60.0, 50.0, 2.0), RADIUS),
+            CELL_A,
+        );
+    }
+}
+
 /// DAT-01 phase 2a/2b/2d (2026-07-27): baked-procedural-scenery collision —
 /// per-landblock batch residency, the unload purge (the double-registration
 /// failure mode), and the broad+narrow sweep through `SpatialScene`.

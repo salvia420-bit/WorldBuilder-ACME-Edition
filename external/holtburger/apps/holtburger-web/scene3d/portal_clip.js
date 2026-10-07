@@ -105,6 +105,43 @@ export const SIDEDNESS_PLANE_EPS_M = 0.0002;
 export const TERRAIN_LOS_SAMPLES = 12;
 
 /**
+ * Bug 7 (2026-10-07, "doors/building objects poke through terrain hills").
+ * The punch gate sampled ONE ray (to the aperture centroid) at a FIXED 12
+ * samples. On a 200 m ray that is one sample every ~17 m, which steps clean
+ * over a crest; and a doorway whose centroid clears a crest while its bottom
+ * edge does not was punched whole, so the room showed through the hill.
+ * `apertureTerrainOccluded` now marches at most `TERRAIN_LOS_STEP_M` apart
+ * (AC terrain is a 24 m triangle grid, so nothing narrower than a few metres
+ * exists to miss), between `TERRAIN_LOS_SAMPLES` and `TERRAIN_LOS_MAX_SAMPLES`
+ * samples per ray.
+ */
+export const TERRAIN_LOS_STEP_M = 6;
+export const TERRAIN_LOS_MAX_SAMPLES = 48;
+
+/**
+ * Vertices within this many metres of an aperture's lowest vertex form its
+ * bottom edge, which gets its own rays. Terrain hides a doorway from the bottom
+ * up: for a vertical opening the ray to a top vertex runs above the ray to the
+ * bottom vertex under it at every point, so the bottom edge is the part to test.
+ */
+export const TERRAIN_LOS_BOTTOM_BAND_M = 0.5;
+
+/**
+ * The sunken-aperture exemption (see `terrainRayBlocked`) forgives terrain
+ * that covers the end of the ray only when that terrain is the doorway's own
+ * grade: no blocked sample in the trailing run may rise more than this above
+ * the surface at the aperture's own (x, y). A hill rises well above it, which
+ * is the case the old exemption let through.
+ */
+export const TERRAIN_LOS_SUNKEN_GRADE_TOL_M = 1.5;
+
+/** Sample count for a camera→aperture ray of `lenM` metres. */
+export function terrainLosSamplesFor(lenM) {
+  const n = Number.isFinite(lenM) ? Math.ceil(lenM / TERRAIN_LOS_STEP_M) : 0;
+  return Math.min(TERRAIN_LOS_MAX_SAMPLES, Math.max(TERRAIN_LOS_SAMPLES, n));
+}
+
+/**
  * Camera movement, in metres, that invalidates every cached terrain-LOS
  * verdict. The LOS gate answers "does a hill stand between the camera and this
  * doorway"; that answer is a property of the (camera cell, doorway) pair, not
@@ -364,11 +401,24 @@ export function terrainRayBlocked(
   // Only applied when the CAMERA end is above grade, i.e. the outdoor vantage
   // the punch serves; a camera already under the surface keeps the old verdict
   // (the indoor depth split, not the punch, owns that case).
+  //
+  // Bug 7 (2026-10-07) narrows that exemption. "The blocked run continues to
+  // the target" is also what a hill looks like when its far slope runs down
+  // to the doorway, or when the doorway sits at the foot of the hill: the ray
+  // never comes back out, so the old test called the hill "the target's own
+  // elevation" and punched the doorway through it (the "doors poke through
+  // hills" report; the test suite carried it as a KNOWN FAIL-OPEN). The run is
+  // now forgiven only when (a) the target really is below grade at its own
+  // (x, y), and (b) no sample in the run rises more than
+  // `TERRAIN_LOS_SUNKEN_GRADE_TOL_M` above that grade, i.e. the terrain in
+  // the way is the flat ground the room is sunk into, not a rise.
   let camAbove = false;
+  let hTarget = null;
   if (sunkenExempt) {
     let h0;
     try {
       h0 = sampleHeight(ax, ay);
+      hTarget = sampleHeight(bx, by);
     } catch (_) {
       return false; // sampler threw → fail open
     }
@@ -380,6 +430,9 @@ export function terrainRayBlocked(
   // the bug). Only the span BETWEEN them can prove a hill is in the way.
   let firstBlockedI = -1;
   let lastClearI = -1;
+  // Highest terrain among the blocked samples since the last clear one, i.e.
+  // over the trailing run once the loop ends.
+  let runMaxH = -Infinity;
   for (let i = 1; i < n; i++) {
     const t = i / n;
     const x = ax + (bx - ax) * t;
@@ -396,15 +449,67 @@ export function terrainRayBlocked(
       if (firstBlockedI < 0) firstBlockedI = i;
       // Without the exemption this is the original early-out, verbatim.
       if (!camAbove) return true;
+      if (h > runMaxH) runMaxH = h;
     } else {
       lastClearI = i;
+      runMaxH = -Infinity;
     }
   }
   if (firstBlockedI < 0) return false;
   if (!camAbove) return true;
-  // Blocked only if the ray got PAST the occluder — i.e. a hill, not the
-  // target's own below-grade elevation.
-  return firstBlockedI < lastClearI;
+  // The ray got PAST an occluder and came back out: a hill.
+  if (firstBlockedI < lastClearI) return true;
+  // The blocked run reaches the target. Unknown grade there → fail open.
+  if (hTarget == null || !Number.isFinite(hTarget)) return false;
+  // An above-grade target with terrain over the end of the ray is hidden by
+  // the slope in front of it.
+  if (!(hTarget > bz + clearanceM)) return true;
+  // A below-grade target: forgiven only if the run is its own flat grade.
+  return runMaxH > hTarget + TERRAIN_LOS_SUNKEN_GRADE_TOL_M;
+}
+
+/**
+ * Bug 7 (2026-10-07) — is an aperture hidden behind terrain from `camAc`?
+ *
+ * Rays go to the centroid and to every bottom-edge vertex (see
+ * `TERRAIN_LOS_BOTTOM_BAND_M`), each marched with `terrainLosSamplesFor(len)`
+ * samples; ANY blocked ray drops the aperture. Dropping a half-hidden doorway
+ * only loses the punch there (its interior still draws, depth-tested against
+ * the hill), while punching it would paint the room over the hill.
+ *
+ * @param {(x:number,y:number)=>(number|null|undefined)} sampleHeight
+ * @param {{x:number,y:number,z:number}} camAc
+ * @param {number[]} pts flat [x,y,z, …] in AC world metres
+ * @param {boolean} [sunkenExempt=true] forwarded to `terrainRayBlocked`
+ */
+export function apertureTerrainOccluded(sampleHeight, camAc, pts, sunkenExempt = true) {
+  if (typeof sampleHeight !== "function" || !camAc || !pts) return false;
+  const nv = (pts.length / 3) | 0;
+  if (nv < 1) return false;
+  let cx = 0, cy = 0, cz = 0, minZ = Infinity;
+  for (let i = 0; i < nv; i++) {
+    const z = pts[i * 3 + 2];
+    cx += pts[i * 3];
+    cy += pts[i * 3 + 1];
+    cz += z;
+    if (z < minZ) minZ = z;
+  }
+  cx /= nv; cy /= nv; cz /= nv;
+  const ax = camAc.x, ay = camAc.y, az = camAc.z;
+  const ray = (bx, by, bz) => {
+    const len = Math.hypot(bx - ax, by - ay, bz - az);
+    return terrainRayBlocked(
+      sampleHeight, ax, ay, az, bx, by, bz,
+      terrainLosSamplesFor(len), TERRAIN_LOS_CLEARANCE_M, sunkenExempt,
+    );
+  };
+  if (ray(cx, cy, cz)) return true;
+  for (let i = 0; i < nv; i++) {
+    const z = pts[i * 3 + 2];
+    if (z > minZ + TERRAIN_LOS_BOTTOM_BAND_M) continue;
+    if (ray(pts[i * 3], pts[i * 3 + 1], z)) return true;
+  }
+  return false;
 }
 
 /**
@@ -927,35 +1032,22 @@ export function clipAperturesForPunch(flat, mvp, opts = {}) {
 
     // 4. terrain line-of-sight (stand-in for ConstructView sidedness).
     //    LAST on purpose — it is by far the most expensive gate in this loop:
-    //    TERRAIN_LOS_SAMPLES-1 = 11 `terrainHeightAt` calls, each a JS→wasm
-    //    boundary crossing plus a RefCell borrow and a HashMap lookup. With
+    //    up to three rays of 12-48 `terrainHeightAt` calls each, every one a
+    //    JS→wasm boundary crossing plus a RefCell borrow and a HashMap lookup. With
     //    `opts.losCache` supplied the verdict is memoised per DOORWAY (keyed on
     //    the raw, camera-independent centroid) and only re-derived when the
     //    camera has actually moved or the entry has aged out — so a standing or
     //    panning camera pays nothing here at all.
     if (sampleHeight && camAc) {
-      let cx = 0, cy = 0, cz = 0;
-      const cn = (clipped.length / 3) | 0;
-      for (let i = 0; i < cn; i++) {
-        cx += clipped[i * 3];
-        cy += clipped[i * 3 + 1];
-        cz += clipped[i * 3 + 2];
-      }
-      cx /= cn; cy /= cn; cz /= cn;
       let blocked;
       const key = losCache && plane ? losKey(plane.cx, plane.cy, plane.cz) : -1;
       const hit = key >= 0 ? losCache.m.get(key) : undefined;
       if (hit !== undefined && losCache.gen < hit.expire) {
         blocked = hit.v;
       } else {
-        blocked = terrainRayBlocked(
-          sampleHeight,
-          camAc.x, camAc.y, camAc.z,
-          cx, cy, cz,
-          TERRAIN_LOS_SAMPLES,
-          TERRAIN_LOS_CLEARANCE_M,
-          losSunkenExempt,
-        );
+        // Bug 7: centroid + bottom-edge rays at distance-scaled sampling (was
+        // one centroid ray at 12 fixed samples).
+        blocked = apertureTerrainOccluded(sampleHeight, camAc, clipped, losSunkenExempt);
         if (key >= 0) {
           // Stagger the expiry across doorways (the low bits of the key are the
           // quantised height, which differs per aperture) so a set that entered

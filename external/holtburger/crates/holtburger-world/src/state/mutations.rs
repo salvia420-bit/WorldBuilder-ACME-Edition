@@ -1500,12 +1500,20 @@ impl WorldState {
             && entity.health_fraction != Some(health_fraction)
         {
             entity.health_fraction = Some(health_fraction);
-            events.push(WorldEvent::EntityHealthUpdated {
-                guid,
-                health_fraction,
-            });
             updated = true;
         }
+        // Bug 10 (2026-10-07): every UpdateHealth reply reaches the HUD,
+        // even when the entity store has no record for `guid` (a creature
+        // whose 3D rig is selectable but whose store entry was pruned or
+        // never landed) or the value did not change (the selection HUD
+        // re-seeds on every new selection and needs the reply). Retail's
+        // `gmToolbarUI` updates the meter from every
+        // `CM_Combat::DispatchUI_UpdateHealth`; only the cache write above is
+        // conditional on the store.
+        events.push(WorldEvent::EntityHealthUpdated {
+            guid,
+            health_fraction,
+        });
 
         updated
     }

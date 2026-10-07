@@ -17,7 +17,8 @@
 // Uses the shared `ac_icon_cache.js` so the same icon fetched by one
 // panel is instant for the next.
 
-import { fetchIconDataUrl } from "./ac_icon_cache.js";
+import { fetchIconDataUrl, fetchItemIconDataUrl, fetchSpellIconDataUrl } from "./ac_icon_cache.js";
+import { resolveContainedItemMeta } from "../plugins/contained_item_meta.js";
 
 /**
  * Resolve any of the supported binding shapes to a CSS-ready data URL.
@@ -51,8 +52,13 @@ export function resolveBindingIconImmediate(binding) {
   return null;
 }
 
-/** Resolve `spellId → SpellTable.spells[spellId].iconId → DAT fetch`. */
+/** Resolve `spellId` → the RETAIL composite (bug 12, 2026-10-07): power
+ *  backing + icon + Reversed/NonReversed tint + self/fellowship overlay
+ *  (`ClientMagicSystem::CompositeSpellIcon`). Raw-icon fallback when the
+ *  SpellTable record lacks the composite inputs. */
 export async function resolveSpellIcon(spellId) {
+  const composed = await fetchSpellIconDataUrl(spellId >>> 0, "entity-icon:spell");
+  if (typeof composed === "string") return composed;
   const iconId = lookupSpellIconId(spellId);
   if (!iconId) return null;
   return fetchIconDataUrl(iconId, "entity-icon:spell");
@@ -78,10 +84,18 @@ function lookupSpellIconId(spellId) {
   return null;
 }
 
-/** Resolve `itemGuid → inventory entry iconId → WOM entity meta fallback`. */
+/** Resolve `itemGuid` → the RETAIL item composite (bug 12, 2026-10-07):
+ *  type background + underlay + (icon + overlay, white → UI-effect tile)
+ *  (`IconData::RenderIcons`). Item properties come from the wasm entity store
+ *  (contained_item_meta.js); the raw-icon lookup is the fallback. */
 export async function resolveItemIcon(itemGuid) {
-  const iconId = lookupItemIconId(itemGuid);
+  const g = itemGuid >>> 0;
+  let meta = null;
+  try { meta = resolveContainedItemMeta(window.__sessionHandle ?? null, g); } catch (_) { meta = null; }
+  const iconId = (meta?.iconId >>> 0) || lookupItemIconId(g);
   if (!iconId) return null;
+  const composed = await fetchItemIconDataUrl({ ...(meta || {}), iconId }, "entity-icon:item");
+  if (typeof composed === "string") return composed;
   return fetchIconDataUrl(iconId, "entity-icon:item");
 }
 

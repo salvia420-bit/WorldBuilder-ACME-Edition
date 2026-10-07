@@ -242,7 +242,9 @@ for (const f of RUST_FIELDS) {
 
 // (2.2) prune_guid removes every one of the nine (eight fields + the
 // REMOTE_AIRBORNE_STATE thread-local) and strips container lists.
-const pruneStart = libRs.indexOf("fn prune_guid(&self, g: u32)");
+// Bug 1 (2026-10-07): `strip_membership` — the delete path strips container
+// lists, the create path re-indexes them instead (prune_on_guid_reuse).
+const pruneStart = libRs.indexOf("fn prune_guid(&self, g: u32, strip_membership: bool)");
 const pruneSlice = pruneStart >= 0 ? libRs.slice(pruneStart, pruneStart + 1400) : "";
 check("lib.rs defines prune_guid", pruneStart >= 0);
 for (const f of RUST_FIELDS) {
@@ -285,7 +287,7 @@ check("  fan-out calls per_guid.prune_on_delete", fanoutSlice.includes("per_guid
 // recycled guid inherited the previous occupant's radar-blip colour, gravity
 // flag and default script. Assert the real invariant instead: every sibling is
 // pruned inside `prune_guid`'s body, and the delete fan-out reaches it.
-const pruneGuidStart = libRs.indexOf("    fn prune_guid(&self, g: u32) {");
+const pruneGuidStart = libRs.indexOf("    fn prune_guid(&self, g: u32, strip_membership: bool) {");
 check("lib.rs has the single-owner prune_guid", pruneGuidStart >= 0);
 // Bound the slice by the NEXT fn at the same indent, not a byte count — a
 // fixed window is what let the old assertions drift out of their own target.
@@ -316,10 +318,20 @@ for (const sib of [
 }
 // Both lifecycles must reach that one owner — the reuse path missing them is
 // exactly the defect R6#1 fixed.
-check("  prune_on_delete delegates to prune_guid",
-  /fn prune_on_delete\(&self, g: u32\) \{\s*self\.prune_guid\(g\);/.test(libRs));
-check("  prune_on_guid_reuse delegates to prune_guid",
-  /fn prune_on_guid_reuse\(&self, g: u32\) \{\s*self\.prune_guid\(g\);/.test(libRs));
+check("  prune_on_delete delegates to prune_guid (strips membership)",
+  /fn prune_on_delete\(&self, g: u32\) \{\s*self\.prune_guid\(g, true\);/.test(libRs));
+check("  prune_on_guid_reuse delegates to prune_guid (keeps membership)",
+  /fn prune_on_guid_reuse\(&self, g: u32, container: Option<u32>\) \{\s*self\.prune_guid\(g, false\);/.test(libRs));
+// Bug 1: the create path files the item under the container its
+// description names and drops it from any other (OpenAC Reindex) instead of
+// stripping it out of the ViewContents list that arrived first.
+{
+  const s = libRs.indexOf("fn prune_on_guid_reuse(&self, g: u32, container: Option<u32>)");
+  const body = s >= 0 ? libRs.slice(s, s + 900) : "";
+  check("  prune_on_guid_reuse re-indexes container membership",
+    /Some\(\*cid\) == container[\s\S]{0,120}?items\.push\(g\)/.test(body) &&
+    /items\.retain\(\|item\| \*item != g\)/.test(body));
+}
 
 // (2.4) guid-reuse overwrite: BOTH create paths purge.
 for (const fn of ["maintain_bridge_indexes_on_routed_create", "apply_inventory_object_create"]) {

@@ -1048,16 +1048,11 @@ export function createLandblockStream(D) {
       if (typeof applyConfirmedStance === "function") {
         applyConfirmedStance(upd.motionStance >>> 0);
       }
-      // Track B9 (2026-06-08): belt-and-suspenders — also re-pose the
-      // local 3D rig for the server-authoritative stance. The animation
-      // gate above (and loop.js KIND_MOTION) skips the local locomotion
-      // command, but the STANCE half of UpdateMotion 0xF74C must still
-      // reach the rig. setLocalStance touches only the Ready/idle base
-      // pose and never the predictor-owned walk/run clip.
-      window.liveScene3d?.entityManager?.setLocalStance?.(
-        D.localPlayerGuid,
-        upd.motionStance >>> 0
-      );
+      // Bug 2 (2026-10-07): the 3D rig's stance is applied ONCE, by loop.js
+      // `_armMotion` (setLocalStance). This second call (Track B9's
+      // belt-and-suspenders) ran after the cast gesture had started, saw the
+      // held gesture and issued Ready, so your own cast never showed the
+      // arms-out hold — the recoil played straight after the raise.
       return;
     }
     const entry = entityMap.get(guid);

@@ -130,6 +130,38 @@ export function objectIsAttackable(target, player) {
 }
 
 /**
+ * Bug 10 (2026-10-07) — does selecting `target` show (and query) a health
+ * meter? Retail `gmToolbarUI::HandleSelectionChanged` (acclient.c:241923-
+ * 241930) sends `CM_Combat::Event_QueryHealth` only when the object is a
+ * player (`IsPlayer`), has a pet owner, or `ClientCombatSystem::
+ * ObjectIsAttackable`; anything else (a non-attackable NPC such as the
+ * Reformed Bandit) shows no meter. OpenAC: Core/Combat/
+ * SelectedObjectHealthPolicy.ShouldQueryHealth — same three tests.
+ *
+ * @param {{itemType?:number, objDescFlags?:number, petOwner?:number}|null} target
+ * @param {{objDescFlags?:number}|null} player the local player's meta
+ */
+export function shouldQueryHealth(target, player) {
+  if (!target) return false;
+  const odf = (target.objDescFlags >>> 0) || 0;
+  if ((odf & ODF_PLAYER) !== 0) return true;
+  if ((target.petOwner >>> 0) !== 0) return true;
+  return objectIsAttackable(target, player);
+}
+
+/**
+ * Bug 9 (2026-10-07) — retail `ItemUses::IsUseable` (acclient.c:296802):
+ * an object can be Used unless bit 0 (USEABLE_NO) of its ItemUseable
+ * bitfield is set. The retail descriptor defaults the field to 0, so an
+ * absent value (undefined/null) is usable. OpenAC ClientObject.IsUseable.
+ * @param {number|null|undefined} useable PropertyInt.ItemUseable (16)
+ */
+export function itemIsUseable(useable) {
+  if (useable == null || !Number.isFinite(+useable)) return true;
+  return ((useable >>> 0) & 1) === 0;
+}
+
+/**
  * Core SelectNext ordering (acclient.c:397944-398210), factored pure.
  *
  * @param {Array<{guid:number, dist:number}>} candidates — already filtered

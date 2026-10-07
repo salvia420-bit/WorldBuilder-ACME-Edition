@@ -1914,6 +1914,29 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                             is_autonomous: true,
                         });
                     }
+                    // Bug 19 (2026-10-07): the LOCAL player's
+                    // leave-ground edge, for a jump AND a walk-off.
+                    // Retail `LeaveGround` (acclient.c:344478) re-runs
+                    // the interpreted movement off the walkable, which
+                    // puts the motion table's Falling state on the
+                    // sequence (take-off link + Falling loop,
+                    // acclient.c:344193); `HitGround` (:344429) re-applies
+                    // the held motion (landing link). The two motion
+                    // updates above are marked autonomous, and loop.js
+                    // drops autonomous local echoes to protect the
+                    // gait predictor, so the local rig never left its
+                    // run/idle cycle for the whole arc. The JS
+                    // `setAirborne` drives Falling and the landing from
+                    // this event and its touchdown twin above.
+                    if !was_airborne_pre_tick && w.player.is_airborne {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                            string_payload: None,
+                            u32_payload: Some(u32::from(player_guid_for_airborne)),
+                            u32_payload_2: Some(1),
+                            f32_payload: None,
+                        });
+                    }
                     // Phase 4 step 3.6 diagnostic — log pose
                     // every ~60 ticks (~1s at 60Hz rAF) so we
                     // can verify the local-pose integrator is

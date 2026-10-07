@@ -85,6 +85,10 @@ export function loadSavedAudioGains(storage) {
   return out;
 }
 
+// Bug 8 (2026-10-07): `[audio-loud]` diagnostic thresholds (see `_noteLoud`).
+const LOUD_DB = -30;
+const LOUD_REPEAT_MS = 15000;
+const LOUD_MAX_LINES = 80;
 const DEFAULT_REF_DISTANCE = 5.0;      // meters: at/below this distance, full volume
 const DEFAULT_ROLLOFF_FACTOR = 2.0;    // inverse-SQUARE attenuation rate (retail)
 const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
@@ -552,6 +556,10 @@ export class AudioManager {
       );
     }
     this.lastMix = m;
+    if (m.play && !opts.loop && worldPos && this._listenerPos) {
+      const l = this._listenerPos;
+      this._noteLoud(did, Math.hypot(worldPos.x - l.x, worldPos.y - l.y, worldPos.z - l.z), m.decibels, opts);
+    }
     // Loops are lifecycle-managed by ambient_runtime / portal_space and are
     // never culled here; a loop that starts inaudible starts at gain 0.
     if (!m.play && !opts.loop) {
@@ -668,10 +676,12 @@ export class AudioManager {
     if (panner) source.connect(gain).connect(panner).connect(out);
     else source.connect(gain).connect(out);
 
-    // Retail 16-voice pool. A stolen voice is stopped (SoundBuf::Stop).
+    // Retail 16-voice pool. A stolen voice is stopped (SoundBuf::Stop). Bug 8:
+    // the wave id feeds OpenAC's per-wave cap (voice_pool.js MAX_VOICES_PER_WAVE).
     const token = this.voicePool.claim(
       { stop: () => { try { source.stop(); } catch (_) {} } },
       (typeof priority === "number") ? priority : VOICE_PRIORITY,
+      did >>> 0,
     );
     if (!token) {
       try { source.disconnect(); } catch (_) {}
@@ -732,6 +742,7 @@ export class AudioManager {
         this.skipCount += 1;
         return null;
       }
+      this._noteLoud(did, dist, a.decibels, opts);
     }
     const panner = this._ctx.createPanner();
     panner.panningModel = "HRTF";
@@ -756,6 +767,45 @@ export class AudioManager {
       priority: opts.priority,
       followGuid: opts.followGuid,
     });
+  }
+
+  /**
+   * Bug 8 (2026-10-07) diagnostic: one `[audio-loud]` line for a positional
+   * world sound mixed at LOUD_DB or louder — at most once per (owner, wave)
+   * per LOUD_REPEAT_MS, and LOUD_MAX_LINES per session — naming the owner
+   * entity (and its cell: an EnvCell id means the source is indoors), the wave,
+   * the mixed level, the distance from the listener (the camera, as retail's
+   * `SoundManager::player_position_` is the viewer) and how many voices that
+   * wave already holds. Enough to tell "which sound is loud, and why" from a
+   * console paste.
+   */
+  _noteLoud(did, dist, decibels, opts) {
+    if (!(decibels >= LOUD_DB)) return;
+    if ((this._loudLines | 0) >= LOUD_MAX_LINES) return;
+    const owner = (opts && Number.isFinite(opts.followGuid)) ? (opts.followGuid >>> 0) : 0;
+    const key = `${owner}:${did >>> 0}`;
+    const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    if (!this._loudSeen) this._loudSeen = new Map();
+    const last = this._loudSeen.get(key);
+    if (last !== undefined && now - last < LOUD_REPEAT_MS) return;
+    this._loudSeen.set(key, now);
+    this._loudLines = (this._loudLines | 0) + 1;
+    let who = "";
+    try {
+      const inst = owner ? globalThis.liveScene3d?.entityManager?.entityMap?.get?.(owner) : null;
+      if (inst) {
+        const cell = (inst._wireCellIdx ?? inst._outdoorCellIdx ?? 0) & 0xffff;
+        who = ` "${inst.meta?.name ?? ""}" cell=0x${cell.toString(16)}${cell >= 0x100 ? "(indoor)" : ""}`;
+      }
+    } catch (_) {}
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[audio-loud] wave=0x${(did >>> 0).toString(16)} owner=0x${owner.toString(16)}${who} ` +
+        `dB=${decibels} dist=${Number(dist).toFixed(1)}m vol=${Number(opts?.gain ?? 1).toFixed(2)} ` +
+        `copies=${this.voicePool.copiesOf(did >>> 0)} cap=${this.voicePool.maxVoicesPerWave}`,
+      );
+    } catch (_) {}
   }
 
   /**

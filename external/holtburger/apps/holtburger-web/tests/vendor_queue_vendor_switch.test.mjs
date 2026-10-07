@@ -158,6 +158,10 @@ const body = spliceModule(src, {
     entityWorldPos: "() => null",
     localPlayerWorldPos: "() => null",
     devHex: "(g) => String(g >>> 0)",
+    // Bug 3 (2026-10-07): the range math moved to plugins/vendor_range.js
+    // (covered by tests/vendor_range_cylinder.test.mjs); inert here.
+    vendorRangeVerdict: "() => ({ inRange: true, dist: 0, range: 0, mode: 'stub' })",
+    VENDOR_FALLBACK_RANGE_M: "3.96",
   },
 });
 // eslint-disable-next-line no-new-func

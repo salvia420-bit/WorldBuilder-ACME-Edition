@@ -29,6 +29,11 @@ import {
   isLandCellBoundaryPoly,
   projectScreenRect,
   terrainRayBlocked,
+  apertureTerrainOccluded,
+  terrainLosSamplesFor,
+  TERRAIN_LOS_SAMPLES,
+  TERRAIN_LOS_STEP_M,
+  TERRAIN_LOS_MAX_SAMPLES,
   isCameraBelowTerrain,
   clipAperturesForPunch,
   makeLosCache,
@@ -282,15 +287,79 @@ t("a camera BELOW grade keeps the old verdict (the split owns that case)", () =>
   assert.equal(terrainRayBlocked(() => 0, 0, 0, -5, 20, 0, -5), true);
 });
 
-t("KNOWN FAIL-OPEN: hill + sunken target with no re-emergence keeps the doorway", () => {
+t("bug 7: hill + sunken target with no re-emergence now BLOCKS (was a known fail-open)", () => {
   // Ridge at x 5..10 and flat grade after it, with the aperture 4 m down: the
   // ray never rises back above the surface, so the blocked run reaches the
-  // target and the exemption applies. Fails OPEN (an over-punch bounded by the
-  // scissor rect) rather than re-introducing the reported defect — the explicit
-  // trade this gate makes. Documented so a future tightening is a deliberate
-  // choice, not a surprise.
+  // target. The old exemption forgave the whole run and punched the doorway
+  // through the ridge ("doors poke through hills"). The run now rises 40 m above
+  // the target's own grade, which is a hill, not the ground the room is sunk in.
   const h = (x) => (x > 5 && x < 10 ? 40 : 0);
-  assert.equal(terrainRayBlocked(h, 0, 0, 2, 20, 0, -4), false);
+  assert.equal(terrainRayBlocked(h, 0, 0, 2, 20, 0, -4), true);
+});
+
+t("bug 7: an above-grade doorway at the foot of a hill's far slope blocks", () => {
+  // Hill 120..196 m whose far slope runs right up to a doorway at grade: the
+  // ray goes under the hill and never comes out before the target.
+  const h = (x) => (x < 120 ? 0 : x <= 199 ? 6 : 0.5);
+  assert.equal(terrainRayBlocked(h, 0, 0, 5, 200, 0, 1.5), true);
+});
+
+console.log("§4b apertureTerrainOccluded — bug 7, doors poking through hills");
+
+// A doorway in the plane x = X spanning y ∈ [-1, 1], z ∈ [z0, z1].
+const doorAt = (x, z0, z1) => [x, -1, z0, x, 1, z0, x, 1, z1, x, -1, z1];
+
+t("terrainLosSamplesFor scales with ray length inside [12, 48]", () => {
+  assert.equal(terrainLosSamplesFor(10), TERRAIN_LOS_SAMPLES);
+  assert.equal(terrainLosSamplesFor(200), Math.ceil(200 / TERRAIN_LOS_STEP_M));
+  assert.equal(terrainLosSamplesFor(5000), TERRAIN_LOS_MAX_SAMPLES);
+  assert.equal(terrainLosSamplesFor(NaN), TERRAIN_LOS_SAMPLES);
+});
+
+t("a narrow ridge 12 fixed samples step over is caught", () => {
+  // 6 m wide, 8 m tall ridge halfway along a 200 m ray. With 12 samples the
+  // ray is sampled at x = 100 and x = 116.7 and never sees it.
+  const ridge = (x) => (x >= 101 && x <= 107 ? 8 : 0);
+  assert.equal(terrainRayBlocked(ridge, 0, 0, 12, 200, 0, 1.5), false, "the old 12-sample miss");
+  assert.equal(apertureTerrainOccluded(ridge, { x: 0, y: 0, z: 12 }, doorAt(200, 0, 3)), true);
+});
+
+t("a crest that hides only the bottom of the doorway drops it", () => {
+  // The centroid ray (z 1.5) clears a 2 m crest; the bottom edge (z 0) does not.
+  const crest = (x) => (x >= 140 && x <= 160 ? 2.0 : 0);
+  const cam = { x: 0, y: 0, z: 4 };
+  assert.equal(terrainRayBlocked(crest, 0, 0, 4, 200, 0, 1.5), false, "centroid alone is clear");
+  assert.equal(apertureTerrainOccluded(crest, cam, doorAt(200, 0, 3)), true);
+});
+
+t("the sunken Yaraq doorway stays visible over its own flat grade", () => {
+  const flat = () => 3.0;
+  assert.equal(apertureTerrainOccluded(flat, { x: 0, y: 0, z: 8 }, doorAt(30, 0, 2.5)), false);
+});
+
+t("an open field keeps the doorway", () => {
+  assert.equal(apertureTerrainOccluded(() => 0, { x: 0, y: 0, z: 3 }, doorAt(80, 0, 3)), false);
+});
+
+t("unknown terrain fails OPEN for every ray", () => {
+  assert.equal(apertureTerrainOccluded(() => null, { x: 0, y: 0, z: 3 }, doorAt(80, 0, 3)), false);
+  assert.equal(apertureTerrainOccluded(null, { x: 0, y: 0, z: 3 }, doorAt(80, 0, 3)), false);
+});
+
+t("the bottom-edge rays are wired into clipAperturesForPunch", () => {
+  const plane = makeNearPlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 });
+  // Door at x = 20 spanning z ∈ [-1, 1]; a crest at x 8..12 rising to 0.3
+  // hides only its bottom edge from a camera at z = 0.
+  const flat = [1, 4, 20, -1, -1, 20, 1, -1, 20, 1, 1, 20, -1, 1];
+  const crest = (x) => (x >= 8 && x <= 12 ? 0.3 : -10);
+  assert.equal(terrainRayBlocked(crest, 0, 0, 0, 20, 0, 0), false, "centroid alone is clear");
+  const res = clipAperturesForPunch(flat, MVP, {
+    nearPlane: plane,
+    camAc: { x: 0, y: 0, z: 0 },
+    sampleHeight: crest,
+  });
+  assert.equal(res.kept, 0);
+  assert.equal(res.dropped.terrain, 1);
 });
 
 t("the terrain cull is wired into clipAperturesForPunch", () => {
@@ -733,7 +802,10 @@ t("the LOS cache returns the same verdicts as the uncached path", () => {
   const base = {
     nearPlane: makeNearPlane({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }),
     camAc: { x: 0, y: 0, z: 0 },
-    sampleHeight: () => 0, // flat ground well below the ray → never blocks
+    // Flat ground well below every ray → never blocks. (The door spans
+    // z ∈ [-1, 1]; since bug 7 its bottom edge gets its own ray, so ground at
+    // z = 0 would bury that edge.)
+    sampleHeight: () => -5,
   };
   const uncached = clipAperturesForPunch(flat, MVP, base);
   const cache = makeLosCache();

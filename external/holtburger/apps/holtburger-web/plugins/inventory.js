@@ -36,9 +36,16 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { PaperdollViewport } from "../ui/ac_paperdoll_viewport.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared, getIconImmediate } from "../ui/ac_icon_cache.js";
 import {
-  uiEffectIconsEnabled,
+  fetchIconDataUrl as fetchIconDataUrlShared,
+  getIconImmediate,
+  fetchItemIconDataUrl,
+  getItemIconImmediate,
+  itemIconKey,
+} from "../ui/ac_icon_cache.js";
+import { PLAYER_PACK_ICON, ITEM_TYPE_CONTAINER } from "../ui/ac_icon_compose.js";
+import {
+  uiEffectBadgesEnabled,
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
@@ -93,8 +100,31 @@ const OVERLAY_ID = "hb-inventory";
 const PAPERDOLL_W = 224;
 const PAPERDOLL_H = 214;
 const BAG_COL_W = 61;
-// Generic "Pack" icon (LSD weenie 70016 Icon DID) for the main-pack slot.
-const MAIN_PACK_ICON = 0x06001BAF;
+// Main-pack slot icon (bug 12, 2026-10-07): retail/OpenAC compose the
+// player's pack base icon 0x0600127E as ItemType.Container
+// (OpenAC InventoryController.PlayerPackBaseIcon) — not the generic LSD
+// "Pack" weenie icon used before.
+const MAIN_PACK_ICON_META = Object.freeze({ iconId: PLAYER_PACK_ICON, itemType: ITEM_TYPE_CONTAINER });
+
+// Bug 12: the inputs of a retail item composite for one inventory row — the
+// row carries icon / item type / UI effects; the custom overlay & underlay
+// (PropertyDataId 50 / 52) come from the wasm entity store.
+function iconMetaForRow(row) {
+  const g = (row?.guid >>> 0) || 0;
+  let ovl = 0, und = 0;
+  const h = (typeof window !== "undefined") ? window.__sessionHandle : null;
+  if (g && h) {
+    try { ovl = (h.objectDataIdProperty?.(g, 50) >>> 0) || 0; } catch (_) { ovl = 0; }
+    try { und = (h.objectDataIdProperty?.(g, 52) >>> 0) || 0; } catch (_) { und = 0; }
+  }
+  return {
+    iconId: (row?.iconId >>> 0) || 0,
+    itemType: (row?.itemType >>> 0) || 0,
+    uiEffects: (row?.uiEffects >>> 0) || 0,
+    iconOverlay: ovl,
+    iconUnderlay: und,
+  };
+}
 // Retail human defaults when the snapshot has not surfaced the property
 // yet (ACE human weenie: ItemsCapacity 102, ContainersCapacity 7).
 const DEFAULT_MAIN_CAP = 102;
@@ -304,7 +334,8 @@ function ensureStyles() {
       position: absolute; inset: 0;
       z-index: 1;
       pointer-events: none;
-      opacity: 0.25;
+      /* Bug 13 (2026-10-07): fully opaque — retail draws the dressed doll
+         (gmPaperDollUI::RedressCreature → CreatureMode::AddObject). */
     }
     #${OVERLAY_ID} .hb-inv-paperdoll-viewport canvas { display: block; width: 100%; height: 100%; }
     #${OVERLAY_ID} .hb-inv-doll-slot {
@@ -725,15 +756,21 @@ function doMount(parentEl, _ctx) {
     cell._iconId = -1;
     return cell;
   }
-  function setBagIcon(cell, iconId) {
-    if (cell._iconId === iconId) return;
-    cell._iconId = iconId;
+  // Bug 12: bag cells show the RETAIL composite (see ui/ac_icon_compose.js);
+  // a failed fetch clears the memo so the next render retries.
+  function setBagIcon(cell, meta) {
+    const key = meta?.iconId ? itemIconKey(meta) : "";
+    if (cell._iconKey === key) return;
+    cell._iconKey = key;
+    cell._iconId = (meta?.iconId >>> 0) || 0;
     cell._icon.style.backgroundImage = "";
-    if (!iconId) return;
-    const hit = getIconImmediate(iconId);
+    if (!key) return;
+    const hit = getItemIconImmediate(meta);
     if (hit) { cell._icon.style.backgroundImage = `url("${hit}")`; return; }
-    fetchPaperdollIconDataUrl(iconId).then((url) => {
-      if (url && cell._iconId === iconId) cell._icon.style.backgroundImage = `url("${url}")`;
+    fetchItemIconDataUrl(meta, "inventory").then((url) => {
+      if (cell._iconKey !== key) return;
+      if (typeof url !== "string") { cell._iconKey = null; return; }
+      cell._icon.style.backgroundImage = `url("${url}")`;
     });
   }
   function setBagCapacity(cell, used, cap) {
@@ -745,7 +782,7 @@ function doMount(parentEl, _ctx) {
   // Inv_MainPackSlot.
   const mainSlot = makeBagCell();
   mainSlot.classList.add("hb-inv-mainpack");
-  setBagIcon(mainSlot, MAIN_PACK_ICON);
+  setBagIcon(mainSlot, MAIN_PACK_ICON_META);
   mainSlot.addEventListener("click", () => selectPack(0));
   mainSlot.addEventListener("mouseenter", () => {
     const c = capacityOf(MAIN_PACK_KEY);
@@ -820,7 +857,7 @@ function doMount(parentEl, _ctx) {
       cell.dataset.packGuid = String(g);
       cell.dataset.guid = String(g);
       cell.dataset.index = String(i);
-      setBagIcon(cell, (row?.iconId >>> 0) || 0);
+      setBagIcon(cell, iconMetaForRow(row));
       const c = capacityOf(g);
       setBagCapacity(cell, c.used, c.cap);
       cell.classList.toggle("is-open", selectedPackContainerId === g);
@@ -852,19 +889,29 @@ function doMount(parentEl, _ctx) {
   overlay.appendChild(itemsGrid);
   const cellCache = new Map();
 
+  // Bug 12 (2026-10-07): the RETAIL composite (type background, underlay,
+  // icon + overlay with the white key → UI-effect tile) instead of the raw
+  // DAT icon. A failed fetch clears the memo so a later render retries.
   function setCellIcon(cell, row) {
-    const iconId = (row.iconId >>> 0) || 0;
-    if (cell._iconId === iconId) return;
+    const meta = iconMetaForRow(row);
+    const iconId = meta.iconId;
+    const key = iconId ? itemIconKey(meta) : `none:${(row.itemType >>> 0) || 0}`;
+    if (cell._iconKey === key) return;
+    cell._iconKey = key;
     cell._iconId = iconId;
     const icon = cell._icon;
     icon.style.backgroundColor = "";
     icon.style.backgroundImage = "";
     if (!iconId) { icon.style.backgroundColor = typeTint(row.itemType); return; }
-    const hit = getIconImmediate(iconId);
+    const hit = getItemIconImmediate(meta);
     if (hit) { icon.style.backgroundImage = `url("${hit}")`; return; }
     icon.style.backgroundColor = typeTint(row.itemType);
-    fetchPaperdollIconDataUrl(iconId).then((url) => {
-      if (!url || cell._iconId !== iconId) return;
+    fetchItemIconDataUrl(meta, "inventory").then((url) => {
+      if (cell._iconKey !== key) return;
+      if (typeof url !== "string") {
+        cell._iconKey = null; // retry on the next render (the cache TTL rate-limits)
+        return;
+      }
       icon.style.backgroundColor = "";
       icon.style.backgroundImage = `url("${url}")`;
     });
@@ -889,7 +936,7 @@ function doMount(parentEl, _ctx) {
     cell._fxBits = bits;
     cell._fx?.remove();
     cell._fx = null;
-    if (!bits || !uiEffectIconsEnabled()) return;
+    if (!bits || !uiEffectBadgesEnabled()) return;
     // Track A A1: UiEffects (PropertyInt 18) magic badge(s); `?uiEffectIcons=off` escape.
     const fx = uiEffectIconsFor(bits);
     if (!fx.length) return;
@@ -939,6 +986,7 @@ function doMount(parentEl, _ctx) {
     if (cell.dataset.guid !== g) {
       cell.dataset.guid = g;
       cell._iconId = -1;
+      cell._iconKey = null;
     }
     cell.dataset.index = String(e.index);
     const tb = ((e.row.itemType >>> 0) & (~(e.row.itemType >>> 0) + 1)) >>> 0;
@@ -1182,15 +1230,25 @@ function doMount(parentEl, _ctx) {
       e.el.draggable = false;
       e.icon.style.backgroundImage = "";
       e.icon.dataset.iconId = "";
+      e.icon.dataset.iconKey = "";
     }
   }
-  function dollSlotFor(mask) {
+  // Bug 13 (2026-10-07): an item fills EVERY slot its mask covers. Real
+  // armour covers several (Sleeves 0x1800 = upper + lower arm, Leggings
+  // 0x6000 = upper + lower leg) and ACE stores the full coverage as the
+  // wielded location; retail tests each slot bit independently
+  // (`gmPaperDollUI::SetUIItemIntoLocation`, acclient.c:221965 `& 0x10`
+  // → lowerArmSlot, :221986 `& 0x40` → lowerLegSlot; OpenAC
+  // PaperdollController). The old first-match lookup left Lower arm / Lower
+  // leg empty under sleeves / leggings.
+  function dollSlotsFor(mask) {
     const m = mask >>> 0;
-    if (!m) return null;
+    const out = [];
+    if (!m) return out;
     for (const k of Object.keys(dollSlotEls)) {
-      if ((m & (Number(k) >>> 0)) !== 0) return dollSlotEls[k];
+      if ((m & (Number(k) >>> 0)) !== 0) out.push(dollSlotEls[k]);
     }
-    return null;
+    return out;
   }
   function showInDoll(slotEntry, row, pending) {
     const el = slotEntry.el;
@@ -1201,24 +1259,31 @@ function doMount(parentEl, _ctx) {
     el.dataset.guid = g;
     el.dataset.itemName = row.name || slotEntry.slot.name;
     el.draggable = !pending;
-    const iconId = (row.iconId >>> 0) || 0;
-    if (slotEntry.icon.dataset.iconId === String(iconId)) return;
-    slotEntry.icon.dataset.iconId = String(iconId);
-    const hit = iconId ? getIconImmediate(iconId) : null;
+    // Bug 12: equipped-slot icons are the retail composite too.
+    const meta = iconMetaForRow(row);
+    const iconKey = meta.iconId ? itemIconKey(meta) : "";
+    if (slotEntry.icon.dataset.iconKey === iconKey) return;
+    slotEntry.icon.dataset.iconKey = iconKey;
+    slotEntry.icon.dataset.iconId = String(meta.iconId);
+    const hit = meta.iconId ? getItemIconImmediate(meta) : null;
     if (hit) { slotEntry.icon.style.backgroundImage = `url("${hit}")`; return; }
-    if (!iconId) return;
-    fetchPaperdollIconDataUrl(iconId).then((url) => {
-      if (url && el.dataset.itemGuid === g) slotEntry.icon.style.backgroundImage = `url("${url}")`;
+    if (!meta.iconId) return;
+    fetchItemIconDataUrl(meta, "inventory").then((url) => {
+      if (typeof url !== "string") { slotEntry.icon.dataset.iconKey = ""; return; }
+      if (el.dataset.itemGuid === g) slotEntry.icon.style.backgroundImage = `url("${url}")`;
     });
   }
   function placeEquippedInDoll(row) {
-    const slotEntry = dollSlotFor(row.equipMask);
-    if (!slotEntry) return false;
+    const slots = dollSlotsFor(row.equipMask);
+    if (!slots.length) return false;
     const p = pendingOps.get(row.guid);
     // An equipped item being moved / dropped / given away waits ghosted.
     const leaving = !!p && p.op !== "wield";
     if (leaving && p.op === "move" && p.toKey != null && !p.external) return true; // drawn in the grid
-    showInDoll(slotEntry, row, leaving);
+    for (const slotEntry of slots) showInDoll(slotEntry, row, leaving);
+    if (slots.length > 1) {
+      console.debug?.(`[paperdoll-slots] ${row.name || row.guid} mask=0x${(row.equipMask >>> 0).toString(16)} → ${slots.map((e) => e.slot.name).join(", ")}`);
+    }
     return true;
   }
   function applyPendingWieldsToDoll() {
@@ -1226,8 +1291,13 @@ function doMount(parentEl, _ctx) {
       if (e.op !== "wield" || !e.slotMask) continue;
       const row = displayRow(e.guid);
       if (!row || (row.equipMask >>> 0) !== 0) continue;
-      const slotEntry = dollSlotFor(e.slotMask);
-      if (slotEntry) showInDoll(slotEntry, row, true);
+      // ACE normalises armour / clothing to its full ValidLocations on wield
+      // (Player_Inventory.cs `if (item is Clothing) wieldedLocation =
+      // item.ValidLocations`), so ghost every slot it will cover.
+      const vl = (row.validLocations >>> 0) || 0;
+      const isWorn = (vl & 0x0000FFFF) !== 0 && (vl & 0x3F00000) === 0;
+      const mask = isWorn ? (vl | (e.slotMask >>> 0)) : (e.slotMask >>> 0);
+      for (const slotEntry of dollSlotsFor(mask)) showInDoll(slotEntry, row, true);
     }
   }
 
@@ -1267,6 +1337,10 @@ function doMount(parentEl, _ctx) {
         } catch (_) { wieldedItems = []; }
       }
       const stanceLow = (typeof window.__getCurrentStanceLow === "function") ? (window.__getCurrentStanceLow() >>> 0) : 0;
+      // Bug 13: the worn armour (ObjDesc part / texture swaps, kept current
+      // on the rig meta by applyAppearance) + heritage for the retail eye.
+      let heritage = 0;
+      try { heritage = (h?.objectIntProperty?.(lpg >>> 0, 188) >>> 0) || 0; } catch (_) { heritage = 0; }
       paperdollViewport.loadPlayer(
         setupId,
         (meta.mtableId ?? 0) >>> 0,
@@ -1274,6 +1348,11 @@ function doMount(parentEl, _ctx) {
         meta.subPalettes ?? new Uint32Array(0),
         wieldedItems,
         stanceLow,
+        {
+          modelChanges: meta.modelChanges ?? new Uint32Array(0),
+          textureChanges: meta.textureChanges ?? new Uint32Array(0),
+          heritage,
+        },
       ).then((ok) => { if (ok) paperdollViewport.start?.(); }).catch(() => {});
     } catch (_) { /* viewport is best-effort */ }
   }
@@ -1550,6 +1629,12 @@ function doMount(parentEl, _ctx) {
     }, 500);
   }
 
+  // Bug 13 (2026-10-07): loop.js calls this once the LOCAL player's
+  // appearance change (equip → ObjDescEvent → applyAppearance) has landed on
+  // the rig meta, so the doll redresses even when the inventory refresh ran
+  // before the new ObjDesc arrived.
+  window.__refreshPaperdoll = refreshPaperdollViewport;
+
   // ESC clears the armed-item state (skip while typing).
   function onKey(ev) {
     if (ev?.key !== "Escape") return;
@@ -1581,6 +1666,7 @@ function doMount(parentEl, _ctx) {
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
+    if (window.__refreshPaperdoll === refreshPaperdollViewport) delete window.__refreshPaperdoll;
     if (pollTimer) clearInterval(pollTimer);
     if (viewportLoadTimer) clearInterval(viewportLoadTimer);
     for (const u of unsubs) { try { u(); } catch (_) {} }

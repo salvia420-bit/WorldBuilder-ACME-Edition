@@ -82,6 +82,15 @@ import { attachStaticDefaultScriptsWorld } from "./statics.js";
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
 import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
 import { objectBakeAllowed, tickObjectRadius } from "./object_radius.js";
+import {
+  VIEWER_CELL_ON,
+  VIEWER_SPHERE_RADIUS_M,
+  VIEWER_PIVOT_Z_M,
+  isIndoorCellId,
+  publishViewerCell,
+  viewerIndoorOr,
+  viewerState,
+} from "./viewer_cell.js";
 
 // ?cellBugParity=retail keeps indoor cells visible from outdoors — matches a known retail rendering quirk for nostalgia research.
 const CELL_BUG_PARITY = (() => {
@@ -2130,6 +2139,67 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 }
 
 /**
+ * Bug 4 (2026-10-07) — resolve, publish and apply this frame's VIEWER cell
+ * (the camera's cell; see scene3d/viewer_cell.js). Walks the head→eye segment
+ * in wasm (`resolveViewerCell`), roots the wasm render walks at the result
+ * (`setViewerCell`, 0 = the player's own cell) and logs one line per change.
+ * Returns the viewer cell (the player's when the flag is off, the export is
+ * missing, or the camera is not ready).
+ */
+let _viewerCellLastLog = "";
+function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
+  let viewer = playerCell;
+  const canResolve =
+    VIEWER_CELL_ON &&
+    typeof sessionHandle.resolveViewerCell === "function" &&
+    typeof sessionHandle.setViewerCell === "function";
+  if (canResolve) {
+    const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+    const pp = playerAcPosition(sessionHandle);
+    if (pp && acCameraFrame(cam, scene3d.worldRoot ?? null)) {
+      try {
+        viewer = sessionHandle.resolveViewerCell(
+          pp.x, pp.y, pp.z + VIEWER_PIVOT_Z_M,
+          _acCamVec.x, _acCamVec.y, _acCamVec.z,
+          VIEWER_SPHERE_RADIUS_M,
+          playerCell,
+        ) >>> 0;
+      } catch (_) {
+        viewer = playerCell;
+      }
+    }
+    if (!viewer) viewer = playerCell;
+    try {
+      sessionHandle.setViewerCell(viewer !== playerCell ? viewer : 0);
+    } catch (_) {}
+  }
+  let seenOutside = false;
+  try {
+    seenOutside =
+      viewer === playerCell
+        ? !!sessionHandle.isCurrentCellSeenOutside?.()
+        : !!sessionHandle.isCellSeenOutside?.(viewer);
+  } catch (_) {}
+  publishViewerCell(playerCell, playerIndoor, viewer, seenOutside);
+  const viewerIndoor = viewer === playerCell ? !!playerIndoor : isIndoorCellId(viewer);
+  scene3d._viewerCell = viewer;
+  scene3d._viewerIndoor = viewerIndoor;
+  const key = `${playerCell}|${viewer}`;
+  if (canResolve && key !== _viewerCellLastLog) {
+    _viewerCellLastLog = key;
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[viewerCell] player=0x${(playerCell >>> 0).toString(16)} ` +
+        `viewer=0x${(viewer >>> 0).toString(16)} viewerIndoor=${viewerIndoor} ` +
+        `playerIndoor=${!!playerIndoor} seenOutside=${seenOutside}`,
+      );
+    } catch (_) {}
+  }
+  return viewer;
+}
+
+/**
  * Visibility tick — runs per rAF inside the scene3d loop.
  *
  * Reads the wasm-side cell BFS via `sessionHandle`:
@@ -2199,6 +2269,9 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   }
 
   let cellId = 0;
+  // Bug 4: the camera's cell. Every RENDER decision below keys off it; the
+  // player's `cellId` stays the "is there a pose yet" gate.
+  let viewerCell = 0;
   let renderSetArr = null;
   let isIndoor = false;
   // PERF (2026-08-04): the `?indoorDepthSplit` narrowing below needs the SAME
@@ -2208,7 +2281,16 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   let pviewSetThisTick = null;
   try {
     cellId = sessionHandle.getCurrentCellId() >>> 0;
-    isIndoor = !!sessionHandle.isCurrentCellIndoor();
+    const playerIndoor = !!sessionHandle.isCurrentCellIndoor();
+    // Bug 4 (2026-10-07): render from the VIEWER's cell, as retail does
+    // (`SmartBox::RenderNormalMode`, acclient.c:144889). Must run before the
+    // walks below, which it re-roots.
+    viewerCell = cellId !== 0
+      ? updateViewerCell(scene3d, sessionHandle, cellId, playerIndoor)
+      : 0;
+    isIndoor = cellId !== 0 && viewerCell !== cellId
+      ? isIndoorCellId(viewerCell)
+      : playerIndoor;
     // F14-6 — stamp the local player's indoor state for the per-frame
     // nameplate LOD tick (nameplate_sprite.js), which flips nameplate /
     // buff-badge depthTest on indoors under ?nameplateOcclusion so dungeon
@@ -2391,6 +2473,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         reason: splitReason,
         indoor: isIndoor,
         cell: `0x${(cellId >>> 0).toString(16)}`,
+        viewerCell: `0x${(viewerCell >>> 0).toString(16)}`,
         relayered: scene3d._splitRelayered === true,
         relayerDiag: scene3d._splitRelayerDiag ?? null,
         path: scene3d.skyDome?._indoorSplitPath ?? null,
@@ -2403,7 +2486,8 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       // eslint-disable-next-line no-console
       console.log(
         `[indoorDepthSplit] ${splitArmed ? "ARMED" : "disarmed"} (${splitReason}) ` +
-        `mode=${INDOOR_DEPTH_SPLIT} indoor=${isIndoor} cell=0x${(cellId >>> 0).toString(16)}`,
+        `mode=${INDOOR_DEPTH_SPLIT} indoor=${isIndoor} cell=0x${(cellId >>> 0).toString(16)} ` +
+        `viewer=0x${(viewerCell >>> 0).toString(16)}`,
       );
     } catch (_) {}
   }
@@ -2416,7 +2500,10 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     // terrain in 2026-05-29.
     try {
       const portalSet = new Set();
-      const bfs = sessionHandle.getRenderSet(1);
+      // Bug 4: the depth-1 set of the VIEWER cell (the walk root).
+      const bfs = typeof sessionHandle.getViewerRenderSet === "function"
+        ? sessionHandle.getViewerRenderSet()
+        : sessionHandle.getRenderSet(1);
       if (bfs) for (const v of bfs) portalSet.add(v >>> 0);
       // PERF: reuse the walk the visibility block above already ran off the
       // IDENTICAL MVP (projection · matrixWorldInverse · worldRoot.matrixWorld)
@@ -2438,7 +2525,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
           if (pv) for (const v of pv) portalSet.add(v >>> 0);
         }
       }
-      portalSet.add(cellId >>> 0); // never lose the "where am I" anchor
+      portalSet.add((viewerCell || cellId) >>> 0); // never lose the "where am I" anchor
       if (portalSet.size) renderSetArr = Array.from(portalSet);
       else splitArmed = false; // nothing to draw → don't wipe depth for nothing
     } catch (_) {
@@ -2450,7 +2537,8 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // Idempotent and transition-driven: a steady armed frame with no streaming
   // does ZERO traverses.
   const wasRelayered = scene3d._splitRelayered === true;
-  const splitLbKey = (cellId & 0xffff0000) >>> 0;
+  // Bug 4: hoist the landblock the CAMERA is in (the room being drawn).
+  const splitLbKey = ((viewerCell || cellId) & 0xffff0000) >>> 0;
   if (splitArmed) {
     const sig = _splitGroupSignature(scene3d);
     scene3d._splitRelayerTick = ((scene3d._splitRelayerTick | 0) + 1) | 0;
@@ -2775,7 +2863,8 @@ export function tickPortalStencil(scene3d, sessionHandle) {
 
   let indoor = false;
   try {
-    indoor = !!sessionHandle.isCurrentCellIndoor?.();
+    // Bug 4: the camera's cell decides (viewer_cell.js).
+    indoor = viewerIndoorOr(sessionHandle.isCurrentCellIndoor?.());
   } catch (_) {}
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
   const worldRoot = scene3d.worldRoot ?? null;
@@ -2880,6 +2969,11 @@ function _punchDiag(scene3d, reason, extra = null) {
   };
 }
 
+// Bug 7: `[punch-los]` rate limit (see tickPortalPunch).
+const PUNCH_LOS_LOG_MS = 5000;
+let _punchLosLastCount = 0;
+let _punchLosLastLogMs = -Infinity;
+
 export function tickPortalPunch(scene3d, sessionHandle) {
   const pass = scene3d?._portalPunchPass;
   if (!pass || !sessionHandle) {
@@ -2901,7 +2995,9 @@ export function tickPortalPunch(scene3d, sessionHandle) {
 
   let indoor = false;
   try {
-    indoor = !!sessionHandle.isCurrentCellIndoor?.();
+    // Bug 4: the camera's cell decides (viewer_cell.js). Player outside with
+    // the camera inside a building used to punch the doorway from inside.
+    indoor = viewerIndoorOr(sessionHandle.isCurrentCellIndoor?.());
   } catch (_) {}
   const camera = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
   const worldRoot = scene3d.worldRoot ?? null;
@@ -3037,6 +3133,24 @@ export function tickPortalPunch(scene3d, sessionHandle) {
       if (res.kept > 0) {
         punchFlat = res.flat;
         punchRect = res.rect;
+      }
+      // Bug 7 (2026-10-07): confirm in-game that doorways behind hills stop
+      // being punched — one line when the count of terrain-hidden apertures
+      // changes, at most every PUNCH_LOS_LOG_MS.
+      {
+        const hidden = res.dropped?.terrain | 0;
+        const nowMs = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+        if (hidden !== _punchLosLastCount && nowMs - _punchLosLastLogMs >= PUNCH_LOS_LOG_MS) {
+          _punchLosLastCount = hidden;
+          _punchLosLastLogMs = nowMs;
+          try {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[punch-los] ${hidden} doorway aperture(s) hidden behind terrain not punched ` +
+              `(kept ${res.kept})`,
+            );
+          } catch (_) {}
+        }
       }
       // ONE-PASTE DIAGNOSTIC. `kept > 0` with the interior visible is the
       // success condition; if `kept === 0` the `dropped` breakdown names the
@@ -3279,18 +3393,23 @@ export function markOutdoorEntities(scene3d) {
   const em = scene3d?.entityManager;
   const map = em?.entityMap;
   if (!map || typeof map.forEach !== "function") return 0;
-  // The split is armed because the player is INSIDE: never treat the local
-  // player as outdoor, whatever its (spawn-time) cell index says.
+  // The local player's (spawn-time / wire) cell index can be stale, so it
+  // takes its cell from the live pose instead. Bug 4 (2026-10-07): the split
+  // now arms on the CAMERA's cell, so with the camera inside a doorway the
+  // player may be standing outdoors; it used to be treated as inside always.
   let self = 0;
   try { self = (em._localPlayerGuid?.() ?? 0) >>> 0; } catch (_) { self = 0; }
+  const vs = viewerState();
+  const selfOutdoor = vs.valid && !vs.playerIndoor;
   let n = 0;
   map.forEach((inst, guid) => {
     const root = inst?.root;
     if (!root || !root.userData) return;
     const ci = inst._wireCellIdx ?? inst._outdoorCellIdx;
-    const outdoor =
-      (self === 0 || (guid >>> 0) !== self) &&
-      ci != null && Number.isFinite(ci) && (ci & 0xffff) < 0x0100;
+    const isSelf = self !== 0 && (guid >>> 0) === self;
+    const outdoor = isSelf
+      ? selfOutdoor
+      : ci != null && Number.isFinite(ci) && (ci & 0xffff) < 0x0100;
     root.userData.__splitOutdoor = outdoor;
     if (outdoor) n++;
   });
@@ -3334,6 +3453,9 @@ export function noteEntityLandcell(em, guid, cellId) {
  * absent — capture-time setups without a live session continue to run
  * the render loop unaffected.
  */
+// Bug 5 (2026-10-07): re-sweep cadence while the ring has unbaked / parked LBs.
+const PVS_RESWEEP_MS = 500;
+
 export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   if (!scene3d || !sessionHandle) return;
   if (typeof sessionHandle.getRenderSet !== "function") return;
@@ -3561,6 +3683,9 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // derives from a wasm-sorted renderSet so its iteration order is stable
   // frame-to-frame. (A cooldown-backed-off failed bake retries on the next
   // signature change, which roaming produces within seconds.)
+  // Bug 5 (2026-10-07): publish the effective draw ring so the LRU never
+  // reclaims (parks) a landblock the sweep wants drawn.
+  scene3d._pvsEffectiveRingRadius = ringRadius;
   let fireSig = String(ringRadius);
   for (const lbKey of seen) fireSig += "," + lbKey;
   // Steady-state short-circuit: skip the whole sweep when the signature is
@@ -3569,7 +3694,18 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   // sentinel below that can't match `fireSig`), so the cap still re-enters each
   // frame to fill the remaining LBs progressively while a fully-baked ring
   // collapses to one sweep per LB-crossing — exactly as the uncapped path does.
-  if (scene3d._pvsLastFireSig === fireSig) return;
+  if (scene3d._pvsLastFireSig === fireSig) {
+    // Bug 5 (2026-10-07, terrain holes): the signature used to latch for
+    // good once every ring LB had been FIRED, even when a bake was skipped
+    // (stream-guard failure cooldown, prefetch error) or an LB was parked by
+    // the LRU — nothing re-requested those until the next LB crossing, and
+    // they showed as holes. While the last sweep left ring LBs unbaked or
+    // parked, re-sweep at a bounded cadence (the guard still rate-limits).
+    if (!scene3d._pvsSweepIncomplete) return;
+    const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (nowMs < (scene3d._pvsResweepAtMs || 0)) return;
+    scene3d._pvsResweepAtMs = nowMs + PVS_RESWEEP_MS;
+  }
   const ringSeen = scene3d._pvsRingLbScratch || (scene3d._pvsRingLbScratch = new Set());
   ringSeen.clear();
   for (const lbKey of seen) {
@@ -3646,7 +3782,12 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   const tBaked = scene3d.terrainBakedLbs instanceof Set ? scene3d.terrainBakedLbs : null;
   const sBaked = scene3d.staticsBakedLbs instanceof Set ? scene3d.staticsBakedLbs : null;
   const bBaked = scene3d.buildingsBakedLbs instanceof Set ? scene3d.buildingsBakedLbs : null;
+  const lru = scene3d.landblockLru || null;
   const isNewBake = (lbKey) => {
+    // Bug 5: a PARKED LB keeps its baked marks, so it never read as "new" and
+    // stayed invisible inside the ring; firing it lets the loaders' fast path
+    // (index.js loadTerrainForLandblock) unpark it.
+    try { if (lru?.isParked?.(lbKey)) return true; } catch (_) { /* fall through */ }
     // ?objRadius (perf T7): objects outside the near radius are never "new" —
     // fireOne will not start them, so counting them would hold the sweep open.
     const objOk = objectBakeAllowed(seen, lbKey);
@@ -3710,9 +3851,11 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     // Hold the signature (re-enter next frame) while new LBs remain, so the ring
     // fills progressively as in-flight slots free; record it once nothing new
     // remains so the steady-state cost collapses to one sweep per LB-crossing.
-    // (A bake that fails sets a guard cooldown but leaves its baked-Set unset;
-    // it is retried on the next LB-crossing, matching the legacy capped path.)
+    // Bug 5: a bake that failed (guard cooldown) or an LB still parked keeps
+    // `_pvsSweepIncomplete` set, so the latched sweep re-runs every
+    // PVS_RESWEEP_MS instead of waiting for the next LB crossing.
     scene3d._pvsLastFireSig = remaining ? null : fireSig;
+    scene3d._pvsSweepIncomplete = remaining || ringArr.some(isNewBake);
     return;
   }
 
@@ -3738,4 +3881,6 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   } else {
     scene3d._pvsLastFireSig = null;
   }
+  // Bug 5: see the stream-queue path.
+  scene3d._pvsSweepIncomplete = remaining || ringArr.some(isNewBake);
 }

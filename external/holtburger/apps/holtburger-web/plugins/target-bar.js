@@ -45,6 +45,7 @@ import { listManifestBindings } from "../ui/keymap.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
+import { shouldQueryHealth } from "../scene3d/target_cycle.js";
 import {
   COMBAT_MODE,
   combatModeForStance,
@@ -246,6 +247,43 @@ export function lookupObjectName(guid) {
   return null;
 }
 
+// Bug 10 (2026-10-07) — retail's selection meter policy. Only a player, a
+// pet, or an attackable object is queried and metered
+// (`gmToolbarUI::HandleSelectionChanged` acclient.c:241923-241930; OpenAC
+// SelectedObjectHealthPolicy). A non-attackable NPC (Reformed Bandit) shows
+// no meter in retail. PropertyInstanceId.PetOwner = 44.
+const PROP_IID_PET_OWNER = 44;
+function selectionMeta(guid) {
+  try {
+    const e = window.liveScene3d?.entityManager?.entityMap?.get(guid >>> 0);
+    const meta = e?.meta || null;
+    if (!meta) return null;
+    let petOwner = 0;
+    try {
+      petOwner = (window.__sessionHandle?.objectInstanceIdProperty?.(guid >>> 0, PROP_IID_PET_OWNER) >>> 0) || 0;
+    } catch (_) { petOwner = 0; }
+    return {
+      itemType: (meta.itemType >>> 0) || 0,
+      objDescFlags: (meta.objDescFlags >>> 0) || 0,
+      petOwner,
+    };
+  } catch (_) { return null; }
+}
+export function wantsHealthMeter(guid) {
+  const g = guid >>> 0;
+  if (!g) return false;
+  let me = 0;
+  try {
+    me = (window.getLocalPlayerGuid?.() ?? window.__sessionHandle?.playerGuid?.() ?? 0) >>> 0;
+  } catch (_) { me = 0; }
+  if (me && g === me) return true;
+  const target = selectionMeta(g);
+  // No rig to read (inventory item, out-of-view object): keep the old
+  // behaviour and ask — ACE answers only for creatures it can find.
+  if (!target) return true;
+  return shouldQueryHealth(target, me ? selectionMeta(me) : null);
+}
+
 function cachedHealthFraction(guid) {
   try {
     const f = window.__sessionHandle?.objectHealthFraction?.(guid >>> 0);
@@ -291,6 +329,9 @@ export function mountToolbarControls(field, opts = {}) {
     selectedGuid: 0,
     selectedName: "",
     selectedHealth: null,
+    // Bug 10: does the current selection get a health meter (retail policy)?
+    healthQueried: false,
+    healthReplyLogged: false,
     mode: COMBAT_MODE.NONCOMBAT,
     // Optimistic combat-mode flip window: until the server's UpdateMotion
     // changes the stance away from `pendingFromLow`, a poll that still
@@ -569,23 +610,45 @@ export function mountToolbarControls(field, opts = {}) {
   function updateSelection(nextOverride) {
     const next = (nextOverride != null) ? (nextOverride >>> 0) : getSelectedTargetGuid();
     if (next !== state.selectedGuid) {
+      const prevQueried = !!state.healthQueried;
       state.selectedGuid = next;
       state.selectedName = next ? (lookupObjectName(next) || "") : "";
       // F10-1 — new target: seed from the cached health fraction, then ask
       // the server (reply = `entityHealthUpdated`). HUD rec #98: the next
       // bus event resyncs a stale in-flight reply.
-      state.selectedHealth = next ? cachedHealthFraction(next) : null;
+      // Bug 10: only players, pets and attackable objects are metered (retail).
+      state.healthQueried = next ? wantsHealthMeter(next) : false;
+      state.healthReplyLogged = false;
+      state.selectedHealth = state.healthQueried ? cachedHealthFraction(next) : null;
+      const h = window.__sessionHandle;
+      if (next && state.healthQueried) {
+        try { h?.queryHealth?.(next); } catch (_) {}
+      } else if (prevQueried) {
+        // Retail `Event_QueryHealth(0)` when the meter goes away
+        // (acclient.c:241825): ACE stops the heartbeat health updates.
+        try { h?.queryHealth?.(0); } catch (_) {}
+      }
       if (next) {
-        try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
+        console.info(
+          `[target-health] sel 0x${next.toString(16)} meter=${state.healthQueried} ` +
+          `cached=${state.selectedHealth == null ? "none" : state.selectedHealth.toFixed(2)}`,
+        );
         // SelectionBlinkField (0x100001A0) ObjectSelected state.
         target.classList.remove("is-blinking");
         void target.offsetWidth;
         target.classList.add("is-blinking");
       }
       renderTarget();
-    } else if (next && !state.selectedName) {
-      const n = lookupObjectName(next);
-      if (n) { state.selectedName = n; renderTarget(); }
+    } else if (next) {
+      if (!state.selectedName) {
+        const n = lookupObjectName(next);
+        if (n) { state.selectedName = n; renderTarget(); }
+      }
+      // The rig (and so its flags) can land after the selection.
+      if (!state.healthQueried && wantsHealthMeter(next)) {
+        state.healthQueried = true;
+        try { window.__sessionHandle?.queryHealth?.(next); } catch (_) {}
+      }
     }
   }
 
@@ -610,8 +673,17 @@ export function mountToolbarControls(field, opts = {}) {
     const d = ev?.detail ?? ev ?? {};
     const guid = (d.guid ?? 0) >>> 0;
     if (!guid || guid !== state.selectedGuid) return;
+    if (!state.healthQueried) return; // no meter for this selection (retail)
     const f = d.fraction;
     state.selectedHealth = Number.isFinite(f) && f >= 0 ? f : null;
+    if (!state.healthReplyLogged) {
+      state.healthReplyLogged = true;
+      let inStore = false;
+      try { inStore = typeof window.__sessionHandle?.objectName?.(guid) === "string"; } catch (_) {}
+      console.info(
+        `[target-health] reply 0x${guid.toString(16)} frac=${Number.isFinite(f) ? f.toFixed(2) : f} inStore=${inStore}`,
+      );
+    }
     renderTarget();
   };
   const onStatsUpdated = () => updateStance();

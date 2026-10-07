@@ -5143,13 +5143,10 @@
                   ? window.getLocalPlayerGuid()
                   : null;
               if (em && localGuid != null) {
-                const JUMP_MOTION_CMD = 0x2500003B;
-                const NONCOMBAT_STANCE = 0x8000003D;
-                const stance =
-                  (typeof em.getStance === "function"
-                    ? em.getStance(localGuid >>> 0) >>> 0
-                    : 0) || NONCOMBAT_STANCE;
-                em.setMotion(localGuid >>> 0, JUMP_MOTION_CMD, stance);
+                // Bug 19 (2026-10-07): no setMotion(Jump 0x2500003B) — no
+                // retail MotionTable has that clip. The airborne pose is the
+                // MotionTable's Falling state, which setAirborne now plays
+                // (take-off link + Falling loop; the landing link on touchdown).
                 // Wave 1.7 (2026-05-26) — fire the arms-up airborne
                 // overlay locally. The Jump motion-command (0x003B)
                 // is universally ABSENT from all 436 retail motion

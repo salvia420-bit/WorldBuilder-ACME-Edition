@@ -58,6 +58,16 @@
 //   - `await`ing is always safe (in-flight requests are deduped internally)
 // ---------------------------------------------------------------------
 
+import {
+  itemBackgroundDid,
+  itemEffectTileDid,
+  spellIconLayers,
+  composeItemIcon,
+  composeSpellIcon,
+  replaceWhiteWithBlack,
+  rgbaToPngDataUrl,
+} from "./ac_icon_compose.js";
+
 /** Resolved data URLs. Insertion-ordered → the first key is the LRU victim. */
 const iconCache = new Map();
 /** In-flight fetches, deduped per iconId. Retired in `finally` on both arms. */
@@ -197,13 +207,9 @@ export async function fetchIconDataUrl(iconId, label = "ac-icon-cache") {
     try {
       const r = await fetchIcon(iconId >>> 0);
       if (!r || !r.width || !r.height || !r.pixels?.length) return false;
-      const canvas = document.createElement("canvas");
-      canvas.width = r.width; canvas.height = r.height;
-      const cx = canvas.getContext("2d");
-      const img = cx.createImageData(r.width, r.height);
-      img.data.set(r.pixels);
-      cx.putImageData(img, 0, 0);
-      return canvas.toDataURL("image/png");
+      // Bug 12 (2026-10-07): encode the PNG directly — no canvas readback
+      // (privacy-hardened browsers return canvas readbacks as blank/white).
+      return rgbaToPngDataUrl(r.width, r.height, new Uint8Array(r.pixels));
     } catch (e) {
       console.warn(`[${label}] icon ${iconId} fetch failed:`, e);
       // HUD rec #204 — surface to diag so missing-icon telemetry can
@@ -232,6 +238,194 @@ export async function fetchIconDataUrl(iconId, label = "ac-icon-cache") {
   if (typeof url === "string") storeSuccess(iconId, url);
   else storeFailure(iconId);
   return url;
+}
+
+/* ── retail icon composition (bug 12, 2026-10-07) ─────────────────────
+ * See ./ac_icon_compose.js for the retail/OpenAC rules. Decoded layers
+ * (icons and the shared background / effect tiles) are cached as RGBA; the
+ * finished composites live in the same LRU as raw icons, under string keys.
+ */
+const RGBA_CACHE_MAX = 512;
+const rgbaCache = new Map();
+const rgbaInflight = new Map();
+const _composeLogged = new Set();
+
+/** Decoded RGBA of one RenderSurface (`0x06xxxxxx`), or null. */
+export async function fetchIconRgba(did, label = "ac-icon-cache:rgba") {
+  const id = did >>> 0;
+  if (!id) return null;
+  const hit = rgbaCache.get(id);
+  if (hit) {
+    rgbaCache.delete(id);
+    rgbaCache.set(id, hit);
+    return hit;
+  }
+  const pending = rgbaInflight.get(id);
+  if (pending) return pending;
+  const negKey = `rgba:${id}`;
+  if (failureSuppressed(negKey)) return null;
+  const wasm = (typeof window !== "undefined") ? (window.__hbWasm ?? window.__wasm ?? null) : null;
+  const fetchIcon = wasm?.fetch_icon_pixels;
+  if (!fetchIcon) {
+    storeFailure(negKey);
+    return null;
+  }
+  const p = (async () => {
+    try {
+      const r = await fetchIcon(id);
+      if (!r || !r.width || !r.height) return null;
+      const px = r.pixels;
+      if (!px?.length) return null;
+      const out = { width: r.width >>> 0, height: r.height >>> 0, pixels: new Uint8ClampedArray(px) };
+      try { r.free?.(); } catch (_) {}
+      return out;
+    } catch (e) {
+      console.warn(`[${label}] icon layer 0x${id.toString(16)} fetch failed:`, e);
+      return null;
+    }
+  })();
+  rgbaInflight.set(id, p);
+  let v;
+  try { v = await p; } finally { rgbaInflight.delete(id); }
+  if (v) {
+    rgbaCache.set(id, v);
+    while (rgbaCache.size > RGBA_CACHE_MAX) rgbaCache.delete(rgbaCache.keys().next().value);
+  } else {
+    storeFailure(negKey);
+  }
+  return v;
+}
+
+async function _composedOnce(key, build) {
+  const hit = touch(key);
+  if (hit !== undefined) return hit;
+  const pending = inflight.get(key);
+  if (pending !== undefined) return pending;
+  if (failureSuppressed(key)) return false;
+  const promise = (async () => {
+    try { return await build(); } catch (e) {
+      console.warn(`[icon-compose] ${key} failed:`, e);
+      return false;
+    }
+  })();
+  inflight.set(key, promise);
+  let url;
+  try { url = await promise; } finally { inflight.delete(key); }
+  if (typeof url === "string") storeSuccess(key, url);
+  else storeFailure(key);
+  return url;
+}
+
+/** Cache key of a retail item composite (shared by the immediate lookup). */
+export function itemIconKey(meta, drag = false) {
+  const iconId = (meta?.iconId >>> 0) || 0;
+  const bg = drag ? 0 : itemBackgroundDid(meta?.itemType >>> 0);
+  const und = drag ? 0 : ((meta?.iconUnderlay >>> 0) || 0);
+  const ovl = (meta?.iconOverlay >>> 0) || 0;
+  const fx = itemEffectTileDid(meta?.uiEffects >>> 0);
+  return `item:${bg}:${und}:${iconId}:${ovl}:${fx}:${drag ? 1 : 0}`;
+}
+
+/**
+ * Retail item icon (`IconData::RenderIcons`): type background + custom
+ * underlay + (icon + overlay, white → UI-effect tile). `drag: true` returns the
+ * drag icon (no background). Resolves to a data URL, `false` on failure, or
+ * null for iconId 0.
+ * @param {{iconId:number,itemType?:number,uiEffects?:number,iconUnderlay?:number,iconOverlay?:number}} meta
+ */
+export function fetchItemIconDataUrl(meta, label = "item-icon", opts = {}) {
+  const iconId = (meta?.iconId >>> 0) || 0;
+  if (!iconId) return Promise.resolve(null);
+  const drag = !!opts.drag;
+  const key = itemIconKey(meta, drag);
+  return _composedOnce(key, async () => {
+    const bg = drag ? 0 : itemBackgroundDid(meta.itemType >>> 0);
+    const und = drag ? 0 : ((meta.iconUnderlay >>> 0) || 0);
+    const ovl = (meta.iconOverlay >>> 0) || 0;
+    const fx = itemEffectTileDid(meta.uiEffects >>> 0);
+    const [bgI, undI, icI, ovI, fxI] = await Promise.all([
+      bg ? fetchIconRgba(bg, label) : null,
+      und ? fetchIconRgba(und, label) : null,
+      fetchIconRgba(iconId, label),
+      ovl ? fetchIconRgba(ovl, label) : null,
+      fetchIconRgba(fx, label),
+    ]);
+    if (!icI) return false;
+    const { icon, drag: dragImg } = composeItemIcon({
+      background: bgI, underlay: undI, icon: icI, overlay: ovI, effectTile: fxI,
+    });
+    const img = drag ? dragImg : icon;
+    if (!img) return false;
+    if (!_composeLogged.has(key) && _composeLogged.size < 64) {
+      _composeLogged.add(key);
+      console.info(
+        `[icon-compose] icon=0x${iconId.toString(16)} type=0x${((meta.itemType >>> 0) || 0).toString(16)} ` +
+        `bg=0x${bg.toString(16)} fx=0x${fx.toString(16)} ovl=0x${ovl.toString(16)} und=0x${und.toString(16)}${drag ? " (drag)" : ""}`,
+      );
+    }
+    return rgbaToPngDataUrl(img.width, img.height, img.pixels);
+  });
+}
+
+/** Synchronous composite lookup (null until composed once). */
+export function getItemIconImmediate(meta, drag = false) {
+  if (!(meta?.iconId >>> 0)) return null;
+  const v = touch(itemIconKey(meta, drag));
+  return typeof v === "string" ? v : null;
+}
+
+function _spellRecord(spellId) {
+  try {
+    const rec = window.__sessionHandle?.getSpellRecord?.(spellId >>> 0);
+    if (!rec) return null;
+    const get = (k) => (rec instanceof Map ? rec.get(k) : rec[k]);
+    const comps = get("components");
+    return {
+      iconId: (get("iconId") >>> 0) || 0,
+      bitfield: (get("bitfield") >>> 0) || 0,
+      firstComponent: Array.isArray(comps) && comps.length ? (comps[0] >>> 0) : 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Retail spell icon (`ClientMagicSystem::CompositeSpellIcon`): power-component
+ * backing + icon, white → Reversed/NonReversed tile, self/fellowship overlay.
+ */
+export function fetchSpellIconDataUrl(spellId, label = "spell-icon") {
+  const sid = (spellId >>> 0) & 0x7fffffff;
+  if (!sid) return Promise.resolve(null);
+  const rec = _spellRecord(sid);
+  if (!rec || !rec.iconId) return Promise.resolve(null);
+  const layers = spellIconLayers(rec);
+  const key = `spell:${sid}:${layers.backing}:${layers.icon}:${layers.tint}:${layers.overlay}`;
+  return _composedOnce(key, async () => {
+    const [b, i, t, o] = await Promise.all([
+      layers.backing ? fetchIconRgba(layers.backing, label) : null,
+      fetchIconRgba(layers.icon, label),
+      layers.tint ? fetchIconRgba(layers.tint, label) : null,
+      layers.overlay ? fetchIconRgba(layers.overlay, label) : null,
+    ]);
+    if (!i) return false;
+    const img = composeSpellIcon({ backing: b, icon: i, tint: t, overlay: o });
+    if (!img) return false;
+    return rgbaToPngDataUrl(img.width, img.height, img.pixels);
+  });
+}
+
+/** Retail spell-component icon (`CompositeSpellComponentIcon`): white → black. */
+export function fetchSpellComponentIconDataUrl(iconId, label = "component-icon") {
+  const id = iconId >>> 0;
+  if (!id) return Promise.resolve(null);
+  return _composedOnce(`comp:${id}`, async () => {
+    const i = await fetchIconRgba(id, label);
+    if (!i) return false;
+    const img = { width: i.width, height: i.height, pixels: new Uint8ClampedArray(i.pixels) };
+    replaceWhiteWithBlack(img);
+    return rgbaToPngDataUrl(img.width, img.height, img.pixels);
+  });
 }
 
 /** Synchronous lookup — returns the cached data URL if it's
@@ -346,6 +540,9 @@ export function resetIconCache() {
   iconCache.clear();
   inflight.clear();
   negative.clear();
+  rgbaCache.clear();
+  rgbaInflight.clear();
+  _composeLogged.clear();
   cachedBytes = 0;
   iconEvictions = 0;
   iconRetries = 0;

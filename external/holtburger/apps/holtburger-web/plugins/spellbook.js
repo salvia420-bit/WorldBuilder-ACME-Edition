@@ -43,7 +43,7 @@
 import { setAcText, COMPACT_FONT_ID } from "../ui/ac_font.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/keymap.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
-import { getIconImmediate, fetchIconDataUrl } from "../ui/ac_icon_cache.js";
+import { getIconImmediate, fetchIconDataUrl, fetchSpellIconDataUrl } from "../ui/ac_icon_cache.js";
 import { hudPoint, hudViewport } from "../ui/hud_scale.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
@@ -831,11 +831,19 @@ function doMount(parentEl, ctx) {
     const icon = document.createElement("div");
     icon.className = "hb-sb-icon";
     const iconDid = (meta?.icon >>> 0) || 0;
-    const cached = iconDid ? getIconImmediate(iconDid) : null;
-    if (cached) icon.style.backgroundImage = `url("${cached}")`;
-    else if (iconDid) {
-      fetchIconDataUrl(iconDid, "spellbook").then((url) => {
-        if (url && icon.isConnected) icon.style.backgroundImage = `url("${url}")`;
+    // Bug 12 (2026-10-07): the retail spell composite (power backing + icon,
+    // white key → Reversed/NonReversed tile, self/fellowship overlay —
+    // ClientMagicSystem::CompositeSpellIcon); raw icon only as the fallback.
+    if (iconDid) {
+      icon.dataset.spellIconUrl = "";
+      fetchSpellIconDataUrl(id, "spellbook").then((url) => {
+        if (typeof url === "string") return url;
+        return getIconImmediate(iconDid) || fetchIconDataUrl(iconDid, "spellbook");
+      }).then((url) => {
+        if (typeof url === "string" && icon.isConnected) {
+          icon.style.backgroundImage = `url("${url}")`;
+          icon.dataset.spellIconUrl = url;
+        }
       }).catch(() => {});
     }
     const slotNum = document.createElement("span");
@@ -869,7 +877,7 @@ function doMount(parentEl, ctx) {
       ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
       ev.dataTransfer.setData("text/plain", meta.name);
       try {
-        const url = iconDid ? getIconImmediate(iconDid) : null;
+        const url = icon.dataset.spellIconUrl || (iconDid ? getIconImmediate(iconDid) : null);
         if (url) {
           const img = new Image();
           img.src = url;

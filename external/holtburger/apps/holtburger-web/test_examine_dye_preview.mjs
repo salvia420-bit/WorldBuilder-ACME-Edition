@@ -390,8 +390,11 @@ check("PaperdollViewport.loadPlayer signature matches caller expectation", () =>
   // signature later grew two OPTIONAL trailing params (wieldedItems,
   // stanceLow — wielded-item rig attach + stance cache key), which
   // examine-target.js now passes too. Pin the prefix order, allow the tail.
-  if (!/async\s+loadPlayer\s*\(\s*setupId\s*,\s*mtableId\s*,\s*paletteId\s*,\s*subPalettes\s*(?:,\s*wieldedItems\s*)?(?:,\s*stanceLow\s*)?\)/.test(viewportSrc)) {
-    throw new Error("loadPlayer signature drifted from (setupId, mtableId, paletteId, subPalettes[, wieldedItems[, stanceLow]])");
+  // Bug 13 (2026-10-07): an optional trailing `appearance` (the worn-armour
+  // ObjDesc) joined the signature; the leading order the caller relies on is
+  // unchanged.
+  if (!/async\s+loadPlayer\s*\(\s*setupId\s*,\s*mtableId\s*,\s*paletteId\s*,\s*subPalettes\s*(?:,\s*wieldedItems\s*)?(?:,\s*stanceLow\s*)?(?:,\s*appearance\s*(?:=\s*null\s*)?)?\)/.test(viewportSrc)) {
+    throw new Error("loadPlayer signature drifted from (setupId, mtableId, paletteId, subPalettes[, wieldedItems[, stanceLow[, appearance]]])");
   }
 });
 

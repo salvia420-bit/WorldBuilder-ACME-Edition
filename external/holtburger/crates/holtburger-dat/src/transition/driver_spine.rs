@@ -652,6 +652,16 @@ impl CTransition {
                 self.collision_info.contact_plane_is_water = false; // *(v16+52) = 0
                 let v17 = self.sphere_path.precipice_slide(&mut self.collision_info);
                 *ts = v17;
+                // Bug 17 (2026-10-07): a walkable mover held at the lip of a
+                // walkable BSP polygon (a thatch-roof eave) is edge-protected
+                // exactly like the terrain lip above: the precipice slide keeps
+                // its position on the poly but leaves the frame contact-less,
+                // and the caller then `begin_fall`s it off the roof (the
+                // reported "hop"). Latch it so the marshalling re-plants the
+                // grounded state from the entry walkable plane.
+                if self.retail_ground {
+                    self.edge_held = true;
+                }
                 (v17 == 2) as i32
             } else if contact_valid {
                 // 312731-312737: ACCEPT (contact plane present, not steep, no walkable).
@@ -674,6 +684,12 @@ impl CTransition {
                 self.collision_info.contact_plane_is_water = false; // *(v12+52) = 0
                 self.sphere_path.restore_check_pos();
 
+                // Bug 17 (2026-10-07): both outcomes below hold a walkable
+                // mover at the edge (a precipice slide along it, or the
+                // "nothing to stand on" stop); latch it like the lip above.
+                if self.retail_ground {
+                    self.edge_held = true;
+                }
                 if self.sphere_path.walkable.is_some() {
                     // 312756-312764: landed on a walkable surface below → re-seat & precipice.
                     self.collision_info.contact_plane = None;

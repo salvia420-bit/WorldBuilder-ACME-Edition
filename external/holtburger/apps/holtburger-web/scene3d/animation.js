@@ -614,6 +614,10 @@ export class AnimationCache {
             const numFrames = animData.numFrames >>> 0;
             const framerate = +animData.framerate;
             const resolvedStance = animData.resolvedStance >>> 0;
+            // Bugs 2/15/18 (2026-10-07): did the requested LINK resolve, or is
+            // this the cycle the bake fell back to? `null` = an older pkg/
+            // without the getter (unknown; callers keep the old behaviour).
+            const isLink = typeof animData.isLink === "boolean" ? animData.isLink : null;
 
             // First-call-per-setup: stash the partNames so future
             // bakes for other commands/stances reuse the same labels
@@ -887,6 +891,7 @@ export class AnimationCache {
                 partCount,
                 framerate,
                 resolvedStance,
+                isLink,
                 restOrigins,
                 restOrientations,
                 hooks,

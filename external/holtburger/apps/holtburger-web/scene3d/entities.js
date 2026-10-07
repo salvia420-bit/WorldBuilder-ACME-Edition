@@ -968,8 +968,36 @@ import { poseRigAt } from "./motion/motion_sequence.js";
 import {
   createMotionQueue, addToQueue, animationsDone, headMotion,
 } from "./motion_queue.js";
+// Bugs 2/15/18 (2026-10-07): bare low-16 → full 32-bit MotionCommand, so
+// every link lookup uses the full inner key (scene3d/motion/motion_command_full.js).
+import { fullMotionCommand } from "./motion/motion_command_full.js";
 // Pending one-shots kept behind the playhead (see `_enqueueUnifiedOneShot`).
-const _UNIFIED_QUEUE_MAX = 3;
+// Bug 2 (2026-10-07): 3 → 8. With movement no longer cutting the playhead
+// (`_preemptUnifiedForMotion`), a cast burst (windups + gesture) or a swing
+// chain queues behind it the way retail's unbounded pending_animations does;
+// 3 dropped the earliest windup of a burst.
+const _UNIFIED_QUEUE_MAX = 8;
+// Bug 15 (2026-10-07): spawn-in-flight motion stash (see `_stashSpawnMotion`).
+const SPAWN_MOTION_STASH_ACTIONS = 3;
+const SPAWN_MOTION_STASH_MAX_AGE_MS = 1500;
+// Bug 15: no distance-LOD respawn (remove()+spawn()) within this long of a
+// swing/cast, or while a one-shot plays or is queued — it threw them away.
+const LOD_RESPAWN_COMBAT_QUIET_MS = 3000;
+// Bug 15: late swing bakes (see `_tryPlayLink`).
+const MOTION_LATE_LOG_MS = 500;
+const MOTION_LATE_SKIP_MS = 1500;
+// Bug 19 (2026-10-07): airborne pose = the MotionTable Falling state
+// (`setAirborne`); `?jumpPose=overlay` restores the procedural arms-up tween.
+const CMD_FALLING_FULL = 0x40000015;
+const JUMP_POSE_OVERLAY = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("jumpPose") === "overlay";
+  } catch (_) {
+    return false;
+  }
+})();
+// A touchdown that never arrives (lost event) force-lands after this long.
+const MAX_AIRBORNE_MS = 8000;
 // Reused empties for the absent fields of MotionSequence.fromDescriptor.
 const EMPTY_F32 = new Float32Array(0);
 const EMPTY_U32 = new Uint32Array(0);
@@ -4738,8 +4766,12 @@ export class EntityManager {
     if (initialClip) {
       const _cls0 = classifyMotionCommand(initialMotion);
       if (_cls0 === "walk" || _cls0 === "run" || _cls0 === "idle") {
+        // Bugs 2/15/18: the same full-command / full-stance key setMotion
+        // builds, so its first Ready dedupes against this idle.
+        const st0Key = (resolvedStance || initialStance) >>> 0;
         const cacheKey0 = AnimationCache.makeKey(
-          setupId, mtableId, initialMotion, resolvedStance || initialStance,
+          setupId, mtableId, fullMotionCommand(initialMotion),
+          st0Key ? (((st0Key & 0xffff) | 0x80000000) >>> 0) : 0,
         );
         _spawnOnPlayhead = this._installUnifiedLoco(
           inst, animEntry.sequenceDescriptor, cacheKey0, animEntry.hooks, initialMotion,
@@ -4750,6 +4782,15 @@ export class EntityManager {
         // negative framerate, baked reversed) instead of snapping.
         if (_spawnOnPlayhead && isDoorStateMotion(initialMotion)) {
           inst.lastMotionCommand = initialMotion >>> 0;
+        } else if (_spawnOnPlayhead) {
+          // Bug 18 (2026-10-07): the same for locomotion. Retail's
+          // InterpretedMotionState starts at the spawn substate and style, so
+          // the first stance change plays its draw/sheathe link and the first
+          // step its Ready→Walk/Run link. Ours left both unset, so the first
+          // combat toggle after a spawn popped straight into the new stance.
+          inst.lastMotionCommand = fullMotionCommand(initialMotion);
+          const st0 = (resolvedStance || initialStance) >>> 0;
+          if (!inst.lastStance && st0) inst.lastStance = st0;
         }
       }
     }
@@ -4836,6 +4877,11 @@ export class EntityManager {
     // boot flood + async AtmosphereLights attach settle so the warmed
     // programs compile against the final light state (A10-F3).
     try { scheduleArchetypeWarm(this.scene3d); } catch (_) { /* diag-only */ }
+    // Bug 15 (2026-10-07): motions that arrived while this rig was being
+    // built (see `_stashSpawnMotion`).
+    if (this._spawnMotionStash?.has(guid)) {
+      try { this._replaySpawnMotions(guid); } catch (_) { /* replay is best-effort */ }
+    }
     // (2026-07-06) A corpse CreateObject (ODF Corpse bit) arrives right after a
     // creature's Dead motion + delete. Correlate it to the collapsing creature
     // so the corpse stays hidden until the death animation finishes and reveals
@@ -6364,6 +6410,17 @@ export class EntityManager {
     }
     if (c.root.parent) c.root.parent.remove(c.root);
     mount.add(c.root);
+    // Bug 14 diag: how long from the server's attach to the item on screen.
+    try {
+      const t0m = (typeof window !== "undefined") ? window.__heldAttachT0 : null;
+      const t0 = t0m?.get?.(cGuid);
+      if (typeof t0 === "number") {
+        t0m.delete(cGuid);
+        const now = (typeof performance !== "undefined") ? performance.now() : 0;
+        // eslint-disable-next-line no-console
+        console.info(`[held-attach] 0x${cGuid.toString(16)}→0x${pGuid.toString(16)} loc=${location} mounted ${Math.round(now - t0)} ms after the attach`);
+      }
+    } catch (_) { /* diag only */ }
     // EQUIP-3 (2026-08-02) — brand the mounted root so the two part-content
     // swap sites (`_applyAppearanceHotSwap` and the ReplaceObject anim hook)
     // can tell "a held item parented here" from "a surface Mesh I own". Both
@@ -8176,6 +8233,52 @@ export class EntityManager {
    * here too once the JS recv handler is restored (deferred; remote
    * jumps currently fall back to the MotionTable Falling cycle path).
    */
+  // Bug 19 helpers (see `setAirborne`).
+  _leaveGround(inst) {
+    const g = inst.guid >>> 0;
+    const stance = ((inst.currentStance ?? inst.lastStance ?? 0) >>> 0);
+    const from = (inst.lastMotionCommand ?? 0) >>> 0;
+    inst._groundMotion = {
+      cmd: from && (from & 0xffff) !== CMD_LOW_FALLING ? from : CMD_READY_FULL,
+      stance,
+      speed: (inst._motionSpeed ?? 1.0) * ((inst._motionSpeedSign ?? 1) < 0 ? -1 : 1),
+    };
+    inst._airborneSinceMs = performance.now();
+    if (this._jumpAnimLogOk(g)) {
+      try {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[jump-anim] 0x${g.toString(16)} airborne=1 -> 0x${CMD_FALLING_FULL.toString(16)} ` +
+          `(from 0x${from.toString(16)})`,
+        );
+      } catch (_) {}
+    }
+    this.setMotion(g, CMD_FALLING_FULL, stance, 1.0);
+  }
+
+  _hitGround(inst, why) {
+    const g = inst.guid >>> 0;
+    const gm = inst._groundMotion;
+    inst._groundMotion = null;
+    inst._airborneSinceMs = 0;
+    const stance = ((gm?.stance || inst.currentStance || inst.lastStance || 0) >>> 0);
+    const cmd = gm?.cmd && (gm.cmd & 0xffff) !== CMD_LOW_FALLING ? gm.cmd >>> 0 : CMD_READY_FULL;
+    if (this._jumpAnimLogOk(g)) {
+      try {
+        // eslint-disable-next-line no-console
+        console.log(`[jump-anim] 0x${g.toString(16)} airborne=0 (${why}) -> 0x${cmd.toString(16)}`);
+      } catch (_) {}
+    }
+    this.setMotion(g, cmd, stance, gm?.speed ?? 1.0);
+  }
+
+  // `[jump-anim]` lines: always for the local player, a capped few for others.
+  _jumpAnimLogOk(g) {
+    if (this._isLocalPlayerGuid(g >>> 0)) return true;
+    this._jumpAnimRemoteLogs = (this._jumpAnimRemoteLogs | 0) + 1;
+    return this._jumpAnimRemoteLogs <= 20;
+  }
+
   setAirborne(guid, airborne) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst || !inst.root) return;
@@ -8187,6 +8290,22 @@ export class EntityManager {
     // any state change. The takeoff path re-stamps in _tickJumpPoseTween
     // once the takeoff tween completes; the landing path leaves it null.
     inst._airborneStablishedMs = null;
+
+    // Bug 19 (2026-10-07): the airborne pose is the MotionTable's Falling
+    // state, as in retail. `LeaveGround` (acclient.c:344478) re-runs the
+    // interpreted movement off the walkable, which applies Falling
+    // 0x40000015 (acclient.c:344193): the take-off LINK out of the current
+    // substate (human MT: Ready→Falling 0x030004AA, Run→Falling 0x030004AC)
+    // and then the Falling loop (0x030004A9). Keys pressed in the air only
+    // update the motion state (acclient.c:343987-344013; `setMotion` keeps
+    // them in `_groundMotion`), and `HitGround` (:344429) re-applies that
+    // state, which plays the Falling→Ready/Walk/Run landing link. The old
+    // procedural arms-up tween is kept behind `?jumpPose=overlay`.
+    if (!JUMP_POSE_OVERLAY) {
+      if (wantAirborne) this._leaveGround(inst);
+      else this._hitGround(inst, "touchdown");
+      return;
+    }
 
     const isHumanShape = inst.parts && inst.parts.length >= 16;
 
@@ -9069,14 +9188,28 @@ export class EntityManager {
     const lowIn = (motionCommand >>> 0) & 0xffff;
     const incoming = (lowIn === 0 || lowIn === 0x0004 /* Stop */)
       ? "idle" : classifyMotionCommand(motionCommand >>> 0);
-    if ((incoming === "attack" || incoming === "cast") && inst._unifiedSeq.clearOnDone) return;
-    // 2026-10-05: retail never cuts a queued action/link on a Ready re-issue
-    // (same-substate re-speed / remove_cyclic_anims only, acclient.c:337780ff).
-    // The per-press MaybeStopCompletely (457f9de1) emits DriveApplied(Ready),
-    // which freed the cast gesture here before it could play. Deliberate cuts
-    // (anim-break / fizzle) free it in cancelCastSequence instead.
-    if (incoming === "idle" && inst._unifiedSeq.clearOnDone) return;
+    // Bug 2 (2026-10-07): a one-shot that finishes on its own (an action,
+    // a windup, a gesture, a transition link) is NEVER cut by an incoming
+    // command, whatever its class. Retail's new cycle only does
+    // `clear_physics` + `remove_cyclic_anims` (acclient.c:337737, :337796):
+    // queued links and actions keep playing and the new link + cycle are
+    // appended behind them (OpenAC CMotionTable.cs:193, :255); sidestep and
+    // turn are modifiers on the sequence (CMotionTable.cs:341-366), not
+    // replacements. Before this, every Q/E/A/D press (camera.js
+    // `_dispatchLocalRigMotion`, client_events.js DriveApplied) freed the
+    // cast windup on the playhead, so attack spells cast while moving never
+    // animated. The deliberate cuts stay explicit: the forward-key anim-break
+    // and fizzles free the one-shot in `cancelCastSequence`, death pre-empts in
+    // its own branch.
+    if (inst._unifiedSeq.clearOnDone) return;
     const ua = inst._unifiedSeq;
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[motion-cut] 0x${(inst.guid >>> 0).toString(16)} held one-shot cut by ` +
+        `0x${(motionCommand >>> 0).toString(16)} (${incoming})`,
+      );
+    } catch (_) {}
     this._clearUnifiedQueue(inst); // frees every pending record except `ua`
     try { ua.seq.free(); } catch (_) { /* already freed */ }
     inst._unifiedSeq = null;
@@ -9676,9 +9809,104 @@ export class EntityManager {
    * the cycle's `setEffectiveTimeScale` — composing with (not clobbering)
    * the `?velScale=on` T11 velocity-scale path (see `tick()` ~L6343).
    */
+  // Bug 15 (2026-10-07): motions that arrive while a rig's spawn is in
+  // flight. Keeps the LATEST base command (locomotion / idle / stance) and up
+  // to SPAWN_MOTION_STASH_ACTIONS recent actions (swings, windups, emotes).
+  _stashSpawnMotion(guid, motionCommand, motionStance, motionSpeed) {
+    if (!this._spawnMotionStash) this._spawnMotionStash = new Map();
+    let st = this._spawnMotionStash.get(guid);
+    if (!st) {
+      st = { base: null, actions: [] };
+      this._spawnMotionStash.set(guid, st);
+    }
+    const rec = {
+      cmd: motionCommand >>> 0,
+      stance: motionStance >>> 0,
+      speed: motionSpeed,
+      at: performance.now(),
+    };
+    const c = classifyMotionCommand(rec.cmd);
+    if ((c === "attack" || c === "cast") && !isSubstateCastGesture(rec.cmd)) {
+      st.actions.push(rec);
+      if (st.actions.length > SPAWN_MOTION_STASH_ACTIONS) st.actions.shift();
+    } else {
+      st.base = rec;
+    }
+  }
+
+  // Replay what `_stashSpawnMotion` kept, once the rig is in `entityMap`.
+  // Actions older than SPAWN_MOTION_STASH_MAX_AGE_MS are dropped: by then the
+  // swing they animate has already resolved on the server.
+  _replaySpawnMotions(guid) {
+    const st = this._spawnMotionStash?.get(guid);
+    if (!st) return;
+    this._spawnMotionStash.delete(guid);
+    const now = performance.now();
+    let replayed = 0;
+    let dropped = 0;
+    if (st.base) {
+      this.setMotion(guid, st.base.cmd, st.base.stance, st.base.speed);
+      replayed++;
+    }
+    for (const a of st.actions) {
+      if (now - a.at > SPAWN_MOTION_STASH_MAX_AGE_MS) {
+        dropped++;
+        continue;
+      }
+      this.setMotion(guid, a.cmd, a.stance, a.speed);
+      replayed++;
+    }
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[motion-drop] 0x${(guid >>> 0).toString(16)} spawn in flight: replayed ${replayed}, ` +
+        `dropped ${dropped} stale action(s)` +
+        (st.base ? ` (base 0x${st.base.cmd.toString(16)} st=0x${st.base.stance.toString(16)})` : ""),
+      );
+    } catch (_) {}
+  }
+
   setMotion(guid, motionCommand, motionStance, motionSpeed = 1.0) {
     const inst = this.entityMap.get(guid >>> 0);
-    if (!inst) return Promise.resolve();
+    if (!inst) {
+      // Bug 15 (2026-10-07): a motion for a rig still being built used to be
+      // dropped (the rig is only registered at the END of `_spawnImpl`, after
+      // its bakes). Right after login every nearby monster is mid-spawn, so
+      // their first chase/swing broadcasts vanished. Stash them; `_spawnImpl`
+      // replays them once the rig commits.
+      if (this.spawnInFlight?.has(guid >>> 0)) {
+        this._stashSpawnMotion(guid >>> 0, motionCommand, motionStance, motionSpeed);
+      }
+      return Promise.resolve();
+    }
+    {
+      // Bug 15: stamp a server swing/cast when it ARRIVES, not when its bake
+      // finishes, so the damage-event swing guess (client_events.js, now
+      // opt-in) and the LOD-respawn guard see it at once.
+      const c = classifyMotionCommand(motionCommand >>> 0);
+      if (c === "attack" || c === "cast") {
+        const now = performance.now();
+        inst._lastServerSwingMs = now;
+        inst._lastCombatMotionMs = now;
+      }
+      // Bug 19 (2026-10-07): off the ground the interpreted movement keeps
+      // Falling on the sequence; locomotion commands (held keys, the
+      // server's echo) only update the state that touchdown re-applies
+      // (acclient.c:343987-344013, :344429). Death and actions still play.
+      if (inst._isAirborne && !JUMP_POSE_OVERLAY) {
+        const low = (motionCommand >>> 0) & 0xffff;
+        const loco = low === 0 || low === CMD_LOW_READY || low === CMD_LOW_STOP ||
+          c === "walk" || c === "run" || c === "idle";
+        if (loco && low !== CMD_LOW_FALLING && low !== CMD_LOW_DEAD) {
+          inst._groundMotion = {
+            cmd: motionCommand >>> 0,
+            stance: (motionStance >>> 0) || inst._groundMotion?.stance || 0,
+            speed: motionSpeed,
+          };
+          return Promise.resolve();
+        }
+      }
+    }
     // 2026-10-05 cast regression (fb58331a): a final cast gesture is a held
     // SUBSTATE whose link + cycle commit in one step AFTER their bakes resolve,
     // token-gated like any cycle. ACE sends the closing Ready ~0.35 s after the
@@ -9877,6 +10105,16 @@ export class EntityManager {
       cmd = (cmd & 0xFFFF0000) | CMD_LOW_SIDESTEP_RIGHT;
       cmdLow = CMD_LOW_SIDESTEP_RIGHT;
     }
+    // Bugs 2/15/18 (2026-10-07): canonical FULL 32-bit command from here on.
+    // The MotionTable link INNER key is the full command, and remote motions
+    // arrive as the wire's bare low-16 (local Ready alternated bare/full), so
+    // every link lookup TO a bare command missed. The canonical value also
+    // fixes the Stop→Ready substitution above, which kept a full Stop's class
+    // bits (0x40000004 → 0x40000003, not Ready's 0x41000003).
+    {
+      const canon = fullMotionCommand(cmdLow);
+      if (canon > 0xffff) cmd = canon >>> 0;
+    }
     let stance = (motionStance >>> 0);
     // Wave 3 / Phase 3.3 (2026-05-26): capture the PREVIOUS stance
     // before `inst.lastStance` is mutated below so the Ready-substitution
@@ -9905,6 +10143,10 @@ export class EntityManager {
     // existing read pattern in `setSwingMotion` at line ~1942 which
     // already checks `inst.currentStance ?? inst.lastStance ?? …`.
     inst.currentStance = stance;
+    // Bugs 2/15/18: full 32-bit stance (0x80000000 | low16) for every cache
+    // key and bake below, so a bare wire stance and a full one share a key.
+    // The stored lastStance / currentStance keep the value they were given.
+    if (stance) stance = (((stance & 0xffff) | 0x80000000) >>> 0);
     // (2026-07-02) — death-hold stamp, read by loop.js `_armRemove`: ACE
     // resolves `deathAnimLength` through `GetAnimData`, which reads the
     // MotionTable LINKS ONLY (DatLoader MotionTable.cs:130-148) — creature
@@ -9915,6 +10157,20 @@ export class EntityManager {
     // BEFORE the async keyframe fetch so the removal deferral covers the
     // resolve window (the `entityMap.has` guard below would otherwise
     // abort the fetch when the delete lands first).
+    // Bug 6 (2026-10-07): a PLAYER rig survives its death (the same object
+    // returns at the lifestone); a live motion after Dead clears the death
+    // state so the dying-only guards (no re-dress, no LOD respawn, frozen
+    // dead-reckon) stop applying. Creatures never come back — their corpse is
+    // a new object.
+    if ((cmd & 0xFFFF) !== CMD_LOW_DEAD && typeof inst._deathAt === "number") {
+      const isPlayerRig = this._isLocalPlayerGuid(guid >>> 0)
+        || (((inst.meta?.objDescFlags >>> 0) & 0x8) !== 0);
+      if (isPlayerRig && !inst._removePending && !inst._corpseHandoffGuid) {
+        inst._deathAt = undefined;
+        inst._deathEndAt = undefined;
+        inst._deadFrozen = false;
+      }
+    }
     if ((cmd & 0xFFFF) === CMD_LOW_DEAD) {
       inst._deathAt = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
@@ -9940,13 +10196,17 @@ export class EntityManager {
         } catch (_e) {
           killOpts = undefined;
         }
+        // Bug 6 (2026-10-07): mark the rig as arming so a server delete that
+        // lands before the cold registry fetch resolves still holds it for the
+        // corpse claim (loop.js `_armRemove`).
+        inst._ragdollArming = true;
         startRagdoll(inst, killOpts).catch((e) => {
           if (!this._ragdollWarned) {
             this._ragdollWarned = true;
             // eslint-disable-next-line no-console
             console.warn(`[entities/ragdoll] arm failed for 0x${guid.toString(16)}:`, e);
           }
-        });
+        }).finally(() => { inst._ragdollArming = false; });
       }
     }
     // A final cast gesture is a SUBSTATE (see isSubstateCastGesture): it takes
@@ -10254,11 +10514,22 @@ export class EntityManager {
     // OLD stance's cycle. The pending fetch is parked on the instance, so a
     // newer setMotion that supersedes this one (the predictor's Ready re-issue)
     // inherits it instead of losing the draw animation.
-    if (
-      (cmd & 0xffff) === CMD_LOW_READY &&
-      prevStance !== 0 && (stance & 0xffff) !== (prevStance & 0xffff)
-    ) {
-      inst._pendingStyleLinks = this._resolveStyleLinks(inst, setupId, mtableId, prevStance, stance);
+    //
+    // Bug 18 (2026-10-07): the style change is applied for ANY command, not
+    // only Ready, and as retail orders it. `apply_interpreted_movement`
+    // (acclient.c:344147) applies the style first, then the forward command,
+    // into one sequence: the style step appends the EXIT link (current
+    // substate → Ready, old style), the style link(s), then the new style's
+    // Ready (acclient.c:337700-337760; OpenAC CMotionTable.cs:158-211); the
+    // forward step appends Ready → cmd (new style) and the new cycle. Ours
+    // played the style link only for a Ready (a Run carrying the new stance
+    // popped straight into the combat run) and no exit link.
+    let ownStanceChain = false;
+    if (prevStance !== 0 && (stance & 0xffff) !== (prevStance & 0xffff)) {
+      inst._pendingStyleLinks = this._resolveStanceChain(
+        inst, setupId, mtableId, prevStance, stance, (inst.lastMotionCommand ?? 0) >>> 0,
+      );
+      ownStanceChain = true;
     }
     // Dedupe against the playhead's cycle (`currentActionKey` is its key).
     // Audit F6: per-entity command token, bumped BEFORE the dedup so even a
@@ -10291,7 +10562,13 @@ export class EntityManager {
     // caster in (it stops the caster first). Retail would hop through the
     // style default from any other substate; from a never-moved spawn
     // `lastMotionCommand` is 0, which would otherwise skip the gesture link.
-    const fromMotion = castGestureSubstate ? READY_SUBSTATE : ((inst.lastMotionCommand ?? 0) >>> 0);
+    // Bug 18: after a style change the substate is the NEW style's Ready, so
+    // the forward command links from there (the chain's entry link).
+    const fromMotion = castGestureSubstate
+      ? READY_SUBSTATE
+      : styleLinksP
+        ? CMD_READY_FULL
+        : ((inst.lastMotionCommand ?? 0) >>> 0);
     let linkP = null;
     if (
       fromMotion !== 0 &&
@@ -10349,10 +10626,29 @@ export class EntityManager {
     // ---- commit: links + cycle in ONE synchronous step (no tick between) ----
     // Order matches retail's sequence build: the transition (exit) link, the
     // style link(s), then the destination cycle (acclient.c:337726-745).
+    // Bug 18: the style chain (exit link + style links) FIRST, then the
+    // forward command's link, then the cycle — retail's order.
     let linked = false;
-    if (linkEntry && this._playLinkEntry(inst, linkEntry, fromMotion, cmd, stance)) linked = true;
+    let styleN = 0;
     for (const l of (styleLinks || [])) {
-      if (this._playLinkEntry(inst, l.entry, READY_SUBSTATE, l.toCmd, l.stance)) linked = true;
+      if (this._playLinkEntry(inst, l.entry, l.fromCmd ?? READY_SUBSTATE, l.toCmd, l.stance)) {
+        linked = true;
+        styleN++;
+      }
+    }
+    const entryPlayed = !!(linkEntry && this._playLinkEntry(inst, linkEntry, fromMotion, cmd, stance));
+    if (entryPlayed) linked = true;
+    if (styleLinks) {
+      const m = styleLinks.meta || {};
+      try {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[stance-chain] 0x${(guid >>> 0).toString(16)} ` +
+          `0x${((m.from ?? prevStance) >>> 0).toString(16)}->0x${((m.to ?? stance) >>> 0).toString(16)} ` +
+          `exit=${m.exit ? 1 : 0} style=${styleN - (m.exit ? 1 : 0)} entry=${entryPlayed ? 1 : 0} ` +
+          `cycle=0x${(cmd >>> 0).toString(16)}${ownStanceChain ? "" : " (inherited)"}`,
+        );
+      } catch (_) {}
     }
     // No animation resolved for this (cmd, stance) → the playhead keeps its
     // current cycle (the mixer used to fade to the rest pose here, which the
@@ -10440,7 +10736,18 @@ export class EntityManager {
       this.setMotion(g, CMD_LOW_READY, stance);
       return;
     }
-    if (!changed || moving) {
+    if (changed && moving) {
+      // Bug 18 (2026-10-07): a combat toggle WHILE running used to only
+      // record the stance here; the next predictor tick then swapped straight
+      // to the new stance's run cycle (the "stance switches instantly"). Play
+      // the retail style change on the current gait instead: setMotion builds
+      // exit link → draw/sheathe → Ready→Run (new style) → run cycle. The
+      // predictor's own re-issue of the same Run then dedupes against it.
+      const spd = (inst._motionSpeed ?? 1.0) * ((inst._motionSpeedSign ?? 1) < 0 ? -1 : 1);
+      this.setMotion(g, lastCmd, stance, spd);
+      return;
+    }
+    if (!changed) {
       // No pose swap: just record the confirmed stance so getStance()
       // and the next predictor tick pick it up. (Always safe.)
       inst.currentStance = stance;
@@ -10660,6 +10967,18 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return false;
+    // Bug 6 / bug 16 (2026-10-07): a creature that has died is not re-dressed.
+    // ACE dequips an armed creature's treasure while it dies
+    // (`TryDequipObjectWithBroadcasting` → ObjDescEvent, Creature_Death.cs:675);
+    // re-dressing the dying rig cost a full bake + palette decode (a frame
+    // drop at every armed kill), and the remove()+spawn() fallback wiped the
+    // ragdoll the corpse handoff copies its pose from. The corpse carries the
+    // final ObjDesc anyway.
+    if (typeof inst._deathAt === "number") {
+      // eslint-disable-next-line no-console
+      console.info(`[handoff] skip re-dress of dying 0x${g.toString(16)}`);
+      return true;
+    }
 
     const oldMeta = inst.meta || {};
     const newMeta = { ...oldMeta };
@@ -11200,7 +11519,9 @@ export class EntityManager {
       // 2026-08-02 trace, bug #3) plus a grace for busy spawn queues.
       const endAt = inst._deathEndAt ?? (inst._deathAt + DEATH_HOLD_FALLBACK_MS);
       const ragdollLive = RAGDOLL_ON && inst._ragdoll && !inst._ragdoll.sim?.done;
-      if (!ragdollLive && now >= endAt + DEATH_CORRELATE_GRACE_MS) continue;
+      // Bug 6 (2026-10-07): a creature whose server delete already arrived is
+      // held by `_armRemove` only so a corpse can claim it — always in-window.
+      if (!ragdollLive && !inst._removePending && now >= endAt + DEATH_CORRELATE_GRACE_MS) continue;
       const p = inst.root?.position;
       if (!p) continue;
       const dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
@@ -11214,8 +11535,26 @@ export class EntityManager {
     }
     if (!best) {
       if (RAGDOLL_ON) {
+        // Bug 6 diag: name the nearest dying creature that was rejected and why.
+        let near = null, nearD2 = Infinity, why = "none";
+        for (const inst of this.entityMap.values()) {
+          if (inst === corpseInst || typeof inst._deathAt !== "number") continue;
+          const p = inst.root?.position;
+          if (!p) continue;
+          const d2 = (p.x - cp.x) ** 2 + (p.y - cp.y) ** 2 + (p.z - cp.z) ** 2;
+          if (d2 < nearD2) { nearD2 = d2; near = inst; }
+        }
+        if (near) {
+          const endAt = near._deathEndAt ?? (near._deathAt + DEATH_HOLD_FALLBACK_MS);
+          why = near._corpseHandoffGuid ? "claimed"
+            : (now >= endAt + DEATH_CORRELATE_GRACE_MS && !near._removePending) ? "window"
+            : "distance";
+        }
         // eslint-disable-next-line no-console
-        console.info(`[handoff] corpse 0x${(corpseInst.guid >>> 0).toString(16)}: no dying creature matched — authored pose shows`);
+        console.info(
+          `[handoff] corpse 0x${(corpseInst.guid >>> 0).toString(16)}: no dying creature matched — authored pose shows` +
+          (near ? ` (nearest 0x${(near.guid >>> 0).toString(16)} d=${Math.sqrt(nearD2).toFixed(1)}m rejected: ${why})` : " (no dying creature present)"),
+        );
       }
       return; // no dying creature here → corpse shows normally
     }
@@ -11907,6 +12246,30 @@ export class EntityManager {
     return out;
   }
 
+  // Bug 18 (2026-10-07): the whole style-change prefix retail appends before
+  // the forward command: the EXIT link `exitFrom → Ready` in the OLD style
+  // (skipped when already at Ready), then `_resolveStyleLinks`. Resolves to
+  // `[{ entry, fromCmd, toCmd, stance }]` in play order, with
+  // `.meta = { from, to, exit }` for the [stance-chain] log. Fetch only.
+  async _resolveStanceChain(inst, setupId, mtableId, fromStyle, toStyle, exitFrom) {
+    const full = (s) => (((s >>> 0) & 0xffff) | 0x80000000) >>> 0;
+    const from = full(fromStyle);
+    const to = full(toStyle);
+    const exitCmd = fullMotionCommand(exitFrom >>> 0);
+    const wantExit = exitCmd !== 0 && (exitCmd & 0xffff) !== CMD_LOW_READY;
+    const [exit, style] = await Promise.all([
+      wantExit
+        ? this._fetchLinkEntry(inst, setupId, mtableId, exitCmd, CMD_READY_FULL, from)
+        : Promise.resolve(null),
+      this._resolveStyleLinks(inst, setupId, mtableId, from, to),
+    ]);
+    const out = [];
+    if (exit) out.push({ entry: exit, fromCmd: exitCmd, toCmd: CMD_READY_FULL, stance: from });
+    for (const l of style) out.push({ ...l, fromCmd: CMD_READY_FULL });
+    out.meta = { from, to, exit: !!exit };
+    return out;
+  }
+
   // Fetch + play the stance-change links on their own (kept for callers
   // outside setMotion; setMotion commits them with the cycle instead).
   async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
@@ -11922,6 +12285,13 @@ export class EntityManager {
   async _fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance) {
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (typeof fetchKeyframes !== "function") return null;
+    // Bug 15 (2026-10-07): a swing / cast link is player-visible combat
+    // feedback, so its bake rides the urgent fetch lane (BUG-3
+    // `?appearanceUrgent`) instead of queueing behind world streaming; after
+    // login that queue held the first swings back for seconds. Locomotion
+    // links stay on the normal lane.
+    const tcls = classifyMotionCommand(toCmd >>> 0);
+    const urgent = APPEARANCE_URGENT_ON && (tcls === "attack" || tcls === "cast");
     let entry;
     try {
       entry = await this.animationCache.get(
@@ -11936,13 +12306,42 @@ export class EntityManager {
           paletteId: (inst.meta.paletteId ?? 0) >>> 0,
           paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
           fromMotion: fromCmd,
+          urgent,
         },
       );
     } catch (_) {
       return null;
     }
     if (!this.entityMap.has(inst.guid >>> 0)) return null;
-    return entry?.clip ? entry : null;
+    if (!entry?.clip) return null;
+    // Bugs 2/15/18 (2026-10-07): when the requested link does not exist the
+    // wasm bake falls back to the target's CYCLE (lib.rs
+    // build_entity_animation_data_inner_v2), and this used to hand that whole
+    // loop back as the link — a full Ready/Run cycle played once in front of
+    // the real draw, swing or windup. `isLink === false` is that fallback;
+    // `null` (an older pkg/ without the flag) keeps the old behaviour.
+    if (entry.isLink === false) {
+      this._noteCycleAsLink(inst, mtableId, fromCmd, toCmd, stance);
+      return null;
+    }
+    return entry;
+  }
+
+  // One console line per distinct rejected (mtable, stance, from → to), capped
+  // per session: most locomotion transitions legitimately have no link.
+  _noteCycleAsLink(inst, mtableId, fromCmd, toCmd, stance) {
+    const key = `${mtableId >>> 0}:${stance >>> 0}:${fromCmd >>> 0}:${toCmd >>> 0}`;
+    if (!this._cycleAsLinkSeen) this._cycleAsLinkSeen = new Set();
+    if (this._cycleAsLinkSeen.has(key) || this._cycleAsLinkSeen.size >= 64) return;
+    this._cycleAsLinkSeen.add(key);
+    try {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[motion-link] cycle-as-link rejected 0x${(inst.guid >>> 0).toString(16)} ` +
+        `0x${(fromCmd >>> 0).toString(16)}->0x${(toCmd >>> 0).toString(16)} ` +
+        `st=0x${(stance >>> 0).toString(16)} mtable=0x${(mtableId >>> 0).toString(16)}`,
+      );
+    } catch (_) {}
   }
 
   // Play an already-resolved link entry as a FULL-BODY one-shot in the Rust
@@ -11988,10 +12387,34 @@ export class EntityManager {
     // unified one-shot), false otherwise — the door-state caller falls back
     // to its 1-frame cycle hold on false. Legacy callers ignore the value.
     if (typeof this.wasmExports?.fetchEntityAnimationKeyframes !== "function") return false;
+    const t0 = performance.now();
     const entry = await this._fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance);
     if (!this.entityMap.has(inst.guid >>> 0)) return false;
     // A locomotion link whose setMotion was superseded mid-fetch is stale (F6).
     if (opts?.motionToken !== undefined && inst._motionToken !== opts.motionToken) return false;
+    // Bug 15 (2026-10-07): a swing whose bake took longer than the swing
+    // itself would play AFTER its hit landed (retail loads synchronously and
+    // never shows one late). Skip it past MOTION_LATE_SKIP_MS or twice its
+    // length; log any wait over MOTION_LATE_LOG_MS either way.
+    if (entry) {
+      const tcls = classifyMotionCommand(toCmd >>> 0);
+      if (tcls === "attack" || tcls === "cast") {
+        const waited = performance.now() - t0;
+        if (waited > MOTION_LATE_LOG_MS) {
+          const sp = (Number.isFinite(+opts?.speed) && +opts.speed > 0) ? +opts.speed : 1;
+          const durMs = (_finiteOr0(entry.sequenceDescriptor?.duration) * 1000) / sp;
+          const skip = waited > Math.max(MOTION_LATE_SKIP_MS, 2 * durMs);
+          try {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[motion-late] 0x${(inst.guid >>> 0).toString(16)} 0x${(toCmd >>> 0).toString(16)} ` +
+              `bake ${Math.round(waited)}ms (clip ${Math.round(durMs)}ms) ${skip ? "skipped" : "played"}`,
+            );
+          } catch (_) {}
+          if (skip) return false;
+        }
+      }
+    }
     if (!entry) {
       // No link registered for this (stance, from→to) transition. For
       // locomotion transition links this is the common/expected case
@@ -13752,8 +14175,26 @@ export class EntityManager {
       const g = inst.guid >>> 0;
       if (g === localGuid) continue; // local player is always full detail
       if (!inst._lodOriginalSetup) continue; // no degrade chain captured
+      // Bug 6 (2026-10-07): never LOD-respawn (remove()+spawn()) a dying
+      // creature or a corpse mid-handoff — it wiped the ragdoll and the
+      // `_deathAt` stamp the corpse claim needs, so the corpse came up in the
+      // authored pose. Retail swaps degrades inside the part array instead.
+      if (typeof inst._deathAt === "number" || inst._hiddenForHandoff || inst._corpseHandoffGuid) continue;
       if (inst._lodRespawning) continue; // a band query / respawn is in flight
       if (this.spawnInFlight.has(g)) continue;
+      // Bug 15 (2026-10-07): `_respawnForLod` is remove()+spawn(), which threw
+      // away a swing on the playhead and every queued one-shot, and dropped
+      // motions arriving during the rebuild. Approaching monsters cross the
+      // distance bands exactly while they attack. Hold the swap while a
+      // one-shot plays or waits, and for a quiet window after combat motion.
+      if (
+        inst._unifiedSeq?.clearOnDone ||
+        (inst._unifiedQueue?.list?.length ?? 0) > 0 ||
+        (inst._lastCombatMotionMs &&
+          performance.now() - inst._lastCombatMotionMs < LOD_RESPAWN_COMBAT_QUIET_MS)
+      ) {
+        continue;
+      }
       if (inst._jumpPoseTween) continue; // (swing/cast tweens retired, WS-B 2026-06-18)
       // PROJ-VIS: never LOD-respawn a projectile. `_respawnForLod` is
       // remove()+spawn(): mid-flight it tore down the trail emitters + light and
@@ -14514,6 +14955,14 @@ export class EntityManager {
           this._playheadWarned = true;
           console.warn("[entities] motion playhead advance threw:", e);
         }
+      }
+      // Bug 19: a lost touchdown must not leave a rig in Falling forever.
+      if (
+        inst._isAirborne && inst._airborneSinceMs &&
+        performance.now() - inst._airborneSinceMs > MAX_AIRBORNE_MS
+      ) {
+        inst._isAirborne = false;
+        this._hitGround(inst, "stuck-airborne timeout");
       }
       // Wave 1.7 (2026-05-26) — Jump-pose tween advance. Runs AFTER
       // the playhead pose so our per-part slerp wins on the locked-out
@@ -16602,6 +17051,10 @@ export class EntityManager {
       if (lbId == null) continue;
       const lb = lbId >>> 0;
       if (lb === 0) continue; // wielded/contained — rides the player, no landblock
+      // Bug 14: an item mounted on a wielder rides that wielder whatever
+      // landblock it was spawned in (a pre-fix synthesized wield spawn carried
+      // the wielder's landblock and was reaped ~30 s after a long port).
+      if (inst?._attachedParentGuid != null) continue;
       const lx = (lb >>> 24) & 0xff;
       const ly = (lb >>> 16) & 0xff;
       const cheb = Math.max(Math.abs(lx - cx), Math.abs(ly - cy));

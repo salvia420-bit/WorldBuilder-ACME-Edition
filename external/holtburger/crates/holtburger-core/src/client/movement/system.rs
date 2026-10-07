@@ -1809,6 +1809,13 @@ pub(crate) struct MovementSystem {
     /// the clamp runs under `&self` (same reason `SpatialScene`'s arm-eval
     /// probes are `Cell`s).
     fu3_diag_tick: std::cell::Cell<u32>,
+    /// Bug 17 (2026-10-07): lines left for the `[ground-keep]` diagnostic
+    /// (capped so a long hold at a lip cannot flood the console).
+    ground_keep_logs: std::cell::Cell<u32>,
+    /// Bug 17: lines left for the `[ground-loss]` diagnostic.
+    ground_loss_logs: std::cell::Cell<u32>,
+    /// Bug 19: lines left for the `[jump-pack]` diagnostic.
+    jump_pack_logs: std::cell::Cell<u32>,
     /// Phase 3 Phase D (2026-06-28) — runtime carrier of the
     /// `?faithfulOutdoor=off` URL flag. `None` = use the
     /// [`USE_FAITHFUL_OUTDOOR`] const default (ON); `Some(false)` forces the
@@ -2339,6 +2346,9 @@ impl MovementSystem {
             faithful_entity_collision_runtime: false,
             fu3_diag_runtime: false,
             fu3_diag_tick: std::cell::Cell::new(0),
+            ground_keep_logs: std::cell::Cell::new(0),
+            ground_loss_logs: std::cell::Cell::new(0),
+            jump_pack_logs: std::cell::Cell::new(0),
             faithful_outdoor_runtime: None,
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
@@ -3451,6 +3461,38 @@ impl MovementSystem {
                     .unwrap_or(Vector3::new(0.0, 0.0, vz))
             };
 
+        // Bug 19 (2026-10-07): the JumpPack velocity is in the player's LOCAL
+        // frame. Retail `DoJump` packs `get_local_physics_velocity`
+        // (acclient.c:408180-408193; OpenAC PlayerMovementController.cs
+        // :1825-1833) and ACE applies it with `set_local_velocity`
+        // (Player.cs:913/938 → PhysicsObj `Position.LocalToGlobalVec`). Ours
+        // sent the WORLD-frame launch velocity, so the server's arc (and every
+        // observer's view of the jump) was rotated by the jumper's heading;
+        // only a heading-0 jump went the right way. The local trajectory above
+        // stays world-frame.
+        let lateral_velocity = match world
+            .local_player_runtime_pose()
+            .map(|p| p.rotation)
+        {
+            Some(q) => {
+                let l = q
+                    .conjugate()
+                    .rotate_vector(Vector3::new(lateral_velocity.x, lateral_velocity.y, 0.0));
+                Vector3::new(l.x, l.y, lateral_velocity.z)
+            }
+            None => lateral_velocity,
+        };
+        if self.jump_pack_logs.get() < 20 {
+            self.jump_pack_logs.set(self.jump_pack_logs.get() + 1);
+            // warn: the wasm console logger routes WARN and above only.
+            log::warn!(
+                "[jump-pack] extent={:.2} local=({:.2},{:.2},{:.2})",
+                extent,
+                lateral_velocity.x,
+                lateral_velocity.y,
+                lateral_velocity.z,
+            );
+        }
         // The single pack ctor + the one counter-stamped funnel
         // (retail acclient.c:408180-408193).
         let data = build_jump(world, extent, lateral_velocity);
@@ -7631,6 +7673,35 @@ impl MovementSystem {
                 pose.coords.y += disp.y;
             }
         }
+        // Bug 17 (2026-10-07): retail and OpenAC update the mover's contact
+        // state ONLY from a transition that succeeded AND moved it.
+        // `CPhysicsObj::UpdateObjectInternal` skips the transition for an
+        // unchanged position and, when the transition fails, keeps both the
+        // position and Contact/OnWalkable (acclient.c:322781-322840); OpenAC
+        // gates the same update on `resolveResult.Ok && candidateMoved`
+        // (PlayerMovementController.cs:1982). Ours re-derived "grounded" from
+        // every slice, so a failed or zero-length slice at a lip or on a steep
+        // stretch left the ground (begin_fall) and the player "hopped".
+        let candidate_moved = leash_delta.length_squared() > 0.0;
+        let transition_ok = !matches!(
+            outcome.state,
+            holtburger_world::spatial::collision::TransitionState::Collided
+                | holtburger_world::spatial::collision::TransitionState::Invalid
+        );
+        let keep_ground = !was_airborne && !outcome.grounded && !(transition_ok && candidate_moved);
+        if keep_ground {
+            let n = self.ground_keep_logs.get();
+            if n < 40 {
+                self.ground_keep_logs.set(n + 1);
+                // warn: the wasm console logger routes WARN and above only.
+                log::warn!(
+                    "[ground-keep] state={:?} moved={} cell=0x{:08X} — contact kept (retail: failed/zero-length transition keeps OnWalkable)",
+                    outcome.state,
+                    candidate_moved,
+                    pose.landblock_id.0,
+                );
+            }
+        }
         // InitLastKnownContactPlane equivalent — a step with no wall
         // leaves the prior tracked plane intact.
         if let Some(n) = outcome.wall_normal {
@@ -7642,7 +7713,7 @@ impl MovementSystem {
         // touched (retail sets `contact_plane_valid` from the transition every
         // frame — a jump arc therefore drops the plane on its first airborne
         // frame and nothing re-seeds mid-air).
-        if gates.retail_ground {
+        if gates.retail_ground && !keep_ground {
             world.player.last_contact_plane = outcome.contact_plane;
         }
         // Retail stationary-fall read-back (`CPhysicsObj::report_collision_end`,
@@ -7717,7 +7788,51 @@ impl MovementSystem {
             }
             world.player.land();
         }
-        if !was_airborne && !outcome.grounded {
+        // Bug 17 (2026-10-07): an airborne mover pressed against a too-steep
+        // face (a thatch roof, a cliff) loses the into-face part of its
+        // velocity, as retail's collision response does
+        // (`CPhysicsObj::handle_all_collisions`, acclient.c:321881:
+        // `v -= (1 + e)(v·n) n` for `v·n < 0`, elasticity 0.05 — OpenAC
+        // PhysicsObjUpdate.HandleAllCollisions). Without it the launch velocity
+        // stayed frozen while sliding down the face and threw the player off
+        // at the next edge ("flies off").
+        if was_airborne
+            && !outcome.grounded
+            && let Some((plane, _)) = outcome.contact_plane
+        {
+            let n = plane.normal;
+            let mut v = Vector3::new(
+                world.player.current_planar_velocity.x,
+                world.player.current_planar_velocity.y,
+                world.player.vertical_velocity,
+            );
+            let d = v.dot(&n);
+            if d < 0.0 {
+                const ELASTICITY: f32 = 0.05;
+                v = v - n * ((1.0 + ELASTICITY) * d);
+                world.player.current_planar_velocity.x = v.x;
+                world.player.current_planar_velocity.y = v.y;
+                world.player.vertical_velocity = v.z;
+            }
+        }
+        if !was_airborne && !outcome.grounded && !keep_ground {
+            let n = self.ground_loss_logs.get();
+            if n < 40 {
+                self.ground_loss_logs.set(n + 1);
+                // warn: the wasm console logger routes WARN and above only.
+                log::warn!(
+                "[ground-loss] state={:?} cp={} z {:.2}->{:.2} d=({:.2},{:.2},{:.2}) lastcp_nz={:?} cell=0x{:08X}",
+                outcome.state,
+                outcome.contact_plane.is_some(),
+                input.begin.coords.z,
+                pose.coords.z,
+                leash_delta.x,
+                leash_delta.y,
+                leash_delta.z,
+                input.last_contact_plane.map(|(p, _)| p.normal.z),
+                pose.landblock_id.0,
+                );
+            }
             world.player.begin_fall();
             // A3-D3-5: retail leave-ground launch velocity. LIVE —
             // `USE_LEAVE_GROUND_VELOCITY` ships `true`, so this is NOT a no-op

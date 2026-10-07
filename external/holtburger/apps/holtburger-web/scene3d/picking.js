@@ -17,7 +17,7 @@ import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 // the retail chain). Flag-off `serverTurnOwnsFacing()` is a constant false and
 // this file behaves byte-identically.
 import { serverTurnOwnsFacing } from "./server_turn.js";
-import { objectIsAttackable } from "./target_cycle.js";
+import { objectIsAttackable, itemIsUseable } from "./target_cycle.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -26,8 +26,11 @@ const ATTACK_POWER_FULL = 1.0;
 // single click only selects + assesses the object; USE (portal teleport,
 // door toggle, vendor open) requires a second click on the same target
 // within this window, so a stray click no longer fires an irreversible
-// world action. Retail's default double-click delay is ~0.3–0.5s.
-const PEACE_USE_DOUBLE_CLICK_MS = 400;
+// world action. Bug 9 (2026-10-07): 500 ms — the Windows default retail
+// inherited and OpenAC's UiRoot double-click window — measured between the
+// two events' own timestamps, so a slow frame between them no longer eats
+// the double-click.
+const PEACE_USE_DOUBLE_CLICK_MS = 500;
 
 // F7-3 — turn the local player to face a missile target before firing.
 // ACE rotates the shooter (TurnToObject) before the launch; without this
@@ -667,12 +670,24 @@ export function setupClickPicking({
     } catch (_) { return false; }
   }
 
+  // Bug 9 (2026-10-07) — retail `ItemUses::IsUseable` on the object's
+  // ItemUseable (PropertyInt 16, from the weenie header via the wasm store).
+  // An NPC like the Reformed Bandit carries 0x20 (Remote) → usable; monsters
+  // carry 1 (No) → not usable.
+  function entityIsUsable(guid) {
+    let u;
+    try { u = sessionHandle.objectIntProperty?.(guid >>> 0, 16); } catch (_) { u = undefined; }
+    return itemIsUseable(u);
+  }
+
   // F17-2 double-click bookkeeping, shared by every use-class branch:
   // consume on the second click inside the window, (re-)arm otherwise.
-  function doubleClickGate(guid) {
+  function doubleClickGate(guid, ev) {
     const g = guid >>> 0;
-    const nowMs = (typeof performance !== "undefined" && performance.now)
-      ? performance.now() : Date.now();
+    const evT = ev && Number.isFinite(ev.timeStamp) && ev.timeStamp > 0 ? ev.timeStamp : NaN;
+    const nowMs = Number.isFinite(evT)
+      ? evT
+      : ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now());
     const isDouble =
       lastPeaceClick.guid === g &&
       (nowMs - lastPeaceClick.t) <= PEACE_USE_DOUBLE_CLICK_MS;
@@ -937,7 +952,7 @@ export function setupClickPicking({
       // either no-oped or cast AT the corpse. Single click still only
       // selects/assesses; the double-click gate is unchanged.
       if (entityIsCorpse(guid) && typeof sessionHandle.useObject === "function") {
-        if (doubleClickGate(guid)) {
+        if (doubleClickGate(guid, ev)) {
           cancelClientMove();
           sessionHandle.useObject(guid >>> 0);
         }
@@ -955,7 +970,7 @@ export function setupClickPicking({
       // client-side charge. Double-click retained — same misclick guard
       // as every other world action; single click stays select+assess.
       if (entityIsGroundItem(guid) && typeof sessionHandle.moveItem === "function") {
-        if (doubleClickGate(guid)) {
+        if (doubleClickGate(guid, ev)) {
           const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
           if (me !== 0) {
             cancelClientMove();
@@ -965,7 +980,12 @@ export function setupClickPicking({
         return;
       }
 
-      if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
+      // Bug 9 (2026-10-07): retail double-click is `ItemHolder::UseObject` in
+      // EVERY stance (acclient.c:275702 → :433354). A usable object that is not
+      // an attack target (NPC, vendor, door, portal) therefore skips the magic
+      // branch and reaches the use branch below even in magic stance.
+      const usableNonTarget = !entityIsAttackableTarget(guid) && entityIsUsable(guid);
+      if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function" && !usableNonTarget) {
         // SEL-1 (2026-08-02) — RETAIL: a single left-click SELECTS, it never
         // casts. `RecvNotice_SmartBoxObjectFound`'s `sr_Select` branch calls
         // `SetSelectedObject` and stops (acclient.c:275684-275692); the cast
@@ -1141,7 +1161,11 @@ export function setupClickPicking({
         // through to useObject, silently eating the click. Reject with feedback
         // instead — matches the melee/ranged wording verbatim — and return so
         // the world useObject (portal/door/vendor) isn't also fired.
-        if (cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0) {
+        // Bug 9: only an ATTACK target is "the spell you meant to cast" —
+        // double-clicking an NPC/door/vendor with a spell selected Uses it,
+        // as retail's UseObject does in every combat mode.
+        if (cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
+            && !isInMagicStance?.() && entityIsAttackableTarget(guid)) {
           emitActionRejected("Enter magic mode to cast that spell.");
           return;
         }
@@ -1175,8 +1199,12 @@ export function setupClickPicking({
           // Generic USE (portal teleport, door toggle, vendor open) still
           // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
           // misclick in town no longer fires an irreversible world action.
-          if (doubleClickGate(guid)) {
+          if (doubleClickGate(guid, ev)) {
             cancelClientMove();
+            console.info(
+              `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
+              `(attackable=${entityIsAttackableTarget(guid)} usable=${entityIsUsable(guid)})`,
+            );
             sessionHandle.useObject(guid >>> 0);
           }
         }
@@ -1637,6 +1665,10 @@ export function setupClickPicking({
     // re-implementing the raycast against entity roots. Returns the
     // entity GUID (u32) or null if no entity is under the cursor.
     window.__pickEntityAt = pickEntityAt;
+    // Bug 9 (2026-10-07): the radial menu offers Attack / Use from the same
+    // tests the click dispatch uses.
+    window.__entityIsAttackableTarget = entityIsAttackableTarget;
+    window.__entityIsUsable = entityIsUsable;
   }
 
   // Phase I.1 follow-on (handoff Tier 1): manual-input override.

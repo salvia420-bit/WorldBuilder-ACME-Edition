@@ -254,6 +254,23 @@ const TIER5 = [
   { tier: 5, flag: "unwedge_reflex", file: "tests/unwedge_reflex.test.mjs" },
   { tier: 5, flag: "vendor_profile", file: "tests/vendor_profile.test.cjs" },
   { tier: 5, flag: "vendor_queue_vendor_switch", file: "tests/vendor_queue_vendor_switch.test.mjs" },
+  // 2026-10-07 bug 3: the vendor window closes at the vendor's own use radius
+  // (retail Position::cylinder_distance), as OpenAC.
+  { tier: 5, flag: "vendor_range_cylinder", file: "tests/vendor_range_cylinder.test.mjs" },
+  // 2026-10-07 bug 6: the ragdolled creature waits for its corpse's claim.
+  { tier: 5, flag: "death_hold", file: "tests/death_hold.test.mjs" },
+  // 2026-10-07 bug 16: carnage slices/fractures run one per frame.
+  { tier: 5, flag: "dismember_heavy_schedule", file: "tests/dismember_heavy_schedule.test.mjs" },
+  // 2026-10-07 bug 14: a held item's spawn is built at its attach, poseless.
+  { tier: 5, flag: "held_attach_promote", file: "tests/held_attach_promote.test.mjs" },
+  // 2026-10-07 bug 12: retail icon composites (no white key, type backgrounds).
+  { tier: 5, flag: "icon_compose", file: "tests/icon_compose.test.mjs" },
+  // 2026-10-07 bug 13: the paperdoll faces the viewer from retail's camera.
+  { tier: 5, flag: "paperdoll_retail_framing", file: "tests/paperdoll_retail_framing.test.mjs" },
+  // 2026-10-07 bug 5: 1 Hz terrain hole self-heal.
+  { tier: 5, flag: "terrain_hole_audit", file: "tests/terrain_hole_audit.test.mjs" },
+  { tier: 5, flag: "viewerCell", file: "tests/viewer_cell.test.mjs" },
+  { tier: 5, flag: "motionLinkFidelity", file: "tests/motion_link_fidelity.test.mjs" },
   { tier: 5, flag: "world-state", file: "tests/world-state.test.cjs" },
   { tier: 5, flag: "world_object", file: "tests/world_object.test.cjs" },
   { tier: 5, flag: "world_object_property_dict", file: "tests/world_object_property_dict.test.cjs" },

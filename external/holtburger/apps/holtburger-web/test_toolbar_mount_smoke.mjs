@@ -372,6 +372,32 @@ check("selection: Use/Examine enable, name + cached health meter shown, health q
   dispatch(useBtn, "click");
   eq(lastCall("useObject"), ["useObject", 0x80000AAA]);
 });
+check("bug 10: a non-attackable NPC gets no meter and no query; leaving a metered target sends QueryHealth(0)", () => {
+  // Retail gmToolbarUI::HandleSelectionChanged (acclient.c:241923-241930) /
+  // OpenAC SelectedObjectHealthPolicy: players, pets and attackable objects only.
+  const em = window.liveScene3d.entityManager;
+  em.entityMap.set(PLAYER, { meta: { itemType: 0x10, objDescFlags: 0x08 } }); // the local player
+  em.entityMap.set(0x80000AAA, { meta: { itemType: 0x10, objDescFlags: 0x14 } }); // drudge: Stuck|Attackable
+  em.entityMap.set(0x7A4B4013, { meta: { itemType: 0x10, objDescFlags: 0x04 } }); // Reformed Bandit: Stuck only
+  // Re-select the drudge through a neutral selection so the policy re-runs.
+  selected = 0;
+  window.__pluginClient.events.emit("selectionChanged", { guid: 0 });
+  selected = 0x80000AAA;
+  window.__pluginClient.events.emit("selectionChanged", { guid: selected });
+  eq(lastCall("queryHealth"), ["queryHealth", 0x80000AAA], "attackable creature is queried");
+  ok(!field.querySelector(".htb-target-health").hidden, "drudge meter visible");
+  const before = calls.filter((c) => c[0] === "queryHealth").length;
+  selected = 0x7A4B4013;
+  window.__pluginClient.events.emit("selectionChanged", { guid: selected });
+  const q = calls.filter((c) => c[0] === "queryHealth").slice(before);
+  eq(q.length, 1, "exactly one QueryHealth on switching to the bandit");
+  eq(q[0], ["queryHealth", 0], "the meter-off QueryHealth(0), not a query for the bandit");
+  ok(field.querySelector(".htb-target-health").hidden, "bandit: no meter");
+  window.__pluginClient.events.emit("entityHealthUpdated", { guid: 0x7A4B4013, fraction: 1 });
+  ok(field.querySelector(".htb-target-health").hidden, "a stray reply does not show a meter");
+  em.entityMap.delete(0x7A4B4013);
+  em.entityMap.delete(PLAYER);
+});
 check("deselect → 'No selection', meter hidden", () => {
   selected = 0;
   window.__pluginClient.events.emit("selectionChanged", { guid: 0 });

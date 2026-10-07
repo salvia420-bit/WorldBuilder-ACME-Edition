@@ -22,6 +22,7 @@
 // the existing `liveScene3d.skyDome` access patterns from before K.6.
 
 import * as THREE from "three";
+import { viewerState } from "./viewer_cell.js";
 
 const SKY_CAMERA_NEAR = 0.1;
 const SKY_CAMERA_FAR = 50000.0;
@@ -608,6 +609,11 @@ export class SkyDome {
         isIndoor = this._lastIsIndoor;
       }
     }
+    // Bug 4 (2026-10-07): the sky follows the CAMERA's cell, as retail's
+    // render path does (scene3d/viewer_cell.js). cells.js publishes it earlier
+    // in the same frame; until then this is the player's cell, as before.
+    const viewer = session ? viewerState() : null;
+    if (viewer && viewer.valid) isIndoor = viewer.indoor;
     this._lastIsIndoor = isIndoor;
     // SKY-SEEN-OUTSIDE (2026-08-04, `?skySeenOutside`, default ON; `=off`
     // restores the old any-indoor blackout). `_lastSkyBlocked` is the flag the
@@ -625,7 +631,9 @@ export class SkyDome {
     // SeenOutside, so they keep the blackout. Typeof-guarded: a stale pkg/
     // without the getter degrades to the old behavior.
     let skyBlocked = isIndoor;
-    if (
+    if (SKY_SEEN_OUTSIDE_ON && isIndoor && viewer && viewer.valid) {
+      skyBlocked = !viewer.seenOutside;
+    } else if (
       SKY_SEEN_OUTSIDE_ON &&
       isIndoor &&
       session &&

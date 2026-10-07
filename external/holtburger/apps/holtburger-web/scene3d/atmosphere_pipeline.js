@@ -1224,6 +1224,20 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     fxPass.mainCamera = cam;
   }
 
+  // Bug 11 diag: one line per resize (rate-limited) — correlate any
+  // "[.WebGL] GL_INVALID_FRAMEBUFFER_OPERATION" with the resize that preceded it.
+  let _lastResizeLogMs = -1e9;
+  function _logResize(w, h) {
+    try {
+      const now = (typeof performance !== "undefined") ? performance.now() : 0;
+      if (now - _lastResizeLogMs < 2000) return;
+      _lastResizeLogMs = now;
+      const dbs = renderer.getDrawingBufferSize(new THREE.Vector2());
+      // eslint-disable-next-line no-console
+      console.info(`[resize] composer css=${Math.round(w)}x${Math.round(h)} dbs=${dbs.x}x${dbs.y} pmDepth=${composer.depthTexture ? "disposed→realloc" : "none"}`);
+    } catch (_) { /* diag only */ }
+  }
+
   return {
     composer,
     aerialPerspective,
@@ -1521,6 +1535,27 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
     setSize(w, h) {
       composer.setSize(w, h);
+      // Bug 11 (2026-10-07, black flicker + 256× "glBlitFramebuffer:
+      // Framebuffer is incomplete: Attachments are not all the same size").
+      // pmndrs re-attaches ITS OWN depth texture (`composer.depthTexture`) to
+      // `inputBuffer` before every pass (postprocessing 6.39.1
+      // EffectComposer.render: `inputBuffer.depthTexture = this.depthTexture`).
+      // three only frees a render target's depth texture when that target is
+      // resized WHILE the texture is attached to it (deallocateRenderTarget),
+      // and never re-allocates the immutable storage of a live depth texture
+      // (WebGLTextures upload: `allocateMemory` only when __version is unset).
+      // The bespoke swap below detaches pmndrs' texture from both buffers, so
+      // a second resize before the next render (adaptive render scale +
+      // window resize in one frame, Options apply, …) left it at the OLD
+      // size: the next render attached old-size depth to new-size colour →
+      // incomplete FBO → black frames until some later resize freed it.
+      // Disposing it here is always safe: three re-creates it at the size of
+      // the target it is next attached to.
+      const pmDepth = composer.depthTexture;
+      if (pmDepth) {
+        try { pmDepth.dispose(); } catch (_) { /* re-created on next attach */ }
+      }
+      _logResize(w, h);
       // Rebuild the shared depth texture at the new size — Three.js
       // doesn't auto-resize DepthTextures attached to composer RTs.
       //

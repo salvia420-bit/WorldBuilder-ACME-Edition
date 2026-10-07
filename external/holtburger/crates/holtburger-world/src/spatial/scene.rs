@@ -4860,6 +4860,158 @@ impl SpatialScene {
         None
     }
 
+    /// Bug 4 (2026-10-07): the cell the CAMERA is in, i.e. retail's viewer
+    /// cell.
+    ///
+    /// Retail picks the render path from the viewer's cell, not the
+    /// player's: `SmartBox::RenderNormalMode` (acclient.c:144889) branches
+    /// on `viewer.objcell_id & 0xFFFF < 0x100`, and `SmartBox::update_viewer`
+    /// (acclient.c:144991) finds that cell by moving the camera sphere from
+    /// the player's head to the eye as a physics transit, so the cell only
+    /// changes where the sphere crosses a portal. OpenAC does the same
+    /// (`PhysicsCameraCollisionProbe.SweepEye` returns the transit's
+    /// `CellId` as the viewer cell). Keying the render path to the PLAYER's
+    /// cell is what broke the barn door: player outside with the eye inside
+    /// drew the outdoor punch from inside the room, and player inside with
+    /// the eye outside sealed the doorway against the eye.
+    ///
+    /// We have no camera transit, so this walks the head→eye segment the
+    /// JS camera clip chain already produced:
+    ///   * from an EnvCell, the `clip_segment_to_cell_space` walk. Leaving
+    ///     through a portal that leads outdoors puts the eye in the
+    ///     landscape (or in whichever building cell then contains it); a
+    ///     void exit (a wall, where that clip already stopped the camera)
+    ///     keeps the last cell reached;
+    ///   * from outdoors, the cell of a resident building that contains
+    ///     the eye, found by flooding each nearby building's portal graph
+    ///     from its entry cells, else the outdoor landcell under the eye.
+    ///
+    /// Returns `player_cell` unchanged when it is 0, an input is not
+    /// finite, or the head is not inside the player's own EnvCell (the
+    /// spawn/teleport edge `clip_segment_to_cell_space` also fails open on).
+    pub fn resolve_viewer_cell(
+        &self,
+        player_cell: u32,
+        start: Vector3,
+        end: Vector3,
+        radius: f32,
+    ) -> u32 {
+        const STEP_M: f32 = 0.25;
+        const MAX_STEPS: usize = 256;
+        let finite = |v: Vector3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+        if player_cell == 0 || !finite(start) || !finite(end) {
+            return player_cell;
+        }
+        if !is_envcell_id(player_cell) {
+            return self.viewer_cell_outdoors(end).unwrap_or(player_cell);
+        }
+        let delta = end - start;
+        let len = delta.length();
+        if !len.is_finite() || len < 1e-4 {
+            return player_cell;
+        }
+        let n = ((len / STEP_M).ceil() as usize).clamp(1, MAX_STEPS);
+        // Same re-seat rules as `clip_segment_to_cell_space`.
+        let resolve = |carried: u32, p: Vector3| -> Option<u32> {
+            if self.cell_contains_point(carried, p) {
+                return Some(carried);
+            }
+            for &nb in self.cell_portal_neighbours(carried) {
+                if is_envcell_id(nb) && self.cell_contains_point(nb, p) {
+                    return Some(nb);
+                }
+            }
+            if self.cell_contains_sphere(carried, p, radius) {
+                return Some(carried);
+            }
+            for &nb in self.cell_portal_neighbours(carried) {
+                if is_envcell_id(nb) && self.cell_contains_sphere(nb, p, radius) {
+                    return Some(nb);
+                }
+            }
+            None
+        };
+        let mut carried = player_cell;
+        if resolve(carried, start).is_none() {
+            return player_cell;
+        }
+        let mut prev_t = 0.0f32;
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            let p = start + delta * t;
+            match resolve(carried, p) {
+                Some(cell) => {
+                    carried = cell;
+                    prev_t = t;
+                }
+                None => {
+                    let p_prev = start + delta * prev_t;
+                    for poly in self.cell_portal_polygons_for(carried) {
+                        let low = poly.other_cell_id & 0xFFFF;
+                        let leads_outdoors = !(0x100..=0xFFFD).contains(&low);
+                        if leads_outdoors
+                            && segment_crosses_polygon(p_prev, p, &poly.vertices, radius)
+                        {
+                            return self.viewer_cell_outdoors(end).unwrap_or(carried);
+                        }
+                    }
+                    return carried;
+                }
+            }
+        }
+        carried
+    }
+
+    /// Bug 4 helper for [`Self::resolve_viewer_cell`]: the cell an eye at
+    /// `global` occupies when it is not inside the player's own building.
+    /// Buildings are found the way retail enters them from outdoors
+    /// (`CBuildingObj::find_building_transit_cells`, acclient.c:719068): the
+    /// entry cells behind the building portals registered on the landcells
+    /// around the point, here the 3×3 block centred on it so a building
+    /// whose origin sits on a neighbouring landcell is still found. Each
+    /// building's own portal graph is then flooded (same landblock only,
+    /// bounded) for the cell that contains the point. No containing cell →
+    /// the outdoor landcell under the point. `None` off the world grid.
+    fn viewer_cell_outdoors(&self, global: Vector3) -> Option<u32> {
+        const MAX_FLOOD: usize = 128;
+        let gx = (global.x / CELL_SIZE).floor() as i32;
+        let gy = (global.y / CELL_SIZE).floor() as i32;
+        if !(0..2040).contains(&gx) || !(0..2040).contains(&gy) {
+            return None;
+        }
+        let mut todo: Vec<u32> = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let (x, y) = (gx + dx, gy + dy);
+                if !(0..2040).contains(&x) || !(0..2040).contains(&y) {
+                    continue;
+                }
+                for &env in self.building_transit_cells(lcoord_to_cellid(x, y)) {
+                    if !todo.contains(&env) {
+                        todo.push(env);
+                    }
+                }
+            }
+        }
+        let mut i = 0;
+        while i < todo.len() && i < MAX_FLOOD {
+            let cell = todo[i];
+            i += 1;
+            if self.cell_contains_point(cell, global) {
+                return Some(cell);
+            }
+            for &nb in self.cell_portal_neighbours(cell) {
+                if is_envcell_id(nb)
+                    && (nb & 0xFFFF_0000) == (cell & 0xFFFF_0000)
+                    && !todo.contains(&nb)
+                {
+                    todo.push(nb);
+                }
+            }
+        }
+        Some(lcoord_to_cellid(gx, gy))
+    }
+
     /// Workstream C (3D camera collision, 2026-05-11): insert a
     /// world-space physics triangle for a building part into the
     /// per-landblock index. Called by the wasm bundle's

@@ -78,7 +78,10 @@ test("a second gesture over a finishing one-shot appends instead of wedging", ()
   assert.notEqual(b.seq.__wbg_ptr, 0);
 });
 
-test("locomotion pre-empts the playhead AND drops the queue — no freed head left", () => {
+test("bug 2: locomotion never cuts a finishing one-shot — it keeps the playhead and its queue", () => {
+  // Retail appends a new cycle behind the queued links/actions
+  // (acclient.c:337737/:337796; OpenAC CMotionTable.cs:193, :255). Cutting
+  // here is what made attack spells cast while turning/strafing never animate.
   const h = new Harness();
   const inst = {};
   const a = fakeRec("a");
@@ -86,10 +89,31 @@ test("locomotion pre-empts the playhead AND drops the queue — no freed head le
   h._enqueueUnifiedOneShot(inst, ATTACK, 1, a);
   h._enqueueUnifiedOneShot(inst, CAST, 1, b);
   h._preemptUnifiedForMotion(inst, RUN);
+  assert.equal(inst._unifiedSeq, a, "the in-flight one-shot keeps the playhead");
+  assert.equal(a.seq.freed, 0);
+  assert.equal(b.seq.freed, 0);
+  // `a` finishes → the queued one is promoted.
+  a.seq.free();
+  inst._unifiedSeq = null;
+  h._unifiedOneShotFinished(inst, a);
+  assert.equal(inst._unifiedSeq, b);
+});
+
+test("a held one-shot pre-empted by locomotion drops the queue too — no freed head left", () => {
+  const h = new Harness();
+  const inst = {};
+  const hold = fakeRec("death");
+  hold.clearOnDone = false;
+  inst._unifiedSeq = hold;
+  const q = fakeRec("q");
+  q.numAnims = 1;
+  inst._unifiedQueue = MQ.createMotionQueue();
+  MQ.addToQueue(inst._unifiedQueue, ATTACK, 1, q);
+  h._preemptUnifiedForMotion(inst, RUN);
   assert.equal(inst._unifiedSeq, null);
   assert.equal(inst._unifiedQueue, null);
-  assert.equal(a.seq.freed, 1);
-  assert.equal(b.seq.freed, 1);
+  assert.equal(hold.seq.freed, 1);
+  assert.equal(q.seq.freed, 1);
   // The next gesture plays immediately.
   const c = fakeRec("c");
   assert.equal(h._enqueueUnifiedOneShot(inst, CAST, 1, c), true);

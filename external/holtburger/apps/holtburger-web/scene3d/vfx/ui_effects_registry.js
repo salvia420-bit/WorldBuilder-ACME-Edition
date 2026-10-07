@@ -116,6 +116,27 @@ export function uiEffectIconsEnabled() {
   return _uiEffectIconsOn;
 }
 
+/**
+ * `?uiEffectBadges=on` (DEFAULT OFF, bug 12 2026-10-07) — the corner badge
+ * dots on inventory / hotbar / loot slots. Retail has no badge: the UiEffects
+ * flag recolours the icon's outline (the white key is replaced by the effect
+ * tile in `IconData::RenderIcons`), which the composite icons now do. The
+ * examine panel's "Magic Effects" row stays on `?uiEffectIcons`.
+ */
+let _uiEffectBadgesOn;
+export function uiEffectBadgesEnabled() {
+  if (_uiEffectBadgesOn === undefined) {
+    _uiEffectBadgesOn = false;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        const v = new URLSearchParams(window.location.search).get("uiEffectBadges");
+        _uiEffectBadgesOn = v != null && ["on", "1", "true", "yes"].includes(String(v).toLowerCase());
+      }
+    } catch (_) { /* default off */ }
+  }
+  return _uiEffectBadgesOn;
+}
+
 /** `rgb` triple (0..1) → CSS `rgb(r,g,b)` string. */
 export function uiEffectTintCss(tint) {
   const c = (x) => Math.max(0, Math.min(255, Math.round((x || 0) * 255)));

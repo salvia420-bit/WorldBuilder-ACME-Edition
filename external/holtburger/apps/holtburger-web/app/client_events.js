@@ -2085,7 +2085,20 @@ export function dispatchClientEvent(evt, D) {
       // `setSwingPose` so humanoids still get the legacy
       // wind-up.
       const em = window.liveScene3d?.entityManager;
-      if (em && typeof em.findGuidByName === "function") {
+      // Bug 15 (2026-10-07): the damage-event swing GUESS is now opt-in
+      // (`?swingGuess=on`). Retail and OpenAC never synthesize a swing from a
+      // combat message (OpenAC CombatAnimationPlanner.PlanForEvent returns
+      // None); the server's UpdateMotion is the only animation source. The
+      // guess fired whenever the real swing was still baking, so a cold cache
+      // played a CMT-picked (often wrong) swing on whichever same-named
+      // monster `findGuidByName` returned — the "unreliable" first swings.
+      // Motions for rigs still spawning are now stashed instead of dropped
+      // (entities.js `_stashSpawnMotion`), which is what the guess papered over.
+      let swingGuessOn = false;
+      try {
+        swingGuessOn = new URLSearchParams(window.location.search).get("swingGuess")?.toLowerCase() === "on";
+      } catch (_) {}
+      if (swingGuessOn && em && typeof em.findGuidByName === "function") {
         const dispatchRemoteSwing = (attackerName) => {
           const g = em.findGuidByName(attackerName);
           if (g === 0) return;
@@ -2237,6 +2250,13 @@ export function dispatchClientEvent(evt, D) {
             );
           }
           if (resolvedMotion && typeof em.setSwingMotion === "function") {
+            try {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[swing-guess] 0x${(g >>> 0).toString(16)} 0x${(resolvedMotion >>> 0).toString(16)} ` +
+                "(no server swing stamp)",
+              );
+            } catch (_) {}
             em.setSwingMotion(g, resolvedMotion);
           } else if (typeof em.setSwingPose === "function") {
             em.setSwingPose(g);

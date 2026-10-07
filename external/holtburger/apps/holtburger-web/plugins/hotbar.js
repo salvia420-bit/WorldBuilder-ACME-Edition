@@ -54,7 +54,7 @@ import { hudRect, hudViewport, toHudPx } from "../ui/hud_scale.js";
 import { resolveBindingIcon } from "../ui/ac_entity_icon.js";
 import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
 import {
-  uiEffectIconsEnabled,
+  uiEffectBadgesEnabled,
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
@@ -652,7 +652,7 @@ export function mount(ctx) {
     // DOM-only; flag-off no-op.
     const prevFx = el.querySelector(".hb-hotbar-uifx");
     if (prevFx) prevFx.remove();
-    if (uiEffectIconsEnabled() && bound.itemGuid) {
+    if (uiEffectBadgesEnabled() && bound.itemGuid) {
       const uiFx = uiEffectIconsFor(_itemUiEffects(bound.itemGuid));
       if (uiFx.length) {
         const fxWrap = document.createElement("span");

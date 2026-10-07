@@ -578,9 +578,36 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                 }
                             })
                             .collect();
+                        // Vendor range inputs (bug 3, 2026-10-07): the
+                        // vendor's wire use radius + both bodies'
+                        // CPartArray dims, read once at open.
+                        let (use_radius, vendor_dims, player_dims) = world
+                            .borrow()
+                            .as_ref()
+                            .map(|w| {
+                                use holtburger_common::properties::WorldObjectExt as _;
+                                let vendor = w.entities.get(data.vendor_guid);
+                                let use_radius = vendor
+                                    .and_then(|e| e.use_radius())
+                                    .unwrap_or(0.0) as f32;
+                                let vd = vendor
+                                    .map(|e| w.entity_part_dims(e))
+                                    .unwrap_or((0.0, 0.0));
+                                let pd = w
+                                    .player_entity()
+                                    .map(|e| w.entity_part_dims(e))
+                                    .unwrap_or((0.0, 0.0));
+                                (use_radius, vd, pd)
+                            })
+                            .unwrap_or((0.0, (0.0, 0.0), (0.0, 0.0)));
                         latest_vendor_state.borrow_mut().insert(
                             vendor_guid_u32,
                             VendorState {
+                                use_radius: if use_radius.is_finite() { use_radius } else { 0.0 },
+                                vendor_radius: vendor_dims.0,
+                                vendor_height: vendor_dims.1,
+                                player_radius: player_dims.0,
+                                player_height: player_dims.1,
                                 vendor_guid: vendor_guid_u32,
                                 vendor_name: vendor_name_for_cache,
                                 buy_multiplier: data.buy_multiplier,
@@ -663,18 +690,21 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::ViewContents(data) => {
                     // PR-HH 2026-05-23: non-vendor
                     // container opened (chest, corpse,
-                    // salvage bag, etc.). Server-side
-                    // `Container.Open()` sends N
-                    // `GameMessageCreateObject` per
-                    // contained item FIRST (which the
-                    // entity store has already absorbed
-                    // by the time we reach this arm),
-                    // then one `GameEventViewContents`
-                    // = (container_guid, [(item_guid,
-                    // container_type), …]). We just
-                    // cache the GUID list; JS reads
-                    // item details out of the entity
-                    // store by guid.
+                    // salvage bag, etc.). We cache the
+                    // GUID list; JS reads item details
+                    // out of the entity store by guid.
+                    //
+                    // ORDER (bug 1, 2026-10-07): ACE's
+                    // `Container.SendInventory` enqueues
+                    // this ViewContents (UI queue) BEFORE
+                    // the items' CreateObjects (SmartBox
+                    // queue, flushed after it), so the
+                    // items are usually NOT in the entity
+                    // store yet. Their creates re-index
+                    // into this list
+                    // (`prune_on_guid_reuse`), and the
+                    // icon getter falls back to the live
+                    // entity once they land.
                     let container_guid_u32 = u32::from(data.container);
                     let item_guids: Vec<u32> = data
                         .items
@@ -682,22 +712,32 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         .map(|i| u32::from(i.guid))
                         .collect();
                     let item_count = item_guids.len() as u32;
-                    // Populate icon cache while world.entities
-                    // still holds the contained items. Items
-                    // have model_id=0 so the JS spawn gate
-                    // drops them before entityMap.set() — this
-                    // is the only reliable icon_id source for
-                    // the container-panel.
-                    let world_guard = world.borrow();
-                    if let Some(ref w) = *world_guard {
-                        let mut icons = latest_object_icons.borrow_mut();
-                        for i in data.items.iter() {
-                            let ig = u32::from(i.guid);
-                            if let Some(entity) = w.entities.get(i.guid) {
-                                icons.insert(ig, entity.icon_id.unwrap_or(0));
+                    // Populate the icon cache for any item the
+                    // entity store already knows (a re-open).
+                    // Items have model_id=0 so the JS spawn
+                    // gate drops them before entityMap.set();
+                    // `getObjectIconId` falls back to the
+                    // entity for the rest.
+                    let mut known_at_open = 0u32;
+                    {
+                        let world_guard = world.borrow();
+                        if let Some(ref w) = *world_guard {
+                            let mut icons = latest_object_icons.borrow_mut();
+                            for i in data.items.iter() {
+                                let ig = u32::from(i.guid);
+                                if let Some(entity) = w.entities.get(i.guid) {
+                                    known_at_open += 1;
+                                    icons.insert(ig, entity.icon_id.unwrap_or(0));
+                                }
                             }
                         }
                     }
+                    // Bug 1 diag: `known_at_open` is 0 on a first open
+                    // (the items' creates follow this event).
+                    console_log_str(&format!(
+                        "[view-contents] 0x{:08X} items={} known_at_open={}",
+                        container_guid_u32, item_count, known_at_open
+                    ));
                     let container_name = world.borrow()
                         .as_ref()
                         .and_then(|w| {

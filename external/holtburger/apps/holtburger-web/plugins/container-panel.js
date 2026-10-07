@@ -23,12 +23,13 @@
 // selects that pack in the backpack column); anything else opens the
 // external-container window.
 
+import { resolveContainedItemMeta } from "./contained_item_meta.js";
 import { setAcText } from "../ui/ac_font.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared } from "../ui/ac_icon_cache.js";
+import { fetchIconDataUrl as fetchIconDataUrlShared, fetchItemIconDataUrl } from "../ui/ac_icon_cache.js";
 import { clearPlaceholderGlyph } from "../ui/ac_html.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import {
-  uiEffectIconsEnabled,
+  uiEffectBadgesEnabled,
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
@@ -193,8 +194,11 @@ function resolveItemMeta(guid, invSnapshot) {
       };
     }
   } catch (_) {}
-  // Third channel: icon cache populated at ViewContents time before the
-  // JS spawn gate discards contained items (model_id=0 → no entityMap entry).
+  // Third channel (bug 1, 2026-10-07): the wasm entity store — contained
+  // items have no rig (model_id=0 → no entityMap entry) but their
+  // ObjectCreate lands there (contained_item_meta.js).
+  const stored = resolveContainedItemMeta(handle, g);
+  if (stored) return stored;
   const iconFromCache = (handle?.getObjectIconId?.(g) >>> 0) || 0;
   return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1 };
 }
@@ -261,8 +265,9 @@ function renderItems(items) {
     slot.textContent = "📦";
     slot.title = it.name;
     if (it.iconId) {
-      fetchIconDataUrl(it.iconId).then((url) => {
-        if (!url || !slot.isConnected) return;
+      // Bug 12 (2026-10-07): the retail item composite (ui/ac_icon_compose.js).
+      fetchItemIconDataUrl(it, "container-panel").then((url) => {
+        if (typeof url !== "string" || !slot.isConnected) return;
         // Glyph only — the stack-count badge and UiEffects chips are
         // appended below this promise and must survive it.
         clearPlaceholderGlyph(slot);
@@ -284,7 +289,7 @@ function renderItems(items) {
     // stale): UiEffects magic-effect badge(s). Same registry + real-icon
     // (0x25000009 map) + tint fallback as the inventory grid. `.hcp-slot` is
     // position:relative. DOM-only; `?uiEffectIcons=off` is the escape.
-    if (uiEffectIconsEnabled()) {
+    if (uiEffectBadgesEnabled()) {
       const uiFx = uiEffectIconsFor((it.uiEffects >>> 0) || 0);
       if (uiFx.length) {
         const fxWrap = document.createElement("div");

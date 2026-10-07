@@ -67,7 +67,7 @@ test("unknown target is not attackable", () => {
 
 test("picking.js gates the attack and routes non-attackable clicks to use", () => {
   const src = readFileSync(new URL("../scene3d/picking.js", import.meta.url), "utf8");
-  assert.match(src, /import \{ objectIsAttackable \} from "\.\/target_cycle\.js";/);
+  assert.match(src, /import \{ objectIsAttackable, itemIsUseable \} from "\.\/target_cycle\.js";/);
   // fireAttackOnSelectedTarget refuses before any wire send.
   const fire = src.slice(src.indexOf("function fireAttackOnSelectedTarget("));
   const gate = fire.indexOf("if (!entityIsAttackableTarget(targetGuid))");
@@ -79,4 +79,26 @@ test("picking.js gates the attack and routes non-attackable clicks to use", () =
   // branch; a door falls through to the double-click useObject branch.
   assert.match(src,
     /\} else if \(\(isInMeleeStance\?\.\(\) \|\| isInRangedStance\?\.\(\)\) && entityIsAttackableTarget\(guid\)\) \{/);
+  // Bug 9 (2026-10-07): a usable non-attackable object (the Reformed Bandit)
+  // skips the magic branch, so a magic-stance double-click Uses it (retail
+  // ItemHolder::UseObject in every stance); and an armed spell only blocks a
+  // double-click on an ATTACK target.
+  assert.match(src, /const usableNonTarget = !entityIsAttackableTarget\(guid\) && entityIsUsable\(guid\);/);
+  assert.match(src, /isInMagicStance\?\.\(\) && typeof sessionHandle\.castTargetedSpell === "function" && !usableNonTarget\)/);
+  assert.match(src, /&& !isInMagicStance\?\.\(\) && entityIsAttackableTarget\(guid\)\) \{\s*emitActionRejected\("Enter magic mode to cast that spell\."\);/);
+});
+
+test("bug 9/10: retail Use and health-meter policies (target_cycle.js)", async () => {
+  const tc = await import("../scene3d/target_cycle.js");
+  // ItemUses::IsUseable — bit 0 (USEABLE_NO) clear = usable; absent = usable.
+  assert.equal(tc.itemIsUseable(0x20), true);  // Reformed Bandit: Remote
+  assert.equal(tc.itemIsUseable(1), false);    // monsters: No
+  assert.equal(tc.itemIsUseable(undefined), true);
+  // gmToolbarUI::HandleSelectionChanged — players, pets, attackable only.
+  const me = { objDescFlags: ODF_PLAYER };
+  assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x14 }, me), true);   // drudge / hollow minion
+  assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x04 }, me), false);  // Reformed Bandit
+  assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x08 }, me), true);   // another player
+  assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x04, petOwner: 0x50000002 }, me), true);
+  assert.equal(tc.shouldQueryHealth(null, me), false);
 });

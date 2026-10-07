@@ -343,6 +343,10 @@ check(
 
 // ---- Test 3: kind=5 MOTION = WALK_FORWARD ----------------------------
 const WALK_CMD = 0x4500_0005;
+// Bugs 2/15/18 (2026-10-07): setMotion keys every cycle by the canonical
+// FULL command and FULL stance (0x80000000 | low16), so a bare wire value and
+// a full one share one cache entry and one dedup key.
+const NONCOMBAT_FULL = 0x8000003d >>> 0;
 const RUN_CMD = 0x4400_0007;
 const STOP_CMD = 0x4500_0004;
 
@@ -357,7 +361,7 @@ const walkActionKey = inst.currentActionKey;
 const walkLoco = inst._unifiedLoco;
 check(
     "walk currentActionKey carries WALK_CMD encoding",
-    typeof walkActionKey === "string" && walkActionKey === `33554585:150994945:${WALK_CMD >>> 0}:61`,
+    typeof walkActionKey === "string" && walkActionKey === `33554585:150994945:${WALK_CMD >>> 0}:${NONCOMBAT_FULL}`,
     `walkActionKey=${walkActionKey}`
 );
 
@@ -411,16 +415,18 @@ check(
 // the stance-aware idle cycle plays (combat pose survives releasing W) instead
 // of a bare rest pose.
 await em.setMotion(TEST_GUID, STOP_CMD, 0x003d);
-const READY_CMD = (STOP_CMD & 0xFFFF0000) | 0x0003;
+// The canonical Ready (0x41000003) — keeping STOP's class bits (0x40000003)
+// was not a real command and missed every link keyed by the full Ready.
+const READY_CMD = 0x41000003;
 check(
     "setMotion(STOP) substitutes the stance Ready idle cycle",
-    inst.currentActionKey === `33554585:150994945:${READY_CMD >>> 0}:61`,
+    inst.currentActionKey === `33554585:150994945:${READY_CMD >>> 0}:${NONCOMBAT_FULL}`,
     `key=${inst.currentActionKey}`
 );
 
 // ---- Test 7: re-entering WALK lands on the walk cycle again ---------
 await em.setMotion(TEST_GUID, WALK_CMD, 0x003d);
-const walkKey = `33554585:150994945:${WALK_CMD >>> 0}:61`;
+const walkKey = `33554585:150994945:${WALK_CMD >>> 0}:${NONCOMBAT_FULL}`;
 check(
     "re-entering WALK plays the walk cycle again",
     inst.currentActionKey === walkKey,
@@ -449,7 +455,7 @@ check(
 );
 check(
     "respawn puts the WALK spawn motion straight onto the playhead",
-    !!inst2._unifiedLoco && inst2.currentActionKey === `33554585:150994945:${WALK_CMD >>> 0}:61`,
+    !!inst2._unifiedLoco && inst2.currentActionKey === `33554585:150994945:${WALK_CMD >>> 0}:${NONCOMBAT_FULL}`,
     `loco=${!!inst2._unifiedLoco}, key=${inst2.currentActionKey}`
 );
 em.remove(TEST_GUID);

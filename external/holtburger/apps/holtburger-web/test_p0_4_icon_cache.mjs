@@ -67,8 +67,12 @@ async function main() {
       `resident=${s.resident} expected 8`);
     check("eviction counter records the drops", s.evictions === 12,
       `evictions=${s.evictions} expected 12`);
+    // Bug 12 (2026-10-07): icons are PNG-encoded without a canvas now, so
+    // the URL length is the real encoder output (identical for every 2×2
+    // fake icon) — the tally must equal the resident URLs' total length.
+    const oneLen = (m.getIconImmediate(0x06000000 + 20) || "").length;
     check("byte tally tracks residency, not total fetches",
-      s.bytes === 8 * FAKE_URL.length, `bytes=${s.bytes}`);
+      oneLen > 0 && s.bytes === 8 * oneLen, `bytes=${s.bytes} one=${oneLen}`);
     check("the LRU victim is the OLDEST id",
       m.getIconImmediate(0x06000001) === null &&
       typeof m.getIconImmediate(0x06000000 + 20) === "string",

@@ -107,7 +107,14 @@ const COMMON = {
   setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
   fetchIconDataUrlShared: "() => Promise.resolve(null)",
   getIconImmediate: "() => null",
+  // Bug 12 (2026-10-07): retail item-icon composites.
+  fetchItemIconDataUrl: "() => Promise.resolve(null)",
+  getItemIconImmediate: "() => null",
+  itemIconKey: "(m) => 'item:' + ((m && m.iconId) >>> 0)",
+  PLAYER_PACK_ICON: "0x0600127E",
+  ITEM_TYPE_CONTAINER: "0x200",
   uiEffectIconsEnabled: "() => false",
+  uiEffectBadgesEnabled: "() => false",
   uiEffectIconsFor: "() => []",
   uiEffectTintCss: "() => null",
 };
@@ -128,9 +135,12 @@ const inventoryMod = load("plugins/inventory.js", ["view"], {
     "showItemTooltip", "hideItemTooltip", "localPlayerGuid",
   ]),
 });
+const containedMeta = await import(pathToFileURL(path.join(APP, "plugins", "contained_item_meta.js")).href);
+globalThis.__T.resolveContainedItemMeta = containedMeta.resolveContainedItemMeta;
 const lootMod = load("plugins/corpse-loot-bar.js", ["openFor", "closeBar", "state"], {
   ...COMMON,
   fetchIconDataUrl: "() => Promise.resolve(null)",
+  resolveContainedItemMeta: "globalThis.__T.resolveContainedItemMeta",
   ...real([
     "attachWindowPosition", "makeTitlebar", "takeInventorySnapshot", "decideItemDrop", "DROP_TARGET",
     "MAIN_PACK_KEY", "PACKS_KEY", "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction",
@@ -369,6 +379,27 @@ await check("drag an inventory item onto the chest strip → moveItem(item, ches
 await check("server CloseGroundContainer closes the window", () => {
   bus.emit("containerClosed", { u32Payload: CHEST });
   assert.equal(ext.dataset.open, "0");
+});
+
+// Bug 13 (2026-10-07): armour fills every slot its mask covers (retail
+// gmPaperDollUI::SetUIItemIntoLocation tests each slot bit independently).
+await check("bug 13: Sleeves (0x1800) fill Upper AND Lower arm; Leggings (0x6000) Upper AND Lower leg", async () => {
+  const SLV = 0x60000101, LEG = 0x60000102;
+  inv.push(row(SLV, "Sleeves", { itemType: 0x2, equipMask: 0x1800, validLocations: 0x1800 }));
+  inv.push(row(LEG, "Leggings", { itemType: 0x2, equipMask: 0x6000, validLocations: 0x6000 }));
+  bus.emit("playerInventoryChanged", {});
+  await settle();
+  // (the DOM stub's attribute selector does not take spaces — filter in JS)
+  const slot = (n) => Array.from(document.querySelectorAll("#hb-inventory .hb-inv-doll-slot"))
+    .find((el) => el.dataset.name === n) || null;
+  assert.equal(Number(slot("Upper arm").dataset.itemGuid), SLV);
+  assert.equal(Number(slot("Lower arm").dataset.itemGuid), SLV);
+  assert.equal(Number(slot("Upper leg").dataset.itemGuid), LEG);
+  assert.equal(Number(slot("Lower leg").dataset.itemGuid), LEG);
+  inv = inv.filter((r) => r.guid !== SLV && r.guid !== LEG);
+  bus.emit("playerInventoryChanged", {});
+  await settle();
+  assert.equal(slot("Lower arm").dataset.itemGuid, undefined);
 });
 
 unmount();

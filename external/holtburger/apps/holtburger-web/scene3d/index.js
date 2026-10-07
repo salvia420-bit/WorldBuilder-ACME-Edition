@@ -36,6 +36,14 @@ import {
   resolveTerrainRingOpts,
   tickTerrainLodRebake,
 } from "./terrain.js?v=phase-d-batch";
+import { auditTerrainRing } from "./terrain_hole_audit.js";
+// Bug 5 (2026-10-07): 1 Hz terrain self-heal audit. Default ON.
+const TERRAIN_AUDIT_ON = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("terrainAudit");
+    return !(v != null && ["off", "0", "false", "no"].includes(v.toLowerCase()));
+  } catch (_) { return true; }
+})();
 import {
   bakeBuildingsForLandblock,
 } from "./buildings.js?v=phase-d-batch";
@@ -2520,6 +2528,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
         // re-points the LOD reference, and drains one queued re-bake/frame.
         tickTerrainLodRebake(liveScene3dRef, currentLbKey);
+        // Bug 5 (2026-10-07) — 1 Hz terrain self-heal (retail LScape rescans
+        // every grid slot): re-request any landblock in the draw ring that is
+        // parked, unbaked-and-idle, or marked baked with no mesh.
+        // `?terrainAudit=off` escapes.
+        if (TERRAIN_AUDIT_ON) {
+          const nowA = (typeof performance !== "undefined") ? performance.now() : Date.now();
+          const a = auditTerrainRing(liveScene3dRef, currentLbKey, nowA);
+          if (a && (a.parked + a.unbaked + a.markNoMesh) > 0
+              && nowA - (liveScene3dRef._terrainAuditLogMs || -1e9) > 5000) {
+            liveScene3dRef._terrainAuditLogMs = nowA;
+            console.info(
+              `[terrain-audit] holes=${a.parked + a.unbaked + a.markNoMesh} ` +
+              `r=${liveScene3dRef._pvsEffectiveRingRadius ?? "?"} center=0x${(currentLbKey >>> 0).toString(16)} ` +
+              `parked=${a.parked} unbaked=${a.unbaked} markNoMesh=${a.markNoMesh} → re-requested`,
+            );
+          }
+        }
         // Grace-aware stale-entity reaper (2026-06-15). Shares the LRU's
         // current-LB read; self-throttled. Culls entities whose landblock the
         // player left longer ago than ACE's 25 s ObjMaint grace (so ACE

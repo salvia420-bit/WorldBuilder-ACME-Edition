@@ -954,9 +954,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // Setup/MTable/STable DIDs + scale + translucency but
             // NOT the ObjDesc model_data (palette/texture swaps,
             // hydration.rs:190-251) — base weapon look only.
-            // Spawn pose = the wielder's cached pose (the attach
-            // overrides it; paired with the JS-side
-            // pending-attach hide so nothing flashes at origin).
+            // Spawn pose = none (landblock 0, bug 14 — see below);
+            // the attach places it, and the JS-side pending-attach
+            // hide keeps it from flashing at the origin.
             // Skipped when the guid already has a live rig
             // (ground-pickup→wield, re-equip) — no double spawn.
             if wielded_spawn_on
@@ -976,22 +976,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 if setup_did != 0 {
                     let mtable_id =
                         entity.mtable_id().map(u32::from).unwrap_or(0);
-                    let (lb, x, y, z, qw, qx, qy, qz) = w
-                        .entities
-                        .get(data.parent_guid)
-                        .map(|p| {
-                            (
-                                u32::from(p.position.landblock_id),
-                                p.position.coords.x,
-                                p.position.coords.y,
-                                p.position.coords.z,
-                                p.position.rotation.w,
-                                p.position.rotation.x,
-                                p.position.rotation.y,
-                                p.position.rotation.z,
-                            )
-                        })
-                        .unwrap_or((0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0));
+                    // Bug 14 (2026-10-07): POSELESS, like ACE's own
+                    // parented CreateObject (no Position — the wasm
+                    // surfaces landblock 0 / origin). The old wielder
+                    // pose sent the JS spawn through the distance-LOD
+                    // lookup on the low-priority fetch lane, behind
+                    // world streaming — the 3-4 s before a freshly
+                    // wielded weapon/shield showed. Poseless spawns skip
+                    // that lookup and take the urgent lanes; the rig is
+                    // hidden until its attach mounts it, and the stale
+                    // reaper spares landblock 0.
+                    let (lb, x, y, z, qw, qx, qy, qz) =
+                        (0u32, 0.0f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32, 0.0f32, 0.0f32);
                     entity_updates.borrow_mut().push(EntityUpdate {
                         kind: ENTITY_UPDATE_KIND_SPAWN,
                         guid: u32::from(data.child_guid),

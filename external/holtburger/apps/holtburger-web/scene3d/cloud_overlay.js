@@ -944,6 +944,10 @@ export class CloudOverlay {
       this.volume.effect.setSize(width, height);
       if (this.composer) {
         this.composer.setSize(width, height);
+        // Bug 11 (2026-10-07): same stale-depth-storage hazard as the main
+        // composer (atmosphere_pipeline.js setSize) — free pmndrs' own depth
+        // texture so it re-allocates at the new size.
+        try { this.composer.depthTexture?.dispose?.(); } catch (_) {}
         // Latch ONLY when a composer actually got sized — setting it with a
         // null composer made preRender skip the lazy-init sizing entirely.
         this._composerSized = true;

@@ -364,7 +364,44 @@ function _partMeshes(part) {
  * parts (`opts.chainParts`) as extra debris pieces (hidden on the rig).
  * Returns a result object or null.
  */
-export async function slicePart(inst, partIndex, planePointW, planeNormalW, opts = {}) {
+/* ── heavy-op scheduler (bug 16, 2026-10-07) ─────────────────────────
+ * A kill ran its whole carnage finisher (1-2 hip severs, a limb gib, a torso
+ * gib and up to three finisher moves) in ONE microtask flush: every
+ * slicePart/fracturePart awaited the same cached pinata import and then did
+ * its weld + slice / Voronoi fracture back to back — a single long task, the
+ * "frame drop after a kill". Each op now runs in its own animation frame,
+ * strictly in order; the ragdoll hides the few frames of spread.
+ */
+let _heavyChain = Promise.resolve();
+const _nextFrame = () => new Promise((r) => {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => r());
+  else setTimeout(r, 16);
+});
+let _heavyQueued = 0;
+export function heavyOpsQueued() { return _heavyQueued; }
+function _scheduleHeavy(fn, label = "op") {
+  _heavyQueued++;
+  const run = _heavyChain.then(async () => {
+    const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+    try {
+      return await fn();
+    } finally {
+      const ms = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
+      // Bug 16 diag: one op per frame now — anything still over ~8 ms here is
+      // a single slice/fracture that is itself too heavy.
+      if (ms > 8) console.info(`[deathcost] ${label}: ${ms.toFixed(1)} ms (queued ${_heavyQueued - 1})`);
+    }
+  });
+  _heavyChain = run.catch(() => {}).then(() => { _heavyQueued--; return _nextFrame(); });
+  return run;
+}
+
+/** Slice a part (one op per frame — see the scheduler above). */
+export function slicePart(inst, partIndex, planePointW, planeNormalW, opts = {}) {
+  return _scheduleHeavy(() => _slicePartNow(inst, partIndex, planePointW, planeNormalW, opts), `slice part ${partIndex}`);
+}
+
+async function _slicePartNow(inst, partIndex, planePointW, planeNormalW, opts = {}) {
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const meshes = _partMeshes(part);
@@ -553,7 +590,9 @@ export function fragmentCountFor(triCount, opts = {}) {
   const t = triCount || 0;
   const base = t >= 200 ? 9 : t >= 80 ? 7 : t >= 30 ? 5 : 4;
   const n = Math.round((base + (opts.critical ? 3 : 0)) * (opts.scale ?? 1));
-  return Math.max(3, Math.min(14, n));
+  // Bug 16: death gibs pass `maxFragments` (a fracture's cost scales with it).
+  const cap = Number.isFinite(opts.maxFragments) ? Math.max(3, opts.maxFragments) : 14;
+  return Math.max(3, Math.min(cap, n));
 }
 
 /**
@@ -646,7 +685,12 @@ function _partRelMatrix(part) {
  * opts: { critical, fragmentCount, scale, impactPointW, impactRadius, seed,
  *         speedScale, upScale }
  */
-export async function fracturePart(inst, partIndex, opts = {}) {
+/** Fracture a part (one op per frame — see the scheduler above). */
+export function fracturePart(inst, partIndex, opts = {}) {
+  return _scheduleHeavy(() => _fracturePartNow(inst, partIndex, opts), `fracture part ${partIndex}`);
+}
+
+async function _fracturePartNow(inst, partIndex, opts = {}) {
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const meshes = _partMeshes(part);

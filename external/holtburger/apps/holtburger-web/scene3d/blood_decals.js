@@ -471,6 +471,26 @@ function _ensurePool() {
   return _pool;
 }
 
+/**
+ * Bug 16 (2026-10-07): build the decal pool before the first hit so its
+ * ShaderMaterial can be compiled by the login warm (bake_prewarm.js) instead
+ * of linking synchronously on the first blood stamp of the session — which
+ * is usually the first kill. Returns the InstancedMesh or null.
+ */
+export function ensureBloodDecalPool() {
+  if (!bloodEnabled()) return null;
+  // Not ready yet (liveScene3d lands late): stay silent — the caller retries,
+  // and `_ensurePool`'s one-shot "stamp dropped" warning stays meaningful.
+  if (typeof window === "undefined" || !window.liveScene3d?.entitiesGroup) return null;
+  const pool = _ensurePool();
+  return pool ? pool.mesh : null;
+}
+
+function _markSlot(attr, start, count) {
+  if (typeof attr.addUpdateRange === "function") attr.addUpdateRange(start, count);
+  attr.needsUpdate = true;
+}
+
 const _m4 = [];
 function _stamp(acPos, normal, size, variant, tintScale) {
   const pool = _ensurePool();
@@ -510,10 +530,13 @@ function _stamp(acPos, normal, size, variant, tintScale) {
   m[14] = acPos[2] + normal[2] * 0.015;
   m[15] = 1;
   pool.mesh.instanceMatrix.array.set(m, i * 16);
-  pool.mesh.instanceMatrix.needsUpdate = true;
-  pool.birth.needsUpdate = true;
-  pool.uvRect.needsUpdate = true;
-  pool.tint.needsUpdate = true;
+  // Bug 16: upload only the stamped slot (the whole 1024-slot buffers were
+  // re-sent on every stamp, ~10 stamps per hit). three clears the ranges
+  // after each upload.
+  _markSlot(pool.mesh.instanceMatrix, i * 16, 16);
+  _markSlot(pool.birth, i, 1);
+  _markSlot(pool.uvRect, i * 4, 4);
+  _markSlot(pool.tint, i * 3, 3);
   // Keep the clock sane for anything that reads it before the next draw
   // (diag, a stamp landing between passes). onBeforeRender owns it otherwise.
   pool.uTime.value = _nowS();

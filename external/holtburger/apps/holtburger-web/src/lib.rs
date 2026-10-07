@@ -23816,11 +23816,21 @@ pub struct EntityAnimationData {
     segment_counts: Vec<u32>,
     segment_framerates: Vec<f32>,
     segment_anim_ids: Vec<u32>,
+    /// Bugs 2/15/18: see `EntityAnimationKeyframesInner::is_link`.
+    is_link: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl EntityAnimationData {
+    /// Bugs 2/15/18 (2026-10-07): true only when these keyframes are the
+    /// requested MotionTable LINK. `false` for a cycle, including the cycle
+    /// the bake falls back to when a requested link does not exist.
+    #[wasm_bindgen(getter, js_name = isLink)]
+    pub fn is_link(&self) -> bool {
+        self.is_link
+    }
+
     /// Number of parts in the SetupModel — equals the length of the
     /// `Vec<ModelMesh>` `take_part_meshes` returns AND the per-frame
     /// stride into `part_frames` (each frame contributes `part_count`
@@ -24021,6 +24031,7 @@ impl EntityAnimationData {
             segment_counts: Vec::new(),
             segment_framerates: Vec::new(),
             segment_anim_ids: Vec::new(),
+            is_link: false,
         }
     }
 }
@@ -24100,6 +24111,12 @@ pub(crate) struct EntityAnimationKeyframesInner {
     /// `ModelMesh.didDegrade` so JS can run retail's per-part
     /// `GfxObjDegradeInfo::get_degrade` pick (scene3d/part_degrade.js).
     pub part_did_degrades: Vec<u32>,
+    /// Bugs 2/15/18 (2026-10-07): true only when a `from_motion_command` was
+    /// given AND the MotionTable LINK resolved. A missed link falls back to
+    /// the target's CYCLE (so callers that only want "something to play" keep
+    /// working), and JS used to play that whole loop as if it were the link —
+    /// a Ready/Run cycle in front of every draw, swing and windup.
+    pub is_link: bool,
 }
 
 /// Post-prefetch body of `fetch_entity_animation_keyframes`. Takes a
@@ -24195,6 +24212,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             segment_framerates: Vec::new(),
             segment_anim_ids: Vec::new(),
             part_did_degrades: vec![raw_did_degrade; part_count as usize],
+            is_link: false,
         });
     }
 
@@ -24245,6 +24263,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     } else {
         None
     };
+    let is_link = link_result.is_some();
     let (bake, resolved_stance) = match link_result {
         Some(t) => t,
         None => match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
@@ -24270,6 +24289,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     segment_framerates: Vec::new(),
                     segment_anim_ids: Vec::new(),
                     part_did_degrades,
+                    is_link: false,
                 });
             }
         },
@@ -24362,6 +24382,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         segment_framerates,
         segment_anim_ids,
         part_did_degrades,
+        is_link,
     })
 }
 
@@ -24780,6 +24801,7 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         segment_counts: inner.segment_counts,
         segment_framerates: inner.segment_framerates,
         segment_anim_ids: inner.segment_anim_ids,
+        is_link: inner.is_link,
     }
 }
 
@@ -28793,6 +28815,20 @@ struct VendorState {
     min_value: u32,
     max_value: u32,
     deals_magic: bool,
+    // Vendor range (2026-10-07, bug 3): the inputs retail's vendor range
+    // check reads. `gmVendorUI::OpenVendor` (acclient.c:246660) registers an
+    // object-range handler with the vendor's OWN wire `_useRadius`
+    // (PublicWeenieDesc, 0 when the flag is absent — the ctor zeroes it,
+    // acclient.c:470951) and use_radii=1, so `CPhysicsObj::get_distance_to_object`
+    // measures `Position::cylinder_distance` (acclient.c:467221) with each
+    // body's `CPartArray::GetRadius`/`GetHeight`. OpenAC does the same
+    // (Runtime/Gameplay/RuntimeVendorRangeQuery.cs). Dims are (0, 0) when a
+    // Setup is not resident — OpenAC's "zero girth and zero height".
+    use_radius: f32,
+    vendor_radius: f32,
+    vendor_height: f32,
+    player_radius: f32,
+    player_height: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -28825,12 +28861,22 @@ pub struct VendorStateJs {
     alternate_currency_amount: u32,
     alternate_currency_name: String,
     items: Vec<VendorItemJs>,
+    use_radius: f32,
+    vendor_radius: f32,
+    vendor_height: f32,
+    player_radius: f32,
+    player_height: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl VendorStateJs {
     fn from_cached(cache: &VendorState) -> Self {
         Self {
+            use_radius: cache.use_radius,
+            vendor_radius: cache.vendor_radius,
+            vendor_height: cache.vendor_height,
+            player_radius: cache.player_radius,
+            player_height: cache.player_height,
             vendor_guid: cache.vendor_guid,
             vendor_name: cache.vendor_name.clone(),
             buy_multiplier: cache.buy_multiplier,
@@ -28887,6 +28933,22 @@ impl VendorStateJs {
     /// (not yet wired — see vendor-ui.js follow-on).
     #[wasm_bindgen(getter)]
     pub fn items(&self) -> Vec<VendorItemJs> { self.items.clone() }
+    /// The vendor's wire use radius (m; 0 when the create message carried
+    /// none). The window closes once the cylinder distance exceeds it.
+    #[wasm_bindgen(getter, js_name = useRadius)]
+    pub fn use_radius(&self) -> f32 { self.use_radius }
+    /// Vendor `CPartArray::GetRadius` (Setup radius × scale), 0 if unknown.
+    #[wasm_bindgen(getter, js_name = vendorRadius)]
+    pub fn vendor_radius(&self) -> f32 { self.vendor_radius }
+    /// Vendor `CPartArray::GetHeight` (Setup height × scale), 0 if unknown.
+    #[wasm_bindgen(getter, js_name = vendorHeight)]
+    pub fn vendor_height(&self) -> f32 { self.vendor_height }
+    /// Local player `CPartArray::GetRadius`, 0 if unknown.
+    #[wasm_bindgen(getter, js_name = playerRadius)]
+    pub fn player_radius(&self) -> f32 { self.player_radius }
+    /// Local player `CPartArray::GetHeight`, 0 if unknown.
+    #[wasm_bindgen(getter, js_name = playerHeight)]
+    pub fn player_height(&self) -> f32 { self.player_height }
 }
 
 /// One item in a vendor's stock. Cloneable for JS-side iteration via
@@ -32304,8 +32366,15 @@ fn apply_inventory_object_create(
     let guid = data.public_weenie_desc.guid;
     // P4.1 / LEAK-01: ACE recycles dynamic GUIDs. Any per-guid cache
     // entry surviving into an `ObjectCreate` for this guid describes a
-    // previous occupant.
-    per_guid.prune_on_guid_reuse(u32::from(guid));
+    // previous occupant. Container membership is re-indexed to the
+    // create's ContainerId (bug 1).
+    per_guid.prune_on_guid_reuse(
+        u32::from(guid),
+        data.public_weenie_desc
+            .container_id
+            .map(u32::from)
+            .filter(|c| *c != 0),
+    );
     let entity_name = data
         .public_weenie_desc
         .name
@@ -32657,8 +32726,15 @@ fn maintain_bridge_indexes_on_routed_create(
     use holtburger_common::properties::{PhysicsState, WorldObjectExt as _};
     // P4.1 / LEAK-01: ACE recycles dynamic GUIDs. Any per-guid cache
     // entry surviving into an `ObjectCreate` for this guid describes a
-    // previous occupant.
-    per_guid.prune_on_guid_reuse(u32::from(guid));
+    // previous occupant. Container membership is re-indexed to the
+    // create's ContainerId (bug 1).
+    let created_in = world
+        .entities
+        .get(guid)
+        .and_then(|e| e.container_id())
+        .map(u32::from)
+        .filter(|c| *c != 0);
+    per_guid.prune_on_guid_reuse(u32::from(guid), created_in);
     if let Some(entity) = world.entities.get_mut(guid) {
         let table_did = resolve_physics_script_table_did(entity);
         entity.physics_script_table_did = table_did;
@@ -32775,14 +32851,17 @@ struct PerGuidBridgeIndexes<'a> {
 
 #[cfg(target_arch = "wasm32")]
 impl PerGuidBridgeIndexes<'_> {
-    /// Drop every per-guid cache entry keyed by `g`, and strip `g` from
-    /// every cached container GUID list.
+    /// Drop every per-guid cache entry keyed by `g`; with
+    /// `strip_membership`, also drop `g`'s own contents list and strip `g`
+    /// from every cached container GUID list.
     ///
     /// The list strip is the NQ-19 half: looting a corpse slot-by-slot
     /// deletes the *contents*, never the container, so without it a
     /// reopened container still renders items that are gone. Cost is
     /// O(total cached container items), bounded by the handful of
-    /// containers opened per session.
+    /// containers opened per session. It is DELETE-ONLY (bug 1,
+    /// 2026-10-07): the create path re-indexes membership instead — see
+    /// `prune_on_guid_reuse`.
     ///
     /// Every borrow is scoped to its own statement — callers routinely
     /// hold a `world.borrow_mut()` across these calls, never one of
@@ -32795,9 +32874,9 @@ impl PerGuidBridgeIndexes<'_> {
     /// a recycled GUID) — so a cache added to one path can no longer go
     /// missing from the other. Adding a guid-keyed store anywhere in the
     /// bridge means adding a field above and a line here, nowhere else.
-    fn prune_guid(&self, g: u32) {
+    fn prune_guid(&self, g: u32, strip_membership: bool) {
         self.latest_vendor_state.borrow_mut().remove(&g);
-        {
+        if strip_membership {
             let mut contents = self.latest_container_contents.borrow_mut();
             contents.remove(&g);
             for items in contents.values_mut() {
@@ -32846,11 +32925,14 @@ impl PerGuidBridgeIndexes<'_> {
         MOTION_ACTION_STAMPS.with(|m| {
             m.borrow_mut().remove(&g);
         });
+        MOTION_FORWARD_ACTION_STAMPS.with(|m| {
+            m.borrow_mut().remove(&g);
+        });
     }
 
     /// Delete-signal entry point (`ObjectDelete` / `InventoryRemoveObject`).
     fn prune_on_delete(&self, g: u32) {
-        self.prune_guid(g);
+        self.prune_guid(g, true);
         BRIDGE_INDEX_DELETE_PRUNES.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
@@ -32862,13 +32944,33 @@ impl PerGuidBridgeIndexes<'_> {
     /// is normally preceded by `prune_on_delete` and finds the maps
     /// already empty.
     ///
-    /// Ordering invariant: the `ViewContents` arm populates
-    /// `latest_object_icons` / `latest_container_contents` by reading
-    /// `world.entities`, which requires each item's `ObjectCreate` to
-    /// have already landed — so this purge cannot race ahead of the
-    /// inserts it would otherwise erase.
-    fn prune_on_guid_reuse(&self, g: u32) {
-        self.prune_guid(g);
+    /// Container membership is NOT pruned here (bug 1, 2026-10-07: every
+    /// corpse opened as "There is nothing inside."). ACE's
+    /// `Container.SendInventory` enqueues `GameEventViewContents` (UI queue
+    /// 0x09) BEFORE the items' `GameMessageCreateObject`s (SmartBox queue
+    /// 0x0A), and `NetworkSession.Update` flushes the queues in index
+    /// order, so the contents list always lands first and each item's
+    /// ObjectCreate used to strip itself — and a sub-pack its own list —
+    /// right back out of it. Retail keeps the list on the container
+    /// (`ClientUISystem::OnViewContents` acclient.c:402688 →
+    /// `ACCObjectMaint::ViewObjectContents`) and OpenAC re-indexes on
+    /// create (`ClientObjectTable.Reindex`: drop the item from its OLD
+    /// container, file it under the one its description names). That is
+    /// what this does with `container` (the create's ContainerId).
+    fn prune_on_guid_reuse(&self, g: u32, container: Option<u32>) {
+        self.prune_guid(g, false);
+        {
+            let mut contents = self.latest_container_contents.borrow_mut();
+            for (cid, items) in contents.iter_mut() {
+                if Some(*cid) == container {
+                    if !items.contains(&g) {
+                        items.push(g);
+                    }
+                } else {
+                    items.retain(|item| *item != g);
+                }
+            }
+        }
         BRIDGE_INDEX_REUSE_PRUNES.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
@@ -33702,6 +33804,17 @@ pub struct SessionHandle {
     /// appear floating until the portal clip lands — hence the `?stablist` gate).
     /// JS flips it via [`SessionHandle::set_stablist_render`].
     stablist_render_enabled: std::cell::Cell<bool>,
+    /// Bug 4 (2026-10-07): retail's VIEWER cell (the camera's cell), set by
+    /// JS each frame from [`SessionHandle::resolve_viewer_cell`] through
+    /// [`SessionHandle::set_viewer_cell`]. `0` = follow the player's cell
+    /// (no override). When set, the render-set walks
+    /// (`getRenderSetWithPView`, `getRenderSetWithFrustum`,
+    /// `getPViewOutsidePortals`) root at it instead of the player's cell,
+    /// as retail's `SmartBox::RenderNormalMode` (acclient.c:144889) does.
+    viewer_cell: std::cell::Cell<u32>,
+    /// Bug 4: the depth-1 render set rooted at `viewer_cell`, computed when
+    /// it is set (empty when there is no override).
+    viewer_render_set: std::cell::RefCell<Vec<u32>>,
     /// Phase 6 step E follow-up (2026-05-09): door GUID → snapshot of
     /// the building part the door was registered against during its
     /// ObjectCreate. Populated incrementally by the recv-loop as
@@ -35446,9 +35559,17 @@ impl SessionHandle {
     /// Icon DID for any object by GUID, populated at container-open time
     /// for items that don't survive the JS spawn gate (contained items
     /// with model_id=0). Returns 0 when the GUID is unknown.
+    ///
+    /// Bug 1 (2026-10-07): falls back to the live entity's icon. Container
+    /// contents arrive AFTER their ViewContents (see `prune_on_guid_reuse`),
+    /// so the open-time cache is usually empty for a corpse's items.
     #[wasm_bindgen(js_name = getObjectIconId)]
     pub fn get_object_icon_id(&self, guid: u32) -> u32 {
-        self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0)
+        let cached = self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0);
+        if cached != 0 {
+            return cached;
+        }
+        self.with_entity(guid, |e| e.icon_id).unwrap_or(0)
     }
 
     // ─── rynth-integration Phase 1 (2026-07-16) ─────────────────────────
@@ -36193,6 +36314,8 @@ impl SessionHandle {
         if snap.current_cell == 0 {
             return (Vec::new(), 0, Vec::new());
         }
+        // Bug 4: walk from the viewer (camera) cell when JS has set one.
+        let root = self.walk_root(&snap).0;
         // Hard cap on portal-traversal depth — see method doc.
         // `max_depth=0` → use the default (production callers + JS
         // callers that omit the arg both land here via wasm-bindgen's
@@ -36234,22 +36357,22 @@ impl SessionHandle {
         // polygon the walk produces. The current cell gets the full viewport
         // (drawn unclipped); each neighbour gets its `clipped` poly below.
         let mut cell_clips: Vec<(u32, u8, Vec<[f32; 2]>)> = Vec::new();
-        cell_clips.push((snap.current_cell, 0, initial_view.clone()));
+        cell_clips.push((root, 0, initial_view.clone()));
 
         let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        visible.insert(snap.current_cell);
+        visible.insert(root);
         let mut max_depth_reached: u8 = 0;
 
         if portal_map.is_empty() {
             // Snapshot hasn't seen portal polygons yet (recv loop may
-            // not have published). Return just current_cell — JS
+            // not have published). Return just the root cell — JS
             // unions with Phase 4 frustum-cull fallback.
-            return (vec![snap.current_cell], 0, cell_clips);
+            return (vec![root], 0, cell_clips);
         }
 
         let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
             std::collections::VecDeque::new();
-        queue.push_back((snap.current_cell, initial_view, 0));
+        queue.push_back((root, initial_view, 0));
         while let Some((cell_id, view_poly, depth)) = queue.pop_front() {
             if depth >= effective_max_depth {
                 continue;
@@ -36505,8 +36628,10 @@ impl SessionHandle {
         let mut mvp_arr = [0.0f32; 16];
         mvp_arr.copy_from_slice(mvp);
         let snap = self.cell_scene_snapshot.borrow();
-        // Retail `DrawInside` is the EnvCell-viewer path only.
-        if snap.current_cell == 0 || (snap.current_cell & 0xFFFF) < 0x0100 {
+        // Retail `DrawInside` is the EnvCell-viewer path only. Bug 4: the
+        // VIEWER's cell decides, when JS has set one.
+        let (root, root_indoor) = self.walk_root(&snap);
+        if root == 0 || !root_indoor {
             return out;
         }
         const PVIEW_MAX_DEPTH: u8 = 8;
@@ -36545,7 +36670,7 @@ impl SessionHandle {
         ];
         let mut visible: std::collections::HashSet<u32> =
             std::collections::HashSet::new();
-        visible.insert(snap.current_cell);
+        visible.insert(root);
         // Retail keeps EVERY view a cell is seen through (`num_view` /
         // `portal_view`, merged per cell) and stamps its outdoor portals once
         // per view. The render-set walk keeps only the first view; here a cell
@@ -36558,7 +36683,7 @@ impl SessionHandle {
             std::collections::HashSet::new();
         let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8, bool)> =
             std::collections::VecDeque::new();
-        queue.push_back((snap.current_cell, initial_view, 0, true));
+        queue.push_back((root, initial_view, 0, true));
         let mut count: u32 = 0;
         while let Some((cell_id, view_poly, depth, explore)) = queue.pop_front() {
             let Some(portals) = portal_map.get(&cell_id) else {
@@ -36667,15 +36792,24 @@ impl SessionHandle {
         // Snapshot.is_indoor decides which branch (matches the same
         // `pose.is_indoors()` the recv-loop used to publish — keeps the
         // JS branch consistent with what was sampled).
+        // Bug 4: root at the viewer (camera) cell when JS has set one; its
+        // depth-1 set was computed by `setViewerCell`.
+        let (root, root_indoor) = self.walk_root(&snap);
+        let viewer_set = self.viewer_render_set.borrow();
+        let root_set: &[u32] = if root != snap.current_cell {
+            viewer_set.as_slice()
+        } else {
+            snap.render_set.as_slice()
+        };
         let mut visible: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        visible.insert(snap.current_cell);
+        visible.insert(root);
 
-        if snap.is_indoor {
+        if root_indoor {
             // Indoor: BFS already computed in snap.render_set; frustum-
             // prune the neighbours, keep cells whose AABB straddles the
             // frustum (or that lack a registered AABB — treat as "keep").
-            for &cell in &snap.render_set {
-                if cell == snap.current_cell {
+            for &cell in root_set {
+                if cell == root {
                     continue;
                 }
                 match aabb_for(cell) {
@@ -36912,6 +37046,91 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// Bug 4 (2026-10-07): the render-walk root — the viewer cell JS set,
+    /// else the player's — and whether it is an EnvCell.
+    fn walk_root(&self, snap: &CellSceneSnapshot) -> (u32, bool) {
+        let viewer = self.viewer_cell.get();
+        if viewer != 0 && snap.current_cell != 0 {
+            (viewer, (viewer & 0xFFFF) >= 0x0100)
+        } else {
+            (snap.current_cell, snap.is_indoor)
+        }
+    }
+
+    /// Bug 4 (2026-10-07): retail's viewer cell for a camera at
+    /// `(to_x, to_y, to_z)` whose pivot (the player's head) is
+    /// `(from_x, from_y, from_z)`, AC world metres. Walks the segment from
+    /// `player_cell` (the player's full cell id) with
+    /// `SpatialScene::resolve_viewer_cell`. Pure query; JS hands the result
+    /// to [`Self::set_viewer_cell`].
+    #[wasm_bindgen(js_name = resolveViewerCell)]
+    pub fn resolve_viewer_cell(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        player_cell: u32,
+    ) -> u32 {
+        use holtburger_common::Vector3;
+        let scene = self.collision_scene.borrow();
+        scene.resolve_viewer_cell(
+            player_cell,
+            Vector3::new(from_x, from_y, from_z),
+            Vector3::new(to_x, to_y, to_z),
+            radius,
+        )
+    }
+
+    /// Bug 4 (2026-10-07): root the render-set walks at `cell` (the viewer
+    /// cell). `0`, or the player's own cell, clears the override. Computes
+    /// the depth-1 render set of an EnvCell viewer once here so the
+    /// per-frame walks only read it.
+    #[wasm_bindgen(js_name = setViewerCell)]
+    pub fn set_viewer_cell(&self, cell: u32) {
+        let player = self.cell_scene_snapshot.borrow().current_cell;
+        let cell = if cell == player { 0 } else { cell };
+        self.viewer_cell.set(cell);
+        let mut set = self.viewer_render_set.borrow_mut();
+        set.clear();
+        if cell != 0 && (cell & 0xFFFF) >= 0x0100 {
+            let scene = self.collision_scene.borrow();
+            set.extend(scene.render_set(cell, 1));
+            set.sort_unstable();
+        }
+    }
+
+    /// Bug 4: the viewer cell the walks are rooted at (`0` = the player's).
+    #[wasm_bindgen(js_name = getViewerCell)]
+    pub fn get_viewer_cell(&self) -> u32 {
+        self.viewer_cell.get()
+    }
+
+    /// Bug 4: the depth-1 render set of the walk root — `getRenderSet(1)`
+    /// for the viewer cell when one is set, else exactly `getRenderSet(1)`.
+    #[wasm_bindgen(js_name = getViewerRenderSet)]
+    pub fn get_viewer_render_set(&self) -> Vec<u32> {
+        if self.viewer_cell.get() != 0 {
+            let set = self.viewer_render_set.borrow();
+            if !set.is_empty() {
+                return set.clone();
+            }
+            return vec![self.viewer_cell.get()];
+        }
+        self.cell_scene_snapshot.borrow().render_set.clone()
+    }
+
+    /// Bug 4: the SeenOutside bit of any resident cell (`false` for an
+    /// outdoor or unknown cell). The sky pass uses it for the viewer cell
+    /// the way `isCurrentCellSeenOutside` serves the player's.
+    #[wasm_bindgen(js_name = isCellSeenOutside)]
+    pub fn is_cell_seen_outside(&self, cell: u32) -> bool {
+        self.collision_scene.borrow().cell_seen_outside(cell)
     }
 
     /// Sealed-dungeon terrain gate (2026-07-08). Reports whether the
@@ -41252,6 +41471,8 @@ pub async fn start_session(
         cell_scene_snapshot,
         outdoor_pview_enabled: std::cell::Cell::new(true),
         stablist_render_enabled: std::cell::Cell::new(false),
+        viewer_cell: std::cell::Cell::new(0),
+        viewer_render_set: std::cell::RefCell::new(Vec::new()),
         door_part_snapshot,
         local_player_pose,
         local_player_can_jump,
@@ -43097,6 +43318,12 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static MOTION_ACTION_STAMPS: std::cell::RefCell<std::collections::HashMap<u32, u16>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Bug 2 (2026-10-07): the forward-slot actions' stamps (the broadcast
+    /// `movement_sequence`), kept apart from the per-item command-list stamps
+    /// above — see the `action_from_commands` note in
+    /// session/messages/position.rs.
+    static MOTION_FORWARD_ACTION_STAMPS: std::cell::RefCell<std::collections::HashMap<u32, u16>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -48442,6 +48669,23 @@ mod tests_animation_keyframes_batch {
             close(n[0], 0.0) && close(n[1], 0.0) && close(n[2], 5.0),
             "link net translation, got {n:?}"
         );
+        // Bugs 2/15/18 (2026-10-07): only a RESOLVED link is flagged a link.
+        assert!(inner.is_link, "a registered link resolves as a link");
+
+        // A requested link that does not exist falls back to the target's
+        // CYCLE — and must say so, or JS plays the loop as a fake link.
+        let inner = build_entity_animation_data_inner_v2(
+            &source, setup_id, &[], &[], None, cycle_cmd, stance, from_cmd, 0,
+        )
+        .expect("missed-link inner");
+        assert!(inner.num_frames > 0, "the cycle fallback still bakes");
+        assert!(!inner.is_link, "a missed link's cycle fallback is NOT a link");
+        // A plain cycle request is not a link either.
+        let inner = build_entity_animation_data_inner_v2(
+            &source, setup_id, &[], &[], None, cycle_cmd, stance, 0, 0,
+        )
+        .expect("cycle inner (again)");
+        assert!(!inner.is_link);
     }
 }
 

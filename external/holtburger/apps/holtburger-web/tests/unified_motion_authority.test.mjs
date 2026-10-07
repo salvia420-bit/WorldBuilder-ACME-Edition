@@ -346,7 +346,9 @@ test("stance switch: the draw link and the new stance cycle commit together", as
 
 test("cast gesture is a substate: raise link, held arms-out cycle, recoil link on Ready", async () => {
   const em = makeManager();
-  const inst = await spawn(em, READY); // never moved: lastMotionCommand unset
+  // Spawned already in Magic stance: since bug 18 a spawn seeds the style, so
+  // a spawn in the default style would (correctly) play the draw link first.
+  const inst = await spawn(em, READY, { motionStance: 0x49 });
   await em.setMotion(inst.guid, MAGIC_BLAST & 0xffff, 0x49, 2.0); // bare low16, CastSpeed 2
   assert.equal(inst.lastMotionCommand, MAGIC_BLAST, "gesture expanded + remembered as the substate");
   const raise = inst._unifiedSeq;
@@ -389,7 +391,9 @@ test("an action's speed scales its link only, not the following cycle", async ()
 // cold, so the Ready lands while it is still in flight.
 test("war-spell cast from the wire: a Ready during a cold gesture bake keeps raise + recoil", async () => {
   const em = makeManager();
-  const inst = await spawn(em, READY);
+  // Already in Magic stance (bug 18: a spawn in the default style would play
+  // the NonCombat→Magic draw link before the windup, as retail does).
+  const inst = await spawn(em, READY, { motionStance: 0x49 });
   await em.setMotion(inst.guid, READY, 0x49, 1.0); // in Magic stance, idle
   // Windup: KIND_MOTION(0) then KIND_MOTION_ACTION(MagicPowerUp01).
   em.setMotion(inst.guid, 0, 0x49, 2.0);
@@ -418,7 +422,8 @@ test("war-spell cast from the wire: a Ready during a cold gesture bake keeps rai
   assert.ok(sawRecoil, "MagicBlast->Ready recoil link plays (full-key lookup)");
   for (let i = 0; i < 10; i += 1) em.tick(0.05);
   assert.ok(partY(inst) >= 10 && partY(inst) < 10 + NUM_FRAMES, "back on the Magic Ready cycle");
-  assert.equal(inst.lastMotionCommand, 0x0003, "substate memory is Ready again");
+  // Bugs 2/15/18: commands are canonical full 32-bit from setMotion on.
+  assert.equal(inst.lastMotionCommand, READY, "substate memory is Ready again");
   em.dispose();
 });
 

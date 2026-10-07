@@ -576,6 +576,18 @@ function isNearPlayerLb(scene3d, lbKey, radius = 1) {
   }
 }
 
+// Bug 5 (2026-10-07): protect the whole drawn ring from reclaim (see
+// `_wantedRingRadius`). Default ON; `?lbRingProtect=off` escapes.
+const LB_RING_PROTECT_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = new URLSearchParams(globalThis.location.search).get("lbRingProtect");
+      if (v != null) return !(["off", "0", "false", "no"].includes(v.toLowerCase()));
+    }
+  } catch (_) { /* default on */ }
+  return true;
+})();
+
 export class LandblockLRU {
   constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, ringFloor = 1, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
@@ -1131,6 +1143,16 @@ export class LandblockLRU {
   // Per-frame eviction tick. Touches the player's LB + 3×3 ring (the
   // always-resident floor), then evicts the oldest entries beyond
   // `maxResident` until the resident count is ≤ maxResident.
+  /** Bug 5: the effective PVS draw-ring radius (cells.js
+   *  `tickPvsLoadExpansion` publishes it every frame), 0 when unknown. Ring
+   *  LBs are exempt from reclaim. `?lbRingProtect=off` restores the 3×3-only
+   *  protection. */
+  _wantedRingRadius() {
+    if (!LB_RING_PROTECT_ON) return 0;
+    const r = this.scene3d?._pvsEffectiveRingRadius;
+    return Number.isFinite(r) && r > 0 ? (r | 0) : 0;
+  }
+
   tickEviction(currentLbKeyArg, sealedKeepLbKeyArg = 0) {
     // ST7 `?slotGrid` — ASSERT-ONLY arm (see the constructor note): the
     // grid owns residency; this tick computes + diffs, acts on nothing.
@@ -1312,6 +1334,19 @@ export class LandblockLRU {
     // candidates for eviction even under adversarial maxResident < 9.
     this.touch(currentLbKey);
     for (const k of ringKeysAround(currentLbKey)) this.touch(k);
+    // Bug 5 (2026-10-07, terrain holes): the WHOLE drawn ring is wanted, not
+    // only the 3×3. Ring LBs outside the 3×3 were never touched after their
+    // bake, so the count cap picked them as the "oldest" victims (side and
+    // leading-edge blocks of a long walk), and the PVS sweep — which then
+    // treated them as baked — never brought them back: holes until the player
+    // walked within one block. Keep their recency current and exempt them
+    // from victim selection below (cells.js publishes the effective radius).
+    const wantR = this._wantedRingRadius();
+    if (wantR > 1 && currentLbKey != null) {
+      for (const [key, entry] of this.entries) {
+        if (lbChebyshev(currentLbKey, key) <= wantR) entry.lastTouchMs = nowMs;
+      }
+    }
 
     if (RECLAIM_GATE_ON && this._centerJumpAtMs > 0) {
       if (nowMs - this._centerJumpAtMs < RECLAIM_GATE_MAX_HOLD_MS
@@ -1343,8 +1378,9 @@ export class LandblockLRU {
     // fresh bake can't be a victim in the same second it lands). Sort
     // ascending by lastTouchMs → oldest evicted first.
     const candidates = [];
+    const protectR = Math.max(this.ringFloor, wantR);
     for (const [key, entry] of this.entries) {
-      if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= this.ringFloor) continue;
+      if (currentLbKey != null && lbChebyshev(currentLbKey, key) <= protectR) continue;
       if (RECLAIM_MIN_AGE_MS > 0 && nowMs - entry.lastTouchMs < RECLAIM_MIN_AGE_MS) continue;
       // TN-storm fix: never park an LB whose guarded bake is still in
       // flight (its completion track() would land next to the pool copy —

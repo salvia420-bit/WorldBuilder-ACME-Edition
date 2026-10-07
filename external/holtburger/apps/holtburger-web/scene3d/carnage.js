@@ -624,6 +624,10 @@ function _longestBodyChain(reg, rand) {
  * death (which legs are still available, which parts are already destroyed) so
  * two moves never fight over the same part. Never throws.
  */
+// Bug 16 (2026-10-07): a death gib's Voronoi fracture cost grows with its
+// fragment count (up to 14 at a crit); death gibs are capped lower.
+const DEATH_GIB_MAX_FRAGMENTS = 8;
+
 function _runFinisherMove(kind, inst, reg, st, crit, rand, cx) {
   const claim = (i) => {
     if (i === null || i === undefined || i < 0) return false;
@@ -688,7 +692,7 @@ function _runFinisherMove(kind, inst, reg, st, crit, rand, cx) {
       st.severed.add(leg.leaf);
       st.fractures++;
       st.events.push({ kind: "limbGib", part: target });
-      fracturePart(inst, target, { critical: crit, scale: crit ? 1.2 : 1 })
+      fracturePart(inst, target, { critical: crit, scale: crit ? 1.2 : 1, maxFragments: DEATH_GIB_MAX_FRAGMENTS })
         .catch((e) => console.warn("[carnage] limb gib failed:", e));
       return true;
     }
@@ -697,7 +701,7 @@ function _runFinisherMove(kind, inst, reg, st, crit, rand, cx) {
       if (!claim(ri)) return false;
       st.fractures++;
       st.events.push({ kind: "torsoGib", part: ri });
-      fracturePart(inst, ri, { critical: true, scale: 1.2 })
+      fracturePart(inst, ri, { critical: true, scale: 1.2, maxFragments: DEATH_GIB_MAX_FRAGMENTS })
         .catch((e) => console.warn("[carnage] torso gib failed:", e));
       return true;
     }
@@ -812,13 +816,13 @@ export function carnageOnDeath(inst) {
       if (gibPart !== null && gibPart !== undefined && inst.parts?.[gibPart] && !cx.used.has(gibPart)) {
         cx.used.add(gibPart);
         st.fractures++;
-        fracturePart(inst, gibPart, { critical: crit, scale: crit ? 1.2 : 1 })
+        fracturePart(inst, gibPart, { critical: crit, scale: crit ? 1.2 : 1, maxFragments: DEATH_GIB_MAX_FRAGMENTS })
           .catch((e) => console.warn("[carnage] gib failed:", e));
       }
       if (plan.gibTorso && hasRoot && !cx.used.has(reg.rootIndex)) {
         cx.used.add(reg.rootIndex);
         st.fractures++;
-        fracturePart(inst, reg.rootIndex, { critical: true, scale: 1.2 })
+        fracturePart(inst, reg.rootIndex, { critical: true, scale: 1.2, maxFragments: DEATH_GIB_MAX_FRAGMENTS })
           .catch((e) => console.warn("[carnage] torso gib failed:", e));
       }
     } catch (e) {

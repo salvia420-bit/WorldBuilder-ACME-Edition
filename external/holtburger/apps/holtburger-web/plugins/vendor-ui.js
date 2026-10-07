@@ -53,6 +53,7 @@
 import { setAcText } from "../ui/ac_font.js";
 import { formatAppraisalTooltip } from "./inventory_helpers.js";
 import { DropItemFlags } from "./drop_item_flags.js";
+import { vendorRangeVerdict, VENDOR_FALLBACK_RANGE_M } from "./vendor_range.js";
 import {
   createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, kitButton, fillSlotIcon,
   wireDropTarget, inventoryRows, entityWorldPos, localPlayerWorldPos, devHex,
@@ -101,6 +102,15 @@ function snapshotFromWasm(state) {
     alternateCurrencyWcid: state.alternateCurrencyWcid,
     alternateCurrencyAmount: state.alternateCurrencyAmount,
     alternateCurrencyName: state.alternateCurrencyName,
+    // Vendor range inputs (bug 3, 2026-10-07): the vendor's wire use
+    // radius (0 when absent, as retail) and both bodies' CPartArray
+    // radius/height. Absent on a stale pkg/ → null, and the watchdog falls
+    // back to the old fixed range.
+    useRadius: Number.isFinite(state.useRadius) ? state.useRadius : null,
+    vendorRadius: Number.isFinite(state.vendorRadius) ? state.vendorRadius : 0,
+    vendorHeight: Number.isFinite(state.vendorHeight) ? state.vendorHeight : 0,
+    playerRadius: Number.isFinite(state.playerRadius) ? state.playerRadius : 0,
+    playerHeight: Number.isFinite(state.playerHeight) ? state.playerHeight : 0,
     items: Array.from(state.items || []).map((i) => ({
       itemGuid: i.itemGuid,
       wcid: i.wcid,
@@ -440,22 +450,38 @@ function stageSell(guid) {
 // RETAIL (client owns the close; there is no close packet in either
 // direction): `gmVendorUI::OpenVendor` (acclient.c:246660) registers an
 // object-range handler with the VENDOR'S OWN wire use-radius
-// (`_range = PublicWeenieDesc::_useRadius`, useRadii=1, 1.0 s poll);
-// `CPlayerSystem::CalculateObjectRangeChecks` (:397612) fires
-// `gmVendorUI::OnObjectRangeExit` (:242550) → `CloseVendor` (:245102)
-// once the cylinder distance exceeds it.
-// ACE (independent, emote-only): Vendor.CheckClose() every 1.5 s plays
-// the goodbye emote past UseRadius; it never tells the client to close.
-// THE VALUE: ACE-World vendors carry UseRadius 3.0 (×1108 of 1179), so
-// 3.0 is the default until the per-vendor `use_radius` (parsed in
-// crates/holtburger-protocol description.rs, not yet surfaced to JS) is
-// plumbed through. We measure centre-to-centre, so the two collision
-// radii (2 × 0.48) are added back.
-const VENDOR_USE_RADIUS = 3.0;
-const VENDOR_CYLINDER_RADII_ALLOWANCE = 0.96;
-const VENDOR_MAX_INTERACT_RANGE = VENDOR_USE_RADIUS + VENDOR_CYLINDER_RADII_ALLOWANCE;
+// (`_range = PublicWeenieDesc::_useRadius`, useRadii=1, xy_only=0, 1.0 s
+// poll); `CPlayerSystem::CalculateObjectRangeChecks` (:397612) →
+// `ACCWeenieObject::ObjectsInRange` (:436730) →
+// `CPhysicsObj::get_distance_to_object(use_cyls=1)` →
+// `Position::cylinder_distance` (:467221) with each body's
+// `CPartArray::GetRadius`/`GetHeight`; past the radius it fires
+// `gmVendorUI::OnObjectRangeExit` (:242550) → `CloseVendor` (:245102).
+// OpenAC (Runtime/Gameplay/RuntimeVendorRangeQuery.cs) does exactly this
+// every frame, treats an absent use radius as 0 m (the retail ctor zeroes
+// `_useRadius`, :470951), and closes when the vendor is gone.
+// ACE (independent, emote-only): Vendor.CheckClose() every 1.5 s plays the
+// goodbye emote past UseRadius; it never tells the client to close.
+//
+// Bug 3 (2026-10-07): this used a fixed 3.0 m + 0.96 m PLANAR centre
+// distance. Now: the vendor's own radius, retail's 3-D cylinder distance.
+// The fixed range survives only as the stale-pkg/ fallback.
+// OpenAC checks every frame, retail once a second; 4 Hz is close to the
+// former without a per-frame hook. The range math lives in vendor_range.js.
+const VENDOR_RANGE_POLL_MS = 250;
+
 function startVendorRangeWatchdog() {
   stopVendorRangeWatchdog();
+  const vs0 = state.vendorState;
+  if (vs0) {
+    console.info(
+      `[vendor-range] open ${devHex(vs0.vendorGuid >>> 0)}: useRadius=` +
+      `${Number.isFinite(vs0.useRadius) ? vs0.useRadius.toFixed(2) + "m" : "n/a (stale pkg, fixed " + VENDOR_FALLBACK_RANGE_M.toFixed(2) + "m)"}` +
+      ` vendor r/h=${(vs0.vendorRadius || 0).toFixed(3)}/${(vs0.vendorHeight || 0).toFixed(3)}` +
+      ` player r/h=${(vs0.playerRadius || 0).toFixed(3)}/${(vs0.playerHeight || 0).toFixed(3)}`,
+    );
+  }
+  let seenVendor = false;
   state.rangeCheckTimer = setInterval(() => {
     if (!state.win?.isOpen()) {
       stopVendorRangeWatchdog();
@@ -463,19 +489,29 @@ function startVendorRangeWatchdog() {
     }
     const vendorGuid = (state.vendorState?.vendorGuid >>> 0) || 0;
     if (!vendorGuid) return;
-    const vendorPos = entityWorldPos(vendorGuid);
-    if (!vendorPos) return; // vendor not in scene; let the server time out
     const pp = localPlayerWorldPos();
     if (!pp) return;
-    const dist = Math.hypot(vendorPos.x - pp.x, vendorPos.y - pp.y);
-    if (dist > VENDOR_MAX_INTERACT_RANGE) {
+    const vendorPos = entityWorldPos(vendorGuid);
+    if (!vendorPos) {
+      // OpenAC closes when the vendor is no longer an active object. Only
+      // once we have seen it in the scene: a rig that never loaded (debug
+      // mount, nullRender) is not a vendor that left.
+      if (seenVendor) {
+        console.info(`[vendor-range] vendor ${devHex(vendorGuid)} left the world — closing`);
+        hideOverlay();
+      }
+      return;
+    }
+    seenVendor = true;
+    const v = vendorRangeVerdict(state.vendorState, vendorPos, pp);
+    if (!v.inRange) {
       console.info(
-        `[vendor-ui] vendor ${devHex(vendorGuid)} out of range ` +
-        `(${dist.toFixed(1)}m > ${VENDOR_MAX_INTERACT_RANGE.toFixed(2)}m) — closing`,
+        `[vendor-range] vendor ${devHex(vendorGuid)} out of range ` +
+        `(${v.mode} distance ${v.dist.toFixed(2)}m > ${v.range.toFixed(2)}m) — closing`,
       );
       hideOverlay();
     }
-  }, 500);
+  }, VENDOR_RANGE_POLL_MS);
 }
 function stopVendorRangeWatchdog() {
   if (state.rangeCheckTimer) {

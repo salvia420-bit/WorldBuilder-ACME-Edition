@@ -111,4 +111,42 @@ await test("AudioManager: 17 concurrent one-shots -> 16 start, 17th dropped; end
   fake.uninstall();
 });
 
+// Bug 8 (2026-10-07) — OpenAC's per-wave cap (VoiceAllocation
+// .TryTakeOldestOfOneSound, AudioMixerOptions.DefaultMaxVoicesPerWave = 4).
+await test("per-wave cap: a fifth copy of one wave replaces its oldest copy", () => {
+  const pool = new VoicePool(16, 4);
+  const stopped = [];
+  const W = 0x0a00042e;
+  for (let i = 0; i < 4; i++) pool.claim({ stop: () => stopped.push(i) }, VOICE_PRIORITY, W);
+  assert.equal(pool.copiesOf(W), 4);
+  const t5 = pool.claim({ stop: () => stopped.push(4) }, VOICE_PRIORITY, W);
+  assert.ok(t5 > 0, "the fifth copy plays");
+  assert.deepEqual(stopped, [0], "the oldest copy was stopped");
+  assert.equal(pool.copiesOf(W), 4, "still four copies");
+  assert.equal(pool.waveCapCount, 1);
+  // Other waves still get free voices.
+  assert.ok(pool.claim({ stop() {} }, VOICE_PRIORITY, 0x0a000001) > 0);
+  assert.equal(pool.activeCount(), 5);
+});
+
+await test("per-wave cap off (retailMixer) keeps the shipped behaviour", () => {
+  const pool = new VoicePool(16, 0);
+  const W = 0x0a00042e;
+  for (let i = 0; i < 6; i++) pool.claim({ stop() {} }, VOICE_PRIORITY, W);
+  assert.equal(pool.copiesOf(W), 6);
+  assert.equal(pool.waveCapCount, 0);
+});
+
+await test("acquireVoice: the cap only counts PLAYING copies of the same wave", () => {
+  const W = 7;
+  const slots = [
+    { occupied: true, stillPlaying: true, priority: 0, waveId: W, startedAt: 2 },
+    { occupied: true, stillPlaying: false, priority: 0, waveId: W, startedAt: 1 },
+    { occupied: true, stillPlaying: true, priority: 0, waveId: 9, startedAt: 0 },
+    { occupied: false, stillPlaying: false, priority: 0, waveId: 0, startedAt: 0 },
+  ];
+  assert.equal(acquireVoice(slots, 0, 0, W, 1), 0, "at the cap of 1 → its own playing copy");
+  assert.equal(acquireVoice(slots, 0, 0, W, 2), 1, "under the cap → the normal free/finished slot");
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", FAILURES above" : ""}`);

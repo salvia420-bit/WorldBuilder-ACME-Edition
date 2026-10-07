@@ -37,15 +37,21 @@
 // → entityManager → getObjectIconId (see resolveItemMeta).
 
 import { setAcText } from "../ui/ac_font.js";
-import { fetchIconDataUrl as fetchIconDataUrlShared, getIconImmediate } from "../ui/ac_icon_cache.js";
+import {
+  fetchIconDataUrl as fetchIconDataUrlShared,
+  fetchItemIconDataUrl,
+  getItemIconImmediate,
+  itemIconKey,
+} from "../ui/ac_icon_cache.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
 import { makeTitlebar } from "../ui/hud_kit.js";
 import {
-  uiEffectIconsEnabled,
+  uiEffectBadgesEnabled,
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { takeInventorySnapshot, decideItemDrop, DROP_TARGET, MAIN_PACK_KEY, PACKS_KEY } from "./inventory_helpers.js";
+import { resolveContainedItemMeta } from "./contained_item_meta.js";
 import {
   beginItemDrag,
   registerDropZone,
@@ -75,7 +81,13 @@ let state = {
   items: [],
   selectedGuid: 0,
   despawnTimer: 0,
+  // Bug 1: bounded re-poll while listed items are not created yet.
+  resolveTimer: 0,
+  resolveTries: 0,
+  lastLog: "",
 };
+const RESOLVE_POLL_MS = 250;
+const RESOLVE_MAX_TRIES = 12;
 let onKeyDownHandler = null;
 let windowCtl = null;
 let lootAll = null;
@@ -128,8 +140,14 @@ function resolveItemMeta(guid, invSnapshot) {
       };
     }
   } catch (_) {}
+  // Bug 1 (2026-10-07): a corpse's items have no rig and are not ours —
+  // read them out of the wasm entity store (contained_item_meta.js).
+  const stored = resolveContainedItemMeta(handle, g);
+  if (stored) return stored;
+  // Not created yet (ACE sends ViewContents before the CreateObjects):
+  // placeholder, re-polled by refreshContents.
   const iconFromCache = (handle?.getObjectIconId?.(g) >>> 0) || 0;
-  return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1, wcid: 0, itemType: 0, uiEffects: 0 };
+  return { guid: g, name: fmtGuid(g), iconId: iconFromCache, stackSize: 1, wcid: 0, itemType: 0, uiEffects: 0, unresolved: true };
 }
 
 function ensureStyles() {
@@ -400,18 +418,24 @@ function lootStep() {
   lootAll.timer = setTimeout(lootStep, LOOT_ALL_STEP_MS);
 }
 
+// Bug 12 (2026-10-07): the retail item composite (ui/ac_icon_compose.js);
+// a failed fetch clears the memo so the next refresh retries.
 function setCellIcon(cell, it) {
   const iconId = (it.iconId >>> 0) || 0;
-  if (cell._iconId === iconId) return;
+  const key = iconId ? itemIconKey(it) : "";
+  if (cell._iconKey === key) return;
+  cell._iconKey = key;
   cell._iconId = iconId;
   const icon = cell._icon;
   icon.style.backgroundImage = "";
   icon.style.backgroundColor = iconId ? "" : "rgba(60, 50, 34, 0.8)";
   if (!iconId) return;
-  const hit = getIconImmediate(iconId);
+  const hit = getItemIconImmediate(it);
   if (hit) { icon.style.backgroundImage = `url("${hit}")`; return; }
-  fetchIconDataUrl(iconId).then((url) => {
-    if (url && cell._iconId === iconId) icon.style.backgroundImage = `url("${url}")`;
+  fetchItemIconDataUrl(it, "corpse-loot-bar").then((url) => {
+    if (cell._iconKey !== key) return;
+    if (typeof url !== "string") { cell._iconKey = null; return; }
+    icon.style.backgroundImage = `url("${url}")`;
   });
 }
 
@@ -475,7 +499,7 @@ function setCellEffects(cell, bits) {
   cell._fxBits = bits;
   cell._fx?.remove();
   cell._fx = null;
-  if (!bits || !uiEffectIconsEnabled()) return;
+  if (!bits || !uiEffectBadgesEnabled()) return;
   const fx = uiEffectIconsFor(bits);
   if (!fx.length) return;
   const wrap = document.createElement("span");
@@ -574,6 +598,7 @@ function refreshContents() {
   // ONE snapshot serves both the owned-filter and every per-item meta resolve;
   // `free()` runs in a `finally` so a throw inside resolveItemMeta still
   // releases the boxes.
+  const listed = guids.length;
   const snap = takeInventorySnapshot(handle);
   try {
     const owned = new Set(snap.inv.map((it) => (it.guid >>> 0)));
@@ -584,6 +609,22 @@ function refreshContents() {
   }
   if (!guids.some((x) => (x >>> 0) === (state.selectedGuid >>> 0))) {
     state.selectedGuid = 0;
+  }
+  // Bug 1: the items' CreateObjects follow the ViewContents, so some may
+  // still be placeholders — re-poll a few times until every one resolves.
+  const unresolved = state.items.filter((it) => it.unresolved).length;
+  const line = `[corpse-loot] 0x${g.toString(16)} listed=${listed} shown=${state.items.length} unresolved=${unresolved}`;
+  if (line !== state.lastLog) {
+    state.lastLog = line;
+    console.info(line);
+  }
+  if (state.resolveTimer) { clearTimeout(state.resolveTimer); state.resolveTimer = 0; }
+  if (unresolved > 0 && state.resolveTries < RESOLVE_MAX_TRIES) {
+    state.resolveTries++;
+    state.resolveTimer = setTimeout(() => {
+      state.resolveTimer = 0;
+      if (overlayEl?.dataset.open === "1" && (state.corpseGuid >>> 0) === g) refreshContents();
+    }, RESOLVE_POLL_MS);
   }
   render();
   if (lootAll && lootAll.waitGuid && !guids.some((x) => (x >>> 0) === lootAll.waitGuid)) {
@@ -604,6 +645,8 @@ function openFor(corpseGuid, corpseName) {
   state.corpseGuid = g;
   state.corpseName = corpseName || "Container";
   state.selectedGuid = 0;
+  state.resolveTries = 0;
+  state.lastLog = "";
   overlayEl.dataset.open = "1";
   refreshContents();
   // Place synchronously (offsetWidth forces layout) so the first painted
@@ -645,6 +688,7 @@ function closeBar() {
   stopLootAll();
   state.corpseGuid = 0;
   state.selectedGuid = 0;
+  if (state.resolveTimer) { clearTimeout(state.resolveTimer); state.resolveTimer = 0; }
   // CM_Inventory::Event_NoLongerViewingContents — only if the wasm build
   // exposes it (it does not yet; ACE then frees the chest on range exit).
   try { if (g) playerHandle()?.noLongerViewingContents?.(g); } catch (_) {}

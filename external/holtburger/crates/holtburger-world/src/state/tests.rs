@@ -2678,6 +2678,46 @@ fn test_update_health_updates_target_entity_fraction_and_emits_replace() {
 }
 
 #[test]
+fn test_update_health_for_unknown_or_unchanged_entity_still_emits() {
+    // Bug 10 (2026-10-07): the selection HUD must get every QueryHealth
+    // reply, even for a guid the entity store does not hold and for a value
+    // that did not change since the last reply.
+    let mut state = WorldState::synthetic();
+    let unknown = Guid(0x7A4B4010);
+    let msg = |g: Guid, h: f32| {
+        GameMessage::GameEvent(Box::new(GameEventMessage {
+            target: g,
+            sequence: 1,
+            event: GameEvent::UpdateHealth(Box::new(UpdateHealthEventData {
+                target: g,
+                health: h,
+            })),
+        }))
+    };
+    let events = state.handle_message(&msg(unknown, 0.75));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        WorldEvent::EntityHealthUpdated { guid, health_fraction }
+            if *guid == unknown && *health_fraction == 0.75
+    )));
+    assert!(state.entities.get(unknown).is_none());
+
+    let known = Guid(0x60000002);
+    state.add_entity(Entity::new(
+        known,
+        "Hollow Minion".to_string(),
+        WorldPosition::default(),
+    ));
+    let _ = state.handle_message(&msg(known, 1.0));
+    let again = state.handle_message(&msg(known, 1.0));
+    assert!(again.iter().any(|event| matches!(
+        event,
+        WorldEvent::EntityHealthUpdated { guid, health_fraction }
+            if *guid == known && *health_fraction == 1.0
+    )));
+}
+
+#[test]
 fn test_fellowship_full_update_populates_world_state_and_emits_projection() {
     let mut state = WorldState::synthetic();
     state.player.guid = Guid(0x5000_0001);
@@ -4648,6 +4688,35 @@ fn test_tick_runs_sweep_without_player_guid() {
             .iter()
             .any(|event| matches!(event, WorldEvent::EntityDespawned(target) if *target == guid))
     );
+}
+
+#[test]
+fn test_no_player_entity_assigns_no_visibility_prune_deadline() {
+    // Bug 10 (2026-10-07): with no player pose the visible set is empty;
+    // the sweep must not start a 25 s deadline on every world entity (that
+    // emptied the store under live, still-selectable rigs).
+    let mut state = WorldState::synthetic();
+    state.server_time = Some(ServerTimeSync {
+        server_time: 100.0,
+        local_time: Instant::now(),
+    });
+    state.player.guid = Guid(0x50000133); // no entity seeded for it
+    let target_guid = Guid(0x60000133);
+    let pos = WorldPosition {
+        landblock_id: Guid(0xA4B4010E),
+        coords: Vector3::new(10.0, 10.0, -6.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.add_entity(Entity::new(target_guid, "Hollow Minion".to_string(), pos));
+
+    let _ = state.tick();
+    assert!(
+        state
+            .entity_lifecycle_state(target_guid)
+            .and_then(|lifecycle| lifecycle.prune_deadline)
+            .is_none()
+    );
+    assert!(state.entities.get(target_guid).is_some());
 }
 
 #[test]

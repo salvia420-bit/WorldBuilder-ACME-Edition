@@ -1326,6 +1326,41 @@ impl MovingObjectPhysics for FaithfulMover {
 /// Drives the walkable-vs-steep discriminator (`begin_on_walkable`) for the lip
 /// edge-protection: a mover on WALKABLE terrain is held at a lip (T4); one on a
 /// too-steep face keeps `cliff_slide` and slides (T2).
+/// Bug 17 (2026-10-07): did the mover BEGIN this slice on walkable ground?
+/// Feeds the driver's walkable-vs-steep discriminator (`begin_on_walkable`).
+///
+/// Standing ON the terrain (feet within `ON_TERRAIN_BAND_M` of the surface at
+/// its own xy) the terrain normal decides, exactly as before — a stale walkable
+/// plane carried onto a too-steep face must not edge-hold the slider (the T2
+/// guard, `outdoor_mid_slope_idle_slides_not_stuck`). Standing well ABOVE the
+/// terrain the support is a BSP surface (a roof, a bridge, a floor), and the
+/// terrain under it says nothing about the footing: the stored contact plane
+/// decides. That is what lets a thatch-roof eave hold the player like a
+/// terrain lip instead of dropping them off it.
+fn faithful_begin_on_walkable(scene: &SpatialScene, input: &TransitionInput) -> bool {
+    const FLOOR_Z: f32 = 0.664_174_1;
+    const ON_TERRAIN_BAND_M: f32 = 0.75;
+    let terrain_walkable =
+        || faithful_terrain_normal(scene, &input.begin).is_some_and(|n| n.z >= FLOOR_Z);
+    let on_terrain = faithful_terrain_floor(scene, &input.begin)
+        .is_some_and(|(tz, _)| input.begin.coords.z <= tz + ON_TERRAIN_BAND_M);
+    if on_terrain {
+        return terrain_walkable();
+    }
+    // Above the terrain: the stored contact plane is the support only while it
+    // still passes under the feet (the same nearness test the CONTACT seed
+    // uses); a stale plane left behind by a step-off or a teleport is not.
+    let radius = input.object.radius;
+    let feet = input.begin.global_coords();
+    let low_center = Vector3::new(feet.x, feet.y, feet.z + radius);
+    let local_walkable_plane = input.last_contact_plane.is_some_and(|(plane, _)| {
+        let bottom_dist = plane.normal.dot(&low_center) + plane.d - radius;
+        plane.normal.z >= FLOOR_Z
+            && bottom_dist.abs() <= input.object.step_down_height.max(radius)
+    });
+    local_walkable_plane || (input.last_contact_plane.is_none() && terrain_walkable())
+}
+
 fn faithful_terrain_normal(scene: &SpatialScene, pose: &WorldPosition) -> Option<Vector3> {
     let cell_id = scene.current_cell(pose);
     let heights = scene.terrain_cell_heights(cell_id)?;
@@ -1466,8 +1501,7 @@ pub fn faithful_find_transitional_position(
     scene.note_terrain_plane_frame_arm_reached();
     t.world_frame_terrain_plane = input.gates.world_frame_terrain_plane;
     if input.gates.retail_ground {
-        t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
-            .is_some_and(|n| n.z >= 0.664_174_1);
+        t.begin_on_walkable = faithful_begin_on_walkable(scene, input);
     }
     // Phase 3 Phase E1b / WS-C (2026-06-29) — restore the faithful persistent
     // `ON_WALKABLE` precondition for a GROUNDED mover (the genuine vertical-lip
@@ -2446,8 +2480,8 @@ pub(crate) fn faithful_diag_step(
     t.retail_ground = input.gates.retail_ground;
     t.world_frame_terrain_plane = input.gates.world_frame_terrain_plane;
     if input.gates.retail_ground {
-        t.begin_on_walkable = faithful_terrain_normal(scene, &input.begin)
-            .is_some_and(|n| n.z >= 0.664_174_1);
+        // Bug 17: mirrors `faithful_find_transitional_position`.
+        t.begin_on_walkable = faithful_begin_on_walkable(scene, input);
     }
     let grounded_entry = !input.airborne || input.force_grounded;
     // 2026-08-02 — MUST mirror the FLOOR_Z gate in

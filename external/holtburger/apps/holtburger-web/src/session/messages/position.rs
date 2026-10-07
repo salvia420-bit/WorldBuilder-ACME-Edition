@@ -1265,22 +1265,48 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // guid, so a re-broadcast UpdateMotion doesn't restart
             // the swing/eat clip. An action with no sequence
             // (shouldn't happen — the snapshot pairs them) emits.
+            //
+            // Bug 2 (2026-10-07): the snapshot's sequence comes from one of
+            // TWO unrelated counters — a command-list action carries its own
+            // per-item motion stamp (retail `server_action_stamp`,
+            // acclient.c:344388-344418), while a forward-slot action (eat /
+            // drink, ACE's non-PK windups) is stamped with the broadcast's
+            // `movement_sequence`. One table for both compared one counter
+            // against the other, so after any forward-slot action a later
+            // command-list action (a PK caster's windup run, a recall
+            // gesture) could be judged "older" and dropped. Each source now
+            // has its own table.
+            let action_from_commands = matches!(
+                &data.data,
+                holtburger_protocol::messages::movement::MovementTypeData::Invalid(inv)
+                    if inv.state.commands.iter().any(|item| {
+                        holtburger_world::player::expand_motion_command_low16(item.command.raw())
+                            .is_some_and(holtburger_world::player::is_action_motion_command)
+                    })
+            );
             let action_is_new = match &main_path_action {
                 Some((_, snap)) => match snap.action_sequence {
-                    Some(seq) => MOTION_ACTION_STAMPS.with(|m| {
-                        let mut m = m.borrow_mut();
-                        let guid_key = u32::from(data.guid);
-                        let fresh = m
-                            .get(&guid_key)
-                            .map(|&prev| {
-                                holtburger_common::sequence::is_newer_u16(seq, prev)
-                            })
-                            .unwrap_or(true);
-                        if fresh {
-                            m.insert(guid_key, seq);
+                    Some(seq) => {
+                        let check = |m: &std::cell::RefCell<std::collections::HashMap<u32, u16>>| {
+                            let mut m = m.borrow_mut();
+                            let guid_key = u32::from(data.guid);
+                            let fresh = m
+                                .get(&guid_key)
+                                .map(|&prev| {
+                                    holtburger_common::sequence::is_newer_u16(seq, prev)
+                                })
+                                .unwrap_or(true);
+                            if fresh {
+                                m.insert(guid_key, seq);
+                            }
+                            fresh
+                        };
+                        if action_from_commands {
+                            MOTION_ACTION_STAMPS.with(check)
+                        } else {
+                            MOTION_FORWARD_ACTION_STAMPS.with(check)
                         }
-                        fresh
-                    }),
+                    }
                     None => true,
                 },
                 None => false,

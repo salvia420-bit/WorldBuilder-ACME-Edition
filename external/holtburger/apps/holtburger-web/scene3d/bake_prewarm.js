@@ -23,6 +23,7 @@
 // `?bakePrewarm=off` restores the legacy attach-then-lazy-compile behaviour.
 
 import { withWarmTarget } from "./shader_prewarm.js";
+import { ensureBloodDecalPool } from "./blood_decals.js";
 
 export const BAKE_PREWARM = (() => {
   try {
@@ -233,6 +234,19 @@ async function _runArchetypeWarm(scene3d) {
       side: THREE.DoubleSide,
     })
   );
+  // Bug 16 (2026-10-07): the dismember cap ("flesh") material is a mapless
+  // FRONT-sided MeshStandardMaterial (dismember.js `_fleshMaterial`); `side`
+  // is part of three's program key, so the DoubleSide proxy above never
+  // covered it and the first sever of the session (usually at a kill) linked
+  // a program synchronously.
+  push(
+    new THREE.MeshStandardMaterial({
+      color: 0x6b1414,
+      roughness: 0.9,
+      metalness: 0.0,
+      side: THREE.FrontSide,
+    })
+  );
   // Particle-unlit family (entity VFX billboards — never previously warmed).
   push(
     new THREE.MeshBasicMaterial({
@@ -248,6 +262,25 @@ async function _runArchetypeWarm(scene3d) {
   } catch (_) {
     /* fail-soft */
   }
+  // Bug 16: the blood-decal pool's instanced ShaderMaterial (built lazily on
+  // the first stamp before) — build + compile it now, in the real scene.
+  // liveScene3d can land after this warm; retry a few times.
+  const warmBlood = (tries) => {
+    try {
+      const bloodMesh = ensureBloodDecalPool();
+      if (bloodMesh) {
+        guardedCompileAsync(renderer, bloodMesh, camera, host.scene)
+          .then(() => console.info("[bake_prewarm] blood decal pool compiled"))
+          .catch(() => {});
+        return;
+      }
+    } catch (_) {
+      /* fail-soft: the pool compiles on its first stamp (legacy) */
+      return;
+    }
+    if (tries > 0 && typeof setTimeout === "function") setTimeout(() => warmBlood(tries - 1), 10000);
+  };
+  warmBlood(6);
   // Park (never dispose) — see the refcount note above. Parked on the HOST
   // (the facade probes read) as well as the caller's bag.
   host._archetypeWarmGroup = group;

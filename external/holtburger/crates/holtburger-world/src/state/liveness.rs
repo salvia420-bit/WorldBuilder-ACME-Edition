@@ -154,6 +154,16 @@ impl WorldState {
     }
 
     fn maintain_visibility_prune_deadlines(&mut self, now: f64) {
+        // Bug 10 (2026-10-07): without a player landblock the visible set
+        // below is EMPTY, so every world entity got a 25 s prune deadline and
+        // was swept out of the store while its 3D rig stayed selectable — and
+        // every later UpdateHealth / property read for it found nothing. The
+        // TODO above says prefer retaining too much: with no player pose we
+        // cannot judge visibility at all, so leave the deadlines alone (ACE's
+        // ObjectDelete still removes objects explicitly).
+        if self.player_landblock().is_none() {
+            return;
+        }
         let visible_guids = self.current_visible_world_guids();
         let world_entity_guids: Vec<_> = self
             .entities

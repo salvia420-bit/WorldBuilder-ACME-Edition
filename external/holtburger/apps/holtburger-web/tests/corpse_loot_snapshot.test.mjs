@@ -133,12 +133,22 @@ const helpers = await import(
   pathToFileURL(path.join(APP, "plugins", "inventory_helpers.js")).href
 );
 globalThis.__realTakeInventorySnapshot = helpers.takeInventorySnapshot;
+// Bug 1 (2026-10-07): the REAL contained-item resolver is threaded in too.
+const containedMeta = await import(
+  pathToFileURL(path.join(APP, "plugins", "contained_item_meta.js")).href
+);
+globalThis.__realResolveContainedItemMeta = containedMeta.resolveContainedItemMeta;
 
 const UI_STUBS = {
   setAcText: "(el, text) => { if (el) el.__text = text; }",
   fetchIconDataUrlShared: "() => Promise.resolve(null)",
   fetchIconDataUrl: "() => Promise.resolve(null)",
+  // Bug 12 (2026-10-07): retail icon composites (not on the snapshot path).
+  fetchItemIconDataUrl: "() => Promise.resolve(null)",
+  getItemIconImmediate: "() => null",
+  itemIconKey: "() => ''",
   takeInventorySnapshot: "globalThis.__realTakeInventorySnapshot",
+  resolveContainedItemMeta: "globalThis.__realResolveContainedItemMeta",
 };
 
 // HUD overhaul 2026-10-05: corpse-loot-bar is now the kit-chrome external-
@@ -154,6 +164,7 @@ const CORPSE_STUBS = {
   attachWindowPosition: NOT_ON_SNAPSHOT_PATH("attachWindowPosition"),
   makeTitlebar: NOT_ON_SNAPSHOT_PATH("makeTitlebar"),
   uiEffectIconsEnabled: "() => false",
+  uiEffectBadgesEnabled: "() => false",
   uiEffectIconsFor: "() => []",
   uiEffectTintCss: "() => null",
   decideItemDrop: NOT_ON_SNAPSHOT_PATH("decideItemDrop"),
@@ -181,6 +192,7 @@ const CONTAINER_STUBS = {
   DropItemFlags: "Object.freeze({ None: 0 })",
   isDropAccepted: "() => true",
   uiEffectIconsEnabled: "() => false",
+  uiEffectBadgesEnabled: "() => false",
   uiEffectIconsFor: "() => []",
   uiEffectTintCss: "() => null",
 };
@@ -245,6 +257,59 @@ const CONTAINER_STUBS = {
       "already-owned guids must be pruned from the strip",
     );
     assert.equal(s2.boxesFreed, s2.boxesMinted, "filter path must free too");
+  });
+}
+
+/* ── [A2] bug 1: corpse items live only in the wasm entity store ──────── */
+//
+// ACE sends ViewContents BEFORE the items' CreateObjects; once those land the
+// items are in the wasm entity store (objectName / objectIntProperty / …) but
+// never in entityMap (no rig) nor playerInventory (not ours). The strip must
+// show their real name/icon/stack, and placeholders for items not created yet
+// must be flagged so refreshContents re-polls.
+{
+  const CONTENTS = [0xB1000001, 0xB1000002, 0xB1000003];
+  const { handle } = makeHandle({ invSize: 2, contents: CONTENTS });
+  const store = new Map([
+    [0xB1000001, { name: "Pyreal", ints: { 1: 0x40, 12: 25, 18: 0 }, wcid: 273, icon: 0x0600229F }],
+    [0xB1000002, { name: "Leather Cap", ints: { 1: 0x2, 18: 1 }, dids: { 50: 0x06001234 }, wcid: 118, icon: 0x060013F0 }],
+    // 0xB1000003: its CreateObject has not landed yet.
+  ]);
+  handle.objectName = (g) => store.get(g >>> 0)?.name;
+  handle.objectIntProperty = (g, k) => store.get(g >>> 0)?.ints?.[k];
+  handle.objectDataIdProperty = (g, k) => store.get(g >>> 0)?.dids?.[k];
+  handle.objectWcid = (g) => store.get(g >>> 0)?.wcid ?? 0;
+  handle.getObjectIconId = (g) => store.get(g >>> 0)?.icon ?? 0;
+  installWindow(handle);
+  const mod = loadPlugin("plugins/corpse-loot-bar.js", ["refreshContents", "state"], CORPSE_STUBS);
+  mod.state.corpseGuid = 0xC0FFEE03;
+  mod.refreshContents();
+  const byGuid = new Map(mod.state.items.map((it) => [it.guid >>> 0, it]));
+
+  check("[bug 1] a created corpse item shows its real name, icon, stack, type", () => {
+    const p = byGuid.get(0xB1000001);
+    assert.equal(p.name, "Pyreal");
+    assert.equal(p.iconId, 0x0600229F);
+    assert.equal(p.stackSize, 25);
+    assert.equal(p.itemType, 0x40);
+    assert.equal(p.wcid, 273);
+    assert.ok(!p.unresolved);
+    const c = byGuid.get(0xB1000002);
+    assert.equal(c.name, "Leather Cap");
+    assert.equal(c.uiEffects, 1);
+    assert.equal(c.iconOverlay, 0x06001234);
+  });
+  check("[bug 1] the strip is not empty (no 'There is nothing inside.')", () => {
+    assert.equal(mod.state.items.length, 3);
+  });
+  check("[bug 1] an item whose create has not landed is a flagged placeholder", () => {
+    const x = byGuid.get(0xB1000003);
+    assert.equal(x.unresolved, true);
+    assert.match(x.name, /^0x/);
+  });
+  check("[bug 1] a re-poll is scheduled while a placeholder remains", () => {
+    assert.ok(mod.state.resolveTimer, "resolveTimer armed");
+    clearTimeout(mod.state.resolveTimer);
   });
 }
 

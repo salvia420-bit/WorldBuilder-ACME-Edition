@@ -412,6 +412,17 @@ await t("R5 loop.js KIND.POSITION writes the current landcell; an entity that wa
   dispatchEntityUpdate(scene3d, em, { kind: KIND.POSITION, guid: 99, landblockId: 0xa9b40021, x: 1, y: 1, z: 1 });
   markOutdoorEntities(scene3d);
   assert.equal(self.root.userData.__splitOutdoor, false);
+  // Bug 4: the split arms on the CAMERA's cell. Camera inside a building with
+  // the player standing outdoors → the player is outdoor content (drawn before
+  // the doorway wall); player inside → as before.
+  const vc = await import("../scene3d/viewer_cell.js");
+  vc.publishViewerCell(0xa9b40021, false, 0xa9b4010e, true);
+  markOutdoorEntities(scene3d);
+  assert.equal(self.root.userData.__splitOutdoor, true, "player outdoors, camera inside");
+  vc.publishViewerCell(0xa9b40105, true, 0xa9b40105, true);
+  markOutdoorEntities(scene3d);
+  assert.equal(self.root.userData.__splitOutdoor, false, "player inside");
+  vc.resetViewerCell();
 });
 
 await t("R6 the pre-draw is narrowed to the doorway rect and fully restored", () => {
