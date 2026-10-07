@@ -822,6 +822,15 @@ function installSpellBarHotkeys() {
       () => __stripApi?.fireSlot(slotIdx),
     ]);
   }
+  // Holding a key auto-repeats only the selection SCROLLS; a cast / slot use /
+  // first-last jump fires once per press (a held slot key used to re-send the
+  // cast ~30x/s — "too busy" spam and an automatic re-cast).
+  const repeatableRows = new Set([
+    LOCAL_ACTION_IDS.MAGIC_PREV_TAB,
+    LOCAL_ACTION_IDS.MAGIC_NEXT_TAB,
+    LOCAL_ACTION_IDS.MAGIC_PREV_SPELL,
+    LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL,
+  ]);
 
   // Web-native aliases kept from v1 ([ ] cycle, { } first/last) + the
   // storage-level digit fallback for a strip that failed to mount. Not
@@ -840,6 +849,7 @@ function installSpellBarHotkeys() {
     if (!api && key >= "1" && key <= "9") {
       const slotIdx = key.charCodeAt(0) - 49; // '1' → slot 0
       ev.preventDefault();
+      if (ev.repeat) return; // a held digit casts once
       const spellId = (getSpellBarSlots()[slotIdx] | 0);
       if (!spellId) return;
       loadCatalog()
@@ -869,6 +879,7 @@ function installSpellBarHotkeys() {
       funnel.bindAction(id, def, run, {
         when: inMagicStance,
         source: "combat-bar",
+        allowRepeat: repeatableRows.has(id),
       });
     }
     funnel.bindRaw("combat-bar.aliases", (ev) => {
@@ -891,7 +902,7 @@ function installSpellBarHotkeys() {
       for (const [id, def, run] of actionRows) {
         const b = resolveLocalBinding(id, def);
         if (matchesBinding(ev, b)) {
-          run();
+          if (!ev.repeat || repeatableRows.has(id)) run();
           ev.preventDefault();
           return;
         }

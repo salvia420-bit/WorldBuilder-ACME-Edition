@@ -1158,18 +1158,6 @@ impl WorldState {
         self.terrain_heights.len()
     }
 
-    /// Workstream C (3D camera collision, 2026-05-11): clone the
-    /// terrain heightmap cache for the camera-side shadow. Called by
-    /// the wasm bundle's recv-loop on each TickMovement to refresh the
-    /// JS-readable shadow `SessionHandle.terrain_heights_shadow` reads
-    /// to back the `terrainHeightAt(x, y)` export. The HashMap is
-    /// shallow-cloned (the value type is `[f32; 81]` which is Copy),
-    /// so cost is O(num_loaded_landblocks) — for Holtburg's 9-LB ring
-    /// that's effectively free.
-    pub fn terrain_heights_snapshot(&self) -> std::collections::HashMap<u32, [f32; 81]> {
-        self.terrain_heights.clone()
-    }
-
     /// Bilinear-interpolate the terrain height at the given world-frame
     /// `(x, y)` against the cached 9×9 grid for the containing landblock.
     /// Returns `None` if the landblock isn't in the cache (caller falls
@@ -1523,6 +1511,15 @@ impl WorldState {
             // occupant's wielder and emitted a bogus `EntityDetached`.
             self.open_containers.remove(&guid);
             self.prior_wielders.remove(&u32::from(guid));
+            // 2026-10-07 — same family: `container_placement` kept every
+            // unlooted item of every corpse / chest ever opened, and
+            // `inventory_placement` scans the whole map once per player item
+            // on every inventory snapshot. Drop the removed entity's own
+            // placement and, for a container, its contents' (they are
+            // detached below). No rank changes: placements whose item left
+            // the container were already ignored.
+            self.container_placement.remove(&guid);
+            self.container_placement.retain(|_, (c, _, _)| *c != guid);
 
             let dependent_guids: Vec<_> = self
                 .entities

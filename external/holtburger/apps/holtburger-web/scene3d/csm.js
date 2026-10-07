@@ -178,6 +178,7 @@ const CAM_ROT_DELTA_SQ_EPS = 2e-6; // unit-basis², ≈1e-3 rad
  *   sunDir: {x:number,y:number,z:number},
  *   csmGroup: THREE.Group,
  *   patchedMaterials: Set<THREE.Material>,
+ *   uniforms: Object<string, {value: *}>,
  *   dispose: () => void
  * }}
  */
@@ -271,8 +272,32 @@ export function setupCsm(scene, opts = {}) {
     // first-frame rebuild below).
     didRefitThisTick: true,
     // Receivers' materials register here once patched, so we can refresh
-    // uniforms after each `updateCsm` without re-walking the scene.
+    // uniforms after each `updateCsm` without re-walking the scene. Since
+    // 2026-10-07 only the per-landblock terrain ShaderMaterials (whose own
+    // `uniforms` carry the CSM slots, removed again on evict/park) register;
+    // MaterialCache receivers bind `uniforms` below instead.
     patchedMaterials: new Set(),
+    // 2026-10-07 — ONE set of CSM uniform objects, handed BY REFERENCE to
+    // every MaterialCache receiver's program (materials.js
+    // `_installCsmShaderPatch`, the same pattern as VFX_GLOBALS), so
+    // `refreshCsmUniforms` writes nine values once per frame. The per-material
+    // registry it replaces pinned every per-surface material ever built (the
+    // `?matBudgetMB` eviction relies on GC) and walked them all each frame;
+    // and because a batched variant shares its member's userData, it only
+    // ever refreshed the LAST program compiled for a surface — the member's
+    // or the variant's — leaving the other's shadow uniforms frozen.
+    uniforms: {
+      uCsmShadowMap0: { value: null },
+      uCsmShadowMap1: { value: null },
+      uCsmShadowMap2: { value: null },
+      uCsmMatrix0: { value: new THREE.Matrix4() },
+      uCsmMatrix1: { value: new THREE.Matrix4() },
+      uCsmMatrix2: { value: new THREE.Matrix4() },
+      uCsmSplits: { value: new THREE.Vector2(splits[0], splits[1]) },
+      uCsmFar: { value: splits[2] },
+      uCsmBlend: { value: blendFrac },
+    },
+    _uniformRefs: null,
     // Perf C4 — skip-rebuild cache. `updateCsm` compares the camera
     // position + sun direction against these and bails out of the
     // (3 × _fitCascade) work if both deltas are below threshold. The
@@ -538,12 +563,8 @@ export function updateCsm(csmState, camera, sunDir) {
  * again with a fresh uniforms object) rebuilds instead of writing into the
  * dead shader's uniforms.
  */
-function _csmUniformRefs(mat) {
-  const u = mat.userData?.csmShaderUniforms;
-  if (!u) return null;
-  const cached = mat.userData.__csmUniformRefs;
-  if (cached && cached.src === u) return cached;
-  const refs = {
+function _refsOf(u) {
+  return {
     src: u,
     maps: [u.uCsmShadowMap0 || null, u.uCsmShadowMap1 || null, u.uCsmShadowMap2 || null],
     mats: [u.uCsmMatrix0 || null, u.uCsmMatrix1 || null, u.uCsmMatrix2 || null],
@@ -551,6 +572,14 @@ function _csmUniformRefs(mat) {
     far: u.uCsmFar || null,
     blend: u.uCsmBlend || null,
   };
+}
+
+function _csmUniformRefs(mat) {
+  const u = mat.userData?.csmShaderUniforms;
+  if (!u) return null;
+  const cached = mat.userData.__csmUniformRefs;
+  if (cached && cached.src === u) return cached;
+  const refs = _refsOf(u);
   Object.defineProperty(mat.userData, "__csmUniformRefs", {
     value: refs,
     writable: true,
@@ -561,45 +590,52 @@ function _csmUniformRefs(mat) {
 }
 
 export function refreshCsmUniforms(csmState) {
-  if (!csmState?.patchedMaterials) return;
-  const lights = csmState.lights;
-  // splits + blendFrac don't change per frame in the common case
-  // (splits are a setup-time choice). The uniform values for these
-  // are already baked at install; we only refresh per-frame shadow
-  // matrices + map textures (those change as cameras / lights move).
+  if (!csmState) return;
+  if (csmState.uniforms) {
+    if (!csmState._uniformRefs) csmState._uniformRefs = _refsOf(csmState.uniforms);
+    _writeCsmRefs(csmState._uniformRefs, csmState);
+  }
+  if (!csmState.patchedMaterials) return;
   for (const mat of csmState.patchedMaterials) {
     const refs = _csmUniformRefs(mat);
-    if (!refs) continue;
-    for (let i = 0; i < 3; i += 1) {
-      const light = lights[i];
-      if (!light) continue;
-      const mapU = refs.maps[i];
-      if (mapU) {
-        // light.shadow.map is created lazily on first render; until
-        // it lands, leave the stale uniform value (the shader will
-        // see the previous frame's texture, which is fine for a
-        // single-frame discontinuity).
-        const tex = light.shadow?.map?.texture ?? null;
-        if (tex) mapU.value = tex;
-      }
-      const matU = refs.mats[i];
-      if (matU) {
-        // Three composes shadow.matrix as
-        //   biasMatrix * cam.projectionMatrix * cam.matrixWorldInverse
-        // so it transforms world → shadow-NDC[0,1]. We can sample
-        // `shadow.map.texture` directly at `xy` of the result.
-        matU.value.copy(light.shadow.matrix);
-      }
+    if (refs) _writeCsmRefs(refs, csmState);
+  }
+}
+
+function _writeCsmRefs(refs, csmState) {
+  const lights = csmState.lights;
+  // splits + blendFrac don't change per frame in the common case
+  // (splits are a setup-time choice); the per-frame work is the shadow
+  // matrices + map textures (those change as cameras / lights move).
+  for (let i = 0; i < 3; i += 1) {
+    const light = lights[i];
+    if (!light) continue;
+    const mapU = refs.maps[i];
+    if (mapU) {
+      // light.shadow.map is created lazily on first render; until
+      // it lands, leave the stale uniform value (the shader will
+      // see the previous frame's texture, which is fine for a
+      // single-frame discontinuity).
+      const tex = light.shadow?.map?.texture ?? null;
+      if (tex) mapU.value = tex;
     }
-    if (refs.splits) {
-      refs.splits.value.set(csmState.splits[0], csmState.splits[1]);
+    const matU = refs.mats[i];
+    if (matU) {
+      // Three composes shadow.matrix as
+      //   biasMatrix * cam.projectionMatrix * cam.matrixWorldInverse
+      // so it transforms world → shadow-NDC[0,1]. We can sample
+      // `shadow.map.texture` directly at `xy` of the result.
+      matU.value.copy(light.shadow.matrix);
     }
-    if (refs.far) {
-      refs.far.value = csmState.splits[2];
-    }
-    if (refs.blend) {
-      refs.blend.value = csmState.blendFrac;
-    }
+  }
+  if (refs.splits) {
+    refs.splits.value.set(csmState.splits[0], csmState.splits[1]);
+  }
+  if (refs.far) {
+    refs.far.value = csmState.splits[2];
+  }
+  if (refs.blend) {
+    refs.blend.value = csmState.blendFrac;
   }
 }
 

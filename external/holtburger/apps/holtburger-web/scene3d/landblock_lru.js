@@ -1969,6 +1969,11 @@ export class LandblockLRU {
     if (typeof s._evictSpawnsInjectedLb === "function") {
       try { s._evictSpawnsInjectedLb(lbKey); } catch (_) { /* fail-soft */ }
     }
+    // The wasm per-LB scenery + spawn record caches (hb_evict_lb_world_caches,
+    // installed by index.js; absent ⇒ no-op). A re-entry re-fetches them.
+    if (typeof s._evictLbWorldCaches === "function") {
+      try { s._evictLbWorldCaches(lbKey); } catch (_) { /* fail-soft */ }
+    }
     // Phase 3 — tear down this LB's SYNTHESIZED particle emitters (owner key
     // `static:<lbKey>`). statics.js installs this hook when its particle manager
     // is first created (mirrors `_evictSpawnsInjectedLb`); absent ⇒ no static

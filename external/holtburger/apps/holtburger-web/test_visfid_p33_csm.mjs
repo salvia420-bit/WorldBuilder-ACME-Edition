@@ -313,9 +313,11 @@ check(
     typeof matOpaque.onBeforeCompile === "function",
     `onBeforeCompile=${typeof matOpaque.onBeforeCompile}`
 );
+// 2026-10-07 — receivers bind csmState.uniforms (shared objects) instead of
+// joining the per-frame registry, which pinned every per-surface material.
 check(
-    "MaterialCache(csmState): patchedMaterials set now includes the new mat",
-    csmStateM.patchedMaterials.has(matOpaque),
+    "MaterialCache(csmState): the new mat does NOT join patchedMaterials (shared uniforms)",
+    !csmStateM.patchedMaterials.has(matOpaque) && csmStateM.patchedMaterials.size === 0,
     `size=${csmStateM.patchedMaterials.size}`
 );
 
@@ -391,6 +393,34 @@ check(
         stubShader.uniforms.uCsmSplits !== undefined,
     `uniforms=${Object.keys(stubShader.uniforms).filter((k) => k.startsWith("uCsm")).join(",")}`
 );
+// Every program compiled from the hook — the member's, a batched variant's
+// (which shares the member's userData and hook) — binds the SAME objects, so
+// one refresh reaches all of them. The old per-program objects were refreshed
+// only for the program compiled LAST.
+{
+    const stubShaderB = {
+        fragmentShader: "#include <common>\nvoid main() {\n#include <dithering_fragment>\n}\n",
+        vertexShader: "#include <common>\nvoid main() {\n#include <project_vertex>\n}\n",
+        uniforms: {},
+    };
+    matOpaque.onBeforeCompile(stubShaderB);
+    const names = ["uCsmShadowMap0", "uCsmShadowMap1", "uCsmShadowMap2", "uCsmMatrix0", "uCsmMatrix1",
+        "uCsmMatrix2", "uCsmSplits", "uCsmFar", "uCsmBlend"];
+    check(
+        "two compiles of one receiver bind the same csmState.uniforms objects",
+        names.every((n) => stubShader.uniforms[n] === csmStateM.uniforms[n] && stubShaderB.uniforms[n] === csmStateM.uniforms[n]),
+        names.filter((n) => stubShaderB.uniforms[n] !== csmStateM.uniforms[n]).join(",")
+    );
+    csmStateM.lights[1].shadow.matrix.makeTranslation(3, 4, 5);
+    csmStateM.blendFrac = 0.25;
+    refreshCsmUniforms(csmStateM);
+    check(
+        "refreshCsmUniforms writes the shared set (every bound program sees it)",
+        stubShaderB.uniforms.uCsmMatrix1.value.equals(csmStateM.lights[1].shadow.matrix) &&
+            stubShader.uniforms.uCsmBlend.value === 0.25,
+        `blend=${stubShader.uniforms.uCsmBlend.value}`
+    );
+}
 
 // ---- Stage 9: composition with detail patch ----
 // When BOTH Detail (0x20000) bit + csmState are present, both patches

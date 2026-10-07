@@ -92,6 +92,10 @@ const LOUD_MAX_LINES = 80;
 const DEFAULT_REF_DISTANCE = 5.0;      // meters: at/below this distance, full volume
 const DEFAULT_ROLLOFF_FACTOR = 2.0;    // inverse-SQUARE attenuation rate (retail)
 const DEFAULT_MAX_DISTANCE = 200.0;    // clamp falloff beyond this distance
+// Decoded-buffer LRU budget (see AudioManager._bufferCache) and how long a
+// FETCH failure stays cached before the sound may be retried.
+const BUFFER_CACHE_BUDGET_BYTES = 64 * 1024 * 1024;
+const BUFFER_FETCH_RETRY_MS = 30_000;
 
 /**
  * @typedef {object} PlayOpts
@@ -157,10 +161,23 @@ export class AudioManager {
 
     // Decoded-buffer cache: did → Promise<AudioBuffer|null>.
     // Storing the in-flight Promise dedupes concurrent fetches for the
-    // same did. A failed decode resolves to null and is cached so we
-    // don't retry per play().
+    // same did. A failed DECODE resolves to null and is cached so we
+    // don't retry per play(); a failed FETCH (network / prefetch) is cached
+    // only for BUFFER_FETCH_RETRY_MS, then retried — caching it for good
+    // made that sound silent for the rest of the session.
+    //
+    // Byte-budgeted LRU (2026-10-07): decoded buffers are float32 at the
+    // context rate, ~8.7x the 11 kHz DAT bytes (all 786 waves decode to
+    // ~360 MB); unbounded, every sound ever played stayed resident. Map
+    // order is recency (a hit moves the key to the end); resolved buffers
+    // are evicted oldest-first past `_bufferBudgetBytes`. Safe: a playing
+    // AudioBufferSourceNode holds its own reference to its buffer.
     /** @type {Map<number, Promise<AudioBuffer|null>>} */
     this._bufferCache = new Map();
+    /** @type {Map<number, number>} did → decoded bytes (resolved buffers only) */
+    this._bufferBytes = new Map();
+    this._bufferBytesTotal = 0;
+    this._bufferBudgetBytes = BUFFER_CACHE_BUDGET_BYTES;
 
     // Wave 3 / A4 fix (2026-05-28) — sounds whose source should follow
     // a moving entity. Key = AudioBufferSourceNode (unique per play());
@@ -417,13 +434,18 @@ export class AudioManager {
    */
   async _loadBuffer(did) {
     const key = (did >>> 0);
-    if (this._bufferCache.has(key)) {
-      return this._bufferCache.get(key);
+    const cached = this._bufferCache.get(key);
+    if (cached !== undefined) {
+      // LRU touch: re-insert at the end (most recently used).
+      this._bufferCache.delete(key);
+      this._bufferCache.set(key, cached);
+      return cached;
     }
     if (!this._ctx) {
       this._initContext();
       if (!this._ctx) return null;
     }
+    let fetchFailed = false;
     const promise = (async () => {
       let wave;
       try {
@@ -439,6 +461,7 @@ export class AudioManager {
           // eslint-disable-next-line no-console
           console.warn(`[H3/audio] fetchWave(0x${key.toString(16)}) failed:`, e);
         }
+        fetchFailed = true;
         return null;
       }
       let bytes;
@@ -477,7 +500,35 @@ export class AudioManager {
       }
     })();
     this._bufferCache.set(key, promise);
+    promise.then((buf) => {
+      if (this._bufferCache.get(key) !== promise) return; // cleared / replaced meanwhile
+      if (buf) {
+        const bytes = (buf.length | 0) * (buf.numberOfChannels | 0) * 4;
+        this._bufferBytes.set(key, bytes);
+        this._bufferBytesTotal += bytes;
+        this._evictBuffersOverBudget(key);
+      } else if (fetchFailed) {
+        setTimeout(() => {
+          if (this._bufferCache.get(key) === promise) this._bufferCache.delete(key);
+        }, BUFFER_FETCH_RETRY_MS);
+      }
+    });
     return promise;
+  }
+
+  /** Drop least-recently-used decoded buffers until under budget (never `keep`). */
+  _evictBuffersOverBudget(keep) {
+    if (this._bufferBytesTotal <= this._bufferBudgetBytes) return;
+    for (const key of this._bufferCache.keys()) {
+      if (this._bufferBytesTotal <= this._bufferBudgetBytes) break;
+      if (key === keep) continue;
+      const bytes = this._bufferBytes.get(key);
+      if (bytes === undefined) continue; // in flight, or a cached null
+      this._bufferCache.delete(key);
+      this._bufferBytes.delete(key);
+      this._bufferBytesTotal -= bytes;
+      this.buffersEvicted = (this.buffersEvicted | 0) + 1;
+    }
   }
 
   /**
@@ -824,11 +875,15 @@ export class AudioManager {
    */
   clearCache() {
     this._bufferCache.clear();
+    this._bufferBytes.clear();
+    this._bufferBytesTotal = 0;
   }
 
   dispose() {
     this.pauseAll();
     this._bufferCache.clear();
+    this._bufferBytes.clear();
+    this._bufferBytesTotal = 0;
     this._ctx = null;
     this._master = null;
     // Phase 3 (2026-06-04) — drop the category bus refs alongside master.

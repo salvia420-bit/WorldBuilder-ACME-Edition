@@ -281,10 +281,10 @@ export function setupSceneLighting(scene, opts = {}) {
   // Visual-fidelity Phase 3.3 — when caller opts into CSM, instantiate
   // the three cascade shadow lights. They share the sun's direction
   // (derived from sunPos.minus(target=origin) = sunPos itself, since
-  // the sun targets world origin by default). The bundle's
-  // `patchedMaterials` Set tracks every material that subsequently
-  // installs the CSM shader patch — `refreshCsmUniforms` walks it each
-  // tick to push fresh shadow-map textures + matrices.
+  // the sun targets world origin by default). `refreshCsmUniforms` pushes
+  // fresh shadow-map textures + matrices each tick into the bundle's shared
+  // `uniforms` (bound by every MaterialCache receiver) and into the terrain
+  // materials registered on `patchedMaterials`.
   let csmState = null;
   if (csmEnabled) {
     // RP5 — pass through the optional CSM refit-threshold overrides

@@ -3332,9 +3332,11 @@ fn obj_id_hex_to_u32(s: &str) -> Result<u32, String> {
 
 // Per-page state for the scenery fetch path. Mirrors
 // `global_source`'s thread-local pattern. Single-threaded wasm32
-// makes `RefCell` sound; the cache is unbounded but bounded in
-// practice by the LB count (169 for the 13×13 ring, ~65k for full
-// Dereth — still under a megabyte at retail JSONL sizes).
+// makes `RefCell` sound. Each landblock's records (~46 × 80 B
+// `CachedRecord`, ~3.7 KB) are dropped when the landblock leaves
+// the LRU (`hb_evict_lb_world_caches`, wired from
+// scene3d/landblock_lru.js since 2026-10-07); before that the cache
+// grew with every landblock visited (~240 MB for all of Dereth).
 #[cfg(target_arch = "wasm32")]
 mod scenery_fetch {
     use std::cell::RefCell;
@@ -4547,7 +4549,8 @@ pub use spawn_fetch::{clear_spawns_cache, init_spawns_base_url, spawns_cache_siz
 /// record caches track the RESIDENT set instead of growing O(route). The
 /// FETCH tracks themselves stay legacy-lane until ST10 (T12 D3's exception,
 /// carried forward); a re-entry re-fetches through them (browser-cache-warm).
-/// OFF arm: never called — both caches keep today's grow-only behavior.
+/// Since 2026-10-07 the default landblock LRU evict calls it too
+/// (`scene3d._evictLbWorldCaches`), so neither cache grows with the route.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn hb_evict_lb_world_caches(lb_key: u32) {
@@ -9303,6 +9306,41 @@ fn inner_to_motion_link_anim_js(inner: MotionLinkAnimInner) -> MotionLinkAnimJs 
         duration_sec: inner.duration_sec,
         resolved_command: inner.resolved_command,
     }
+}
+
+/// Memo for `SessionHandle::lookup_motion_link_for_swing`, keyed by the raw
+/// `(motion_table_id, stance, command)` arguments. The export used to copy +
+/// parse the whole MotionTable (44 KB for the player's 0x09000001) and every
+/// link Animation (~58 KB each for the cast windups) on EVERY call — ~15
+/// calls per level-8 cast (gesture length, clip prefetch, playGesture; two
+/// thirds synchronously inside the click/key handler), 2 per melee click,
+/// and up to 8 per idle fidget for every idle creature in town, whose tables
+/// miss all 8 every time. Answers depend only on the immutable DAT, so both
+/// hits and confirmed misses (`None` from a RESIDENT table) are stored; a
+/// result reached through a not-yet-resident table or Animation is not.
+/// Cleared by `init_resource_source` (a new manifest invalidates it).
+#[cfg(target_arch = "wasm32")]
+static MOTION_LINK_SWING_MEMO: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<(u32, u32, u32), Option<MotionLinkAnimInner>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Bound on [`MOTION_LINK_SWING_MEMO`]: far above the distinct questions a
+/// session asks (a few tables × stances × the gesture / swing / emote
+/// commands); clear-on-overflow keeps a pathological caller from growing it.
+#[cfg(target_arch = "wasm32")]
+const MOTION_LINK_SWING_MEMO_CAP: usize = 16_384;
+
+/// Drop the whole swing-link memo. Called by `init_resource_source` re-init.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn motion_link_memo_clear_all() -> u32 {
+    MOTION_LINK_SWING_MEMO
+        .lock()
+        .map(|mut m| {
+            let n = m.len() as u32;
+            m.clear();
+            n
+        })
+        .unwrap_or(0)
 }
 
 /// Parse a motion-table DAT record's raw bytes and resolve the swing
@@ -33930,31 +33968,20 @@ pub struct SessionHandle {
     /// the live `SpatialScene` used by the camera collision sweep
     /// exports (`cameraSweepCollision`, `sweepSphereAgainstBuildingMesh`,
     /// `sweepSphereAgainstCellMesh`, `sweepSphereAgainstStatics`). The
-    /// recv-loop refreshes this by cloning `world.scene` after every
-    /// TickMovement drain so the JS-side sweep reads at most one tick
-    /// behind the live integrator state. Pre-spawn the shadow is the
-    /// default-constructed empty Scene (empty indices); JS reads still
-    /// return `None` from every sweep, which is the correct camera
-    /// behaviour pre-spawn (no terrain to lift the camera off).
+    /// TickMovement arm refreshes it from `world.scene.collision_view()`
+    /// at most every `SHADOW_REFRESH_MIN_INTERVAL` (100 ms;
+    /// session/commands/movement.rs), so JS reads geometry at most that
+    /// stale. Pre-spawn the shadow is the default-constructed empty Scene
+    /// (empty indices); JS reads still return `None` from every sweep,
+    /// which is the correct camera behaviour pre-spawn (no terrain to
+    /// lift the camera off).
     ///
-    /// We mirror the entire SpatialScene rather than a pure-data subset
-    /// so the sweep entrypoints can call the existing `Scene::sweep_-
-    /// sphere_against_*` methods unchanged. Scene's clone cost is
-    /// dominated by the entity body store and the per-LB triangle
-    /// HashMaps; for Holtburg (~16 buildings, ~120 cell triangles per
-    /// loaded dungeon) the clone runs in tens of microseconds per
-    /// TickMovement — well below the 33 ms 30 Hz budget.
+    /// It is a whole `SpatialScene` so the sweep entrypoints can call the
+    /// existing `Scene::sweep_sphere_against_*` methods unchanged, but
+    /// `collision_view` shares only the `Arc` geometry tables: the
+    /// per-entity maps, body store and remote-motion state (which no
+    /// reader uses) are left empty instead of being deep-copied.
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
-    /// Workstream C: shadow of `world.terrain_heights` so
-    /// `terrainHeightAt(x, y)` can resolve without a live WorldState
-    /// borrow. Refreshed on every TickMovement alongside
-    /// `collision_scene` (cheap because it's only ~9 LBs at hot Holtburg
-    /// loaded). Empty pre-spawn; the heightfield clamp degrades to
-    /// "no clamp" gracefully when the LB hasn't loaded yet — same
-    /// behaviour as the integrator's manual-drive terrain snap.
-    terrain_heights_shadow: std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
-    >,
     /// Wave F.5 (2026-05-27): local player's active contracts (quest
     /// tracker). Refreshed by the recv loop on every
     /// `GameEvent::SendClientContractTracker` (opcode 0x0315 — per-row
@@ -34031,6 +34058,108 @@ struct CellSceneSnapshot {
     /// outdoor camera. `(cell_id, seen_outside)`. Sourced from
     /// `scene.cell_seen_outside` (same map that feeds the ambient gate).
     cell_seen_outside_map: Vec<(u32, bool)>,
+    /// `SpatialScene::collision_cache_key()` the four cell-geometry fields
+    /// above were built from. `publish_cell_scene_snapshot` reuses them while
+    /// it is unchanged instead of rebuilding them every TickMovement (one
+    /// heap Vec per portal polygon + a HashMap, for every resident EnvCell —
+    /// the data only changes when a landblock's cells load or unload).
+    geometry_key: Option<(u64, u64)>,
+    /// `cell_portal_polygons` decoded ONCE into the per-cell lookup the PView
+    /// walks traverse (`from` cell → `(to, world-space verts)`). Built with
+    /// the geometry above; the three walk entry points used to re-decode the
+    /// whole flat list into a fresh HashMap + one Vec per polygon on every
+    /// call, several calls per frame.
+    portal_map: std::rc::Rc<CellPortalMap>,
+    /// Further per-geometry lookups the per-frame visibility getters used to
+    /// recompute from the full resident lists on every call — built and
+    /// reused with `portal_map`.
+    derived: std::rc::Rc<CellDerived>,
+}
+
+/// See [`CellSceneSnapshot::derived`]. Every list keeps the iteration order
+/// of the snapshot list it was filtered from, so consumers produce the same
+/// output they did when they filtered inline.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct CellDerived {
+    /// Cells with at least one outdoor-exit portal (`to & 0xFFFF >= 0xFFFE`,
+    /// the AC outdoor sentinel).
+    outdoor_exit_cells: std::collections::HashSet<u32>,
+    /// `cell_aabbs` filtered to `outdoor_exit_cells`.
+    outdoor_exit_aabbs: Vec<(u32, holtburger_common::Aabb)>,
+    /// `cell_seen_outside_map` filtered to SeenOutside cells that have an AABB.
+    seen_outside_aabbs: Vec<(u32, holtburger_common::Aabb)>,
+    /// Landblock high word → does any portal owned by that landblock face
+    /// outdoors. Absent key ⇒ no portal of that landblock is resident.
+    lb_has_outdoor_portal: std::collections::HashMap<u32, bool>,
+    /// Indices into `cell_portal_polygons` of outdoor-facing polygons with a
+    /// usable vertex list (>= 3 vertices) — the aperture candidates.
+    outdoor_portal_idx: Vec<usize>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_cell_derived(
+    cell_aabbs: &[(u32, [f32; 6])],
+    cell_aabb_index: &std::collections::HashMap<u32, [f32; 6]>,
+    polys: &[(u32, u32, Vec<f32>, bool)],
+    seen_outside: &[(u32, bool)],
+) -> CellDerived {
+    let aabb_of = |ext: &[f32; 6]| {
+        holtburger_common::Aabb::new(
+            holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
+            holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
+        )
+    };
+    let mut d = CellDerived::default();
+    for (i, (from, to, flat, _)) in polys.iter().enumerate() {
+        let outdoor = (*to & 0xFFFF) >= 0xFFFE;
+        let has_outdoor = d.lb_has_outdoor_portal.entry(*from & 0xFFFF_0000).or_insert(false);
+        if outdoor {
+            *has_outdoor = true;
+            d.outdoor_exit_cells.insert(*from);
+            if flat.len() >= 9 && flat.len() % 3 == 0 {
+                d.outdoor_portal_idx.push(i);
+            }
+        }
+    }
+    for (cell_id, ext) in cell_aabbs {
+        if d.outdoor_exit_cells.contains(cell_id) {
+            d.outdoor_exit_aabbs.push((*cell_id, aabb_of(ext)));
+        }
+    }
+    for (cell_id, is_seen) in seen_outside {
+        if !*is_seen {
+            continue;
+        }
+        if let Some(ext) = cell_aabb_index.get(cell_id) {
+            d.seen_outside_aabbs.push((*cell_id, aabb_of(ext)));
+        }
+    }
+    d
+}
+
+/// See [`CellSceneSnapshot::portal_map`].
+#[cfg(target_arch = "wasm32")]
+type CellPortalMap =
+    std::collections::HashMap<u32, Vec<(u32, Vec<holtburger_common::Vector3>)>>;
+
+/// Decode the snapshot's flat portal polygons into the walk lookup. Polygons
+/// with fewer than 3 vertices (or a ragged float count) are skipped — the
+/// same filter every walk applied when it built this map itself.
+#[cfg(target_arch = "wasm32")]
+fn build_cell_portal_map(polys: &[(u32, u32, Vec<f32>, bool)]) -> CellPortalMap {
+    let mut portal_map = CellPortalMap::new();
+    for (from, to, flat, ..) in polys {
+        if flat.len() < 9 || flat.len() % 3 != 0 {
+            continue;
+        }
+        let mut verts: Vec<holtburger_common::Vector3> = Vec::with_capacity(flat.len() / 3);
+        for chunk in flat.chunks_exact(3) {
+            verts.push(holtburger_common::Vector3::new(chunk[0], chunk[1], chunk[2]));
+        }
+        portal_map.entry(*from).or_default().push((*to, verts));
+    }
+    portal_map
 }
 
 /// Phase 6 step E follow-up (2026-05-09): JS-facing payload for a door
@@ -34851,6 +34980,16 @@ impl SessionHandle {
     /// the first `ObjectCreate` for an owned item.
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
+        if INVENTORY_SNAPSHOT_DIRTY.with(|d| d.get()) {
+            // `try_borrow`: a read landing while the recv loop holds the
+            // world keeps the previous snapshot and stays dirty.
+            if let Ok(guard) = self.world.try_borrow() {
+                if let Some(w) = guard.as_ref() {
+                    publish_player_inventory_snapshot(w, &self.latest_inventory);
+                    INVENTORY_SNAPSHOT_DIRTY.with(|d| d.set(false));
+                }
+            }
+        }
         self.latest_inventory.borrow().clone()
     }
 
@@ -36329,23 +36468,8 @@ impl SessionHandle {
             PVIEW_MAX_DEPTH
         };
 
-        // Build the per-cell portal lookup from the snapshot's flat
-        // form. Cheap: ~140 cells × ~6 portals.
-        let mut portal_map: std::collections::HashMap<u32, Vec<(u32, Vec<holtburger_common::Vector3>)>> =
-            std::collections::HashMap::new();
-        for (from, to, flat, ..) in &snap.cell_portal_polygons {
-            if flat.len() < 9 || flat.len() % 3 != 0 {
-                continue;
-            }
-            let mut verts: Vec<holtburger_common::Vector3> =
-                Vec::with_capacity(flat.len() / 3);
-            for chunk in flat.chunks_exact(3) {
-                verts.push(holtburger_common::Vector3::new(
-                    chunk[0], chunk[1], chunk[2],
-                ));
-            }
-            portal_map.entry(*from).or_default().push((*to, verts));
-        }
+        // Prebuilt with the snapshot geometry (see CellSceneSnapshot::portal_map).
+        let portal_map: &CellPortalMap = &snap.portal_map;
 
         let initial_view: Vec<[f32; 2]> = vec![
             [-1.0, -1.0],
@@ -36489,14 +36613,12 @@ impl SessionHandle {
         let mut out: Vec<f32> = Vec::new();
         out.push(0.0); // aperture_count placeholder (patched below)
         let mut count: u32 = 0;
-        for (from, to, flat, portal_side) in &snap.cell_portal_polygons {
-            // Outdoor-facing apertures only (doors/windows to the landscape).
-            if (*to & 0xFFFF) < 0xFFFE {
-                continue;
-            }
-            if flat.len() < 9 || flat.len() % 3 != 0 {
-                continue;
-            }
+        // Outdoor-facing apertures (doors/windows to the landscape) with a
+        // usable vertex list only — the candidate indices are prebuilt with the
+        // snapshot geometry (CellSceneSnapshot::derived), in polygon order, so
+        // this no longer walks every resident portal polygon every frame.
+        for &i in &snap.derived.outdoor_portal_idx {
+            let (from, _to, flat, portal_side) = &snap.cell_portal_polygons[i];
             // Only reveal rooms actually in view (the room = the portal's
             // owning cell `from`); skip off-screen buildings.
             let aabb = match aabb_for(*from) {
@@ -36641,23 +36763,8 @@ impl SessionHandle {
             PVIEW_MAX_DEPTH
         };
 
-        let mut portal_map: std::collections::HashMap<
-            u32,
-            Vec<(u32, Vec<holtburger_common::Vector3>)>,
-        > = std::collections::HashMap::new();
-        for (from, to, flat, ..) in &snap.cell_portal_polygons {
-            if flat.len() < 9 || flat.len() % 3 != 0 {
-                continue;
-            }
-            let mut verts: Vec<holtburger_common::Vector3> =
-                Vec::with_capacity(flat.len() / 3);
-            for chunk in flat.chunks_exact(3) {
-                verts.push(holtburger_common::Vector3::new(
-                    chunk[0], chunk[1], chunk[2],
-                ));
-            }
-            portal_map.entry(*from).or_default().push((*to, verts));
-        }
+        // Prebuilt with the snapshot geometry (see CellSceneSnapshot::portal_map).
+        let portal_map: &CellPortalMap = &snap.portal_map;
         if portal_map.is_empty() {
             return out;
         }
@@ -36839,22 +36946,10 @@ impl SessionHandle {
             // Build a (cell_id → has_outdoor_exit) lookup from the
             // snapshot's portal-polygon list. A cell qualifies when
             // ANY of its portals has other_cell_id with low-16 ≥ 0xFFFE.
-            let mut outdoor_exit_cells: std::collections::HashSet<u32> =
-                std::collections::HashSet::new();
-            for (from, to, _verts, ..) in &snap.cell_portal_polygons {
-                if (*to & 0xFFFF) >= 0xFFFE {
-                    outdoor_exit_cells.insert(*from);
-                }
-            }
-            for (cell_id, ext) in &snap.cell_aabbs {
-                if !outdoor_exit_cells.contains(cell_id) {
-                    continue;
-                }
-                let aabb = holtburger_common::Aabb::new(
-                    holtburger_common::Vector3::new(ext[0], ext[1], ext[2]),
-                    holtburger_common::Vector3::new(ext[3], ext[4], ext[5]),
-                );
-                if frustum.intersects_aabb(&aabb) {
+            // (Prebuilt with the snapshot geometry — CellSceneSnapshot::derived.)
+            let outdoor_exit_cells = &snap.derived.outdoor_exit_cells;
+            for (cell_id, aabb) in &snap.derived.outdoor_exit_aabbs {
+                if frustum.intersects_aabb(aabb) {
                     visible.insert(*cell_id);
                 }
             }
@@ -36895,30 +36990,23 @@ impl SessionHandle {
                 // altitude.
                 const FLOAT_CULL_BAND_M: f32 = 100.0;
                 let mut floor_z = f32::INFINITY;
-                for (cell_id, is_seen) in &snap.cell_seen_outside_map {
-                    if !*is_seen {
-                        continue;
-                    }
-                    if let Some(aabb) = aabb_for(*cell_id) {
-                        if frustum.intersects_aabb(&aabb) && aabb.min.z < floor_z {
-                            floor_z = aabb.min.z;
-                        }
+                for (_, aabb) in &snap.derived.seen_outside_aabbs {
+                    if frustum.intersects_aabb(aabb) && aabb.min.z < floor_z {
+                        floor_z = aabb.min.z;
                     }
                 }
                 let z_ceiling = floor_z + FLOAT_CULL_BAND_M;
-                for (cell_id, is_seen) in &snap.cell_seen_outside_map {
-                    if !*is_seen || visible.contains(cell_id) {
+                for (cell_id, aabb) in &snap.derived.seen_outside_aabbs {
+                    if visible.contains(cell_id) {
                         continue;
                     }
-                    if let Some(aabb) = aabb_for(*cell_id) {
-                        // Cull only cells whose entire footprint floats far above
-                        // the ground/building base in view (sky satellites).
-                        if aabb.min.z > z_ceiling {
-                            continue;
-                        }
-                        if frustum.intersects_aabb(&aabb) {
-                            visible.insert(*cell_id);
-                        }
+                    // Cull only cells whose entire footprint floats far above
+                    // the ground/building base in view (sky satellites).
+                    if aabb.min.z > z_ceiling {
+                        continue;
+                    }
+                    if frustum.intersects_aabb(aabb) {
+                        visible.insert(*cell_id);
                     }
                 }
             }
@@ -36952,23 +37040,8 @@ impl SessionHandle {
             // `?outdoorPview=off` escape → `setOutdoorPview(false)`.
             if self.outdoor_pview_enabled.get() {
                 const PVIEW_MAX_DEPTH: u8 = 8;
-                let mut portal_map: std::collections::HashMap<
-                    u32,
-                    Vec<(u32, Vec<holtburger_common::Vector3>)>,
-                > = std::collections::HashMap::new();
-                for (from, to, flat, ..) in &snap.cell_portal_polygons {
-                    if flat.len() < 9 || flat.len() % 3 != 0 {
-                        continue;
-                    }
-                    let mut verts: Vec<holtburger_common::Vector3> =
-                        Vec::with_capacity(flat.len() / 3);
-                    for chunk in flat.chunks_exact(3) {
-                        verts.push(holtburger_common::Vector3::new(
-                            chunk[0], chunk[1], chunk[2],
-                        ));
-                    }
-                    portal_map.entry(*from).or_default().push((*to, verts));
-                }
+                // Prebuilt with the snapshot geometry (see CellSceneSnapshot::portal_map).
+                let portal_map: &CellPortalMap = &snap.portal_map;
                 let viewport: Vec<[f32; 2]> =
                     vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
                 let mut queue: std::collections::VecDeque<(u32, Vec<[f32; 2]>, u8)> =
@@ -37156,9 +37229,9 @@ impl SessionHandle {
     /// published yet (no portal has `from` in the current landblock) —
     /// i.e. "unknown, assume a mouth" so terrain stays visible until the
     /// cell set loads. Only a fully-loaded, mouthless indoor dungeon
-    /// returns `false`. Cheap: one linear scan of the snapshot's per-cell
-    /// portal list (~140 × a few portals); JS memoises per landblock so it
-    /// runs once per dungeon entry. ADDITIVE export — no manifest bump.
+    /// returns `false`. Cheap: one map lookup in the snapshot's derived
+    /// per-landblock table (built with the cell geometry); JS memoises per
+    /// landblock as well. ADDITIVE export — no manifest bump.
     #[wasm_bindgen(js_name = currentDungeonHasOutdoorPortal)]
     pub fn current_dungeon_has_outdoor_portal(&self) -> bool {
         let snap = self.cell_scene_snapshot.borrow();
@@ -37166,24 +37239,15 @@ impl SessionHandle {
             return true; // no pose yet → unknown, keep terrain visible
         }
         let lb_high = snap.current_cell & 0xFFFF_0000;
-        let mut saw_dungeon_portal = false;
-        for (from, to, _flat, ..) in &snap.cell_portal_polygons {
-            // Restrict to THIS dungeon's landblock: the snapshot can also
-            // hold adjacent outdoor-landblock cells whose own exits are not
-            // this dungeon's mouth.
-            if (*from & 0xFFFF_0000) != lb_high {
-                continue;
-            }
-            saw_dungeon_portal = true;
-            if (*to & 0xFFFF) >= 0xFFFE {
-                return true; // an outdoor-facing aperture exists → keep terrain
-            }
-        }
-        // Portals present for this landblock but none outdoor-facing → the
-        // dungeon is sealed → cull. No portals seen yet → not loaded →
-        // treat as unknown (keep terrain visible) to avoid an entry-time
-        // flicker at a mouthed dungeon.
-        !saw_dungeon_portal
+        // Restricted to THIS dungeon's landblock (the snapshot can also hold
+        // adjacent outdoor-landblock cells whose own exits are not this
+        // dungeon's mouth); prebuilt per landblock with the snapshot geometry
+        // instead of scanning every resident portal polygon each indoor frame.
+        // An outdoor-facing aperture exists → keep terrain. Portals present
+        // but none outdoor-facing → the dungeon is sealed → cull. No portals
+        // seen yet → not loaded → unknown (keep terrain visible) to avoid an
+        // entry-time flicker at a mouthed dungeon.
+        snap.derived.lb_has_outdoor_portal.get(&lb_high).copied().unwrap_or(true)
     }
 
     /// Fix B (2026-07-02) rollback escape: disable the outdoor
@@ -37512,9 +37576,8 @@ impl SessionHandle {
     /// when the containing landblock hasn't been baked into the
     /// terrain cache yet (pre-EnteredWorld, or an unloaded LB the
     /// camera momentarily sweeps over). Mirrors
-    /// `WorldState::terrain_height_at` byte-for-byte — the recv-loop
-    /// clones the heightmap cache into a shadow each TickMovement and
-    /// this read consults that shadow.
+    /// `WorldState::terrain_height_at` byte-for-byte, reading the grids
+    /// from the `collision_scene` shadow (refreshed ≤ every 100 ms).
     ///
     /// JS camera path uses this to lift the camera off the ground:
     /// `if (cameraZ < terrainZ + radius + 0.2) cameraZ = terrainZ + 0.6;`.
@@ -37534,8 +37597,18 @@ impl SessionHandle {
             return None;
         }
         let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
-        let shadow = self.terrain_heights_shadow.borrow();
-        let grid = shadow.get(&landblock_id)?;
+        // The `collision_scene` shadow already carries the 9x9 grids
+        // (an `Arc` share — the faithful outdoor path reads the same store,
+        // filled from the same `PopulateTerrain` arrays under the same key).
+        // This used to read a SECOND shadow: a deep copy of the insert-only
+        // `WorldState.terrain_heights` taken every TickMovement, so the
+        // per-frame copy grew with every landblock visited for the whole
+        // session. NB the scene copy is insert-only too (nothing prunes it);
+        // if pruning is ever added, `terrainPrefetchedLbs` in
+        // app/landblock_stream.js must forget the landblock as well or a
+        // re-entered landblock never re-populates.
+        let scene = self.collision_scene.borrow();
+        let grid = scene.terrain_cell_heights(landblock_id)?;
         let local_x = world_x - lb_x as f32 * LB_M;
         let local_y = world_y - lb_y as f32 * LB_M;
         let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
@@ -40281,6 +40354,19 @@ impl SessionHandle {
         if (motion_table_id >> 24) != 0x09 {
             return None;
         }
+        // Memo hit (see MOTION_LINK_SWING_MEMO): the answer is a pure function
+        // of (table, stance, command) against the immutable DAT, and callers
+        // ask the same few questions on every cast gesture, swing and idle
+        // fidget — each miss below copies + parses a ~44 KB MotionTable plus
+        // up to two ~58 KB Animations.
+        let memo_key = (motion_table_id, stance, command);
+        if let Ok(m) = MOTION_LINK_SWING_MEMO.lock() {
+            if let Some(hit) = m.get(&memo_key) {
+                return hit.clone().map(inner_to_motion_link_anim_js);
+            }
+        }
+        // A table that is not resident yet returns None WITHOUT memoising, so
+        // the caller's retry after the prefetch lands still resolves it.
         let source = global_source::try_global_source()?;
         let bytes = source
             .get_file_by_key(ResourceKey::new("eor/portal", motion_table_id))
@@ -40297,19 +40383,35 @@ impl SessionHandle {
         // bake path (`build_concatenated_motion_frames`) already parses these
         // same records the same way, and duplicating the on-disk layout here
         // would be a second place to get it wrong.
+        // An Animation the source could not serve makes the link unpriceable
+        // for NOW (duration 0.0) — remember that, so such a result is not
+        // memoised and a later call can price it once the record is resident.
+        let anim_missing = std::cell::Cell::new(false);
         let anim_frames = |anim_id: u32| -> Option<u32> {
             if (anim_id >> 24) != 0x03 {
                 return None;
             }
-            let anim_bytes = source
-                .get_file_by_key(ResourceKey::new("eor/portal", anim_id))
-                .ok()?;
+            let anim_bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", anim_id)) {
+                Ok(b) => b,
+                Err(_) => {
+                    anim_missing.set(true);
+                    return None;
+                }
+            };
             holtburger_dat::file_type::Animation::read(&mut std::io::Cursor::new(&anim_bytes))
                 .ok()
                 .map(|a| a.num_frames)
         };
-        classify_motion_link_for_swing(&mtable, stance, command, anim_frames)
-            .map(inner_to_motion_link_anim_js)
+        let inner = classify_motion_link_for_swing(&mtable, stance, command, anim_frames);
+        if !anim_missing.get() {
+            if let Ok(mut m) = MOTION_LINK_SWING_MEMO.lock() {
+                if m.len() >= MOTION_LINK_SWING_MEMO_CAP {
+                    m.clear();
+                }
+                m.insert(memo_key, inner.clone());
+            }
+        }
+        inner.map(inner_to_motion_link_anim_js)
     }
 
     /// Wave J3 (2026-05-26): inscription text for `guid` — server-
@@ -41221,9 +41323,6 @@ pub async fn start_session(
     > = std::rc::Rc::new(std::cell::RefCell::new(
         holtburger_world::SpatialScene::new(),
     ));
-    let terrain_heights_shadow: std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
-    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
 
     {
         let queued_events = queued_events.clone();
@@ -41242,7 +41341,6 @@ pub async fn start_session(
         let world_state = world_state.clone();
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
-        let latest_inventory = latest_inventory.clone();
         let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_container_contents_inner = latest_container_contents.clone();
         let latest_object_icons_inner = latest_object_icons.clone();
@@ -41283,7 +41381,6 @@ pub async fn start_session(
         let last_recv_instant_inner = last_recv_instant.clone();
         let last_ping_rtt_ms_inner = last_ping_rtt_ms.clone();
         let collision_scene_inner = collision_scene.clone();
-        let terrain_heights_shadow_inner = terrain_heights_shadow.clone();
         let turbine_chat_state_inner = turbine_chat_state.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
@@ -41295,7 +41392,6 @@ pub async fn start_session(
                 Some(charlist_tx),
                 world_bootstrap,
                 latest_stats,
-                latest_inventory,
                 latest_vendor_state_inner,
                 latest_container_contents_inner,
                 latest_object_icons_inner,
@@ -41342,7 +41438,6 @@ pub async fn start_session(
                 last_recv_instant_inner,
                 last_ping_rtt_ms_inner,
                 collision_scene_inner,
-                terrain_heights_shadow_inner,
                 turbine_chat_state_inner,
                 pending_confirmations_inner,
                 plugin_list_inner,
@@ -41487,7 +41582,6 @@ pub async fn start_session(
         last_ping_rtt_ms,
         last_client_prediction,
         collision_scene,
-        terrain_heights_shadow,
         latest_contracts,
     })
 }
@@ -42464,6 +42558,23 @@ fn publish_player_stats_snapshot(
     });
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    // 2026-10-07 — set by the recv loop when a message MAY have changed the
+    // player's inventory; `playerInventory()` rebuilds the snapshot on read.
+    // The scan in `session/messages` counts every world spawn / replace as
+    // "may have" (the snapshot builder filters by ownership), so the eager
+    // build cost a full snapshot — every owned item's property reads, name
+    // clone and placement rank — per ObjectCreate, ~300 per town arrival,
+    // while JS reads it at most once per event drain.
+    static INVENTORY_SNAPSHOT_DIRTY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn mark_player_inventory_dirty() {
+    INVENTORY_SNAPSHOT_DIRTY.with(|d| d.set(true));
+}
+
 /// Phase 4 step 4 follow-on (vitals + inventory panels): build the
 /// inventory snapshot from `WorldState.entities` filtered to entities
 /// owned by the player (in `player.inventory` OR `player.equipment`).
@@ -43170,6 +43281,39 @@ fn publish_cell_scene_snapshot(
     let mut render_vec: Vec<u32> = render.into_iter().collect();
     render_vec.sort_unstable();
 
+    // The cell geometry below only changes when a landblock's cells load or
+    // unload, and every such mutation bumps the scene's collision rev
+    // (`insert_cell_aabb` / `insert_cell_seen_outside` /
+    // `insert_cell_portal_polygon` / the clears). While the key is unchanged
+    // the previous tick's vectors are MOVED into the new snapshot instead of
+    // being rebuilt — this ran every frame inside the synchronous tick hop.
+    let geometry_key = world.scene.collision_cache_key();
+    {
+        let mut prev = snapshot.borrow_mut();
+        if prev.geometry_key == Some(geometry_key) {
+            let cell_aabbs = std::mem::take(&mut prev.cell_aabbs);
+            let cell_aabb_index = std::mem::take(&mut prev.cell_aabb_index);
+            let cell_portal_polygons = std::mem::take(&mut prev.cell_portal_polygons);
+            let cell_seen_outside_map = std::mem::take(&mut prev.cell_seen_outside_map);
+            let portal_map = std::mem::take(&mut prev.portal_map);
+            let derived = std::mem::take(&mut prev.derived);
+            *prev = CellSceneSnapshot {
+                current_cell: current,
+                is_indoor: pose.is_indoors(),
+                seen_outside: world.scene.cell_seen_outside(current),
+                render_set: render_vec,
+                cell_aabbs,
+                cell_aabb_index,
+                cell_portal_polygons,
+                cell_seen_outside_map,
+                geometry_key: Some(geometry_key),
+                portal_map,
+                derived,
+            };
+            return;
+        }
+    }
+
     // Phase 4 PView port (2026-05-25): snapshot every loaded cell AABB
     // so the SessionHandle's `getRenderSetWithFrustum(mvp)` rAF tick
     // can frustum-cull at render frequency without re-entering the
@@ -43217,6 +43361,14 @@ fn publish_cell_scene_snapshot(
         .map(|(id, _)| (*id, world.scene.cell_seen_outside(*id)))
         .collect();
 
+    let cell_aabb_index: std::collections::HashMap<u32, [f32; 6]> =
+        cell_aabbs.iter().copied().collect();
+    let derived = std::rc::Rc::new(build_cell_derived(
+        &cell_aabbs,
+        &cell_aabb_index,
+        &cell_portal_polygons,
+        &cell_seen_outside_map,
+    ));
     *snapshot.borrow_mut() = CellSceneSnapshot {
         current_cell: current,
         is_indoor: pose.is_indoors(),
@@ -43228,10 +43380,13 @@ fn publish_cell_scene_snapshot(
         // outdoor / no-cell case (key absent) — acclient.c:146721/146746.
         seen_outside: world.scene.cell_seen_outside(current),
         render_set: render_vec,
-        cell_aabb_index: cell_aabbs.iter().copied().collect(),
+        cell_aabb_index,
         cell_aabbs,
+        derived,
+        portal_map: std::rc::Rc::new(build_cell_portal_map(&cell_portal_polygons)),
         cell_portal_polygons,
         cell_seen_outside_map,
+        geometry_key: Some(geometry_key),
     };
 }
 
@@ -43871,7 +44026,6 @@ async fn recv_loop(
         std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
     >,
     latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
-    latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
     latest_vendor_state: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
     >,
@@ -43961,9 +44115,6 @@ async fn recv_loop(
     last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
-    terrain_heights_shadow: std::rc::Rc<
-        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
-    >,
     turbine_chat_state: std::rc::Rc<
         std::cell::RefCell<holtburger_core::client::types::TurbineChatState>,
     >,
@@ -44433,7 +44584,6 @@ async fn recv_loop(
         charlist_tx,
         world_bootstrap,
         latest_stats,
-        latest_inventory,
         latest_vendor_state,
         latest_container_contents,
         latest_object_icons,
@@ -44475,7 +44625,6 @@ async fn recv_loop(
         last_recv_instant,
         last_ping_rtt_ms,
         collision_scene,
-        terrain_heights_shadow,
         turbine_chat_state,
         pending_confirmations,
         plugin_list,

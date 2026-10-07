@@ -8329,6 +8329,36 @@ impl MovementSystem {
         self.apply_movement_world_events_ungated(events);
     }
 
+    /// The registry prune for the frame spine's World phase
+    /// (`tick_spine::tick_frame`). The liveness sweep inside `world.tick()`
+    /// is the ONLY `EntityDespawned` emitter (`ObjectDelete` just marks the
+    /// entity), and its events never reached
+    /// [`Self::apply_movement_world_events`], which is fed message-path
+    /// events only — so the registry's `EntityDespawned` arm never ran:
+    /// every remote mover ever seen kept its `MovementManager`, walked by
+    /// the per-tick completion pump and `drive_remote_movetos`, and a MoveTo
+    /// armed on a destroyed guid survived to steer the guid's next occupant.
+    /// Retail `CObjectMaint::UseTime` (acclient.c:310246-310278) destroys
+    /// the object outright. The local player's entry is kept: its state
+    /// (player-controlled flag, pending motions) must outlive an
+    /// explicit-delete + re-create of its entity.
+    pub(crate) fn prune_swept_movement_managers(
+        &mut self,
+        events: &[holtburger_world::WorldEvent],
+        local_player: Guid,
+    ) {
+        if !USE_UNPACK_MOVEMENT_SEMANTICS {
+            return;
+        }
+        for event in events {
+            if let WorldEvent::EntityDespawned(guid) = event {
+                if *guid != local_player {
+                    self.movement_managers.remove(guid);
+                }
+            }
+        }
+    }
+
     /// The gate-free body of [`Self::apply_movement_world_events`] —
     /// split out so the Lane-A unit tests can exercise the registry
     /// while the const ships default-off (the spec's "land flag-off

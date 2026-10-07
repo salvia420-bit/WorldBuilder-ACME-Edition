@@ -948,14 +948,14 @@ impl Clone for CollisionRevStamp {
 }
 
 // F4-5 (grind-loop G-2, 2026-06-11): the wasm recv-loop snapshots this
-// whole struct into the JS-readable camera-sweep shadow EVERY TickMovement
-// (`*collision_scene.borrow_mut() = w.scene.clone()`). The immutable
-// geometry tables (triangle bags, BSPs, AABB/portal indexes) dominate that
-// clone, so they're `Arc`-wrapped: the per-tick clone is a refcount bump,
-// and the rare load/unload mutations go through `Arc::make_mut` (which
-// deep-clones the one mutated table only while a snapshot still shares it).
-// Per-tick mutable state (entity_poses, body_store, landblock_map, door
-// exclusions) stays plain.
+// struct into the JS-readable camera-sweep shadow (since 2026-10-07 via
+// `collision_view`, at most every 100 ms). The immutable geometry tables
+// (triangle bags, BSPs, AABB/portal indexes) dominate that copy, so they're
+// `Arc`-wrapped: the snapshot is a refcount bump, and the rare load/unload
+// mutations go through `Arc::make_mut` (which deep-clones the one mutated
+// table only while a snapshot still shares it). Per-tick mutable state
+// (entity_poses, body_store, landblock_map, door exclusions) stays plain;
+// `collision_view` leaves it out of the snapshot.
 #[derive(Clone)]
 pub struct SpatialScene {
     landblock_map: HashMap<Guid, HashSet<Guid>>,
@@ -2331,6 +2331,11 @@ impl SpatialScene {
     /// pushes the boolean alongside the cell AABB; the recv-loop drain
     /// installs it here. Mirrors `insert_cell_aabb` exactly.
     pub fn insert_cell_seen_outside(&mut self, cell_id: u32, v: bool) {
+        // The wasm cell-scene snapshot keys its cached cell geometry
+        // (aabbs / seen-outside / portal polygons) on `collision_cache_key`,
+        // so every mutation of those tables must bump — not only the ones the
+        // faithful bridge reads.
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.cell_seen_outside).insert(cell_id, v);
     }
 
@@ -2414,6 +2419,9 @@ impl SpatialScene {
         cell_id: u32,
         polygon: CellPortalPolygon,
     ) {
+        // See `insert_cell_seen_outside`: the wasm cell-scene snapshot keys on
+        // the collision rev.
+        self.bump_collision_rev();
         Arc::make_mut(&mut self.cell_portal_polygons)
             .entry(cell_id)
             .or_default()
@@ -4444,8 +4452,8 @@ impl SpatialScene {
     /// landblock, but
     /// each Arc-wrapped table is `Arc::make_mut`ed and retain-scanned ONCE
     /// for the whole batch. The per-LB forms pay one COW deep-clone per
-    /// mutated table per `TickMovement` drain (the per-tick
-    /// `collision_scene` snapshot always shares the Arc) plus one full
+    /// mutated table per drain while the `collision_scene` snapshot
+    /// shares the Arc (refreshed ≤ every 100 ms) plus one full
     /// retain pass per LB — a sealed-dungeon purge draining N landblocks
     /// in one tick paid N scans where one suffices. Landblock ids are
     /// masked to their high words internally. Returns
@@ -6411,6 +6419,40 @@ impl SpatialScene {
             body.sampling.mode = SpatialSampleMode::Suspended;
             body.sampling.last_derived_at = now;
         }
+    }
+
+    /// 2026-10-07 — the copy behind holtburger-web's per-tick
+    /// `collision_scene` shadow (session/commands/movement.rs), which serves
+    /// the camera sweeps, the viewer-cell resolve, the terrain-height clamp and
+    /// the cell-space clip. Every one of those readers touches only the
+    /// `Arc`-shared geometry tables (plus the small door maps and diag
+    /// counters, which are still cloned), never the per-entity state — yet a
+    /// plain `clone()` deep-copied that state every frame: the landblock →
+    /// entity index, every entity pose, every sampled body (each with its
+    /// PositionManager), the remote-motion maps and the sky descriptor. They
+    /// are moved out for the duration of the clone and moved straight back,
+    /// so the view gets them EMPTY. Any field added later is cloned exactly as
+    /// before (the derive), so this can only ever leave out the fields named
+    /// here.
+    pub fn collision_view(&mut self) -> Self {
+        let landblock_map = std::mem::take(&mut self.landblock_map);
+        let entity_poses = std::mem::take(&mut self.entity_poses);
+        let bodies = std::mem::take(&mut self.body_store.bodies);
+        let remote_stepped_poses = std::mem::take(&mut self.remote_stepped_poses);
+        let remote_airborne_changes = std::mem::take(&mut self.remote_airborne_changes);
+        let remote_sticky_targets = std::mem::take(&mut self.remote_sticky_targets);
+        let remote_sticky_stepped = std::mem::take(&mut self.remote_sticky_stepped);
+        let sky_desc = self.sky_desc.take();
+        let view = self.clone();
+        self.landblock_map = landblock_map;
+        self.entity_poses = entity_poses;
+        self.body_store.bodies = bodies;
+        self.remote_stepped_poses = remote_stepped_poses;
+        self.remote_airborne_changes = remote_airborne_changes;
+        self.remote_sticky_targets = remote_sticky_targets;
+        self.remote_sticky_stepped = remote_sticky_stepped;
+        self.sky_desc = sky_desc;
+        view
     }
 
     pub fn update_entity(&mut self, guid: Guid, old_lb: Guid, pose: WorldPosition) {

@@ -3256,6 +3256,44 @@ fn test_inventory_placement_matches_ace_insert_shift() {
     assert_eq!(state.inventory_placement(Guid(2)), Some(2));
 }
 
+/// 2026-10-07: `remove_entity` drops the removed item's placement and, for a
+/// removed container (a decayed corpse, a swept chest), its contents' — the
+/// map used to keep every unlooted item of every container ever opened.
+/// Ranks of the remaining items are unchanged.
+#[test]
+fn test_remove_entity_prunes_item_and_container_placements() {
+    let mut state = WorldState::synthetic();
+    let pack = Guid(0x50);
+    let corpse = Guid(0x60);
+    state.entities.insert(Entity::new(corpse, "Corpse".to_string(), WorldPosition::default()));
+    for i in 1..=5u32 {
+        state.entities.insert(Entity::new(Guid(i), format!("Item{i}"), WorldPosition::default()));
+    }
+    state.seed_inventory_placement(pack, vec![(Guid(1), false), (Guid(2), false), (Guid(3), false)]);
+    state.seed_inventory_placement(corpse, vec![(Guid(4), false), (Guid(5), false)]);
+    for i in 1..=3u32 {
+        state.entities.get_mut(Guid(i)).unwrap().set_container_id(Some(pack));
+    }
+    for i in 4..=5u32 {
+        state.entities.get_mut(Guid(i)).unwrap().set_container_id(Some(corpse));
+    }
+    assert_eq!(state.container_placement.len(), 5);
+
+    // An item consumed out of the pack: its own entry goes, the rest keep
+    // their ranks (removed items were already skipped by the ranking).
+    state.remove_entity(Guid(2));
+    assert!(!state.container_placement.contains_key(&Guid(2)));
+    assert_eq!(state.inventory_placement(Guid(1)), Some(0));
+    assert_eq!(state.inventory_placement(Guid(3)), Some(1));
+
+    // The corpse decays: its contents' placements go with it.
+    state.remove_entity(corpse);
+    assert!(!state.container_placement.contains_key(&Guid(4)));
+    assert!(!state.container_placement.contains_key(&Guid(5)));
+    assert_eq!(state.container_placement.len(), 2);
+    assert_eq!(state.inventory_placement(Guid(3)), Some(1));
+}
+
 #[test]
 fn test_inventory_put_object_in_3d() {
     let mut state = WorldState::synthetic();

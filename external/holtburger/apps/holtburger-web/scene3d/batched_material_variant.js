@@ -57,8 +57,25 @@ export function batchMatVariantEnabled() {
 // property whose value changed (opacity fades, re-seated maps, quality pokes,
 // and `version`, so a member needsUpdate recompiles the variant too). Writes
 // still go to the MEMBER (the RULE above); the sync makes the bucket follow.
-const _live = new Map(); // variant -> { mat, keys, hot, ver }
+const _live = new Map(); // variant -> { mat, keys, hot, ver, onVariantDispose, onMemberDispose }
 let _forwarding = false;
+
+// 2026-10-07 — HOLDERS. `_live` is walked every frame and references each
+// member strongly, so a variant has to LEAVE it when the last BatchedMesh
+// drawing with it goes away. Before this, nothing removed an entry short of
+// the member being disposed — which the material cache never does to a
+// handed-out material (its `?matBudgetMB` eviction drops the cache's reference
+// and leaves the rest to GC) — so every surface ever batched stayed synced
+// each frame and reachable, textures included, for the whole session (scout
+// measurement: 0.61 ms/frame at 400 variants, 14.2 ms at 8,000). The batchers
+// call `holdBatchedMaterial(bm)` when they build a BatchedMesh and
+// `releaseBatchedMaterial(bm)` when they dispose it; the last release drops
+// the variant and disposes ONLY it (three frees its program reference and
+// per-material state; the member and the textures they share are untouched).
+const _holds = new WeakMap();    // member -> number of BatchedMeshes holding it
+const _holderOf = new WeakMap(); // BatchedMesh -> member it holds
+let _holdersLive = 0;
+let _variantsDropped = 0;
 function _skipKey(k) {
   return k === "id" || k === "uuid" || k === "_listeners" ||
     (k.charCodeAt(0) === 95 && k.charCodeAt(1) === 95 && (k.startsWith("__hb") || k.startsWith("__dsp")));
@@ -119,26 +136,82 @@ export function batchedMaterialFor(mat) {
   _mirror(v, mat, keys, null);
   _variantOf.set(mat, v);
   _memberOf.set(v, mat);
-  _live.set(v, { mat, keys, hot: HOT_DEFAULT.filter((k) => keys.includes(k)), ver: mat.version });
+  const e = { mat, keys, hot: HOT_DEFAULT.filter((k) => keys.includes(k)), ver: mat.version,
+    onVariantDispose: null, onMemberDispose: null };
+  _live.set(v, e);
   // Disposal stays what it meant before the variant existed, in both
   // directions: disposing the bucket's material disposes the member, and a
   // member dispose frees the variant's three slot. `_forwarding` stops the
-  // two listeners bouncing.
+  // two listeners bouncing. Kept on the entry so `_dropVariant` can unhook them.
   try {
-    v.addEventListener("dispose", () => {
+    e.onVariantDispose = () => {
       if (_forwarding) return;
       _forwarding = true;
       try { mat.dispose(); } catch (_) { /* fail-soft */ } finally { _forwarding = false; }
-    });
-    mat.addEventListener("dispose", () => {
+    };
+    e.onMemberDispose = () => {
       _live.delete(v);
       _variantOf.delete(mat);
       if (_forwarding) return;
       _forwarding = true;
       try { v.dispatchEvent({ type: "dispose" }); } catch (_) { /* fail-soft */ } finally { _forwarding = false; }
-    });
+    };
+    v.addEventListener("dispose", e.onVariantDispose);
+    mat.addEventListener("dispose", e.onMemberDispose);
   } catch (_) { /* fail-soft */ }
   return v;
+}
+
+/**
+ * Record that `bm` (a statics BatchedMesh, already constructed with
+ * `batchedMaterialFor(member)` or the member itself) draws the member's
+ * variant until `releaseBatchedMaterial(bm)`. Counted with the flag off too,
+ * so a variant made later by `setBatchMatVariant(root, true)` still drops.
+ */
+export function holdBatchedMaterial(bm) {
+  const m = bm?.material;
+  if (!m || Array.isArray(m) || !m.isMaterial || _holderOf.has(bm)) return false;
+  const member = memberMaterialOf(m);
+  _holderOf.set(bm, member);
+  _holds.set(member, (_holds.get(member) || 0) + 1);
+  _holdersLive += 1;
+  return true;
+}
+
+/** Teardown half of `holdBatchedMaterial`; idempotent per BatchedMesh. */
+export function releaseBatchedMaterial(bm) {
+  const member = bm ? _holderOf.get(bm) : undefined;
+  if (member === undefined) return false;
+  _holderOf.delete(bm);
+  _holdersLive -= 1;
+  const n = (_holds.get(member) || 1) - 1;
+  if (n > 0) { _holds.set(member, n); return true; }
+  _holds.delete(member);
+  _dropVariant(member);
+  return true;
+}
+
+function _dropVariant(member) {
+  const v = _variantOf.get(member);
+  if (!v) return;
+  const e = _live.get(v);
+  _live.delete(v);
+  _variantOf.delete(member);
+  _memberOf.delete(v);
+  // Unhook BOTH listeners before the dispose: the variant's would forward it
+  // to the member, which plain meshes are still drawing with.
+  if (e) {
+    try { v.removeEventListener("dispose", e.onVariantDispose); } catch (_) { /* fail-soft */ }
+    try { member.removeEventListener("dispose", e.onMemberDispose); } catch (_) { /* fail-soft */ }
+  }
+  _forwarding = true;
+  try { v.dispose(); } catch (_) { /* fail-soft */ } finally { _forwarding = false; }
+  _variantsDropped += 1;
+}
+
+/** Diag/test snapshot: variants synced per frame, BatchedMeshes holding one, variants dropped. */
+export function batchMatVariantStats() {
+  return { live: _live.size, holders: _holdersLive, dropped: _variantsDropped };
 }
 
 /** The member material behind `m` (identity for a non-variant). */

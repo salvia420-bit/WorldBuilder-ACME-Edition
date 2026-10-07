@@ -381,11 +381,11 @@ export const REGISTRY = Object.freeze([
     name: "__diag.runAll",
     status: "current",
     reads: "function",
-    evidence: "scene3d/diag.js:638",
+    evidence: "scene3d/diag.js:654",
     availability: "in-world",
     opaque: true,
     note: "Oracle-diff family (PASS|DRIFT|NO-ORACLE|INFRA + missingSurfaces "
-      + "honesty rule, diag.js:660-664). Orthogonal correctness tooling — "
+      + "honesty rule, diag.js:676-680). Orthogonal correctness tooling — "
       + "retained untouched per pass-10 D-10.3.5; not a metrics surface.",
     fields: {},
   },

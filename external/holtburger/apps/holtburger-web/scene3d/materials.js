@@ -1044,19 +1044,37 @@ function _installCsmShaderPatch(material, csmState) {
     ...(material.userData || {}),
     csmEnabled: true,
   };
+  const shared = csmState.uniforms || null;
   _chainBeforeCompile(material, (shader) => {
-    // Allocate uniforms (texture refs filled in by refreshCsmUniforms
-    // each frame; init to whatever's already on the cascade lights so
-    // the first frame doesn't render with a null sampler).
-    shader.uniforms.uCsmShadowMap0 = { value: csmState.lights[0]?.shadow?.map?.texture ?? null };
-    shader.uniforms.uCsmShadowMap1 = { value: csmState.lights[1]?.shadow?.map?.texture ?? null };
-    shader.uniforms.uCsmShadowMap2 = { value: csmState.lights[2]?.shadow?.map?.texture ?? null };
-    shader.uniforms.uCsmMatrix0 = { value: csmState.lights[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
-    shader.uniforms.uCsmMatrix1 = { value: csmState.lights[1]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
-    shader.uniforms.uCsmMatrix2 = { value: csmState.lights[2]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
-    shader.uniforms.uCsmSplits = { value: new THREE.Vector2(csmState.splits[0], csmState.splits[1]) };
-    shader.uniforms.uCsmFar = { value: csmState.splits[2] };
-    shader.uniforms.uCsmBlend = { value: csmState.blendFrac };
+    if (shared) {
+      // csm.js `setupCsm` — the ONE set of uniform objects every receiver's
+      // program binds; refreshCsmUniforms writes them once per frame. Any
+      // program compiled from this hook (the member's, a batched variant's,
+      // a clone's) therefore tracks the cascades.
+      shader.uniforms.uCsmShadowMap0 = shared.uCsmShadowMap0;
+      shader.uniforms.uCsmShadowMap1 = shared.uCsmShadowMap1;
+      shader.uniforms.uCsmShadowMap2 = shared.uCsmShadowMap2;
+      shader.uniforms.uCsmMatrix0 = shared.uCsmMatrix0;
+      shader.uniforms.uCsmMatrix1 = shared.uCsmMatrix1;
+      shader.uniforms.uCsmMatrix2 = shared.uCsmMatrix2;
+      shader.uniforms.uCsmSplits = shared.uCsmSplits;
+      shader.uniforms.uCsmFar = shared.uCsmFar;
+      shader.uniforms.uCsmBlend = shared.uCsmBlend;
+    } else {
+      // Legacy bundle without shared uniforms: allocate per program (texture
+      // refs filled in by refreshCsmUniforms each frame; init to whatever's
+      // already on the cascade lights so the first frame doesn't render
+      // with a null sampler).
+      shader.uniforms.uCsmShadowMap0 = { value: csmState.lights[0]?.shadow?.map?.texture ?? null };
+      shader.uniforms.uCsmShadowMap1 = { value: csmState.lights[1]?.shadow?.map?.texture ?? null };
+      shader.uniforms.uCsmShadowMap2 = { value: csmState.lights[2]?.shadow?.map?.texture ?? null };
+      shader.uniforms.uCsmMatrix0 = { value: csmState.lights[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+      shader.uniforms.uCsmMatrix1 = { value: csmState.lights[1]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+      shader.uniforms.uCsmMatrix2 = { value: csmState.lights[2]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+      shader.uniforms.uCsmSplits = { value: new THREE.Vector2(csmState.splits[0], csmState.splits[1]) };
+      shader.uniforms.uCsmFar = { value: csmState.splits[2] };
+      shader.uniforms.uCsmBlend = { value: csmState.blendFrac };
+    }
 
     // Declare uniforms + the sampling helper. Inject right after the
     // existing `void main() {` insertion point — the detail patch puts
@@ -1207,12 +1225,14 @@ varying float vCsmViewDepth;`
 #include <dithering_fragment>`
     );
 
-    // Stash the uniforms so `refreshCsmUniforms` can update the texture
-    // + matrix references each frame post-compile.
-    _defineLiveUserData(material, "csmShaderUniforms", shader.uniforms);
+    // Legacy path only: stash the uniforms so `refreshCsmUniforms` can
+    // update the texture + matrix references each frame post-compile.
+    if (!shared) _defineLiveUserData(material, "csmShaderUniforms", shader.uniforms);
   });
-  // Register on the bundle's set so refreshCsmUniforms walks us.
-  if (csmState.patchedMaterials && typeof csmState.patchedMaterials.add === "function") {
+  // Legacy path only: register on the bundle's set so refreshCsmUniforms
+  // walks us. With shared uniforms there is nothing per material to refresh,
+  // and a registry entry would pin the material for the session.
+  if (!shared && csmState.patchedMaterials && typeof csmState.patchedMaterials.add === "function") {
     csmState.patchedMaterials.add(material);
   }
   material.needsUpdate = true;

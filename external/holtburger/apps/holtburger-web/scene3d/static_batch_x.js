@@ -28,7 +28,7 @@
 // ~29->~47 fps). `?statBatchChunk=off` escapes to the per-LB legacy path.
 
 import * as THREE from "three";
-import { batchedMaterialFor } from "./batched_material_variant.js";
+import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 
 let _flag;
 /** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
@@ -1894,8 +1894,37 @@ function _warnOnce(key, msg) {
   console.warn(msg);
 }
 
-const _INIT_VERTS = 1 << 14;      // 16,384 (chunk-scale); grows via setGeometrySize on demand
+const _INIT_VERTS = 1 << 14;      // 16,384 — ceiling for a NEW bucket's first allocation
+const _MIN_INIT_VERTS = 1 << 10;  // 1,024 — floor; both grow via setGeometrySize on demand
 const _INIT_INST = 256;           // chunk-scale; grows via setInstanceCount on demand
+
+// First allocation for a NEW bucket, sized from the group that creates it.
+// Every bucket used to start at the 16,384-vert ceiling (+ 32,768 indices,
+// ~0.5 MB) whatever it held: the 1070 census (PERF-LOG 2026-10-06 session 3)
+// found 348 Holtburg buckets holding 3-14 instances each — 182 MB of mostly
+// empty buffers, each uploaded WHOLE on its first draw (31.5 MB of first-sight
+// uploads in one street sweep). Size to twice this group's unique geometry
+// (the other landblocks of the 3x3 region feed the same bucket), rounded up to
+// a power of two and clamped to [_MIN_INIT_VERTS, _INIT_VERTS]; a later feed
+// that outgrows it takes the existing `_addGeometryGrow` doubling. Draws only
+// cover used ranges, so the rendered result is unchanged.
+function _initialBucketVerts(group) {
+  let verts = 0;
+  let indices = 0;
+  const seen = new Set();
+  for (const m of group) {
+    const g = m && m.geometry;
+    if (!g || seen.has(g)) continue;
+    seen.add(g);
+    verts += g.attributes?.position?.count || 0;
+    indices += g.index ? g.index.count : 0;
+  }
+  // Buckets keep indices at 2x verts (see `_addGeometryGrow`).
+  const need = Math.max(verts, Math.ceil(indices / 2)) * 2;
+  let size = _MIN_INIT_VERTS;
+  while (size < need && size < _INIT_VERTS) size *= 2;
+  return size;
+}
 const _OPTIMIZE_FRAC = 0.30;      // compact a bucket once >30% of its used extent is dead
 const _GROW_TRIES = 8;            // doubling attempts before a node falls through
 
@@ -1931,7 +1960,7 @@ function _regionKeyOfId(id) {
  * buckets sort adjacent — and the frame-cost census measured 71% of draws
  * changing material against 79 distinct programs.
  */
-function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
+function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, initVerts = _INIT_VERTS) {
   let region = _buckets.get(regionKey);
   if (!region) { region = new Map(); _buckets.set(regionKey, region); }
   let b = region.get(mat);
@@ -1940,8 +1969,11 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
   // reads fall through to `mat`, but three caches the batched program apart so
   // plain-Mesh draws of `mat` stop flipping its program every frame. The
   // region map and `ud.material` stay keyed by the MEMBER `mat`.
-  const bm = new THREE.BatchedMesh(_INIT_INST, _INIT_VERTS, _INIT_VERTS * 2,
+  const bm = new THREE.BatchedMesh(_INIT_INST, initVerts, initVerts * 2,
     typeof batchedMaterialFor === "function" ? batchedMaterialFor(mat) : mat);
+  // Held until `_reapBucketIfEmpty`: the last release takes the variant out of
+  // the per-frame sync set (and stops it pinning `mat`).
+  if (typeof holdBatchedMaterial === "function") holdBatchedMaterial(bm);
   // OPAQUE: skip the per-frame instance depth sort (CPU win; statAtlas
   // precedent). Transparent buckets keep the sort for blend order — unless
   // `?statBatchNoSort=on` proves this material's blend is order-independent
@@ -1964,7 +1996,7 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
     // the name/census shape and must not be read as "the bucket's surface".
     __statArrayMerged: !!poolRef,
     surfaceDid: surf,
-    maxVerts: _INIT_VERTS,
+    maxVerts: initVerts,
     maxInst: _INIT_INST,
     usedVerts: 0,        // used extent ever appended (delete does NOT compact;
                          //   only drops on optimize())
@@ -2015,8 +2047,9 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
  * and were deliberately PERSISTENT — but nothing ever removed one, so a bucket
  * survived in `staticsGroup` with its full GPU allocation for the whole session
  * even after every landblock in its region had been evicted. Each bucket costs
- * `_INIT_VERTS` verts of position/normal/uv plus `_INIT_VERTS * 2` indices
- * (~0.65 MB before any growth) and its own matrix/indirect textures, and the
+ * its vertex + index allocation (then a flat `_INIT_VERTS`, ~0.65 MB before any
+ * growth; sized from the first feed since 2026-10-07) and its own
+ * matrix/indirect textures, and the
  * region key space is 86x86 — so a cross-Dereth roam ratcheted VRAM and
  * `staticsGroup.children` monotonically with regions VISITED rather than
  * regions RESIDENT. `?statBatchChunk` is default-ON, so this was the shipped
@@ -2027,7 +2060,9 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef) {
  * record on the legacy path, at last reference on the dedup path).
  *
  * The material is SHARED cross-LB (MaterialCache) and is never disposed here —
- * only the bucket's own geometry buffers and BatchedMesh-internal textures.
+ * only the bucket's own geometry buffers and BatchedMesh-internal textures, and
+ * the bucket's hold on its batched variant (the last hold disposes the variant
+ * alone; see batched_material_variant.js HOLDERS).
  */
 function _reapBucketIfEmpty(bm) {
   const ud = bm.userData;
@@ -2043,6 +2078,7 @@ function _reapBucketIfEmpty(bm) {
   // big vertex+index buffers live on its own geometry.
   try { bm.dispose(); } catch (_) { /* fail-soft */ }
   try { bm.geometry?.dispose(); } catch (_) { /* fail-soft */ }
+  if (typeof releaseBatchedMaterial === "function") releaseBatchedMaterial(bm);
   // ?statBatchSphere — drop the cache with the bucket, and take its bytes back
   // out of the census. Without this `walk.sphere.bytes` is a high-water mark
   // wearing a live-total name, which is the reporting bug this file has already
@@ -2231,7 +2267,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
           const ref = handle ? _arrayMerge.acquire(handle) : null;
           if (ref) {
             try {
-              bucket = _getOrCreateBucket(ref.material, scene3d, group[0], regionKey, ref);
+              bucket = _getOrCreateBucket(ref.material, scene3d, group[0], regionKey, ref, _initialBucketVerts(group));
               poolRef = ref;
               _mergeStats.groupsMerged += 1;
               _mergeStats.layerRefsHeld += 1;
@@ -2246,7 +2282,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       }
       if (!bucket) {
         try {
-          bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey, null);
+          bucket = _getOrCreateBucket(group[0].material, scene3d, group[0], regionKey, null, _initialBucketVerts(group));
           _mergeStats.groupsLegacy += 1;
         } catch (_) {
           out.push(...group); // bucket creation failed — whole group stays unbatched

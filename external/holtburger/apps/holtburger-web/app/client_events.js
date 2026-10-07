@@ -21,6 +21,8 @@ import { ClientEventKind } from "../scene3d/client_event_kinds.js";
 import { getCombatManeuver } from "../ui/ac_combat_maneuver.js";
 import { inferAttackTypeForWeapon, ATTACK_TYPE } from "../ui/ac_attack_type_for_weapon.js";
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
+import { preloadCastSequenceTable } from "../ui/ac_spell_cast_sequence.js";
+import { preloadSpellShapeTable } from "../ui/ac_spell_shape.js";
 import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
 import { acToThree } from "../scene3d/adapter.js";
 import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
@@ -173,6 +175,20 @@ export function dispatchClientEvent(evt, D) {
     if (window.__bootState !== "in-world") {
       setBootState("in-world", `guid=0x${playerGuid}`);
     }
+    // First-cast tables: both lazy-load on first USE, so the session's first
+    // cast ran without its gesture chain (and parsed 2.1 MB mid-cast). Warm
+    // them at idle now. Idempotent — a repeat ENTERED_WORLD is a no-op.
+    try {
+      const warmCastTables = () => {
+        preloadCastSequenceTable();
+        preloadSpellShapeTable();
+      };
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(warmCastTables, { timeout: 5000 });
+      } else {
+        setTimeout(warmCastTables, 1000);
+      }
+    } catch (_) { /* never block entering the world on a warm-up */ }
     // evtGuard (2026-07-28): open the keyboard-movement gate the
     // moment we KNOW we're in-world, instead of ~300 lines later
     // at the end of this handler. Pre-fix, any exception in the

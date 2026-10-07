@@ -684,10 +684,19 @@ export function mount(_ctx) {
 
     // gmUIElement_EffectsIndicator::RecvNotice_EnchantmentsChanged.
     const refreshEnchIndicators = () => {
+      let snap = null;
       try {
-        const snap = client.player?.enchantments?.();
+        snap = client.player?.enchantments?.();
         if (snap) applyEnchantmentSnapshot(snap);
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        // Fresh wasm-bindgen PlayerEnchantmentJs boxes on every pull (this
+        // runs per stats batch and per enchantment delta) — only counted
+        // above, never retained, so release them now.
+        if (Array.isArray(snap)) {
+          for (const r of snap) { try { r?.free?.(); } catch (_) { /* already freed */ } }
+        }
+      }
     };
     const world = client.world;
     if (world && typeof world.addEventListener === "function") {

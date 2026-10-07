@@ -1524,6 +1524,13 @@ export class CameraSwitcher {
     const startY = playerPos.y;
     const startZ = playerPos.z + 1.6;
 
+    // The sweeps return wasm-bindgen `CollisionHit` BOXES and this chain runs
+    // every frame the boom touches geometry (up to ~5 sweeps indoors): copy
+    // `.t` (clipFinalTo), then free, instead of leaving each to the
+    // FinalizationRegistry.
+    const freeHit = (hit) => {
+      try { hit.free?.(); } catch (_) { /* already released */ }
+    };
     const clipFinalTo = (hit) => {
       // hit.t in [0, 1]; clamp to a tiny minimum so we don't snap the
       // camera to the player's head.
@@ -1550,7 +1557,7 @@ export class CameraSwitcher {
               CAM_RADIUS,
               landblockId,
             );
-            if (hit) clipFinalTo(hit);
+            if (hit) { clipFinalTo(hit); freeHit(hit); }
           }
         } catch (_) {}
       }
@@ -1564,7 +1571,7 @@ export class CameraSwitcher {
             CAM_RADIUS,
             landblockId,
           );
-          if (hit) clipFinalTo(hit);
+          if (hit) { clipFinalTo(hit); freeHit(hit); }
         }
       } catch (_) {}
 
@@ -1577,7 +1584,7 @@ export class CameraSwitcher {
             CAM_RADIUS,
             landblockId,
           );
-          if (hit) clipFinalTo(hit);
+          if (hit) { clipFinalTo(hit); freeHit(hit); }
         }
       } catch (_) {}
     }
@@ -1603,7 +1610,7 @@ export class CameraSwitcher {
             CAM_RADIUS,
             cellArr,
           );
-          if (hit) clipFinalTo(hit);
+          if (hit) { clipFinalTo(hit); freeHit(hit); }
         }
       }
     } catch (_) {}
@@ -1631,7 +1638,7 @@ export class CameraSwitcher {
               CAM_RADIUS,
               cellArr,
             );
-            if (hit) clipFinalTo(hit);
+            if (hit) { clipFinalTo(hit); freeHit(hit); }
           }
         } catch (_) {}
       }
@@ -1648,7 +1655,7 @@ export class CameraSwitcher {
             CAM_RADIUS,
             range,
           );
-          if (hit) clipFinalTo(hit);
+          if (hit) { clipFinalTo(hit); freeHit(hit); }
         }
       } catch (_) {}
     }
@@ -2786,7 +2793,9 @@ export class CameraSwitcher {
     };
     const onKeyDown = (ev) => {
       if (isTypingInForm()) return;
-      if ((ev.key || "").toLowerCase() === "c") {
+      // Press edge only — a held C used to cycle the modes at the OS
+      // autorepeat rate and land on whichever one the last repeat picked.
+      if ((ev.key || "").toLowerCase() === "c" && !ev.repeat) {
         const idx = CAMERA_MODES.indexOf(this.mode);
         const next = CAMERA_MODES[(idx + 1) % CAMERA_MODES.length];
         this.switchMode(next);

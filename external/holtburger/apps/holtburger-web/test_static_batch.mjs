@@ -131,6 +131,32 @@ check("10: BatchedMesh.dispose() runs without throwing (evict path)", disposed, 
     bs.length === 2 && bs.every((b) => (b.userData.surfaceDid >>> 0) === 0x0E00));
 }
 
+// ===== 2026-10-07 — a per-LB batch holds its batched-material variant until dispose =====
+// (batched_material_variant.js HOLDERS; every LRU teardown path ends in dispose()).
+{
+  const V = await import("./scene3d/batched_material_variant.js");
+  const withVariants = new Function("THREE", "batchedMaterialFor", "holdBatchedMaterial", "releaseBatchedMaterial",
+    shims + stripped + "\n; return { consolidateStaticSingletons };")(
+    THREE, V.batchedMaterialFor, V.holdBatchedMaterial, V.releaseBatchedMaterial);
+  const matH = new THREE.MeshBasicMaterial();
+  let memberDisposed = 0;
+  matH.addEventListener("dispose", () => memberDisposed++);
+  const ns = [];
+  for (let i = 0; i < 3; i++) { const m = singleton(0x0F00, i); m.material = matH; ns.push(m); }
+  const base = V.batchMatVariantStats();
+  const bs = [];
+  withVariants.consolidateStaticSingletons(ns, bs);
+  const b = bs[0];
+  check("H1: the per-LB batch draws the variant and holds it",
+    bs.length === 1 && b.material !== matH && V.memberMaterialOf(b.material) === matH &&
+    V.batchMatVariantStats().holders === base.holders + 1 && V.batchMatVariantStats().live === base.live + 1,
+    JSON.stringify(V.batchMatVariantStats()));
+  b.dispose();
+  const st = V.batchMatVariantStats();
+  check("H2: dispose() (the LRU evict path) releases it; the member is untouched",
+    st.holders === base.holders && st.live === base.live && memberDisposed === 0, JSON.stringify(st));
+}
+
 console.log("=========================");
 console.log(`static-batch test: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

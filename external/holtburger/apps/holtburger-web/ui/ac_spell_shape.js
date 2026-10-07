@@ -175,6 +175,21 @@ async function _loadTableAsync(url) {
 }
 
 /**
+ * Warm the table ahead of first use (called at idle once in-world) so the
+ * session's first targeted cast doesn't classify against a missing table.
+ * Idempotent; resolves to the table, or `null` when there is no `fetch`
+ * (Node) or the fetch failed — a later `classifySpell` still retries.
+ *
+ * @param {string} [url]
+ * @returns {Promise<Record<string, object> | null>}
+ */
+export function preloadSpellShapeTable(url) {
+  if (_shapeTable) return Promise.resolve(_shapeTable);
+  if (typeof fetch !== "function") return Promise.resolve(null);
+  return _loadTableAsync(url).catch(() => null);
+}
+
+/**
  * Synchronously preload the shape table from a JS object — used by
  * Node-side tests that read `data/spell-shapes.json` with `fs.readFile`
  * and want `classifySpell` to be synchronous.

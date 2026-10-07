@@ -34,9 +34,12 @@
  *
  * ## Cache semantics
  *
- * - `Map<did, Promise<table | null>>` — both successful tables AND
- *   misses (null) are cached so repeated lookups against a missing
- *   DID don't re-pay the wasm round-trip.
+ * - `Map<did, Promise<table | null>>` — successful tables AND real
+ *   misses (null: no such record, or a parse error) are cached so
+ *   repeated lookups against a missing DID don't re-pay the wasm
+ *   round-trip. A TRANSIENT failure (wasm not up yet, or the fetch
+ *   threw) is not: its entry is dropped once it settles, so the next
+ *   lookup retries (2026-10-07).
  * - Concurrent callers for the same `did` share one in-flight
  *   Promise; the wasm export itself is idempotent + prefetch-cached
  *   on the Rust side, but the JS-side cache avoids creating multiple
@@ -93,11 +96,18 @@ export function fetchPhysicsScriptTable(did) {
   const hit = _cache.get(key);
   if (hit !== undefined) return hit;
 
+  // A null from a TRANSIENT failure (wasm not up yet, or the record's
+  // prefetch threw) is returned but NOT kept: caching it made every effect
+  // keyed on this table dead for the rest of the session after one boot-time
+  // lookup or one network hiccup. DAT misses ("null") and parse failures are
+  // definitive and stay cached.
+  let transient = false;
   const promise = (async () => {
     const wasm = (typeof window !== "undefined")
       ? (window.__hbWasm ?? window.__wasm ?? null)
       : null;
     if (!wasm || typeof wasm.fetchPhysicsScriptTable !== "function") {
+      transient = true;
       return null;
     }
     let json;
@@ -106,9 +116,11 @@ export function fetchPhysicsScriptTable(did) {
     } catch (err) {
       // wasm-side fetch / prefetch error — the Rust path already
       // returns `"null"` for DAT misses, so reaching this catch
-      // means an unexpected JS/wasm boundary failure. Log + cache
-      // null per the "never throw" contract.
+      // means the record could not be fetched (network / prefetch
+      // failure). Log + resolve null per the "never throw" contract;
+      // not cached, so the next lookup retries.
       console.warn(`[ac-pst] fetchPhysicsScriptTable(0x${key.toString(16)}) wasm threw:`, err);
+      transient = true;
       return null;
     }
     if (typeof json !== "string" || json === "null") {
@@ -139,6 +151,9 @@ export function fetchPhysicsScriptTable(did) {
   })();
 
   _cache.set(key, promise);
+  promise.then(() => {
+    if (transient && _cache.get(key) === promise) _cache.delete(key);
+  });
   return promise;
 }
 
@@ -248,6 +263,36 @@ export async function _runSelfTests() {
         };
         const t2 = await fetchPhysicsScriptTable(0x34000002);
         if (t2 !== null) throw new Error("expected null on shape mismatch (no id/scripts)");
+      },
+    ],
+    [
+      "test 5: transient failures (wasm not up / prefetch threw) are NOT cached",
+      async () => {
+        _clearPhysicsScriptTableCache();
+        globalThis.window = globalThis.window ?? {};
+        const saved = globalThis.window.__hbWasm;
+        try {
+          globalThis.window.__hbWasm = null; // boot-time lookup before wasm is up
+          if ((await fetchPhysicsScriptTable(0x34000005)) !== null) throw new Error("expected null with no wasm");
+          await Promise.resolve();
+          let calls = 0;
+          globalThis.window.__hbWasm = {
+            fetchPhysicsScriptTable: async () => {
+              calls += 1;
+              if (calls === 1) throw new Error("prefetch: network");
+              return JSON.stringify({ id: 0x34000005, scripts: { "4": [{ mod: 0, scriptDid: 1 }] } });
+            },
+          };
+          if ((await fetchPhysicsScriptTable(0x34000005)) !== null) throw new Error("expected null when the fetch throws");
+          await Promise.resolve();
+          const t = await fetchPhysicsScriptTable(0x34000005);
+          if (!t || t.id !== 0x34000005) throw new Error("expected the retry after a throw to resolve the table");
+          if (calls !== 2) throw new Error(`expected 2 wasm calls, got ${calls}`);
+          if ((await fetchPhysicsScriptTable(0x34000005)) !== t) throw new Error("a resolved table must stay cached");
+        } finally {
+          globalThis.window.__hbWasm = saved;
+          _clearPhysicsScriptTableCache();
+        }
       },
     ],
   ];

@@ -736,7 +736,10 @@ export function mount(ctx) {
     }
   }
 
-  // Mirror a single visibility line to the existing chat-log overlay.
+  // Mirror a single visibility line to the existing chat-log overlay (the
+  // visible chat panel mirrors it). Failures and "needs a target" hints only:
+  // a successful use/cast is silent, like retail (it used to print a debug
+  // "Hotbar N: use item 0x…" line into the player's chat on every press).
   // Best-effort — chat-log may not exist pre-login or if chat plugin
   // is unmounted; silently drop in that case.
   function logToChat(text) {
@@ -800,9 +803,6 @@ export function mount(ctx) {
     if (!fire) return false;
     try {
       fire(bound.itemGuid, armed);
-      logToChat(
-        `Hotbar ${idx + 1}: cast spell 0x${armed.toString(16).toUpperCase()} on item 0x${bound.itemGuid.toString(16).toUpperCase()}`,
-      );
       try {
         window.dispatchEvent(new CustomEvent("hbHotbarItemTargeted", {
           detail: { slotIndex: idx, itemGuid: bound.itemGuid, spellId: armed },
@@ -847,9 +847,6 @@ export function mount(ctx) {
         }
         try {
           handle.useObject(action.itemGuid);
-          logToChat(
-            `Hotbar ${idx + 1}: use item 0x${action.itemGuid.toString(16).toUpperCase()}`,
-          );
           // Successful fire → clear any armed item set by inventory click /
           // context menu. Keyboard 1-7 taps that resolve to needTarget/none
           // do NOT reach this branch, so muscle-memory taps don't nuke
@@ -866,9 +863,6 @@ export function mount(ctx) {
             logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
             return;
           }
-          logToChat(
-            `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on self`,
-          );
           try { window.__inventory?.setArmedItem?.(0); } catch (_) {}
         } catch (e) {
           logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
@@ -881,9 +875,6 @@ export function mount(ctx) {
             logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
             return;
           }
-          logToChat(
-            `Hotbar ${idx + 1}: cast spell 0x${action.spellId.toString(16).toUpperCase()} on 0x${action.targetGuid.toString(16).toUpperCase()}`,
-          );
           try { window.__inventory?.setArmedItem?.(0); } catch (_) {}
         } catch (e) {
           logToChat(`Hotbar ${idx + 1}: cast failed — ${e?.message ?? e}`);
@@ -941,7 +932,7 @@ export function mount(ctx) {
       fireSlot(i);
     });
     el.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fireSlot(i); }
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); if (!ev.repeat) fireSlot(i); }
     });
 
     // Drag-drop MIMEs accepted by hotbar slots:
@@ -1218,6 +1209,7 @@ export function mount(ctx) {
       const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_${slot}`], `Digit${slot}`);
       if (matchesBinding(ev, binding)) {
         if (digitInMagic(binding)) return; // spell strip owns digits in magic
+        if (ev.repeat) return; // a held slot key uses the item once
         fireSlot(slot - 1);
         return;
       }
@@ -1227,6 +1219,7 @@ export function mount(ctx) {
       const binding = resolveLocalBinding(LOCAL_ACTION_IDS[`HOTBAR_R2_${slot}`], null);
       if (binding && matchesBinding(ev, binding)) {
         if (digitInMagic(binding)) return;
+        if (ev.repeat) return;
         fireSlot(SLOTS_PER_ROW + slot - 1);
         return;
       }

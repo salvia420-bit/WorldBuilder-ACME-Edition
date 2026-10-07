@@ -79,6 +79,9 @@ where
     for event in &world_events {
         on_event(TickPhase::World, event, world, simulation);
     }
+    // The sweep's despawns are the only `EntityDespawned` events there are;
+    // drop the destroyed guids' movement managers (both spines run this).
+    movement.prune_swept_movement_managers(&world_events, world.player.guid);
 
     let simulation_events = simulation.tick(now, dt, world, movement);
     for event in &simulation_events {
@@ -393,7 +396,7 @@ mod tests {
     /// (acclient.c:310246–310278).
     #[tokio::test]
     async fn tick_spine_handle_reports_out_of_visibility_prune_despawn() {
-        let (mut world, _player_guid) = seeded_world();
+        let (mut world, player_guid) = seeded_world();
         let mut movement = MovementSystemHandle::new();
         let mut session = Session::new_test();
         let mut spine = TickSpineHandle::new();
@@ -430,6 +433,37 @@ mod tests {
             "entity must survive the deadline-stamping tick"
         );
 
+        // Both guids get movement managers (any UpdateMotion / MovementEvent
+        // creates one) — the sweep must drop the far one only. `seeded` is
+        // false only while USE_UNPACK_MOVEMENT_SEMANTICS is off (no registry).
+        let seeded = {
+            use holtburger_protocol::messages::movement::MotionStance;
+            use holtburger_protocol::messages::{
+                MovementEventData, MovementInvalid, MovementType, MovementTypeData,
+            };
+            let event_for = |guid: Guid| WorldEvent::EntityMovementEvent {
+                guid,
+                data: Box::new(MovementEventData {
+                    guid,
+                    object_instance_sequence: 1,
+                    movement_sequence: 2,
+                    server_control_sequence: 3,
+                    is_autonomous: false,
+                    movement_type: MovementType::Invalid,
+                    motion_flags: 0,
+                    current_style: MotionStance::NonCombat.interpreted(),
+                    data: MovementTypeData::Invalid(MovementInvalid::default()),
+                }),
+                target_exists: false,
+                object_radius: 0.0,
+                object_height: 0.0,
+            };
+            movement
+                .inner_mut()
+                .apply_movement_world_events(&[event_for(far_guid), event_for(player_guid)]);
+            movement.inner_mut().movement_manager_for(far_guid).is_some()
+        };
+
         // Advance sim-time past ACE_DESTRUCTION_TIMEOUT_SECS by
         // re-anchoring the server-time sync (+30 s).
         let _ = world.set_server_time_sync(1_030.0, Instant::now());
@@ -452,5 +486,58 @@ mod tests {
             world.entities.get(far_guid).is_none(),
             "swept entity must be evicted from world.entities"
         );
+        if seeded {
+            assert!(
+                movement.inner_mut().movement_manager_for(far_guid).is_none(),
+                "the swept guid's MovementManager must be dropped with it"
+            );
+            assert!(
+                movement.inner_mut().movement_manager_for(player_guid).is_some(),
+                "the local player's MovementManager is never pruned by the sweep"
+            );
+        }
+    }
+
+    /// The local player's own explicit delete is swept like any other
+    /// entity's (liveness.rs), but its MovementManager carries state that
+    /// must outlive the entity's re-create.
+    #[test]
+    fn swept_local_player_keeps_its_movement_manager() {
+        let player_guid = Guid(0x5000_0001);
+        let remote_guid = Guid(0x8000_0042);
+        let mut movement = MovementSystem::new();
+        let seeded = [player_guid, remote_guid].map(|guid| WorldEvent::EntityMovementEvent {
+            guid,
+            data: Box::new(holtburger_protocol::messages::MovementEventData {
+                guid,
+                object_instance_sequence: 1,
+                movement_sequence: 2,
+                server_control_sequence: 3,
+                is_autonomous: false,
+                movement_type: holtburger_protocol::messages::MovementType::Invalid,
+                motion_flags: 0,
+                current_style: holtburger_protocol::messages::movement::MotionStance::NonCombat
+                    .interpreted(),
+                data: holtburger_protocol::messages::MovementTypeData::Invalid(
+                    holtburger_protocol::messages::MovementInvalid::default(),
+                ),
+            }),
+            target_exists: false,
+            object_radius: 0.0,
+            object_height: 0.0,
+        });
+        movement.apply_movement_world_events(&seeded);
+        if movement.movement_manager_for(remote_guid).is_none() {
+            return; // USE_UNPACK_MOVEMENT_SEMANTICS off: no registry to prune
+        }
+        movement.prune_swept_movement_managers(
+            &[
+                WorldEvent::EntityDespawned(player_guid),
+                WorldEvent::EntityDespawned(remote_guid),
+            ],
+            player_guid,
+        );
+        assert!(movement.movement_manager_for(player_guid).is_some());
+        assert!(movement.movement_manager_for(remote_guid).is_none());
     }
 }

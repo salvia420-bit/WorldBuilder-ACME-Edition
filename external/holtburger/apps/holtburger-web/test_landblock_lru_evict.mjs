@@ -259,5 +259,22 @@ import { lbKeyOf } from "./scene3d/landblock_lru.js";
     `size=${lru.entries.size}`);
 }
 
+// --- Test 9 (2026-10-07): eviction releases the wasm per-LB scenery/spawn
+//     record caches through the facade index.js installs; absent ⇒ no-op.
+{
+  const scene3d = makeStubScene3d();
+  const released = [];
+  scene3d._evictLbWorldCaches = (lb) => released.push(lb >>> 0);
+  const lru = new LandblockLRU({ scene3d, maxResident: 1, getCurrentLbId: () => null });
+  lru.track(keyA);
+  lru.evict(keyA);
+  check("Test9: evict releases the LB's wasm world caches once",
+    released.length === 1 && released[0] === keyA, `released=${released.map((k) => k.toString(16))}`);
+  const bare = makeStubScene3d();
+  const lru2 = new LandblockLRU({ scene3d: bare, maxResident: 1, getCurrentLbId: () => null });
+  lru2.track(keyB);
+  check("Test9: no facade installed ⇒ evict still succeeds", lru2.evict(keyB) === true);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

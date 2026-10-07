@@ -261,6 +261,9 @@ const TIER5 = [
   { tier: 5, flag: "death_hold", file: "tests/death_hold.test.mjs" },
   // 2026-10-07 bug 16: carnage slices/fractures run one per frame.
   { tier: 5, flag: "dismember_heavy_schedule", file: "tests/dismember_heavy_schedule.test.mjs" },
+  // 2026-10-07 review: an expired corpse-dismember archive frees a despawned
+  // corpse's stumps (they kept a dead parent and were never disposed).
+  { tier: 5, flag: "dismember_archive", file: "tests/dismember_archive.test.mjs" },
   // 2026-10-07 bug 14: a held item's spawn is built at its attach, poseless.
   { tier: 5, flag: "held_attach_promote", file: "tests/held_attach_promote.test.mjs" },
   // 2026-10-07 bug 12: retail icon composites (no white key, type backgrounds).
@@ -471,6 +474,8 @@ const TIER5 = [
   { tier: 5, flag: "part_degrade", file: "test_part_degrade.mjs" },
   { tier: 5, flag: "cell_static_merge", file: "test_cell_static_merge.mjs" },
   { tier: 5, flag: "particle_shared_alpha", file: "test_particle_shared_alpha.mjs" },
+  // 2026-10-07 code review: a transient PhysicsScriptTable failure is retried, not cached.
+  { tier: 5, flag: "ac_physics_script_table", file: "test_ac_physics_script_table.mjs" },
   // 2026-10-06 remote-console fixes: the pre-3D entity backlog keeps state events;
   // the missing-link warning fires only for real swings / casts.
   { tier: 5, flag: "entity_backlog", file: "test_entity_backlog.mjs" },

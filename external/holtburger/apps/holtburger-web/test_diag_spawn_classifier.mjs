@@ -146,6 +146,30 @@ const classOf = (r) => (r.missing[0]?.classification ?? null);
     d.spawns.abandoned >= 1, `abandoned=${d.spawns.abandoned}`);
 }
 
+// ── 2026-10-07: the always-on ledger is bounded, and a respawn updates ITS entry ─
+{
+  const d = freshDiag();
+  for (let i = 0; i < 400; i++) attempt(d, 0x20000 + i);
+  const bucket = d.spawns.byWcid.get(WCID);
+  check("cap: a wcid bucket keeps at most 128 records", bucket.length === 128, `len=${bucket.length}`);
+  check("cap: it keeps the NEWEST records", bucket[bucket.length - 1].guid === 0x20000 + 399);
+  // Same guid spawned twice (appearance / LOD respawn): the second success must
+  // mark the second record, not the first one with that guid.
+  const d2 = freshDiag();
+  attempt(d2, 0x7777);
+  d2.onSpawnSucceeded(0x7777, null);
+  attempt(d2, 0x7777);
+  d2.onSpawnFailed({ guid: 0x7777, wcid: WCID, landblockId: LB }, new Error("x"));
+  const b2 = d2.spawns.byWcid.get(WCID);
+  check("respawn: first record stays succeeded, second is failed",
+    b2.length === 2 && b2[0].status === "succeeded" && b2[1].status === "failed",
+    JSON.stringify(b2.map((r) => r.status)));
+  for (let i = 0; i < 600; i++) d2.onSpawnFailed({ guid: 0x30000 + i, wcid: WCID, landblockId: LB }, "e");
+  check("cap: failures list capped at 500, failedTotal keeps counting",
+    d2.spawns.failed.length === 500 && d2.spawns.failedTotal === 601 && d2.summary().failed === 601,
+    `len=${d2.spawns.failed.length} total=${d2.spawns.failedTotal}`);
+}
+
 console.log("");
 console.log(`diag spawn classifier: ${pass} passed, ${fail} failed`);
 // Explicit exit: several ./diag/ attach modules install their own

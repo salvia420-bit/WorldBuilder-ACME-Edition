@@ -314,6 +314,32 @@ console.log("\n=== 12. __diag.input() surface ===");
   check("reports the fault seam", s.fault === null);
 }
 
+console.log("\n=== 12b. OS autorepeat of a held key fires an action ONCE ===");
+{
+  const r = makeRig({ magicStance: true });
+  check("press edge dispatches", r.funnel.handleKeyDown(key("Digit1", { key: "1" })) === true && r.hits.hotbar1 === 1);
+  const rep = key("Digit1", { key: "1", repeat: true });
+  const consumed = r.funnel.handleKeyDown(rep);
+  r.funnel.handleKeyDown(key("Digit1", { key: "1", repeat: true }));
+  check("autorepeats do not re-fire the hotbar slot", r.hits.hotbar1 === 1, `hotbar1=${r.hits.hotbar1}`);
+  check("a repeat is still CONSUMED (matched, default prevented)", consumed === true && rep.defaultPrevented === true);
+  check("suppressed repeats are counted", r.funnel.stats.repeatsSuppressed === 2);
+  check("raw subscribers still see repeats (held WASD keystate)",
+    (r.funnel.handleKeyDown(key("KeyW", { key: "w", repeat: true })), r.hits.wasd === 1));
+  // An opted-in action (selection scrolling) keeps repeating.
+  let scrolls = 0;
+  r.funnel.bindAction(LOCAL_ACTION_IDS.MAGIC_NEXT_SPELL, "PageDown", () => { scrolls += 1; },
+    { allowRepeat: true, source: "test" });
+  r.funnel.handleKeyDown(key("PageDown"));
+  r.funnel.handleKeyDown(key("PageDown", { repeat: true }));
+  r.funnel.handleKeyDown(key("PageDown", { repeat: true }));
+  check("allowRepeat action fires on every repeat", scrolls === 3, `scrolls=${scrolls}`);
+  const cb = readFileSync(new URL("./plugins/combat-bar.js", import.meta.url), "utf8");
+  check("combat-bar opts ONLY the selection scrolls into repeat",
+    /allowRepeat: repeatableRows\.has\(id\)/.test(cb) &&
+    /MAGIC_NEXT_SPELL,\s*\]\);/.test(cb) && !/MAGIC_CAST,\s*\]\)/.test(cb));
+}
+
 console.log("\n=== 13. Source pins — every migrated site rides the funnel ===");
 {
   const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");

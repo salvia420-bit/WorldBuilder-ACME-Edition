@@ -478,10 +478,14 @@ impl ClientSimulationSystem {
     ) -> Option<SpatialSolveRequest> {
         if !include_local {
             let local_pose = world.local_player_runtime_pose();
+            // As a set: it is probed once per tracked body below (was a
+            // linear `Vec::contains` per body, every frame).
             let nearby_tracked = local_pose.as_ref().map(|pose| {
                 world
                     .scene
                     .get_entities_in_range(pose, ACTIVE_SOLVE_RADIUS_M)
+                    .into_iter()
+                    .collect::<std::collections::HashSet<Guid>>()
             });
             let local_body_id = (world.player.guid != Guid::NULL)
                 .then_some(SpatialBodyId::LocalPlayer(world.player.guid));
@@ -521,19 +525,25 @@ impl ClientSimulationSystem {
                 .and_then(|body_id| world.resolve_body_projection_input(body_id))
         });
         let local_pose = local_body.map(|body| body.pose);
+        // Sets, not linear scans: both are probed once per tracked body, every
+        // frame (the `bodies.iter().any` check made the loop O(tracked²)).
         let nearby_tracked = local_pose.map(|pose| {
             world
                 .scene
                 .get_entities_in_range(&pose, ACTIVE_SOLVE_RADIUS_M)
+                .into_iter()
+                .collect::<std::collections::HashSet<Guid>>()
         });
         let mut bodies = Vec::<SolveBodyInput>::new();
+        let mut pushed_ids = std::collections::HashSet::<SpatialBodyId>::new();
 
         if let Some(body) = local_body {
+            pushed_ids.insert(body.body_id);
             bodies.push(body);
         }
 
         for body_id in self.tracked_body_ids.iter().copied() {
-            if bodies.iter().any(|body| body.body_id == body_id) {
+            if pushed_ids.contains(&body_id) {
                 continue;
             }
 
@@ -553,6 +563,7 @@ impl ClientSimulationSystem {
                 continue;
             }
 
+            pushed_ids.insert(input.body_id);
             bodies.push(input);
         }
 

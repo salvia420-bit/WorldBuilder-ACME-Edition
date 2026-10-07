@@ -394,6 +394,20 @@ pub trait WorldContext {
     fn get_player_float_property(&self, _prop: PropertyFloat) -> Option<f64> {
         None
     }
+
+    /// Membership test behind [`WorldContextExt::is_in_player_inventory`].
+    /// The default scans [`Self::iter_inventory`]; implementors that hold
+    /// the inventory as a set override it with an O(1) lookup (the liveness
+    /// sweep asks this for every tracked guid on every tick).
+    fn inventory_contains(&self, guid: Guid) -> bool {
+        self.iter_inventory().any(|candidate| candidate == guid)
+    }
+
+    /// Membership test behind [`WorldContextExt::is_equipped_item`]; same
+    /// contract as [`Self::inventory_contains`].
+    fn equipment_contains(&self, guid: Guid) -> bool {
+        self.iter_equipment().any(|candidate| candidate == guid)
+    }
 }
 
 impl WorldContext for WorldState {
@@ -411,6 +425,14 @@ impl WorldContext for WorldState {
 
     fn iter_equipment(&self) -> impl Iterator<Item = Guid> + '_ {
         self.player.equipment.keys().copied()
+    }
+
+    fn inventory_contains(&self, guid: Guid) -> bool {
+        self.player.inventory.contains(&guid)
+    }
+
+    fn equipment_contains(&self, guid: Guid) -> bool {
+        self.player.equipment.contains_key(&guid)
     }
 
     fn iter_entities(&self) -> impl Iterator<Item = &Entity> + '_ {
@@ -722,11 +744,11 @@ pub trait WorldContextExt: WorldContext {
     }
 
     fn is_in_player_inventory(&self, guid: Guid) -> bool {
-        self.iter_inventory().any(|candidate| candidate == guid)
+        self.inventory_contains(guid)
     }
 
     fn is_equipped_item(&self, guid: Guid) -> bool {
-        self.iter_equipment().any(|candidate| candidate == guid)
+        self.equipment_contains(guid)
     }
 
     fn is_owned_by_player(&self, guid: Guid) -> bool {

@@ -28,6 +28,7 @@ const {
     _loadSequenceSync,
     _resetSequenceTable,
     isCastSequenceLoaded,
+    preloadCastSequenceTable,
 } = await import(helperUrl);
 
 // Synthetic fixture — covers all four shape variants the chain runner
@@ -381,6 +382,39 @@ _loadSequenceSync(FIXTURE);
         "(W18) 6666 (legacy entry) formulaScale defaults to 1.0",
         got?.formulaScale === 1.0,
     );
+}
+
+// --- preloadCastSequenceTable (first-cast warm-up, 2026-10-07) ---
+{
+    _resetSequenceTable();
+    const savedFetch = globalThis.fetch;
+    try {
+        delete globalThis.fetch;
+        check("(preload) no fetch (Node) resolves null, table stays unloaded",
+            (await preloadCastSequenceTable()) === null && !isCastSequenceLoaded());
+        let calls = 0;
+        globalThis.fetch = async (url) => {
+            calls += 1;
+            return { ok: true, json: async () => ({ sequences: { "77": {
+                school: "War", shape: "Bolt", level: 1, fastCast: true,
+                windupGestures: [], castGesture: { motion: "CastSpell", name: "Cast", durationS: 1 },
+                totalDurationS: 1,
+            } } }) };
+        };
+        const [t1, t2] = await Promise.all([preloadCastSequenceTable(), preloadCastSequenceTable()]);
+        check("(preload) concurrent preloads share ONE fetch", calls === 1 && t1 === t2 && t1 !== null);
+        check("(preload) getCastSequence hits on the very first lookup after the warm-up",
+            getCastSequence(77)?.shape === "Bolt");
+        await preloadCastSequenceTable();
+        check("(preload) a later preload is a no-op", calls === 1);
+        _resetSequenceTable();
+        globalThis.fetch = async () => ({ ok: false, status: 404 });
+        check("(preload) a failed fetch resolves null (no unhandled rejection), stays retryable",
+            (await preloadCastSequenceTable()) === null && !isCastSequenceLoaded());
+    } finally {
+        if (savedFetch) globalThis.fetch = savedFetch; else delete globalThis.fetch;
+        _resetSequenceTable();
+    }
 }
 
 // --- Summary ---

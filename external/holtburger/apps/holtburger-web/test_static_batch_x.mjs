@@ -37,16 +37,17 @@ src = src.replace(/^\s*import\s+.*$/gm, "");
 const stripped = src
   .replace(/^\s*export\s+function\s+/gm, "function ")
   .replace(/^\s*export\s+const\s+/gm, "const ");
-const { batchedMaterialFor, memberMaterialOf, syncBatchMatVariants } = await import("./scene3d/batched_material_variant.js");
+const { batchedMaterialFor, memberMaterialOf, syncBatchMatVariants, holdBatchedMaterial, releaseBatchedMaterial, batchMatVariantStats } =
+  await import("./scene3d/batched_material_variant.js");
 const factory = new Function(
-  "THREE", "batchedMaterialFor",
+  "THREE", "batchedMaterialFor", "holdBatchedMaterial", "releaseBatchedMaterial",
   stripped +
     "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
     "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
     "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, batchXInstancesForLb, " +
     "tickStatBatchXOptimize, getStatBatchXStats };"
 );
-const M = factory(THREE, batchedMaterialFor);
+const M = factory(THREE, batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial);
 
 // ---- mock singleton nodes (mirrors test_static_batch.mjs) ----
 // Statics singleton geometries are NON-indexed {position, uv, normal} (adapter.js
@@ -448,6 +449,82 @@ for (const dedup of [false, true]) {
     M.parkStaticBatchXForLb(0x12340000) === 0 && M.unparkStaticBatchXForLb(0x12340000) === 0);
 }
 M.__setStatGeomDedupForTest(false);
+
+// ===== bucket first allocation is sized from the group that creates it =====
+// (PERF-LOG 2026-10-06 session 3: every bucket used to start at 16,384 verts
+// + 32,768 indices whatever it held — 182 MB at Holtburg for 3-14 instances.)
+{
+  M.__resetStatBatchXForTest?.();
+  const sc = { staticsGroup: new THREE.Group() };
+  const LBs = 0x50500000 >>> 0; // (80,80) -> region (26,26)
+  const matS = new THREE.MeshBasicMaterial();
+  const small = triGeom(4); // 12 verts
+  M.consolidateStaticSingletonsCrossLb(
+    [singleton(0x08000101, 0, LBs, small, matS), singleton(0x08000101, 1, LBs, small, matS)], sc, LBs);
+  const bmS = sc.staticsGroup.children[0];
+  check("S1: a 12-vert group gets the 1,024-vert floor, not 16,384",
+    bmS?.isBatchedMesh && bmS.userData.maxVerts === 1024 && bmS.geometry.attributes.position.count === 1024,
+    `maxVerts=${bmS?.userData.maxVerts} attr=${bmS?.geometry.attributes.position.count}`);
+
+  // A later neighbour feed that outgrows the small first allocation still lands
+  // every instance (the existing doubling growth path).
+  const LBs2 = 0x4f4f0000 >>> 0; // (79,79) -> same 3x3 region (26,26)
+  const big = triGeom(700); // 2,100 verts > 1,024
+  M.consolidateStaticSingletonsCrossLb(
+    [singleton(0x08000101, 5, LBs2, big, matS), singleton(0x08000101, 6, LBs2, big, matS)], sc, LBs2);
+  check("S2: a later feed grows the small bucket and all 4 instances land in it",
+    sc.staticsGroup.children.length === 1 && bmS.userData.instances === 4 &&
+    bmS.userData.maxVerts >= 12 + 2100 && bmS.geometry.attributes.position.count === bmS.userData.maxVerts,
+    `children=${sc.staticsGroup.children.length} inst=${bmS.userData.instances} maxVerts=${bmS.userData.maxVerts}`);
+
+  // A first feed above the ceiling is clamped to 16,384 and grows on the spot.
+  const LBb = 0x90900000 >>> 0; // region (48,48)
+  const matL = new THREE.MeshBasicMaterial();
+  const huge = triGeom(6000); // 18,000 verts
+  M.consolidateStaticSingletonsCrossLb(
+    [singleton(0x08000202, 0, LBb, huge, matL), singleton(0x08000202, 1, LBb, huge, matL)], sc, LBb);
+  const bmL = sc.staticsGroup.children.find((c) => c.userData?.material === matL);
+  check("S3: an 18,000-vert first feed fits (clamped start, grown past 16,384)",
+    bmL?.isBatchedMesh && bmL.userData.instances === 2 && bmL.userData.maxVerts > 16384,
+    `inst=${bmL?.userData.instances} maxVerts=${bmL?.userData.maxVerts}`);
+}
+
+// ===== a reaped bucket gives back its batched-material variant (2026-10-07) =====
+// The variant set is walked every frame and pins the member; a region the
+// player has left must not keep its materials there for the session.
+{
+  M.__resetStatBatchXForTest?.();
+  const sc = { staticsGroup: new THREE.Group() };
+  const LBr = 0x30300000 >>> 0, LBr2 = 0x31310000 >>> 0; // same 3x3 region (16,16)
+  const matR = new THREE.MeshBasicMaterial();
+  let memberDisposed = 0;
+  matR.addEventListener("dispose", () => memberDisposed++);
+  const base = batchMatVariantStats();
+  const g = triGeom(2);
+  M.consolidateStaticSingletonsCrossLb([singleton(0x0E00, 0, LBr, g, matR), singleton(0x0E00, 1, LBr, g, matR)], sc, LBr);
+  M.consolidateStaticSingletonsCrossLb([singleton(0x0E00, 2, LBr2, g, matR), singleton(0x0E00, 3, LBr2, g, matR)], sc, LBr2);
+  const bmR = sc.staticsGroup.children[0];
+  const vR = bmR?.material;
+  check("R1: one bucket holds the variant while its region is resident",
+    sc.staticsGroup.children.length === 1 && vR !== matR && memberMaterialOf(vR) === matR &&
+    batchMatVariantStats().holders === base.holders + 1 && batchMatVariantStats().live === base.live + 1,
+    JSON.stringify(batchMatVariantStats()));
+  M.evictStaticBatchXForLb(LBr);
+  check("R2: evicting one LB of the region keeps the bucket and its variant",
+    batchMatVariantStats().live === base.live + 1 && bmR.parent === sc.staticsGroup);
+  M.evictStaticBatchXForLb(LBr2);
+  const st = batchMatVariantStats();
+  check("R3: the reaped bucket released it — variant out of the per-frame set",
+    bmR.parent == null && st.live === base.live && st.holders === base.holders && st.dropped === base.dropped + 1,
+    JSON.stringify(st));
+  check("R4: and the member material (still used by plain meshes) was not disposed", memberDisposed === 0);
+  M.consolidateStaticSingletonsCrossLb([singleton(0x0E00, 0, LBr, g, matR), singleton(0x0E00, 1, LBr, g, matR)], sc, LBr);
+  const bmR2 = sc.staticsGroup.children[0];
+  check("R5: re-entering the region builds a bucket on a fresh variant",
+    bmR2 && bmR2 !== bmR && bmR2.material !== vR && memberMaterialOf(bmR2.material) === matR &&
+    batchMatVariantStats().live === base.live + 1);
+  M.evictStaticBatchXForLb(LBr);
+}
 
 console.log(`static-batch-x test: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

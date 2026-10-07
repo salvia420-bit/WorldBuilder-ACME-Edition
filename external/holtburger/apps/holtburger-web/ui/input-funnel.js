@@ -155,6 +155,7 @@ export class InputFunnel {
       rawRuns: 0,
       dispatched: 0,
       unmatched: 0,
+      repeatsSuppressed: 0,
       handlerErrors: 0,
       faults: 0,
     };
@@ -186,10 +187,12 @@ export class InputFunnel {
    * @param {string|object} defaultBinding KeyboardEvent.code, or a
    *   `{code, ctrl, shift, alt, meta}` shape for modifier defaults.
    * @param {(ev: KeyboardEvent) => void} handler
-   * @param {{when?: () => boolean, priority?: number, source?: string}} [opts]
+   * @param {{when?: () => boolean, priority?: number, source?: string, allowRepeat?: boolean}} [opts]
    *   `when` is the action's own scope predicate (e.g. magic stance, panel
    *   mounted). It narrows WHICH action wins — it is NOT a second gate: a
    *   dead funnel still kills the action.
+   *   `allowRepeat` lets OS key autorepeat re-fire the action (selection
+   *   scrolling). Default false: a held key fires once, on the press edge.
    * @returns {() => void} unbind
    */
   bindAction(labelHash, defaultBinding, handler, opts = {}) {
@@ -201,6 +204,7 @@ export class InputFunnel {
       when: typeof opts.when === "function" ? opts.when : null,
       priority: opts.priority | 0,
       source: opts.source || "?",
+      allowRepeat: opts.allowRepeat === true,
       seq: this._seq++,
       count: 0,
     };
@@ -302,6 +306,17 @@ export class InputFunnel {
       }
       if (!binding || !binding.code) continue;
       if (!matchesBinding(ev, binding)) continue;
+      // OS autorepeat of a held key: consume it (the key is still OURS — no
+      // browser default, no lower-priority action) without re-firing. Retail
+      // repeats only repeat-type actions; holding a hotbar/spell key used to
+      // re-send the use/cast ~30x/s (extra potions drunk, auto re-casts).
+      if (ev.repeat && !a.allowRepeat) {
+        this.stats.repeatsSuppressed += 1;
+        try {
+          ev.preventDefault();
+        } catch (_) {}
+        return true;
+      }
       a.count += 1;
       this.stats.dispatched += 1;
       this.lastDispatch = {

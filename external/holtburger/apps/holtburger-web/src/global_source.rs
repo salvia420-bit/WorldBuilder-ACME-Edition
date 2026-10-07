@@ -75,9 +75,10 @@ pub async fn init_resource_source(manifest_url: String) -> Result<(), JsValue> {
     // triangulations from the old manifest are stale against a new one.
     let dropped_pixels = crate::surface_pixel_cache_clear_all();
     let dropped_tris = crate::model_tri_cache_clear_all();
-    if dropped_pixels > 0 || dropped_tris > 0 {
+    let dropped_links = crate::motion_link_memo_clear_all();
+    if dropped_pixels > 0 || dropped_tris > 0 || dropped_links > 0 {
         log::info!(
-            "init_resource_source: cleared {dropped_pixels} surface-cache + {dropped_tris} tri-memo entries from prior source"
+            "init_resource_source: cleared {dropped_pixels} surface-cache + {dropped_tris} tri-memo + {dropped_links} swing-link-memo entries from prior source"
         );
     }
     Ok(())

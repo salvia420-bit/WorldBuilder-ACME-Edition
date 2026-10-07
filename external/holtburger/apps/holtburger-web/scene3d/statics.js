@@ -72,7 +72,7 @@
 //      Phase 7.2 capture, F#5+6 capture) stay green.
 
 import * as THREE from "three";
-import { batchedMaterialFor } from "./batched_material_variant.js";
+import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 import { BAKE_PREWARM, prewarmSubtree } from "./bake_prewarm.js";
 import { meshToGeometryGroups } from "./adapter.js";
 // T13 (ST3, `?geomBundles`): HBG1 bundle consumption — armed only by
@@ -2025,6 +2025,17 @@ STAT_ARRAY_MERGE_PROVIDER.setVfxHook({
   });
 })();
 
+// A per-LB batch holds its member's batched variant (batched_material_variant.js
+// HOLDERS) until it is disposed. Every teardown — the LRU evict scan, park
+// discard / disposeParked, the empty batch and prewarm-bail paths below — ends
+// in dispose(), so the release rides it.
+class _LbStaticBatch extends THREE.BatchedMesh {
+  dispose() {
+    if (typeof releaseBatchedMaterial === "function") releaseBatchedMaterial(this);
+    super.dispose();
+  }
+}
+
 // Consolidate a per-LB list of built static nodes: plain-Mesh singletons sharing
 // a surface material → one BatchedMesh per surfaceDid; LOD wrappers, lone
 // singletons, and any member that won't fit the batch fall through as-is.
@@ -2063,9 +2074,10 @@ export function consolidateStaticSingletons(nodes, outBatches) {
       if (m.geometry.index) maxIdx += m.geometry.index.count;
     }
     let bm;
-    try { bm = new THREE.BatchedMesh(group.length, maxVerts, maxIdx,
+    try { bm = new _LbStaticBatch(group.length, maxVerts, maxIdx,
       typeof batchedMaterialFor === "function" ? batchedMaterialFor(mat) : mat); }
     catch (_) { out.push(...group); continue; }
+    if (typeof holdBatchedMaterial === "function") holdBatchedMaterial(bm);
     let added = 0;
     for (const m of group) {
       try {
@@ -2715,6 +2727,10 @@ export async function bakeStaticsForLandblock(
       // group geometries (full + degraded) and bail without attaching (same as the
       // time-slice cancellation guard above; nodes were never added to the scene graph).
       disposeBakeOwnedGeometries(primary.groupsByModel, degradedGeomByModel);
+      // The per-LB batches were never attached, so no evict scan will see them.
+      for (const n of nodesToAdd) {
+        if (n?.userData?.__staticBatch === true) { try { n.dispose(); } catch (_) { /* fail-soft */ } }
+      }
       return {
         ...makeEmptySummary(),
         evictedDuringBuild: true,
@@ -4188,7 +4204,7 @@ const STATIC_SCRIPT_FLAG = "staticScripts"; // ?staticScripts=off disables V1.
 // script anchor (`"static:<n>"`), single `destroyAllForOwner` teardown
 // instead of the whole-table nuke in `disposeStaticParticles`. Off-path =
 // the legacy unscoped manager table, byte-identical.
-import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
+import { ownerRegistry } from "./particles/owner_registry.js";
 let _staticOwnerSeq = 0;
 // CreateParticle hook types (mirrors entities.js `_attachParticleChainForEntity`).
 const STATIC_HOOK_CREATE_PARTICLE = 13;
@@ -4292,9 +4308,11 @@ const STATIC_SCRIPT_SLICE_MS = 6;
 // silently take replace semantics.
 function _blockingParticleParityOn() {
   try {
-    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+    // `location`, not a non-empty `location.search`: a bare URL must read the
+    // documented default (ON), same as the entities.js twin.
+    if (typeof globalThis !== "undefined" && globalThis.location) {
       return (
-        new URLSearchParams(globalThis.location.search)
+        new URLSearchParams(globalThis.location.search || "")
           .get("blockingParticleParity")?.toLowerCase() !== "off"
       );
     }
@@ -4309,12 +4327,11 @@ function _blockingParticleParityOn() {
 // through a punched doorway — the defect that kept the previous per-tick
 // staticsGroup sweep (retired with this change) default-OFF.
 //
-// NOTE the `search || ""`: this reader must NOT be gated on a NON-EMPTY
-// `location.search` the way `_blockingParticleParityOn` above is. That shape
-// returns false on a bare URL — the opposite of its documented default — and
-// statics.js:4171-4174 already carries a workaround for the same bug in
-// `particleOwnerOn()`. A default-ON escape hatch has to read ON when the query
-// string is absent, which is the production case.
+// NOTE the `search || ""`: a default-ON reader must NOT be gated on a
+// NON-EMPTY `location.search` — that shape returns false on a bare URL (the
+// production case), the opposite of its documented default. It was the bug
+// in `_blockingParticleParityOn` above and in `particleOwnerOn()` until
+// 2026-10-07.
 function _indoorParticleLayerEnabled() {
   try {
     if (typeof globalThis !== "undefined" && globalThis.location) {
@@ -4689,10 +4706,10 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
       // facade's win here is the scoped teardown (`destroyAllForOwner`
       // per anchor) replacing the whole-table nuke.
       // Leak fix (2026-07-07): ALWAYS route a keyed emitter through
-      // ownerRegistry (independent of `particleOwnerOn()`, which returns false
-      // on an empty location.search), so owner-scoped teardown works on a BARE
-      // URL — otherwise the `static:<lbKey>` key would be inert and the
-      // billboards would leak.
+      // ownerRegistry (independent of `particleOwnerOn()`, which until
+      // 2026-10-07 read OFF on a bare URL), so owner-scoped teardown works
+      // with `?particleOwner=off` too — otherwise the `static:<lbKey>` key
+      // would be inert and the billboards would leak.
       const id =
         ownerKey !== null
           ? await ownerRegistry.addEmitter(ownerKey, manager, req)
@@ -5112,16 +5129,16 @@ export function disposeStaticParticles(scene3d) {
   // A11-S2: drop the facade's per-anchor owner records too (the destroys
   // above already freed the underlying emitters; this clears tracking +
   // tombstones in-flight creates so a late addEmitter resolve self-destroys
-  // instead of repopulating a disposed manager).
-  if (particleOwnerOn()) {
-    try {
-      for (const key of [...ownerRegistry.ownerKeys()]) {
-        if (typeof key === "string" && key.startsWith("static:")) {
-          ownerRegistry.destroyAllForOwner(key);
-        }
+  // instead of repopulating a disposed manager). Unconditional: keyed static
+  // emitters are registered with ownerRegistry regardless of `?particleOwner`
+  // (the 2026-07-07 leak fix), so their teardown must be too.
+  try {
+    for (const key of [...ownerRegistry.ownerKeys()]) {
+      if (typeof key === "string" && key.startsWith("static:")) {
+        ownerRegistry.destroyAllForOwner(key);
       }
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
 }
 
 /** A11-S3: advance the static ParticleManager from the main loop — retail

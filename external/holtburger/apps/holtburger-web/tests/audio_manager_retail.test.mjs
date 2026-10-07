@@ -145,5 +145,46 @@ await test("from-centre gain is whole dB (0.7 -> -3 dB)", async () => {
   near(h.gain.gain.value, linearGain(-3), 1e-6);
 });
 
+await test("decoded-buffer cache is a byte-budgeted LRU (2026-10-07)", async () => {
+  const am = mk();
+  am._initContext?.();
+  am._ctx.decodeAudioData = async () => ({ length: 1_000_000, numberOfChannels: 1, duration: 1 }); // 4 MB
+  am._bufferBudgetBytes = 10 * 1024 * 1024; // room for two
+  await am._loadBuffer(0x0a000101);
+  await am._loadBuffer(0x0a000102);
+  await am._loadBuffer(0x0a000101); // touch → 0x102 is now least recent
+  await am._loadBuffer(0x0a000103);
+  await Promise.resolve();
+  assert.ok(am._bufferCache.has(0x0a000101), "recently used kept");
+  assert.ok(am._bufferCache.has(0x0a000103), "newest kept");
+  assert.ok(!am._bufferCache.has(0x0a000102), "least recently used evicted");
+  assert.equal(am._bufferBytesTotal, 8_000_000);
+});
+await test("a FETCH failure is retried later; a decode failure stays cached", async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { queueMicrotask(fn); return 0; }; // collapse the retry delay
+  try {
+    let calls = 0;
+    const am = mk({
+      fetchWave: async (did) => {
+        calls += 1;
+        if (calls === 1) throw new Error("prefetch: network");
+        return fake.fetchWave(did);
+      },
+    });
+    assert.equal(await am._loadBuffer(0x0a000201), null);
+    await new Promise((r) => queueMicrotask(r));
+    await new Promise((r) => queueMicrotask(r));
+    assert.ok(!am._bufferCache.has(0x0a000201), "fetch-failure null evicted after the retry delay");
+    assert.ok(await am._loadBuffer(0x0a000201), "retried and decoded");
+    am._ctx.decodeAudioData = async () => { throw new Error("bad wav"); };
+    assert.equal(await am._loadBuffer(0x0a000202), null);
+    await new Promise((r) => queueMicrotask(r));
+    assert.ok(am._bufferCache.has(0x0a000202), "decode-failure null stays cached");
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
 fake.uninstall();
 console.log(`\n${passed} passed${process.exitCode ? ", FAILURES above" : ""}`);

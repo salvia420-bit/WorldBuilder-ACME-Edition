@@ -357,6 +357,28 @@ function _partMeshes(part) {
   return part.children.filter((c) => c.isMesh && c.geometry);
 }
 
+// Strip `part` for a dismember pass. The FIRST pass on a part stashes its
+// original (cache-shared) meshes for restoreParts(). A later pass on the same
+// part removes the previous pass's stump / chip meshes instead — this
+// module's own `__disposable` geometry, already rendered, referenced by
+// nothing once removed — so free it here; dropping it leaked the GPU buffers
+// and three's per-geometry binding state on every re-sliced / re-chipped part.
+// Only meshes actually removed from `part` are freed (a stale `meshes` list
+// captured before an await never frees anything still drawn elsewhere), and
+// archived corpse stumps are not `__disposable`.
+function _stripPartForPass(inst, part, partIndex, meshes) {
+  inst._dismemberStash = inst._dismemberStash || new Map();
+  const first = !inst._dismemberStash.has(partIndex);
+  if (first) inst._dismemberStash.set(partIndex, meshes);
+  for (const m of meshes) {
+    const wasChild = m.parent === part;
+    part.remove(m);
+    if (!first && wasChild && m.geometry?.userData?.__disposable === true) {
+      try { m.geometry.dispose(); } catch (_) { /* fail-soft */ }
+    }
+  }
+}
+
 /**
  * Slice part `partIndex` of entity `inst` with a world-space plane, swap the
  * proximal fragment into the part Group in place (stump), spawn the distal
@@ -471,11 +493,7 @@ async function _slicePartNow(inst, partIndex, planePointW, planeNormalW, opts = 
   // In-place children swap (mixer bindings on the Group survive untouched).
   // Original meshes are stashed, not disposed — geometry is cache-shared and
   // restoreParts() can resurrect the limb (heals!).
-  inst._dismemberStash = inst._dismemberStash || new Map();
-  if (!inst._dismemberStash.has(partIndex)) {
-    inst._dismemberStash.set(partIndex, meshes);
-  }
-  for (const m of meshes) part.remove(m);
+  _stripPartForPass(inst, part, partIndex, meshes);
   stumpPieces.forEach((p, i) => {
     const stumpMesh = new THREE.Mesh(p.geometry, [outerMaterial, _fleshMaterial]);
     stumpMesh.name = `part_${partIndex}_stump_${i}`;
@@ -726,9 +744,7 @@ async function _fracturePartNow(inst, partIndex, opts = {}) {
 
   // Strip the part (stash for restoreParts) — the limb is gone, the rig keeps
   // animating an empty Group so every mixer binding stays valid.
-  inst._dismemberStash = inst._dismemberStash || new Map();
-  if (!inst._dismemberStash.has(partIndex)) inst._dismemberStash.set(partIndex, meshes);
-  for (const m of meshes) part.remove(m);
+  _stripPartForPass(inst, part, partIndex, meshes);
 
   const result = { partIndex, requested: count, fragments: frags.length, debris: 0, audit };
   const rel = _partRelMatrix(part);
@@ -816,9 +832,7 @@ export async function chipPart(inst, partIndex, opts = {}) {
   const volumes = frags.map((f) => _bboxVolume(f.geometry));
   const { keep, eject } = pickChipFragments(volumes, opts);
 
-  inst._dismemberStash = inst._dismemberStash || new Map();
-  if (!inst._dismemberStash.has(partIndex)) inst._dismemberStash.set(partIndex, meshes);
-  for (const m of meshes) part.remove(m);
+  _stripPartForPass(inst, part, partIndex, meshes);
   let keptTris = 0;
   for (const i of keep) {
     const f = frags[i];
@@ -1154,7 +1168,7 @@ export function transferDismemberment(fromInst, toInst) {
  */
 const CORPSE_DISM_MAX = 32;
 const CORPSE_DISM_TTL_MS = 10 * 60 * 1000;
-const _corpseDism = new Map(); // guid -> { n, stumps: Map<pi, Mesh[]>, hidden: number[], expiresAt }
+const _corpseDism = new Map(); // guid -> { n, stumps: Map<pi, Mesh[]>, hidden: number[], expiresAt, inst }
 
 /**
  * Drop an archive entry. Ownership rule (round-1 #2): exactly one dispose()
@@ -1169,17 +1183,26 @@ const _corpseDism = new Map(); // guid -> { n, stumps: Map<pi, Mesh[]>, hidden: 
  * that rig instead (its `_disposeMeshChildren` walk / `restoreParts` frees
  * `__disposable` geometry) and free only the genuinely orphaned ones here.
  */
+//
+// 2026-10-07: "has a parent" is not "on a live rig". A removed corpse detaches
+// only its ROOT, so its stumps keep their (dead) part group as parent, and
+// every expired entry whose corpse had despawned handed ownership to a rig
+// that would never dispose again — the stumps leaked. The entry now records
+// the rig holding the stumps (`inst`, re-pointed on restore); only a mesh on
+// that rig while it is still alive is handed back.
 function _disposeDismEntry(entry) {
+  const live = !!entry.inst && entry.inst._disposed !== true;
   for (const meshes of entry.stumps.values()) {
     for (const m of meshes) {
       const ud = m.geometry?.userData;
       if (!ud?.__corpseArchived) continue;
-      if (m.parent) {
-        // Still on a rig — transfer ownership, do NOT free.
+      if (live && m.parent) {
+        // Still on the live rig — transfer ownership, do NOT free.
         ud.__corpseArchived = false;
         ud.__disposable = true;
         continue;
       }
+      m.parent?.remove(m);
       m.geometry.dispose();
     }
   }
@@ -1216,7 +1239,7 @@ function _archiveCorpseDismemberment(inst) {
     }
   }
   const hidden = inst._dismemberHidden ? [...inst._dismemberHidden] : [];
-  _corpseDism.set(g, { n: inst.parts.length, stumps, hidden, expiresAt: now + CORPSE_DISM_TTL_MS });
+  _corpseDism.set(g, { n: inst.parts.length, stumps, hidden, expiresAt: now + CORPSE_DISM_TTL_MS, inst });
 }
 
 /**
@@ -1240,6 +1263,7 @@ export function restoreCorpseDismemberment(inst) {
   // since it was archived (Map preserves insertion order).
   _corpseDism.delete(g);
   _corpseDism.set(g, entry);
+  entry.inst = inst; // the stumps move onto this rig below
   let altered = 0;
   inst._dismemberStash = inst._dismemberStash || new Map();
   for (const [pi, meshes] of entry.stumps) {

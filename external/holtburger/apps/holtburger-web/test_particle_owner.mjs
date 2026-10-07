@@ -69,9 +69,18 @@ class FakeManager {
   globalThis.location = { search: "?particleOwner=off" };
   check("flag: =off parses false", particleOwnerOn() === false);
   _resetParticleOwnerFlagForTests();
+  globalThis.location = { search: "?nosw=1" };
+  check("flag: absent among other params parses true (default ON)", particleOwnerOn() === true);
+  // A bare URL has an EMPTY search string. It must read the documented
+  // default too — the old `location?.search` truthiness gate made it OFF.
+  _resetParticleOwnerFlagForTests();
   globalThis.location = { search: "" };
-  check("flag: absent parses false (default OFF)", particleOwnerOn() === false);
-  check("flag: parse is cached", particleOwnerOn() === false);
+  check("flag: bare URL (empty search) parses true (default ON)", particleOwnerOn() === true);
+  globalThis.location = { search: "?particleOwner=off" };
+  check("flag: parse is cached", particleOwnerOn() === true);
+  _resetParticleOwnerFlagForTests();
+  delete globalThis.location;
+  check("flag: no location (Node) parses false", particleOwnerOn() === false);
   _resetParticleOwnerFlagForTests();
 }
 

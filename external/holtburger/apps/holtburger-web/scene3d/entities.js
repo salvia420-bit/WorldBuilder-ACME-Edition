@@ -3114,19 +3114,25 @@ function classifyMotionCommandTyped(motionTableId, stance, motionCmd) {
       );
       if (linkAnim) {
         // Typed result — caller can use `.anim`, `.durationSec`,
-        // etc. to drive the AnimationMixer precisely.
-        return {
-          kind: linkAnim.kind, // "swing" | "cast" | "unknown"
-          height: linkAnim.height || null, // "High" | "Medium" | "Low" | null
-          anim: linkAnim.anim,
-          animId: linkAnim.animId,
-          lowFrame: linkAnim.lowFrame,
-          highFrame: linkAnim.highFrame,
-          framerate: linkAnim.framerate,
-          durationSec: linkAnim.durationSec,
-          resolvedCommand: linkAnim.resolvedCommand,
-          source: "wasm-link",
-        };
+        // etc. to drive the AnimationMixer precisely. Copied into a
+        // plain object, then the wasm-bindgen box is freed (this runs
+        // several times per cast gesture and per swing).
+        try {
+          return {
+            kind: linkAnim.kind, // "swing" | "cast" | "unknown"
+            height: linkAnim.height || null, // "High" | "Medium" | "Low" | null
+            anim: linkAnim.anim,
+            animId: linkAnim.animId,
+            lowFrame: linkAnim.lowFrame,
+            highFrame: linkAnim.highFrame,
+            framerate: linkAnim.framerate,
+            durationSec: linkAnim.durationSec,
+            resolvedCommand: linkAnim.resolvedCommand,
+            source: "wasm-link",
+          };
+        } finally {
+          try { linkAnim.free?.(); } catch (_) { /* already released */ }
+        }
       }
       // Wasm returned None — either no link for this (stance, cmd) or
       // the motion table isn't in the cache yet. Fall through to coarse.
@@ -7810,15 +7816,23 @@ export class EntityManager {
    * offset in to match entity world positions (`inst.root.position`).
    */
   _localPlayerWorldPose() {
+    let pose = null;
     try {
       const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
-      const pose = sh?.getLocalPlayerPose?.();
+      pose = sh?.getLocalPlayerPose?.();
       if (!pose) return null;
       const lbId = (pose.landblockId ?? 0) >>> 0;
       const lbX = (lbId >>> 24) & 0xff;
       const lbY = (lbId >>> 16) & 0xff;
       return { x: pose.x + lbX * 192, y: pose.y + lbY * 192, z: pose.z };
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    } finally {
+      // The pose is a wasm-bindgen BOX and this runs every EntityManager.tick:
+      // copy-then-free, or ~60 boxes/s are left to the FinalizationRegistry
+      // (frame_pose.js / the R1#6 note).
+      try { pose?.free?.(); } catch (_) { /* already released */ }
+    }
   }
 
   /**

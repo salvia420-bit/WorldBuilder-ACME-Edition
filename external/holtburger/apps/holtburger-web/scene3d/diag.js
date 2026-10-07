@@ -76,6 +76,18 @@ const ABANDON_TIMEOUT_MS = 120_000;
 // Sweep cadence — the reap is O(pending), so amortise it over attempts
 // rather than running it on every spawn.
 const ABANDON_SWEEP_EVERY = 64;
+// The spawn ledger is installed unconditionally and fed by EVERY spawn
+// (ObjectCreate, projectiles, appearance + dynamic-LOD respawns): unbounded,
+// it grew ~5-30k records per hour of roaming, and each success/failure scanned
+// its wcid bucket from the oldest record (~36 µs per spawn at 5k records for
+// one wcid, ~750 µs at 50k). Keep the most recent records per wcid (the
+// `diff()` oracle compares the CURRENT landblock) and the most recent failures
+// (`failedTotal` keeps the count); reach a record's ledger entry through
+// `_wcidEntryOf` instead of a scan — which is also what makes a same-guid
+// respawn update ITS entry rather than the oldest one with that guid.
+const WCID_LEDGER_CAP = 128;
+const FAILED_LEDGER_CAP = 500;
+const _wcidEntryOf = new WeakMap(); // pending record → its byWcid entry
 
 export function installDiag() {
   if (typeof window === "undefined") return;
@@ -90,7 +102,8 @@ export function installDiag() {
     spawns: {
       attempted: 0,
       succeeded: 0,
-      failed: [],   // [{ guid, wcid, name, lbId, error, attemptedAt, failedAt }]
+      failed: [],   // [{ guid, wcid, name, lbId, error, attemptedAt, failedAt }] — last FAILED_LEDGER_CAP
+      failedTotal: 0,
       pending: new Map(),   // guid → SpawnMeta + awaitingWhat
       // Aggregate views built incrementally on each hook fire:
       byLandblock: new Map(),   // lbId → { attempted, succeeded, failed, pending: Set<guid> }
@@ -174,7 +187,10 @@ export function installDiag() {
         wcidBucket = [];
         this.spawns.byWcid.set(wcid, wcidBucket);
       }
-      wcidBucket.push({ guid, lbId, x: record.x, y: record.y, z: record.z, name: record.name, status: "pending" });
+      const wcidEntry = { guid, lbId, x: record.x, y: record.y, z: record.z, name: record.name, status: "pending" };
+      wcidBucket.push(wcidEntry);
+      if (wcidBucket.length > WCID_LEDGER_CAP) wcidBucket.shift();
+      _wcidEntryOf.set(record, wcidEntry);
     },
 
     /**
@@ -219,11 +235,8 @@ export function installDiag() {
         reaped += 1;
         const lbBucket = this.spawns.byLandblock.get(rec.landblockId);
         if (lbBucket) lbBucket.pending.delete(g);
-        const wcidBucket = this.spawns.byWcid.get(rec.wcid);
-        if (wcidBucket) {
-          const idx = wcidBucket.findIndex((r) => r.guid === g);
-          if (idx >= 0) wcidBucket[idx].status = "abandoned";
-        }
+        const wcidEntry = _wcidEntryOf.get(rec);
+        if (wcidEntry) wcidEntry.status = "abandoned";
       }
       return reaped;
     },
@@ -258,22 +271,15 @@ export function installDiag() {
           lbBucket.pending.delete(g);
           lbBucket.succeeded += 1;
         }
-        const wcidBucket = this.spawns.byWcid.get(pending.wcid);
-        if (wcidBucket) {
-          const idx = wcidBucket.findIndex((r) => r.guid === g);
-          if (idx >= 0) wcidBucket[idx].status = "succeeded";
-        }
-        // Update final position from the actual instance — server pose
-        // may have shifted between spawn-attempted and succeeded.
-        if (inst?.root) {
-          const wcidBucket2 = this.spawns.byWcid.get(pending.wcid);
-          if (wcidBucket2) {
-            const idx = wcidBucket2.findIndex((r) => r.guid === g);
-            if (idx >= 0) {
-              wcidBucket2[idx].x = inst.root.position.x;
-              wcidBucket2[idx].y = inst.root.position.y;
-              wcidBucket2[idx].z = inst.root.position.z;
-            }
+        const wcidEntry = _wcidEntryOf.get(pending);
+        if (wcidEntry) {
+          wcidEntry.status = "succeeded";
+          // Update final position from the actual instance — server pose
+          // may have shifted between spawn-attempted and succeeded.
+          if (inst?.root) {
+            wcidEntry.x = inst.root.position.x;
+            wcidEntry.y = inst.root.position.y;
+            wcidEntry.z = inst.root.position.z;
           }
         }
         this.spawns.pending.delete(g);
@@ -285,6 +291,8 @@ export function installDiag() {
       const pending = this.spawns.pending.get(g);
       const lbId = pending?.landblockId ?? lbKeyOf(meta?.landblockId >>> 0);
       const wcid = pending?.wcid ?? (meta?.wcid >>> 0);
+      this.spawns.failedTotal += 1;
+      if (this.spawns.failed.length >= FAILED_LEDGER_CAP) this.spawns.failed.shift();
       this.spawns.failed.push({
         guid: g,
         wcid,
@@ -299,10 +307,18 @@ export function installDiag() {
         lbBucket.pending.delete(g);
         lbBucket.failed += 1;
       }
-      const wcidBucket = this.spawns.byWcid.get(wcid);
-      if (wcidBucket) {
-        const idx = wcidBucket.findIndex((r) => r.guid === g);
-        if (idx >= 0) wcidBucket[idx].status = "failed";
+      const wcidEntry = pending ? _wcidEntryOf.get(pending) : undefined;
+      if (wcidEntry) {
+        wcidEntry.status = "failed";
+      } else {
+        // No pending record (failure without an attempt hook) — fall back to
+        // the newest ledger entry for this guid (the bucket is capped).
+        const wcidBucket = this.spawns.byWcid.get(wcid);
+        if (wcidBucket) {
+          for (let i = wcidBucket.length - 1; i >= 0; i--) {
+            if (wcidBucket[i].guid === g) { wcidBucket[i].status = "failed"; break; }
+          }
+        }
       }
       this.spawns.pending.delete(g);
     },
@@ -570,7 +586,7 @@ export function installDiag() {
       return {
         attempted: s.attempted,
         succeeded: s.succeeded,
-        failed: s.failed.length,
+        failed: s.failedTotal,
         pending: s.pending.size,
         localPlayer: { ...s.localPlayer },
         byLandblock: Array.from(s.byLandblock.entries()).map(([lb, b]) => ({

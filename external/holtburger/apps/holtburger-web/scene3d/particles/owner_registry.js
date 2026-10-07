@@ -53,9 +53,15 @@ export function particleOwnerOn() {
   if (_flagCache !== null) return _flagCache;
   let on = false;
   try {
-    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+    // Default ON (docs/url-flags.md). Gate on `location` existing, NOT on a
+    // non-empty `location.search`: a bare production URL has search === ""
+    // and must read the documented default — the old truthiness gate turned
+    // it OFF, so players on a plain URL ran the untested legacy emitter
+    // bookkeeping (no in-flight tombstones) while every dev URL ran this one.
+    // No `location` at all (Node tests) stays OFF.
+    if (typeof globalThis !== "undefined" && globalThis.location) {
       on =
-        new URLSearchParams(globalThis.location.search)
+        new URLSearchParams(globalThis.location.search || "")
           .get("particleOwner")?.toLowerCase() !== "off";
     }
   } catch (_) {

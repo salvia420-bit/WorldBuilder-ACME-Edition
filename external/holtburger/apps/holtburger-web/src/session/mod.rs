@@ -60,7 +60,6 @@ pub(crate) struct LoopCtx {
     pub(crate) world_bootstrap:
         std::rc::Rc<std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>>,
     pub(crate) latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
-    pub(crate) latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
     pub(crate) latest_vendor_state:
         std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, VendorState>>>,
     pub(crate) latest_container_contents:
@@ -115,8 +114,6 @@ pub(crate) struct LoopCtx {
     pub(crate) last_recv_instant: std::rc::Rc<std::cell::RefCell<Option<web_time::Instant>>>,
     pub(crate) last_ping_rtt_ms: std::rc::Rc<std::cell::RefCell<Option<u32>>>,
     pub(crate) collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
-    pub(crate) terrain_heights_shadow:
-        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>>,
     pub(crate) turbine_chat_state:
         std::rc::Rc<std::cell::RefCell<holtburger_core::client::types::TurbineChatState>>,
     pub(crate) pending_confirmations: std::rc::Rc<std::cell::RefCell<Vec<PendingConfirmation>>>,

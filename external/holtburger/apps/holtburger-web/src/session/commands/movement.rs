@@ -8,6 +8,16 @@
 use crate::*;
 use crate::session::{LoopCtx, LoopFlags, LoopFlow};
 
+/// Minimum spacing of `collision_scene` shadow refreshes (see the
+/// TickMovement arm).
+const SHADOW_REFRESH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+thread_local! {
+    /// When the TickMovement arm last refreshed the `collision_scene` shadow.
+    static SHADOW_REFRESHED_AT: std::cell::Cell<Option<web_time::Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
 pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
     let LoopFlags {
         unified_tick_on,
@@ -26,7 +36,6 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         local_player_jump_charge_level,
         local_player_pursuit_status,
         collision_scene,
-        terrain_heights_shadow,
         world,
         movement,
         tick_spine,
@@ -1093,24 +1102,31 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
 
             // Workstream C (3D camera collision,
             // 2026-05-11): refresh the JS-readable shadow
-            // of the SpatialScene + terrain heights so
+            // of the SpatialScene (incl. its Arc-shared
+            // terrain heights) so
             // `cameraSweepCollision` / `terrainHeightAt`
             // and friends see fresh indices the next time
-            // JS calls them. Clone is one-shot per tick
-            // (Holtburg's hot case is hundreds of triangles
-            // + AABBs; the clone runs in <100 µs by direct
-            // measurement on a desktop browser). Doing this
-            // unconditionally per tick keeps the camera
-            // sweep deterministic at the cost of a clone we
-            // could otherwise gate on `drained_* > 0`. The
-            // gate would shave the clone cost when no
-            // collision data changed, but at the price of
-            // making rare cases (e.g. door open mid-tick
-            // not requiring a re-clone) hard to reason
-            // about. Pay the cost; profile if it hurts.
-            *collision_scene.borrow_mut() = w.scene.clone();
-            *terrain_heights_shadow.borrow_mut() =
-                w.terrain_heights_snapshot();
+            // JS calls them.
+            // `collision_view` (not `clone`): every shadow reader uses
+            // only the Arc-shared geometry, so the per-entity maps, sampled
+            // bodies and remote-motion state are left out instead of being
+            // deep-copied every frame.
+            //
+            // At most every SHADOW_REFRESH_MIN_INTERVAL (2026-10-07): the
+            // shadow holds a second reference to every geometry `Arc`, so the
+            // FIRST `Arc::make_mut` on a table after each refresh deep-clones
+            // the whole table (all resident cells' triangles, polygons, PVS
+            // lists…). Refreshing every tick made that a full-table copy on
+            // EVERY streaming drain tick; now it is at most one per table per
+            // interval. The camera / viewer-cell readers see geometry at most
+            // that stale — imperceptible for a collision clamp.
+            let shadow_due = SHADOW_REFRESHED_AT.with(|c| {
+                c.get().is_none_or(|t| now.saturating_duration_since(t) >= SHADOW_REFRESH_MIN_INTERVAL)
+            });
+            if shadow_due {
+                *collision_scene.borrow_mut() = w.scene.collision_view();
+                SHADOW_REFRESHED_AT.with(|c| c.set(Some(now)));
+            }
 
             // ORACLE open defect #1 (2026-08-12): publish the
             // augmentation trace. UNCONDITIONAL (not gated on

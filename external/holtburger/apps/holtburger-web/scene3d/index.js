@@ -172,7 +172,7 @@ import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { installLightLoops } from "./light_loops.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
-import { syncBatchMatVariants } from "./batched_material_variant.js";
+import { syncBatchMatVariants, batchMatVariantStats } from "./batched_material_variant.js";
 import {
   adaptiveResEnabled,
   adaptiveResSettleEnabled,
@@ -3744,6 +3744,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       // `__wireFillCompanion` tag), so existing companions aren't
       // double-added.
       return Promise.resolve(p).then((r) => {
+        // Evicted mid-build: the build already threw its cells away and the
+        // LRU entry is gone. Tracking here would re-create it as a phantom
+        // resident LB with no content (taking an LRU slot from a real one),
+        // and there are no new cells to light or fill.
+        if (r?.evictedDuringBuild) return r;
         // LRU wave H4 — pull per-LB disposables off the bake summary so
         // eviction can dispose() per-cell + cell-static BufferGeometries
         // (the biggest GPU-VBO release win at Academy: 568 cells per LB).
@@ -5085,6 +5090,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         return null; /* diagnostic only — never throw */
       }
     };
+    // Batched-material variants synced every frame (`live`), the batches
+    // holding them, and how many were dropped when their last batch went.
+    // `live` should track resident buckets, not every surface ever batched.
+    window.__diag.batchMatVariants = () => {
+      try { return batchMatVariantStats(); } catch (_) { return null; }
+    };
 
     // `entMB` — the entity-owned recolored-texture pool (2026-07-26,
     // RESULTS-matcache-falsifier-2026-07-26.md next-move 1). Sibling to
@@ -6260,6 +6271,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // retained — see static_batch_x.js parkStaticBatchXForLb).
     liveScene3d._parkStaticBatchXForLb = parkStaticBatchXForLb;
     liveScene3d._unparkStaticBatchXForLb = unparkStaticBatchXForLb;
+    // 2026-10-07 — the per-LB scenery + spawn record caches in wasm were
+    // released only by the ?slotGrid dev arm (`evictLbCaches` below), so on
+    // the default path they grew with every landblock visited (~3.7 KB of
+    // scenery records each, in wasm memory, which never shrinks). They go
+    // with the landblock now; a re-entry re-fetches (shard cache warm).
+    liveScene3d._evictLbWorldCaches = (lbKey) => {
+      try { wasmExports?.hb_evict_lb_world_caches?.(lbKey >>> 0); } catch (_) { /* fail-soft */ }
+    };
     // ?objRadius (perf T7): unpark re-shows bucket/atlas instances; this
     // re-hides them for a landblock still outside the near radius (no-op off).
     liveScene3d._objRadiusAfterUnpark = (lbKey) => objRadiusAfterUnpark(liveScene3d, lbKey);

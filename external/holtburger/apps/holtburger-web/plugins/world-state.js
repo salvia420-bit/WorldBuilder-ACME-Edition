@@ -1145,13 +1145,21 @@ export function bindWorldStateToClient(world, client) {
   // PlayerStatsUpdated (kind=8) — piggybacks enchantments. Forward the
   // snapshot into the diff engine.
   client.events.on('playerStatsUpdated', () => {
+    let snapshot = null;
     try {
-      const snapshot = client.player.enchantments
+      snapshot = client.player.enchantments
         ? client.player.enchantments()
         : null;
       if (snapshot) world.dispatchEnchantmentSnapshot(snapshot);
     } catch (e) {
       world.log.warn?.('[world-state] enchantment snapshot read failed', e);
+    } finally {
+      // dispatchEnchantmentSnapshot copies every field into plain records, so
+      // the fresh wasm-bindgen boxes (one per enchantment, every stats batch)
+      // can be released here instead of waiting on the FinalizationRegistry.
+      if (Array.isArray(snapshot)) {
+        for (const r of snapshot) { try { r?.free?.(); } catch (_) { /* already freed */ } }
+      }
     }
   });
 

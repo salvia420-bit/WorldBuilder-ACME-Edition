@@ -276,9 +276,9 @@ function toArray(a) {
   try { return Array.from(a); } catch (_) { return []; }
 }
 
-// Snapshot → plain arrays. `client.player.stats` is a fresh wasm
-// PlayerStatsSnapshot per call (rynth/webhost.js `call` is live, not
-// cached), so it is freed once copied.
+// Snapshot → plain arrays. `client.player.stats` is a plain copy since
+// 2026-10-07 (plugins/api.js frees the wasm PlayerStatsSnapshot itself);
+// the `free?.()` below stays for hosts that still hand out the raw box.
 function getStats() {
   let s = null;
   try { s = window.__pluginClient?.player?.stats ?? null; } catch (_) { s = null; }

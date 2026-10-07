@@ -107,12 +107,18 @@ function _adaptSound(s) {
   };
 }
 
+// Landblocks of parsed triggers kept, least-recently-asked evicted first. The
+// runtime asks for the player's landblock every tick, so the working set is
+// tiny; before 2026-10-07 every landblock ever visited stayed (~3.3 KB each).
+const AMBIENT_CACHE_CAP = 256;
+
 export class BakedAmbientSource {
   /**
    * @param {object} [opts]
    * @param {string} [opts.baseUrl]    Override the dist/events/ base.
    * @param {(url:string)=>Promise<{ok:boolean,status:number,text:()=>Promise<string>}>}
    *        [opts.fetchImpl]           Injectable fetch (tests pass a stub).
+   * @param {number} [opts.cacheCap]   Landblocks kept (default AMBIENT_CACHE_CAP).
    */
   constructor(opts = {}) {
     this._baseUrl = opts.baseUrl || EVENTS_BASE_URL;
@@ -122,8 +128,10 @@ export class BakedAmbientSource {
         : typeof fetch !== "undefined"
         ? (url) => fetch(url)
         : null;
-    /** @type {Map<number, BakedAmbientTrigger[]>} lbKey16 → triggers (loaded). */
+    /** @type {Map<number, BakedAmbientTrigger[]>} lbKey16 → triggers (loaded; LRU order). */
     this._cache = new Map();
+    this._cacheCap = Number.isFinite(opts.cacheCap) && opts.cacheCap > 0 ? opts.cacheCap : AMBIENT_CACHE_CAP;
+    this._lastKey = -1;
     /** @type {Set<number>} lbKey16 currently fetching. */
     this._inflight = new Set();
 
@@ -133,6 +141,7 @@ export class BakedAmbientSource {
     this.lbEmpty = 0;
     this.lbErrors = 0;
     this.lastError = null;
+    this.evictions = 0;
   }
 
   /**
@@ -149,16 +158,34 @@ export class BakedAmbientSource {
   getTriggersForLb(lbX, lbY) {
     const key = ((((lbX & 0xff) << 8) | (lbY & 0xff)) >>> 0);
     const cached = this._cache.get(key);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      if (key !== this._lastKey) {
+        // LRU touch (skipped while the player stays in one landblock).
+        this._cache.delete(key);
+        this._cache.set(key, cached);
+        this._lastKey = key;
+      }
+      return cached;
+    }
     if (!this._inflight.has(key)) this._beginFetch(key);
     return null;
+  }
+
+  _store(key, triggers) {
+    this._cache.set(key, triggers);
+    while (this._cache.size > this._cacheCap) {
+      const oldest = this._cache.keys().next().value;
+      this._cache.delete(oldest);
+      if (oldest === this._lastKey) this._lastKey = -1;
+      this.evictions += 1;
+    }
   }
 
   _beginFetch(key) {
     const hex = key.toString(16).toUpperCase().padStart(4, "0");
     if (!this._fetch) {
       // No fetch available (non-browser, no stub) — cache empty.
-      this._cache.set(key, []);
+      this._store(key, []);
       this.lbEmpty += 1;
       return;
     }
@@ -169,7 +196,7 @@ export class BakedAmbientSource {
       .then((resp) => {
         if (!resp || !resp.ok) {
           // 404 / missing file = "no baked ambient for this LB".
-          this._cache.set(key, []);
+          this._store(key, []);
           this.lbEmpty += 1;
           return null;
         }
@@ -178,7 +205,7 @@ export class BakedAmbientSource {
       .then((text) => {
         if (text == null) return; // already cached [] above
         const triggers = parseAmbientTriggers(text);
-        this._cache.set(key, triggers);
+        this._store(key, triggers);
         if (triggers.length) this.lbWithAmbient += 1;
         else this.lbEmpty += 1;
       })
@@ -186,7 +213,7 @@ export class BakedAmbientSource {
         this.lastError = String(e && e.message ? e.message : e);
         this.lbErrors += 1;
         // Cache empty so a broken endpoint isn't re-hit every tick.
-        this._cache.set(key, []);
+        this._store(key, []);
         // eslint-disable-next-line no-console
         console.warn(`[ambient/baked] fetch failed for LB 0x${hex}:`, e);
       })
@@ -206,6 +233,7 @@ export class BakedAmbientSource {
       lbEmpty: this.lbEmpty,
       lbErrors: this.lbErrors,
       lastError: this.lastError,
+      evictions: this.evictions,
     };
   }
 }

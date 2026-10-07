@@ -120,6 +120,23 @@ console.log("=========================");
   await new Promise((r) => setTimeout(r, 0));
   const r404 = src404.getTriggersForLb(1, 2);
   check("BakedSource: 404 → cached empty array (fail-soft)", Array.isArray(r404) && r404.length === 0, JSON.stringify(r404));
+
+  // 2026-10-07 — the cache is a bounded LRU: the landblock still being asked
+  // for survives; the least recently asked one goes (and re-fetches on return).
+  const lruFetched = [];
+  const srcLru = new BakedAmbientSource({
+    baseUrl: "L/",
+    cacheCap: 3,
+    fetchImpl: async (u) => { lruFetched.push(u); return { ok: true, status: 200, text: async () => fakeBody }; },
+  });
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  for (const x of [1, 2, 3]) { srcLru.getTriggersForLb(x, 0); await settle(); }
+  srcLru.getTriggersForLb(1, 0); // touch LB 1 → LB 2 is now least recent
+  srcLru.getTriggersForLb(4, 0); await settle();
+  check("BakedSource LRU: size capped", srcLru.stats().cachedLbs === 3 && srcLru.stats().evictions === 1,
+    JSON.stringify(srcLru.stats()));
+  check("BakedSource LRU: the recently asked LB is kept (no re-fetch)", Array.isArray(srcLru.getTriggersForLb(1, 0)) && lruFetched.length === 4);
+  check("BakedSource LRU: the least recently asked LB was evicted (re-fetches)", srcLru.getTriggersForLb(2, 0) === null && lruFetched.length === 5);
 }
 
 // ===================================================================

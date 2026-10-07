@@ -91,16 +91,9 @@ const WAIVERS = {
   // (2026-10-05). These are NOT known-good; each names the fix. The gate stays
   // green on them so it can block NEW regressions, and an entry whose finding
   // disappears is reported as STALE so the list cannot outlive its bug.
-  "PRESENCE-DIVERGENT": {
-    particleOwner:
-      "BUG scene3d/particles/owner_registry.js:56 — `if (globalThis.location?.search)` guard: a bare URL " +
-      "(no query) reads OFF while any query reads ON (docs row: default ON). Fix: drop the presence " +
-      "guard / default `on = true`.",
-    blockingParticleParity:
-      "BUG scene3d/statics.js:4287 `_blockingParticleParityOn` — same presence-guard shape: bare URL → " +
-      "false, any query → ON (docs: default ON). Observationally inert for statics today (comment above " +
-      "it), but the walkers disagree. Fix: `return true` fallback.",
-  },
+  // (2026-10-07: particleOwner + blockingParticleParity fixed — both readers
+  // now gate on `location`, not a non-empty `location.search`.)
+  "PRESENCE-DIVERGENT": {},
 };
 
 // ── collect files ───────────────────────────────────────────────────────────

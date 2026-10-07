@@ -664,6 +664,9 @@ function refreshFromSnapshot(snapshot) {
   state.enchantments.clear();
   state.cooldowns.clear();
   if (!Array.isArray(snapshot)) return;
+  // Per-(category, layer) winner so far — the tiebreak used to spread every
+  // kept enchantment into a fresh array and linear-scan it per row (O(N²)).
+  const byCategory = new Map();
   for (const raw of snapshot) {
     const n = normalizeEnchantment(raw);
     if (!n) continue;
@@ -672,14 +675,12 @@ function refreshFromSnapshot(snapshot) {
     } else {
       stampReceivedAt(n, receivedAtSelf);
       // Per-category tiebreak: keep the highest-Power entry.
-      const prev = [...state.enchantments.values()].find(
-        (p) => p.spellCategory === n.spellCategory
-              && p.layer === n.layer
-              && p.spellCategory !== 0,
-      );
+      const catKey = n.spellCategory !== 0 ? `${n.spellCategory}:${n.layer}` : null;
+      const prev = catKey !== null ? byCategory.get(catKey) : undefined;
       if (prev && prev.power >= n.power) continue;
       if (prev) state.enchantments.delete(prev.layeredId);
       state.enchantments.set(n.layeredId, n);
+      if (catKey !== null) byCategory.set(catKey, n);
     }
   }
   pruneReceivedAtCache(receivedAtSelf, state.enchantments);

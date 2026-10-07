@@ -614,9 +614,24 @@ export function createClient(sessionHandle, opts = {}) {
       return host.TryGetPlayerPoseLive();
     },
     get stats() {
-      // Raw PlayerStatsSnapshot (stride arrays) — the shape plugins parse.
+      // Raw PlayerStatsSnapshot (stride arrays) — the shape plugins parse —
+      // as a PLAIN copy with the wasm box freed here. Every read is a fresh
+      // box, ~5 `playerStatsUpdated` subscribers read it per stats batch and
+      // most never freed it (a FinalizationRegistry backlog through combat).
       // `host.TryGetPlayerStats()` is the normalized projection.
-      return host.call("GetPlayerStats") ?? null;
+      const box = host.call("GetPlayerStats") ?? null;
+      if (!box) return null;
+      try {
+        return {
+          name: box.name,
+          vitals: box.vitals,
+          attributes: box.attributes,
+          skills: box.skills,
+          levelInfo: box.levelInfo,
+        };
+      } finally {
+        try { box.free?.(); } catch (_) { /* already released */ }
+      }
     },
     get inventory() {
       // Raw InventoryItem rows; `host.TryGetPlayerInventory()` projects.
@@ -991,7 +1006,9 @@ export function createClient(sessionHandle, opts = {}) {
     // owns the single document-capture listener, the single in-world gate,
     // and the single keymap resolution (user rebinds included).
     //
-    //   client.input.bindAction(labelHash, defaultCode, fn, { when, priority })
+    //   client.input.bindAction(labelHash, defaultCode, fn, { when, priority, allowRepeat })
+    //     // fires on the key-down EDGE: OS autorepeat is consumed unless
+    //     // `allowRepeat: true` (scroll-style actions; 2026-10-07)
     //   client.input.bindRaw(name, fn)          // every gated keydown
     //   client.input.bindRawUp(name, fn)        // every keyup (ungated)
     //

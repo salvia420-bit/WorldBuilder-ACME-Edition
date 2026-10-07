@@ -141,6 +141,25 @@ async function _loadSequenceAsync(url) {
 }
 
 /**
+ * Warm the table ahead of first use (called at idle once in-world).
+ * `getCastSequence` only STARTS the fetch on its first call and returns
+ * null, so without this the session's first cast ran without its table:
+ * `playCastSequence` bailed `tableNotLoaded` (no busy-window guard, no
+ * windup clip prefetch, default 2 s / 3 s duration estimates) and the
+ * 2.1 MB JSON.parse then landed mid-cast. Idempotent; resolves to the
+ * table, or `null` when there is no `fetch` (Node) or the fetch failed —
+ * a later `getCastSequence` still retries.
+ *
+ * @param {string} [url]
+ * @returns {Promise<Record<string, object> | null>}
+ */
+export function preloadCastSequenceTable(url) {
+  if (_sequenceTable) return Promise.resolve(_sequenceTable);
+  if (typeof fetch !== "function") return Promise.resolve(null);
+  return _loadSequenceAsync(url).catch(() => null);
+}
+
+/**
  * Synchronously preload the cast-sequence table from a JS object —
  * used by Node-side tests that read `data/spell-cast-sequence.json`
  * with `fs.readFile` and want `getCastSequence` to be synchronous.

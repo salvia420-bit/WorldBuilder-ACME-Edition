@@ -37,7 +37,6 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         queued_events,
         entity_updates,
         latest_stats,
-        latest_inventory,
         latest_vendor_state,
         latest_container_contents,
         latest_object_icons,
@@ -1478,8 +1477,9 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             f32_payload: None,
         });
     }
-    if inventory_changed && let Some(w) = world.borrow().as_ref() {
-        publish_player_inventory_snapshot(w, &latest_inventory);
+    if inventory_changed && world.borrow().is_some() {
+        // Rebuilt on the next `playerInventory()` read, not per message.
+        mark_player_inventory_dirty();
         queued_events.borrow_mut().push(ClientEvent {
             kind: CLIENT_EVENT_KIND_INVENTORY_UPDATED,
             string_payload: None,

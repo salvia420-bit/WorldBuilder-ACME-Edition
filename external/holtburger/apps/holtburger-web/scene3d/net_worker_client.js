@@ -37,7 +37,7 @@ import init, {
   net_proxy_push_inbound,
   net_proxy_push_disconnect,
   net_proxy_push_timesync,
-} from "../pkg/holtburger_web.js?v=wasmrev-20261006f";
+} from "../pkg/holtburger_web.js?v=wasmrev-20261007c";
 
 const READY_TIMEOUT_MS = 12000;
 
@@ -164,7 +164,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   // Ensure the main-thread wasm is instantiated before we arm/route into it.
   // STAMPED wasm URL — the glue's import.meta.url default drops ?v=.
   await init({
-    module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=wasmrev-20261006f", import.meta.url),
+    module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=wasmrev-20261007c", import.meta.url),
   });
 
   let worker;

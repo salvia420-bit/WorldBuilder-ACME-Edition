@@ -6336,3 +6336,86 @@ mod envcell_id_range {
         );
     }
 }
+
+/// 2026-10-07 — the wasm cell-scene snapshot (holtburger-web
+/// `publish_cell_scene_snapshot`) reuses its cell geometry (cell AABBs,
+/// SeenOutside bits, portal polygons) while `collision_cache_key()` is
+/// unchanged, so EVERY mutation of those three tables must change the key —
+/// including the two inserts the faithful bridge itself never reads.
+#[test]
+fn cell_snapshot_tables_bump_collision_cache_key() {
+    let mut scene = SpatialScene::new();
+    let cell = 0xA9B4_0100u32;
+
+    let k0 = scene.collision_cache_key();
+    scene.insert_cell_aabb(
+        cell,
+        holtburger_common::Aabb::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 1.0)),
+    );
+    let k1 = scene.collision_cache_key();
+    assert_ne!(k0, k1, "insert_cell_aabb must change the key");
+
+    scene.insert_cell_seen_outside(cell, true);
+    let k2 = scene.collision_cache_key();
+    assert_ne!(k1, k2, "insert_cell_seen_outside must change the key");
+
+    scene.insert_cell_portal_polygon(
+        cell,
+        CellPortalPolygon {
+            other_cell_id: 0xA9B4_FFFF,
+            vertices: vec![
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 1.0),
+            ],
+            portal_side: false,
+        },
+    );
+    let k3 = scene.collision_cache_key();
+    assert_ne!(k2, k3, "insert_cell_portal_polygon must change the key");
+
+    scene.clear_cells_for_landblock(0xA9B4_0000);
+    assert_ne!(k3, scene.collision_cache_key(), "clear_cells_for_landblock must change the key");
+    assert_eq!(scene.cell_portal_polygon_count(), 0);
+
+    // Reads never move it.
+    let k4 = scene.collision_cache_key();
+    let _ = scene.cell_portal_polygons_for(cell);
+    let _ = scene.cell_seen_outside(cell);
+    assert_eq!(k4, scene.collision_cache_key());
+}
+
+/// 2026-10-07 — `collision_view` (the wasm per-tick camera shadow) shares the
+/// geometry tables, leaves the per-entity state out, and hands the source scene
+/// its per-entity state back untouched.
+#[test]
+fn collision_view_keeps_geometry_drops_entity_state_and_restores_source() {
+    let mut scene = SpatialScene::new();
+    let cell = 0xA9B4_0100u32;
+    scene.insert_cell_aabb(
+        cell,
+        holtburger_common::Aabb::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 10.0)),
+    );
+    scene.insert_cell_seen_outside(cell, true);
+    let mut heights = [0.0f32; 81];
+    heights[40] = 12.5;
+    scene.populate_terrain_heights(0xA9B4_0000, heights);
+    let guid = Guid(0x5000_0001);
+    let pose = make_position(5.0, 5.0, 0.0);
+    scene.update_entity(guid, pose.landblock_id, pose);
+
+    let view = scene.collision_view();
+
+    // Geometry readers answer identically on the view.
+    assert!(view.cell_seen_outside(cell));
+    assert_eq!(
+        view.terrain_cell_heights(0xA9B4_0000).map(|h| h[40]),
+        Some(12.5),
+    );
+    assert_eq!(view.cell_aabbs_iter().count(), 1);
+    // Per-entity state is NOT copied into the view…
+    assert!(view.get_in_landblock(pose.landblock_id).is_none());
+    // …and the source keeps all of it.
+    assert!(scene.get_in_landblock(pose.landblock_id).is_some_and(|s| s.contains(&guid)));
+    assert!(scene.get_nearby_entities(pose.landblock_id).contains(&guid));
+}

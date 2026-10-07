@@ -567,6 +567,10 @@ export async function initPluginBar(D) {
     const action = matchManifestHotkeyEvent(ev);
     if (action && action.pluginId) {
       ev.preventDefault();
+      // Press edge only: these are TOGGLES, so OS autorepeat of a held key
+      // flickered the panel open/closed ~30x/s and left it in whichever
+      // state the last repeat landed on.
+      if (ev.repeat) return;
       const dispatch = PLUGIN_HOTKEY_DISPATCH[action.pluginId];
       if (dispatch) {
         dispatch();
