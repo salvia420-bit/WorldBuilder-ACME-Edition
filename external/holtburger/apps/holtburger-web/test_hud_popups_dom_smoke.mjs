@@ -516,26 +516,6 @@ await guard("salvage confirm", async () => {
   press("Escape");
   check("Esc cancels", res === "x" && s.getAttribute("data-open") === "0");
 });
-const life = await load("plugins/lifestone-popup.js");
-await guard("lifestone popup", async () => {
-  const calls = [];
-  const bus = new Map();
-  const client = {
-    events: { on: (n, f) => bus.set(n, f), off: () => {} },
-    player: { useObject: (g) => calls.push(["use", g]), recallToLifestone: () => calls.push(["recall"]) },
-  };
-  const dispose = life.mount({ client });
-  bus.get("lifestoneClicked")({ guid: 0x7A001 });
-  const p = document.getElementById("hb-lifestone-popup");
-  check("opens with dialog chrome", p.classList.contains("hb-dlg") && p.getAttribute("data-open") === "1");
-  press("Enter");
-  check("first Enter highlights Bind (doesn't bind)", calls.length === 0 && document.activeElement?.dataset?.action === "bind");
-  press("ArrowDown");
-  check("ArrowDown moves to Recall", document.activeElement?.dataset?.action === "recall");
-  press("Enter");
-  check("Enter activates Recall", calls.length === 1 && calls[0][0] === "recall" && p.getAttribute("data-open") === "0");
-  dispose();
-});
 
 // ── Hover tooltip ──────────────────────────────────────────────────────
 console.log("== hover tooltip ==");

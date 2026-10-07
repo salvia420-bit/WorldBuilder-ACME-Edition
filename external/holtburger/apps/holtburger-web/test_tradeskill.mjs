@@ -9,7 +9,7 @@
 //   - `decideTradeskillCall(action, client)` — action → wasm-call decision
 //
 // Covers the drag-end → useWithTarget call decision per the wave brief.
-// Mirrors test_lifestone_popup.mjs (Wave 6.B) and test_hotbar_fire.mjs
+// Mirrors test_hotbar_fire.mjs
 // (Wave 3.A) for parity with sibling test files.
 
 import { fileURLToPath, pathToFileURL } from "node:url";

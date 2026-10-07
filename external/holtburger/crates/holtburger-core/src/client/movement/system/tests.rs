@@ -10333,11 +10333,14 @@ fn f2_server_moveto_object_turns_then_runs_then_sticks_at_arrival() {
     }
 
     let arrival = arrival_slice.expect("the approach must complete");
-    // Turn: 90 deg at the authored 1.5 rad/s = 1.047 s = 53 slices.
+    // Turn: the wire params carry no hold key (HoldKey_Invalid), which
+    // `adjust_motion` resolves to the player's current one — Run by default
+    // — so TurnRight runs at the authored 1.5 rad/s x 1.5 = 2.25 rad/s
+    // (acclient.c:343746 / :343439): 90 deg = 0.698 s = 35 slices.
     let turn_secs = turn_slices as f32 * dt.as_secs_f32();
     assert!(
-        (turn_secs - 1.047).abs() < 0.10,
-        "turn-in-place phase should sweep 90 deg at 1.5 rad/s (~1.047 s), got {turn_secs:.3} s"
+        (turn_secs - 0.698).abs() < 0.10,
+        "turn-in-place phase should sweep 90 deg at 2.25 rad/s (~0.698 s), got {turn_secs:.3} s"
     );
     // Run: 4.0 x run_rate 1.0 x params.speed 1.5 = 6.000 m/s.
     for speed in &run_speeds {
@@ -10356,8 +10359,8 @@ fn f2_server_moveto_object_turns_then_runs_then_sticks_at_arrival() {
     );
     let total = (arrival + 1) as f32 * dt.as_secs_f32();
     assert!(
-        (total - 2.8).abs() < 0.20,
-        "engage->arrive should take ~2.8 s, got {total:.3} s"
+        (total - 2.45).abs() < 0.20,
+        "engage->arrive should take ~2.45 s, got {total:.3} s"
     );
 
     // The arrival handoff: sticky installed on the target, radius
@@ -10373,6 +10376,323 @@ fn f2_server_moveto_object_turns_then_runs_then_sticks_at_arrival() {
     assert!(
         centre_distance <= 1.5 + 0.15 && centre_distance > 1.0,
         "arrival must land inside the cylinder band (<=1.5 m centres), got {centre_distance:.3} m"
+    );
+}
+
+/// 2026-10-07 — a SERVER TurnToObject for the local player (ACE `Rotate`
+/// before a missile shot, `TurnTo_Magic` before a cast) turns at retail's
+/// RUN turn rate. The wire `TurnToParameters` carry no hold key
+/// (`MovementParameters::UnPackNet`, acclient.c:346344; ctor default 0 =
+/// HoldKey_Invalid, :339437); `BeginTurnToHeading` passes it to the
+/// TurnRight `_DoMotion` (:345456) and `CMotionInterp::adjust_motion`
+/// resolves Invalid to the player's current hold key and applies
+/// `apply_run_to_command`'s ×1.5 under Run (:343746 / :343439). ACE sizes
+/// its post-turn wait to the same rate (`Player.GetRotateDelay` = base /
+/// RunFactor 1.5), so a walk-rate turn was cut a third short by the next
+/// motion's `cancel_moveto` preamble.
+/// ACE's `Creature.TurnToObject` as the local player's wire lane delivers
+/// it (UpdateMotion movement type 8, non-autonomous).
+fn install_server_turn_to_object(movement: &mut MovementSystem, guid: Guid, target_guid: Guid) {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementType, MovementTypeData, TurnToObject, TurnToParameters,
+    };
+    use holtburger_world::WorldEvent;
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(MovementEventData {
+            guid,
+            object_instance_sequence: 1,
+            movement_sequence: 2,
+            server_control_sequence: 3,
+            is_autonomous: false,
+            movement_type: MovementType::TurnToObject,
+            motion_flags: 0,
+            current_style: MotionStance::NonCombat.interpreted(),
+            data: MovementTypeData::TurnToObject(TurnToObject {
+                target: target_guid,
+                desired_heading: 0.0,
+                // ACE `Creature.TurnToObject` → MoveToParameters defaults
+                // (StopCompletely 0x10000 included), speed 1.0.
+                params: TurnToParameters {
+                    movement_parameters: 0x0001_EE0F,
+                    speed: 1.0,
+                    desired_heading: 0.0,
+                },
+            }),
+        }),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+}
+
+#[test]
+fn server_turn_to_object_turns_the_local_player_at_the_run_turn_rate() {
+    // Heading 90 → the target due east is 90 deg of turn (as in F2 above).
+    let (mut world, mut movement, guid, target_guid) = server_moveto_fixture(90.0, 62.0);
+    install_server_turn_to_object(&mut movement, guid, target_guid);
+    assert!(movement.moveto_is_active(guid), "TurnToObject installed on the local driver");
+
+    let dt = Duration::from_millis(20);
+    let start = Instant::now();
+    let mut turn_slices = 0usize;
+    for i in 0..300 {
+        let now = start + dt * (i as u32);
+        movement.drive_local_moveto(now, &mut world);
+        if let Some(control) = movement.current_local_drive_control(&world, dt) {
+            assert!(
+                control.desired_world_delta.length() <= 1e-6,
+                "a TurnTo never translates"
+            );
+            let omega = control.turn_omega_rad_s.expect("turn realized at an omega");
+            assert!(
+                (omega - 2.25).abs() < 1e-4,
+                "server TurnTo must turn at the RUN rate 1.5 x 1.5 = 2.25 rad/s, got {omega}"
+            );
+            turn_slices += 1;
+        }
+        drive_slice_for_test(&mut movement, &mut world, dt);
+        if !movement.moveto_is_active(guid) {
+            break;
+        }
+    }
+    assert!(!movement.moveto_is_active(guid), "the turn completes");
+    let turn_secs = turn_slices as f32 * dt.as_secs_f32();
+    assert!(
+        (turn_secs - 0.698).abs() < 0.10,
+        "90 deg at 2.25 rad/s is ~0.698 s (ACE Rotate waits 0.698 s too), got {turn_secs:.3} s"
+    );
+    let heading = world
+        .local_player_runtime_pose()
+        .expect("pose")
+        .rotation
+        .to_heading();
+    let to_target = std::f32::consts::PI;
+    let err = (heading - to_target).rem_euclid(std::f32::consts::TAU);
+    let err = err.min(std::f32::consts::TAU - err);
+    assert!(err < 0.02, "the turn arrives facing the target (snap), heading err {err:.4} rad");
+}
+
+/// 2026-10-07 — picking.js calls the JS `cancelPursuit` on every canvas
+/// click; it must end only a pursuit the JS installed, never the server's
+/// TurnToObject (re-clicking the target mid-turn left the player short).
+#[test]
+fn js_cancel_pursuit_does_not_cancel_a_server_turn() {
+    let (mut world, mut movement, guid, target_guid) = server_moveto_fixture(90.0, 62.0);
+    install_server_turn_to_object(&mut movement, guid, target_guid);
+    let now = Instant::now();
+    let _ = movement.drive_local_moveto(now, &mut world); // the turn begins
+    ingest_intent(&mut movement, PlayerDriveIntent::CancelPursuit, now);
+    let _ = movement.apply_pending_pursuit_commands_ungated(&mut world);
+    assert!(
+        movement.moveto_is_active(guid),
+        "a selection click must not cancel the server's TurnToObject"
+    );
+}
+
+/// The hold-key resolution behind the rate: Run and None hold keys are
+/// honoured as sent; HoldKey_Invalid (every server turn) follows the
+/// player's Shift latch, exactly like `adjust_motion`'s
+/// `raw_state.current_holdkey` fallback.
+#[test]
+fn moveto_turn_hold_key_resolves_like_adjust_motion() {
+    use crate::client::movement_types::Gait;
+    let mut movement = MovementSystem::new();
+    // No interpreter yet = no key ever pressed = the unshifted default: Run.
+    assert_eq!(movement.turn_gait_for_hold_key(0), Gait::Run);
+    assert_eq!(movement.turn_gait_for_hold_key(2), Gait::Run);
+    assert_eq!(movement.turn_gait_for_hold_key(1), Gait::Walk);
+    // Shift held (hold_run latch set) → the Invalid hold key walks.
+    let mut interp = super::super::command_interpreter::CommandInterpreter::new(0.0);
+    interp.hold_run = true;
+    movement.command_interpreter = Some(interp);
+    assert_eq!(movement.turn_gait_for_hold_key(0), Gait::Walk);
+    assert_eq!(movement.turn_gait_for_hold_key(2), Gait::Run, "an explicit Run wins");
+}
+
+/// 2026-10-07 — the local rig steps through a server turn. Retail runs the
+/// server's TurnTo on the local player's own `CMotionInterp`
+/// (`MoveToManager::_DoMotion` acclient.c:344753 ← `BeginTurnToHeading`
+/// :345507), so the TurnRight/TurnLeft cycle plays; ours rotated the idle
+/// pose. The published rig motion is the wire's: same turn direction as the
+/// MoveToState observers get, at the run gait, and it clears once the turn
+/// lands.
+#[tokio::test]
+async fn server_turn_publishes_the_turn_cycle_for_the_local_rig() {
+    let (mut world, mut movement, guid, target_guid) = server_moveto_fixture(90.0, 62.0);
+    let mut sink = RecordingSink::default();
+    assert_eq!(movement.local_rig_motion_packed(), 0, "nothing before the turn");
+    install_server_turn_to_object(&mut movement, guid, target_guid);
+
+    let dt = Duration::from_millis(20);
+    let start = Instant::now();
+    movement.tick(start, &mut world, &mut sink).await.expect("tick");
+    let packed = movement.local_rig_motion_packed();
+    assert_ne!(packed & (1 << 31), 0, "the turn is published while it runs");
+    assert_eq!(packed & 0xff, 1, "turn in place: no forward axis");
+    assert_eq!((packed >> 24) & 1, 1, "server turns run (HoldKey_Invalid → Run)");
+    let turn_axis = ((packed >> 16) & 0xff) as i32 - 1;
+    assert_ne!(turn_axis, 0, "a turn axis is set");
+    let wire_turn = sink
+        .sent
+        .iter()
+        .find_map(|action| match action {
+            GameAction::MoveToState(data) => data.raw_motion_state.turn_command,
+            _ => None,
+        })
+        .expect("the turn reached the wire");
+    let wire_axis = if wire_turn == TURN_RIGHT_MOTION_COMMAND { 1 } else { -1 };
+    assert_eq!(turn_axis, wire_axis, "the rig turns the way observers see it turn");
+
+    let mut cleared = false;
+    for i in 1..300 {
+        drive_slice_for_test(&mut movement, &mut world, dt);
+        movement
+            .tick(start + dt * (i as u32), &mut world, &mut sink)
+            .await
+            .expect("tick");
+        if !movement.moveto_is_active(guid) {
+            movement
+                .tick(start + dt * (i as u32 + 1), &mut world, &mut sink)
+                .await
+                .expect("tick");
+            cleared = movement.local_rig_motion_packed() == 0;
+            break;
+        }
+    }
+    assert!(cleared, "the rig motion clears when the turn lands");
+}
+
+// =====================================================================
+// 2026-10-07 — `?castMoveLock`: W never breaks a cast. A forward/backward
+// press made while one of our cast requests is outstanding is held back
+// until the server's UseDone, then replayed; strafe/turn pass through.
+// =====================================================================
+
+fn queued_key_edges(movement: &MovementSystem) -> Vec<(u32, bool)> {
+    movement
+        .queued_drive_commands
+        .iter()
+        .filter_map(|c| match c {
+            QueuedDriveCommand::KeyEdge { action, down } => Some((*action, *down)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn cast_move_lock_holds_back_w_until_use_done_then_replays_it() {
+    let mut movement = MovementSystem::new();
+    let t0 = Instant::now();
+    movement.note_cast_request_sent(t0);
+    assert!(movement.cast_request_in_flight());
+
+    movement.enqueue_key_action(0x29, true); // W pressed mid-cast
+    movement.enqueue_key_action(0x2E, true); // turn right — never held back
+    movement.enqueue_key_action(0x2C, true); // strafe right — slidecast untouched
+    assert_eq!(
+        queued_key_edges(&movement),
+        vec![(0x2E, true), (0x2C, true)],
+        "W must not reach the interpreter while the cast is in flight"
+    );
+    movement.queued_drive_commands.clear();
+
+    movement.note_use_done(); // the server finished the cast
+    assert!(!movement.cast_request_in_flight());
+    assert_eq!(
+        queued_key_edges(&movement),
+        vec![(0x29, true)],
+        "the held W is replayed as a fresh press the moment the cast resolves"
+    );
+}
+
+#[test]
+fn cast_move_lock_swallows_the_release_of_a_held_back_press() {
+    let mut movement = MovementSystem::new();
+    movement.note_cast_request_sent(Instant::now());
+    movement.enqueue_key_action(0x2A, true); // S tapped mid-cast…
+    movement.enqueue_key_action(0x2A, false); // …and released before UseDone
+    assert!(queued_key_edges(&movement).is_empty(), "the whole tap is swallowed");
+    movement.note_use_done();
+    assert!(queued_key_edges(&movement).is_empty(), "nothing to replay");
+}
+
+#[test]
+fn cast_move_lock_passes_the_release_of_a_key_held_before_the_cast() {
+    let mut movement = MovementSystem::new();
+    movement.enqueue_key_action(0x29, true); // running before the cast
+    movement.note_cast_request_sent(Instant::now());
+    movement.enqueue_key_action(0x29, false); // let go mid-cast
+    assert_eq!(
+        queued_key_edges(&movement),
+        vec![(0x29, true), (0x29, false)],
+        "a press the interpreter already saw must get its release"
+    );
+}
+
+#[test]
+fn cast_move_lock_needs_every_outstanding_cast_answered() {
+    let mut movement = MovementSystem::new();
+    let t0 = Instant::now();
+    movement.note_cast_request_sent(t0);
+    movement.note_cast_request_sent(t0); // a second cast queued behind it
+    movement.enqueue_key_action(0x29, true);
+    movement.note_use_done();
+    assert!(queued_key_edges(&movement).is_empty(), "one cast still in flight");
+    movement.note_use_done();
+    assert_eq!(queued_key_edges(&movement), vec![(0x29, true)]);
+    // A UseDone with no cast outstanding (door, item) is inert.
+    movement.queued_drive_commands.clear();
+    movement.note_use_done();
+    movement.enqueue_key_action(0x2A, true);
+    assert_eq!(queued_key_edges(&movement), vec![(0x2A, true)]);
+}
+
+#[test]
+fn cast_move_lock_watchdog_releases_a_lost_use_done() {
+    let mut movement = MovementSystem::new();
+    let t0 = Instant::now();
+    movement.note_cast_request_sent(t0);
+    movement.enqueue_key_action(0x29, true);
+    movement.expire_cast_move_lock(t0 + Duration::from_secs(9));
+    assert!(movement.cast_request_in_flight(), "inside the cap");
+    assert!(queued_key_edges(&movement).is_empty());
+    movement.expire_cast_move_lock(t0 + CAST_MOVE_LOCK_MAX);
+    assert!(!movement.cast_request_in_flight(), "the cap releases the lock");
+    assert_eq!(queued_key_edges(&movement), vec![(0x29, true)]);
+}
+
+#[test]
+fn cast_move_lock_escape_passes_w_through() {
+    let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(false);
+    movement.note_cast_request_sent(Instant::now());
+    movement.enqueue_key_action(0x29, true);
+    assert_eq!(queued_key_edges(&movement), vec![(0x29, true)], "?castMoveLock=off");
+}
+
+/// The published lock state (camera.js keeps the local rig off the run
+/// cycle while it holds): on from the cast request to its UseDone, never
+/// with the escape.
+#[test]
+fn cast_move_lock_holding_tracks_the_in_flight_cast() {
+    let mut movement = MovementSystem::new();
+    assert!(!movement.cast_move_lock_holding());
+    movement.note_cast_request_sent(Instant::now());
+    assert!(movement.cast_move_lock_holding());
+    movement.note_use_done();
+    assert!(!movement.cast_move_lock_holding());
+
+    movement.set_cast_move_lock(false);
+    movement.note_cast_request_sent(Instant::now());
+    assert!(!movement.cast_move_lock_holding(), "?castMoveLock=off holds nothing");
+}
+
+#[test]
+fn cast_hold_reclaim_ships_default_on() {
+    let movement = MovementSystem::new();
+    assert!(
+        movement.cast_hold_reclaim_enabled(),
+        "held W stays dead for the whole cast by default (2026-10-07)"
     );
 }
 

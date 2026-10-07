@@ -1126,11 +1126,42 @@ const USE_SLIDE_CAST: bool = false;
 /// `?castHoldReclaim=on` URL flag ([`MovementSystem::cast_hold_reclaim_runtime`]).
 /// Effective predicate: [`MovementSystem::cast_hold_reclaim_enabled`].
 ///
-/// `false` (DEFAULT): today's per-windup forward revival (regression floor).
-/// `true` / `?castHoldReclaim=on`: hold the forward slot dead across the
-/// whole cast chain. Default OFF — eye-test gated (the leak is
-/// targeted-cast-only, FU-A-dormant for self buffs).
-const USE_CAST_HOLD_RECLAIM: bool = false;
+/// `true` (DEFAULT since 2026-10-07): hold the forward slot dead across the
+/// whole cast — the window now runs from OUR cast request to the server's
+/// UseDone ([`MovementSystem::note_cast_request_sent`] /
+/// [`MovementSystem::note_use_done`]) as well as the JS chain stamp. User
+/// ruling: "pressing w shouldn't cancel a cast". Under ACE's PK physics
+/// (`Player.FastTick` = PK/PKLite) every revived metre counts against
+/// `Windup_MaxMove` 6 m and ends in "Your movement disrupted spell
+/// casting!" + fizzle (Player_Magic.cs DoCastSpell_Inner).
+/// `false` / `?castHoldReclaim=off`: the per-windup forward revival.
+const USE_CAST_HOLD_RECLAIM: bool = true;
+
+/// (2026-10-07) — `?castMoveLock`: while one of OUR cast requests is
+/// outstanding (CastTargetedSpell / CastUntargetedSpell sent → the server's
+/// UseDone), a FRESH forward / backward key press is held back and replayed
+/// the moment the cast resolves, so pressing W never breaks a cast (user
+/// ruling, 2026-10-07). Retail's client never cancels a cast on movement
+/// (ClientMagicSystem keeps no cast state; only the server ends a cast,
+/// UseDone → `m_cBusy--`, acclient.c:401924) — but a forward press evicts
+/// the cast gesture from the forward slot, and against ACE's PK physics the
+/// run that follows fizzles the spell past `Windup_MaxMove` 6 m. Turning and
+/// strafing are untouched (slidecast). Release edges of a held-back press are
+/// swallowed with it; a key pressed BEFORE the cast releases normally.
+///
+/// `true` (DEFAULT): hold back. `false` / `?castMoveLock=off`: pass through.
+const USE_CAST_MOVE_LOCK: bool = true;
+
+/// Input actions the cast move lock holds back: MovementForward (0x29) and
+/// MovementBackup (0x2A) — the forward-slot axis (`HandleKeyboardCommand`
+/// ids, `on_action`'s dense `InputAction - 0x29` switch).
+const CAST_MOVE_LOCK_ACTIONS: [u32; 2] = [0x29, 0x2A];
+
+/// Safety cap on an outstanding cast with no UseDone (lost packet, a
+/// server path that never answers) — OURS, so the lock can never wedge
+/// movement. ACE's longest cast (turn + 10 windups + cast gesture + recoil
+/// at CastSpeed 2.0) is well under this.
+const CAST_MOVE_LOCK_MAX: Duration = Duration::from_secs(10);
 
 /// Movement-port WAVE 1 step 4 (2026-07-03) — the retail
 /// `CommandInterpreter` INPUT LANE master gate (the strangler flag).
@@ -1891,6 +1922,18 @@ pub(crate) struct MovementSystem {
     /// `true` from windup start to chain completion/fizzle/cancel. Read by
     /// the interpreter seam [`SystemInterpreterSeams::local_cast_forward_lock_active`].
     local_cast_window_active: bool,
+    /// (2026-10-07) — cast requests WE sent that the server has not yet
+    /// answered with a UseDone ([`Self::note_cast_request_sent`] /
+    /// [`Self::note_use_done`]). Non-zero = a cast is in flight.
+    cast_requests_pending: u32,
+    /// When the oldest outstanding cast request was sent — the
+    /// [`CAST_MOVE_LOCK_MAX`] watchdog's clock.
+    cast_requests_since: Option<Instant>,
+    /// [`USE_CAST_MOVE_LOCK`] — forward/backward presses held back while a
+    /// cast is in flight, replayed (in press order) when it resolves.
+    cast_lock_deferred_keys: Vec<u32>,
+    /// `?castMoveLock=off` runtime carrier ([`USE_CAST_MOVE_LOCK`]).
+    cast_move_lock_runtime: Option<bool>,
 
     /// `?slideCast=off` runtime carrier ([`USE_SLIDE_CAST`]) —
     /// [`Self::slide_cast_enabled`]. Default `None`.
@@ -1936,6 +1979,17 @@ pub(crate) struct MovementSystem {
     /// wasm TickMovement arm each tick; only interp-lane sites push, so
     /// flag-off (and the native cli) never accumulates.
     cmd_interp_events: Vec<CmdInterpEvent>,
+    /// (2026-10-07) — the wire motion of the AUTONOMOUS drive this tick
+    /// executed (a server TurnTo / MoveTo steer on the local MoveTo driver,
+    /// a JS autonomous intent), `None` when none ran. Published to the
+    /// local rig via [`Self::local_rig_motion_packed`]: retail issues those
+    /// motions on the local player's OWN `CMotionInterp`
+    /// (`MoveToManager::_DoMotion`, acclient.c:344753 — TurnRight/TurnLeft
+    /// from `BeginTurnToHeading` :345507, the forward gait from
+    /// `BeginMoveForward` :345415), so the rig steps through a server turn.
+    /// Ours only animated keyboard input, so the avatar slid round in its
+    /// idle pose.
+    local_rig_autonomous_motion: Option<MotionState>,
     /// Physics-parity 2026-07-03 (dossier A F1/F2) — runtime carrier of
     /// the `?retailQuantum=on` URL flag. `None` = the
     /// [`USE_RETAIL_QUANTUM`] const default (OFF — the DECISIONS-A1-O5
@@ -2363,6 +2417,10 @@ impl MovementSystem {
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
             local_cast_window_active: false,
+            cast_requests_pending: 0,
+            cast_requests_since: None,
+            cast_lock_deferred_keys: Vec::new(),
+            cast_move_lock_runtime: None,
             slide_cast_runtime: None,
             cmd_interp_runtime: None,
             command_interpreter: None,
@@ -2371,6 +2429,7 @@ impl MovementSystem {
             motion_state_pulses_sent: 0,
             pending_cmd_interp_jump_release: false,
             cmd_interp_events: Vec::new(),
+            local_rig_autonomous_motion: None,
             retail_quantum_runtime: None,
             last_move_was_autonomous: false,
             pending_take_control: false,
@@ -2570,6 +2629,101 @@ impl MovementSystem {
         self.local_cast_window_active = active;
     }
 
+    /// `?castMoveLock=off` runtime carrier install ([`USE_CAST_MOVE_LOCK`]).
+    pub(crate) fn set_cast_move_lock(&mut self, on: bool) {
+        self.cast_move_lock_runtime = Some(on);
+    }
+
+    /// [`USE_CAST_MOVE_LOCK`] effective predicate.
+    pub(crate) fn cast_move_lock_enabled(&self) -> bool {
+        self.cast_move_lock_runtime.unwrap_or(USE_CAST_MOVE_LOCK)
+    }
+
+    /// (2026-10-07) — one of OUR cast requests went out (the recv loop's
+    /// CastTargetedSpell / CastUntargetedSpell arms). ACE answers every one
+    /// with exactly one UseDone — success after the recoil, or the error
+    /// (Player_Magic.cs `SendUseDoneEvent` sites); a cast queued behind a
+    /// busy one answers when it eventually runs.
+    pub(crate) fn note_cast_request_sent(&mut self, now: Instant) {
+        if self.cast_requests_pending == 0 {
+            self.cast_requests_since = Some(now);
+        }
+        self.cast_requests_pending = self.cast_requests_pending.saturating_add(1);
+    }
+
+    /// (2026-10-07) — the server's UseDone (0x01C7) landed: retire one
+    /// outstanding cast request; the last one releases the cast move lock.
+    /// A UseDone for a non-cast action (door, item) with no cast pending is
+    /// a no-op.
+    pub(crate) fn note_use_done(&mut self) {
+        if self.cast_requests_pending == 0 {
+            return;
+        }
+        self.cast_requests_pending -= 1;
+        if self.cast_requests_pending == 0 {
+            self.release_cast_move_lock();
+        }
+    }
+
+    /// A cast is in flight (sent, not yet answered).
+    pub(crate) fn cast_request_in_flight(&self) -> bool {
+        self.cast_requests_pending > 0
+    }
+
+    /// [`USE_CAST_MOVE_LOCK`] is holding forward/backward presses right now
+    /// — published so the JS local-rig dispatcher does not play a run cycle
+    /// for a press the body will not act on until the cast resolves.
+    pub(crate) fn cast_move_lock_holding(&self) -> bool {
+        self.cast_move_lock_enabled() && self.cast_request_in_flight()
+    }
+
+    /// End the cast window: forget the outstanding requests and replay the
+    /// held-back presses (still held — their releases were swallowed with
+    /// them) as fresh edges, so the player moves off the moment the spell
+    /// is out without re-pressing.
+    fn release_cast_move_lock(&mut self) {
+        self.cast_requests_pending = 0;
+        self.cast_requests_since = None;
+        for action in std::mem::take(&mut self.cast_lock_deferred_keys) {
+            self.queued_drive_commands
+                .push(QueuedDriveCommand::KeyEdge { action, down: true });
+        }
+    }
+
+    /// [`CAST_MOVE_LOCK_MAX`] watchdog — never let a lost UseDone wedge
+    /// movement.
+    fn expire_cast_move_lock(&mut self, now: Instant) {
+        if let Some(since) = self.cast_requests_since
+            && now.saturating_duration_since(since) >= CAST_MOVE_LOCK_MAX
+        {
+            self.release_cast_move_lock();
+        }
+    }
+
+    /// [`USE_CAST_MOVE_LOCK`] gate for one key edge: `true` = consumed
+    /// (held back, or the release of a held-back press).
+    fn cast_move_lock_consumes(&mut self, action: u32, down: bool) -> bool {
+        if !CAST_MOVE_LOCK_ACTIONS.contains(&action) {
+            return false;
+        }
+        if down {
+            if !(self.cast_move_lock_enabled() && self.cast_request_in_flight()) {
+                return false;
+            }
+            if !self.cast_lock_deferred_keys.contains(&action) {
+                self.cast_lock_deferred_keys.push(action);
+            }
+            return true;
+        }
+        match self.cast_lock_deferred_keys.iter().position(|a| *a == action) {
+            Some(i) => {
+                self.cast_lock_deferred_keys.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// `?slideCast=off` runtime carrier install ([`USE_SLIDE_CAST`]).
     pub(crate) fn set_slide_cast(&mut self, on: bool) {
         self.slide_cast_runtime = Some(on);
@@ -2598,6 +2752,9 @@ impl MovementSystem {
     /// JS calls it ONLY under `?cmdInterp=on` (the flag-off legacy lane
     /// stays byte-identical because nothing ever queues a KeyEdge).
     pub(crate) fn enqueue_key_action(&mut self, action: u32, down: bool) {
+        if self.cast_move_lock_consumes(action, down) {
+            return;
+        }
         self.queued_drive_commands
             .push(QueuedDriveCommand::KeyEdge { action, down });
     }
@@ -3025,6 +3182,38 @@ impl MovementSystem {
             Gait::Run
         } else {
             Gait::Walk
+        }
+    }
+
+    /// The local player's persistent hold-key gait — retail
+    /// `raw_state.current_holdkey`, written only by `set_hold_run` from the
+    /// interpreter's `hold_run` (see [`Self::gait_from_hold_run`]). Before
+    /// the first key edge there is no interpreter yet; the player is then in
+    /// the default (unshifted) state, which is Run under
+    /// [`UI_TOGGLES_RUN`].
+    fn current_hold_gait(&self) -> crate::client::movement_types::Gait {
+        let hold_run = self
+            .command_interpreter
+            .as_ref()
+            .map_or(false, |interp| interp.hold_run);
+        Self::gait_from_hold_run(hold_run)
+    }
+
+    /// Gait for a MoveTo turn node with the directive's
+    /// `hold_key_to_apply`: `CMotionInterp::adjust_motion`
+    /// (acclient.c:343746) resolves HoldKey_Invalid (0) to
+    /// `raw_state.current_holdkey`, and `apply_run_to_command`
+    /// (:343439) scales TurnRight by 1.5 under HoldKey_Run (2).
+    /// A server TurnTo never carries a hold key —
+    /// `MovementParameters::UnPackNet` reads bitfield/speed/heading only
+    /// (:346344) and the ctor leaves `hold_key_to_apply = 0` (:339437) —
+    /// so it turns at the player's current gait.
+    fn turn_gait_for_hold_key(&self, hold_key_to_apply: u32) -> crate::client::movement_types::Gait {
+        use crate::client::movement_types::Gait;
+        match hold_key_to_apply {
+            2 => Gait::Run,
+            1 => Gait::Walk,
+            _ => self.current_hold_gait(),
         }
     }
 
@@ -3987,6 +4176,7 @@ impl MovementSystem {
         // healthy.
         self.reconcile_stale_null_cell(world, now);
         self.reconcile_server_controlled_projection(world, now);
+        self.expire_cast_move_lock(now);
 
         // A2-P3 (2026-06-12, W3+ S9) — consume the deferred sticky
         // timeout: ACE `StickyManager.ClearTarget` also cancels the
@@ -4296,6 +4486,14 @@ impl MovementSystem {
                 None => {}
             }
         }
+        // The rig mirror of this tick's autonomous drive — the same motion
+        // the wire carries to observers (`autonomous_wire_motion_state`).
+        self.local_rig_autonomous_motion = match self.active_drive.map(|active| active.intent) {
+            Some(ActiveDriveIntent::Autonomous(intent)) if !transient_sent => {
+                Self::autonomous_wire_motion_state(world, intent)
+            }
+            _ => None,
+        };
 
         let _ = self
             .maybe_send_autonomous_position_heartbeat(
@@ -4343,6 +4541,24 @@ impl MovementSystem {
             let mut effects = MotionSideEffects::default();
             match command {
                 PendingPursuitCommand::Cancel { restore_manual } => {
+                    // 2026-10-07 — the JS `cancelPursuit` export
+                    // (`restore_manual`) ends only a pursuit the JS
+                    // installed (S10 lane: `local_pursuit_engaged` with no
+                    // server drive). A SERVER-commanded TurnTo/MoveTo
+                    // (wire `unpack_movement` cases 6-9, or the F2
+                    // ServerMoveTo) shares the same local MoveToManager, and
+                    // picking.js calls `cancelPursuit` on every canvas click
+                    // — so re-clicking the target while ACE turned the player
+                    // toward it (missile `Rotate`, `TurnTo_Magic`) cancelled
+                    // the turn. Retail: a selection click sends and cancels
+                    // nothing (`sr_Select`, acclient.c:275684); only raw
+                    // movement input cancels a MoveTo (the ManualSet /
+                    // interpreter arms here, acclient.c:339240).
+                    if restore_manual
+                        && !(self.local_pursuit_engaged && self.server_moveto_drive.is_none())
+                    {
+                        continue;
+                    }
                     let Some(manager) = self.movement_managers.get_mut(&guid) else {
                         continue;
                     };
@@ -4755,15 +4971,28 @@ impl MovementSystem {
                 }
                 false
             }
-            Some(MoveToSteer::Turn { heading_deg }) => {
+            Some(MoveToSteer::Turn { heading_deg, hold_key }) => {
                 // Turn-in-place: zero delta + desired heading (the
-                // lane's turning realization). Turn omega magnitude =
-                // integrator policy, NOT re-derived here (spec §7 Q4).
+                // lane's turning realization). The gait picks the turn
+                // omega in `current_local_drive_control` (base TurnRight
+                // omega, ×RUN_TURN_FACTOR under Run).
+                //
+                // 2026-10-07: this was a hard-coded Walk, so every server
+                // TurnTo (ACE `Rotate` before a missile shot / cast,
+                // `TurnTo_Magic`) turned the local player at 2/3 of retail's
+                // rate. ACE sizes its wait to the RUN rate
+                // (`Player.GetRotateDelay` = base / RunFactor 1.5,
+                // Player_Location.cs) and its next motion's unpack preamble
+                // cancels the turn (`unpack_movement` → `cancel_moveto`,
+                // acclient.c:339517), so the rig stopped a third of the way
+                // short of the target — and ACE's cast angle check then
+                // re-turned. Retail resolves the turn's hold key the way
+                // `turn_gait_for_hold_key` does.
                 self.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
                     desired_world_delta: Vector3::zero(),
                     desired_heading: Some(normalize_heading(heading_deg.to_radians())),
                     target_hint: None,
-                    gait: crate::client::movement_types::Gait::Walk,
+                    gait: self.turn_gait_for_hold_key(hold_key),
                     force_grounded: false,
                 }));
                 false
@@ -4815,6 +5044,29 @@ impl MovementSystem {
             Some(err) => 3 | (err << 16),
             None => 0,
         }
+    }
+
+    /// (2026-10-07) — the local rig's share of this tick's autonomous
+    /// drive ([`Self::local_rig_autonomous_motion`]), packed for the wasm
+    /// getter: `0` = none, else `1 << 31 | (forward + 1) | (turn + 1) << 16
+    /// | run << 24` — each axis −1/0/+1 biased by +1, the kind-61
+    /// `DriveApplied` layout plus the active bit.
+    pub(crate) fn local_rig_motion_packed(&self) -> u32 {
+        let Some(state) = self.local_rig_autonomous_motion else {
+            return 0;
+        };
+        let forward: u32 = match state.forward {
+            Some(ForwardLocomotion::Forward) => 2,
+            Some(ForwardLocomotion::Backstep) => 0,
+            None => 1,
+        };
+        let turn: u32 = match state.turning {
+            Some(Turn::Right) => 2,
+            Some(Turn::Left) => 0,
+            None => 1,
+        };
+        let run = u32::from(state.gait == crate::client::movement_types::Gait::Run);
+        (1 << 31) | forward | (turn << 16) | (run << 24)
     }
 
     pub(crate) fn current_local_drive_control(
@@ -9374,7 +9626,7 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         // revives held-W. Default OFF ⇒ always false ⇒ byte-identical to
         // today when the flag is off.
         self.system.cast_hold_reclaim_enabled()
-            && self.system.local_cast_window_active
+            && (self.system.local_cast_window_active || self.system.cast_request_in_flight())
             && !self.world.player.is_airborne
     }
     fn player_report_exhaustion(&mut self) {}
@@ -9565,7 +9817,7 @@ pub(crate) fn drive_remote_movetos(
                     None
                 }
             }
-            Some(MoveToSteer::Turn { heading_deg }) => Some(holtburger_world::spatial::RemoteMoveToDrive {
+            Some(MoveToSteer::Turn { heading_deg, .. }) => Some(holtburger_world::spatial::RemoteMoveToDrive {
                 heading_rad: normalize_heading(heading_deg.to_radians()),
                 forward: None,
             }),

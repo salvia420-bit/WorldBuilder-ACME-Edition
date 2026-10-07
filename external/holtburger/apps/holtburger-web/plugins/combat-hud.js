@@ -34,6 +34,12 @@
 //     ClientCombatSystem::EndAttackRequest(height, USE_POWER_BAR_LEVEL): attack
 //     at the slider's power; msg 10 (slider moved) → m_rUIRequestedPower =
 //     dwParam1 × 0.001 clamped 0..1.
+//   Hold to charge (2026-10-07, ui/attack_power_bar.js): pressing a height
+//     button / key starts the power bar building (StartAttackRequest →
+//     AttemptStartBuildingAttack, 1.0 s to full); releasing commits
+//     max(selector, bar) — a quick tap waits for the bar to reach the selector
+//     and attacks there, holding past it charges the swing (EndAttackRequest
+//     :408952, UseTime :409015).
 //   gmCombatUI::RecvNotice_AttackHeightChanged — the button group highlights
 //     the requested height (attribute 0xB1 = selected child).
 //   gmCombatUI::RecvNotice_SetCombatMode — MeleeCombat / MissileCombat states,
@@ -65,6 +71,7 @@ import {
   CHARACTER_OPTION,
 } from "../ui/ac_character_options.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
+import { getAttackCharge } from "../ui/attack_power_bar.js";
 
 const OVERLAY_ID = "hb-combat-hud";
 const STYLE_ID   = "hb-combat-hud-style";
@@ -183,6 +190,7 @@ function ensureStyles() {
       pointer-events: none;
     }
     #${OVERLAY_ID} .hch-fill.is-charging { filter: brightness(0.85) saturate(0.8); }
+    #${OVERLAY_ID} .hch-fill.is-building { filter: brightness(1.2) saturate(1.1); }
     #${OVERLAY_ID} .hch-thumb {
       position: absolute; top: 0;
       left: 100%;
@@ -271,6 +279,7 @@ const state = {
   lastPublishedPower: null,
   reckTraining: null,  // cached Recklessness SAC (0..3) / null
   charging: false,     // a swing's refill animation is running
+  building: false,     // the hold-to-charge bar is building (attack_power_bar.js)
   debugPinned: false,  // window.__combatHudDebug() — keep open outside combat
 };
 
@@ -325,7 +334,7 @@ function paintPower() {
   const pct = Math.round(state.power * 100);
   const ranged = stanceIsRanged();
   const rightLabel = ranged ? "Accuracy" : "Power";
-  if (!state.charging && r.fill) r.fill.style.width = `${pct}%`;
+  if (!state.charging && !state.building && r.fill) r.fill.style.width = `${pct}%`;
   if (r.thumb) r.thumb.style.left = `${pct}%`;
   if (r.bar) {
     r.bar.setAttribute?.("aria-valuenow", String(pct));
@@ -419,17 +428,52 @@ function syncHeightHighlight() {
   }
 }
 
-/** ClientCombatSystem::EndAttackRequest(height, USE_POWER_BAR_LEVEL). */
-function attackAtHeight(value) {
+/** Retail SetRequestedAttackHeight — the requested height is selected on
+ *  PRESS (the button group highlights it at once). */
+function requestHeight(value) {
   if (window.__combatBarState) window.__combatBarState.attackHeight = value;
   persistCombatBarField("attackHeight", value);
   syncHeightHighlight();
-  if (typeof window.__fireAttackOnTarget === "function") {
-    try { window.__fireAttackOnTarget(value); } catch (e) {
-      console.warn(`[combat-hud] attack failed: ${e?.message ?? e}`);
-    }
-  } else {
+}
+
+/** Height button / key DOWN — StartAttackRequest: the power bar builds. */
+function pressHeight(value) {
+  requestHeight(value);
+  if (typeof window.__fireAttackOnTarget !== "function") {
     console.warn("[combat-hud] __fireAttackOnTarget not exposed");
+    return;
+  }
+  getAttackCharge().press(value);
+}
+
+/** Height button / key UP — EndAttackRequest(height, USE_POWER_BAR_LEVEL). */
+function releaseHeight(value) {
+  getAttackCharge().release(value);
+}
+
+/** A whole tap (keyboard activation of a focused button): attacks at the
+ *  selector once the bar reaches it. */
+function attackAtHeight(value) {
+  pressHeight(value);
+  releaseHeight(value);
+}
+
+/** Paint the building bar: the fill grows from 0 while the button is held;
+ *  the thumb stays on the selector. */
+function onChargeChange(s) {
+  const fill = state.refs?.fill;
+  const wasBuilding = state.building;
+  state.building = !!s?.building;
+  if (!fill) return;
+  if (state.building) {
+    fill.classList.add("is-building");
+    fill.style.transition = "none";
+    fill.style.width = `${(Math.max(0, Math.min(1, Number(s.level) || 0)) * 100).toFixed(1)}%`;
+  } else if (wasBuilding) {
+    fill.classList.remove("is-building");
+    // The swing's refill animation (onCommenceAttack) takes over if the
+    // release fired; otherwise (cancelled) show the selector again.
+    if (!state.charging) paintPower();
   }
 }
 
@@ -586,7 +630,7 @@ function build() {
   // Row 3 — keyboard hints.
   const hints = document.createElement("div");
   hints.className = "hch-row hch-hints";
-  hints.innerHTML = "<kbd>Ins</kbd> / <kbd>PgUp</kbd> lower / raise power · click a height or press its key to attack";
+  hints.innerHTML = "<kbd>Ins</kbd> / <kbd>PgUp</kbd> lower / raise power · tap a height to attack, hold it to charge";
   main.appendChild(hints);
 
   // AttackButtonGroup.
@@ -604,8 +648,27 @@ function build() {
     btn.dataset.height = h.id;
     btn.dataset.heightValue = String(h.value);
     btn.textContent = h.label;
-    btn.title = `${h.label} attack (${h.key}) — attacks your selected target`;
-    btn.addEventListener("click", () => attackAtHeight(h.value));
+    btn.title = `${h.label} attack (${h.key}) — click to attack at the selector's power, hold to charge`;
+    // Hold to charge: DOWN starts the bar, UP commits (pointer-captured, so a
+    // release off the button still lands here).
+    btn.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
+      btn._chargePointer = ev.pointerId;
+      pressHeight(h.value);
+    });
+    const onUp = (ev) => {
+      if (btn._chargePointer == null || btn._chargePointer !== ev.pointerId) return;
+      btn._chargePointer = null;
+      try { btn.releasePointerCapture(ev.pointerId); } catch (_) {}
+      releaseHeight(h.value);
+    };
+    btn.addEventListener("pointerup", onUp);
+    btn.addEventListener("pointercancel", onUp);
+    // Keyboard activation of a focused button (Enter / Space) arrives as a
+    // click with no pointer sequence (detail 0): a tap.
+    btn.addEventListener("click", (ev) => { if (ev.detail === 0) attackAtHeight(h.value); });
     heights.appendChild(btn);
     heightEls[h.id] = btn;
   }
@@ -708,6 +771,9 @@ function hide() {
   if (!state.overlayEl) return;
   state.overlayEl.dataset.open = "0";
   state.visible = false;
+  // Left melee/missile (retail cancels a request outside the ready position).
+  heldAttackKeys.clear();
+  getAttackCharge().cancel();
   onAttackDone();
 }
 
@@ -722,6 +788,10 @@ function deleteKeyOwnedByPanel() {
   } catch (_) { return false; }
 }
 
+// Attack keys held right now (code → height) — a keyup releases only the
+// key whose keydown started the build here.
+const heldAttackKeys = new Map();
+
 function onCombatKey(ev) {
   if (!state.visible || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
   if (!stanceIsMeleeOrMissile()) return;
@@ -729,7 +799,12 @@ function onCombatKey(ev) {
   if (h && h.code === "Delete" && deleteKeyOwnedByPanel()) return;
   if (h) {
     ev.preventDefault();
-    if (!ev.repeat) attackAtHeight(h.value);
+    // Hold to charge: the press starts the bar (OS auto-repeat ignored), the
+    // keyup below commits it.
+    if (!ev.repeat && !heldAttackKeys.has(h.code)) {
+      heldAttackKeys.set(h.code, h.value);
+      pressHeight(h.value);
+    }
     return;
   }
   const delta = POWER_KEYS[ev.code];
@@ -739,9 +814,22 @@ function onCombatKey(ev) {
   }
 }
 
+// Releases are ungated (a key let go while typing / after a stance change
+// must still end the build).
+function onCombatKeyUp(ev) {
+  const value = heldAttackKeys.get(ev.code);
+  if (value == null) return;
+  heldAttackKeys.delete(ev.code);
+  releaseHeight(value);
+}
+
 function installKeys() {
+  const unsubCharge = getAttackCharge().onChange(onChargeChange);
   if (inputFunnelV2On()) {
-    return getInputFunnel()?.bindRaw?.("combat-hud.attackKeys", onCombatKey) || (() => {});
+    const f = getInputFunnel();
+    const unDown = f?.bindRaw?.("combat-hud.attackKeys", onCombatKey) || (() => {});
+    const unUp = f?.bindRawUp?.("combat-hud.attackKeysUp", onCombatKeyUp) || (() => {});
+    return () => { unDown(); unUp(); unsubCharge(); };
   }
   const legacy = (ev) => {
     const t = ev.target;
@@ -750,7 +838,12 @@ function installKeys() {
     onCombatKey(ev);
   };
   window.addEventListener("keydown", legacy);
-  return () => window.removeEventListener("keydown", legacy);
+  window.addEventListener("keyup", onCombatKeyUp);
+  return () => {
+    window.removeEventListener("keydown", legacy);
+    window.removeEventListener("keyup", onCombatKeyUp);
+    unsubCharge();
+  };
 }
 
 // Q1a (2026-05-26): "You died." overlay — fires off the kind=29 Death bus

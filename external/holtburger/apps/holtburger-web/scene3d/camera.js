@@ -2593,6 +2593,27 @@ export class CameraSwitcher {
     const localGuid = typeof lpgFn === "function" ? lpgFn() : null;
     if (localGuid == null) return;
     const g = localGuid >>> 0;
+    // 2026-10-07 — `?castMoveLock` (default on, interpreter lane) holds W/S
+    // back while one of our casts is in flight and replays the press when
+    // the server's UseDone lands (the kind-61 DriveApplied consumer animates
+    // that). Animating the raw key meanwhile ran the rig in place. A change
+    // of nothing but the held forward axis is skipped outright — re-issuing
+    // the unchanged idle would stomp the server turn / cast gesture playing.
+    let castLocked = false;
+    if (CMD_INTERP_ON) {
+      try { castLocked = this._getSessionHandle()?.castMoveLockActive?.() === true; } catch (_) { /* old pkg */ }
+    }
+    if (castLocked) {
+      // Nothing dispatched yet = the spawn idle.
+      const last = this._lastRigDispatch ?? { forward: 0, strafe: 0, turn: 0, run: true };
+      const moving = m.strafe !== 0 || m.turn !== 0;
+      if (last.forward === 0 && last.strafe === m.strafe && last.turn === m.turn &&
+          (!moving || last.run === m.run)) {
+        return;
+      }
+      m = { ...m, forward: 0 };
+    }
+    this._lastRigDispatch = { forward: m.forward, strafe: m.strafe, turn: m.turn, run: m.run };
     // F15-3 (2026-06-27, ?localRigCombo=on) — compose the local rig from
     // INDEPENDENT forward + sidestep slots (retail CMotionInterp drives
     // forward/sidestep/turn commands concurrently, acclient.c:344147) instead of
@@ -2633,8 +2654,11 @@ export class CameraSwitcher {
       // timeScale -0.779 = -(2.028 / 2.6017), the COL-10 table's value.
       else if (m.forward < 0) { fwdCmd = 0x45000006; }                   // WalkBackwards (adjust_motion at setMotion)
       else if (m.strafe !== 0) { fwdCmd = 0x6500000f; fwdSpeed = m.strafe < 0 ? -1.0 : 1.0; } // pure strafe IS the cycle (2026-10-05)
-      else if (m.turn > 0) { fwdCmd = 0x6500000d; }                     // TurnRight
-      else if (m.turn < 0) { fwdCmd = 0x6500000e; }                     // TurnLeft
+      // Turns at retail's hold-run speed (adjust_motion → apply_run_to_command
+      // ×1.5, acclient.c:343439) — the same speed the kind-61 consumer uses,
+      // so the two local-rig dispatchers agree (2026-10-07).
+      else if (m.turn > 0) { fwdCmd = 0x6500000d; fwdSpeed = m.run ? 1.5 : 1.0; } // TurnRight
+      else if (m.turn < 0) { fwdCmd = 0x6500000e; fwdSpeed = m.run ? 1.5 : 1.0; } // TurnLeft (setMotion reverses)
       else { fwdCmd = 0x41000003; }                                     // Ready (stop → idle)
       const sideCmd = m.strafe !== 0 ? 0x6500000f : 0;                  // SideStepRight (layer collapses L→R)
       const sideSpeed = m.strafe < 0 ? -1.0 : 1.0;

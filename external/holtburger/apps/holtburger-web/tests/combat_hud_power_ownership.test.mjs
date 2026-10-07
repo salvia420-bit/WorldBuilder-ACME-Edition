@@ -90,6 +90,9 @@ const body = spliceModule(src, {
     CHARACTER_OPTION: "Object.freeze({ AutoRepeatAttacks: 0 })",
     getInputFunnel: "() => null",
     inputFunnelV2On: "() => false",
+    // Hold-to-charge controller (ui/attack_power_bar.js) — the power-ownership
+    // paths never build a charge; inert controller surface.
+    getAttackCharge: "() => ({ press() {}, release() {}, cancel() {}, onChange: () => () => {} })",
   },
 });
 // eslint-disable-next-line no-new-func

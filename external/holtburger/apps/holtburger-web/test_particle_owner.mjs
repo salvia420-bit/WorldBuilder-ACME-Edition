@@ -155,6 +155,28 @@ class FakeManager {
   reg.destroyAllForOwner(3);
 }
 
+// ---- 6b. StopParticle racing an in-flight create (2026-10-07) ----------
+// The windup hand trails: CreateParticle on the forward pass, StopParticle on
+// the backward pass ~0.3 s later — sooner than a cold emitter build. Retail's
+// create is synchronous, so the stop must still reach the emitter.
+{
+  const reg = new ParticleOwnerRegistry();
+  const mgr = new FakeManager();
+  let release;
+  mgr.gate = new Promise((res) => { release = res; });
+  const pending = reg.addEmitter(21, mgr, { emitterId: 19 });
+  check("stop-race: a stop during the in-flight create is accepted", reg.stopEmitter(21, 19) === true);
+  release();
+  mgr.gate = null;
+  const id = await pending;
+  check("stop-race: the create still resolves", id !== 0 && mgr.particleTable.has(id));
+  check("stop-race: the pending stop is applied on resolve", mgr.stopped.has(id));
+  // A later create on the same handle is a fresh emitter — not pre-stopped.
+  const again = await reg.addEmitter(21, mgr, { emitterId: 19 });
+  check("stop-race: a later create on the handle is not pre-stopped", again !== 0 && !mgr.stopped.has(again));
+  reg.destroyAllForOwner(21);
+}
+
 // ---- 7. despawn racing an in-flight create (epoch tombstone) -----------
 {
   const reg = new ParticleOwnerRegistry();

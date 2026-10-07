@@ -143,6 +143,9 @@ const body = spliceModule(src, {
     castCooldownMs: "() => 0",
     castSweepReducer: "() => 0",
     suggestedCombatModeFromInventory: "() => 2",
+    // Hold-to-charge controller (ui/attack_power_bar.js) — not on the
+    // skill-stride path; a throwing stub keeps that falsifiable.
+    getAttackCharge: "() => { throw new Error('getAttackCharge must not run on the skill-stride path'); }",
   },
 });
 // eslint-disable-next-line no-new-func

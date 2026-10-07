@@ -1657,6 +1657,13 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                             *cell = 0;
                         }
                     }
+                    // (2026-10-07): the local rig's share of this
+                    // tick's autonomous drive (server TurnTo /
+                    // MoveTo) — read per frame by frame_pump.js.
+                    LOCAL_RIG_AUTONOMOUS_MOTION
+                        .with(|c| c.set(movement.local_rig_motion_packed()));
+                    LOCAL_CAST_MOVE_LOCK
+                        .with(|c| c.set(movement.cast_move_lock_holding()));
                     // A2-P2 (2026-06-12, W3+ S8): publish the
                     // remote poses the spine's manager step
                     // produced THIS tick — post-tick by

@@ -71,7 +71,7 @@ export const DEFAULT_CONFIG = Object.freeze({
 // ─── Pure helpers ────────────────────────────────────────────────
 // Exported separately so test_tradeskill.mjs can drive them without
 // booting the DOM or wasm. Pattern mirrors hotbar.js#decideFireAction
-// + lifestone-popup.js#nextStateForAction.
+// + salvage-confirm.js#nextStateForAction.
 
 /**
  * Decide what to do given a drag-end event.

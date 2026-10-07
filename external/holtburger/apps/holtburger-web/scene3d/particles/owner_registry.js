@@ -273,6 +273,12 @@ export class ParticleOwnerRegistry {
       rec.scoped.set(handle, id);
     }
     this.addCount += 1;
+    // A StopParticle for this handle landed while the create was in flight
+    // (see stopEmitter) — apply it now, as retail's synchronous create would
+    // have let it.
+    if (handle !== 0 && token.stopRequested === true) {
+      try { manager.stopParticleEmitter(id); } catch (_) {}
+    }
     return id;
   }
 
@@ -330,6 +336,18 @@ export class ParticleOwnerRegistry {
     if (!rec) return false;
     const h = handle >>> 0;
     const mapped = rec.scoped.get(h);
+    if (mapped !== undefined && typeof mapped !== "number") {
+      // The create for this handle is still in flight (it awaits the emitter
+      // DAT fetch + mesh build). Retail creates synchronously inside the hook
+      // (ParticleManager::CreateParticleEmitter), so a StopParticle a few
+      // frames later always finds the emitter — e.g. a windup gesture's hand
+      // trails (MagicPowerUp, anim 0x030005A0: CreateParticle 19-22 on frame 1
+      // forward, StopParticle 19-22 on frame 1 backward, ~0.3 s apart at
+      // CastSpeed 2). Dropping the stop left those 10 s trail emitters
+      // running after the cast. Record it; addEmitter applies it on resolve.
+      mapped.stopRequested = true;
+      return true;
+    }
     const id = typeof mapped === "number" ? mapped : (rec.ids.has(h) ? h : 0);
     if (id === 0) return false;
     const manager = rec.ids.get(id);

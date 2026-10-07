@@ -211,6 +211,20 @@ impl MovementSystemHandle {
         self.inner.pursuit_status(world.player.guid)
     }
 
+    /// (2026-10-07) — the motion the local rig plays for the last tick's
+    /// autonomous drive (a server TurnTo/MoveTo running on the local
+    /// driver): `0` = none, else the packed axes of
+    /// `MovementSystem::local_rig_motion_packed`.
+    pub fn local_rig_motion_packed(&self) -> u32 {
+        self.inner.local_rig_motion_packed()
+    }
+
+    /// (2026-10-07) — `?castMoveLock` is holding W/S back for an in-flight
+    /// cast (`MovementSystem::cast_move_lock_holding`).
+    pub fn cast_move_lock_holding(&self) -> bool {
+        self.inner.cast_move_lock_holding()
+    }
+
     /// A6-T1/T2 (2026-06-12, W3+ S7): install the `?unifiedTransition=on`
     /// runtime carrier. The wasm recv-loop init calls this once after
     /// parsing the URL flag; when on (or when the native
@@ -368,6 +382,25 @@ impl MovementSystemHandle {
     /// `MovementSystem::note_local_cast_window`.
     pub fn note_local_cast_window(&mut self, active: bool) {
         self.inner.note_local_cast_window(active);
+    }
+
+    /// (2026-10-07): install the `?castMoveLock=off` runtime carrier.
+    /// Forwards to `MovementSystem::set_cast_move_lock`.
+    pub fn set_cast_move_lock(&mut self, on: bool) {
+        self.inner.set_cast_move_lock(on);
+    }
+
+    /// (2026-10-07): one of our cast requests just went out — opens the
+    /// cast window until the server's UseDone. Forwards to
+    /// `MovementSystem::note_cast_request_sent`.
+    pub fn note_cast_request_sent(&mut self) {
+        self.inner.note_cast_request_sent(Instant::now());
+    }
+
+    /// (2026-10-07): the server's UseDone landed. Forwards to
+    /// `MovementSystem::note_use_done`.
+    pub fn note_use_done(&mut self) {
+        self.inner.note_use_done();
     }
 
     /// (2026-07-03): install the `?slideCast=off` runtime carrier (default

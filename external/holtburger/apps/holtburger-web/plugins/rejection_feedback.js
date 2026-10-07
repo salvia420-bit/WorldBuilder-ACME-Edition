@@ -335,25 +335,15 @@ function _onClientActionRejected(evt) {
   if (message) _renderToast(message);
 }
 
-// F11-5 — server-side attack rejection. kind=19 `attackDone` carries
-// `error` ("None" on success). ACE drops the swing (wrong target, too far,
-// busy, …) with no other client signal, so render the reason. The full
-// server reason enum isn't enumerated client-side; humanize the PascalCase
-// name (e.g. "TargetOutOfRange" → "Target out of range") best-effort.
-function _humanizeAttackError(error) {
-  const s = String(error || "")
-    .replace(/_/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .trim();
-  if (!s) return "";
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}
-function _onAttackDone(evt) {
-  const error = (evt?.detail ?? evt ?? {}).error;
-  if (!error || error === "None") return;
-  const msg = _humanizeAttackError(error);
-  if (msg) _renderToast(msg);
-}
+// kind=19 `attackDone` is deliberately NOT toasted (2026-10-07). Retail's
+// `ClientCombatSystem::HandleAttackDoneEvent(etype)` (acclient.c:409200)
+// never displays its error — a non-zero etype only aborts the automatic
+// attack. ACE relies on that: `Player_Melee.cs OnAttackDone` ends EVERY attack
+// sequence (target dead, out of ammo, cancelled, …) with
+// `GameEventAttackDone(ActionCancelled)` purely to reset the power bar, and
+// sends any message the player should see as a SEPARATE WeenieError
+// (MissileOutOfRange, YoureTooBusy, … — rendered by the kind:13 / chat
+// paths). Toasting AttackDone printed "Action cancelled" after every kill.
 
 // Transient strings (kind:2 chat with category 9) — server action
 // feedback like "You are out of ammunition!" (ACE bounces a missile
@@ -380,7 +370,6 @@ function _attachSubscription() {
     client.events.on("kind:48", _onInventoryActionFailed);
     client.events.on("kind:13", _onWeenieError);
     client.events.on("clientActionRejected", _onClientActionRejected);
-    client.events.on("attackDone", _onAttackDone);
     client.events.on("kind:2", _onChatReceived);
     return true;
   } catch (_) { return false; }

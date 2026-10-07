@@ -1469,13 +1469,25 @@ const CAST_MAGIC_STANCE = 0x0049;
 // the default. Default/absent = synthetic fires (byte-identical to today); the
 // wire copy renders through the identical resolver, so if E1 confirms the wire
 // paints on the local rig, flip this to `!== "on"`.
+//
+// 2026-10-07 — FLIPPED: DEFAULT OFF (strict `?castSyntheticCasterVfx=on`
+// restores the synthetic). The wire copy is confirmed: the 2026-08-12 probe
+// (playCastSequence note below) measured ACE delivering the whole cast to the
+// caster — every windup UpdateMotion AND the CasterEffect GameMessageScript
+// (WorldObject_Magic.cs:358-359) — and the local cast animation already plays
+// from that wire, not from this chain. Retail has a single source too: the
+// client never fabricates a cast effect (`ClientMagicSystem::
+// FreeHandsAndCastSpell`, acclient.c:403775, sends and stops), and OpenAC
+// renders caster/target effects only from the server's 0xF754/0xF755
+// (EntityEffectController). The synthetic glow fired twice per buff/recall
+// cast, the first one a round-trip early.
 const CAST_SYNTHETIC_CASTER_VFX = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return true;
+    if (typeof window === "undefined" || !window.location) return false;
     return new URLSearchParams(window.location.search)
-      .get("castSyntheticCasterVfx")?.toLowerCase() !== "off";
+      .get("castSyntheticCasterVfx")?.toLowerCase() === "on";
   } catch (_) {
-    return true; // non-browser (headless source-eval harness): default ON
+    return false;
   }
 })();
 
@@ -10006,6 +10018,16 @@ export class EntityManager {
     if (((motionCommand >>> 0) & 0xffff) === CMD_LOW_SIDESTEP_LEFT) {
       const sIn = +motionSpeed;
       motionCommand = (((motionCommand >>> 0) & 0xffff0000) | CMD_LOW_SIDESTEP_RIGHT) >>> 0;
+      motionSpeed = -(Number.isFinite(sIn) && sIn !== 0 ? Math.abs(sIn) : 1.0);
+    }
+    // 2026-10-07: TurnLeft likewise → TurnRight with NEGATED speed (the same
+    // adjust_motion arm, acclient.c:343746 `*motion = 0x6500000D; *speed *=
+    // -1`), so a left turn plays the right-turn cycle in REVERSE. The later
+    // Left→Right remap kept the speed positive: a left turn stepped the
+    // right-turn footwork.
+    if (((motionCommand >>> 0) & 0xffff) === CMD_LOW_TURN_LEFT) {
+      const sIn = +motionSpeed;
+      motionCommand = (((motionCommand >>> 0) & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0;
       motionSpeed = -(Number.isFinite(sIn) && sIn !== 0 ? Math.abs(sIn) : 1.0);
     }
     // CQ-06 (2026-07-27) — death-hold guard, retail refusal semantics. Once a

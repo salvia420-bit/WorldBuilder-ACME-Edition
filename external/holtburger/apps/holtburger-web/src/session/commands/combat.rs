@@ -271,6 +271,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "cast_targeted_spell: {e}",
                 LoopFlow::Exit
             );
+            // 2026-10-07: the cast window (castMoveLock / castHoldReclaim)
+            // runs from here to the server's UseDone.
+            movement.note_cast_request_sent();
             console_log_str(&format!(
                 "[cast_spell] target=0x{target_guid:08X} spell_id={spell_id}",
             ));
@@ -299,6 +302,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "cast_untargeted_spell: {e}",
                 LoopFlow::Exit
             );
+            movement.note_cast_request_sent();
             console_log_str(&format!(
                 "[cast_spell] untargeted spell_id={spell_id}",
             ));

@@ -74,4 +74,12 @@ client.events.emit("kind:13", { u32Payload: 0x001d, u32Payload2: 0x12345678 });
 assert.equal(toasts.length, 1);
 assert.ok(flashed.length > 0);
 
-console.log("rejection_feedback_kind48: 5/5 PASS");
+// 6. AttackDone is never toasted — retail HandleAttackDoneEvent (acclient.c:409200)
+//    prints nothing, and ACE ends every attack (e.g. the target just died) with
+//    AttackDone(ActionCancelled) only to reset the power bar.
+reset();
+client.events.emit("attackDone", { error: "ActionCancelled" });
+client.events.emit("attackDone", { error: "None" });
+assert.equal(toasts.length, 0, "attackDone(ActionCancelled) after a kill renders no toast");
+
+console.log("rejection_feedback_kind48: 6/6 PASS");

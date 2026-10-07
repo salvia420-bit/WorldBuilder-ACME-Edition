@@ -5,9 +5,10 @@
 //       bottom-centre toolbar stack, in its OWN zoomed HUD px, ignoring
 //       top/side HUD, transient tooltips and full-viewport overlays.
 //   [2] combat-hud keyboard — PgDn/End/Del attack High/Medium/Low (retail
-//       ATTACK_HEIGHT 1/2/3), Ins/PgUp step the power by 10%, only in a
-//       melee/missile stance, and Delete stands down while the spellbook's
-//       "forget spell" action owns it.
+//       ATTACK_HEIGHT 1/2/3) — press starts the power bar, release attacks
+//       (hold to charge, ui/attack_power_bar.js) — Ins/PgUp step the power by
+//       10%, only in a melee/missile stance, and Delete stands down while the
+//       spellbook's "forget spell" action owns it.
 //   [3] vitae-detail vitaeSummary — gmVitaeUI::Update: penalty %, threshold
 //       from DeathLevel (fallback Level), experience still owed = threshold −
 //       VitaeCpPool.
@@ -21,6 +22,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spliceModule } from "../harness/lib/splice_module.mjs";
+import { createAttackCharge } from "../ui/attack_power_bar.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.join(HERE, "..");
@@ -40,15 +42,29 @@ function check(name, fn) {
 
 /* ── combat-hud, spliced with explicit inert stubs ─────────────────────── */
 
-const fired = [];
+const fired = [];      // heights of the PRIMARY attack requests
+const firedFull = [];  // [height, power, followUp] for every request
 let funnelActions = [];
+let clockMs = 0;
 globalThis.window = {
   __combatBarState: { powerLevel: 0.5, attackHeight: 2 },
   __getCurrentStanceLow: () => 0x3c, // a melee stance
-  __fireAttackOnTarget: (h) => fired.push(h),
+  __fireAttackOnTarget: (h, p, o) => {
+    firedFull.push([h, p, !!o?.followUp]);
+    if (!o?.followUp) fired.push(h);
+  },
   innerWidth: 1600,
   innerHeight: 900,
 };
+// The REAL hold-to-charge controller on a fake clock (no rAF: the tests
+// drive release / tick explicitly).
+const testCharge = createAttackCharge({
+  now: () => clockMs,
+  fire: (h, p, o) => window.__fireAttackOnTarget(h, p, o),
+  getSlider: () => window.__combatBarState.powerLevel,
+});
+testCharge.onChange = () => () => {};
+globalThis.__testCharge = testCharge;
 globalThis.localStorage = {
   _m: new Map(),
   getItem(k) { return this._m.has(k) ? this._m.get(k) : null; },
@@ -81,11 +97,12 @@ const body = spliceModule(src, {
     CHARACTER_OPTION: "Object.freeze({ AutoRepeatAttacks: 0 })",
     getInputFunnel: "() => ({ actions: globalThis.__testFunnelActions() })",
     inputFunnelV2On: "() => false",
+    getAttackCharge: "() => globalThis.__testCharge",
   },
 });
 globalThis.__testFunnelActions = () => funnelActions;
 // eslint-disable-next-line no-new-func
-const hud = new Function(body + "\nreturn { computeDockBottom, onCombatKey, state, HEIGHTS };\n")();
+const hud = new Function(body + "\nreturn { computeDockBottom, onCombatKey, onCombatKeyUp, state, HEIGHTS };\n")();
 
 function rectEl(id, r) {
   return {
@@ -136,9 +153,12 @@ check("never climbs above mid-screen", () => {
 
 console.log("\n[2] combat-hud keyboard (melee / missile)");
 
-const key = (code, extra = {}) => {
+// A full key press: keydown, `holdMs` of holding, keyup (the bar's build).
+const key = (code, extra = {}, holdMs = 1000) => {
   let prevented = false;
   hud.onCombatKey({ code, repeat: false, preventDefault() { prevented = true; }, ...extra });
+  clockMs += holdMs;
+  hud.onCombatKeyUp({ code });
   return prevented;
 };
 
@@ -152,10 +172,37 @@ check("PgDn / End / Del → High (1) / Medium (2) / Low (3)", () => {
   assert.equal(window.__combatBarState.attackHeight, 3, "the requested height follows the last attack");
 });
 
+check("press only starts the bar — the attack goes out on release (hold to charge)", () => {
+  fired.length = 0;
+  firedFull.length = 0;
+  hud.onCombatKey({ code: "End", repeat: false, preventDefault() {} });
+  assert.deepEqual(fired, [], "nothing fires while the key is held");
+  assert.equal(window.__combatBarState.attackHeight, 2, "the height is requested on press");
+  clockMs += 800; // charged to 80 % — past the 50 % selector
+  hud.onCombatKeyUp({ code: "End" });
+  assert.deepEqual(firedFull, [[2, 0.8, false], [2, 0.5, true]],
+    "the charged swing at 80 %, then the selector power for the repeats");
+});
+
+check("a quick tap attacks at the selector once the bar reaches it", () => {
+  firedFull.length = 0;
+  hud.onCombatKey({ code: "PageDown", repeat: false, preventDefault() {} });
+  clockMs += 50;
+  hud.onCombatKeyUp({ code: "PageDown" });
+  assert.deepEqual(firedFull, [], "a 50 ms tap waits for the bar");
+  clockMs += 450; // bar at the 50 % selector
+  testCharge.tick();
+  assert.deepEqual(firedFull, [[1, 0.5, false]]);
+});
+
 check("held-key auto-repeat does not spam attacks", () => {
   fired.length = 0;
-  key("End", { repeat: true });
-  assert.deepEqual(fired, []);
+  hud.onCombatKey({ code: "End", repeat: false, preventDefault() {} });
+  hud.onCombatKey({ code: "End", repeat: true, preventDefault() {} });
+  hud.onCombatKey({ code: "End", repeat: true, preventDefault() {} });
+  clockMs += 1000;
+  hud.onCombatKeyUp({ code: "End" });
+  assert.deepEqual(fired, [2], "one attack per press, however long the OS repeats");
 });
 
 check("Ins / PgUp step the power by 10% and publish it", () => {

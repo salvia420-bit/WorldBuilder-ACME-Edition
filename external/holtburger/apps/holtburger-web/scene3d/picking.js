@@ -44,14 +44,28 @@ const PEACE_USE_DOUBLE_CLICK_MS = 500;
 // `true` after the eye-test, so unlike its siblings (castFaceTarget /
 // castReface) there was no way to isolate the missile turn-in-place when
 // diagnosing a motion-pipeline regression — and the ?serverTurn work below
-// needs to disable every local face loop. DEFAULT-ON (`!== "off"`), i.e.
-// byte-identical to the old hard-coded value when the param is absent.
-// `?missileFaceTarget=off` to disable.
+// needs to disable every local face loop.
+//
+// 2026-10-07 — DEFAULT FLIPPED OFF (strict `=on` opt-in), together with
+// castFaceTarget / castReface. Retail has no client-side pre-turn:
+// `ClientCombatSystem::ExecuteAttack` (acclient.c:408626) and
+// `ClientMagicSystem::CastSpell` (:404671) only stop the player
+// (`MaybeStopCompletely`) and send; the turn is the SERVER's TurnToObject
+// (ACE `Rotate` / `TurnTo_Magic`), which the client applies to the local
+// player through its MoveToManager (`unpack_movement` case 8 →
+// `CPhysicsObj::TurnToObject`, acclient.c:339604). OpenAC does exactly the
+// same and has no pre-turn either. Our wasm MoveTo driver now realizes that
+// turn at retail's run-turn rate (it turned at walk rate, so ACE's next
+// motion cut it a third short — the "not turning towards the monster"
+// report). This local loop drove the same body through `setMovementInput`
+// (non-idle manual input CANCELS the server's TurnTo), turned at walk rate,
+// timed out after 72° (FACE_TURN_TIMEOUT_MS) and delayed the shot by up to
+// 800 ms. `?missileFaceTarget=on` restores it.
 const MISSILE_FACE_TARGET = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return true;
-    return new URLSearchParams(window.location.search).get("missileFaceTarget")?.toLowerCase() !== "off";
-  } catch { return true; }
+    if (typeof window === "undefined" || !window.location) return false;
+    return new URLSearchParams(window.location.search).get("missileFaceTarget")?.toLowerCase() === "on";
+  } catch { return false; }
 })();
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
@@ -70,14 +84,14 @@ const STICKY_WATCH_OUT_SAMPLES = 2;
 
 // F8-5 — turn the local caster to face the target before a spell cast
 // (ACE Rotate() before the windup), so the bolt doesn't launch sideways/
-// backwards out of a frozen, wrong-facing caster. DEFAULT-ON with
-// ?castFaceTarget=off as the escape (the old "default-off" note here was
-// stale — P16 fleet packet, 2026-07-04). While a manual movement key is
-// held the pre-step is skipped entirely (see turnToFaceThenAct).
+// backwards out of a frozen, wrong-facing caster. While a manual movement
+// key is held the pre-step is skipped entirely (see turnToFaceThenAct).
+// 2026-10-07 — DEFAULT OFF (strict `?castFaceTarget=on`): the server's
+// TurnToObject turns the caster (see MISSILE_FACE_TARGET above).
 const CAST_FACE_TARGET = (() => {
   try {
     return typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("castFaceTarget") !== "off";
+      new URLSearchParams(window.location.search).get("castFaceTarget") === "on";
   } catch { return false; }
 })();
 
@@ -95,11 +109,15 @@ const CAST_FACE_TARGET = (() => {
 // (root.quaternion follows the server pose), which the manual 1070 casting eye-test
 // (2026-07-13, user-confirmed "great") substitutes for. It still touches the motion
 // pipeline mid-cast (a turn edge could trip an FU-A control reclaim, ADJ-15 Q3), so
-// keep the `?castReface=off` escape. `?castReface=off` to disable.
+// keep the `?castReface=off` escape.
+// 2026-10-07 — DEFAULT OFF (strict `?castReface=on`): ACE's "second rotate"
+// is a server TurnToObject like the first, which the wasm MoveTo driver now
+// applies to the local player at the retail run-turn rate (see
+// MISSILE_FACE_TARGET above); a local loop on top of it cancels it.
 const CAST_REFACE = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search).get("castReface")?.toLowerCase() !== "off";
+    return new URLSearchParams(window.location.search).get("castReface")?.toLowerCase() === "on";
   } catch { return false; }
 })();
 
@@ -735,8 +753,15 @@ export function setupClickPicking({
   // and the old one exits WITHOUT issuing its neutral stop (the new loop owns
   // the drive now, so stopping would stomp it — the P16-H1 ManualSet hazard).
   let faceLoopToken = 0;
+  // A face loop is driving `setMovementInput` right now (between its first
+  // turn command and its neutral stop / preemption).
+  let faceLoopActive = false;
+  // Returns whether a loop was in flight (its turn command may be latched).
   function cancelFaceLoop() {
     faceLoopToken++;
+    const wasActive = faceLoopActive;
+    faceLoopActive = false;
+    return wasActive;
   }
 
   function turnToFaceThenAct(targetGuid, act, enabled) {
@@ -782,6 +807,7 @@ export function setupClickPicking({
     // stale token on its next frame and bails without stopping the drive.
     if (faceLoopToken !== 0) pickDiag.faceLoopPreempted++;
     const myToken = ++faceLoopToken;
+    faceLoopActive = true;
     pickDiag.faceLoopStarts++;
     const step = () => {
       // ROT-1: preempted by a newer loop — leave the drive to the new owner.
@@ -789,6 +815,7 @@ export function setupClickPicking({
       const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
       const pose = playerWorldPose(sessionHandle);
       if (!targetAc || !pose) {
+        faceLoopActive = false;
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
         return;
@@ -808,6 +835,7 @@ export function setupClickPicking({
         if (performance.now() - startMs >= FACE_TURN_TIMEOUT_MS) {
           pickDiag.faceLoopTimeouts++;
         }
+        faceLoopActive = false;
         try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
         act();
         return;
@@ -911,8 +939,13 @@ export function setupClickPicking({
     // face-turn rAF loop survived it and kept driving `setMovementInput`
     // across the new click. Cancel it here too, and neutralise the drive so a
     // preempted loop can't leave a turn command latched.
-    cancelFaceLoop();
-    try { sessionHandle.setMovementInput?.(0, 0, 0, false); } catch {}
+    // 2026-10-07: only when a loop WAS driving. A click is a selection, not a
+    // movement input (retail `sr_Select` sends nothing, acclient.c:275684), so
+    // an unconditional neutral `setMovementInput` must not reach the wasm
+    // drive — e.g. while the server's TurnToObject is turning the player.
+    if (cancelFaceLoop()) {
+      try { sessionHandle.setMovementInput?.(0, 0, 0, false); } catch {}
+    }
     cancelClientMove();
     const guid = pickEntityAt(ev.clientX, ev.clientY);
     if (guid == null) return;
@@ -1169,44 +1202,27 @@ export function setupClickPicking({
           emitActionRejected("Enter magic mode to cast that spell.");
           return;
         }
-        // Wave 6.B (2026-05-28) — typed-class click precedence for
-        // Lifestone. The Chorizite-port WorldObjectManager
-        // (window.__wom) holds typed subclasses (Lifestone extends
-        // Static); when the click target is a Lifestone, emit the
-        // typed-click event so plugins/lifestone-popup.js can render
-        // bind/recall UI INSTEAD of the silent generic
-        // useObject → ACE-decides-bind path. The popup eventually
-        // dispatches `useObject(guid)` itself on user "Bind here"
-        // confirmation (so this branch only blocks the generic
-        // fall-through, no wire packet is dropped). Lifestone stays on
-        // SINGLE click because it is confirmation-gated — a stray click
-        // can't fire an irreversible action.
-        let handledByTypedClick = false;
-        try {
-          const wo = (typeof window !== "undefined")
-            ? window.__wom?.get?.(guid >>> 0)
-            : null;
-          if (wo && wo.constructor && wo.constructor.name === "Lifestone") {
-            window.__pluginClient?.events?.emit?.("lifestoneClicked", {
-              guid: guid >>> 0,
-            });
-            handledByTypedClick = true;
-          }
-        } catch (_) { /* never block click on wom-probe faults */ }
-        if (!handledByTypedClick) {
-          // F17-2 — single click only selects + assesses (selectionChanged
-          // already fired above; examine-target requests appraisal off it).
-          // Generic USE (portal teleport, door toggle, vendor open) still
-          // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
-          // misclick in town no longer fires an irreversible world action.
-          if (doubleClickGate(guid, ev)) {
-            cancelClientMove();
-            console.info(
-              `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
-              `(attackable=${entityIsAttackableTarget(guid)} usable=${entityIsUsable(guid)})`,
-            );
-            sessionHandle.useObject(guid >>> 0);
-          }
+        // F17-2 — single click only selects + assesses (selectionChanged
+        // already fired above; examine-target requests appraisal off it).
+        // USE (portal teleport, door toggle, vendor open, lifestone bind)
+        // requires a double-click within PEACE_USE_DOUBLE_CLICK_MS, so a
+        // misclick in town no longer fires an irreversible world action.
+        //
+        // A lifestone takes this same path (2026-10-07): retail double-click
+        // is `ItemHolder::UseObject` for every object (acclient.c:433354),
+        // and ACE answers a Use on a lifestone with the Sanctuary motion +
+        // "You have attuned your spirit to this Lifestone" (Lifestone.cs
+        // ActOnUse). The old Wave 6.B bind/recall popup opened on the
+        // first click and the second click of the double-click closed it
+        // again — and a recall button never belonged on the lifestone
+        // (retail recalls with the Lifestone Recall spell / @ls).
+        if (doubleClickGate(guid, ev)) {
+          cancelClientMove();
+          console.info(
+            `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
+            `(attackable=${entityIsAttackableTarget(guid)} usable=${entityIsUsable(guid)})`,
+          );
+          sessionHandle.useObject(guid >>> 0);
         }
       }
     } catch (e) {
@@ -1295,7 +1311,15 @@ export function setupClickPicking({
   // missile/magic turn-to-face and fire in place. The lockout
   // (`cb.attackInProgress`) gates rapid clicks; `combatCommenceAttack` seeds
   // the combat-bar meter.
-  function fireAttackOnSelectedTarget(height) {
+  //
+  // `power` (2026-10-07) — the hold-to-charge power bar's committed level
+  // (ui/attack_power_bar.js, retail `EndAttackRequest`); absent = the
+  // selector (`powerLevel`). `opts.followUp` — retail's SECOND
+  // `ExecuteAttack` after a charged release (acclient.c:408952): the swing
+  // is already on its way, so this only re-sends the request at the
+  // selector's power, which ACE's AttackQueue hands to the auto-repeat
+  // swings (Entity/AttackQueue.cs). No lockout, turn, prediction or sticky.
+  function fireAttackOnSelectedTarget(height, power, opts) {
     const targetGuid = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
     if (targetGuid === 0) {
       console.log("[fire-attack] no target selected — click a monster first");
@@ -1315,8 +1339,21 @@ export function setupClickPicking({
     // back to Medium rather than crash the swing. (Number.isFinite(0) is true,
     // so a 0 would otherwise sail past the `??` above.)
     const safeHeight = (rawHeight === 1 || rawHeight === 2 || rawHeight === 3) ? rawHeight : ATTACK_HEIGHT_MEDIUM;
-    const slider =
-      cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL;
+    const slider = Number.isFinite(power)
+      ? Math.max(0, Math.min(1, power))
+      : (cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL);
+    if (opts?.followUp) {
+      try {
+        if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
+          sessionHandle.missileAttack(targetGuid, safeHeight, slider);
+        } else if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
+          sessionHandle.attack(targetGuid, safeHeight, slider);
+        }
+      } catch (e) {
+        console.warn(`[fire-attack] follow-up request failed: ${e?.message ?? e}`);
+      }
+      return;
+    }
     const fireOnce = (cmd, commenceDetail) => {
       // F6-6 — read the lockout LIVE at execution time, not a click-time
       // capture. For a charge-pursuit `fireOnce` runs seconds later on

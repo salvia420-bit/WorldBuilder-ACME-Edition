@@ -252,7 +252,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-06: + scene3d/bandwidth_tier.js + scene3d/atmosphere_lut_plan.js
   // (slow-link boot) + scene3d/batched_material_variant.js (statically
   // reachable but missing from the committed block until this re-run) → 303.
-  const NON_APP_PRELOADS = 303;
+  // 2026-10-07: re-run for the new app/local_auto_motion.js; the block had
+  // drifted again (14 statically reachable non-app modules missing) → 317.
+  const NON_APP_PRELOADS = 317;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)

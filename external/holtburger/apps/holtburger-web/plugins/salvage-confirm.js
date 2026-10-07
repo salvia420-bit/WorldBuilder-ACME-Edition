@@ -1,7 +1,6 @@
 // Salvage confirmation modal — reusable Are-You-Sure prompt before a
-// salvage operation destroys the source item(s). Pattern mirrors
-// lifestone-popup.js: pure (nextStateForAction + decideSalvageAction)
-// helpers + DOM mount, so tests can drive the state machine without
+// salvage operation destroys the source item(s). Pure
+// (nextStateForAction + decideSalvageAction) helpers + DOM mount, so tests can drive the state machine without
 // loading the DOM.
 //
 // Triggering sites (tradeskill.js's `requireConfirm` flow, salvage-
@@ -27,7 +26,6 @@
 //                                   callbacks directly.
 //
 // References:
-//   - plugins/lifestone-popup.js (state-machine pattern)
 //   - plugins/tradeskill.js (sibling confirm popup with requireConfirm)
 //   - plugins/salvage-panel.js (sibling batch UI)
 
@@ -43,8 +41,7 @@ const STYLE_ID = "hb-salvage-confirm-style";
 
 // ─── Pure state machine ──────────────────────────────────────────
 // Exported so test_salvage_confirm.mjs can exercise the dispatch
-// decisions without DOM. Identical-shape to lifestone-popup.js for
-// consistency across confirm-modal plugins.
+// decisions without DOM.
 
 /**
  * Reduce a confirm-modal state given an event.

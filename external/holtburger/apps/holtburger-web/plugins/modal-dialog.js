@@ -21,17 +21,17 @@
 //   window.__modalConfirmCallback — callback-based
 //
 // References:
-//   - plugins/lifestone-popup.js / salvage-confirm.js (sibling
-//     confirm modals; modal-dialog supersedes them for free-form
-//     confirms — they keep their domain-specific state machines)
+//   - plugins/salvage-confirm.js (sibling confirm modal; modal-dialog
+//     supersedes it for free-form confirms — it keeps its domain-specific
+//     state machine)
 //
 // HUD overhaul 2026-10-05 — retail dialog chrome + keyboard:
 //   - frame = retail DialogBox (layout 0x21000042, element 0x100002AF):
 //     13×13 brass corner caps 0x06005D39/3A/3B/3C, silver edges
 //     0x06005D3D (top/bottom) / 0x06005D3E (left/right) over the navy
 //     field 0x06005DDB. Exposed as the shared `.hb-dlg` class
-//     (`ensureDialogChromeStyles()`) so salvage-confirm / lifestone-popup
-//     / options-panel prompts all wear the same chrome.
+//     (`ensureDialogChromeStyles()`) so salvage-confirm / options-panel
+//     prompts all wear the same chrome.
 //   - kit `hbk-btn` buttons (confirm first, like retail's Yes / No),
 //     gold `hbk-divider` under the title, CSS-text message that wraps
 //     (the old single-line <ac-text> canvas ran off the dialog edge).

@@ -220,8 +220,13 @@ pub(crate) enum MoveToSteer {
         run: bool,
     },
     /// Turn command active: face `heading_deg` (degrees, retail node
-    /// domain).
-    Turn { heading_deg: f32 },
+    /// domain). `hold_key` is the directive's `hold_key_to_apply`, which
+    /// `BeginTurnToHeading` hands to the TurnRight `_DoMotion`
+    /// (acclient.c:345456); 0 = HoldKey_Invalid (every server TurnTo — the
+    /// wire never carries one), resolved by the consumer to the mover's
+    /// current hold key exactly as `CMotionInterp::adjust_motion` does
+    /// (:343746).
+    Turn { heading_deg: f32, hold_key: u32 },
 }
 
 /// The physics-domain effects one `use_time` returns instead of
@@ -1063,6 +1068,7 @@ impl MoveToManager {
             {
                 Some(MoveToSteer::Turn {
                     heading_deg: *heading,
+                    hold_key: self.movement_params.hold_key_to_apply,
                 })
             }
             _ => None,
@@ -1399,7 +1405,7 @@ mod tests {
         let out = manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
         assert_eq!(out.do_motions[0].0, MOTION_TURN_RIGHT);
         assert!(
-            matches!(out.steer, Some(MoveToSteer::Turn { heading_deg }) if (heading_deg - 180.0).abs() < 0.1)
+            matches!(out.steer, Some(MoveToSteer::Turn { heading_deg, .. }) if (heading_deg - 180.0).abs() < 0.1)
         );
 
         // Frame 2: still short of the node heading → stall bookkeeping

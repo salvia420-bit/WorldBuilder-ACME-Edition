@@ -32,6 +32,7 @@ import {
   castSweepReducer,
 } from "../ui/ac_cast_ui_logic.js";
 import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
+import { getAttackCharge } from "../ui/attack_power_bar.js";
 
 // Wave 6 / Phase 17 — spell-shape badge mapping.
 //
@@ -1738,29 +1739,45 @@ function renderAttackControls(bodyEl, state) {
     btn.type = "button";
     btn.className = "hb-cb-height-btn";
     btn.textContent = h.label;
-    btn.title = `${h.label} attack at your selected target`;
+    btn.title = `${h.label} attack at your selected target — click for the selector's power, hold to charge`;
     btn.dataset.value = String(h.value);
     if (state.attackHeight === h.value) btn.classList.add("active");
-    btn.addEventListener("click", () => {
+    // Retail UX (2026-05-19) — Hi/Med/Lo also FIRE the attack on the
+    // currently selected target, through `window.__fireAttackOnTarget`
+    // (scene3d/picking.js). 2026-10-07: hold to charge, exactly like the
+    // combat HUD (ui/attack_power_bar.js — retail StartAttackRequest on
+    // press, EndAttackRequest on release): a click attacks at the power
+    // selector once the bar reaches it, holding charges past it.
+    const pressHeight = () => {
       state.attackHeight = h.value;
       for (const [v, b] of heightButtons) {
         b.classList.toggle("active", v === h.value);
       }
       saveState(state);
       syncWindowState(state);
-      // Retail UX (2026-05-19) — clicking Hi/Med/Lo also FIRES the
-      // attack on the currently selected target. The fire helper
-      // (set on `window` by `scene3d/picking.js::setupClickPicking`)
-      // reads the selected target + power + chargeAttack flag and
-      // routes through the same lockout/charge path the click handler
-      // used to. No-op if no target selected, wrong stance, or
-      // attack still in flight.
-      try {
-        window.__fireAttackOnTarget?.(h.value);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn(`[combat-bar] fire-on-height click: ${e?.message ?? e}`);
-      }
+      getAttackCharge().press(h.value);
+    };
+    const releaseHeight = () => getAttackCharge().release(h.value);
+    btn.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      try { btn.setPointerCapture(ev.pointerId); } catch (_) {}
+      btn._chargePointer = ev.pointerId;
+      pressHeight();
+    });
+    const onUp = (ev) => {
+      if (btn._chargePointer == null || btn._chargePointer !== ev.pointerId) return;
+      btn._chargePointer = null;
+      try { btn.releasePointerCapture(ev.pointerId); } catch (_) {}
+      releaseHeight();
+    };
+    btn.addEventListener("pointerup", onUp);
+    btn.addEventListener("pointercancel", onUp);
+    // Keyboard activation (Enter / Space): a tap.
+    btn.addEventListener("click", (ev) => {
+      if (ev.detail !== 0) return;
+      pressHeight();
+      releaseHeight();
     });
     heightButtons.set(h.value, btn);
     heightGroup.appendChild(btn);

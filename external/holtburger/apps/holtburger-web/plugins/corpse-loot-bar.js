@@ -71,7 +71,24 @@ const DESPAWN_POLL_MS = 1000;
 const EXT_WINDOW_ID = 0x10000063;
 // Default placement: centred, clear of the bottom toolbar (HUD px).
 const DEFAULT_BOTTOM_GAP = 132;
-const LOOT_ALL_STEP_MS = 700;
+// Loot all — strictly ONE take in flight (2026-10-07). ACE's pickup is a
+// busy-guarded state machine (Player_Inventory.cs
+// HandleActionPutItemInContainer_Verify): while a pickup is in its Start
+// phase (walk-to + crouch) another PutItemInContainer is refused with
+// YoureTooBusy + InventoryServerSaveFailed, and only ONE more is accepted
+// (queued as NextPickup) once the first item has moved and the player is
+// standing back up. The old loop sent the next take on a fixed 700 ms timer
+// whether or not the server had answered, so every pickup slower than that
+// collided, failed, and stopped the loop. The next take now goes out only
+// after the previous one was answered: the item left the container (echo),
+// the server refused it (busy → retried, anything else → stop), or the
+// ledger gave up waiting.
+const LOOT_ALL_NEXT_DELAY_MS = 150;   // after an echo — ACE queues it as NextPickup
+const LOOT_ALL_RETRY_DELAY_MS = 900;  // after a "You're too busy" refusal
+const LOOT_ALL_MAX_TRIES = 3;         // per item, then it is skipped
+const LOOT_ALL_WATCHDOG_MS = 8000;    // > the pending ledger's 6 s TTL
+const LOOT_ALL_BUSY_WINDOW_MS = 1500; // a YoureTooBusy this recent explains a failure
+const WERR_YOURE_TOO_BUSY = 0x001d;
 const SP = "./data/ui-sprites";
 
 let overlayEl = null;
@@ -302,10 +319,7 @@ function buildOverlay() {
 
   pendingOps.onChange((evt) => {
     if (overlayEl?.dataset.open !== "1") return;
-    if (lootAll && evt?.type === "fail" && evt.guid === lootAll.waitGuid) {
-      stopLootAll();
-      showItemToast(`Loot all stopped — the ${evt.entry?.stub?.name || "item"} could not be taken.`);
-    }
+    onLootAllLedger(evt);
     render();
   });
 
@@ -393,7 +407,7 @@ function takeItem(itemGuid) {
 }
 
 function startLootAll() {
-  lootAll = { waitGuid: 0, timer: 0 };
+  lootAll = { waitGuid: 0, timer: 0, tries: new Map(), skipped: new Set(), lastBusyMs: -Infinity };
   render();
   lootStep();
 }
@@ -402,20 +416,87 @@ function stopLootAll() {
   lootAll = null;
   render();
 }
+function scheduleLootStep(ms) {
+  if (!lootAll) return;
+  if (lootAll.timer) clearTimeout(lootAll.timer);
+  lootAll.timer = setTimeout(lootStep, ms);
+}
 function lootStep() {
   if (!lootAll) return;
   if (lootAll.timer) { clearTimeout(lootAll.timer); lootAll.timer = 0; }
   if (overlayEl?.dataset.open !== "1") { stopLootAll(); return; }
-  const next = state.items.find((it) => !pendingOps.has(it.guid >>> 0));
+  const w = lootAll.waitGuid >>> 0;
+  if (w) {
+    // One take in flight, never two: while the server has not answered the
+    // last one, only the watchdog is re-armed.
+    const listed = state.items.some((it) => (it.guid >>> 0) === w);
+    if (listed && pendingOps.has(w)) {
+      scheduleLootStep(LOOT_ALL_WATCHDOG_MS);
+      return;
+    }
+    lootAll.waitGuid = 0;
+  }
+  const next = state.items.find((it) => {
+    const g = it.guid >>> 0;
+    return !pendingOps.has(g) && !lootAll.skipped.has(g);
+  });
   if (!next) {
-    // Everything taken or in flight — finish once the strip is empty.
-    if (!state.items.length) stopLootAll();
-    else lootAll.timer = setTimeout(lootStep, LOOT_ALL_STEP_MS);
+    // Everything taken, skipped, or in flight from another take (a manual
+    // double-click) — finish once nothing takeable is left.
+    if (!state.items.some((it) => !lootAll.skipped.has(it.guid >>> 0))) {
+      const skipped = lootAll.skipped.size;
+      stopLootAll();
+      if (skipped > 0) {
+        showItemToast(`Loot all finished — ${skipped === 1 ? "1 item" : `${skipped} items`} could not be taken.`);
+      }
+    } else {
+      scheduleLootStep(LOOT_ALL_WATCHDOG_MS);
+    }
     return;
   }
-  lootAll.waitGuid = next.guid >>> 0;
-  if (!takeItem(next.guid)) { stopLootAll(); return; }
-  lootAll.timer = setTimeout(lootStep, LOOT_ALL_STEP_MS);
+  const g = next.guid >>> 0;
+  const tries = (lootAll.tries.get(g) || 0) + 1;
+  if (tries > LOOT_ALL_MAX_TRIES) {
+    lootAll.skipped.add(g);
+    scheduleLootStep(0);
+    return;
+  }
+  lootAll.tries.set(g, tries);
+  lootAll.waitGuid = g;
+  if (!takeItem(g)) {
+    lootAll.waitGuid = 0;
+    lootAll.skipped.add(g);
+    scheduleLootStep(LOOT_ALL_NEXT_DELAY_MS);
+    return;
+  }
+  scheduleLootStep(LOOT_ALL_WATCHDOG_MS);
+}
+// The server answered the awaited take (pending-ledger event).
+function onLootAllLedger(evt) {
+  if (!lootAll || !evt || (evt.guid >>> 0) !== (lootAll.waitGuid >>> 0)) return;
+  if (evt.type === "fail") {
+    // ACE refuses a pickup that lands while the previous one is still in its
+    // Start phase with YoureTooBusy (sent just before the
+    // InventoryServerSaveFailed) — wait for the player to stand back up and
+    // try the same item again. Any other refusal (too encumbered, pack full,
+    // someone else took it) stops the loop as before.
+    if (performance.now() - lootAll.lastBusyMs <= LOOT_ALL_BUSY_WINDOW_MS) {
+      scheduleLootStep(LOOT_ALL_RETRY_DELAY_MS);
+      return;
+    }
+    stopLootAll();
+    showItemToast(`Loot all stopped — the ${evt.entry?.stub?.name || "item"} could not be taken.`);
+    return;
+  }
+  if (evt.type === "resolve" || evt.type === "expire") {
+    // Taken (or the ledger stopped waiting — lootStep re-checks the strip).
+    scheduleLootStep(LOOT_ALL_NEXT_DELAY_MS);
+  }
+}
+function onLootAllWeenieError(ev) {
+  if (!lootAll) return;
+  const p = ev?.detail ?? ev ?? {};
+  if (((p.u32Payload >>> 0) || 0) === WERR_YOURE_TOO_BUSY) lootAll.lastBusyMs = performance.now();
 }
 
 // Bug 12 (2026-10-07): the retail item composite (ui/ac_icon_compose.js);
@@ -628,9 +709,10 @@ function refreshContents() {
   }
   render();
   if (lootAll && lootAll.waitGuid && !guids.some((x) => (x >>> 0) === lootAll.waitGuid)) {
-    // The awaited item arrived — take the next one promptly.
-    if (lootAll.timer) clearTimeout(lootAll.timer);
-    lootAll.timer = setTimeout(lootStep, 120);
+    // The awaited item left the container — the server has moved it and is
+    // standing the player back up, which is exactly when ACE accepts (queues)
+    // the next pickup. Take the next one promptly.
+    scheduleLootStep(LOOT_ALL_NEXT_DELAY_MS);
   }
 }
 
@@ -723,6 +805,7 @@ function trySubscribe() {
   if (!client?.events?.on) return false;
   client.events.on("playerInventoryChanged", onInvChanged);
   client.events.on("containerClosed", onContainerClosed);
+  client.events.on("kind:13", onLootAllWeenieError);
   return true;
 }
 if (typeof window !== "undefined") {

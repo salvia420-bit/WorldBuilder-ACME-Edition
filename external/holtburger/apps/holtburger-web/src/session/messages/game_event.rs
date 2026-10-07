@@ -782,6 +782,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         busy.0 = busy.0.saturating_sub(1);
                         busy.1 = Some(web_time::Instant::now());
                     }
+                    // 2026-10-07: retire one outstanding cast request — the
+                    // last one closes the cast window and replays any W/S
+                    // press held back during it (castMoveLock).
+                    movement.note_use_done();
                     if data.error == WeenieError::None {
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_USE_DONE,

@@ -1707,6 +1707,7 @@ export function dispatchClientEvent(evt, D) {
         const packed = (evt.u32Payload2 ?? 0x010101) >>> 0;
         const fwd = (packed & 0xff) - 1;
         const side = ((packed >> 8) & 0xff) - 1;
+        const turn = ((packed >> 16) & 0xff) - 1;
         const run = ((packed >> 24) & 0xff) !== 0;
         if (em && localGuid != null) {
           const NONCOMBAT_STANCE = 0x8000003d;
@@ -1731,6 +1732,16 @@ export function dispatchClientEvent(evt, D) {
             if (fwd === 0 && side !== 0) {
               forwardCmd = 0x6500000f;
               fwdSpeed = side < 0 ? -1.0 : 1.0;
+            } else if (fwd === 0 && turn !== 0) {
+              // 2026-10-07: a pure turn IS the cycle too — this arm
+              // played Ready, so turning in place stood still in the
+              // idle pose. TurnRight / TurnLeft (setMotion plays Left
+              // as Right reversed) at retail's hold-run turn speed:
+              // adjust_motion → apply_run_to_command ×1.5
+              // (acclient.c:343746 / :343439), the rate the body
+              // turns at.
+              forwardCmd = turn > 0 ? 0x6500000d : 0x6500000e;
+              fwdSpeed = run ? 1.5 : 1.0;
             }
             em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance, fwdSpeed);
           }

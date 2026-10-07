@@ -13,6 +13,7 @@
 // lastInputSig, lastForwardAxis) through D's live accessors.
 
 import { getInputController as __getInputController, resolveRunModifier as __resolveRunModifier } from "../scene3d/input.js";
+import { getLocalAutoMotion } from "./local_auto_motion.js";
 
 export function pumpEntityUpdatesAndInput(D) {
   const { playerRunRate, __inputFunnelOn, entityMap, __UNIFIED_DISPATCH, SPRITE_HEADING_OFFSET,
@@ -195,6 +196,11 @@ export function pumpEntityUpdatesAndInput(D) {
     try { handle.tickMovement(); } catch (_) {}
   } else if (window.__syncTickDiag) {
     window.__syncTickDiag.skipped2d += 1;
+  }
+  // 2026-10-07: the local rig steps through a turn / MoveTo the client runs
+  // on the server's orders (app/local_auto_motion.js).
+  if (D.enteredWorld && typeof handle.localAutonomousMotion === "function") {
+    try { getLocalAutoMotion()?.update(handle.localAutonomousMotion()); } catch (_) {}
   }
   // Phase 4 step 3.5: client-side prediction. ACE doesn't
   // echo position back to the originator (retail AC's

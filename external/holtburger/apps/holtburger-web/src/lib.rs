@@ -712,24 +712,33 @@ fn parse_cast_move_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "castMove=off")
 }
 
-/// (2026-07-12, WS04 S3a): parse `?castHoldReclaim`. DEFAULT-OFF strict
-/// opt-in (the flag footgun escape): returns `true` ONLY when
-/// `castHoldReclaim=on` (or the bare `castHoldReclaim`) is present — a bare
-/// param never accidentally reads ON, and `castHoldReclaim=off` is OFF. When
-/// on, the FU-A `use_time` reclaim holds the local player's FORWARD slot dead
-/// across a whole KNOWN cast chain (the JS chain stamps
-/// `SessionHandle::noteLocalCastWindow`) instead of reviving held-W per
-/// windup-node — the multi-windup war/void forward leak. Strafe/turn still
-/// reclaim (slidecast untouched); a jump clears the lock; a fresh forward
-/// edge is untouched (fastcast preserved). Native carrier:
+/// (2026-07-12, WS04 S3a): parse `?castHoldReclaim`. DEFAULT-ON since
+/// 2026-10-07 (user ruling "pressing w shouldn't cancel a cast"): returns
+/// `true` UNLESS `castHoldReclaim=off` is present. When on, the FU-A
+/// `use_time` reclaim holds the local player's FORWARD slot dead across a
+/// whole cast (from our cast request to the server's UseDone, plus the JS
+/// chain's `SessionHandle::noteLocalCastWindow` stamp) instead of reviving
+/// held-W per windup-node — the multi-windup war/void forward leak that ACE's
+/// PK physics fizzles past 6 m. Strafe/turn still reclaim (slidecast
+/// untouched); a jump clears the lock. Native carrier:
 /// `USE_CAST_HOLD_RECLAIM` (movement/system.rs). Needs a wasm rebuild; NO
 /// manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_cast_hold_reclaim_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed
-        .split('&')
-        .any(|kv| kv == "castHoldReclaim" || kv == "castHoldReclaim=on")
+    !trimmed.split('&').any(|kv| kv == "castHoldReclaim=off")
+}
+
+/// (2026-10-07): parse `?castMoveLock=off`. DEFAULT-ON: returns `true`
+/// UNLESS `castMoveLock=off` is present. When on, a FRESH forward/backward
+/// press made while one of our casts is in flight (sent → UseDone) is held
+/// back and replayed when the cast resolves, so W never breaks a cast.
+/// Native carrier: `USE_CAST_MOVE_LOCK` (movement/system.rs). Needs a wasm
+/// rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cast_move_lock_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "castMoveLock=off")
 }
 
 /// (2026-07-03): parse `?slideCast`. ADJ-8 (2026-07-04): DEFAULT
@@ -32007,6 +32016,21 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
+    /// (2026-10-07): `?castHoldReclaim` / `?castMoveLock` — DEFAULT-ON (W
+    /// never breaks a cast); only an explicit `=off` disables.
+    #[test]
+    fn cast_hold_reclaim_and_cast_move_lock_flags_default_on_unless_off() {
+        use super::{parse_cast_hold_reclaim_flag, parse_cast_move_lock_flag};
+        assert!(parse_cast_hold_reclaim_flag(""));
+        assert!(parse_cast_hold_reclaim_flag("?castHoldReclaim=on"));
+        assert!(!parse_cast_hold_reclaim_flag("?castHoldReclaim=off"));
+        assert!(!parse_cast_hold_reclaim_flag("?nosw=1&castHoldReclaim=off"));
+        assert!(parse_cast_move_lock_flag(""));
+        assert!(parse_cast_move_lock_flag("?castMoveLock=on"));
+        assert!(!parse_cast_move_lock_flag("?castMoveLock=off"));
+        assert!(!parse_cast_move_lock_flag("?nosw=1&castMoveLock=off"));
+    }
+
     /// F2 (2026-07-27): `?serverMoveToDriver` / `?stickyIdleStep` parse
     /// shapes — DEFAULT-ON; only an explicit `=off` disables (the
     /// movement-flag house shape).
@@ -34670,6 +34694,26 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = localStickyTarget)]
     pub fn local_sticky_target(&self) -> u32 {
         LOCAL_STICKY_TARGET.with(|c| c.get())
+    }
+
+    /// (2026-10-07): the motion the local rig should play for the movement
+    /// system's autonomous drive — a server TurnTo / MoveTo the local MoveTo
+    /// driver is running (retail issues those on the local player's own
+    /// `CMotionInterp`, `MoveToManager::_DoMotion` acclient.c:344753). `0` =
+    /// none; else `1 << 31 | (forward + 1) | (turn + 1) << 16 | run << 24`.
+    /// Purely additive export (F18-2: no manifest bump).
+    #[wasm_bindgen(js_name = localAutonomousMotion)]
+    pub fn local_autonomous_motion(&self) -> u32 {
+        LOCAL_RIG_AUTONOMOUS_MOTION.with(|c| c.get())
+    }
+
+    /// (2026-10-07): `?castMoveLock` is holding W/S back for one of our
+    /// in-flight casts (the press replays when the server's UseDone lands).
+    /// camera.js keeps the local rig off the run cycle meanwhile. Purely
+    /// additive export (F18-2: no manifest bump).
+    #[wasm_bindgen(js_name = castMoveLockActive)]
+    pub fn cast_move_lock_active(&self) -> bool {
+        LOCAL_CAST_MOVE_LOCK.with(|c| c.get())
     }
 
     /// COMBAT-RADII (2026-07-28): `[evals, resolved, enabled]` — the
@@ -43603,6 +43647,19 @@ thread_local! {
     static LOCAL_STICKY_TARGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+// (2026-10-07) — the motion the LOCAL rig plays for the movement system's
+// autonomous drive (a server TurnTo / MoveTo running on the local MoveTo
+// driver): `MovementSystemHandle::local_rig_motion_packed`, published by the
+// TickMovement arm every tick and read per frame by app/frame_pump.js through
+// `SessionHandle::localAutonomousMotion`. `0` = no autonomous drive.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static LOCAL_RIG_AUTONOMOUS_MOTION: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    // `?castMoveLock` holding W/S for an in-flight cast — read by camera.js
+    // so the local rig does not run in place (`castMoveLockActive`).
+    static LOCAL_CAST_MOVE_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 // COMBAT-RADII (2026-07-28) — diagnostic mirror of
 // `WorldState::combat_radii_counters()`: `(evals, resolved, enabled)`.
 // `evals` is the UNCONDITIONAL reachability probe (bumped outside the
@@ -44214,11 +44271,14 @@ async fn recv_loop(
     // locomotion until an input edge / gesture end); see
     // `parse_cast_move_flag`.
     movement.set_cast_move(parse_cast_move_flag(&flag_search()));
-    // (2026-07-12, WS04 S3a): `?castHoldReclaim=on` — hold the FORWARD slot
-    // dead across a whole known cast chain (default OFF, eye-test gated); the
-    // JS cast chain stamps `noteLocalCastWindow`. See
-    // `parse_cast_hold_reclaim_flag`.
+    // (2026-07-12, WS04 S3a): `?castHoldReclaim` — hold the FORWARD slot
+    // dead across a whole cast (default ON since 2026-10-07; `=off`
+    // escape). See `parse_cast_hold_reclaim_flag`.
     movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&flag_search()));
+    // (2026-10-07): `?castMoveLock=off` — a fresh W/S press during one of our
+    // casts is held back until the server's UseDone (default ON); see
+    // `parse_cast_move_lock_flag`.
+    movement.set_cast_move_lock(parse_cast_move_lock_flag(&flag_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
     // ACE's General cast-gesture stomps. ADJ-8 (2026-07-04): default
     // OFF (authentic burst, user ruling); `=on` is the modern opt-in;

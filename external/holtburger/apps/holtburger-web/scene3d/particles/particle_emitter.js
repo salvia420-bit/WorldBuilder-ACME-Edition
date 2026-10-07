@@ -291,7 +291,30 @@ export class ParticleEmitter {
     this.partIndex = partIdx;
     this.parentOffset.position.copy(frame.position);
     this.parentOffset.quaternion.copy(frame.quaternion);
+    // The per-metre baseline is the PARENTED origin (see _emitterOrigin).
+    this._emitterOrigin(this.lastEmitOffset);
     return true;
+  }
+
+  /**
+   * The emitter's own origin, in the same `_scene`-local space as
+   * `_resolveAnchorFrame()` — retail's emitter `physobj` position.
+   * `ParticleEmitter::SetParenting` (acclient.c:330252) parents that object to
+   * the owner at (part_index, parent_offset) via `CPhysicsObj::set_parent`, so
+   * it rides the animated PART; `ShouldEmitParticle` / `RecordParticleEmission`
+   * (:330613 / :330593) measure BirthratePerMeter distance on it. ACE's
+   * server-side port (which this file follows) used the owner's ROOT position
+   * — ACE never renders particles. With the root, a part-anchored per-metre
+   * emitter only emitted while the whole body travelled: a cast's hand-trail
+   * emitters (0x32000109 — BirthratePerMeter 0.05 m, created by every windup
+   * and cast gesture's CreateParticle hooks) drew nothing for a caster
+   * standing still. Root-anchored emitters with no offset are unchanged.
+   */
+  _emitterOrigin(out) {
+    const f = this._resolveAnchorFrame();
+    out.copy(this.parentOffset.position);
+    if (f.quaternion) out.applyQuaternion(f.quaternion);
+    return out.add(f.position);
   }
 
   /** Port of `KillParticle` (ParticleEmitter.cs:50-59). */
@@ -333,7 +356,7 @@ export class ParticleEmitter {
   recordParticleEmission() {
     this.numParticles += 1;
     this.totalEmitted += 1;
-    this.lastEmitOffset.copy(this.parent.position);
+    this._emitterOrigin(this.lastEmitOffset);
     this.lastEmitTime = currentTime();
   }
 
@@ -341,7 +364,7 @@ export class ParticleEmitter {
   shouldEmitParticle() {
     let offset;
     if (this.info.emitterType === EmitterType.BirthratePerMeter) {
-      offset = _scratchVec3.subVectors(this.parent.position, this.lastEmitOffset);
+      offset = this._emitterOrigin(_scratchVec3).sub(this.lastEmitOffset);
     } else {
       offset = _scratchVec3.set(0, 0, 0);
     }

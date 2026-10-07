@@ -1042,6 +1042,41 @@ check(
 }
 
 // ============================================================
+// Test 17a2: BirthratePerMeter on a PART-anchored emitter measures the
+// emitter's own (parented) origin — retail ParticleEmitter::SetParenting
+// parents the emitter's physobj to the part (acclient.c:330252), and
+// ShouldEmitParticle reads THAT position (:330613). A cast's hand-trail
+// emitters (0x32000109, 0.05 m) must emit as the hands move while the
+// caster's root stands still.
+// ============================================================
+{
+  mockTime = 50;
+  const scene = new THREE.Group(); // identity: world == scene-local
+  const hand = { position: new THREE.Vector3(0.3, 0.1, 1.2), quaternion: new THREE.Quaternion() };
+  const parent = {
+    position: new THREE.Vector3(0, 0, 0), // the caster's ROOT — never moves here
+    quaternion: new THREE.Quaternion(),
+    partFrames: { 13: hand },
+  };
+  const e = new ParticleEmitter({ parent, scene, meshFactory: () => makeMesh() });
+  e.info = new ParticleEmitterInfo(makeBaseInfo({
+    emitterType: EmitterType.BirthratePerMeter,
+    birthrate: 0.05, maxParticles: 40, totalParticles: 0, totalSeconds: 10,
+  }));
+  e.setParenting(13, { position: new THREE.Vector3(0, 0, 0.05), quaternion: new THREE.Quaternion() });
+  check("PerMeter part anchor: baseline is the parented hand origin, not the root",
+    approx(e.lastEmitOffset.x, 0.3) && approx(e.lastEmitOffset.y, 0.1) && approx(e.lastEmitOffset.z, 1.25),
+    `baseline=(${e.lastEmitOffset.x}, ${e.lastEmitOffset.y}, ${e.lastEmitOffset.z})`);
+  check("PerMeter part anchor: hand still ⇒ no emit", e.shouldEmitParticle() === false);
+  hand.position.set(0.3, 0.2, 1.3); // the arm lifts ~0.14 m; the root stays put
+  check("PerMeter part anchor: the hand moved 0.14 m > 0.05 m ⇒ emit while the root is still",
+    e.shouldEmitParticle() === true);
+  e.recordParticleEmission();
+  check("PerMeter part anchor: the emission re-baselines on the hand",
+    approx(e.lastEmitOffset.y, 0.2) && approx(e.lastEmitOffset.z, 1.35) && e.shouldEmitParticle() === false);
+}
+
+// ============================================================
 // Test 17b: Explode init — retail c.z = sin(pitch)*c.z (no cos(pitch) factor)
 // ============================================================
 {
