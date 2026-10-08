@@ -253,10 +253,52 @@ console.log("\n-- L10 ?ssao ---------------------------------------------------"
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L11 ?canopySoften --------------------------------------------");
+{
+  const C = await import("../scene3d/canopy_soften.js");
+  check("default 0.65; off = 0; numbers clamp",
+    C.canopySoftenStrength("") === 0.65 && C.canopySoftenStrength("?canopySoften=off") === 0
+    && C.canopySoftenStrength("?canopySoften=0.3") === 0.3 && C.canopySoftenStrength("?canopySoften=4") === 1);
+  // A 4 m crown made of flat faces: every face normal points straight out of
+  // its face; the softened normals must lean toward the crown-radial direction.
+  const box = (sx, sy, sz, z0) => {
+    const P = [], N = [];
+    const faces = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    for (const [nx, ny, nz] of faces) {
+      for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) {
+        let x, y, z;
+        if (nx) { x = nx; y = a; z = b; } else if (ny) { x = a; y = ny; z = b; } else { x = a; y = b; z = nz; }
+        P.push(x * sx / 2, y * sy / 2, z0 + (z + 1) * sz / 2); N.push(nx, ny, nz);
+      }
+    }
+    return { P: new Float32Array(P), N: new Float32Array(N) };
+  };
+  const crown = box(4, 4, 3.5, 3);
+  const before = Float32Array.from(crown.N);
+  check("a crown-like group is softened", C.softenCanopyNormals(crown.P, crown.N, 0.65) === true);
+  // vertex 0 sits on the +X face at the (-y, low-z) corner: radial leans -y and down.
+  check("normals tilt toward the crown-radial direction", crown.N[1] < before[1] - 0.1 && crown.N[2] < before[2] - 0.1,
+    `n0 ${[...crown.N.slice(0, 3)].map((v) => v.toFixed(2))}`);
+  check("softened normals stay unit length", Math.abs(Math.hypot(crown.N[0], crown.N[1], crown.N[2]) - 1) < 1e-5);
+  const trunk = box(0.4, 0.4, 6, 0);
+  check("a trunk (tall + thin) is left alone", C.softenCanopyNormals(trunk.P, trunk.N, 0.65) === false);
+  const flag = box(2.0, 0.04, 1.5, 4);
+  check("a flat panel (flag / banner / card) is left alone", C.softenCanopyNormals(flag.P, flag.N, 0.65) === false);
+  const g = { geometry: { attributes: { position: { itemSize: 3, array: box(4, 4, 3.5, 3).P }, normal: { itemSize: 3, array: box(4, 4, 3.5, 3).N, needsUpdate: false } }, userData: {} } };
+  check("softenCanopyGroups softens once and marks the geometry", C.softenCanopyGroups([g], 0.65) === 1 && g.geometry.userData.hbCanopySoft === true
+    && g.geometry.attributes.normal.needsUpdate === true);
+  check("...and never bends a shared geometry twice", C.softenCanopyGroups([g], 0.65) === 0);
+  check("statics.js softens wind-responsive models after the content stamp",
+    /stampStaticContentKeys\(id, groups\);\s*groupsByModel\.set\(id, groups\);[\s\S]{0,400}windResponds\(vfxDescriptorFor\(id\)\)\) softenCanopyGroups\(groups\)/.test(src("scene3d/statics.js")));
+  check("animated scenery softens every part build (3 sites)",
+    (src("scene3d/animated_scenery.js").match(/softenCanopyGroups\(/g) || []).length === 3);
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }

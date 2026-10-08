@@ -50,6 +50,8 @@ import { SuiteAssetSource, ensureSuiteInit } from "./suite_assets.js";
 // buildTreeWindClip). archetype #1's MECH-A consumer.
 import { windBend } from "./vfx/components/windBend.js";
 import { visualEnabled } from "./vfx_catalog.js";
+// ?canopySoften (2026-10-07): crown-radial normals for animated foliage parts.
+import { softenCanopyGroups } from "./canopy_soften.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -382,6 +384,7 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
     if (wasmMesh) {
       try {
         const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        softenCanopyGroups(groups);
         for (let g = 0; g < (groups?.length || 0); g++) {
           const grp = groups[g];
           const sid = grp.surfaceDid || surfaceDids?.[g] || 0;
@@ -591,6 +594,7 @@ function _getSharedSetupGeom(setupId, wasmExports) {
       if (wasmMesh) {
         try {
           const r = meshToGeometryGroups(wasmMesh);
+          softenCanopyGroups(r.groups);
           for (let g = 0; g < (r.groups?.length || 0); g++) {
             const grp = r.groups[g];
             const sid = grp.surfaceDid || r.surfaceDids?.[g] || 0;
@@ -885,6 +889,7 @@ async function buildOneWind(p, wasmExports, materialCache, spFetch) {
     if (wasmMesh) {
       try {
         const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        softenCanopyGroups(groups);
         for (let g = 0; g < (groups?.length || 0); g++) {
           const grp = groups[g];
           const sid = grp.surfaceDid || surfaceDids?.[g] || 0;

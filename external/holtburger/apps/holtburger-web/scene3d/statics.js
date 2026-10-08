@@ -144,6 +144,8 @@ import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 derived day/wea
 // is kept ⇒ byte-identical frozen path. ensureVfxHashVarying = the slice-03
 // per-instance vVfxHash prelude installed FIRST in each variant's chain.
 import { fragPlanForDid } from "./vfx/frag_attach.js";
+// ?canopySoften (2026-10-07): crown-radial normals for wind-responsive foliage.
+import { softenCanopyGroups } from "./canopy_soften.js";
 import { buildFragVariant } from "./vfx/frag_install.js";
 import { ensureVfxHashVarying } from "./vfx/per_instance.js";
 // Barrel — registers ALL Phase-1 frag/light components so fragPlanForDid can
@@ -931,6 +933,11 @@ async function fetchPrimaryGeometries(uniqueModelIds, fetchModelMeshes) {
       // Cost is O(1) per (model, surface) per LB feed — never per placement.
       stampStaticContentKeys(id, groups);
       groupsByModel.set(id, groups);
+      // Trees / foliage (the GPU-sway set): bend crown normals toward the
+      // crown centre before anything batches the groups (canopy_soften.js).
+      try {
+        if (visualEnabled() && windResponds(vfxDescriptorFor(id))) softenCanopyGroups(groups);
+      } catch (_) { /* a look tweak never blocks a bake */ }
       if (decodeMisses === 0) {
         completeIds.add(id >>> 0);
         surfaceDidsByModel.set(id >>> 0, Array.from(surfacesArr, (d) => d >>> 0));

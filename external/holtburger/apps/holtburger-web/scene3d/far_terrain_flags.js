@@ -191,12 +191,17 @@ export function horizonFogEnabled() {
 /**
  * Where the horizon band STARTS, as a fraction of the drawn edge
  * `(R_effective + 0.5) * 192`. `?horizonFogNear=N`, clamp [0, 0.9].
- * 0.45 at the live R = 5 => 475 m -> 1003 m: ~15 % at 600 m, ~40 % at 700 m,
- * ~67 % at 800 m, opaque before the edge. Lower = more depth haze, higher =
+ * 0.62 at the live R = 5 => 655 m -> 1003 m. Lower = more depth haze, higher =
  * crisper mid-field. A live sweep knob, not a retail value.
+ * 2026-10-07 (later): 0.45 -> 0.62. The 0.45 tune (owner: "mainly on the
+ * horizon") was made while the takram aerial perspective silently never
+ * reached the screen (split post chain, see atmosphere_pipeline.js
+ * PostChainSourcePass); with AP's inscatter back the two hazes stacked and
+ * everything past ~475 m washed to a pale sheet at Holtburg. 0.62 keeps the
+ * mid-field forest in colour and still dissolves the drawn edge.
  */
 export function horizonFogNearFrac() {
-  return _num("horizonFogNear", 0.45, 0, 0.9);
+  return _num("horizonFogNear", 0.62, 0, 0.9);
 }
 
 /**

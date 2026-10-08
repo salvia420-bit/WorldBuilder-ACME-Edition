@@ -131,7 +131,9 @@ export const GRASS_DEFAULTS = Object.freeze({
   bladeCount: 60025,      // 245² — the `high` tier; every count rounds up square
   radiusM: 48,
   sliceSize: 512,         // plan §3.1: a frame re-scatters at most this many
-  fadeFraction: 0.2,      // blades fade to zero scale over the last 20% of R
+  // 2026-10-07: 0.2 -> 0.35 with the tighter (40 m at ultra) radius — on a
+  // slope seen from above the field ended in a visible line (owner at Holtburg).
+  fadeFraction: 0.35,     // blades fade to zero scale over the last 35% of R
   seed: 0x6c455f01,
   heightOffsetM: -0.02,   // bury the base 2 cm so no blade floats on a slope
   // Wind. freq/flutter/the 3.7x band are windSwayGpu's numbers VERBATIM so the
@@ -254,6 +256,8 @@ export const GRASS_VERTEX_SEAM = "#include <begin_vertex>";
 export const GRASS_FRAGMENT_SEAM = "#include <color_fragment>";
 // The double-sided normal flip lives in this chunk (`normal *= faceDirection`).
 export const GRASS_NORMAL_SEAM = "#include <normal_fragment_begin>";
+// The object-space normal is set here, before the default normal transform.
+export const GRASS_OBJECT_NORMAL_SEAM = "#include <beginnormal_vertex>";
 
 /** Per-instance attributes THIS module owns (the pool owns aScale/aNormal). */
 export const GRASS_ATTRIBUTES = Object.freeze([
@@ -374,6 +378,22 @@ function _grassVertexSnippet() {
 // no sky light, and rendered as a black spike: half of every field read as
 // black thorns at Holtburg. Re-take the interpolated normal unflipped, so both
 // faces light exactly like the ground they grow from.
+// GROUND NORMAL (2026-10-07, Holtburg at night). The authored blade normal is
+// a constant UP, but the terrain it grows from is lit with its own slope: under
+// retail's night "sun" (0.9 deg above the horizon) a west-facing hill was
+// bright while every blade on it, facing straight up, got almost nothing — dark
+// strokes on a pale slope. Each instance already carries the ground normal it
+// was planted on (aNormal, POOL-written), so light the blade with that: the
+// field matches the ground under it at every sun angle. Degenerate (unwritten)
+// instances keep UP.
+function _grassGroundNormalSnippet() {
+  return [
+    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, ground normal) ----",
+    "  if (dot(aNormal, aNormal) > 1e-6) objectNormal = normalize(aNormal);",
+    "  // ---- " + GRASS_END + " ----",
+  ].join("\n");
+}
+
 function _grassMarkerSnippet() {
   return [
     "  // ---- " + GRASS_MARKER + " (terrain_grass.js, ssao marker) ----",
@@ -455,6 +475,10 @@ export function injectTerrainGrassShader(shader) {
   // 3) Splice. The vertex snippet goes AFTER the hash assignment so `vVfxHash`
   //    is written before it is read; anchor on the EXPORTED constant so this
   //    stays in lockstep with per_instance.js rather than on copied text.
+  shader.vertexShader = shader.vertexShader.replace(
+    GRASS_OBJECT_NORMAL_SEAM,
+    GRASS_OBJECT_NORMAL_SEAM + "\n" + _grassGroundNormalSnippet(),
+  );
   const cur = shader.vertexShader;
   if (cur.indexOf(VFX_HASH_ASSIGN_VERTEX) !== -1) {
     shader.vertexShader = cur.replace(

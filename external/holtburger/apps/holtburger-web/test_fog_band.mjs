@@ -171,7 +171,7 @@ check("horizonFog is default ON (param absent)", withSearch("", () => horizonFog
 check("?horizonFog=off disables", withSearch("?horizonFog=off", () => horizonFogEnabled()) === false);
 check("?farTerrain=off (wave master) disables", withSearch("?farTerrain=off", () => horizonFogEnabled()) === false);
 check("?horizonFog=on stays on", withSearch("?horizonFog=on", () => horizonFogEnabled()) === true);
-check("horizonFogNear default 0.45", withSearch("", () => horizonFogNearFrac()) === 0.45);
+check("horizonFogNear default 0.62 (2026-10-07: AP inscatter is back on top of it)", withSearch("", () => horizonFogNearFrac()) === 0.62);
 check("?horizonFogNear=0.6 reads 0.6", withSearch("?horizonFogNear=0.6", () => horizonFogNearFrac()) === 0.6);
 check("?horizonFogNear=5 clamps to 0.9", withSearch("?horizonFogNear=5", () => horizonFogNearFrac()) === 0.9);
 

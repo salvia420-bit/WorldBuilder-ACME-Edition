@@ -279,7 +279,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // shadows; generator --check: up to date, 343 modules) → 331.
   // 2026-10-07 (AO): + scene3d/ssao.js, scene3d/ssao_marker.js (screen-space
   // ambient occlusion; generator --check: up to date, 345 modules) → 333.
-  const NON_APP_PRELOADS = 333;
+  // 2026-10-07 (trees): + scene3d/canopy_soften.js (crown-radial normals;
+  // generator --check: up to date, 346 modules) → 334.
+  const NON_APP_PRELOADS = 334;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
