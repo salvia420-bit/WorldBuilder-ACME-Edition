@@ -65,11 +65,20 @@ export function terrainFogEnabled() {
 
 /**
  * S2/S3 — the Far Composite Ring itself (bakes + far patches).
- * Ships DEFAULT-OFF pending the validator's per-stage GPU sign-off; flip with
- * `?farRing=on`. The fog stage above is independently shippable and is ON.
+ * Shipped DEFAULT-OFF pending a GPU sign-off; flipped DEFAULT-ON 2026-10-08
+ * after the owner's 1070 pass (below). `?farRing=off` restores the near ring
+ * only. The fog stage above is independently shippable and is ON.
  */
 export function farRingEnabled() {
-  return farTerrainEnabled() && _boolOn("farRing", false);
+  // 2026-10-08 — DEFAULT ON (`?farRing=off` escape). Owner on the 1070: distant
+  // hills read "drawn with ms paint" — past ~650 m the horizon fog turned the
+  // terrain into pale flat cut-outs, because the drawn edge was the near ring's
+  // 1056 m. With the ring the edge is (8 + 0.5) x 192 = 1632 m and the fog band
+  // re-anchors to ~1010 -> 1550 m, so the hills inside it keep shape and colour.
+  // Measured on the 1070 (quality ultra, 1080p, raised coastal vantage): ring
+  // visible vs hidden 51.4 / 54.4 vs 53.4 / 53.8 fps (noise), +10 draws,
+  // __farTerrainState().ring.policyOk true. Owner: "keep it".
+  return farTerrainEnabled() && _boolOn("farRing", true);
 }
 
 /** Far ring Chebyshev radius in landblocks. `?farRadius=N`, default 8 (1536 m). */

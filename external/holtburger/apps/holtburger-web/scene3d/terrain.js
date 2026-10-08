@@ -1616,6 +1616,10 @@ uniform float uMacroFadeEnd;          // metres — full strength beyond this
 uniform float uMacroScaleA;           // world metres per macro tile, tap A
 uniform float uMacroScaleB;           // world metres per macro tile, tap B (rotated)
 uniform float uMacroNoiseAmp;         // extra procedural world-space octaves
+// 2026-10-08 — FAR HARMONIZE (?farHarmonize; see the block after TexMerge).
+uniform float uFarHarmonize;          // strength 0..1 (0 = off)
+uniform float uFarHarmonizeStart;     // metres — untouched nearer than this
+uniform float uFarHarmonizeEnd;       // metres — full strength beyond this
 // T1 (2026-05-28) — retail TexMerge composite. AC's landscape does NOT
 // bilinear-blend between cells: each 24 m cell picks a base terrain texture
 // plus up to 3 alpha-masked overlays (one per differing corner) + up to 2
@@ -2099,6 +2103,17 @@ in float vIsPerspective;
 vec3 atlasUvFor(int code, vec2 cellUv) {
   float tiling = float(uBaseTexTiling[clamp(code, 0, 32)]);
   return vec3(fract(cellUv * tiling), float(code));
+}
+
+// 2026-10-08 — a terrain type's MEAN texel: its atlas layer's smallest mip
+// (any uv; the LOD clamps to the 1x1 level). One fetch, no CPU table. Shared
+// by the far harmonize (.rgb) and the height blend's layer mean (.a,
+// terrain_micro.js terrainHbHeight) — the shader's one lowest-mip atlas read.
+vec4 terrainTypeMeanTex(int code) {
+  return textureLod(uAtlas, vec3(0.5, 0.5, float(clamp(code, 0, 32))), 16.0);
+}
+vec3 terrainTypeMean(int code) {
+  return terrainTypeMeanTex(code).rgb;
 }
 
 // T1 — rotate an intra-cell UV ([0,1]^2) by 90 deg steps around its centre, so
@@ -2660,7 +2675,10 @@ void main() {
     // different colors" were the 192-m LB-grid repeat of the noise pattern.
     float NOISE_FREQ = uPaintNoiseFreq / 24.0;     // freq in 1/m
     float NOISE_STRENGTH = uPaintNoiseStrength;
-    vec2 np = vWorldPos.xy * NOISE_FREQ;
+    // 2026-10-08 — the AC GROUND plane (east, north) = three (x, -z).
+    // vWorldPos is three world space (y = height): vWorldPos.xy was
+    // (east, height), so on level ground this field varied east-west only.
+    vec2 np = vec2(vWorldPos.x, -vWorldPos.z) * NOISE_FREQ;
     // Candidate H (2026-06-22): pick the perturbation noise source.
     // uWarpAmp == 0 -> legacy per-pixel sin-hash (byte-identical to the shipped
     // winner). uWarpAmp > 0 -> spatially-coherent value noise sampled through a
@@ -2721,6 +2739,9 @@ void main() {
     result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
   }
 ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_DECL_GLSL : ""}
+  // FAR HARMONIZE (below) needs the composite's MEAN-colour twin; -1 = unset
+  // (the bilinear path, where the plain corner blend is the twin).
+  vec3 harmSharpMean = vec3(-1.0);
   // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
   // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
   // slots, row = NS cell iv). Slot 0 is the base terrain tile; slots 1..3
@@ -2744,7 +2765,8 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     // OWN atlas layer is a water code, which is also what keeps a water
     // overlay flowing over a static land base at a blended cell border.
     vec3 merged = terrainAtlasTex(clamp(baseLayer, 0, 32),
-      isWaterCode(baseLayer) ? waterCellUv : cellUv).rgb;${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
+      isWaterCode(baseLayer) ? waterCellUv : cellUv).rgb;
+    vec3 mergedMean = terrainTypeMean(baseLayer);${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
     // R4.a 2026-05-28 — explicit all-road corner case. Per
     // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
     // texture_merge_info, an all-road cell is packed with base layer
@@ -2772,10 +2794,16 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         //     perturbation, applied asymmetrically, which is why the borders
         //     still read as authored edges rather than as organic transitions.
         // (2) MACRO OCTAVE. See the uSplatMacroAmp/Freq declarations.
-        splatN = fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq)
-               + uSplatMacroAmp * fragValueNoise2D(vWorldPos.xy * uSplatMacroFreq);
+        //
+        // 2026-10-08 — sampled in the AC GROUND plane, three (x, -z). It read
+        // vWorldPos.xy, i.e. (east, HEIGHT): on level ground the border
+        // perturbation was one-dimensional (constant north-south), so masked
+        // borders kept their straight authored runs.
+        vec2 splatXy = vec2(vWorldPos.x, -vWorldPos.z);
+        splatN = fragValueNoise2D(splatXy * uSplatNoiseFreq)
+               + uSplatMacroAmp * fragValueNoise2D(splatXy * uSplatMacroFreq);
       } else {
-        splatN = fragValueNoise2D(vWorldPos.xy * uSplatNoiseFreq) - 0.5;
+        splatN = fragValueNoise2D(vec2(vWorldPos.x, -vWorldPos.z) * uSplatNoiseFreq) - 0.5;
       }
     }
     if (baseLayer != 32) {
@@ -2827,9 +2855,52 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         vec3 overlayCol = terrainAtlasTex(clamp(layer, 0, 32),
           isWaterCode(layer) ? waterCellUv : cellUv).rgb;${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
         merged = mix(overlayCol, merged, baseW);
+        mergedMean = mix(terrainTypeMean(layer), mergedMean, baseW);
       }
     }
     result = merged;
+    harmSharpMean = mergedMean;
+  }
+
+  // =====================================================================
+  // FAR HARMONIZE (2026-10-08, ?farHarmonize, DEFAULT strength 1.0)
+  // =====================================================================
+  // Owner on the 1070, distant hills: "drawn with ms paint", then — after a
+  // fractal-border attempt failed against AC's per-cell terrain painting
+  // (a type exists only in the cells its vertices touch, so pushing a border
+  // further than that band breaks into rectangular blocks) — "harmonize
+  // colours far". At range, each fragment's ground colour is pulled toward the
+  // SMOOTH local average of its cell's four corner types: the bilinear blend
+  // of the types' mean colours, which is continuous across cells (corners are
+  // shared), so a stair-stepped mask edge becomes a gradual transition over
+  // the 24 m band without inventing coverage the painting does not have.
+  // Applied as a RATIO against the composite's own mean-colour twin
+  // (harmSharpMean: the same masks, mean colours instead of texels), so each
+  // texture keeps its detail and only its base colour moves. Water corners
+  // are left out of the average (a shore must not tint blue) and water
+  // fragments are untouched. Distance-ramped: byte-identical inside
+  // uFarHarmonizeStart (120 m).
+  if (uFarHarmonize > 0.0) {
+    float harmF = smoothstep(uFarHarmonizeStart, uFarHarmonizeEnd, vViewDepth) * uFarHarmonize;
+    if (harmF > 0.001) {
+      float ha00 = isWaterCode(t00) ? 0.0 : w00;
+      float ha10 = isWaterCode(t10) ? 0.0 : w10;
+      float ha01 = isWaterCode(t01) ? 0.0 : w01;
+      float ha11 = isWaterCode(t11) ? 0.0 : w11;
+      float haSum = ha00 + ha10 + ha01 + ha11;
+      if (haSum > 1e-3) {
+        vec3 hm00 = terrainTypeMean(t00);
+        vec3 hm10 = terrainTypeMean(t10);
+        vec3 hm01 = terrainTypeMean(t01);
+        vec3 hm11 = terrainTypeMean(t11);
+        vec3 harmSmooth = (hm00 * ha00 + hm10 * ha10 + hm01 * ha01 + hm11 * ha11) / haSum;
+        vec3 harmSharp = harmSharpMean.x >= 0.0
+          ? harmSharpMean
+          : hm00 * w00 + hm10 * w10 + hm01 * w01 + hm11 * w11;
+        vec3 harmRatio = clamp(harmSmooth / max(harmSharp, vec3(1e-3)), vec3(0.5), vec3(2.0));
+        result *= mix(vec3(1.0), harmRatio, harmF * (1.0 - waterW));
+      }
+    }
   }
 
   // Wave 2.A — terrain-palette tint (OPT-IN, off by default since T8).
@@ -3055,7 +3126,10 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     if (mSlice < uMacroSliceCount) {
       float mFade = smoothstep(uMacroFadeStart, uMacroFadeEnd, vViewDepth);
       if (mFade > 0.0) {
-        vec2 wp = vWorldPos.xy;
+        // 2026-10-08 — the AC GROUND plane, three (x, -z). vWorldPos.xy was
+        // (east, height): the macro maps and octaves were smeared into
+        // north-south streaks on any level field — which is most of them.
+        vec2 wp = vec2(vWorldPos.x, -vWorldPos.z);
         // Tap B is rotated ~37 deg (an angle with no small rational relation
         // to the axis-aligned tap A) and uses a scale that is NOT a harmonic
         // of A, so the two lattices' repeats never coincide: the visible
@@ -4068,6 +4142,7 @@ export async function resolveTerrainRingOpts(
       pbrNormalAoTex: null,
       waterEnvEnabled: false,
       waterReflect: WATER_REFLECT_DEFAULT,
+      farHarmonize: 0,
       splatNoiseAmp: 0,
       splatNoiseFreq: 0.35,
       splatMacroAmp: 0,
@@ -4803,6 +4878,8 @@ export async function resolveTerrainRingOpts(
     waterEnvEnabled: readWaterEnvFlag(),
     // 2026-10-08 — its sky reflection strength (?waterReflect=<0..1.5>).
     waterReflect: readWaterReflect(),
+    // 2026-10-08 — far harmonize strength (?farHarmonize=<0..1> / off).
+    farHarmonize: readFarHarmonize(),
     // T1 — splat-noise border tunables (?splatNoise=off, ?splatNoiseAmp=,
     // ?splatNoiseFreq=).
     splatNoiseAmp: readSplatNoiseAmp(),
@@ -5311,6 +5388,30 @@ function readPomFlag() {
     return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
     return true;
+  }
+}
+
+/** 2026-10-08 — far harmonize (see the FAR HARMONIZE block): strength + ramp. */
+export const FAR_HARMONIZE_DEFAULT = 1.0;
+export const FAR_HARMONIZE_START_M = 120;
+export const FAR_HARMONIZE_END_M = 500;
+
+/**
+ * 2026-10-08 — `?farHarmonize=<0..1>` (strength) / `off`; missing or junk =
+ * FAR_HARMONIZE_DEFAULT (owner on the 1070: full strength).
+ */
+export function readFarHarmonize(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("farHarmonize");
+    if (v == null || v === "") return FAR_HARMONIZE_DEFAULT;
+    const lv = String(v).toLowerCase();
+    if (lv === "off" || lv === "false" || lv === "no") return 0;
+    if (lv === "on" || lv === "true" || lv === "yes") return FAR_HARMONIZE_DEFAULT;
+    const n = Number(lv);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : FAR_HARMONIZE_DEFAULT;
+  } catch (_) {
+    return FAR_HARMONIZE_DEFAULT;
   }
 }
 
@@ -5952,6 +6053,10 @@ export async function bakeTerrainForLandblock(
       uIblEnabled: { value: 0.0 },
       uEnvIntensity: { value: 1.0 },
       uWaterEnvEnabled: { value: opts.waterEnvEnabled ? 1.0 : 0.0 },
+      // 2026-10-08 — far harmonize (?farHarmonize, default 1.0).
+      uFarHarmonize: { value: Number.isFinite(opts.farHarmonize) ? opts.farHarmonize : FAR_HARMONIZE_DEFAULT },
+      uFarHarmonizeStart: { value: FAR_HARMONIZE_START_M },
+      uFarHarmonizeEnd: { value: FAR_HARMONIZE_END_M },
       // 2026-10-08 — sky reflection over water (?waterReflect, default 0.35).
       uWaterReflect: { value: Number.isFinite(opts.waterReflect) ? opts.waterReflect : WATER_REFLECT_DEFAULT },
       // 2026-10-08 — pushed on the light tick (loop.js tickTerrainSunDir).

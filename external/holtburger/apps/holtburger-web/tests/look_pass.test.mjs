@@ -21,6 +21,8 @@
 //       the water's sun glint fades out once the sky's sun is down.
 //   L15 the terrain reflection cube renders from the viewer (Dereth's moons
 //       where they really are) and carries the volumetric clouds (?waterClouds).
+//   L16 distant hills: the far ring is default-on, the terrain noise layers
+//       sample the ground plane, and ?farHarmonize softens far type borders.
 //
 // Fails on the pre-change code: tone_curve.js / color_grade.js /
 // luminous_night.js / sway_shadow.js do not exist, the composer was AGX-only,
@@ -491,10 +493,45 @@ console.log("\n-- L15 reflection cube: viewer position + clouds ----------------
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L16 distant hills -------------------------------------------");
+{
+  const F = await import("../scene3d/far_terrain_flags.js");
+  check("the far ring is default-on (?farRing=off escape)", F.farRingEnabled() === true
+    && /return farTerrainEnabled\(\) && _boolOn\("farRing", true\);/.test(src("scene3d/far_terrain_flags.js")));
+  const t = src("scene3d/terrain.js");
+  const code = t.replace(/\/\/[^\n]*/g, "");
+  check("no terrain noise layer samples vWorldPos.xy (three world: (east, HEIGHT)) any more",
+    !/vWorldPos\.xy/.test(code));
+  check("macro, splat and paint noise sample the AC ground plane (x, -z)",
+    code.includes("vec2 wp = vec2(vWorldPos.x, -vWorldPos.z);")
+    && code.includes("vec2 splatXy = vec2(vWorldPos.x, -vWorldPos.z);")
+    && code.includes("vec2 np = vec2(vWorldPos.x, -vWorldPos.z) * NOISE_FREQ;"));
+  check("?farHarmonize: default 1.0, off = 0, numbers clamp to [0, 1]",
+    /export const FAR_HARMONIZE_DEFAULT = 1\.0;/.test(t)
+    && /export function readFarHarmonize\(search\)[\s\S]{0,700}lv === "off"[\s\S]{0,300}Math\.min\(1, Math\.max\(0, n\)\)/.test(t));
+  check("a type's mean colour is its atlas layer's smallest mip",
+    t.includes("return textureLod(uAtlas, vec3(0.5, 0.5, float(clamp(code, 0, 32))), 16.0);")
+    && t.includes("return terrainTypeMeanTex(code).rgb;"));
+  check("the TexMerge composite keeps a mean-colour twin with the same masks",
+    t.includes("vec3 mergedMean = terrainTypeMean(baseLayer);")
+    && t.includes("mergedMean = mix(terrainTypeMean(layer), mergedMean, baseW);")
+    && t.includes("harmSharpMean = mergedMean;"));
+  const iBlock = t.indexOf("if (uFarHarmonize > 0.0) {");
+  check("harmonize: a ratio toward the smooth corner-type average, water excluded, distance-ramped",
+    iBlock > t.indexOf("harmSharpMean = mergedMean;")
+    && t.includes("float ha00 = isWaterCode(t00) ? 0.0 : w00;")
+    && t.includes("vec3 harmRatio = clamp(harmSmooth / max(harmSharp, vec3(1e-3)), vec3(0.5), vec3(2.0));")
+    && t.includes("result *= mix(vec3(1.0), harmRatio, harmF * (1.0 - waterW));")
+    && t.includes("float harmF = smoothstep(uFarHarmonizeStart, uFarHarmonizeEnd, vViewDepth) * uFarHarmonize;"));
+  check("the batched terrain's merge-gate anchor is untouched (terrain_batch.js rewrites it verbatim)",
+    t.includes("  if (uTexMergeEnabled > 0.5) {\n    int colBase = iu * 6;"));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds", "farHarmonize"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }

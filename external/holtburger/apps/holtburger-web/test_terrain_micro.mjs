@@ -323,7 +323,10 @@ const STEP4 = [
   const raw = (outside.match(/texture(?:Grad)?\(\s*(?:uAtlas|uAtlasNormalAo|uAlphaMasks)\s*,/g) || []);
   check(`no raw atlas / nra / mask tap outside the helpers (${raw.length})`, raw.length === 0, raw.join(" | "));
   const lodTaps = (CODE.match(/textureLod\(uAtlas,/g) || []).length;
-  check("the only other uAtlas read is the height-blend layer mean (1x1 mip)", lodTaps === 1);
+  // 2026-10-08 — the layer mean is now one shared helper (terrain.js
+  // terrainTypeMeanTex): the height blend's .a and the far harmonize's .rgb.
+  check("the only other uAtlas read is the shared layer-mean helper (1x1 mip)", lodTaps === 1
+    && /float terrainHbHeight[\s\S]{0,200}terrainTypeMeanTex\(c\)\.a/.test(CODE));
   check("helpers use textureGrad with the continuous grid gradient",
     /textureGrad\(uAtlas, atlasUvFor\(code, cellUv\),\s*\n\s*gTerrainGridDx \* tiling, gTerrainGridDy \* tiling\)/.test(FRAG)
     && /textureGrad\(uAlphaMasks, vec3\(m, float\(maskIdx\)\),\s*\n\s*maskUvFor\(cellUv \+ gTerrainGridDx, rot\) - m,/.test(FRAG));

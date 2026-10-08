@@ -590,7 +590,7 @@ uniform vec4 uHeightBlend;      // x amount (0 = off), y height gain, z sharpnes
 uniform vec2 uHeightBlendFade;  // metres: full nearer than x, gone beyond y
 float terrainHbHeight(int code, vec2 cellUv) {
   int c = clamp(code, 0, 32);
-  return terrainAtlasTex(c, cellUv).a - textureLod(uAtlas, vec3(0.5, 0.5, float(c)), 16.0).a;
+  return terrainAtlasTex(c, cellUv).a - terrainTypeMeanTex(c).a;
 }
 float terrainHeightBlendW(float baseW, float hBase, float hOver, float amt) {
   float x = baseW + (hBase - hOver) * uHeightBlend.y;
