@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-10-05",
+  "updated": "2026-10-08",
   "basis": "Facet map only. Scores are provisional placeholders until each facet's fresh audit (current code vs acclient.c and OpenAC, re-derived from scratch) and a critic pass. Findings and fix commits from earlier sessions are recorded under 'inherited_leads': hypotheses to re-verify, not evidence.",
   "scale": "10 indistinguishable from retail; 8.5 retail with nits; 7 clearly right but noticeably off; 5 approximation/programmer behaviour",
   "gate": {
@@ -232,7 +232,7 @@
       },
       "open": [
         "REGRESSION (round 3): jump from a dock/static object falls to the terrain below (take-off-height floor removed; remote_ground_at ignores static BSPs, scene.rs:470)",
-        "HIGH D5 no client MoveToManager for remotes; keep_heading=false (scene.rs:5162) - chasing mobs face stale heading, overshoot",
+        "STALE 2026-10-08: D5 landed in 7972f3e8/e6b1e7c9; its remaining realisation gaps (premature sticky lunge, turn-node stall, bearing-not-facing walk, wire speed, sticky max speed) were fixed in wave 4 (moveto-1/2/3/5/6). Original text: HIGH D5 no client MoveToManager for remotes; keep_heading=false (scene.rs:5162) - chasing mobs face stale heading, overshoot",
         "MED-LOW walking off a static edge floats (scene.rs:5408)",
         "LOW walk-off velocity summed not replaced (get_leave_ground_velocity 343806-343833)",
         "LOW indoor landing stops dead; hard-landing bounce skipped; newer-instance frames applied immediately; omega ignored"
@@ -562,6 +562,48 @@
         "7577d166"
       ],
       "gate": "JS 368/368; lints clean; world 741/741, core 646; release wasm rebuilt"
+    },
+    {
+      "id": 4,
+      "started": "2026-10-08",
+      "note": "OpenAC/decomp comparison round 1: 14 behaviour areas, each compared (OpenAC vs holtburger vs acclient.c) then adversarially verified; 74 findings, 54 shipped, 2 partial, 17 deferred (3 render-impact), 1 superseded. Ledger: apps/holtburger-web/docs/openac-comparison-2026-10-08/FINDINGS-round1.md. Handoff: apps/holtburger-web/docs/HANDOFF-openac-comparison-2026-10-08.md. No visual testing; every visible behaviour change ships default-on with an =off escape and is in the handoff's eye-test queue.",
+      "agents": [
+        {
+          "facet": "animation_motion",
+          "scope": "hook timing at frame exit, cycle restart after one-shots, style-link speed, link-only bake, default_style cycle fallback"
+        },
+        {
+          "facet": "movement_physics_collision",
+          "scope": "jump launch cap + load gate, burden from wire, jump skill augs, AutonomousPosition cadence, raw TurnLeft wire, RawMotionState header"
+        },
+        {
+          "facet": "remote_motion",
+          "scope": "remote MoveTo: sticky on arrival, turn-node completion, facing walk + aux deadband, wire speed, sticky max speed"
+        },
+        {
+          "facet": "combat_magic",
+          "scope": "retail Next/Prev monster, radar-range cycle filter, auto-target, range-exit drop, sphere pick, wielder attack; formula-untargeted spells, busy count, target pre-check"
+        },
+        {
+          "facet": "net_session_protocol",
+          "scope": "140 s dead-session + stall guard, cleartext NAK not ordered, 4096 ISAAC/reorder window, NAK hints + 0.6 s re-request timer, echo reply removed"
+        },
+        {
+          "facet": "ui_hud_plugins",
+          "scope": "enchantment cull (key-0/attack-defense families), InqSkill/InqAttribute2nd terms, creature appraisal; vendor sell/split, PlaceInBackpack pickups, hotbar activation, cooldowns, wear/ammo rules"
+        },
+        {
+          "facet": "render.particles_vfx",
+          "scope": "lifecycle only: one-shot drain, cull freeze, owner retirement, initial burst, static hook start time"
+        }
+      ],
+      "merged": [
+        "0680b84b"
+      ],
+      "gate": "JS 460/460; lints + event-kinds + modulepreload clean; common 72, protocol 393, core 680, world 817, session 43, dat motion_table 23, holtburger-web --lib 271 (+1 pre-existing failure resolve_static_placement_frame_orders); wasm32 check + release wasm 2026-10-08 13:15",
+      "unverified": [
+        "All visible behaviour changes (handoff eye-test queue) — no 1070 session yet"
+      ]
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
