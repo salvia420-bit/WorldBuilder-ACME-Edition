@@ -39,7 +39,10 @@ import { lowBandwidth } from "./bandwidth_tier.js";
 // without touching this table.
 export const TERRAIN_VFX_PROMOTED = Object.freeze({
     trail: false,
-    grass: false,
+    // OWNER SIGN-OFF 2026-10-07 (live on the 1070, Holtburg: "the amount of
+    // grass looks so good tho") after the look pass — ground-matched tints,
+    // wider blades, tighter radius at the same count, no back-face black.
+    grass: true,
     sand: false,
     snow: false,
     // USER 1070 SIGN-OFF 2026-08-01 (in-person vistest): ice ships.
@@ -310,7 +313,9 @@ export const PRESETS = {
         // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
         terrainGrass: terrainMaster("grass", "mid"),
         terrainGrassBlades: 24336,
-        terrainGrassRadius: 32,
+        // 2026-10-07: tighter radius, same count — past ~35 m a blade is a
+        // sub-pixel sliver, so the far ring was ~75% of the budget for nothing.
+        terrainGrassRadius: 24,
         terrainGrassStomp: false,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: terrainMaster("trail", "mid"),
@@ -408,7 +413,9 @@ export const PRESETS = {
         // a hypothesis, §8 risk 6: measure before fixing this number).
         terrainGrass: terrainMaster("grass", "high"),
         terrainGrassBlades: 60025,
-        terrainGrassRadius: 48,
+        // 2026-10-07: tighter radius, same count — past ~35 m a blade is a
+        // sub-pixel sliver, so the far ring was ~75% of the budget for nothing.
+        terrainGrassRadius: 32,
         terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: terrainMaster("trail", "high"),
@@ -497,7 +504,9 @@ export const PRESETS = {
         // Terrain VFX grass — see the `low` tier. 119716 = 346².
         terrainGrass: terrainMaster("grass", "ultra"),
         terrainGrassBlades: 119716,
-        terrainGrassRadius: 64,
+        // 2026-10-07: tighter radius, same count — past ~35 m a blade is a
+        // sub-pixel sliver, so the far ring was ~75% of the budget for nothing.
+        terrainGrassRadius: 40,
         terrainGrassStomp: true,
         // Terrain VFX trail map — see the `low` tier for the rationale.
         terrainTrail: terrainMaster("trail", "ultra"),

@@ -1904,6 +1904,8 @@ import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
 // G14 visual-hook routing gap as a side effect (16/20/23/24/25 now reach
 // `_fireHook`). Off-path = the unchanged legacy walker below.
 import { ScriptManager } from "./script_manager.js";
+// ?lumNight (2026-10-07): ambient-like luminosity dims at night.
+import { registerLuminousMaterial } from "./luminous_night.js";
 const SCRIPT_QUEUE_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
@@ -5958,6 +5960,7 @@ export class EntityManager {
       // emissiveMap program variant already exists (no net new program expected).
       // Default OFF = byte-identical (flat white).
       if (readLuminousEmissiveMapFlag() && mat.map) mat.emissiveMap = mat.map;
+      registerLuminousMaterial(mat, sfLuminosity);
     }
     // Diffuse-reflectance albedo tint — parity with _materialFromFlags
     // (materials.js:1839; retail acclient.c:454458). No-op at d≈1 (~96% of

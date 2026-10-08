@@ -106,6 +106,7 @@ import {
   nightNumFlag,
   nightRampEnabled,
 } from "./night_ramp.js";
+import { acesToneMap, neutralToneMap, toneCurveName } from "./tone_curve.js";
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -261,17 +262,45 @@ export function agxDisplay(rgb, exposure = DISPLAY_EXPOSURE_DEFAULT, out = [0, 0
   return out;
 }
 /**
- * Inverse of `agxDisplay`: the scene radiance that displays as `target`
- * (sRGB-encoded 0..1 triple). Damped per-channel log-space iteration on the
- * full forward transform (AgX's matrices mix channels mildly); converges to
- * < 0.5/255 for any in-gamut colour away from pure black/white.
+ * Scene radiance → screen through the curve the composer is ACTUALLY using
+ * (`?tone=`, tone_curve.js; default Neutral since 2026-10-07). AgX keeps its
+ * exact legacy path above; Neutral / ACES are three r184's shaders + sRGB OETF.
  */
-export function sceneRadianceForDisplay(target, exposure = DISPLAY_EXPOSURE_DEFAULT, out = [0, 0, 0]) {
+export function displayForward(rgb, exposure = DISPLAY_EXPOSURE_DEFAULT, out = [0, 0, 0], curve = toneCurveName()) {
+  if (curve === "agx") return agxDisplay(rgb, exposure, out);
+  const v = [rgb[0] * exposure, rgb[1] * exposure, rgb[2] * exposure];
+  if (curve === "aces") acesToneMap(v); else neutralToneMap(v);
+  for (let i = 0; i < 3; i += 1) out[i] = linearToSrgb(v[i]);
+  return out;
+}
+
+/**
+ * Inverse of `displayForward`: the scene radiance that displays as `target`
+ * (sRGB-encoded 0..1 triple) through the live curve. Damped per-channel
+ * log-space iteration on the full forward transform (the curves' matrices /
+ * offsets mix channels mildly); converges to < 0.5/255 for any in-gamut
+ * colour away from pure black/white.
+ */
+export function sceneRadianceForDisplay(target, exposure = DISPLAY_EXPOSURE_DEFAULT, out = [0, 0, 0], curve = toneCurveName()) {
   const want = [0, 1, 2].map((i) => Math.max(srgbToLinear(Math.min(1, Math.max(0, target[i]))), 1e-6));
+  // Neutral below its 0.76 compression knee is closed-form invertible, and
+  // the iteration below is NOT reliable there: Neutral subtracts ONE offset
+  // derived from the min channel, so a per-channel step can swap which channel
+  // is the minimum and settle on the wrong branch (measured: (14,14,25) came
+  // back as (37,37,8)). Forward: out_i = x_i - off, off = x_min - 6.25 x_min²
+  // (x_min < 0.08) else 0.04 ⇒ out_min = 6.25 x_min² | x_min - 0.04.
+  if (curve !== "agx" && curve !== "aces" && Math.max(want[0], want[1], want[2]) < 0.76) {
+    const oMin = Math.min(want[0], want[1], want[2]);
+    const xMin = oMin < 6.25 * 0.08 * 0.08 ? Math.sqrt(oMin / 6.25) : oMin + 0.04;
+    const off = xMin - oMin;
+    const ex = exposure > 0 ? exposure : DISPLAY_EXPOSURE_DEFAULT;
+    for (let i = 0; i < 3; i += 1) out[i] = (want[i] + off) / ex;
+    return out;
+  }
   const x = [0.02 / exposure, 0.02 / exposure, 0.02 / exposure];
   const got = [0, 0, 0];
   for (let it = 0; it < 200; it += 1) {
-    agxDisplay(x, exposure, got);
+    displayForward(x, exposure, got, curve);
     let err = 0;
     for (let i = 0; i < 3; i += 1) {
       const g = Math.max(srgbToLinear(got[i]), 1e-7);
@@ -419,7 +448,7 @@ export function installCloudNightDiag(scene3dGetter) {
           : null,
         // Night floor: the uniform the shader adds, its weight, and what a
         // cloud at the calibration gradient DISPLAYS (sRGB 0-255) through the
-        // live exposure + AgX — must be the night colour (0x171725 → 23,23,37)
+        // live exposure + tone curve — must be the night colour (0x171725 → 23,23,37)
         // at full night and [0,0,0] by day.
         nightAmbientPatched: vol ? !!vol._nightAmbientPatched : null,
         ambientWeight: cn ? cn.ambientWeight : null,
@@ -427,7 +456,7 @@ export function installCloudNightDiag(scene3dGetter) {
         nightColor: vol ? "#" + (vol._nightColor >>> 0).toString(16).padStart(6, "0") : null,
         displayExposure: vol ? vol._displayExposure : null,
         nightCloudDisplay: u?.cloudNightAmbient?.value
-          ? agxDisplay(
+          ? displayForward(
             [0, 1, 2].map((i) => u.cloudNightAmbient.value.getComponent(i) * CLOUD_NIGHT_GRADIENT_REF),
             vol._displayExposure,
           ).map((c) => Math.round(c * 255))

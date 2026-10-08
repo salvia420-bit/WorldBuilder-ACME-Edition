@@ -1949,9 +1949,9 @@ uniform float uAcAmbLevel;
 // on every tier that isn't running it.
 #ifdef HB_TERRAIN_CSM
 uniform float uCsmEnabled;
-uniform sampler2D uCsmShadowMap0;
-uniform sampler2D uCsmShadowMap1;
-uniform sampler2D uCsmShadowMap2;
+uniform sampler2DShadow uCsmShadowMap0;
+uniform sampler2DShadow uCsmShadowMap1;
+uniform sampler2DShadow uCsmShadowMap2;
 uniform mat4 uCsmMatrix0;
 uniform mat4 uCsmMatrix1;
 uniform mat4 uCsmMatrix2;
@@ -1959,7 +1959,7 @@ uniform vec2 uCsmSplits;
 uniform float uCsmFar;
 uniform float uCsmBlend;
 
-float csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
+float csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   vec4 sc = m * vec4(worldPos, 1.0);
   sc.xyz /= max(sc.w, 1e-6);
   if (sc.x < 0.0 || sc.x > 1.0 ||
@@ -1967,10 +1967,17 @@ float csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
       sc.z > 1.0) {
     return 1.0;
   }
-  float bias = 0.0005;
+  // 2026-10-07: hardware depth compare on the cascade's DEPTH texture
+  // (sampler2DShadow, LessEqual): 1 = lit, 0 = shadowed, and every tap is
+  // already a bilinear 2x2 PCF. Four half-texel taps soften the edge.
+  float bias = 0.0007;
   float ref = sc.z - bias;
-  float stored = texture(sm, sc.xy).r;
-  return stored < ref ? 0.0 : 1.0;
+  vec2 tx = 0.5 / vec2(textureSize(sm, 0));
+  return 0.25 * (
+      texture(sm, vec3(sc.xy + vec2(-tx.x, -tx.y), ref))
+    + texture(sm, vec3(sc.xy + vec2( tx.x, -tx.y), ref))
+    + texture(sm, vec3(sc.xy + vec2(-tx.x,  tx.y), ref))
+    + texture(sm, vec3(sc.xy + vec2( tx.x,  tx.y), ref)));
 }
 
 float csmShadowFactor(vec3 worldPos, float viewDepth) {
@@ -6287,13 +6294,13 @@ export async function bakeTerrainForLandblock(
         value: scene3d?.csmState ? 1.0 : 0.0,
       },
       uCsmShadowMap0: {
-        value: scene3d?.csmState?.lights?.[0]?.shadow?.map?.texture ?? null,
+        value: scene3d?.csmState?.lights?.[0]?.shadow?.map?.depthTexture ?? null,
       },
       uCsmShadowMap1: {
-        value: scene3d?.csmState?.lights?.[1]?.shadow?.map?.texture ?? null,
+        value: scene3d?.csmState?.lights?.[1]?.shadow?.map?.depthTexture ?? null,
       },
       uCsmShadowMap2: {
-        value: scene3d?.csmState?.lights?.[2]?.shadow?.map?.texture ?? null,
+        value: scene3d?.csmState?.lights?.[2]?.shadow?.map?.depthTexture ?? null,
       },
       uCsmMatrix0: {
         value: scene3d?.csmState?.lights?.[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4(),

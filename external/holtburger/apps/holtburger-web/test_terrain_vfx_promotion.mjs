@@ -421,12 +421,14 @@ check("no tier promotes the trail map",
 // ===========================================================================
 console.log("\n-- P4 ice reachability + the promotion switchboard -------------");
 // ===========================================================================
-check("every master is gated by TERRAIN_VFX_PROMOTED — ice promoted "
-  + "(USER 1070 SIGN-OFF 2026-08-01), the other eight still false",
+// Owner sign-offs on the 1070: ice 2026-08-01, grass 2026-10-07.
+const SIGNED_OFF = new Set(["ice", "grass"]);
+check("every master is gated by TERRAIN_VFX_PROMOTED — ice + grass promoted "
+  + "(USER 1070 SIGN-OFFS 2026-08-01 / 2026-10-07), the other seven still false",
   Object.keys(MASTERS).length === 9
-  && TERRAIN_VFX_PROMOTED.ice === true
+  && TERRAIN_VFX_PROMOTED.ice === true && TERRAIN_VFX_PROMOTED.grass === true
   && Object.values(MASTERS).every((f) =>
-    TERRAIN_VFX_PROMOTED[f] === (f === "ice")));
+    TERRAIN_VFX_PROMOTED[f] === SIGNED_OFF.has(f)));
 check("the gate and the ladder are both frozen",
   Object.isFrozen(TERRAIN_VFX_PROMOTED) && Object.isFrozen(TERRAIN_VFX_TIERS));
 check("the ladder is the documented {high, ultra} promotion target",

@@ -95,6 +95,8 @@ import { transcodeXu7WithNra } from "./xu7_textures.js";
 // see `texture_release.js` for the preconditions that gate the flag.
 import { armCpuRelease } from "./texture_release.js";
 import { PLANE } from "./surface_planes.js";
+// ?lumNight (2026-10-07): ambient-like luminosity dims at night.
+import { registerLuminousMaterial } from "./luminous_night.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -1065,9 +1067,9 @@ function _installCsmShaderPatch(material, csmState) {
       // refs filled in by refreshCsmUniforms each frame; init to whatever's
       // already on the cascade lights so the first frame doesn't render
       // with a null sampler).
-      shader.uniforms.uCsmShadowMap0 = { value: csmState.lights[0]?.shadow?.map?.texture ?? null };
-      shader.uniforms.uCsmShadowMap1 = { value: csmState.lights[1]?.shadow?.map?.texture ?? null };
-      shader.uniforms.uCsmShadowMap2 = { value: csmState.lights[2]?.shadow?.map?.texture ?? null };
+      shader.uniforms.uCsmShadowMap0 = { value: csmState.lights[0]?.shadow?.map?.depthTexture ?? null };
+      shader.uniforms.uCsmShadowMap1 = { value: csmState.lights[1]?.shadow?.map?.depthTexture ?? null };
+      shader.uniforms.uCsmShadowMap2 = { value: csmState.lights[2]?.shadow?.map?.depthTexture ?? null };
       shader.uniforms.uCsmMatrix0 = { value: csmState.lights[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
       shader.uniforms.uCsmMatrix1 = { value: csmState.lights[1]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
       shader.uniforms.uCsmMatrix2 = { value: csmState.lights[2]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
@@ -1082,9 +1084,9 @@ function _installCsmShaderPatch(material, csmState) {
     // mechanism means the detail patch already ran if it's also active).
     shader.fragmentShader = shader.fragmentShader.replace(
       "void main() {",
-      `uniform sampler2D uCsmShadowMap0;
-uniform sampler2D uCsmShadowMap1;
-uniform sampler2D uCsmShadowMap2;
+      `uniform sampler2DShadow uCsmShadowMap0;
+uniform sampler2DShadow uCsmShadowMap1;
+uniform sampler2DShadow uCsmShadowMap2;
 uniform mat4 uCsmMatrix0;
 uniform mat4 uCsmMatrix1;
 uniform mat4 uCsmMatrix2;
@@ -1095,7 +1097,7 @@ uniform float uCsmBlend;
 // Sample one cascade's shadow map at worldPos. Returns 1.0 for fully
 // lit, 0.0 for fully shadowed. Standard PCF-1-tap (3-tap unrolled for
 // a softer edge without the cost of full PCF).
-float _csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
+float _csmSampleCascade(sampler2DShadow sm, mat4 m, vec3 worldPos) {
   vec4 shadowCoord = m * vec4(worldPos, 1.0);
   // shadow.matrix is composed by three to produce coords in [0,1] for
   // x,y already; z is in [0,1] as depth in NDC. Perspective-divide
@@ -1111,13 +1113,17 @@ float _csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
       shadowCoord.z > 1.0) {
     return 1.0;
   }
-  // Compare reference depth against stored. three.js renders
-  // depth-only into the R channel of the shadow map texture
-  // (DepthTexture; sampled via .x).
-  float bias = 0.0005;
+  // 2026-10-07: hardware depth compare on the cascade's DEPTH texture
+  // (sampler2DShadow, LessEqual): 1 = lit, 0 = shadowed, and every tap is
+  // already a bilinear 2x2 PCF. Four half-texel taps soften the edge.
+  float bias = 0.0007;
   float ref = shadowCoord.z - bias;
-  float stored = texture2D(sm, shadowCoord.xy).r;
-  return stored < ref ? 0.0 : 1.0;
+  vec2 tx = 0.5 / vec2(textureSize(sm, 0));
+  return 0.25 * (
+      texture(sm, vec3(shadowCoord.xy + vec2(-tx.x, -tx.y), ref))
+    + texture(sm, vec3(shadowCoord.xy + vec2( tx.x, -tx.y), ref))
+    + texture(sm, vec3(shadowCoord.xy + vec2(-tx.x,  tx.y), ref))
+    + texture(sm, vec3(shadowCoord.xy + vec2( tx.x,  tx.y), ref)));
 }
 
 // CSM main entry — pick cascade by view-space depth and sample with
@@ -1933,6 +1939,7 @@ function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
     mat.emissive = new THREE.Color(0xffffff);
     mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
     if (texture) mat.emissiveMap = texture;
+    registerLuminousMaterial(mat, sfLuminosity);
   }
   // Diffuse-reflectance albedo tint — retail uses `diffuse` as a reflectance
   // multiplier on the material's diffuse colour (acclient.c:454458). No-op at
@@ -4669,6 +4676,8 @@ export class MaterialCache {
       opts.color = new THREE.Color(sfDiffuse, sfDiffuse, sfDiffuse);
     }
     const mat = new THREE.MeshStandardMaterial(opts);
+    // ?lumNight — the inline ladder set the luminosity emissive on `opts`.
+    if (!useUnifiedDecoder && hasLum) registerLuminousMaterial(mat, sfLuminosity);
 
     // === A10-M1 (2026-06-11) — run the single decoder on the built material ===
     // When `?surfaceUnified=on` the inline `opts` ladder above was skipped; apply

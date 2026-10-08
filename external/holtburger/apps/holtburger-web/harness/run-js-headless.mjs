@@ -359,6 +359,10 @@ const TIER5 = [
   { tier: 5, flag: "horizonFog+cloudsFullOpacity", file: "test_fog_band.mjs" },
   // 2026-10-07 clouds lit by the sky's night-ramped sun (night clouds dark).
   { tier: 5, flag: "cloudNight", file: "tests/cloud_night_lighting.test.mjs" },
+  // 2026-10-07 owner look pass on the 1070: ?tone / ?grade / ?lumNight /
+  // ?adaptiveResBootGrace / ?swayShadow + the split-chain resolve, cloud depth
+  // and CSM depth-texture fixes.
+  { tier: 5, flag: "lookPass", file: "tests/look_pass.test.mjs" },
   // 2026-10-07 moon nebula sheets as far-depth sky glows (the sky wedges) +
   // AerialPerspective takes the sky's sun (it was (0,0,0)).
   { tier: 5, flag: "skyGlow+aerialSun", file: "tests/sky_glow.test.mjs" },

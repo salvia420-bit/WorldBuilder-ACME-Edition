@@ -246,6 +246,21 @@ check(
     Math.abs(fakeUniforms.uCsmBlend.value - 0.1) < 1e-6,
     `uCsmBlend=${fakeUniforms.uCsmBlend.value}`
 );
+// 2026-10-07 — the map uniform must carry the cascade's DEPTH texture (what
+// three r184 renders shadow depth into), never the colour attachment, which
+// holds `1 - depth` at 8 bits and inverted every receiver compare.
+{
+    const colour = new THREE.Texture();
+    const depth = new THREE.DepthTexture(4, 4);
+    csmState.lights[0].shadow.map = { texture: colour, depthTexture: depth };
+    refreshCsmUniforms(csmState);
+    check(
+        "refreshCsmUniforms binds shadow.map.depthTexture (not the colour .texture) to uCsmShadowMap0",
+        fakeUniforms.uCsmShadowMap0.value === depth,
+        `got ${fakeUniforms.uCsmShadowMap0.value === colour ? "the colour texture" : String(fakeUniforms.uCsmShadowMap0.value)}`
+    );
+    csmState.lights[0].shadow.map = null;
+}
 
 // ---- Stage 5: dispose removes the cascade group cleanly ----
 const beforeDispose = scene.children.length;
@@ -357,11 +372,20 @@ const stubShader = {
 matOpaque.onBeforeCompile(stubShader);
 
 check(
-    "patched fragment shader declares uCsmShadowMap0/1/2 samplers",
-    /uniform sampler2D uCsmShadowMap0/.test(stubShader.fragmentShader) &&
-        /uniform sampler2D uCsmShadowMap1/.test(stubShader.fragmentShader) &&
-        /uniform sampler2D uCsmShadowMap2/.test(stubShader.fragmentShader),
+    "patched fragment shader declares uCsmShadowMap0/1/2 as sampler2DShadow (hardware depth compare)",
+    /uniform sampler2DShadow uCsmShadowMap0/.test(stubShader.fragmentShader) &&
+        /uniform sampler2DShadow uCsmShadowMap1/.test(stubShader.fragmentShader) &&
+        /uniform sampler2DShadow uCsmShadowMap2/.test(stubShader.fragmentShader),
     "samplers found"
+);
+// 2026-10-07 — the receivers must compare against the cascade DEPTH texture.
+// three r184 writes `1 - depth` (8-bit) into the shadow map's colour buffer;
+// reading that `.r` as depth inverted every compare (no shadow anywhere).
+check(
+    "cascade sample is a hardware compare: texture(sm, vec3(uv, ref)), no colour .r read",
+    /texture\(sm, vec3\(/.test(stubShader.fragmentShader) &&
+        !/texture2D\(sm, shadowCoord\.xy\)\.r/.test(stubShader.fragmentShader),
+    "compare sampling"
 );
 check(
     "patched fragment shader declares uCsmSplits + uCsmFar + uCsmBlend",
@@ -457,7 +481,7 @@ matBoth.onBeforeCompile(stubShader2);
 check(
     "chained patch: BOTH detail (uDetailMap) AND CSM (uCsmShadowMap0) uniforms declared",
     /uniform sampler2D uDetailMap/.test(stubShader2.fragmentShader) &&
-        /uniform sampler2D uCsmShadowMap0/.test(stubShader2.fragmentShader),
+        /uniform sampler2DShadow uCsmShadowMap0/.test(stubShader2.fragmentShader),
     "both found"
 );
 check(

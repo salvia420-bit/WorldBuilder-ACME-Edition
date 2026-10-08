@@ -602,6 +602,15 @@ export function refreshCsmUniforms(csmState) {
   }
 }
 
+/**
+ * The texture CSM receivers sample for a cascade light: its shadow DEPTH
+ * texture (a `sampler2DShadow` in the receiver GLSL — hardware compare + PCF).
+ * Null until three has rendered that light's shadow map once.
+ */
+export function csmShadowSampleTexture(light) {
+  return light?.shadow?.map?.depthTexture ?? null;
+}
+
 function _writeCsmRefs(refs, csmState) {
   const lights = csmState.lights;
   // splits + blendFrac don't change per frame in the common case
@@ -616,15 +625,21 @@ function _writeCsmRefs(refs, csmState) {
       // it lands, leave the stale uniform value (the shader will
       // see the previous frame's texture, which is fine for a
       // single-frame discontinuity).
-      const tex = light.shadow?.map?.texture ?? null;
+      // 2026-10-07 (1070 look pass): the DEPTH texture, not `.texture`.
+      // three r184 renders shadow depth into `shadow.map.depthTexture`
+      // (LessEqual compare, linear filter under PCF) and the colour buffer
+      // only holds `1 - depth` at 8 bits (ShaderLib depth.glsl BasicDepth
+      // packing). Read as plain depth that colour inverted every compare —
+      // measured live: zero shadowed receivers anywhere, sun at 28 deg.
+      const tex = csmShadowSampleTexture(light);
       if (tex) mapU.value = tex;
     }
     const matU = refs.mats[i];
     if (matU) {
       // Three composes shadow.matrix as
       //   biasMatrix * cam.projectionMatrix * cam.matrixWorldInverse
-      // so it transforms world → shadow-NDC[0,1]. We can sample
-      // `shadow.map.texture` directly at `xy` of the result.
+      // so it transforms world → shadow-NDC[0,1]: `xy` addresses the
+      // depth texture and `z` is the reference depth for the compare.
       matU.value.copy(light.shadow.matrix);
     }
   }

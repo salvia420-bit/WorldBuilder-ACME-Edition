@@ -181,6 +181,8 @@ import {
   adaptiveResSettleEnabled,
   adaptiveResGpuCheckEnabled,
   computeInitialRenderScale,
+  adaptiveResBootGraceEnabled,
+  bootGraceActive,
   createFenceGpuProbe,
   AdaptiveRenderScaleController,
 } from "./adaptive_render_scale.js";
@@ -1267,6 +1269,12 @@ export async function preInit3D(canvas) {
         // 2026-10-07 — lower only when the GPU is actually behind; hold or
         // raise when frames are main-thread bound (see adaptiveResGpuCheckEnabled).
         gpuProbe: adaptiveGpuProbe,
+        // 2026-10-07 (later) — boot grace: no lowering / no settle latch until
+        // the scene has been `ready` for BOOT_GRACE_MS (the 0.52-for-5-minutes
+        // latch on the 1070; see adaptiveResBootGraceEnabled).
+        isBooting: adaptiveResBootGraceEnabled()
+          ? () => bootGraceActive(window.__bootStateHistory)
+          : null,
         log: (m) => {
           try { console.log(m); } catch (_) { /* best-effort */ }
         },

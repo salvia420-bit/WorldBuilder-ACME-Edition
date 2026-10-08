@@ -167,18 +167,24 @@ export const GRASS_DEFAULTS = Object.freeze({
  *   mat    0 = tall and springy, 1 = near-mat; drives wind stiffness in-shader
  */
 export const GRASS_VARIANTS = Object.freeze({
+  // 2026-10-07 look pass (1070, Holtburg noon): blades lit by the same sun as
+  // the ground read as pale near-white hairs — the old tints (Grassland
+  // 0.40/0.54/0.24) were ~2.5x brighter and far greyer than the displayed
+  // ground (measured 0.15/0.18/0.01 linear through the Neutral curve). Tints
+  // now sit on the ground's own hue, a touch greener, and every blade is ~1.6x
+  // wider so a field reads as grass rather than scattered wires.
   // Grassland — the medium reference blade.
-  1: Object.freeze({ h: 0.34, w: 0.030, tint: [0.40, 0.54, 0.24], keep: 0.88, bare: 0.0, mat: 0.35 }),
+  1: Object.freeze({ h: 0.34, w: 0.050, tint: [0.15, 0.24, 0.035], keep: 0.88, bare: 0.0, mat: 0.35 }),
   // LushGrass — tall and saturated.
-  3: Object.freeze({ h: 0.54, w: 0.034, tint: [0.30, 0.62, 0.20], keep: 1.0, bare: 0.0, mat: 0.0 }),
+  3: Object.freeze({ h: 0.54, w: 0.055, tint: [0.11, 0.26, 0.030], keep: 1.0, bare: 0.0, mat: 0.0 }),
   // PatchyGrassland — sparse, with real bare gaps rather than uniform thinning.
-  9: Object.freeze({ h: 0.26, w: 0.028, tint: [0.48, 0.52, 0.26], keep: 0.55, bare: 0.35, mat: 0.5 }),
+  9: Object.freeze({ h: 0.26, w: 0.045, tint: [0.19, 0.21, 0.040], keep: 0.55, bare: 0.35, mat: 0.5 }),
   // forestfloor — short, leaf-litter tint (browner, less saturated).
-  21: Object.freeze({ h: 0.16, w: 0.038, tint: [0.44, 0.42, 0.24], keep: 0.72, bare: 0.12, mat: 0.7 }),
+  21: Object.freeze({ h: 0.16, w: 0.050, tint: [0.17, 0.16, 0.060], keep: 0.72, bare: 0.12, mat: 0.7 }),
   // Moss — very short, near-mat, wide.
-  28: Object.freeze({ h: 0.075, w: 0.052, tint: [0.28, 0.48, 0.24], keep: 1.0, bare: 0.0, mat: 1.0 }),
+  28: Object.freeze({ h: 0.075, w: 0.060, tint: [0.09, 0.19, 0.050], keep: 1.0, bare: 0.0, mat: 1.0 }),
   // DarkMoss — the same mat, darker and cooler.
-  29: Object.freeze({ h: 0.065, w: 0.052, tint: [0.18, 0.34, 0.19], keep: 1.0, bare: 0.0, mat: 1.0 }),
+  29: Object.freeze({ h: 0.065, w: 0.060, tint: [0.06, 0.13, 0.050], keep: 1.0, bare: 0.0, mat: 1.0 }),
 });
 
 /** The codes this family plants on, ascending. Derived from the table. */
@@ -245,6 +251,8 @@ export const GRASS_END = "VFX_TERRAIN_GRASS_END";
 /** The seam this patch needs. Absent ⇒ the injection is a NO-OP (byte-identical). */
 export const GRASS_VERTEX_SEAM = "#include <begin_vertex>";
 export const GRASS_FRAGMENT_SEAM = "#include <color_fragment>";
+// The double-sided normal flip lives in this chunk (`normal *= faceDirection`).
+export const GRASS_NORMAL_SEAM = "#include <normal_fragment_begin>";
 
 /** Per-instance attributes THIS module owns (the pool owns aScale/aNormal). */
 export const GRASS_ATTRIBUTES = Object.freeze([
@@ -356,6 +364,23 @@ function _grassVertexSnippet() {
   ].join("\n");
 }
 
+// NO BACK-FACE FLIP (2026-10-07, 1070 look pass). The blade normal is the
+// ground's UP on purpose (see the geometry header), but the material is
+// DoubleSide and three's normal_fragment_begin multiplies the normal by
+// faceDirection — so every blade seen from behind got a DOWN normal, no sun and
+// no sky light, and rendered as a black spike: half of every field read as
+// black thorns at Holtburg. Re-take the interpolated normal unflipped, so both
+// faces light exactly like the ground they grow from.
+function _grassNormalSnippet() {
+  return [
+    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, normal) ----",
+    "  #ifndef FLAT_SHADED",
+    "    normal = normalize( vNormal );",
+    "  #endif",
+    "  // ---- " + GRASS_END + " ----",
+  ].join("\n");
+}
+
 function _grassFragmentSnippet() {
   return [
     "  // ---- " + GRASS_MARKER + " (terrain_grass.js, fragment) ----",
@@ -434,6 +459,11 @@ export function injectTerrainGrassShader(shader) {
   shader.fragmentShader = shader.fragmentShader.replace(
     GRASS_FRAGMENT_SEAM,
     GRASS_FRAGMENT_SEAM + "\n" + _grassFragmentSnippet(),
+  );
+  // Absent seam (a non-standard material) ⇒ replace() is a no-op, as above.
+  shader.fragmentShader = shader.fragmentShader.replace(
+    GRASS_NORMAL_SEAM,
+    GRASS_NORMAL_SEAM + "\n" + _grassNormalSnippet(),
   );
   return shader;
 }

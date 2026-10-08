@@ -40,6 +40,8 @@
 //     to flag every material for recompilation, and must see the real one.
 
 import * as THREE from "three";
+// ?swayShadow (2026-10-07): swaying trees cast swaying shadows.
+import { applySwayShadow } from "./sway_shadow.js";
 
 const FLAG = (() => {
   try {
@@ -72,6 +74,9 @@ function collect(o, camLayers, vsm, out) {
   if (o.visible === false) return 1;
   if ((o.isMesh || o.isLine || o.isPoints) && (o.castShadow || (vsm && o.receiveShadow)) && o.layers.test(camLayers)) {
     out.push(o);
+    // The walk already touches every caster each shadow pass: hand a
+    // wind-swaying one its sway-aware depth material (once; sway_shadow.js).
+    if (o.customDepthMaterial === undefined) applySwayShadow(o);
     return 1;
   }
   let n = 1;

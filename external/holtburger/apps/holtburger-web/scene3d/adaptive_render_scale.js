@@ -95,6 +95,41 @@ export function adaptiveResGpuCheckEnabled() {
   }
 }
 
+/** `?adaptiveResBootGrace` — default ON; `=off`/`0`/`false` disables.
+ *
+ * 2026-10-07 (owner session on the 1070, quality=ultra, 1920x1080): the
+ * controller dropped to 0.52 while the world was still streaming in, the
+ * raises it then tried failed against the same load hitches, and the settle
+ * latch held the frame at HALF resolution for five minutes — on a GPU that
+ * renders that scene at 53 fps at full resolution (measured right after
+ * `__setRenderScale(1)`). Boot frames say nothing about steady-state fill
+ * cost: they are bakes, decodes and first-use shader links. So until the
+ * world has reported `ready` and settled for BOOT_GRACE_MS the controller
+ * never lowers and never latches (raises still apply). The HiDPI case this
+ * module exists for is already handled at boot by computeInitialRenderScale.
+ */
+export const BOOT_GRACE_MS = 30_000;
+export function adaptiveResBootGraceEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("adaptiveResBootGrace");
+    if (v == null) return true;
+    const lv = String(v).toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** True while the client has not yet reported scene `ready`, or did so less
+ *  than `graceMs` ago (wall clock, the `__bootStateHistory` timestamps). */
+export function bootGraceActive(history, nowMs = Date.now(), graceMs = BOOT_GRACE_MS) {
+  if (!Array.isArray(history)) return false;
+  const ready = history.find((e) => e && e.state === "ready");
+  if (!ready) return true;
+  return !(Number.isFinite(ready.ts) && nowMs - ready.ts >= graceMs);
+}
+
 /**
  * GPU-behind probe for the controller. The render loop calls `frameEnd()` once
  * per frame AFTER its GL submission. It reads the fence inserted at the end of
@@ -285,6 +320,9 @@ export class AdaptiveRenderScaleController {
     // GPU-behind probe (see adaptiveResGpuCheckEnabled / createFenceGpuProbe).
     // null = rAF cadence only (the pre-2026-10-07 behaviour).
     gpuProbe = null,
+    // Boot grace (see adaptiveResBootGraceEnabled): `() => true` while the
+    // world is still loading — no lowering and no settle latch then.
+    isBooting = null,
     now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
     log = null,
   } = {}) {
@@ -321,6 +359,8 @@ export class AdaptiveRenderScaleController {
     this.raiseCeiling = maxScale; // raises never exceed this while latched
     this.settleLatches = 0; // reachability counter for the damper
     this._gpuProbe = gpuProbe;
+    this._isBooting = typeof isBooting === "function" ? isBooting : null;
+    this.bootHolds = 0; // lowers suppressed by the boot grace
     this._gpuKnown = 0; // frames in this eval window with a GPU verdict
     this._gpuBehind = 0; // ...of which the GPU was still behind
     this._prevGpuBehind = null;
@@ -366,6 +406,12 @@ export class AdaptiveRenderScaleController {
       `no sign the GPU is the bottleneck, so a lower resolution would not help ` +
       `(?adaptiveResGpuCheck=off disables)`
     );
+  }
+
+  /** True while the boot grace holds every lower (never throws). */
+  _booting() {
+    if (!this._isBooting) return false;
+    try { return this._isBooting() === true; } catch (_) { return false; }
   }
 
   /** The highest scale a raise may reach right now. */
@@ -418,7 +464,9 @@ export class AdaptiveRenderScaleController {
     const gpuBehindBoth = behind === true && prevBehind === true;
     if (catastrophic && prevCatastrophic && t >= this._cooldownUntil) {
       const s = this._getScale();
-      if (s > this._minScale && this._gpuProbe && !gpuBehindBoth) {
+      if (s > this._minScale && this._booting()) {
+        this.bootHolds += 1;
+      } else if (s > this._minScale && this._gpuProbe && !gpuBehindBoth) {
         this._noteHold(dt, s, behind === false && prevBehind === false
           ? "the GPU kept up on both frames"
           : "there is no evidence the GPU was behind");
@@ -463,7 +511,9 @@ export class AdaptiveRenderScaleController {
     // fall back to the rAF-only rule and drop the scale. Live, two "GPU behind
     // on 29-30%" windows during streaming ratcheted the owner to 0.35. With no
     // probe at all (WebGL1), the rAF-only rule still applies.
-    const mayLower = !this._gpuProbe || gpu.verdict === true;
+    const booting = this._booting();
+    const mayLower = (!this._gpuProbe || gpu.verdict === true) && !booting;
+    if (overBudget && booting && s > this._minScale) this.bootHolds += 1;
     if (!overBudget || gpu.verdict === true) this._holdLogged = false;
     if (overBudget && s > this._minScale && mayLower) {
       // Bigger step when we are WAY over budget (e.g. the 4 s / 4K case).
@@ -487,7 +537,7 @@ export class AdaptiveRenderScaleController {
         return;
       }
     }
-    if (overBudget && !mayLower && s > this._minScale) {
+    if (overBudget && !mayLower && !booting && s > this._minScale) {
       this._noteHold(p75, s, gpu.keptUpPct == null
         ? "there was no GPU verdict this window"
         : `the GPU kept up on ${gpu.keptUpPct}% of frames`);

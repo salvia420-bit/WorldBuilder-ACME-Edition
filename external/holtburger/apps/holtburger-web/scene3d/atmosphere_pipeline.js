@@ -65,6 +65,8 @@ import {
 } from "./portal_punch.js";
 import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_effect.js";
 import { particlesOverCloudsEnabled, collectLateFx } from "./particles_over_clouds.js";
+import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
+import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -496,7 +498,26 @@ class PostChainSourcePass extends EffectPass {
   }
   render(renderer, inputBuffer, outputBuffer, deltaTime, stencilTest) {
     const late = this._latePass();
-    super.render(renderer, late ? late.renderTarget : inputBuffer, outputBuffer, deltaTime, stencilTest);
+    // NO DEPTH RESOLVE (2026-10-07, 1070 vis-test of b8819698). These passes
+    // are full-screen effect quads: they write colour only. But the buffer the
+    // late NanScrub writes is a multisampled composer buffer carrying the
+    // shared scene depth texture, and three resolves an MSAA target with ONE
+    // blitFramebuffer(COLOR | DEPTH): on the 1070 (ANGLE D3D11) that blit
+    // raised GL_INVALID_OPERATION every frame (its depth attachment does not
+    // match the target's multisample depth renderbuffer), and a rejected blit
+    // resolves NOTHING — the colour was lost too, so the post half read the
+    // raw world pass and the whole [Clouds, AerialPerspective] composite never
+    // reached the screen (no clouds, no aerial perspective, measured: buffer
+    // unchanged across the pass, gl.getError() 1282; with depth resolve off
+    // the pass writes T exactly and the error is 0). The depth texture keeps
+    // what the world pass resolved into it, which is all any later reader wants.
+    const restore = outputBuffer && outputBuffer.resolveDepthBuffer === true;
+    if (restore) outputBuffer.resolveDepthBuffer = false;
+    try {
+      super.render(renderer, late ? late.renderTarget : inputBuffer, outputBuffer, deltaTime, stencilTest);
+    } finally {
+      if (restore) outputBuffer.resolveDepthBuffer = true;
+    }
   }
 }
 
@@ -1346,12 +1367,17 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     lensFlare.thresholdRange = 0.1;
   }
 
-  // Tone mapping — collapses the HalfFloat HDR pipeline to sRGB. AGX
-  // is the takram-recommended mode (well-behaved highlight roll-off,
-  // designed for physically-based atmosphere/cloud output). MUST run
+  // Tone mapping — collapses the HalfFloat HDR pipeline to sRGB. MUST run
   // AFTER LensFlare (so the flare's HDR extraction works) and BEFORE
   // Dithering (so dither operates on the final 8-bit-ish value range).
-  const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
+  // 2026-10-07: the curve is `?tone=` (tone_curve.js) — Khronos PBR Neutral
+  // by default (owner's pick on the 1070: AC's painted albedo reaches the
+  // screen instead of AGX's desaturated mid-range); `?tone=agx` restores the
+  // previous takram-recommended AGX look exactly.
+  const toneMapping = new ToneMappingEffect({ mode: toneMappingModeFor(toneCurveName(), ToneMappingMode) });
+  // Display-referred look (contrast / warmth / night tint), merged into the
+  // same pass right after the curve; null under `?grade=off` (color_grade.js).
+  const colorGrade = createColorGradeEffect();
   const dithering = new DitheringEffect();
 
   // Bloom — HDR halo around bright pixels (sun disc, lava, lit windows,
@@ -1483,9 +1509,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     });
     // Same slot order as the legacy list below, cut after the cloud/aerial
     // composite: HeatHaze → Clouds → AerialPerspective → [HorizonDissolve]
-    // | particles | LensFlare → Bloom → Vignette → ToneMapping → Dithering.
+    // | particles | LensFlare → Bloom → Vignette → ToneMapping → ColorGrade
+    // → Dithering.
     const atmosEffects = [heatHaze, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
-    const postEffects = [lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean);
+    const postEffects = [lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
     if (nanScrubOn) {
       lateScrubPass = new PostChainSourcePass(camera, particlesOverCloudsPass, makeNanScrub());
@@ -1515,7 +1542,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // before AerialPerspective's update() reads the overlay map it produces
       // (pmndrs updates effects in list order; all three carry DEPTH so the
       // stable attribute sort keeps this order).
-      ...[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
+      ...[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
     );
   }
   if (nanScrubOn) {
@@ -1532,11 +1559,24 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // overlay retires its private composer + sky quad and points
   // AerialPerspective's overlay/shadowLength at the cloud buffers.
   const cloudsMainAdopted = !!(cloudsMain && cloudOverlayForMain.adoptMainPass({ aerialPerspective }));
+  // 2026-10-07 (1070 vis-test of b8819698): the adoption NULLS the shared
+  // CloudsEffect's scene depth. Retiring the overlay's private composer calls
+  // pmndrs `removePass(privatePass)`, and when no remaining pass needs depth
+  // removePass runs `privatePass.setDepthTexture(null)` (postprocessing
+  // build/index.js removePass) — which forwards to every effect of that pass,
+  // i.e. the CloudsEffect this composer's fxPass now owns. Measured live:
+  // cloudsPass depthBuffer = null, so every cloud ray marched to infinity and
+  // the overlay painted cloud over hills, trees and the town. Re-hand the
+  // fxPass's depth (the composer's stable depth copy) to its effects.
+  if (cloudsMainAdopted && typeof fxPass.getDepthTexture === "function" && fxPass.getDepthTexture()) {
+    fxPass.setDepthTexture(fxPass.getDepthTexture(), fxPass.fullscreenMaterial?.depthPacking);
+  }
 
   // Live tuning handle for the 1070 eye-test, mirroring `window.__horizonFade`:
   // `__heatHaze.strength = 0.012`, `.freq`, `.speed`, and `.state` for a
   // snapshot of what the terrain provider is publishing. No-op when off.
   installHeatHazeHandle(heatHaze);
+  installColorGradeHandle(colorGrade);
 
   // `?particlesOverClouds` runtime state. `lateArmed` is the no-reload A/B
   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
@@ -1670,6 +1710,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     bloom,
     vignette,
     toneMapping,
+    // null under `?grade=off`; live handle `window.__grade`.
+    colorGrade,
     dithering,
     skyRenderPass,
     worldRenderPass,
@@ -2093,6 +2135,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       vignette?.dispose?.();
       heatHaze?.dispose?.();
       toneMapping.dispose?.();
+      colorGrade?.dispose?.();
       dithering.dispose?.();
     },
   };

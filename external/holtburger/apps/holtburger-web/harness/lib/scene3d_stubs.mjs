@@ -83,6 +83,11 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   // Real string values, not sentinels: a suite that ever asserts on the tag
   // should see the production string.
   PLANE: '{ ALBEDO: "albedo", NORMAL: "normal", HEIGHT: "height", ROUGHNESS: "roughness", AO: "ao" }',
+  // ./luminous_night.js — `?lumNight` registration (2026-10-07). "Not
+  // tracked" = false, and the real function only writes `userData.hbLumBase`
+  // plus (at night) a scaled `emissiveIntensity`, so a spliced suite sees the
+  // un-dimmed noon value it always asserted.
+  registerLuminousMaterial: "() => false",
 });
 
 /**

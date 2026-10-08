@@ -131,6 +131,9 @@ const factory = new Function(
   "materialBakeEnabled",
   "SuiteAssetSource",
   "loadTexchanManifest",
+  // ./luminous_night.js (?lumNight, 2026-10-07) — called on every luminous
+  // surface _materialFromFlags builds; "not tracked" keeps the noon value.
+  "registerLuminousMaterial",
   `${patched}\n; return { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag, readClipMapParityMode };`,
 );
 const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnifiedFlag, readSurfaceParityV2Flag, readClipMapParityMode } =
@@ -139,6 +142,7 @@ const { MaterialCache, SURFACE_TYPE, applySurfaceRenderState, readSurfaceUnified
     () => false,
     function SuiteAssetSourceStub() {},
     async () => new Map(),
+    () => false,
   );
 
 // ---- Stage 1: SURFACE_TYPE bit-value verification -------------------

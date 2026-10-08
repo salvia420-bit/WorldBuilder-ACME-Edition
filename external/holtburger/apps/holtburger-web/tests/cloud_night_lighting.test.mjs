@@ -338,14 +338,14 @@ console.log("\n-- N7 night floor: night clouds are never black -----------------
   };
   const cloudSkySrc = (pitch) => irr(6361.5, Math.sin(pitch * Math.PI / 180)).map((e) => e * 2 * Math.PI / (4 * Math.PI) * CN.CLOUD_NIGHT_GRADIENT_REF);
   const to8 = (d) => d.map((x) => Math.round(x * 255));
-  const dayDisp = to8(CN.agxDisplay(cloudSkySrc(45), 5));
+  const dayDisp = to8(CN.displayForward(cloudSkySrc(45), 5));
   const nightPhys = cloudSkySrc(-14);
-  const nightDisp = to8(CN.agxDisplay(nightPhys, 5));
+  const nightDisp = to8(CN.displayForward(nightPhys, 5));
   console.log(`     physical cloud sky-light: 45 deg → display ${dayDisp}; -14 deg → radiance ${nightPhys.map((x) => x.toExponential(2))} → display ${nightDisp}`);
-  check("sanity: the physical daytime sky-light is clearly visible through exposure 5 + AgX", Math.max(...dayDisp) > 60);
+  check("sanity: the physical daytime sky-light is clearly visible through exposure 5 + the live tone curve", Math.max(...dayDisp) > 60);
   check("WHY: the physical -14 deg cloud light is display-BLACK (the 1070 blotches)", Math.max(...nightDisp) === 0);
   const floor = CN.cloudNightAmbientRadiance(CN.CLOUD_NIGHT_COLOR_DEFAULT, 1, 5);
-  const withFloor = to8(CN.agxDisplay([0, 1, 2].map((i) => nightPhys[i] + floor[i] * CN.CLOUD_NIGHT_GRADIENT_REF), 5));
+  const withFloor = to8(CN.displayForward([0, 1, 2].map((i) => nightPhys[i] + floor[i] * CN.CLOUD_NIGHT_GRADIENT_REF), 5));
   check("FIX: physical + floor displays the night colour 0x171725 = (23,23,37) (±1)",
     Math.abs(withFloor[0] - 23) <= 1 && Math.abs(withFloor[1] - 23) <= 1 && Math.abs(withFloor[2] - 37) <= 1, `got ${withFloor}`);
 }
@@ -357,11 +357,26 @@ console.log("\n-- N7 night floor: night clouds are never black -----------------
   for (const c of cols) {
     for (const ex of [2, 5, 10]) {
       const r = CN.sceneRadianceForDisplay(c.map((x) => x / 255), ex);
-      const back = CN.agxDisplay(r, ex).map((x) => x * 255);
+      const back = CN.displayForward(r, ex).map((x) => x * 255);
       worst = Math.max(worst, ...back.map((v, i) => Math.abs(v - c[i])));
     }
   }
-  check("agxDisplay ∘ sceneRadianceForDisplay round-trips within 0.5/255 (exposure 2/5/10)", worst < 0.5, `worst ${worst}`);
+  check("displayForward ∘ sceneRadianceForDisplay round-trips within 0.5/255 (exposure 2/5/10)", worst < 0.5, `worst ${worst}`);
+  // Every curve the composer can run (?tone=neutral|agx|aces) inverts cleanly,
+  // and the AgX branch is still the exact legacy transform.
+  for (const curve of ["neutral", "agx", "aces"]) {
+    let w = 0;
+    for (const c of cols) {
+      for (const ex of [2, 5, 10]) {
+        const r = CN.sceneRadianceForDisplay(c.map((x) => x / 255), ex, [0, 0, 0], curve);
+        const back = CN.displayForward(r, ex, [0, 0, 0], curve).map((x) => x * 255);
+        w = Math.max(w, ...back.map((v, i) => Math.abs(v - c[i])));
+      }
+    }
+    check(`round trip through ?tone=${curve} within 0.5/255`, w < 0.5, `worst ${w}`);
+  }
+  check("?tone=agx displayForward IS agxDisplay (legacy calibration untouched)",
+    JSON.stringify(CN.displayForward([0.01, 0.02, 0.03], 5, [0, 0, 0], "agx")) === JSON.stringify(CN.agxDisplay([0.01, 0.02, 0.03], 5)));
 }
 
 // (c) weight: zero while the sun is up, full by -6 deg.
@@ -395,9 +410,9 @@ check("flag off → floor weight 0", CN.cloudNightLighting(skyStateAt(0.0), {}, 
   check("noon + golden hour: floor uniform exactly (0,0,0)", noon.every((x) => x === 0) && golden.every((x) => x === 0));
   check("night: floor > 0 in every channel, blue-dominant (grey-blue)", night.every((x) => x > 0) && night[2] > night[0] && night[2] > night[1]);
   const to8 = (d) => d.map((x) => Math.round(x * 255));
-  const base = to8(CN.agxDisplay(night.map((x) => x * 0.5), 5));
-  const ref = to8(CN.agxDisplay(night.map((x) => x * CN.CLOUD_NIGHT_GRADIENT_REF), 5));
-  const top = to8(CN.agxDisplay(night, 5));
+  const base = to8(CN.displayForward(night.map((x) => x * 0.5), 5));
+  const ref = to8(CN.displayForward(night.map((x) => x * CN.CLOUD_NIGHT_GRADIENT_REF), 5));
+  const top = to8(CN.displayForward(night, 5));
   console.log(`     night cloud on screen: base ${base}  mid ${ref}  top ${top}  (night colour 23,23,37)`);
   check("night cloud at the calibration gradient displays the night colour (23,23,37)", JSON.stringify(ref) === "[23,23,37]");
   check("night cloud bases (skyGradient 0.5) are darker but NEVER black (every channel >= 10)",
@@ -411,7 +426,7 @@ check("flag off → floor weight 0", CN.cloudNightLighting(skyStateAt(0.0), {}, 
   vol.tick(skyStateAt(0.0));
   const at2 = U.cloudNightAmbient.value.toArray();
   check("exposure change re-solves the floor so the on-screen colour holds",
-    at2[2] > night[2] * 2 && JSON.stringify(to8(CN.agxDisplay(at2.map((x) => x * CN.CLOUD_NIGHT_GRADIENT_REF), 2))) === "[23,23,37]");
+    at2[2] > night[2] * 2 && JSON.stringify(to8(CN.displayForward(at2.map((x) => x * CN.CLOUD_NIGHT_GRADIENT_REF), 2))) === "[23,23,37]");
   vol.setDisplayExposure(5);
   vol.tick(skyStateAt(0.0));
 }

@@ -172,6 +172,8 @@ import {
   nightFactorFromAuthoredPitch,
   nightGroundScale,
 } from "./night_ramp.js";
+// ?lumNight (2026-10-07) — dim ambient-like Surface luminosity at night.
+import { tickLuminousNight } from "./luminous_night.js";
 
 // Entity-update kind constants — aliases over the shared KIND table
 // (A15-Q4; pre-Q4 these were file-local literals). Listed here
@@ -2754,6 +2756,11 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
         console.warn("[sky-c] skyLightingController.tick threw:", e);
       }
     }
+    // ?lumNight — same snapshot, same night fraction as the ground dim; a
+    // compare per tick unless the scale moved (luminous_night.js).
+    try {
+      tickLuminousNight(scene3d.skyLightingController._lastState);
+    } catch (_) { /* never kill the frame for the emissive night dim */ }
     // Wave R1.C (2026-05-28) — apply the freshly-snapshotted fog color
     // to the THREE distance fog. Runs immediately after the snapshot
     // tick so `_lastState` is current. Reads `?fogLerp` to pick the

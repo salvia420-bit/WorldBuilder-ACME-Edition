@@ -277,13 +277,13 @@ const A = build();
   const iScrub = at(/NanScrub/);
   const iAtmos = at(/^EffectPass\[CloudsEffect,AerialPerspectiveEffect\]$/);
   const iLate = at(/^ParticlesOverClouds$/);
-  const iPost = at(/^EffectPass\[BloomEffect,ToneMappingEffect,DitheringEffect\]$/);
+  const iPost = at(/^EffectPass\[BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/);
   console.log("     " + names.slice(iRestore).join(" -> "));
   check("clouds adopted into the main pass (the bug's precondition)", p.cloudsMainPass === true);
   // 2026-10-07 (later): the late target is scrubbed again before bloom (1070:
   // negative-radiance pixels in T brought the black flashing back).
   const iLateScrub = names.findLastIndex((n) => /^EffectPass\[NanScrub\]$/.test(n));
-  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> ParticlesOverClouds -> NanScrub -> [Bloom, ToneMapping, Dithering]",
+  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> ParticlesOverClouds -> NanScrub -> [Bloom, ToneMapping, ColorGrade, Dithering]",
     iRestore >= 0 && iRestore < iScrub && iScrub < iAtmos && iAtmos < iLate && iLate < iLateScrub &&
     iLateScrub === iPost - 1 && iPost === names.length - 1,
     names.join(" | "));
@@ -412,7 +412,7 @@ for (const how of ["opts", "url"]) {
   const { p } = built;
   const names = p.composer.passes.map(describe);
   check(`${how}: ONE post-chain EffectPass with clouds -> aerial -> bloom -> tone map -> dither`,
-    names[names.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,DitheringEffect]" &&
+    names[names.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
     names[names.length - 2] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
   check(`${how}: no late pass, no post half`, !names.includes("ParticlesOverClouds") &&
     p.particlesOverCloudsPass === null && p.fxPostPass === null);

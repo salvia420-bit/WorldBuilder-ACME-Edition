@@ -293,8 +293,11 @@ console.log("\n-- L5: blade count matches the tier --");
     && Number.isFinite(PRESETS[t].terrainGrassBlades)
     && Number.isFinite(PRESETS[t].terrainGrassRadius)
     && typeof PRESETS[t].terrainGrassStomp === "boolean"));
-  check("grass ships OFF on every tier (§5.9)",
-    ["low", "mid", "high", "ultra"].every((t) => PRESETS[t].terrainGrass === false));
+  // PROMOTED 2026-10-07 (owner sign-off on the 1070): the shared ladder —
+  // on at high/ultra, off at low/mid (mid/low ship 0 / few blades anyway).
+  check("grass promoted on the ladder: ON high/ultra, OFF low/mid",
+    PRESETS.low.terrainGrass === false && PRESETS.mid.terrainGrass === false
+    && PRESETS.high.terrainGrass === true && PRESETS.ultra.terrainGrass === true);
   check("stomp ladder: off low/mid, on high/ultra",
     PRESETS.low.terrainGrassStomp === false && PRESETS.mid.terrainGrassStomp === false
     && PRESETS.high.terrainGrassStomp === true && PRESETS.ultra.terrainGrassStomp === true);

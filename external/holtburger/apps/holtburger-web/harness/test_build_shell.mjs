@@ -272,7 +272,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-07 (netsync round 2): + scene3d/ghost_rigs.js, imported only by
   // scene3d/loop.js, whose import graph the generator does not list (loop.js
   // itself is not in the block); generator --check: up to date → unchanged.
-  const NON_APP_PRELOADS = 327;
+  // 2026-10-07 (1070 look pass): + scene3d/tone_curve.js, scene3d/color_grade.js,
+  // scene3d/luminous_night.js (Neutral tone curve / colour grade / night
+  // luminosity dim; generator --check: up to date, 342 modules) → 330.
+  // 2026-10-07 (later): + scene3d/sway_shadow.js (swaying trees cast swaying
+  // shadows; generator --check: up to date, 343 modules) → 331.
+  const NON_APP_PRELOADS = 331;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
