@@ -1,16 +1,18 @@
-# HANDOFF — OpenAC / retail-decomp comparison, round 1 shipped (2026-10-08)
+# HANDOFF — OpenAC / retail-decomp comparison, rounds 1 + 2 shipped (2026-10-08)
 
 A code-only session. Parallel agents each took a piece of OpenAC (`external/OpenAC`, C#), compared it with the
 matching holtburger-web code and with the retail decomp (`~/ac-headers/acclient.c`, the authority), and
 proposed changes. A second agent then tried to refute every finding before anything was implemented.
-Code commit: `0680b84b`. **There was no visual testing.** Every change that is visible in-game ships default-on with an `?flag=off`
+Code commits: `0680b84b` (round 1) and `ac5a0e94` (round 2).
+**There was no visual testing.** Every change that is visible in-game ships default-on with an `?flag=off`
 escape and is listed in §4 for a later 1070 eye-test.
 
-- Findings ledger (74 findings: status, escape flag, note): `docs/openac-comparison-2026-10-08/FINDINGS-round1.md`.
-- Full evidence per finding (decomp / OpenAC / holtburger citations, proposed change, verifier corrections and
-  implementation notes): `docs/openac-comparison-2026-10-08/round1-findings.json`.
-- Round 2 (10 more areas) was still running at commit time: `docs/openac-comparison-2026-10-08/round2-unverified-snapshot.json` (§6).
-- Status ledger: `docs/PARITY-STATUS.json` wave 4.
+- Round 1: 14 areas, 74 findings, 54 shipped. Ledger `docs/openac-comparison-2026-10-08/FINDINGS-round1.md`;
+  evidence `round1-findings.json`.
+- Round 2: 10 areas, 53 findings, 42 shipped + 2 partial. Ledger `FINDINGS-round2.md`; evidence `round2-findings.json` (§6).
+- Each evidence file holds the decomp / OpenAC / holtburger citations, the proposed change, and the verifier's corrections and
+  implementation notes.
+- Status ledger: `docs/PARITY-STATUS.json` waves 4 and 5.
 
 ---
 
@@ -25,6 +27,10 @@ Later in the session:
 > yes wrap up whenever you are done round 1 then commit and push to origin/master. make a handoff before pushing that contains my initial prompt to you and your suggested prompt to resume the remaining work
 
 > dont stop the currenr work tho
+
+> how much to do after the verifiers? might as well keep going i suppose
+
+> once the general purpose agents are done can we not spawn more and just let the holtburger-js-implement r2 finish as i must manage usage
 
 ---
 
@@ -182,23 +188,56 @@ The evidence and implementation notes for each are in `round1-findings.json`.
 
 ---
 
-## 6. Round 2 (in flight at commit time)
+## 6. Round 2: shipped (same pipeline, same day)
 
 Ten more areas: camera, audio, calendar/time, chat, held-item attachment, fellowship/trade/allegiance, world-object use,
-character options, death/corpses, radar. At commit time 9 of 10 compare agents had returned 47 findings. These are **UNVERIFIED**:
-the adversarial verify pass had not run. Snapshot: `round2-unverified-snapshot.json`.
+character options, death/corpses, radar. That gave 53 findings: 43 confirmed, 10 partially confirmed, 44 safe. 42 are shipped
+and 2 partial. Ledger: `FINDINGS-round2.md`.
 
-Notable claims to verify first:
-- chat-1: Turbine channel commands send to the wrong room (off-by-one).
-- chat-3: your own chat appears twice.
-- use-1: double-clicking a Stuck lever tries a pickup.
-- trade-1: Decline / ClearTradeAcceptance / TradeFailure handled alike.
-- allegiance-1: AllegianceUpdateRequest never sent.
-- held-1: held items inherit the wielder's scale.
-- camera-1: first person is decoupled from the character.
-- daytime-1: sky time runs on a private 1999 wall clock.
+| Theme | Findings | Escape flags (default ON) |
+|---|---|---|
+| **Chat.**<br>• Turbine rooms use retail ids; `/a` goes to the Allegiance room.<br>• Emotes carry the actor's name.<br>• No doubled own lines; retail sentences.<br>• `@` / `:` / `;` prefixes, aliases and inline `*pose*`.<br>• `/r` only from player tells.<br>• Client-side squelch.<br>• No duplicate death broadcast for victim/killer.<br>• Retail use-failure text. | chat-1..6, death-6, use-3 (partial) | — |
+| **Social.**<br>• AllegianceUpdateRequest sent; patron = monarch handled.<br>• Fellowship Open/Close (0x0291).<br>• Retail trade Decline/Clear/Failure.<br>• Fellowship Ignore/AutoAccept exclusion.<br>• Retail option defaults before PlayerDescription. | allegiance-1/2, fellowship-1, trade-1/2, charopt-1/6 | — |
+| **Death.**<br>• A dead player can't move.<br>• The rig stands at the lifestone.<br>• Selection is released at the server delete.<br>• The corpse handoff never claims the player.<br>• Unopened-corpse binds. | death-1..5 | `deadInputGate`, `localDeathRevive`, `deathSelectRelease` |
+| **Sky time.**<br>• The sky's time of day and DayGroup come from the server clock; the sky's look is unchanged.<br>• Calendar ported to wasm. | daytime-1/3 | `skyServerClock` |
+| **Held items.**<br>• The wield ledger can't re-mount into an old hand.<br>• Pickup un-parents instead of destroying the rig.<br>• Per-child attach generation.<br>• No feet-mount fallback. | held-2/4/5/6 | `wieldLedgerAuthority`, `pickupLeaveWorld`, `attachGen`, `heldMountStrict` |
+| **Camera.**<br>• Smooth, then collide.<br>• Retail 0.3 m standoff and 1.5 m pivot.<br>• Auto-follow follows in-place turns.<br>• ViewCombatTarget option.<br>• Scenery sweep export (camera-3 partial). | camera-2/4/5, charopt-2, camera-3 | `camViewerStep`, `camRetailSphere`, `autoFollowTurns`, `combatTargetView`, `camScenery` |
+| **World use and items.**<br>• Stuck levers are Used, not picked up.<br>• ItemUseable=No refused locally.<br>• 0.2 s use throttle.<br>• MainPackPreferred.<br>• Drag-to-player opens a secure trade.<br>• Trade closes when the partner vanishes.<br>• No double optimistic item sounds. | use-1/2/4, charopt-3/4, trade-2, audio-1/5 | `retailUseResult`, `retailUseReject`, `retailUseThrottle`, `retailItemSounds` |
+| **Radar.**<br>• RadarBehavior defaults.<br>• IsCreature from ItemType.<br>• Live PK colours.<br>• BlackFog2 blackout.<br>• No per-tick debug rebuild.<br>• Wielded-item sounds at world position. | radar-1..5, audio-2 | `radarRetailShowable`, `radarLiveFlags`, `radarBlank`, `attachedSoundPos` |
 
-If this session continues, round 2 is verified and implemented the same way and a follow-up commit updates this file.
+**Round-2 gate:**
+- JS: 473/473; lints, event-kinds and modulepreload (360) all clean.
+- Rust `--lib`: common 72, protocol 398 (+ opcode_parity 2), core 685, world 832, session 43; holtburger-web new tests 24/24.
+- wasm32 check clean; release wasm built 16:14 (6.9 MB).
+
+**Round-2 eye-test additions:**
+- Sky: the sun sits about 780 s earlier than before, and the day's weather group now matches other clients (`skyServerClock`).
+- Camera:
+  - pulled-in camera feel near walls (`camViewerStep`, `camRetailSphere`);
+  - auto-follow during turn-to-face (`autoFollowTurns`).
+- Chat: own lines now come only from the server echo, and channel colours changed.
+- World: levers and buttons activate on double-click.
+- Held items: an archer's quiver after a pickup.
+- Death: standing up at the lifestone.
+- Radar: blips missing for creature-typed props with no RadarBehavior.
+
+**Round-2 deferred:**
+- Render impact:
+  - held-1: child scale inheritance.
+  - daytime-2: weather profile table.
+  - charopt-5: vivid targeting brackets.
+  - audio-4: wire PlayScripts on the owner ScriptManager, the same work as plifecycle-6.
+- Needs design or a live check:
+  - camera-1: in-head view vs heading.
+  - camera-6: slope alignment.
+  - held-3: ParentEvent/PickupEvent queue/defer.
+  - audio-3: pre-create queue unification.
+  - fellowship-2: retail strings with the leader's name.
+- Partial:
+  - camera-3: one retail viewer transit.
+  - use-3: clear the ground object on move failure.
+- Unrelated bug noticed: `character_option_mask` (holtburger-world player/types.rs) maps StayInChatModeAfterSendingMessage to the
+  HEAR_ALLEGIANCE_CHAT bit and AllowOthersToSeeYourAge to SALVAGE_MULTIPLE.
 
 ---
 
@@ -214,6 +253,10 @@ If this session continues, round 2 is verified and implemented the same way and 
 - **On this 4-CPU box a workflow runs at most 2 agents concurrently.** Plus 1–2 background Rust edit agents, that peaked fine;
   `available` never dropped below about 1.8 GB.
 - **Durations:** release wasm-pack about 6 min; full JS gate about 3.5 min; holtburger-web `--lib` native about 2–3 min warm.
+- **Round 2 ran 5 agents at once** (a 2-lane JS workflow plus 3 Rust edit agents). `available` stayed at 4.3–4.8 GB, because
+  agents are in-process and none ran heavy jobs.
+- **One near-miss:** I relaunched a persisted workflow script by its path with placeholder args, which re-ran round 1. I stopped it
+  within seconds. The compare script now takes its areas from `args`.
 
 ---
 
@@ -226,19 +269,20 @@ original goal verbatim in §1 — the same rules apply: code only, no visual tes
 visuals, every agent must respect the 8 GB laptop limits in ~/CLAUDE.md and the §7 lessons: no rustfmt on
 src/lib.rs, stop the TS language server before builds, agents never run cargo/wasm-pack/the full gate/browsers).
 
-Remaining work, in order:
-1. Round 2: adversarially verify the 47 unverified findings in
-   docs/openac-comparison-2026-10-08/round2-unverified-snapshot.json (plus run the missing area if one is absent),
-   re-reading every decomp/OpenAC/holtburger citation; then implement the confirmed ones whose visual impact is
-   none/behaviour, in file-disjoint lanes with targeted tests, default-on with =off escapes per the owner flag
-   policy. Rust: agents edit only; the orchestrator compiles/tests each cluster under capped-build, one heavy job
-   at a time. Write FINDINGS-round2.md like FINDINGS-round1.md.
-2. Pick up the deferred round-1 findings from §5 that are safe without an eye-test (createobj-5, motioninterp-6,
-   moveto-4, cmotiontable-5, outbound-5 canonicalization), verifying each against acclient.c first.
-3. Run one more comparison round on areas not yet covered (e.g. streaming/residency correctness vs OpenAC
-   App/Streaming, portal space/teleport, LandDefs/terrain sampling, books/contracts/quests, vitals/regen, UI
-   layout behaviour), same compare → verify → implement pipeline.
+Rounds 1 and 2 are shipped. Remaining work, in order:
+1. Deferred findings that are safe without an eye-test, verifying each against acclient.c first (evidence and
+   verifier notes are in docs/openac-comparison-2026-10-08/round{1,2}-findings.json):
+   round 1 createobj-5, motioninterp-6, moveto-4, cmotiontable-5, outbound-5 canonicalization;
+   round 2 camera-3 (one retail viewer transit), use-3 (clear the ground object on move failure), fellowship-2,
+   held-3; plus the character_option_mask bit-mapping bug noted in §6.
+2. A third comparison round on areas not yet covered (streaming/residency correctness vs OpenAC App/Streaming,
+   portal space/teleport, LandDefs/terrain sampling, books/contracts/quests, vitals/regen, UI layout behaviour),
+   same compare → adversarial verify → implement pipeline, file-disjoint lanes, Rust compiled by the orchestrator
+   only, default-on with =off escapes per the owner flag policy.
+3. The large design items when the owner wants them: cmotiontable-2 (signed/reversed links), createobj-1,
+   plifecycle-6 / audio-4 (owner ScriptManager for wire scripts), spellcast-5 (personalized formulas).
 4. End with the full gate (capped JS gate, lints, core/common/protocol/world/session --lib, wasm32 check), one
    release wasm build, an updated handoff + PARITY-STATUS wave, then commit and push to origin/master.
-Keep the §4 eye-test queue growing for the owner's next 1070 session.
+Keep the §4/§6 eye-test queues growing for the owner's next 1070 session. Watch usage: the owner asked to cap
+agent spawning, so prefer one workflow at a time and say how many agents a step will use before starting it.
 ```

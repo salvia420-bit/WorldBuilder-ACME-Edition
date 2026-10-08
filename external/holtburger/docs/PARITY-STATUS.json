@@ -604,6 +604,44 @@
       "unverified": [
         "All visible behaviour changes (handoff eye-test queue) — no 1070 session yet"
       ]
+    },
+    {
+      "id": 5,
+      "started": "2026-10-08",
+      "note": "OpenAC/decomp comparison round 2: 10 behaviour areas (camera, audio, calendar/time, chat, held items, fellowship/trade/allegiance, world-object use, character options, death/corpses, radar). 53 findings, 42 shipped, 2 partial, 9 deferred (4 render-impact). Ledger: apps/holtburger-web/docs/openac-comparison-2026-10-08/FINDINGS-round2.md. No visual testing; visible changes default-on with =off escapes, listed in the handoff §6 eye-test additions.",
+      "agents": [
+        {
+          "facet": "ui_hud_plugins",
+          "scope": "chat routing/formatting/squelch/reply, allegiance update request, fellowship openness, trade state, character option defaults/exclusion, MainPackPreferred, drag-to-trade, radar rules"
+        },
+        {
+          "facet": "animation_motion",
+          "scope": "held-item ledger authority, pickup leave-world, attach generations, strict mount"
+        },
+        {
+          "facet": "movement_physics_collision",
+          "scope": "dead-player input gate, retail camera order/standoff/follow, ViewCombatTarget, scenery sweep export"
+        },
+        {
+          "facet": "render.sky_clouds_fog",
+          "scope": "time only: sky time of day + DayGroup from the server clock (look unchanged); calendar port"
+        },
+        {
+          "facet": "audio",
+          "scope": "no double optimistic item sounds, wielded-item sounds at world position, SoundTable lookup allocation"
+        },
+        {
+          "facet": "combat_magic",
+          "scope": "death flow: revive pose, selection release at server delete, corpse handoff guard, unopened-corpse binds, death broadcast dedupe"
+        }
+      ],
+      "merged": [
+        "ac5a0e94"
+      ],
+      "gate": "JS 473/473; lints + event-kinds + modulepreload (360) clean; common 72, protocol 398 + opcode_parity 2, core 685, world 832, session 43; holtburger-web new tests 24/24 (+1 pre-existing stale test); wasm32 check + release wasm 2026-10-08 16:14",
+      "unverified": [
+        "All round-2 visible behaviour changes (handoff §6) — no 1070 session yet"
+      ]
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",
