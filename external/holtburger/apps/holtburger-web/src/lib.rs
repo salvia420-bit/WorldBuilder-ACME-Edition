@@ -45331,6 +45331,8 @@ pub struct AnimationJs {
     num_frames: u32,
     flags: u32,
     frames: Vec<f32>,
+    /// SetOmega (hook 22) axis carried by the clip, `[x, y, z]`, or empty.
+    set_omega: Vec<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -45352,6 +45354,18 @@ impl AnimationJs {
     #[wasm_bindgen(getter)]
     pub fn frames(&self) -> Vec<f32> {
         self.frames.clone()
+    }
+    /// The clip's SetOmega hook axis `[x, y, z]` (empty Float32Array when the
+    /// clip has none). Retail's `SetOmegaHook::Execute` stores it as the
+    /// object's `m_omegaVector` (acclient.c:342548 -> :316613) and, for a
+    /// static object, `animate_static_object` rotates the whole object by it
+    /// once per update with NO quantum multiply (`Frame::grotate`,
+    /// acclient.c:321150). Every retail DefaultAnimation that carries one (8
+    /// clips: the ambient butterflies/seagulls/birds/insects, e.g. 0x03000751
+    /// = (0, 0, -0.0384)) fires it on frame 0, so the LAST one wins here.
+    #[wasm_bindgen(getter, js_name = setOmega)]
+    pub fn set_omega(&self) -> Vec<f32> {
+        self.set_omega.clone()
     }
 }
 
@@ -45396,11 +45410,26 @@ pub async fn fetch_animation(did: u32) -> Result<AnimationJs, JsValue> {
             frames.push(fr.orientation.z);
         }
     }
+    // SetOmega (hook type 22): 12-byte payload = Vector3 axis (setup_model.rs
+    // AnimationHook::read). Scenery has no other way to see it — `frames`
+    // above carries part poses only.
+    let mut set_omega: Vec<f32> = Vec::new();
+    for pf in &anim.part_frames {
+        for h in &pf.hooks {
+            if h.hook_type == 22 && h.data.len() >= 12 {
+                let f = |o: usize| {
+                    f32::from_le_bytes([h.data[o], h.data[o + 1], h.data[o + 2], h.data[o + 3]])
+                };
+                set_omega = vec![f(0), f(4), f(8)];
+            }
+        }
+    }
     Ok(AnimationJs {
         num_parts: anim.num_parts,
         num_frames: anim.num_frames,
         flags: anim.flags.bits(),
         frames,
+        set_omega,
     })
 }
 

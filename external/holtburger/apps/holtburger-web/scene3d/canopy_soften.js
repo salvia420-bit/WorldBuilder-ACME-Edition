@@ -13,8 +13,10 @@
 // Applied ONCE per surface group of a wind-responsive model (the same
 // windResponds() set the GPU sway uses — trees and foliage), at the statics
 // seam where the model's surface groups are built, in model space (AC Z-up),
-// and per part for the keyframe-animated scenery (animated_scenery.js — the
-// commonest Holtburg trees, setup 0x02000493). Trunk-like groups (tall and
+// and per part for the keyframe-animated scenery (animated_scenery.js —
+// swaying foliage and props; its flying ambients, e.g. the butterflies
+// 0x02000493 / 0x02000494, are flat wing quads the flat-panel guard skips).
+// Trunk-like groups (tall and
 // thin), flat panels (flags, banners, blades, cards) and tiny groups are left
 // alone. Only the
 // `normal` attribute changes: no draw, program or material is added.

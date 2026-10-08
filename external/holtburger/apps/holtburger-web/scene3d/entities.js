@@ -1295,6 +1295,29 @@ const VEL_SCALE_ON = (() => {
   }
 })();
 
+// ?creatureGait (2026-10-08, DEFAULT ON; `=off` escape) — retail gait tempo for
+// SERVER-SIMULATED movers (every non-player guid: creatures, NPCs). ACE and
+// retail move them by their own clip's root motion and play that clip at
+// framerate x speed — `add_motion` scales velocity AND framerate by the same
+// speed_mod (acclient.c:337431; ACE MotionTable.add_motion) — so the cadence
+// is just `_motionSpeed`. The velScale numerator, `stateGroundSpeed`, is the
+// humanoid get_state_velocity (3.12 walk / 4.0 run, acclient.c:343539), which
+// retail only uses for a jump launch (get_leave_ground_velocity, :343821);
+// over a small creature's own clip speed it inflated the walk of a Black
+// Rabbit (mtable 0x09000062, 1.46 m/s clip) 2.1x and a Chicken (0x0900012C,
+// 1.24 m/s) 2.5x, and only while moving. Player rigs (0x5xxxxxxx), moved by
+// player physics at exactly those constants, keep the velScale path.
+const CREATURE_GAIT_RETAIL_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return (
+      new URLSearchParams(window.location.search).get("creatureGait")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return true;
+  }
+})();
+
 // A5-P2 (unification survey 2026-06-11) — `?tweenClock=dt` (default OFF).
 // One clock domain for the hook-side-effect tweens
 // (`_tickJumpPoseTween` / `_tickScaleHookTween`; the swing/cast pose tickers
@@ -9434,7 +9457,9 @@ export class EntityManager {
 
   _unifiedLocoGaitScale(inst, base) {
     let scale;
-    if (base > 0) {
+    const serverMover = CREATURE_GAIT_RETAIL_ON
+      && (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000;
+    if (base > 0 && !serverMover) {
       let actual = this._resolveStateGroundSpeed(inst);
       const fromGetter = Number.isFinite(actual) && actual > 0;
       if (!fromGetter) actual = inst._emaSpeed ?? 0;

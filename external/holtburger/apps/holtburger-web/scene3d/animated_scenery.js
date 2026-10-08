@@ -113,6 +113,85 @@ function animSceneryFps() {
   return fps;
 }
 
+// ?animSceneryOmega (2026-10-08, DEFAULT ON; `=off` escape) — the retail
+// SetOmega ORBIT of the ambient critters. All 8 retail DefaultAnimations that
+// carry a SetOmega hook are the flying ambients — butterflies 0x02000493/494
+// (~182k placements), seagulls 0x020005AC (~24k), birds 0x020005A9 (~23k),
+// 0x020009B3, the insect cloud 0x020004B0 (+ 0x02000490/491). Their parts sit
+// 3-36 m off the object origin and the clip only flaps/bobs them; the FLYING
+// comes from the frame-0 SetOmega hook: retail stores the axis as
+// m_omegaVector (SetOmegaHook::Execute -> CPhysicsObj::set_omega,
+// acclient.c:342548 / :316613) and `animate_static_object` grotates the whole
+// object by it once per update, NO quantum multiply (acclient.c:321150), with
+// updates gated to >= MIN_QUANTUM = 1/30 s (:321170, :784229). The authored
+// axes are per-TICK angles (0.535 to 2.2 deg; as rad/s they would be a 3-11
+// minute circle), so the orbit is integrated at that 30 Hz reference (OpenAC's
+// RetailStaticAnimatingObjectScheduler does the same): a seagull circles its
+// 12 m ring in ~5.5 s. Without it every critter hovered in place beating its
+// wings at the (correct, 30 fps) clip rate — a stationary bird flapping 4.3 Hz.
+//
+// 2026-10-08 (owner on the 1070, once the orbit landed: "orbit too fast") —
+// the per-tick angle is retail's, but the rate is not fixed in retail: the
+// static-animation update runs at most every MIN_QUANTUM (the 30 Hz above) and
+// in practice at the client's own update rate, often lower. At the 30 Hz
+// ceiling a seagull laps its 12 m ring in 5.5 s (~14 m/s). Default 15 Hz:
+// ~11 s a lap (~7 m/s, a soaring gull), butterflies ~1.2 m/s.
+// `?animSceneryOmegaHz=<1..60>` tunes it; `window.__animSceneryOmegaHz(v)` live.
+export const ANIM_SCENERY_OMEGA_HZ_DEFAULT = 15;
+let _omegaHz;
+export function animSceneryOmegaHz() {
+  if (_omegaHz !== undefined) return _omegaHz;
+  let hz = ANIM_SCENERY_OMEGA_HZ_DEFAULT;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = Number(new URLSearchParams(window.location.search).get("animSceneryOmegaHz"));
+      if (Number.isFinite(v) && v > 0) hz = Math.min(60, Math.max(1, v));
+    }
+  } catch (_) { /* default */ }
+  _omegaHz = hz;
+  return hz;
+}
+/** Test seam / live A/B: a number sets the rate (clamped), undefined re-reads the URL. */
+export function __setAnimSceneryOmegaHzForTest(v) {
+  _omegaHz = v === undefined ? undefined : Math.min(60, Math.max(1, Number(v) || ANIM_SCENERY_OMEGA_HZ_DEFAULT));
+}
+if (typeof window !== "undefined") {
+  window.__animSceneryOmegaHz = (v) => { if (v !== undefined) __setAnimSceneryOmegaHzForTest(v); return animSceneryOmegaHz(); };
+}
+let _omegaFlag;
+export function animSceneryOmegaEnabled() {
+  if (_omegaFlag !== undefined) return _omegaFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("animSceneryOmega")?.toLowerCase();
+      if (v != null) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _omegaFlag = on;
+  return on;
+}
+/** Test seam: true/false arms/disarms, undefined re-reads the URL. */
+export function __setAnimSceneryOmegaForTest(v) { _omegaFlag = v; }
+
+/**
+ * Parse a fetchAnimation `setOmega` getter value into `{ axis, rad }` (unit
+ * axis + radians per retail tick), or null when absent / below retail
+ * grotate's 2e-4 threshold (Frame::grotate, acclient.c:357422). Pure.
+ */
+export function parseSetOmega(om) {
+  if (!om || om.length !== 3) return null;
+  const x = +om[0], y = +om[1], z = +om[2];
+  const rad = Math.hypot(x, y, z);
+  if (!(rad >= 0.0002)) return null;
+  return { axis: new THREE.Vector3(x / rad, y / rad, z / rad), rad };
+}
+
+/** Retail static-object orbit advance (radians) for `dt` wall seconds. Pure. */
+export function staticOmegaAngleStep(omega, dt) {
+  return omega && dt > 0 ? omega.rad * animSceneryOmegaHz() * dt : 0;
+}
+
 // ?animSceneryInstanced (default-ON — 2026-07-02 1070 eye-test + A/B; ?animSceneryInstanced=off
 // escape restores the per-mesh legacy path) — collapse per-placement part Meshes into one
 // InstancedMesh per (setupId, part, surface group). 2026-07-02 GTX-1070 A/B (quality=low
@@ -303,6 +382,10 @@ async function getOrCreateDidGroup(animId, wasmExports) {
   const numParts = anim.numParts | 0;
   const numFrames = anim.numFrames | 0;
   const frames = anim.frames;
+  // SetOmega orbit axis — new wasm getter; undefined on a stale pkg (no orbit,
+  // today's behaviour). Read BEFORE free().
+  let omega = null;
+  try { omega = animSceneryOmegaEnabled() ? parseSetOmega(anim.setOmega) : null; } catch (_) { omega = null; }
   anim.free?.();
   if (numParts <= 0 || numFrames <= 0) return null;
   // DAT frames: n frames × 1/fps, no duplicated closing frame → open loop.
@@ -322,9 +405,36 @@ async function getOrCreateDidGroup(animId, wasmExports) {
   const action = mixer.clipAction(clip);
   action.setLoop(THREE.LoopRepeat, Infinity);
   action.play();
-  const group = { mixer, template, parts, numParts, refCount: 0 };
+  const group = {
+    mixer, template, parts, numParts, refCount: 0,
+    // Retail orbit state: one shared angle per DID (every critter of a DID was
+    // loaded with its own placement heading, so they still sit at different
+    // points of their circles — as in retail, where they all tick together).
+    omega, orbitAngle: 0, orbitQ: new THREE.Quaternion(),
+  };
   _didGroups.set(animId, group);
   return group;
+}
+
+/** Advance a DID group's SetOmega orbit (no-op without one). */
+function _advanceOrbit(g, dt) {
+  if (!g.omega) return;
+  g.orbitAngle = (g.orbitAngle + staticOmegaAngleStep(g.omega, dt)) % (Math.PI * 2);
+  g.orbitQ.setFromAxisAngle(g.omega.axis, g.orbitAngle);
+}
+
+const _orbitQuatScratch = new THREE.Quaternion();
+/**
+ * The anchor transform this frame. Retail grotate is a GLOBAL rotation
+ * (new_q = q_w * q, acclient.c:357422), so the orbit pre-multiplies the
+ * placement orientation about the anchor's own origin: the parts, authored
+ * off-origin, sweep a circle round the placement point.
+ */
+function _orbitNodeMatrix(inst, g) {
+  if (!g.omega || !inst.baseQuat) return inst.nodeMat;
+  const m = inst._orbitMat || (inst._orbitMat = new THREE.Matrix4());
+  _orbitQuatScratch.copy(g.orbitQ).multiply(inst.baseQuat);
+  return m.compose(inst.node.position, _orbitQuatScratch, inst.node.scale);
 }
 
 /**
@@ -467,7 +577,8 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
         r.key = key;
         _instances.push(r);
       } else {
-        _instances.push({ node: r.node, parts: r.parts, animId: r.animId, key });
+        _instances.push({ node: r.node, parts: r.parts, animId: r.animId, key,
+          baseQuat: r.node.quaternion.clone() });
       }
       _ensureRaf();
       built += 1;
@@ -680,7 +791,8 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
   node.updateMatrix();
   node.matrixAutoUpdate = false; // placement never moves; rAF writes slots, not the anchor
 
-  const inst = { node, parts: [], animId, key: null, nodeMat: node.matrix.clone(), slots: [], instanced: true };
+  const inst = { node, parts: [], animId, key: null, nodeMat: node.matrix.clone(), slots: [], instanced: true,
+    baseQuat: node.quaternion.clone() };
   for (let i = 0; i < shared.partCount; i++) {
     const groups = shared.parts[i];
     for (let g = 0; g < groups.length; g++) {
@@ -711,10 +823,11 @@ function _writeInstancedPose(inst, g) {
     }
     g._poseStamp = _poseFrame;
   }
+  const nodeMat = _orbitNodeMatrix(inst, g);
   for (const s of inst.slots) {
     const pm = g._partMats[s.partIdx];
     if (!pm) continue;
-    _instScratch.multiplyMatrices(inst.nodeMat, pm);
+    _instScratch.multiplyMatrices(nodeMat, pm);
     s.bucket.mesh.setMatrixAt(s.index, _instScratch);
     _markDirty(s.bucket, s.index);
   }
@@ -1101,9 +1214,11 @@ function _ensureRaf() {
     _tickCalls += 1;
     _lastDt = dt;
     _poseFrame += 1;
-    // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement).
+    // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement),
+    // and its retail SetOmega orbit (?animSceneryOmega).
     for (const g of _didGroups.values()) {
       try { g.mixer.update(dt); } catch (_) {}
+      _advanceOrbit(g, dt);
     }
     // Distance tick-cull: only COPY the animated pose onto instances within the
     // camera radius (now 800 m — distant sway is wanted); beyond it they freeze.
@@ -1160,6 +1275,7 @@ function _ensureRaf() {
       const g = _didGroups.get(inst.animId);
       if (!g) continue;
       if (inst.instanced) { _writeInstancedPose(inst, g); continue; }
+      if (g.omega && inst.baseQuat) inst.node.quaternion.copy(g.orbitQ).multiply(inst.baseQuat);
       const n = Math.min(g.parts.length, inst.parts.length);
       for (let j = 0; j < n; j++) {
         inst.parts[j].position.copy(g.parts[j].position);
@@ -1179,11 +1295,13 @@ export function tickAnimatedScenery(dt) {
   _poseFrame += 1;
   for (const g of _didGroups.values()) {
     try { g.mixer.update(d); } catch (_) {}
+    _advanceOrbit(g, d);
   }
   for (const inst of _instances) {
     const g = _didGroups.get(inst.animId);
     if (!g) continue;
     if (inst.instanced) { _writeInstancedPose(inst, g); continue; }
+    if (g.omega && inst.baseQuat) inst.node.quaternion.copy(g.orbitQ).multiply(inst.baseQuat);
     const n = Math.min(g.parts.length, inst.parts.length);
     for (let j = 0; j < n; j++) {
       inst.parts[j].position.copy(g.parts[j].position);
@@ -1199,9 +1317,12 @@ export function animatedSceneryDiag() {
   for (const g of _didGroups.values()) if (g.mixer.time > maxTime) maxTime = g.mixer.time;
   let instanced = 0;
   for (const inst of _instances) if (inst.instanced) instanced += 1;
+  let orbitingDids = 0;
+  for (const g of _didGroups.values()) if (g.omega) orbitingDids += 1;
   return {
     instances: _instances.length,
     instanced,
+    orbitingDids,
     buckets: _bucketList.length,
     didGroups: _didGroups.size,
     tickCalls: _tickCalls,

@@ -363,6 +363,10 @@ const TIER5 = [
   // ?adaptiveResBootGrace / ?swayShadow + the split-chain resolve, cloud depth
   // and CSM depth-texture fixes.
   { tier: 5, flag: "lookPass", file: "tests/look_pass.test.mjs" },
+  // 2026-10-08 — ambient critters fly their retail SetOmega orbit; server movers
+  // walk at their own clip tempo (?animSceneryOmega / ?creatureGait).
+  { tier: 5, flag: "animSceneryOmega", file: "tests/animated_scenery_omega.test.mjs" },
+  { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
   // 2026-10-07 moon nebula sheets as far-depth sky glows (the sky wedges) +
   // AerialPerspective takes the sky's sun (it was (0,0,0)).
   { tier: 5, flag: "skyGlow+aerialSun", file: "tests/sky_glow.test.mjs" },
