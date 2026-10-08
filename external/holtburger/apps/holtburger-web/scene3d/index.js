@@ -5820,6 +5820,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   skyScene: skyDome.skyScene,
                   atmosphereLights,
                   refreshMs: readIblRefreshMs(),
+                  // 2026-10-08 — render the sky products from the viewer, and
+                  // composite the volumetric clouds into the terrain cube
+                  // (?waterClouds) when they run in this composer.
+                  camera: liveScene3d.camera,
+                  getCloudsBuffer: () => (liveScene3d.atmospherePipeline?.cloudsMainPass
+                    ? (liveScene3d.cloudOverlay?.volume?.effect?.cloudsPass?.outputBuffer ?? null)
+                    : null),
                 });
                 // eslint-disable-next-line no-console
                 console.log(

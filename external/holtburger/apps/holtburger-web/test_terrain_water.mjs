@@ -218,12 +218,22 @@ check("the env reflection blurs up the mip chain with distance",
 // reflection does not fade: past the sheen fade the normal is flat, so far
 // water keeps its grazing-angle Fresnel brightening at uWaterReflect.
 check("the glint is distance-faded, the sky reflection is not",
-  /vec3 waterSpec = uAcSunColor \* glint \* 1\.5 \* sheenFade;/.test(FRAG)
+  /waterGlint = uAcSunColor \* glint \* 1\.5 \* sheenFade \* uSunGlint \* waterW;/.test(FRAG)
   && /waterSpec \+= envSample \* fresW \* uWaterReflect;/.test(FRAG));
 check("?waterReflect: default 0.35, off = 0, numbers clamp to [0, 1.5], junk = default",
   WATER_REFLECT_DEFAULT === 0.35 && readWaterReflect("") === 0.35 && readWaterReflect("?waterReflect=off") === 0
   && readWaterReflect("?waterReflect=0.8") === 0.8 && readWaterReflect("?waterReflect=9") === 1.5
   && readWaterReflect("?waterReflect=x") === 0.35);
+// 2026-10-08 — retail's sun never sets (0.9 deg), so the glint kept drawing a
+// sun path on the water all night; loop.js pushes 1 - nightFactor per light tick.
+check("the water sun glint fades out at night (uSunGlint, pushed on the light tick)",
+  /uniform float uSunGlint;/.test(FRAG) && /uSunGlint: \{ value: 1\.0 \}/.test(SRC));
+// 2026-10-08 — the glint is direct sunlight: it takes the un-floored cloud and
+// cast shadows, added after they are computed (the final colour stays as is).
+const iGlintAdd = FRAG.indexOf("iblSpec += waterGlint * clamp((cloudShadow - 0.3) / 0.7, 0.0, 1.0)");
+check("the sun glint is cloud- and cast-shadowed, after both shadow terms exist",
+  iGlintAdd > FRAG.indexOf("float csmShadow = 1.0;") && iGlintAdd > FRAG.indexOf("float cloudShadow = 1.0;")
+  && /\* clamp\(\(csmShadow - 0\.45\) \/ 0\.55, 0\.0, 1\.0\);/.test(FRAG));
 check("water's own F0 (0.02) and the uWaterReflect uniform",
   /float fresW = 0\.02 \+ 0\.98 \* pow/.test(FRAG) && /uniform float uWaterReflect;/.test(FRAG)
   && /uWaterReflect: \{ value: Number\.isFinite\(opts\.waterReflect\) \? opts\.waterReflect : WATER_REFLECT_DEFAULT \}/.test(SRC));

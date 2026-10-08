@@ -67,6 +67,73 @@ export function readIblRefreshMs() {
 
 const ENV_CUBE_SIZE = 128;
 
+/**
+ * 2026-10-08 `?waterClouds` (DEFAULT ON; `=off` escape) — composite the
+ * volumetric clouds into the terrain env cube, so water mirrors the real cloud
+ * deck and a moon (or a patch of bright sky) that a cloud covers on screen is
+ * covered in the reflection too. Owner on the 1070 at the coast, a storm night:
+ * "it also shouldn't work when clouds are blocking it" — the cube is a render
+ * of the clear sky scene alone (the takram clouds are a screen-space post
+ * effect), so the water reflected a moon the clouds hid.
+ */
+export function readWaterCloudsFlag(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("waterClouds");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** Terrain-cube cadence while clouds are composited (the PMREM keeps refreshMs). */
+export const CLOUD_CUBE_REFRESH_MS = 1000;
+
+// The composite: one fullscreen quad per cube face. Each texel takes its own
+// direction (the face camera that rendered it), projects that direction into
+// the MAIN camera's view and, where it lands on screen, blends the clouds
+// buffer over the clear sky exactly as AerialPerspective does on screen
+// (premultiplied: dst = cloud.rgb + dst * (1 - cloud.a)). Directions the main
+// view cannot see take the mean of the upper screen's clouds (12 taps), so an
+// overcast sky still overcasts the reflection of what is above the frame.
+export const CLOUD_COMPOSITE_VERT = /* glsl */ `
+varying vec2 vNdc;
+void main() {
+  vNdc = position.xy;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
+export const CLOUD_COMPOSITE_FRAG = /* glsl */ `
+uniform sampler2D uClouds;
+uniform mat4 uFaceInvProj;
+uniform mat4 uFaceWorld;
+uniform mat4 uViewProj;
+uniform vec3 uViewPos;
+varying vec2 vNdc;
+vec4 offscreenClouds() {
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 3; j++) {
+      acc += texture2D(uClouds, vec2(0.125 + 0.25 * float(i), 0.6 + 0.15 * float(j)));
+    }
+  }
+  return acc / 12.0;
+}
+void main() {
+  vec4 v = uFaceInvProj * vec4(vNdc, 1.0, 1.0);
+  vec3 dir = normalize(mat3(uFaceWorld) * (v.xyz / v.w));
+  vec4 clip = uViewProj * vec4(uViewPos + dir * 1.0e4, 1.0);
+  vec4 c = offscreenClouds();
+  if (clip.w > 0.0) {
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) c = texture2D(uClouds, uv);
+  }
+  c.a = clamp(c.a, 0.0, 1.0);
+  c.rgb = max(c.rgb, vec3(0.0));
+  gl_FragColor = c;
+}`;
+
 export class IblEnvironment {
   /**
    * @param {Object} opts
@@ -75,8 +142,12 @@ export class IblEnvironment {
    * @param {THREE.Scene} opts.skyScene — skyDome.skyScene (environment source)
    * @param {import('./atmosphere_lights.js').AtmosphereLights} [opts.atmosphereLights]
    * @param {number} [opts.refreshMs=15000]
+   * @param {THREE.Camera} [opts.camera] the viewer; both products render from
+   *   its position (2026-10-08 — see refresh()). Omitted: the world origin.
+   * @param {() => (THREE.Texture|null)} [opts.getCloudsBuffer] the volumetric
+   *   clouds' screen buffer for the composite (`?waterClouds`); null = none.
    */
-  constructor({ renderer, scene, skyScene, atmosphereLights, refreshMs = 15000 }) {
+  constructor({ renderer, scene, skyScene, atmosphereLights, refreshMs = 15000, camera = null, getCloudsBuffer = null }) {
     if (!renderer || !scene || !skyScene) {
       throw new Error("IblEnvironment: renderer, scene and skyScene are required");
     }
@@ -85,6 +156,13 @@ export class IblEnvironment {
     this.skyScene = skyScene;
     this.atmosphereLights = atmosphereLights ?? null;
     this.refreshMs = refreshMs;
+    this.camera = camera ?? null;
+    this._viewPos = new THREE.Vector3();
+    this.getCloudsBuffer = typeof getCloudsBuffer === "function" ? getCloudsBuffer : null;
+    this.waterClouds = readWaterCloudsFlag();
+    this._cloudComposite = null; // lazy {scene, cam, mat}
+    this._lastCubeMs = -Infinity;
+    this.cloudComposites = 0;
 
     this._pmrem = new THREE.PMREMGenerator(renderer);
     this._pmrem.compileCubemapShader();
@@ -111,17 +189,18 @@ export class IblEnvironment {
     if (this.atmosphereLights) this.atmosphereLights.iblOwnsDiffuse = true;
   }
 
-  /** Re-render both environment products from the current sky. */
-  refresh(nowMs) {
-    // 2026-08-03 — hide the CLIP-SPACE members of skyScene for the duration.
-    // `cloud_overlay`'s composite quad writes `gl_Position = vec4(position.xy,
-    // 0, 1)` (no matrices), so it is not geometry in the scene at all: through
-    // the CubeCamera it covers EVERY face completely, and through `fromScene`
-    // it becomes the entire environment. Under `?clouds=on&ibl=on` that means
-    // the whole world's indirect light is the cloud composite rather than the
-    // sky. World-placed members (the radiance quad, stars, the moon
-    // billboards) are left visible on purpose — they are real sky radiance and
-    // their contribution to the environment is the point.
+  /**
+   * 2026-08-03 — hide the CLIP-SPACE members of skyScene while rendering it.
+   * `cloud_overlay`'s composite quad writes `gl_Position = vec4(position.xy,
+   * 0, 1)` (no matrices), so it is not geometry in the scene at all: through
+   * the CubeCamera it covers EVERY face completely, and through `fromScene`
+   * it becomes the entire environment. Under `?clouds=on&ibl=on` that means
+   * the whole world's indirect light is the cloud composite rather than the
+   * sky. World-placed members (the radiance quad, stars, the moon
+   * billboards) are left visible on purpose — they are real sky radiance and
+   * their contribution to the environment is the point. Returns what it hid.
+   */
+  _hideClipSpace() {
     const hidden = [];
     try {
       const kids = this.skyScene?.children;
@@ -135,21 +214,132 @@ export class IblEnvironment {
         }
       }
     } catch (_) { /* fail-soft: a bad walk must not skip the refresh */ }
+    return hidden;
+  }
 
+  /**
+   * 2026-10-08 — both products render from the VIEWER, not the world origin.
+   * The sky scene's world-placed members follow the camera (sky_cell, the AC
+   * moon billboards ~1-2 km out); seen from the origin — ~47 km away at
+   * Holtburg — a moon landed on the horizon at the wrong azimuth (measured:
+   * az 77 deg, el 1.3 deg, against the moon's true az 136, el 9) and every
+   * water surface mirrored a moon that was not in the sky (owner pass on the
+   * 1070, pre-dawn at the coast). From the viewer the water's reflection
+   * tracks Dereth's own moons, in their own colours.
+   */
+  _updateViewPos() {
+    this._viewPos.set(0, 0, 0);
     try {
-      // PMREM for standard materials. New RT per call (three has no reuse
-      // API for fromScene); texture-object swap does not recompile programs.
-      const rt = this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7);
-      const old = this._pmremRT;
-      this.scene.environment = rt.texture;
-      this._pmremRT = rt;
-      if (old) old.dispose();
+      if (this.camera && typeof this.camera.getWorldPosition === "function") {
+        this.camera.getWorldPosition(this._viewPos);
+        if (!Number.isFinite(this._viewPos.x + this._viewPos.y + this._viewPos.z)) this._viewPos.set(0, 0, 0);
+      }
+    } catch (_) { this._viewPos.set(0, 0, 0); }
+  }
 
-      // Raw mipmapped cube for the terrain shader.
+  /** The clouds buffer to composite, or null (flag off / no clouds / no camera). */
+  _cloudsBuffer() {
+    if (!this.waterClouds || !this.getCloudsBuffer || !this.camera) return null;
+    try { return this.getCloudsBuffer() || null; } catch (_) { return null; }
+  }
+
+  /** The raw mipmapped cube the terrain shader samples: clear sky, then clouds. */
+  _renderTerrainCube(nowMs) {
+    const hidden = this._hideClipSpace();
+    try {
+      this._cubeCam.position.copy(this._viewPos);
+      this._cubeCam.updateMatrixWorld(true);
       this._cubeCam.update(this.renderer, this.skyScene);
     } finally {
       for (let i = 0; i < hidden.length; i += 1) hidden[i].visible = true;
     }
+    const clouds = this._cloudsBuffer();
+    if (clouds) {
+      try { this._compositeClouds(clouds); } catch (_) { /* the clear-sky cube stands */ }
+    }
+    this._lastCubeMs = nowMs;
+  }
+
+  _compositeClouds(clouds) {
+    if (!this._cloudComposite) {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uClouds: { value: null },
+          uFaceInvProj: { value: new THREE.Matrix4() },
+          uFaceWorld: { value: new THREE.Matrix4() },
+          uViewProj: { value: new THREE.Matrix4() },
+          uViewPos: { value: new THREE.Vector3() },
+        },
+        vertexShader: CLOUD_COMPOSITE_VERT,
+        fragmentShader: CLOUD_COMPOSITE_FRAG,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        toneMapped: false,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendSrcAlpha: THREE.ZeroFactor,
+        blendDstAlpha: THREE.OneFactor,
+      });
+      const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+      quad.frustumCulled = false;
+      const scene = new THREE.Scene();
+      scene.add(quad);
+      this._cloudComposite = { scene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), mat, quad };
+    }
+    const { scene, cam, mat } = this._cloudComposite;
+    const u = mat.uniforms;
+    u.uClouds.value = clouds;
+    this.camera.updateMatrixWorld?.();
+    u.uViewProj.value.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    u.uViewPos.value.copy(this._viewPos);
+    const r = this.renderer;
+    const prevTarget = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace();
+    const prevMip = r.getActiveMipmapLevel();
+    const prevAutoClear = r.autoClear;
+    const tex = this._cubeRT.texture;
+    const genMips = tex.generateMipmaps;
+    r.autoClear = false;
+    try {
+      const faces = this._cubeCam.children;
+      for (let f = 0; f < 6; f += 1) {
+        const fc = faces[f];
+        if (!fc) continue;
+        u.uFaceInvProj.value.copy(fc.projectionMatrixInverse);
+        u.uFaceWorld.value.copy(fc.matrixWorld);
+        // One mip generation, after the last face (CubeCamera.update's idiom).
+        tex.generateMipmaps = f === 5 ? genMips : false;
+        r.setRenderTarget(this._cubeRT, f);
+        r.render(scene, cam);
+      }
+    } finally {
+      tex.generateMipmaps = genMips;
+      r.autoClear = prevAutoClear;
+      r.setRenderTarget(prevTarget, prevFace, prevMip);
+    }
+    this.cloudComposites += 1;
+  }
+
+  /** Re-render both environment products from the current sky. */
+  refresh(nowMs) {
+    this._updateViewPos();
+    const hidden = this._hideClipSpace();
+    try {
+      // PMREM for standard materials. New RT per call (three has no reuse
+      // API for fromScene); texture-object swap does not recompile programs.
+      const rt = this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7, { position: this._viewPos });
+      const old = this._pmremRT;
+      this.scene.environment = rt.texture;
+      this._pmremRT = rt;
+      if (old) old.dispose();
+    } finally {
+      for (let i = 0; i < hidden.length; i += 1) hidden[i].visible = true;
+    }
+    // Raw mipmapped cube for the terrain shader (+ the clouds, ?waterClouds).
+    this._renderTerrainCube(nowMs);
 
     this._lastRefreshMs = nowMs;
     this.refreshCount += 1;
@@ -183,6 +373,12 @@ export class IblEnvironment {
 
   tick(nowMs, terrainMaterials) {
     if (nowMs - this._lastRefreshMs >= this.refreshMs) this.refresh(nowMs);
+    else if (nowMs - this._lastCubeMs >= CLOUD_CUBE_REFRESH_MS && this._cloudsBuffer()) {
+      // Clouds drift; the terrain cube follows them at 1 Hz (the PMREM for
+      // the standard materials keeps its refreshMs cadence).
+      this._updateViewPos();
+      this._renderTerrainCube(nowMs);
+    }
 
     // Diurnal intensity: reuse the exact retail ambient term the muted
     // probe would have used (L1 ambBright curve, 0.2 floor, worldLightScale).
@@ -208,5 +404,10 @@ export class IblEnvironment {
     if (this._pmremRT) this._pmremRT.dispose();
     this._pmrem.dispose();
     this._cubeRT.dispose();
+    if (this._cloudComposite) {
+      this._cloudComposite.mat.dispose();
+      this._cloudComposite.quad.geometry.dispose();
+      this._cloudComposite = null;
+    }
   }
 }

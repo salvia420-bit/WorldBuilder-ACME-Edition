@@ -48,6 +48,7 @@ import {
   terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin,
   farFogFloorM, farFogFloorMinLb,
   farFogSkyProbeEnabled, farFogSkyElevDeg, farFogSkyHz, farFogTint,
+  farFogSunAvoidDeg, avoidSunAzimuth,
   horizonFogEnabled, horizonFogNearFrac, computeFogBand,
 } from "./far_terrain_flags.js";
 import { tickFarTerrain, farTerrainEffectiveRadiusLb } from "./far_terrain.js";
@@ -171,6 +172,7 @@ import {
   nightRampEnabled,
   nightFactorFromAuthoredPitch,
   nightGroundScale,
+  artSunPitchDeg,
 } from "./night_ramp.js";
 // ?lumNight (2026-10-07) — dim ambient-like Surface luminosity at night.
 import { tickLuminousNight } from "./luminous_night.js";
@@ -1190,7 +1192,34 @@ const _acTerrainGouraud = {
   sunColor: [1, 1, 1],
   ambColor: [1, 1, 1],
   ambLevel: AC_LSCAPE_LIGHT_MINIMUM,
+  // 2026-10-08 — sun-glint strength (terrain.js uSunGlint), 1 by day.
+  sunGlint: 1,
 };
+
+/**
+ * 2026-10-08 — sun-glint multiplier for the water sheen, in [0, 1]. Retail's
+ * sun never sets (Dereth's DayGroups bottom out at 0.9 deg) and the terrain's
+ * uAcSunColor only dims to the night-ground scale, so the water kept drawing a
+ * bright sun-glitter path all night under a sky whose (night-ramp remapped)
+ * sun was well below the horizon — owner pass on the 1070, dawn/dusk at the
+ * coast. Follows the SKY's sun: 0 while it is below the horizon, fading in to
+ * 1 by +3 deg (a disc on the horizon throws its path; one 4 deg under it does
+ * not — the night fraction is still 0.87 there, too much against black
+ * water). `?nightRamp=off` (retail sky, sun always up) keeps 1.
+ */
+export const SUN_GLINT_FADE_DEG = Object.freeze([-1, 3]);
+export function sunGlintMul(state) {
+  try {
+    if (!nightRampEnabled()) return 1.0;
+    const pitch = state && Number.isFinite(state.dirPitch) ? state.dirPitch : null;
+    if (pitch == null) return 1.0;
+    const art = artSunPitchDeg(pitch);
+    const [lo, hi] = SUN_GLINT_FADE_DEG;
+    return Math.min(1, Math.max(0, (art - lo) / (hi - lo)));
+  } catch (_) {
+    return 1.0;
+  }
+}
 
 // === visual-quality wave (2026-08-02) — TERRAIN world-light calibration ===
 //
@@ -1321,6 +1350,7 @@ function tickTerrainSunDir(scene3d) {
     // exactly 1.0 by day and whenever the flag is off, so nothing about the
     // daytime calibration moves.
     const tls = _acTerrainLight.scale * _nightGroundMul(state);
+    g.sunGlint = sunGlintMul(state);
     const dc = (state.dirColorArgb >>> 0);
     g.sunColor[0] = (((dc >>> 16) & 0xff) / 255) * tls;
     g.sunColor[1] = (((dc >>> 8) & 0xff) / 255) * tls;
@@ -1362,6 +1392,7 @@ function tickTerrainSunDir(scene3d) {
     u.uAcSunColor.value.setRGB(g.sunColor[0], g.sunColor[1], g.sunColor[2]);
     u.uAcAmbColor.value.setRGB(g.ambColor[0], g.ambColor[1], g.ambColor[2]);
     u.uAcAmbLevel.value = g.ambLevel;
+    if (u.uSunGlint) u.uSunGlint.value = g.sunGlint;
   }
 }
 
@@ -1536,6 +1567,7 @@ let _fogProbeInFlight = false;
 const _fogProbePos = new THREE.Vector3();
 const _fogProbeFwd = new THREE.Vector3();
 const _fogProbeDir = new THREE.Vector3();
+const _fogProbeAvoid = { x: 0, z: 0 };
 const _fogTintColor = new THREE.Color();
 
 /** IEEE-754 binary16 → Number. `readRenderTargetPixels` on a HalfFloatType
@@ -1678,6 +1710,15 @@ function sampleHorizonSkyRadiance(scene3d) {
     if (_fogProbeFwd.lengthSq() < 1e-8) _fogProbeFwd.set(0, 0, -1);
     _fogProbeFwd.normalize();
     const elev = farFogSkyElevDeg() * Math.PI / 180;
+    // 2026-10-08 `?farFogSunAvoid` — never probe inside the sun's halo: facing a
+    // low sun the 2 deg sample WAS the aureole (raw 155 at dusk) and every
+    // fogged pixel took it (far_terrain_flags.js avoidSunAzimuth). The sky's
+    // own (night-ramp remapped) sun, not the surface light's.
+    const skySun = scene3d.atmosphereSky?.skyMaterial?.sunDirection
+      ?? scene3d.atmosphereLights?.sun?.sunDirection ?? null;
+    avoidSunAzimuth(_fogProbeFwd.x, _fogProbeFwd.z, elev, skySun, farFogSunAvoidDeg(), _fogProbeAvoid);
+    _fogProbeFwd.x = _fogProbeAvoid.x;
+    _fogProbeFwd.z = _fogProbeAvoid.z;
     const ce = Math.cos(elev);
     _fogProbeDir.set(_fogProbeFwd.x * ce, Math.sin(elev), _fogProbeFwd.z * ce).normalize();
     _fogProbeCam.position.copy(_fogProbePos);

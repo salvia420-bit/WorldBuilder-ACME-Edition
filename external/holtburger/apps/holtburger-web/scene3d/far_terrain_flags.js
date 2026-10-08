@@ -152,6 +152,55 @@ export function farFogSkyHz() {
 }
 
 /**
+ * 2026-10-08 — minimum angle, in degrees, between the fog probe and the SKY's
+ * sun (`?farFogSunAvoid=<deg>`, default 45; 0 = off). Owner on the 1070,
+ * dusk at the coast facing the sunset: the whole frame went orange-white.
+ * The probe looks 2 deg above the horizon in the camera's azimuth, so facing a
+ * low sun it sampled the sun's aureole — raw (155, 36, 3), against a scene that
+ * is otherwise 0.01-0.7 — and that single colour then painted EVERY fogged
+ * pixel (all terrain past ~650 m, even 30 deg off the sun), which bloom spread
+ * across the frame. The fog only has to hide the streaming edge with the
+ * horizon sky's colour; the directional glow toward the sun is aerial
+ * perspective's job, per pixel. See `avoidSunAzimuth`.
+ */
+export function farFogSunAvoidDeg() {
+  const raw = _param("farFogSunAvoid");
+  if (raw != null && /^(off|false|no)$/i.test(String(raw))) return 0;
+  return _num("farFogSunAvoid", 45, 0, 90);
+}
+
+/**
+ * 2026-10-08 — turn the fog probe's horizontal forward away from the sun until
+ * the probe-to-sun angle is at least `minDeg`, keeping the camera's side of the
+ * sun. Pure. Three world space (Y up): `fx, fz` is the probe's normalised
+ * horizontal forward, `elevRad` its elevation, `sun` the sky's sun direction.
+ * Unchanged when the sun is already that far away at ANY azimuth (high sun),
+ * when `minDeg <= 0`, or without a usable sun. Writes and returns `out`.
+ */
+export function avoidSunAzimuth(fx, fz, elevRad, sun, minDeg, out = { x: 0, z: 0 }) {
+  out.x = fx; out.z = fz;
+  if (!(minDeg > 0) || !sun) return out;
+  const len = Math.hypot(sun.x, sun.y, sun.z);
+  if (!(len > 1e-9)) return out;
+  const ux = sun.x / len, uy = sun.y / len, uz = sun.z / len;
+  const sh = Math.hypot(ux, uz);
+  if (sh < 1e-6) return out; // sun at the zenith: every azimuth is as far
+  const sx = ux / sh, sz = uz / sh;
+  const cosEp = Math.cos(elevRad), sinEp = Math.sin(elevRad);
+  // cos(angle) = sinEp*sinEs + cosEp*cosEs*cos(dAz) <= cos(min)  <=>  cos(dAz) <= need
+  const need = (Math.cos(minDeg * Math.PI / 180) - sinEp * uy) / (cosEp * sh);
+  if (!(need < 1)) return out;
+  const dMin = Math.acos(Math.max(-1, need));
+  // Signed azimuth of the forward from the sun: f = R(theta) s.
+  const theta = Math.atan2(sx * fz - sz * fx, sx * fx + sz * fz);
+  if (Math.abs(theta) >= dMin) return out;
+  const phi = theta >= 0 ? dMin : -dMin;
+  out.x = sx * Math.cos(phi) - sz * Math.sin(phi);
+  out.z = sx * Math.sin(phi) + sz * Math.cos(phi);
+  return out;
+}
+
+/**
  * Weight of the AUTHORED DAT fog chroma blended over the sampled sky radiance,
  * preserving the sample's luminance. 0 (default) = pure sky radiance, which is
  * what the acceptance measurement ("fogged pixel within a few levels of the sky

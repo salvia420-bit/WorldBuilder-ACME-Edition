@@ -1534,6 +1534,7 @@ uniform float uIblEnabled;            // 0.0 OFF / 1.0 ON (default)
 uniform float uEnvIntensity;
 uniform float uWaterEnvEnabled;       // terrainplan s4 default tier: water sheen gate
 uniform float uWaterReflect;          // 2026-10-08 — sky reflection strength over water (?waterReflect, default 0.35)
+uniform float uSunGlint;              // 2026-10-08 — water sun-glint multiplier: 1 by day, 0 once the sky's sun is down (loop.js light tick)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -3348,6 +3349,9 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   //     and nothing at all beyond 160 m. The retail water texture underneath is
   //     unchanged.
   float sheenFade = 1.0 - smoothstep(30.0, 160.0, vViewDepth);
+  // The sun glint is added further down, once the cloud and cast shadows are
+  // known (direct sunlight does not glint under a cloud or a roof).
+  vec3 waterGlint = vec3(0.0);
   if (uWaterEnvEnabled > 0.5 && waterW > 0.0) {
     // View direction in three world space, and the same vector in AC space:
     // world(x,y,z) = ac(x,z,-y) so ac = (w.x, -w.z, w.y).
@@ -3374,7 +3378,10 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     // direction TO the sun; -viewAc is the direction to the eye.
     vec3 halfAc = normalize(sunDir - viewAc);
     float glint = pow(clamp(dot(wN, halfAc), 0.0, 1.0), 300.0);
-    vec3 waterSpec = uAcSunColor * glint * 1.5 * sheenFade;
+    // uSunGlint: retail's sun never sets (0.9 deg), so without it the water
+    // drew a sun-glitter path all night under a sky whose sun was down.
+    waterGlint = uAcSunColor * glint * 1.5 * sheenFade * uSunGlint * waterW;
+    vec3 waterSpec = vec3(0.0);
     if (uIblEnabled > 0.5) {
       vec3 nWorldW = normalize(vec3(wN.x, wN.z, -wN.y));
       vec3 reflW = reflect(viewW, nWorldW);
@@ -3506,6 +3513,13 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     csmShadow = mix(0.45, 1.0, s);
   }
 #endif
+
+  // 2026-10-08 — the water's sun glint (computed in the sheen block above) is
+  // DIRECT sunlight: none under a cloud, none in a roof's or a hill's shadow.
+  // Both terms are un-floored here (their 0.3 / 0.45 floors are the ambient
+  // that still fills a shadow, which a specular highlight does not have).
+  iblSpec += waterGlint * clamp((cloudShadow - 0.3) / 0.7, 0.0, 1.0)
+                        * clamp((csmShadow - 0.45) / 0.55, 0.0, 1.0);
 
   // R1.A 2026-05-28 — TerrainTex saturation + hue adjust, applied to
   // the lit color BEFORE the brightness multiply so the channel order
@@ -5940,6 +5954,8 @@ export async function bakeTerrainForLandblock(
       uWaterEnvEnabled: { value: opts.waterEnvEnabled ? 1.0 : 0.0 },
       // 2026-10-08 — sky reflection over water (?waterReflect, default 0.35).
       uWaterReflect: { value: Number.isFinite(opts.waterReflect) ? opts.waterReflect : WATER_REFLECT_DEFAULT },
+      // 2026-10-08 — pushed on the light tick (loop.js tickTerrainSunDir).
+      uSunGlint: { value: 1.0 },
       // T1 splat-noise borders (default on; ?splatNoise=off → amp 0 no-op).
       uSplatNoiseAmp: { value: Number.isFinite(opts.splatNoiseAmp) ? opts.splatNoiseAmp : 0.0 },
       uSplatNoiseFreq: { value: Number.isFinite(opts.splatNoiseFreq) ? opts.splatNoiseFreq : 0.35 },

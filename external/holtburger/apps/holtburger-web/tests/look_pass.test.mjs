@@ -17,6 +17,10 @@
 //   L12 ?retailFill  the hemisphere fill follows the retail diurnal ambient
 //                    (shaded walls keep their share of the sunlit brightness).
 //   L13 ?grassIndoorCull  no grass blades inside building interior cells.
+//   L14 dusk: the fog probe keeps out of the sun's halo (?farFogSunAvoid) and
+//       the water's sun glint fades out once the sky's sun is down.
+//   L15 the terrain reflection cube renders from the viewer (Dereth's moons
+//       where they really are) and carries the volumetric clouds (?waterClouds).
 //
 // Fails on the pre-change code: tone_curve.js / color_grade.js /
 // luminous_night.js / sway_shadow.js do not exist, the composer was AGX-only,
@@ -416,10 +420,81 @@ console.log("\n-- L13 ?grassIndoorCull -----------------------------------------
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L14 dusk: fog probe vs the sun, night glint -------------------");
+{
+  const F = await import("../scene3d/far_terrain_flags.js");
+  const D = Math.PI / 180;
+  const sunAt = (azDeg, elDeg) => ({ x: Math.cos(elDeg * D) * Math.sin(azDeg * D), y: Math.sin(elDeg * D), z: Math.cos(elDeg * D) * Math.cos(azDeg * D) });
+  const ang = (fx, fz, elRad, sun) => {
+    const px = Math.cos(elRad) * fx, py = Math.sin(elRad), pz = Math.cos(elRad) * fz;
+    return Math.acos(Math.min(1, px * sun.x + py * sun.y + pz * sun.z)) / D;
+  };
+  const el = 2 * D;
+  check("default 45 deg; off / 0 disable", F.farFogSunAvoidDeg() === 45);
+  // Facing a 2-deg sun dead ahead: the probe turns to >= 45 deg from it.
+  const sun = sunAt(270, 2.2);
+  const fwd = { x: Math.sin(270 * D), z: Math.cos(270 * D) };
+  const o = F.avoidSunAzimuth(fwd.x, fwd.z, el, sun, 45);
+  check("facing a setting sun, the probe turns 45 deg away from it",
+    Math.abs(ang(o.x, o.z, el, sun) - 45) < 0.05 && Math.abs(Math.hypot(o.x, o.z) - 1) < 1e-9, `angle ${ang(o.x, o.z, el, sun).toFixed(2)}`);
+  // 20 deg left of the sun stays on the left.
+  const f2 = { x: Math.sin(250 * D), z: Math.cos(250 * D) };
+  const o2 = F.avoidSunAzimuth(f2.x, f2.z, el, sun, 45);
+  const sideOf = (x, z) => Math.sign(sun.x * z - sun.z * x);
+  check("...keeping the camera's side of the sun", sideOf(o2.x, o2.z) === sideOf(f2.x, f2.z) && Math.abs(ang(o2.x, o2.z, el, sun) - 45) < 0.05);
+  const f3 = { x: Math.sin(180 * D), z: Math.cos(180 * D) };
+  const o3 = F.avoidSunAzimuth(f3.x, f3.z, el, sun, 45);
+  check("90 deg off the sun: unchanged", o3.x === f3.x && o3.z === f3.z);
+  const noon = sunAt(270, 68);
+  const o4 = F.avoidSunAzimuth(fwd.x, fwd.z, el, noon, 45);
+  check("a high sun is never inside 45 deg of a 2-deg probe: unchanged", o4.x === fwd.x && o4.z === fwd.z);
+  const o5 = F.avoidSunAzimuth(fwd.x, fwd.z, el, sun, 0);
+  check("minDeg 0 (=off): unchanged", o5.x === fwd.x && o5.z === fwd.z);
+  const loop = src("scene3d/loop.js");
+  check("the probe aims through avoidSunAzimuth at the SKY's sun",
+    /avoidSunAzimuth\(_fogProbeFwd\.x, _fogProbeFwd\.z, elev, skySun, farFogSunAvoidDeg\(\), _fogProbeAvoid\)/.test(loop)
+    && loop.includes("scene3d.atmosphereSky?.skyMaterial?.sunDirection"));
+  check("the light tick pushes the night glint fade onto the terrain",
+    loop.includes("g.sunGlint = sunGlintMul(state);") && loop.includes("if (u.uSunGlint) u.uSunGlint.value = g.sunGlint;"));
+  // The glint follows the SKY's sun (the night-ramp art pitch): authored 6.36
+  // deg (t 0.19) is art -4.3 -> 0; authored 10 (art 2.2) -> 0.8; noon -> 1.
+  const N = await import("../scene3d/night_ramp.js");
+  const glint = (authored) => Math.min(1, Math.max(0, (N.artSunPitchDeg(authored) + 1) / 4));
+  check("glint fade: 0 with the sky's sun down, ~0.8 at a 2 deg sun, 1 by day",
+    glint(6.36) === 0 && glint(8.18) === 0 && Math.abs(glint(10) - 0.8) < 0.01 && glint(68) === 1
+    && /export const SUN_GLINT_FADE_DEG = Object\.freeze\(\[-1, 3\]\);/.test(loop));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- L15 reflection cube: viewer position + clouds ------------------");
+{
+  const ibl = src("scene3d/ibl_environment.js");
+  check("the PMREM renders from the viewer", ibl.includes("this._pmrem.fromScene(this.skyScene, 0.03, 0.1, 1e7, { position: this._viewPos })"));
+  check("...and so does the terrain cube camera",
+    /this\._cubeCam\.position\.copy\(this\._viewPos\);\s*this\._cubeCam\.updateMatrixWorld\(true\);\s*this\._cubeCam\.update\(this\.renderer, this\.skyScene\);/.test(ibl));
+  check("?waterClouds: default on, =off escape",
+    /export function readWaterCloudsFlag\(search\)[\s\S]{0,420}if \(v == null\) return true;[\s\S]{0,120}t === "off"/.test(ibl));
+  check("each cube texel projects its own direction into the main view and samples the clouds there",
+    ibl.includes("vec3 dir = normalize(mat3(uFaceWorld) * (v.xyz / v.w));")
+    && ibl.includes("vec4 clip = uViewProj * vec4(uViewPos + dir * 1.0e4, 1.0);")
+    && ibl.includes("c = texture2D(uClouds, uv);"));
+  check("off-screen directions take the upper screen's mean cloud", ibl.includes("vec4 c = offscreenClouds();"));
+  check("composited like AerialPerspective (premultiplied over the clear sky)",
+    ibl.includes("blendSrc: THREE.OneFactor,") && ibl.includes("blendDst: THREE.OneMinusSrcAlphaFactor,"));
+  check("one mip generation after the last face", ibl.includes("tex.generateMipmaps = f === 5 ? genMips : false;"));
+  check("the terrain cube follows the clouds at 1 Hz; the PMREM keeps its cadence",
+    /export const CLOUD_CUBE_REFRESH_MS = 1000;/.test(ibl)
+    && /else if \(nowMs - this\._lastCubeMs >= CLOUD_CUBE_REFRESH_MS && this\._cloudsBuffer\(\)\)/.test(ibl));
+  const idx = src("scene3d/index.js");
+  check("index.js hands the IBL the camera and the main-pass clouds buffer",
+    idx.includes("camera: liveScene3d.camera,") && idx.includes("liveScene3d.cloudOverlay?.volume?.effect?.cloudsPass?.outputBuffer"));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }
