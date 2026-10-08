@@ -23,6 +23,8 @@
 //       where they really are) and carries the volumetric clouds (?waterClouds).
 //   L16 distant hills: the far ring is default-on, the terrain noise layers
 //       sample the ground plane, and ?farHarmonize softens far type borders.
+//   L17 ?paintLight (warm light / cool shade on far slopes, shared tail, near +
+//       far ring) and ?layerHaze (distance + altitude haze over all geometry).
 //
 // Fails on the pre-change code: tone_curve.js / color_grade.js /
 // luminous_night.js / sway_shadow.js do not exist, the composer was AGX-only,
@@ -250,7 +252,10 @@ console.log("\n-- L10 ?ssao ---------------------------------------------------"
   const pipe = src("scene3d/atmosphere_pipeline.js");
   check("composite is the first atmosphere effect after heat haze (before clouds + aerial)",
     pipe.includes("[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve]"));
-  check("the AO pass is added right before fxPass", /if \(ssaoPass\) composer\.addPass\(ssaoPass\);\s*composer\.addPass\(fxPass\);/.test(pipe));
+  // 2026-10-08 — on the UNSPLIT chain the ?layerHaze pass also goes in front of
+  // fxPass (it tone-maps there); AO still runs before it and before fxPass.
+  check("the AO pass is added right before fxPass (only the unsplit-chain haze between)",
+    /if \(ssaoPass\) composer\.addPass\(ssaoPass\);\s*(?:\/\/[^\n]*\n\s*)?(?:if \(layeredHaze && !particlesOverCloudsPass\) composer\.addPass\(layeredHaze\);\s*)?composer\.addPass\(fxPass\);/.test(pipe));
   check("grass is marked only while a composite exists", pipe.includes("SSAO_GRASS_MARKER.value = ssaoComposite ? 1 : 0;"));
   const Gr = await import("../scene3d/terrain_grass.js");
   const sh = {
@@ -528,10 +533,69 @@ console.log("\n-- L16 distant hills -------------------------------------------"
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L17 painted light + layered haze ----------------------------");
+{
+  const tail = src("scene3d/terrain_shared_glsl.js");
+  check("terrainPaintLight lives in the SHARED tail (one copy for near + far)",
+    /vec3 terrainPaintLight\(vec3 rgb, vec3 n, vec3 sunDirAc, float viewDepth, vec4 params\)/.test(tail)
+    && tail.includes("float t = clamp((dot(n, sunDirAc) - sunDirAc.z) * 2.5, -1.0, 1.0) * k;"));
+  // JS mirror of the shared-tail function: level ground untouched, sun-facing
+  // slopes warm + lift, slopes turned away cool + drop, night and distance fade.
+  const D = Math.PI / 180;
+  const paint = (rgb, n, sun, depth, [str, s0, s1, night]) => {
+    const ss = Math.min(1, Math.max(0, (depth - s0) / (s1 - s0))); const sm = ss * ss * (3 - 2 * ss);
+    const k = str * sm * (1 - night); if (k <= 0) return rgb;
+    const t = Math.min(1, Math.max(-1, (n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2] - sun[2]) * 2.5)) * k;
+    const tint = t >= 0 ? [1 + 0.12 * t, 1 + 0.05 * t, 1 - 0.16 * t] : [1 + 0.16 * t, 1 + 0.07 * t, 1 - 0.12 * t];
+    return rgb.map((c, i) => c * tint[i] * (1 + 0.25 * t));
+  };
+  const sun = [Math.cos(25 * D), 0, Math.sin(25 * D)];
+  const slope = (deg, toward) => [Math.sin(deg * D) * (toward ? 1 : -1), 0, Math.cos(deg * D)];
+  const g = [0.1, 0.12, 0.03];
+  const P = [1.3, 60, 300, 0];
+  const lvl = paint(g, [0, 0, 1], sun, 600, P);
+  check("level ground (and water) is untouched", lvl.every((c, i) => Math.abs(c - g[i]) < 1e-12));
+  const warm = paint(g, slope(20, true), sun, 600, P), cool = paint(g, slope(20, false), sun, 600, P);
+  const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  check("a slope turned to the sun warms (R:B up) and lifts; one turned away cools (B:R up) and drops",
+    warm[0] / warm[2] > (g[0] / g[2]) * 1.2 && lum(warm) > lum(g) * 1.1
+    && cool[2] / cool[0] > (g[2] / g[0]) * 1.2 && lum(cool) < lum(g) * 0.9,
+    `warm ${warm.map((v) => v.toFixed(4))} cool ${cool.map((v) => v.toFixed(4))}`);
+  check("untouched near the player and at full night",
+    paint(g, slope(20, true), sun, 40, P).every((c, i) => c === g[i])
+    && paint(g, slope(20, true), sun, 600, [1.3, 60, 300, 1]).every((c, i) => c === g[i]));
+  const t = src("scene3d/terrain.js");
+  check("monolith: applied after the far-ring bake return (live, never baked)",
+    t.indexOf("modulated = terrainPaintLight(modulated, normalize(vAcNormal), sunDir, vViewDepth, uPaintLight);")
+      > t.indexOf("if (uBakeAlbedo > 0.5) { fragColor = vec4(modulated, 1.0); return; }")
+    && /export const PAINT_LIGHT_DEFAULT = 1\.3;/.test(t));
+  const far = src("scene3d/far_terrain.js");
+  check("far ring: the same call, the uniform copied from the near ring",
+    far.includes("albedo = terrainPaintLight(albedo, normalize(vAcNormal), sunDir, vViewDepth, uPaintLight);")
+    && far.includes("if (s.uPaintLight && u.uPaintLight) u.uPaintLight.value.copy(s.uPaintLight.value);"));
+  check("the light tick pushes the night fade", src("scene3d/loop.js").includes("if (u.uPaintLight) u.uPaintLight.value.w = g.paintNight;"));
+
+  const H = await import("../scene3d/layered_haze.js");
+  check("?layerHaze: default 0.4, off = 0, clamp [0, 1]",
+    H.layerHazeStrength("") === 0.4 && H.layerHazeStrength("?layerHaze=off") === 0
+    && H.layerHazeStrength("?layerHaze=0.7") === 0.7 && H.layerHazeStrength("?layerHaze=3") === 1);
+  check("no haze inside 250 m; more with distance; less on high ground",
+    H.layerHazeAmount(0.4, 200, 0) === 0
+    && H.layerHazeAmount(0.4, 1500, 0) > H.layerHazeAmount(0.4, 700, 0)
+    && H.layerHazeAmount(0.4, 1500, 300) < H.layerHazeAmount(0.4, 1500, 0) * 0.6);
+  const lh = src("scene3d/layered_haze.js");
+  check("the pass decodes the LOG depth and skips the sky",
+    lh.includes("float w = exp2(texture2D(tDepth, vUv).r * uLogFar) - 1.0;") && lh.includes("if (w >= uSkyM) { gl_FragColor = src; return; }"));
+  const ap = src("scene3d/atmosphere_pipeline.js");
+  check("pipeline: split chain = after the late scrub, before the bloom / tone-map pass",
+    /if \(lateScrubPass\) composer\.addPass\(lateScrubPass\);[\s\S]{0,260}if \(layeredHaze\) composer\.addPass\(layeredHaze\);\s*composer\.addPass\(fxPostPass\);/.test(ap));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds", "farHarmonize"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull", "farFogSunAvoid", "waterClouds", "farHarmonize", "paintLight", "layerHaze"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }

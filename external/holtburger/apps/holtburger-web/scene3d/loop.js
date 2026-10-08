@@ -1194,6 +1194,8 @@ const _acTerrainGouraud = {
   ambLevel: AC_LSCAPE_LIGHT_MINIMUM,
   // 2026-10-08 — sun-glint strength (terrain.js uSunGlint), 1 by day.
   sunGlint: 1,
+  // 2026-10-08 — painted light's night fade (terrain.js uPaintLight.w), 0 by day.
+  paintNight: 0,
 };
 
 /**
@@ -1351,6 +1353,12 @@ function tickTerrainSunDir(scene3d) {
     // daytime calibration moves.
     const tls = _acTerrainLight.scale * _nightGroundMul(state);
     g.sunGlint = sunGlintMul(state);
+    g.paintNight = (() => {
+      try {
+        if (!nightRampEnabled() || !Number.isFinite(state.dirPitch)) return 0;
+        return nightFactorFromAuthoredPitch(state.dirPitch);
+      } catch (_) { return 0; }
+    })();
     const dc = (state.dirColorArgb >>> 0);
     g.sunColor[0] = (((dc >>> 16) & 0xff) / 255) * tls;
     g.sunColor[1] = (((dc >>> 8) & 0xff) / 255) * tls;
@@ -1393,6 +1401,7 @@ function tickTerrainSunDir(scene3d) {
     u.uAcAmbColor.value.setRGB(g.ambColor[0], g.ambColor[1], g.ambColor[2]);
     u.uAcAmbLevel.value = g.ambLevel;
     if (u.uSunGlint) u.uSunGlint.value = g.sunGlint;
+    if (u.uPaintLight) u.uPaintLight.value.w = g.paintNight;
   }
 }
 

@@ -68,6 +68,8 @@ import { particlesOverCloudsEnabled, collectLateFx } from "./particles_over_clou
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
 import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
+// 2026-10-08 — ?layerHaze: painterly distance + altitude haze over all geometry.
+import { LayeredHazePass, layerHazeStrength, installLayerHazeHandle } from "./layered_haze.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
@@ -1385,6 +1387,19 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // pass, composited as the FIRST effect of that pass so aerial perspective
   // (and the clouds) apply on top — distant haze is never darkened.
   const ssaoPass = ssaoOpt ? new SsaoPass(camera) : null;
+  // 2026-10-08 — ?layerHaze (default 0.4): after the clouds / aerial
+  // perspective pass, before bloom + tone mapping (see layered_haze.js).
+  const layerHazeStr = layerHazeStrength();
+  const layeredHaze = layerHazeStr > 0
+    ? new LayeredHazePass(camera, {
+      strength: layerHazeStr,
+      getFogColor: () => (scene && scene.fog && scene.fog.color) || null,
+      isSkyBlocked: () => {
+        const sd = globalThis.window?.liveScene3d?.skyDome;
+        return !!(sd?._lastSkyBlocked ?? sd?._lastIsIndoor);
+      },
+    })
+    : null;
   const ssaoComposite = ssaoPass ? new SsaoCompositeEffect(ssaoPass) : null;
   // The composite restores the grass marker's alpha, so only mark while it exists.
   SSAO_GRASS_MARKER.value = ssaoComposite ? 1 : 0;
@@ -1567,10 +1582,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // AO reads the composer's stable depth copy (needsDepthTexture), so it must
   // run after the world pass and before the pass that composites it.
   if (ssaoPass) composer.addPass(ssaoPass);
+  // Unsplit chain: fxPass also tone-maps, so the haze has to go in front of it.
+  if (layeredHaze && !particlesOverCloudsPass) composer.addPass(layeredHaze);
   composer.addPass(fxPass);
   if (particlesOverCloudsPass) {
     composer.addPass(particlesOverCloudsPass);
     if (lateScrubPass) composer.addPass(lateScrubPass);
+    // Split chain: after clouds + aerial perspective + late particles, before
+    // the bloom / tone-mapping pass — haze in HDR over the finished scene.
+    if (layeredHaze) composer.addPass(layeredHaze);
     composer.addPass(fxPostPass);
   }
   // Hand the clouds over only once the pass that now owns them exists: the
@@ -1596,6 +1616,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   installHeatHazeHandle(heatHaze);
   installColorGradeHandle(colorGrade);
   installSsaoHandle(ssaoPass);
+  installLayerHazeHandle(layeredHaze);
 
   // `?particlesOverClouds` runtime state. `lateArmed` is the no-reload A/B
   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
@@ -1733,6 +1754,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     colorGrade,
     // null unless the preset / `?ssao=on`; live handle `window.__ssao`.
     ssaoPass,
+    // null under `?layerHaze=off`; live handle `window.__layerHaze`.
+    layeredHaze,
     dithering,
     skyRenderPass,
     worldRenderPass,
@@ -2126,6 +2149,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       cellsRenderPass.camera = cam;
       aerialPerspective.camera = cam;
       ssaoPass?.setCamera?.(cam);
+      layeredHaze?.setCamera?.(cam);
       worldMaskPass.setCamera(cam);
       cellsMaskPass.setCamera(cam);
       cellsPostMaskPass.setCamera(cam);
@@ -2159,6 +2183,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       toneMapping.dispose?.();
       colorGrade?.dispose?.();
       if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;
+      if (layeredHaze) installLayerHazeHandle(null);
       dithering.dispose?.();
     },
   };

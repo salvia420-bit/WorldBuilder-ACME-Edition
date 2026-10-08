@@ -457,6 +457,7 @@ uniform vec3 uSunDir;
 uniform float uAcGouraudEnabled;
 uniform vec3 uAcSunVec;
 uniform vec3 uAcSunColor;
+uniform vec4 uPaintLight;  // 2026-10-08 — painted light (shared tail), copied from the near ring
 uniform vec3 uAcAmbColor;
 uniform float uAcAmbLevel;
 uniform float uDetailNormalEnabled;
@@ -500,6 +501,9 @@ void main() {
     albedo = terrainAcGouraud(albedo, vAcLightNormal, uAcSunVec,
                               uAcSunColor, uAcAmbColor, uAcAmbLevel);
   }
+  // 2026-10-08 — painted light, the same shared-tail call the monolith makes
+  // right after its bake return (live, never baked into the composite).
+  albedo = terrainPaintLight(albedo, normalize(vAcNormal), sunDir, vViewDepth, uPaintLight);
   // The monolith's detail-normal NdotL uses the RNM result, whose tangent BASE
   // is the flat (0,0,1) regardless of geometry — and past ~50 m the detail
   // array has mipped to that flat base anyway. So the far equivalent is the
@@ -909,6 +913,7 @@ function ensureFarMaterial(scene3d) {
       uAcGouraudEnabled: { value: 0.0 },
       uAcSunVec: { value: new THREE.Vector3(0, 0, 0) },
       uAcSunColor: { value: new THREE.Color(1, 1, 1) },
+      uPaintLight: { value: new THREE.Vector4(0, 60, 300, 0) },
       uAcAmbColor: { value: new THREE.Color(1, 1, 1) },
       uAcAmbLevel: { value: 0.2 },
       uDetailNormalEnabled: { value: 0.0 },
@@ -1466,6 +1471,7 @@ function publishFarUniforms(scene3d) {
       if (s.uAcGouraudEnabled) u.uAcGouraudEnabled.value = s.uAcGouraudEnabled.value;
       if (s.uAcSunVec) u.uAcSunVec.value.copy(s.uAcSunVec.value);
       if (s.uAcSunColor) u.uAcSunColor.value.copy(s.uAcSunColor.value);
+      if (s.uPaintLight && u.uPaintLight) u.uPaintLight.value.copy(s.uPaintLight.value);
       if (s.uAcAmbColor) u.uAcAmbColor.value.copy(s.uAcAmbColor.value);
       if (s.uAcAmbLevel) u.uAcAmbLevel.value = s.uAcAmbLevel.value;
       if (s.uDetailNormalEnabled) u.uDetailNormalEnabled.value = s.uDetailNormalEnabled.value;

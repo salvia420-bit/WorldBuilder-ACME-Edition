@@ -70,6 +70,22 @@ vec3 terrainAcGouraud(vec3 albedo, vec3 acLightNormal, vec3 acSunVec,
   return albedo * acC;
 }
 
+// 2026-10-08 — PAINTED LIGHT (?paintLight). Owner on the 1070, distant hills:
+// "warm light, cool shade". Relative to LEVEL ground (dot(n, sun) - sun.z):
+// a slope turned toward the sun warms and lifts, one turned away cools and
+// drops — the light/shade split of a painted landscape. Level ground (water
+// included) is untouched by construction, the term shrinks with a high sun
+// (as real slope contrast does) and params fade it with distance and night.
+// params = (strength, startM, endM, nightFactor). Pure: reads no uniform.
+vec3 terrainPaintLight(vec3 rgb, vec3 n, vec3 sunDirAc, float viewDepth, vec4 params) {
+  float k = params.x * smoothstep(params.y, params.z, viewDepth) * (1.0 - params.w);
+  if (k <= 0.0) return rgb;
+  float t = clamp((dot(n, sunDirAc) - sunDirAc.z) * 2.5, -1.0, 1.0) * k;
+  vec3 tint = t >= 0.0 ? mix(vec3(1.0), vec3(1.12, 1.05, 0.84), t)
+                       : mix(vec3(1.0), vec3(0.84, 0.93, 1.12), -t);
+  return rgb * tint * (1.0 + 0.25 * t);
+}
+
 // The shadowed multiply. Separate from terrainAcGouraud because cloud/CSM
 // shadow are screen-driven and must never be baked into a composite.
 vec3 terrainApplyLight(vec3 albedo, float ndotl, float cloudShadow, float csmShadow) {

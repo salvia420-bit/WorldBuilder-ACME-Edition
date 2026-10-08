@@ -1620,6 +1620,8 @@ uniform float uMacroNoiseAmp;         // extra procedural world-space octaves
 uniform float uFarHarmonize;          // strength 0..1 (0 = off)
 uniform float uFarHarmonizeStart;     // metres — untouched nearer than this
 uniform float uFarHarmonizeEnd;       // metres — full strength beyond this
+// 2026-10-08 — painted light (?paintLight): (strength, startM, endM, nightFactor).
+uniform vec4 uPaintLight;
 // T1 (2026-05-28) — retail TexMerge composite. AC's landscape does NOT
 // bilinear-blend between cells: each 24 m cell picks a base terrain texture
 // plus up to 3 alpha-masked overlays (one per differing corner) + up to 2
@@ -3921,6 +3923,11 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // uBakeAlbedo is 0.0 in every shipped frame.
   if (uBakeAlbedo > 0.5) { fragColor = vec4(modulated, 1.0); return; }
 
+  // 2026-10-08 — PAINTED LIGHT (shared tail terrainPaintLight). After the bake
+  // return on purpose: the far-ring composite stays albedo-only and
+  // far_terrain.js applies the same function live, so the seam cannot split.
+  modulated = terrainPaintLight(modulated, normalize(vAcNormal), sunDir, vViewDepth, uPaintLight);
+
   vec3 terrainLit = terrainApplyLight(modulated, ndotl, cloudShadow, csmShadow)
                     + iblSpec + sandSparkle * cloudShadow * csmShadow;
   // Retail range fog. No-op (identity return, no uniforms declared) whenever
@@ -4143,6 +4150,7 @@ export async function resolveTerrainRingOpts(
       waterEnvEnabled: false,
       waterReflect: WATER_REFLECT_DEFAULT,
       farHarmonize: 0,
+      paintLight: 0,
       splatNoiseAmp: 0,
       splatNoiseFreq: 0.35,
       splatMacroAmp: 0,
@@ -4880,6 +4888,8 @@ export async function resolveTerrainRingOpts(
     waterReflect: readWaterReflect(),
     // 2026-10-08 — far harmonize strength (?farHarmonize=<0..1> / off).
     farHarmonize: readFarHarmonize(),
+    // 2026-10-08 — painted light strength (?paintLight=<0..2> / off).
+    paintLight: readPaintLight(),
     // T1 — splat-noise border tunables (?splatNoise=off, ?splatNoiseAmp=,
     // ?splatNoiseFreq=).
     splatNoiseAmp: readSplatNoiseAmp(),
@@ -5412,6 +5422,31 @@ export function readFarHarmonize(search) {
     return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : FAR_HARMONIZE_DEFAULT;
   } catch (_) {
     return FAR_HARMONIZE_DEFAULT;
+  }
+}
+
+/**
+ * 2026-10-08 — painted light (shared tail `terrainPaintLight`): strength and
+ * distance ramp. Owner on the 1070: "something between normal (1.0) and
+ * strong (1.6)" -> 1.3.
+ */
+export const PAINT_LIGHT_DEFAULT = 1.3;
+export const PAINT_LIGHT_START_M = 60;
+export const PAINT_LIGHT_END_M = 300;
+
+/** `?paintLight=<0..2>` / `off`; missing or junk = PAINT_LIGHT_DEFAULT. */
+export function readPaintLight(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("paintLight");
+    if (v == null || v === "") return PAINT_LIGHT_DEFAULT;
+    const lv = String(v).toLowerCase();
+    if (lv === "off" || lv === "false" || lv === "no") return 0;
+    if (lv === "on" || lv === "true" || lv === "yes") return PAINT_LIGHT_DEFAULT;
+    const n = Number(lv);
+    return Number.isFinite(n) ? Math.min(2, Math.max(0, n)) : PAINT_LIGHT_DEFAULT;
+  } catch (_) {
+    return PAINT_LIGHT_DEFAULT;
   }
 }
 
@@ -6057,6 +6092,10 @@ export async function bakeTerrainForLandblock(
       uFarHarmonize: { value: Number.isFinite(opts.farHarmonize) ? opts.farHarmonize : FAR_HARMONIZE_DEFAULT },
       uFarHarmonizeStart: { value: FAR_HARMONIZE_START_M },
       uFarHarmonizeEnd: { value: FAR_HARMONIZE_END_M },
+      // 2026-10-08 — painted light; .w (night) is pushed on the light tick.
+      uPaintLight: { value: new THREE.Vector4(
+        Number.isFinite(opts.paintLight) ? opts.paintLight : PAINT_LIGHT_DEFAULT,
+        PAINT_LIGHT_START_M, PAINT_LIGHT_END_M, 0) },
       // 2026-10-08 — sky reflection over water (?waterReflect, default 0.35).
       uWaterReflect: { value: Number.isFinite(opts.waterReflect) ? opts.waterReflect : WATER_REFLECT_DEFAULT },
       // 2026-10-08 — pushed on the light tick (loop.js tickTerrainSunDir).

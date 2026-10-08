@@ -283,9 +283,12 @@ const A = build();
   // 2026-10-07 (later): the late target is scrubbed again before bloom (1070:
   // negative-radiance pixels in T brought the black flashing back).
   const iLateScrub = names.findLastIndex((n) => /^EffectPass\[NanScrub\]$/.test(n));
-  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> ParticlesOverClouds -> NanScrub -> [Bloom, ToneMapping, ColorGrade, Dithering]",
+  // 2026-10-08 — ?layerHaze (default on) sits between the late scrub and the
+  // post half: haze in HDR over the finished scene, before bloom/tone mapping.
+  const iHaze = names.indexOf("LayeredHazePass");
+  check("order: Restore -> NanScrub -> [Clouds, Aerial] -> ParticlesOverClouds -> NanScrub -> LayeredHaze -> [Bloom, ToneMapping, ColorGrade, Dithering]",
     iRestore >= 0 && iRestore < iScrub && iScrub < iAtmos && iAtmos < iLate && iLate < iLateScrub &&
-    iLateScrub === iPost - 1 && iPost === names.length - 1,
+    iLateScrub === iHaze - 1 && iHaze === iPost - 1 && iPost === names.length - 1,
     names.join(" | "));
   check("the late scrub reads the late target, swaps, and the post half reads the composer input",
     p.composer.passes[iLateScrub]._latePass?.() === p.particlesOverCloudsPass && p.composer.passes[iLateScrub].needsSwap === true &&
@@ -411,9 +414,12 @@ for (const how of ["opts", "url"]) {
   }
   const { p } = built;
   const names = p.composer.passes.map(describe);
+  // 2026-10-08 — unsplit chain: the post EffectPass also tone-maps, so the
+  // ?layerHaze pass goes in front of it (after the scrub).
   check(`${how}: ONE post-chain EffectPass with clouds -> aerial -> bloom -> tone map -> dither`,
     names[names.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
-    names[names.length - 2] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
+    names[names.length - 2] === "LayeredHazePass" &&
+    names[names.length - 3] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
   check(`${how}: no late pass, no post half`, !names.includes("ParticlesOverClouds") &&
     p.particlesOverCloudsPass === null && p.fxPostPass === null);
   frame(p);
