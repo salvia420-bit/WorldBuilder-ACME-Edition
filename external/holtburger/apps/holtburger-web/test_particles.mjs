@@ -102,8 +102,11 @@ function stripExports(src) {
 // factory. Order matters because each file has cross-references — but
 // we strip the `import ... from "./*"` lines so the symbols just
 // resolve via the shared closure scope.
+// 2026-10-07: also `../` imports (particle_manager.js now imports
+// `applySkyGlowMaterial` from ../sky_glow.js); a no-op stub stands in below —
+// no emitter in this test carries `skyGlow`, so it is never reached.
 function stripLocalImports(src) {
-  return src.replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/[^"']+["'];?\s*$/gm, "");
+  return src.replace(/^\s*import\s+\{[^}]+\}\s+from\s+["']\.\.?\/[^"']+["'];?\s*$/gm, "");
 }
 
 let timeRngSrc = readSrc("scene3d/particles/time_rng.js");
@@ -111,8 +114,11 @@ let particleSrc = readSrc("scene3d/particles/particle.js");
 let particleEmitterInfoSrc = readSrc("scene3d/particles/particle_emitter_info.js");
 let particleEmitterSrc = readSrc("scene3d/particles/particle_emitter.js");
 let particleManagerSrc = readSrc("scene3d/particles/particle_manager.js");
+// 2026-10-07 `?additiveFogBlack`: particle_manager.js imports ./additive_fog.js;
+// inlined for real (not stubbed) so every additive emitter here takes it.
+let additiveFogSrc = readSrc("scene3d/particles/additive_fog.js");
 
-const sources = [timeRngSrc, particleSrc, particleEmitterInfoSrc, particleEmitterSrc, particleManagerSrc];
+const sources = [timeRngSrc, particleSrc, particleEmitterInfoSrc, particleEmitterSrc, particleManagerSrc, additiveFogSrc];
 const stripped = sources.map((s) => stripExports(stripImportThree(stripLocalImports(s))));
 
 const composite =
@@ -120,6 +126,9 @@ const composite =
   "\n// === particle.js ===\n" + stripped[1] +
   "\n// === particle_emitter_info.js ===\n" + stripped[2] +
   "\n// === particle_emitter.js ===\n" + stripped[3] +
+  "\n// === sky_glow.js stub (tests/sky_glow.test.mjs covers the real one) ===\nfunction applySkyGlowMaterial() { return false; }\n" +
+  "\n// === particles_over_clouds.js stub (tests/particles_over_clouds.test.mjs covers the real one) ===\nfunction registerLateFxSource() { return () => {}; }\n" +
+  "\n// === additive_fog.js ===\n" + stripped[5] +
   "\n// === particle_manager.js ===\n" + stripped[4] +
   "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket };";
 

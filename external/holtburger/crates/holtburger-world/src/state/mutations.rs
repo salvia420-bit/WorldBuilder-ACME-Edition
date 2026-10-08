@@ -130,6 +130,30 @@ impl WorldState {
             Instant::now(),
             remote,
         );
+
+        // NETSYNC-1 (2026-10-07, `?remoteMotionKeep`, DEFAULT ON). The scene
+        // reconcile wipes `motion_state` on every body, and a REMOTE body's
+        // state is otherwise only written when an UpdateMotion CHANGES the
+        // entity snapshot (`handlers/movement.rs`). So after each wire
+        // position correction a remote runner had no state velocity: the
+        // interp node pulled it onto the server pose and it then stood there
+        // until the next correction (Coldeve capture: 64% of moving
+        // intervals rendered as stand-then-glide). Retail `MoveOrTeleport`
+        // (acclient.c:323451-323498) never touches the object's
+        // `CMotionInterp`, so the interpreted state persists across
+        // corrections. Re-seed it from the entity's latest snapshot — the
+        // last UpdateMotion, else the ObjectCreate movement — which also
+        // seeds a body created by this reconcile (a remote that spawned
+        // already running).
+        if matches!(body_id, SpatialBodyId::Entity(_)) && self.scene.remote_motion_keep_active() {
+            let snapshot = self
+                .entities
+                .get(guid)
+                .and_then(|entity| entity.motion_snapshot);
+            if snapshot.is_some() && self.scene.body(body_id).is_some() {
+                self.seed_runtime_body_motion(guid, body_id, snapshot);
+            }
+        }
     }
 
     /// A2-P2: flip the scene's remote-driver runtime switch (set once at
@@ -484,9 +508,28 @@ impl WorldState {
             return None;
         }
 
+        self.seed_runtime_body_motion(guid, body_id, motion_state);
+        Some(body_id)
+    }
+
+    /// Install a body's interpreted motion state; for a REMOTE body also its
+    /// motion-table TurnRight omega at the snapshot's stance (NETSYNC-3), so
+    /// the scene can turn it by its interpreted turn axis.
+    fn seed_runtime_body_motion(
+        &mut self,
+        guid: Guid,
+        body_id: SpatialBodyId,
+        motion_state: Option<crate::entity::EntityMotionSnapshot>,
+    ) {
         self.scene
             .update_runtime_body_motion_state(body_id, motion_state);
-        Some(body_id)
+        if matches!(body_id, SpatialBodyId::Entity(_)) {
+            let stance = motion_state
+                .and_then(|snapshot| snapshot.current_style)
+                .map(|style| style as u32);
+            let omega_z = self.remote_turn_right_omega_z(guid, stance);
+            self.scene.set_remote_turn_omega(body_id, omega_z);
+        }
     }
 
     fn emit_runtime_body_changed(events: &mut Vec<WorldEvent>, body_id: SpatialBodyId) {

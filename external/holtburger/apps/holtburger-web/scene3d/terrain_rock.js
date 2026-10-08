@@ -99,6 +99,7 @@ import {
   terrainRockGritCount,
   terrainRockRadiusM,
   terrainRockDensity,
+  grassOffRoadEnabled,
 } from "./vfx_flags.js";
 import { withLogDepth } from "./shader_logdepth.js";
 
@@ -831,12 +832,22 @@ function _gritGeometry(THREE) {
  * @param {number} [opts.count]    instances (rounded up to a square).
  * @param {number} [opts.radiusM]
  * @param {number} [opts.seed]
+ * @param {boolean} [opts.offRoad] keep pebbles off painted roads; default
+ *   `?grassOffRoad` (ON).
  */
 export function createPebbleField(opts = {}) {
   const THREE = opts.THREE || null;
   const count = Math.max(1, Math.round(Number.isFinite(opts.count) ? opts.count : 9000));
   const radiusM = Math.min(512, Math.max(8, Number.isFinite(opts.radiusM) ? opts.radiusM : 56));
   const seed = (Number.isFinite(opts.seed) ? opts.seed : 0x520c4bed) | 0;
+  // 2026-10-07 — ~19 % of Dereth's road vertices carry a ROCK code (a quarter-
+  // world census of client_cell_1.dat), so pebbles/rubble littered those roads
+  // exactly as grass did Holtburg's. Same pool gate as grass, under the same
+  // `?grassOffRoad` escape (default ON), but a 0.5 m verge, not 1.5 m: a road
+  // shoulder collects grit, only the lane itself is swept. (Grit streamers,
+  // sand/snow ribbons, dirt haze and ground fog are airborne veils that blow
+  // ACROSS a road, so they stay as they were.)
+  const offRoad = typeof opts.offRoad === "boolean" ? opts.offRoad : grassOffRoadEnabled();
   const globals = opts.globals || null;
   const tuning = { ...ROCK_TUNING, ...(opts.tuning || {}) };
 
@@ -914,6 +925,8 @@ export function createPebbleField(opts = {}) {
     fadeFraction: tuning.pebbleFadeFraction,
     jitter: 1,
     families: [FAM_ROCK],
+    offRoad,
+    offRoadVergeM: 0.5,
     attributes: ROCK_PEBBLE_SCHEMA.map((a) => ({ ...a })),
     uniforms,
     // PER-CODE DENSITY. The pool has already written ctx.code from the oracle

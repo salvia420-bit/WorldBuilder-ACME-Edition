@@ -47,7 +47,8 @@
 // construction.
 //
 // DEGENERATE INSTANCES. An instance whose ground is the wrong family, is
-// outside the disc, has no cached height, or sits on an unbaked landblock is
+// outside the disc, has no cached height, sits on an unbaked landblock, or
+// (with `opts.offRoad`, 2026-10-07) sits on / at the verge of a painted road is
 // written as ZERO SCALE — in the consumer's scale attribute AND in the
 // instance matrix, so it is zero-area for any material, including one that
 // ignores the attribute. It costs a vertex shader invocation and nothing else.
@@ -104,7 +105,15 @@ export const SCATTER_DEFAULTS = Object.freeze({
                        // triggers a full re-scatter (same rule as trail_map.js)
   maxUpdateRuns: 4,    // buffer-upload ranges per flush before going full-buffer
   maxPendingRanges: 16, // un-consumed ranges tolerated before going full-buffer
+  offRoadVergeM: 1.5,  // 2026-10-07 — thinning band beyond the painted road's
+                       // edge (opts.offRoad). 1.5 m past the retail road
+                       // masks' 50 % line covers their soft fringe (byte < 217
+                       // reaches 4.99 / 5.87 / 4.99 m vs cores 4.3 / 4.9 / 3.6)
 });
+
+/** Hash slot of the off-road verge draw. Placement jitter uses 1 and 2 and
+ *  `ctx.rand(channel)` uses `channel + 16`, so 3 collides with neither. */
+const ROAD_HASH_SLOT = 3;
 
 /**
  * Deterministic 32-bit hash of three integers + a seed. This is the INTEGER
@@ -256,6 +265,17 @@ function _num(v, fallback, lo, hi) {
  * @param {number[]|Set<number>} [opts.families] accepted `FAM_*` ids. Empty or
  *   omitted ⇒ every family is accepted (the pool never imports
  *   `terrain_families.js`; ids are just integers to it).
+ * @param {boolean} [opts.offRoad=false] 2026-10-07 — keep instances off the
+ *   road the ground shader paints, using the oracle sample's `roadEdgeM`
+ *   (signed metres to the painted road's edge, `terrain_oracle.js
+ *   roadEdgeDistanceInCell`). Inside the road (`roadEdgeM <= 0`) an instance is
+ *   always rejected; across the next `offRoadVergeM` metres the rejection
+ *   probability falls LINEARLY from 1 to 0 on a per-cell hash, so the field
+ *   thins into a soft verge instead of stopping at a hard line (or, worse, at a
+ *   24 m cell edge). The CONSUMER decides (it owns its flag — the pool reads no
+ *   URL); default false is byte-identical to a pool that never heard of roads,
+ *   and an oracle sample without `roadEdgeM` never rejects.
+ * @param {number} [opts.offRoadVergeM=1.5] width of that thinning band.
  * @param {(sample:object, ctx:object)=>boolean} [opts.accept] extra predicate,
  *   applied after the family test. Return false ⇒ degenerate.
  * @param {(ctx:object)=>void} [opts.fill] per-instance consumer callback, called
@@ -320,6 +340,12 @@ export function createScatterPool(opts = {}) {
 
   const fill = typeof opts.fill === "function" ? opts.fill : null;
   const accept = typeof opts.accept === "function" ? opts.accept : null;
+
+  // Off-road gate (2026-10-07). Mutable on purpose: `setOffRoad()` lets a live
+  // A/B flip it without a reload (the consumer's flag still decides the boot
+  // value).
+  let offRoad = opts.offRoad === true;
+  let offRoadVergeM = _num(opts.offRoadVergeM, SCATTER_DEFAULTS.offRoadVergeM, 0, 24);
 
   // Family gate. Ids are small integers (FAM_* is 0..8) so a byte mask beats a
   // Set lookup in the hot loop; an empty list means "accept everything".
@@ -501,6 +527,7 @@ export function createScatterPool(opts = {}) {
     liveCount: 0,
     nullSamples: 0,
     familyRejects: 0,
+    roadRejects: 0,
     outOfRange: 0,
     noHeight: 0,
     fillRejects: 0,
@@ -745,6 +772,24 @@ export function createScatterPool(opts = {}) {
       return;
     }
 
+    // 2026-10-07 — OFF-ROAD (opts.offRoad). A road vertex keeps its grass/rock
+    // terrain code, so the family gate alone planted straight through every
+    // road ("see the grass on the road" — owner, Holtburg). `roadEdgeM` is the
+    // oracle's signed distance to the painted road's edge; `undefined < n` is
+    // false, so a road-less sample (or a stub oracle) never rejects. Resolved,
+    // not retried: the road under a cell never changes without a rebake.
+    if (offRoad) {
+      const edge = s.roadEdgeM;
+      if (edge < offRoadVergeM) {
+        const p = edge <= 0 ? 1 : 1 - edge / offRoadVergeM;
+        if (p >= 1 || scatterHash01(gx, gy, ROAD_HASH_SLOT, randSeed) < p) {
+          state.roadRejects += 1;
+          commitDegenerate(i, x, y, s.height);
+          return;
+        }
+      }
+    }
+
     _ctx.index = i;
     _ctx.cellX = gx;
     _ctx.cellY = gy;
@@ -918,6 +963,25 @@ export function createScatterPool(opts = {}) {
     resolvedFlags.fill(0);
   }
 
+  /**
+   * 2026-10-07 — flip the off-road gate live (A/B without a reload). Marks
+   * every instance for re-examination, so the field converges over the next
+   * amortised laps exactly like a landblock landing — no full re-scatter spike.
+   * @param {boolean} on
+   * @param {number} [vergeM] optional new verge width (metres, 0..24)
+   * @returns {boolean} the gate's new state
+   */
+  function setOffRoad(on, vergeM) {
+    const next = on === true;
+    const nextVerge = _num(vergeM, offRoadVergeM, 0, 24);
+    if (next !== offRoad || nextVerge !== offRoadVergeM) {
+      offRoad = next;
+      offRoadVergeM = nextVerge;
+      invalidate();
+    }
+    return offRoad;
+  }
+
   function dispose() {
     if (mesh) {
       try { if (mesh.parent) mesh.parent.remove(mesh); } catch (_) {}
@@ -962,6 +1026,9 @@ export function createScatterPool(opts = {}) {
       degenerate: count - state.liveCount,
       nullSamples: state.nullSamples,
       familyRejects: state.familyRejects,
+      offRoad,
+      offRoadVergeM,
+      roadRejects: state.roadRejects,
       outOfRange: state.outOfRange,
       noHeight: state.noHeight,
       fillRejects: state.fillRejects,
@@ -990,6 +1057,7 @@ export function createScatterPool(opts = {}) {
     update,
     rescatterAll,
     invalidate,
+    setOffRoad,
     dispose,
     stats,
     // per-instance introspection (tests, diagnostics — not a hot path)

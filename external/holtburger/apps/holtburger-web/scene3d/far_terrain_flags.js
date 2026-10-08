@@ -162,6 +162,94 @@ export function farFogTint() {
   return _num("farFogTint", 0, 0, 1);
 }
 
+/**
+ * 2026-10-07 — HORIZON FOG (`?horizonFog`, DEFAULT ON, `=off` escape). Owner,
+ * playtesting on the 1070: "the fog is a bit much ... i mainly want it on the
+ * horizon to hide if there is nothing loaded beyond the horizon, and to provide
+ * a sense of depth at distance."
+ *
+ * The authored DAT band is retail's and it was built for a 2000-era draw
+ * distance: the live dusk DayGroup measured 85 -> 796 m, so with three's
+ * smoothstep terrain 200 m out was already 7 % fogged, 400 m out 41 %, and the
+ * whole loaded world (R = 5, drawn edge 1056 m) sat inside the ramp. Outdoors
+ * (sky visible) the band is now anchored to the DRAWN EDGE instead:
+ *
+ *   far  = farFogFrac x drawnEdge   (+ farFogFloor, unchanged) — the existing
+ *          fog-before-edge invariant, now ALWAYS the far end, even when the
+ *          authored fogMax is shorter;
+ *   near = max(authored fogMin, horizonFogNear x drawnEdge).
+ *
+ * So the fog hides exactly the streaming edge and adds depth over the outer
+ * part of the loaded world, never the near field. Indoors (sky blocked — the
+ * dungeon / EnvCell case) the authored band is applied exactly as before.
+ * `?horizonFog=off` restores the authored band everywhere.
+ */
+export function horizonFogEnabled() {
+  return farTerrainEnabled() && _boolOn("horizonFog", true);
+}
+
+/**
+ * Where the horizon band STARTS, as a fraction of the drawn edge
+ * `(R_effective + 0.5) * 192`. `?horizonFogNear=N`, clamp [0, 0.9].
+ * 0.45 at the live R = 5 => 475 m -> 1003 m: ~15 % at 600 m, ~40 % at 700 m,
+ * ~67 % at 800 m, opaque before the edge. Lower = more depth haze, higher =
+ * crisper mid-field. A live sweep knob, not a retail value.
+ */
+export function horizonFogNearFrac() {
+  return _num("horizonFogNear", 0.45, 0, 0.9);
+}
+
+/**
+ * The fog-distance math of `loop.js::tickDistanceFogColor`, pure so it can be
+ * unit-tested (test_fog_band.mjs). Inputs are the AUTHORED SkyState band, the
+ * MEASURED near-ring radius and the flag values; returns the band to apply.
+ *
+ * mode:
+ *   "authored" — no usable radius / clamp disabled: the authored band verbatim.
+ *   "clamped"  — legacy (indoors, or `?horizonFog=off`): far clamped to the
+ *                drawn edge only when the authored fogMax is beyond it; a
+ *                degenerate near (>= far, boot fill) is scaled to far * 0.1.
+ *   "horizon"  — 2026-10-07 default outdoors: far = the clamped edge, near =
+ *                max(authored near, horizonNear x drawnEdge).
+ *
+ * @param {{authoredMin:number, authoredMax:number, rEffLb:number, frac:number,
+ *          floorM:number, floorMinLb:number, horizon:boolean,
+ *          horizonNear:number}} p
+ * @returns {{near:number, far:number, drawnEdgeM:(number|null), mode:string}}
+ */
+export function computeFogBand(p) {
+  const authoredMin = +p.authoredMin;
+  const authoredMax = +p.authoredMax;
+  let near = authoredMin;
+  let far = authoredMax;
+  let mode = "authored";
+  let drawnEdgeM = null;
+  const rEff = +p.rEffLb;
+  const frac = +p.frac;
+  if (frac > 0 && Number.isFinite(rEff) && rEff > 0) {
+    drawnEdgeM = (rEff + 0.5) * 192;
+    let edge = frac * drawnEdgeM;
+    const floorM = +p.floorM;
+    if (floorM > 0 && rEff >= +p.floorMinLb) {
+      edge = Math.max(edge, Math.min(floorM, drawnEdgeM));
+    }
+    if (p.horizon && edge > 0) {
+      far = edge;
+      const hn = Math.min(0.9, Math.max(0, +p.horizonNear || 0));
+      near = Math.max(Number.isFinite(authoredMin) ? authoredMin : 0, hn * drawnEdgeM);
+      // A user pin like farFogFrac=0.3 can push the edge under the start:
+      // keep a real ramp rather than a step.
+      if (near >= far) near = far * 0.5;
+      mode = "horizon";
+    } else if (edge > 0 && edge < far) {
+      far = edge;
+      if (near >= far) near = far * 0.1;
+      mode = "clamped";
+    }
+  }
+  return { near, far, drawnEdgeM, mode };
+}
+
 /** Numeric pin for the fog band, for A/B only. NaN = "use the AC/SkyState value". */
 export function farFogNearPin() {
   const raw = _param("farFogNear");

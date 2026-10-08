@@ -116,6 +116,8 @@ import { decodeSplatterId } from "./splatter_decode.js";
 // no listeners at import time) — same import-safety property as
 // splatter_decode.js, so the node stub suites are unaffected.
 import { noteSplatterHit } from "./kill_impulse.js";
+// 2026-10-07 `?particlesOverClouds` — dependency-free registry (no three).
+import { registerLateFxSource } from "./particles_over_clouds.js";
 
 /** `?ragdoll` (DEFAULT ON, `=off` escape) — hoisted; the URL cannot change. */
 const _RAGDOLL_ON_FOR_KILL_DIR = (() => {
@@ -538,6 +540,11 @@ const _burstPool = [[], [], []];
 // Cap the pooled idle meshes per shape. Beyond this, released meshes
 // are really disposed rather than retained.
 const _BURST_POOL_MAX = 24;
+// 2026-10-07 `?particlesOverClouds` — live placeholder bursts are additive
+// spell flashes like the real emitters, so the composer draws them after the
+// cloud composite too (particles_over_clouds.js filters + hides them).
+const _liveBursts = new Set();
+registerLateFxSource((out) => { for (const m of _liveBursts) out.push(m); });
 
 /**
  * Acquire a burst mesh of `shape`, applying all per-burst properties.
@@ -594,6 +601,7 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
   // without re-deriving it from geometry identity.
   mesh.userData.__rp6Shape = shape;
   if (parent) parent.add(mesh);
+  _liveBursts.add(mesh);
   return mesh;
 }
 
@@ -605,6 +613,7 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
  */
 function _releaseBurstMesh(mesh) {
   if (!mesh) return;
+  _liveBursts.delete(mesh);
   if (mesh.parent) mesh.parent.remove(mesh);
   mesh.visible = false;
   const shape = mesh.userData?.__rp6Shape;
@@ -1711,7 +1720,328 @@ const _realVfxStats = {
   // WS09 — audio hooks (Sound/SoundTable/SoundTweaked) routed to the entity
   // sound sink from a wire PlayScript (default on; `?playEffectSound=off` skips).
   soundHooksFired: 0,
+  // HIDEFX (2026-10-07, `?playEffectLifecycle`) — see the section below.
+  // StopParticle(15)/DestroyParticle(14) hooks executed from a PlayScript;
+  // emitters that attached AFTER their group's one-shot reaper had run (the
+  // stuck-forever hole) and were reaped on arrival instead; hidden-state
+  // groups held / released, by release reason.
+  stopHooksFired: 0,
+  destroyHooksFired: 0,
+  lateAttachReaped: 0,
+  hiddenHolds: 0,
+  hiddenReleased: 0,
+  hiddenStateScriptsPlayed: 0,
 };
+
+// =====================================================================
+// HIDEFX (2026-10-07) — `?playEffectLifecycle` (DEFAULT ON; `=off` restores
+// the legacy one-shot-only lifecycle byte-for-byte).
+// =====================================================================
+// THE BUG (owner, GTX 1070, Coldeve, 2026-10-07): portalling out of the
+// Holtburg academy left a pink/violet sparkle column on the player that never
+// went away — a TRAIL, not a cloud, i.e. world-space particles still being
+// emitted behind a running player. The log had `resolved scriptId=0x74`
+// (Hide, PhysicsScript 0x33000332, 14 emitters).
+//
+// RETAIL LIFECYCLE (read from the real DAT bytes in client_portal.dat this
+// session, and the decomp):
+//   - Hide 0x33000332 = 14 CreateParticle hooks at t=0, emitters 0x3200028C
+//     (×13, one per body part) and 0x3200028B (part 0), with EXPLICIT emitter
+//     handles 1000-1013, plus Transparent 0→1 over 0.75 s. BOTH emitters have
+//     total_particles = 0 AND total_seconds = 0: they never stop on their own
+//     (`ParticleEmitter::StopEmitter`, acclient.c:330295-330309, only stops
+//     on an elapsed total_seconds or a reached total_particles).
+//   - Hidden 0x33000331 (PlayScript 0x76) = the same 14 creates on the same
+//     handles (the "pink bubble state"), Transparent 1→1.
+//   - UnHide 0x3300032F (PlayScript 0x75) = 14 StopParticle hooks on handles
+//     1000-1013 + Transparent 1→0 over 0.75 s. Across ALL 164 retail
+//     PhysicsScriptTables, UnHide's scripts are the ONLY PlayScript scripts
+//     that carry StopParticle/DestroyParticle hooks at all (the other one
+//     DestroyParticles handle 7500, which only a Hidden script creates).
+//   - Nobody SENDS 0x75/0x76: retail plays them client-side.
+//     `CPhysicsObj::set_state` calls `set_hidden` when the HIDDEN (0x4000) bit
+//     changes (acclient.c:322199-322200); `set_hidden(1)` plays PS_Hidden
+//     (:322107) and `set_hidden(0)` plays PS_UnHide (:322140), on the same
+//     object whose per-object `ParticleManager` holds the Hide emitters
+//     (`CreateParticleEmitter` replaces an existing handle, :329375-329412;
+//     `StopParticleEmitter` flags it stopped, :329442-329480, and the stopped
+//     emitter is reaped once its particles age out, :331224-331227 /
+//     :329482-329525). ACE mirrors it: `DoPreTeleportHide` sends PlayScript
+//     Hide (Player_Location.cs), `DoTeleportPhysicsStateChanges` broadcasts
+//     SetState{Hidden}, and `OnTeleportComplete` broadcasts SetState{!Hidden}
+//     ("pink bubbles -> fully materialized"); 0x75 is never on the wire.
+//
+// WHY OURS KEPT EMITTING:
+//   (1) nothing ever played UnHide — the client never mapped the HIDDEN-bit
+//       transition (kind=17 EntityVisibilityChanged) onto PS_Hidden/PS_UnHide;
+//   (2) even a wire UnHide would have been a no-op: this resolver ran ONLY
+//       CreateParticle/sound hooks (UnHide has none → `missNoCreateParticleHook`
+//       → grey placeholder), and it dropped the hook's emitter handle, so a
+//       StopParticle(1000) had nothing to resolve against;
+//   (3) the only thing bounding the infinite Hide emitters was the 2.5 s
+//       one-shot reaper, and it has a hole: it destroys the ids ALREADY in
+//       the group list, but an `addEmitter` still awaiting its GfxObj mesh +
+//       texture (`resolveGfxObjShared` / `fetch_surfaces_pixels`, not on the
+//       urgent lane) pushes its id AFTER the reaper ran — and nothing ever
+//       reaps it. A portal is the worst case: the destination's landblocks
+//       flood the fetch queue at the exact moment Hide resolves. A late
+//       infinite emitter then emits for the rest of the session.
+//   AttribUpPurple (0x10 → 0x33000040, emitter 0x32000048) and LevelUp
+//   (0x8A → 0x330006F7, emitters 0x320003AE/AF/B0) are NOT candidates: every
+//   one of their emitters is a finite parent-local burst (initial = total =
+//   60 / 40 particles, lifespan 2.5±0.5 / 3.0±0.25 s), which stops and drains
+//   by itself even when leaked, and parent-local particles can't trail.
+//
+// THE FIX (all JS; owner-registry path only — `?particleOwner=off` keeps the
+// legacy registry and only gets fix (c)):
+//   (a) The set_hidden state scripts (Hide 0x74 / Hidden 0x76) register their
+//       emitters under the hook's OBJECT-SCOPED handle (retail per-object
+//       table semantics, owner_registry.js) and are HELD — exempt from the
+//       2.5 s reaper — until the target unhides, the target despawns, or a
+//       backstop fires (not hidden after a grace window, or a hard cap).
+//   (b) `noteEntityVisibility` (called from EntityManager.setVisibility on
+//       every kind=17 flip) tracks the HIDDEN bit per guid and plays PS_Hidden
+//       on hide and PS_UnHide on unhide, exactly like set_state/set_hidden.
+//       The resolver now executes StopParticle(15)/DestroyParticle(14) hooks
+//       by scoped handle, so UnHide's real 14 stops do the stopping; the hold
+//       release additionally stops whatever the group spawned (incl. creates
+//       still in flight) so a missing table entry can't strand bubbles.
+//       Stopped emitters drain naturally (0.5-0.75 s lifespans), then reap.
+//   (c) The reaper hole: an emitter that attaches after its group was reaped
+//       gets its own reap one base-lifetime later (so a late cast effect is
+//       still SEEN, but never outlives the one-shot budget).
+// Only the three set_hidden scripts get handles + holds: the DAT survey above
+// shows no other PlayScript has a stop/destroy partner, so the per-object
+// handle REPLACE semantics for e.g. buff scripts' handle 1 stay out of scope.
+const PLAY_EFFECT_LIFECYCLE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return new URLSearchParams(window.location.search)
+      .get("playEffectLifecycle")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+
+// PhysicsState bits (acclient.h `PhysicsState`; the wasm visibility gate in
+// src/lib.rs CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED reads the same three).
+const _PHYS_STATE_NO_DRAW = 0x20;
+const _PHYS_STATE_HIDDEN = 0x4000;
+const _PHYS_STATE_CLOAKED = 0x100000;
+
+/** The scripts `CPhysicsObj::set_hidden` drives (acclient.c:322107/:322140). */
+const _HIDDEN_STATE_CREATE_SCRIPTS = new Set([PLAY_SCRIPT.Hide, PLAY_SCRIPT.Hidden]);
+
+// Timing knobs (ms). Mutable ONLY through `__test.setLifecycleTiming` so the
+// headless suite can run the real schedule on a short clock.
+const _LIFECYCLE_MS = {
+  // The legacy one-shot reaper base (`ONE_SHOT_LIFETIME_MS` below) — kept at
+  // the historical 2500 ms; a late attach is reaped this long after it lands.
+  oneShotBase: 2500,
+  // A hold whose target is NOT hidden this long after its last script landed
+  // is released. Covers ACE's 2.0 s recall gap between PlayScript Hide and the
+  // SetState{Hidden} (WorldObject_Magic.cs `AddDelaySeconds(2.0f)`) + latency.
+  holdGrace: 5000,
+  // Re-check cadence while the target stays hidden.
+  holdCheck: 5000,
+  // Hard cap: no hidden-state hold outlives this, hidden or not (a lost
+  // unhide must never be "forever" again).
+  holdMax: 60000,
+  // After a stop, reap the drained emitters' owner records. Hide/Hidden
+  // emitters 0x3200028C / 0x3200028B have 0.5 s / 0.75 s lifespans.
+  drain: 2000,
+};
+
+/** guid → true while the last observed physics state carried HIDDEN. */
+const _hiddenGuids = new Set();
+/** guid → count of observed unhides (a hold registered under an older epoch
+ *  than the current one was overtaken by an unhide mid-resolve). */
+const _hiddenEpochs = new Map();
+/** guid → { groups:Set<group>, sinceMs, lastAddMs, timer } */
+const _hiddenHolds = new Map();
+
+function _lifecycleNowMs() {
+  return (typeof performance !== "undefined" && performance.now)
+    ? performance.now() : Date.now();
+}
+
+function _hiddenEpoch(guid) {
+  return _hiddenEpochs.get(guid >>> 0) ?? 0;
+}
+
+/** Owner-registry STOP of a group's spawned ids, then a reap after the drain
+ *  window so the owner record doesn't keep the drained emitters' ids. */
+function _stopAndReapIds(ownerKey, ids) {
+  if (!ids || ids.length === 0) return;
+  try { ownerRegistry.stopSome(ownerKey, ids); } catch (_) {}
+  const snapshot = ids.slice();
+  setTimeout(() => {
+    try { ownerRegistry.destroySome(ownerKey, snapshot); } catch (_) {}
+  }, _LIFECYCLE_MS.drain);
+}
+
+/** HIDEFX fix (c): an emitter that attached after its group's one-shot reaper
+ *  ran gets its own reap one base-lifetime after it landed — a late cue is
+ *  still seen, but no one-shot emitter (finite or not) outlives the budget. */
+function _reapLateAttach(em, wm, guid, emitterId) {
+  _realVfxStats.lateAttachReaped += 1;
+  setTimeout(() => {
+    if (particleOwnerOn()) {
+      try { ownerRegistry.destroySome(guid >>> 0, [emitterId]); } catch (_) {}
+      return;
+    }
+    try { wm?.destroyParticleEmitter?.(emitterId); } catch (_) {}
+    try {
+      const ids = em?._particleEmittersForGuid?.get(guid);
+      if (ids && ids.length > 0) {
+        const rest = ids.filter((id) => id !== emitterId);
+        if (rest.length === 0) em._particleEmittersForGuid.delete(guid);
+        else em._particleEmittersForGuid.set(guid, rest);
+      }
+    } catch (_) {}
+  }, _LIFECYCLE_MS.oneShotBase);
+}
+
+/** Release one held group: stop everything it spawned; creates still in
+ *  flight see `_released` on attach and stop themselves. */
+function _releaseHeldGroup(group, reason) {
+  if (!group || group._released) return;
+  group._released = true;
+  group._releaseReason = reason;
+  _realVfxStats.hiddenReleased += 1;
+  _stopAndReapIds(group.ownerKey, group.ids);
+}
+
+/** End a guid's hidden-state hold (unhide / despawn / backstop). */
+function _releaseHiddenHold(guid, reason) {
+  const g = guid >>> 0;
+  const h = _hiddenHolds.get(g);
+  if (!h) return 0;
+  _hiddenHolds.delete(g);
+  if (h.timer !== null) {
+    try { clearTimeout(h.timer); } catch (_) {}
+    h.timer = null;
+  }
+  let n = 0;
+  for (const group of h.groups) {
+    _releaseHeldGroup(group, reason);
+    n += 1;
+  }
+  return n;
+}
+
+function _armHiddenHoldCheck(g, h, delayMs) {
+  h.timer = setTimeout(() => {
+    h.timer = null;
+    if (_hiddenHolds.get(g) !== h) return;
+    const now = _lifecycleNowMs();
+    if (now - h.sinceMs >= _LIFECYCLE_MS.holdMax) {
+      _releaseHiddenHold(g, "max");
+      return;
+    }
+    if (!_hiddenGuids.has(g) && now - h.lastAddMs >= _LIFECYCLE_MS.holdGrace) {
+      _releaseHiddenHold(g, "not-hidden");
+      return;
+    }
+    _armHiddenHoldCheck(g, h, _LIFECYCLE_MS.holdCheck);
+  }, delayMs);
+}
+
+/**
+ * Hold a Hide/Hidden group instead of reaping it at 2.5 s. `epochAtEntry` is
+ * the guid's unhide epoch captured when the resolver STARTED: an unhide that
+ * landed during the resolve's DAT awaits means retail would already have run
+ * UnHide over these emitters, so release at once.
+ */
+function _holdHiddenGroup(guid, group, epochAtEntry) {
+  const g = guid >>> 0;
+  group._held = true;
+  _realVfxStats.hiddenHolds += 1;
+  if (_hiddenEpoch(g) !== epochAtEntry) {
+    _releaseHeldGroup(group, "unhid-during-resolve");
+    return;
+  }
+  const now = _lifecycleNowMs();
+  let h = _hiddenHolds.get(g);
+  if (!h) {
+    h = { groups: new Set(), sinceMs: now, lastAddMs: now, timer: null };
+    _hiddenHolds.set(g, h);
+  }
+  h.groups.add(group);
+  h.lastAddMs = now;
+  if (h.timer === null) _armHiddenHoldCheck(g, h, _LIFECYCLE_MS.holdGrace);
+}
+
+/** Read the HIDDEN bit for a guid that just lost drawability. A missing
+ *  accessor / unknown guid reads as Hidden (the common cause). A state that
+ *  shows NONE of the three draw-gate bits means a later SetState in the same
+ *  drain batch already cleared it — attribute that to Hidden as well, so a
+ *  batched hide+unhide still pairs its PS_UnHide. */
+function _visibilityLossIsHidden(g) {
+  try {
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || typeof sh.objectPhysicsState !== "function") return true;
+    const st = sh.objectPhysicsState(g) >>> 0;
+    if (st === 0) return true;
+    if ((st & _PHYS_STATE_HIDDEN) !== 0) return true;
+    return (st & (_PHYS_STATE_NO_DRAW | _PHYS_STATE_CLOAKED)) === 0;
+  } catch (_) {
+    return true;
+  }
+}
+
+/** Play one set_hidden state script on `guid` (retail GetScript(…, 1.0)).
+ *  No placeholder: these are client-local scripts, not wire cues. */
+function _playHiddenStateScript(guid, scriptId) {
+  _realVfxStats.hiddenStateScriptsPlayed += 1;
+  try {
+    Promise.resolve(_tryResolveRealVfx(guid >>> 0, scriptId, 1.0)).catch(() => {});
+  } catch (_) { /* never break the visibility path */ }
+}
+
+/**
+ * HIDEFX — the `CPhysicsObj::set_state` → `set_hidden` hook (acclient.c:
+ * 322172-322201 / 322078-322160). Called by `EntityManager.setVisibility` on
+ * every kind=17 EntityVisibilityChanged flip (wasm emits it when
+ * `should_draw()` = !(HIDDEN|NO_DRAW|CLOAKED) flips, and once at spawn for an
+ * already-hidden object — the retail create-time set_state). Plays PS_Hidden
+ * when the flip is the HIDDEN bit going up, PS_UnHide when it comes down, and
+ * ends the guid's hidden-state hold on ANY flip back to drawable. Never throws.
+ *
+ * @param {number} guid
+ * @param {boolean} visible
+ */
+export function noteEntityVisibility(guid, visible) {
+  if (!PLAY_EFFECT_LIFECYCLE_ON || !particleOwnerOn()) return;
+  try {
+    const g = guid >>> 0;
+    if (visible) {
+      const wasHidden = _hiddenGuids.delete(g);
+      if (wasHidden || _hiddenHolds.has(g)) {
+        _hiddenEpochs.set(g, _hiddenEpoch(g) + 1);
+        _releaseHiddenHold(g, "unhide");
+      }
+      if (wasHidden) _playHiddenStateScript(g, PLAY_SCRIPT.UnHide);
+      return;
+    }
+    if (_hiddenGuids.has(g)) return;
+    if (!_visibilityLossIsHidden(g)) return; // NoDraw / Cloaked: no script
+    _hiddenGuids.add(g);
+    _playHiddenStateScript(g, PLAY_SCRIPT.Hidden);
+  } catch (_) { /* diag/vfx must never break visibility */ }
+}
+
+/** HIDEFX — entity released: forget its hidden state and end its hold (the
+ *  owner teardown already destroyed the emitters; the epoch bump makes any
+ *  Hide/Hidden resolve still in flight release on arrival). */
+export function forgetEntityHiddenState(guid) {
+  const g = guid >>> 0;
+  _hiddenGuids.delete(g);
+  if (_hiddenHolds.has(g)) {
+    _hiddenEpochs.set(g, _hiddenEpoch(g) + 1);
+    _releaseHiddenHold(g, "despawn");
+  }
+}
 
 /**
  * Track B7 (2026-06-08): hard-deadline wrapper around `_tryResolveRealVfx`.
@@ -1812,6 +2142,8 @@ function _isLiveInstance(em, guid, inst) {
 // silent synthetic copy whose visuals already played).
 async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = false, soundOnly = false) {
   _realVfxStats.attempts += 1;
+  // HIDEFX: captured BEFORE the DAT awaits — see `_holdHiddenGroup`.
+  const hiddenEpochAtEntry = _hiddenEpoch(targetGuid);
   // `?castLat=on` stamp. Defaults to "now" so the exported
   // `tryResolveRealVfx` and any older caller still produce coherent (if
   // resolver-relative) timings.
@@ -1967,11 +2299,63 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
   }
   if (soundOnly) return false;
 
+  // HIDEFX (2026-10-07, `?playEffectLifecycle`): run the script's
+  // StopParticle(15) / DestroyParticle(14) hooks — retail
+  // `StopParticleHook::Execute` → `CPhysicsObj::stop_particle_emitter`
+  // (acclient.c:342542-342545 / :316396-316407) against the TARGET object's
+  // own emitter table, i.e. by the OBJECT-SCOPED handle in the owner registry
+  // (`hook_data[0..4]`, u32 LE — ACE StopParticleHook/DestroyParticleHook).
+  // Decoded synchronously (the wasm entry objects may be reclaimed), fired at
+  // the hook's StartTime. A stop that lands while its create is still in
+  // flight is applied on attach (owner_registry `stopRequested`). In retail
+  // data only UnHide's scripts carry these hooks (see the HIDEFX header).
+  let stopHookCount = 0;
+  if (PLAY_EFFECT_LIFECYCLE_ON && particleOwnerOn()) {
+    for (const e of entriesJs) {
+      const ht = e.hookType | 0;
+      if (ht !== 14 && ht !== 15) continue;
+      const bytes = e.hookData;
+      if (!bytes || bytes.byteLength < 4) continue;
+      const handle = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+        .getUint32(0, true) >>> 0;
+      if (handle === 0) continue;
+      stopHookCount += 1;
+      const delayMs = Math.max(0, (+e.startTime || 0) * 1000);
+      setTimeout(() => {
+        if (!_isLiveInstance(em, targetGuid, inst)) return;
+        // `scopedOnly`: a script handle addresses the per-object handle table
+        // ONLY — never an unrelated emitter whose global facade id == handle.
+        if (ht === 15) {
+          try { ownerRegistry.stopEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
+          _realVfxStats.stopHooksFired += 1;
+        } else {
+          try { ownerRegistry.destroyEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
+          _realVfxStats.destroyHooksFired += 1;
+        }
+      }, delayMs);
+    }
+    // A played UnHide ends the guid's hidden-state hold however it arrived
+    // (client-local set_hidden path or a server that does send 0x75).
+    if (scriptId === PLAY_SCRIPT.UnHide) _releaseHiddenHold(targetGuid, "unhide-script");
+  }
+
   let particleHookCount = 0;
   for (const e of entriesJs) {
     if (e.hookType === 13 || e.hookType === 26) {
       particleHookCount += 1;
     }
+  }
+  if (particleHookCount === 0 && stopHookCount > 0) {
+    // A stop-only script (UnHide) IS the real effect — no placeholder upgrade
+    // is owed and it is not a `noCreateParticleHook` miss.
+    _castLat("stop", t0, `stop/destroy hooks=${stopHookCount}`);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[play-effect-vfx/real] resolved scriptId=0x${scriptId.toString(16)} ` +
+        `target=0x${targetGuid.toString(16)} table=0x${tableDid.toString(16)} ` +
+        `pes=0x${pesId.toString(16)} stopHooksScheduled=${stopHookCount}`,
+    );
+    return true;
   }
   if (particleHookCount === 0) {
     _realVfxStats.missNoCreateParticleHook += 1;
@@ -2055,6 +2439,13 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
   // is the same live array the closures push into; the concurrent-cap FIFO
   // registration still runs AFTER the loop (below), so eviction semantics are
   // unchanged (`_evicted` stays false until then, exactly as before).
+  // HIDEFX (2026-10-07): Hide / Hidden run on the retail per-object handle
+  // table (their CreateParticle hooks carry handles 1000-1013 that UnHide's
+  // StopParticle hooks address) and are held until unhide — see the HIDEFX
+  // header. Owner-registry path only (handles are owner-scoped there).
+  const holdForHiddenState = PLAY_EFFECT_LIFECYCLE_ON
+    && particleOwnerOn()
+    && _HIDDEN_STATE_CREATE_SCRIPTS.has(scriptId >>> 0);
   const _rp6Group = {
     wm,
     ids: spawnedEmitterIds,
@@ -2063,6 +2454,15 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
     // A11-S2: owner-policy metadata — the facade owner these ids live
     // under (the target entity), for destroySome-routed evict/reap.
     ownerKey: targetGuid >>> 0,
+    // HIDEFX (2026-10-07): set when the one-shot reaper has run — an emitter
+    // attaching after that is reaped on its own clock instead of leaking.
+    _reaped: false,
+    // HIDEFX: a set_hidden state group (Hide/Hidden) is HELD, not reaped,
+    // until `_releaseHeldGroup` flips `_released`. Known up front so an
+    // attach that beats `_holdHiddenGroup` (the `?castVfxBatch=off` serial
+    // lane awaits inside the loop) is never mistaken for a one-shot.
+    _held: holdForHiddenState,
+    _released: false,
   };
   // CAST-BATCH (2026-08-04, `?castVfxBatch=off` to revert) — THE cast-path
   // serialization. This loop used to `await fetchParticleEmitter(...)` INSIDE
@@ -2164,6 +2564,14 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
     // A11-S0: hook 26 = CreateBlockingParticle. Captured before the
     // setTimeout closure so the flag/hook decision is fixed at walk time.
     const blockingHook = ((e.hookType | 0) === 26) && BLOCKING_PARTICLE_PARITY_ON;
+    // HIDEFX (2026-10-07): the hook's OBJECT-SCOPED emitter handle
+    // (CreateParticleHook.emitter_id — 1000-1013 for Hide/Hidden), read
+    // synchronously like the offset above. Only the held set_hidden scripts
+    // use it (owner_registry maps it per target, replacing a live handle like
+    // retail `ParticleManager::CreateParticleEmitter`, acclient.c:329375-329412).
+    const scopedHandle = holdForHiddenState
+      ? ((e.createParticleEmitterInstanceId >>> 0) || 0)
+      : 0;
 
     // StartTime-driven schedule (entities.js:~6649/~6738 pattern).
     const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
@@ -2195,6 +2603,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
         parentOffset: offset,
         blocking: blockingHook,
       };
+      if (scopedHandle !== 0) req.emitterId = scopedHandle;
       // A11-S2: on-path, register under the TARGET entity's guid owner —
       // entity-remove's single `destroyAllForOwner` then reaps PlayEffect
       // one-shots too (and the facade's epoch tombstone covers a despawn
@@ -2223,6 +2632,18 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
               return;
             }
             spawnedEmitterIds.push(emitterId);
+            // HIDEFX (2026-10-07): the attach may land AFTER this group's
+            // lifecycle already ended — the one-shot reaper ran (it only
+            // reaps ids already in the list), or the hidden-state hold was
+            // released. Both used to leak the emitter for the session, and an
+            // infinite (0/0) emitter like Hide's then emits forever.
+            if (PLAY_EFFECT_LIFECYCLE_ON) {
+              if (_rp6Group._held) {
+                if (_rp6Group._released) _stopAndReapIds(targetGuid >>> 0, [emitterId]);
+              } else if (_rp6Group._reaped) {
+                _reapLateAttach(em, wm, targetGuid >>> 0, emitterId);
+              }
+            }
             // Keep the per-guid tracking honest as late hooks land so
             // entity-remove can tear them down (the synchronous block
             // below created the array; push into the live one if it
@@ -2288,50 +2709,64 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
   // per-guid tracking above means an evicted group's emitter IDs are
   // still pruned correctly when the entity-remove or one-shot timer
   // fires (destroyParticleEmitter is idempotent).
-  _registerEmitterGroup(_rp6Group);
-
-  // 10. Schedule one-shot cleanup. PlayEffect events are by definition
-  //     one-shot (the wire opcode broadcasts a single "play this script
-  //     once" cue); long-lived per-entity scripts go through the H2
-  //     spawn-time chain instead. 2500ms covers Launch (~500ms) +
-  //     Explode (~1.2s) + the long tail of misc scripts; emitters
-  //     whose own particles all expire earlier are no-op cleaned up
-  //     by `ParticleManager.tick()`'s auto-remove path.
   //
-  //     Track B7 (2026-06-08): extend the cleanup base by the largest
-  //     hook StartTime so late-scheduled hooks aren't torn down before
-  //     they even spawn (their setTimeout fires at +maxStartTimeMs).
-  const ONE_SHOT_LIFETIME_MS = 2500 + maxStartTimeMs;
-  setTimeout(() => {
-    // RP6: drop from the cap registry first (idempotent if already
-    // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
-    _unregisterEmitterGroup(_rp6Group);
-    // A11-S2 on-path: one-shot reap routes through the facade so its
-    // owner tracking stays honest (idempotent on already-evicted /
-    // entity-removed ids); the legacy map below was never written.
-    if (particleOwnerOn()) {
-      try { ownerRegistry.destroySome(targetGuid >>> 0, spawnedEmitterIds); } catch (_) {}
-      return;
-    }
-    for (const eid of spawnedEmitterIds) {
-      try { wm.destroyParticleEmitter(eid); } catch (_) {}
-    }
-    // Wave 3 / A5 fix — prune from per-guid tracking so a future
-    // entity-remove doesn't double-destroy these already-destroyed
-    // emitter IDs. (`destroyParticleEmitter` is safe to call twice —
-    // returns false on the second — but pruning keeps the map honest
-    // and prevents the map from accumulating stale IDs.)
-    const perGuidIds = em._particleEmittersForGuid.get(targetGuid);
-    if (perGuidIds && perGuidIds.length > 0) {
-      const toRemove = new Set(spawnedEmitterIds);
-      const remaining = perGuidIds.filter((id) => !toRemove.has(id));
-      if (remaining.length === 0) {
-        em._particleEmittersForGuid.delete(targetGuid);
-      } else {
-        em._particleEmittersForGuid.set(targetGuid, remaining);
+  // HIDEFX (2026-10-07): a held set_hidden group (Hide / Hidden) takes
+  // neither the FIFO cap nor the one-shot reaper — retail keeps those
+  // infinite emitters until UnHide stops them, and a held group parked in the
+  // cap list for a whole teleport would push real cast cues out of it. Its
+  // lifetime is the hold (`_holdHiddenGroup`: unhide / despawn / backstop).
+  if (holdForHiddenState) {
+    _holdHiddenGroup(targetGuid, _rp6Group, hiddenEpochAtEntry);
+  } else {
+    _registerEmitterGroup(_rp6Group);
+
+    // 10. Schedule one-shot cleanup. PlayEffect events are by definition
+    //     one-shot (the wire opcode broadcasts a single "play this script
+    //     once" cue); long-lived per-entity scripts go through the H2
+    //     spawn-time chain instead. 2500ms covers Launch (~500ms) +
+    //     Explode (~1.2s) + the long tail of misc scripts; emitters
+    //     whose own particles all expire earlier are no-op cleaned up
+    //     by `ParticleManager.tick()`'s auto-remove path.
+    //
+    //     Track B7 (2026-06-08): extend the cleanup base by the largest
+    //     hook StartTime so late-scheduled hooks aren't torn down before
+    //     they even spawn (their setTimeout fires at +maxStartTimeMs).
+    //     HIDEFX: the 2500 base now lives in `_LIFECYCLE_MS.oneShotBase`
+    //     (same value; the headless suite shortens it).
+    const ONE_SHOT_LIFETIME_MS = _LIFECYCLE_MS.oneShotBase + maxStartTimeMs;
+    setTimeout(() => {
+      // HIDEFX: from here on a late attach reaps itself (see `.then` above).
+      _rp6Group._reaped = true;
+      // RP6: drop from the cap registry first (idempotent if already
+      // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
+      _unregisterEmitterGroup(_rp6Group);
+      // A11-S2 on-path: one-shot reap routes through the facade so its
+      // owner tracking stays honest (idempotent on already-evicted /
+      // entity-removed ids); the legacy map below was never written.
+      if (particleOwnerOn()) {
+        try { ownerRegistry.destroySome(targetGuid >>> 0, spawnedEmitterIds); } catch (_) {}
+        return;
       }
-    }
-  }, ONE_SHOT_LIFETIME_MS);
+      for (const eid of spawnedEmitterIds) {
+        try { wm.destroyParticleEmitter(eid); } catch (_) {}
+      }
+      // Wave 3 / A5 fix — prune from per-guid tracking so a future
+      // entity-remove doesn't double-destroy these already-destroyed
+      // emitter IDs. (`destroyParticleEmitter` is safe to call twice —
+      // returns false on the second — but pruning keeps the map honest
+      // and prevents the map from accumulating stale IDs.)
+      const perGuidIds = em._particleEmittersForGuid.get(targetGuid);
+      if (perGuidIds && perGuidIds.length > 0) {
+        const toRemove = new Set(spawnedEmitterIds);
+        const remaining = perGuidIds.filter((id) => !toRemove.has(id));
+        if (remaining.length === 0) {
+          em._particleEmittersForGuid.delete(targetGuid);
+        } else {
+          em._particleEmittersForGuid.set(targetGuid, remaining);
+        }
+      }
+    }, ONE_SHOT_LIFETIME_MS);
+  }
 
   _realVfxStats.resolved += 1;
   // eslint-disable-next-line no-console
@@ -2341,7 +2776,9 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       `pes=0x${pesId.toString(16)} speed=${speed.toFixed(3)} ` +
       // Track B7: emitters spawn at their StartTime, so report the
       // SCHEDULED count here (the resolved count grows asynchronously).
-      `emittersScheduled=${pendingSpawnCount}`,
+      `emittersScheduled=${pendingSpawnCount}` +
+      // HIDEFX: `held` = a set_hidden state group (lives until unhide).
+      (holdForHiddenState ? " held=until-unhide" : ""),
   );
   return true;
 }
@@ -3880,6 +4317,28 @@ export const __test = Object.freeze({
     cube: _burstPool[_BURST_SHAPE.CUBE].length,
   }),
   playEffectEmitterGroupCount: () => _playEffectEmitterGroups.length,
+  // HIDEFX (2026-10-07) — `?playEffectLifecycle` introspection + clock knob.
+  // `hiddenState(guid)` = { hidden, epoch, holdGroups }; `setLifecycleTiming`
+  // overrides any of {oneShotBase, holdGrace, holdCheck, holdMax, drain} (ms)
+  // and returns the previous values so a suite can restore them.
+  playEffectLifecycleOn: PLAY_EFFECT_LIFECYCLE_ON,
+  hiddenState: (guid) => {
+    const g = guid >>> 0;
+    return Object.freeze({
+      hidden: _hiddenGuids.has(g),
+      epoch: _hiddenEpoch(g),
+      holdGroups: _hiddenHolds.get(g)?.groups.size ?? 0,
+    });
+  },
+  setLifecycleTiming: (overrides = {}) => {
+    const prev = { ..._LIFECYCLE_MS };
+    for (const k of Object.keys(_LIFECYCLE_MS)) {
+      if (Number.isFinite(overrides[k])) _LIFECYCLE_MS[k] = overrides[k];
+    }
+    return prev;
+  },
+  noteEntityVisibility,
+  forgetEntityHiddenState,
   isCriticalPlayScript: _isCriticalPlayScript,
   maxActiveBursts: _MAX_ACTIVE_BURSTS,
   maxPlayEffectEmitterGroups: _MAX_PLAYEFFECT_EMITTER_GROUPS,

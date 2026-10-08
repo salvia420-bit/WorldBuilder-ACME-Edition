@@ -124,6 +124,19 @@ const TB_INIT_VERTS = 1 << 16; // 65,536 → Uint32 batch index from the start
 const TB_INIT_INDEX_RATIO = 6; // 9×9 LB: 384 idx / 81 verts ≈ 4.75; subdiv → ~6
 const TB_OPTIMIZE_FRAC = 0.3;  // compact once >30% of the used extent is dead
 const VT_W = 9, VT_H = 9;          // vertex-types layer dims (bytes: 324)
+// 2026-10-07 — the terrain shading bevel's retail-normal fetch, legacy and
+// batched forms. MUST equal scene3d/terrain_round.js
+// TERRAIN_ROUND_FETCH_ANCHOR / _BATCHED (test_terrain_round.mjs asserts it);
+// inlined rather than imported so this module stays import-light (the batch
+// test evaluates its source with the imports stripped).
+const ROUND_FETCH_ANCHOR =
+  "  vec2 roundE = texelFetch(uVertexTypes, ivec2(9 + x, y), 0).rg * 2.0 - 1.0;";
+const ROUND_FETCH_BATCHED =
+  "  vec2 roundE = texelFetch(uVertexTypes, ivec3(9 + x, y, int(vLbSlot + 0.5)), 0).rg * 2.0 - 1.0;";
+// 2026-10-07 — with the terrain shading bevel on (scene3d/terrain_round.js)
+// the per-LB vertex-types texture is 18 wide (columns 9..17 = retail normals).
+// The batch takes the layer width from the first texture it sees
+// (`state.vtW`); the width is session-constant.
 const MERGE_W = 48, MERGE_H = 8;   // TexMerge layer dims (bytes: 1536)
 
 // ---------------------------------------------------------------------------
@@ -300,6 +313,14 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
     "frag gouraud gate",
   );
   if (f == null) return null;
+  // 9. 2026-10-07 — terrain shading bevel (scene3d/terrain_round.js): its
+  //    retail-normal fetch reads the same per-LB vertex-types layer. Only
+  //    present when ?terrainRound / ?terrainBevel are on, hence conditional
+  //    (an absent anchor is the bevel being off, not drift).
+  if (f.includes(ROUND_FETCH_ANCHOR)) {
+    f = _replaceOnce(f, ROUND_FETCH_ANCHOR, ROUND_FETCH_BATCHED, "frag round bevel fetch");
+    if (f == null) return null;
+  }
 
   return { vertexShader: v, fragmentShader: f };
 }
@@ -329,15 +350,18 @@ function _makeDataArray(w, h, layers) {
 //       inherited from the copied source bytes.
 function _writeVtLayer(state, slot, vtTex, mergeValid, gouraudValid) {
   const src = vtTex?.image?.data;
-  const stride = VT_W * VT_H * 4;
-  if (!src || src.length !== stride || vtTex.image.width !== VT_W || vtTex.image.height !== VT_H) {
+  const vtW = state.vtW || VT_W;
+  const stride = vtW * VT_H * 4;
+  if (!src || src.length !== stride || vtTex.image.width !== vtW || vtTex.image.height !== VT_H) {
     return false;
   }
   const dst = state.vtArray.image.data;
   dst.set(src, slot * stride);
   const b = mergeValid ? 255 : 0;
   const a = gouraudValid ? 255 : 0;
-  for (let i = 0; i < VT_W * VT_H; i += 1) {
+  // B/A of EVERY texel carry the two validity bits; the bevel's normal texels
+  // (columns 9..17) only use R/G, so this overwrite is harmless to them.
+  for (let i = 0; i < vtW * VT_H; i += 1) {
     dst[slot * stride + i * 4 + 2] = b;
     dst[slot * stride + i * 4 + 3] = a;
   }
@@ -357,6 +381,19 @@ function _zeroVec3Attr(vcount) {
   if (!attr) {
     attr = new THREE.BufferAttribute(new Float32Array(vcount * 3), 3, false);
     _zeroAttrCache.set(vcount, attr);
+  }
+  return attr;
+}
+
+// 2026-10-07 — same idea for the 1-component terrain-rounding offset
+// (`aRoundZ`, scene3d/terrain_round.js). Separate cache: the key is the vertex
+// count and the two stand-ins have different item sizes.
+const _zeroFloatAttrCache = new Map();
+function _zeroFloatAttr(vcount) {
+  let attr = _zeroFloatAttrCache.get(vcount);
+  if (!attr) {
+    attr = new THREE.BufferAttribute(new Float32Array(vcount), 1, false);
+    _zeroFloatAttrCache.set(vcount, attr);
   }
   return attr;
 }
@@ -450,10 +487,13 @@ function _createState(scene3d, lbMesh, opts, extras) {
   const glsl = _buildBatchedGlsl(extras.vertexGlsl, extras.fragmentGlsl);
   if (!glsl) return null; // anchors drifted — warned already
 
+  // 2026-10-07 — 9 (pre-wave) or 18 (terrain shading bevel); see VT_W note.
+  const vtW = lbMesh?.userData?.vertexTypesTexture?.image?.width === VT_W * 2 ? VT_W * 2 : VT_W;
   const state = {
     bm: null,
     material: null,
-    vtArray: _makeDataArray(VT_W, VT_H, TB_SLOT_CAPACITY),
+    vtW,
+    vtArray: _makeDataArray(vtW, VT_H, TB_SLOT_CAPACITY),
     mergeArray:
       opts.texMergeEnabled && opts.texMergeAlphaArray
         ? _makeDataArray(MERGE_W, MERGE_H, TB_SLOT_CAPACITY)
@@ -464,6 +504,12 @@ function _createState(scene3d, lbMesh, opts, extras) {
     // resolved ONCE here and consulted by every absorb — including the unpark
     // re-absorb path, which receives no `extras`.
     wantsAcLightNormal: extras.vertexGlsl.includes("acLightNormal"),
+    // 2026-10-07 — terrain corner rounding (scene3d/terrain_round.js). The
+    // vertex shader declares `aRoundZ` only when ?terrainRound is on, so this
+    // is session-constant for the same reason as the line above. LBs without
+    // the attribute (factor-1 fallback after a failed subdivide) present a
+    // zero stand-in, which is exactly "not rounded".
+    wantsRoundZ: extras.vertexGlsl.includes("aRoundZ"),
     freeSlots: [],
     nextSlot: 0,
     byLb: new Map(),     // lbKey -> { gid, iid, slot }
@@ -783,6 +829,9 @@ function _absorbMeshIntoState(state, lbMesh) {
     if (state.wantsAcLightNormal) {
       names.push("acLightNormal");
     }
+    if (state.wantsRoundZ) {
+      names.push("aRoundZ");
+    }
     state.attrNames = names;
   }
   const vcount = srcGeom.attributes.position.count;
@@ -792,6 +841,10 @@ function _absorbMeshIntoState(state, lbMesh) {
     if (!attr && name === "acLightNormal") {
       // Never read: this LB's A-channel gate is 0 (see gouraudValid above).
       attr = _zeroVec3Attr(vcount);
+    }
+    if (!attr && name === "aRoundZ") {
+      // Zero offset == the retail faceted surface (2026-10-07).
+      attr = _zeroFloatAttr(vcount);
     }
     if (!attr) {
       releaseSlot();

@@ -119,6 +119,9 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTe
 import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate, setStatArrayMergeProvider } from "./static_batch_x.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 import { STAT_ARRAY_MERGE_PROVIDER } from "./static_array_pool.js";
+// 2026-10-07 — terrain rounding step 3: ground-standing placements are baked
+// onto the ROUNDED drawn ground (z += visualZ - physicsZ), `?terrainRoundObjects=off`.
+import { applyVisualGroundToPlacements, visualGroundEnabled } from "./visual_ground.js";
 // VFX descriptor catalog (?visual, default-OFF). Generalizes the wind divert: a
 // placement also goes to the wind player if its catalog descriptor carries
 // deformation.windBend. Off/absent-catalog ⇒ frozen path unchanged.
@@ -2225,6 +2228,14 @@ export async function bakeStaticsForLandblock(
   // the rest of the per-LB bake. Order is LandblockInfo first then
   // scenery — purely for log-readability; the renderer doesn't care.
   let statics = landblockInfoStatics.concat(sceneryStatics);
+  // 2026-10-07 — terrain rounding step 3 (scene3d/visual_ground.js): bake the
+  // drawn-ground offset (visualZ - physicsZ, the fillet this LB draws when the
+  // player is near it) into every ground-standing placement's z HERE, on these
+  // per-bake plain copies, before the anim/wind peels and every node / batch /
+  // atlas / pool path read it — zero per-frame cost. Elevated placements
+  // (>= 1 m above the retail ground) keep their z. Never throws. Off (flag /
+  // fillet off) = not even awaited: the bake's scheduling is step 2's.
+  if (visualGroundEnabled()) await applyVisualGroundToPlacements(statics, scene3d, wasmExports, urgent);
   // Task #7 — peel animated scenery (defaultAnimationId != 0) out of the frozen
   // instanced path so it isn't double-rendered; attachAnimatedScenery builds
   // per-part animated nodes for it. Flag-gated; when off, statics is unchanged
@@ -3099,6 +3110,9 @@ export async function bakeStaticsRing(
   const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
   mark("stage1: fetchAndDrainScenery");
   let statics = landblockInfoStatics.concat(sceneryStatics);
+  // 2026-10-07 — terrain rounding step 3: same drawn-ground bake as the per-LB
+  // baker (scene3d/visual_ground.js groups the ring's placements per LB).
+  if (visualGroundEnabled()) await applyVisualGroundToPlacements(statics, scene3d, wasmExports, false);
   // Task #7 — peel animated scenery (defaultAnimationId != 0) out of the frozen
   // instanced path so it isn't double-rendered; attachAnimatedScenery builds
   // per-part animated nodes for it. Flag-gated; when off, statics is unchanged
@@ -4700,6 +4714,11 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
         blocking:
           ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
           _blockingParticleParityOn(),
+        // 2026-10-07 `?skyGlow` — DERIVED FROM THE ANCHOR for the same reason
+        // as renderLayer above (the CallPES loop re-runs this with the anchor,
+        // never with extra params). Only sky_dome.js's sky-chain anchor carries
+        // the tag; the manager then makes these sky glows (sky_glow.js).
+        skyGlow: anchor?.userData?.isSkyGlowAnchor === true,
       };
       // A11-S2: per-anchor owner scoping when `?particleOwner=on`. The
       // statics walker auto-assigns ids (no explicit handle), so the

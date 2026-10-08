@@ -214,6 +214,31 @@ impl WorldState {
             })
     }
 
+    /// NETSYNC-3 (2026-10-07): `MotionData.omega.z` of the TurnRight cycle
+    /// in `guid`'s motion table (the entity's MotionTable property, else its
+    /// setup's default table) at `stance`, falling back to the table's default
+    /// style. Retail turns a remote by `speed × MotionData.omega`
+    /// (`add_motion` acclient.c:337431, `combine_motion` :337477) — per
+    /// table, so a creature turns at its own authored rate (retail values run
+    /// -1.0 … -4.5 rad/s). `None` when the table or the cycle is unknown.
+    pub(crate) fn remote_turn_right_omega_z(&self, guid: Guid, stance: Option<u32>) -> Option<f32> {
+        let motion_table_id = motion_table_id_for_source(self.motion_table_source_for_guid(guid)?);
+        let default_style = self
+            .motion_kinematics
+            .motion_table(motion_table_id)?
+            .default_style;
+        let lookup = |stance: u32| {
+            self.motion_kinematics
+                .cycle_kinematics(motion_table_id, stance, MotionTable::TURN_RIGHT_COMMAND)
+                .and_then(|kinematics| kinematics.omega)
+                .map(|omega| omega.z)
+                .filter(|z| z.is_finite() && *z != 0.0)
+        };
+        stance
+            .and_then(|stance| lookup(stance))
+            .or_else(|| lookup(default_style))
+    }
+
     fn motion_table_source_for_guid(&self, guid: Guid) -> Option<PlayerMotionTableSource> {
         let entity = self.entities.get(guid)?;
 

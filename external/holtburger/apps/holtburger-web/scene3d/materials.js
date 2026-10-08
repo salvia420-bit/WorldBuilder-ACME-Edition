@@ -60,7 +60,7 @@ import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // X6 (`?texBc7=on`, DEFAULT-OFF) — direct BC7/BPTC albedo upload. Every entry
 // point below is inert unless the flag is on AND the GPU reports
 // EXT_texture_compression_bptc, so the RGBA8 path is unchanged by default.
-import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7 } from "./bc7_textures.js";
+import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7, bc7ClipAlphaGateFor } from "./bc7_textures.js";
 // `?bandwidth` (2026-10-06) — on a LOW session the full-tier statics textures
 // (xu7 / BC7 / pre, ~109 MB on a Holtburg ring) are not fetched: surfaces keep
 // the retail-resolution albedo they already decoded from the DAT record.
@@ -5804,6 +5804,19 @@ export class MaterialCache {
       }
       return;
     }
+    // CLIP-ALPHA (2026-10-07, `?bc7ClipAlphaGuard`, default ON) — the
+    // partial-cutout sibling of the veto above. When this material discards
+    // or blends by map alpha AND its decoded albedo has texels it would drop,
+    // every payload offered for the swap (pre, full, tex-bc7 twin) must be
+    // able to drop them too; a payload whose BC7 alpha never falls under the
+    // cut is refused. Measured cause: the served dist's `tex-xu7` records for
+    // 224 RenderSurfaces lost their ClipMap key (the reed clumps at the
+    // waterline, 0x080000A1 / rs 0x0600385A, rendered as opaque black quads)
+    // while their `tex-bc7` twins kept it — so a refused xu7 record falls back
+    // to the twin, and only if that fails too does the surface keep its RGBA8
+    // albedo. See the long note at `bc7ClipAlphaGateFor` (bc7_textures.js).
+    // `null` (nothing to protect, or flag off) = the unguarded swap below.
+    const gate = bc7ClipAlphaGateFor(mat, rs, d);
     // P1 (2026-08-04): the re-point handler runs via onSwap for EACH phase
     // (pre then full) — NOT via the returned promise, which would double-run
     // it for the full phase (double LRU delta, double dispose).
@@ -5813,7 +5826,7 @@ export class MaterialCache {
         // alone (the new material has its own ask).
         if (this.materials.get(d) !== mat) return;
         this._repointAlbedoForDid(d, mat, res.replaced || null);
-      })
+      }, gate ? { gate } : undefined)
       .catch(() => {
         /* fail-soft: the surface keeps its RGBA8 albedo */
       });

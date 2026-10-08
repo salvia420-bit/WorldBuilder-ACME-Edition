@@ -34,6 +34,10 @@
 //       GPU objects, no throw. That is the `?nullRender=1` path.
 //   L11 The optional GLSL helper declares each uniform exactly once, matches
 //       `pool.uniforms` by name, and matches `fadeFor` in form (LINEAR).
+//   L13 (2026-10-07) OFF-ROAD: with `offRoad` no instance survives where the
+//       oracle's `roadEdgeM <= 0`, the verge thins LINEARLY, everything past
+//       the verge is untouched, the default (off) is byte-identical, a sample
+//       without `roadEdgeM` never rejects, and `setOffRoad()` converges live.
 //
 // Run from apps/holtburger-web/:  node test_terrain_scatter.mjs
 // (`three` resolves as a bare import via node_modules — the plan §6 tier for
@@ -84,6 +88,9 @@ function makeStubOracle(opts = {}) {
       corners[0] = code; corners[1] = code; corners[2] = code; corners[3] = code;
       r.code = code;
       r.family = familyForCode(code);
+      // 2026-10-07 — the oracle's signed distance to the painted road's edge;
+      // left undefined unless a test asks for roads.
+      if (opts.roadEdgeAt) r.roadEdgeM = opts.roadEdgeAt(x, y);
       r.lbX = Math.floor(x / 192);
       r.lbY = Math.floor(y / 192);
       r.lbKey = ((r.lbX & 0xff) << 24) | ((r.lbY & 0xff) << 16);
@@ -907,6 +914,90 @@ console.log("\n-- L12b: opts.randSalt decorrelates two pools on one cell --");
     a.cells.length === c.cells.length && a.cells.every((v, i) => v === c.cells[i]));
   check("the salted stream is still deterministic (pure in cell + seed + salt)",
     drawsFor(1).draws.every((v, i) => v === c.draws[i]));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- L13: the off-road gate (2026-10-07) --");
+{
+  // A straight 8 m road along x = 4000 (edge distance = |x - 4000| - 4).
+  const ROAD_X = 4000;
+  const roadEdgeAt = (x) => Math.abs(x - ROAD_X) - 4;
+  const roadOracle = () => makeStubOracle({ roadEdgeAt });
+  const liveSet = (pool) => {
+    const out = [];
+    for (let i = 0; i < pool.count; i += 1) out.push(pool.isLive(i) ? 1 : 0);
+    return out;
+  };
+  const xOf = (pool, i) => pool.arrays.aOffset[i * 3];
+
+  const plain = makePool({ oracle: makeStubOracle() });
+  plain.pool.rescatterAll(ROAD_X, 4000, 20);
+  const dflt = makePool({ oracle: roadOracle() });
+  dflt.pool.rescatterAll(ROAD_X, 4000, 20);
+  check("default: offRoad is OFF and nothing is road-rejected",
+    dflt.pool.stats().offRoad === false && dflt.pool.stats().roadRejects === 0);
+  check("default: byte-identical to a pool whose oracle knows no roads",
+    liveSet(dflt.pool).join("") === liveSet(plain.pool).join("")
+    && dflt.pool.arrays.aOffset.every((v, i) => v === plain.pool.arrays.aOffset[i]));
+
+  const on = makePool({ oracle: roadOracle(), offRoad: true, offRoadVergeM: 1.5 });
+  on.pool.rescatterAll(ROAD_X, 4000, 20);
+  const st = on.pool.stats();
+  check("offRoad ON: stats report the gate + the default 1.5 m verge",
+    st.offRoad === true && st.offRoadVergeM === 1.5 && SCATTER_DEFAULTS.offRoadVergeM === 1.5);
+  let onRoad = 0, vergeTot = 0, vergeLive = 0, farTot = 0, farSame = 0, nearVergeLive = 0, nearVergeTot = 0, farVergeLive = 0, farVergeTot = 0;
+  for (let i = 0; i < on.pool.count; i += 1) {
+    if (!plain.pool.isLive(i)) continue;          // outside the disc etc.
+    const e = roadEdgeAt(xOf(plain.pool, i));
+    if (e <= 0) { if (on.pool.isLive(i)) onRoad += 1; continue; }
+    if (e < 1.5) {
+      vergeTot += 1; if (on.pool.isLive(i)) vergeLive += 1;
+      if (e < 0.5) { nearVergeTot += 1; if (on.pool.isLive(i)) nearVergeLive += 1; }
+      if (e > 1.0) { farVergeTot += 1; if (on.pool.isLive(i)) farVergeLive += 1; }
+      continue;
+    }
+    farTot += 1; if (on.pool.isLive(i)) farSame += 1;
+  }
+  check("offRoad ON: NO instance survives on the road (roadEdgeM <= 0)", onRoad === 0, `onRoad=${onRoad}`);
+  check("offRoad ON: the verge THINS (some kept, some dropped)",
+    vergeLive > 0 && vergeLive < vergeTot, `${vergeLive}/${vergeTot}`);
+  check("offRoad ON: the verge is a RAMP (sparser by the road than 1 m out)",
+    nearVergeLive / nearVergeTot < farVergeLive / farVergeTot,
+    `${(nearVergeLive / nearVergeTot).toFixed(2)} vs ${(farVergeLive / farVergeTot).toFixed(2)}`);
+  check("offRoad ON: the verge keeps ~half overall (linear ramp, expectation 0.5)",
+    Math.abs(vergeLive / vergeTot - 0.5) < 0.12, (vergeLive / vergeTot).toFixed(3));
+  check("offRoad ON: everything past the verge is untouched", farTot > 0 && farSame === farTot, `${farSame}/${farTot}`);
+  check("offRoad ON: roadRejects counts exactly the dropped instances",
+    st.roadRejects === plain.pool.stats().live - st.live, `${st.roadRejects} vs ${plain.pool.stats().live - st.live}`);
+  const on2 = makePool({ oracle: roadOracle(), offRoad: true });
+  on2.pool.rescatterAll(ROAD_X, 4000, 20);
+  check("offRoad ON: deterministic (two pools, identical fields)", liveSet(on2.pool).join("") === liveSet(on.pool).join(""));
+
+  const hard = makePool({ oracle: roadOracle(), offRoad: true, offRoadVergeM: 0 });
+  hard.pool.rescatterAll(ROAD_X, 4000, 20);
+  let hardBad = 0;
+  for (let i = 0; i < hard.pool.count; i += 1) {
+    if (!plain.pool.isLive(i)) continue;
+    const e = roadEdgeAt(xOf(plain.pool, i));
+    if ((e > 0) !== hard.pool.isLive(i)) hardBad += 1;
+  }
+  check("offRoadVergeM 0 is a hard line exactly at the road edge", hardBad === 0, `mismatches=${hardBad}`);
+
+  const blind = makePool({ oracle: makeStubOracle(), offRoad: true });
+  blind.pool.rescatterAll(ROAD_X, 4000, 20);
+  check("a sample WITHOUT roadEdgeM never rejects (stub oracles, old LBs)",
+    blind.pool.stats().roadRejects === 0 && liveSet(blind.pool).join("") === liveSet(plain.pool).join(""));
+
+  // Live A/B: flip it off and let the amortised laps converge — no movement.
+  check("setOffRoad(false) returns the new state", on.pool.setOffRoad(false) === false);
+  for (let k = 0; k < 16; k += 1) on.pool.update(0.016, ROAD_X, 4000, 20);
+  check("…and the field converges to the road-blind one", liveSet(on.pool).join("") === liveSet(plain.pool).join(""));
+  on.pool.setOffRoad(true);
+  for (let k = 0; k < 16; k += 1) on.pool.update(0.016, ROAD_X, 4000, 20);
+  check("setOffRoad(true) converges back to the gated field", liveSet(on.pool).join("") === liveSet(on2.pool).join(""));
+  check("setOffRoad never re-allocates or full-rescatters",
+    on.pool.stats().fullRescatters === 1 && on.pool.stats().allocations === GRASS_SCHEMA.length);
+  for (const p of [plain, dflt, on, on2, hard, blind]) p.pool.dispose();
 }
 
 // ---------------------------------------------------------------------------

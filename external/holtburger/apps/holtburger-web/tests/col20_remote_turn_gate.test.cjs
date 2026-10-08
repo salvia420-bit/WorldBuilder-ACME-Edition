@@ -82,9 +82,19 @@ check('the deadline valve is bounded by a 180° sweep at 1.5 rad/s', () => {
 
 // ─── 2. gate decision contract (setMotion block) ────────────────────────
 // Returns the command actually played; mutates `inst` exactly like the source.
-function applyGate(inst, { guid, isLocal, cmd, stance, motionSpeed, nowMs, cls }) {
+// NETSYNC-2 (2026-10-07, `?remoteTurnGateFix`, default ON): the gate arms only
+// for a motion that came from a MoveTo envelope (`fromMoveTo`, set by loop.js
+// `_armMotion` from KIND_MOTION `vx`), and the substituted turn is the
+// canonical TurnRight 0x6500000D. `fix: false` models the `=off` escape.
+// The pre-NETSYNC cases below all model a MoveTo (fromMoveTo defaults true).
+const TURN_RIGHT_FULL = 0x6500000d;
+function applyGate(inst, { guid, isLocal, cmd, stance, motionSpeed, nowMs, cls, fromMoveTo = true, fix = true }) {
   const cmdLow = cmd & 0xffff;
   if (isLocal || cls === 'attack' || cls === 'cast') return cmd;
+  if (fix && fromMoveTo !== true) {
+    inst._turnGateCmd = 0;
+    return cmd;
+  }
   if (cmdLow !== CMD_LOW_RUN_FORWARD && cmdLow !== CMD_LOW_WALK_FORWARD) {
     inst._turnGateCmd = 0;
     return cmd;
@@ -103,7 +113,7 @@ function applyGate(inst, { guid, isLocal, cmd, stance, motionSpeed, nowMs, cls }
     inst._turnGateCmd = cmd;
     inst._turnGateStance = stance;
     inst._turnGateSpeed = Number.isFinite(+motionSpeed) ? +motionSpeed : 1.0;
-    return ((cmd & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0;
+    return fix ? TURN_RIGHT_FULL : (((cmd & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0);
   }
   inst._turnGateCmd = 0;
   return cmd;
@@ -156,9 +166,63 @@ check('180° error → the turn cycle plays, stance preserved', () => {
     isLocal: false, cmd: RUN_FORWARD, stance: 0x3d, motionSpeed: 1.0, nowMs: 0,
   });
   assert.equal(played & 0xffff, CMD_LOW_TURN_RIGHT);
-  assert.equal(played >>> 16, RUN_FORWARD >>> 16, 'class byte preserved');
+  // NETSYNC-2: the canonical TurnRight, not RunForward's class + 0x000D.
+  assert.equal(played, TURN_RIGHT_FULL, 'canonical TurnRight 0x6500000D');
   assert.equal(inst._turnGateCmd, RUN_FORWARD);
   assert.equal(inst._turnGateStance, 0x3d);
+});
+
+// ─── NETSYNC-2 (2026-10-07, Coldeve capture) ───────────────────────────
+check('NETSYNC-2: an interpreted (type 0) run is never gated, even at 180°', () => {
+  const inst = { _headingEaseInit: true, _headingErr: Math.PI };
+  const played = applyGate(inst, {
+    isLocal: false, cmd: RUN_FORWARD, stance: 0x3d, motionSpeed: 1, nowMs: 0, fromMoveTo: false,
+  });
+  assert.equal(played, RUN_FORWARD, 'a player run plays at once (retail CMotionInterp)');
+  assert.equal(inst._turnGateCmd, 0);
+});
+
+check('NETSYNC-2: an interpreted motion drops a gate a MoveTo armed', () => {
+  const inst = { _headingEaseInit: true, _headingErr: Math.PI };
+  applyGate(inst, { isLocal: false, cmd: RUN_FORWARD, stance: 0x3d, motionSpeed: 1, nowMs: 0 });
+  assert.equal(inst._turnGateCmd, RUN_FORWARD);
+  applyGate(inst, {
+    isLocal: false, cmd: WALK_FORWARD, stance: 0x3d, motionSpeed: 1, nowMs: 10, fromMoveTo: false,
+  });
+  assert.equal(inst._turnGateCmd, 0, 'no stale MoveTo run is re-issued by the tick release');
+});
+
+check('NETSYNC-2 escape (=off): pre-fix scope and the 0x4400000D id', () => {
+  const inst = { _headingEaseInit: true, _headingErr: Math.PI };
+  const played = applyGate(inst, {
+    isLocal: false, cmd: RUN_FORWARD, stance: 0x3d, motionSpeed: 1, nowMs: 0, fromMoveTo: false, fix: false,
+  });
+  assert.equal(played, 0x4400000d);
+});
+
+check('NETSYNC-2: source carries the fixed gate (flag reader, scope, canonical turn)', () => {
+  const i = SRC.indexOf('const REMOTE_TURN_GATE_FIX_ON');
+  assert.ok(i > 0, 'REMOTE_TURN_GATE_FIX_ON reader missing');
+  const block = SRC.slice(i, i + 400);
+  assert.ok(
+    /get\("remoteTurnGateFix"\)\?\.toLowerCase\(\) !==\s*\n?\s*"off"/.test(block),
+    'reader must be `!== "off"` (default ON)'
+  );
+  assert.ok(
+    SRC.includes('if (REMOTE_TURN_GATE_FIX_ON && inst._motionFromMoveTo !== true) {'),
+    'gate must be scoped to MoveTo-origin motions'
+  );
+  assert.ok(
+    SRC.includes('? (fullMotionCommand(CMD_LOW_TURN_RIGHT) >>> 0)'),
+    'gate must substitute the canonical TurnRight'
+  );
+  const LOOP = fs.readFileSync(path.join(__dirname, '..', 'scene3d', 'loop.js'), 'utf8');
+  const arm = LOOP.indexOf('function _armMotion(');
+  const body = LOOP.slice(arm, arm + 6000);
+  const hint = body.indexOf('em.noteRemoteMoveToHint?.(motionGuid, +(upd.vx ?? 0) > 0)');
+  const set = body.indexOf('em.setMotion(');
+  assert.ok(hint > 0, 'loop.js _armMotion must mark the MoveTo origin from vx');
+  assert.ok(hint < set, 'the MoveTo mark must land BEFORE setMotion reads it');
 });
 
 check('19° error → locomotion starts immediately (inside tolerance)', () => {

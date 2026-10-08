@@ -234,12 +234,14 @@ check("it offsets cellUv along the same view-parallax vector POM marches",
 check("the amplitude is WELL UNDER uPomScale (0.004 vs 0.012), so the two "
   + "offsets never fight (plan §3.4)",
   /DEFAULT_ICE_REFRACT_AMOUNT = 0\.004/.test(SRC) && /uPomScale: \{ value: 0\.012 \}/.test(SRC));
+// 2026-10-07 (terrain step 4) — atlas taps go through terrainAtlasTex (same
+// atlasUvFor address; explicit continuous-UV gradient under ?terrainGradUv).
 check("it is exactly ONE extra atlas tap",
-  countOf(REFRACT_CODE, "texture(uAtlas") === 1);
+  countOf(REFRACT_CODE, "terrainAtlasTex(") === 1 && countOf(REFRACT_CODE, "texture(uAtlas") === 0);
 check("… blended UNDER the real surface tile, not replacing it",
   /result = mix\(result, refr, iceW \* 0\.55\);/.test(FRAG));
 check("it uses the same atlasUvFor addressing as every other sampler",
-  /texture\(uAtlas, atlasUvFor\(clamp\(nearCode, 0, 32\), refrUv\)\)\.rgb/.test(FRAG));
+  /terrainAtlasTex\(clamp\(nearCode, 0, 32\), refrUv\)\.rgb/.test(FRAG));
 check("it HONOURS the cellTouchesWater bypass (POM did not run there)",
   /uIceRefractEnabled > 0\.5 && uIceEnabled > 0\.5 && iceW > 0\.0 && !cellTouchesWater/.test(FRAG));
 check("it skips grazing rays, exactly as the POM march does",

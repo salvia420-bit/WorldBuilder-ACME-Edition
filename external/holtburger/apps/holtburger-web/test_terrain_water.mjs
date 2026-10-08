@@ -113,26 +113,30 @@ check(
   "TexMerge block still overwrites result (premise of this test)",
   FRAG.includes("result = merged;")
 );
+// 2026-10-07 (terrain step 4) — the atlas / mask taps now go through
+// terrainAtlasTex / terrainMaskTex (scene3d/terrain_micro.js: same
+// atlasUvFor / maskUvFor address, explicit continuous-UV gradient under
+// ?terrainGradUv). The water contract below is unchanged; only the call shape.
 check(
   "merge BASE slot picks waterCellUv when its layer is water",
-  /vec3 merged = texture\(uAtlas, atlasUvFor\(clamp\(baseLayer, 0, 32\),\s*\n\s*isWaterCode\(baseLayer\) \? waterCellUv : cellUv\)\)\.rgb;/.test(
+  /vec3 merged = terrainAtlasTex\(clamp\(baseLayer, 0, 32\),\s*\n\s*isWaterCode\(baseLayer\) \? waterCellUv : cellUv\)\.rgb;/.test(
     mergeBlock
   )
 );
 check(
   "merge OVERLAY slots pick waterCellUv when their layer is water",
-  /vec3 overlayCol = texture\(uAtlas, atlasUvFor\(clamp\(layer, 0, 32\),\s*\n\s*isWaterCode\(layer\) \? waterCellUv : cellUv\)\)\.rgb;/.test(
+  /vec3 overlayCol = terrainAtlasTex\(clamp\(layer, 0, 32\),\s*\n\s*isWaterCode\(layer\) \? waterCellUv : cellUv\)\.rgb;/.test(
     mergeBlock
   )
 );
 check(
   "the alpha MASK still samples the UNSCROLLED cellUv",
-  /maskUvFor\(cellUv, rot\)/.test(mergeBlock),
+  /terrainMaskTex\(cellUv, rot, maskIdx\)/.test(mergeBlock),
   "a drifting mask would smear the cell's authored coverage shape"
 );
 check(
   "no merge-slot atlas sample is left on a bare cellUv",
-  !/texture\(uAtlas, atlasUvFor\(clamp\((?:baseLayer|layer), 0, 32\), cellUv\)\)/.test(
+  !/(?:texture\(uAtlas, atlasUvFor|terrainAtlasTex)\(clamp\((?:baseLayer|layer), 0, 32\),\s*cellUv\)/.test(
     mergeBlock
   )
 );

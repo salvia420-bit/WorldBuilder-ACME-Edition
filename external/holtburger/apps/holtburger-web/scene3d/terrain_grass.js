@@ -95,6 +95,18 @@
 //   ?terrainGrassRadius=N    metres, default 48 (URL > preset > fallback)
 //   ?terrainGrassStomp=on    the trail-map read, bisectable on its own
 //   ?terrainGrassBlades=N    the tier count itself (quality.js INT_FLAGS)
+//   ?grassOffRoad=off        2026-10-07 escape; DEFAULT-ON (see OFF-ROAD below)
+//
+// OFF-ROAD (2026-10-07, owner, Holtburg: "see the grass on the road. can we make
+// it so its not on the road"). A retail road is 2 bits on the vertex word, not a
+// terrain code — the road vertex keeps its Grassland/LushGrass code — so the
+// corner-code dither planted blades straight across every cobbled lane. The
+// oracle now reports `roadEdgeM` (signed metres to the edge of the road the
+// ground shader paints, modelled on retail's own road-mask decomposition and
+// calibrated against the masks in portal.dat), and the pool's `offRoad` gate
+// rejects every blade on the road and thins them linearly over a 1.5 m verge.
+// Same deterministic per-cell hash as the rest of placement, so park/teleport
+// reproduce it exactly.
 
 import { registerTerrainVfx, wireframeActive } from "./terrain_vfx.js";
 import { FAM_GRASS, familyForCode } from "./terrain_families.js";
@@ -107,6 +119,7 @@ import {
   terrainGrassDensity,
   terrainGrassRadiusM,
   terrainGrassStompEnabled,
+  grassOffRoadEnabled,
 } from "./vfx_flags.js";
 
 // ---------------------------------------------------------------------------
@@ -134,6 +147,10 @@ export const GRASS_DEFAULTS = Object.freeze({
   stompSplay: 0.55,       // lateral splay away from the stamp, x blade height
   stampRadiusM: 0.75,     // the player's footprint blob
   stampStrength: 1,
+  // 2026-10-07 — off-road verge: blades thin from none at the painted road's
+  // edge to full density 1.5 m out (covers the retail masks' soft fringe, see
+  // terrain_oracle.js ROAD_PAINT).
+  roadVergeM: 1.5,
 });
 
 /**
@@ -440,7 +457,7 @@ export function hasTerrainGrassShader(shader) {
  * @param {object} [overrides] explicit values (tests / callers) that win over
  *   every reader.
  * @returns {{count:number, radiusM:number, stomp:boolean, density:number,
- *   blades:number, seed:number, source:string}|null} null ⇒ disabled at this
+ *   blades:number, seed:number, offRoad:boolean, source:string}|null} null ⇒ disabled at this
  *   tier (the `low` contract: every effect in this plan is null on `low`).
  */
 export function resolveGrassConfig(overrides = {}) {
@@ -448,6 +465,8 @@ export function resolveGrassConfig(overrides = {}) {
   const density = Number.isFinite(overrides.density) ? overrides.density : terrainGrassDensity();
   const radiusM = Number.isFinite(overrides.radiusM) ? overrides.radiusM : terrainGrassRadiusM();
   const stomp = typeof overrides.stomp === "boolean" ? overrides.stomp : terrainGrassStompEnabled();
+  // 2026-10-07 — `?grassOffRoad` (default ON); explicit boolean wins (tests).
+  const offRoad = typeof overrides.offRoad === "boolean" ? overrides.offRoad : grassOffRoadEnabled();
   const count = Math.round(blades * (Number.isFinite(density) ? density : 1));
   if (!(count >= 1)) return null;
   return {
@@ -456,6 +475,7 @@ export function resolveGrassConfig(overrides = {}) {
     count,
     radiusM,
     stomp,
+    offRoad,
     seed: Number.isFinite(overrides.seed) ? overrides.seed | 0 : GRASS_DEFAULTS.seed,
     source: Number.isFinite(overrides.blades) ? "explicit" : "flags",
   };
@@ -652,6 +672,11 @@ export function createTerrainGrassProvider(opts = {}) {
         // decides, and a nearest-vertex family gate would clip exactly the
         // boundary blades the dither exists to keep (plan §8 risk 2).
         attributes: GRASS_ATTRIBUTES.map((a) => ({ ...a })),
+        // 2026-10-07 — no blades on the painted road, a soft verge beside it
+        // (see OFF-ROAD in the header). Decided in the pool, BEFORE `fill`, so
+        // the dithered corner-code draw never even runs on the road.
+        offRoad: cfg.offRoad === true,
+        offRoadVergeM: GRASS_DEFAULTS.roadVergeM,
         fill: makeGrassFill(seed),
         name: "terrain-grass",
       });
@@ -753,6 +778,10 @@ export function createTerrainGrassProvider(opts = {}) {
         // landed on grass terrain in front of the player.
         visibleBlades: ps ? ps.live : 0,
         blades: ps ? ps.count : 0,
+        // 2026-10-07 — the live gate (setOffRoad may have flipped it) and how
+        // many blade placements the road has refused so far.
+        offRoad: ps ? ps.offRoad : !!(cfg && cfg.offRoad),
+        roadRejects: ps ? ps.roadRejects : 0,
         degenerate: ps ? ps.degenerate : 0,
         radiusM: ps ? ps.radiusM : (cfg ? cfg.radiusM : 0),
         stomp: !!(cfg && cfg.stomp),
@@ -816,6 +845,13 @@ export function initTerrainGrass(opts = {}) {
     stats: () => provider.stats(),
     get pool() { return provider._pool; },
     get uniforms() { return provider._uniforms; },
+    /** 2026-10-07 — live A/B of `?grassOffRoad` without a reload; the field
+     *  converges over the next amortised laps. Returns the new state (or null
+     *  before the pool exists). */
+    setOffRoad: (on) => {
+      const pool = provider._pool;
+      return pool && typeof pool.setOffRoad === "function" ? pool.setOffRoad(on === true) : null;
+    },
     unregister: () => { reg.unregister(); _handle = null; },
   };
   try {

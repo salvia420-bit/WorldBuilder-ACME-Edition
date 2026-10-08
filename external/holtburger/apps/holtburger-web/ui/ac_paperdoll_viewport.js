@@ -130,6 +130,27 @@ export class PaperdollViewport {
     // keyed by wielder setupId. Mirrors `entities.js::_holdingLocCache`
     // pattern; populated lazily inside loadPlayer's wielded pass.
     this._holdingLocCache = new Map();
+    // 2026-10-07 — re-render when the canvas becomes visible (the panel opens).
+    // This covers a load that finished while the panel was display:none. It
+    // replaces the 2026-05-29 workaround, where inventory.js called start()
+    // after every load: a perpetual rAF loop re-rendering a static doll every
+    // frame, panel open or closed (~0.75 ms of main thread per frame, measured
+    // on the 1070). IntersectionObserver costs nothing per frame and never
+    // forces a layout.
+    this._io = null;
+    if (typeof IntersectionObserver === "function") {
+      this._io = new IntersectionObserver((entries) => {
+        const last = entries[entries.length - 1];
+        if (last?.isIntersecting) this.renderNow();
+      });
+      this._io.observe(el);
+    }
+  }
+
+  /** One render of the current rig (no-op once disposed). */
+  renderNow() {
+    if (this._disposed) return;
+    try { this.renderer.render(this.scene, this.camera); } catch (_) {}
   }
 
   /** Returns the canvas element — caller appends to its container. */
@@ -519,9 +540,10 @@ export class PaperdollViewport {
   }
 
   /**
-   * Optional rAF loop. Off by default — the paperdoll is static. Callers
-   * that want a constantly-re-rendered viewport (e.g. for an animated
-   * doll later) can call start() / stop(). Idempotent.
+   * Optional rAF loop. Off by default — the paperdoll is static, and the
+   * IntersectionObserver in the constructor re-renders it when it is shown.
+   * Callers that want a constantly-re-rendered viewport (e.g. for an
+   * animated doll later) can call start() / stop(). Idempotent.
    */
   start() {
     if (this._rafId !== null || this._disposed) return;
@@ -545,6 +567,8 @@ export class PaperdollViewport {
     if (this._disposed) return;
     this._disposed = true;
     this.stop();
+    try { this._io?.disconnect(); } catch (_) {}
+    this._io = null;
     this._clearRig();
     try { this.renderer.dispose(); } catch (_) {}
     try { this.renderer.forceContextLoss(); } catch (_) {}

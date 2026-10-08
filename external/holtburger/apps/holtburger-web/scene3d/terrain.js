@@ -114,6 +114,63 @@ import { terrainDirtEnabled, terrainMudPrintsEnabled, terrainMudWetnessEnabled }
 // built from (`terrain_vfx.js::initTerrainVfx`), so the shader's
 // HB_TERRAIN_TRAIL_MAP define can never disagree with whether a map exists.
 import { terrainTrailEnabled } from "./vfx_flags.js";
+// 2026-10-07 — terrain edge rounding (owner request: "the hills have sharp
+// points ... round just the edges ... inches would give the look"). VISUAL
+// ONLY: a fragment-shader SHADING BEVEL across retail creases (retail normals
+// ride extra columns of uVertexTypes — no new sampler) plus an optional
+// centimetre fillet offset; every retail vertex stays at its exact height and
+// `position` stays the retail faceted surface. Rationale, measurements and
+// the crack-free seam rule live in the module header. `?terrainRound=off` is
+// byte-identical.
+import {
+  TERRAIN_ROUND,
+  TERRAIN_ROUND_VERTEX_DECL_GLSL,
+  TERRAIN_ROUND_VERTEX_APPLY_GLSL,
+  TERRAIN_ROUND_FRAG_GLSL,
+  computeTerrainRoundOffsets,
+  noteTerrainRoundOffsets,
+  noteTerrainRoundHeights,
+  terrainRoundNeighbours,
+  terrainRoundMinLevel,
+  terrainRoundTypesCols,
+  terrainRoundUniforms,
+  writeTerrainRoundNormals,
+  installTerrainRoundDiag,
+} from "./terrain_round.js";
+// 2026-10-07 — terrain rounding step 3: each attached LB publishes what it now
+// DRAWS (factor + the uploaded aRoundZ) so things standing on it are drawn on
+// the rounded surface (scene3d/visual_ground.js; `?terrainRoundObjects=off`).
+import { noteVisualGroundBake } from "./visual_ground.js";
+
+// 2026-10-07 — terrain FINE SURFACE DETAIL (step 4 of the owner's terrain
+// plan: "inches would give the look"). Shading + sampling only, no geometry:
+// micro-relief on the retail Gouraud normal (the detail-normal array and the
+// nra material normal were loaded but shaded NOTHING under the default-on
+// ?terrainGouraud), height-blend TexMerge transitions, the retail detail
+// crossfade in gamma space, and explicit-gradient atlas/mask taps that remove
+// the fract() mip-seam lines on the 12 m grid. No new sampler. Audit +
+// rationale in the module header; each feature has its own `=off` escape.
+import {
+  TERRAIN_MICRO,
+  terrainDetailFragGlsl,
+  TERRAIN_GRADUV_MAIN_GLSL,
+  TERRAIN_DETAIL_GAMMA_MIX_GLSL,
+  TERRAIN_DETAIL_LINEAR_MIX_GLSL,
+  TERRAIN_MICRO_DECL_GLSL,
+  TERRAIN_MICRO_MERGE_BASE_GLSL,
+  TERRAIN_MICRO_MERGE_SLOT_GLSL,
+  TERRAIN_MICRO_APPLY_GLSL,
+  TERRAIN_HEIGHT_BLEND_DECL_GLSL,
+  TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL,
+  terrainMicroUniforms,
+  installTerrainMicroDiag,
+} from "./terrain_micro.js";
+
+// 2026-10-07 — terrain shading bevel on: the per-LB vertex-types texture is
+// 18 wide (columns 9..17 carry the 81 retail normals) and the fragment shader
+// gains terrainRoundBevel(). Session-constant (module load).
+const TERRAIN_ROUND_BEVEL_ON = TERRAIN_ROUND.enabled && TERRAIN_ROUND.bevel;
+const VERTEX_TYPES_COLS = terrainRoundTypesCols();
 
 // ----- AC world-coord constants -------------------------------------
 const METERS_PER_LANDBLOCK = 192.0;
@@ -386,7 +443,8 @@ function _installPoolDispose(tex, freeList) {
  * G=roadCode*64, B=0, A=255) — the warm-path fill below mirrors it exactly so
  * a re-baked LB is byte-identical to a cold-baked one.
  */
-function acquireVertexTypesTex(terrainCodes, roadCodes) {
+function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
+  if (VERTEX_TYPES_COLS !== 9) return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals);
   const tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
     // Cold miss — build via the shared adapter helper (correct dims, filters,
@@ -408,6 +466,44 @@ function acquireVertexTypesTex(terrainCodes, roadCodes) {
   }
   tex.userData.__parked = false; // checked back out
   tex.needsUpdate = true; // re-upload the rewritten bytes to the same texture
+  return tex;
+}
+
+/**
+ * 2026-10-07 — terrain shading bevel (scene3d/terrain_round.js): the SAME
+ * vertex-types texture widened to 18×9. Columns 0..8 are byte-identical to
+ * `acquireVertexTypesTex` (R = code, G = road*64, B = 0, A = 255); columns
+ * 9..17 carry the 81 retail calc_lighting normals (R/G = nx/ny, the shader
+ * reconstructs z). Widening an existing texture instead of adding one keeps
+ * the terrain program inside the 1070's 16 fragment texture units. Same pool
+ * discipline (one width per session, so pooled textures always fit).
+ */
+function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals) {
+  const cols = VERTEX_TYPES_COLS;
+  let tex = _vertexTypesTexFreeList.pop();
+  if (!tex) {
+    tex = new THREE.DataTexture(new Uint8Array(cols * 9 * 4), cols, 9, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    tex.colorSpace = THREE.NoColorSpace;
+    _installPoolDispose(tex, _vertexTypesTexFreeList);
+  }
+  const bytes = tex.image.data;
+  for (let row = 0; row < 9; row += 1) {
+    for (let col = 0; col < 9; col += 1) {
+      const dst = (row * cols + col) * 4;
+      const src = col * 9 + row; // column-major source (see adapter.js)
+      bytes[dst + 0] = terrainCodes[src];
+      bytes[dst + 1] = roadCodes ? roadCodes[src] * 64 : 0;
+      bytes[dst + 2] = 0;
+      bytes[dst + 3] = 255;
+    }
+  }
+  const f = roundNormals && roundNormals.factor ? roundNormals.factor : 0;
+  writeTerrainRoundNormals(bytes, cols, roundNormals ? roundNormals.acLight : null, f * 8 + 1, f);
+  tex.userData.__parked = false; // checked out
+  tex.needsUpdate = true;
   return tex;
 }
 
@@ -1184,7 +1280,7 @@ in float vertexHue;
 // which is seam-continuous and drives the detail/triplanar path. Supplied by
 // adapter.js only when the wasm bundle exports acLightNormals; the fragment
 // gate uAcGouraudEnabled is 0 otherwise, so a missing attribute is a no-op.
-in vec3 acLightNormal;
+in vec3 acLightNormal;${TERRAIN_ROUND.enabled ? TERRAIN_ROUND_VERTEX_DECL_GLSL.replace(/\n$/, "") : ""}
 
 uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
 uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of SWELL-eligible water codes (retail SurfChar set; the fragment stage uses the wider uWaterSurfaceCodeMask for the surface look)
@@ -1355,7 +1451,7 @@ void main() {
   vIsWater = isWater;
 
   vWorldPos = (modelMatrix * vec4(displacedPos, 1.0)).xyz;
-  vec4 mvPos = modelViewMatrix * vec4(displacedPos, 1.0);
+  vec4 mvPos = modelViewMatrix * vec4(displacedPos, 1.0);${TERRAIN_ROUND.enabled ? TERRAIN_ROUND_VERTEX_APPLY_GLSL.replace(/\n$/, "") : ""}
   vViewDepth = -mvPos.z;
   gl_Position = projectionMatrix * mvPos;
 #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
@@ -2103,7 +2199,7 @@ int vertexTypeAt(int iu, int iv) {
 // 4 cell corners in the main body to get a smooth road-presence mask.
 float vertexRoadAt(int iu, int iv) {
   return texelFetch(uVertexTypes, ivec2(iu, iv), 0).g > 0.125 ? 1.0 : 0.0;
-}
+}${TERRAIN_ROUND_BEVEL_ON ? TERRAIN_ROUND_FRAG_GLSL.replace(/\n$/, "") : ""}
 
 // 2026-07-02 — point-to-segment distance (metres, cell frame) for the
 // analytic road lane painter in main(). No backticks in comments here.
@@ -2112,6 +2208,7 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
   float t = clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0);
   return length(p - (a + ab * t));
 }
+${terrainDetailFragGlsl().replace(/\n$/, "")}
 
 // Wave 2.A — sample the 32×1 terrain palette LUT at the given code.
 // Codes 0..31 clamp to the palette length; the 32-tile (road) layer
@@ -2194,15 +2291,27 @@ void main() {
   // depth write is unconditional for every drawn fragment. Perspective
   // camera → log2 encoding; ortho (radar) → pass through gl_FragCoord.z.
   gl_FragDepth = vIsPerspective == 0.0 ? gl_FragCoord.z : log2( vFragDepth ) * logDepthBufFC * 0.5;
-#endif
+#endif${TERRAIN_MICRO.gradUv ? TERRAIN_GRADUV_MAIN_GLSL.replace(/\n$/, "") : ""}
   // vGridUv is [0, 8] across the 192 m LB. Bilinear 4-corner blend.
   vec2 grid = vGridUv;
   int iu = int(floor(grid.x));
   int iv = int(floor(grid.y));
   iu = clamp(iu, 0, 7);
   iv = clamp(iv, 0, 7);
-  float fu = grid.x - float(iu);
-  float fv = grid.y - float(iv);
+  // 2026-10-07 — clamp the intra-cell fraction. iu/iv are clamped to the
+  // 8x8 grid, but a fragment whose vGridUv falls outside [0, 8] then got
+  // fu/fv < 0 or > 1, so the four corner weights below EXTRAPOLATED. They
+  // still sum to 1, but individually blow up. The atlas blend mostly hides
+  // that (similar corner colours); the per-biome palette tint, whose
+  // corners differ mainly in green, did not. Owner, live on the 1070: "a
+  // green sparkling light in the distance which has always been
+  // mysterious". The HDR buffer measured rgb ~(10, 141, 3) on one terrain
+  // fragment seen through a tree, versus ~0.06 for its neighbours, rising
+  // as the moon rose. Clamping removed it (live shader patch: 141.6 ->
+  // 0.06). For in-range fragments, fu/fv were already in [0, 1], so this
+  // is a no-op there.
+  float fu = clamp(grid.x - float(iu), 0.0, 1.0);
+  float fv = clamp(grid.y - float(iv), 0.0, 1.0);
   vec2 cellUv = vec2(fu, fv);
 
   // Phase 2.2 — water UV scroll. Apply a per-frame offset to the
@@ -2298,13 +2407,15 @@ void main() {
       float pomFade = 1.0 - clamp(
         (vViewDepth - uPomFadeStart) / max(uPomFadeEnd - uPomFadeStart, 1e-3),
         0.0, 1.0);
-      float tiling = float(uBaseTexTiling[pomCode]);
       vec2 stepUv = (vt.xy / max(-vt.z, 0.3)) * (uPomScale * pomFade) * 0.125;
       vec2 uvOff = vec2(0.0);
       float layerH = 1.0;
       for (int i = 0; i < 8; i++) {
-        float mapH = texture(uAtlas,
-          vec3(fract((cellUv + uvOff) * tiling), float(pomCode))).a;
+        // 2026-10-07 — through terrainAtlasTex (== the old
+        // fract((cellUv + uvOff) * tiling) address): with ?terrainGradUv the
+        // march samples with the continuous-UV gradient, so neither the tile
+        // wrap nor the march's own step jumps reach the mip selection.
+        float mapH = terrainAtlasTex(pomCode, cellUv + uvOff).a;
         if (mapH >= layerH) break;
         layerH -= 0.125;
         uvOff += stepUv;
@@ -2443,10 +2554,12 @@ void main() {
   vec2 uv01 = wc01 ? waterCellUv : cellUv;
   vec2 uv11 = wc11 ? waterCellUv : cellUv;
 
-  vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), uv00)).rgb;
-  vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), uv10)).rgb;
-  vec3 c01 = texture(uAtlas, atlasUvFor(clamp(t01, 0, 32), uv01)).rgb;
-  vec3 c11 = texture(uAtlas, atlasUvFor(clamp(t11, 0, 32), uv11)).rgb;
+  // 2026-10-07 — atlas taps go through terrainAtlasTex (scene3d/terrain_micro.js):
+  // same atlasUvFor address, explicit continuous-UV gradient under ?terrainGradUv.
+  vec3 c00 = terrainAtlasTex(clamp(t00, 0, 32), uv00).rgb;
+  vec3 c10 = terrainAtlasTex(clamp(t10, 0, 32), uv10).rgb;
+  vec3 c01 = terrainAtlasTex(clamp(t01, 0, 32), uv01).rgb;
+  vec3 c11 = terrainAtlasTex(clamp(t11, 0, 32), uv11).rgb;
 
   float w00 = (1.0 - fu) * (1.0 - fv);
   float w10 = fu * (1.0 - fv);
@@ -2598,7 +2711,7 @@ void main() {
     // cell is just the same texture, slightly averaged for the per-corner UVs).
     result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
   }
-
+${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_DECL_GLSL : ""}
   // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
   // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
   // slots, row = NS cell iv). Slot 0 is the base terrain tile; slots 1..3
@@ -2621,8 +2734,8 @@ void main() {
     // with texMerge forced off. Each slot now picks the scrolled UV iff ITS
     // OWN atlas layer is a water code, which is also what keeps a water
     // overlay flowing over a static land base at a blended cell border.
-    vec3 merged = texture(uAtlas, atlasUvFor(clamp(baseLayer, 0, 32),
-      isWaterCode(baseLayer) ? waterCellUv : cellUv)).rgb;
+    vec3 merged = terrainAtlasTex(clamp(baseLayer, 0, 32),
+      isWaterCode(baseLayer) ? waterCellUv : cellUv).rgb;${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
     // R4.a 2026-05-28 — explicit all-road corner case. Per
     // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
     // texture_merge_info, an all-road cell is packed with base layer
@@ -2672,7 +2785,6 @@ void main() {
         int layer = int(t.r * 255.0 + 0.5);
         int maskIdx = int(t.g * 255.0 + 0.5);
         int rot = int(t.b * 255.0 + 0.5);
-        vec2 mUv = maskUvFor(cellUv, rot);
         // 2026-07-02 — RETAIL MASK SENSE. ImgTex::MergeTexture
         // (acclient.c:365787) computes dst = (a*dst + (256-a)*src) >> 8 where
         // dst is the composited BASE tile and src the incoming OVERLAY: the
@@ -2685,8 +2797,12 @@ void main() {
         // abandoned. R4.a roundMergeAlpha nudges the mask byte up when
         // a > 0x80 — with the mask now weighting the base, that is exactly
         // retail's rounding on the same operand.
+        // 2026-10-07 — terrainMaskTex = the old maskUvFor(cellUv, rot) tap;
+        // under ?terrainGradUv it carries the continuous-UV gradient (the
+        // cellUv reset at every cell edge was a 1x1-mip line of ~25% overlay
+        // on transition cells since ?maskMips).
         float baseW = roundMergeAlpha(
-          texture(uAlphaMasks, vec3(mUv, float(maskIdx))).r,
+          terrainMaskTex(cellUv, rot, maskIdx).r,
           uTexMergeAlphaRound
         );
         // T1 splat-noise: shift the base/overlay balance inside the
@@ -2699,8 +2815,8 @@ void main() {
         // slot above. The alpha MASK keeps reading the unscrolled cellUv:
         // the mask is the cell's authored coverage shape and must not drift,
         // only the water texels inside it do.
-        vec3 overlayCol = texture(uAtlas, atlasUvFor(clamp(layer, 0, 32),
-          isWaterCode(layer) ? waterCellUv : cellUv)).rgb;
+        vec3 overlayCol = terrainAtlasTex(clamp(layer, 0, 32),
+          isWaterCode(layer) ? waterCellUv : cellUv).rgb;${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
         merged = mix(overlayCol, merged, baseW);
       }
     }
@@ -2799,7 +2915,7 @@ void main() {
     vec3 rvt = vec3(rvw.x, -rvw.z, rvw.y);
     if (rvt.z < -0.15) {
       vec2 refrUv = cellUv + (rvt.xy / max(-rvt.z, 0.3)) * uIceRefractAmount;
-      vec3 refr = texture(uAtlas, atlasUvFor(clamp(nearCode, 0, 32), refrUv)).rgb;
+      vec3 refr = terrainAtlasTex(clamp(nearCode, 0, 32), refrUv).rgb;
       // 0.55 keeps the surface tile dominant: this reads as something seen a
       // few centimetres INTO the ice, not as a doubled texture.
       result = mix(result, refr, iceW * 0.55);
@@ -2831,7 +2947,10 @@ void main() {
                 / max(uDetailTexFadeEnd - uDetailTexFadeStart, 1e-3),
           0.0, 1.0);
         float amtA = detail.a * fadeA * clamp(uDetailTexStrength, 0.0, 1.0);
-        result = mix(result, detail.rgb, amtA);
+        // 2026-10-07 (?terrainDetailGamma, default on) — retail blended this in
+        // the GAMMA-encoded framebuffer; a linear-space mix toward the grey
+        // tile lifted dark ground near the camera (see terrain_micro.js).
+        ${TERRAIN_MICRO.detailGamma ? TERRAIN_DETAIL_GAMMA_MIX_GLSL : TERRAIN_DETAIL_LINEAR_MIX_GLSL}
       } else {
         // "percode" A/B mode keeps the modern per-type MODULATE2X grain.
         float fade = 1.0 - smoothstep(uDetailTexFadeStart, uDetailTexFadeEnd, vViewDepth);
@@ -3120,8 +3239,7 @@ void main() {
   vec3 iblSpec = vec3(0.0);
   if (uPbrEnabled > 0.5 && !acGouraud) {
     int pbrCode = clamp(nearCode, 0, 32);
-    vec3 pbrUvw = atlasUvFor(pbrCode, cellUv);
-    vec4 pbrTexel = texture(uAtlasNormalAo, pbrUvw);
+    vec4 pbrTexel = terrainNraTex(pbrCode, cellUv);
     // nra pack: xy = tangent normal, z reconstructed (unit hemisphere),
     // b = material roughness, a = AO.
     vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
@@ -3389,8 +3507,12 @@ void main() {
   // to the prior inline form, and the same characters the far composite ring
   // executes, so the seam cannot drift. The far BAKE forces uAcGouraudEnabled to
   // 0 and the far shader re-applies this live off the same uniforms.
+  // 2026-10-07 — the shading normal is hoisted into acShadeN so the step-4
+  // micro-relief (?terrainMicro, scene3d/terrain_micro.js) perturbs exactly
+  // the normal the bevel produced; it never touches the bevel itself.
   if (acGouraud) {
-    modulated = terrainAcGouraud(modulated, vAcLightNormal, uAcSunVec,
+    vec3 acShadeN = ${TERRAIN_ROUND_BEVEL_ON ? "terrainRoundBevel(vAcLightNormal)" : "vAcLightNormal"};${TERRAIN_MICRO.micro ? TERRAIN_MICRO_APPLY_GLSL : ""}
+    modulated = terrainAcGouraud(modulated, acShadeN, uAcSunVec,
                                  uAcSunColor, uAcAmbColor, uAcAmbLevel);
   }
 
@@ -3686,6 +3808,16 @@ void main() {
 `;
 
 /**
+ * 2026-10-07 — test seam: the ASSEMBLED terrain GLSL (every interpolated
+ * module string resolved for this session's flags), so node tests can check
+ * declaration order, the sampler budget and the step-4 injections against the
+ * program the GPU actually compiles rather than against the source text.
+ */
+export function _terrainGlslForTest() {
+  return { vertex: TERRAIN_VERTEX_GLSL, fragment: TERRAIN_FRAGMENT_GLSL };
+}
+
+/**
  * Read `subdivLevel` from `scene3d.quality.flags`, defaulting to 1 if
  * the flag is missing or out of range. Quality preset values are 1, 2,
  * 4, or 8; we coerce any other value to the nearest power-of-two bound.
@@ -3942,6 +4074,15 @@ export async function resolveTerrainRingOpts(
   const canSubdivide =
     subdivLevel >= 1 &&
     typeof wasmExports.fetch_subdivided_landblocks === "function";
+  // 2026-10-07 — terrain edge rounding: the optional centimetre fillet can ask
+  // for a minimum subdivision on EVERY landblock (`?terrainRoundLevel`; its
+  // seam rule samples landblock edges at that spacing, so a coarser neighbour
+  // would open a crack). Default 1 = no floor = the pre-wave LOD ladder; the
+  // shading bevel needs no subdivision at all.
+  const roundMinLevel = canSubdivide ? terrainRoundMinLevel() : 1;
+  if (TERRAIN_ROUND.enabled) installTerrainRoundDiag(scene3d);
+  // 2026-10-07 — terrain fine detail live handle (window.__terrainMicro).
+  installTerrainMicroDiag(scene3d);
 
   // Phase 2.2 — animated water/lava displacement.
   // 2026-07-31 (water-fix) — the `subdivLevel >= 2` quality gate is GONE.
@@ -4482,6 +4623,7 @@ export async function resolveTerrainRingOpts(
     codeToSliceArr,
     subdivLevel,
     canSubdivide,
+    roundMinLevel,
     displacementEnabled,
     // 2026-07-08 — surface UV-scroll independent of the subdiv/displacement
     // LOD. Default on (`?waterScroll=off` → static water). Read once per ring;
@@ -5206,8 +5348,11 @@ function pickSubdivLevelForLb(opts, lbX, lbY) {
   // displacement / triplanar slope detection both look equivalent at 6 m
   // spacing). Cap centre at `halfLevel` to match ring-1; ring-2+ stays
   // at 1.
-  if (distLb <= 1) return halfLevel;
-  return 1;
+  const level = distLb <= 1 ? halfLevel : 1;
+  // 2026-10-07 — terrain corner rounding floors every landblock at
+  // `opts.roundMinLevel` (2 by default; absent/1 when rounding is off, which
+  // returns the pre-wave level unchanged). See resolveTerrainRingOpts.
+  return opts.roundMinLevel > level ? opts.roundMinLevel : level;
 }
 
 // === F12-6 — per-LB subdiv LOD re-bake on player approach ==================
@@ -5559,9 +5704,37 @@ export async function bakeTerrainForLandblock(
   // the current shader (kept on the geometry for forward compat).
   let geom;
   let effectiveSubdiv = 1;
+  let roundMaxAbsM = null;
   if (subdivEntry && subdivEntry.mesh) {
     geom = subdividedLandblockMeshToGeometry(subdivEntry.mesh);
     effectiveSubdiv = subdivEntry.level;
+    // 2026-10-07 — terrain edge rounding, centimetre fillet (visual only).
+    // Bake this LB's per-vertex offset from its own faceted positions: exactly
+    // 0 at every retail vertex, a monotone fillet <= terrainRoundMax between.
+    // `position` is untouched, so every CPU reader still sees the retail
+    // surface. Null => no attribute (fillet off, factor < 2): the shader reads
+    // the default 0 and terrain_batch presents a zero stand-in. Neighbour
+    // heights only shape slopes ACROSS this LB's edges (never a shared edge).
+    if (TERRAIN_ROUND.enabled && !scene3d.wireframeMode) {
+      noteTerrainRoundHeights(lbX, lbY, wasmMesh.heights);
+      const posAttr = geom.getAttribute("position");
+      const roundOff = computeTerrainRoundOffsets(
+        posAttr ? posAttr.array : null,
+        effectiveSubdiv * 8 + 1,
+        effectiveSubdiv,
+        lbX,
+        lbY,
+        TERRAIN_ROUND,
+        terrainRoundNeighbours(lbX, lbY),
+      );
+      if (roundOff) {
+        geom.setAttribute("aRoundZ", new THREE.BufferAttribute(roundOff, 1, false));
+        roundMaxAbsM = noteTerrainRoundOffsets(roundOff);
+        // The cull sphere was fitted to the faceted positions; the drawn
+        // surface can sit up to maxDev off them.
+        if (geom.boundingSphere) geom.boundingSphere.radius += TERRAIN_ROUND.maxDevM;
+      }
+    }
     if (typeof subdivEntry.mesh.free === "function") subdivEntry.mesh.free();
     // 2026-08-03 — mark CONSUMED. A ring driver holds this same entry object
     // and frees whatever is left over (LBs we short-circuited); a null mesh is
@@ -5660,7 +5833,15 @@ export async function bakeTerrainForLandblock(
   } else {
     // RP4 — pooled 9×9 vertex-types texture (reuses the GPU texture across LB
     // transitions; bytes fully overwritten per LB). See acquireVertexTypesTex.
-    vertexTypesTex = acquireVertexTypesTex(terrainCodesCopy, roadCodesCopy);
+    vertexTypesTex = acquireVertexTypesTex(
+      terrainCodesCopy,
+      roadCodesCopy,
+      // 2026-10-07 — terrain shading bevel: the 81 retail normals ride
+      // columns 9..17 (null when the bevel is off => the pre-wave 9x9 path).
+      TERRAIN_ROUND_BEVEL_ON
+        ? { acLight: geom.getAttribute("acLightNormal")?.array ?? null, factor: effectiveSubdiv }
+        : null,
+    );
 
     // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built
     // only when `?texMerge=on` AND the wasm mesh carries merge data. The
@@ -6060,6 +6241,17 @@ export async function bakeTerrainForLandblock(
           lbY * METERS_PER_LANDBLOCK
         ),
       },
+      // 2026-10-07 — terrain corner rounding: uRoundScale (live multiplier)
+      // + uRoundFade (camera-distance fade). `{}` when ?terrainRound=off, so
+      // the uniform set stays the pre-wave one. Cloned into the batch
+      // material by terrain_batch._buildBatchMaterial like every uniform.
+      ...terrainRoundUniforms(THREE.Vector2),
+      // 2026-10-07 — terrain fine detail (scene3d/terrain_micro.js): micro-
+      // relief + height-blend tunables. Only the features whose GLSL is
+      // compiled get entries; quality `low` holds both amounts at 0 unless
+      // the URL forced `=on`. Cloned into the batch material like every
+      // uniform; live: window.__terrainMicro.set({...}).
+      ...terrainMicroUniforms(THREE, scene3d?.quality?.preset),
       // Clouds-L — cloud shadow uniforms. Updated each frame from
       // cloud_volume.js when CloudOverlay is wired. Default off
       // (uCloudShadowEnabled=0) so terrain renders correctly when
@@ -6263,6 +6455,9 @@ export async function bakeTerrainForLandblock(
     // Phase 2.1 — actual subdivision factor used for this LB.
     // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.
     subdivLevel: effectiveSubdiv,
+    // 2026-10-07 — terrain corner rounding: this LB's largest baked
+    // |visual - physics| offset in metres (null = no rounding attribute).
+    roundMaxAbsM,
     // Phase 2.2 — capture probes inspect these to verify the
     // displacement patch is wired. uTime is mutated each rAF by
     // `loop.js::tickPerFrame`; the snapshot here records the wiring
@@ -6325,6 +6520,13 @@ export async function bakeTerrainForLandblock(
   }
 
   scene3d.terrainGroup.add(lbMesh);
+  // 2026-10-07 — terrain rounding step 3 (scene3d/visual_ground.js): publish
+  // this LB's drawn fillet — the SAME aRoundZ array just uploaded (null at
+  // factor 1 / fillet off / wire mode) — and its retail heights, so entities
+  // and statics on it get visualZ - physicsZ bit-for-bit. A LOD re-bake lands
+  // here too and replaces the record. Fail-soft inside.
+  noteVisualGroundBake(lbX, lbY, lbMesh.userData.heights, effectiveSubdiv,
+    geom.getAttribute("aRoundZ")?.array ?? null, opts);
 
   // 2026-05-22 — wire-agent: pair the wireframe mesh with a second mesh
   // sharing the same BufferGeometry that draws the solid colour fill

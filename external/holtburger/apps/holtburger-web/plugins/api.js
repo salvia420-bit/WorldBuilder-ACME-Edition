@@ -15,8 +15,8 @@
 //
 // | # | Chorizite (Source)                  | EventArgs Payload                              | api.js / kind=N           | Status      | Note                                                                 |
 // |---|-------------------------------------|------------------------------------------------|---------------------------|-------------|----------------------------------------------------------------------|
-// | 1 | World.OnWeenieCreated               | WorldObject Object                             | EntityUpdate kind=1 SPAWN + bus "objectCreated" | PARTIAL     | 2026-10-06: world-state.js dispatchItemCreateObject emits "objectCreated", but NOTHING CALLS IT (0 callers) — the plugin world mirror never learns non-character objects; live, every appraisal of a portal logs "dispatchSetAppraiseInfo: unknown weenie". Needs the host entity SPAWN/REMOVE stream wired in (see TODO row 1/2 below). |
-// | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE+ bus "objectReleased" | IMPLEMENTED | PR-2 2026-05-27: bus event + recursive child release ported          |
+// | 1 | World.OnWeenieCreated               | WorldObject Object                             | EntityUpdate kind=1 SPAWN + world "objectCreated" | PARTIAL     | 2026-10-07: WIRED — every KIND_SPAWN already feeds the renderer-neutral WorldObjectManager (app/landblock_stream.js neutralSpawn → `window.__wom`); `bindWorldStateToManager` (world-state.js, bound in index.html where the manager is built) makes `client.world` ADOPT its typed instances on its "created" event (+ backfill), and the local player is registered as the typed Character as soon as `setLocalPlayerGuid` runs. `?pluginWorldFeed=off` escape. Still PARTIAL: contained / pack items get no KIND_SPAWN (lib.rs skip_contained_spawn) so they are not mirrored (appraising one warns once per guid); full ObjDesc / PhysicsDesc / WeenieDesc blobs are wasm-only (the mirror carries guid, wcid, name, item type and the classifier flags). Was (2026-10-06): 0 callers, `world.weenies.size === 0` live. |
+// | 2 | World.OnWeenieReleased              | WorldObject Object                             | EntityUpdate kind=2 REMOVE+ world "objectReleased" | IMPLEMENTED | PR-2 2026-05-27: bus event + recursive child release ported. 2026-10-07: actually FED — the WorldObjectManager "deleted" event (KIND_REMOVE via neutralRemove) releases the mirrored weenie and drops any queued container-open keyed by it; the local Character is never released (World.cs:735). Objects that leave visibility are released by the 25 s client cull (`?maintPrune`, default-ON since 2026-10-07 NETSYNC-4; `=off` restores the old persist-until-server-delete). |
 // | 3 | World.OnContainerOpened             | Container Container                            | kind=12 vendorOpened + kind=21 containerOpened | IMPLEMENTED | PR-2 2026-05-27: child-wait gate per World.cs:212-249 now correct    |
 // | 4 | World.OnContainerClosed             | Container Container                            | kind=31 + bus "containerClosed" | IMPLEMENTED | PR-2 2026-05-27: NEW wasm kind=31 ContainerClosed + JS dispatcher    |
 // | 5 | World.OnSelectionChanged            | WorldObject? Object                            | "selectionChanged" bus    | IMPLEMENTED | Q1b (2026-05-26): scene3d/picking.js emits {guid, prevGuid} on every change |
@@ -402,7 +402,7 @@ export const eventArgsFactories = Object.freeze({
 // row). See `plugins/world-state.js` for the dispatch table + load-bearing
 // container-open child-wait gate (`World.cs:212-249`).
 import { WorldState, bindWorldStateToClient } from './world-state.js';
-export { WorldState, bindWorldStateToClient } from './world-state.js';
+export { WorldState, bindWorldStateToClient, bindWorldStateToManager } from './world-state.js';
 
 /**
  * Build the plugin-facing `client` facade over a wasm SessionHandle.
@@ -475,8 +475,11 @@ export function createClient(sessionHandle, opts = {}) {
       bus.dispatchEvent(new CustomEvent(name, { detail: payload }));
     },
   };
-  // TODO(coverage-table row 1):  add "objectCreated"  bus event (World.OnWeenieCreated)
-  // TODO(coverage-table row 2):  add "objectReleased" bus event (World.OnWeenieReleased)
+  // rows 1/2: WIRED (2026-10-07) — "objectCreated" / "objectReleased" fire on
+  // `client.world` (an EventTarget: client.world.addEventListener), fed by
+  // bindWorldStateToManager from the host's KIND_SPAWN / KIND_REMOVE stream;
+  // wielder updates ride kind:49/47 → world "itemParentChanged". Not re-emitted
+  // on this bus (one event per spawn on the plugin bus would be pure fan-out).
   // row 3: DONE (PR-HH 2026-05-23) — kind=21 containerOpened fires for
   // non-vendor containers (chest/corpse/salvage bag); vendor still on kind=12.
   // TODO(coverage-table row 4):  add "containerClosed" (StopViewingObjectContents → new ClientEvent kind)

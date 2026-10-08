@@ -51,6 +51,28 @@ const PROP_INT_PHYSICS_STATE     = 107;
 const PROP_INSTANCE_CONTAINER    = 2;
 const PROP_INSTANCE_WIELDER      = 3;
 
+const PROP_INT_ITEM_TYPE         = 1;
+const PROP_STRING_NAME           = 1;
+
+// 2026-10-07 — `?pluginWorldFeed=off` escape for the host → WorldState feed
+// (bindWorldStateToManager + the kind:47/49 wielder updates below). Default
+// ON: before it, nothing called dispatchItemCreateObject, so the plugin
+// mirror stayed empty for the whole session (live: `world.weenies.size ===
+// 0`, 30+ `dispatchContainerClosed: unknown container` per session).
+export const PLUGIN_WORLD_FEED_ON = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || '').get('pluginWorldFeed');
+    return !(v === 'off' || v === '0' || v === 'false');
+  } catch (_) { return true; }
+})();
+
+// Bounds for the two per-guid side tables that are keyed by guids the mirror
+// may never learn (a container whose ObjectCreate never reaches the mirror —
+// e.g. a contained pack — is never closed by a create; an appraisal of an
+// unmirrored pack item is warned about once, not per appraisal).
+const PENDING_OPEN_FOR_CONTAINER_MAX = 32;
+const WARNED_UNKNOWN_MAX = 256;
+
 // `Item_OnViewContents` payload routing per `World.cs:207-251`. We model
 // the in-flight gate as a Map<containerGuid, {watchSet, container}> so
 // concurrent container opens don't clobber each other.
@@ -174,6 +196,16 @@ export class WorldState extends EventTarget {
     /** @type {Character|null} The local player's typed Character. */
     this.character = null;
 
+    // 2026-10-07 — set by `bindWorldStateToManager` (the live host feed):
+    // the WorldObjectManager whose typed instances this mirror adopts, and
+    // whether `setLocalPlayerGuid` should register the local Character at
+    // once (retail `Game.Character` exists from login — the eager-WorldState
+    // path can suppress the local player's KIND_SPAWN entirely).
+    this._typedSource = null;
+    this._feedLocalPlayer = false;
+    // Guids already warned about by dispatchSetAppraiseInfo (warn once).
+    this._warnedUnknown = new Set();
+
     this._disposed = false;
   }
 
@@ -214,9 +246,17 @@ export class WorldState extends EventTarget {
       for (const [k, v] of existing.dataValues)     ch.dataValues.set(k, v);
       for (const [k, v] of existing.positionValues) ch.positionValues.set(k, v);
       this.weenies.set(g, ch);
+      // 2026-10-07 — the upgraded entry needs the same back-reference the
+      // create path injects (Container/Item read-through getters).
+      if (typeof ch.setWorld === 'function') ch.setWorld(this);
       this.character = ch;
     } else if (existing instanceof Character) {
       this.character = existing;
+    } else if (!existing && g !== 0 && this._feedLocalPlayer && !this._disposed) {
+      // 2026-10-07 — live feed: the local player is a weenie from the moment
+      // its guid is known (PLAYER_SPAWNED / ENTERED_WORLD), whether or not a
+      // KIND_SPAWN for it ever arrives. A later spawn folds into this entry.
+      this.dispatchItemCreateObject({ guid: g });
     }
   }
 
@@ -263,6 +303,14 @@ export class WorldState extends EventTarget {
    */
   byClass(className) {
     if (this.manager) return this.manager.byClass(className);
+    // 2026-10-07 — fed from a WorldObjectManager: same descendant-aware
+    // match as WorldObjectManager.byClass, over THIS mirror (which also
+    // holds the local Character the manager never sees).
+    const tax = this._typedSource?.taxonomy;
+    if (tax && typeof tax.allDescendantsOf === 'function') {
+      const include = new Set([className, ...tax.allDescendantsOf(className)]);
+      return [...this.weenies.values()].filter(wo => include.has(wo.className));
+    }
     return [...this.weenies.values()].filter(wo => wo.className === className);
   }
 
@@ -291,9 +339,15 @@ export class WorldState extends EventTarget {
    * the host calls `dispatchObjDescUpdate` / `dispatchPhysicsDescUpdate`
    * / `dispatchWeenieDescUpdate` separately.
    *
+   * 2026-10-07 — `payload.object`: a typed instance the host's
+   * WorldObjectManager already built for this guid (the live feed,
+   * `bindWorldStateToManager`). It is ADOPTED on first sight instead of
+   * constructing a second one; a guid already in the mirror keeps its
+   * instance (C# GetOrCreateWorldObject) and only folds name / item type.
+   *
    * @param {object} payload {guid, classId?, objDesc?, physicsDesc?,
    *                          weenieDesc?, itemType?, objDescFlags?,
-   *                          weenieFlags?, name?}
+   *                          weenieFlags?, name?, object?}
    * @returns {WorldObject|null}
    */
   dispatchItemCreateObject(payload) {
@@ -311,6 +365,7 @@ export class WorldState extends EventTarget {
     // matches the handoff scope.
     let wo = this.weenies.get(guid);
     const isLocalPlayer = this._localPlayerGuid !== 0 && guid === this._localPlayerGuid;
+    const typed = payload?.object instanceof WorldObject ? payload.object : null;
 
     if (!wo) {
       if (isLocalPlayer) {
@@ -320,16 +375,20 @@ export class WorldState extends EventTarget {
         // that the generic Player subclass can't carry.
         wo = new Character(
           guid,
-          payload?.classId ?? payload?.wcid ?? 0,
-          this.manager?.taxonomy ?? null,
-          this.manager?.enums ?? null,
-          this.manager ?? null,
+          payload?.classId ?? payload?.wcid ?? typed?.classId ?? 0,
+          this.manager?.taxonomy ?? typed?.taxonomy ?? this._typedSource?.taxonomy ?? null,
+          this.manager?.enums ?? typed?.enums ?? this._typedSource?.enums ?? null,
+          this.manager ?? typed?.manager ?? this._typedSource ?? null,
         );
-        if (payload?.objDescFlags !== undefined) wo.objDescFlags = payload.objDescFlags;
-        if (payload?.weenieFlags !== undefined)  wo.weenieFlags = payload.weenieFlags;
-        if (payload?.canonicalObjectClass)        wo.canonicalObjectClass = payload.canonicalObjectClass;
-        if (payload?.classificationSource)        wo.classificationSource = payload.classificationSource;
+        const flagSrc = typed ?? payload;
+        if (flagSrc?.objDescFlags !== undefined) wo.objDescFlags = flagSrc.objDescFlags;
+        if (flagSrc?.weenieFlags !== undefined)  wo.weenieFlags = flagSrc.weenieFlags;
+        if (flagSrc?.canonicalObjectClass)        wo.canonicalObjectClass = flagSrc.canonicalObjectClass;
+        if (flagSrc?.classificationSource)        wo.classificationSource = flagSrc.classificationSource;
         this.character = wo;
+      } else if (typed && (typed.id >>> 0) === guid) {
+        // 2026-10-07 — live feed: adopt the manager's typed instance.
+        wo = typed;
       } else if (this.manager?.loaded) {
         // Defer construction to the manager when available — it owns the
         // typed-subclass dispatch via `canonicalClassify`. Otherwise build
@@ -369,6 +428,17 @@ export class WorldState extends EventTarget {
     if (payload?.physicsDesc)  wo.updatePhysicsDesc(payload.physicsDesc);
     if (payload?.weenieDesc)   wo.updateWeenieDesc(payload.weenieDesc);
 
+    // 2026-10-07 — fold the identity a feed instance / payload carries into
+    // an entry we kept (re-sent ObjectCreate, or the local Character that was
+    // registered before its spawn): WorldObjectManager seeds name + item type.
+    const src = typed && typed !== wo ? typed : null;
+    const foldName = payload?.name ?? src?.stringValues?.get(PROP_STRING_NAME);
+    if (foldName) wo.setStringValue(PROP_STRING_NAME, foldName);
+    const foldType = payload?.itemType ?? src?.intValues?.get(PROP_INT_ITEM_TYPE);
+    if (foldType && wo.intValue(PROP_INT_ITEM_TYPE, 0) !== (foldType | 0)) {
+      wo.setIntValue(PROP_INT_ITEM_TYPE, foldType | 0);
+    }
+
     // `World.cs:190` — fire ObjectCreatedEventArgs.
     this.dispatchEvent(new CustomEvent('objectCreated', { detail: { object: wo } }));
 
@@ -404,6 +474,18 @@ export class WorldState extends EventTarget {
   dispatchItemDeleteObject(guid) {
     if (this._disposed) return false;
     const id = guid >>> 0;
+    // 2026-10-07 — a deleted guid can never satisfy a queued open; drop the
+    // side-table entries keyed by it so they cannot go stale (live: 2 queued
+    // opens that never resolved).
+    this._pendingContainerOpenForContainer.delete(id);
+    const gate = this._pendingContainerOpens.get(id);
+    if (gate) {
+      if (gate.timeoutId != null) clearTimeout(gate.timeoutId);
+      this._pendingContainerOpens.delete(id);
+    }
+    this._warnedUnknown.delete(id);
+    // `World.cs:735` RemoveWeenie — the local Character is never released.
+    if (this._localPlayerGuid !== 0 && id === this._localPlayerGuid) return false;
     const wo = this.weenies.get(id);
     if (!wo) return false;
 
@@ -511,6 +593,13 @@ export class WorldState extends EventTarget {
       // when the ObjectCreate for `cid` lands. See
       // `_pendingContainerOpenForContainer` for the rationale; this
       // mirrors the items-not-yet-arrived gate one layer up.
+      // 2026-10-07 — bounded: a container the mirror never learns (and the
+      // server never closes) would otherwise sit here forever.
+      this._pendingContainerOpenForContainer.delete(cid);
+      if (this._pendingContainerOpenForContainer.size >= PENDING_OPEN_FOR_CONTAINER_MAX) {
+        const oldest = this._pendingContainerOpenForContainer.keys().next().value;
+        if (oldest !== undefined) this._pendingContainerOpenForContainer.delete(oldest);
+      }
       this._pendingContainerOpenForContainer.set(cid, items);
       return;
     }
@@ -726,9 +815,17 @@ export class WorldState extends EventTarget {
   dispatchSetAppraiseInfo(guid, payload = {}) {
     const wo = this.weenies.get(guid >>> 0);
     if (!wo) {
-      this.log.warn(
-        `[world-state] dispatchSetAppraiseInfo: unknown weenie 0x${(guid >>> 0).toString(16)}`
-      );
+      // 2026-10-07 — once per guid: pack / contained items are not in the
+      // mirror (no KIND_SPAWN for them — see the api.js coverage row 1 gap),
+      // so re-assessing the same pack item must not re-warn every time.
+      const g = guid >>> 0;
+      if (!this._warnedUnknown.has(g)) {
+        if (this._warnedUnknown.size >= WARNED_UNKNOWN_MAX) this._warnedUnknown.clear();
+        this._warnedUnknown.add(g);
+        this.log.warn(
+          `[world-state] dispatchSetAppraiseInfo: unknown weenie 0x${g.toString(16)}`
+        );
+      }
       return;
     }
     const folded = {};
@@ -1054,6 +1151,7 @@ export class WorldState extends EventTarget {
     this._pendingContainerOpenForContainer.clear();
     this._enchantmentSnapshot.clear();
     this._lastAppraisalAt.clear();
+    this._warnedUnknown.clear();
     // PR 4: drop the typed Character handle. The local-player GUID
     // stays — a relog with the same character can reuse the heuristic.
     this.character = null;
@@ -1171,4 +1269,89 @@ export function bindWorldStateToClient(world, client) {
     const guid = (detail.guid ?? 0) >>> 0;
     world.setSelected(guid);
   });
+
+  // 2026-10-07 — object UPDATE half of the live feed: the wielder
+  // transitions (`Item_ParentEvent`, `World.cs:264-271`). client_events.js
+  // re-emits ClientEvent kind=49 EntityAttached {u32Payload: item,
+  // u32Payload2: new wielder} and kind=47 EntityDetached {item, prior
+  // wielder} as `kind:49` / `kind:47` with the raw event as detail (read
+  // synchronously — the box is freed after the drain iteration). Items the
+  // mirror never saw are skipped silently: these fire for every creature in
+  // view, not just for mirrored objects.
+  if (PLUGIN_WORLD_FEED_ON) {
+    const onWield = (attached) => (evt) => {
+      const d = evt?.detail ?? evt;
+      const item = (d?.u32Payload ?? 0) >>> 0;
+      if (!item || !world.exists(item)) return;
+      world.dispatchItemParent(item, attached ? ((d?.u32Payload2 ?? 0) >>> 0) : 0);
+    };
+    client.events.on('kind:49', onWield(true));
+    client.events.on('kind:47', onWield(false));
+  }
+}
+
+/**
+ * 2026-10-07 — the live object CREATE / REMOVE feed for `client.world`.
+ *
+ * The host already runs every EntityUpdate KIND_SPAWN / KIND_REMOVE through
+ * the renderer-neutral `WorldObjectManager` (app/landblock_stream.js
+ * neutralSpawn / neutralRemove; index.html constructs it as `window.__wom`),
+ * which builds the canonically-classified typed instance (and buffers the
+ * boot flood until its taxonomy loads). This binds the WorldState to that
+ * manager's `created` / `deleted` events so the plugin mirror ADOPTS the same
+ * typed instances (one object per guid, no second classification) and
+ * releases them on remove, keeping the mirror bounded by the wire's
+ * create/delete pairs. Objects the manager already holds are backfilled.
+ *
+ * Gaps (documented in plugins/api.js coverage row 1): contained / pack items
+ * get no KIND_SPAWN (lib.rs skip_contained_spawn), so they are not mirrored;
+ * objects that leave visibility are released by the 25 s client cull's
+ * KIND_REMOVE (`?maintPrune`, default-ON since 2026-10-07 NETSYNC-4; `=off`
+ * keeps them until the server deletes them), exactly like `window.__wom`.
+ *
+ * Idempotent per (world, manager); rebinding a manager to a NEW world (a
+ * fresh plugin client) detaches the old one. `?pluginWorldFeed=off` → no-op.
+ *
+ * @param {WorldState} world
+ * @param {object} manager WorldObjectManager (EventTarget with `objects`)
+ * @param {{enabled?: boolean}} [opts] test override for the URL flag
+ * @returns {boolean} true when (newly) bound
+ */
+export function bindWorldStateToManager(world, manager, opts = {}) {
+  const enabled = opts.enabled ?? PLUGIN_WORLD_FEED_ON;
+  if (!enabled || !world || !manager || typeof manager.addEventListener !== 'function') return false;
+  const prev = manager._worldStateBridge;
+  if (prev && prev.world === world) return false;
+  if (prev) {
+    manager.removeEventListener('created', prev.onCreated);
+    manager.removeEventListener('deleted', prev.onDeleted);
+    if (prev.world._typedSource === manager) {
+      prev.world._typedSource = null;
+      prev.world._feedLocalPlayer = false;
+    }
+  }
+  const onCreated = (e) => {
+    const wo = e?.detail?.object;
+    if (!wo) return;
+    world.dispatchItemCreateObject({ guid: wo.id >>> 0, object: wo });
+  };
+  const onDeleted = (e) => {
+    const g = e?.detail?.guid ?? e?.detail?.object?.id;
+    if (g == null) return;
+    world.dispatchItemDeleteObject(g >>> 0);
+  };
+  manager.addEventListener('created', onCreated);
+  manager.addEventListener('deleted', onDeleted);
+  manager._worldStateBridge = { world, onCreated, onDeleted };
+  world._typedSource = manager;
+  world._feedLocalPlayer = true;
+  // Backfill: spawns that reached the manager before this bind.
+  if (manager.objects instanceof Map) {
+    for (const wo of manager.objects.values()) {
+      if (wo) world.dispatchItemCreateObject({ guid: wo.id >>> 0, object: wo });
+    }
+  }
+  // The local guid may already be known (bind after PLAYER_SPAWNED).
+  if (world._localPlayerGuid) world.setLocalPlayerGuid(world._localPlayerGuid);
+  return true;
 }

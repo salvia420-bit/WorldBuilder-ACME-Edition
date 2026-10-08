@@ -334,6 +334,23 @@ export function terrainGrassDensity() {
   return _numFlag("terrainGrassDensity", 1, 0, 2);
 }
 
+/** `?grassOffRoad` — keep grass blades (and rock pebbles, the other opaque
+ *  ground-lying scatter) off the road the ground shader paints, with a 1.5 m
+ *  thinning verge. 2026-10-07, owner report off a Holtburg video take: "see the
+ *  grass on the road. can we make it so its not on the road" — a retail road
+ *  vertex keeps its Grassland/rock terrain code, so the code-keyed scatter
+ *  planted straight through every road. DEFAULT-ON; `=off` (or 0/false/no)
+ *  restores the old field exactly. A NON-RETAIL fix to a non-retail effect, so
+ *  no preset key. Not memoized (read once per pool build), like
+ *  `terrainRockDensity`. Live A/B without a reload:
+ *  `window.__terrainGrass.setOffRoad(false|true)`. */
+export function grassOffRoadEnabled() {
+  const v = _strFlag("grassOffRoad");
+  if (v == null) return true;
+  const s = v.toLowerCase();
+  return !(s === "off" || s === "0" || s === "false" || s === "no" || s === "");
+}
+
 // ---------------------------------------------------------------------------
 // THE TRAIL MAP AND ITS THREE WRITERS (promotion-readiness, 2026-08-01).
 //

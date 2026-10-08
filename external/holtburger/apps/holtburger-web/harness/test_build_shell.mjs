@@ -254,7 +254,25 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // reachable but missing from the committed block until this re-run) → 303.
   // 2026-10-07: re-run for the new app/local_auto_motion.js; the block had
   // drifted again (14 statically reachable non-app modules missing) → 317.
-  const NON_APP_PRELOADS = 317;
+  // 2026-10-07 (later): + scene3d/batched_indirect_per_camera.js,
+  // scene3d/shadow_caster_list.js, scene3d/skip_empty_multidraw.js (shadow /
+  // batch perf trims; generator --check: up to date, 332 modules) → 320.
+  // 2026-10-07 (later still): + scene3d/cloud_night.js, scene3d/sky_glow.js,
+  // scene3d/terrain_round.js (night clouds / sky-glow sheets / terrain
+  // rounding; generator --check: up to date, 335 modules) → 323.
+  // 2026-10-07 (terrain step 4): + scene3d/terrain_micro.js (terrain fine
+  // detail; generator --check: up to date, 336 modules) → 324.
+  // 2026-10-07 (terrain step 3): + scene3d/visual_ground.js (objects drawn on
+  // the rounded ground; generator --check: up to date, 337 modules) → 325.
+  // 2026-10-07 (netsync): + scene3d/diag/remote_sync.js (`__diag.remoteSync`,
+  // remote movement-sync + remote cast-gesture diag; generator --check: up to
+  // date, 338 modules) → 326.
+  // 2026-10-07 (cloudfx): + scene3d/particles_over_clouds.js (particles drawn
+  // after the cloud composite; generator --check: up to date, 339 modules) → 327.
+  // 2026-10-07 (netsync round 2): + scene3d/ghost_rigs.js, imported only by
+  // scene3d/loop.js, whose import graph the generator does not list (loop.js
+  // itself is not in the block); generator --check: up to date → unchanged.
+  const NON_APP_PRELOADS = 327;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)

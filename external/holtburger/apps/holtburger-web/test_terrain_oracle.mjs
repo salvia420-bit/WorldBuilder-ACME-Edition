@@ -24,7 +24,13 @@
 //    smear (matches `WorldState::terrain_normal_at`);
 //  - `cornerCodes` gives the four cell corners for boundary feathering;
 //  - `terrain.js` still stashes `heights` in the lbMesh userData literal
-//    (the Wave 0A one-line edit the whole oracle stands on).
+//    (the Wave 0A one-line edit the whole oracle stands on);
+//  - ROADS (2026-10-07): `cornerRoads` in `cornerCodes` order, `roadEdgeM` per
+//    retail road-overlay decomposition (corner / edge / diagonal / 3-corner =
+//    two edges / all-road), Infinity with no road or no road data, survives
+//    park, adopted from `userData.roadCodes` by the backfill, and terrain.js
+//    still stashes `roadCodes` in the userData literal. (The real-DAT
+//    calibration of the widths lives in test_terrain_grass_offroad.mjs.)
 //
 // Pure ESM — no three stub needed (`terrain_oracle.js` imports only
 // `landblock_lru.js` + `terrain_families.js`, both import-free leaves).
@@ -36,6 +42,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 import {
   createTerrainOracle, cellSwToNeCut,
   triangleHeightInCell, triangleGradInCell,
+  roadEdgeDistanceInCell, ROAD_PAINT,
   VERTEX_GRID, VERTEX_SPACING_M, METERS_PER_LANDBLOCK,
 } from "./scene3d/terrain_oracle.js";
 import {
@@ -458,6 +465,96 @@ console.log("terrain_oracle — cornerCodes (boundary feathering, §8 risk 2)");
   check("sample(x, y, out) reuses the cornerCodes buffer", r2.cornerCodes === cc);
 }
 
+// ---- roads (2026-10-07) -----------------------------------------------
+console.log("terrain_oracle — roads: cornerRoads + roadEdgeM");
+{
+  const E = ROAD_PAINT.edgeHalfWidthM, D = ROAD_PAINT.diagHalfWidthM, C = ROAD_PAINT.cornerRadiusM;
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  // Pure model, one case per retail road-overlay shape. Args: SW, SE, NW, NE, fx, fy.
+  check("no road corner -> Infinity", roadEdgeDistanceInCell(0, 0, 0, 0, 0.5, 0.5) === Infinity);
+  check("all four corners -> the whole cell is road (all_road)",
+    roadEdgeDistanceInCell(1, 1, 1, 1, 0.5, 0.5) < 0 && roadEdgeDistanceInCell(2, 3, 1, 1, 0.99, 0.01) < 0);
+  check("SW+SE -> south edge lane", near(roadEdgeDistanceInCell(1, 1, 0, 0, 0.3, 0.25), 6 - E));
+  check("NW+NE -> north edge lane", near(roadEdgeDistanceInCell(0, 0, 1, 1, 0.3, 0.75), 6 - E));
+  check("SW+NW -> west edge lane", near(roadEdgeDistanceInCell(1, 0, 1, 0, 0.25, 0.9), 6 - E));
+  check("SE+NE -> east edge lane", near(roadEdgeDistanceInCell(0, 1, 0, 1, 0.75, 0.1), 6 - E));
+  check("SW+NE -> SW-NE diagonal lane",
+    near(roadEdgeDistanceInCell(1, 0, 0, 1, 0.5, 0.5), -D)
+    && near(roadEdgeDistanceInCell(1, 0, 0, 1, 1, 0), 24 * Math.SQRT1_2 - D));
+  check("SE+NW -> SE-NW diagonal lane",
+    near(roadEdgeDistanceInCell(0, 1, 1, 0, 0.5, 0.5), -D)
+    && near(roadEdgeDistanceInCell(0, 1, 1, 0, 0, 0), 24 * Math.SQRT1_2 - D));
+  check("one corner -> a quarter disc at that corner",
+    near(roadEdgeDistanceInCell(0, 0, 0, 1, 1, 1), -C)
+    && near(roadEdgeDistanceInCell(0, 0, 0, 1, 0.75, 0.75), Math.hypot(6, 6) - C)
+    && near(roadEdgeDistanceInCell(1, 0, 0, 0, 0.25, 0), 6 - C));
+  // 3 corners (missing NE) -> retail [9, 3]: west + south lanes through SW.
+  // NEVER the SE-NW diagonal: the cell centre is 12 m from both lanes.
+  check("3 corners -> two edge lanes through the corner opposite the gap",
+    near(roadEdgeDistanceInCell(1, 1, 1, 0, 0.5, 0.5), 12 - E)
+    && near(roadEdgeDistanceInCell(1, 1, 1, 0, 0.1, 0.9), 2.4 - E)
+    && near(roadEdgeDistanceInCell(1, 1, 1, 0, 0.9, 0.05), 1.2 - E));
+  check("3 corners: the far (missing) corner is off-road",
+    roadEdgeDistanceInCell(1, 1, 1, 0, 0.95, 0.95) > 0
+    && roadEdgeDistanceInCell(0, 1, 1, 1, 0.05, 0.05) > 0
+    && roadEdgeDistanceInCell(1, 0, 1, 1, 0.95, 0.05) > 0
+    && roadEdgeDistanceInCell(1, 1, 0, 1, 0.05, 0.95) > 0);
+
+  // Through the oracle: a road along vertex column x = 2 (rows 1..6) plus one
+  // lone road vertex at (6, 6).
+  const codes = makeCodes(1);
+  const roads = new Uint8Array(81);
+  for (let row = 1; row <= 6; row += 1) roads[2 * 9 + row] = 2;   // any non-zero is road
+  roads[6 * 9 + 6] = 1;
+  const oracle = createTerrainOracle();
+  oracle.noteLandblock(LBKEY, { codes, heights: makeHeights(3), roads, lbX: LBX, lbY: LBY });
+  const s = oracle.sample(OX + 2.25 * 24, OY + 3.5 * 24);   // cell (2,3): SW+NW road
+  check("cornerRoads is [sw, se, nw, ne] in cornerCodes order, normalised to 0/1",
+    s.cornerRoads.length === 4 && Array.from(s.cornerRoads).join() === "1,0,1,0",
+    Array.from(s.cornerRoads).join());
+  check("hasRoads true for an LB noted with road data", s.hasRoads === true);
+  check("roadEdgeM = 6 m from the west-edge lane, minus its half-width",
+    Math.abs(s.roadEdgeM - (6 - E)) < 1e-4, String(s.roadEdgeM));
+  check("the lane is negative right on the vertex line",
+    oracle.sample(OX + 2 * 24 + 0.5, OY + 3.5 * 24).roadEdgeM < 0
+    && oracle.sample(OX + 2 * 24 - 0.5, OY + 3.5 * 24).roadEdgeM < 0);
+  check("a lone road vertex is a disc (corner mask) in each of its 4 cells",
+    [[1, 1], [-1, 1], [1, -1], [-1, -1]].every(([dx, dy]) =>
+      oracle.sample(OX + 6 * 24 + dx, OY + 6 * 24 + dy).roadEdgeM < 0
+      && oracle.sample(OX + 6 * 24 + dx * 6, OY + 6 * 24 + dy * 6).roadEdgeM > 0));
+  check("far from any road -> Infinity", oracle.sample(OX + 4.5 * 24, OY + 0.5 * 24).roadEdgeM === Infinity);
+  const out = {};
+  const r1 = oracle.sample(OX + 10, OY + 10, out);
+  const cr = r1.cornerRoads;
+  oracle.sample(OX + 50, OY + 80, out);
+  check("sample(x, y, out) reuses the cornerRoads buffer", out.cornerRoads === cr);
+
+  // No road data (an older mesh): no road, never a guess.
+  const o2 = createTerrainOracle();
+  o2.noteLandblock(LBKEY, { codes, heights: makeHeights(3), lbX: LBX, lbY: LBY });
+  const s2 = o2.sample(OX + 2 * 24, OY + 3.5 * 24);
+  check("an LB noted WITHOUT roads -> hasRoads false, roadEdgeM Infinity, corners 0",
+    s2.hasRoads === false && s2.roadEdgeM === Infinity && Array.from(s2.cornerRoads).join() === "0,0,0,0");
+
+  // Park survival + backfill adoption of userData.roadCodes.
+  const children = [];
+  const mesh = fakeMesh(LBX, LBY, codes, makeHeights(3));
+  mesh.userData.roadCodes = roads;
+  children.push(mesh);
+  const o3 = createTerrainOracle({ getTerrainMeshes: () => children });
+  check("backfill adopts userData.roadCodes",
+    o3.sample(OX + 2 * 24, OY + 3.5 * 24).roadEdgeM < 0);
+  children.length = 0;   // landblock_lru.park() detaches the mesh
+  check("PARK: roads keep answering with the mesh out of terrainGroup",
+    o3.sample(OX + 2 * 24, OY + 3.5 * 24).roadEdgeM < 0);
+  roads.fill(0);         // the cache holds its own COPY
+  check("the cache owns a copy of the road bytes (mesh disposal cannot change it)",
+    o3.sample(OX + 2 * 24, OY + 3.5 * 24).roadEdgeM < 0);
+  o3.invalidate(LBKEY);
+  check("invalidate drops roads with the rest of the entry",
+    o3.sample(OX + 2 * 24, OY + 3.5 * 24) === null);
+}
+
 // ---- familyCoverage ---------------------------------------------------
 console.log("terrain_oracle — familyCoverage");
 {
@@ -492,6 +589,11 @@ console.log("terrain_oracle — terrain.js userData contract");
     "add `heights: Float32Array.from(wasmMesh.heights),` to the userData literal");
   check("terrain.js still stashes lbX/lbY the oracle keys off",
     /^\s*lbX,\s*$/m.test(body) && /^\s*lbY,\s*$/m.test(body));
+  check("terrain.js stashes `roadCodes` on lbMesh.userData (2026-10-07 off-road grass reads it)",
+    /roadCodes:\s*roadCodesCopy/.test(body));
+  const vfx = readFileSync(resolvePath(__dirname, "scene3d/terrain_vfx.js"), "utf8");
+  check("terrain_vfx.js forwards roads at every oracle note site (attach + late-oracle replay)",
+    (vfx.match(/roads: entry\.roads/g) || []).length >= 2 && /roads: ud\.roadCodes/.test(vfx));
 }
 
 // ---- constants --------------------------------------------------------

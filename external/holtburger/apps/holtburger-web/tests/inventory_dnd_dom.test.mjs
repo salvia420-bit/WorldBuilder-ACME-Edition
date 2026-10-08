@@ -131,6 +131,7 @@ const inventoryMod = load("plugins/inventory.js", ["view"], {
     "parseSlotsViewChecked", "canEquipInSlot", "buildPlayerEquipState", "formatAppraisalTooltip",
     "takeInventoryRows", "rowUsesPackSlot", "pickWieldSlotMask", "createPackOrder", "packCapacity",
     "mergeAmount", "DROP_TARGET", "MAIN_PACK_KEY", "PACKS_KEY", "decideItemDrop",
+    "wieldEventTouchesLocal",
     "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
     "showItemTooltip", "hideItemTooltip", "localPlayerGuid",
   ]),

@@ -76,6 +76,7 @@ import {
   MAIN_PACK_KEY,
   PACKS_KEY,
   decideItemDrop,
+  wieldEventTouchesLocal,
 } from "./inventory_helpers.js";
 import {
   beginItemDrag,
@@ -1273,6 +1274,13 @@ function doMount(parentEl, _ctx) {
       if (el.dataset.itemGuid === g) slotEntry.icon.style.backgroundImage = `url("${url}")`;
     });
   }
+  // 2026-10-07 — `[paperdoll-slots]` logs a multi-slot item's mapping once
+  // per change (it used to repeat on every rebuild: ~360 lines for the same
+  // two items in a 15-minute session); `?diag=1` restores the per-rebuild trace.
+  const paperdollSlotsLogged = new Map(); // guid → last logged mapping
+  const paperdollSlotsTraceAll = (() => {
+    try { return new URLSearchParams(window.location?.search || "").get("diag") === "1"; } catch (_) { return false; }
+  })();
   function placeEquippedInDoll(row) {
     const slots = dollSlotsFor(row.equipMask);
     if (!slots.length) return false;
@@ -1282,7 +1290,12 @@ function doMount(parentEl, _ctx) {
     if (leaving && p.op === "move" && p.toKey != null && !p.external) return true; // drawn in the grid
     for (const slotEntry of slots) showInDoll(slotEntry, row, leaving);
     if (slots.length > 1) {
-      console.debug?.(`[paperdoll-slots] ${row.name || row.guid} mask=0x${(row.equipMask >>> 0).toString(16)} → ${slots.map((e) => e.slot.name).join(", ")}`);
+      const line = `${row.name || row.guid} mask=0x${(row.equipMask >>> 0).toString(16)} → ${slots.map((e) => e.slot.name).join(", ")}`;
+      if (paperdollSlotsTraceAll || paperdollSlotsLogged.get(row.guid) !== line) {
+        if (paperdollSlotsLogged.size >= 64) paperdollSlotsLogged.clear();
+        paperdollSlotsLogged.set(row.guid, line);
+        console.debug?.(`[paperdoll-slots] ${line}`);
+      }
     }
     return true;
   }
@@ -1353,7 +1366,7 @@ function doMount(parentEl, _ctx) {
           textureChanges: meta.textureChanges ?? new Uint32Array(0),
           heritage,
         },
-      ).then((ok) => { if (ok) paperdollViewport.start?.(); }).catch(() => {});
+      ).catch(() => {}); // the viewport re-renders itself when the panel is shown
     } catch (_) { /* viewport is best-effort */ }
   }
 
@@ -1406,7 +1419,10 @@ function doMount(parentEl, _ctx) {
     return groups;
   }
 
+  // 2026-10-07 — live-check surface for the kind:47/49 filter below.
+  const rebuildStats = (window.__inventoryRebuildStats = { rebuilds: 0, wieldEventsSkipped: 0 });
   function rebuild() {
+    rebuildStats.rebuilds += 1;
     rows = takeInventoryRows(sessionHandleNow());
     rowsByGuid = new Map(rows.map((r) => [r.guid, r]));
     stubs = new Map();
@@ -1650,11 +1666,22 @@ function doMount(parentEl, _ctx) {
     const client = window.__pluginClient;
     if (client?.events?.on) {
       const onStats = () => { refreshBurden(); refreshAetheriaGating(); };
+      // 2026-10-07 — kind:47/49 fire for every wielder transition in view;
+      // rebuild (panel + doll) only for ours (inventory_helpers.js
+      // wieldEventTouchesLocal). Read synchronously: the detail is the wasm
+      // ClientEvent box, freed after the drain iteration.
+      const onWieldChange = (ev) => {
+        if (wieldEventTouchesLocal(ev?.detail ?? ev, localPlayerGuid(), (g) => rowsByGuid.has(g))) {
+          scheduleRebuild();
+        } else {
+          rebuildStats.wieldEventsSkipped += 1;
+        }
+      };
       const evs = [
         ["playerStatsUpdated", onStats],
         ["playerInventoryChanged", scheduleRebuild],
-        ["kind:47", scheduleRebuild],
-        ["kind:49", scheduleRebuild],
+        ["kind:47", onWieldChange],
+        ["kind:49", onWieldChange],
       ];
       for (const [name, fn] of evs) {
         client.events.on(name, fn);
@@ -1666,6 +1693,7 @@ function doMount(parentEl, _ctx) {
   return () => {
     window.removeEventListener("keydown", onKey);
     delete window.__isInventoryItem;
+    if (window.__inventoryRebuildStats === rebuildStats) delete window.__inventoryRebuildStats;
     if (window.__refreshPaperdoll === refreshPaperdollViewport) delete window.__refreshPaperdoll;
     if (pollTimer) clearInterval(pollTimer);
     if (viewportLoadTimer) clearInterval(viewportLoadTimer);

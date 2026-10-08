@@ -82,6 +82,7 @@ const APP_ROOT = path.resolve(HERE, "..");
 const TIER1 = [
   { flag: "inputFunnel", file: "test_a14_i1_input_controller.mjs" },
   { flag: "inputFunnelV2", file: "test_input_funnel_v2.mjs" },
+  { flag: "heldKeyRelease", file: "test_held_key_release.mjs" },
   { flag: "hookDrain", file: "test_hook_windows.mjs" },
   { flag: "hookDrain", file: "test_hook_fire_queue.mjs" },
   { flag: "surfaceUnified+surfaceParityV2", file: "test_f7_8_surface_bitfield.mjs" },
@@ -93,6 +94,10 @@ const TIER1 = [
   // schedule. This one lifts the shipped decoder out of entities.js.
   { flag: "scriptHookTime", file: "harness/test_script_hook_time.mjs" },
   { flag: "particleOwner", file: "test_particle_owner.mjs" },
+  // HIDEFX (2026-10-07): the portal "pink bubbles" that never went away —
+  // Hide/Hidden/UnHide emitter lifecycle against REAL client_portal.dat bytes
+  // (pins the legacy leak on the =off arm, the retail stop on the =on arm).
+  { flag: "playEffectLifecycle", file: "test_hidefx_lifecycle.mjs" },
   { flag: "preCreateBuffer", file: "test_a8_m4_pre_create_buffer.mjs" },
   { flag: "retailRunKeys(JS)", file: "test_a14_i3_run_keys.mjs" },
   { flag: "particleDegrade(JS)", file: "test_a11_s4_particle_degrade.mjs" },
@@ -159,6 +164,8 @@ const TIER4 = [
   { flag: "ragdollEnv", file: "tests/ragdoll_env.test.mjs" },
   { flag: "projectileLights+projectileLaunchClock+projectileTerrainStop", file: "tests/projectile_visual_fidelity.test.mjs" },
   { flag: "ragdollEnergy", file: "tests/ragdoll_energy.test.mjs" },
+  // 2026-10-07 — ragdoll landing on a corpse must settle (jiggle report).
+  { flag: "ragdollStackLive", file: "tests/ragdoll_stack.test.mjs" },
   { flag: "killImpulse", file: "tests/kill_impulse.test.mjs" },
   { flag: "gfxRelief", file: "tests/gfx_relief.test.mjs" },
   { flag: "combatInstallGiveup", file: "tests/combat_install_giveup.test.mjs" },
@@ -197,6 +204,18 @@ const TIER5 = [
   { tier: 5, flag: "bc7_pre_phase", file: "test_bc7_pre_phase.mjs" },
   { tier: 5, flag: "atlas_bc7_pre_gate", file: "test_atlas_bc7_pre_gate.mjs" },
   { tier: 5, flag: "terrain_bc7_aniso", file: "test_terrain_bc7_aniso.mjs" },
+  // 2026-10-07 — CLIP-ALPHA guard (`?bc7ClipAlphaGuard`, the reed clumps drawn
+  // as black quads): synthetic mechanics everywhere, plus the real reed record
+  // (retail portal DAT + the served dist's tex-xu7/tex-bc7 records). Both
+  // fixtures are external, so the real suite is NO-FIXTURE when either is
+  // absent (HB_PORTAL_DAT / HB_CLIP_DIST override the paths).
+  { tier: 5, flag: "bc7_clip_alpha_guard", file: "harness/test_bc7_clip_alpha_guard.mjs" },
+  { tier: 5, flag: "bc7_clip_alpha_guard_real", file: "harness/test_bc7_clip_alpha_guard_real.mjs",
+    requires: () => {
+      const dat = process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat";
+      const dist = (process.env.HB_CLIP_DIST || "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2") + "/manifest/holtburger-tex-xu7.bin";
+      return [dat, dist].find((p) => !existsSync(p)) || dist;
+    } },
   { tier: 5, flag: "r10_index_orchestrator", file: "test_r10_index_orchestrator.mjs" },
   { tier: 5, flag: "portal_space_sequencer", file: "test_portal_space_sequencer.mjs" },
   { tier: 5, flag: "rig_indoor_layer", file: "test_rig_indoor_layer.mjs" },
@@ -229,6 +248,9 @@ const TIER5 = [
   { tier: 5, flag: "character_creation_reopen", file: "tests/character_creation_reopen.test.mjs" },
   { tier: 5, flag: "character_info_tab_labels", file: "tests/character_info_tab_labels.test.mjs" },
   { tier: 5, flag: "col20_remote_turn_gate", file: "tests/col20_remote_turn_gate.test.cjs" },
+  // NETSYNC (2026-10-07, Coldeve capture): __diag.remoteSync + the remote
+  // motion-keep (Rust) / turn-gate-fix (JS) wiring.
+  { tier: 5, flag: "netsync_remote_sync", file: "harness/test_netsync_remote_sync.mjs" },
   { tier: 5, flag: "combat_bar_skill_stride", file: "tests/combat_bar_skill_stride.test.mjs" },
   { tier: 5, flag: "combat_hud_power_ownership", file: "tests/combat_hud_power_ownership.test.mjs" },
   { tier: 5, flag: "hud_combat_status", file: "tests/hud_combat_status.test.mjs" },
@@ -304,6 +326,7 @@ const TIER5 = [
   { tier: 5, flag: "ac_spell_shape", file: "test_ac_spell_shape.mjs" },
   { tier: 5, flag: "adapter_atlas_guard", file: "test_adapter_atlas_guard.mjs" },
   { tier: 5, flag: "adaptive_res_settle", file: "test_adaptive_res_settle.mjs" },
+  { tier: 5, flag: "adaptive_res_gpu_check", file: "test_adaptive_res_gpu_check.mjs" },
   { tier: 5, flag: "ambient_baked", file: "test_ambient_baked.mjs" },
   { tier: 5, flag: "ambient_frame", file: "test_ambient_frame.mjs" },
   { tier: 5, flag: "animated_scenery", file: "test_animated_scenery.mjs" },
@@ -318,6 +341,9 @@ const TIER5 = [
   { tier: 5, flag: "cell_lights", file: "test_cell_lights.mjs" },
   { tier: 5, flag: "cloud_overlay_dispose", file: "test_cloud_overlay_dispose.mjs" },
   { tier: 5, flag: "cloudsMainPass", file: "tests/clouds_main_pass.test.mjs" },
+  // 2026-10-07 particles drawn after the cloud + aerial composite (split post
+  // chain; the -sky glow stays behind the clouds).
+  { tier: 5, flag: "particlesOverClouds", file: "tests/particles_over_clouds.test.mjs" },
   // 2026-10-05 audio retail parity (voice pool, retail mixer, 0xF750, UI/portal sounds, volume 0).
   { tier: 5, flag: "audio_voice_pool", file: "tests/audio_voice_pool.test.mjs" },
   { tier: 5, flag: "audioRetailPan", file: "tests/audio_retail_mixer.test.mjs" },
@@ -329,6 +355,16 @@ const TIER5 = [
   { tier: 5, flag: "audio_ambient_model", file: "tests/audio_ambient_model.test.mjs" },
   { tier: 5, flag: "audio_manager_retail+audioWhenInactive", file: "tests/audio_manager_retail.test.mjs" },
   { tier: 5, flag: "cloud_storm_look", file: "test_cloud_storm_look.mjs" },
+  // 2026-10-07 horizon fog band + clouds-at-full-opacity AP blend.
+  { tier: 5, flag: "horizonFog+cloudsFullOpacity", file: "test_fog_band.mjs" },
+  // 2026-10-07 clouds lit by the sky's night-ramped sun (night clouds dark).
+  { tier: 5, flag: "cloudNight", file: "tests/cloud_night_lighting.test.mjs" },
+  // 2026-10-07 moon nebula sheets as far-depth sky glows (the sky wedges) +
+  // AerialPerspective takes the sky's sun (it was (0,0,0)).
+  { tier: 5, flag: "skyGlow+aerialSun", file: "tests/sky_glow.test.mjs" },
+  // 2026-10-07 additive particles unfogged like retail (D3DRS_FOGENABLE off for
+  // the Additive bit) instead of three's mix toward fogColor (pale quads).
+  { tier: 5, flag: "additiveFogBlack", file: "tests/additive_fog.test.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },
   { tier: 5, flag: "diag_combat_giveup", file: "test_diag_combat_giveup.mjs" },
@@ -426,9 +462,19 @@ const TIER5 = [
   { tier: 5, flag: "terrain_dirt", file: "test_terrain_dirt.mjs" },
   { tier: 5, flag: "terrain_families", file: "test_terrain_families.mjs" },
   { tier: 5, flag: "terrain_grass_scatter", file: "test_terrain_grass_scatter.mjs" },
+  // 2026-10-07 — grass/pebbles off the painted road (?grassOffRoad): real-DAT road masks + Holtburg.
+  { tier: 5, flag: "terrain_grass_offroad", file: "test_terrain_grass_offroad.mjs" },
   { tier: 5, flag: "terrain_grass_shader", file: "test_terrain_grass_shader.mjs" },
   { tier: 5, flag: "terrain_oracle", file: "test_terrain_oracle.mjs" },
   { tier: 5, flag: "terrain_palette", file: "test_terrain_palette.mjs" },
+  { flag: "terrainCellFracClamp", file: "test_terrain_cell_frac_clamp.mjs" },
+  // 2026-10-07 — terrain corner rounding: real-DAT deviation bound + crack-free seams.
+  { tier: 5, flag: "terrain_round", file: "test_terrain_round.mjs" },
+  // 2026-10-07 — terrain rounding step 3: objects drawn on the rounded ground (real DAT).
+  { tier: 5, flag: "visual_ground", file: "test_visual_ground.mjs" },
+  // 2026-10-07 — terrain fine detail (step 4): micro-relief maths, height blend,
+  // gamma crossfade, mip-seam taps, sampler budget on the assembled program.
+  { tier: 5, flag: "terrain_micro", file: "test_terrain_micro.mjs" },
   { tier: 5, flag: "terrain_ring_batch", file: "test_terrain_ring_batch.mjs" },
   { tier: 5, flag: "terrain_rock", file: "test_terrain_rock.mjs" },
   { tier: 5, flag: "terrain_sand", file: "test_terrain_sand.mjs" },
@@ -496,6 +542,12 @@ const TIER5 = [
   { tier: 5, flag: "stat_batch_memo_slots", file: "test_stat_batch_memo_slots.mjs" },
   { tier: 5, flag: "stat_batch_runs", file: "test_stat_batch_runs.mjs" },
   { tier: 5, flag: "stat_batch_walk", file: "test_stat_batch_walk.mjs" },
+  // 2026-10-07 shadow/batch path trims (1070 ultra, CSM re-rastering every frame):
+  // per-camera BatchedMesh indirect textures, one scene walk per shadow raster,
+  // empty multidraws skip three's draw setup.
+  { tier: 5, flag: "bm_indirect_per_camera", file: "test_bm_indirect_per_camera.mjs" },
+  { tier: 5, flag: "shadow_caster_list", file: "test_shadow_caster_list.mjs" },
+  { tier: 5, flag: "skip_empty_multidraw", file: "test_skip_empty_multidraw.mjs" },
   { tier: 5, flag: "static_atlas_growth", file: "test_static_atlas_growth.mjs" },
   { tier: 5, flag: "static_atlas_pages", file: "test_static_atlas_pages.mjs" },
   { tier: 5, flag: "static_geom_cache", file: "test_static_geom_cache.mjs" },

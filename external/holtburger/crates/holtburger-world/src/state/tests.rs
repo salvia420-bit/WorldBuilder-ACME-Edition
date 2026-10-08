@@ -6779,3 +6779,214 @@ fn test_aug_trace_records_wipe_and_self_create_preserves_augmentation() {
         "this control is the ENTITY-went shape; the live defect is the other one"
     );
 }
+
+/// NETSYNC-1 (2026-10-07, Coldeve capture). A remote body keeps its
+/// interpreted motion state across a wire position correction — retail
+/// `MoveOrTeleport` (acclient.c:323451-323498) never touches the object's
+/// `CMotionInterp` — so a remote runner keeps advancing by its state
+/// velocity between ~1 Hz UpdatePositions instead of standing on each
+/// corrected pose until its next motion CHANGE. `?remoteMotionKeep=off`
+/// (`set_remote_motion_keep_enabled(false)`) restores the pre-fix wipe.
+#[test]
+fn netsync1_remote_body_keeps_motion_state_across_position_corrections() {
+    use crate::entity::{EntityMotionSnapshot, OrderedMotionSpeed};
+
+    fn run_case(keep: bool, seed_from_spawn: bool) -> (Option<EntityMotionSnapshot>, f32) {
+        let mut state = WorldState::synthetic();
+        state.set_remote_interp_enabled(true);
+        state.scene.set_remote_motion_keep_enabled(keep);
+        let guid = Guid(0x5006_0001);
+        let terrain = 12.0;
+        let start = WorldPosition {
+            // Low word < 0x100 → outdoor (the D1 walk is outdoor-only).
+            landblock_id: Guid(0x0102_0011),
+            coords: Vector3::new(50.0, 50.0, terrain),
+            rotation: holtburger_common::math::Quaternion::from_heading(0.0),
+        };
+        let run = EntityMotionSnapshot {
+            forward_command: Some(InterpretedMotionCommand::RUN_FORWARD),
+            forward_speed: OrderedMotionSpeed::from_f32(1.0),
+            ..Default::default()
+        };
+        let mut entity = Entity::new(guid, "Runner".to_string(), start);
+        if seed_from_spawn {
+            // ObjectCreate already carried the run (a remote that came into
+            // view running): the snapshot is on the entity, never on the body.
+            entity.motion_snapshot = Some(run);
+        }
+        state.add_entity(entity);
+        state
+            .scene
+            .populate_terrain_heights(0x0102_0000, [terrain; 81]);
+        if !seed_from_spawn {
+            // The UpdateMotion arm (handlers/movement.rs
+            // `update_entity_motion_snapshot`): entity + body both get it.
+            state.entities.get_mut(guid).unwrap().motion_snapshot = Some(run);
+            state.update_runtime_body_motion_snapshot_for_guid(guid, Some(run));
+        }
+        // The next wire correction, 4 m ahead (grounded).
+        let corrected = WorldPosition {
+            coords: Vector3::new(50.0, 54.0, terrain),
+            ..start
+        };
+        let accepted = state.apply_entity_position_pack(
+            guid,
+            &PositionPack {
+                pos: corrected,
+                instance_sequence: 1,
+                position_sequence: 1,
+                flags: UpdatePositionFlag::IS_GROUNDED,
+                ..PositionPack::default()
+            },
+            &mut Vec::new(),
+        );
+        assert!(accepted, "correction accepted");
+        let body_id = SpatialBodyId::Entity(guid);
+        let kept = state.scene.body(body_id).unwrap().motion_state;
+        // Let any interpolation node finish first (the near-player lattice
+        // arm queues one; the far / no-player arm snaps): the walk under test
+        // is what happens AFTER the body reaches the corrected pose.
+        for _ in 0..50 {
+            if !state
+                .scene
+                .body(body_id)
+                .unwrap()
+                .position_manager
+                .queue_active()
+            {
+                break;
+            }
+            state.scene.step_remote_position_managers(0.1);
+        }
+        let before = state.scene.body(body_id).unwrap().pose;
+        for _ in 0..5 {
+            state.scene.step_remote_position_managers(0.1);
+        }
+        let after = state.scene.body(body_id).unwrap().pose;
+        let d = after.global_coords() - before.global_coords();
+        (kept, (d.x * d.x + d.y * d.y).sqrt())
+    }
+
+    // UpdateMotion then UpdatePosition (the common case).
+    let (kept, moved) = run_case(true, false);
+    assert_eq!(
+        kept.and_then(|m| m.forward_command),
+        Some(InterpretedMotionCommand::RUN_FORWARD),
+        "the run survives the correction",
+    );
+    assert!(
+        (moved - 2.0).abs() < 0.05,
+        "4 m/s × 0.5 s after the correction, moved {moved}"
+    );
+
+    // Spawned running: the first correction seeds the body from the entity.
+    let (seeded, moved) = run_case(true, true);
+    assert_eq!(
+        seeded.and_then(|m| m.forward_command),
+        Some(InterpretedMotionCommand::RUN_FORWARD)
+    );
+    assert!(
+        (moved - 2.0).abs() < 0.05,
+        "spawn-seeded runner advances, moved {moved}"
+    );
+
+    // Escape hatch: the pre-fix wipe, and the runner stands on the pose.
+    let (wiped, still) = run_case(false, false);
+    assert!(
+        wiped.is_none(),
+        "?remoteMotionKeep=off keeps the legacy wipe"
+    );
+    assert!(still < 1e-4, "...and the body does not advance: {still}");
+}
+
+/// NETSYNC-3 (2026-10-07). A remote body's turn rate is its OWN motion
+/// table's TurnRight omega at its current stance (retail `add_motion` /
+/// `combine_motion`: speed × MotionData.omega, acclient.c:337431 / :337477),
+/// installed whenever its motion state is (the UpdateMotion arm and the
+/// NETSYNC-1 re-seed); a stance the table does not author falls back to the
+/// table's default style, an unknown table to `None` (scene fallback).
+#[test]
+fn netsync3_remote_turn_omega_resolves_from_the_entity_motion_table() {
+    use crate::entity::{EntityMotionSnapshot, OrderedMotionSpeed};
+
+    let player_table = 0x0900_0001;
+    let creature_table = 0x0900_0028;
+    let mut asset = motion_kinematics_asset_with_table(
+        player_table,
+        MotionStance::NonCombat as u32,
+        None,
+        None,
+        None,
+        // client_portal.dat 0x09000001 TurnRight cycle omega (holtburger-dat
+        // `netsync3_turn_right_omega_is_clockwise_in_retail_tables`).
+        Some(Vector3::new(0.0, 0.0, -1.5)),
+    );
+    let creature = motion_kinematics_asset_with_table(
+        creature_table,
+        MotionStance::NonCombat as u32,
+        None,
+        None,
+        None,
+        Some(Vector3::new(0.0, 0.0, -3.5)),
+    );
+    asset.motion_tables.extend(creature.motion_tables);
+
+    let mut state = WorldState::synthetic();
+    state.set_motion_kinematics(asset);
+    let pose = WorldPosition {
+        landblock_id: Guid(0x0102_0011),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let turning = |style: MotionStance| EntityMotionSnapshot {
+        current_style: Some(style),
+        turn_command: Some(InterpretedMotionCommand::TURN_RIGHT),
+        turn_speed: OrderedMotionSpeed::from_f32(1.0),
+        ..Default::default()
+    };
+    let mut omega_for = |guid: Guid, table: Option<u32>, style: MotionStance| {
+        let mut entity = Entity::new(guid, "Turner".to_string(), pose);
+        if let Some(table) = table {
+            entity.properties.set_did_prop(
+                holtburger_common::properties::PropertyDataId::MotionTable,
+                Guid(table),
+            );
+        }
+        state.add_entity(entity);
+        state.update_runtime_body_motion_snapshot_for_guid(guid, Some(turning(style)));
+        state
+            .scene
+            .body(SpatialBodyId::Entity(guid))
+            .expect("remote body")
+            .remote_turn_omega_z
+    };
+
+    assert_eq!(
+        omega_for(
+            Guid(0x5006_0101),
+            Some(player_table),
+            MotionStance::NonCombat
+        ),
+        Some(-1.5),
+        "player table, authored stance"
+    );
+    assert_eq!(
+        omega_for(Guid(0x5006_0102), Some(player_table), MotionStance::Magic),
+        Some(-1.5),
+        "a stance the table lacks falls back to its default style"
+    );
+    assert_eq!(
+        omega_for(
+            Guid(0x8000_0103),
+            Some(creature_table),
+            MotionStance::NonCombat
+        ),
+        Some(-3.5),
+        "a creature turns at its own table's rate"
+    );
+    assert_eq!(
+        omega_for(Guid(0x8000_0104), None, MotionStance::NonCombat),
+        None,
+        "no table → None (the scene's player-table fallback applies)"
+    );
+}

@@ -561,6 +561,12 @@ console.log("\n-- registration gate: ship-OFF registers NOTHING --");
     globalThis.window.__terrainGrass === handle && typeof handle.stats === "function");
   check("initTerrainGrass is idempotent", initTerrainGrass({ THREE: THREE_SPY }) === handle);
   check("it took the tier's blade count", handle.stats().config.count === 60025);
+  // 2026-10-07 — `?grassOffRoad` (default ON) rides the config, and the handle
+  // carries the live A/B switch (real-DAT coverage: test_terrain_grass_offroad.mjs).
+  check("off-road is ON by default (?grassOffRoad absent)",
+    handle.stats().config.offRoad === true && handle.stats().offRoad === true);
+  check("the handle exposes setOffRoad (null before the pool exists)",
+    typeof handle.setOffRoad === "function" && handle.setOffRoad(false) === null);
   handle.unregister();
   check("unregister drops it from the spine", !providersNow().includes("terrain.grass"));
   _resetTerrainGrass();

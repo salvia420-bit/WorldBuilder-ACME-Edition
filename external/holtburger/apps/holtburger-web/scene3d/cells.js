@@ -355,6 +355,10 @@ const PUNCH_SIDEDNESS = PUNCH_SIDEDNESS_MODE !== "off";
 // 32. Unit 16 is therefore legal, nothing fails to bind, and the terrain
 // visibly draws correctly on a live screencast while the warning fires ~once
 // per frame. Do not "fix" this by dropping a terrain feature.
+// SILENCED 2026-10-07: scene3d/index.js now sets
+// renderer.capabilities.maxTextures to MAX_COMBINED_TEXTURE_IMAGE_UNITS, the
+// limit three.js's shared unit counter actually has to stay under. It was
+// re-verified on the 1070: unit 16 bound, gl.getError() == 0.
 //
 // WHAT IT DOES COST, and the real follow-up: the authored budget documented in
 // `terrain_shared_glsl.js` ("the monolith is at 16/16 fragment texture units")
@@ -2147,6 +2151,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
  * missing, or the camera is not ready).
  */
 let _viewerCellLastLog = "";
+const VIEWER_CELL_TRACE_ALL = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("diag") === "1";
+  } catch (_) { return false; }
+})();
 function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
   let viewer = playerCell;
   const canResolve =
@@ -2184,7 +2193,14 @@ function updateViewerCell(scene3d, sessionHandle, playerCell, playerIndoor) {
   const viewerIndoor = viewer === playerCell ? !!playerIndoor : isIndoorCellId(viewer);
   scene3d._viewerCell = viewer;
   scene3d._viewerIndoor = viewerIndoor;
-  const key = `${playerCell}|${viewer}`;
+  // 2026-10-07 — log meaningful transitions only: outdoors (player AND
+  // viewer outdoor) is ONE state, so walking — or the chase camera trailing
+  // into the neighbouring 24 m cell — no longer logs every outdoor cell
+  // border (~400 lines / 15 min live). Any indoor side still logs per cell
+  // pair (the barn-door cases). `?diag=1` restores the every-change trace.
+  const key = (VIEWER_CELL_TRACE_ALL || viewerIndoor || playerIndoor)
+    ? `${playerCell}|${viewer}`
+    : "outdoor";
   if (canResolve && key !== _viewerCellLastLog) {
     _viewerCellLastLog = key;
     try {

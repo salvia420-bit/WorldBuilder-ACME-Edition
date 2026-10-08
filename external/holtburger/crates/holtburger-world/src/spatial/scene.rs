@@ -1387,6 +1387,21 @@ pub struct SpatialScene {
     /// OpenAC comparison 2026-10-04 (remote motion D5): remote bodies follow
     /// their client-side MoveTo steer (`?remoteMoveTo=off`).
     remote_moveto_enabled: bool,
+    /// NETSYNC-1 (2026-10-07, Coldeve capture): a remote body KEEPS its
+    /// interpreted motion state across a wire position correction
+    /// (`?remoteMotionKeep=off`). Retail `MoveOrTeleport`
+    /// (acclient.c:323451-323498) never touches the object's
+    /// `CMotionInterp`; the reconcile below wipes `motion_state` for every
+    /// body, so a remote runner stopped dead after each ~1 Hz
+    /// UpdatePosition until its next motion CHANGE. The world state
+    /// re-seeds the body from the entity's latest snapshot after each
+    /// remote reconcile while this is on (`WorldState::
+    /// reconcile_authoritative_body_with_remote`).
+    remote_motion_keep_enabled: bool,
+    /// NETSYNC-3 (2026-10-07): a remote body turns by its interpreted turn
+    /// axis between corrections (`?remoteTurn=off`). See
+    /// [`SpatialBody::state_omega_z`] and `step_remote_position_managers`.
+    remote_turn_enabled: bool,
     /// D7: per-tick leave-ground (`true`) / hit-ground (`false`) edges of
     /// remote bodies, drained by the wasm tick next to
     /// [`Self::take_remote_stepped_poses`] into the JS airborne event
@@ -1587,6 +1602,8 @@ impl SpatialScene {
             remote_root_motion_enabled: true,
             remote_jump_arc_enabled: true,
             remote_moveto_enabled: true,
+            remote_motion_keep_enabled: true,
+            remote_turn_enabled: true,
             remote_airborne_changes: Vec::new(),
             local_sticky_target: None,
             remote_sticky_enabled: false,
@@ -1856,6 +1873,32 @@ impl SpatialScene {
     /// `?remoteMoveTo=off` escape for the D5 remote MoveTo steer.
     pub fn set_remote_moveto_enabled(&mut self, enabled: bool) {
         self.remote_moveto_enabled = enabled;
+    }
+
+    /// `?remoteMotionKeep=off` escape for NETSYNC-1 (remote bodies keep
+    /// their motion state across position corrections).
+    pub fn set_remote_motion_keep_enabled(&mut self, enabled: bool) {
+        self.remote_motion_keep_enabled = enabled;
+    }
+
+    /// True when a remote reconcile must re-seed the body's motion state
+    /// (the switch AND the remote body driver whose walk reads it).
+    pub fn remote_motion_keep_active(&self) -> bool {
+        self.remote_motion_keep_enabled && self.remote_interp_enabled
+    }
+
+    /// `?remoteTurn=off` escape for NETSYNC-3 (remote bodies turn by their
+    /// interpreted turn axis between corrections).
+    pub fn set_remote_turn_enabled(&mut self, enabled: bool) {
+        self.remote_turn_enabled = enabled;
+    }
+
+    /// NETSYNC-3: install a remote body's motion-table TurnRight omega z
+    /// (`None` = unresolved → the player-table fallback).
+    pub fn set_remote_turn_omega(&mut self, body_id: SpatialBodyId, omega_z: Option<f32>) {
+        if let Some(body) = self.body_store.body_mut(body_id) {
+            body.remote_turn_omega_z = omega_z;
+        }
     }
 
     /// True when the remote MoveTo pump should run (the switch AND the
@@ -5775,6 +5818,45 @@ impl SpatialScene {
                 }
                 stepped = true;
             }
+            // NETSYNC-3 (2026-10-07, `?remoteTurn`): the interpreted TURN
+            // axis rotates the body every slice, as retail moves each object
+            // by its sequence: `CSequence::apply_physics` rotates the offset
+            // frame by omega × quantum (acclient.c:339860; omega = speed ×
+            // MotionData.omega, :337431/:337477) and `UpdatePositionInternal`
+            // composes it onto the object (:319989). Pre-fix a remote running
+            // in an arc dead-reckoned in a straight line from the last wire
+            // heading (Coldeve capture: median 27° heading error at the next
+            // correction, 30-80° for turning bots). Same ownership as the
+            // walk: an active interpolation node REPLACES the offset frame,
+            // rotation included, while the body has contact (adjust_offset
+            // :389178-389268); a MoveTo steer (D5, below) or the sticky lane
+            // owns the heading itself. Airborne bodies still turn (retail
+            // zeroes only the origin off the ground, :320014-320025). AFTER
+            // the ground move / arc: they write `body.pose` wholesale. The
+            // row exports heading-owned (the sticky-row channel) so JS
+            // applies the turned quaternion instead of easing to the stale
+            // wire heading.
+            if self.remote_turn_enabled
+                && body.remote_moveto.is_none()
+                && !self.remote_sticky_targets.contains_key(&guid)
+            {
+                let interp_owns = body.position_manager.queue_active()
+                    && body.remote_arc.is_none()
+                    && body.last_wire_contact.unwrap_or(true);
+                let omega_z = body.state_omega_z();
+                if !interp_owns && omega_z.is_finite() && omega_z != 0.0 {
+                    let half = 0.5 * omega_z * quantum;
+                    let spin = holtburger_common::Quaternion {
+                        w: half.cos(),
+                        x: 0.0,
+                        y: 0.0,
+                        z: half.sin(),
+                    };
+                    body.pose.rotation = body.pose.rotation.multiply(spin).normalize();
+                    self.remote_sticky_stepped.insert(guid);
+                    stepped = true;
+                }
+            }
             // D5: turn toward the MoveTo heading at the retail turn rate.
             // AFTER the ground move / arc above: those write `body.pose`
             // wholesale from a pose computed before this slice's turn, so a
@@ -5788,10 +5870,22 @@ impl SpatialScene {
                 && body.remote_arc.is_none()
                 && let Some(drive) = body.remote_moveto
             {
-                let rate = if drive.forward == Some(true) {
-                    std::f32::consts::FRAC_PI_2 * 1.5
+                // NETSYNC-3: the body's own motion-table TurnRight rate
+                // (|MotionData.omega.z|; player tables 1.5 rad/s, DAT-pinned —
+                // the π/2 here was the "unverified" guess), else the player
+                // value; `?remoteTurn=off` keeps the old π/2.
+                let base = if self.remote_turn_enabled {
+                    body.remote_turn_omega_z
+                        .map(f32::abs)
+                        .filter(|w| w.is_finite() && *w > 0.0)
+                        .unwrap_or(-super::RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z)
                 } else {
                     std::f32::consts::FRAC_PI_2
+                };
+                let rate = if drive.forward == Some(true) {
+                    base * 1.5
+                } else {
+                    base
                 };
                 let current = body.pose.rotation.to_heading();
                 let mut diff = (drive.heading_rad - current) % std::f32::consts::TAU;

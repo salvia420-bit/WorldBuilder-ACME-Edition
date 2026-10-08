@@ -1033,3 +1033,28 @@ export function packCapacity(rows, key, { mainCap = 0, packsCap = 0 } = {}) {
   }
   return { used, cap };
 }
+
+/**
+ * 2026-10-07 — does a kind:49 EntityAttached / kind:47 EntityDetached event
+ * concern the LOCAL inventory? Both fire for every wielder transition in view
+ * (each creature that spawns holding, draws or sheathes a weapon), and the
+ * inventory panel rebuilt itself + the paperdoll for each one (live: ~360
+ * `[paperdoll-slots]` recomputations of the same two items in 15 minutes).
+ *
+ * Payload (lib.rs CLIENT_EVENT_KIND_ENTITY_ATTACHED / _DETACHED):
+ * `u32Payload` = item guid, `u32Payload2` = new (49) / prior (47) wielder.
+ * Conservative: an unreadable event or an unknown local guid → true.
+ *
+ * @param {{u32Payload?: number, u32Payload2?: number}|null} detail
+ * @param {number|null} localGuid
+ * @param {(guid: number) => boolean} isMine  inventory membership test
+ * @returns {boolean}
+ */
+export function wieldEventTouchesLocal(detail, localGuid, isMine) {
+  const item = (detail?.u32Payload ?? 0) >>> 0;
+  if (!item) return true;
+  const me = (localGuid ?? 0) >>> 0;
+  if (!me) return true;
+  if (((detail?.u32Payload2 ?? 0) >>> 0) === me) return true;
+  try { return !!isMine?.(item); } catch (_) { return true; }
+}

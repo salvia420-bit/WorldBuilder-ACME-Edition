@@ -22,6 +22,23 @@ import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 // Same mockable physics clock the emitters age on (seconds) — used by the
 // culled count-bounded stop bound below so tests can drive it deterministically.
 import { currentTime, holdTimeLatch, releaseTimeLatch } from "./time_rng.js";
+// 2026-10-07 `?skyGlow` — the moon SkyObject's nebula sheets (sky_dome.js sky
+// chain) render as far-depth, unfogged, edge-windowed sky glows. See sky_glow.js.
+import { applySkyGlowMaterial } from "../sky_glow.js";
+// 2026-10-07 `?additiveFogBlack` (DEFAULT ON) — additive particles are drawn
+// unfogged, as retail does (D3DPolyRender::SetSurface turns D3DRS_FOGENABLE off
+// for the Additive bit, acclient.c:454551). See additive_fog.js.
+import {
+  additiveFogMode,
+  additiveFogStateOf,
+  applyAdditiveParticleFog,
+  isAdditiveParticleMaterial,
+  setAdditiveFogMode,
+} from "./additive_fog.js";
+// 2026-10-07 `?particlesOverClouds` (DEFAULT ON) — the composer draws these
+// objects AFTER the cloud + aerial composite. See particles_over_clouds.js and
+// `collectParticlesOverClouds` at the end of this file.
+import { registerLateFxSource } from "../particles_over_clouds.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -1048,6 +1065,58 @@ function _rp6ShouldCull(emitter, camera) {
   return !_rp6Frustum.intersectsSphere(_rp6Sphere);
 }
 
+// ── ?additiveFogBlack live switch (2026-10-07) ────────────────────────────────
+// Every manager (the instancing seam's `_instManagers` holds only opted-in ones).
+// The walk covers each material an additive particle can render with: the
+// per-slot clones (`partStorage`, drawn on the per-mesh path and kept as the
+// instancing carriers), this manager's instanced buckets, and the parked pool
+// (re-applied anyway when a slot reuses it). Shared alpha buckets are never
+// additive. Diagnostic only: new materials take the current mode in addEmitter.
+const _allManagers = new Set();
+
+function _forEachParticleMaterial(fn) {
+  const seen = new Set();
+  const visit = (mat, isBucket) => {
+    if (!mat || seen.has(mat)) return;
+    seen.add(mat);
+    fn(mat, isBucket);
+  };
+  for (const mgr of _allManagers) {
+    for (const [, e] of mgr.particleTable) {
+      for (const m of (e.partStorage || [])) if (m) visit(m.material, false);
+    }
+    for (const b of mgr._instBuckets.values()) visit(b.im?.material, true);
+    for (const pool of mgr._materialPool.values()) for (const mat of pool) visit(mat, false);
+  }
+}
+
+/** Counts for the live check (`window.__additiveFogBlack()`). */
+export function additiveFogDiag() {
+  const out = {
+    mode: additiveFogMode(), managers: _allManagers.size,
+    materials: 0, unfogged: 0, fade: 0, stockFogged: 0,
+    buckets: 0, bucketsUnfogged: 0, bucketsFade: 0, bucketsStockFogged: 0,
+  };
+  _forEachParticleMaterial((mat, isBucket) => {
+    if (!isAdditiveParticleMaterial(mat)) return;
+    const k = mat.fog !== true ? "unfogged" : additiveFogStateOf(mat) === "fade" ? "fade" : "stockFogged";
+    out.materials++;
+    out[k]++;
+    if (isBucket) {
+      out.buckets++;
+      out[`buckets${k[0].toUpperCase()}${k.slice(1)}`]++;
+    }
+  });
+  return out;
+}
+
+/** Switch every live additive particle material to `mode` in place (no reload). */
+export function setAdditiveFogBlack(mode) {
+  const m = setAdditiveFogMode(mode);
+  _forEachParticleMaterial((mat) => { applyAdditiveParticleFog(mat, m); });
+  return additiveFogDiag();
+}
+
 function _disposeMaterialIfOwned(mat) {
   if (!mat) return;
   const ud = mat.userData;
@@ -1108,6 +1177,12 @@ export class ParticleManager {
     // the opted-in manager installs it, and it mutates nothing until called —
     // the URL flag still decides the initial state.
     if (this._instancing) _instManagers.add(this);
+    // ?additiveFogBlack live switch: `window.__additiveFogBlack()` = counts,
+    // `("retail" | "fade" | "off")` re-applies every manager's materials.
+    _allManagers.add(this);
+    if (typeof window !== "undefined") {
+      window.__additiveFogBlack = (mode) => (mode === undefined ? additiveFogDiag() : setAdditiveFogBlack(mode));
+    }
     if (this._instancing && typeof window !== "undefined") {
       const sum = (rs) => rs.reduce((a, r) => {
         for (const [k, v] of Object.entries(r)) a[k] = typeof v === "number" ? (a[k] || 0) + v : v;
@@ -1214,6 +1289,10 @@ export class ParticleManager {
       emitterId = 0,
       blocking = false,
       renderLayer = 0,
+      // 2026-10-07 `?skyGlow`: true only for the sky_dome.js sky chain (derived
+      // from its anchor in statics.js). Its slot + bucket materials become sky
+      // glows (sky_glow.js applySkyGlowMaterial); every other caller: false.
+      skyGlow = false,
     } = req;
     // Interior particle layering (2026-08-04) — see `_PARTICLE_RENDER_LAYER`
     // note above `_appendInstances`. 0 = leave on the world layer (every
@@ -1417,8 +1496,9 @@ export class ParticleManager {
         // (keyed by gfxobj + blend branch — both constant for this emitter),
         // falling back to a fresh clone. Cuts the allocate/free churn that
         // drove the sustained-combat cast stutter.
+        // `|sky` keeps patched sky-glow clones out of a world emitter's pool.
         const poolKey = baseMaterial
-          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}|${baseMaterial.uuid}`
+          ? `${(info.hwGfxObjId >>> 0)}|${baseIsAdditive ? 1 : 0}|${baseMaterial.uuid}${skyGlow ? "|sky" : ""}`
           : null;
         const mat = baseMaterial
           ? (this._takePooledMaterial(poolKey) || baseMaterial.clone())
@@ -1491,6 +1571,14 @@ export class ParticleManager {
           // Perf (2026-06-27): tag the pool key so _reclaimSlotMaterial() can
           // park this clone back in the right pool at teardown.
           mat.userData.__poolKey = poolKey;
+          // 2026-10-07 `?skyGlow` (per-mesh path, e.g. ?particleInstancing=off).
+          if (skyGlow) applySkyGlowMaterial(mat);
+          // 2026-10-07 `?additiveFogBlack`: retail draws Additive surfaces with
+          // D3D fog OFF (acclient.c:454551); three's mix toward fogColor turned
+          // every distant glow into a pale quad. After the sky glow (which it
+          // skips) and on EVERY slot build, so a pooled clone re-takes the
+          // current mode (a no-op when it already has it).
+          if (baseIsAdditive) applyAdditiveParticleFog(mat);
         }
         // NOTE: `geometry` is shared across all slots and originates from
         // the caller-supplied `geometryFactory` (typically a DAT-backed
@@ -1549,6 +1637,8 @@ export class ParticleManager {
     });
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
+    // 2026-10-07 `?skyGlow`: keys its own instanced bucket (see _appendInstances).
+    emitter.skyGlow = skyGlow === true;
 
     const ok = await emitter.setInfo(info);
     if (!ok) {
@@ -1871,9 +1961,12 @@ export class ParticleManager {
     const gfx = emitter._instKey >>> 0;
     const layer = emitter.renderLayer | 0;
     const alpha = emitter._instAlpha === true;
-    const key = `${gfx}|${layer}${alpha ? "|a" : ""}`;
+    // 2026-10-07 `?skyGlow`: sky-chain emitters never share a bucket (or the
+    // shared alpha bucket) with world emitters — their material is patched.
+    const sky = emitter.skyGlow === true;
+    const key = `${gfx}|${layer}${alpha ? "|a" : ""}${sky ? "|sky" : ""}`;
     let bucket = null;
-    if (alpha && particleSharedAlphaEnabled()) {
+    if (alpha && !sky && particleSharedAlphaEnabled()) {
       bucket = sharedAlphaBuckets.acquire(key, this._scene, _alphaMatSig(emitter._instBaseMat),
         () => { const im = this._makeBucketIm(emitter, gfx, layer, alpha); im.name += "-s"; return im; }, _sharedFrameId());
     }
@@ -1905,6 +1998,30 @@ export class ParticleManager {
     bucket.n = n;
   }
 
+  /**
+   * `?particlesOverClouds` source: push this manager's live draw objects —
+   * its non-empty instanced buckets and the active slot meshes of per-mesh
+   * emitters — minus the sky chain. Shared alpha buckets are pushed once by
+   * `collectParticlesOverClouds`. Filtering (visibility, layers, lit
+   * materials) is the collector's job (particles_over_clouds.js).
+   */
+  _collectParticlesOverClouds(out) {
+    for (const b of this._instBuckets.values()) {
+      const im = b.im;
+      if (im && im.count > 0 && im.userData?.skyChain !== true) out.push(im);
+    }
+    for (const e of this.particleTable.values()) {
+      // Instanced emitters keep their slot meshes off the graph (_NOOP seams).
+      if (e.skyGlow === true || e._onMeshActive === _NOOP) continue;
+      const parts = e.parts;
+      if (!parts) continue;
+      for (let i = 0; i < parts.length; i++) {
+        const m = parts[i];
+        if (m && m.visible === true && m.parent) out.push(m);
+      }
+    }
+  }
+
   /** One bucket's InstancedMesh (not yet parented) for an emitter's (gfxobj, layer, blend). */
   _makeBucketIm(emitter, gfx, layer, alpha) {
     const mat = emitter._instBaseMat.clone();
@@ -1925,15 +2042,25 @@ export class ParticleManager {
     mat.forceSinglePass = true;
     mat.userData.__cacheOwned = false;
     mat.userData.__disposable = true;
+    // 2026-10-07 `?skyGlow` — after the blend config above (it keeps it).
+    const sky = emitter.skyGlow === true && applySkyGlowMaterial(mat);
+    // 2026-10-07 `?additiveFogBlack` — the additive bucket (the path that draws
+    // nearly every additive particle by default) gets the same retail no-fog as
+    // the per-slot clones; one program for all of them. Sky glows are skipped.
+    if (!alpha) applyAdditiveParticleFog(mat);
     const im = new THREE.InstancedMesh(emitter._instGeom, mat, _INST_BUCKET_MIN_CAP);
     im.count = 0;
-    im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}${alpha ? "-a" : ""}`;
+    im.name = `particle-inst-0x${gfx.toString(16)}${layer ? `-L${layer}` : ""}${alpha ? "-a" : ""}${sky ? "-sky" : ""}`;
     // RP6 culls per emitter by contribution; three's per-object test would
     // measure the bucket's identity-placed bounds, not the particles'.
     im.frustumCulled = false;
     im.matrixAutoUpdate = false;
     im.updateMatrix();
-    im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha };
+    // `skyChain`: every sky-chain bucket, patched or not (the map-less storm
+    // lightning box keeps `skyGlow: false`) — `?particlesOverClouds` leaves the
+    // whole sky chain behind the clouds.
+    im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha, skyGlow: !!sky,
+      skyChain: emitter.skyGlow === true };
     // Same emission-time layer the singleton slot meshes get (meshFactory).
     if (layer > 0) im.layers.set(layer);
     im.setColorAt(0, _instColor.setRGB(1, 1, 1));
@@ -2116,3 +2243,17 @@ export class ParticleManager {
     return this.particleTable.delete(emitterId);
   }
 }
+
+/**
+ * `?particlesOverClouds` (2026-10-07) — every live particle draw object of
+ * every manager, for the composer's late pass (drawn after the cloud +
+ * aerial composite instead of under it). Registered once at module load;
+ * the pipeline filters and hides what it takes. The sky chain is excluded.
+ */
+export function collectParticlesOverClouds(out) {
+  for (const m of _allManagers) m._collectParticlesOverClouds(out);
+  for (const b of sharedAlphaBuckets.buckets.values()) {
+    if (b.im && b.im.count > 0 && b.im.userData?.skyChain !== true) out.push(b.im);
+  }
+}
+registerLateFxSource(collectParticlesOverClouds);

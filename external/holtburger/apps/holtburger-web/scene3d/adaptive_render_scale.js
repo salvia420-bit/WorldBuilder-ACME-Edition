@@ -12,10 +12,13 @@
 // This module (default-on `?adaptiveRes`, opt out `=off`) does two things:
 //   (1) SMART DEFAULT — caps the INITIAL rendered-pixel count to a budget, so a
 //       HiDPI / OS-scaled display starts near 1080p instead of 4K.
-//   (2) ADAPTIVE — measures per-frame time (rAF cadence, which is GPU-bound) and
-//       lowers renderScale when frames blow past budget, raising it back when the
-//       GPU has headroom. Hysteresis + a post-change cooldown avoid oscillation
-//       (and skip the one-frame spike from the render-target rebuild).
+//   (2) ADAPTIVE — measures per-frame time (rAF cadence) and lowers renderScale
+//       when frames blow past budget, raising it back when the GPU has headroom.
+//       Hysteresis + a post-change cooldown avoid oscillation (and skip the
+//       one-frame spike from the render-target rebuild). rAF cadence is NOT
+//       GPU-bound by itself: a main-thread-bound frame looks the same. So when
+//       a GPU fence probe is wired in (`?adaptiveResGpuCheck`, below), it lowers
+//       only when the GPU is actually behind.
 //
 // An explicit `?renderScale=N` is treated as a fixed user override — adaptation
 // is disabled and the smart default is skipped. Also skipped under
@@ -58,6 +61,91 @@ export function adaptiveResSettleEnabled() {
   } catch (_) {
     return true;
   }
+}
+
+/** `?adaptiveResGpuCheck` — default ON; `=off`/`0`/`false` disables.
+ *
+ * 2026-10-07 (owner at the 1070, quality=ultra, full screen): within minutes of
+ * play the controller cut the scale 1 → 0.4 and latched it there 7 times. Yet
+ * live frame time was the SAME at scale 0.47, 0.88 and 2.0 (3840×2160): about
+ * 33 ms p75 each time. The frames were main-thread bound (~600 draws a frame of
+ * three.js submission, plus streaming) and the GPU was mostly idle. rAF cadence
+ * cannot tell those cases apart, so every CPU stall read as "GPU too slow" and
+ * bought a blurrier picture for nothing.
+ *
+ * The check: a GL fence is inserted at the end of each frame's submission and
+ * read at the end of the NEXT frame's. If it has not signalled after a whole
+ * frame, the GPU is the bottleneck. Measured live on the 1070: the GPU was
+ * behind on 5% of frames at scale 1 (CPU-bound) and 99% at scale 2
+ * (GPU-bound). The controller now lowers resolution only when the GPU is
+ * behind. When the GPU keeps up, it raises back toward full resolution even if
+ * frames are over the band, because there resolution costs nothing. With no
+ * fence support (WebGL1, lost context) samples are null and the old rAF-only
+ * behaviour applies.
+ */
+export function adaptiveResGpuCheckEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("adaptiveResGpuCheck");
+    if (v == null) return true;
+    const lv = String(v).toLowerCase();
+    return !(lv === "off" || lv === "0" || lv === "false");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * GPU-behind probe for the controller. The render loop calls `frameEnd()` once
+ * per frame AFTER its GL submission. It reads the fence inserted at the end of
+ * the previous frame, then inserts a new one. `sample()` returns the newest
+ * unread verdict: true = the GPU had not finished the previous frame's work a
+ * whole frame later, false = it had, null = nothing new / unknown.
+ *
+ * The fence must be inserted after a frame's submission and read one full frame
+ * later. Reading it at the start of the next frame (no slack) reports "behind"
+ * on a CPU-saturated loop too, because the GPU is still on the tail of the work
+ * that was just flushed. WebGL2 only updates sync status between tasks, so a
+ * next-frame read is also the earliest meaningful one. No explicit flush:
+ * Chrome flushes the frame's commands, fence included, when it presents the
+ * canvas.
+ *
+ * @param {WebGL2RenderingContext} gl
+ * @returns {{frameEnd(): void, sample(): (boolean|null), dispose(): void} | null}
+ */
+export function createFenceGpuProbe(gl) {
+  if (!gl || typeof gl.fenceSync !== "function" || typeof gl.getSyncParameter !== "function") {
+    return null;
+  }
+  let fence = null;
+  let unread = null;
+  return {
+    frameEnd() {
+      try {
+        if (fence) {
+          // A lost context answers null here, which must not read as "behind".
+          const st = gl.getSyncParameter(fence, gl.SYNC_STATUS);
+          unread = st === gl.SIGNALED ? false : st === gl.UNSIGNALED ? true : null;
+          gl.deleteSync(fence);
+          fence = null;
+        }
+        fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0); // null on a lost context
+      } catch (_) {
+        fence = null;
+        unread = null;
+      }
+    },
+    sample() {
+      const v = unread;
+      unread = null;
+      return v;
+    },
+    dispose() {
+      try { if (fence) gl.deleteSync(fence); } catch (_) { /* context gone */ }
+      fence = null;
+      unread = null;
+    },
+  };
 }
 
 /** `?adaptiveRes` — default ON; `=off`/`0`/`false` disables. */
@@ -194,6 +282,9 @@ export class AdaptiveRenderScaleController {
     settle = true,
     settleWindowMs = 120_000,
     settleLockMs = 300_000,
+    // GPU-behind probe (see adaptiveResGpuCheckEnabled / createFenceGpuProbe).
+    // null = rAF cadence only (the pre-2026-10-07 behaviour).
+    gpuProbe = null,
     now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
     log = null,
   } = {}) {
@@ -229,6 +320,52 @@ export class AdaptiveRenderScaleController {
     this._lastChange = null; // {dir, from, to, t} — the last applied change
     this.raiseCeiling = maxScale; // raises never exceed this while latched
     this.settleLatches = 0; // reachability counter for the damper
+    this._gpuProbe = gpuProbe;
+    this._gpuKnown = 0; // frames in this eval window with a GPU verdict
+    this._gpuBehind = 0; // ...of which the GPU was still behind
+    this._prevGpuBehind = null;
+    // Over-budget windows in which the GPU kept up, so the scale was held
+    // instead of lowered. The "[adaptive-res] holding" log fires once per run.
+    this.cpuBoundHolds = 0;
+    this._holdLogged = false;
+  }
+
+  /** The newest GPU-behind verdict from the probe: true / false / null. */
+  _sampleGpu() {
+    if (!this._gpuProbe) return null;
+    try {
+      const v = this._gpuProbe.sample();
+      return v === true || v === false ? v : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Window verdict, then reset: true = the GPU is the bottleneck, false = it
+   *  kept up (frames are main-thread bound), null = unknown or mixed (fall
+   *  back to rAF cadence alone). */
+  _takeGpuVerdict() {
+    const known = this._gpuKnown;
+    const behind = this._gpuBehind;
+    this._gpuKnown = 0;
+    this._gpuBehind = 0;
+    if (known < Math.max(3, this._minSamples >> 1)) return { verdict: null, keptUpPct: null };
+    const frac = behind / known;
+    const keptUpPct = Math.round((1 - frac) * 100);
+    if (frac >= 0.5) return { verdict: true, keptUpPct };
+    if (frac <= 0.25) return { verdict: false, keptUpPct };
+    return { verdict: null, keptUpPct };
+  }
+
+  _noteHold(p75, s, verdictText) {
+    this.cpuBoundHolds += 1;
+    if (this._holdLogged || !this._log) return;
+    this._holdLogged = true;
+    this._log(
+      `[adaptive-res] holding scale=${s} — p75 frame ${Math.round(p75)}ms but ${verdictText}: ` +
+      `no sign the GPU is the bottleneck, so a lower resolution would not help ` +
+      `(?adaptiveResGpuCheck=off disables)`
+    );
   }
 
   /** The highest scale a raise may reach right now. */
@@ -241,6 +378,11 @@ export class AdaptiveRenderScaleController {
   /** Call once per frame. Records the inter-frame delta and evaluates on cadence. */
   recordFrame() {
     const t = this._now();
+    // Drain the probe every frame, even ones skipped below, so a verdict is
+    // never counted against the wrong frame.
+    const behind = this._sampleGpu();
+    const prevBehind = this._prevGpuBehind;
+    this._prevGpuBehind = behind;
     const prev = this._last;
     this._last = t;
     if (this._lastEval == null) this._lastEval = t;
@@ -249,6 +391,10 @@ export class AdaptiveRenderScaleController {
     // Ignore absurd deltas (tab backgrounded / an unrelated GC pause).
     if (!(dt >= 0 && dt < 60_000)) return;
     this._samples.push(dt);
+    if (behind != null) {
+      this._gpuKnown += 1;
+      if (behind) this._gpuBehind += 1;
+    }
     // FAST PATH: a single catastrophically-slow frame (≫ budget, e.g. the 4 s /
     // 4K turn) drops the scale IMMEDIATELY rather than waiting a full eval window
     // — otherwise, at ~4 fps there aren't enough samples per window to evaluate.
@@ -261,18 +407,30 @@ export class AdaptiveRenderScaleController {
     // settle latch. Requiring two CONSECUTIVE over-budget frames keeps the
     // sustained case (a genuinely fill-bound GPU produces a run of them, which
     // is the ~4 fps case this path exists for) while ignoring isolated hitches.
+    // With a GPU probe, lower only when the GPU was BEHIND on both frames.
+    // 2026-10-07 (later): "kept up" alone was too weak a gate. A load-time
+    // stall (shader compiles, landblock bakes) gives unknown verdicts, and
+    // those still dropped the scale (live: 0.47 -> 0.35 latched during a
+    // teleport/login). No evidence of a GPU bottleneck now means hold.
     const catastrophic = dt > this._highMs * 3;
     const prevCatastrophic = this._prevCatastrophic === true;
     this._prevCatastrophic = catastrophic;
+    const gpuBehindBoth = behind === true && prevBehind === true;
     if (catastrophic && prevCatastrophic && t >= this._cooldownUntil) {
       const s = this._getScale();
-      if (s > this._minScale) {
+      if (s > this._minScale && this._gpuProbe && !gpuBehindBoth) {
+        this._noteHold(dt, s, behind === false && prevBehind === false
+          ? "the GPU kept up on both frames"
+          : "there is no evidence the GPU was behind");
+      } else if (s > this._minScale) {
         const over = dt / this._highMs;
         const st = over > 4 ? this._step * 2 : this._step;
         const next = Math.max(this._minScale, Math.round((s - st) * 1000) / 1000);
         if (next < s) {
           this._apply(next, t, dt, "down");
           this._samples = [];
+          this._gpuKnown = 0;
+          this._gpuBehind = 0;
           this._lastEval = t;
           return;
         }
@@ -290,27 +448,53 @@ export class AdaptiveRenderScaleController {
     const samples = this._samples;
     this._samples = [];
     this._lastEval = t;
+    // Taken before the cooldown return so every window's GPU counts reset.
+    const gpu = this._takeGpuVerdict();
     if (t < this._cooldownUntil) return; // let the last change settle
     if (samples.length < this._minSamples) return;
     const p75 = percentile(samples, 0.75);
     let s = this._getScale();
-    if (p75 > this._highMs && s > this._minScale) {
+    const overBudget = p75 > this._highMs;
+    // GPU kept up (verdict false): frames are main-thread bound, so lowering
+    // resolution cannot help them and raising it costs nothing.
+    const gpuKeptUp = gpu.verdict === false;
+    // 2026-10-07 (later): with a probe, lowering needs a GPU-BOUND verdict
+    // (>= 50% of frames behind). Mixed (25-50%) and unknown windows used to
+    // fall back to the rAF-only rule and drop the scale. Live, two "GPU behind
+    // on 29-30%" windows during streaming ratcheted the owner to 0.35. With no
+    // probe at all (WebGL1), the rAF-only rule still applies.
+    const mayLower = !this._gpuProbe || gpu.verdict === true;
+    if (!overBudget || gpu.verdict === true) this._holdLogged = false;
+    if (overBudget && s > this._minScale && mayLower) {
       // Bigger step when we are WAY over budget (e.g. the 4 s / 4K case).
       const over = p75 / this._highMs;
       const st = over > 4 ? this._step * 2 : this._step;
       const next = Math.max(this._minScale, Math.round((s - st) * 1000) / 1000);
-      if (next < s) this._apply(next, t, p75, "down");
-    } else if (p75 < this._lowMs && s < this._maxScale) {
+      // Say what let the drop through, so a drop in a log explains itself.
+      const why = this._gpuProbe ? `GPU behind on ${100 - gpu.keptUpPct}% of frames` : "";
+      if (next < s) this._apply(next, t, p75, "down", why);
+      return;
+    }
+    if (s < this._maxScale && (p75 < this._lowMs || gpuKeptUp)) {
       // Settle cap: headroom only raises up to the ceiling left by the last
       // failed raise (raising past it is exactly what re-enters the
       // dropped-frames side of the churn). Lowering stays allowed above.
       const cap = this._raiseCap(t);
       const next = Math.min(cap, Math.round((s + this._step) * 1000) / 1000);
-      if (next > s + 1e-9) this._apply(next, t, p75, "up");
+      if (next > s + 1e-9) {
+        const why = p75 < this._lowMs ? "" : `GPU kept up on ${gpu.keptUpPct}% of frames`;
+        this._apply(next, t, p75, "up", why);
+        return;
+      }
+    }
+    if (overBudget && !mayLower && s > this._minScale) {
+      this._noteHold(p75, s, gpu.keptUpPct == null
+        ? "there was no GPU verdict this window"
+        : `the GPU kept up on ${gpu.keptUpPct}% of frames`);
     }
   }
 
-  _apply(scale, t, p75, dir) {
+  _apply(scale, t, p75, dir, why = "") {
     let before = scale;
     try { before = this._getScale(); } catch (_) { /* keep the target */ }
     try {
@@ -334,7 +518,12 @@ export class AdaptiveRenderScaleController {
     }
     this.changes += 1;
     this._cooldownUntil = t + this._cooldownMs;
-    if (this._log) this._log(`[adaptive-res] ${dir} → scale=${scale} (p75 frame ${Math.round(p75)}ms)`);
+    if (this._log) {
+      this._log(
+        `[adaptive-res] ${dir} → scale=${scale} (p75 frame ${Math.round(p75)}ms)` +
+        (why ? ` — ${why}` : "")
+      );
+    }
     if (this._settle) this._noteChangeForSettle(scale, t, dir);
     this._lastChange = { dir, from: before, to: scale, t };
   }
@@ -376,5 +565,15 @@ export class AdaptiveRenderScaleController {
       cancelAnimationFrame(this._raf);
     }
     this._raf = null;
+  }
+
+  /** Telemetry for `window.__adaptiveRenderScale.gpuState()`. */
+  gpuState() {
+    return {
+      probe: !!this._gpuProbe,
+      windowFrames: this._gpuKnown,
+      windowBehind: this._gpuBehind,
+      cpuBoundHolds: this.cpuBoundHolds,
+    };
   }
 }

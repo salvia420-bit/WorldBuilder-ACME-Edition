@@ -14,6 +14,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_root_motion_on,
         remote_jump_arc_on,
         remote_moveto_on,
+        remote_motion_keep_on,
+        remote_turn_on,
         remote_sticky_on,
         combat_radii_on,
         server_run_rate_on,
@@ -133,6 +135,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 new_world.scene.set_remote_root_motion_enabled(remote_root_motion_on);
                 new_world.scene.set_remote_jump_arc_enabled(remote_jump_arc_on);
                 new_world.scene.set_remote_moveto_enabled(remote_moveto_on);
+                // NETSYNC-1: remote bodies keep their motion
+                // state across position corrections
+                // (?remoteMotionKeep, default ON).
+                new_world
+                    .scene
+                    .set_remote_motion_keep_enabled(remote_motion_keep_on);
+                // NETSYNC-3: remote bodies turn by their
+                // interpreted turn axis (?remoteTurn, default ON).
+                new_world.scene.set_remote_turn_enabled(remote_turn_on);
                 // COMBAT-RADII (2026-07-28): size-aware
                 // standoffs (?combatRadii, default ON).
                 new_world.set_combat_radii_enabled(combat_radii_on);

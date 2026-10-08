@@ -299,6 +299,10 @@ export class AtmosphereSky {
     // follow the art sky — which is what a night treatment wants, and is the
     // reason the ground dim below is expressed as a MULTIPLIER on top of it
     // rather than as a second, fighting light model.)
+    // 2026-10-07 — no longer the only one: the takram clouds raymarch the same
+    // LUTs, so cloud_volume.js tick now lights them with this same
+    // `artSunPitchDeg(state.dirPitch)` on the same snapshot (`?cloudNight`,
+    // cloud_night.js). `window.__cloudNightState().seamDeg` must read 0.
     this._artPitchDeg = artSunPitchDeg(state.dirPitch);
     sunDirFromHeadingPitch(state.dirHeading, this._artPitchDeg, this._sunDirScratch);
     this.skyMaterial.sunDirection.copy(this._sunDirScratch);

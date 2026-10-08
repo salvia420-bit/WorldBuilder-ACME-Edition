@@ -29,6 +29,7 @@
 
 import * as THREE from "three";
 import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
+import { wrapOnBeforeRenderPerCamera } from "./batched_indirect_per_camera.js";
 
 let _flag;
 /** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
@@ -1775,7 +1776,17 @@ function _memoOnBeforeRender(renderer, scene, camera, geometry, material, group)
  * both flags off, or read `getStatBatchXStats().walk.calls` /
  * `walk.sphere.calls` instead, which count the same thing and are always live.
  */
+// The two own-property overrides, each wrapped ONCE (on first install) for
+// ?bmIndirectPerCamera, so every bucket shares the same two function objects.
+let _memoOnBeforeRenderPC = null;
+let _sphereOnBeforeRenderPC = null;
 function _installMemo(bm) {
+  if (_memoOnBeforeRenderPC === null) {
+    // `typeof` guard: the node suites eval this file with its imports stripped.
+    const wrap = typeof wrapOnBeforeRenderPerCamera === "function" ? wrapOnBeforeRenderPerCamera : (f) => f;
+    _memoOnBeforeRenderPC = wrap(_memoOnBeforeRender);
+    _sphereOnBeforeRenderPC = wrap(_sphereOnBeforeRender);
+  }
   const memo = statBatchMemoMode() !== "off";
   const sphere = statBatchSphereMode() !== "off";
   const runs = statBatchRunsMode() !== "off";
@@ -1783,7 +1794,11 @@ function _installMemo(bm) {
   // The epoch lives on `__memo` and is bumped by `_memoInvalidate` regardless of
   // which flag is on, so the sphere cache needs this state even with memo off.
   bm.userData.__memo = _memoStateFor();
-  bm.onBeforeRender = memo ? _memoOnBeforeRender : _sphereOnBeforeRender;
+  // 2026-10-07 — through the ?bmIndirectPerCamera wrapper (one shared function
+  // per path, not a closure per bucket): each camera draws from its own indirect
+  // texture, so a slot hit no longer re-uploads ids the GPU already holds
+  // (batched_indirect_per_camera.js). Identity when that flag is off.
+  bm.onBeforeRender = memo ? _memoOnBeforeRenderPC : _sphereOnBeforeRenderPC;
   if (memo) _memoStats.installed += 1;
   if (sphere) _sphereStats.installed += 1;
 }

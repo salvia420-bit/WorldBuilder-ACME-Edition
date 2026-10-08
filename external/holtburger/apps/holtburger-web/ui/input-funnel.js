@@ -94,6 +94,32 @@ export function _resetInputFunnelV2ForTest() {
   _v2 = null;
 }
 
+/** `?heldKeyRelease` — DEFAULT-ON (2026-10-07); `=off`/`0`/`false` disables
+ *  the synthetic key-ups after a native drag or context menu swallowed the
+ *  real ones (see `InputFunnel.releaseHeld`). The lost-key-up detector
+ *  (`_noteLostKeyUp`) is diagnostics only and always on. */
+export function readHeldKeyReleaseFlag(search) {
+  try {
+    const s =
+      typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : "";
+    const v = new URLSearchParams(s).get("heldKeyRelease");
+    if (v == null) return true;
+    const lc = v.toLowerCase();
+    return !(lc === "off" || lc === "0" || lc === "false");
+  } catch (_) {
+    return true;
+  }
+}
+let _heldKeyRelease = null;
+export function heldKeyReleaseOn() {
+  if (_heldKeyRelease === null) _heldKeyRelease = readHeldKeyReleaseFlag();
+  return _heldKeyRelease;
+}
+
 /**
  * True when a genuine text-entry context owns this keystroke.
  *
@@ -158,8 +184,25 @@ export class InputFunnel {
       repeatsSuppressed: 0,
       handlerErrors: 0,
       faults: 0,
+      heldReleased: 0,
+      lostKeyUps: 0,
     };
     this.lastDispatch = null;
+    // Held-key ledger (2026-10-07, `?heldKeyRelease`): every key whose press
+    // reached the raw subscribers and whose release has not been seen yet,
+    // keyed by `ev.code` (identical on press and release whatever the layout
+    // or Shift state; `ev.key` is not). See `releaseHeld` / `_noteLostKeyUp`.
+    /** @type {Map<string, {key: string, at: number}>} */
+    this._held = new Map();
+    this._dragging = false;
+    /** @type {null|{reason: string, keys: string[], at: number}} */
+    this.lastRelease = null;
+    // Recent events that can swallow a key-up (drag, context menu, blur,
+    // hidden tab, pointer lock, fullscreen), newest last, for the detector.
+    /** @type {Array<{type: string, at: number, target: string}>} */
+    this._risks = [];
+    /** @type {null|object} */
+    this.lastLostKeyUp = null;
   }
 
   /** index.html injects `() => enteredWorld && !isTypingInForm()`. */
@@ -281,7 +324,12 @@ export class InputFunnel {
       this.stats.gateClosed += 1;
       return false;
     }
-    // (4) Raw subscribers — all of them.
+    // (4) Raw subscribers — all of them. They now believe this key is down.
+    if (ev.code) {
+      const prev = this._held.get(ev.code);
+      if (prev && !ev.repeat) this._noteLostKeyUp(ev, prev);
+      if (!prev || !ev.repeat) this._held.set(ev.code, { key: ev.key, at: Date.now() });
+    }
     for (const r of this.raws.slice()) {
       r.count += 1;
       this.stats.rawRuns += 1;
@@ -342,10 +390,87 @@ export class InputFunnel {
       this.stats.faults += 1;
       throw new Error("[inputFunnel] fault-injected dispatch failure");
     }
+    if (ev.code) this._held.delete(ev.code);
     for (const r of this.rawUps.slice()) {
       r.count += 1;
       this._run(r, ev, `rawUp:${r.name}`);
     }
+  }
+
+  /**
+   * Deliver the key-up the browser never sent, for every key still held.
+   *
+   * 2026-10-07, owner at the 1070: "i got stuck autorunning" right after
+   * inventory drag-and-drop. The camera keystate still read `w: true` with no
+   * key down. During a native HTML5 drag, Chrome on Windows runs the OS's
+   * modal drag loop and the page gets no keyboard events, so releasing W
+   * mid-drag loses the key-up. The cmdInterp lane is edge-driven, so the
+   * retail command stack kept its WalkForward head and the character ran
+   * forever, exactly as the `__gameplayBlur` note in index.html describes for
+   * blur. Every raw key-up subscriber (index gameplay → cmdInterp edges,
+   * camera keystate) gets the same synthetic release a real one would have
+   * produced, so none of them needs drag-awareness of its own.
+   *
+   * Space is never released here: its release edge is DoJump (cmdInterp), and
+   * a drag must not fire a stale jump. `__gameplayBlur` skips it for the same
+   * reason.
+   * @param {string} reason
+   * @returns {string[]} the keys released
+   */
+  releaseHeld(reason) {
+    if (this._held.size === 0) return [];
+    const held = [...this._held.entries()];
+    this._held.clear();
+    const released = [];
+    for (const [code, { key }] of held) {
+      if (key === " ") continue;
+      const ev =
+        typeof KeyboardEvent === "function"
+          ? new KeyboardEvent("keyup", { key, code })
+          : { type: "keyup", key, code, repeat: false, preventDefault() {}, stopPropagation() {} };
+      this.handleKeyUp(ev);
+      released.push(key);
+    }
+    if (released.length > 0) {
+      this.stats.heldReleased += released.length;
+      this.lastRelease = { reason, keys: released, at: Date.now() };
+    }
+    return released;
+  }
+
+  /** Remember an event that can swallow a key-up (last 8 kept). */
+  _noteRisk(type, ev) {
+    let target = "";
+    try {
+      const t = ev?.target;
+      if (t && t.tagName) target = `${t.tagName.toLowerCase()}${t.id ? "#" + t.id : ""}${t.className && typeof t.className === "string" ? "." + t.className.split(/\s+/)[0] : ""}`;
+    } catch (_) { /* diagnostics only */ }
+    this._risks.push({ type, at: Date.now(), target });
+    if (this._risks.length > 8) this._risks.shift();
+  }
+
+  /**
+   * A fresh (non-repeat) press of a key the ledger still holds: its key-up
+   * never reached the page. That is the stuck-run signature, so name it
+   * once, along with what happened just before, which turns the next report
+   * into a diagnosis.
+   */
+  _noteLostKeyUp(ev, prev) {
+    this.stats.lostKeyUps += 1;
+    const now = Date.now();
+    const risks = this._risks
+      .filter((r) => r.at >= prev.at - 1000)
+      .map((r) => ({ ...r, msAfterPress: r.at - prev.at }));
+    this.lastLostKeyUp = { code: ev.code, key: ev.key, heldMs: now - prev.at, at: now, risks };
+    try {
+      const why = risks.length
+        ? risks.map((r) => `${r.type}${r.target ? " on " + r.target : ""} +${(r.msAfterPress / 1000).toFixed(1)}s`).join(", ")
+        : "none recorded (not a drag, context menu, blur, hidden tab, pointer lock or fullscreen change)";
+      console.warn(
+        `[inputFunnel] lost key-up: ${ev.code} was pressed ${((now - prev.at) / 1000).toFixed(1)}s ago and ` +
+        `its release never reached the page. Events since the press: ${why}`
+      );
+    } catch (_) { /* diagnostics only */ }
   }
 
   /** Install the ONE document-level capture listener pair. Idempotent. */
@@ -357,6 +482,48 @@ export class InputFunnel {
     this._onUp = (ev) => this.handleKeyUp(ev);
     d.addEventListener("keydown", this._onDown, true);
     d.addEventListener("keyup", this._onUp, true);
+    if (heldKeyReleaseOn()) {
+      // Native drag ⇒ no key events until it ends (see `releaseHeld`). The end
+      // is `dragend`/`drop`. Neither reaches `document` when the dragged
+      // element was removed mid-drag (inventory cells re-render on every item
+      // update) and the drop was refused, so the first pointer event after the
+      // OS drag loop ends is the fallback. A move with no button held, or a
+      // fresh press, means the drag is over.
+      this._onDragStart = (ev) => { this._dragging = true; this._noteRisk("dragstart", ev); };
+      this._onDragOver = (ev) => {
+        if (!this._dragging) return;
+        if (ev.type === "pointermove" && ev.buttons !== 0) return;
+        this._dragging = false;
+        this.releaseHeld("drag");
+      };
+      d.addEventListener("dragstart", this._onDragStart, true);
+      for (const t of ["dragend", "drop", "pointermove", "pointerdown"]) {
+        d.addEventListener(t, this._onDragOver, true);
+      }
+    }
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      // A native context menu also takes the keyboard until it closes, with
+      // no blur. Windows fires `contextmenu` on mouse-up over whatever is under
+      // the pointer, so a right-drag camera turn released over a HUD element
+      // opens Chrome's menu. Bubble phase on window runs after every element
+      // handler, so `defaultPrevented` is final here: release only when the
+      // browser menu really opens.
+      window.addEventListener("contextmenu", (ev) => {
+        if (ev.defaultPrevented) return;
+        this._noteRisk("contextmenu", ev);
+        if (heldKeyReleaseOn()) this.releaseHeld("contextmenu");
+      });
+      // A blur already makes every subscriber release on its own (index.html
+      // `__gameplayBlur`, camera.js `onBlur`), so the ledger only forgets.
+      window.addEventListener("blur", (ev) => { this._noteRisk("blur", ev); this._held.clear(); });
+    }
+    if (typeof d.addEventListener === "function") {
+      d.addEventListener("visibilitychange", (ev) => {
+        if (d.visibilityState === "hidden") this._noteRisk("hidden", ev);
+      });
+      d.addEventListener("pointerlockchange", (ev) => this._noteRisk("pointerlock", ev));
+      d.addEventListener("fullscreenchange", (ev) => this._noteRisk("fullscreen", ev));
+    }
     return this;
   }
 

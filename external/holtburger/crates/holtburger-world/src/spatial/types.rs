@@ -312,7 +312,24 @@ pub struct SpatialBody {
     /// remote MoveToManager would `_DoMotion`), set by the movement system's
     /// remote MoveTo pump. `None` = no steer (idle / arrived / turn done).
     pub remote_moveto: Option<RemoteMoveToDrive>,
+    /// NETSYNC-3 (2026-10-07): the z omega (rad/s about +z) of this remote
+    /// body's motion-table TurnRight cycle at its current stance —
+    /// `MotionData.omega.z`, resolved by the world state from the entity's
+    /// motion table (`WorldState::remote_turn_right_omega_z`). `None` =
+    /// unresolved; [`SpatialBody::state_omega_z`] then uses the player-table
+    /// value [`RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z`].
+    pub remote_turn_omega_z: Option<f32>,
 }
+
+/// NETSYNC-3 (2026-10-07): `MotionData.omega.z` of the TurnRight (0x6500000D)
+/// cycle AND the style-0 / per-stance TurnRight modifiers of the player motion
+/// tables (0x09000001, 0x0900020D/E, 0x09000207 — every stance), read from
+/// client_portal.dat (holtburger-dat test
+/// `netsync3_turn_right_omega_is_clockwise_in_retail_tables`). NEGATIVE =
+/// clockwise seen from above (+z up, x east, y north): a right turn. Every
+/// one of the 301 retail tables that authors a TurnRight omega has z < 0
+/// (values -1.0 … -4.5; one -18).
+pub const RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z: f32 = -1.5;
 
 /// OpenAC comparison 2026-10-04 (remote motion D5) — one remote MoveTo
 /// steer: face `heading_rad` (AC heading, the `Quaternion::from_heading`
@@ -361,6 +378,7 @@ impl SpatialBody {
             remote_arc: None,
             remote_moving_to: false,
             remote_moveto: None,
+            remote_turn_omega_z: None,
         }
     }
 
@@ -381,6 +399,7 @@ impl SpatialBody {
             remote_arc: None,
             remote_moving_to: false,
             remote_moveto: None,
+            remote_turn_omega_z: None,
         }
     }
 
@@ -430,6 +449,35 @@ impl SpatialBody {
         } else {
             v
         }
+    }
+
+    /// NETSYNC-3 (2026-10-07): the angular velocity (rad/s about +z) a
+    /// REMOTE body's interpreted TURN axis applies, as retail moves every
+    /// object by its sequence each frame: `add_motion` / `combine_motion`
+    /// set `omega = speed_mod × MotionData.omega` (acclient.c:337431,
+    /// :337477), `CSequence::apply_physics` rotates the offset frame by
+    /// `omega × quantum` (:339860) and `UpdatePositionInternal` composes it
+    /// onto the object (:319989). The wire turn is already interpreted
+    /// (ACE `MovementData`: TurnRight with ±1.0 walk / ±1.5 run / mouselook
+    /// speed, TurnLeft sent as TurnRight × -1); a raw TurnLeft is folded the
+    /// retail `adjust_motion` way (TurnRight, speed × -1). 0 when no turn.
+    pub fn state_omega_z(&self) -> f32 {
+        let Some(ms) = self.motion_state else {
+            return 0.0;
+        };
+        let speed = ms
+            .turn_speed
+            .map(|s| s.to_f32())
+            .filter(|v| v.is_finite())
+            .unwrap_or(1.0);
+        let signed = match ms.turn_command {
+            Some(c) if c == InterpretedMotionCommand::TURN_RIGHT => speed,
+            Some(c) if c == InterpretedMotionCommand::TURN_LEFT => -speed,
+            _ => return 0.0,
+        };
+        self.remote_turn_omega_z
+            .unwrap_or(RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z)
+            * signed
     }
 
     /// Retail `CMotionInterp::get_adjusted_max_speed` (acclient.c:343512)

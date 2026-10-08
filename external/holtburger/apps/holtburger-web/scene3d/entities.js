@@ -764,6 +764,37 @@ const MOVETO_TURN_GATE_ON = (() => {
   }
 })();
 
+// NETSYNC-2 (2026-10-07, Coldeve capture) — `?remoteTurnGateFix=off` escape;
+// absent ⇒ ON (the reader is `!== "off"`; true outside a browser so the Node
+// harness exercises the fixed path). Two corrections to the COL-20 gate above:
+//  1. SCOPE. The gate models a MoveTo's turn-before-move node queue
+//     (`MoveToManager::MoveToObject_Internal` acclient.c:345859), but it fired
+//     for EVERY remote run/walk. A player's interpreted RunForward (UpdateMotion
+//     type 0) plays at once in retail — the turn is a modifier applied by
+//     CMotionInterp, never a turn-in-place phase. Our remote heading only
+//     moves on ~1 Hz position packets, so after each packet the rendered
+//     facing lagged the wire heading by >20 degrees and a running player
+//     played the turn-in-place cycle while its body kept translating (capture:
+//     56 holds on players, median 280 ms, p90 1.8 s). Now the gate arms only
+//     for a motion that came from a MoveTo envelope — loop.js `_armMotion`
+//     marks it from KIND_MOTION `vx` (the MoveTo run rate; 0 for type 0).
+//  2. COMMAND. The substituted turn was `(cmd & 0xffff0000) | 0x000D`, i.e.
+//     RunForward's class bits + TurnRight = 0x4400000D, not a MotionCommand
+//     (TurnRight is 0x6500000D). The cycle lookup masks the class away, but the
+//     link INNER key is the full command, so the Ready->turn link missed and
+//     the bogus id leaked into `currentActionKey` / `__diag.motion`.
+const REMOTE_TURN_GATE_FIX_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    return (
+      new URLSearchParams(window.location.search).get("remoteTurnGateFix")?.toLowerCase() !==
+      "off"
+    );
+  } catch (_) {
+    return true;
+  }
+})();
+
 // === A2 Path A (2026-05-29) — remote-entity HEADING easing (DEFAULT-ON).
 // Remote entities used to SNAP their quaternion to each server heading
 // (~30 Hz), so a turning creature stepped through its facing. AC's MotionTable
@@ -1094,7 +1125,14 @@ import {
   surfaceResultProvenAbsent,
   materialRendersNothing,
 } from "./materials.js";
-import { drainPendingPlayEffects } from "./play_effect_vfx.js";
+// HIDEFX (2026-10-07): `noteEntityVisibility` / `forgetEntityHiddenState` are
+// the retail set_state→set_hidden script hook (PS_Hidden / PS_UnHide) — see
+// the HIDEFX header in play_effect_vfx.js. `?playEffectLifecycle=off` → no-ops.
+import {
+  drainPendingPlayEffects,
+  noteEntityVisibility,
+  forgetEntityHiddenState,
+} from "./play_effect_vfx.js";
 import { drainPendingObjectSounds } from "./audio/retail_sound_rules.js";
 // #16 (?itemFx) — the optional non-retail UiEffects 3D item-aura. Mirrors the
 // statics.js frag seam (buildFragVariant + VFX_GLOBALS), keyed off the entity's
@@ -1230,6 +1268,10 @@ import { getOcclusionCuller, ENTITY_PAD_M } from "./occlusion_cull.js";
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
 import { createPreCreateBuffer } from "./pre_create_buffer.js";
+// 2026-10-07 — terrain rounding step 3: rigs standing on the ground are DRAWN
+// on the rounded ground (render-only root-matrix offset; root.position stays
+// physics). DEFAULT-ON, `?terrainRoundObjects=off`. See scene3d/visual_ground.js.
+import { installVisualGroundRoot, visualGroundBeginFrame } from "./visual_ground.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -3249,6 +3291,14 @@ class EntityInstance {
     // setPose so the jump tilt survives across position updates. Cleared
     // by `_tickJumpPoseTween` on the final landing tick.
     this.airborneTilt = null;
+    // 2026-10-07 — terrain rounding step 3 (scene3d/visual_ground.js): the
+    // drawn-ground offset state. `installVisualGroundRoot` gives the root an
+    // own `updateMatrix` that adds visualZ - physicsZ under the feet to the
+    // root's MATRIX only (never `root.position`, so physics/picking/targeting
+    // reads are untouched); gated off indoors, when attached, for missiles,
+    // gravity-less weenies and anything off the ground. Null when off/stubbed.
+    this._vg = null;
+    installVisualGroundRoot(this);
   }
 
   // The playhead's key: the locomotion cycle the Rust MotionSequence
@@ -6024,6 +6074,17 @@ export class EntityManager {
     }
   }
 
+  /**
+   * NETSYNC-2 (2026-10-07) — remember whether this remote's latest
+   * KIND_MOTION came from a MoveTo envelope (loop.js `_armMotion`, from the
+   * MoveTo run rate on `vx`). The COL-20 turn gate arms only for those under
+   * `?remoteTurnGateFix` (default on).
+   */
+  noteRemoteMoveToHint(guid, isMoveTo) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (inst) inst._motionFromMoveTo = isMoveTo === true;
+  }
+
   setPose(guid, x, y, z, qw, qx, qy, qz) {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
@@ -6065,6 +6126,25 @@ export class EntityManager {
     // clamp measures against. Kept for remotes only; the local player runs its
     // own predictor and never reaches the separation resolve.
     if (isRemote) {
+      // NETSYNC diag (2026-10-07): how far the DRAWN rig is from this new
+      // server pose, and whether it moved on from the previous one at all
+      // (`__diag.remoteSync`). Read before `_wirePos` advances.
+      if (inst._wirePos && inst.root) {
+        try {
+          const rs = window.__diag?.remoteSync;
+          if (rs) {
+            rs.onWirePose(g, inst.meta?.name, inst.root.position, inst._wirePos, { x, y }, {
+              // Were wasm rows driving this rig just before the update?
+              wasmDriven: (inst._wasmDriven | 0) > 0,
+              animCmd: (+String(inst.currentActionKey ?? "").split(":")[2] || 0) >>> 0,
+              // Read lazily, only for a held update (one wasm call).
+              bodyState: () => window.__sessionHandle?.remoteBodyState?.(g),
+              // Read lazily, only for a moving update (far ones are not scored).
+              playerPose: () => this._localPlayerWorldPose(),
+            });
+          }
+        } catch (_) {}
+      }
       let wp = inst._wirePos;
       if (!wp) wp = inst._wirePos = new THREE.Vector3();
       wp.set(x, y, z);
@@ -6266,6 +6346,12 @@ export class EntityManager {
     // visibility don't fight: the rendered flag is `stateVisible &&
     // !renderCullHidden`.
     _setEntityStateVisible(inst, !!visible);
+    // HIDEFX (2026-10-07): retail `CPhysicsObj::set_state` plays PS_Hidden /
+    // PS_UnHide from the object's own PhysicsScriptTable when the HIDDEN bit
+    // flips (acclient.c:322199-322200 → set_hidden :322107 / :322140) — the
+    // UnHide script is what stops the portal "pink bubbles" (Hide's infinite
+    // emitters, handles 1000-1013). ACE never sends 0x75 on the wire.
+    try { noteEntityVisibility(g, !!visible); } catch (_) {}
     // PROJ-VIS: a projectile's NoDraw (ACE ProjectileImpact SetState) must also
     // put out its pool-fed light — the carrier keeps feeding the fixed pool even
     // under a hidden root, so a dark rig would otherwise still glow.
@@ -10270,7 +10356,11 @@ export class EntityManager {
       cls !== "attack" &&
       cls !== "cast"
     ) {
-      if (cmdLow !== CMD_LOW_RUN_FORWARD && cmdLow !== CMD_LOW_WALK_FORWARD) {
+      if (REMOTE_TURN_GATE_FIX_ON && inst._motionFromMoveTo !== true) {
+        // NETSYNC-2: an interpreted (type 0) run/walk is not a MoveTo — no
+        // turn-before-move phase in retail. Drop any gate a MoveTo armed.
+        inst._turnGateCmd = 0;
+      } else if (cmdLow !== CMD_LOW_RUN_FORWARD && cmdLow !== CMD_LOW_WALK_FORWARD) {
         // Any other command supersedes the queued locomotion — retail's
         // per-unpack preamble cancels the pending queue wholesale before the
         // case dispatch (acclient.c:339518-339519).
@@ -10293,7 +10383,11 @@ export class EntityManager {
         inst._turnGateSpeed = Number.isFinite(+motionSpeed) ? +motionSpeed : 1.0;
         // Substitute the turn-in-place cycle at the SAME stance. TurnLeft is
         // already folded to TurnRight above, matching retail's carried code.
-        cmd = ((cmd & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0;
+        // NETSYNC-2: the canonical full TurnRight (0x6500000D), not the run's
+        // class bits + 0x000D (0x4400000D, no such command).
+        cmd = REMOTE_TURN_GATE_FIX_ON
+          ? (fullMotionCommand(CMD_LOW_TURN_RIGHT) >>> 0)
+          : (((cmd & 0xffff0000) | CMD_LOW_TURN_RIGHT) >>> 0);
         cmdLow = CMD_LOW_TURN_RIGHT;
         cls = classifyMotionCommand(cmd);
       } else {
@@ -10430,8 +10524,20 @@ export class EntityManager {
       // bare low-16 from the side-channel / legacy caller is expanded here
       // so the link still resolves (no-op when already full-32bit).
       const linkCmd = expandActionCommandLow16(cmd);
-      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, linkCmd, stance,
+      const actionP = this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, linkCmd, stance,
         { speed: actionSpeed || 1.0 });
+      // NETSYNC diag (2026-10-07): did a REMOTE windup / swing link resolve
+      // and play? (`__diag.motion` only sees cycle changes, never these.)
+      if (!this._isLocalPlayerGuid(guid >>> 0) && actionP && typeof actionP.then === "function") {
+        actionP.then((played) => {
+          try {
+            window.__diag?.remoteSync?.onCastAction?.(
+              guid >>> 0, linkCmd >>> 0, !!played, inst.meta?.name,
+              played ? null : { reason: inst._linkMissReason ?? "unknown", cls, stance: stance >>> 0, fromCmd: READY_SUBSTATE >>> 0 },
+            );
+          } catch (_) {}
+        }, () => {});
+      }
       // Don't update `lastMotionCommand` — the next locomotion
       // broadcast should resolve its link transition from the
       // PREVIOUS locomotion cmd, not from this swing.
@@ -10683,6 +10789,15 @@ export class EntityManager {
           `0x${((m.from ?? prevStance) >>> 0).toString(16)}->0x${((m.to ?? stance) >>> 0).toString(16)} ` +
           `exit=${m.exit ? 1 : 0} style=${styleN - (m.exit ? 1 : 0)} entry=${entryPlayed ? 1 : 0} ` +
           `cycle=0x${(cmd >>> 0).toString(16)}${ownStanceChain ? "" : " (inherited)"}`,
+        );
+      } catch (_) {}
+    }
+    // NETSYNC diag (2026-10-07): a REMOTE cast gesture committed — did its
+    // Ready->gesture link (the arm raise) play, and did the hold cycle bake?
+    if (castGestureSubstate && !this._isLocalPlayerGuid(guid >>> 0)) {
+      try {
+        window.__diag?.remoteSync?.onCastGesture?.(
+          guid >>> 0, cmd >>> 0, entryPlayed, !!entry?.clip, inst.meta?.name,
         );
       } catch (_) {}
     }
@@ -11798,6 +11913,9 @@ export class EntityManager {
     if (particleOwnerOn()) {
       try { ownerRegistry.destroyAllForOwner(g); } catch (_) {}
     }
+    // HIDEFX (2026-10-07): drop this guid's hidden-state tracking + hold
+    // (its emitters died with the owner teardown just above).
+    try { forgetEntityHiddenState(g); } catch (_) {}
     // H3-E1 (2026-05-12): cancel any pending Sound / SoundTweaked
     // setTimeout schedules. If we didn't, a sound queued at start_time
     // = 30s would fire 30s after the rocket already despawned.
@@ -12422,12 +12540,24 @@ export class EntityManager {
     // Returns true when a clip was resolved and played (or handed to the
     // unified one-shot), false otherwise — the door-state caller falls back
     // to its 1-frame cycle hold on false. Legacy callers ignore the value.
-    if (typeof this.wasmExports?.fetchEntityAnimationKeyframes !== "function") return false;
+    // NETSYNC diag (2026-10-07): why a link did not play, read by the
+    // `__diag.remoteSync` action hook (setMotion action branch). Diag only.
+    inst._linkMissReason = null;
+    if (typeof this.wasmExports?.fetchEntityAnimationKeyframes !== "function") {
+      inst._linkMissReason = "noWasm";
+      return false;
+    }
     const t0 = performance.now();
     const entry = await this._fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance);
-    if (!this.entityMap.has(inst.guid >>> 0)) return false;
+    if (!this.entityMap.has(inst.guid >>> 0)) {
+      inst._linkMissReason = "removed";
+      return false;
+    }
     // A locomotion link whose setMotion was superseded mid-fetch is stale (F6).
-    if (opts?.motionToken !== undefined && inst._motionToken !== opts.motionToken) return false;
+    if (opts?.motionToken !== undefined && inst._motionToken !== opts.motionToken) {
+      inst._linkMissReason = "superseded";
+      return false;
+    }
     // Bug 15 (2026-10-07): a swing whose bake took longer than the swing
     // itself would play AFTER its hit landed (retail loads synchronously and
     // never shows one late). Skip it past MOTION_LATE_SKIP_MS or twice its
@@ -12447,11 +12577,15 @@ export class EntityManager {
               `bake ${Math.round(waited)}ms (clip ${Math.round(durMs)}ms) ${skip ? "skipped" : "played"}`,
             );
           } catch (_) {}
-          if (skip) return false;
+          if (skip) {
+            inst._linkMissReason = "lateSkip";
+            return false;
+          }
         }
       }
     }
     if (!entry) {
+      inst._linkMissReason = "noLink";
       // No link registered for this (stance, from→to) transition. For
       // locomotion transition links this is the common/expected case
       // (most cycles have no explicit link clip), but for an Action-class
@@ -12492,7 +12626,9 @@ export class EntityManager {
     }
     // Every other link — attack swings, cast windups, emotes, locomotion
     // transition links, stance (draw/sheathe) links.
-    return this._playLinkEntry(inst, entry, fromCmd, toCmd, stance, opts?.speed);
+    const played = this._playLinkEntry(inst, entry, fromCmd, toCmd, stance, opts?.speed);
+    if (!played) inst._linkMissReason = "playFailed";
+    return played;
   }
 
   // Build + install a held state-transition one-shot (see the stateHold call
@@ -14496,6 +14632,11 @@ export class EntityManager {
    * Called from loop.js#tickPerFrame.
    */
   tick(dt) {
+    // 2026-10-07 — terrain rounding step 3: advance the drawn-ground memo clock
+    // + snapshot its shared per-frame inputs (scene3d/visual_ground.js). Before
+    // the dt<=0 early-out so the offsets stay current through a dt-recovery
+    // window. No-op with `?terrainRoundObjects=off` / the fillet off.
+    visualGroundBeginFrame(this.scene3d);
     // F3-1b (bughunt 2026-06-27): integrate ballistic projectiles on a
     // wall-clock dt BEFORE the dt<=0 recovery early-return below. The main
     // loop forces dt=0 for ~10 frames after any >0.5 s frame stall (the

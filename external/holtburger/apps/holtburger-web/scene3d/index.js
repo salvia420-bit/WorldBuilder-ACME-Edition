@@ -172,11 +172,16 @@ import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { installLightLoops } from "./light_loops.js";
 import { installSkipHiddenMatrix } from "./skip_hidden_matrix.js";
+import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.js";
+import { installShadowCasterList } from "./shadow_caster_list.js";
+import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
 import { syncBatchMatVariants, batchMatVariantStats } from "./batched_material_variant.js";
 import {
   adaptiveResEnabled,
   adaptiveResSettleEnabled,
+  adaptiveResGpuCheckEnabled,
   computeInitialRenderScale,
+  createFenceGpuProbe,
   AdaptiveRenderScaleController,
 } from "./adaptive_render_scale.js";
 import { SkyLightingController } from "./sky_lighting.js";
@@ -1125,6 +1130,20 @@ export async function preInit3D(canvas) {
   // stops emitting "Using format enabled by implicitly enabled extension"
   // warnings every frame the atmosphere LUTs are sampled.
   renderer.getContext().getExtension("EXT_float_blend");
+  // 2026-10-07 — three.js warns "Trying to use 16 texture units while this GPU
+  // supports only 16" whenever its texture-unit counter reaches
+  // capabilities.maxTextures (MAX_TEXTURE_IMAGE_UNITS, a FRAGMENT-stage limit).
+  // But that counter is shared by both shader stages, and the limit a unit
+  // index must stay under is MAX_COMBINED_TEXTURE_IMAGE_UNITS (32 on the 1070).
+  // terrain-batch puts 2 vertex samplers (BatchedMesh) + 15 fragment samplers
+  // on units 0..16. That's legal: on the live 1070, uCsmShadowMap2 is on unit 16
+  // with gl.getError() == 0. But it logged the warning every frame (~80/s).
+  // maxTextures has no other reader in r184, and a real per-stage overflow
+  // still fails loudly at program link. See cells.js "CORRECTED 2026-08-12".
+  try {
+    const gl = renderer.getContext();
+    renderer.capabilities.maxTextures = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+  } catch (_) { /* capability tweak must never break boot */ }
   // X6 `?texBc7=on` — probe EXT_texture_compression_bptc on THIS context. No-op
   // (and silent) with the flag absent; with the flag on it logs which arm the
   // boot took. Everything downstream reads `bc7Available()`, so an unsupported
@@ -1222,6 +1241,9 @@ export async function preInit3D(canvas) {
   // back when it has headroom (hysteresis + cooldown). Kills the "4 s per turn"
   // on weak/HiDPI GPUs without the user knowing `?renderScale` exists. Skipped
   // for an explicit ?renderScale (fixed) and headless/agent modes (no render).
+  // `adaptiveGpuProbe` is handed to init3D, whose scheduleNext() feeds it once
+  // per frame after the frame's GL submission (?adaptiveResGpuCheck).
+  let adaptiveGpuProbe = null;
   if (
     !_explicitRenderScale &&
     adaptiveResEnabled() &&
@@ -1230,6 +1252,7 @@ export async function preInit3D(canvas) {
     typeof window !== "undefined"
   ) {
     try {
+      if (adaptiveResGpuCheckEnabled()) adaptiveGpuProbe = createFenceGpuProbe(renderer.getContext());
       const _adaptive = new AdaptiveRenderScaleController({
         getScale: () => _renderScale,
         applyScale: (s) => {
@@ -1241,6 +1264,9 @@ export async function preInit3D(canvas) {
         // `=off` escape). Stops the endless up/down resolution churn on GPUs
         // whose frame time jumps across the stable band (R9 290 @ 4K).
         settle: adaptiveResSettleEnabled(),
+        // 2026-10-07 — lower only when the GPU is actually behind; hold or
+        // raise when frames are main-thread bound (see adaptiveResGpuCheckEnabled).
+        gpuProbe: adaptiveGpuProbe,
         log: (m) => {
           try { console.log(m); } catch (_) { /* best-effort */ }
         },
@@ -1368,6 +1394,19 @@ export async function preInit3D(canvas) {
   // background instead of freezing the frame on a synchronous link (1-2 s per
   // MeshStandard variant on ANGLE/D3D11).
   try { installAsyncLinkGuard(renderer, () => scene); } catch (_) { /* never break boot */ }
+  // Perf 2026-10-07 (prof3: 1070 ultra, CSM re-rastering every frame while
+  // fighting/running) — three exact-output trims of the shadow + batch path:
+  //   ?bmIndirectPerCamera — one BatchedMesh indirect texture per camera; a
+  //     rebuild that reproduces what that camera's texture holds is not
+  //     re-uploaded (was 4 uploads/bucket/frame with CSM; prof3 uploadTexture
+  //     2.44 ms/frame).
+  //   ?shadowCasterList — the shadow pass walks the scene once per raster,
+  //     not once per cascade light (prof3 shadow renderObject self 2.7 ms/frame).
+  //   ?skipEmptyMultiDraw — a BatchedMesh whose rebuild culled everything
+  //     skips three's per-draw setup (it issues no GL draw either way).
+  try { installBatchedIndirectPerCamera(THREE); } catch (_) { /* never break boot */ }
+  try { installShadowCasterList(renderer); } catch (_) { /* never break boot */ }
+  try { installSkipEmptyMultiDraw(renderer); } catch (_) { /* never break boot */ }
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
   // home of this URL parse, but it's `await import()`'d from
   // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
@@ -1634,6 +1673,7 @@ export async function preInit3D(canvas) {
     syncTickDiag,
     diagMode,
     audioConstructable,
+    adaptiveGpuProbe,
   };
 }
 
@@ -1679,6 +1719,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     syncTickDiag,
     diagMode: _diagMode,
     audioConstructable,
+    adaptiveGpuProbe,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
 
@@ -2286,6 +2327,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     }
   }
   function scheduleNext() {
+    // Every tick exit runs through here after its GL submission, which is
+    // where the adaptive-res fence belongs (null unless the controller runs).
+    adaptiveGpuProbe?.frameEnd();
     if (renderOnDemand) return;
     if (_frameIntervalMs > 0) {
       const now = (typeof performance !== "undefined" && performance.now)
@@ -2532,17 +2576,28 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // every grid slot): re-request any landblock in the draw ring that is
         // parked, unbaked-and-idle, or marked baked with no mesh.
         // `?terrainAudit=off` escapes.
+        // 2026-10-07 — counts/logs GENUINE holes only: the ring-sweep backlog
+        // after a crossing is `pending`, not a hole, and is left to the
+        // sweep (terrain_hole_audit.js header). `_terrainAuditStats` is the
+        // live-check surface (cumulative genuine holes since boot).
         if (TERRAIN_AUDIT_ON) {
           const nowA = (typeof performance !== "undefined") ? performance.now() : Date.now();
           const a = auditTerrainRing(liveScene3dRef, currentLbKey, nowA);
-          if (a && (a.parked + a.unbaked + a.markNoMesh) > 0
-              && nowA - (liveScene3dRef._terrainAuditLogMs || -1e9) > 5000) {
-            liveScene3dRef._terrainAuditLogMs = nowA;
-            console.info(
-              `[terrain-audit] holes=${a.parked + a.unbaked + a.markNoMesh} ` +
-              `r=${liveScene3dRef._pvsEffectiveRingRadius ?? "?"} center=0x${(currentLbKey >>> 0).toString(16)} ` +
-              `parked=${a.parked} unbaked=${a.unbaked} markNoMesh=${a.markNoMesh} → re-requested`,
-            );
+          if (a) {
+            const holes = a.parked + a.unbaked + a.markNoMesh;
+            const stA = liveScene3dRef._terrainAuditStats
+              || (liveScene3dRef._terrainAuditStats = { runs: 0, genuine: 0, lastPending: 0 });
+            stA.runs += 1;
+            stA.genuine += holes;
+            stA.lastPending = a.pending;
+            if (holes > 0 && nowA - (liveScene3dRef._terrainAuditLogMs || -1e9) > 5000) {
+              liveScene3dRef._terrainAuditLogMs = nowA;
+              console.info(
+                `[terrain-audit] holes=${holes} ` +
+                `r=${liveScene3dRef._pvsEffectiveRingRadius ?? "?"} center=0x${(currentLbKey >>> 0).toString(16)} ` +
+                `parked=${a.parked} unbaked=${a.unbaked} markNoMesh=${a.markNoMesh} pending=${a.pending} → re-requested`,
+              );
+            }
           }
         }
         // Grace-aware stale-entity reaper (2026-06-15). Shares the LRU's
@@ -2633,7 +2688,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         try {
           atmospherePipeline.preFrameSkySync(
             liveScene3dRef?.skyDome,
-            activeCam
+            activeCam,
+            liveScene3dRef?.atmosphereSky // 2026-10-07 ?aerialSun: AP takes the sky's sun
           );
           const cloudOverlay = liveScene3dRef?.cloudOverlay;
           const cloudActive =
@@ -5584,7 +5640,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // See project_holtburger_stutter_fixes_2026-05-21 for the
             // pre-warm contract that needs to be preserved.
             const [
-              { createAtmospherePipeline },
+              { createAtmospherePipeline, aerialBlendOpacity },
               { AtmosphereLights },
               { AtmosphereSky },
             // 2026-05-21 cold-boot win: prefer the eager-imported
@@ -5901,15 +5957,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 // (measured whole-band MAD 1.8-3.3 on terrain rows, 0.09-0.17
                 // on sky rows) — true Rayleigh over 1 km at ground level is
                 // nearly nothing — so 0.6 is a mild knock, not a suppression.
-                let FOGLERP_AERIAL_OPACITY = 0.6;
-                try {
-                  const raw = new URLSearchParams(window.location.search || "")
-                    .get("aerialOpacity");
-                  if (raw != null && raw !== "") {
-                    const n = Number(raw);
-                    if (Number.isFinite(n)) FOGLERP_AERIAL_OPACITY = Math.min(1, Math.max(0, n));
-                  }
-                } catch (_) { /* no window.location in the Node harness */ }
+                // 2026-10-07 — 1.0 when the clouds composite INSIDE this effect
+                // (cloudsMainPass), else 0.6; `?aerialOpacity=N` still pins it,
+                // `?cloudsFullOpacity=off` restores the 0.6 knock. Rationale:
+                // atmosphere_pipeline.js `aerialBlendOpacity`.
+                const FOGLERP_AERIAL_OPACITY = typeof aerialBlendOpacity === "function"
+                  ? aerialBlendOpacity(!!atmospherePipeline?.cloudsMainPass)
+                  : 0.6;
                 try {
                   const ap = atmospherePipeline?.aerialPerspective;
                   if (ap?.blendMode?.opacity != null) {

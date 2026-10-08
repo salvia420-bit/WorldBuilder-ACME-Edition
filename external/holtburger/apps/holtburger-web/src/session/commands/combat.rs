@@ -433,7 +433,16 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "cancelAttack: {e}",
                 LoopFlow::Exit
             );
-            console_log_str("[cancelAttack] sent");
+            // 2026-10-07 — pure send trace (~150 per 15-min session: every
+            // movement key pressed in a combat stance sends one, picking.js
+            // F6-4) and nothing parses it. `?diag=1` restores it.
+            if flag_search()
+                .trim_start_matches('?')
+                .split('&')
+                .any(|kv| kv == "diag=1")
+            {
+                console_log_str("[cancelAttack] sent");
+            }
         }
         SessionCommand::QueryHealth { target_guid } => {
             // F10-1 (combat): ask ACE for the target's health

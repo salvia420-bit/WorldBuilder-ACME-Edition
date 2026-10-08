@@ -32,10 +32,14 @@
 // WHAT IT DELIBERATELY DOES *NOT* TOUCH. The remapped elevation is injected at
 // exactly one call site (`atmosphere_sky.js`, `AtmosphereSky.tick`). It does
 // NOT reach `SunDirectionalLight`, `SkyLightProbe`, the CSM cascade direction,
-// the terrain `uSunDir` / `uAcSunVec`, or the cloud volume — each of those
-// derives its own vector from `skyLightingController._lastState` independently.
-// That is verifiable: `__nightRampState()` reports both pitches, and the sun
-// light's own direction is unchanged frame-for-frame with the flag on or off.
+// or the terrain `uSunDir` / `uAcSunVec` — each of those derives its own vector
+// from `skyLightingController._lastState` independently. That is verifiable:
+// `__nightRampState()` reports both pitches, and the sun light's own direction
+// is unchanged frame-for-frame with the flag on or off.
+// (2026-10-07: the takram CLOUD volume deliberately DOES follow it now — it
+// samples the same Bruneton LUTs as the sky, so on the raw 0.9 deg pitch it
+// glowed sunset-orange under a night sky. Second call site, same function, same
+// snapshot: `cloud_night.js` / `cloud_volume.js` tick, `?cloudNight=off`.)
 //
 // WARM EMITTERS. Torches, braziers, hearths and luminous window surfaces are
 // absolute HDR values with no time-of-day term at all (placed PointLights from

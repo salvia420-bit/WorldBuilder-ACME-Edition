@@ -15,6 +15,9 @@
 //   7. Enchantment delta detection emits added/removed deltas
 //   8. SetAppraiseInfo folds props through PR 1's setters
 //   9. Selection bookkeeping
+//  11. 2026-10-07 live feed — bindWorldStateToManager (KIND_SPAWN/REMOVE via
+//      the WorldObjectManager), local Character registration, wielder
+//      updates (kind:49/47), bounded pending tables, warn-once appraisal
 //
 // Run from apps/holtburger-web/:
 //   node tests/world-state.test.cjs
@@ -29,6 +32,12 @@ const WS_URL = pathToFileURL(
 ).href;
 const WO_URL = pathToFileURL(
   path.join(__dirname, '..', 'plugins', 'world-objects', 'world_object.js')
+).href;
+const WOM_URL = pathToFileURL(
+  path.join(__dirname, '..', 'plugins', 'world-objects', 'world_object_manager.js')
+).href;
+const CHAR_URL = pathToFileURL(
+  path.join(__dirname, '..', 'plugins', 'world-objects', 'character.js')
 ).href;
 
 let passed = 0;
@@ -52,8 +61,10 @@ function silentLog() {
 }
 
 (async () => {
-  const { WorldState } = await import(WS_URL);
+  const { WorldState, bindWorldStateToManager, bindWorldStateToClient } = await import(WS_URL);
   const { WorldObject } = await import(WO_URL);
+  const { WorldObjectManager } = await import(WOM_URL);
+  const { Character } = await import(CHAR_URL);
 
   // ─── [1] Weenies map + Get/Exists ───
   console.log('\n[1] Weenies map + Get/Exists');
@@ -561,6 +572,194 @@ function silentLog() {
     const result = w.dispatchItemCreateObject({ guid: 0x1400, classId: 0 });
     assert.equal(result, null);
     assert.equal(fired, false);
+  });
+
+  // ─── [11] 2026-10-07 live feed ───
+  console.log('\n[11] Live feed — WorldObjectManager bridge');
+
+  // Taxonomy/enums .load() fetch()es JSON (not in Node); onObjectCreated only
+  // checks the loaded flag (same shim as world_objects_typed_hierarchy.test).
+  function loadedWom() {
+    const wom = new WorldObjectManager();
+    wom.loaded = true;
+    return wom;
+  }
+  // ItemType.Container (0x200) — a canonically classified, non-Unknown spawn
+  // (keeps the manager's Unknown-sentinel console.info out of the output).
+  const spawn = (wom, guid, name = 'Thing', itemType = 0x200) =>
+    wom.onObjectCreated({ guid, classId: 7, itemType, objDescFlags: 0, weenieFlags: 0, name });
+  function fakeClient() {
+    const subs = new Map();
+    return {
+      subs,
+      events: {
+        on(n, fn) { if (!subs.has(n)) subs.set(n, []); subs.get(n).push(fn); },
+        emit(n, detail) { for (const fn of subs.get(n) || []) fn({ detail }); },
+      },
+      player: {},
+    };
+  }
+
+  check('KIND_SPAWN through the manager lands in the mirror as the SAME typed instance', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    assert.equal(bindWorldStateToManager(w, wom, { enabled: true }), true);
+    let created = null;
+    w.addEventListener('objectCreated', (e) => { created = e.detail.object; });
+    const typed = spawn(wom, 0x80001234, 'Chest');
+    assert.equal(w.get(0x80001234), typed, 'adopted, not re-constructed');
+    assert.equal(created, typed);
+    assert.equal(typed._world, w, 'adoption injects the _world back-reference');
+    assert.equal(w.count(), 1);
+  });
+
+  check('objects the manager held before the bind are backfilled', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    spawn(wom, 0x80000001);
+    spawn(wom, 0x80000002);
+    bindWorldStateToManager(w, wom, { enabled: true });
+    assert.equal(w.count(), 2);
+    assert.equal(bindWorldStateToManager(w, wom, { enabled: true }), false, 'idempotent');
+    spawn(wom, 0x80000003);
+    assert.equal(w.count(), 3, 'one listener, no double adoption');
+  });
+
+  check('KIND_REMOVE through the manager releases the weenie (bounded mirror)', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    bindWorldStateToManager(w, wom, { enabled: true });
+    const typed = spawn(wom, 0x80000010);
+    let released = null;
+    w.addEventListener('objectReleased', (e) => { released = e.detail.object; });
+    wom.onObjectDeleted({ guid: 0x80000010 });
+    assert.equal(w.exists(0x80000010), false);
+    assert.equal(released, typed);
+    assert.equal(w.count(), 0);
+  });
+
+  check('a re-sent create keeps the mirrored instance (get-or-create) and folds the name', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    bindWorldStateToManager(w, wom, { enabled: true });
+    const first = spawn(wom, 0x80000020, 'Old Name');
+    first.setIntValue(19, 55); // state the mirror accumulated (e.g. appraisal)
+    let fired = 0;
+    w.addEventListener('objectCreated', () => { fired += 1; });
+    spawn(wom, 0x80000020, 'New Name');
+    const kept = w.get(0x80000020);
+    assert.equal(kept, first);
+    assert.equal(kept.intValue(19, 0), 55);
+    assert.equal(kept.name, 'New Name');
+    assert.equal(fired, 1, 'C# fires OnWeenieCreated on every CreateObject');
+  });
+
+  check('the local player is a Character from setLocalPlayerGuid on (no KIND_SPAWN needed)', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    bindWorldStateToManager(w, wom, { enabled: true });
+    w.setLocalPlayerGuid(0x50000001);
+    const ch = w.get(0x50000001);
+    assert.ok(ch instanceof Character);
+    assert.equal(w.character, ch);
+    // A later KIND_SPAWN for the player folds into the Character.
+    spawn(wom, 0x50000001, 'Tester', 0x10 /* Creature */);
+    assert.equal(w.get(0x50000001), ch);
+    assert.equal(ch.name, 'Tester');
+    // ...and the Character is never released (World.cs:735).
+    wom.onObjectDeleted({ guid: 0x50000001 });
+    assert.equal(w.get(0x50000001), ch);
+  });
+
+  check('bind AFTER setLocalPlayerGuid still registers the Character; unbound worlds do not', () => {
+    const bare = new WorldState({ logger: silentLog() });
+    bare.setLocalPlayerGuid(0x50000002);
+    assert.equal(bare.count(), 0, 'no feed → PR-4 behaviour unchanged');
+    const w = new WorldState({ logger: silentLog() });
+    w.setLocalPlayerGuid(0x50000003);
+    bindWorldStateToManager(w, loadedWom(), { enabled: true });
+    assert.ok(w.get(0x50000003) instanceof Character);
+  });
+
+  check('corpse open → close: no unknown-container warn once the corpse spawned', () => {
+    const warnings = [];
+    const w = new WorldState({ logger: { warn(...a) { warnings.push(a.join(' ')); }, error() {}, info() {}, log() {} } });
+    const wom = loadedWom();
+    bindWorldStateToManager(w, wom, { enabled: true });
+    spawn(wom, 0x80000030, 'Corpse of Drudge');
+    let closed = null;
+    w.addEventListener('containerClosed', (e) => { closed = e.detail.container; });
+    w.dispatchContainerOpened(0x80000030, []);
+    w.dispatchContainerClosed(0x80000030);
+    assert.equal(closed, w.get(0x80000030));
+    assert.equal(warnings.length, 0, warnings.join(' | '));
+  });
+
+  check('an open queued before its container spawned replays when the create arrives', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    bindWorldStateToManager(w, wom, { enabled: true });
+    let opened = null;
+    w.addEventListener('containerOpened', (e) => { opened = e.detail.container; });
+    w.dispatchContainerOpened(0x80000040, []);
+    assert.equal(w._pendingContainerOpenForContainer.size, 1);
+    spawn(wom, 0x80000040, 'Chest');
+    assert.ok(opened, 'replayed');
+    assert.equal(opened, w.get(0x80000040));
+    assert.equal(w._pendingContainerOpenForContainer.size, 0);
+  });
+
+  check('queued opens are dropped on remove and capped (no stale entries)', () => {
+    const w = new WorldState({ logger: silentLog() });
+    w.dispatchContainerOpened(0x900, []);
+    w.dispatchItemDeleteObject(0x900);
+    assert.equal(w._pendingContainerOpenForContainer.size, 0);
+    for (let i = 0; i < 40; i++) w.dispatchContainerOpened(0x1000 + i, []);
+    assert.equal(w._pendingContainerOpenForContainer.size, 32);
+    assert.equal(w._pendingContainerOpenForContainer.has(0x1000), false, 'oldest evicted');
+    assert.equal(w._pendingContainerOpenForContainer.has(0x1000 + 39), true);
+  });
+
+  check('wielder updates (kind:49 / kind:47) reach known items; unknown items are ignored silently', () => {
+    const warnings = [];
+    const w = new WorldState({ logger: { warn(...a) { warnings.push(a.join(' ')); }, error() {}, info() {}, log() {} } });
+    const c = fakeClient();
+    bindWorldStateToClient(w, c);
+    w.dispatchItemCreateObject({ guid: 0x700 });
+    c.events.emit('kind:49', { u32Payload: 0x700, u32Payload2: 0x50000001 });
+    assert.equal(w.get(0x700).instanceValue(3, 0), 0x50000001);
+    c.events.emit('kind:47', { u32Payload: 0x700, u32Payload2: 0x50000001 });
+    assert.equal(w.get(0x700).instanceValue(3, -1), 0);
+    c.events.emit('kind:49', { u32Payload: 0xBEEF, u32Payload2: 0x1 }); // a monster's sword
+    assert.equal(warnings.length, 0);
+  });
+
+  check('?pluginWorldFeed=off (enabled:false) leaves the mirror unfed', () => {
+    const w = new WorldState({ logger: silentLog() });
+    const wom = loadedWom();
+    assert.equal(bindWorldStateToManager(w, wom, { enabled: false }), false);
+    spawn(wom, 0x80000050);
+    assert.equal(w.count(), 0);
+  });
+
+  check('rebinding the manager to a new plugin client\'s world detaches the old one', () => {
+    const wom = loadedWom();
+    const a = new WorldState({ logger: silentLog() });
+    const b = new WorldState({ logger: silentLog() });
+    bindWorldStateToManager(a, wom, { enabled: true });
+    bindWorldStateToManager(b, wom, { enabled: true });
+    spawn(wom, 0x80000060);
+    assert.equal(a.exists(0x80000060), false);
+    assert.equal(b.exists(0x80000060), true);
+  });
+
+  check('appraising an unmirrored (pack) item warns once per guid, not per appraisal', () => {
+    const warnings = [];
+    const w = new WorldState({ logger: { warn(...a) { warnings.push(a.join(' ')); }, error() {}, info() {}, log() {} } });
+    w.dispatchSetAppraiseInfo(0x123, {});
+    w.dispatchSetAppraiseInfo(0x123, {});
+    w.dispatchSetAppraiseInfo(0x456, {});
+    assert.equal(warnings.length, 2);
   });
 
   // ─── Summary ───

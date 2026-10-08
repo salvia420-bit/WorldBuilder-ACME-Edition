@@ -764,6 +764,10 @@ export class CloudOverlay {
    */
   preRender(renderer, dt = 0, activeCam = null) {
     if (!renderer) return;
+    // 2026-10-07 — ?cloudNight night floor is solved in DISPLAY terms
+    // (exposure × AgX); hand the volume the live exposure (`?exposure`,
+    // `__setExposure`). A number compare per frame; re-solves only on change.
+    this.volume?.setDisplayExposure?.(renderer.toneMappingExposure);
     if (this._mainPass) {
       // `?cloudsMainPass=on`: the main composer's fxPass runs the raymarch
       // (CloudsEffect.update) with the real scene depth; arm exactly one

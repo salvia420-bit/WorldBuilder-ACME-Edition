@@ -300,9 +300,13 @@ export class ParticleOwnerRegistry {
    * `destroy_particle_emitter`, acclient.c:316382-316393). Also accepts a
    * raw underlying id (PlayEffect reaper path). Unknown handles no-op,
    * matching retail's per-object table miss.
+   * HIDEFX (2026-10-07): `opts.scopedOnly` skips the raw-underlying-id
+   * fallback — a script handle (the PlayEffect StopParticle/DestroyParticle
+   * path in play_effect_vfx.js) must never hit an unrelated emitter whose
+   * GLOBAL facade id happens to equal it (Hide's handles are 1000-1013).
    * @returns {boolean} true when an emitter was destroyed.
    */
-  destroyEmitter(ownerKey, handle) {
+  destroyEmitter(ownerKey, handle, opts) {
     const rec = this._owners.get(ownerKey);
     if (!rec) return false;
     const h = handle >>> 0;
@@ -318,6 +322,7 @@ export class ParticleOwnerRegistry {
       rec.scoped.delete(h);
       return true;
     }
+    if (opts?.scopedOnly === true) return false;
     if (rec.ids.has(h)) {
       this._destroyUnderlying(rec, h);
       this._pruneOwner(ownerKey, rec);
@@ -330,8 +335,9 @@ export class ParticleOwnerRegistry {
    * `StopParticleHook` (15) — stop emission by scoped handle, NO teardown
    * (retail stop = flag-only, acclient.c:329442-329480; the manager reaps
    * the drained emitter from its table on its own).
+   * HIDEFX (2026-10-07): `opts.scopedOnly` — as for `destroyEmitter`.
    */
-  stopEmitter(ownerKey, handle) {
+  stopEmitter(ownerKey, handle, opts) {
     const rec = this._owners.get(ownerKey);
     if (!rec) return false;
     const h = handle >>> 0;
@@ -348,11 +354,40 @@ export class ParticleOwnerRegistry {
       mapped.stopRequested = true;
       return true;
     }
+    if (typeof mapped !== "number" && opts?.scopedOnly === true) return false;
     const id = typeof mapped === "number" ? mapped : (rec.ids.has(h) ? h : 0);
     if (id === 0) return false;
     const manager = rec.ids.get(id);
     if (!manager) return false;
     try { return manager.stopParticleEmitter(id) === true; } catch (_) { return false; }
+  }
+
+  /**
+   * HIDEFX (2026-10-07) — STOP (not destroy) a specific UNDERLYING id list
+   * under one owner: retail `ParticleManager::StopParticleEmitter`
+   * (acclient.c:329442-329480) sets `stopped` and leaves the emitter in the
+   * table until its live particles age out (`ParticleEmitter::UpdateParticles`
+   * returns `num_particles != 0` once stopped, :331224-331227; the manager
+   * removes it, :329482-329525). This is the id-list twin of `stopEmitter`,
+   * for the PlayEffect hidden-state hold release in play_effect_vfx.js.
+   * Unlike `stopEmitter` it never consults the scoped-handle map, so a raw
+   * underlying id that happens to equal a script handle (ids are small
+   * monotonic integers; Hide's handles are 1000-1013) can't be misread as
+   * that handle. Unknown / already-reaped ids no-op.
+   * @returns {number} emitters flagged stopped.
+   */
+  stopSome(ownerKey, ids) {
+    const rec = this._owners.get(ownerKey);
+    if (!rec || !Array.isArray(ids)) return 0;
+    let n = 0;
+    for (const id of ids) {
+      const manager = rec.ids.get(id >>> 0);
+      if (!manager) continue;
+      try {
+        if (manager.stopParticleEmitter(id >>> 0) === true) n += 1;
+      } catch (_) { /* idempotent */ }
+    }
+    return n;
   }
 
   /**

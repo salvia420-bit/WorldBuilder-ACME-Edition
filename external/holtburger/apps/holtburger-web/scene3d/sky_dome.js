@@ -23,6 +23,10 @@
 
 import * as THREE from "three";
 import { viewerState } from "./viewer_cell.js";
+// 2026-10-07 `?skyGlow` (DEFAULT ON) — the "birds" this host attaches are the
+// moon SkyObject's nebula glow sheets; sky_glow.js renders them retail-style
+// (behind the world and the clouds, unfogged, edge-windowed). See its header.
+import { installSkyGlowHandle, updateSkyGlowFrame } from "./sky_glow.js";
 
 const SKY_CAMERA_NEAR = 0.1;
 const SKY_CAMERA_FAR = 50000.0;
@@ -321,6 +325,9 @@ export class SkyDome {
     // Tick counters (capture scripts inspect these).
     this._tickCount = 0;
     this._indoorTickCount = 0;
+
+    // 2026-10-07 `?skyGlow` live tuning handle (`window.__skyGlow(v)`).
+    installSkyGlowHandle();
   }
 
   /**
@@ -549,6 +556,13 @@ export class SkyDome {
       this._skyBirdAnchor = new THREE.Group();
       this._skyBirdAnchor.name = "sky-bird-anchor";
       this._skyBirdAnchor.frustumCulled = false;
+      // 2026-10-07 `?skyGlow` — the "birds" are not birds. Region 0x13000000's
+      // only sky PES chains are the moon's 0x330007DB (in all 20 DayGroups:
+      // three Swarm emitters of 275-unit additive nebula quads at scale 7-8,
+      // 450-700 m out — kilometre sheets) and the storm DayGroups' 0x33000453
+      // lightning box. statics.js reads this tag into the emitter request, and
+      // particle_manager.js turns the textured ones into sky glows (sky_glow.js).
+      this._skyBirdAnchor.userData.isSkyGlowAnchor = true;
       // FRAME INVARIANT (2026-08-03): `_runStaticParticleChain` parents the
       // Swarm emitters straight under this anchor, and every other caller
       // hands it an anchor under `staticsGroup` — so the DAT emitter offsets
@@ -644,6 +658,12 @@ export class SkyDome {
       } catch (_) { /* keep isIndoor */ }
     }
     this._lastSkyBlocked = skyBlocked;
+    // 2026-10-07 `?skyGlow` — display-space gain tracks the composer exposure,
+    // and the glows hide whenever the sky pass is off (their far-depth trick
+    // would otherwise light a dungeon's cleared void).
+    try {
+      updateSkyGlowFrame(this.liveScene3dRef?.renderer?.toneMappingExposure, !skyBlocked);
+    } catch (_) { /* sky glow sync must never kill the sky tick */ }
 
     // Task #4 — keep the sky-swarm (bird) anchor overhead, following the camera.
     // Hidden indoors (no birds through ceilings). The emitters tick on the

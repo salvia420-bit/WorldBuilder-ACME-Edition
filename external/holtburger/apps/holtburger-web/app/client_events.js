@@ -1699,10 +1699,15 @@ export function dispatchClientEvent(evt, D) {
         // console line alongside the visuals.
         window.__cmdInterpReclaims =
           ((window.__cmdInterpReclaims | 0) + 1) | 0;
-        console.log(
-          "[cmdInterp] FU-A control reclaim #" +
-            window.__cmdInterpReclaims
-        );
+        // 2026-10-07 — the counter is the data source (harness/
+        // postflip-legs.mjs reads it); the per-reclaim line was pure trace
+        // (~63 per 15-min session), so it now needs `?diag=1`.
+        if (/[?&]diag=1(?:&|$)/.test(globalThis.location?.search || "")) {
+          console.log(
+            "[cmdInterp] FU-A control reclaim #" +
+              window.__cmdInterpReclaims
+          );
+        }
       } else if (code61 === 3) {
         const packed = (evt.u32Payload2 ?? 0x010101) >>> 0;
         const fwd = (packed & 0xff) - 1;

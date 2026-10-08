@@ -37,6 +37,8 @@
 
 import { shouldDeferDeathRemove, deathHoldVerdict, DEATH_CLAIM_POLL_MS } from "./death_hold.js";
 import { asyncLinkBusy } from "./async_link_guard.js";
+// NETSYNC-4b (2026-10-07): ghost player-rig backstop (see sweepGhostRigs).
+import { GHOST_RIG_SWEEP_ON, GHOST_RIG_SWEEP_INTERVAL_MS, ghostRigSweepStep } from "./ghost_rigs.js";
 import * as THREE from "three";
 import { tickCellVisibility3D, tickPortalStencil, tickPortalPunch, tickPortalSeal, tickPvsLoadExpansion, noteEntityLandcell } from "./cells.js";
 // Far-terrain wave (2026-08-02). S1 (retail range fog) reads the flags + the
@@ -46,6 +48,7 @@ import {
   terrainFogEnabled, farFogFrac, farFogNearPin, farFogFarPin,
   farFogFloorM, farFogFloorMinLb,
   farFogSkyProbeEnabled, farFogSkyElevDeg, farFogSkyHz, farFogTint,
+  horizonFogEnabled, horizonFogNearFrac, computeFogBand,
 } from "./far_terrain_flags.js";
 import { tickFarTerrain, farTerrainEffectiveRadiusLb } from "./far_terrain.js";
 // ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
@@ -605,6 +608,41 @@ const REMOTE_INTERP_ON = (() => {
     return false;
   }
 })();
+
+// NETSYNC-4b (2026-10-07) — remove a remote PLAYER rig the wasm world has
+// not known for > 25 s + margin (retail CObjectMaint destruction time,
+// acclient.c:310651; the `?maintPrune` KIND_REMOVE normally does it at 25 s —
+// this is the backstop for a rig whose KIND_REMOVE never came). Throttled to
+// 1 Hz; only while the wasm world knows the local player (in world). The
+// `typeof` guards keep suites that splice loop.js without its imports inert.
+const _ghostRigState = new Map();
+let _ghostRigLastMs = 0;
+function sweepGhostRigs(scene3d, sessionHandle) {
+  if (typeof ghostRigSweepStep !== "function" || typeof GHOST_RIG_SWEEP_ON === "undefined") return;
+  if (!GHOST_RIG_SWEEP_ON) return;
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (now - _ghostRigLastMs < GHOST_RIG_SWEEP_INTERVAL_MS) return;
+  _ghostRigLastMs = now;
+  const em = scene3d?.entityManager;
+  if (!em?.entityMap || typeof sessionHandle?.objectPosition !== "function") return;
+  let local = null;
+  try { local = (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") ? window.getLocalPlayerGuid() : null; } catch (_) { local = null; }
+  if (local == null) return;
+  const known = (g) => {
+    try { const p = sessionHandle.objectPosition(g >>> 0); return !!p && p.length > 0; } catch (_) { return true; }
+  };
+  if (!known(local)) return; // not in world: everything reads unknown
+  const drop = ghostRigSweepStep(_ghostRigState, now, em.entityMap.keys(), known, local);
+  for (const g of drop) {
+    const inst = em.entityMap.get(g);
+    if (!inst || inst._removePending || inst._attachedParentGuid != null) continue;
+    try {
+      // eslint-disable-next-line no-console
+      console.log(`[ghost-rig] 0x${g.toString(16)} ${inst.meta?.name ?? ""}: unknown to the wasm world for 30 s — removing the rig`);
+    } catch (_) {}
+    try { _armRemove(scene3d, em, { guid: g }); } catch (_) {}
+  }
+}
 
 function drainRemotePoses(scene3d, sessionHandle) {
   if (!REMOTE_INTERP_ON) return;
@@ -1914,25 +1952,38 @@ function tickDistanceFogColor(scene3d) {
       scene3d._authoredFogMaxM = fogMax;
       const frac = farFogFrac();
       const rEff = farTerrainEffectiveRadiusLb(scene3d);
-      if (frac > 0 && Number.isFinite(rEff) && rEff > 0) {
-        const drawnEdge = (rEff + 0.5) * 192;
-        let edge = frac * drawnEdge;
-        const floorM = farFogFloorM();
-        if (floorM > 0 && rEff >= farFogFloorMinLb()) {
-          edge = Math.max(edge, Math.min(floorM, drawnEdge));
-        }
-        if (edge > 0 && edge < far) {
-          far = edge;
-          // DEGENERATE BAND. In the first seconds of a boot the drawn world is
-          // smaller than the authored fog START (150 m), so the clamp produces
-          // far < near, `far > near` below is false, and the fog silently keeps
-          // whatever the THREE.Fog was CONSTRUCTED with (2500 m) — i.e. no fog
-          // at all in exactly the phase where the drawn edge is nearest and
-          // ugliest. Measured on the HD520: 30 s of fogFar 2500 against a
-          // 136 m drawn edge. Scale the whole band down instead.
-          if (near >= far) near = far * 0.1;
-        }
-      }
+      // 2026-10-07 HORIZON FOG (`?horizonFog`, default ON) — owner on the 1070:
+      // "i mainly want it on the horizon to hide if there is nothing loaded
+      // beyond the horizon, and to provide a sense of depth at distance". The
+      // live dusk band was authored 85 -> 796 m, i.e. the whole R=5 world
+      // (edge 1056 m) inside the ramp and the near field visibly hazed.
+      // Outdoors the band is re-anchored to the DRAWN EDGE (far = the clamp
+      // below, ALWAYS; near = max(authored, horizonFogNear x edge)); with the
+      // sky blocked (dungeon / sealed cell) the authored band is applied exactly
+      // as before. The math is `far_terrain_flags.js::computeFogBand` (pure,
+      // unit-tested in test_fog_band.mjs); the legacy "clamped" branch there is
+      // the previous inline code verbatim, including the DEGENERATE BAND guard:
+      // in the first seconds of a boot the drawn world is smaller than the
+      // authored fog START (150 m), so the clamp produces far < near, `far >
+      // near` below is false, and the fog silently keeps whatever the THREE.Fog
+      // was CONSTRUCTED with (2500 m) — i.e. no fog at all in exactly the phase
+      // where the drawn edge is nearest and ugliest (measured on the HD520: 30 s
+      // of fogFar 2500 against a 136 m drawn edge), so the band is scaled down.
+      const skyDome = scene3d.skyDome;
+      const skyBlocked = !!(skyDome?._lastSkyBlocked ?? skyDome?._lastIsIndoor);
+      const horizon = horizonFogEnabled() && !skyBlocked;
+      const band = computeFogBand({
+        authoredMin: near,
+        authoredMax: far,
+        rEffLb: rEff,
+        frac,
+        floorM: farFogFloorM(),
+        floorMinLb: farFogFloorMinLb(),
+        horizon,
+        horizonNear: horizonFogNearFrac(),
+      });
+      near = band.near;
+      far = band.far;
       const nearPin = farFogNearPin();
       const farPin = farFogFarPin();
       if (Number.isFinite(nearPin)) near = nearPin;
@@ -1961,6 +2012,12 @@ function tickDistanceFogColor(scene3d) {
         // SOLID radius when `?farRing=on` and patches are actually drawn.
         effectiveRadiusLb: rEff,
         drawnEdgeM: Number.isFinite(rEff) ? (rEff + 0.5) * 192 : null,
+        // 2026-10-07 — which branch of computeFogBand produced near/far:
+        // "horizon" (outdoor default), "clamped"/"authored" (indoors, or
+        // ?horizonFog=off). horizonNear is the start fraction of the edge.
+        mode: band.mode,
+        horizonNear: horizon ? horizonFogNearFrac() : null,
+        skyBlocked,
       };
     }
   }
@@ -2863,6 +2920,8 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
     // same-frame KIND_POSITION bookkeeping (sticky-clear, heading stash,
     // __lastEntityWorldPos) has landed and the managed write wins the frame.
     drainRemotePoses(scene3d, sessionHandle);
+    // NETSYNC-4b: drop ghost player rigs (1 Hz, `?ghostRigSweep=off`).
+    sweepGhostRigs(scene3d, sessionHandle);
     // Cohere-B follow-on (2026-05-12): drive the local-player rig
     // from the wasm integrator's authoritative pose each rAF. Runs
     // AFTER drainEntityEvents3D so any KIND_SPAWN for the local guid
@@ -3583,6 +3642,13 @@ function _armMotion(scene3d, em, upd) {
     !isAuto &&
     !isLocalGaitLocomotionCmd(motionCmd);
   if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
+    // NETSYNC-2 (2026-10-07): mark whether this motion is a MoveTo envelope
+    // BEFORE setMotion reads it — `vx` carries the MoveTo run rate and is 0
+    // for an interpreted (type 0) state (src/session/messages/position.rs,
+    // F3-5). The COL-20 turn gate arms only for MoveTos (`?remoteTurnGateFix`).
+    if (!isLocalPlayerGuid(motionGuid)) {
+      try { em.noteRemoteMoveToHint?.(motionGuid, +(upd.vx ?? 0) > 0); } catch (_) {}
+    }
     // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
     em.setMotion(
       motionGuid,

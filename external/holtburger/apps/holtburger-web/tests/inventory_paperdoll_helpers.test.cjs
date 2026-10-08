@@ -57,6 +57,7 @@ function check(name, fn) {
     canEquipInSlot,
     EQUIP,
     COMBAT_STYLE_CASTER,
+    wieldEventTouchesLocal,
   } = await import(INV_URL);
 
   // ============================================================
@@ -362,6 +363,32 @@ function check(name, fn) {
     const r = canEquipInSlot(null, EQUIP.MeleeWeapon, emptyState);
     assert.strictEqual(r.ok, false);
   });
+
+  // ============================================================
+  // wieldEventTouchesLocal (2026-10-07) — kind:47/49 rebuild filter
+  // ============================================================
+  console.log('\n[wieldEventTouchesLocal] kind:47/49 → rebuild only for ours');
+  {
+    const ME = 0x50000001;
+    const mine = new Set([0x70000001]);
+    const isMine = (g) => mine.has(g);
+    check('a creature wielding its own sword does not rebuild the panel', () => {
+      assert.strictEqual(wieldEventTouchesLocal({ u32Payload: 0x80001234, u32Payload2: 0x80001000 }, ME, isMine), false);
+    });
+    check('the local player becoming the wielder (pack → wield) rebuilds', () => {
+      assert.strictEqual(wieldEventTouchesLocal({ u32Payload: 0x80009999, u32Payload2: ME }, ME, isMine), true);
+    });
+    check('a detach whose prior wielder was us rebuilds', () => {
+      assert.strictEqual(wieldEventTouchesLocal({ u32Payload: 0x70000002, u32Payload2: ME }, ME, isMine), true);
+    });
+    check('one of our items changing wielder rebuilds (give / drop paths)', () => {
+      assert.strictEqual(wieldEventTouchesLocal({ u32Payload: 0x70000001, u32Payload2: 0x80001000 }, ME, isMine), true);
+    });
+    check('unreadable event or unknown local guid → conservative rebuild', () => {
+      assert.strictEqual(wieldEventTouchesLocal(null, ME, isMine), true);
+      assert.strictEqual(wieldEventTouchesLocal({ u32Payload: 0x80001234, u32Payload2: 1 }, null, isMine), true);
+    });
+  }
 
   // ============================================================
   // Summary

@@ -38,6 +38,10 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   bc7Available: "() => false",
   bc7TextureBytes: "() => 0",
   upgradeMaterialToBc7: "() => false",
+  // ./bc7_textures.js — CLIP-ALPHA guard (2026-10-07). Only reached past the
+  // `bc7Available()` gate above, which is false here; `null` is the real
+  // "nothing to protect" answer.
+  bc7ClipAlphaGateFor: "() => null",
   // ./bc7_textures.js — ST5 (`?texCompressedOnly`): inactive is the default
   // arm (flag OFF), so the compressed-only branch never fires and the
   // remaining symbols are unreachable-but-declared (explicit inert stubs,
@@ -136,5 +140,14 @@ export function entitiesCtorPrelude() {
     "// === part_degrade.js (genuine) ===\n" + stripExports(pd) + "\n" +
     "// === motion_link_diag.js (genuine) ===\n" + stripExports(mld) + "\n" +
     "// === motion/motion_command_full.js (genuine) ===\n" +
-    "const fullMotionCommand = (() => {\n" + stripExports(mcf) + "\nreturn fullMotionCommand;\n})();\n";
+    "const fullMotionCommand = (() => {\n" + stripExports(mcf) + "\nreturn fullMotionCommand;\n})();\n" +
+    // 2026-10-07 — terrain rounding step 3 (./visual_ground.js): the
+    // EntityInstance constructor calls installVisualGroundRoot and `tick`
+    // calls visualGroundBeginFrame. Not inlined (it imports terrain_round /
+    // terrain_oracle / frame_pose); stubbed to the real answers in a spliced
+    // suite: no terrain bake has published a drawn fillet, so every rig's
+    // offset is 0 and nothing reads the per-frame snapshot (its own suite,
+    // test_visual_ground.mjs, drives the genuine module).
+    "// === visual_ground.js (inert: no drawn fillet) ===\n" +
+    "const installVisualGroundRoot = () => false;\nconst visualGroundBeginFrame = () => {};\n";
 }

@@ -1271,4 +1271,93 @@ mod tests {
             failures.len()
         );
     }
+    /// NETSYNC-3 (2026-10-07): pins the SIGN and magnitude of the turn omega
+    /// remote bodies integrate (holtburger-world `SpatialBody::state_omega_z`,
+    /// `RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z`) to retail data. Retail turns an
+    /// object by `speed × MotionData.omega` (`add_motion` acclient.c:337431,
+    /// `combine_motion` :337477) rotated in by `CSequence::apply_physics`
+    /// (:339860); TurnLeft is never looked up (`adjust_motion` folds it to
+    /// TurnRight with speed × -1). So the TurnRight omega alone fixes the
+    /// direction: z < 0 = clockwise from above (+z up, x east, y north) =
+    /// a right turn. Player table 0x09000001 authors -1.5 rad/s in every
+    /// stance and on the style-0 modifier; every retail table that authors a
+    /// TurnRight omega has z < 0.
+    #[test]
+    fn netsync3_turn_right_omega_is_clockwise_in_retail_tables() {
+        use crate::DatDatabase;
+        let path = match retail_portal_dat_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("[netsync3_turn_right_omega] SKIP — no client_portal.dat available");
+                return;
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+        let read = |id: u32| {
+            let bytes = dat.get_file(id).expect("motion table present in client_portal.dat");
+            MotionTable::read(&mut Cursor::new(bytes)).expect("motion table parses")
+        };
+
+        let human = read(0x0900_0001);
+        // NonCombat, HandCombat, Magic, SwordCombat.
+        for stance in [0x8000_003Du32, 0x8000_003C, 0x8000_0049, 0x8000_003E] {
+            let omega = human
+                .motion_data_for_cycle(stance, MotionTable::TURN_RIGHT_COMMAND)
+                .and_then(|md| md.omega);
+            assert_eq!(
+                omega,
+                Some(Vector3::new(0.0, 0.0, -1.5)),
+                "0x09000001 TurnRight cycle omega, stance 0x{stance:08X}"
+            );
+        }
+        let style0 = human
+            .modifiers
+            .get(&cycle_key(0, MotionTable::TURN_RIGHT_COMMAND))
+            .and_then(|md| md.omega);
+        assert_eq!(
+            style0,
+            Some(Vector3::new(0.0, 0.0, -1.5)),
+            "0x09000001 style-0 TurnRight modifier (turn while moving)"
+        );
+
+        let mut ids: Vec<u32> = dat
+            .files
+            .keys()
+            .copied()
+            .filter(|id| (0x0900_0000..=0x0900_FFFF).contains(id))
+            .collect();
+        ids.sort_unstable();
+        let mut tables_with_turn = 0usize;
+        for id in ids {
+            let Ok(bytes) = dat.get_file(id) else {
+                continue;
+            };
+            let Ok(mt) = MotionTable::read(&mut Cursor::new(bytes)) else {
+                continue;
+            };
+            let mut has_turn = false;
+            for (key, md) in mt.cycles.iter().chain(mt.modifiers.iter()) {
+                if key & 0xFFFF != 0x000D {
+                    continue;
+                }
+                let Some(omega) = md.omega else { continue };
+                if omega.z == 0.0 {
+                    continue;
+                }
+                has_turn = true;
+                assert!(
+                    omega.z < 0.0,
+                    "0x{id:08X} key 0x{key:08X}: TurnRight omega.z {} must be clockwise (< 0)",
+                    omega.z
+                );
+            }
+            if has_turn {
+                tables_with_turn += 1;
+            }
+        }
+        assert!(
+            tables_with_turn > 250,
+            "expected ~300 tables authoring a TurnRight omega, saw {tables_with_turn}"
+        );
+    }
 }

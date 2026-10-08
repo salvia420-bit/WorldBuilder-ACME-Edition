@@ -906,12 +906,25 @@ fn get_link_flag() -> bool {
 /// +25.0 s, acclient.c:310666, drained by `CObjectMaint::UseTime`
 /// acclient.c:310246–310278) are translated into KIND_REMOVE rig
 /// events — closing survey A8 §3 row 2: rigs for entities that left
-/// the visible set no longer persist for the whole session. Default
-/// OFF = despawn events stay dropped, byte-identical to before.
-#[cfg(target_arch = "wasm32")]
+/// the visible set no longer persist for the whole session.
+///
+/// NETSYNC-4 (2026-10-07, Coldeve capture): DEFAULT ON, `?maintPrune=off`
+/// is the escape (was strict `=on`). With the unified spine default-on the
+/// wasm world already culled out-of-visibility entities at exactly 25 s —
+/// the capture shows Guan Yin / Cobby / Yeevoid II losing their wasm entity
+/// 25.2 s after portalling into a dungeon — but with this flag off the
+/// despawn never reached JS, so their rigs stayed for the rest of the
+/// session at the dungeon coordinates (and 7 more "ghost" players whose
+/// wasm entity was gone from the start). ACE relies on that client cull:
+/// `ObjectMaint.KnownObjects` — "if it remains outside PVS for
+/// DestructionTime (25 s), the client automatically culls the object" —
+/// and sends no ObjectDelete for it; retail does it in
+/// `CPhysicsObj::prepare_to_leave_visibility` → `AddObjectToBeDestroyed`
+/// (acclient.c:319196, :310651).
+#[cfg(any(target_arch = "wasm32", test))]
 fn parse_maint_prune_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "maintPrune=on")
+    !trimmed.split('&').any(|kv| kv == "maintPrune=off")
 }
 
 /// A1-O2 (2026-06-11, unification survey): parse
@@ -1017,6 +1030,28 @@ fn parse_remote_root_motion_flag(search: &str) -> bool {
 fn parse_remote_jump_arc_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "remoteJumpArc=off")
+}
+
+/// NETSYNC-1 (2026-10-07, Coldeve capture): `?remoteMotionKeep=off`
+/// restores the pre-fix behaviour where every remote wire position
+/// correction wiped the body's interpreted motion state (the remote then
+/// stood on the corrected pose until its next motion CHANGE). DEFAULT-ON;
+/// rides the effective `remoteInterp` composite
+/// (`SpatialScene::remote_motion_keep_active`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_motion_keep_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteMotionKeep=off")
+}
+
+/// NETSYNC-3 (2026-10-07): `?remoteTurn=off` stops remote bodies turning
+/// by their interpreted turn axis between corrections (the pre-fix
+/// straight-line dead reckoning). DEFAULT-ON; rides the effective
+/// `remoteInterp` composite.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_turn_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteTurn=off")
 }
 
 /// OpenAC comparison 2026-10-04 (remote motion D5): `?remoteMoveTo=off`
@@ -31926,6 +31961,42 @@ mod wire_state_packs_routing_tests {
         ));
     }
 
+    /// NETSYNC-1 (2026-10-07): `?remoteMotionKeep` parse shape —
+    /// DEFAULT-ON; only an explicit `=off` disables.
+    #[test]
+    fn remote_motion_keep_flag_defaults_on_unless_off() {
+        use super::parse_remote_motion_keep_flag;
+        assert!(parse_remote_motion_keep_flag(""));
+        assert!(parse_remote_motion_keep_flag("?renderer=3d"));
+        assert!(parse_remote_motion_keep_flag("?remoteMotionKeep=on"));
+        assert!(!parse_remote_motion_keep_flag("?remoteMotionKeep=off"));
+        assert!(!parse_remote_motion_keep_flag("?nosw=1&remoteMotionKeep=off"));
+    }
+
+    /// NETSYNC-4 (2026-10-07): `?maintPrune` parse shape — DEFAULT-ON
+    /// (was strict `=on`); only an explicit `=off` disables.
+    #[test]
+    fn maint_prune_flag_defaults_on_unless_off() {
+        use super::parse_maint_prune_flag;
+        assert!(parse_maint_prune_flag(""));
+        assert!(parse_maint_prune_flag("?renderer=3d"));
+        assert!(parse_maint_prune_flag("?maintPrune=on"));
+        assert!(!parse_maint_prune_flag("?maintPrune=off"));
+        assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
+    }
+
+    /// NETSYNC-3 (2026-10-07): `?remoteTurn` parse shape — DEFAULT-ON;
+    /// only an explicit `=off` disables.
+    #[test]
+    fn remote_turn_flag_defaults_on_unless_off() {
+        use super::parse_remote_turn_flag;
+        assert!(parse_remote_turn_flag(""));
+        assert!(parse_remote_turn_flag("?renderer=3d"));
+        assert!(parse_remote_turn_flag("?remoteTurnGate=off"));
+        assert!(!parse_remote_turn_flag("?remoteTurn=off"));
+        assert!(!parse_remote_turn_flag("?nosw=1&remoteTurn=off"));
+    }
+
     /// F-2026-07-03: `?retailLeash` / `?retailQuantum` parse shapes —
     /// DEFAULT-ON; only an explicit `=off` disables.
     #[test]
@@ -36132,6 +36203,68 @@ impl SessionHandle {
             ])
         })
         .unwrap_or_default()
+    }
+
+    /// NETSYNC (2026-10-07): diagnostic read of a REMOTE body's
+    /// dead-reckoning inputs, so `__diag.remoteSync` can say WHY a remote
+    /// stood on its last server pose (held) instead of moving on. Fixed
+    /// layout (f32), empty when the guid has no scene body:
+    /// `[0] forward_low16, [1] forward_speed, [2] turn_low16,
+    /// [3] turn_speed, [4] sidestep_low16, [5] interp_queue_active,
+    /// [6] last_wire_contact (1 / 0 / -1 unknown), [7] indoors,
+    /// [8] moveto (0 none / 1 turn node / 2 walk-run node), [9] sticky,
+    /// [10] airborne_arc, [11] |state velocity| m/s, [12] state omega z
+    /// rad/s, [13] resolved TurnRight omega z (NaN = fallback),
+    /// [14] has_motion_state`. Read-only; purely additive export.
+    #[wasm_bindgen(js_name = remoteBodyState)]
+    pub fn remote_body_state(&self, guid: u32) -> Vec<f32> {
+        let Ok(world) = self.world.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(world) = world.as_ref() else {
+            return Vec::new();
+        };
+        let g = holtburger_common::Guid(guid);
+        let Some(body) = world
+            .scene
+            .body(holtburger_world::spatial::SpatialBodyId::Entity(g))
+        else {
+            return Vec::new();
+        };
+        let ms = body.motion_state;
+        let low = |c: Option<holtburger_protocol::messages::movement::InterpretedMotionCommand>| {
+            c.map(|c| f32::from(c.raw())).unwrap_or(0.0)
+        };
+        let speed = |s: Option<holtburger_world::entity::OrderedMotionSpeed>| {
+            s.map(|s| s.to_f32()).unwrap_or(0.0)
+        };
+        let flag = |b: bool| if b { 1.0 } else { 0.0 };
+        let v = body.state_velocity_local();
+        vec![
+            low(ms.and_then(|m| m.forward_command)),
+            speed(ms.and_then(|m| m.forward_speed)),
+            low(ms.and_then(|m| m.turn_command)),
+            speed(ms.and_then(|m| m.turn_speed)),
+            low(ms.and_then(|m| m.sidestep_command)),
+            flag(body.position_manager.queue_active()),
+            match body.last_wire_contact {
+                Some(true) => 1.0,
+                Some(false) => 0.0,
+                None => -1.0,
+            },
+            flag(body.pose.is_indoors()),
+            match body.remote_moveto {
+                None => 0.0,
+                Some(drive) if drive.forward.is_some() => 2.0,
+                Some(_) => 1.0,
+            },
+            flag(world.scene.remote_sticky_target(g).is_some()),
+            flag(body.remote_arc.is_some()),
+            (v.x * v.x + v.y * v.y).sqrt(),
+            body.state_omega_z(),
+            body.remote_turn_omega_z.unwrap_or(f32::NAN),
+            flag(ms.is_some()),
+        ]
     }
 
     /// PR-JJ 2026-05-23: the local player's active enchantments — full
@@ -44489,8 +44622,9 @@ async fn recv_loop(
     // spine's despawn reports (25 s out-of-visibility prune + swept
     // explicit deletes, liveness.rs ↔ acclient.c:310666) to the JS rig
     // layer as KIND_REMOVE. Requires the unified spine (`?unifiedTick`,
-    // default ON) — inert under `unifiedTick=off`. Default OFF (strict `=on`);
-    // see `parse_maint_prune_flag` and the TickMovement arm.
+    // default ON) — inert under `unifiedTick=off`. DEFAULT ON since
+    // NETSYNC-4 (2026-10-07; `=off` escape); see `parse_maint_prune_flag`
+    // and the TickMovement arm.
     let maint_prune_on: bool =
         unified_tick_on && parse_maint_prune_flag(&flag_search());
     // A1-O2 (2026-06-11): `?posePublishPostTick=on` — publish the
@@ -44541,6 +44675,8 @@ async fn recv_loop(
     let remote_root_motion_on: bool = parse_remote_root_motion_flag(&flag_search());
     let remote_jump_arc_on: bool = parse_remote_jump_arc_flag(&flag_search());
     let remote_moveto_on: bool = parse_remote_moveto_flag(&flag_search());
+    let remote_motion_keep_on: bool = parse_remote_motion_keep_flag(&flag_search());
+    let remote_turn_on: bool = parse_remote_turn_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -44722,6 +44858,8 @@ async fn recv_loop(
             remote_root_motion_on,
             remote_jump_arc_on,
             remote_moveto_on,
+            remote_motion_keep_on,
+            remote_turn_on,
             remote_sticky_on,
             combat_radii_on,
             server_run_rate_on,

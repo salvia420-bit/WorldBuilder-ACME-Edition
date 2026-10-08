@@ -574,6 +574,15 @@ function updateSupport(sim) {
   const radiusAC = RAGDOLL_NODE_RADIUS * ((Math.abs(rs[0]) + Math.abs(rs[1])) * 0.5 || 1);
   const hasFloor = typeof env.floorZAt === "function";
   const hasWall = typeof env.constrainAC === "function";
+  // 2026-10-07 — optional per-step hook: the bridge re-measures bodies that
+  // are still moving (a pack-mate mid-topple) ONCE here, never per node.
+  if (hasFloor && typeof env.beginStep === "function") {
+    try {
+      env.beginStep();
+    } catch (_e) {
+      /* enrichment only — a stale body surface is still a surface */
+    }
+  }
   for (let i = 0; i < n; i++) {
     const i3 = i * 3;
     qrot(rq, pos[i3] * rs[0], pos[i3 + 1] * rs[1], pos[i3 + 2] * rs[2], v, false);
@@ -584,7 +593,9 @@ function updateSupport(sim) {
     if (hasFloor) {
       let z;
       try {
-        z = env.floorZAt(ax, ay);
+        // az (2026-10-07): the node's own height, so a body the node is
+        // beside/under is not mistaken for ground (ragdoll_env STACK_STEP_UP_M).
+        z = env.floorZAt(ax, ay, az);
       } catch (_e) {
         z = undefined;
       }
@@ -936,8 +947,9 @@ export function quatMul(q1, q2) {
 
 /* ── environment bridge ──────────────────────────────────────────────────
  * ./ragdoll_env.js is an OPTIONAL sibling that exports
- *   envForRagdoll(inst) -> { floorZAt(acX, acY) -> acZ,
- *                            constrainAC(pos {x,y,z}, radius) -> void } | null
+ *   envForRagdoll(inst) -> { floorZAt(acX, acY[, nodeAcZ]) -> acZ,
+ *                            constrainAC(pos {x,y,z}, radius) -> void,
+ *                            beginStep() -> void   (optional, once per step) } | null
  * in the AC/entitiesGroup frame. It is resolved through a GUARDED DYNAMIC
  * import rather than a static one on purpose: scene3d modules are served raw
  * (no bundler), so a missing or throwing ragdoll_env.js behind a static import
@@ -980,7 +992,24 @@ function readRoot(sim, root) {
  */
 function reportSettled(sim) {
   const mod = _envMod;
-  if (!mod || typeof mod.registerSettledBody !== "function" || !sim.rootValid || !sim.n) return;
+  if (!mod || typeof mod.registerSettledBody !== "function") return;
+  const f = settledFootprint(sim);
+  if (!f) return;
+  try {
+    mod.registerSettledBody(f.x, f.y, f.top, f.r);
+  } catch (_e) {
+    /* enrichment only — a throwing registry must never break the death */
+  }
+}
+
+/**
+ * The AC-frame resting footprint reportSettled registers: parts' centroid,
+ * top surface and horizontal radius (node radius included). Pure — split out
+ * 2026-10-07 so the stacking suite registers bodies exactly as the runtime
+ * does. Null when the root transform is unknown.
+ */
+export function settledFootprint(sim) {
+  if (!sim || !sim.rootValid || !sim.n) return null;
   const rp = sim.rootPos;
   const rq = sim.rootQuat;
   const rs = sim.rootScale;
@@ -1008,11 +1037,43 @@ function reportSettled(sim) {
     if (d > r2) r2 = d;
   }
   const scXY = (Math.abs(rs[0]) + Math.abs(rs[1])) * 0.5 || 1;
-  try {
-    mod.registerSettledBody(cx, cy, topZ + RAGDOLL_NODE_RADIUS * Math.abs(rs[2] || 1), Math.sqrt(r2) + RAGDOLL_NODE_RADIUS * scXY);
-  } catch (_e) {
-    /* enrichment only — a throwing registry must never break the death */
+  return {
+    x: cx,
+    y: cy,
+    top: topZ + RAGDOLL_NODE_RADIUS * Math.abs(rs[2] || 1),
+    r: Math.sqrt(r2) + RAGDOLL_NODE_RADIUS * scXY,
+  };
+}
+
+/* Freeze-transition tally (2026-10-07, read by __diag.ragdoll.stats): how
+ * many sims came to rest through the settle metric vs the RAGDOLL_MAX_TIME
+ * hard stop, split by whether bodies were stacked under them — plus the sims
+ * the corpse handoff took over while they were STILL MOVING (finishReveal
+ * gives up waiting after ~4 s, so a jiggling sim usually ends there, not on
+ * the hard stop). hardStop + cutoff is the live jiggle counter. */
+const _settleStats = {
+  settled: 0,
+  hardStop: 0,
+  cutoff: 0,
+  stackedSettled: 0,
+  stackedHardStop: 0,
+  stackedCutoff: 0,
+  sumT: 0,
+  worstT: 0,
+};
+
+function _noteFreeze(sim) {
+  const hard = !(sim.t < RAGDOLL_MAX_TIME);
+  const stacked = !!(sim.env && sim.env.bodyCount > 0);
+  if (hard) {
+    _settleStats.hardStop++;
+    if (stacked) _settleStats.stackedHardStop++;
+  } else {
+    _settleStats.settled++;
+    if (stacked) _settleStats.stackedSettled++;
   }
+  _settleStats.sumT += sim.t;
+  if (sim.t > _settleStats.worstT) _settleStats.worstT = sim.t;
 }
 
 /**
@@ -1146,6 +1207,7 @@ export function applyRagdoll(inst, dt) {
     stepSim(sim, Math.min(MAX_DT, dt || 1 / 60));
     if (sim.done && !rd.reported) {
       rd.reported = true;
+      _noteFreeze(sim);
       reportSettled(sim);
     }
   }
@@ -1234,6 +1296,13 @@ export function captureRagdollPose(inst) {
  */
 export function transferRagdollPose(fromInst, toInst) {
   if (!fromInst?._ragdoll || !toInst?.parts) return false;
+  const live = fromInst._ragdoll.sim;
+  if (live && !live.done && !fromInst._ragdoll.cutoffNoted) {
+    // the corpse is taking over a body that never came to rest (stats only)
+    fromInst._ragdoll.cutoffNoted = true;
+    _settleStats.cutoff++;
+    if (live.env && live.env.bodyCount > 0) _settleStats.stackedCutoff++;
+  }
   const pose = captureRagdollPose(fromInst);
   if (!pose) return false;
   _archiveCorpsePose(toInst.guid, pose);
@@ -1414,6 +1483,35 @@ export function attachRagdoll(diag) {
         maxRise: +(s.maxRise || 0).toFixed(3),
         settled: s.settled,
         done: s.done,
+        // 2026-10-07 stacking: bodies under this sim, how many are tracked
+        // live (?ragdollStackLive), and whether it is the tracked model.
+        stack: s.env
+          ? {
+              bodies: s.env.bodyCount | 0,
+              tracked: s.env.trackedBodies | 0,
+              live: !!s.env.stackLive,
+            }
+          : null,
+      };
+    },
+    /**
+     * Tally since load: settle-metric rests vs 14 s hard stops vs sims the
+     * corpse handoff took over while still moving, split by "landed on other
+     * bodies". A jiggling ragdoll never rests, so in pack fights
+     * `stackedHardStop` and `stackedCutoff` should stay ~0.
+     */
+    stats() {
+      const st = _settleStats;
+      const n = st.settled + st.hardStop;
+      return {
+        settled: st.settled,
+        hardStop: st.hardStop,
+        cutoff: st.cutoff,
+        stackedSettled: st.stackedSettled,
+        stackedHardStop: st.stackedHardStop,
+        stackedCutoff: st.stackedCutoff,
+        meanS: n ? +(st.sumT / n).toFixed(2) : null,
+        worstS: +st.worstT.toFixed(2),
       };
     },
   };

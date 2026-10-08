@@ -15,6 +15,8 @@
 // post-`worldRoot.rotation.x = -π/2` three.js space) is updated from
 // state.dirHeading + state.dirPitch via the shared
 // `./sun_direction.js::sunDirFromHeadingPitch` utility.
+// (2026-10-07: the pitch is the SKY's night-ramped art elevation, not the raw
+// retail one — `?cloudNight`, see cloud_night.js and tick() below.)
 //
 // **Not wired into loop.js yet.** That's Clouds-D — when the cloud
 // volume actually attaches to skyCell and renders. This module is
@@ -39,6 +41,18 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // This module only READS the storm flag (real DayGroup SkyObject signal).
 import { readWeatherFlags } from './weather_state.js';
 import { applyCloudLook } from './cloud_storm_look.js';
+// 2026-10-07 — ?cloudNight (DEFAULT ON): light the clouds with the sky's
+// night-ramped elevation instead of the raw never-setting retail pitch, and
+// fade cloud shadows + light shafts with the direct sun. Rationale: cloud_night.js.
+import {
+  cloudNightLighting,
+  cloudNightEnabled,
+  cloudNightColor,
+  cloudNightLevel,
+  cloudNightAmbientRadiance,
+  CLOUD_SHADOW_STRENGTH_DEFAULT,
+  DISPLAY_EXPOSURE_DEFAULT,
+} from './cloud_night.js';
 
 // Storm-reactive cloud look (default ON; `?cloudWeather=off` freezes the
 // fair-weather baseline and ignores storms). 2026-08-01: the WMO
@@ -216,6 +230,33 @@ export class CloudVolume {
     // Scratch vec3 so tick() doesn't allocate per-frame.
     this._sunDirScratch = new THREE.Vector3();
 
+    // 2026-10-07 — ?cloudNight per-frame result (cloud_night.js
+    // cloudNightLighting writes into it; read by _pushCloudShadowsToTerrain
+    // and window.__cloudNightState). `null` until the first state arrives →
+    // the terrain push keeps its legacy behaviour until then.
+    this._cloudNight = null;
+    this._cloudNightScratch = {};
+    // Un-scaled bases of the two takram uniforms ?cloudNight multiplies,
+    // re-captured whenever anything else (quality preset, devtools) writes
+    // the uniform — see _scaleCloudUniform.
+    this._cloudNightBase = {
+      skyLightScale: { base: NaN, written: NaN },
+      maxShadowLengthRayDistance: { base: NaN, written: NaN },
+    };
+    // 2026-10-07 — ?cloudNight NIGHT FLOOR (1070 follow-up: night clouds were
+    // pure black). The physical night light really is ~0 (see cloud_night.js),
+    // so an art sky-light floor is injected into the cloud in-scatter term.
+    // Patched into the shader SOURCE once, here, before the first compile —
+    // one program, no define flips, no per-frame cost but one MAD per sample.
+    // The colour (?cloudNightColor, URL-immutable) is read once; the level and
+    // the display exposure are watched and the floor re-solved on change only.
+    this._nightAmbientPatched = cloudNightEnabled() ? this._installNightAmbient() : false;
+    this._nightColor = cloudNightColor();
+    this._displayExposure = DISPLAY_EXPOSURE_DEFAULT;
+    this._nightAmbientBase = [0, 0, 0];
+    this._nightAmbientLevel = NaN;
+    this._nightAmbientExposure = NaN;
+
     // Initialise to sane noon-ish values matching CloudsMaterial.ts's
     // construct-time defaults. tick() will overwrite as soon as state
     // arrives.
@@ -285,11 +326,22 @@ export class CloudVolume {
     // runs (must run AFTER CloudsMaterial.copyCameraSettings each
     // frame).
 
-    // sunDirection — still load-bearing for the cloud raymarch. Same
-    // conversion from AC heading/pitch as before.
+    // sunDirection — still load-bearing for the cloud raymarch.
+    //
+    // 2026-10-07 — ?cloudNight (DEFAULT ON). This used to pass the RAW
+    // `state.dirPitch`, which never drops below 0.9 deg (Dereth's sun never
+    // sets), while the sky raymarches the night-ramped elevation (−14 deg at
+    // night, atmosphere_sky.js tick). Same Bruneton LUTs, two different suns:
+    // all night the clouds were lit as a sunset — orange-red direct light
+    // through a full air-mass plus sunset sky irradiance and inscatter —
+    // under a night-dark sky. The clouds now take the sky's elevation from
+    // the same function on the same snapshot (no seam). Heading is untouched.
+    // `?cloudNight=off` restores the raw pitch and skips every write below.
+    const cn = cloudNightLighting(state, this._cloudNightScratch);
+    this._cloudNight = cn;
     sunDirFromHeadingPitch(
       state.dirHeading,
-      state.dirPitch,
+      cn.pitchDeg,
       this._sunDirScratch
     );
     if (this.effect.sunDirection && this.effect.sunDirection.copy) {
@@ -299,6 +351,31 @@ export class CloudVolume {
     // in case the effect's accessor doesn't propagate immediately.
     if (u.sunDirection && u.sunDirection.value && u.sunDirection.value.copy) {
       u.sunDirection.value.copy(this._sunDirScratch);
+    }
+
+    // 2026-10-07 — ?cloudNight intensity side (uniform writes only; no
+    // define flips, so no shader relink at dusk/dawn):
+    //  - skyLightScale × skyLightMul: 1 unless ?cloudNightSkyLight lifts the
+    //    night sky-light fill (faint "moonlit" read for the eye test);
+    //  - maxShadowLengthRayDistance × directFactor: light shafts fade with the
+    //    direct sun and are 0 (march exits on step one) once it has set — the
+    //    beer-shadow map they read is built along a below-horizon sun then.
+    if (cn.enabled) {
+      this._scaleCloudUniform(u, 'skyLightScale', cn.skyLightMul);
+      this._scaleCloudUniform(u, 'maxShadowLengthRayDistance', cn.directFactor);
+      // Night floor: weight 0 while the sun is up → (0,0,0), i.e. golden
+      // hour and day are untouched; smoothstep to full by −6 deg.
+      if (this._nightAmbientPatched && u.cloudNightAmbient) {
+        const level = cloudNightLevel();
+        if (level !== this._nightAmbientLevel || this._displayExposure !== this._nightAmbientExposure) {
+          cloudNightAmbientRadiance(this._nightColor, level, this._displayExposure, this._nightAmbientBase);
+          this._nightAmbientLevel = level;
+          this._nightAmbientExposure = this._displayExposure;
+        }
+        const b = this._nightAmbientBase;
+        const w = cn.ambientWeight;
+        u.cloudNightAmbient.value.set(b[0] * w, b[1] * w, b[2] * w);
+      }
     }
 
     this._lastState = state;
@@ -335,6 +412,62 @@ export class CloudVolume {
     // shadow drift on fast time-of-day changes.
   }
 
+  /**
+   * 2026-10-07 — ?cloudNight night floor: splice one uniform and one line into
+   * the takram clouds fragment shader, right after its own sky-light term:
+   *   radiance += skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale;
+   *   radiance += cloudNightAmbient * skyGradient;          // ← added
+   * so the floor is scattered, shadowed by alpha and integrated exactly like
+   * sky light (bases darker than tops, thin edges blend into the sky). The
+   * vendor string is never re-assigned after construction (CloudsMaterial
+   * builds it once). Fail-soft: if either anchor is missing (vendor update),
+   * nothing is patched and the clouds render as before.
+   * @returns {boolean} patched
+   */
+  _installNightAmbient() {
+    const m = this.material;
+    const fs = m && m.fragmentShader;
+    const UNI = 'uniform float skyLightScale;';
+    const SKY = 'radiance += skyIrradiance * RECIPROCAL_PI4 * skyGradient * skyLightScale;';
+    if (typeof fs !== 'string' || fs.indexOf(UNI) < 0 || fs.indexOf(SKY) < 0) {
+      // eslint-disable-next-line no-console
+      console.warn('[clouds] cloudNight: shader anchors not found — night floor NOT installed');
+      return false;
+    }
+    m.fragmentShader = fs
+      .replace(UNI, UNI + '\nuniform vec3 cloudNightAmbient; // 2026-10-07 cloudNight art night floor')
+      .replace(SKY, SKY + '\n      radiance += cloudNightAmbient * skyGradient;');
+    m.uniforms.cloudNightAmbient = new THREE.Uniform(new THREE.Vector3());
+    m.needsUpdate = true;
+    return true;
+  }
+
+  /**
+   * The renderer's `toneMappingExposure` (CloudOverlay.preRender reports it
+   * each frame). The night floor is solved in DISPLAY terms, so a changed
+   * exposure re-solves it and the night clouds keep their on-screen colour.
+   */
+  setDisplayExposure(v) {
+    if (Number.isFinite(v) && v > 0) this._displayExposure = v;
+  }
+
+  /**
+   * 2026-10-07 — ?cloudNight: write `base × mul` into a takram clouds uniform
+   * without losing the un-scaled base. If the live value is not the one we
+   * last wrote, someone else set it (qualityPreset Object.assign, devtools),
+   * so that value becomes the new base. Zero-alloc; writes only on change.
+   */
+  _scaleCloudUniform(uniforms, key, mul) {
+    const un = uniforms?.[key];
+    if (!un || typeof un.value !== 'number') return;
+    const slot = this._cloudNightBase[key];
+    if (!slot) return;
+    if (un.value !== slot.written) slot.base = un.value;
+    const v = slot.base * (Number.isFinite(mul) ? mul : 1);
+    if (un.value !== v) un.value = v;
+    slot.written = v;
+  }
+
   _pushCloudShadowsToTerrain() {
     const ls = typeof window !== 'undefined' ? window.liveScene3d : null;
     const terrainMats = ls?.terrainMaterials;
@@ -343,7 +476,15 @@ export class CloudVolume {
     // `window.__setCloudShadowEnabled(false)`) flips uCloudShadowEnabled
     // to 0 once and skips the per-frame texture/matrix copy. Cheaper
     // than nulling out the texture each frame.
-    const disabled = ls?.__cloudShadowDisabled === true;
+    //
+    // 2026-10-07 — ?cloudNight: the same off-branch once the direct sun has
+    // SET (directFactor 0, art elevation <= 0). The beer-shadow map is built
+    // along the cloud sun direction, which is then below the horizon — a map
+    // looking up from under the ground. Off is exact ("no cloud shadow", the
+    // terrain's own `exp(-depth*0)` is 1 anyway) and skips the sample.
+    const cn = this._cloudNight;
+    const sunSet = !!(cn && cn.enabled && !(cn.directFactor > 0));
+    const disabled = ls?.__cloudShadowDisabled === true || sunSet;
     if (disabled) {
       for (const m of terrainMats) {
         const u = m?.uniforms;
@@ -362,15 +503,24 @@ export class CloudVolume {
     // LBs pick up the value as their materials register, without the
     // caller having to chase the terrainMaterials array.
     const strengthOverride = ls?.__cloudShadowStrength;
+    // 2026-10-07 — ?cloudNight: through dusk/dawn the extinction is scaled by
+    // the direct-sun factor (1 above ?cloudShadowFadeDeg, → 0 at the horizon),
+    // so cloud shadows fade with the sun instead of popping off at sunset.
+    // Base = the override if set, else the terrain.js initialiser (2.0).
+    // Flag off (cn null / !enabled) → the legacy override-only write, exactly.
+    const dayScaled = !!(cn && cn.enabled);
+    const strength = dayScaled
+      ? (Number.isFinite(strengthOverride) ? strengthOverride : CLOUD_SHADOW_STRENGTH_DEFAULT) * cn.directFactor
+      : strengthOverride;
     for (const m of terrainMats) {
       const u = m?.uniforms;
       if (!u?.uCloudShadowEnabled) continue;
       if (u.uCloudShadowEnabled.value !== 1.0) u.uCloudShadowEnabled.value = 1.0;
       if (u.uCloudShadowMap.value !== shadowTex) u.uCloudShadowMap.value = shadowTex;
       u.uCloudShadowMatrix0.value.copy(mats[0]);
-      if (Number.isFinite(strengthOverride) && u.uCloudShadowStrength &&
-          u.uCloudShadowStrength.value !== strengthOverride) {
-        u.uCloudShadowStrength.value = strengthOverride;
+      if (Number.isFinite(strength) && u.uCloudShadowStrength &&
+          u.uCloudShadowStrength.value !== strength) {
+        u.uCloudShadowStrength.value = strength;
       }
     }
   }

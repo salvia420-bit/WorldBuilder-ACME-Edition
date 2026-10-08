@@ -461,6 +461,11 @@ export function terrainVfxNoteLandblockMesh(scene3d, lbMesh) {
     // Wave 0A adds `heights` to the userData literal; tolerate its absence so
     // this module works against a tree where that line has not landed.
     heights: ud.heights || null,
+    // 2026-10-07 — per-vertex road flags (terrain.js `userData.roadCodes`, the
+    // same bytes `uVertexTypes.G` paints the road from) so the oracle can keep
+    // grass / pebbles off the road. Kept on the entry for the late-oracle
+    // replay below; absent on an old mesh ⇒ the oracle reports no roads.
+    roads: ud.roadCodes || null,
     coverage: familyCoverageOf(ud.terrainCodes),
     groups: new Map(),
   };
@@ -471,7 +476,7 @@ export function terrainVfxNoteLandblockMesh(scene3d, lbMesh) {
   if (_oracle && typeof _oracle.noteLandblock === "function") {
     try {
       _oracle.noteLandblock(lbKey, {
-        codes: entry.codes, heights: entry.heights, lbX, lbY,
+        codes: entry.codes, heights: entry.heights, roads: entry.roads, lbX, lbY,
       });
     } catch (_) { /* fail-soft */ }
   }
@@ -639,7 +644,8 @@ export function ensureOracle() {
         for (const [lbKey, entry] of _tracked) {
           try {
             _oracle.noteLandblock(lbKey, {
-              codes: entry.codes, heights: entry.heights, lbX: entry.lbX, lbY: entry.lbY,
+              codes: entry.codes, heights: entry.heights, roads: entry.roads,
+              lbX: entry.lbX, lbY: entry.lbY,
             });
           } catch (_) { /* fail-soft */ }
         }

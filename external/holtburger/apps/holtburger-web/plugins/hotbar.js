@@ -643,7 +643,13 @@ export function mount(ctx) {
     resolveBindingIcon(bound).then((u) => {
       // Bail if the slot got re-bound while we were fetching.
       if (icon.dataset.boundKey !== key) return;
+      icon.dataset.iconOk = u ? "1" : "0";
       if (u) icon.style.backgroundImage = `url("${u}")`;
+      // 2026-10-07 — an ITEM binding that can't resolve is an item we don't
+      // have (yet): leave the slot blank instead of a permanent compass disk.
+      // `refreshUnresolvedIcons` re-resolves it when the item arrives; the
+      // prune clears the binding once the item is known to be gone.
+      else if (bound.itemGuid) icon.style.backgroundImage = "";
     }).catch(() => { /* shared helper logs; placeholder stays */ });
 
     // Track A (?uiEffectIcons, default OFF): UiEffects magic-effect badge for an
@@ -1320,35 +1326,84 @@ export function mount(ctx) {
   let inWorld = false;
   let firstBindAt = 0;
   let reconcileAttempts = 0;
-  // pruneStaleItemBindings: 3-gated. Only sweeps when in_world AND we've
-  // completed reconcile AND any local binding is old enough AND we have
-  // inventory snapshot to compare against.
+  // 2026-10-07 — "reconcile finished" (merged, or gave up after 30 tries).
+  // The prune used to gate on `reconcileAttempts < 30`, but the 1 Hz timer
+  // stops counting the moment the merge SUCCEEDS (attempt ~2-5 for any
+  // character with server shortcuts). So for exactly those characters the
+  // prune never ran. Owner, live: a potion stack used up from slot 1 left its
+  // icon in the slot, no RemoveShortCut was sent, and after a reload the
+  // server restored the dead shortcut (drawn as the 0x06004CC1 compass-disk
+  // placeholder, since its icon can never resolve).
+  let reconcileDone = false;
+  let reconcileDoneAt = 0;
+  // Item guids seen in this session's inventory snapshots. A binding whose
+  // item was SEEN and is now gone was used up / dropped / given away, so its
+  // shortcut goes at once (retail gmToolbarUI::RemoveShortcut(item, broadcast=1)
+  // → Event_RemoveShortCut). One never seen this session (a shortcut restored
+  // from the server for an item that no longer exists) is only dropped once
+  // the post-login ObjectCreate burst has had NEVER_SEEN_GRACE_MS to land, so a
+  // slow login can't delete good shortcuts server-side.
+  const seenItemGuids = new Set();
+  const NEVER_SEEN_GRACE_MS = 30000;
+  // pruneStaleItemBindings: gated. Only sweeps when in_world AND reconcile is
+  // finished AND any local binding is old enough AND we have an inventory
+  // snapshot to compare against.
   function pruneStaleItemBindings() {
     if (!inWorld) return;
-    if (reconcileAttempts < 30) return;
+    if (!reconcileDone) return;
     if ((Date.now() - firstBindAt) <= 5000) return;
     const handle = window.__sessionHandle ?? null;
     if (typeof handle?.playerInventory !== "function") return;
     const inv = handle.playerInventory();
     if (!Array.isArray(inv) || inv.length === 0) return;
+    for (const x of inv) seenItemGuids.add(x.guid >>> 0);
+    const neverSeenMayGo = (Date.now() - reconcileDoneAt) >= NEVER_SEEN_GRACE_MS;
     let dirty = false;
     for (let i = 0; i < SLOT_COUNT; i++) {
       const b = state.slots[i];
       if (!b?.itemGuid) continue;
       const it = inv.find((x) => (x.guid >>> 0) === (b.itemGuid >>> 0));
       if (it) continue;
+      if (!seenItemGuids.has(b.itemGuid >>> 0) && !neverSeenMayGo) continue;
       // Stale binding; if wcid known, look for matching wcid on a different guid
       // (post-restart objectGuid reuse).
       if (b.wcid) {
         const alt = inv.find((x) => (x.wcid >>> 0) === (b.wcid >>> 0));
-        if (alt) { state.slots[i] = { itemGuid: alt.guid >>> 0, wcid: b.wcid }; dirty = true; continue; }
+        if (alt) {
+          state.slots[i] = { itemGuid: alt.guid >>> 0, wcid: b.wcid };
+          dirty = true;
+          // Keep the server in step (same RM→ADD as a fresh bind), or it
+          // restores the dead guid on the next login.
+          sendRemoveShortcut(i);
+          sendAddShortcut(i, alt.guid >>> 0, 0);
+          continue;
+        }
       }
       state.slots[i] = null;
       dirty = true;
       sendRemoveShortcut(i);
     }
+    // Copy-then-free, as in the bind-validity sweep above: only primitives
+    // were read, so release the wasm boxes now.
+    for (const x of inv) { try { x?.free?.(); } catch (_) {} }
     if (dirty) { saveState(state); for (let i = 0; i < SLOT_COUNT; i++) renderSlot(i); }
   }
+  // 2026-10-07 — a slot rendered before its item's ObjectCreate landed (the
+  // server shortcut list arrives with PlayerDescription, ahead of the item
+  // burst) never re-resolved its icon: nothing re-rendered it. Retry those
+  // slots on every inventory change, independent of the prune's gates.
+  function refreshUnresolvedIcons() {
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const b = state.slots[i];
+      if (!b?.itemGuid) continue;
+      const icon = slotEls[i]?.querySelector(".hb-hotbar-slot-icon");
+      if (icon && icon.dataset.iconOk !== "1") renderSlot(i);
+    }
+  }
+  const onInventoryChanged = () => {
+    refreshUnresolvedIcons();
+    pruneStaleItemBindings();
+  };
   // All bus subscriptions use the plugin facade (same channel index.html
   // emits playerInventoryChanged on); previous wave wrongly used the
   // window DOM event bus and the listener never fired.
@@ -1363,14 +1418,25 @@ export function mount(ctx) {
     for (const slot of slotEls) slot.classList.toggle("cooldown-active", active > 0);
   };
   try {
-    client?.events?.on?.("playerInventoryChanged", pruneStaleItemBindings);
+    client?.events?.on?.("playerInventoryChanged", onInventoryChanged);
     client?.events?.on?.("landblockChanged", onLandblockChanged);
     client?.events?.on?.("sharedCooldownChanged", onSharedCooldown);
   } catch (_) {}
+  let neverSeenSweepTimer = null;
   const reconcileTimer = setInterval(() => {
     reconcileAttempts++;
-    if (reconcileWithServer() || reconcileAttempts > 30) {
+    const merged = reconcileWithServer();
+    if (merged || reconcileAttempts > 30) {
       clearInterval(reconcileTimer);
+      reconcileDone = true;
+      reconcileDoneAt = Date.now();
+      // PlayerDescription landed, so the player is in the world even if no
+      // landblockChanged has been seen by this mount yet.
+      if (merged) inWorld = true;
+      pruneStaleItemBindings();
+      // One sweep once the never-seen grace has passed: a dead shortcut
+      // restored from the server may see no inventory change for minutes.
+      neverSeenSweepTimer = setTimeout(pruneStaleItemBindings, NEVER_SEEN_GRACE_MS + 500);
     }
   }, 1000);
 
@@ -1440,9 +1506,10 @@ export function mount(ctx) {
     window.removeEventListener("keydown", onKey);
     for (const un of funnelUnbinds) { try { un?.(); } catch (_) {} }
     clearInterval(reconcileTimer);
+    if (neverSeenSweepTimer) clearTimeout(neverSeenSweepTimer);
     clearTimeout(migrateTimer);
     try {
-      client?.events?.off?.("playerInventoryChanged", pruneStaleItemBindings);
+      client?.events?.off?.("playerInventoryChanged", onInventoryChanged);
       client?.events?.off?.("landblockChanged", onLandblockChanged);
       client?.events?.off?.("sharedCooldownChanged", onSharedCooldown);
     } catch (_) {}

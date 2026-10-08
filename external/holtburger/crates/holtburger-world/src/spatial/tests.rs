@@ -4267,6 +4267,205 @@ mod remote_pose_driver {
         assert!(off.remote_arc(GUID).is_none(), "?remoteJumpArc=off");
         assert!(off.take_remote_airborne_changes().is_empty());
     }
+
+    // ---- NETSYNC-3 (2026-10-07): the interpreted TURN axis turns the body ----
+    //
+    // Retail moves every object by its sequence each frame: `add_motion` /
+    // `combine_motion` set omega = speed × MotionData.omega (acclient.c:337431,
+    // :337477), `CSequence::apply_physics` rotates the offset frame by
+    // omega × quantum (:339860), `UpdatePositionInternal` composes it onto
+    // the object (:319989). The player table's TurnRight omega is -1.5 rad/s
+    // about +z (holtburger-dat `netsync3_turn_right_omega_is_clockwise_in_
+    // retail_tables`): clockwise from above, i.e. north (+y) turns toward
+    // east (+x). These tests pin that geometry, not a heading convention.
+
+    fn north_pose_on_terrain(terrain: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: Guid(0x0102_0011),
+            coords: Vector3::new(50.0, 50.0, terrain),
+            // Identity faces +y (north): rotate_vector((0,1,0)) == (0,1,0).
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    fn turn_snapshot(
+        forward: Option<(InterpretedMotionCommand, f32)>,
+        turn: InterpretedMotionCommand,
+        turn_speed: f32,
+    ) -> crate::entity::EntityMotionSnapshot {
+        crate::entity::EntityMotionSnapshot {
+            forward_command: forward.map(|(cmd, _)| cmd),
+            forward_speed: forward.and_then(|(_, s)| crate::entity::OrderedMotionSpeed::from_f32(s)),
+            turn_command: Some(turn),
+            turn_speed: crate::entity::OrderedMotionSpeed::from_f32(turn_speed),
+            ..Default::default()
+        }
+    }
+
+    fn facing(scene: &SpatialScene, body_id: SpatialBodyId) -> Vector3 {
+        scene
+            .body(body_id)
+            .unwrap()
+            .pose
+            .rotation
+            .rotate_vector(Vector3::new(0.0, 1.0, 0.0))
+    }
+
+    #[test]
+    fn netsync3_turn_right_in_place_rotates_clockwise_at_the_table_rate() {
+        let start = north_pose_on_terrain(0.0);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.body_mut(body_id).unwrap().set_motion_state(Some(turn_snapshot(
+            None,
+            InterpretedMotionCommand::TURN_RIGHT,
+            1.0,
+        )));
+        scene.set_remote_turn_omega(body_id, Some(crate::spatial::RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z));
+        for _ in 0..10 {
+            scene.step_remote_position_managers(0.1);
+        }
+        let f = facing(&scene, body_id);
+        // 1.5 rad clockwise from north = (sin 1.5, cos 1.5).
+        assert!(
+            (f.x - 1.5f32.sin()).abs() < 1e-3 && (f.y - 1.5f32.cos()).abs() < 1e-3,
+            "TurnRight × 1.0 for 1 s turns north toward east by 1.5 rad: {f:?}"
+        );
+        let moved = scene.body(body_id).unwrap().pose.coords - start.coords;
+        assert!(moved.length() < 1e-4, "a turn in place does not translate: {moved:?}");
+        assert!(scene.take_remote_sticky_stepped().contains(&GUID), "heading-owned row");
+        assert!(scene.take_remote_stepped_poses().iter().any(|(g, _)| *g == GUID));
+    }
+
+    #[test]
+    fn netsync3_turn_left_both_wire_forms_rotate_counter_clockwise() {
+        // ACE sends a left turn as TurnRight with a NEGATIVE speed
+        // (MovementData.cs); a raw TurnLeft folds the retail adjust_motion way.
+        for (cmd, speed) in [
+            (InterpretedMotionCommand::TURN_RIGHT, -1.0f32),
+            (InterpretedMotionCommand::TURN_LEFT, 1.0f32),
+        ] {
+            let start = north_pose_on_terrain(0.0);
+            let (mut scene, body_id) = scene_with_remote_body(start);
+            scene
+                .body_mut(body_id)
+                .unwrap()
+                .set_motion_state(Some(turn_snapshot(None, cmd, speed)));
+            // Unresolved table → the player-table fallback.
+            scene.set_remote_turn_omega(body_id, None);
+            for _ in 0..5 {
+                scene.step_remote_position_managers(0.1);
+            }
+            let f = facing(&scene, body_id);
+            assert!(
+                (f.x + 0.75f32.sin()).abs() < 1e-3,
+                "{cmd:?} × {speed}: 0.75 rad toward WEST: {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn netsync3_run_while_turning_right_curves_east() {
+        let terrain = 12.0;
+        let start = north_pose_on_terrain(terrain);
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.populate_terrain_heights(0x0102_0000, [terrain; 81]);
+        // ACE run + turn: RunForward × 1.0, TurnRight × 1.5 (MovementData.cs).
+        scene.body_mut(body_id).unwrap().set_motion_state(Some(turn_snapshot(
+            Some((InterpretedMotionCommand::RUN_FORWARD, 1.0)),
+            InterpretedMotionCommand::TURN_RIGHT,
+            1.5,
+        )));
+        scene.set_remote_turn_omega(body_id, Some(-1.5));
+        for _ in 0..20 {
+            scene.step_remote_position_managers(0.05);
+        }
+        let after = scene.body(body_id).unwrap().pose;
+        let d = after.global_coords() - start.global_coords();
+        let chord = (d.x * d.x + d.y * d.y).sqrt();
+        // r = 4 / 2.25 m; after 2.25 rad: x = r(1 - cos), y = r sin, chord ≈ 3.2 m.
+        assert!(d.x > 2.0, "the run curves right (east): {d:?}");
+        assert!(chord > 2.8 && chord < 3.7, "an arc, not a 4 m straight line: chord {chord}");
+        let f = facing(&scene, body_id);
+        assert!(f.y < 0.0 && f.x > 0.0, "2.25 rad right of north faces south-east: {f:?}");
+    }
+
+    #[test]
+    fn netsync3_moveto_turn_uses_the_table_rate() {
+        // D5 turn node: the rate is the body's |TurnRight omega| (was π/2).
+        for (enabled, omega, expected) in [
+            (true, Some(-3.5f32), 0.35f32),
+            (true, None, 0.15),
+            (false, Some(-3.5), std::f32::consts::FRAC_PI_2 * 0.1),
+        ] {
+            let start = north_pose_on_terrain(0.0);
+            let (mut scene, body_id) = scene_with_remote_body(start);
+            scene.set_remote_turn_enabled(enabled);
+            scene.set_remote_turn_omega(body_id, omega);
+            let current = start.rotation.to_heading();
+            scene.set_remote_moveto(
+                GUID,
+                true,
+                Some(crate::spatial::RemoteMoveToDrive {
+                    heading_rad: current + 1.0,
+                    forward: None,
+                }),
+                None,
+            );
+            scene.step_remote_position_managers(0.1);
+            let after = scene.body(body_id).unwrap().pose.rotation.to_heading();
+            let mut turned = (after - current).abs();
+            if turned > std::f32::consts::PI {
+                turned = std::f32::consts::TAU - turned;
+            }
+            assert!(
+                (turned - expected).abs() < 1e-3,
+                "enabled={enabled} omega={omega:?}: turned {turned}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn netsync3_turn_yields_to_interpolation_movoto_and_the_flag() {
+        let start = north_pose_on_terrain(0.0);
+        let snapshot = turn_snapshot(None, InterpretedMotionCommand::TURN_RIGHT, 1.0);
+
+        // ?remoteTurn=off: no rotation.
+        let (mut off, off_id) = scene_with_remote_body(start);
+        off.set_remote_turn_enabled(false);
+        off.body_mut(off_id).unwrap().set_motion_state(Some(snapshot));
+        off.step_remote_position_managers(0.1);
+        assert_eq!(off.body(off_id).unwrap().pose.rotation, start.rotation, "?remoteTurn=off");
+
+        // An active interpolation node owns the offset frame (adjust_offset
+        // :389178-389268) while the body has contact.
+        let (mut interp, interp_id) = scene_with_remote_body(start);
+        interp.body_mut(interp_id).unwrap().set_motion_state(Some(snapshot));
+        let target = WorldPosition {
+            coords: Vector3::new(52.0, 50.0, 0.0),
+            ..start
+        };
+        reconcile(&mut interp, interp_id, target, AuthoritativeBodySync::Snapshot, ctx(Some(true), Some(start)));
+        assert!(interp.body(interp_id).unwrap().position_manager.queue_active());
+        interp.step_remote_position_managers(0.02);
+        let f = facing(&interp, interp_id);
+        assert!(f.x.abs() < 1e-4, "no anim turn while the node is active: {f:?}");
+
+        // A MoveTo steer owns the heading (D5).
+        let (mut steer, steer_id) = scene_with_remote_body(start);
+        steer.body_mut(steer_id).unwrap().set_motion_state(Some(snapshot));
+        steer.set_remote_moveto(
+            GUID,
+            true,
+            Some(crate::spatial::RemoteMoveToDrive {
+                heading_rad: start.rotation.to_heading(),
+                forward: None,
+            }),
+            None,
+        );
+        steer.step_remote_position_managers(0.1);
+        let f = facing(&steer, steer_id);
+        assert!(f.x.abs() < 1e-3, "the steer, not the turn axis, owns the heading: {f:?}");
+    }
 }
 
 // === A2-P3 (2026-06-12, W3+ S9) — LOCAL-player sticky scene tests. =======

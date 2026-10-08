@@ -23,13 +23,25 @@
 //      oracle owns its own cache, populated once at bake, retained across
 //      park/unpark, cleared ONLY on evict/rebake via `invalidate()`.
 //      NEVER scan the scene graph to decide whether an LB exists.
-//      Budget: Uint8Array(81) + Float32Array(81) ≈ 405 B per LB; at the
-//      256-slot LRU cap ≈ 104 KB.
+//      Budget: 2 x Uint8Array(81) + Float32Array(81) ≈ 486 B per LB; at the
+//      256-slot LRU cap ≈ 125 KB.
 //
 //   3. `cornerCodes` — the four cell-corner codes, so a family can feather at
 //      a type boundary instead of showing 24 m square patches (plan §8 risk 2:
 //      the GPU bilinear-blends the four corner textures, so a nearest-vertex
 //      code sample and the rendered pixel actively disagree near cell edges).
+//
+//   4. ROADS (2026-10-07, owner report off a Holtburg video take: "see the
+//      grass on the road. can we make it so its not on the road"). A retail
+//      road is NOT a terrain code — it is 2 extra bits on the vertex word, and
+//      a road vertex keeps its Grassland/LushGrass code underneath. So every
+//      code-keyed scatter (grass, pebbles) planted straight through the town
+//      roads. The oracle now caches the per-vertex road flags too (the same
+//      `userData.roadCodes` terrain.js already feeds to `uVertexTypes.G`) and
+//      `sample()` reports `cornerRoads` plus `roadEdgeM`: the signed distance
+//      to the edge of the road the GROUND SHADER PAINTS at that point. See
+//      `roadEdgeDistanceInCell` for the model and `ROAD_PAINT` for where its
+//      numbers come from (measured off the retail road masks in portal.dat).
 //
 // THREE-free on purpose (plan §6). The only import is `landblock_lru.js`,
 // which is itself import-free, so this file loads in node unaided.
@@ -117,6 +129,110 @@ export function triangleGradInCell(z00, z10, z01, z11, fx, fy, swNeCut) {
   return [z11 - z01, z11 - z10];                     // upper-right: NE, NW, SE
 }
 
+// ----- roads (2026-10-07) ---------------------------------------------
+
+/**
+ * Half-widths of the road the ground shader paints, in metres from the road
+ * SKELETON of one 24 m cell. 2026-10-07, measured off the three retail road
+ * alpha masks the default TexMerge path composites (`?roadSlots`, default on —
+ * `RETAIL_ROAD_MASKS` in src/lib.rs: rcode 9 = 0x0500168E edge lane, rcode 10 =
+ * 0x0500168C diagonal, rcode 8 = 0x0500168D corner), 512² A8 in
+ * client_portal.dat. Each value is the LARGEST distance from the skeleton of
+ * any texel that is >= 50 % road (mask byte < 128), plus ~0.1 m for the GPU's
+ * 256² resample + bilinear filter, so the core contains every painted road
+ * texel whatever the mask's rotation:
+ *   edge   p50 3.47 m, max 4.15 m  (a hand-drawn lane, 2.8..4.2 m wide)
+ *   diag   max 4.77 m              (an S-curve: ~7 m wide, meandering ±1.2 m
+ *                                   about the cell diagonal)
+ *   corner max 3.49 m              (a quarter disc)
+ * The masks' soft fringe (byte < 217, i.e. >= 15 % road — the band the
+ * shader's splat noise can push to 50 %) reaches 4.99 / 5.87 / 4.99 m, which is
+ * what a consumer's verge margin should cover. `test_terrain_grass_offroad.mjs`
+ * re-measures all of this from the real DAT and fails if these drift.
+ *
+ * The retail lane is ~7-8 m across because BOTH cells sharing a road edge paint
+ * their own ~3.5 m half of it.
+ */
+export const ROAD_PAINT = Object.freeze({
+  edgeHalfWidthM: 4.3,
+  diagHalfWidthM: 4.9,
+  cornerRadiusM: 3.6,
+});
+
+/**
+ * Signed distance (metres) from a point in a 24 m cell to the EDGE of the road
+ * the ground shader paints there: < 0 inside the road, > 0 outside, `Infinity`
+ * when no corner of the cell is road.
+ *
+ * The decomposition is retail's, not a heuristic: `TexMerge::GetRoadCode` →
+ * `holtburger_dat::terrain_merge::road_code` turns the cell's 4 corner road bits
+ * into at most two road overlays, and `FindRoadAlpha` rotates one of three
+ * masks onto each:
+ *   1 road corner              → corner mask (quarter disc at that corner)
+ *   2 ADJACENT road corners    → edge mask (lane along that cell edge)
+ *   2 OPPOSITE road corners    → diagonal mask (lane along that diagonal)
+ *   3 road corners (0x7/B/D/E) → TWO edge masks meeting at the corner opposite
+ *                                the missing one — never the diagonal
+ *   4 road corners (0xF)       → `all_road`: the base tile IS road (layer 32),
+ *                                the whole cell is road
+ * Each overlay is then modelled as distance-to-skeleton minus its `ROAD_PAINT`
+ * half-width. Inside the cell the projection onto an edge or diagonal always
+ * lands on the segment, so the perpendicular distance IS the segment distance.
+ *
+ * The analytic fallback lane (`?roadSlots=off` / no TexMerge) is narrower
+ * (2.5 m + 1 m soft) and fully contained in this, so the model is safe there too.
+ *
+ * Corner order is the oracle's `cornerCodes` order: SW, SE, NW, NE. Any
+ * non-zero value is road (the wasm `roadCodes` are the raw 2-bit field).
+ *
+ * @param {number} r00 SW road flag
+ * @param {number} r10 SE road flag
+ * @param {number} r01 NW road flag
+ * @param {number} r11 NE road flag
+ * @param {number} fx  cell fraction east,  0..1
+ * @param {number} fy  cell fraction north, 0..1
+ * @returns {number}
+ */
+export function roadEdgeDistanceInCell(r00, r10, r01, r11, fx, fy) {
+  const sw = r00 ? 1 : 0;
+  const se = r10 ? 1 : 0;
+  const nw = r01 ? 1 : 0;
+  const ne = r11 ? 1 : 0;
+  const n = sw + se + nw + ne;
+  if (n === 0) return Infinity;
+  if (n === 4) return -VERTEX_SPACING_M;
+  const px = fx * VERTEX_SPACING_M;
+  const py = fy * VERTEX_SPACING_M;
+  const qx = VERTEX_SPACING_M - px;
+  const qy = VERTEX_SPACING_M - py;
+  const edge = ROAD_PAINT.edgeHalfWidthM;
+  if (n === 3) {
+    // Two edge lanes through the corner OPPOSITE the missing one.
+    if (!sw) return Math.min(qx, qy) - edge;  // middle NE: east + north edges
+    if (!se) return Math.min(px, qy) - edge;  // middle NW: west + north edges
+    if (!nw) return Math.min(qx, py) - edge;  // middle SE: east + south edges
+    return Math.min(px, py) - edge;           // middle SW: west + south edges
+  }
+  if (n === 2) {
+    if (sw && se) return py - edge;           // south edge
+    if (nw && ne) return qy - edge;           // north edge
+    if (sw && nw) return px - edge;           // west edge
+    if (se && ne) return qx - edge;           // east edge
+    // Opposite corners: the diagonal lane.
+    const d = (sw && ne)
+      ? Math.abs(px - py) * Math.SQRT1_2                    // SW <-> NE
+      : Math.abs(px + py - VERTEX_SPACING_M) * Math.SQRT1_2; // SE <-> NW
+    return d - ROAD_PAINT.diagHalfWidthM;
+  }
+  // One road corner: a quarter disc.
+  let d;
+  if (sw) d = Math.sqrt(px * px + py * py);
+  else if (se) d = Math.sqrt(qx * qx + py * py);
+  else if (nw) d = Math.sqrt(px * px + qy * qy);
+  else d = Math.sqrt(qx * qx + qy * qy);
+  return d - ROAD_PAINT.cornerRadiusM;
+}
+
 // ----- helpers ------------------------------------------------------
 
 function clampInt(v, lo, hi) {
@@ -145,6 +261,20 @@ function copyHeights(src) {
 }
 
 /**
+ * 2026-10-07 — per-vertex road flags, normalised to 0/1 (any non-zero 2-bit
+ * road field is road — the same test `pack_pcode` and the shader's
+ * `vertexRoadAt` apply). A copy for the same reason as `copyCodes`. null when
+ * the caller had none (a mesh from before roads reached the oracle): such an LB
+ * simply reports no roads.
+ */
+function copyRoads(src) {
+  if (!src || src.length < VERTEX_COUNT) return null;
+  const out = new Uint8Array(VERTEX_COUNT);
+  for (let i = 0; i < VERTEX_COUNT; i += 1) out[i] = src[i] ? 1 : 0;
+  return out;
+}
+
+/**
  * Create a terrain oracle.
  *
  * @param {object} [opts]
@@ -162,7 +292,7 @@ export function createTerrainOracle(opts = {}) {
     ? Math.max(1, opts.parkRescanEveryHits | 0)
     : PARK_RESCAN_EVERY_HITS;
 
-  /** @type {Map<number, {codes:Uint8Array, heights:Float32Array|null, lbX:number, lbY:number, coverage:Uint16Array|null}>} */
+  /** @type {Map<number, {codes:Uint8Array, heights:Float32Array|null, roads:Uint8Array|null, lbX:number, lbY:number, coverage:Uint16Array|null}>} */
   const cache = new Map();
   /** Bumped by every successful note/backfill — gives missed LBs another look. */
   let noteEpoch = 0;
@@ -218,7 +348,9 @@ export function createTerrainOracle(opts = {}) {
    *
    * @param {number} lbKeyOrId residency key or the `| 0xffff` `userData.lbId`
    *   form; masked either way.
-   * @param {{codes:ArrayLike<number>, heights?:ArrayLike<number>, lbX?:number, lbY?:number}} data
+   * @param {{codes:ArrayLike<number>, heights?:ArrayLike<number>, roads?:ArrayLike<number>, lbX?:number, lbY?:number}} data
+   *   `roads` (2026-10-07) is the mesh's `userData.roadCodes`, same
+   *   column-major layout as `codes`.
    * @returns {boolean} false when `codes` was missing/short (nothing cached).
    */
   function noteLandblock(lbKeyOrId, data) {
@@ -235,6 +367,10 @@ export function createTerrainOracle(opts = {}) {
       // literal. `sample()` then reports `height: null, normal: null` rather
       // than guessing — see the `hasHeight` field.
       heights: copyHeights(data.heights),
+      // 2026-10-07 — null on a caller without road data: `sample()` then
+      // reports `hasRoads: false` / `roadEdgeM: Infinity` (no road known),
+      // never a guessed road.
+      roads: copyRoads(data.roads),
       lbX,
       lbY,
       coverage: null,
@@ -300,6 +436,7 @@ export function createTerrainOracle(opts = {}) {
     if (noteLandblock(lbKey, {
       codes: ud.terrainCodes,
       heights: ud.heights,
+      roads: ud.roadCodes,
       lbX: ud.lbX,
       lbY: ud.lbY,
     })) {
@@ -333,8 +470,13 @@ export function createTerrainOracle(opts = {}) {
    *   hot scatter loop to keep the sampler allocation-free.
    * @returns {null | {code:number, family:number, height:number|null,
    *   normal:{x:number,y:number,z:number}|null, hasHeight:boolean,
-   *   lbX:number, lbY:number, lbKey:number, cornerCodes:Uint8Array}}
+   *   lbX:number, lbY:number, lbKey:number, cornerCodes:Uint8Array,
+   *   cornerRoads:Uint8Array, hasRoads:boolean, roadEdgeM:number}}
    *   null when the LB is not cached, is off-world, or carried no codes.
+   *   `cornerRoads` (2026-10-07) is 0/1 per corner in `cornerCodes` order;
+   *   `roadEdgeM` is `roadEdgeDistanceInCell` at (x, y): < 0 = on the painted
+   *   road, Infinity = no road corner (or an LB noted without road data, which
+   *   `hasRoads: false` distinguishes).
    */
   function sample(x, y, out) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -393,6 +535,30 @@ export function createTerrainOracle(opts = {}) {
     corners[1] = e.codes[iSE] & 0x1f;
     corners[2] = e.codes[iNW] & 0x1f;
     corners[3] = e.codes[iNE] & 0x1f;
+
+    // 2026-10-07 — road flags at the same four corners, and the signed distance
+    // to the painted road's edge. One OR + branch when the cell has no road
+    // corner (the overwhelming case), so the hot scatter path stays flat.
+    let cr = r.cornerRoads;
+    if (!cr || cr.length !== 4) {
+      cr = new Uint8Array(4);
+      r.cornerRoads = cr;
+    }
+    const rd = e.roads;
+    if (rd) {
+      cr[0] = rd[iSW];
+      cr[1] = rd[iSE];
+      cr[2] = rd[iNW];
+      cr[3] = rd[iNE];
+      r.hasRoads = true;
+      r.roadEdgeM = (cr[0] | cr[1] | cr[2] | cr[3]) === 0
+        ? Infinity
+        : roadEdgeDistanceInCell(cr[0], cr[1], cr[2], cr[3], fx, fy);
+    } else {
+      cr[0] = 0; cr[1] = 0; cr[2] = 0; cr[3] = 0;
+      r.hasRoads = false;
+      r.roadEdgeM = Infinity;
+    }
 
     r.code = code;
     r.family = TERRAIN_CODE_TO_FAMILY[code];
