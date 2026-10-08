@@ -642,6 +642,40 @@
       "unverified": [
         "All round-2 visible behaviour changes (handoff §6) — no 1070 session yet"
       ]
+    },
+    {
+      "id": 6,
+      "started": "2026-10-08",
+      "note": "Follow-ups + OpenAC/decomp rounds 3-4 under the owner's usage cap (two helper agents, orchestrator-verified, no workflows). Deferred: 7 shipped, 1 partial, 1 skipped (decomp contradicts). Rounds 3-4: 8 areas, 26 findings, 19 shipped, 3 partial, 4 deferred. CLI build (broken since 2026-07-27) restored. Ledgers: apps/holtburger-web/docs/openac-comparison-2026-10-08/FINDINGS-round3.md, FINDINGS-round4.md; handoff §6b.",
+      "agents": [
+        {
+          "facet": "net_session_protocol",
+          "scope": "lifecycle stamp gates, retail QueueBlobForObject, MoveToState default omission, 0x0248 parse, clear-friends, log-off on unload, character errors"
+        },
+        {
+          "facet": "remote_motion",
+          "scope": "remote MoveTo animation phase from the Rust node"
+        },
+        {
+          "facet": "movement_physics_collision",
+          "scope": "teleport hook (autorun/MoveTo cancel), open-sea wall, fallback water model"
+        },
+        {
+          "facet": "ui_hud_plugins",
+          "scope": "server confirmation dialogs, salvage gate + result line, books editability/flush/range-close, examine inscriptions, training unusable skills + real XP costs, housing ownership + RestrictionDB data, retail social commands, character list rules, portal-space busy"
+        },
+        {
+          "facet": "animation_motion",
+          "scope": "style-change hop 2 without hop 1, cycle-less style refused"
+        }
+      ],
+      "merged": [
+        "2552cc25"
+      ],
+      "gate": "JS 482/483 in-gate (test_frame_split_probe timing flake; 5/5 standalone); lints + event-kinds (58) + modulepreload (364) clean; protocol 404 + opcode_parity 2, world 865, core 694, holtburger-web 301 (+1 pre-existing), CLI 359+16 (4 flaky chat tests pass on rerun), dat 702 (+1 pre-existing terrain_subdiv); wasm32 check + release wasm 2026-10-08 18:46",
+      "unverified": [
+        "All visible behaviour changes in handoff §6b eye-test additions — no 1070 session yet"
+      ]
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",

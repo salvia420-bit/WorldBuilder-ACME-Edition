@@ -1,0 +1,240 @@
+[
+ {
+  "id": "training-1",
+  "title": "Untrained skills with min_level > 1 (all magic schools, Healing, Lockpick, Alchemy, Fletching, Cooking, Summoning, Mana Conversion, Recklessness, Sneak Attack, Dirty Fighting) can never be trained: the Unusable section is hard-coded 'Cannot be trained'",
+  "severity": "HIGH",
+  "category": "correctness",
+  "decomp_evidence": "gmSkillUI::RebuildSkillList (acclient.c:213838) only GROUPS by class: sac 3 \u2192 Specialized, sac 2 \u2192 Trained, `if ( skill._sac != 1 || v12->_data._min_level > 1 )` \u2192 the Unusable header, else Untrained. Selection does not care about the section: gmSkillUI::UpdateSelection (:213626) reads InqSkillAdvancementClass and `if ( (signed int)sac < 2 )` shows gmSkillUI::DisplaySelectionFooter_Untrained (:213693), which enables the Train button when `v7 && availableCredits >= v7` (v7 = SkillBase _trained_cost; :212913). gmSkillUI::TrainSkill (:213989) then confirms and sends CM_Train::Event_TrainSkill.",
+  "openac_evidence": "OpenAC's character sheet keeps the class and a separate UsableUntrained bit (src/AcDream.App/UI/Layout/CharacterSheet.cs:125/137) instead of folding 'unusable untrained' into 'cannot train'; its sample data marks Alchemy/Cooking/Fletching Untrained with UsableUntrained=false and a train cost (SampleData.cs:60-62).",
+  "holt_evidence": "plugins/train-skills.js:233-238 skillGroupFor: `TRAINING.UNTRAINED && minLevel <= 1` \u2192 'untrained', everything else \u2192 'unusable'. plugins/character-info.js:536-538 footerModel: `if (rec.kind === \"skill\" && rec.group === \"unusable\") return { title, line1: [\"Cannot be trained\", \"\"], ..., raise1: off, raise10: hidden }`. data/skill-table.json lists minLevel 2 for skills 16, 21, 23, 31, 32, 33, 34, 37, 38, 39, 43, 50, 51, 52, 54.",
+  "discrepancy": "A character who did not take a magic school (or Healing, Lockpick, \u2026) at creation can never train it in holtburger \u2014 the button is disabled with 'Cannot be trained'. Retail lists those skills under 'Unusable Skills' but lets you train them for their credit cost.",
+  "proposed_change": "Keep skillGroupFor's retail grouping but drive the footer by class, as retail does: in footerModel, any skill row with training < TRAINED (SAC 0 or 1) gets the untrained footer (\"Credits to Train:\" trainedCost, Train enabled when trainedCost > 0 && trainedCost <= credits). Optionally keep SAC 0 (Inactive) disabled since ACE refuses it, but SAC 1 must be trainable from either section. The model needs `trainedCost` on unusable rows too (buildSkillModel). No flag needed (a bug), or `?trainUnusable=off`.",
+  "files_to_change": [
+   "apps/holtburger-web/plugins/character-info.js",
+   "apps/holtburger-web/test_train_skill.mjs"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": false,
+  "test_plan": "Node (test_train_skill.mjs / a footerModel unit): a SAC 1 War Magic row (group 'unusable', trainedCost 16) with 20 credits \u2192 raise1 {enabled:true, action:'train', cost:16}; with 10 credits \u2192 disabled; SAC 0 row \u2192 disabled. Live: a character without War Magic opens Skills, selects War Magic under Unusable, Train sends TrainSkill(34, 16).",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "training-2",
+  "title": "Train confirmation uses invented wording; retail asks \"Are you sure you want to spend %d credits to train %s?\"",
+  "severity": "LOW",
+  "category": "parity",
+  "decomp_evidence": "gmSkillUI::TrainSkill (acclient.c:213989) builds the dialog text from `\"Are you sure you want to spend %d credits to train %s?\"` (SkillSystem::InqSkillName) and opens it with DialogFactory::MakeCallbackDialogInCurrentUI(\u2026, gmSkillUI::TrainSkillDialogCallback) (:213716).",
+  "openac_evidence": "n/a (no training dialog in the listed files).",
+  "holt_evidence": "plugins/character-info.js:903-904 `confirmAction(\"Train Skill\", `Train ${rec.name} for ${fmt(spec.cost)} skill credit${\u2026}?`, \"Train\")`.",
+  "discrepancy": "HUD text differs from retail (UI policy targets retail).",
+  "proposed_change": "Use the retail sentence (`Are you sure you want to spend ${cost} credits to train ${name}?`) with Yes / No buttons via the existing modal.",
+  "files_to_change": [
+   "apps/holtburger-web/plugins/character-info.js"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": false,
+  "test_plan": "Node: stub window.__modalConfirm, click Train on an untrained skill, assert the message string.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "training-3",
+  "title": "Attribute and vital raise costs use reconstructed spent XP (table[ranks]) and, for vitals, ranks back-solved from the base max \u2014 retail uses the stat's real level_from_cp / cp_spent, which the world crate already has",
+  "severity": "LOW",
+  "category": "robustness",
+  "decomp_evidence": "gmAttributeUI::GetCostToRaise (acclient.c:214308) / GetCostToRaise10 (:214364): `ExperienceSystem::ExperienceToAttributeLevel(_level_from_cp + n) - _cp_spent` (Attribute) and the Attribute2nd twin for vitals \u2014 the real ranks and spent XP from CACQualities::InqAttribute / InqAttribute2nd.",
+  "openac_evidence": "n/a.",
+  "holt_evidence": "plugins/character-info.js:388 `const spent = Array.isArray(table) ? (table[r.ranks] ?? 0) : 0;` (attributes) and :408-409 `estimateVitalRanks(id, base, attrBase, \u2026)` + `table[ranks]` (vitals; plugins/train-skills.js:170-179 back-solves ranks as base \u2212 formula). The JS stride drops the data: src/lib.rs publish_player_stats_snapshot packs vitals as [type, current, base, buffed_max] and attributes as [type, current, base, ranks], although holtburger-world stats.rs Attribute/Vital carry `ranks`, `start`, `spent_xp`, `next_rank_xp`.",
+  "discrepancy": "Whenever spent XP is not exactly the table value for the rank (XP banked by an earlier mismatched raise, server-side adjustments) or a vital's start/formula differs from the JS estimate, the client sends the wrong amount: ACE (Player_Vitals.cs / Player_Attributes.cs SpendVitalXp / SpendAttributeXp) banks an under-payment without a rank, or rejects an over-payment past ExperienceLeft.",
+  "proposed_change": "Extend the stats snapshot with a parallel stride for attributes and vitals: [type, ranks, start, spent_xp, next_rank_cost] (next_rank_cost = next_rank_xp \u2212 spent_xp, as skills already do), and have character-info use the real ranks/spent for statRaiseCost (keep the estimate only as a stale-pkg fallback).",
+  "files_to_change": [
+   "apps/holtburger-web/src/lib.rs",
+   "apps/holtburger-web/plugins/character-info.js",
+   "apps/holtburger-web/plugins/train-skills.js"
+  ],
+  "visual_impact": "none",
+  "needs_wasm_rebuild": true,
+  "test_plan": "Rust: snapshot test that the new stride carries ranks/spent from WorldState. Node: statRaiseCost with spent = table[ranks] + 500 gives the retail cost (table[ranks+1] \u2212 spent).",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "login-1",
+  "title": "No log-off: the client never sends CharacterLogOff (0xF653), so closing or 'leaving' keeps the character in the world until ACE times the session out, and there is no return to character select",
+  "severity": "MED",
+  "category": "missing-feature",
+  "decomp_evidence": "CPlayerSystem::LogOffCharacter (acclient.c:400717) \u2192 CPlayerSystem::RequestLogOff (:400355): prints \"Logging off...\" to chat, Proto_UI::LogOffCharacter(playerID) (:374063 packs 63059 = 0xF653 + gid), sets logOffRequested with logOffRequestTime = now + 3.0 s (+20 s when the player is a PK, weenie vfptr[7]), and calls cmdinterp HandleLogOff (movement disabled). While an inventory request is outstanding (ACCWeenieObject::prevRequest) it only marks loggingOff. CPlayerSystem::ExecuteLogOff (:395824) clears initialLoginComplete/player state and ClientNet::ExitWorldDisconnect returns to character management.",
+  "openac_evidence": "src/AcDream.Core.Net/Messages/CharacterLogOff.cs: BuildRequestBody(characterId) = 0xF653 + id; IsConfirmation for the server's bare 0xF653 reply.",
+  "holt_evidence": "holtburger-protocol already has GameMessage::CharacterLogOff (game_message/mod.rs:43, pack.rs:76, unpack.rs:119), but nothing sends it: no SessionCommand or wasm export, and no slash command. plugins/status-indicators.js:32-36 says the retail LogoffButton is 'NOT ported: the wasm session has no logout/LogOffCharacter surface yet'. index.html allows one spawn per page session ('Reload the page to pick a different character'), and app/auto_login.js exists to run the 0x0D 'character in world' kick dance that a lingering character causes.",
+  "discrepancy": "Retail logs the character out cleanly: 3 s, or 23 s for a PK, then ACE saves and returns the account to the character list. Holtburger just drops the socket. The character stays attackable in the world until ACE's dead-session timeout, and the next login hits EnterGameCharacterInWorld (0x0D).",
+  "proposed_change": "1) Add SessionCommand::LogOff plus a wasm export `logOffCharacter()` that sends GameMessage::CharacterLogOff (ACE's CharacterHandler.CharacterLogOff ignores the payload; send the gid like retail if the pack is extended). 2) In JS, the retail RequestLogOff UX: 'Logging off...' line, movement input disabled, then on the server's CharacterLogOff (0xF653) + CharacterList (ACE Session.LogOffPlayer \u2192 Session.cs:268-272) tear the in-world session down to the character list (the existing reconnect hygiene / AbortController path). 3) Expose it from the status-indicators Logoff button (retail gmFloatyIndicatorsUI LogoffButton) and a /logout alias. Optionally send it on `pagehide`.",
+  "files_to_change": [
+   "apps/holtburger-web/src/lib.rs",
+   "apps/holtburger-web/src/session/commands/lifecycle.rs",
+   "apps/holtburger-web/src/session/messages/login.rs",
+   "apps/holtburger-web/plugins/status-indicators.js",
+   "apps/holtburger-web/app/slash_commands.js",
+   "apps/holtburger-web/index.html"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": true,
+  "test_plan": "Rust: the command packs 0xF653. Node: the slash/button calls the export and prints 'Logging off...'; a CharacterLogOff + CharacterList pair returns the UI to the character list. Live: log off, then log the same character back in at once; expect no 0x0D 'in world' error and no kick dance.",
+  "effort": "M",
+  "already_tracked": "Partly: the status-indicators.js comment says the LogoffButton is unported",
+  "status": "partial"
+ },
+ {
+  "id": "login-2",
+  "title": "CharacterError codes are shown as raw enum names ('[ACE] CharacterError: Delete (0x6)'); retail maps each code to its ID_CHAR_ERROR_* message, sends fatal ones back to the login screen and ignores 2 / 7 / 22",
+  "severity": "LOW",
+  "category": "parity",
+  "decomp_evidence": "gmUIFlow::RecvNotice_CharacterError (acclient.c:183837): codes 1, 3, 4/8, 9, 10, 14, 21 and 24 \u2192 ID_CHAR_ERROR_{LOGON, ACCOUNT_LOGON, SERVER_CRASH, ACCOUNT_INVALID, ACCOUNT_DOESNT_EXIST, ENTER_GAME_PLAYER_ACCOUNT_MISSING, LOGON_SERVER_FULL, SUBSCRIPTION_EXPIRED} in UI mode 0x10000002 (fatal, back to logon). 5, 6, 11-13, 15-20 and 23 \u2192 ID_CHAR_ERROR_{LOGOFF, DELETE, ENTER_GAME_*} in mode 0x1000000A (stay on character select). Anything else (2 LoggedOn, 7 NoPremade, 22 CharacterIsBooted) shows nothing.",
+  "openac_evidence": "src/AcDream.Core.Net/Messages/CharacterError.cs: the full 0x00-0x19 Code enum with the same names.",
+  "holt_evidence": "src/session/messages/login.rs:403-423 forwards the code plus `format!(\"{:?}\", e)` as kind 20. app/client_events.js:654-677 writes `[ACE] CharacterError: <code>${name}</code> (0x\u2026)` into the login status line.",
+  "discrepancy": "Players see programmer text instead of a sentence, and a fatal error (account in use, server full) leaves them on a half-usable character list.",
+  "proposed_change": "Add a code \u2192 English message table using the retail ID names as keys (e.g. 0x0D 'That character is already in the world.'). For the fatal group, return to the login form; for the others, keep the character list. Keep window.__lastCharacterError for auto_login.js as is.",
+  "files_to_change": [
+   "apps/holtburger-web/app/client_events.js"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": false,
+  "test_plan": "Node (tests/app_client_events.test.mjs): a kind 20 with code 6 sets a readable message and keeps the list; code 0x15 returns to login; codes 2/7/22 print nothing.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "login-3",
+  "title": "Pending-delete characters print '[pending delete @ 1970-01-01T00:00:01Z]' \u2014 ACE's per-character field is a greyed-out flag/seconds value, not an epoch; retail greys the row and sorts it to the bottom",
+  "severity": "LOW",
+  "category": "correctness",
+  "decomp_evidence": "CharacterIdentity { gid_, name_, secondsGreyedOut_ } (acclient.h:30557). gmCharacterManagementUI::RebuildCharacterList (acclient.c:281100) tints a row when CharacterSet::GetGreyedOutFor(slot) is non-zero (:281238 onward) and moves greyed rows to the end of the list (:281369-281375). gmCharacterManagementUI::UpdateButtons (:281010) disables Enter Game and swaps Delete for Restore on a greyed row.",
+  "openac_evidence": "src/AcDream.Core.Net/Messages/CharacterList.cs: `Character(uint Id, string Name, uint SecondsGreyedOut)`; IsAvailableActiveIdentity = id != 0 && SecondsGreyedOut == 0.",
+  "holt_evidence": "index.html:4555-4557 `const isPending = c.deleteTime !== 0; \u2026 [pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]`. ACE writes `character.DeleteTime != 0 ? (uint)Math.Max(1, Time.GetUnixTime() - character.DeleteTime) : 0` (GameMessageCharacterList.cs), i.e. 1 while the deletion is pending. The Delete confirmation is a plain window.confirm with invented text (index.html:4726-4734).",
+  "discrepancy": "A garbage 1970 date appears on every pending-delete row; greyed characters stay in place instead of sinking to the bottom; the confirm dialog is a browser alert.",
+  "proposed_change": "Treat deleteTime as a greyed-out flag: show '(pending deletion)' with the greyed colour and sort greyed rows last. Use the existing modal-dialog for the delete confirmation.",
+  "files_to_change": [
+   "apps/holtburger-web/index.html"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": false,
+  "test_plan": "Node DOM check (or manual): a list with one deleteTime=1 row renders it last, with no date and a Restore button.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "housing-1",
+  "title": "HouseUpdateRestrictions (0x0248) is misparsed: the leading timestamp is 1 byte (retail and ACE), holtburger reads a u32, so the object guid and the whole RestrictionDB are garbage",
+  "severity": "HIGH",
+  "category": "correctness",
+  "decomp_evidence": "CM_House::DispatchUI_Recv_UpdateRestrictions (acclient.c:707359): after the 584 (0x0248) opcode, `v7 = *v6; buf = v6 + 1; v8 = *(_DWORD *)(v6 + 1); wts = v7; buf = v6 + 5; RestrictionDB::UnPack(...)`, i.e. a char wts, a u32 sender, then the RestrictionDB. ClientHousingSystem::Handle_House__Recv_UpdateRestrictions (:430582) ignores sender == the player, otherwise `if (ACCWeenieObject::UpdateHouseRestrictionTS(obj, wts)) ACCWeenieObject::SetRestrictions(obj, db)` on THAT object.",
+  "openac_evidence": "src/AcDream.Core.Net/Messages/GameEvents.cs:797-828 ParseHouseUpdateRestrictions: `byte sequence = payload[pos]; pos += 1; uint senderId = \u2026` (comment 'Sequence(1) + SenderId(4) + RestrictionDB\u2026'). GameEventWiring.cs:672-677 applies it per object: items.UpdateHouseRestrictions(SenderId, \u2026).",
+  "holt_evidence": "crates/holtburger-protocol/src/messages/house/events.rs:252-266 `pub sequence: u32` read with `LittleEndian::read_u32` and then `Guid::unpack`; the round-trip test at :422 encodes the same wrong shape. ACE writes `obj.Sequences.GetNextSequence(SequenceType.UpdateRestrictionDB)` (GameEventHouseUpdateRestrictions.cs:14). UpdateRestrictionDB falls to the default `new ByteSequence(false)` (SequenceManager.cs), whose `NextBytes => new byte[] { NextValue }` (ByteSequence.cs:45) is one byte. src/session/messages/game_event.rs:1396-1418 stores the result as the single panel snapshot latest_house_restrictions.",
+  "discrepancy": "Every restriction update decodes 3 bytes off. The house panel's guest/storage counts, open status and monarch are wrong (or the event fails to parse), and a future entry-restriction check would read a garbage DB for the wrong object.",
+  "proposed_change": "Parse `sequence: u8`, then `object_guid: Guid`, then the RestrictionDB (version, open bitmask, monarch, PackableHashTable<guid, permission>). Fix the pack and the test fixture. In the recv arm, apply it per object (see housing-3): keep latest_house_restrictions for the panel only when the object is the player's own house.",
+  "files_to_change": [
+   "crates/holtburger-protocol/src/messages/house/events.rs",
+   "apps/holtburger-web/src/session/messages/game_event.rs"
+  ],
+  "visual_impact": "none",
+  "needs_wasm_rebuild": true,
+  "test_plan": "holtburger-protocol: decode a byte buffer built exactly like ACE (0x0248, u8 7, u32 0x7A9B4007, u32 0x10000002, u32 1, u32 monarch, u16 count 2, u16 buckets 64, two (guid, perm) pairs) and assert guid/open/monarch/guests; re-pin the round-trip test.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "housing-2",
+  "title": "House ownership is read from HouseStatus code 0, which ACE never sends \u2014 owners get HouseData; HouseStatus only ever carries a failure (retail shows it as a failed-transaction notice)",
+  "severity": "MED",
+  "category": "correctness",
+  "decomp_evidence": "CM_House::DispatchUI_Recv_HouseStatus (acclient.c:707289): opcode 550 (0x0226) \u2192 ClientHousingSystem::Handle_House__Recv_HouseTransaction(etype) \u2192 CM_House::SendNotice_FailedHouseTransaction(etype), the same path as HouseTransaction 0x0259. Ownership comes from HouseData (Handle_House__Recv_HouseData \u2192 SendNotice_UpdateHouseData).",
+  "openac_evidence": "src/AcDream.Runtime/Gameplay/RuntimeHouseState.cs:66-76 ApplyHouseData sets `_ownsHouse = true`; :109-119 ApplyHouseStatus sets `_ownsHouse = false` and drops the data.",
+  "holt_evidence": "src/lib.rs:30814-30817 HouseStatusJs `is_house_owner() { self.error_code == 0 }`. plugins/house-panel.js:280-286 ownership(): `if (!snap.status) return { owner: false, text: \"Not looked up yet \u2014 press Query House.\" }`, owner only when `errorCode === WEENIE_ERROR_NONE`; the Dwelling rows and the Abandon button need `own.owner`. ACE Player_House.cs:917-931 HandleActionQueryHouse: no house \u2192 `GameEventHouseStatus(Session)` (BadParam); house owned \u2192 `GameEventHouseData` only. HouseStatus(HouseEvicted) comes with the eviction refresh (:566). tests/commerce_windows_smoke.test.mjs fakes `playerHouseStatus: () => ({ errorCode: 0, isHouseOwner: true })`.",
+  "discrepancy": "A real owner presses Query House and sees 'Not looked up yet' or a stale status: no dwelling, location or maintenance, and Abandon stays disabled. A failure code is shown as an ownership state instead of retail's failed-transaction message.",
+  "proposed_change": "Owner = a HouseData snapshot arrived (latest_house_data is Some) more recently than any HouseStatus. HouseStatus clears latest_house_data and is shown as the WeenieError text (weenie_error_messages.js), as HouseTransaction is. Drop is_house_owner's `== 0` rule (or derive it from the data). Update the smoke-test fake to the ACE shape (status undefined + data present).",
+  "files_to_change": [
+   "apps/holtburger-web/src/session/messages/game_event.rs",
+   "apps/holtburger-web/src/lib.rs",
+   "apps/holtburger-web/plugins/house-panel.js",
+   "apps/holtburger-web/tests/commerce_windows_smoke.test.mjs"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": true,
+  "test_plan": "Node: house panel with status=null + data present shows 'You own a house' and the dwelling rows; status BadParam \u2192 'You do not own a house' plus the error text; a HouseStatus after HouseData clears ownership. Live: an owner presses Query House.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ },
+ {
+  "id": "housing-3",
+  "title": "Per-house restriction data (PWD HouseRestrictions and later 0x0248 updates) is parsed but never stored on the house entity \u2014 the data path retail CObjCell::check_entry_restrictions / CanMoveInto needs (prerequisite for landdefs-terrain-2)",
+  "severity": "MED",
+  "category": "missing-feature",
+  "decomp_evidence": "CObjCell::check_entry_restrictions (acclient.c:347102) \u2192 restriction object's CanMoveInto (ACCWeenieObject::CanMoveInto :438410): owner `pwd._house_owner_iid` (the owner always passes), else `RestrictionDB::IsAllowedIn(pwd._db, mover.id, mover monarch)` (:473082: `_bitmask & 1` open \u2192 allowed; `_monarch_iid` matches the mover's monarch \u2192 allowed; mover in `_table` \u2192 allowed). When refused it plays `pwd._pscript` unless the DisableHouseRestrictionEffects option is set. Bypass: ACCWeenieObject::CanBypassMoveRestrictions (:436967) = bitfield 0x100000 (Admin) && 0x400000 (ImmuneCellRestrictions). RestrictionDB = {_bitmask, _monarch_iid, PHashTable<guid, perm>} (acclient.h:37155).",
+  "openac_evidence": "src/AcDream.Core/Items/HouseRestrictions.cs HouseRestrictionRecord.IsAllowedIn(mover, moverMonarch); TransitionTypes.cs:103-125 CheckEntryRestrictions reads restrictionObject.HouseOwnerId and .Restrictions from the client object table; GameEventWiring.cs:672-677 keeps the per-object record current.",
+  "holt_evidence": "The protocol parses PWD house_owner and house_restrictions (crates/holtburger-protocol/src/messages/object/messages/description.rs:26 HouseRestrictionsData, :192/:220). holtburger-world hydration.rs:158 stores only `PropertyInstanceId::HouseOwner`; house_restrictions is dropped. 0x0248 goes to one global snapshot (game_event.rs:1396-1418). ACE sends what is needed: WorldObject_Networking.cs:794-805 sets WeenieHeaderFlag.HouseRestrictions on every House (HouseOwner when owned) and :173-190 writes `new RestrictionDB(house)`, using the root house's DB for villa/mansion copies and for an outdoor house's dungeon copy. House.cs SendRestrictionDB sends PublicUpdateInstanceID(HouseOwner) + 0x0248 to known players on every change.",
+  "discrepancy": "Nothing on the client can answer 'may this player enter that house's cells'. Retail's barrier test (and its refusal effect) cannot be implemented until the per-house DB is stored and kept current.",
+  "proposed_change": "Hydrate PWD house_restrictions onto the entity (e.g. Entity.house_restrictions: Option<RestrictionDb>). Apply 0x0248 to the sender entity with retail's timestamp check (UpdateHouseRestrictionTS, wrap-around u8 newer) and ignore sender == the player, as retail does. Expose `objectHouseRestrictions(guid)` for the house panel. Then landdefs-terrain-2 resolves cell \u2192 restriction guid \u2192 entity \u2192 IsAllowedIn(player, player monarch from the allegiance state), with the Admin & ImmuneCellRestrictions bypass and the pscript refusal effect.",
+  "files_to_change": [
+   "crates/holtburger-world/src/hydration.rs",
+   "crates/holtburger-world/src/entity.rs",
+   "apps/holtburger-web/src/session/messages/game_event.rs",
+   "apps/holtburger-web/src/lib.rs"
+  ],
+  "visual_impact": "none",
+  "needs_wasm_rebuild": true,
+  "test_plan": "holtburger-world: a CreateObject with HouseRestrictions hydrates the DB; a newer-TS 0x0248 replaces it, an older one is ignored, sender == player is ignored; IsAllowedIn truth table (open, monarch, guest, stranger).",
+  "effort": "M",
+  "already_tracked": "Feeds round-3 landdefs-terrain-2 (deferred)",
+  "status": "shipped"
+ },
+ {
+  "id": "social-lists-1",
+  "title": "Retail client commands /friends, /squelch, /unsquelch, /filter, /unfilter, /messagetypes are not handled \u2014 they are forwarded to ACE as '@friends \u2026', which vanilla ACE does not implement ('Unknown command')",
+  "severity": "MED",
+  "category": "missing-feature",
+  "decomp_evidence": "The retail client command table registers \"friends\" / \"friends_add\" / \"friends_remove\" (acclient.c:429077-429139) and \"squelch\", \"unsquelch\", \"messagetypes\", \"filter\", \"unfilter\" (:429387-430070). ClientCommunicationSystem::DoFriends (:421494) dispatches add \u2192 DoFriendsAdd (:419061, CM_Social::Event_AddFriend by name; 'You must specify the name of the friend you wish to add.'), remove \u2192 DoFriendsRemove (:419108; '-all' \u2192 Event_ClearFriends, else the id from the friends list; 'You must specify the name of the friend you wish to remove.'), online \u2192 SendNotice_ChatCommand_DisplayFriends(1), no argument \u2192 the whole list (output strings :201116-201144 'Your friends list is empty!', 'Your friends:', '  You have no friends that are online.'), else 'Invalid friends command specified.' (:421592). DoSquelch / DoUnSquelch (:421669 / :421735) parse `[-account] [-<message_type>] [-reply] <name>` via ProcessSquelchArgs (:419701) \u2192 CM_Communication::Event_ModifyCharacterSquelch / Event_ModifyAccountSquelch; PerformGlobalSquelchMod (:421888) backs /filter and /unfilter (Event_ModifyGlobalSquelch). Usage text: HelpFriends (:419024) and HelpAdvancedSquelch.",
+  "openac_evidence": "src/AcDream.Runtime/Chat/RetailClientCommandCatalog.cs:168-186 (Friends / FriendsAdd / FriendsRemove definitions) and :479-486 (\"friends\", \"squelch\", \"unsquelch\", \"filter\", \"unfilter\", \"messagetypes\"); RetailCommandHelpTable.cs:400-407 carries the help text.",
+  "holt_evidence": "app/slash_commands.js handles tell/reply/say/emote/channels/Turbine rooms/soul emotes only. The fallback (:410-419, `const serverLine = ...` at :417) sends `@${rawCmd} ${rest}` to the server for any other verb. Vanilla ACE has no friends/squelch command (nothing in ~/ace-server ACE.Server/Command). The wasm already exports everything needed: addFriend(name) (src/lib.rs:40960), removeFriend(guid) (:40973), modifyCharacterSquelch (:40989), modifyAccountSquelch (:41482), modifyGlobalSquelch (:41505). The panel uses them (plugins/social-panel.js:612, :650). The RemoveAllFriends opcode is only a comment in crates/holtburger-protocol/src/opcodes.rs:491 (`// RemoveAllFriends = 0x0025`); retail CM_Social::Event_ClearFriends packs 37 (0x25).",
+  "discrepancy": "'/squelch Spammer', '/friends add Bob' and '/filter -tells' print an ACE 'Unknown command' error. Retail ran them locally and sent the GameActions.",
+  "proposed_change": "Add a client-command block in app/slash_commands.js (before the server fallback), routed through the existing exports:\n- `/friends`: list, or `online` for online friends only. Print retail's lines from handle.playerFriends().\n- `/friends add <name>`, `/friends_add`: addFriend(name).\n- `/friends remove <name>`, `/friends_remove`: removeFriend(guid of the named entry, else 'That character is not on your friends list!').\n- `/friends remove -all`: needs a new clearFriends export (Event_ClearFriends 0x0025) and prints 'Your friends list has been cleared.'.\n- `/squelch`, `/unsquelch` with retail's -account / -<type> / -reply flags (the reply target is the existing /r target); `/filter`, `/unfilter -<type>` \u2192 modifyGlobalSquelch.\n- `/messagetypes`: print the type list.\n- Add them to RETAIL_CLIENT_VERBS so '@squelch' is rerouted too.",
+  "files_to_change": [
+   "apps/holtburger-web/app/slash_commands.js",
+   "apps/holtburger-web/src/lib.rs",
+   "apps/holtburger-web/src/session/commands/social.rs"
+  ],
+  "visual_impact": "behaviour",
+  "needs_wasm_rebuild": true,
+  "test_plan": "Node (test_slash_commands-style): each form calls the right export with the right args; '/friends remove Nobody' prints the retail refusal; '@squelch x' is rerouted, not sent. Rust: the ClearFriends command packs opcode 0x0025.",
+  "effort": "M",
+  "already_tracked": "No (round-2 chat-4 covered prefixes/aliases, not these verbs)",
+  "status": "shipped"
+ },
+ {
+  "id": "social-lists-2",
+  "title": "FriendsUpdate type 3 (RemoveSilent) is ignored \u2014 retail removes the friend without a message",
+  "severity": "LOW",
+  "category": "correctness",
+  "decomp_evidence": "gmFriendsUI::RecvNotice_UpdateFriendsList (acclient.c:201724): case 2 \u2192 ServerSays_RemoveFriend(list, 0), case 3 \u2192 ServerSays_RemoveFriend(list, 1) (silent), case 4 \u2192 ServerSays_UpdateFriend.",
+  "openac_evidence": "src/AcDream.Core/Social/FriendsState.cs Apply: `case FriendsUpdateType.Remove: case FriendsUpdateType.RemoveSilent:` both remove; the enum has RemoveSilent = 3.",
+  "holt_evidence": "src/lib.rs publish_player_friends_snapshot matches FULL_LIST / FRIEND_ADDED / FRIEND_REMOVED / FRIEND_STATUS_CHANGED, and the default arm (:44545-44551) logs 'unknown update_type' and ignores it. crates/holtburger-protocol friends/events.rs:12-15 defines no 3. (Vanilla ACE only sends 0/1/2/4, so this only bites other servers.)",
+  "discrepancy": "A friend removed with update type 3 stays in holtburger's list.",
+  "proposed_change": "Add `FRIEND_REMOVED_SILENT: u32 = 0x0003` and treat it like FRIEND_REMOVED (no chat line).",
+  "files_to_change": [
+   "crates/holtburger-protocol/src/messages/friends/events.rs",
+   "apps/holtburger-web/src/lib.rs"
+  ],
+  "visual_impact": "none",
+  "needs_wasm_rebuild": true,
+  "test_plan": "Rust: a type 3 update removes the entry from the snapshot.",
+  "effort": "S",
+  "already_tracked": "No",
+  "status": "shipped"
+ }
+]

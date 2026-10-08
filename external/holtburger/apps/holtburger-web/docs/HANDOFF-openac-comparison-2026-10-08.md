@@ -1,18 +1,22 @@
-# HANDOFF — OpenAC / retail-decomp comparison, rounds 1 + 2 shipped (2026-10-08)
+# HANDOFF — OpenAC / retail-decomp comparison: rounds 1–4 and follow-ups shipped (2026-10-08)
 
 A code-only session. Parallel agents each took a piece of OpenAC (`external/OpenAC`, C#), compared it with the
 matching holtburger-web code and with the retail decomp (`~/ac-headers/acclient.c`, the authority), and
 proposed changes. A second agent then tried to refute every finding before anything was implemented.
-Code commits: `0680b84b` (round 1) and `ac5a0e94` (round 2).
+Code commits: `0680b84b` (round 1), `ac5a0e94` (round 2) and `2552cc25` (follow-ups + rounds 3–4).
 **There was no visual testing.** Every change that is visible in-game ships default-on with an `?flag=off`
 escape and is listed in §4 for a later 1070 eye-test.
 
 - Round 1: 14 areas, 74 findings, 54 shipped. Ledger `docs/openac-comparison-2026-10-08/FINDINGS-round1.md`;
   evidence `round1-findings.json`.
 - Round 2: 10 areas, 53 findings, 42 shipped + 2 partial. Ledger `FINDINGS-round2.md`; evidence `round2-findings.json` (§6).
+- Follow-ups + rounds 3–4 (§6b), done under the owner's usage cap (two helper agents, no workflows):
+  - 9 deferred findings handled: 7 shipped, 1 partial, 1 skipped because the decomp contradicts it.
+  - Rounds 3–4: 8 areas, 26 findings, 19 shipped + 3 partial. Ledgers `FINDINGS-round3.md` / `FINDINGS-round4.md`.
+  - The CLI build, broken since 2026-07-27, is fixed.
+- Status ledger: `docs/PARITY-STATUS.json` waves 4, 5 and 6.
 - Each evidence file holds the decomp / OpenAC / holtburger citations, the proposed change, and the verifier's corrections and
   implementation notes.
-- Status ledger: `docs/PARITY-STATUS.json` waves 4 and 5.
 
 ---
 
@@ -31,6 +35,12 @@ Later in the session:
 > how much to do after the verifiers? might as well keep going i suppose
 
 > once the general purpose agents are done can we not spawn more and just let the holtburger-js-implement r2 finish as i must manage usage
+
+> lets do the follow ups and continue with future work, you can have a 5.5 agent to help
+
+> we can add another agent to the team. 5.5 we can have two going at any time
+
+> no more agents after this. we wrap up and update the handoff commit and push when they are done
 
 ---
 
@@ -236,8 +246,80 @@ and 2 partial. Ledger: `FINDINGS-round2.md`.
 - Partial:
   - camera-3: one retail viewer transit.
   - use-3: clear the ground object on move failure.
-- Unrelated bug noticed: `character_option_mask` (holtburger-world player/types.rs) maps StayInChatModeAfterSendingMessage to the
-  HEAR_ALLEGIANCE_CHAT bit and AllowOthersToSeeYourAge to SALVAGE_MULTIPLE.
+- (Retracted.) A round-2 agent reported a `character_option_mask` bit-mapping bug. I checked every CharacterOption id and every
+  CharacterOptions1/2 bit against ACE's enums, and all of them match, so it was a misread.
+
+## 6b. Follow-ups and rounds 3–4 (usage-capped: two helper agents, orchestrator verifies)
+
+**Ops follow-ups:**
+- The wsbridge was rebuilt (release) and restarted through its supervisor (pid swap at 16:30), so net-3's 2 MiB UDP receive buffer
+  is live.
+- `net.core.rmem_max` is 4 MiB, so no host change was needed.
+
+**Deferred findings handled.** Escapes are `?flag=off`.
+
+| Finding | Status | Escape | Change |
+|---|---|---|---|
+| createobj-5 | shipped | `lifecycleStampGates` | DeleteObject / Pickup / Parent / ObjDesc / instance stamp gates |
+| outbound-5 | shipped | `rawDefaultOmission` | Retail default omission in MoveToState. Style and turn speed stay explicit; changing them needs a live soak. |
+| fellowship-2 | shipped | — | Retail fellowship strings with the leader name |
+| use-3 | shipped | `moveFailCloseGround` | Loot window closes on a move-failure UseDone |
+| cmotiontable-5 | shipped (JS parts) | `styleChainRetail` | Hop 2 plays without hop 1; a cycle-less style change is refused. The wasm style-chain planner is still deferred with cmotiontable-2. |
+| moveto-4 | shipped | `remoteMoveToPhase` | Remote animation phase from the Rust MoveToManager node, new ClientEvent kind 67 |
+| held-3 | shipped | `objectBlobQueue` | Retail QueueBlobForObject for Parent/Pickup events about unknown or newer objects |
+| motioninterp-6 | skipped | — | The decomp shows the SetHoldKey Run arm can't fire |
+
+The CLI build was broken by a `Cell<u64>`-not-`Sync` error since 3d466147 (2026-07-27). The counters are now an atomic newtype, and
+`cargo test -p holtburger-cli` passes.
+
+**Round 3** (streaming/teleport, LandDefs/terrain, books/journal, crafting) and **round 4** (training, login, housing,
+social lists) are in `FINDINGS-round3.md` / `FINDINGS-round4.md`. Escapes are `?flag=off`.
+
+| Area | Shipped / partial | Escape(s) | What changed |
+|---|---|---|---|
+| Server confirmations | shipped | `serverConfirmUi` | Craft-chance, fellowship invite, swear, aug/skill/attribute and yes/no dialogs now exist (`plugins/server-confirm.js`). Before, only the bot could answer them. |
+| Teleport hook | shipped | `teleportHook` | Autorun stops and MoveTo is cancelled when the destination pose lands |
+| Water | shipped | `openSeaWall`, `fallbackWaterRetail` | Open-sea wall on all-water landblocks only; fallback water model fixed |
+| Books | shipped / partial | `bookRetailPages`, `examineInscribe`, `bookRangeClose` | Editability from author / ignore-author; flush on close and page turn; inscriptions from the examine panel; range close |
+| Salvage | shipped | `salvageSuitable`, `salvageResultChat` | Retail suitability gate; retail result line in chat |
+| Training | shipped | `trainUnusable`, `realStatXp` | Untrained magic, Healing, Lockpick etc. can be trained; retail confirm text; raise costs from the real XP |
+| Housing | shipped | `houseOwnerFromData` | 0x0248 parse fixed (1-byte timestamp); ownership from HouseData; per-house RestrictionDB + IsAllowedIn, **not wired to collision yet** |
+| Social commands | shipped | `retailSocialCmds` | Retail `/friends`, `/squelch`, `/unsquelch`, `/filter`, `/unfilter`, `/messagetypes`; clear-friends 0x0025; silent friend removal |
+| Login | shipped | `retailCharErrors`, `retailCharList` | Retail CharacterError text; pending-delete rows greyed and listed last; delete needs DELETE typed |
+| Log-off | partial | `logOffOnUnload` | CharacterLogOff sent on page close; no in-place return to character select |
+| Portal busy | partial | `portalBusy` | Combat toggle refused in portal space; uses and casts dropped |
+
+**Deferred from rounds 3–4:**
+- streaming-teleport-1: LoginComplete at the end of the tunnel fade-in. It touches the high-risk position pipeline and
+  `DEFER_LOGIN_COMPLETE_AFTER_TELEPORT` stays false; needs a 1070 teleport eye-test.
+- streaming-teleport-3/4 (render): reveal gate and interior streaming window.
+- landdefs-terrain-2: housing barriers. The data path now exists; the collision wiring remains.
+- Partials:
+  - login-1: in-place return to character select.
+  - books-journal-2: page-text fetch.
+  - streaming-teleport-5: inventory drags in the tunnel.
+
+**Gate for this commit:**
+- JS 483 suites: 482 pass in the gate; `test_frame_split_probe.mjs` failed once under gate load and passes 5/5 standalone.
+  Neither it nor `frame_split.js` changed today.
+- Lints, event kinds (58) and modulepreload (364) are clean.
+- Rust `--lib`: protocol 404 + opcode_parity 2, world 865, core 694, holtburger-web 301 (+1 pre-existing), CLI 359 + 16.
+  Four CLI chat tests failed in one run and passed in two reruns, so they're flaky and probably share log state.
+- holtburger-dat: 702 pass, plus `terrain_subdiv::…triangle_corner_ring_matches_height_sampler`, which fails before
+  today too (the file is unchanged since 2026-08-03).
+- wasm32 check is clean; release wasm built at 18:46 (6.94 MB).
+- `cargo fmt --check` was not run: rustfmt on `src/lib.rs` needs about 4.2 GB. Run it on a bigger machine if CI enforces formatting.
+
+**Eye-test additions:**
+- Tinker with the craft-chance option on, and accept a fellowship invite.
+- Portal while autorunning.
+- Walk off the coast south of Holtburg, and wade a lake right after a teleport.
+- Edit a library book and a book you wrote; inscribe a weapon from the examine panel.
+- Train War Magic from Unusable.
+- As a house owner, press Query House.
+- `/squelch`, `/friends remove -all`.
+- Reload while in-world, then log straight back in.
+- A monster aggroed from behind: it should turn in place, then run, then go to Ready.
 
 ---
 
@@ -269,20 +351,24 @@ original goal verbatim in §1 — the same rules apply: code only, no visual tes
 visuals, every agent must respect the 8 GB laptop limits in ~/CLAUDE.md and the §7 lessons: no rustfmt on
 src/lib.rs, stop the TS language server before builds, agents never run cargo/wasm-pack/the full gate/browsers).
 
-Rounds 1 and 2 are shipped. Remaining work, in order:
-1. Deferred findings that are safe without an eye-test, verifying each against acclient.c first (evidence and
-   verifier notes are in docs/openac-comparison-2026-10-08/round{1,2}-findings.json):
-   round 1 createobj-5, motioninterp-6, moveto-4, cmotiontable-5, outbound-5 canonicalization;
-   round 2 camera-3 (one retail viewer transit), use-3 (clear the ground object on move failure), fellowship-2,
-   held-3; plus the character_option_mask bit-mapping bug noted in §6.
-2. A third comparison round on areas not yet covered (streaming/residency correctness vs OpenAC App/Streaming,
-   portal space/teleport, LandDefs/terrain sampling, books/contracts/quests, vitals/regen, UI layout behaviour),
-   same compare → adversarial verify → implement pipeline, file-disjoint lanes, Rust compiled by the orchestrator
-   only, default-on with =off escapes per the owner flag policy.
-3. The large design items when the owner wants them: cmotiontable-2 (signed/reversed links), createobj-1,
-   plifecycle-6 / audio-4 (owner ScriptManager for wire scripts), spellcast-5 (personalized formulas).
-4. End with the full gate (capped JS gate, lints, core/common/protocol/world/session --lib, wasm32 check), one
-   release wasm build, an updated handoff + PARITY-STATUS wave, then commit and push to origin/master.
-Keep the §4/§6 eye-test queues growing for the owner's next 1070 session. Watch usage: the owner asked to cap
-agent spawning, so prefer one workflow at a time and say how many agents a step will use before starting it.
+Rounds 1–4 and the first follow-up batches are shipped (§3, §6, §6b). Remaining work, in order:
+1. Wire housing barriers (landdefs-terrain-2): the per-house RestrictionDB + IsAllowedIn now exist in
+   crates/holtburger-world/src/house.rs (round-4 housing-3); connect them to the faithful outdoor/indoor
+   SceneObjCell::restriction_obj + CObjCell::check_entry_restrictions (acclient.c:347102) behind an =off escape,
+   with tests that a non-owner bounces and owners/guests/open houses pass.
+2. Partials: login-1 (in-place return to character select + retail 3 s / 23 s PK log-off timer),
+   books-journal-2 (page-text fetch), streaming-teleport-5 (inventory drags in the tunnel), camera-3 (one retail
+   viewer transit), outbound-5 (omit style / 1.0 turn speed after a live soak).
+3. Large design items when the owner wants them: cmotiontable-2 + the cmotiontable-5 wasm style-chain planner
+   (signed/reversed links, style-default double hop), createobj-1 (in-place re-create), plifecycle-6 / audio-4
+   (owner ScriptManager for wire scripts), spellcast-5 (personalized formulas; capture golden vectors from ACE),
+   csequence-3 / csequence-5.
+4. Another comparison round on areas not yet covered (vitals/regen display, UI layout behaviour, chargen,
+   vendor buy side, containers/chests, PK/PKLite rules), compare → verify → implement.
+5. End with the full gate (capped JS gate, lints, core/common/protocol/world/session/dat --lib, CLI, wasm32
+   check), one release wasm build, an updated handoff + PARITY-STATUS wave, then commit and push to origin/master.
+Items needing the owner's 1070 eye-test before code changes: streaming-teleport-1 (LoginComplete timing),
+streaming-teleport-3/4, camera-1/6, held-1, daytime-2, charopt-5, and all createobj render items.
+Keep the §4/§6/§6b eye-test queues growing. Usage: the owner caps agents — ask how many helpers are allowed
+(today ended at two concurrent general-purpose helpers, no workflows) and say how many a step will use first.
 ```
