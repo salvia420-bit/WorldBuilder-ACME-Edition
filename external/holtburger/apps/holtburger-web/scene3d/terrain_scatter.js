@@ -278,6 +278,11 @@ function _num(v, fallback, lo, hi) {
  * @param {number} [opts.offRoadVergeM=1.5] width of that thinning band.
  * @param {(sample:object, ctx:object)=>boolean} [opts.accept] extra predicate,
  *   applied after the family test. Return false ⇒ degenerate.
+ * @param {(x:number, y:number, z:number)=>boolean} [opts.exclude] 2026-10-08 —
+ *   a caller-owned point test on the instance's ground point, applied right
+ *   after the off-road gate; true ⇒ degenerate (counted in `excludeRejects`).
+ *   Resolved, not retried: when the set it tests against changes the caller
+ *   calls `invalidate()` (terrain_grass.js — the building-interior mask).
  * @param {(ctx:object)=>void} [opts.fill] per-instance consumer callback, called
  *   ONLY for accepted instances, before the pool commits the instance. It may
  *   write any attribute (`ctx.set(name, ...)` or `ctx.arrays[name]` +
@@ -340,6 +345,7 @@ export function createScatterPool(opts = {}) {
 
   const fill = typeof opts.fill === "function" ? opts.fill : null;
   const accept = typeof opts.accept === "function" ? opts.accept : null;
+  const exclude = typeof opts.exclude === "function" ? opts.exclude : null;
 
   // Off-road gate (2026-10-07). Mutable on purpose: `setOffRoad()` lets a live
   // A/B flip it without a reload (the consumer's flag still decides the boot
@@ -528,6 +534,7 @@ export function createScatterPool(opts = {}) {
     nullSamples: 0,
     familyRejects: 0,
     roadRejects: 0,
+    excludeRejects: 0,
     outOfRange: 0,
     noHeight: 0,
     fillRejects: 0,
@@ -790,6 +797,18 @@ export function createScatterPool(opts = {}) {
       }
     }
 
+    // 2026-10-08 — caller exclusion (opts.exclude), e.g. no grass inside a
+    // building's interior cells. A throwing test never rejects.
+    if (exclude) {
+      let hit = false;
+      try { hit = exclude(x, y, s.height) === true; } catch (_) { hit = false; }
+      if (hit) {
+        state.excludeRejects += 1;
+        commitDegenerate(i, x, y, s.height);
+        return;
+      }
+    }
+
     _ctx.index = i;
     _ctx.cellX = gx;
     _ctx.cellY = gy;
@@ -1029,6 +1048,7 @@ export function createScatterPool(opts = {}) {
       offRoad,
       offRoadVergeM,
       roadRejects: state.roadRejects,
+      excludeRejects: state.excludeRejects,
       outOfRange: state.outOfRange,
       noHeight: state.noHeight,
       fillRejects: state.fillRejects,

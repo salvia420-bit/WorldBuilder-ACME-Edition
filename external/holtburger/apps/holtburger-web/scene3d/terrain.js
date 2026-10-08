@@ -1533,6 +1533,7 @@ uniform samplerCube uEnvCube;
 uniform float uIblEnabled;            // 0.0 OFF / 1.0 ON (default)
 uniform float uEnvIntensity;
 uniform float uWaterEnvEnabled;       // terrainplan s4 default tier: water sheen gate
+uniform float uWaterReflect;          // 2026-10-08 — sky reflection strength over water (?waterReflect, default 0.35)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
 uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
 uniform float uRoadTileScale;         // road UV tile rate per LB unit
@@ -3327,38 +3328,64 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // with the normal flattening toward vertical and the env reflection blurring
   // up the mip chain on the way out. Beyond the fade the water reads as the
   // plain retail tile it did before, which is also the conservative answer.
+  //
+  // 2026-10-08 (owner look pass on the 1070, Holtburg river) — three fixes:
+  //   * The ripple field is sampled in the GROUND plane. It read
+  //     vWorldPos.xy, and vWorldPos is three world space (y = height), so on
+  //     flat water the field varied along x alone: one-dimensional ridges
+  //     whose sun glints drew long white streaks across every river and lake
+  //     (the "streaks to the horizon" above were mostly this, not aliasing).
+  //   * Two octaves (1.1 m and 0.47 m, drifting different ways) at a calm
+  //     slope (~0.25 at most) with a tight 300 glint lobe: sparkle in the sun's
+  //     path instead of milky blobs.
+  //   * The sky reflection no longer fades out with the ripples. Past the
+  //     sheen fade the normal is flat, so the reflection is smooth (nothing to
+  //     alias) and far water keeps its grazing-angle Fresnel brightening —
+  //     the strongest "this is water" cue at range. F0 = 0.02 (water). The
+  //     strength is uWaterReflect (?waterReflect, default 0.35) of the sky
+  //     cube's own radiance, which is already dark at night; it used to be
+  //     uEnvIntensity x 0.55 (~0.11, the diurnal AMBIENT term) near the camera
+  //     and nothing at all beyond 160 m. The retail water texture underneath is
+  //     unchanged.
   float sheenFade = 1.0 - smoothstep(30.0, 160.0, vViewDepth);
-  if (uWaterEnvEnabled > 0.5 && waterW > 0.0 && sheenFade > 0.001) {
-    vec2 wuv = vWorldPos.xy * 0.30 + vec2(uTime * 0.35, uTime * 0.22);
-    float wh0 = fragValueNoise2D(wuv);
-    float whx = fragValueNoise2D(wuv + vec2(0.7, 0.0));
-    float why = fragValueNoise2D(wuv + vec2(0.0, 0.7));
-    // AC tangent frame (z-up), same convention the PBR path assumes. The xy
-    // slope is scaled by sheenFade so the surface relaxes to flat with
-    // distance instead of shimmering.
-    vec3 wN = normalize(vec3((wh0 - whx) * 1.4 * sheenFade,
-                             (wh0 - why) * 1.4 * sheenFade,
-                             1.0));
+  if (uWaterEnvEnabled > 0.5 && waterW > 0.0) {
     // View direction in three world space, and the same vector in AC space:
     // world(x,y,z) = ac(x,z,-y) so ac = (w.x, -w.z, w.y).
     vec3 viewW = normalize(vWorldPos - cameraPosition);
     vec3 viewAc = vec3(viewW.x, -viewW.z, viewW.y);
-    // Sun glint (Blinn half-vector). sunDir is the AC-z-up direction TO the
-    // sun; -viewAc is the direction to the eye.
+    vec3 wN = vec3(0.0, 0.0, 1.0);
+    if (sheenFade > 0.001) {
+      // AC ground-plane position (east, north) — the sand sparkle's frame.
+      vec2 gp = vec2(vWorldPos.x, -vWorldPos.z);
+      vec2 wuv = gp * 0.9 + vec2(uTime * 0.35, uTime * 0.22);
+      vec2 wuv2 = gp * 2.13 + vec2(-uTime * 0.29, uTime * 0.41);
+      float wh0 = fragValueNoise2D(wuv);
+      float whx = fragValueNoise2D(wuv + vec2(0.35, 0.0));
+      float why = fragValueNoise2D(wuv + vec2(0.0, 0.35));
+      float vh0 = fragValueNoise2D(wuv2);
+      float vhx = fragValueNoise2D(wuv2 + vec2(0.35, 0.0));
+      float vhy = fragValueNoise2D(wuv2 + vec2(0.0, 0.35));
+      vec2 slope = (vec2(wh0 - whx, wh0 - why) + 0.5 * vec2(vh0 - vhx, vh0 - vhy)) * 0.5;
+      // AC tangent frame (z-up). The slope is scaled by sheenFade so the
+      // surface relaxes to flat with distance instead of shimmering.
+      wN = normalize(vec3(slope * sheenFade, 1.0));
+    }
+    // Sun glint (Blinn half-vector), near-camera only. sunDir is the AC-z-up
+    // direction TO the sun; -viewAc is the direction to the eye.
     vec3 halfAc = normalize(sunDir - viewAc);
-    float glint = pow(clamp(dot(wN, halfAc), 0.0, 1.0), 64.0);
-    vec3 waterSpec = uAcSunColor * glint * 0.30;
+    float glint = pow(clamp(dot(wN, halfAc), 0.0, 1.0), 300.0);
+    vec3 waterSpec = uAcSunColor * glint * 1.5 * sheenFade;
     if (uIblEnabled > 0.5) {
       vec3 nWorldW = normalize(vec3(wN.x, wN.z, -wN.y));
       vec3 reflW = reflect(viewW, nWorldW);
-      // Near camera: low mip, near-mirror sky reflection (water is the one
-      // terrain layer that genuinely reflects the sky). Far: blur up the mip
-      // chain, which is the correct pre-filter for a shrinking footprint.
-      vec3 envSample = textureLod(uEnvCube, reflW, mix(4.0, 0.6, sheenFade)).rgb;
-      float fresW = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
-      waterSpec += envSample * fresW * uEnvIntensity * 0.55;
+      reflW.y = abs(reflW.y); // a steep ripple never mirrors the ground half
+      // Near camera: low mip, near-mirror sky. Far: a blurred sky — the
+      // ripples the flat normal no longer resolves.
+      vec3 envSample = textureLod(uEnvCube, reflW, mix(2.5, 0.6, sheenFade)).rgb;
+      float fresW = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
+      waterSpec += envSample * fresW * uWaterReflect;
     }
-    iblSpec += waterSpec * waterW * sheenFade;
+    iblSpec += waterSpec * waterW;
   }
 
   // === Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN ===========================
@@ -4026,6 +4053,7 @@ export async function resolveTerrainRingOpts(
       pbrEnabled: false,
       pbrNormalAoTex: null,
       waterEnvEnabled: false,
+      waterReflect: WATER_REFLECT_DEFAULT,
       splatNoiseAmp: 0,
       splatNoiseFreq: 0.35,
       splatMacroAmp: 0,
@@ -4759,6 +4787,8 @@ export async function resolveTerrainRingOpts(
     pbrNormalAoTex: scene3d.pbrTerrainState?.nraTex ?? null,
     // terrainplan s4 — water env sheen (default on; ?waterEnv=off escape).
     waterEnvEnabled: readWaterEnvFlag(),
+    // 2026-10-08 — its sky reflection strength (?waterReflect=<0..1.5>).
+    waterReflect: readWaterReflect(),
     // T1 — splat-noise border tunables (?splatNoise=off, ?splatNoiseAmp=,
     // ?splatNoiseFreq=).
     splatNoiseAmp: readSplatNoiseAmp(),
@@ -5267,6 +5297,28 @@ function readPomFlag() {
     return !(typeof v === "string" && v.toLowerCase() === "off");
   } catch (_) {
     return true;
+  }
+}
+
+/** 2026-10-08 — default sky-reflection strength over water (see the sheen block). */
+export const WATER_REFLECT_DEFAULT = 0.35;
+
+/**
+ * 2026-10-08 — `?waterReflect=<0..1.5>`: the fraction of the sky cube's own
+ * radiance water mirrors (times Fresnel). 0 = no sky reflection; missing or
+ * junk = WATER_REFLECT_DEFAULT.
+ */
+export function readWaterReflect(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("waterReflect");
+    if (v == null || v === "") return WATER_REFLECT_DEFAULT;
+    const lv = String(v).toLowerCase();
+    if (lv === "off" || lv === "false" || lv === "no") return 0;
+    const n = Number(lv);
+    return Number.isFinite(n) ? Math.min(1.5, Math.max(0, n)) : WATER_REFLECT_DEFAULT;
+  } catch (_) {
+    return WATER_REFLECT_DEFAULT;
   }
 }
 
@@ -5886,6 +5938,8 @@ export async function bakeTerrainForLandblock(
       uIblEnabled: { value: 0.0 },
       uEnvIntensity: { value: 1.0 },
       uWaterEnvEnabled: { value: opts.waterEnvEnabled ? 1.0 : 0.0 },
+      // 2026-10-08 — sky reflection over water (?waterReflect, default 0.35).
+      uWaterReflect: { value: Number.isFinite(opts.waterReflect) ? opts.waterReflect : WATER_REFLECT_DEFAULT },
       // T1 splat-noise borders (default on; ?splatNoise=off → amp 0 no-op).
       uSplatNoiseAmp: { value: Number.isFinite(opts.splatNoiseAmp) ? opts.splatNoiseAmp : 0.0 },
       uSplatNoiseFreq: { value: Number.isFinite(opts.splatNoiseFreq) ? opts.splatNoiseFreq : 0.35 },

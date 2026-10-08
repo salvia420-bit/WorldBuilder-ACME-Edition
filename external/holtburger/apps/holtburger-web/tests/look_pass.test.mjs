@@ -12,6 +12,11 @@
 //   L7  grass blades take the unflipped ground normal on both faces.
 //   L8  ?swayShadow  swaying casters get the sway-aware depth material.
 //   L9  docs: every new flag has a url-flags.md row.
+//   L10 ?ssao        the half-res AO pass and its grass marker.
+//   L11 ?canopySoften crown-radial normals for tree crowns, trunks/panels kept.
+//   L12 ?retailFill  the hemisphere fill follows the retail diurnal ambient
+//                    (shaded walls keep their share of the sunlit brightness).
+//   L13 ?grassIndoorCull  no grass blades inside building interior cells.
 //
 // Fails on the pre-change code: tone_curve.js / color_grade.js /
 // luminous_night.js / sway_shadow.js do not exist, the composer was AGX-only,
@@ -295,10 +300,126 @@ console.log("\n-- L11 ?canopySoften --------------------------------------------
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L12 ?retailFill ----------------------------------------------");
+{
+  const R = await import("../scene3d/retail_fill.js");
+  check("gain: default 4.5, off = 0, on = default, numbers clamp to [0, 20], junk = default",
+    R.retailFillGain("") === 4.5 && R.retailFillGain("?retailFill=off") === 0 && R.retailFillGain("?retailFill=on") === 4.5
+    && R.retailFillGain("?retailFill=3") === 3 && R.retailFillGain("?retailFill=99") === 20 && R.retailFillGain("?retailFill=x") === 4.5);
+  check("the base is the old constant hemisphere (lighting.js HEMI_INTENSITY)",
+    R.RETAIL_FILL_BASE === 0.15 && src("scene3d/lighting.js").includes("const HEMI_INTENSITY = 0.15;"));
+  const noon = { ambBright: 0.28, dirPitch: 45 };
+  check("noon: gain x ambBright (the 1070 tune, 4.5 x 0.28 = 1.26)", near(R.retailFillIntensity(noon, 4.5, false, ""), 1.26, 1e-9));
+  check("the retail LSCAPE_LIGHT_MINIMUM floor (0.2) holds under a dim ambient",
+    near(R.retailFillIntensity({ ambBright: 0.05, dirPitch: 45 }, 4.5, false, ""), 0.9, 1e-9));
+  check("clamped to 2.0 under a bright ambient", R.retailFillIntensity({ ambBright: 0.9, dirPitch: 45 }, 4.5, false, "") === 2.0);
+  const night = R.retailFillIntensity({ ambBright: 0.28, dirPitch: 0.9 }, 4.5, false, "");
+  check("full night keeps 12 % of the daytime fill (never below the base)", near(night, Math.max(0.15, 1.26 * 0.12), 1e-9), `got ${night}`);
+  check("?nightRamp=off: no night fade", near(R.retailFillIntensity({ ambBright: 0.28, dirPitch: 0.9 }, 4.5, false, "?nightRamp=off"), 1.26, 1e-9));
+  check("off / enclosed cell / no snapshot: the base",
+    R.retailFillIntensity(noon, 0, false, "") === 0.15 && R.retailFillIntensity(noon, 4.5, true, "") === 0.15
+    && R.retailFillIntensity(null, 4.5, false, "") === 0.15);
+  // tickRetailFill against a fake scene: one hemisphere under a parent.
+  const hemi = { isHemisphereLight: true, parent: {}, intensity: 0.15 };
+  const scene3d = { scene: { traverse: (fn) => { fn({}); fn(hemi); } }, atmosphereLights: { _indoorMute: false }, skyDome: { _lastIsIndoor: false } };
+  R.tickRetailFill(scene3d, noon);
+  check("the tick drives the scene's hemisphere light", near(hemi.intensity, 1.26, 1e-9), `got ${hemi.intensity}`);
+  scene3d.skyDome._lastIsIndoor = true; // a SeenOutside cottage interior: lit like the street
+  R.tickRetailFill(scene3d, noon);
+  check("a SeenOutside interior keeps the fill (no cut at the cottage door)", near(hemi.intensity, 1.26, 1e-9));
+  scene3d.atmosphereLights._indoorMute = true; // an enclosed dungeon cell
+  R.tickRetailFill(scene3d, noon);
+  check("an enclosed cell drops to the base", hemi.intensity === 0.15);
+  scene3d.atmosphereLights._indoorMute = false;
+  R.setRetailFillGain(2);
+  R.tickRetailFill(scene3d, noon);
+  check("setGain (live A/B) applies on the next tick", near(hemi.intensity, 0.56, 1e-9) && R.retailFillState().gain === 2);
+  R.setRetailFillGain(4.5);
+  const hemi2 = { isHemisphereLight: true, parent: {}, intensity: 0.15 };
+  hemi.parent = null; // the scene was rebuilt: re-find and re-write even at an unchanged value
+  scene3d.scene = { traverse: (fn) => fn(hemi2) };
+  R.tickRetailFill(scene3d, noon);
+  check("a rebuilt scene's new hemisphere is found and written", near(hemi2.intensity, 1.26, 1e-9));
+  const loop = src("scene3d/loop.js");
+  const iTick = loop.indexOf("tickRetailFill(scene3d, scene3d.skyLightingController._lastState);");
+  check("loop.js imports and ticks it right after the sky snapshot",
+    loop.includes('import { tickRetailFill } from "./retail_fill.js";') && iTick > loop.indexOf("tickLuminousNight(scene3d.skyLightingController._lastState);")
+    && iTick > loop.indexOf("skyLightingController.tick("));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- L13 ?grassIndoorCull -----------------------------------------");
+{
+  const M = await import("../scene3d/grass_interior_mask.js");
+  check("default on; =off escape", M.grassIndoorCullEnabled("") === true && M.grassIndoorCullEnabled("?grassIndoorCull=off") === false);
+  const I4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const rotZ = (deg, tx, ty, tz) => {
+    const c = Math.cos(deg * Math.PI / 180), s = Math.sin(deg * Math.PI / 180);
+    return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, tx, ty, tz, 1];
+  };
+  const prod = M.mat4Mul(rotZ(37, 5, -3, 2), M.mat4AffineInverse(rotZ(37, 5, -3, 2)));
+  check("the affine inverse round-trips", prod.every((v, i) => Math.abs(v - I4[i]) < 1e-9));
+  // worldRoot as measured live: AC Z-up -> three Y-up (rotation -90 deg about X).
+  const ROOT = [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1];
+  const geom = (x0, y0, z0, x1, y1, z1) => ({ boundingBox: { min: { x: x0, y: y0, z: z0 }, max: { x: x1, y: y1, z: z1 } } });
+  // container -> mesh-<id> group (the cell frame) -> fused structure mesh; props hang off the container.
+  function cell(id, local, structure, prop) {
+    const world = M.mat4Mul(ROOT, local);
+    const mg = { name: "mesh-" + id.toString(16), matrixWorld: { elements: world }, children: [] };
+    mg.children.push({ isMesh: true, name: "surfaces-fused-opaque", geometry: structure, matrixWorld: { elements: world }, children: [] });
+    const c = { name: "envcell-" + id.toString(16), children: [mg] };
+    if (prop) c.children.push({ isMesh: true, name: "cellstatic", geometry: prop, matrixWorld: { elements: world }, children: [] });
+    return c;
+  }
+  const root = { matrixWorld: { elements: ROOT } };
+  // A cottage's ground floor at AC (1000, 2000), floor z 50, yawed 90 deg:
+  // local x (+-2 m) runs along world y, local y (+-4 m) along world -x.
+  const ground = cell(0xA9B40100, rotZ(90, 1000, 2000, 50), geom(-2, -4, 0, 2, 4, 3), geom(-30, -30, 0, 30, 30, 1));
+  const cellar = cell(0xA9B40101, rotZ(90, 1000, 2000, 50), geom(-2, -4, -3, 2, 4, 0.1));
+  const upper = cell(0xA9B40102, rotZ(0, 1100, 2000, 53), geom(-3, -3, 0, 3, 3, 3));
+  const map = new Map([[0xA9B40100, ground]]);
+  const scene3d = { cellContainers3d: map, worldRoot: root };
+  const mask = M.createInteriorMask({ checkFrames: 1 });
+  check("the first sync builds the index", mask.sync(scene3d) === true && mask.stats().boxes === 1);
+  check("...an unchanged cell set is a no-op", mask.sync(scene3d) === false);
+  check("a ground point inside the yawed ground-floor cell is culled", mask.contains(1003, 2001, 50.05) === true);
+  check("the box is oriented, not world-aligned (3 m along world y is past the 2 m half-width)", mask.contains(1001, 2003, 50) === false);
+  check("the 0.25 m wall margin catches the wall foot, and no further",
+    mask.contains(1000, 2002.2, 50) === true && mask.contains(1000, 2002.4, 50) === false);
+  check("props are not part of the box (a 30 m prop box culls nothing)", mask.contains(1015, 2015, 50) === false);
+  check("ground 0.5 m under the floor (a slope) is still under the cell; 1.5 m is not",
+    mask.contains(1003, 2001, 49.5) === true && mask.contains(1003, 2001, 48.5) === false);
+  const only = (c) => { const m = M.createInteriorMask({ checkFrames: 1 }); m.sync({ cellContainers3d: new Map([[1, c]]), worldRoot: root }); return m; };
+  check("a cellar (ceiling at the ground) never culls the lawn above it", only(cellar).contains(1003, 2001, 50) === false);
+  check("an upper storey never culls the ground under it", only(upper).contains(1100, 2000, 50) === false);
+  map.set(0xA9B40102, upper);
+  check("a newly loaded cell re-indexes", mask.sync(scene3d) === true && mask.stats().boxes === 2);
+  const bare = { name: "envcell-x", children: [{ name: "mesh-x", matrixWorld: { elements: ROOT }, children: [] }] };
+  map.set(0xA9B40199, bare);
+  check("a cell whose structure mesh has not attached yet is pending, not a box", mask.sync(scene3d) === true && mask.stats().pending === 1);
+  // The pool's exclude hook: refused blades are counted and the rest still live.
+  const { createScatterPool } = await import("../scene3d/terrain_scatter.js");
+  const oracle = { sample: (x, y, out) => Object.assign(out || {}, { code: 1, family: 1, hasHeight: true, height: 10, normal: { x: 0, y: 0, z: 1 }, cornerCodes: null }) };
+  const pool = createScatterPool({
+    count: 1024, radiusM: 30, seed: 3, oracle,
+    attributes: [{ name: "aOffset", itemSize: 3 }, { name: "aScale", itemSize: 1 }],
+    exclude: (x) => x < 400,
+  });
+  pool.update(0.016, 400, 400, 10);
+  const ps = pool.stats();
+  check("the scatter pool's exclude test refuses blades (counted) and the rest live",
+    ps.excludeRejects > 100 && ps.live > 100, `excl ${ps.excludeRejects} live ${ps.live}`);
+  const g = src("scene3d/terrain_grass.js");
+  check("terrain_grass.js feeds the mask to the pool and re-examines on a change",
+    g.includes("exclude: indoorMask ? (x, y, z) => indoorMask.contains(x, y, z) : undefined")
+    && /indoorMask\.sync\([^)]*\)\) pool\.invalidate\(\)/.test(g));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao", "canopySoften", "retailFill", "grassIndoorCull"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }

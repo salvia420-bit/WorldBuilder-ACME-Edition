@@ -51,6 +51,8 @@ const terrainUrl = pathToFileURL(TERRAIN_PATH).href;
 const {
   computeCodeBitmask,
   sharedTerrainTimeSec,
+  readWaterReflect,
+  WATER_REFLECT_DEFAULT,
   PHASE_2_2_WATER_CODES,
   WATER_SURFACE_CODES,
 } = await import(terrainUrl);
@@ -174,7 +176,7 @@ check("bilinear waterW computed once and reused",
 for (const site of [
   ["scroll UV selection", /vec2 uv00 = wc00 \? waterCellUv : cellUv;/],
   ["tint", /result \*= mix\(vec3\(1\.0\), tint, waterW\);/],
-  ["sheen weighting", /iblSpec \+= waterSpec \* waterW \* sheenFade;/],
+  ["sheen weighting", /iblSpec \+= waterSpec \* waterW;/],
   ["POM bypass", /!cellTouchesWater/],
 ]) {
   check(`${site[0]} reads the shared classification`, site[1].test(FRAG));
@@ -184,7 +186,7 @@ console.log("\nTest 5: water sheen runs in BOTH shading modes");
 // It used to live inside `if (uPbrEnabled > 0.5 && !acGouraud)`. Retail
 // Gouraud is default-ON and wins that test, so it never ran.
 const iPbrBlock = FRAG.indexOf("if (uPbrEnabled > 0.5 && !acGouraud) {");
-const iSheen = FRAG.indexOf("if (uWaterEnvEnabled > 0.5 && waterW > 0.0 && sheenFade > 0.001) {");
+const iSheen = FRAG.indexOf("if (uWaterEnvEnabled > 0.5 && waterW > 0.0) {");
 check("sheen block exists", iSheen > 0);
 check("sheen sits OUTSIDE the pbr/!acGouraud block", iSheen > iPbrBlock,
   "and after it, so iblSpec from the generic material term is already resolved");
@@ -193,7 +195,15 @@ check(
   iSheen > FRAG.indexOf("// === 2026-07-31 (water-fix) — WATER SURFACE SHEEN")
 );
 check("sheen scrolls in world space off the shared clock",
-  /vec2 wuv = vWorldPos\.xy \* 0\.30 \+ vec2\(uTime \* 0\.35, uTime \* 0\.22\);/.test(FRAG));
+  /vec2 wuv = gp \* 0\.9 \+ vec2\(uTime \* 0\.35, uTime \* 0\.22\);/.test(FRAG));
+// 2026-10-08 — the ripple field used to read vWorldPos.xy. vWorldPos is three
+// WORLD space (y = height), so on flat water that field varied along x alone:
+// one-dimensional ridges whose glints drew long white streaks across every
+// river (owner, Holtburg, 1070). It must sample the AC ground plane.
+check("the ripple field is sampled in the ground plane, not (x, height)",
+  /vec2 gp = vec2\(vWorldPos\.x, -vWorldPos\.z\);/.test(FRAG) && !/vWorldPos\.xy \* 0\.30/.test(FRAG));
+check("two ripple octaves drift different ways",
+  /vec2 wuv2 = gp \* 2\.13 \+ vec2\(-uTime \* 0\.29, uTime \* 0\.41\);/.test(FRAG));
 // The noise normal is point-sampled with no derivative-aware filter, so past
 // a few tens of metres one pixel spans many wave periods and the specular
 // aliases into long streaks across the whole sea (observed live, attributed by
@@ -201,9 +211,22 @@ check("sheen scrolls in world space off the shared clock",
 check("sheen is distance-faded (anti-alias, live-observed streaks)",
   /float sheenFade = 1\.0 - smoothstep\(30\.0, 160\.0, vViewDepth\);/.test(FRAG));
 check("the wave normal flattens with distance",
-  /\(wh0 - whx\) \* 1\.4 \* sheenFade/.test(FRAG) && /\(wh0 - why\) \* 1\.4 \* sheenFade/.test(FRAG));
+  /wN = normalize\(vec3\(slope \* sheenFade, 1\.0\)\);/.test(FRAG));
 check("the env reflection blurs up the mip chain with distance",
-  /textureLod\(uEnvCube, reflW, mix\(4\.0, 0\.6, sheenFade\)\)/.test(FRAG));
+  /textureLod\(uEnvCube, reflW, mix\(2\.5, 0\.6, sheenFade\)\)/.test(FRAG));
+// 2026-10-08 — the glint stays near-camera (it is what aliases); the sky
+// reflection does not fade: past the sheen fade the normal is flat, so far
+// water keeps its grazing-angle Fresnel brightening at uWaterReflect.
+check("the glint is distance-faded, the sky reflection is not",
+  /vec3 waterSpec = uAcSunColor \* glint \* 1\.5 \* sheenFade;/.test(FRAG)
+  && /waterSpec \+= envSample \* fresW \* uWaterReflect;/.test(FRAG));
+check("?waterReflect: default 0.35, off = 0, numbers clamp to [0, 1.5], junk = default",
+  WATER_REFLECT_DEFAULT === 0.35 && readWaterReflect("") === 0.35 && readWaterReflect("?waterReflect=off") === 0
+  && readWaterReflect("?waterReflect=0.8") === 0.8 && readWaterReflect("?waterReflect=9") === 1.5
+  && readWaterReflect("?waterReflect=x") === 0.35);
+check("water's own F0 (0.02) and the uWaterReflect uniform",
+  /float fresW = 0\.02 \+ 0\.98 \* pow/.test(FRAG) && /uniform float uWaterReflect;/.test(FRAG)
+  && /uWaterReflect: \{ value: Number\.isFinite\(opts\.waterReflect\) \? opts\.waterReflect : WATER_REFLECT_DEFAULT \}/.test(SRC));
 check("sheen adds no light and clones no per-instance program key (VFX invariant)",
   !/customProgramCacheKey/.test(SRC) && !/new THREE\.\w*Light\(/.test(SRC));
 

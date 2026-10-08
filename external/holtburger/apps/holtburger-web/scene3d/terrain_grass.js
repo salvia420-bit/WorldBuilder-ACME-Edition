@@ -110,6 +110,9 @@
 
 import { registerTerrainVfx, wireframeActive } from "./terrain_vfx.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
+// 2026-10-08 — no blades inside building interiors (owner: "grass poking
+// through the building interior cells").
+import { createInteriorMask, grassIndoorCullEnabled } from "./grass_interior_mask.js";
 import { FAM_GRASS, familyForCode } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL, scatterHash01 } from "./terrain_scatter.js";
 import { ensureVfxHashVarying, VFX_HASH_ASSIGN_VERTEX } from "./vfx/per_instance.js";
@@ -650,6 +653,8 @@ export function createTerrainGrassProvider(opts = {}) {
   let lastCtx = null;
   let stamps = 0;
   let trailBound = false;
+  // `?grassIndoorCull` (default on): EnvCell boxes the pool's exclude test reads.
+  const indoorMask = grassIndoorCullEnabled(opts.search) ? createInteriorMask() : null;
 
   // Uniform bag — one `{value}` object per uniform, bound BY REFERENCE into the
   // compiling shader (plan §5.6) so the per-frame writes below reach the GPU
@@ -749,6 +754,8 @@ export function createTerrainGrassProvider(opts = {}) {
         // the dithered corner-code draw never even runs on the road.
         offRoad: cfg.offRoad === true,
         offRoadVergeM: GRASS_DEFAULTS.roadVergeM,
+        // 2026-10-08 — and none inside a building (grass_interior_mask.js).
+        exclude: indoorMask ? (x, y, z) => indoorMask.contains(x, y, z) : undefined,
         fill: makeGrassFill(seed),
         name: "terrain-grass",
       });
@@ -799,6 +806,9 @@ export function createTerrainGrassProvider(opts = {}) {
       if (!built) build(ctx);
       if (!pool) return;
       if (!ctx || ctx.hasPlayer !== true) return;
+      // The loaded interior cells changed (a building's interior baked or was
+      // evicted): re-examine every blade over the pool's amortised laps.
+      if (indoorMask && indoorMask.sync(ctx.scene3d || opts.scene3d || null)) pool.invalidate();
 
       // The single time source (plan §2.3) — the same `frameTime.tsSec` that
       // `tickVfxOscillators` writes into VFX_GLOBALS.uTime, so the tree sway and
@@ -854,6 +864,9 @@ export function createTerrainGrassProvider(opts = {}) {
         // many blade placements the road has refused so far.
         offRoad: ps ? ps.offRoad : !!(cfg && cfg.offRoad),
         roadRejects: ps ? ps.roadRejects : 0,
+        // 2026-10-08 — blades refused inside building interiors, and the mask.
+        indoorRejects: ps ? ps.excludeRejects : 0,
+        indoorCull: indoorMask ? indoorMask.stats() : null,
         degenerate: ps ? ps.degenerate : 0,
         radiusM: ps ? ps.radiusM : (cfg ? cfg.radiusM : 0),
         stomp: !!(cfg && cfg.stomp),

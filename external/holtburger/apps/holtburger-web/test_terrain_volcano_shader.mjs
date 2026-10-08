@@ -79,7 +79,7 @@ const countOf = (hay, needle) => hay.split(needle).length - 1;
 const MARKER = "=== Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN ===";
 const iPomMarch = FRAG.indexOf("cellUv += uvOff;");
 const iWaterScroll = FRAG.indexOf("vec2 waterCellUv = cellUv;");
-const iWaterSheen = FRAG.indexOf("iblSpec += waterSpec * waterW * sheenFade;");
+const iWaterSheen = FRAG.indexOf("iblSpec += waterSpec * waterW;");
 const iVolcW = FRAG.indexOf("float volcW = clamp(");
 const iBlock = FRAG.indexOf(MARKER);
 const iFragColor = FRAG.indexOf("fragColor = vec4(");
