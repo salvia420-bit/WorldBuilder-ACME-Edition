@@ -27,12 +27,17 @@ pub struct ServerTimeSync {
 }
 
 /// F4-4 (bughunt 2026-06-09) — true for a `CellLandblock` terrain TYPE code
-/// (5-bit, 0..31) that is water. Matches the renderer's `TERRAIN_WATER_CODES`
-/// {16,17,18,19,20,22,23} (the `Water*` / `FauxWater*` terrain types; code 21
-/// is excluded). Used to classify per-vertex water for the EntirelyWater
-/// walk-block.
-fn is_water_terrain_code(code: u8) -> bool {
-    matches!(code & 0x1f, 16 | 17 | 18 | 19 | 20 | 22 | 23)
+/// (5-bit, 0..31) that is water. `retail` (landdefs-terrain-3,
+/// `?fallbackWaterRetail`, DEFAULT ON): retail `TERRAIN_SURF_CHAR`
+/// (acclient.c:41303) — only `16..=20` are WATER; 21-31 (incl. the FauxWater
+/// 22/23) are SOLID, the same set the faithful path uses. Legacy (`=off`): the
+/// renderer's `TERRAIN_WATER_CODES` {16,17,18,19,20,22,23}.
+fn is_water_terrain_code(code: u8, retail: bool) -> bool {
+    if retail {
+        matches!(code & 0x1f, 16..=20)
+    } else {
+        matches!(code & 0x1f, 16 | 17 | 18 | 19 | 20 | 22 | 23)
+    }
 }
 
 /// The authoritative state of the game world.
@@ -86,6 +91,26 @@ pub struct WorldState {
     /// world creation by the wasm bundle; the native runtime keeps the
     /// default.
     pub(crate) server_run_rate_enabled: bool,
+    /// createobj-5 (2026-10-08 follow-ups) — runtime carrier of
+    /// `?lifecycleStampGates` (`=off`/`0`/`false` opt out; DEFAULT ON). ON:
+    /// the per-object stamp gates of retail `SmartBox::Handle*` apply to
+    /// DeleteObject (instance; the local player is ignored), PickupEvent /
+    /// ParentEvent (position channel), ObjDescEvent (visual-desc channel)
+    /// and the instance leg of UpdateMotion / VectorUpdate. OFF: those
+    /// messages apply unconditionally (the pre-2026-10-08 behaviour). Set
+    /// once at world creation by the wasm bundle; native keeps the default.
+    pub(crate) lifecycle_stamp_gates_enabled: bool,
+    /// held-3 (2026-10-08 follow-ups) — runtime carrier of
+    /// `?objectBlobQueue` (`=off`/`0`/`false` opt out; DEFAULT ON; also
+    /// needs the stamp gates above). ON: a ParentEvent / PickupEvent naming
+    /// an object the client does not have yet (or a newer instance of it)
+    /// is queued until that object's ObjectCreate and replayed then (retail
+    /// `QueueBlobForObject` / `ProcessObjectNetBlobs`, see
+    /// `state::blob_queue`). Set once at world creation by the wasm bundle;
+    /// the native runtime never queues.
+    pub(crate) object_blob_queue_enabled: bool,
+    /// held-3 — the queued blobs themselves (`state::blob_queue`).
+    pub(crate) object_blobs: super::blob_queue::ObjectBlobQueue,
     /// Last PlayerDescription private property dump (lvl=0 soak bug,
     /// 2026-07-18). ACE sends the local player's Level/XP/etc. exactly once
     /// per login; any path that rebuilds the player entity from a public
@@ -119,6 +144,18 @@ pub struct WorldState {
     /// to walk into a fully-water 24 m cell (ACE `LandCell.FindEnvCollisions`
     /// EntirelyWater => Collided). Empty for LBs whose codes weren't sent.
     pub(crate) terrain_water: std::collections::HashMap<u32, [bool; 81]>,
+    /// landdefs-terrain-3 (2026-10-08 follow-ups) — runtime carrier of
+    /// `?fallbackWaterRetail` (`=off`/`0`/`false` opt out; DEFAULT ON) for the
+    /// heightfield fallback's water model (the path used while the begin
+    /// landblock's terrain is not yet resident in the `SpatialScene`, and
+    /// under `?faithfulOutdoor=off`). ON = retail and the faithful path:
+    /// water codes `16..=20` only, the resting floor `water_depth` BELOW the
+    /// terrain plane ([`Self::water_floor_offset_at`]), and only an
+    /// entirely-water LANDBLOCK is a wall ([`Self::is_entirely_water_cell_at`],
+    /// with `?openSeaWall`). OFF = the F4-4 model (22/23 water, raised floor,
+    /// every all-water CELL a wall). Set once at world creation by the wasm
+    /// bundle, before any terrain is populated; native keeps the default.
+    pub(crate) fallback_water_retail: bool,
     /// Cylsphere radius for each loaded SetupModel id (`0x02xxxxxx`),
     /// in metres. Populated by the wasm bundle via
     /// [`WorldState::register_setup_radius`] as the renderer loads
@@ -665,9 +702,13 @@ impl WorldState {
             open_containers: std::collections::HashSet::new(),
             container_placement: std::collections::HashMap::new(),
             server_run_rate_enabled: true,
+            lifecycle_stamp_gates_enabled: true,
+            object_blob_queue_enabled: true,
+            object_blobs: super::blob_queue::ObjectBlobQueue::default(),
             player_description_properties: None,
             terrain_heights: std::collections::HashMap::new(),
             terrain_water: std::collections::HashMap::new(),
+            fallback_water_retail: true,
             setup_radii: std::collections::HashMap::new(),
             setup_part_dims: std::collections::HashMap::new(),
             setup_physics_geometry: std::collections::HashMap::new(),
@@ -722,11 +763,29 @@ impl WorldState {
         if codes.len() != 81 {
             return;
         }
+        let retail = self.fallback_water_retail;
         let mut water = [false; 81];
         for (i, &c) in codes.iter().enumerate() {
-            water[i] = is_water_terrain_code(c);
+            water[i] = is_water_terrain_code(c, retail);
         }
         self.terrain_water.insert(landblock_id, water);
+    }
+
+    /// landdefs-terrain-3: install `?fallbackWaterRetail` (see the field doc).
+    pub fn set_fallback_water_retail(&mut self, enabled: bool) {
+        self.fallback_water_retail = enabled;
+    }
+
+    /// landdefs-terrain-3 — the heightfield fallback's resting floor relative
+    /// to the terrain plane in water. Retail (`?fallbackWaterRetail`, default):
+    /// `OBJECTINFO::validate_walkable` adds `water_depth` to the signed
+    /// distance (acclient.c:314223-314227), so the sphere rests `water_depth`
+    /// BELOW the plane — `-water_depth_at` (the faithful path's
+    /// `objectinfo.rs` port does the same). Legacy: the F4-4 `+water_depth_at`
+    /// raise. `0.0` on dry ground / an uncached grid either way.
+    pub fn water_floor_offset_at(&self, world_x: f32, world_y: f32) -> f32 {
+        let depth = self.water_depth_at(world_x, world_y);
+        if self.fallback_water_retail { -depth } else { depth }
     }
 
     /// F4-4 — true when world-frame `(x, y)` sits inside a fully-water 24 m
@@ -736,6 +795,15 @@ impl WorldState {
     /// `false` when the landblock's water grid isn't cached (don't block on
     /// missing data) and for partially-water cells (the wading-depth contact-
     /// plane raise is a documented follow-on).
+    ///
+    /// landdefs-terrain-3 (`?fallbackWaterRetail`, default): retail walls only
+    /// an ENTIRELY-water LANDBLOCK (`CLandBlockStruct::CalcWater`
+    /// acclient.c:354566 — every vertex water; `CLandCell::find_env_collisions`
+    /// :355030-355033), and only with `?openSeaWall`; an all-water cell in a
+    /// partly-water block is walkable (the floor sits 0.9 below the plane,
+    /// [`Self::water_floor_offset_at`]). The fallback's movers are the local
+    /// player (never the viewer or a missile — the retail exemptions). The
+    /// per-CELL wall below is the legacy (`=off`) model.
     pub fn is_entirely_water_cell_at(&self, world_x: f32, world_y: f32) -> bool {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
@@ -751,6 +819,9 @@ impl WorldState {
         let Some(water) = self.terrain_water.get(&landblock_id) else {
             return false;
         };
+        if self.fallback_water_retail {
+            return self.scene.open_sea_wall_enabled() && water.iter().all(|&w| w);
+        }
         let local_x = world_x - lb_x as f32 * LB_M;
         let local_y = world_y - lb_y as f32 * LB_M;
         let cx0 = (local_x / VERT_M).clamp(0.0, 8.0).floor() as usize;

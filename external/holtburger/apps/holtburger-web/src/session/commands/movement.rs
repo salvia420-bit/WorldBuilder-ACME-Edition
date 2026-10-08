@@ -1702,6 +1702,22 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                                 f32_payload: None,
                             });
                         }
+                        // R3 moveto-4 (2026-10-08 follow-ups): the
+                        // remote MoveToManager node-motion edges this
+                        // tick (turn-in-place / walk / run / stop) —
+                        // retail's remote animation follows the node
+                        // (`MoveToManager::_DoMotion`, acclient.c:344753).
+                        // JS `applyRemoteMoveToPhase` plays them
+                        // (`?remoteMoveToPhase=off` ignores them).
+                        for (guid, motion) in w.scene.take_remote_moveto_phase_changes() {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_REMOTE_MOVETO_PHASE,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(guid)),
+                                u32_payload_2: Some(motion),
+                                f32_payload: None,
+                            });
+                        }
                     }
                     // A2-P3 (W3+ S9): publish the local
                     // sticky target for the diag getter —

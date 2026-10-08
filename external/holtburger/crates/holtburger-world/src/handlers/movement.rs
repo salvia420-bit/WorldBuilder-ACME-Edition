@@ -155,12 +155,18 @@ pub(crate) fn handle_message(
             // Retail CPhysics::SetObjectMovement stamp gate for REMOTE
             // objects (the local player's own gate lives in
             // player/mutations.rs). Remote motion D8.
+            // createobj-5 (2026-10-08 follow-ups): plus the instance leg of
+            // the 0xF74C dispatch (acclient.c:392816-392833) — an OLDER
+            // instance is dropped before any stamp is recorded (a newer one
+            // is queued by retail; no blob queue here, so it applies).
+            let instance_gate_on = state.lifecycle_stamp_gates_enabled;
             if guid != state.player.guid
                 && let Some(entity) = state.entities.get_mut(guid)
-                && !entity.accept_movement_sequences(
-                    data.movement_sequence,
-                    data.server_control_sequence,
-                )
+                && ((instance_gate_on && entity.is_older_instance(data.object_instance_sequence))
+                    || !entity.accept_movement_sequences(
+                        data.movement_sequence,
+                        data.server_control_sequence,
+                    ))
             {
                 return false;
             }
@@ -229,6 +235,17 @@ pub(crate) fn handle_message(
                 ));
                 true
             } else {
+                // createobj-5 (2026-10-08 follow-ups): retail
+                // `SmartBox::HandleVectorUpdate` (acclient.c:144434-144470)
+                // drops an OLDER instance before `DoVectorUpdate`'s stamp.
+                if state.lifecycle_stamp_gates_enabled
+                    && state
+                        .entities
+                        .get(data.guid)
+                        .is_some_and(|entity| entity.is_older_instance(data.instance_sequence))
+                {
+                    return false;
+                }
                 state.update_entity_velocity(
                     data.guid,
                     data.velocity,

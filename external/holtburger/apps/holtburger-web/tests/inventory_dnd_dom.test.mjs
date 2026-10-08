@@ -105,7 +105,14 @@ const wpos = await import(pathToFileURL(path.join(APP, "ui", "ac_window_position
 const kit = await import(pathToFileURL(path.join(APP, "ui", "hud_kit.js")).href);
 // use-4 (2026-10-08 round 2): activateItem spends the shared retail use throttle.
 const tcycle = await import(pathToFileURL(path.join(APP, "scene3d", "target_cycle.js")).href);
-globalThis.__T = { ...helpers, ...drag, ...wpos, ...kit, consumeUseThrottle: tcycle.consumeUseThrottle };
+// use-3 remainder (2026-10-08 follow-ups): corpse-loot-bar's kind:13
+// move-failure handler helpers (the real ones).
+const weenieErr = await import(pathToFileURL(path.join(APP, "plugins", "weenie_error_messages.js")).href);
+globalThis.__T = {
+  ...helpers, ...drag, ...wpos, ...kit, consumeUseThrottle: tcycle.consumeUseThrottle,
+  clearsGroundObjectOnFailure: weenieErr.clearsGroundObjectOnFailure,
+  moveFailCloseGroundEnabled: weenieErr.moveFailCloseGroundEnabled,
+};
 const real = (names) => Object.fromEntries(names.map((n) => [n, `globalThis.__T.${n}`]));
 const COMMON = {
   setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
@@ -156,6 +163,7 @@ const lootMod = load("plugins/corpse-loot-bar.js", ["openFor", "closeBar", "stat
     "MAIN_PACK_KEY", "PACKS_KEY", "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction",
     "planBackpackPlacement",
     "pendingOps", "showItemTooltip", "hideItemTooltip", "showItemToast", "localPlayerGuid",
+    "clearsGroundObjectOnFailure", "moveFailCloseGroundEnabled",
   ]),
 });
 

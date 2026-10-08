@@ -99,6 +99,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::BreakAllegiance { .. }
         | SessionCommand::AddFriend { .. }
         | SessionCommand::RemoveFriend { .. }
+        | SessionCommand::ClearFriends { .. }
         | SessionCommand::ModifyCharacterSquelch { .. }
         | SessionCommand::ModifyAccountSquelch { .. }
         | SessionCommand::ModifyGlobalSquelch { .. }
@@ -130,6 +131,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::SelectCharacter { .. }
         | SessionCommand::CreateCharacter { .. }
         | SessionCommand::DeleteCharacter { .. }
-        | SessionCommand::RestoreCharacter { .. }) => lifecycle::handle(ctx, c).await,
+        | SessionCommand::RestoreCharacter { .. }
+        | SessionCommand::LogOff { .. }) => lifecycle::handle(ctx, c).await,
     }
 }

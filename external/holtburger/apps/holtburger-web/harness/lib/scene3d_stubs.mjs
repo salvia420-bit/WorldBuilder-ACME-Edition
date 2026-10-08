@@ -106,11 +106,23 @@ export const MATERIALS_JS_STUBS = Object.freeze({
  *     default-ON arms need limbs.js/ragdoll.js, which no suite splices)
  *   - readRigModuleFlag (setup_rig.js) → false
  */
+// 2026-10-08 (moveto-4 follow-up): entities.js reads `remoteMoveToPhaseEnabled()`
+// at module load (`REMOTE_MOVETO_PHASE_ON`). The module is pure, so each name
+// is the GENUINE export of an inlined copy (an IIFE expression, so a suite that
+// splices both preludes gets each name exactly once).
+const genuineRemoteMoveToPhase = (name) =>
+  "(() => {\n" +
+  stripExports(readFileSync(new URL("../../scene3d/remote_moveto_phase.js", import.meta.url), "utf8")) +
+  `\nreturn ${name};\n})()`;
+
 export const ENTITIES_JS_TOPLEVEL_STUBS = Object.freeze({
   readSelectionIndicatorMode: '() => "brackets"',
   limbDamageEnabled: "() => false",
   ragdollEnabled: "() => false",
   readRigModuleFlag: "() => false",
+  remoteMoveToPhaseEnabled: genuineRemoteMoveToPhase("remoteMoveToPhaseEnabled"),
+  planRemoteMoveToPhase: genuineRemoteMoveToPhase("planRemoteMoveToPhase"),
+  remoteMoveToHintReapply: genuineRemoteMoveToPhase("remoteMoveToHintReapply"),
 });
 
 /**

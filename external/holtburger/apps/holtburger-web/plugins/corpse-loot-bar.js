@@ -52,6 +52,7 @@ import {
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { takeInventorySnapshot, decideItemDrop, DROP_TARGET } from "./inventory_helpers.js";
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
+import { clearsGroundObjectOnFailure, moveFailCloseGroundEnabled } from "./weenie_error_messages.js";
 import {
   beginItemDrag,
   registerDropZone,
@@ -805,6 +806,20 @@ function onContainerClosed(ev) {
   if (overlayEl?.dataset.open === "1" && g && g === (state.corpseGuid >>> 0)) closeBar();
 }
 
+// use-3 remainder (2026-10-08 follow-ups): a UseDone move failure
+// (MotionFailure / ObjectGone / NoObject / CantGetThere) runs retail
+// HandleFailureEvent's `ClientUISystem::SetGroundObject(0, 1)`
+// (acclient.c:415858-415867, :401643-401687): the open ground container
+// closes, the server is told (closeBar sends NoLongerViewingContents — the
+// askServer leg) and a selection inside it is dropped (closeBar clears ours).
+// Nothing happens when no ground container is open. `?moveFailCloseGround=off`.
+function onUseFailedClearGroundObject(ev) {
+  const p = ev?.detail ?? ev ?? {};
+  if (!clearsGroundObjectOnFailure(p.u32Payload)) return;
+  if (!moveFailCloseGroundEnabled()) return;
+  if (overlayEl?.dataset.open === "1" && state.corpseGuid) closeBar();
+}
+
 // Subscribe at module-load (container-panel's poll-for-bus pattern). The
 // kind=21 routing itself lives in container-panel.js (it delegates every
 // ground container here via window.__corpseLootBar).
@@ -815,6 +830,7 @@ function trySubscribe() {
   client.events.on("playerInventoryChanged", onInvChanged);
   client.events.on("containerClosed", onContainerClosed);
   client.events.on("kind:13", onLootAllWeenieError);
+  client.events.on("kind:13", onUseFailedClearGroundObject);
   return true;
 }
 if (typeof window !== "undefined") {

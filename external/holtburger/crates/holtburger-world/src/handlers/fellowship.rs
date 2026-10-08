@@ -20,9 +20,14 @@ pub(crate) fn handle_event(
                     .iter()
                     .any(|member| member.guid == state.player.guid)
             {
+                // fellowship-2: retail `RecvNotice_FellowshipUpdate`
+                // (acclient.c:203573-203648) — create vs recruit by who leads.
                 events.push(WorldEvent::FellowshipActivity(
                     FellowshipActivity::YouJoined {
                         fellowship_name: fellowship.name.clone(),
+                        leader_name: fellowship.leader_name(),
+                        self_is_leader: fellowship.is_led_by(state.player.guid),
+                        open: fellowship.open,
                     },
                 ));
             }
@@ -48,13 +53,17 @@ pub(crate) fn handle_event(
 
             if member_is_new {
                 if member.guid == state.player.guid {
-                    let fellowship_name = state
-                        .fellowship
-                        .as_ref()
-                        .map(|fellowship| fellowship.name.clone())
-                        .unwrap_or_default();
+                    let fellowship = state.fellowship.as_ref();
                     events.push(WorldEvent::FellowshipActivity(
-                        FellowshipActivity::YouJoined { fellowship_name },
+                        FellowshipActivity::YouJoined {
+                            fellowship_name: fellowship
+                                .map(|fellowship| fellowship.name.clone())
+                                .unwrap_or_default(),
+                            leader_name: fellowship.and_then(|fellowship| fellowship.leader_name()),
+                            self_is_leader: fellowship
+                                .is_some_and(|fellowship| fellowship.is_led_by(state.player.guid)),
+                            open: fellowship.is_some_and(|fellowship| fellowship.open),
+                        },
                     ));
                 } else {
                     events.push(WorldEvent::FellowshipActivity(
@@ -77,13 +86,20 @@ pub(crate) fn handle_event(
             true
         }
         GameEvent::FellowshipDisband => {
-            let fellowship_name = state
-                .fellowship
-                .as_ref()
-                .map(|fellowship| fellowship.name.clone());
+            // fellowship-2: retail `gmFellowshipUI::FellowshipDisbanded`
+            // (acclient.c:203000-203040) reads `_leader` BEFORE deleting.
+            let fellowship = state.fellowship.as_ref();
+            let fellowship_name = fellowship.map(|fellowship| fellowship.name.clone());
+            let leader_name = fellowship.and_then(|fellowship| fellowship.leader_name());
+            let self_is_leader =
+                fellowship.is_some_and(|fellowship| fellowship.is_led_by(state.player.guid));
             state.fellowship = None;
             events.push(WorldEvent::FellowshipActivity(
-                FellowshipActivity::FellowshipDisbanded { fellowship_name },
+                FellowshipActivity::FellowshipDisbanded {
+                    fellowship_name,
+                    leader_name,
+                    self_is_leader,
+                },
             ));
             events.push(WorldEvent::FellowshipStateUpdated(None));
             true
@@ -110,6 +126,21 @@ fn apply_member_departure(
                 .map(|member| member.name.clone())
         })
         .unwrap_or_else(|| format!("0x{:08X}", player_guid.0));
+    // fellowship-2: retail `FellowQuit` / `FellowDismissed`
+    // (acclient.c:203045-203190) read the fellowship name and `_leader`
+    // BEFORE `RemoveFellow` — capture them before any state change.
+    let fellowship_name = state
+        .fellowship
+        .as_ref()
+        .map(|fellowship| fellowship.name.clone());
+    let leader_name = state
+        .fellowship
+        .as_ref()
+        .and_then(|fellowship| fellowship.leader_name());
+    let self_is_leader = state
+        .fellowship
+        .as_ref()
+        .is_some_and(|fellowship| fellowship.is_led_by(state.player.guid));
 
     let mut clear_fellowship = player_guid == state.player.guid;
 
@@ -124,9 +155,12 @@ fn apply_member_departure(
     }
 
     let activity = match (player_guid == state.player.guid, dismissed) {
-        (true, true) => FellowshipActivity::YouWereDismissed,
-        (true, false) => FellowshipActivity::YouLeft,
-        (false, true) => FellowshipActivity::MemberWasDismissed { member_name },
+        (true, true) => FellowshipActivity::YouWereDismissed { leader_name },
+        (true, false) => FellowshipActivity::YouLeft { fellowship_name },
+        (false, true) => FellowshipActivity::MemberWasDismissed {
+            member_name,
+            self_is_leader,
+        },
         (false, false) => FellowshipActivity::MemberLeft { member_name },
     };
     events.push(WorldEvent::FellowshipActivity(activity));

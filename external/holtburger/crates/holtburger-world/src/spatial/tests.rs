@@ -4205,6 +4205,34 @@ mod remote_pose_driver {
         assert_eq!(v.z, 0.0, "a remote's jump_v_z is 0 (no jump_extent)");
     }
 
+    /// R3 moveto-4 (2026-10-08 follow-ups): the remote MoveTo node motion
+    /// is recorded as EDGES for the remote rig's animation phase — turn →
+    /// run → stop yields each exactly once, an unchanged motion records
+    /// nothing (a steady chase costs nothing), a guid with no body is
+    /// ignored, and the drain empties the list.
+    #[test]
+    fn remote_moveto_phase_records_edges_once() {
+        const TURN_RIGHT: u32 = 0x6500_000D;
+        const RUN_FORWARD: u32 = 0x4400_0007;
+        let (mut scene, _body_id) = arc_scene(arc_pose(50.0, 50.0, ARC_TERRAIN));
+        scene.note_remote_moveto_motion(GUID, 0);
+        assert!(scene.take_remote_moveto_phase_changes().is_empty(), "idle stays idle");
+        scene.note_remote_moveto_motion(GUID, TURN_RIGHT);
+        scene.note_remote_moveto_motion(GUID, TURN_RIGHT);
+        assert_eq!(scene.remote_moveto_motion(GUID), TURN_RIGHT);
+        scene.note_remote_moveto_motion(GUID, RUN_FORWARD);
+        scene.note_remote_moveto_motion(GUID, 0);
+        assert_eq!(
+            scene.take_remote_moveto_phase_changes(),
+            vec![(GUID, TURN_RIGHT), (GUID, RUN_FORWARD), (GUID, 0)]
+        );
+        assert!(scene.take_remote_moveto_phase_changes().is_empty(), "drained");
+        let stranger = Guid(0x8000_9999);
+        scene.note_remote_moveto_motion(stranger, RUN_FORWARD);
+        assert!(scene.take_remote_moveto_phase_changes().is_empty(), "no body: ignored");
+        assert_eq!(scene.remote_moveto_motion(stranger), 0);
+    }
+
     // === OpenAC comparison 2026-10-04, remote motion D5: remote MoveTo. ===
 
     /// A D5 steer for the tests: `forward` Some(run) = walk node, None =

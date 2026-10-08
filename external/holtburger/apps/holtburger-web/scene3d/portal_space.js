@@ -614,6 +614,9 @@ export function signalPortalArrived(info) {
 export function isPortalSpaceActive() {
   return _seq.isActive();
 }
+// streaming-teleport-5: ui/portal_busy.js reads this (retail
+// CPlayerSystem::teleportInProgress spans the tunnel through the fade-in).
+try { globalThis.__isPortalSpaceActive = isPortalSpaceActive; } catch (_) {}
 
 /** True while the tunnel owns the screen (world submission skipped). */
 export function portalSpaceOwnsFrame() {

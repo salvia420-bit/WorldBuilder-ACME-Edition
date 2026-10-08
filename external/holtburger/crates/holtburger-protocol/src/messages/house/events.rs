@@ -250,7 +250,13 @@ impl ProtocolPack for HouseProfileEventData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HouseUpdateRestrictionsEventData {
-    pub sequence: u32,
+    /// Per-object `UpdateRestrictionDB` timestamp. ACE writes
+    /// `obj.Sequences.GetNextSequence(SequenceType.UpdateRestrictionDB)`,
+    /// which is a `ByteSequence` (1 byte on the wire, ByteSequence.cs
+    /// `NextBytes => new byte[] { NextValue }`); retail reads it as the
+    /// 1-byte house-restriction TS (`UpdateHouseRestrictionTS`). A u32 read
+    /// here shifted every later field by 3 bytes.
+    pub sequence: u8,
     pub object_guid: Guid,
     pub version: u32,
     pub open_status: u32,
@@ -260,11 +266,11 @@ pub struct HouseUpdateRestrictionsEventData {
 
 impl ProtocolUnpack for HouseUpdateRestrictionsEventData {
     fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
-        if *offset + 8 > data.len() {
+        if *offset + 5 > data.len() {
             return None;
         }
-        let sequence = LittleEndian::read_u32(&data[*offset..*offset + 4]);
-        *offset += 4;
+        let sequence = data[*offset];
+        *offset += 1;
         let object_guid = Guid::unpack(data, offset)?;
 
         if *offset + 12 > data.len() {
@@ -300,7 +306,7 @@ impl ProtocolUnpack for HouseUpdateRestrictionsEventData {
 
 impl ProtocolPack for HouseUpdateRestrictionsEventData {
     fn pack(&self, buf: &mut Vec<u8>) {
-        buf.write_u32::<LittleEndian>(self.sequence).unwrap();
+        buf.push(self.sequence);
         self.object_guid.pack(buf);
         buf.write_u32::<LittleEndian>(self.version).unwrap();
         buf.write_u32::<LittleEndian>(self.open_status).unwrap();
@@ -429,5 +435,70 @@ mod tests {
         let mut packed = Vec::new();
         data.pack(&mut packed);
         assert_pack_unpack_parity(&packed, &data);
+    }
+
+    /// Bytes laid out exactly as ACE's GameEventHouseUpdateRestrictions
+    /// writes them: u8 UpdateRestrictionDB sequence, u32 house guid, then
+    /// RestrictionDB {u32 version 0x10000002, u32 open status, u32 monarch,
+    /// PackableHashTable header (u16 count, u16 768 buckets), (guid, perm)
+    /// pairs sorted by guid % 89 then guid}.
+    #[test]
+    fn test_house_update_restrictions_ace_layout_one_byte_ts() {
+        let fixture = hex::decode(
+            "07\
+             42000080\
+             02000010\
+             00000000\
+             01000050\
+             02000003\
+             aaaa005000000000\
+             bbbb005001000000",
+        )
+        .unwrap();
+        assert_eq!(fixture.len(), 37);
+        let mut guests = BTreeMap::new();
+        guests.insert(0x5000_AAAA_u32, 0_u32);
+        guests.insert(0x5000_BBBB_u32, 1_u32);
+        let expected = HouseUpdateRestrictionsEventData {
+            sequence: 7,
+            object_guid: Guid(0x8000_0042),
+            version: 0x1000_0002,
+            open_status: 0,
+            monarch_id: Guid(0x5000_0001),
+            guests,
+        };
+        let mut offset = 0;
+        let parsed =
+            HouseUpdateRestrictionsEventData::unpack(&fixture, &mut offset).expect("unpack");
+        assert_eq!(offset, fixture.len(), "must consume the whole ACE payload");
+        assert_eq!(parsed, expected);
+        assert_pack_unpack_parity(&fixture, &expected);
+    }
+
+    /// Open-to-public house, no monarch, empty guest table, TS wrapped to
+    /// 0xFF: still 1 byte, and the open bit lands in `open_status`.
+    #[test]
+    fn test_house_update_restrictions_ace_layout_open_empty() {
+        let fixture = hex::decode("ff3d2c1b7a02000010010000000000000000000003").unwrap();
+        let expected = HouseUpdateRestrictionsEventData {
+            sequence: 0xFF,
+            object_guid: Guid(0x7A1B_2C3D),
+            version: 0x1000_0002,
+            open_status: 1,
+            monarch_id: Guid(0),
+            guests: BTreeMap::new(),
+        };
+        assert_pack_unpack_parity(&fixture, &expected);
+    }
+
+    /// A payload truncated inside the guid must not parse.
+    #[test]
+    fn test_house_update_restrictions_truncated_rejected() {
+        let fixture = hex::decode("0742000080").unwrap();
+        let mut offset = 0;
+        assert!(HouseUpdateRestrictionsEventData::unpack(&fixture, &mut offset).is_none());
+        let short = hex::decode("07420000").unwrap();
+        let mut offset = 0;
+        assert!(HouseUpdateRestrictionsEventData::unpack(&short, &mut offset).is_none());
     }
 }

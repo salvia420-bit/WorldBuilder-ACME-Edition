@@ -16,6 +16,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         spawn_hidden_state_on,
         wielded_spawn_on,
         pickup_leave_world_on,
+        world_lifecycle_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -835,6 +836,21 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             });
         }
         GameMessage::ObjDescEvent(data) => {
+            // createobj-5 (2026-10-08 follow-ups): the routed world
+            // handler (`?worldLifecycle`, default on) runs retail's
+            // `HandleObjDescEvent` + `UpdateVisualDesc` stamp gate
+            // (acclient.c:144356-144392, :143302-143330) and records an
+            // accepted `update_times[7]`; a stale / reordered /
+            // previous-generation ObjDesc must not revert the look.
+            // `?lifecycleStampGates=off` (inside the predicate) disables.
+            if world_lifecycle_on
+                && world
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|w| w.objdesc_event_rejected(data.guid, data.visual_desc_sequence))
+            {
+                return LoopFlow::Continue;
+            }
             // Render-completeness audit (2026-05-29): the
             // *dedicated* "character changed clothes" message
             // is ObjDescEvent (0xF625), which ACE broadcasts on
@@ -922,6 +938,19 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             });
         }
         GameMessage::ParentEvent(data) => {
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `HandleParentEvent` + `DoParentEvent`
+            // (acclient.c:144512-144552, :143504-143530) — the routed
+            // world handler records the child's position stamp on
+            // accept; a stale or previous-generation ParentEvent must not
+            // re-mount / un-mount the rig (nor synthesize a spawn).
+            if world_lifecycle_on
+                && world.borrow().as_ref().is_some_and(|w| {
+                    w.position_channel_event_rejected(data.child_guid, data.child_position_sequence)
+                })
+            {
+                return LoopFlow::Continue;
+            }
             // Render-completeness audit (2026-05-29): a wielded
             // child (weapon/shield/bow) was equipped (or, when
             // parent_guid == NULL, unequipped). ACE sends the
@@ -1103,6 +1132,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             });
         }
         GameMessage::ObjectDelete(data) => {
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `SmartBox::HandleDeleteObject` (acclient.c:143262-143296)
+            // ignores a delete for the local player and drops an older
+            // instance — keep the rig (the world handler kept the entity).
+            if world_lifecycle_on
+                && world
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|w| w.rejects_object_delete(data.guid, data.instance_sequence))
+            {
+                return LoopFlow::Continue;
+            }
             // wieldedSpawn (2026-06-11): rig removed — drop the
             // live-rig ledger entry.
             js_spawned_guids.remove(&u32::from(data.guid));
@@ -1148,6 +1189,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             });
         }
         GameMessage::PickupEvent(data) => {
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `HandlePickupEvent` + `DoPickupEvent`
+            // (acclient.c:144473-144509, :143483-143500) — the routed
+            // world handler records the position stamp on accept; a stale
+            // or previous-generation PickupEvent must not remove the rig.
+            if world_lifecycle_on
+                && world.borrow().as_ref().is_some_and(|w| {
+                    w.position_channel_event_rejected(data.guid, data.position_sequence)
+                })
+            {
+                return LoopFlow::Continue;
+            }
             // F16-3: an item was picked up (by you or anyone
             // else) — incl. arrows/bolts after missile combat.
             // ACE sends this instead of an ObjectDelete, so

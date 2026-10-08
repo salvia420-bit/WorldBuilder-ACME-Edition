@@ -114,6 +114,9 @@ const body = spliceModule(src, {
     // inert stub is correct — a catch-all proxy would make the assertions
     // unfalsifiable, which is exactly what spliceModule refuses.
     noteCombatModeRequest: INERT,
+    // streaming-teleport-5: the portal-space stance refusal
+    // (ui/portal_busy.js), not on the skill-stride path.
+    refuseCombatModeInPortalSpace: "() => false",
     getSpellBarSlots: "() => []",
     setSpellBarSlot: INERT,
     getActiveSpellBar: "() => 0",

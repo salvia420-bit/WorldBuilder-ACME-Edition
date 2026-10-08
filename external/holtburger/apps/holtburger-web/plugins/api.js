@@ -122,6 +122,7 @@
 // their own inventory scan.
 import { selfTargetGuidFor } from "../ui/ac_cast_spell.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
+import { refuseCombatModeInPortalSpace } from "../ui/portal_busy.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 // P6.1 (2026-07-27): the two retail chat hooks (eatable buses backed by
 // the loader's createEatableBus — its first real consumers). Exposed as
@@ -523,6 +524,8 @@ export function createClient(sessionHandle, opts = {}) {
       host.RecallToLifestone();
     },
     toggleCombatMode() {
+      // streaming-teleport-5: retail refuses a stance change in portal space.
+      if (refuseCombatModeInPortalSpace()) return;
       // C8 — untyped toggle: the resulting mode is the server's
       // (`get_suggested_combat_mode`), so record "unknown" = fail-open in the
       // cast gate. See ui/ac_combat_mode_intent.js.
@@ -636,6 +639,10 @@ export function createClient(sessionHandle, opts = {}) {
           attributes: box.attributes,
           skills: box.skills,
           levelInfo: box.levelInfo,
+          // training-3 (2026-10-08): stride-5 [type, ranks, start,
+          // spent_xp, next_rank_cost] rows; undefined on a pre-round-4 pkg.
+          attributeXp: box.attributeXp,
+          vitalXp: box.vitalXp,
         };
       } finally {
         try { box.free?.(); } catch (_) { /* already released */ }

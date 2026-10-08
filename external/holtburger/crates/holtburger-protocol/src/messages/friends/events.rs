@@ -12,6 +12,11 @@ impl FriendsUpdateTypeFlags {
     pub const FULL_LIST: u32 = 0x0000;
     pub const FRIEND_ADDED: u32 = 0x0001;
     pub const FRIEND_REMOVED: u32 = 0x0002;
+    /// social-lists-2 (2026-10-08, round 4): retail `RemoveSilent` —
+    /// gmFriendsUI::RecvNotice_UpdateFriendsList (acclient.c:201724)
+    /// case 3 → ServerSays_RemoveFriend(list, 1): removed, no message.
+    /// Vanilla ACE never sends it; other servers may.
+    pub const FRIEND_REMOVED_SILENT: u32 = 0x0003;
     pub const FRIEND_STATUS_CHANGED: u32 = 0x0004;
 }
 
@@ -104,7 +109,8 @@ impl ProtocolPack for FriendEntry {
 pub struct FriendsListUpdateEventData {
     pub friends: Vec<FriendEntry>,
     /// `FriendsUpdateTypeFlags`: FullList=0, FriendAdded=1,
-    /// FriendRemoved=2, FriendStatusChanged=4. Sent as trailing u32.
+    /// FriendRemoved=2, FriendRemovedSilent=3, FriendStatusChanged=4.
+    /// Sent as trailing u32.
     pub update_type: u32,
 }
 
@@ -227,5 +233,30 @@ mod tests {
             event: GameEvent::FriendsListUpdate(Box::new(event)),
         };
         round_trip(&msg);
+    }
+
+    /// social-lists-2: the retail RemoveSilent type (3) parses with its
+    /// trailing u32 intact.
+    #[test]
+    fn friends_list_update_remove_silent_type_3() {
+        assert_eq!(FriendsUpdateTypeFlags::FRIEND_REMOVED_SILENT, 3);
+        let event = FriendsListUpdateEventData {
+            friends: vec![FriendEntry {
+                friend_id: Guid(0x5000_AAAA),
+                is_online: false,
+                appear_offline: false,
+                name: "Friendo".to_string(),
+                their_friends: vec![],
+                inverse_friends: vec![],
+            }],
+            update_type: FriendsUpdateTypeFlags::FRIEND_REMOVED_SILENT,
+        };
+        let mut packed = Vec::new();
+        event.pack(&mut packed);
+        assert_eq!(&packed[packed.len() - 4..], &[3, 0, 0, 0]);
+        let mut offset = 0;
+        let parsed = FriendsListUpdateEventData::unpack(&packed, &mut offset).expect("unpack");
+        assert_eq!(parsed.update_type, 3);
+        assert_eq!(parsed, event);
     }
 }

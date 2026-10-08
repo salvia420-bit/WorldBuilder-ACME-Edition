@@ -125,6 +125,33 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         context: data.context,
                         text: data.text.clone(),
                     });
+                    // crafting-1 (2026-10-08): retail hands every request
+                    // to a player dialog (ClientUISystem::
+                    // Handle_Character__ConfirmationRequest,
+                    // acclient.c:401345); plugins/server-confirm.js shows
+                    // it. The bot queue above is unchanged.
+                    queued_events.borrow_mut().push(ClientEvent {
+                        kind: CLIENT_EVENT_KIND_CONFIRMATION_REQUEST,
+                        string_payload: Some(data.text.clone()),
+                        u32_payload: Some(data.confirmation_type as u32),
+                        u32_payload_2: Some(data.context),
+                        f32_payload: None,
+                    });
+                }
+                // crafting-1 (2026-10-08): server force-closes a dialog
+                // (timeout / abort). Retail Handle_Character__
+                // ConfirmationDone (acclient.c:401387) closes the dialog
+                // for that (type, context).
+                holtburger_protocol::messages::GameEvent::CharacterConfirmationDone(
+                    data,
+                ) => {
+                    queued_events.borrow_mut().push(ClientEvent {
+                        kind: CLIENT_EVENT_KIND_CONFIRMATION_DONE,
+                        string_payload: None,
+                        u32_payload: Some(data.confirmation_type as u32),
+                        u32_payload_2: Some(data.context),
+                        f32_payload: None,
+                    });
                 }
                 // P6.1 (2026-07-27): admin plugin-manifest query.
                 // Retail
@@ -1323,6 +1350,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         Some(HouseStatus {
                             error_code: data.error as u32,
                         });
+                    // housing-2 (2026-10-08, round 4): retail
+                    // CM_House::DispatchUI_Recv_HouseStatus
+                    // (acclient.c:707289) routes 0x0226 to
+                    // Handle_House__Recv_HouseTransaction →
+                    // SendNotice_FailedHouseTransaction, and
+                    // gmHouseUI::Update(eError) (:219577) DELETES
+                    // its HouseData — a HouseStatus is always a
+                    // failure (ACE: BadParam = no house,
+                    // HouseEvicted). Ownership is "HouseData is
+                    // the newer of the two".
+                    *latest_house_data.borrow_mut() = None;
                 }
                 holtburger_protocol::messages::GameEvent::HouseData(
                     data,
@@ -1335,6 +1373,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // Position. We pick up the scalar +
                     // position fields; payment-list display
                     // is not modeled in this snapshot.
+                    // housing-2: gmHouseUI::Update(HouseData*)
+                    // (acclient.c:219536) — owned; any earlier
+                    // failure status is superseded.
+                    *latest_house_status.borrow_mut() = None;
                     *latest_house_data.borrow_mut() =
                         Some(HouseData {
                             buy_time: data.buy_time,
@@ -1390,6 +1432,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                             guest_count: data.guests.len() as u32,
                             storage_count,
                         });
+                    // housing-3 (2026-10-08, round 4): keep the
+                    // per-house RestrictionDB on the house entity
+                    // (retail Handle_House__Recv_UpdateRestrictions,
+                    // acclient.c:430582 — own-player sender ignored,
+                    // 1-byte TS check, SetRestrictions). Data only;
+                    // not wired into collision.
+                    if let Some(w) = world.borrow_mut().as_mut() {
+                        let _ = w.apply_house_update_restrictions(&data);
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::SendClientContractTrackerTable(
                     data,

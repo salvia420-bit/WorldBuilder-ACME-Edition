@@ -11703,3 +11703,88 @@ fn f2b_idle_sticky_step_escape_is_inert() {
     let after = world.local_player_runtime_pose().expect("pose").coords;
     assert_eq!(before, after, "?stickyIdleStep=off keeps the landed reach");
 }
+
+// =====================================================================
+// streaming-teleport-2 (2026-10-08 follow-ups, `?teleportHook`) — retail
+// `SmartBox::PlayerPositionUpdated(teleporting=1)` (acclient.c:144695-144712)
+// runs `CPhysicsObj::teleport_hook` (:322237 — CancelMoveTo(0x3C
+// ITeleported), UnStick, …) and then `CommandInterpreter::PlayerTeleported`
+// (:716924 — SetAutoRun(0,1) + SendMovementEvent) when the local player's
+// destination pose lands.
+// =====================================================================
+
+/// The hook queues one tick-side command; the native runtime arms it at
+/// PlayerTeleport and fires it once on the next self UpdatePosition.
+#[test]
+fn teleport_hook_queues_once_and_native_arming_fires_once() {
+    let mut movement = MovementSystem::new();
+    movement.fire_armed_teleport_hook();
+    assert!(movement.queued_drive_commands.is_empty(), "not armed: nothing");
+    movement.arm_teleport_hook();
+    movement.fire_armed_teleport_hook();
+    assert_eq!(
+        movement.queued_drive_commands,
+        vec![QueuedDriveCommand::PlayerTeleported]
+    );
+    movement.fire_armed_teleport_hook();
+    assert_eq!(movement.queued_drive_commands.len(), 1, "fires once per arm");
+}
+
+/// Autorun drops on teleport (retail SetAutoRun(0,1)) and the drive falls
+/// back to the held keys — idle here, so the player stands at the
+/// destination instead of running off the arrival pad.
+#[test]
+fn teleport_hook_drops_autorun() {
+    let (mut world, _guid, _target) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    movement.set_cmd_interp(false);
+    movement.set_auto_run(true);
+    movement.pending_pursuit_commands.clear();
+    movement.apply_player_teleported(Instant::now(), &mut world);
+    assert!(!movement.auto_run, "autorun off after the teleport");
+    match movement.active_drive.map(|a| a.intent) {
+        Some(ActiveDriveIntent::Manual(state)) => {
+            assert!(state.is_locomotion_idle() && state.turning.is_none(), "{state:?}");
+        }
+        other => panic!("expected the idle held-keys drive, got {other:?}"),
+    }
+}
+
+/// An active pursuit ends with ITeleported (0x3C) and no manual restore
+/// (teleport_hook's `MovementManager::CancelMoveTo(0x3C)`).
+#[test]
+fn teleport_hook_cancels_pursuit_with_iteleported() {
+    let (mut world, guid, target_guid) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    movement.set_cmd_interp(false);
+    let now = Instant::now();
+    ingest_intent(&mut movement, pursue_intent(target_guid), now);
+    assert!(!movement.apply_pending_pursuit_commands_ungated(&mut world));
+    assert!(movement.moveto_is_active(guid));
+
+    movement.apply_player_teleported(now, &mut world);
+    assert_eq!(
+        movement.pending_pursuit_commands,
+        vec![PendingPursuitCommand::Teleported]
+    );
+    let _ = movement.apply_pending_pursuit_commands_ungated(&mut world);
+    assert!(!movement.moveto_is_active(guid), "the MoveTo is cancelled");
+    assert_eq!(movement.pursuit_status(guid), 3 | (0x3C << 16), "failed with ITeleported");
+}
+
+/// Interpreter lane: the interpreter's own autorun is cleared too
+/// (`CommandInterpreter::PlayerTeleported`).
+#[test]
+fn teleport_hook_clears_the_interpreter_autorun() {
+    let (mut world, _guid, _target) = pursuit_fixture();
+    let mut movement = MovementSystem::new();
+    movement.set_cmd_interp(true);
+    let mut interp = movement.new_command_interpreter();
+    interp.auto_run = true;
+    movement.command_interpreter = Some(interp);
+    movement.apply_player_teleported(Instant::now(), &mut world);
+    assert!(
+        !movement.command_interpreter.as_ref().expect("interpreter kept").auto_run,
+        "interpreter autorun cleared"
+    );
+}

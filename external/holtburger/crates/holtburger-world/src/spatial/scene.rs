@@ -1044,6 +1044,43 @@ impl Clone for CollisionRevStamp {
     }
 }
 
+/// CLI-SEND (2026-10-08): `Sync` cumulative diagnostics counter for the
+/// `&self`-bumped `SpatialScene` probes (`scenery_narrow_hits`,
+/// `exit_bfs_overflows`, the `*_arm_evals` reachability probes, the
+/// combat-radii counters). These were `Cell<u64>` since 3d466147, which made
+/// `SpatialScene` — and with it `WorldState` — `!Sync`, so
+/// `apps/holtburger-cli`'s `tokio::spawn(async move { client.run().await })`
+/// failed with E0277. Same `get` / `set` surface as the `Cell` it replaces;
+/// `Relaxed` ordering (pure monotone diagnostics, never used to synchronise
+/// anything). `Clone` copies the current value, exactly as the `Cell<u64>`
+/// copy did for the per-tick `collision_scene` mirror clone. `AtomicU64` is
+/// available on wasm32 (lowered to plain loads/stores without the atomics
+/// target feature), so the wasm build is unaffected.
+#[derive(Debug, Default)]
+struct DiagCounter(std::sync::atomic::AtomicU64);
+
+impl DiagCounter {
+    const fn new(v: u64) -> Self {
+        Self(std::sync::atomic::AtomicU64::new(v))
+    }
+
+    #[inline]
+    fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn set(&self, v: u64) {
+        self.0.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Clone for DiagCounter {
+    fn clone(&self) -> Self {
+        Self::new(self.get())
+    }
+}
+
 // F4-5 (grind-loop G-2, 2026-06-11): the wasm recv-loop snapshots this
 // struct into the JS-readable camera-sweep shadow (since 2026-10-07 via
 // `collision_view`, at most every 100 ms). The immutable geometry tables
@@ -1323,11 +1360,12 @@ pub struct SpatialScene {
     scenery_colliders: Arc<HashMap<u32, Arc<super::scenery::SceneryColliderBatch>>>,
     /// DAT-01 phase 2e: cumulative count of scenery narrow-phase CONTACTS
     /// (a swept cylsphere hit or a pushout) since the scene was created.
-    /// `Cell` because the integrator holds `&SpatialScene` — the same
-    /// borrow shape `resolve_static_bsp_pushout` runs under. Diagnostics
-    /// only; read through `__diag.collision`. Survives the per-tick
-    /// `collision_scene` mirror clone (a `Cell<u64>` copies by value).
-    scenery_narrow_hits: std::cell::Cell<u64>,
+    /// Interior-mutable ([`DiagCounter`], formerly `Cell<u64>`) because the
+    /// integrator holds `&SpatialScene` — the same borrow shape
+    /// `resolve_static_bsp_pushout` runs under. Diagnostics only; read
+    /// through `__diag.collision`. Survives the per-tick `collision_scene`
+    /// mirror clone (`DiagCounter::clone` copies the value).
+    scenery_narrow_hits: DiagCounter,
     /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): cumulative count of
     /// [`Self::exited_envcell_to_outdoor`] BFS walks that hit
     /// [`EXIT_INDOOR_BFS_MAX_CELLS`] and bailed with "stay indoors".
@@ -1336,9 +1374,9 @@ pub struct SpatialScene {
     /// It should read 0 for the whole life of any real session; a
     /// non-zero value means some structure's walkable graph exceeded 64
     /// rooms (raise the cap) or an edge feed is putting non-portal edges
-    /// back into `cell_adjacency` (fix the feed). Same `Cell<u64>`
+    /// back into `cell_adjacency` (fix the feed). Same [`DiagCounter`]
     /// diagnostics shape as `scenery_narrow_hits`.
-    exit_bfs_overflows: std::cell::Cell<u64>,
+    exit_bfs_overflows: DiagCounter,
     /// DAT-01 phase 2d/2e — REACHABILITY probe. Bumped once per movement
     /// slice at the scenery arm's site in
     /// `MovementSystem::advance_manual_slice_via_transition`,
@@ -1357,7 +1395,7 @@ pub struct SpatialScene {
     ///
     /// Read as `__diag.collision.residency().sceneryArmEvals`. Nonzero after
     /// a few seconds of walking ⇒ the arm is live.
-    scenery_arm_evals: std::cell::Cell<u64>,
+    scenery_arm_evals: DiagCounter,
     /// TIER-3 (2026-07-28, COL-16/COL-17 + stationary `isOnGround`) — the same
     /// unconditional-reachability probe for the WORLD-frame terrain contact-plane
     /// arm in `faithful_bridge::faithful_find_transitional_position`. Bumped
@@ -1367,7 +1405,7 @@ pub struct SpatialScene {
     ///
     /// Read as `__diag.collision.residency().terrainPlaneFrameArmEvals`. Nonzero
     /// after any faithful outdoor slice ⇒ the arm is on the live movement path.
-    terrain_plane_frame_arm_evals: std::cell::Cell<u64>,
+    terrain_plane_frame_arm_evals: DiagCounter,
     /// COL-27 (2026-07-28) — the same unconditional-reachability probe for the
     /// INDOOR envcell-static overlap bake. Bumped OUTSIDE the
     /// `overlap_enabled` gate at the top of
@@ -1376,7 +1414,7 @@ pub struct SpatialScene {
     ///
     /// Read as `__diag.collision.residency().envcellStaticOverlapArmEvals`.
     /// Nonzero after entering any dungeon ⇒ the bake is on the live path.
-    envcell_static_overlap_arm_evals: std::cell::Cell<u64>,
+    envcell_static_overlap_arm_evals: DiagCounter,
     /// PERF Fix 2 (2026-07-23): identity + generation for the faithful
     /// bridge's persistent built-cell cache (see [`CollisionRevStamp`]).
     /// Bumped by [`Self::bump_collision_rev`] from every mutator of a
@@ -1509,6 +1547,25 @@ pub struct SpatialScene {
     /// (retail `CMotionInterp::LeaveGround` / `HitGround`,
     /// acclient.c:344457 / :344429).
     remote_airborne_changes: Vec<(Guid, bool)>,
+    /// R3 moveto-4 (2026-10-08 follow-ups): per-tick changes of a remote
+    /// body's MoveTo node motion ([`SpatialBody::remote_moveto_motion`]:
+    /// the full MotionCommand the remote MoveToManager holds, `0` = none),
+    /// recorded by [`Self::note_remote_moveto_motion`] and drained by the
+    /// wasm tick next to [`Self::take_remote_airborne_changes`] into the JS
+    /// remote MoveTo phase event. Retail's remote animation follows the
+    /// node by construction (`MoveToManager::_DoMotion` acclient.c:344753 →
+    /// `CMotionInterp::DoInterpretedMotion`).
+    remote_moveto_phase_changes: Vec<(Guid, u32)>,
+    /// landdefs-terrain-1 (2026-10-08 follow-ups) — `?openSeaWall` (DEFAULT
+    /// ON). ON: an entirely-water landblock (all 81 vertices water —
+    /// `CLandBlockStruct::CalcWater`, acclient.c:354566) is a wall for
+    /// non-viewer, non-missile movers (`CLandCell::find_env_collisions`
+    /// :355030-355033) — on the faithful outdoor cell
+    /// (`faithful_bridge::build_outdoor_cell`) and, under
+    /// `?fallbackWaterRetail`, in the heightfield fallback
+    /// (`WorldState::is_entirely_water_cell_at`). Set once at world creation
+    /// by the wasm caller; native keeps the default.
+    open_sea_wall_enabled: bool,
     /// A2-P3 (2026-06-12, W3+ S9) — O(1) mirror of the LOCAL player
     /// body's sticky target ([`PositionManager::sticky_object_id`]),
     /// kept in sync by [`Self::stick_local_player_to`] /
@@ -1626,12 +1683,12 @@ pub struct SpatialScene {
     /// `scenery_arm_evals`: a gated counter cannot distinguish "flag
     /// off" from "arm in dead code". Read via
     /// `SessionHandle.combatRadiiStats()`.
-    combat_radii_evals: std::cell::Cell<u64>,
+    combat_radii_evals: DiagCounter,
     /// COMBAT-RADII — how many of those resolutions produced a REAL
     /// per-setup radius (Setup resident + `0x02xxxxxx` gfx id). Nonzero
     /// ⇒ the DAT-backed source is live, not just the residency
     /// fallback.
-    combat_radii_resolved: std::cell::Cell<u64>,
+    combat_radii_resolved: DiagCounter,
 }
 
 /// A2-P3 (2026-06-12, W3+ S9) — outcome of one
@@ -1688,11 +1745,11 @@ impl SpatialScene {
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
-            scenery_narrow_hits: std::cell::Cell::new(0),
-            exit_bfs_overflows: std::cell::Cell::new(0),
-            scenery_arm_evals: std::cell::Cell::new(0),
-            terrain_plane_frame_arm_evals: std::cell::Cell::new(0),
-            envcell_static_overlap_arm_evals: std::cell::Cell::new(0),
+            scenery_narrow_hits: DiagCounter::new(0),
+            exit_bfs_overflows: DiagCounter::new(0),
+            scenery_arm_evals: DiagCounter::new(0),
+            terrain_plane_frame_arm_evals: DiagCounter::new(0),
+            envcell_static_overlap_arm_evals: DiagCounter::new(0),
             collision_stamp: CollisionRevStamp::fresh(),
             building_physics_index: Arc::new(HashMap::new()),
             terrain_heights: Arc::new(HashMap::new()),
@@ -1707,6 +1764,8 @@ impl SpatialScene {
             remote_motion_keep_enabled: true,
             remote_turn_enabled: true,
             remote_airborne_changes: Vec::new(),
+            remote_moveto_phase_changes: Vec::new(),
+            open_sea_wall_enabled: true,
             local_sticky_target: None,
             remote_sticky_enabled: false,
             remote_sticky_targets: HashMap::new(),
@@ -1717,8 +1776,8 @@ impl SpatialScene {
             local_use_position_from_server: false,
             combat_radii_enabled: false,
             local_player_part_radius: super::transition::PLAYER_PART_RADIUS,
-            combat_radii_evals: std::cell::Cell::new(0),
-            combat_radii_resolved: std::cell::Cell::new(0),
+            combat_radii_evals: DiagCounter::new(0),
+            combat_radii_resolved: DiagCounter::new(0),
         }
     }
 
@@ -2023,9 +2082,32 @@ impl SpatialScene {
         self.remote_jump_arc_enabled && self.remote_interp_enabled
     }
 
+    /// landdefs-terrain-1: install `?openSeaWall` (see the field doc). Bumps
+    /// the collision revision so no cached outdoor cell keeps the old block
+    /// water type.
+    pub fn set_open_sea_wall_enabled(&mut self, enabled: bool) {
+        if self.open_sea_wall_enabled != enabled {
+            self.open_sea_wall_enabled = enabled;
+            self.bump_collision_rev();
+        }
+    }
+
+    /// landdefs-terrain-1: whether the open-sea wall is on.
+    pub fn open_sea_wall_enabled(&self) -> bool {
+        self.open_sea_wall_enabled
+    }
+
     /// D7: drain this tick's remote leave-ground / hit-ground edges.
     pub fn take_remote_airborne_changes(&mut self) -> Vec<(Guid, bool)> {
         std::mem::take(&mut self.remote_airborne_changes)
+    }
+
+    /// R3 moveto-4: drain this tick's remote MoveTo phase edges
+    /// (`(guid, motion)`, `motion` = the full MotionCommand the remote
+    /// MoveToManager node now holds, `0` = none). See
+    /// [`Self::note_remote_moveto_motion`].
+    pub fn take_remote_moveto_phase_changes(&mut self) -> Vec<(Guid, u32)> {
+        std::mem::take(&mut self.remote_moveto_phase_changes)
     }
 
     /// A2-P3 R2: drain the per-tick sticky-stepped guid set (drained by
@@ -6292,6 +6374,34 @@ impl SpatialScene {
         }
     }
 
+    /// R3 moveto-4 (2026-10-08 follow-ups) — record the motion a remote
+    /// body's MoveToManager node now holds (`motion` = the full
+    /// MotionCommand of its last `_DoMotion`, `0` = stopped / no directive;
+    /// `MoveToManager::node_motion` in holtburger-core). A CHANGE is pushed
+    /// as a phase edge for the remote rig's animation: retail plays the
+    /// node's motion on the mover's own interp (`BeginTurnToHeading`
+    /// acclient.c:345489-345507, `BeginMoveForward` :345371-345425,
+    /// `BeginNextNode` arrival → `StopCompletely` :345521-345545). An
+    /// unchanged motion records nothing, so a steady chase costs nothing;
+    /// a guid with no body is ignored.
+    pub fn note_remote_moveto_motion(&mut self, guid: Guid, motion: u32) {
+        let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
+            return;
+        };
+        if body.remote_moveto_motion == motion {
+            return;
+        }
+        body.remote_moveto_motion = motion;
+        self.remote_moveto_phase_changes.push((guid, motion));
+    }
+
+    /// R3 moveto-4 — the remote body's current MoveTo node motion (diag/tests).
+    pub fn remote_moveto_motion(&self, guid: Guid) -> u32 {
+        self.body_store
+            .body(SpatialBodyId::Entity(guid))
+            .map_or(0, |body| body.remote_moveto_motion)
+    }
+
     /// D5 — best-known live pose of a MoveTo target (the same resolution
     /// the remote sticky lane uses: the target's own body, the local
     /// player's body, then the wire-fed pose).
@@ -6683,6 +6793,7 @@ impl SpatialScene {
         let bodies = std::mem::take(&mut self.body_store.bodies);
         let remote_stepped_poses = std::mem::take(&mut self.remote_stepped_poses);
         let remote_airborne_changes = std::mem::take(&mut self.remote_airborne_changes);
+        let remote_moveto_phase_changes = std::mem::take(&mut self.remote_moveto_phase_changes);
         let remote_sticky_targets = std::mem::take(&mut self.remote_sticky_targets);
         let remote_sticky_stepped = std::mem::take(&mut self.remote_sticky_stepped);
         let sky_desc = self.sky_desc.take();
@@ -6692,6 +6803,7 @@ impl SpatialScene {
         self.body_store.bodies = bodies;
         self.remote_stepped_poses = remote_stepped_poses;
         self.remote_airborne_changes = remote_airborne_changes;
+        self.remote_moveto_phase_changes = remote_moveto_phase_changes;
         self.remote_sticky_targets = remote_sticky_targets;
         self.remote_sticky_stepped = remote_sticky_stepped;
         self.sky_desc = sky_desc;

@@ -405,6 +405,7 @@ pub mod build {
             ethereal: false,
             step_down: true,
             target_id: 0,
+            missile: false,
         }
     }
 

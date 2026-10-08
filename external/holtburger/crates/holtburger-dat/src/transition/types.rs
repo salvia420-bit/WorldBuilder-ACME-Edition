@@ -279,6 +279,12 @@ pub struct ObjectInfo {
     pub step_down: bool,
     /// `targetID` — the object this transition is targeting (0 = none).
     pub target_id: u32,
+    /// `object->state & MISSILE` (PhysicsState 0x40) — the moving object is
+    /// a missile. `CLandCell::find_env_collisions` exempts it (and the
+    /// viewer) from the open-sea wall (acclient.c:355030-355033,
+    /// landdefs-terrain-1). Default `false`: no missile mover runs this
+    /// driver today (projectiles sweep JS-side, round-1 physupd-1).
+    pub missile: bool,
 }
 
 /// `struct COLLISIONINFO` (`acclient.h:52306`). Accumulates the contact

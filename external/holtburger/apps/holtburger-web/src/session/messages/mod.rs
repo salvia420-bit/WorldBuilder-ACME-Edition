@@ -107,6 +107,31 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         return LoopFlow::Continue;
     };
 
+    // held-3 (2026-10-08 follow-ups, `?objectBlobQueue`, DEFAULT ON): retail
+    // `SmartBox::HandleParentEvent` / `HandlePickupEvent`
+    // (acclient.c:144473-144552) do not dispatch a relation event whose
+    // object is unknown or a NEWER instance than the one held (for a
+    // ParentEvent: the parent, then the child) — `CObjectMaint::
+    // QueueBlobForObject` (:310848-310860) files the raw blob on that object
+    // and `SmartBox::ProcessObjectNetBlobs` (:145767) replays it once its
+    // CreateObject lands. Queue the raw message BEFORE any dispatch (world
+    // route, wielder index, kind=7 / KIND_REMOVE fan-out); the recv loop
+    // (lib.rs) replays the blobs an ObjectCreate releases as freshly received
+    // messages, so a replay runs exactly this path again. Needs the routed
+    // lifecycle family (`?worldLifecycle`) — only a routed ObjectCreate
+    // releases.
+    if world_lifecycle_on
+        && matches!(
+            message,
+            GameMessage::ParentEvent(_) | GameMessage::PickupEvent(_)
+        )
+        && let Some(w) = world.borrow_mut().as_mut()
+        && let Some(wait_for) = w.object_blob_wait_target(&message)
+    {
+        w.queue_object_blob(wait_for, bytes, web_time::Instant::now());
+        return LoopFlow::Continue;
+    }
+
     // Run-skill plumbing backstop (2026-06-02): cache the
     // latest PlayerDescription so a late-constructed
     // WorldState can be hydrated from it (see the
@@ -598,53 +623,24 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 // own "You left/joined the fellowship." feedback —
                 // and member join/leave notices — never reached JS.
                 // Surface them as a `kind=2 CHAT_RECEIVED` line in
-                // the Fellowship category (16). Formatting mirrors
-                // the cli's `format_fellowship_activity` 1:1.
+                // the Fellowship category (16).
+                //
+                // fellowship-2 (2026-10-08 follow-ups): the wording is
+                // retail's client-side `gmFellowshipUI` text
+                // (`FellowshipActivity::retail_text`, acclient.c:
+                // 203000-203223 / :203573-203648) — create vs recruit,
+                // leader vs member — and nothing where retail prints
+                // nothing. Still the Fellowship category (16).
                 WorldEvent::FellowshipActivity(activity) => {
-                    use holtburger_world::events::FellowshipActivity as FA;
-                    let line = match activity {
-                        FA::YouJoined { fellowship_name } => {
-                            if fellowship_name.is_empty() {
-                                "You joined the fellowship.".to_string()
-                            } else {
-                                format!(
-                                    "You joined the fellowship '{}'.",
-                                    fellowship_name
-                                )
-                            }
-                        }
-                        FA::MemberJoined { member_name } => {
-                            format!("{} joined the fellowship.", member_name)
-                        }
-                        FA::YouLeft => "You left the fellowship.".to_string(),
-                        FA::MemberLeft { member_name } => {
-                            format!("{} left the fellowship.", member_name)
-                        }
-                        FA::YouWereDismissed => {
-                            "You were dismissed from the fellowship.".to_string()
-                        }
-                        FA::MemberWasDismissed { member_name } => {
-                            format!(
-                                "{} was dismissed from the fellowship.",
-                                member_name
-                            )
-                        }
-                        FA::FellowshipDisbanded { fellowship_name } => {
-                            match fellowship_name {
-                                Some(name) if !name.is_empty() => {
-                                    format!("The fellowship '{}' was disbanded.", name)
-                                }
-                                _ => "The fellowship was disbanded.".to_string(),
-                            }
-                        }
-                    };
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(line),
-                        u32_payload: None,
-                        u32_payload_2: Some(CHAT_CATEGORY_FELLOWSHIP),
-                        f32_payload: None,
-                    });
+                    if let Some(line) = activity.retail_text() {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(line),
+                            u32_payload: None,
+                            u32_payload_2: Some(CHAT_CATEGORY_FELLOWSHIP),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 WorldEvent::TradeStateUpdated(_) => {
                     trade_changed = true;
@@ -1280,12 +1276,19 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 );
             }
             GameMessage::ObjectDelete(data) if world_lifecycle_on => {
-                maintain_bridge_indexes_on_delete(
-                    data.guid,
-                    &wielder_index,
-                    &per_guid_bridge_indexes,
-                );
-                inventory_changed = true;
+                // createobj-5 (2026-10-08 follow-ups): a delete the
+                // routed world handler rejected (local player, older
+                // instance — retail SmartBox::HandleDeleteObject,
+                // acclient.c:143262-143296) leaves the object alive, so
+                // its bridge indexes stay too.
+                if !w.rejects_object_delete(data.guid, data.instance_sequence) {
+                    maintain_bridge_indexes_on_delete(
+                        data.guid,
+                        &wielder_index,
+                        &per_guid_bridge_indexes,
+                    );
+                    inventory_changed = true;
+                }
             }
             GameMessage::InventoryRemoveObject(data) if world_lifecycle_on => {
                 maintain_bridge_indexes_on_delete(
@@ -1377,7 +1380,17 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             // (`parent_guid == NULL`) strip the child from every
             // wielder bucket, mirroring
             // `apply_inventory_object_delete`'s per-list retain.
-            GameMessage::ParentEvent(data) => {
+            // createobj-5 (2026-10-08 follow-ups): skipped for a
+            // ParentEvent the routed world handler rejected (stale child
+            // position stamp / older parent instance — retail
+            // SmartBox::HandleParentEvent + DoParentEvent).
+            GameMessage::ParentEvent(data)
+                if !(world_lifecycle_on
+                    && w.position_channel_event_rejected(
+                        data.child_guid,
+                        data.child_position_sequence,
+                    )) =>
+            {
                 if data.parent_guid != holtburger_common::Guid::NULL {
                     upsert_wielder_index(w, data.child_guid, &wielder_index);
                 } else {

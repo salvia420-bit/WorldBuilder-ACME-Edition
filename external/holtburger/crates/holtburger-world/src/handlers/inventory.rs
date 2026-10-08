@@ -57,6 +57,13 @@ pub(crate) fn handle_message(
                 state.reconcile_player_owned_entities();
             }
 
+            // held-3 (2026-10-08 follow-ups): the object now exists — release
+            // the ParentEvent / PickupEvent blobs queued on it (retail
+            // `HandleCreateObject` → `SmartBox::ProcessObjectNetBlobs`,
+            // acclient.c:145996 / :145767). The wasm recv loop replays them
+            // right after this message; each re-runs its wait check.
+            state.release_object_blobs(guid, web_time::Instant::now());
+
             if matches!(upsert_kind, EntityUpsertKind::Inserted) {
                 return true;
             }
@@ -64,6 +71,12 @@ pub(crate) fn handle_message(
             true
         }
         GameMessage::ObjectDelete(data) => {
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `SmartBox::HandleDeleteObject` (acclient.c:143262-143296)
+            // ignores the local player and drops an older instance.
+            if state.rejects_object_delete(data.guid, data.instance_sequence) {
+                return false;
+            }
             state.update_player_inventory_recursive(data.guid, false);
             // Wave A / PR1 (2026-06-06): prune prior_wielders so the
             // map stays bounded by live entity count.
@@ -80,6 +93,31 @@ pub(crate) fn handle_message(
             true
         }
         GameMessage::ParentEvent(data) => {
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `SmartBox::HandleParentEvent` (acclient.c:144512-144552) drops
+            // an event whose PARENT instance is older, then `DoParentEvent`
+            // (:143504-143530) applies only a strictly newer CHILD position
+            // stamp (`update_times[0]`). held-3: an unknown parent / child or
+            // a NEWER parent instance is queued by retail; the wasm recv loop
+            // does that before dispatch (`state::blob_queue`,
+            // `?objectBlobQueue`), so such an event reaches this handler only
+            // on the native runtime or with the queue off — and then keeps
+            // the old behaviour (an unknown parent applies; an unknown child
+            // drops here, and JS `_pendingAttach` parks the render attach).
+            if state.lifecycle_stamp_gates_enabled {
+                if state
+                    .entities
+                    .get(data.parent_guid)
+                    .is_some_and(|parent| parent.is_older_instance(data.parent_instance_sequence))
+                {
+                    return false;
+                }
+                if let Some(child) = state.entities.get_mut(data.child_guid)
+                    && !child.accept_child_position(data.child_position_sequence)
+                {
+                    return false;
+                }
+            }
             if let Some(entity) = state.entities.get_mut(data.child_guid) {
                 entity.physics_parent_id = if data.parent_guid == Guid::NULL {
                     None
@@ -141,6 +179,16 @@ pub(crate) fn handle_message(
             if !had_entity {
                 return false;
             }
+            // createobj-5 (2026-10-08 follow-ups): retail
+            // `SmartBox::HandlePickupEvent` + `DoPickupEvent`
+            // (acclient.c:144473-144509, :143483-143500) — instance leg,
+            // then a strictly newer position stamp, recorded on accept.
+            if state.lifecycle_stamp_gates_enabled
+                && let Some(entity) = state.entities.get_mut(guid)
+                && !entity.accept_position_channel(data.instance_sequence, data.position_sequence)
+            {
+                return false;
+            }
 
             if let Some(pos) = state.clear_entity_world_presence(guid) {
                 events.push(WorldEvent::EntityMoved { guid, pos });
@@ -151,6 +199,23 @@ pub(crate) fn handle_message(
             }
 
             true
+        }
+        // createobj-5 (2026-10-08 follow-ups): retail
+        // `SmartBox::HandleObjDescEvent` + `UpdateVisualDesc`
+        // (acclient.c:144356-144392, :143302-143330) — instance leg, then a
+        // strictly newer visual-desc stamp (`update_times[7]`), recorded on
+        // accept. The appearance itself is applied by the render bridge
+        // (the wasm ObjDescEvent arm), which skips the fan-out when this
+        // handler did not record the stamp.
+        GameMessage::ObjDescEvent(data) => {
+            let gates_on = state.lifecycle_stamp_gates_enabled;
+            match state.entities.get_mut(data.guid) {
+                Some(entity) => {
+                    !gates_on
+                        || entity.accept_objdesc(data.instance_sequence, data.visual_desc_sequence)
+                }
+                None => false,
+            }
         }
         _ => false,
     }

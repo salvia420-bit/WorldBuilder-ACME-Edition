@@ -13,6 +13,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         wire_state_packs_stage1_on,
         routine_pos_guard_on,
         remote_sticky_on,
+        teleport_hook_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -260,6 +261,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         u32_payload_2: Some(u32::from(data.pos.teleport_sequence)),
                         f32_payload: None,
                     });
+                    // streaming-teleport-2 (2026-10-08 follow-ups,
+                    // `?teleportHook`): the destination pose landed — retail
+                    // `HandleReceivedPosition` → `TeleportPlayer` →
+                    // `PlayerPositionUpdated(teleporting=1)`
+                    // (acclient.c:145196-145198, :144695-144712) runs
+                    // `teleport_hook` (CancelMoveTo 0x3C ITeleported,
+                    // UnStick) and `CommandInterpreter::PlayerTeleported`
+                    // (autorun off + a movement event). Queued for the next
+                    // movement tick (it needs world access).
+                    if teleport_hook_on {
+                        movement.player_teleported();
+                    }
                 }
                 if *pending_post_teleport_login_complete {
                     *pending_post_teleport_login_complete = false;

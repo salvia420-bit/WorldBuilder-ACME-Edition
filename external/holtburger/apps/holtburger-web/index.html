@@ -1020,9 +1020,11 @@
     <link rel="modulepreload" href="./app/landblock_stream.js">
     <link rel="modulepreload" href="./app/latency_diag.js">
     <link rel="modulepreload" href="./app/local_auto_motion.js">
+    <link rel="modulepreload" href="./app/login_ui_rules.js">
     <link rel="modulepreload" href="./app/plugin_bar.js">
     <link rel="modulepreload" href="./app/server_picker.js">
     <link rel="modulepreload" href="./app/slash_commands.js">
+    <link rel="modulepreload" href="./app/social_commands.js">
     <link rel="modulepreload" href="./pkg/holtburger_web.js?v=wasmrev-20261007f">
     <link rel="modulepreload" href="./pkg/snippets/holtburger-web-35e2cc366b0a5b65/inline0.js">
     <link rel="modulepreload" href="./plugins/allegiance-panel.js">
@@ -1226,6 +1228,7 @@
     <link rel="modulepreload" href="./scene3d/quality.js">
     <link rel="modulepreload" href="./scene3d/ragdoll.js">
     <link rel="modulepreload" href="./scene3d/recolor_flag.js">
+    <link rel="modulepreload" href="./scene3d/remote_moveto_phase.js">
     <link rel="modulepreload" href="./scene3d/residency.js">
     <link rel="modulepreload" href="./scene3d/residency_grid.js">
     <link rel="modulepreload" href="./scene3d/rust_pose.js">
@@ -1371,6 +1374,7 @@
     <link rel="modulepreload" href="./ui/hud_scale.js">
     <link rel="modulepreload" href="./ui/input-funnel.js">
     <link rel="modulepreload" href="./ui/keymap.js">
+    <link rel="modulepreload" href="./ui/portal_busy.js">
     <!-- END modulepreload -->
 
     <script type="module">
@@ -1769,6 +1773,10 @@
       import { pumpEntityUpdatesAndInput } from "./app/frame_pump.js";
       import { createLandblockStream } from "./app/landblock_stream.js";
       import { initSlashCommands } from "./app/slash_commands.js";
+      import {
+        orderCharacterRows, retailCharListEnabled, deleteConfirmationText, deleteConfirmationAccepted,
+        requestLogOff, logOffOnUnloadEnabled,
+      } from "./app/login_ui_rules.js";
       import { initPluginBar } from "./app/plugin_bar.js";
       const __inputFunnelOn = __readInputFunnelFlag();
       const RETAIL_RUN_KEYS_ON = __readRetailRunKeysFlag();
@@ -4119,6 +4127,13 @@
       window.addEventListener("pagehide", () => {
         try {
           const h = window.__sessionHandle;
+          // login-1 (round 4, 2026-10-08): an in-world character asks ACE
+          // to log it off (retail RequestLogOff, 0xF653) before the socket
+          // goes — best-effort, the loop has to run once more to send it.
+          if (h && logOffOnUnloadEnabled()
+            && (window.__bootState === "in-world" || window.__bootState === "ready")) {
+            requestLogOff(h, (t) => window.__appendChatLine?.(t, 0));
+          }
           if (h && typeof h.free === "function") h.free();
         } catch (_) {}
         window.__sessionHandle = null;
@@ -4539,7 +4554,15 @@
               characterUl.innerHTML =
                 `<li class="hint">No characters on this account yet. Use the form below to create one.</li>`;
             } else {
-              characterUl.innerHTML = list.map((c, slot) => {
+              // login-3 (round 4, 2026-10-08): retail RebuildCharacterList
+              // greys pending-deletion rows and lists them LAST; each row
+              // keeps its server slot (CharacterDelete takes the slot).
+              // `?retailCharList=off` → server order + the old date suffix.
+              const retailList = retailCharListEnabled();
+              const rows = retailList
+                ? orderCharacterRows(list)
+                : Array.from(list, (c, slot) => ({ c, slot }));
+              characterUl.innerHTML = rows.map(({ c, slot }) => {
                 const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
                 // Server-supplied name goes through the same escaper the
                 // inventory rows use (escapeHtml, ~L5674). A bare `"` in a
@@ -4551,14 +4574,20 @@
                 // to the exact wire name.
                 const cName = escapeHtml(c.name ?? "");
                 const isPending = c.deleteTime !== 0;
+                // ACE's per-row value is secondsGreyedOut (1 while the
+                // deletion is pending), not an epoch — no date.
                 const pendingDelete = isPending
-                  ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
+                  ? (retailList
+                    ? ` <span class="hint">[pending deletion]</span>`
+                    : ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`)
                   : "";
                 const actionBtn = isPending
                   ? ` <button type="button" data-restore-id="${c.id}" data-name="${cName}">Restore</button>`
                   : ` <button type="button" data-id="${c.id}">Spawn</button>` +
                     ` <button type="button" data-delete-slot="${slot}" data-name="${cName}">Delete</button>`;
-                return `<li data-name="${cName}" data-id="${c.id}"><strong>${cName}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
+                const greyed = isPending && retailList;
+                return `<li data-name="${cName}" data-id="${c.id}"${greyed ? ` data-greyed="1" style="opacity:0.55"` : ""}>` +
+                  `<strong>${cName}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
                   actionBtn + `</li>`;
               }).join("");
               // Delegate Delete / Restore click handling via the
@@ -4723,7 +4752,15 @@
               // Mirror acclient.h:56151-56156
               // MakeDeleteCharacterConfirmationDialog: explicit
               // grace-period warning before the network round-trip.
-              if (!window.confirm(
+              // login-3 (round 4): retail's
+              // ID_CharacterManagement_DeleteCharacterConfirmation text,
+              // which makes you type DELETE (`?retailCharList=off` → the
+              // old yes/no confirm).
+              if (retailCharListEnabled()) {
+                let typed = null;
+                try { typed = window.prompt(deleteConfirmationText(name), ""); } catch (_) { typed = null; }
+                if (!deleteConfirmationAccepted(typed)) return;
+              } else if (!window.confirm(
                 `Delete ${name}?\n\n` +
                 `The character will be marked for deletion and removed ` +
                 `after the server's grace window. You can press Restore ` +
@@ -5431,6 +5468,12 @@
             // flip-flopped. Retail repeats only repeat-type actions.
             if (ev.key === "`" && handle) {
               if (ev.repeat) {
+                ev.preventDefault();
+              } else if (typeof window.__refuseCombatModeInPortalSpace === "function" &&
+                         window.__refuseCombatModeInPortalSpace()) {
+                // streaming-teleport-5: retail ClientCombatSystem::SetCombatMode
+                // refuses in portal space ("You can't enter combat mode while
+                // in portal space"); ui/portal_busy.js printed it.
                 ev.preventDefault();
               } else {
                 try {

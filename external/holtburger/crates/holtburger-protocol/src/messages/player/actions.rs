@@ -311,6 +311,22 @@ impl ProtocolPack for RemoveFriendActionData {
     }
 }
 
+/// social-lists-1 (2026-10-08, round 4): C2S `Social_ClearFriends`
+/// (0x0025) — retail `CM_Social::Event_ClearFriends` packs only the
+/// opcode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveAllFriendsActionData {}
+
+impl ProtocolUnpack for RemoveAllFriendsActionData {
+    fn unpack(_data: &[u8], _offset: &mut usize) -> Option<Self> {
+        Some(Self {})
+    }
+}
+
+impl ProtocolPack for RemoveAllFriendsActionData {
+    fn pack(&self, _writer: &mut Vec<u8>) {}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModifyCharacterSquelchActionData {
     pub add: bool,
@@ -690,6 +706,23 @@ mod tests {
     use crate::test_helpers::assert_pack_unpack_parity;
     use byteorder::{LittleEndian, WriteBytesExt};
     use holtburger_common::CharacterOption;
+
+    /// social-lists-1: `/friends remove -all` → GameAction 0x0025 with an
+    /// empty body, and it unpacks back to the typed variant.
+    #[test]
+    fn test_remove_all_friends_packs_opcode_0x25() {
+        let action = GameActionMessage {
+            sequence: 9,
+            action: GameAction::RemoveAllFriends(Box::new(RemoveAllFriendsActionData {})),
+        };
+        let mut packed = Vec::new();
+        action.pack(&mut packed);
+        assert_eq!(packed, vec![9, 0, 0, 0, 0x25, 0, 0, 0]);
+        let mut offset = 0;
+        let parsed = GameActionMessage::unpack(&packed, &mut offset).expect("unpack");
+        assert_eq!(offset, packed.len());
+        assert_eq!(parsed, action);
+    }
 
     #[test]
     fn test_raise_attribute_parity() {

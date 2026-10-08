@@ -29,6 +29,7 @@ import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pe
 import { emitterPosThree, threeToAc } from "../scene3d/audio/emitter_position.js";
 import { radarBlankAfterEnviron } from "../scene3d/target_cycle.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
+import { characterErrorInfo, retailCharErrorsEnabled } from "./login_ui_rules.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
  *  pumpNetFrame (kind 4 Disconnected): stop draining this batch. */
@@ -663,17 +664,37 @@ export function dispatchClientEvent(evt, D) {
     //     handle, full Connect+Spawn retry)
     const code = evt.u32Payload >>> 0;
     const name = evt.stringPayload || `Unknown(${code})`;
+    // login-2 (round 4, 2026-10-08): retail gmUIFlow::RecvNotice_
+    // CharacterError (acclient.c:183837) — the ID_CHAR_ERROR_* sentence,
+    // fatal codes back to the logon screen, 2 / 7 / 22 silent.
+    const info = characterErrorInfo(code);
     window.__lastCharacterError = {
       ts: Date.now(),
       code,
       name,
+      mode: info.mode,
+      message: info.text,
     };
     console.warn(`[character-error] ${name} (0x${code.toString(16)})`);
-    if (loginStatus) {
+    if (loginStatus && !retailCharErrorsEnabled()) {
       loginStatus.innerHTML =
         // escapeHtml: server-supplied label into innerHTML. The
         // __lastCharacterError stash above keeps the RAW name.
         `<span class="fail">[ACE]</span> CharacterError: <code>${escapeHtml(name)}</code> (0x${code.toString(16)})`;
+    } else if (loginStatus && info.mode !== "ignore" && info.text) {
+      // Fatal (account in use, server full, …): retail drops to the logon
+      // screen. This page has one session per load, so hide the character
+      // list (a new login re-shows it) and point at the reload.
+      const fatal = info.mode === "fatal";
+      loginStatus.innerHTML =
+        `<span class="fail">[FAIL]</span> ${escapeHtml(info.text)}` +
+        (fatal ? ` <span class="hint">Reload the page to log in again.</span>` : "");
+      if (fatal) {
+        try {
+          const sel = document.getElementById("selection");
+          if (sel) sel.hidden = true;
+        } catch (_) { /* best-effort */ }
+      }
     }
   } else if (evt.kind === ClientEventKind.PLAYER_STATS_UPDATED) {
     // Phase 4 step 4 follow-on: PlayerStatsUpdated.
@@ -991,6 +1012,33 @@ export function dispatchClientEvent(evt, D) {
     import('../scene3d/portal_space.js')
       .then((m) => m.signalPortalArrived({ cellId }))
       .catch(() => {});
+    // streaming-teleport-2 (2026-10-08 follow-ups, `?teleportHook`): the wasm
+    // teleport hook turns autorun off at this same edge (retail
+    // CommandInterpreter::PlayerTeleported → SetAutoRun(0,1), which prints
+    // "AutoRun OFF", acclient.c:716924 / :718270-718287). Clear the autorun
+    // key handler's mirror so the next toggle turns it ON again.
+    if (window.__autoRunOn === true &&
+        !/[?&]teleportHook=(?:off|0|false)(?:&|$)/i.test(globalThis.location?.search || "")) {
+      window.__autoRunOn = false;
+      try { appendChatLine("AutoRun OFF", 10); } catch (_) {}
+    }
+  } else if (evt.kind === ClientEventKind.CONFIRMATION_REQUEST || evt.kind === ClientEventKind.CONFIRMATION_DONE) {
+    // crafting-1 (2026-10-08): server confirmation dialogs (GameEvent
+    // 0x0274 / 0x0276). u32Payload = type, u32Payload2 = context,
+    // stringPayload = text (request only). plugins/server-confirm.js shows
+    // the retail Yes/No dialog and answers via sendConfirmationResponse.
+    const detail = {
+      type: (evt.u32Payload ?? 0) >>> 0,
+      context: (evt.u32Payload2 ?? 0) >>> 0,
+      text: typeof evt.stringPayload === "string" ? evt.stringPayload : "",
+    };
+    const isRequest = evt.kind === ClientEventKind.CONFIRMATION_REQUEST;
+    try {
+      window.dispatchEvent(new CustomEvent(isRequest ? "hb:server-confirm-request" : "hb:server-confirm-done", { detail }));
+    } catch (_) {}
+    try {
+      window.__pluginClient?.events?.emit?.(isRequest ? "serverConfirmRequest" : "serverConfirmDone", detail);
+    } catch (_) {}
   } else if (evt.kind === ClientEventKind.CONTRACTS_UPDATED /* ContractsUpdated */) {
     // Wave F.5 (2026-05-27): ACE pushed either
     // `GameEvent::SendClientContractTrackerTable` (opcode
@@ -1842,6 +1890,19 @@ export function dispatchClientEvent(evt, D) {
       && typeof window.liveScene3d.entityManager.setAirborne === "function"
     ) {
       window.liveScene3d.entityManager.setAirborne(airborneGuid, airborne);
+    }
+  } else if (evt.kind === ClientEventKind.REMOTE_MOVETO_PHASE) {
+    // R3 moveto-4 (2026-10-08 follow-ups) — a REMOTE MoveToManager
+    // node-motion edge (wasm TickMovement arm, next to the D7 airborne
+    // edges). `u32Payload` = entity GUID; `u32Payload2` = the full
+    // MotionCommand the node now holds (TurnRight / TurnLeft / WalkForward /
+    // WalkBackwards / RunForward) or 0 (stopped → Ready). Retail's remote
+    // animation follows the node (`MoveToManager::_DoMotion`,
+    // acclient.c:344753); EntityManager.applyRemoteMoveToPhase plays it
+    // (`?remoteMoveToPhase=off` ignores it there).
+    const em = window.liveScene3d?.entityManager;
+    if (em && typeof em.applyRemoteMoveToPhase === "function") {
+      em.applyRemoteMoveToPhase(evt.u32Payload >>> 0, evt.u32Payload2 >>> 0);
     }
   } else if (evt.kind === ClientEventKind.SOUND_TRIGGERED) {
     // Task F (ambient-sounds-chain 2026-05-12):

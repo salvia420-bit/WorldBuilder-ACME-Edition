@@ -28,6 +28,7 @@
 
 import { weenieErrorMessage } from "./weenie_error_messages.js";
 import { ClientEventKind } from "../scene3d/client_event_kinds.js";
+import { portalSpaceBusy } from "../ui/portal_busy.js";
 
 const STYLE_ID = "hb-rejection-feedback-style";
 const RECENT_ACTION_TTL_MS = 2000;
@@ -171,6 +172,8 @@ function _installProxy() {
 //   - cast windup: __combatBarState.armedSpellId !== 0
 //   - bootState: anything other than 'in-world' or 'ready' is busy
 function _isBusy() {
+  // streaming-teleport-5: portal space (retail teleportInProgress busy count).
+  try { if (portalSpaceBusy()) return true; } catch (_) {}
   try {
     const armed = (window.__combatBarState?.armedSpellId >>> 0) || 0;
     if (armed !== 0) return true;

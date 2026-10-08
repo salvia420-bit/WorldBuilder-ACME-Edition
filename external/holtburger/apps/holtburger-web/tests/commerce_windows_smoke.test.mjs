@@ -305,8 +305,12 @@ const handle = {
   bookData: (g) => calls.push(["bookData", g]),
   bookModifyPage: (g, p, ia, text) => calls.push(["bookModifyPage", g, p, ia, text]),
   bookAddPage: (g) => calls.push(["bookAddPage", g]),
+  bookDeletePage: (g, p) => calls.push(["bookDeletePage", g, p]),
   setInscription: (g, t) => calls.push(["setInscription", g, t]),
-  playerHouseStatus: () => ({ errorCode: 0, isHouseOwner: true, free() {} }),
+  // housing-2 (round 4): ACE answers an owner's Query House with HouseData
+  // ONLY — HouseStatus (0x0226) is never errorCode 0 (it is BadParam / no
+  // house, or HouseEvicted), so an owner has no status snapshot at all.
+  playerHouseStatus: () => undefined,
   playerHouseData: () => ({ houseType: 1, landblockId: 0xA9B40019, posX: 100, posY: 50, posZ: 0, buyTime: 1_700_000_000,
     rentTime: Math.floor(Date.now() / 1000) - 86400, maintenanceFree: false, free() {} }),
   playerHouseProfile: () => undefined,
@@ -656,6 +660,72 @@ await check("Inscribe → Save sends setInscription; Esc while editing cancels i
   assert.ok(findButton(root, "Edit"), "back to read mode");
 });
 
+await check("books-journal-1/2: a page someone else wrote is read-only; closing saves; blank own page deletes; Next past the end adds", () => {
+  // Retail gmBookUI (acclient.c:238214 / :238301 / :238407): editable only
+  // when authorID == player || ignoreAuthor; leaving a page saves it.
+  const root = byId("hb-book-panel");
+  book = {
+    objectGuid: 0x80000011, authorName: "", inscription: "", maxCharsPerPage: 1000, maxNumPages: 10,
+    scribeId: 0,
+    pages: [
+      { text: "Lore of old.", authorName: "Gaerlan", authorId: 0x50000099, ignoreAuthor: false, textIncluded: true },
+      { text: "My notes.", authorName: "Me", authorId: PLAYER, ignoreAuthor: false, textIncluded: true },
+    ],
+  };
+  bus.emit("bookUpdated", {});
+  assert.ok(isOpen("hb-book-panel"));
+  assert.match(text("hb-book-panel"), /Lore of old\./);
+  assert.equal(findButton(root, "Edit").disabled, true, "someone else's page is read-only");
+  assert.equal(findButton(root, "Delete").disabled, true);
+  // Turn to my page, write, then close the book: the page is saved.
+  calls.length = 0;
+  root.querySelector(".hbo-next").click();
+  assert.match(text("hb-book-panel"), /My notes\./);
+  assert.equal(findButton(root, "Edit").disabled, false);
+  findButton(root, "Edit").click();
+  root.querySelector(".hbo-edit").value = "My notes, revised.";
+  root.querySelector(".hbo-close").click();
+  assert.deepEqual(calls[0], ["bookModifyPage", 0x80000011, 1, false, "My notes, revised."], "close saves");
+  // Reopen (the same book keeps its page, retail OpenBook); blank my page
+  // and turn back: the page is deleted (CloseCurPage).
+  calls.length = 0;
+  bus.emit("bookUpdated", {});
+  assert.match(text("hb-book-panel"), /My notes\./, "re-opened on the page it was left at");
+  findButton(root, "Edit").click();
+  root.querySelector(".hbo-edit").value = "  \n";
+  root.querySelector(".hbo-prev").click();
+  assert.deepEqual(calls[0], ["bookDeletePage", 0x80000011, 1]);
+  // Next past the last page asks for a new page.
+  calls.length = 0;
+  root.querySelector(".hbo-next").click(); // to page 2 (index 1)
+  root.querySelector(".hbo-next").click(); // past the end → add
+  assert.deepEqual(calls[0], ["bookAddPage", 0x80000011]);
+});
+
+await check("books-journal-2: Next past a blank last page you wrote is refused with retail's line", () => {
+  const root = byId("hb-book-panel");
+  const lines = [];
+  window.__appendChatLine = (t, cat) => lines.push([t, cat]);
+  book = {
+    objectGuid: 0x80000012, authorName: "", inscription: "", maxCharsPerPage: 1000, maxNumPages: 10,
+    scribeId: 0,
+    pages: [{ text: "", authorName: "Me", authorId: PLAYER, ignoreAuthor: false, textIncluded: true }],
+  };
+  calls.length = 0;
+  bus.emit("bookUpdated", {});
+  root.querySelector(".hbo-next").click();
+  assert.equal(calls.filter((c) => c[0] === "bookAddPage").length, 0, "no add");
+  assert.match(lines.at(-1)?.[0] ?? "", /is already open to a blank page$/);
+  assert.equal(lines.at(-1)?.[1], 9, "transient (0x1A) chat");
+  delete window.__appendChatLine;
+  // Restore the fixture the later checks expect.
+  book = {
+    objectGuid: 0x80000010, authorName: "Gaerlan", inscription: "", maxCharsPerPage: 1000, maxNumPages: 10,
+    pages: [{ text: "The first page.", authorName: "Gaerlan" }, { text: "The second page.", authorName: "Gaerlan" }],
+  };
+  bus.emit("bookUpdated", {});
+});
+
 /* ── [6] house ────────────────────────────────────────────────────────── */
 console.log("[house]");
 await check("House tab shows status, dwelling, map location and maintenance — no hex landblock", () => {
@@ -669,6 +739,41 @@ await check("House tab shows status, dwelling, map location and maintenance — 
   assert.doesNotMatch(t, HEX);
   findButton(byId("hb-house-panel"), "Query House").click();
   assert.deepEqual(calls.at(-1), ["houseQuery"]);
+  assert.equal(findButton(byId("hb-house-panel"), "Abandon House").disabled, false, "owner can abandon");
+});
+
+await check("housing-2: HouseStatus is a failure notice — no data → not owner, eviction text, Abandon off", () => {
+  const savedStatus = handle.playerHouseStatus;
+  const savedData = handle.playerHouseData;
+  try {
+    // ACE Query House with no house: HouseStatus(BadParam), no HouseData.
+    handle.playerHouseStatus = () => ({ errorCode: 0x0002, isHouseOwner: false, free() {} });
+    handle.playerHouseData = () => undefined;
+    window.__closeHousePanel();
+    window.__openHousePanel("house");
+    let t = text("hb-house-panel");
+    assert.match(t, /You do not own a house/);
+    assert.doesNotMatch(t, /You own a house/);
+    assert.doesNotMatch(t, /Cottage/);
+    assert.equal(findButton(byId("hb-house-panel"), "Abandon House").disabled, true);
+    // Eviction refresh: HouseStatus(HouseEvicted).
+    handle.playerHouseStatus = () => ({ errorCode: 0x045F, isHouseOwner: false, free() {} });
+    window.__closeHousePanel();
+    window.__openHousePanel("house");
+    t = text("hb-house-panel");
+    assert.match(t, /You were evicted/);
+    // Negative control: the old rule needed errorCode 0 — with HouseData
+    // present and no status the owner view must still show.
+    handle.playerHouseStatus = () => undefined;
+    handle.playerHouseData = savedData;
+    window.__closeHousePanel();
+    window.__openHousePanel("house");
+    assert.match(text("hb-house-panel"), /You own a house/);
+  } finally {
+    handle.playerHouseStatus = savedStatus;
+    handle.playerHouseData = savedData;
+    window.__closeHousePanel();
+  }
 });
 
 await check("a new HouseProfile (covenant crystal used) opens the Buy tab with the crystal filled in", async () => {

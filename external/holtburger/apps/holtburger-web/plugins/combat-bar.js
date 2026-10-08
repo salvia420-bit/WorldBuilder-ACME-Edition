@@ -27,6 +27,7 @@ import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
 import { spellTargetClass } from "../ui/ac_spell_target_type.js";
 import { announceCastRefusal, MSG_NO_SELECTION } from "../ui/ac_spell_target_compat.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
+import { refuseCombatModeInPortalSpace } from "../ui/portal_busy.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 import {
   wrongStanceForArmed,
@@ -1664,6 +1665,8 @@ function renderStanceHeader(bodyEl, client) {
     btn.textContent = w === "Peace" ? "Enter Combat" : "Peace";
   }
   btn.addEventListener("click", () => {
+    // streaming-teleport-5: retail refuses a stance change in portal space.
+    if (refuseCombatModeInPortalSpace()) return;
     try {
       // Use the JS-side stance label as the source of truth for
       // current state — read `__getCurrentStanceLow()` (authoritative;

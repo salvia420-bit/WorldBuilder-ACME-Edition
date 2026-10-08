@@ -15,7 +15,9 @@ use super::motion_interp::{
     leave_ground_velocity_for_state,
 };
 use super::motion_table_manager::{MotionTableEvent, MotionTableManager};
-use super::move_to::{MoveToSteer, MoveToView, USE_MOVETO_DRIVER, WE_ACTION_CANCELLED};
+use super::move_to::{
+    MoveToSteer, MoveToView, USE_MOVETO_DRIVER, WE_ACTION_CANCELLED, WE_I_TELEPORTED,
+};
 use super::movement_manager::{MovementManager, MovementStruct, USE_UNPACK_MOVEMENT_SEMANTICS};
 use super::params::MovementParameters;
 use super::stall_recovery::MoveToStallRecovery;
@@ -186,7 +188,9 @@ fn attempt_precipice_slide(
     let new_gy = new_y + off_y;
     let z2 = world.terrain_height_at(new_gx, new_gy)?;
     let z2 = if USE_WATER_COLLISION {
-        z2 + world.water_depth_at(new_gx, new_gy)
+        // landdefs-terrain-3: retail sinks the resting floor `water_depth`
+        // below the plane (`water_floor_offset_at`; `?fallbackWaterRetail`).
+        z2 + world.water_floor_offset_at(new_gx, new_gy)
     } else {
         z2
     };
@@ -2221,6 +2225,12 @@ pub(crate) struct MovementSystem {
     /// the speed-argument command form (cmd 0x09000047 + float)
     /// changes it, which we don't surface.
     auto_run: bool,
+    /// streaming-teleport-2 (2026-10-08 follow-ups) — NATIVE runtime only:
+    /// a `PlayerTeleport` arrived and the destination pose has not been
+    /// applied yet ([`Self::arm_teleport_hook`] /
+    /// [`Self::fire_armed_teleport_hook`]). The wasm runtime fires the hook
+    /// straight from its seq-matched TeleportArrived edge instead.
+    teleport_hook_armed: bool,
 }
 
 /// One operation for the interpreter lane's shared ingest
@@ -2229,6 +2239,8 @@ pub(crate) struct MovementSystem {
 enum InterpOp {
     KeyEdge { action: u32, down: bool },
     MaybeStopCompletely,
+    /// streaming-teleport-2 — `CommandInterpreter::PlayerTeleported`.
+    PlayerTeleported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2254,6 +2266,17 @@ enum QueuedDriveCommand {
     /// retail slidecasting needs re-tapping (PARITY-LEDGER H2 / R1).
     /// Interpreter lane only; ingested beside KeyEdge (needs world access).
     MaybeStopCompletely,
+    /// streaming-teleport-2 (2026-10-08 follow-ups, `?teleportHook`) — the
+    /// LOCAL player's teleport landed: retail
+    /// `SmartBox::PlayerPositionUpdated(teleporting=1)` (acclient.c:
+    /// 144695-144712, from `TeleportPlayer` :144733 when the destination
+    /// UpdatePosition carries a newer teleport stamp, :145196-145198) runs
+    /// `CPhysicsObj::teleport_hook` (:322237: CancelMoveTo(0x3C ITeleported),
+    /// UnStick, …) and then `CommandInterpreter::PlayerTeleported` (:716924:
+    /// SetAutoRun(0,1) + SendMovementEvent). Both lanes; ingested beside
+    /// KeyEdge (needs world access). See
+    /// [`MovementSystem::apply_player_teleported`].
+    PlayerTeleported,
     Autonomous(AutonomousDriveIntent),
     Transient(TransientMotionIntent),
     ArriveAtPose {
@@ -2398,6 +2421,12 @@ enum PendingPursuitCommand {
     Cancel {
         restore_manual: bool,
     },
+    /// streaming-teleport-2 — `CPhysicsObj::teleport_hook`'s
+    /// `MovementManager::CancelMoveTo(0x3C ITeleported)`
+    /// (acclient.c:322237-322248): cancels ANY local MoveTo (an S10 pursuit
+    /// or a server-commanded one), with no manual restore — the same arm as
+    /// `Cancel { restore_manual: false }`, latching 0x3C instead of 0x36.
+    Teleported,
     /// rynth Phase-1 — retail `MoveToPosition` type 7. The origin is the
     /// command's own pose (no target lookup, no zero-fallback risk).
     MoveToPosition {
@@ -2579,6 +2608,7 @@ impl MovementSystem {
             local_pursuit_engaged: false,
             moveto_stall: MoveToStallRecovery::default(),
             auto_run: false,
+            teleport_hook_armed: false,
         }
     }
 
@@ -3207,6 +3237,10 @@ impl MovementSystem {
                 interp.maybe_stop_completely(&mut seams);
                 true
             }
+            InterpOp::PlayerTeleported => {
+                interp.player_teleported(&mut seams);
+                true
+            }
         };
         let dispatched = seams.dispatched;
         let drive = seams.drive;
@@ -3658,6 +3692,62 @@ impl MovementSystem {
             ));
         } else {
             self.active_drive = Some(ActiveDriveState::manual(base, None));
+        }
+    }
+
+    /// streaming-teleport-2 (2026-10-08 follow-ups, `?teleportHook`) — the
+    /// LOCAL player's teleport landed (the destination pose was applied):
+    /// queue retail's teleport hook for the next tick (it needs world
+    /// access). The wasm runtime calls this from its seq-matched
+    /// TeleportArrived edge (`session/messages/position.rs`); the native
+    /// runtime arms at `PlayerTeleport` and fires on the next self
+    /// UpdatePosition ([`Self::arm_teleport_hook`]).
+    pub(crate) fn player_teleported(&mut self) {
+        self.queued_drive_commands
+            .push(QueuedDriveCommand::PlayerTeleported);
+    }
+
+    /// streaming-teleport-2 — native runtime: a `PlayerTeleport` arrived;
+    /// the hook fires with the next self UpdatePosition (the destination).
+    pub(crate) fn arm_teleport_hook(&mut self) {
+        self.teleport_hook_armed = true;
+    }
+
+    /// streaming-teleport-2 — native runtime: a self UpdatePosition was
+    /// applied; fire the hook armed by the preceding `PlayerTeleport`.
+    pub(crate) fn fire_armed_teleport_hook(&mut self) {
+        if std::mem::take(&mut self.teleport_hook_armed) {
+            self.player_teleported();
+        }
+    }
+
+    /// streaming-teleport-2 — retail `SmartBox::PlayerPositionUpdated(
+    /// teleporting=1)` for the local player (acclient.c:144695-144712):
+    ///
+    /// 1. `CPhysicsObj::teleport_hook` (:322237-322266):
+    ///    `MovementManager::CancelMoveTo(0x3C)` — any local MoveTo (S10
+    ///    pursuit or server-commanded) ends with ITeleported (the pending
+    ///    pursuit entry, applied later this tick) — and
+    ///    `PositionManager::UnStick`. Its StopInterpolating / UnConstrain /
+    ///    ClearTarget halves are not mirrored here: the destination
+    ///    UpdatePosition that triggers this already re-anchors the local
+    ///    pose and leash (retail re-runs `ConstrainTo` right after
+    ///    `TeleportPlayer`, :145199-145201).
+    /// 2. `CommandInterpreter::PlayerTeleported` (:716924): `SetAutoRun(0,1)`
+    ///    + `SendMovementEvent`. Autorun lives in two carriers here: this
+    ///    system's `auto_run` overlay (the `setAutoRun` key bridge) is
+    ///    dropped first — the drive falls back to the held keys, as retail's
+    ///    ApplyCurrentMovement re-reads the SubstateList — then, on the
+    ///    interpreter lane, the interpreter's own `PlayerTeleported` runs
+    ///    (clears its `auto_run`, sends the movement event). On the legacy
+    ///    lane the drive change rides the usual send edge.
+    fn apply_player_teleported(&mut self, now: Instant, world: &mut WorldState) {
+        self.pending_pursuit_commands
+            .push(PendingPursuitCommand::Teleported);
+        world.scene.unstick_local_player();
+        self.set_auto_run(false);
+        if self.cmd_interp_enabled() {
+            self.ingest_interp_op(InterpOp::PlayerTeleported, now, world);
         }
     }
 
@@ -4348,7 +4438,9 @@ impl MovementSystem {
                         restore_manual: true,
                     });
             }
-            QueuedDriveCommand::KeyEdge { .. } | QueuedDriveCommand::MaybeStopCompletely => {
+            QueuedDriveCommand::KeyEdge { .. }
+            | QueuedDriveCommand::MaybeStopCompletely
+            | QueuedDriveCommand::PlayerTeleported => {
                 // Extracted by the tick's drain loop BEFORE this dispatch
                 // (the interpreter lane needs world access); unreachable
                 // here.
@@ -4507,6 +4599,11 @@ impl MovementSystem {
         // BEFORE ingestion so a first key edge in this same tick already
         // finds an enabled interpreter.
         self.attach_command_interpreter_at_world_entry(now, world);
+        // streaming-teleport-2: the teleport hook runs AFTER this tick's
+        // ingestion and its TakeControl consume (the interpreter op asserts
+        // the FU5 bit is clear), still before the pursuit apply and the send
+        // flush below.
+        let mut teleport_hook = false;
         for command in queued {
             match command {
                 // Interpreter lane — needs world access (TakeControl's
@@ -4518,10 +4615,14 @@ impl MovementSystem {
                 QueuedDriveCommand::MaybeStopCompletely => {
                     self.ingest_interp_op(InterpOp::MaybeStopCompletely, now, world);
                 }
+                QueuedDriveCommand::PlayerTeleported => teleport_hook = true,
                 command => self.ingest_drive_command(command, now, local_guid),
             }
         }
         self.consume_pending_take_control(world);
+        if teleport_hook {
+            self.apply_player_teleported(now, world);
+        }
 
         // Wave-1 step 5 — the retail per-frame UseTime pump (FU-A
         // reclaim of held/queued input under a pure server control
@@ -4827,7 +4928,13 @@ impl MovementSystem {
         for command in commands {
             let mut effects = MotionSideEffects::default();
             match command {
-                PendingPursuitCommand::Cancel { restore_manual } => {
+                PendingPursuitCommand::Cancel { .. } | PendingPursuitCommand::Teleported => {
+                    let (restore_manual, cancel_error) = match command {
+                        PendingPursuitCommand::Cancel { restore_manual } => {
+                            (restore_manual, WE_ACTION_CANCELLED)
+                        }
+                        _ => (false, WE_I_TELEPORTED),
+                    };
                     // 2026-10-07 — the JS `cancelPursuit` export
                     // (`restore_manual`) ends only a pursuit the JS
                     // installed (S10 lane: `local_pursuit_engaged` with no
@@ -4850,7 +4957,7 @@ impl MovementSystem {
                         continue;
                     };
                     let was_active = manager.is_moveto_active();
-                    let out = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
+                    let out = manager.cancel_moveto_with_effects(cancel_error, on_contact, &mut effects);
                     self.local_pursuit_engaged = false;
                     // F2 — the wire speed resolution dies with the
                     // directive it was installed for.
@@ -5001,7 +5108,9 @@ impl MovementSystem {
                                 None => MovementStruct::MoveToPosition { origin, params },
                             }
                         }
-                        PendingPursuitCommand::Cancel { .. } => unreachable!("handled above"),
+                        PendingPursuitCommand::Cancel { .. } | PendingPursuitCommand::Teleported => {
+                            unreachable!("handled above")
+                        }
                     };
                     let manager = self.movement_managers.entry(guid).or_default();
                     let _ = manager.perform_movement(&mvs, on_contact, None, &mut effects);
@@ -6777,8 +6886,13 @@ impl MovementSystem {
                 // EntirelyWater stays hard-blocked by the arm below (+0.9
                 // only matters for the airborne landing plane). `0.0` for dry
                 // cells / uncached water grids ⇒ byte-identical default.
+                // landdefs-terrain-3 (`?fallbackWaterRetail`, default): retail
+                // `validate_walkable` adds `water_depth` to the signed distance
+                // (acclient.c:314223-314227) — the walker rests that far BELOW
+                // the plane (`water_floor_offset_at` = `-depth`); `=off` keeps
+                // the F4-4 raise described above.
                 let z = if USE_WATER_COLLISION {
-                    z + world.water_depth_at(global.x, global.y)
+                    z + world.water_floor_offset_at(global.x, global.y)
                 } else {
                     z
                 };
@@ -10205,6 +10319,9 @@ pub(crate) fn drive_remote_movetos(
         };
         if !manager.is_moveto_active() {
             world.scene.set_remote_moveto(guid, false, None, None);
+            // R3 moveto-4: no directive → no node motion (a phase edge to
+            // Ready only if the last tick still held one).
+            world.scene.note_remote_moveto_motion(guid, 0);
             continue;
         }
         let target_pos = match manager.moveto_directive_target() {
@@ -10218,6 +10335,7 @@ pub(crate) fn drive_remote_movetos(
                     let mut effects = MotionSideEffects::default();
                     let _ = manager.cancel_moveto_with_effects(0x37, on_contact, &mut effects);
                     world.scene.set_remote_moveto(guid, false, None, None);
+                    world.scene.note_remote_moveto_motion(guid, 0);
                     continue;
                 }
                 pose
@@ -10304,6 +10422,17 @@ pub(crate) fn drive_remote_movetos(
         world
             .scene
             .set_remote_moveto(guid, manager.is_moveto_active(), drive, out.set_heading);
+        // R3 moveto-4 (2026-10-08 follow-ups): the remote rig's animation
+        // phase follows the NODE, as retail's does (`_DoMotion`
+        // acclient.c:344753 drives the mover's own interp): the scene
+        // records an edge when the node motion changes (turn-in-place →
+        // run → stop), drained into the JS phase event by the wasm tick.
+        // Read from the manager, not the per-slice steer: the steer is
+        // absent while the body is airborne (the UseTime contact gate,
+        // :346024), but the node still holds its motion on the interp.
+        world
+            .scene
+            .note_remote_moveto_motion(guid, manager.moveto_node_motion());
     }
 }
 

@@ -371,13 +371,109 @@ function getInscriptionForGuid(guid) {
   return null;
 }
 
+// books-journal-3 (2026-10-08): retail writes inscriptions HERE, not in the
+// book window. ItemExamineUI::SetInscription (acclient.c:229275-229380)
+// shows the inscription box only for an Inscribable item (PublicWeenieDesc
+// bitfield 0x2); with no ScribeName it reads "<Inscribe here>". The save
+// path (:229410-229449) sends CM_Writing::Event_SetInscription only when the
+// text changed. ACE accepts it for an owned Inscribable item that is
+// unsigned or signed by this character (Player_Inventory.cs
+// HandleActionSetInscription). `?examineInscribe=off` (or 0/false) keeps
+// the old read-only parchment.
+export const ODF_INSCRIBABLE = 0x2;
+export const INSCRIBE_PLACEHOLDER = "<Inscribe here>";
+const INSCRIPTION_MAX = 280;
+
+let _examineInscribeOn = null;
+export function examineInscribeEnabled(search) {
+  if (typeof search === "string") {
+    const v = new URLSearchParams(search).get("examineInscribe")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  }
+  if (_examineInscribeOn === null) {
+    try { _examineInscribeOn = examineInscribeEnabled(globalThis.location?.search ?? ""); }
+    catch (_) { _examineInscribeOn = true; }
+  }
+  return _examineInscribeOn;
+}
+
+/**
+ * Pure gate: may the local player write this item's inscription?
+ * @param {{descFlags:number, owned:boolean, scribeName?:string|null, myName?:string|null}} o
+ */
+export function inscriptionEditable({ descFlags = 0, owned = false, scribeName = null, myName = null } = {}) {
+  if (((descFlags >>> 0) & ODF_INSCRIBABLE) === 0) return false;
+  if (!owned) return false;
+  const scribe = typeof scribeName === "string" ? scribeName.trim() : "";
+  if (!scribe) return true;
+  return typeof myName === "string" && myName.trim() !== "" && scribe === myName.trim();
+}
+
+function localPlayerName() {
+  try {
+    const g = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    const h = getHandle();
+    if (!g || !h) return null;
+    const n = typeof h.objectName === "function" ? h.objectName(g) : null;
+    return typeof n === "string" && n ? n : null;
+  } catch (_) { return null; }
+}
+
+function scribeNameFor(guid) {
+  const fromAppraisal = readAppraisal(guid)?.properties?.strings?.ScribeName;
+  if (typeof fromAppraisal === "string") return fromAppraisal;
+  try {
+    const v = getHandle()?.objectStringProperty?.(guid >>> 0, 8);
+    return typeof v === "string" ? v : null;
+  } catch (_) { return null; }
+}
+
+function canWriteInscription(guid) {
+  if (!guid || !examineInscribeEnabled()) return false;
+  const h = getHandle();
+  if (typeof h?.objectDescFlags !== "function" || typeof h?.setInscription !== "function") return false;
+  let descFlags = 0;
+  try { descFlags = h.objectDescFlags(guid >>> 0) >>> 0; } catch (_) { descFlags = 0; }
+  return inscriptionEditable({
+    descFlags,
+    owned: !!getItemByGuid(guid),
+    scribeName: scribeNameFor(guid),
+    myName: localPlayerName(),
+  });
+}
+
+// The inscription being written (one at a time): saved on blur and when the
+// examine body unmounts. Re-renders skip the paper while it is being edited.
+let _inscEdit = null; // { guid, el, original }
+
+function commitInscriptionEdit() {
+  const ed = _inscEdit;
+  if (!ed) return false;
+  _inscEdit = null;
+  let text = String(ed.el?.textContent ?? "");
+  if (text === INSCRIBE_PLACEHOLDER) text = "";
+  if (text.length > INSCRIPTION_MAX) text = text.slice(0, INSCRIPTION_MAX);
+  if (text === ed.original) return false;
+  try {
+    getHandle()?.setInscription?.(ed.guid >>> 0, text);
+    return true;
+  } catch (e) {
+    console.warn("[examine] setInscription failed:", e);
+    return false;
+  }
+}
+
 // Retail ItemInscriptionText + ItemInscriptionSignatureText on the
-// parchment. Read-only (P2-44: examine never prompts for an inscription;
-// the dedicated /inscribe path owns writing).
+// parchment. Writable per the retail gate above; read-only otherwise.
 function renderInscription(wrapEl, guid) {
   if (!wrapEl) return;
+  // Don't tear the parchment down under the player's cursor.
+  if (_inscEdit && _inscEdit.guid === (guid >>> 0) && _inscEdit.el?.isConnected &&
+      wrapEl.contains(_inscEdit.el)) return;
   wrapEl.innerHTML = "";
-  const info = getInscriptionForGuid(guid);
+  const writable = canWriteInscription(guid);
+  let info = getInscriptionForGuid(guid);
+  if (!info && writable) info = { text: "", ownedByPlayer: true };
   if (!info) { wrapEl.style.display = "none"; return; }
   wrapEl.style.display = "";
   const divider = document.createElement("div");
@@ -389,8 +485,34 @@ function renderInscription(wrapEl, guid) {
   const trimmed = info.text.length > 280 ? info.text.slice(0, 280) : info.text;
   const text = document.createElement("div");
   text.className = "hb-exa-paper-text";
-  text.textContent = trimmed.length > 0 ? trimmed : "(The inscription is blank.)";
-  if (trimmed.length === 0) paper.classList.add("is-blank");
+  if (writable) {
+    // Retail: an unsigned inscribable item reads "<Inscribe here>".
+    text.textContent = trimmed.length > 0 ? trimmed : INSCRIBE_PLACEHOLDER;
+    if (trimmed.length === 0) paper.classList.add("is-blank");
+    text.contentEditable = "true";
+    text.spellcheck = true;
+    text.setAttribute("role", "textbox");
+    text.setAttribute("aria-label", "Inscription");
+    const g = guid >>> 0;
+    text.addEventListener("focus", () => {
+      if (text.textContent === INSCRIBE_PLACEHOLDER) text.textContent = "";
+      paper.classList.remove("is-blank");
+      _inscEdit = { guid: g, el: text, original: trimmed };
+    });
+    text.addEventListener("blur", () => {
+      if (_inscEdit?.el === text) commitInscriptionEdit();
+      if (!text.textContent) { text.textContent = INSCRIBE_PLACEHOLDER; paper.classList.add("is-blank"); }
+    });
+    text.addEventListener("keydown", (ev) => {
+      // Keep typing out of the game's key bindings; Esc / Enter leave the box.
+      ev.stopPropagation();
+      if (ev.key === "Escape") { text.textContent = trimmed; text.blur(); }
+      else if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); text.blur(); }
+    });
+  } else {
+    text.textContent = trimmed.length > 0 ? trimmed : "(The inscription is blank.)";
+    if (trimmed.length === 0) paper.classList.add("is-blank");
+  }
   paper.appendChild(text);
   const scribe = readAppraisal(guid)?.properties?.strings?.ScribeName;
   if (scribe && trimmed.length > 0) {
@@ -1246,6 +1368,8 @@ export function mountExamineBody(parentEl, ctx, opts = {}) {
     // backoff schedule doesn't outlive the panel's unmount.
     cancelIdentifyRetry();
     clearTimeout(pendingTimer);
+    // books-journal-3: an inscription being written is saved on close.
+    if (_inscEdit && _inscEdit.guid === ((examineGuid ?? 0) >>> 0)) commitInscriptionEdit();
     if (paperdollViewport) {
       try { paperdollViewport.dispose(); } catch (_) {}
       paperdollViewport = null;

@@ -72,3 +72,40 @@ export function weenieErrorMessage(code) {
   const hex = (code >>> 0).toString(16).toUpperCase().padStart(4, "0");
   return `WeenieError 0x${hex}`;
 }
+
+// use-3 remainder (2026-10-08 follow-ups): retail
+// ClientCommunicationSystem::HandleFailureEvent (acclient.c:415858-415867) —
+// MotionFailure 0x23 / ObjectGone 0x37 / NoObject 0x38 / CantGetThere 0x39
+// call `ClientUISystem::SetGroundObject(0, 1)` before printing "Unable to move
+// to object!". UseDone(error) reaches it through Handle_Item__UseDone
+// (acclient.c:401924). SetGroundObject (acclient.c:401643-401687) closes the
+// open ground container, tells the server (`Event_NoLongerViewingContents`,
+// askServer = 1) and drops a selection owned by it; with no ground container
+// open it does nothing. Escape: `?moveFailCloseGround=off` (also 0/false).
+export const GROUND_OBJECT_CLEAR_CODES = Object.freeze([0x0023, 0x0037, 0x0038, 0x0039]);
+
+/// True for the WeenieError codes whose retail failure handler clears the
+/// ground object (see GROUND_OBJECT_CLEAR_CODES).
+export function clearsGroundObjectOnFailure(code) {
+  return GROUND_OBJECT_CLEAR_CODES.includes((code >>> 0) || 0);
+}
+
+/// `?moveFailCloseGround` reader — DEFAULT ON; `off` / `0` / `false` (any
+/// case) disable. `search` defaults to the page's query string.
+export function moveFailCloseGroundEnabled(search) {
+  let s = search;
+  if (typeof s !== "string") {
+    try {
+      s = globalThis.location?.search ?? "";
+    } catch (_) {
+      s = "";
+    }
+  }
+  try {
+    const v = new URLSearchParams(s).get("moveFailCloseGround");
+    if (v == null) return true;
+    return !["off", "0", "false"].includes(String(v).toLowerCase());
+  } catch (_) {
+    return true;
+  }
+}

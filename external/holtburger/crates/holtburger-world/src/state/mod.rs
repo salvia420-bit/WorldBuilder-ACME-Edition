@@ -1,3 +1,4 @@
+pub mod blob_queue;
 pub mod fellowship;
 pub mod liveness;
 pub mod motion_resolution;

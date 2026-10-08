@@ -181,6 +181,10 @@ const CORPSE_STUBS = {
   hideItemTooltip: NOT_ON_SNAPSHOT_PATH("hideItemTooltip"),
   showItemToast: NOT_ON_SNAPSHOT_PATH("showItemToast"),
   localPlayerGuid: "() => 0",
+  // use-3 remainder (2026-10-08 follow-ups): the kind:13 move-failure
+  // handler — never reached by refreshContents().
+  clearsGroundObjectOnFailure: NOT_ON_SNAPSHOT_PATH("clearsGroundObjectOnFailure"),
+  moveFailCloseGroundEnabled: NOT_ON_SNAPSHOT_PATH("moveFailCloseGroundEnabled"),
 };
 
 // container-panel additionally pulls the drop-flag / ui-effect helpers.

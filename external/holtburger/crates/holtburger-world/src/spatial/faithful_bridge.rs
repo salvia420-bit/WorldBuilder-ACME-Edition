@@ -266,6 +266,15 @@ pub struct SceneObjCell {
     /// [`Self::get_water_depth`] for the PartiallyWater corner lookup (retail
     /// `CLandBlockStruct::calc_water_depth`: 0.45 at a water corner, 0.1 at land).
     corner_is_water: [bool; 4],
+    /// landdefs-terrain-1 (2026-10-08 follow-ups): the cell's LANDBLOCK water
+    /// type — retail `myLandBlock_->water_type`, set by
+    /// `CLandBlockStruct::CalcWater` (acclient.c:354566): EntirelyWater only
+    /// when all 64 cells are entirely water (all 81 vertices water), else
+    /// PartiallyWater if any vertex is, else NotWater ([`landblock_water_type`]).
+    /// Returned by [`CObjCell::get_block_water_type`] (:346439) and read by the
+    /// open-sea wall in [`Self::find_terrain_collisions`]. `NotWater` for
+    /// indoor cells, a landblock without resident codes, and `?openSeaWall=off`.
+    block_water_type: WaterType,
 }
 
 impl SceneObjCell {
@@ -305,13 +314,16 @@ impl SceneObjCell {
             Some(p) => p,
             None => return TransitionState::OK as i32,
         };
-        // Entirely-water landblock ⇒ a non-viewer mover is blocked (`Collided`).
-        // (Missile is not a movement mover on this path.) Uses the ported
-        // `CObjCell::get_block_water_type`; `None` landblock ⇒ NotWater today, so
-        // this never fires until live water is wired (WS8). VERIFY(WS8): outdoor
-        // water type/depth via the live `WorldState` samplers.
+        // The open-sea wall (acclient.c:355030-355033): an ENTIRELY-water
+        // landblock (`CObjCell::get_block_water_type() == 2`, every one of its 64
+        // cells all-water) blocks any mover that is neither the viewer
+        // (`object_info.state & 4`) nor a missile (`object->state & 0x40`) —
+        // `Collided`. landdefs-terrain-1: the block type now rides the cell
+        // ([`Self::block_water_type`], `?openSeaWall`); an entirely-water CELL in
+        // a partly-water block is NOT a wall (it wades at 0.9 below).
         if self.get_block_water_type() == WaterType::EntirelyWater
             && transition.object_info.state & object_info_state::IS_VIEWER == 0
+            && !transition.object_info.missile
         {
             return TransitionState::Collided as i32;
         }
@@ -433,6 +445,13 @@ impl CObjCell for SceneObjCell {
                 }
             }
         }
+    }
+
+    /// `CObjCell::get_block_water_type` (acclient.c:346439) — `myLandBlock_->
+    /// water_type`, carried on the cell (this bridge builds no `LandblockRef`,
+    /// so the trait default would always read NotWater). landdefs-terrain-1.
+    fn get_block_water_type(&self) -> WaterType {
+        self.block_water_type
     }
 
     fn cur_landblock(&self) -> Option<Rc<dyn LandblockRef>> {
@@ -853,6 +872,7 @@ impl<'a> SceneWorld<'a> {
             // E3.6: indoor cells are never water.
             water_type: WaterType::NotWater,
             corner_is_water: [false; 4],
+            block_water_type: WaterType::NotWater,
         };
         Some(Rc::new(cell) as Rc<dyn CObjCell>)
     }
@@ -1097,11 +1117,12 @@ fn landblock_world_origin(cell_id: u32) -> Vector3 {
 /// `SurfChar` agrees). All four corners ⇒ EntirelyWater; any ⇒ PartiallyWater;
 /// none ⇒ NotWater. Returns the per-corner flags for the wading-depth lookup.
 ///
-/// NOTE: the legacy heightfield path's `WorldState::is_water_terrain_code` also
-/// counts codes 22/23 — but retail `TERRAIN_SURF_CHAR[22/23]` and ACE `SurfChar`
-/// both mark those SOLID, so the faithful path uses only `16..=20`.
+/// NOTE: retail `TERRAIN_SURF_CHAR[22/23]` and ACE `SurfChar` both mark codes
+/// 22/23 SOLID, so only `16..=20` count; the heightfield fallback's
+/// `WorldState::is_water_terrain_code` agrees since landdefs-terrain-3 (its
+/// `?fallbackWaterRetail=off` escape keeps the old 22/23 set).
 fn classify_cell_water(corner_codes: [u8; 4]) -> (WaterType, [bool; 4]) {
-    let is_water = |c: u8| matches!(c & 0x1f, 16..=20);
+    let is_water = is_retail_water_code;
     let flags = [
         is_water(corner_codes[0]),
         is_water(corner_codes[1]),
@@ -1115,6 +1136,27 @@ fn classify_cell_water(corner_codes: [u8; 4]) -> (WaterType, [bool; 4]) {
         _ => WaterType::PartiallyWater,
     };
     (water_type, flags)
+}
+
+/// `TERRAIN_SURF_CHAR[code] == WATER` (acclient.c:41303): the five retail
+/// water terrain types `16..=20`. Codes 22/23 (FauxWater) are SOLID.
+pub(crate) fn is_retail_water_code(code: u8) -> bool {
+    matches!(code & 0x1f, 16..=20)
+}
+
+/// landdefs-terrain-1 (2026-10-08 follow-ups) — `CLandBlockStruct::CalcWater`
+/// (acclient.c:354566): a landblock's water type from its 9×9 vertex terrain
+/// codes. `block_has_water` is set by any cell with a water corner, and the
+/// block is EntirelyWater only when EVERY one of the 8×8 cells is all-water
+/// (`CalcCellWater` :353608 — all four corners), i.e. all 81 vertices are
+/// water. So: no water vertex ⇒ NotWater; all 81 ⇒ EntirelyWater; otherwise
+/// PartiallyWater — a coastal block is never a wall.
+pub(crate) fn landblock_water_type(codes: &[u8; 81]) -> WaterType {
+    match codes.iter().filter(|&&c| is_retail_water_code(c)).count() {
+        0 => WaterType::NotWater,
+        81 => WaterType::EntirelyWater,
+        _ => WaterType::PartiallyWater,
+    }
 }
 
 /// The WORLD-space planes of `cell_id`'s EXTERIOR portals (`other_cell_id`
@@ -1240,6 +1282,16 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         }
         None => (WaterType::NotWater, [false; 4]),
     };
+    // landdefs-terrain-1: the landblock's water type (`CalcWater`) for the
+    // open-sea wall; `?openSeaWall=off` ⇒ NotWater (never a wall).
+    let block_water_type = if scene.open_sea_wall_enabled() {
+        scene
+            .terrain_cell_water_codes(cell_id)
+            .map(landblock_water_type)
+            .unwrap_or(WaterType::NotWater)
+    } else {
+        WaterType::NotWater
+    };
 
     // Collision F1: `CSortCell::building`'s portal targets, resolved like
     // `CBldPortal::GetOtherCell` → `CEnvCell::GetVisible` (acclient.c:362493)
@@ -1280,6 +1332,7 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         landblock_origin,
         water_type,
         corner_is_water,
+        block_water_type,
     }) as ObjCellHandle
 }
 
@@ -2586,7 +2639,7 @@ pub(crate) fn faithful_diag_step(
 mod drift {
     use super::{
         classify_cell_water, faithful_diag_step, faithful_find_transitional_position,
-        FaithfulMover, SceneWorld, WaterType,
+        landblock_water_type, FaithfulMover, SceneWorld, WaterType,
     };
     use holtburger_dat::transition::objcell::CellWorld;
     use crate::spatial::entity_collision::EntityCollider;
@@ -6257,8 +6310,11 @@ mod drift {
 
         // find_collisions on a mover penetrating flat terrain 0.2 below; returns
         // (code, whether a walkable contact plane was recorded → grounded).
-        let run = |codes: [u8; 81]| -> (i32, bool) {
-            let scene = outdoor_scene_with_water([Z; 81], codes);
+        // `state` / `missile` = the mover's OBJECTINFO state / MISSILE bit;
+        // `wall` = `?openSeaWall`.
+        let run_as = |codes: [u8; 81], state: u32, missile: bool, wall: bool| -> (i32, bool) {
+            let mut scene = outdoor_scene_with_water([Z; 81], codes);
+            scene.set_open_sea_wall_enabled(wall);
             let world = SceneWorld::new(&scene);
             let cell = world.get_visible(cell_id).expect("cell");
             let spheres = [
@@ -6267,7 +6323,8 @@ mod drift {
             ];
             let mut t = CTransition::new();
             t.object_info.scale = 1.0;
-            t.object_info.state = object_info_state::CONTACT;
+            t.object_info.state = state;
+            t.object_info.missile = missile;
             t.init_sphere(2, &spheres, 1.0);
             let mut curr = Frame::identity();
             curr.origin = v(cx, cy, Z);
@@ -6281,19 +6338,98 @@ mod drift {
             let code = cell.find_collisions(&mut t);
             (code, t.collision_info.contact_plane.is_some())
         };
+        let run = |codes: [u8; 81]| run_as(codes, object_info_state::CONTACT, false, true);
 
         // Dry terrain: the penetrating mover is ADJUSTED up onto a walkable contact.
         let (dry_code, dry_grounded) = run([0u8; 81]);
         assert_eq!(dry_code, TransitionState::Adjusted as i32, "dry ⇒ adjusted up");
         assert!(dry_grounded, "dry terrain records a walkable contact plane");
 
-        // Entirely-water cell: the 0.9 wading depth lifts the support plane above
-        // the mover's feet ⇒ it HOVERS (Ok) with NO walkable contact — the cell
-        // gives no ground to stand on (faithful `validate_walkable` v17 > 0 branch,
-        // acclient.c:314227; the "can't stand on deep water" outcome).
-        let (water_code, water_grounded) = run([19u8; 81]);
-        assert_eq!(water_code, TransitionState::Ok as i32, "all-water ⇒ no adjust");
+        // Entirely-water CELL in a PARTLY-water landblock (one far vertex dry —
+        // vertex (0,0) is no corner of cell (4,4)): not a wall. The 0.9 wading
+        // depth lifts the support plane above the mover's feet ⇒ it HOVERS (Ok)
+        // with NO walkable contact (faithful `validate_walkable` v17 > 0 branch,
+        // acclient.c:314227) — it sinks toward 0.9 below the surface instead.
+        let mut coastal = [19u8; 81];
+        coastal[0] = 0;
+        let (water_code, water_grounded) = run(coastal);
+        assert_eq!(water_code, TransitionState::Ok as i32, "all-water cell, coastal block ⇒ no wall");
         assert!(!water_grounded, "all-water cell records NO walkable contact");
+    }
+
+    /// landdefs-terrain-1 (2026-10-08 follow-ups) — retail's open-sea wall:
+    /// `CLandCell::find_env_collisions` returns Collided on an ENTIRELY-water
+    /// LANDBLOCK (`get_block_water_type() == 2`, acclient.c:355030-355033;
+    /// `CLandBlockStruct::CalcWater` :354566 — all 81 vertices water) unless
+    /// the mover is the viewer (`state & 4`) or a missile (`object->state &
+    /// 0x40`); `?openSeaWall=off` drops it. Mirrors OpenAC OpenSeaBarrierTests.
+    #[test]
+    fn outdoor_open_sea_landblock_is_a_wall_except_viewer_and_missile() {
+        use holtburger_dat::transition::objcell::CellWorld;
+        use holtburger_dat::transition::types::TransitionState;
+        const Z: f32 = 50.0;
+        let cell_id = OLB | (4 * 8 + 4 + 1);
+        let (cx, cy) = outdoor_cell_center(4, 4);
+        let r = player().radius;
+        let h = player().height;
+        let run_as = |codes: [u8; 81], state: u32, missile: bool, wall: bool| -> i32 {
+            let mut scene = outdoor_scene_with_water([Z; 81], codes);
+            scene.set_open_sea_wall_enabled(wall);
+            let world = SceneWorld::new(&scene);
+            let cell = world.get_visible(cell_id).expect("cell");
+            assert_eq!(
+                cell.get_block_water_type(),
+                if wall { landblock_water_type(&codes) } else { WaterType::NotWater }
+            );
+            let spheres = [
+                Sphere { center: v(0.0, 0.0, r), radius: r },
+                Sphere { center: v(0.0, 0.0, (h - r).max(r)), radius: r },
+            ];
+            let mut t = CTransition::new();
+            t.object_info.scale = 1.0;
+            t.object_info.state = state;
+            t.object_info.missile = missile;
+            t.init_sphere(2, &spheres, 1.0);
+            let mut curr = Frame::identity();
+            curr.origin = v(cx, cy, Z);
+            let mut chk = Frame::identity();
+            chk.origin = v(cx, cy, Z - 0.2);
+            t.sphere_path.curr_pos = Position { objcell_id: cell_id, frame: curr };
+            t.sphere_path.check_pos = Position { objcell_id: cell_id, frame: chk };
+            t.sphere_path.curr_cell = Some(cell_id);
+            t.sphere_path.check_cell = Some(cell_id);
+            t.sphere_path.cache_global_sphere(None);
+            cell.find_collisions(&mut t)
+        };
+        let walker = object_info_state::CONTACT;
+        let collided = TransitionState::Collided as i32;
+        assert_eq!(run_as([19u8; 81], walker, false, true), collided, "open sea walls a walker");
+        assert_ne!(
+            run_as([19u8; 81], walker | object_info_state::IS_VIEWER, false, true),
+            collided,
+            "the viewer crosses the open sea"
+        );
+        assert_ne!(run_as([19u8; 81], walker, true, true), collided, "a missile crosses it");
+        assert_ne!(run_as([19u8; 81], walker, false, false), collided, "?openSeaWall=off");
+        let mut coastal = [19u8; 81];
+        coastal[80] = 0;
+        assert_ne!(run_as(coastal, walker, false, true), collided, "a coastal block is no wall");
+    }
+
+    /// landdefs-terrain-1 — `CalcWater` block classes from the 81 vertex codes.
+    #[test]
+    fn landblock_water_type_matches_calc_water() {
+        assert_eq!(landblock_water_type(&[0u8; 81]), WaterType::NotWater);
+        assert_eq!(landblock_water_type(&[19u8; 81]), WaterType::EntirelyWater);
+        let mut one_dry = [16u8; 81];
+        one_dry[40] = 1;
+        assert_eq!(landblock_water_type(&one_dry), WaterType::PartiallyWater);
+        let mut one_wet = [0u8; 81];
+        one_wet[0] = 20;
+        assert_eq!(landblock_water_type(&one_wet), WaterType::PartiallyWater);
+        // FauxWater 22/23 are SOLID (TERRAIN_SURF_CHAR, acclient.c:41303).
+        assert_eq!(landblock_water_type(&[22u8; 81]), WaterType::NotWater);
+        assert_eq!(landblock_water_type(&[23u8; 81]), WaterType::NotWater);
     }
 
     // (a0b) DIRECT cell-body proof on a SLOPED grid: the contact plane the terrain

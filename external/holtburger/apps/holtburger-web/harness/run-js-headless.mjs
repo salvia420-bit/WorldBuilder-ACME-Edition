@@ -730,6 +730,34 @@ const TIER5 = [
   // 2026-10-08 — A3-radar-audio round 2 audio-2: sounds on a wielded item play
   // at the hand's world position (real EntityManager + attachChildToParent).
   { tier: 5, flag: "attachedSoundPos", file: "tests/audio_attached_emitter.test.mjs" },
+  // 2026-10-08 (follow-ups) — use-3 remainder: a UseDone move failure
+  // (0x23/0x37/0x38/0x39) closes the open ground container, as retail
+  // HandleFailureEvent's SetGroundObject(0, 1) does (`?moveFailCloseGround`).
+  { tier: 5, flag: "moveFailCloseGround", file: "tests/use_fail_ground_object.test.mjs" },
+  // 2026-10-08 (follow-ups, batch 2) — moveto-4: a remote MoveTo's clip
+  // follows the Rust MoveToManager node (turn in place → walk/run → Ready),
+  // ClientEvent kind 67 → applyRemoteMoveToPhase (`?remoteMoveToPhase`).
+  { tier: 5, flag: "remoteMoveToPhase", file: "tests/remote_moveto_phase.test.mjs" },
+  // 2026-10-08 (follow-ups, batch 3) — streaming-teleport-2: the TeleportArrived
+  // edge clears the autorun key mirror the wasm teleport hook turned off
+  // (`?teleportHook`).
+  { tier: 5, flag: "teleportHook", file: "tests/teleport_hook_autorun.test.mjs" },
+  // 2026-10-08 (round 3) — crafting / books / portal busy: the server
+  // ConfirmationRequest dialog (crafting-1), the retail gmSalvageUI suitability
+  // gate + result chat line (crafting-2/3), gmBookUI page rules + examine
+  // inscriptions (books-journal-1..4), portal space as busy (streaming-teleport-5).
+  { tier: 5, flag: "serverConfirmUi", file: "tests/server_confirm.test.mjs" },
+  { tier: 5, flag: "salvageSuitable", file: "tests/salvage_suitable.test.mjs" },
+  { tier: 5, flag: "bookRetailPages", file: "tests/book_retail_pages.test.mjs" },
+  { tier: 5, flag: "portalBusy", file: "tests/portal_busy.test.mjs" },
+  // 2026-10-08 (round 4) — training / social commands / character select:
+  // Unusable-section skills train + retail confirm text + real attribute /
+  // vital spent xp (training-1..3), retail /friends /squelch /filter
+  // /messagetypes client commands (social-lists-1), CharacterError texts,
+  // greyed character rows, log-off on teardown (login-1..3).
+  { tier: 5, flag: "trainUnusable", file: "tests/train_unusable.test.mjs" },
+  { tier: 5, flag: "retailSocialCmds", file: "tests/social_commands.test.mjs" },
+  { tier: 5, flag: "retailCharErrors", file: "tests/login_retail_rules.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

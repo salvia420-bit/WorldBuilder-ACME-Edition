@@ -34,6 +34,16 @@ pub(crate) struct LoopFlags {
     pub(crate) spawn_hidden_state_on: bool,
     pub(crate) wielded_spawn_on: bool,
     pub(crate) pickup_leave_world_on: bool,
+    /// createobj-5 (2026-10-08 follow-ups): `?lifecycleStampGates` (ON).
+    pub(crate) lifecycle_stamp_gates_on: bool,
+    /// held-3 (2026-10-08 follow-ups): `?objectBlobQueue` (ON).
+    pub(crate) object_blob_queue_on: bool,
+    /// streaming-teleport-2 (2026-10-08 follow-ups): `?teleportHook` (ON).
+    pub(crate) teleport_hook_on: bool,
+    /// landdefs-terrain-1 (2026-10-08 follow-ups): `?openSeaWall` (ON).
+    pub(crate) open_sea_wall_on: bool,
+    /// landdefs-terrain-3 (2026-10-08 follow-ups): `?fallbackWaterRetail` (ON).
+    pub(crate) fallback_water_retail_on: bool,
     pub(crate) world_lifecycle_on: bool,
     pub(crate) unified_tick_on: bool,
     pub(crate) maint_prune_on: bool,

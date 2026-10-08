@@ -487,8 +487,12 @@ pub enum GameActionOpcode {
     IdentifyObject = 0x00C8,
     // /// C2S: Set character options/settings.
     // SetCharacterOptions = 0x01A1,
-    // /// C2S: Remove all characters from the friends list.
-    // RemoveAllFriends = 0x0025,
+    /// C2S: Remove all characters from the friends list (retail
+    /// `CM_Social::Event_ClearFriends`, `/friends remove -all`; Chorizite
+    /// `Social_ClearFriends`). Empty payload. ACE
+    /// `GameActionRemoveAllFriends` → `HandleActionRemoveAllFriends` clears
+    /// the DB and sends nothing back (social-lists-1, 2026-10-08).
+    RemoveAllFriends = 0x0025,
     // /// C2S: Query a character's creation age.
     // QueryAge = 0x01C2,
     // /// C2S: Query a character's birth date.

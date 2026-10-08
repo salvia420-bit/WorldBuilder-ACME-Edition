@@ -29,8 +29,15 @@
 //           plain speech runs PublicChat (:426025) — inline `*pose*` /
 //           `<pose>` tokens soul-emote and drop out of the spoken text.
 //   chat-5  /reply uses the retail DoReply strings (:417665).
+//
+// social-lists-1 (round 4, 2026-10-08): the retail client verbs friends /
+// friends_add / friends_remove / squelch / unsquelch / filter / unfilter /
+// messagetypes run locally (app/social_commands.js) instead of going to
+// the server as `@verb` (vanilla ACE has none of them). `?retailSocialCmds=off`
+// restores the forward.
 
 import { CHAT_CATEGORY } from "./chat_log.js";
+import { SOCIAL_CLIENT_VERBS, runSocialCommand, retailSocialCmdsEnabled } from "./social_commands.js";
 
 // ── Retail command tables ─────────────────────────────────────────────────
 // Retail aliased the tell verb five ways (tell/t/send/whisper/w → DoTell).
@@ -93,6 +100,7 @@ export const RETAIL_CLIENT_VERBS = new Set([
   ...TELL_ALIASES, ...REPLY_ALIASES, ...RETELL_ALIASES, ...SAY_ALIASES, ...EMOTE_ALIASES,
   ...Object.keys(CHANNEL_MAP).filter((v) => !NON_RETAIL_CHANNEL_VERBS.has(v)),
   ...Object.keys(TURBINE_CMDS),
+  ...SOCIAL_CLIENT_VERBS,
 ]);
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -123,7 +131,9 @@ export function normalizeChatLine(message) {
   if (c === ":" || c === ";") return { kind: "command", line: `/emote ${m.slice(1)}` };
   if (c === "/") return { kind: "command", line: m };
   if (c === "@") {
-    return RETAIL_CLIENT_VERBS.has(parseCommandLine(m).cmd)
+    const verb = parseCommandLine(m).cmd;
+    const social = SOCIAL_CLIENT_VERBS.includes(verb);
+    return RETAIL_CLIENT_VERBS.has(verb) && (!social || retailSocialCmdsEnabled())
       ? { kind: "command", line: `/${m.slice(1)}` }
       : { kind: "server", line: m };
   }
@@ -388,6 +398,27 @@ export function initSlashCommands() {
                  error: `/${cmd}: ${e?.message || e}` };
       }
       return { dispatched: true, echo: null };
+    }
+
+    // social-lists-1 (round 4, 2026-10-08): retail client-side friends /
+    // squelch / filter commands (ClientCommunicationSystem::DoFriends,
+    // DoSquelch, DoUnSquelch, PerformGlobalSquelchMod, DoMessageTypes).
+    // Their text goes straight to the chat window (retail AddTextToScroll,
+    // system text) and is also returned as `lines` for callers / tests.
+    if (SOCIAL_CLIENT_VERBS.includes(cmd) && retailSocialCmdsEnabled()) {
+      let res;
+      try {
+        res = runSocialCommand(cmd, rest, handle, {
+          lastTeller: window.__chatLastIncomingTellSender
+            ?? (typeof handle.lastTellerName === "function" ? handle.lastTellerName() : null),
+        });
+      } catch (e) {
+        return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` };
+      }
+      const lines = res?.lines ?? [];
+      const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
+      if (append) for (const line of lines) append(line, CHAT_CATEGORY.SYSTEM);
+      return { dispatched: true, echo: null, lines, category: CHAT_CATEGORY.SYSTEM };
     }
 
     // Wave 9 Phase 9.3 (2026-05-26) — soul emote slash commands

@@ -290,7 +290,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // scene3d/death_hold.js, scene3d/held_location.js, scene3d/sky_game_date.js,
   // ui/ac_character_options.js (generator --check: up to date, 360 modules)
   // → 348.
-  const NON_APP_PRELOADS = 348;
+  // 2026-10-08 (follow-ups + round 3): + scene3d/remote_moveto_phase.js,
+  // ui/portal_busy.js (generator --check: up to date, 362 modules) → 350.
+  const NON_APP_PRELOADS = 350;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)

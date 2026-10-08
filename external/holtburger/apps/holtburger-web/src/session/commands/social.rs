@@ -17,6 +17,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         state,
         movement,
         entity_seeded,
+        latest_friends,
         ..
     } = &mut *ctx;
     match cmd {
@@ -590,6 +591,35 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             console_log_str(&format!(
                 "[friends/remove] target=0x{friend_guid:08X}",
             ));
+        }
+        SessionCommand::ClearFriends => {
+            // social-lists-1 (2026-10-08, round 4): retail
+            // `/friends remove -all` → CM_Social::Event_ClearFriends
+            // (0x0025). ACE (HandleActionRemoveAllFriends) clears the
+            // DB and pushes nothing, so flush the local list like retail
+            // gmFriendsUI::RecvNotice_ChatCommand_RemoveAllFriends and
+            // raise friendsUpdated.
+            use holtburger_protocol::messages::{
+                GameAction, RemoveAllFriendsActionData,
+            };
+            let action = GameAction::RemoveAllFriends(Box::new(RemoveAllFriendsActionData {}));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(RemoveAllFriends): {e}",
+                "clear_friends: {e}",
+                LoopFlow::Exit
+            );
+            *latest_friends.borrow_mut() = Some(FriendsSnapshot { friends: Vec::new() });
+            queued_events.borrow_mut().push(ClientEvent {
+                kind: CLIENT_EVENT_KIND_FRIENDS_UPDATED,
+                string_payload: None,
+                u32_payload: None,
+                u32_payload_2: None,
+                f32_payload: None,
+            });
+            console_log_str("[friends/clear]");
         }
         SessionCommand::ModifyCharacterSquelch {
             target_guid,

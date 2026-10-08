@@ -207,7 +207,9 @@ await check("5: the wasm PickupEvent arm keeps a wielder-owned rig (leave-world 
   const arm = objects.slice(objects.indexOf("GameMessage::PickupEvent(data) => {"));
   const owned = arm.indexOf("let owned = pickup_leave_world_on");
   const sentinel = arm.indexOf("motion_stance: ATTACH_PLACEMENT_LEAVE_WORLD");
-  const early = arm.indexOf("return LoopFlow::Continue;");
+  // The owned branch's own early return (createobj-5 added an earlier
+  // stamp-gate `return` at the top of the arm, so search after the sentinel).
+  const early = arm.indexOf("return LoopFlow::Continue;", sentinel);
   const removeLedger = arm.indexOf("js_spawned_guids.remove(");
   assert.ok(owned > 0 && /e\.wielder_id\(\)\.is_some\(\)/.test(arm.slice(owned, sentinel)));
   assert.ok(owned < sentinel && sentinel < early && early < removeLedger,

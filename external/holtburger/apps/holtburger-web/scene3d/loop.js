@@ -3764,6 +3764,12 @@ function _armMotion(scene3d, em, upd) {
       st,
       +(upd.motionSpeed ?? 1.0)
     );
+    // R3 moveto-4 (2026-10-08 follow-ups, `?remoteMoveToPhase`): a re-sent
+    // MoveTo's walk/run hint must not replace the node motion the Rust
+    // MoveToManager still holds (an unchanged node emits no new phase edge).
+    if (!isLocalPlayerGuid(motionGuid)) {
+      try { em.reapplyRemoteMoveToPhase?.(motionGuid, motionCmd); } catch (_) {}
+    }
   } else if (revive) {
     em.setMotion(motionGuid, revive, st || em.getStance?.(motionGuid) || 0x8000003d, 1.0);
   } else if (st !== 0) {

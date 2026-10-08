@@ -924,6 +924,15 @@ pub struct Entity {
     pub spell_book: Vec<u32>,
     pub book: Option<BookData>,
 
+    /// housing-3 (2026-10-08, round 4): retail `pwd._db` — the house's
+    /// RestrictionDB from the CreateObject HouseRestrictions block, replaced
+    /// by newer `HouseUpdateRestrictions` (0x0248). `None` for non-houses.
+    /// See [`crate::house`].
+    pub house_restriction_db: Option<crate::house::RestrictionDb>,
+    /// housing-3: retail `WTimeStamper::_house_ts` — the last accepted
+    /// 0x0248 1-byte timestamp (starts 0, like the retail stamper).
+    pub house_restriction_ts: u8,
+
     pub armor_highlight: Option<u16>,
     pub armor_color: Option<u16>,
     pub weapon_highlight: Option<u16>,
@@ -1006,6 +1015,9 @@ const OBJECT_VECTOR_SEQUENCE_INDEX: usize = 3;
 const OBJECT_TELEPORT_SEQUENCE_INDEX: usize = 4;
 const OBJECT_SERVER_CONTROL_SEQUENCE_INDEX: usize = 5;
 const OBJECT_FORCE_POSITION_SEQUENCE_INDEX: usize = 6;
+/// `ObjDesc` stamp — retail `CPhysicsObj::update_times[7]` (`OBJDESC_TS`),
+/// gated by `SmartBox::UpdateVisualDesc` (acclient.c:143302-143330).
+const OBJECT_VISUAL_DESC_SEQUENCE_INDEX: usize = 7;
 const OBJECT_INSTANCE_SEQUENCE_INDEX: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1089,6 +1101,104 @@ impl Entity {
         }
         self.sequences[OBJECT_STATE_SEQUENCE_INDEX] = state_sequence;
         true
+    }
+
+    /// The object's instance stamp — retail `update_times[8]`
+    /// (`INSTANCE_TS`), seeded by ObjectCreate.
+    pub fn instance_sequence(&self) -> u16 {
+        self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX]
+    }
+
+    /// The last accepted position-channel stamp — retail `update_times[0]`
+    /// (UpdatePosition, PickupEvent and ParentEvent share it).
+    pub fn position_sequence(&self) -> u16 {
+        self.sequences[OBJECT_POSITION_SEQUENCE_INDEX]
+    }
+
+    /// The last accepted visual-desc stamp — retail `update_times[7]`.
+    pub fn visual_desc_sequence(&self) -> u16 {
+        self.sequences[OBJECT_VISUAL_DESC_SEQUENCE_INDEX]
+    }
+
+    /// The instance leg every retail `SmartBox::Handle*` shares
+    /// (HandleDeleteObject :143262, HandleObjDescEvent :144356,
+    /// HandleVectorUpdate :144434, HandlePickupEvent :144473,
+    /// HandleParentEvent :144512, the 0xF74C dispatch :392816-392833):
+    /// a NEWER (or unknown) instance is queued, an EQUAL one applies, and an
+    /// OLDER one is dropped. True only for the drop case. (createobj-5,
+    /// 2026-10-08 follow-ups.)
+    pub fn is_older_instance(&self, instance_sequence: u16) -> bool {
+        is_newer_u16(self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX], instance_sequence)
+    }
+
+    /// Shared shape of the per-channel stamp gates: an older instance
+    /// drops; a same-instance stamp must be strictly newer (wrap-aware) and
+    /// is then recorded; a NEWER instance means a re-created object, which
+    /// retail queues until its ObjectCreate lands. held-3: the wasm queues a
+    /// PickupEvent / ParentEvent in that case before it reaches the world
+    /// (`state::blob_queue`, `?objectBlobQueue`); every other caller (the
+    /// native runtime, the queue off, ObjDescEvent) applies it and records
+    /// the stamp (the `accept_set_state_sequence` precedent). The instance
+    /// itself is never adopted here (createobj-1 keeps `update_times[8]` for
+    /// re-create disposition).
+    fn accept_instance_channel_stamp(
+        &mut self,
+        instance_sequence: u16,
+        index: usize,
+        stamp: u16,
+    ) -> bool {
+        let current_instance = self.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX];
+        if instance_sequence == current_instance {
+            if !is_newer_u16(stamp, self.sequences[index]) {
+                return false;
+            }
+        } else if !is_newer_u16(instance_sequence, current_instance) {
+            return false;
+        }
+        self.sequences[index] = stamp;
+        true
+    }
+
+    /// Retail `SmartBox::HandlePickupEvent` + `DoPickupEvent`
+    /// (acclient.c:144473-144509, :143483-143500): instance leg, then a
+    /// strictly newer `update_times[0]`, which is recorded.
+    pub(crate) fn accept_position_channel(
+        &mut self,
+        instance_sequence: u16,
+        position_sequence: u16,
+    ) -> bool {
+        self.accept_instance_channel_stamp(
+            instance_sequence,
+            OBJECT_POSITION_SEQUENCE_INDEX,
+            position_sequence,
+        )
+    }
+
+    /// Retail `SmartBox::DoParentEvent` (acclient.c:143504-143530): the
+    /// CHILD's `update_times[0]` must be strictly newer, and is recorded.
+    /// The wire carries no child instance; `HandleParentEvent` checks the
+    /// PARENT's instance (:144512-144552), which the caller does.
+    pub(crate) fn accept_child_position(&mut self, position_sequence: u16) -> bool {
+        if !is_newer_u16(position_sequence, self.sequences[OBJECT_POSITION_SEQUENCE_INDEX]) {
+            return false;
+        }
+        self.sequences[OBJECT_POSITION_SEQUENCE_INDEX] = position_sequence;
+        true
+    }
+
+    /// Retail `SmartBox::HandleObjDescEvent` + `UpdateVisualDesc`
+    /// (acclient.c:144356-144392, :143302-143330): instance leg, then a
+    /// strictly newer `update_times[7]`, which is recorded.
+    pub(crate) fn accept_objdesc(
+        &mut self,
+        instance_sequence: u16,
+        visual_desc_sequence: u16,
+    ) -> bool {
+        self.accept_instance_channel_stamp(
+            instance_sequence,
+            OBJECT_VISUAL_DESC_SEQUENCE_INDEX,
+            visual_desc_sequence,
+        )
     }
 
     /// The entity's last-applied `ObjectVector` (VectorUpdate) stamp —
@@ -1278,6 +1388,15 @@ impl Entity {
 
         self.motion_snapshot = EntityMotionSnapshot::from_object_description(data);
 
+        // housing-3 (2026-10-08, round 4): the PWD carries the house's
+        // RestrictionDB (retail `pwd._db`); a new description replaces it
+        // wholesale, the 0x0248 timestamp (`house_restriction_ts`) stays.
+        self.house_restriction_db = data
+            .public_weenie_desc
+            .house_restrictions
+            .as_ref()
+            .map(crate::house::RestrictionDb::from_pwd);
+
         // Hydrate properties from the description (using common mapping logic)
         self.properties.hydrate_from_odd(data);
     }
@@ -1429,6 +1548,8 @@ impl Entity {
             armor_levels: None,
             spell_book: Vec::new(),
             book: None,
+            house_restriction_db: None,
+            house_restriction_ts: 0,
             armor_highlight: None,
             armor_color: None,
             weapon_highlight: None,
@@ -1576,6 +1697,68 @@ mod physics_state_predicates_tests {
         // Wrap-aware.
         e.sequences[1] = 0xFFFF;
         assert!(e.accept_movement_sequences(0, 3));
+    }
+
+    /// createobj-5 (2026-10-08 follow-ups): the instance leg shared by
+    /// every retail `SmartBox::Handle*` — older drops, equal and newer
+    /// pass (newer would be queued by retail; no blob queue here).
+    #[test]
+    fn older_instance_is_the_only_drop_case() {
+        let mut e = fixture(PhysicsState::NONE);
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 5;
+        assert!(e.is_older_instance(4));
+        assert!(!e.is_older_instance(5));
+        assert!(!e.is_older_instance(6));
+        // Wrap-aware: 0 is newer than 0xFFFF.
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 0xFFFF;
+        assert!(!e.is_older_instance(0));
+        assert!(e.is_older_instance(0xFFFE));
+        // An entity that never saw an ObjectCreate (instance 0) keeps no
+        // ACE instance out (non-players are 0, players TotalLogins).
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 0;
+        assert!(!e.is_older_instance(0));
+        assert!(!e.is_older_instance(42));
+    }
+
+    /// Retail `HandlePickupEvent` + `DoPickupEvent`: equal instance and a
+    /// strictly newer `update_times[0]`, recorded on accept; `DoParentEvent`
+    /// checks only the child's position stamp.
+    #[test]
+    fn pickup_and_parent_require_newer_position_stamp() {
+        let mut e = fixture(PhysicsState::NONE);
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 3;
+        e.sequences[OBJECT_POSITION_SEQUENCE_INDEX] = 10;
+        assert!(!e.accept_position_channel(3, 10), "duplicate stamp");
+        assert!(!e.accept_position_channel(3, 9), "older stamp");
+        assert!(!e.accept_position_channel(2, 11), "older instance");
+        assert_eq!(e.position_sequence(), 10, "nothing recorded on reject");
+        assert!(e.accept_position_channel(3, 11));
+        assert_eq!(e.position_sequence(), 11);
+        // A newer instance applies and records (no blob queue), without
+        // adopting the instance.
+        assert!(e.accept_position_channel(4, 2));
+        assert_eq!(e.position_sequence(), 2);
+        assert_eq!(e.instance_sequence(), 3);
+
+        assert!(!e.accept_child_position(2), "duplicate child stamp");
+        assert!(e.accept_child_position(3));
+        assert_eq!(e.position_sequence(), 3);
+    }
+
+    /// Retail `HandleObjDescEvent` + `UpdateVisualDesc`: equal instance and
+    /// a strictly newer `update_times[7]`.
+    #[test]
+    fn objdesc_stamp_gate() {
+        let mut e = fixture(PhysicsState::NONE);
+        e.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX] = 1;
+        e.sequences[OBJECT_VISUAL_DESC_SEQUENCE_INDEX] = 7;
+        assert!(!e.accept_objdesc(1, 7), "duplicate");
+        assert!(!e.accept_objdesc(1, 6), "older");
+        assert!(!e.accept_objdesc(0, 8), "older instance");
+        assert!(e.accept_objdesc(1, 8));
+        assert_eq!(e.visual_desc_sequence(), 8);
+        // The position channel is untouched.
+        assert_eq!(e.position_sequence(), 0);
     }
 
     /// A7-R6: an overlapped ethereal→solid transition DEFERS — the

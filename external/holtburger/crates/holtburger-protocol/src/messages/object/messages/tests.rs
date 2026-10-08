@@ -188,11 +188,33 @@ fn test_update_property_float_unpack() {
 
 #[test]
 fn test_object_delete_fixture() {
+    // A short body (guid only) stays ungated: no instance stamp.
     let expected = ObjectDeleteData {
         guid: Guid(0x50000001),
+        instance_sequence: None,
     };
     let data = hex::decode("01000050").unwrap();
     assert_pack_unpack_parity(&data, &expected);
+}
+
+/// createobj-5 (2026-10-08 follow-ups): ACE `GameMessageDeleteObject`
+/// writes guid + u16 `ObjectInstance` + `Align()` (2 pad bytes); retail
+/// `DispatchSB_DeleteObject` (acclient.c:709598-709609) reads the u16.
+#[test]
+fn test_object_delete_instance_sequence_round_trip() {
+    let expected = ObjectDeleteData {
+        guid: Guid(0x50000001),
+        instance_sequence: Some(7),
+    };
+    let data = hex::decode("0100005007000000").unwrap();
+    assert_pack_unpack_parity(&data, &expected);
+
+    // A body that ends right after the u16 (no pad) still parses.
+    let short = hex::decode("010000500700").unwrap();
+    let mut offset = 0;
+    let parsed = ObjectDeleteData::unpack(&short, &mut offset).expect("unpack");
+    assert_eq!(parsed.instance_sequence, Some(7));
+    assert_eq!(offset, short.len());
 }
 
 #[test]

@@ -793,8 +793,9 @@ impl CommandInterpreter {
     }
 
     /// `PlayerTeleported` — acclient.c:716924: SetAutoRun(0,1) then
-    /// SendMovementEvent.
-    #[allow(dead_code)] // staged: teleport wiring (PlayerTeleport → interp lane)
+    /// SendMovementEvent. Reached from `SmartBox::PlayerPositionUpdated(
+    /// teleporting=1)` (:144695-144712, right after `teleport_hook`) via
+    /// `MovementSystem::apply_player_teleported` (streaming-teleport-2).
     pub(crate) fn player_teleported(&mut self, seams: &mut dyn InterpreterSeams) {
         self.set_auto_run(seams, 0, true);
         self.send_movement_event(seams);

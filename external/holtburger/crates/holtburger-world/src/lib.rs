@@ -17,6 +17,7 @@ pub mod entity;
 pub mod equip;
 pub mod events;
 pub mod handlers;
+pub mod house;
 pub mod hydration;
 mod identify;
 pub mod inspect;

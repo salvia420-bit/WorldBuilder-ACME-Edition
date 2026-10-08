@@ -312,6 +312,16 @@ pub struct SpatialBody {
     /// remote MoveToManager would `_DoMotion`), set by the movement system's
     /// remote MoveTo pump. `None` = no steer (idle / arrived / turn done).
     pub remote_moveto: Option<RemoteMoveToDrive>,
+    /// R3 moveto-4 (2026-10-08 follow-ups): the motion the remote's
+    /// MoveToManager node currently holds on its interp — the full
+    /// MotionCommand of the last `_DoMotion` (TurnRight / TurnLeft from
+    /// `BeginTurnToHeading` acclient.c:345489-345507, WalkForward /
+    /// WalkBackwards / RunForward from `BeginMoveForward` :345371-345425),
+    /// `0` once the node is stopped or the directive ends (`BeginNextNode`
+    /// arrival → `StopCompletely` → Ready, :345521-345545). Written by
+    /// [`crate::spatial::SpatialScene::note_remote_moveto_motion`], which
+    /// records every change as a phase edge for the remote rig's animation.
+    pub remote_moveto_motion: u32,
     /// NETSYNC-3 (2026-10-07): the z omega (rad/s about +z) of this remote
     /// body's motion-table TurnRight cycle at its current stance —
     /// `MotionData.omega.z`, resolved by the world state from the entity's
@@ -400,6 +410,7 @@ impl SpatialBody {
             remote_arc: None,
             remote_moving_to: false,
             remote_moveto: None,
+            remote_moveto_motion: 0,
             remote_turn_omega_z: None,
         }
     }
@@ -421,6 +432,7 @@ impl SpatialBody {
             remote_arc: None,
             remote_moving_to: false,
             remote_moveto: None,
+            remote_moveto_motion: 0,
             remote_turn_omega_z: None,
         }
     }

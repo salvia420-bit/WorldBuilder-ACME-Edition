@@ -276,7 +276,33 @@ function render() {
   renderGuests(snap);
 }
 
-function ownership(snap) {
+/**
+ * housing-2 (2026-10-08, round 4): retail gmHouseUI keeps ONE house record
+ * — HouseData (0x0225) sets it (gmHouseUI::Update(HouseData*),
+ * acclient.c:219536) and HouseStatus (0x0226), a failed house transaction
+ * (CM_House::DispatchUI_Recv_HouseStatus :707289 →
+ * SendNotice_FailedHouseTransaction), deletes it (Update(eError) :219577).
+ * ACE answers Query House with HouseData when you own one and HouseStatus
+ * (BadParam) when you don't; eviction sends HouseStatus(HouseEvicted). So
+ * owner = HouseData present (the wasm recv loop clears the other snapshot
+ * when one arrives); a status is only ever a failure / no-house notice.
+ * `?houseOwnerFromData=off` restores the old "status code 0 = owner" rule.
+ */
+export function houseOwnerFromDataEnabled() {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search ?? "").get("houseOwnerFromData");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+export function ownership(snap) {
+  if (houseOwnerFromDataEnabled()) {
+    if (snap?.data) return { owner: true, text: "You own a house", color: KIT_COLOR.value };
+    if (!snap?.status) return { owner: false, text: "Not looked up yet — press Query House.", color: KIT_COLOR.dim };
+    const failed = snap.status.errorCode >>> 0;
+    if (failed === WEENIE_ERROR_HOUSE_EVICTED) return { owner: false, text: "You were evicted", color: KIT_COLOR.warn };
+    return { owner: false, text: "You do not own a house", color: KIT_COLOR.dim };
+  }
   if (!snap.status) return { owner: false, text: "Not looked up yet — press Query House.", color: KIT_COLOR.dim };
   const code = snap.status.errorCode >>> 0;
   if (code === WEENIE_ERROR_NONE) return { owner: true, text: "You own a house", color: KIT_COLOR.value };

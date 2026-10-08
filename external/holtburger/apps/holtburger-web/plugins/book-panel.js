@@ -28,9 +28,88 @@
 import { setAcText } from "../ui/ac_font.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
 import {
-  createKitWindow, COMMERCE_WINDOW_ID, objectDisplayName, devHex,
+  createKitWindow, COMMERCE_WINDOW_ID, objectDisplayName, devHex, findInventoryItem,
 } from "./commerce_window.js";
 import { clampPage } from "./commerce_logic.js";
+
+// ─── books-journal-1/2/3/4 (2026-10-08 round 3): retail gmBookUI rules ───
+//
+//  • Editability (gmBookUI::DisplayPageData, acclient.c:238214): a page may
+//    be typed into only when `authorID == player || ignoreAuthor`. A page
+//    whose text did not come with the book is not writable here either.
+//  • Leaving a page saves it (gmBookUI::CloseCurPage :238301, called from
+//    SetCurPage :238407 and CloseBook :238386): blank + your own page →
+//    BookDeletePage; otherwise BookModifyPage. Closing or Esc no longer
+//    throws typed text away (Cancel still does, on purpose).
+//  • Turning past the last page adds one (SetCurPage → Event_BookAddPage,
+//    with requestPending refusing further turns until the answer); turning
+//    past a blank last page you wrote is refused with
+//    "The %s is already open to a blank page" (chat 0x1A).
+//  • Title: a scribed book is titled with its inscription
+//    (gmBookUI::OpenBook :238737).
+//  • A book that is not yours (shelf / hook) closes when you walk out of
+//    its use range (OpenBook → RegisterObjectRangeHandler; OnObjectRangeExit
+//    :237788).
+//  • Inscriptions are written from the examine panel (retail
+//    ItemExamineUI); the Inscribe button here only shows for an Inscribable
+//    book you may sign.
+// Flags (default on): `?bookRetailPages=off` restores the old discard /
+// ungated behaviour; `?bookRangeClose=off` disables the range close.
+
+function bookFlagOn(name) {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search ?? "").get(name)?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+const BOOK_RETAIL_PAGES = bookFlagOn("bookRetailPages");
+const BOOK_RANGE_CLOSE = bookFlagOn("bookRangeClose");
+
+/** gmBookUI::PageTextBlank — only spaces, newlines or terminators. */
+export function isBlankBookText(text) {
+  return /^[ \n\r\0]*$/.test(String(text ?? ""));
+}
+
+/** Retail page editability; unknown author (stale pkg) fails open. */
+export function isBookPageEditable(page, playerGuid) {
+  if (!page) return false;
+  if (page.textIncluded === false) return false;
+  if (page.authorId == null) return true;
+  if (page.ignoreAuthor === true) return true;
+  const me = (playerGuid >>> 0) || 0;
+  return me !== 0 && (page.authorId >>> 0) === me;
+}
+
+/** A page the player wrote (retail deletes only those when left blank). */
+export function isOwnBookPage(page, playerGuid) {
+  if (!page) return false;
+  if (page.authorId == null) return true;
+  const me = (playerGuid >>> 0) || 0;
+  return me !== 0 && (page.authorId >>> 0) === me;
+}
+
+/**
+ * What leaving the open page sends (gmBookUI::CloseCurPage), or null.
+ * @returns {"delete"|"modify"|null}
+ */
+export function bookFlushAction(page, typedText, playerGuid) {
+  if (!isBookPageEditable(page, playerGuid)) return null;
+  if (isBlankBookText(typedText) && isOwnBookPage(page, playerGuid)) return "delete";
+  if (String(typedText ?? "") === String(page.text ?? "")) return null;
+  return "modify";
+}
+
+/** Retail title: the inscription of a scribed book, else the object name. */
+export function bookTitle(snap, objectName) {
+  const scribe = (snap?.scribeId ?? 0) >>> 0;
+  const insc = typeof snap?.inscription === "string" ? snap.inscription.trim() : "";
+  if (scribe !== 0 && scribe !== 0xFFFFFFFF && insc) return insc;
+  return objectName;
+}
+
+function localPlayerGuid() {
+  try { return (window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch (_) { return 0; }
+}
 
 const OVERLAY_ID = "hb-book-panel";
 const STYLE_ID = "hb-book-panel-style";
@@ -47,6 +126,10 @@ let lastSnapshotGuid = 0;
 // this many pages lands (the add-page ack and the bookData refetch can
 // arrive in either order).
 let jumpToCount = 0;
+// SetCurPage requestPending: an add-page request is in flight (cleared when
+// the grown book lands, or after a short failsafe).
+let addPendingUntil = 0;
+let rangeTimer = null;
 
 function ensureStyles() {
   if (typeof document === "undefined") return;
@@ -178,10 +261,18 @@ function buildOverlay() {
       top: `max(4px, min(160px, calc(100 * var(--hb-hud-vh, 1vh) - 366px)))`,
     },
     className: "hb-book",
-    onHide: () => { mode = "read"; },
-    // Esc while editing cancels the edit; a second Esc closes the book.
+    // books-journal-2: closing the book saves the open page (retail
+    // gmBookUI::CloseBook → CloseCurPage).
+    onHide: () => {
+      if (BOOK_RETAIL_PAGES && mode === "edit") flushEdit();
+      mode = "read";
+      stopRangeWatch();
+    },
+    // Esc while editing leaves the edit (saving it, books-journal-2); a
+    // second Esc closes the book.
     onEscape: () => {
       if (mode !== "read") {
+        if (BOOK_RETAIL_PAGES && mode === "edit") flushEdit();
         mode = "read";
         rerender();
         return true;
@@ -218,7 +309,13 @@ function buildOverlay() {
   const pageSel = el("select", "hbk-select", bottom);
   pageSel.title = "Go to page";
   pageSel.addEventListener("change", () => {
-    currentPageIndex = parseInt(pageSel.value, 10) || 0;
+    const target = parseInt(pageSel.value, 10) || 0;
+    if (BOOK_RETAIL_PAGES && mode === "edit" && target !== currentPageIndex) {
+      const r = flushEdit();
+      currentPageIndex = r === "delete" && target > currentPageIndex ? target - 1 : target;
+    } else {
+      currentPageIndex = target;
+    }
     mode = "read";
     rerender();
   });
@@ -263,18 +360,185 @@ function readSnapshot() {
 }
 
 function pagesOf(snap) {
-  try { return Array.from(snap?.pages || []).map((p) => ({ text: p.text ?? "", authorName: p.authorName ?? "" })); }
+  try {
+    return Array.from(snap?.pages || []).map((p) => ({
+      text: p.text ?? "",
+      authorName: p.authorName ?? "",
+      // books-journal-1: per-page author + flags (absent on a stale pkg /
+      // debug snapshot → editability fails open, as before).
+      authorId: typeof p.authorId === "number" ? (p.authorId >>> 0) : null,
+      ignoreAuthor: p.ignoreAuthor === true,
+      textIncluded: p.textIncluded !== false,
+    }));
+  }
   catch (_) { return []; }
 }
 
 function turnPage(delta) {
   const snap = readSnapshot();
   const total = pagesOf(snap).length;
-  const next = clampPage(currentPageIndex + delta, total);
+  if (BOOK_RETAIL_PAGES) {
+    if (addPending()) return; // retail requestPending refuses the turn
+    // Next past the last page adds one (gmBookUI::SetCurPage).
+    if (delta > 0 && currentPageIndex + delta >= total) {
+      requestAppendPage({ fromTurn: true });
+      return;
+    }
+  }
+  let next = clampPage(currentPageIndex + delta, total);
   if (next === currentPageIndex) return;
+  if (BOOK_RETAIL_PAGES && mode === "edit") {
+    // Leaving the page saves it; a deleted page shifts the later ones down.
+    const r = flushEdit();
+    if (r === "delete" && next > currentPageIndex) next -= 1;
+  }
   currentPageIndex = next;
   mode = "read";
   rerender();
+}
+
+function addPending() {
+  return addPendingUntil > 0 && Date.now() < addPendingUntil;
+}
+
+/**
+ * gmBookUI::CloseCurPage for the page being edited: returns what was sent
+ * ("delete" | "modify") or null. Always leaves edit mode.
+ */
+function flushEdit() {
+  if (!refs || mode !== "edit") return null;
+  mode = "read";
+  const snap = readSnapshot();
+  if (!snap) return null;
+  const page = pagesOf(snap)[currentPageIndex];
+  const typed = refs.edit.value;
+  const action = bookFlushAction(page, typed, localPlayerGuid());
+  if (!action) return null;
+  const handle = window.__sessionHandle;
+  const guid = snap.objectGuid >>> 0;
+  try {
+    if (action === "delete") {
+      if (typeof handle?.bookDeletePage !== "function") return null;
+      handle.bookDeletePage(guid, currentPageIndex);
+    } else {
+      if (typeof handle?.bookModifyPage !== "function") return null;
+      // ignore_author=false; ACE ignores this field on the wire.
+      handle.bookModifyPage(guid, currentPageIndex, false, typed);
+    }
+    refetch(handle, guid);
+    return action;
+  } catch (e) {
+    console.warn("[book-panel] page save failed:", e);
+    return null;
+  }
+}
+
+/**
+ * Add a page at the end (retail: turning past the last page). Refused with
+ * retail's line when the last page is a blank page the player wrote.
+ */
+function requestAppendPage({ fromTurn = false } = {}) {
+  const snap = readSnapshot();
+  if (!snap) return;
+  const pages = pagesOf(snap);
+  const total = pages.length;
+  const maxPages = snap.maxNumPages | 0;
+  if (maxPages > 0 && total >= maxPages) return;
+  if (addPending()) return;
+  const guid = snap.objectGuid >>> 0;
+  const me = localPlayerGuid();
+  const last = pages[total - 1];
+  const onLast = currentPageIndex === total - 1;
+  const lastText = (mode === "edit" && onLast) ? refs?.edit?.value : last?.text;
+  if (last && last.authorId != null && (onLast || !fromTurn) &&
+      isBlankBookText(lastText) && isOwnBookPage(last, me)) {
+    const name = objectDisplayName(guid, "book");
+    try { window.__appendChatLine?.(`The ${name} is already open to a blank page`, 9); } catch (_) {}
+    return;
+  }
+  if (mode === "edit") flushEdit();
+  const handle = window.__sessionHandle;
+  if (typeof handle?.bookAddPage !== "function") return;
+  try {
+    handle.bookAddPage(guid);
+    jumpToCount = total + 1; // jump to the new page once it lands
+    addPendingUntil = Date.now() + 3000;
+    refetch(handle, guid);
+  } catch (e) {
+    console.warn("[book-panel] bookAddPage failed:", e);
+  }
+}
+
+// ─── books-journal-4: range close for a book that is not yours ───────────
+function globalPos(arr) {
+  if (!Array.isArray(arr) && !(arr && typeof arr.length === "number")) return null;
+  if (arr.length < 4) return null;
+  const lb = Number(arr[0]) >>> 0;
+  if (lb === 0) return null; // no world position (contained / never placed)
+  return {
+    x: ((lb >>> 24) & 0xff) * 192 + Number(arr[1]),
+    y: ((lb >>> 16) & 0xff) * 192 + Number(arr[2]),
+    z: Number(arr[3]),
+  };
+}
+
+/**
+ * Distance at which a borrowed book closes: the object's UseRadius
+ * (PropertyFloat 54, the range retail registers) measured centre to centre,
+ * plus slack for the two bodies' radii.
+ */
+export function bookCloseDistance(useRadius) {
+  const r = Number(useRadius);
+  return (Number.isFinite(r) && r > 0 ? Math.max(r, 1) : 1) + 2.5;
+}
+
+function checkBookRange() {
+  const snap = readSnapshot();
+  if (!snap || !win?.isOpen?.()) { stopRangeWatch(); return; }
+  const guid = snap.objectGuid >>> 0;
+  if (findInventoryItem(guid)) return; // your own book never closes on distance
+  const h = window.__sessionHandle;
+  if (typeof h?.objectPosition !== "function") return;
+  const me = localPlayerGuid();
+  if (!me) return;
+  let a = null;
+  let b = null;
+  try {
+    // A book inside a container (chest, hook) is where its container is.
+    let at = guid;
+    const container = typeof h.objectInstanceIdProperty === "function"
+      ? (h.objectInstanceIdProperty(guid, 2) >>> 0) : 0;
+    if (container && container !== me) at = container;
+    a = globalPos(h.objectPosition(at));
+  } catch (_) { return; }
+  // The local runtime pose (moves with you); the entity's last server
+  // position is the fallback.
+  try {
+    const pose = typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : null;
+    if (pose) {
+      b = globalPos([pose.landblockId, pose.x, pose.y, pose.z]);
+      try { pose.free?.(); } catch (_) {}
+    }
+  } catch (_) { b = null; }
+  if (!b) { try { b = globalPos(h.objectPosition(me)); } catch (_) { return; } }
+  if (!a || !b) return;
+  let useRadius = null;
+  try { useRadius = h.objectFloatProperty?.(guid, 54) ?? null; } catch (_) {}
+  const d = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  if (d > bookCloseDistance(useRadius)) {
+    if (mode === "edit") flushEdit();
+    mode = "read";
+    win?.close();
+  }
+}
+
+function startRangeWatch() {
+  if (!BOOK_RANGE_CLOSE || rangeTimer != null) return;
+  rangeTimer = setInterval(checkBookRange, 500);
+}
+
+function stopRangeWatch() {
+  if (rangeTimer != null) { clearInterval(rangeTimer); rangeTimer = null; }
 }
 
 function updateCounter() {
@@ -301,6 +565,7 @@ function rerender() {
     currentPageIndex = 0;
     mode = "read";
     jumpToCount = 0;
+    addPendingUntil = 0;
     lastSnapshotGuid = snapGuid;
   }
   const pages = pagesOf(snap);
@@ -308,11 +573,14 @@ function rerender() {
   if (jumpToCount && total >= jumpToCount) {
     currentPageIndex = total - 1;
     jumpToCount = 0;
+    addPendingUntil = 0;
   }
   currentPageIndex = clampPage(currentPageIndex, total);
   const page = pages[currentPageIndex];
 
-  const bookName = objectDisplayName(snapGuid, "Book");
+  const bookName = BOOK_RETAIL_PAGES
+    ? bookTitle(snap, objectDisplayName(snapGuid, "Book"))
+    : objectDisplayName(snapGuid, "Book");
   win.setTitle(bookName);
   win.bar.title = bookName;
   const author = (page?.authorName || snap.authorName || "").trim();
@@ -334,14 +602,23 @@ function rerender() {
     }
   }
   refs.pageSel.value = String(currentPageIndex);
-  refs.pageSel.disabled = total <= 1 || mode !== "read";
+  refs.pageSel.disabled = total <= 1 || (mode !== "read" && !(BOOK_RETAIL_PAGES && mode === "edit"));
 
   const reading = mode === "read";
   refs.text.hidden = !reading;
   refs.edit.hidden = reading;
   refs.editLabel.hidden = reading;
-  refs.prev.disabled = !reading || currentPageIndex <= 0;
-  refs.next.disabled = !reading || currentPageIndex >= total - 1;
+  const maxPagesNav = snap.maxNumPages | 0;
+  if (BOOK_RETAIL_PAGES) {
+    // Retail: Next stays live up to maxNumPages - 1 (turning past the end
+    // adds a page); both corners work while writing (the page saves).
+    const navOk = mode !== "inscribe";
+    refs.prev.disabled = !navOk || currentPageIndex <= 0;
+    refs.next.disabled = !navOk || (maxPagesNav > 0 ? currentPageIndex >= maxPagesNav - 1 : currentPageIndex >= total - 1);
+  } else {
+    refs.prev.disabled = !reading || currentPageIndex <= 0;
+    refs.next.disabled = !reading || currentPageIndex >= total - 1;
+  }
 
   if (reading) {
     const body = page?.text ?? "";
@@ -371,17 +648,21 @@ function rerender() {
   // Writing controls.
   setAcText(refs.editBtn, reading ? "Edit" : "Save", { color: reading ? "#f0e0c0" : "#f3d27a" });
   refs.editBtn.title = reading ? "Write on this page" : "Save your changes";
-  refs.editBtn.disabled = reading && total === 0;
+  const me = localPlayerGuid();
+  const editable = !BOOK_RETAIL_PAGES || isBookPageEditable(page, me);
+  refs.editBtn.disabled = reading && (total === 0 || !editable);
+  if (reading && total > 0 && !editable) refs.editBtn.title = "You can't write on this page";
   refs.cancelBtn.hidden = reading;
   refs.addBtn.hidden = !reading;
   refs.delBtn.hidden = !reading;
-  refs.inscBtn.hidden = !reading;
+  refs.inscBtn.hidden = !reading || (BOOK_RETAIL_PAGES && !bookInscriptionAllowed(snap));
   const maxPages = snap.maxNumPages | 0;
   refs.addBtn.disabled = maxPages > 0 && total >= maxPages;
   refs.addBtn.title = refs.addBtn.disabled ? `This book holds at most ${maxPages} pages` : "Add a blank page at the end";
-  refs.delBtn.disabled = total <= 0;
+  refs.delBtn.disabled = total <= 0 || (BOOK_RETAIL_PAGES && !isOwnBookPage(page, me));
 
   win.open();
+  startRangeWatch();
 }
 
 function onEditButton() {
@@ -399,6 +680,27 @@ function refetch(handle, guid) {
   setTimeout(() => { try { handle.bookData(guid); } catch (_) {} }, 200);
 }
 
+/**
+ * books-journal-3: retail writes inscriptions from the examine panel, only
+ * on an Inscribable item that is unsigned or signed by you (ItemExamineUI::
+ * SetInscription, acclient.c:229275). The book's Inscribe button follows the
+ * same gate; unknown data (stale pkg) fails open.
+ */
+function bookInscriptionAllowed(snap) {
+  const h = window.__sessionHandle;
+  const guid = (snap?.objectGuid ?? 0) >>> 0;
+  if (typeof h?.objectDescFlags !== "function") return true;
+  let odf = 0;
+  try { odf = h.objectDescFlags(guid) >>> 0; } catch (_) { return true; }
+  if ((odf & 0x2) === 0) return false; // not Inscribable
+  if (!findInventoryItem(guid)) return false; // ACE only inscribes owned items
+  const scribe = typeof snap?.authorName === "string" ? snap.authorName.trim() : "";
+  if (!scribe) return true;
+  let myName = null;
+  try { myName = h.objectName?.(localPlayerGuid()) ?? null; } catch (_) {}
+  return typeof myName === "string" && myName.trim() === scribe;
+}
+
 function onSaveInscription() {
   const snap = readSnapshot();
   if (!snap) return;
@@ -412,13 +714,22 @@ function onSaveInscription() {
     handle.setInscription(guid, refs.edit.value);
     mode = "read";
     rerender();
-    win?.toast("Inscription saved");
+    // No optimistic "saved" toast: ACE refuses silently (not Inscribable /
+    // signed by someone else) and the server sends no confirmation.
+    if (!BOOK_RETAIL_PAGES) win?.toast("Inscription saved");
   } catch (e) {
     console.warn("[book-panel] setInscription failed:", e);
   }
 }
 
 function onSavePage() {
+  if (BOOK_RETAIL_PAGES) {
+    // Save = leaving the page in retail terms (blank own page → deleted).
+    flushEdit();
+    mode = "read";
+    rerender();
+    return;
+  }
   const snap = readSnapshot();
   if (!snap) return;
   const guid = snap.objectGuid >>> 0;
@@ -440,6 +751,7 @@ function onSavePage() {
 }
 
 function onAddPage() {
+  if (BOOK_RETAIL_PAGES) { requestAppendPage({ fromTurn: false }); return; }
   const snap = readSnapshot();
   if (!snap) return;
   const guid = snap.objectGuid >>> 0;

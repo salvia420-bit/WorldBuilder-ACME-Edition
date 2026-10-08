@@ -298,6 +298,7 @@ mod tests {
         // routing uses) — world.tick()'s sweep evicts it.
         let _ = world.handle_message(&GameMessage::ObjectDelete(Box::new(ObjectDeleteData {
             guid: remote_guid,
+            instance_sequence: None,
         })));
         assert!(
             world.entities.get(remote_guid).is_some(),

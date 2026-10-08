@@ -194,6 +194,13 @@ pub(super) fn build_move_to_state(
     raw_motion_state: RawMotionState,
     metadata: MovementPacketMetadata,
 ) -> MoveToStateActionData {
+    // outbound-5 remainder (2026-10-08 follow-ups): every MoveToState funnels
+    // through here, so the retail default omission is applied once.
+    let raw_motion_state = if retail_raw_default_omission_enabled() {
+        canonicalize_retail_raw_defaults(raw_motion_state)
+    } else {
+        raw_motion_state
+    };
     MoveToStateActionData {
         raw_motion_state,
         position: world.local_player_runtime_pose().unwrap_or_default(),
@@ -203,6 +210,121 @@ pub(super) fn build_move_to_state(
         force_position_sequence: world.player.force_position_sequence,
         contact_long_jump: encode_contact_long_jump(world, metadata),
     }
+}
+
+/// outbound-5 remainder (2026-10-08 follow-ups) — retail default omission on
+/// the outbound MoveToState `RawMotionState`. Retail `RawMotionState::Pack`
+/// (acclient.c:332970) writes only the fields that differ from their
+/// defaults: `current_holdkey != 1` (HoldKey_None), `current_style !=
+/// 0x8000003D`, `forward_command != 0x41000003`, every axis hold key `!= 0`
+/// (Invalid), every speed `!= 1.0f`. The keyboard path stores the axis hold
+/// keys as 0 (`MovementParameters` default bitfield 0x1EE0F carries the
+/// SetHoldKey bit and `RawMotionState::ApplyMotion` stores holdkey 0 under
+/// it, :332852; :339437), so a retail W+Run MoveToState is flags 0x5.
+/// Our builders stamp the resolved key on every axis and 1.0 on every speed.
+///
+/// [`canonicalize_retail_raw_defaults`] omits only what is provably neutral
+/// on vanilla ACE (`Network/Motion/RawMotionState.cs` reader,
+/// `Physics/Animation/RawMotionState.SetState`, `MovementData(Creature,
+/// MoveToState)`):
+/// - `CURRENT_HOLD_KEY` when None — ACE reads it back as Invalid; every
+///   consumer only tests `== Run` (`adjust_motion`, `MovementData`).
+/// - an axis hold key whose gait (Run or not) equals the current key's — an
+///   absent axis key resolves to `CurrentHoldKey` (`adjust_motion`,
+///   MotionInterp.cs:423), exactly retail's Invalid-axis rule.
+/// - `FORWARD_SPEED` / `SIDE_STEP_SPEED` at exactly 1.0 — `SetState`
+///   restores 1.0 for an absent speed; the broadcast converter never reads
+///   them.
+///
+/// Deliberately KEPT (they change what ACE broadcasts to other clients, so
+/// they wait for a live soak): `CURRENT_STYLE` (an absent style makes
+/// `MovementData` broadcast stance 0 instead of NonCombat, our own echo
+/// included) and `TURN_SPEED` 1.0 (the converter copies an explicit raw
+/// turn speed in (0, 1.5] verbatim; absent, it derives 1.5 from Run).
+/// Commands are never touched. Escape: `?rawDefaultOmission=off`.
+pub(super) const USE_RETAIL_RAW_DEFAULT_OMISSION: bool = true;
+
+thread_local! {
+    /// Runtime carrier of `?rawDefaultOmission=off` (`None` = the
+    /// [`USE_RETAIL_RAW_DEFAULT_OMISSION`] const). thread_local like the
+    /// `AUTHORED_MOTION_LENGTHS` precedent (motion_table_manager.rs): wasm is
+    /// single-threaded and `cargo test` threads stay isolated; it saves
+    /// threading a flag through the four associated-fn send paths that all
+    /// end in [`build_move_to_state`].
+    static RETAIL_RAW_DEFAULT_OMISSION_RUNTIME: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Install (or, with `None`, clear) the `?rawDefaultOmission` runtime carrier.
+pub(super) fn set_retail_raw_default_omission(on: Option<bool>) {
+    RETAIL_RAW_DEFAULT_OMISSION_RUNTIME.with(|cell| cell.set(on));
+}
+
+/// [`USE_RETAIL_RAW_DEFAULT_OMISSION`] effective predicate.
+pub(super) fn retail_raw_default_omission_enabled() -> bool {
+    RETAIL_RAW_DEFAULT_OMISSION_RUNTIME
+        .with(|cell| cell.get())
+        .unwrap_or(USE_RETAIL_RAW_DEFAULT_OMISSION)
+}
+
+fn omit_raw_axis_hold_key(
+    key: &mut Option<u32>,
+    flags: &mut RawMotionFlags,
+    flag: RawMotionFlags,
+    current_is_run: bool,
+) {
+    let Some(value) = *key else {
+        return;
+    };
+    let follows_current = value == HoldKey::Invalid as u32
+        || (value == HoldKey::Run as u32) == current_is_run;
+    if follows_current {
+        *key = None;
+        flags.remove(flag);
+    }
+}
+
+fn omit_raw_unit_speed(speed: &mut Option<f32>, flags: &mut RawMotionFlags, flag: RawMotionFlags) {
+    if *speed == Some(1.0) {
+        *speed = None;
+        flags.remove(flag);
+    }
+}
+
+/// The ACE-neutral subset of retail's default omission — see
+/// [`USE_RETAIL_RAW_DEFAULT_OMISSION`]. Keeps `flags` and the `Option`s in
+/// step (the pack derives the header from presence and debug-asserts both).
+pub(super) fn canonicalize_retail_raw_defaults(mut raw: RawMotionState) -> RawMotionState {
+    let current_is_run = raw.current_hold_key == Some(HoldKey::Run as u32);
+    if raw.current_hold_key == Some(HoldKey::None as u32) {
+        raw.current_hold_key = None;
+        raw.flags.remove(RawMotionFlags::CURRENT_HOLD_KEY);
+    }
+    omit_raw_axis_hold_key(
+        &mut raw.forward_hold_key,
+        &mut raw.flags,
+        RawMotionFlags::FORWARD_HOLD_KEY,
+        current_is_run,
+    );
+    omit_raw_axis_hold_key(
+        &mut raw.sidestep_hold_key,
+        &mut raw.flags,
+        RawMotionFlags::SIDE_STEP_HOLD_KEY,
+        current_is_run,
+    );
+    omit_raw_axis_hold_key(
+        &mut raw.turn_hold_key,
+        &mut raw.flags,
+        RawMotionFlags::TURN_HOLD_KEY,
+        current_is_run,
+    );
+    omit_raw_unit_speed(&mut raw.forward_speed, &mut raw.flags, RawMotionFlags::FORWARD_SPEED);
+    omit_raw_unit_speed(
+        &mut raw.sidestep_speed,
+        &mut raw.flags,
+        RawMotionFlags::SIDE_STEP_SPEED,
+    );
+    raw
 }
 
 pub(super) fn build_autonomous_position(
@@ -2023,5 +2145,132 @@ mod tests {
         );
         assert_eq!(wire.current_hold_key, Some(HoldKey::Run as u32));
         assert_eq!(wire.forward_speed, Some(1.0), "unit speed");
+    }
+
+    fn packed_raw(raw: &RawMotionState) -> Vec<u8> {
+        use holtburger_protocol::traits::ProtocolPack;
+        let mut buf = Vec::new();
+        raw.pack(&mut buf);
+        buf
+    }
+
+    /// outbound-5 remainder (2026-10-08 follow-ups): retail
+    /// `RawMotionState::Pack` (acclient.c:332970) — a keyboard W+Run
+    /// MoveToState is flags 0x5 (CURRENT_HOLD_KEY=Run, FORWARD_COMMAND) with
+    /// an 8-byte body; W walking is flags 0x4. Style and turn speed stay.
+    #[test]
+    fn retail_default_omission_matches_retail_pack_for_keyboard_states() {
+        let world = holtburger_world::WorldState::synthetic();
+
+        let run = canonicalize_retail_raw_defaults(build_motion_state_raw_motion_state(
+            &world,
+            MotionState::builder().run().forward().build(),
+            MotionStyle::PreserveServer,
+        ));
+        assert_eq!(
+            run.flags,
+            RawMotionFlags::CURRENT_HOLD_KEY | RawMotionFlags::FORWARD_COMMAND
+        );
+        assert_eq!(run.current_hold_key, Some(HoldKey::Run as u32));
+        assert_eq!(run.forward_command, Some(WALK_FORWARD_MOTION_COMMAND));
+        assert_eq!(run.forward_hold_key, None);
+        assert_eq!(run.forward_speed, None);
+        let bytes = packed_raw(&run);
+        assert_eq!(&bytes[..4], &0x5u32.to_le_bytes());
+        assert_eq!(bytes.len(), 4 + 8);
+
+        let walk = canonicalize_retail_raw_defaults(build_motion_state_raw_motion_state(
+            &world,
+            MotionState::builder().walk().forward().strafe_right().build(),
+            MotionStyle::PreserveServer,
+        ));
+        assert_eq!(
+            walk.flags,
+            RawMotionFlags::FORWARD_COMMAND | RawMotionFlags::SIDE_STEP_COMMAND
+        );
+        assert_eq!(walk.current_hold_key, None);
+        assert_eq!(walk.sidestep_command, Some(SIDESTEP_RIGHT_MOTION_COMMAND));
+        assert_eq!(&packed_raw(&walk)[..4], &0x24u32.to_le_bytes());
+
+        // Turn: the hold key follows the current key (omitted); the 1.0 turn
+        // speed is KEPT (ACE's broadcast converter reads it).
+        let turn = canonicalize_retail_raw_defaults(build_motion_state_raw_motion_state(
+            &world,
+            MotionState::builder().run().turn_left().build(),
+            MotionStyle::Explicit(MotionStance::NonCombat),
+        ));
+        assert_eq!(turn.turn_hold_key, None);
+        assert_eq!(turn.turn_speed, Some(WIRE_TURN_SPEED_BASE));
+        assert!(turn.flags.contains(RawMotionFlags::TURN_SPEED));
+        assert!(
+            turn.flags.contains(RawMotionFlags::CURRENT_STYLE),
+            "the style is kept (ACE broadcasts stance 0 without it)"
+        );
+        assert_eq!(turn.current_stance(), Some(MotionStance::NonCombat));
+    }
+
+    /// An axis key whose gait differs from the current key's (a mouse-style
+    /// explicit key) and a non-unit speed are real information: kept.
+    #[test]
+    fn retail_default_omission_keeps_explicit_axis_keys_and_scaled_speeds() {
+        let raw = RawMotionState {
+            flags: RawMotionFlags::CURRENT_HOLD_KEY
+                | RawMotionFlags::FORWARD_COMMAND
+                | RawMotionFlags::FORWARD_HOLD_KEY
+                | RawMotionFlags::FORWARD_SPEED
+                | RawMotionFlags::SIDE_STEP_COMMAND
+                | RawMotionFlags::SIDE_STEP_HOLD_KEY,
+            current_hold_key: Some(HoldKey::None as u32),
+            forward_command: Some(WALK_FORWARD_MOTION_COMMAND),
+            forward_hold_key: Some(HoldKey::Run as u32),
+            forward_speed: Some(0.5),
+            sidestep_command: Some(SIDESTEP_RIGHT_MOTION_COMMAND),
+            sidestep_hold_key: Some(HoldKey::Invalid as u32),
+            ..Default::default()
+        };
+        let canonical = canonicalize_retail_raw_defaults(raw);
+        assert_eq!(canonical.current_hold_key, None, "None is the default");
+        assert_eq!(canonical.forward_hold_key, Some(HoldKey::Run as u32));
+        assert_eq!(canonical.forward_speed, Some(0.5));
+        assert_eq!(canonical.sidestep_hold_key, None, "Invalid is the default");
+        assert_eq!(
+            canonical.flags,
+            RawMotionFlags::FORWARD_COMMAND
+                | RawMotionFlags::FORWARD_HOLD_KEY
+                | RawMotionFlags::FORWARD_SPEED
+                | RawMotionFlags::SIDE_STEP_COMMAND
+        );
+        // The pack's debug flags/presence assertion holds.
+        let _ = packed_raw(&canonical);
+    }
+
+    /// The single MoveToState constructor applies it; `?rawDefaultOmission=off`
+    /// (the runtime carrier) restores the explicit fields.
+    #[test]
+    fn build_move_to_state_applies_retail_default_omission_unless_off() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                set_retail_raw_default_omission(None);
+            }
+        }
+        let _restore = Restore;
+
+        let world = holtburger_world::WorldState::synthetic();
+        let raw = || {
+            build_motion_state_raw_motion_state(
+                &world,
+                MotionState::builder().run().forward().build(),
+                MotionStyle::PreserveServer,
+            )
+        };
+
+        let data = build_move_to_state(&world, raw(), MovementPacketMetadata::default());
+        assert_eq!(data.raw_motion_state.forward_hold_key, None);
+        assert_eq!(data.raw_motion_state.forward_speed, None);
+
+        set_retail_raw_default_omission(Some(false));
+        let data = build_move_to_state(&world, raw(), MovementPacketMetadata::default());
+        assert_eq!(data.raw_motion_state, raw());
     }
 }

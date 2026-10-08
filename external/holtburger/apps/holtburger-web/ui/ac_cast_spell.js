@@ -1,5 +1,6 @@
 import { castPrecheckMode, preCheckSpell } from "./ac_cast_precheck.js";
 import { castWouldBeSilentlyRejected } from "./ac_combat_mode_intent.js";
+import { portalSpaceBusy } from "./portal_busy.js";
 import {
   announceCastRefusal,
   castingNotice,
@@ -67,13 +68,18 @@ export function castSpellViaHandle(spellId, targetGuid) {
  * client-side refusal (the gate already showed the player why) from a missing
  * session:
  *   "sent"        — dispatched
- *   "refused"     — a client gate refused it and displayed the message
+ *   "refused"     — a client gate refused it and displayed the message (the
+ *                   portal-space busy drop is silent, like a throttled use)
  *   "unavailable" — no spell id / no session / the dispatch threw
  */
 export function castSpellViaHandleResult(spellId, targetGuid) {
   const sid = (spellId >>> 0) || 0;
   if (!sid) return "unavailable";
   const tgt = (targetGuid == null) ? null : ((targetGuid >>> 0) || 0);
+  // streaming-teleport-5 (2026-10-08): portal space is busy (retail
+  // SetTeleportInProgress → IncrementBusyCount); the cast is dropped
+  // silently, like a throttled use. `?portalBusy=off` escape.
+  try { if (portalSpaceBusy()) return "refused"; } catch (_) {}
   // WS14 — optional client pre-cast checks (?castPrecheck, default-OFF). Retail
   // gated COMPONENTS client-side before the send (acclient.c:404710); mana was
   // server-only, so the mana arm (=on) is a deliberate non-retail add. Fail-open

@@ -87,6 +87,10 @@ pub(crate) const WE_NO_OBJECT: u32 = 0x38;
 /// `YouChargedTooFar` — start→now displacement exceeded `fail_distance`
 /// (`HandleMoveToPosition` LABEL_24, acclient.c:345691-345692).
 pub(crate) const WE_YOU_CHARGED_TOO_FAR: u32 = 0x3D;
+/// `ITeleported` — `CPhysicsObj::teleport_hook` runs
+/// `MovementManager::CancelMoveTo(0x3C)` (acclient.c:322237-322248) when the
+/// local player teleports (streaming-teleport-2, `?teleportHook`).
+pub(crate) const WE_I_TELEPORTED: u32 = 0x3C;
 
 /// `Position::cylinder_distance(r1, h1, p1, r2, h2, p2)`
 /// (acclient.c:467221-467266; ACE `Position.CylinderDistance`): the
@@ -668,6 +672,38 @@ impl MoveToManager {
     /// (acclient.c:344895-344898) — ours: directive slot occupied.
     pub(crate) fn is_active(&self) -> bool {
         self.directive.is_some()
+    }
+
+    /// R3 moveto-4 (2026-10-08 follow-ups) — the motion the active node
+    /// holds on the mover's interp, as the full MotionCommand the rig
+    /// should play: the node's `_DoMotion` (acclient.c:344753 →
+    /// `CMotionInterp::DoInterpretedMotion`) — TurnRight / TurnLeft from
+    /// `BeginTurnToHeading` (:345489-345507), WalkForward / WalkBackwards
+    /// from `BeginMoveForward` (:345371-345425), a WalkForward under the
+    /// Run hold key reading as RunForward (retail `adjust_motion` →
+    /// `apply_run_to_command`; the same `hold_key_to_apply == 2` test
+    /// [`Self::current_steer`] uses). `0` = no directive, or between nodes
+    /// (the node's `_StopMotion` already ran, :345663-345686) — the interp
+    /// is back at Ready. The aux turn of `HandleMoveToPosition`
+    /// (:345620-345651) is a turn MODIFIER on the walk/run cycle, not a
+    /// phase, so it never shows here.
+    pub(crate) fn node_motion(&self) -> u32 {
+        if self.directive.is_none() {
+            return 0;
+        }
+        match self.current_command {
+            MOTION_WALK_BACKWARDS => MOTION_WALK_BACKWARDS,
+            MOTION_WALK_FORWARD | MOTION_RUN_FORWARD => {
+                if self.movement_params.hold_key_to_apply == 2 {
+                    MOTION_RUN_FORWARD
+                } else {
+                    MOTION_WALK_FORWARD
+                }
+            }
+            MOTION_TURN_RIGHT => MOTION_TURN_RIGHT,
+            MOTION_TURN_LEFT => MOTION_TURN_LEFT,
+            _ => 0,
+        }
     }
 
     /// S10 contract: read-clear completion latch (see the field doc).
@@ -1587,6 +1623,61 @@ mod tests {
             "{:?}",
             out.steer
         );
+    }
+
+    /// R3 moveto-4 (2026-10-08 follow-ups): `node_motion` is the motion the
+    /// node `_DoMotion`ed (acclient.c:344753) — TurnRight / TurnLeft on a
+    /// turn node (:345489-345507), RunForward for a WalkForward under the
+    /// Run hold key, WalkForward otherwise, WalkBackwards (:345371-345425) —
+    /// unchanged by the aux turn (a modifier, :345620-345651), and 0 with no
+    /// directive, before the first driven frame, after arrival
+    /// (:345521-345545) and after a cancel.
+    #[test]
+    fn node_motion_follows_the_node() {
+        let now = Instant::now();
+        let mut manager = MoveToManager::default();
+        assert_eq!(manager.node_motion(), 0, "no directive");
+        manager.move_to_position(origin(50.0, 0.0), MovementParameters::default());
+        assert_eq!(manager.node_motion(), 0, "armed, no node begun yet");
+        // Facing north (90), target east (180) → TurnRight node.
+        manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
+        assert_eq!(manager.node_motion(), MOTION_TURN_RIGHT);
+        // Overshoot → the walk node begins; 50 m out (threshold 15) → Run.
+        manager.use_time(&view(pose(0.0, 0.0, 185.0), None, now));
+        assert_eq!(manager.node_motion(), MOTION_RUN_FORWARD);
+        // Arrival → CleanUp: no node motion.
+        manager.use_time(&view(pose(49.9, 0.0, 180.0), None, now));
+        assert!(!manager.is_active());
+        assert_eq!(manager.node_motion(), 0);
+
+        // TurnLeft node (facing north 90, target west 0).
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(-50.0, 0.0), MovementParameters::default());
+        manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
+        assert_eq!(manager.node_motion(), MOTION_TURN_LEFT);
+        let _ = manager.cancel_moveto(WE_ACTION_CANCELLED);
+        assert_eq!(manager.node_motion(), 0, "cancelled");
+
+        // Inside the walk/run threshold with can_walk → WalkForward; the
+        // 30° aux turn leaves it a walk.
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(10.0, 0.0), MovementParameters::default());
+        manager.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert_eq!(manager.node_motion(), MOTION_WALK_FORWARD);
+        manager.use_time(&view(pose(0.0, 0.0, 150.0), None, now));
+        assert_eq!(manager.aux_command, MOTION_TURN_RIGHT);
+        assert_eq!(manager.node_motion(), MOTION_WALK_FORWARD, "aux turn is a modifier");
+
+        // towards_and_away under min_distance → WalkBackwards.
+        let mut params = MovementParameters::default();
+        params.bitfield |= 0x100;
+        params.bitfield &= !0x400; // point metric
+        params.min_distance = 2.0;
+        params.distance_to_object = 4.0;
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(1.5, 0.0), params);
+        manager.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert_eq!(manager.node_motion(), MOTION_WALK_BACKWARDS);
     }
 
     /// moving_away arrival at `min_distance`; aux-turn engages > 20°

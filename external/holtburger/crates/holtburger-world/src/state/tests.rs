@@ -2785,8 +2785,15 @@ fn test_fellowship_full_update_populates_world_state_and_emits_projection() {
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::FellowshipActivity(crate::FellowshipActivity::YouJoined { fellowship_name })
-            if fellowship_name == "Raid Bus"
+        WorldEvent::FellowshipActivity(crate::FellowshipActivity::YouJoined {
+            fellowship_name,
+            leader_name,
+            self_is_leader,
+            open,
+        }) if fellowship_name == "Raid Bus"
+            && leader_name.as_deref() == Some("Player")
+            && *self_is_leader
+            && *open
     )));
 }
 
@@ -2878,7 +2885,8 @@ fn test_fellowship_quit_for_local_player_clears_state() {
     assert!(state.fellowship.is_none());
     assert!(events.iter().any(|event| matches!(
         event,
-        WorldEvent::FellowshipActivity(crate::FellowshipActivity::YouLeft)
+        WorldEvent::FellowshipActivity(crate::FellowshipActivity::YouLeft { fellowship_name })
+            if fellowship_name.as_deref() == Some("Raid Bus")
     )));
     assert!(
         events
@@ -3577,13 +3585,15 @@ fn test_parent_event_does_not_null_player_landblock() {
     state.player.guid = player_guid;
     state.seed_local_player_entity(player_guid, "Player", initial_pos);
 
+    // createobj-5: a strictly newer child position stamp, so the event
+    // passes the retail DoParentEvent gate and runs the full handler.
     let msg = GameMessage::ParentEvent(Box::new(ParentEventData {
         parent_guid: Guid(0x8000031B),
         child_guid: player_guid,
         location: 1,
         placement: 1,
         parent_instance_sequence: 0,
-        child_position_sequence: 0,
+        child_position_sequence: 1,
     }));
 
     state.handle_message(&msg);
@@ -4019,7 +4029,10 @@ fn test_object_delete_marks_explicit_delete_without_inline_despawn() {
         WorldPosition::default(),
     ));
 
-    let msg = GameMessage::ObjectDelete(Box::new(ObjectDeleteData { guid }));
+    let msg = GameMessage::ObjectDelete(Box::new(ObjectDeleteData {
+        guid,
+        instance_sequence: None,
+    }));
 
     let events = state.handle_message(&msg);
 
@@ -4085,10 +4098,12 @@ fn test_pickup_event_marks_unretained_entity_for_sweep() {
         },
     ));
 
+    // createobj-5: ACE's PickupEvent carries GetNextSequence(ObjectPosition),
+    // strictly newer than the create's stamp (0 here).
     let msg = GameMessage::PickupEvent(Box::new(PickupEventData {
         guid,
         instance_sequence: 0,
-        position_sequence: 0,
+        position_sequence: 1,
     }));
 
     let events = state.handle_message(&msg);
@@ -6249,6 +6264,66 @@ fn water_depth_at_mirrors_ace_depth_classes() {
     assert_eq!(state.water_depth_at(30.0, 5.0), 0.0);
 }
 
+/// landdefs-terrain-3 (2026-10-08 follow-ups, `?fallbackWaterRetail`) — the
+/// heightfield fallback uses retail's water model: only codes `16..=20` are
+/// water (`TERRAIN_SURF_CHAR`, acclient.c:41303 — FauxWater 22/23 are SOLID),
+/// the resting floor sits `water_depth` BELOW the plane (`validate_walkable`
+/// :314223-314227), and only an entirely-water LANDBLOCK is a wall
+/// (`CalcWater` :354566 / `find_env_collisions` :355030-355033, with
+/// `?openSeaWall`). `=off` keeps the F4-4 model.
+#[test]
+fn fallback_water_is_retail_by_default() {
+    let lb = 0u32; // lb (0,0) → world coords [0,192)
+
+    // 22/23 are not water.
+    let mut state = WorldState::synthetic();
+    state.populate_terrain_water(lb, &[22u8; 81]);
+    assert_eq!(state.water_depth_at(12.0, 12.0), 0.0, "FauxWater 22 is SOLID");
+    state.populate_terrain_water(lb, &[23u8; 81]);
+    assert!(!state.is_entirely_water_cell_at(12.0, 12.0), "FauxWater 23 is SOLID");
+
+    // Shoreline: the floor SINKS (−0.45 near the water vertex, −0.1 near land).
+    let mut codes = [0u8; 81];
+    for vy in 0..9 {
+        codes[vy] = 19;
+    }
+    state.populate_terrain_water(lb, &codes);
+    assert!((state.water_floor_offset_at(5.0, 5.0) + 0.45).abs() < 1e-6);
+    assert!((state.water_floor_offset_at(18.0, 5.0) + 0.1).abs() < 1e-6);
+    assert_eq!(state.water_floor_offset_at(30.0, 5.0), 0.0, "dry: no offset");
+
+    // An all-water CELL in a partly-water landblock: walkable, 0.9 below.
+    let mut coastal = [19u8; 81];
+    coastal[80] = 0; // one dry vertex far from cell (0,0)
+    state.populate_terrain_water(lb, &coastal);
+    assert!(!state.is_entirely_water_cell_at(12.0, 12.0), "a coastal block is no wall");
+    assert!((state.water_floor_offset_at(12.0, 12.0) + 0.9).abs() < 1e-6);
+
+    // The open sea: an all-water landblock is a wall — unless ?openSeaWall=off.
+    state.populate_terrain_water(lb, &[19u8; 81]);
+    assert!(state.is_entirely_water_cell_at(12.0, 12.0));
+    assert!(state.is_entirely_water_cell_at(180.0, 180.0));
+    state.scene.set_open_sea_wall_enabled(false);
+    assert!(!state.is_entirely_water_cell_at(12.0, 12.0), "?openSeaWall=off");
+}
+
+/// landdefs-terrain-3 — `?fallbackWaterRetail=off` keeps the F4-4 model: 22/23
+/// count as water, the floor is RAISED by the wading depth, and every
+/// all-water cell is a wall.
+#[test]
+fn fallback_water_legacy_escape_keeps_f4_4_model() {
+    let lb = 0u32;
+    let mut state = WorldState::synthetic();
+    state.set_fallback_water_retail(false);
+    state.populate_terrain_water(lb, &[22u8; 81]);
+    assert!(state.is_entirely_water_cell_at(12.0, 12.0), "legacy: 22 is water");
+    let mut coastal = [19u8; 81];
+    coastal[80] = 0;
+    state.populate_terrain_water(lb, &coastal);
+    assert!(state.is_entirely_water_cell_at(12.0, 12.0), "legacy: per-cell wall");
+    assert!((state.water_floor_offset_at(12.0, 12.0) - 0.9).abs() < 1e-6, "legacy raise");
+}
+
 // ---------------------------------------------------------------------------
 // WP-2 (last-known-good cell + no-retire-on-transient-NULL). Combines
 // B3-WI1 + B4-item1 (§D3): a transient NULL-landblock pose for the LOCAL
@@ -6888,8 +6963,14 @@ fn test_aug_trace_records_wipe_and_self_create_preserves_augmentation() {
     // `tick()` sweep, which is not a message handler at all. That is exactly
     // why `tick()` carries its own probe; without it this wipe is invisible.
     state.player_description_properties = None;
+    // createobj-5 (2026-10-08 follow-ups): retail ignores a DeleteObject
+    // for the local player (SmartBox::HandleDeleteObject, acclient.c:143273),
+    // and so does the stamp gate. This control needs the pre-gate removal
+    // path, so it runs with `?lifecycleStampGates=off`.
+    state.set_lifecycle_stamp_gates_enabled(false);
     let _ = state.handle_message(&GameMessage::ObjectDelete(Box::new(ObjectDeleteData {
         guid: player_guid,
+        instance_sequence: None,
     })));
     let _ = state.tick();
 
@@ -7121,5 +7202,428 @@ fn netsync3_remote_turn_omega_resolves_from_the_entity_motion_table() {
         omega_for(Guid(0x8000_0104), None, MotionStance::NonCombat),
         None,
         "no table → None (the scene's player-table fallback applies)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// createobj-5 (2026-10-08 follow-ups): the remaining per-object stamp gates
+// of retail `SmartBox::Handle*` (acclient.c:143262-144552, :392816-392833).
+// ---------------------------------------------------------------------------
+
+fn createobj5_explicit_delete(state: &WorldState, guid: Guid) -> bool {
+    matches!(state.entity_lifecycle_state(guid), Some(s) if s.explicit_delete_requested)
+}
+
+fn createobj5_delete(guid: Guid, instance_sequence: Option<u16>) -> GameMessage {
+    GameMessage::ObjectDelete(Box::new(ObjectDeleteData {
+        guid,
+        instance_sequence,
+    }))
+}
+
+/// `SmartBox::HandleDeleteObject` (acclient.c:143262-143296): the local
+/// player is ignored, an older instance is dropped, an equal one deletes, a
+/// newer one applies (retail queues; no blob queue here) and a short body is
+/// ungated. `?lifecycleStampGates=off` restores the unconditional delete.
+#[test]
+fn createobj5_delete_gate_ignores_player_and_drops_older_instance() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0001);
+    state.seed_local_player_entity(player_guid, "Player", WorldPosition::default());
+
+    let remote = Guid(0x8000_0A01);
+    let mut entity = Entity::new(remote, "Remote".to_string(), WorldPosition::default());
+    entity.sequences[8] = 5;
+    state.entities.insert(entity);
+
+    // The local player: ignored (retail result 3, :143273).
+    assert!(state.rejects_object_delete(player_guid, Some(0)));
+    let _ = state.handle_message(&createobj5_delete(player_guid, Some(0)));
+    assert!(!createobj5_explicit_delete(&state, player_guid));
+
+    // Older instance: dropped (result 2).
+    assert!(state.rejects_object_delete(remote, Some(4)));
+    let _ = state.handle_message(&createobj5_delete(remote, Some(4)));
+    assert!(!createobj5_explicit_delete(&state, remote));
+
+    // Equal instance: deleted (result 1).
+    assert!(!state.rejects_object_delete(remote, Some(5)));
+    let _ = state.handle_message(&createobj5_delete(remote, Some(5)));
+    assert!(createobj5_explicit_delete(&state, remote));
+
+    // Newer instance and a short body both apply.
+    let newer = Guid(0x8000_0A02);
+    let mut entity = Entity::new(newer, "Newer".to_string(), WorldPosition::default());
+    entity.sequences[8] = 5;
+    state.entities.insert(entity);
+    assert!(!state.rejects_object_delete(newer, Some(6)));
+    assert!(!state.rejects_object_delete(newer, None));
+    // An unknown guid is never "rejected".
+    assert!(!state.rejects_object_delete(Guid(0x8000_0A99), Some(1)));
+
+    // Escape: everything applies, the player included.
+    state.set_lifecycle_stamp_gates_enabled(false);
+    assert!(!state.rejects_object_delete(player_guid, Some(0)));
+    assert!(!state.rejects_object_delete(newer, Some(4)));
+}
+
+/// `HandleParentEvent` (:144512-144552: the PARENT's instance) +
+/// `DoParentEvent` (:143504-143530: a strictly newer CHILD position stamp)
+/// and `HandlePickupEvent` + `DoPickupEvent` (:144473-144509,
+/// :143483-143500). The post-route check is what the wasm fan-out reads.
+#[test]
+fn createobj5_pickup_and_parent_gate_on_the_position_stamp() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0001);
+    state.seed_local_player_entity(player_guid, "Player", WorldPosition::default());
+
+    let item = Guid(0x8000_0A03);
+    let mut sword = Entity::new(item, "Sword".to_string(), WorldPosition::default());
+    sword.sequences[0] = 10;
+    state.entities.insert(sword);
+
+    let parent = |parent_instance_sequence: u16, child_position_sequence: u16| {
+        GameMessage::ParentEvent(Box::new(ParentEventData {
+            parent_guid: player_guid,
+            child_guid: item,
+            location: 1,
+            placement: 1,
+            parent_instance_sequence,
+            child_position_sequence,
+        }))
+    };
+
+    // A stale child stamp: nothing applied, and the fan-out check says so.
+    let _ = state.handle_message(&parent(0, 9));
+    assert_eq!(state.entities.get(item).unwrap().physics_parent_id, None);
+    assert!(state.position_channel_event_rejected(item, 9));
+
+    // A newer child stamp applies and is recorded.
+    let _ = state.handle_message(&parent(0, 11));
+    assert_eq!(
+        state.entities.get(item).unwrap().physics_parent_id,
+        Some(player_guid)
+    );
+    assert_eq!(state.entities.get(item).unwrap().position_sequence(), 11);
+    assert!(!state.position_channel_event_rejected(item, 11));
+
+    // An OLDER parent instance drops the event before the child stamp.
+    state.entities.get_mut(player_guid).unwrap().sequences[8] = 3;
+    let _ = state.handle_message(&parent(2, 12));
+    assert_eq!(state.entities.get(item).unwrap().position_sequence(), 11);
+    assert!(state.position_channel_event_rejected(item, 12));
+
+    // PickupEvent: same channel, with the object's own instance leg.
+    let loot = Guid(0x8000_0A04);
+    let mut ground = Entity::new(
+        loot,
+        "GroundLoot".to_string(),
+        WorldPosition {
+            landblock_id: Guid(0x1234),
+            ..WorldPosition::default()
+        },
+    );
+    ground.sequences[0] = 20;
+    ground.sequences[8] = 1;
+    state.entities.insert(ground);
+    let pickup = |instance_sequence: u16, position_sequence: u16| {
+        GameMessage::PickupEvent(Box::new(PickupEventData {
+            guid: loot,
+            instance_sequence,
+            position_sequence,
+        }))
+    };
+    let _ = state.handle_message(&pickup(1, 20));
+    let _ = state.handle_message(&pickup(0, 21));
+    assert_eq!(
+        state.entities.get(loot).unwrap().position.landblock_id,
+        Guid(0x1234),
+        "a duplicate stamp and an older instance both leave it on the ground"
+    );
+    assert!(state.position_channel_event_rejected(loot, 21));
+    let _ = state.handle_message(&pickup(1, 21));
+    assert_eq!(
+        state.entities.get(loot).unwrap().position.landblock_id,
+        Guid::NULL
+    );
+    assert!(!state.position_channel_event_rejected(loot, 21));
+}
+
+/// `HandleObjDescEvent` + `UpdateVisualDesc` (:144356-144392,
+/// :143302-143330): now routed to the world, which records `update_times[7]`.
+#[test]
+fn createobj5_objdesc_event_records_the_visual_desc_stamp() {
+    let mut state = WorldState::synthetic();
+    let guid = Guid(0x5000_0A05);
+    let mut other = Entity::new(guid, "Other".to_string(), WorldPosition::default());
+    other.sequences[7] = 4;
+    other.sequences[8] = 2;
+    state.entities.insert(other);
+
+    let objdesc = |instance_sequence: u16, visual_desc_sequence: u16| {
+        GameMessage::ObjDescEvent(Box::new(ObjDescEventData {
+            guid,
+            model_data: ModelData::default(),
+            instance_sequence,
+            visual_desc_sequence,
+        }))
+    };
+
+    let _ = state.handle_message(&objdesc(2, 3));
+    assert!(state.objdesc_event_rejected(guid, 3), "older stamp");
+    let _ = state.handle_message(&objdesc(1, 5));
+    assert!(state.objdesc_event_rejected(guid, 5), "older instance");
+    let _ = state.handle_message(&objdesc(2, 5));
+    assert!(!state.objdesc_event_rejected(guid, 5));
+    assert_eq!(state.entities.get(guid).unwrap().visual_desc_sequence(), 5);
+
+    // Unknown guids are never "rejected" (the render bridge keeps applying).
+    assert!(!state.objdesc_event_rejected(Guid(0x5000_0A99), 1));
+    // Escape.
+    state.set_lifecycle_stamp_gates_enabled(false);
+    assert!(!state.objdesc_event_rejected(guid, 3));
+}
+
+/// The instance leg of the 0xF74C dispatch (:392816-392833) and of
+/// `HandleVectorUpdate` (:144434-144470): an OLDER instance is dropped
+/// before the movement / vector stamp is recorded.
+#[test]
+fn createobj5_movement_and_vector_gates_drop_an_older_instance() {
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0001);
+    state.seed_local_player_entity(player_guid, "Player", WorldPosition::default());
+
+    let remote = Guid(0x8000_0A06);
+    let mut drudge = Entity::new(
+        remote,
+        "Drudge".to_string(),
+        WorldPosition {
+            landblock_id: Guid(0xA9B4_0019),
+            ..WorldPosition::default()
+        },
+    );
+    drudge.sequences[8] = 4;
+    state.entities.insert(drudge);
+
+    let motion = |object_instance_sequence: u16, movement_sequence: u16| {
+        GameMessage::UpdateMotion(Box::new(MovementEventData {
+            guid: remote,
+            object_instance_sequence,
+            movement_sequence,
+            server_control_sequence: 0,
+            is_autonomous: false,
+            movement_type: MovementType::Invalid,
+            motion_flags: 0,
+            current_style: 0,
+            data: MovementTypeData::Invalid(MovementInvalid::default()),
+        }))
+    };
+    let _ = state.handle_message(&motion(3, 1));
+    assert_eq!(
+        state.entities.get(remote).unwrap().movement_sequence(),
+        0,
+        "an older instance is dropped before the movement stamp is recorded"
+    );
+    let _ = state.handle_message(&motion(4, 1));
+    assert_eq!(state.entities.get(remote).unwrap().movement_sequence(), 1);
+
+    let vector = |instance_sequence: u16, vector_sequence: u16| {
+        GameMessage::VectorUpdate(Box::new(VectorUpdateData {
+            guid: remote,
+            velocity: Vector3::new(1.0, 0.0, 0.0),
+            omega: Vector3::zero(),
+            instance_sequence,
+            vector_sequence,
+        }))
+    };
+    let _ = state.handle_message(&vector(3, 1));
+    assert_eq!(state.entities.get(remote).unwrap().velocity, Vector3::zero());
+    let _ = state.handle_message(&vector(4, 1));
+    assert_eq!(
+        state.entities.get(remote).unwrap().velocity,
+        Vector3::new(1.0, 0.0, 0.0)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// fellowship-2 (2026-10-08 follow-ups): retail's client-side fellowship lines
+// need the leader and who-is-leader context, captured BEFORE the change.
+// ---------------------------------------------------------------------------
+
+fn fellowship2_member(guid: Guid, name: &str) -> FellowshipMemberState {
+    FellowshipMemberState {
+        guid,
+        name: name.to_string(),
+        level: 10,
+        cached_cp: 0,
+        cached_luminance: 0,
+        max_health: 100,
+        max_stamina: 100,
+        max_mana: 100,
+        current_health: 100,
+        current_stamina: 100,
+        current_mana: 100,
+        share_loot: true,
+    }
+}
+
+fn fellowship2_state(leader_guid: Guid, members: Vec<FellowshipMemberState>) -> FellowshipState {
+    FellowshipState {
+        name: "Raid Bus".to_string(),
+        leader_guid,
+        share_xp: true,
+        even_share: false,
+        open: false,
+        is_locked: false,
+        members,
+        departed_members: Vec::new(),
+        locks: Vec::new(),
+    }
+}
+
+fn fellowship2_activity(events: &[WorldEvent]) -> crate::FellowshipActivity {
+    events
+        .iter()
+        .find_map(|event| match event {
+            WorldEvent::FellowshipActivity(activity) => Some(activity.clone()),
+            _ => None,
+        })
+        .expect("a fellowship activity")
+}
+
+fn fellowship2_event(event: GameEvent) -> GameMessage {
+    GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: Guid::NULL,
+        sequence: 1,
+        event,
+    }))
+}
+
+/// `gmFellowshipUI::FellowDismissed` (acclient.c:203045-203125): the
+/// dismissed player reads the LEADER's name; the leader reads "You dismiss";
+/// everyone else "has been dismissed". `FellowshipDisbanded` (:203000-203040)
+/// likewise picks by `_leader`, read before the fellowship is deleted.
+#[test]
+fn fellowship2_dismiss_and_disband_carry_the_leader_context() {
+    let player = Guid(0x5000_0001);
+    let leader = Guid(0x5000_0002);
+    let bravo = Guid(0x5000_0003);
+
+    // The local player is dismissed by the leader.
+    let mut state = WorldState::synthetic();
+    state.player.guid = player;
+    state.fellowship = Some(fellowship2_state(
+        leader,
+        vec![
+            fellowship2_member(player, "Player"),
+            fellowship2_member(leader, "Alpha"),
+        ],
+    ));
+    let events = state.handle_message(&fellowship2_event(GameEvent::FellowshipDismiss(Box::new(
+        holtburger_protocol::messages::FellowshipDismissEventData { player_guid: player },
+    ))));
+    let activity = fellowship2_activity(&events);
+    assert_eq!(
+        activity.retail_text().as_deref(),
+        Some("Alpha has dismissed you from the Fellowship.")
+    );
+
+    // The local LEADER dismisses Bravo.
+    let mut state = WorldState::synthetic();
+    state.player.guid = player;
+    state.fellowship = Some(fellowship2_state(
+        player,
+        vec![
+            fellowship2_member(player, "Player"),
+            fellowship2_member(bravo, "Bravo"),
+        ],
+    ));
+    let events = state.handle_message(&fellowship2_event(GameEvent::FellowshipDismiss(Box::new(
+        holtburger_protocol::messages::FellowshipDismissEventData { player_guid: bravo },
+    ))));
+    assert!(matches!(
+        fellowship2_activity(&events),
+        crate::FellowshipActivity::MemberWasDismissed { ref member_name, self_is_leader: true }
+            if member_name == "Bravo"
+    ));
+
+    // A member sees the leader disband.
+    let mut state = WorldState::synthetic();
+    state.player.guid = player;
+    state.fellowship = Some(fellowship2_state(
+        leader,
+        vec![
+            fellowship2_member(player, "Player"),
+            fellowship2_member(leader, "Alpha"),
+        ],
+    ));
+    let events = state.handle_message(&fellowship2_event(GameEvent::FellowshipDisband));
+    assert!(state.fellowship.is_none());
+    assert_eq!(
+        fellowship2_activity(&events).retail_text().as_deref(),
+        Some("Alpha has disbanded your Fellowship.")
+    );
+
+    // A disband with no fellowship known prints nothing (retail guard).
+    let mut state = WorldState::synthetic();
+    state.player.guid = player;
+    let events = state.handle_message(&fellowship2_event(GameEvent::FellowshipDisband));
+    assert_eq!(fellowship2_activity(&events).retail_text(), None);
+}
+
+/// `RecvNotice_FellowshipUpdate` (acclient.c:203573-203648): a first full
+/// update led by someone else is the recruit line.
+#[test]
+fn fellowship2_recruit_line_names_the_leader() {
+    let player = Guid(0x5000_0001);
+    let leader = Guid(0x5000_0002);
+    let mut state = WorldState::synthetic();
+    state.player.guid = player;
+
+    let events = state.handle_message(&fellowship2_event(GameEvent::FellowshipFullUpdate(
+        Box::new(FellowshipFullUpdateEventData {
+            fellows: vec![
+                FellowshipMemberData {
+                    guid: player,
+                    cached_cp: 0,
+                    cached_luminance: 0,
+                    level: 10,
+                    max_health: 100,
+                    max_stamina: 100,
+                    max_mana: 100,
+                    current_health: 100,
+                    current_stamina: 100,
+                    current_mana: 100,
+                    share_loot: 1,
+                    name: "Player".to_string(),
+                },
+                FellowshipMemberData {
+                    guid: leader,
+                    cached_cp: 0,
+                    cached_luminance: 0,
+                    level: 10,
+                    max_health: 100,
+                    max_stamina: 100,
+                    max_mana: 100,
+                    current_health: 100,
+                    current_stamina: 100,
+                    current_mana: 100,
+                    share_loot: 1,
+                    name: "Alpha".to_string(),
+                },
+            ],
+            fellowship_name: "Raid Bus".to_string(),
+            leader_guid: leader,
+            share_xp: true,
+            even_share: false,
+            open: false,
+            is_locked: false,
+            departed_members: Vec::new(),
+            fellowship_locks: Vec::new(),
+        }),
+    )));
+    assert_eq!(
+        fellowship2_activity(&events).retail_text().as_deref(),
+        Some("You have been recruited into the Raid Bus fellowship, a fellowship led by Alpha.")
     );
 }

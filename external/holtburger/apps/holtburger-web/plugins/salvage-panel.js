@@ -42,6 +42,7 @@ import {
   wireDropTarget, inventoryRows, objectDisplayName, objectIconId,
 } from "./commerce_window.js";
 import { fmtNumber } from "./commerce_logic.js";
+import { skillName as retailSkillName } from "./examine_format.js";
 
 const OVERLAY_ID = "hb-salvage-panel";
 const STYLE_ID = "hb-salvage-panel-style";
@@ -125,7 +126,103 @@ const state = {
   unsubscribeSalvage: null,
   warnedMissingSend: false,
   awaitingConfirm: false,
+  // crafting-2: gmSalvageUI::m_material — the first item's material while
+  // "Salvage multiple materials at once" is OFF (0 = unlocked).
+  lockedMaterial: 0,
 };
+
+// ─── crafting-2 (2026-10-08): retail gmSalvageUI::IsItemSuitable ───────
+//
+// acclient.c:252433 — an item may go in the salvage list only when
+//   TinkeringSystem::IsValidMaterialType(material)        (:500471)
+//   && pwd._structure < 100                                (a full bag can't)
+//   && (SalvageMultiple || m_material == 0 || material == m_material)
+//   && !(pwd._bitfield & 0x01000000)                       (not Retained)
+// `m_material` is locked to the first item (_AddItem :252614) and cleared
+// when the list empties (RemoveItem) or is salvaged / reopened.
+// `?salvageSuitable=off` (or 0/false) restores the old ungated list.
+
+/** TinkeringSystem::IsValidMaterialType (acclient.c:500471). */
+export function isValidSalvageMaterial(material) {
+  const m = material >>> 0;
+  return m === 1 || m === 2 || (m >= 4 && m <= 8) || (m >= 10 && m <= 55) ||
+    (m >= 57 && m <= 64) || (m >= 66 && m <= 71) || (m >= 73 && m <= 77);
+}
+
+/** PublicWeenieDesc bitfield RETAINED (holtburger-common ObjectDescriptionFlag). */
+export const ODF_RETAINED = 0x01000000;
+/** holtburger-common CharacterOption::SalvageMultipleMaterialsAtOnce. */
+export const OPTION_SALVAGE_MULTIPLE = 0x22;
+
+/**
+ * Pure port of gmSalvageUI::IsItemSuitable.
+ * @param {{materialType?:number|null, structure?:number|null, descFlags?:number,
+ *          retained?:boolean}} facts
+ * @param {{salvageMultiple?:boolean, lockedMaterial?:number}} opts
+ * @returns {boolean}
+ */
+export function salvageItemSuitable(facts, { salvageMultiple = true, lockedMaterial = 0 } = {}) {
+  const material = (facts?.materialType ?? 0) >>> 0;
+  if (!isValidSalvageMaterial(material)) return false;
+  const structure = Number(facts?.structure ?? 0);
+  if (Number.isFinite(structure) && structure >= 100) return false;
+  if (!salvageMultiple && (lockedMaterial >>> 0) !== 0 && material !== (lockedMaterial >>> 0)) return false;
+  if (((facts?.descFlags ?? 0) & ODF_RETAINED) !== 0 || facts?.retained === true) return false;
+  return true;
+}
+
+let _salvageSuitableOn = null;
+function salvageSuitableOn() {
+  if (_salvageSuitableOn === null) {
+    try {
+      const v = new URLSearchParams(globalThis.location?.search ?? "").get("salvageSuitable")?.toLowerCase();
+      _salvageSuitableOn = !(v === "off" || v === "0" || v === "false");
+    } catch (_) { _salvageSuitableOn = true; }
+  }
+  return _salvageSuitableOn;
+}
+
+function salvageHandle() {
+  try { return window.__sessionHandle ?? window.__pluginClient?._handle ?? null; } catch (_) { return null; }
+}
+
+/**
+ * Live item facts for the gate, or null when the session cannot answer
+ * (stale pkg / no handle) — the gate then fails open, as before.
+ */
+function readSalvageFacts(guid) {
+  const h = salvageHandle();
+  if (typeof h?.objectIntProperty !== "function") return null;
+  const g = guid >>> 0;
+  let materialType = null;
+  let structure = null;
+  let descFlags = 0;
+  let retained = false;
+  try { materialType = h.objectIntProperty(g, 131) ?? null; } catch (_) {}
+  try { structure = h.objectIntProperty(g, 92) ?? null; } catch (_) {}
+  try { descFlags = typeof h.objectDescFlags === "function" ? (h.objectDescFlags(g) >>> 0) : 0; } catch (_) {}
+  try { retained = typeof h.objectBoolProperty === "function" ? h.objectBoolProperty(g, 91) === true : false; } catch (_) {}
+  return { materialType, structure, descFlags, retained };
+}
+
+/** PlayerModule::SalvageMultiple — the character option; unknown → allowed. */
+function salvageMultipleOption() {
+  const h = salvageHandle();
+  if (typeof h?.isCharacterOptionEnabled !== "function") return true;
+  try { return h.isCharacterOptionEnabled(OPTION_SALVAGE_MULTIPLE) !== false; } catch (_) { return true; }
+}
+
+/** The gate for one item; returns {ok, material}. */
+function checkSalvageSuitable(guid) {
+  if (!salvageSuitableOn()) return { ok: true, material: 0 };
+  const facts = readSalvageFacts(guid);
+  if (!facts) return { ok: true, material: 0 };
+  const ok = salvageItemSuitable(facts, {
+    salvageMultiple: salvageMultipleOption(),
+    lockedMaterial: state.lockedMaterial,
+  });
+  return { ok, material: (facts.materialType ?? 0) >>> 0 };
+}
 
 function ensureStyles() {
   if (typeof document === "undefined") return;
@@ -206,7 +303,7 @@ function ensurePanel() {
 
   const footer = el("div", "hbk-footer", body);
   const summary = el("div", "hsv-summary", footer);
-  const clearBtn = kitButton("Clear List", "hbk-btn-small", () => { state.items = []; renderList(); });
+  const clearBtn = kitButton("Clear List", "hbk-btn-small", () => { state.items = []; state.lockedMaterial = 0; renderList(); });
   footer.appendChild(clearBtn);
   const fireBtn = kitButton("Salvage", "hbk-btn", () => fireSalvage());
   fireBtn.disabled = true;
@@ -287,10 +384,15 @@ function renderList() {
 
 export function addItem(itemGuid, label, iconId) {
   const g = (itemGuid >>> 0);
-  if (!g || g === state.toolGuid) return;
-  if (state.items.some((it) => it.guid === g)) return;
+  if (!g || g === state.toolGuid) return false;
+  if (state.items.some((it) => it.guid === g)) return false;
+  // crafting-2: gmSalvageUI::_AddItem refuses an unsuitable item silently.
+  const verdict = checkSalvageSuitable(g);
+  if (!verdict.ok) return false;
   state.items.push({ guid: g, label, iconId: iconId >>> 0 });
+  if (state.items.length === 1) state.lockedMaterial = verdict.material;
   renderList();
+  return true;
 }
 
 // Drag-in path with retail gmSalvageUI::DragItemAcceptable rules.
@@ -327,6 +429,7 @@ function addFromDrop(guid) {
 function removeItem(idx) {
   if (idx < 0 || idx >= state.items.length) return;
   state.items.splice(idx, 1);
+  if (state.items.length === 0) state.lockedMaterial = 0; // gmSalvageUI::RemoveItem
   renderList();
 }
 
@@ -342,7 +445,55 @@ function appendResult(material, units, workmanship) {
   r.resultsList.scrollTop = r.resultsList.scrollHeight;
 }
 
+// ─── crafting-3 (2026-10-08): retail salvage-result chat line ───────────
+//
+// ClientUISystem::Handle_Inventory__Recv_SalvageOperationsResultData
+// (acclient.c:402586): GenerateMaterialsSalvagedString (:402430) joins
+// "%d %s (ws %.2lf)" per material — "" before the first, " and " before
+// the last, ", " otherwise — then
+//   "You obtain %hs using your knowledge of %hs.%s"
+// with AppraisalSystem::SkillToString(skill) and, when the augmentation
+// bonus is non-zero, " Your augmentation has given you a return bonus of %d%%!".
+// Added to the chat scroll (text type 0) whether or not the window is open.
+// `?salvageResultChat=off` (or 0/false) restores the panel-only display.
+
+/** Retail chat line for one SalvageOperationsResult, or null when empty. */
+export function salvageResultChatLine({ skill, augBonus, results } = {}, skillNameFn = retailSkillName) {
+  const list = Array.isArray(results) ? results : [];
+  if (list.length === 0) return null;
+  let materials = "";
+  list.forEach((r, i) => {
+    const sep = i === 0 ? "" : (i === list.length - 1 ? " and " : ", ");
+    const units = Number.isFinite(Number(r?.units)) ? Math.trunc(Number(r.units)) : 0;
+    const ws = Number(r?.workmanship);
+    materials += `${sep}${units} ${materialName(r?.material >>> 0)} (ws ${(Number.isFinite(ws) ? ws : 0).toFixed(2)})`;
+  });
+  let skillLabel = null;
+  try { skillLabel = skillNameFn?.(skill >>> 0) ?? null; } catch (_) { skillLabel = null; }
+  const bonus = (augBonus | 0) !== 0
+    ? ` Your augmentation has given you a return bonus of ${augBonus | 0}%!`
+    : "";
+  return `You obtain ${materials} using your knowledge of ${skillLabel || "Salvaging"}.${bonus}`;
+}
+
+let _salvageResultChatOn = null;
+function salvageResultChatOn() {
+  if (_salvageResultChatOn === null) {
+    try {
+      const v = new URLSearchParams(globalThis.location?.search ?? "").get("salvageResultChat")?.toLowerCase();
+      _salvageResultChatOn = !(v === "off" || v === "0" || v === "false");
+    } catch (_) { _salvageResultChatOn = true; }
+  }
+  return _salvageResultChatOn;
+}
+
 function onSalvageResult(detail) {
+  if (salvageResultChatOn()) {
+    try {
+      const line = salvageResultChatLine(detail);
+      if (line) window.__appendChatLine?.(line, 0);
+    } catch (_) {}
+  }
   if (!state.win?.isOpen()) return;
   const results = Array.isArray(detail?.results) ? detail.results : [];
   for (const r of results) appendResult(r.material >>> 0, r.units | 0, Number(r.workmanship));
@@ -382,6 +533,7 @@ function commitSalvage(tool, itemGuids) {
   }
   const sentSet = new Set(itemGuids.map((g) => g >>> 0));
   state.items = state.items.filter((it) => !sentSet.has(it.guid));
+  if (state.items.length === 0) state.lockedMaterial = 0; // gmSalvageUI::Salvage
   renderList();
   state.win?.toast("Salvaging…");
 }
@@ -406,6 +558,7 @@ export function openPanel(toolGuid) {
   // gmSalvageUI::OpenSalvagePanel — remember the tool, flush the list.
   state.toolGuid = (toolGuid >>> 0) || 0;
   state.items = [];
+  state.lockedMaterial = 0; // gmSalvageUI::OpenSalvagePanel
   state.results = [];
   state.warnedMissingSend = false;
   state.awaitingConfirm = false;

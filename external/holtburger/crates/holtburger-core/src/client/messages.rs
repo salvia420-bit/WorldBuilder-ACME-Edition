@@ -97,6 +97,12 @@ impl ClientRuntime {
                             self.pending_post_teleport_login_complete = false;
                             self.send_login_complete().await?;
                         }
+                        // streaming-teleport-2 (2026-10-08 follow-ups): the
+                        // destination pose landed — retail
+                        // `PlayerPositionUpdated(teleporting=1)` runs
+                        // `teleport_hook` + `CommandInterpreter::
+                        // PlayerTeleported` (acclient.c:144695-144712).
+                        self.movement.fire_armed_teleport_hook();
                     }
                     _ => {}
                 }
@@ -505,6 +511,11 @@ impl ClientRuntime {
                 // `MovementSystem::handle_exit_world_for`.
                 self.movement
                     .handle_exit_world_for(self.world.player.guid, true);
+                // streaming-teleport-2: the teleport hook (autorun off,
+                // MoveTo cancelled with ITeleported) fires when the
+                // destination UpdatePosition lands (retail `TeleportPlayer`
+                // from `HandleReceivedPosition`, acclient.c:145196-145198).
+                self.movement.arm_teleport_hook();
                 // F2-3: `LoginComplete` clears ACE's `Teleporting` flag
                 // (`GameActionLoginComplete` → `Player.OnTeleportComplete`).
                 // Firing it here — before the destination `UpdatePosition` is

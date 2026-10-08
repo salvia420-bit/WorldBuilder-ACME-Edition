@@ -1,0 +1,14 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "server-confirm",
+  "name": "Server Confirm",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Yes/No dialog for server ConfirmationRequests (0x0274): craft success chance, fellowship invites, allegiance swears, aug/skill/attribute devices, emote yes/no.",
+  "icon": "?",
+  "iconHidden": true,
+  "entry": "./server-confirm.js",
+  "environments": ["browser"],
+  "slots": ["overlay"],
+  "clientApi": "^1.0"
+}

@@ -52,15 +52,237 @@ pub struct DerivedStatsData {
     pub vitae: f32,
 }
 
+/// A fellowship join/leave/dismiss/disband notice. fellowship-2 (2026-10-08
+/// follow-ups): each variant carries the context retail's client-side
+/// `gmFellowshipUI` strings need, captured BEFORE the state change (the
+/// leader, who is leader, the fellowship name) — see [`Self::retail_text`].
 #[derive(Debug, Clone)]
 pub enum FellowshipActivity {
-    YouJoined { fellowship_name: String },
-    MemberJoined { member_name: String },
-    YouLeft,
-    MemberLeft { member_name: String },
-    YouWereDismissed,
-    MemberWasDismissed { member_name: String },
-    FellowshipDisbanded { fellowship_name: Option<String> },
+    YouJoined {
+        fellowship_name: String,
+        /// The leader's name (`None` when the leader is not a known member).
+        leader_name: Option<String>,
+        self_is_leader: bool,
+        open: bool,
+    },
+    MemberJoined {
+        member_name: String,
+    },
+    YouLeft {
+        /// The fellowship you left (`None` when none was known).
+        fellowship_name: Option<String>,
+    },
+    MemberLeft {
+        member_name: String,
+    },
+    YouWereDismissed {
+        leader_name: Option<String>,
+    },
+    MemberWasDismissed {
+        member_name: String,
+        self_is_leader: bool,
+    },
+    FellowshipDisbanded {
+        fellowship_name: Option<String>,
+        leader_name: Option<String>,
+        self_is_leader: bool,
+    },
+}
+
+impl FellowshipActivity {
+    /// fellowship-2 (2026-10-08 follow-ups): retail's client-side chat line
+    /// for this notice (`gmFellowshipUI`, acclient.c:203000-203223 and
+    /// `RecvNotice_FellowshipUpdate` :203573-203648), without the trailing
+    /// newline. `None` where retail prints nothing (a disband / your own
+    /// quit with no fellowship known — `if ( m_pFellowship )` guards).
+    ///
+    /// The recruit line is `L"... %hs fellowship, %hs fellowship led by
+    /// %hs.\n"` with `L"an open"` / `L"a closed"` passed to the middle `%hs`
+    /// slot (:203636-203644). `PStringBase<unsigned short>`'s formatted ctor
+    /// is `__vsnwprintf` (:188655-188664), where `%hs` reads a NARROW string,
+    /// so the wide literal stops after its first byte: retail displayed
+    /// "a fellowship led by". That is what we print.
+    ///
+    /// Non-retail fallbacks (retail would dereference a missing fellow):
+    /// a recruit line or a dismissal / disband with no known leader.
+    pub fn retail_text(&self) -> Option<String> {
+        let leader = |name: &Option<String>| name.clone().filter(|n| !n.is_empty());
+        Some(match self {
+            Self::YouJoined {
+                fellowship_name,
+                leader_name,
+                self_is_leader,
+                ..
+            } => {
+                if *self_is_leader {
+                    format!("You have created the Fellowship of {fellowship_name}.")
+                } else if let Some(leader_name) = leader(leader_name) {
+                    format!(
+                        "You have been recruited into the {fellowship_name} fellowship, a fellowship led by {leader_name}."
+                    )
+                } else {
+                    format!("You have been recruited into the {fellowship_name} fellowship.")
+                }
+            }
+            Self::MemberJoined { member_name } => {
+                format!("{member_name} is now a member of your Fellowship.")
+            }
+            Self::YouLeft { fellowship_name } => {
+                let fellowship_name = fellowship_name.as_ref()?;
+                format!("You are no longer a member of the {fellowship_name} Fellowship.")
+            }
+            Self::MemberLeft { member_name } => format!("{member_name} has left your Fellowship."),
+            Self::YouWereDismissed { leader_name } => match leader(leader_name) {
+                Some(leader_name) => format!("{leader_name} has dismissed you from the Fellowship."),
+                None => "You have been dismissed from the Fellowship.".to_string(),
+            },
+            Self::MemberWasDismissed {
+                member_name,
+                self_is_leader,
+            } => {
+                if *self_is_leader {
+                    format!("You dismiss {member_name} from your Fellowship.")
+                } else {
+                    format!("{member_name} has been dismissed from the Fellowship.")
+                }
+            }
+            Self::FellowshipDisbanded {
+                fellowship_name,
+                leader_name,
+                self_is_leader,
+            } => {
+                fellowship_name.as_ref()?;
+                if *self_is_leader {
+                    "You have disbanded your Fellowship.".to_string()
+                } else if let Some(leader_name) = leader(leader_name) {
+                    format!("{leader_name} has disbanded your Fellowship.")
+                } else {
+                    "Your Fellowship has been disbanded.".to_string()
+                }
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod fellowship_retail_text_tests {
+    use super::FellowshipActivity as FA;
+
+    fn text(activity: FA) -> Option<String> {
+        activity.retail_text()
+    }
+
+    /// acclient.c:203618 / :203642 (`RecvNotice_FellowshipUpdate`).
+    #[test]
+    fn join_lines_follow_who_leads() {
+        assert_eq!(
+            text(FA::YouJoined {
+                fellowship_name: "Raid Bus".into(),
+                leader_name: Some("Player".into()),
+                self_is_leader: true,
+                open: true,
+            })
+            .as_deref(),
+            Some("You have created the Fellowship of Raid Bus.")
+        );
+        assert_eq!(
+            text(FA::YouJoined {
+                fellowship_name: "Raid Bus".into(),
+                leader_name: Some("Bravo".into()),
+                self_is_leader: false,
+                open: false,
+            })
+            .as_deref(),
+            Some("You have been recruited into the Raid Bus fellowship, a fellowship led by Bravo.")
+        );
+        assert_eq!(
+            text(FA::MemberJoined {
+                member_name: "Bravo".into()
+            })
+            .as_deref(),
+            Some("Bravo is now a member of your Fellowship.")
+        );
+    }
+
+    /// acclient.c:203165 / :203187 (`FellowQuit`), :203084 / :203115 /
+    /// :203121 (`FellowDismissed`), :203025 / :203033 (`FellowshipDisbanded`).
+    #[test]
+    fn departure_lines_match_retail() {
+        assert_eq!(
+            text(FA::YouLeft {
+                fellowship_name: Some("Raid Bus".into())
+            })
+            .as_deref(),
+            Some("You are no longer a member of the Raid Bus Fellowship.")
+        );
+        assert_eq!(
+            text(FA::MemberLeft {
+                member_name: "Bravo".into()
+            })
+            .as_deref(),
+            Some("Bravo has left your Fellowship.")
+        );
+        assert_eq!(
+            text(FA::YouWereDismissed {
+                leader_name: Some("Alpha".into())
+            })
+            .as_deref(),
+            Some("Alpha has dismissed you from the Fellowship.")
+        );
+        assert_eq!(
+            text(FA::MemberWasDismissed {
+                member_name: "Bravo".into(),
+                self_is_leader: true
+            })
+            .as_deref(),
+            Some("You dismiss Bravo from your Fellowship.")
+        );
+        assert_eq!(
+            text(FA::MemberWasDismissed {
+                member_name: "Bravo".into(),
+                self_is_leader: false
+            })
+            .as_deref(),
+            Some("Bravo has been dismissed from the Fellowship.")
+        );
+        assert_eq!(
+            text(FA::FellowshipDisbanded {
+                fellowship_name: Some("Raid Bus".into()),
+                leader_name: Some("Player".into()),
+                self_is_leader: true
+            })
+            .as_deref(),
+            Some("You have disbanded your Fellowship.")
+        );
+        assert_eq!(
+            text(FA::FellowshipDisbanded {
+                fellowship_name: Some("Raid Bus".into()),
+                leader_name: Some("Alpha".into()),
+                self_is_leader: false
+            })
+            .as_deref(),
+            Some("Alpha has disbanded your Fellowship.")
+        );
+    }
+
+    /// Retail prints nothing without a fellowship (`if ( m_pFellowship )`).
+    #[test]
+    fn no_fellowship_no_line() {
+        assert_eq!(
+            text(FA::YouLeft {
+                fellowship_name: None
+            }),
+            None
+        );
+        assert_eq!(
+            text(FA::FellowshipDisbanded {
+                fellowship_name: None,
+                leader_name: None,
+                self_is_leader: false
+            }),
+            None
+        );
+    }
 }
 
 #[derive(Debug, Clone)]

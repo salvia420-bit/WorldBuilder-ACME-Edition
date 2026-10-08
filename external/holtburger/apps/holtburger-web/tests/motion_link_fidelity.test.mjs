@@ -41,6 +41,7 @@ const FRAMERATE = 30;
 const NONCOMBAT = 0x8000003d;
 const HANDCOMBAT = 0x8000003c;
 const MAGIC = 0x80000049;
+const NOCYCLE_STYLE = 0x8000003f; // cmotiontable-5: a style the mock table has no cycles for
 const READY = 0x41000003;
 const RUN = 0x44000007;
 const WALK = 0x45000005;
@@ -61,6 +62,10 @@ const LINKS = new Map([
   [`49:3:${POWERUP1}`, 950],          // Magic Ready → windup
   [`3d:3:${FALLING}`, 700],           // Ready → Falling (take-off)
   [`3d:15:${RUN}`, 750],              // Falling → Run (landing)
+  // cmotiontable-5: only hop 2 of HandCombat → Magic is authored (no direct
+  // HandCombat → Magic and no HandCombat → NonCombat link).
+  [`3d:3:${MAGIC}`, 480],             // NonCombat Ready → Magic (hop 2)
+  [`3d:3:${NOCYCLE_STYLE}`, 420],     // NonCombat Ready → a style with no cycles
 ]);
 
 function frames(id, n) {
@@ -93,6 +98,7 @@ function partMesh(p) {
 function cycleId(cmd, stance) {
   const base = CYC[cmd >>> 0] ?? CYC[[READY, RUN, WALK, TURN_R, SIDESTEP_R, FALLING].find((c) => (c & 0xffff) === (cmd & 0xffff))];
   if (base == null) return null;
+  if ((stance & 0xffff) === (NOCYCLE_STYLE & 0xffff)) return null;
   return ((stance & 0xffff) === 0x3c ? COMBAT_OFFSET : 0) + base;
 }
 
@@ -314,6 +320,50 @@ test("L4b the exit and draw links play at 1.0; only the entry link takes the run
   assert.equal(sp.get(RUN), 2.5, "entry link (Ready → Run) at the run speed");
   const legacy = await speeds(false);
   assert.equal(legacy.get(HANDCOMBAT), 2.5, "`=off`: the draw link runs at the command speed");
+});
+
+test("L4c a style change whose hop 1 is missing still plays hop 2 (null-safe add_motion)", async () => {
+  // GetObjectSequence (acclient.c:337726-337745): on a direct-link miss both
+  // default-style hops go through the null-safe add_motion, so hop 2 plays
+  // alone when hop 1 is not authored.
+  const run = async (on) => {
+    const em = makeManager();
+    em._styleChainRetailOn = on;
+    const inst = await em.spawn(spawnMeta({ motionStance: HANDCOMBAT }));
+    await em.setMotion(inst.guid, READY, HANDCOMBAT);
+    em.tick(0.05);
+    await em.setMotion(inst.guid, READY, MAGIC);
+    const order = drain(em, inst);
+    em.dispose();
+    return order;
+  };
+  const on = await run(true);
+  assert.ok(on.includes(480), `hop 2 (NonCombat → Magic) played, saw ${on}`);
+  assert.equal(on[on.length - 1], 10, "lands on the Magic Ready cycle");
+  const off = await run(false);
+  assert.ok(!off.includes(480), `\`=off\`: no hop 1, no chain, saw ${off}`);
+});
+
+test("L4d a style change whose destination has no cycle plays none of its links", async () => {
+  // Retail refuses a style change without a cycle for the new state, so
+  // nothing plays (acclient.c:337700-337745); `=off` keeps the old draw link
+  // followed by the old cycle carrying on.
+  const run = async (on) => {
+    const em = makeManager();
+    em._styleChainRetailOn = on;
+    const inst = await em.spawn(spawnMeta());
+    await em.setMotion(inst.guid, READY, NONCOMBAT);
+    em.tick(0.05);
+    await em.setMotion(inst.guid, READY, NOCYCLE_STYLE);
+    const order = drain(em, inst);
+    em.dispose();
+    return order;
+  };
+  const on = await run(true);
+  assert.ok(!on.includes(420), `refused: no draw link, saw ${on}`);
+  assert.equal(on[on.length - 1], 10, "the NonCombat Ready cycle carries on");
+  const off = await run(false);
+  assert.ok(off.includes(420), `\`=off\`: the draw link still plays, saw ${off}`);
 });
 
 test("L5 setLocalStance while running plays the chain instead of only stamping", async () => {

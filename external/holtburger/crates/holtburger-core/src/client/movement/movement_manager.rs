@@ -466,6 +466,12 @@ impl MovementManager {
         self.move_to.as_ref().is_some_and(|m| m.is_active())
     }
 
+    /// R3 moveto-4 passthrough — the motion the active MoveTo node holds
+    /// (`MoveToManager::node_motion`; `0` = none / no manager).
+    pub(crate) fn moveto_node_motion(&self) -> u32 {
+        self.move_to.as_ref().map_or(0, |m| m.node_motion())
+    }
+
     /// S10 A.4 passthrough — read-clear completion latch.
     pub(crate) fn take_moveto_completion(&mut self) -> Option<u32> {
         self.move_to.as_mut().and_then(|m| m.take_completion())
@@ -1853,6 +1859,91 @@ mod tests {
             assert!(saw_turn, "dest {dest_x}: a turn node ran first");
             assert!(walked, "dest {dest_x}: the turn node completed and the walk began");
         }
+    }
+
+    /// R3 moveto-4 (2026-10-08 follow-ups): the remote pump records the
+    /// NODE motion as phase edges for the remote rig's animation (retail
+    /// `_DoMotion` acclient.c:344753 plays the node on the mover's interp):
+    /// the walk/run node's motion once when it begins, nothing while it
+    /// holds, and `0` (→ Ready) on arrival (`BeginNextNode`,
+    /// :345521-345545).
+    #[test]
+    fn remote_moveto_phase_edges_follow_the_node() {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Quaternion, Vector3};
+        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx};
+
+        let guid = Guid(0x8000_0042);
+        let target = Guid(0x8000_0077);
+        let at = |x: f32| WorldPosition {
+            landblock_id: Guid(0x0102_0011),
+            coords: Vector3::new(x, 50.0, 0.0),
+            rotation: Quaternion::from_heading(std::f32::consts::PI), // east
+        };
+        let mut world = remote_moveto_world(guid, at(50.0));
+        world.entities.insert(holtburger_world::entity::Entity::new(
+            target,
+            "Target".to_string(),
+            at(60.0),
+        ));
+        let mut manager = MovementManager::default();
+        let _ = manager.minterp();
+        manager.moveto().move_to_object(
+            target,
+            Origin::default(),
+            0.0,
+            0.0,
+            MovementParameters::default(),
+        );
+        let mut managers = std::collections::HashMap::new();
+        managers.insert(guid, manager);
+
+        let t0 = web_time::Instant::now();
+        crate::client::movement::system::drive_remote_movetos(&mut managers, &mut world, t0);
+        let edges = world.scene.take_remote_moveto_phase_changes();
+        assert_eq!(edges.len(), 1, "the walk node begins at once: {edges:?}");
+        assert_eq!(edges[0].0, guid);
+        assert!(
+            edges[0].1 == crate::client::movement::motion_interp::MOTION_WALK_FORWARD
+                || edges[0].1 == crate::client::movement::motion_interp::MOTION_RUN_FORWARD,
+            "a walk/run node: 0x{:08X}",
+            edges[0].1
+        );
+        assert_eq!(world.scene.remote_moveto_motion(guid), edges[0].1);
+
+        crate::client::movement::system::drive_remote_movetos(
+            &mut managers,
+            &mut world,
+            t0 + std::time::Duration::from_millis(50),
+        );
+        assert!(
+            world.scene.take_remote_moveto_phase_changes().is_empty(),
+            "an unchanged node records nothing"
+        );
+
+        world.scene.reconcile_authoritative_body_with_remote(
+            holtburger_world::spatial::SpatialBodyId::Entity(guid),
+            at(59.7),
+            Vector3::zero(),
+            Vector3::zero(),
+            AuthoritativeBodySync::Reset,
+            web_time::Instant::now(),
+            Some(RemoteCorrectionCtx {
+                contact: Some(true),
+                player_pose: Some(at(59.7)),
+            }),
+        );
+        crate::client::movement::system::drive_remote_movetos(
+            &mut managers,
+            &mut world,
+            t0 + std::time::Duration::from_millis(100),
+        );
+        assert!(!managers[&guid].is_moveto_active(), "arrived");
+        assert_eq!(
+            world.scene.take_remote_moveto_phase_changes(),
+            vec![(guid, 0)],
+            "arrival → no node motion (Ready)"
+        );
     }
 
     /// R3 moveto-1 (2026-10-08): retail sticks a MoveToObject's mover only

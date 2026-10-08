@@ -148,6 +148,10 @@ const toasts = [];
 globalThis.__ledger = ledger;
 globalThis.__realTakeInventorySnapshot = helpers.takeInventorySnapshot;
 globalThis.__realResolveContainedItemMeta = containedMeta.resolveContainedItemMeta;
+// use-3 remainder (2026-10-08 follow-ups): the kind:13 move-failure handler
+// runs on this suite's YoureTooBusy emits — thread the REAL helpers in.
+const weenieErr = await import(pathToFileURL(path.join(APP, "plugins", "weenie_error_messages.js")).href);
+globalThis.__realWeenieErr = weenieErr;
 // item_drag.planBackpackPlacement over the REAL pure planner (2026-10-08):
 // nothing here stacks, so every take is a move into the main pack.
 globalThis.__plan = (item) => helpers.planPlaceInBackpack(
@@ -188,6 +192,8 @@ const STUBS = {
   hideItemTooltip: "() => {}",
   showItemToast: "(m) => globalThis.__toasts.push(m)",
   localPlayerGuid: "() => 0x50000001",
+  clearsGroundObjectOnFailure: "globalThis.__realWeenieErr.clearsGroundObjectOnFailure",
+  moveFailCloseGroundEnabled: "globalThis.__realWeenieErr.moveFailCloseGroundEnabled",
 };
 const src = readFileSync(path.join(APP, "plugins", "corpse-loot-bar.js"), "utf8");
 const body = spliceModule(src, { label: "corpse-loot-bar.js", provided: [], stubs: STUBS });

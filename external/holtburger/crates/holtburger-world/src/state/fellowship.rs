@@ -131,6 +131,23 @@ impl FellowshipState {
         self.members.sort_by_key(|member| member.guid.0);
     }
 
+    /// fellowship-2 (2026-10-08 follow-ups): the leader's name, when the
+    /// leader is a known member (retail `Fellowship::GetFellow(_leader)`).
+    pub fn leader_name(&self) -> Option<String> {
+        if self.leader_guid == Guid::NULL {
+            return None;
+        }
+        self.members
+            .iter()
+            .find(|member| member.guid == self.leader_guid)
+            .map(|member| member.name.clone())
+    }
+
+    /// fellowship-2: retail `_leader == SmartBox::player_id`.
+    pub fn is_led_by(&self, guid: Guid) -> bool {
+        self.leader_guid != Guid::NULL && self.leader_guid == guid
+    }
+
     pub fn remove_member(&mut self, guid: Guid) {
         self.members.retain(|member| member.guid != guid);
     }

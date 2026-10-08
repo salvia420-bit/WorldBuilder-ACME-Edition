@@ -546,7 +546,9 @@ fn format_channel_message(
 
 fn format_fellowship_activity(activity: &FellowshipActivity) -> String {
     match activity {
-        FellowshipActivity::YouJoined { fellowship_name } => {
+        FellowshipActivity::YouJoined {
+            fellowship_name, ..
+        } => {
             if fellowship_name.is_empty() {
                 "You joined the fellowship.".to_string()
             } else {
@@ -556,17 +558,19 @@ fn format_fellowship_activity(activity: &FellowshipActivity) -> String {
         FellowshipActivity::MemberJoined { member_name } => {
             format!("{} joined the fellowship.", member_name)
         }
-        FellowshipActivity::YouLeft => "You left the fellowship.".to_string(),
+        FellowshipActivity::YouLeft { .. } => "You left the fellowship.".to_string(),
         FellowshipActivity::MemberLeft { member_name } => {
             format!("{} left the fellowship.", member_name)
         }
-        FellowshipActivity::YouWereDismissed => {
+        FellowshipActivity::YouWereDismissed { .. } => {
             "You were dismissed from the fellowship.".to_string()
         }
-        FellowshipActivity::MemberWasDismissed { member_name } => {
+        FellowshipActivity::MemberWasDismissed { member_name, .. } => {
             format!("{} was dismissed from the fellowship.", member_name)
         }
-        FellowshipActivity::FellowshipDisbanded { fellowship_name } => match fellowship_name {
+        FellowshipActivity::FellowshipDisbanded {
+            fellowship_name, ..
+        } => match fellowship_name {
             Some(name) if !name.is_empty() => format!("The fellowship '{}' was disbanded.", name),
             _ => "The fellowship was disbanded.".to_string(),
         },
@@ -928,7 +932,7 @@ mod tests {
 
         chat.handle_event(
             &holtburger_core::ClientViewEvent::FellowshipActivity {
-                activity: FellowshipActivity::YouWereDismissed,
+                activity: FellowshipActivity::YouWereDismissed { leader_name: None },
             },
             Some("Player"),
         );

@@ -32,7 +32,8 @@
 // Behaviour (decomp-matched):
 //   * gmSkillUI::RebuildSkillList — Specialized / Trained / Untrained /
 //     Unusable sections, alphabetical inside each (AddSortedSkill);
-//     SAC 1 with min_level > 1 counts as Unusable.
+//     SAC 1 with min_level > 1 counts as Unusable — but, as in retail
+//     UpdateSelection, any SAC < 2 row still gets the Train footer.
 //   * gmStatManagementUI::UpdateExperience — "XP for next level" =
 //     ExperienceToLevel(lvl+1) − total; the red meter fills by progress
 //     through the current level.
@@ -53,7 +54,9 @@
 // publish_player_stats_snapshot): attributes [type, current, base,
 // ranks]×6, vitals [type, current, base, buffed_max]×3, skills [type,
 // current, base, ranks, training, next_rank_cost]×N, levelInfo [level,
-// xp_lo, xp_hi, unspent_lo, unspent_hi, lum_lo, lum_hi]. Skill names /
+// xp_lo, xp_hi, unspent_lo, unspent_hi, lum_lo, lum_hi], and (round 4,
+// training-3) attributeXp / vitalXp [type, ranks, start, spent_xp,
+// next_rank_cost]×N — the real rank / spent xp the raise costs use. Skill names /
 // icons / costs from data/skill-table.json (SkillTable 0x0E000004); XP
 // curves from data/xp-tables-full.json (ExperienceTable 0x0E000018).
 
@@ -290,6 +293,10 @@ function getStats() {
       vitals: toArray(s.vitals),
       skills: toArray(s.skills),
       levelInfo: toArray(s.levelInfo),
+      // training-3 (2026-10-08): real ranks / spent xp for attribute and
+      // vital raise costs ([] on a pkg without the stride → estimate).
+      attributeXp: toArray(s.attributeXp),
+      vitalXp: toArray(s.vitalXp),
       // enchstats-2/3 (2026-10-08): the sheet's tint and rank estimate need
       // the vitae multiplier and GearMaxHealth (PropertyInt 379) beside the
       // snapshot.
@@ -370,6 +377,54 @@ function valueColor(cur, base) {
   return C_VALUE;
 }
 
+/**
+ * training-3 (2026-10-08): stride-5 `[type, ranks, start, spent_xp,
+ * next_rank_cost]` rows (src/lib.rs PlayerStatsSnapshot attributeXp /
+ * vitalXp) → Map(type → { ranks, start, spent, next }). Empty when the
+ * pkg predates the stride, so callers fall back to the estimate.
+ */
+function parseStatXp(arr) {
+  const out = new Map();
+  if (!arr || typeof arr.length !== "number") return out;
+  for (let i = 0; i + 4 < arr.length; i += 5) {
+    out.set(arr[i] >>> 0, {
+      ranks: arr[i + 1] >>> 0, start: arr[i + 2] >>> 0,
+      spent: arr[i + 3] >>> 0, next: arr[i + 4] >>> 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Retail gmAttributeUI::GetCostToRaise{,10} (acclient.c:214308 / :214364):
+ * `ExperienceToAttributeLevel(level_from_cp + n) − cp_spent` from the
+ * stat's REAL rank and spent xp (`real`, from parseStatXp). Without
+ * `real` (stale pkg) the cost falls back to the reconstructed
+ * (`fallbackRanks`, table[rank]) pair. With no local table the server's
+ * marginal still prices +1.
+ */
+function statCosts(table, real, fallbackRanks) {
+  const useReal = !!real && realStatXpEnabled();
+  const ranks = useReal ? real.ranks : fallbackRanks;
+  const spent = useReal
+    ? real.spent
+    : (Array.isArray(table) ? (table[fallbackRanks] ?? 0) : 0);
+  let cost1 = statRaiseCost(table, ranks, spent, 1);
+  const cost10 = statRaiseCost(table, ranks, spent, 10);
+  if (!cost1 && useReal && !Array.isArray(table) && real.next > 0) {
+    cost1 = { cost: real.next, ranks: 1 };
+  }
+  return { cost1, cost10 };
+}
+
+/** `?realStatXp=off|0|false` → back to the reconstructed spent xp. */
+function realStatXpEnabled() {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search ?? "").get("realStatXp");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
 function buildAttributeModel(stats, xp) {
   const items = [];
   const a = stats?.attributes ?? [];
@@ -380,12 +435,14 @@ function buildAttributeModel(stats, xp) {
     attrBase[a[i]] = a[i + 2];
   }
   if (byId.size === 0) return items;
+  const attrXp = parseStatXp(stats?.attributeXp);
+  const vitalXp = parseStatXp(stats?.vitalXp);
   items.push({ key: "h:attributes", kind: "header", group: "plain", label: "Attributes" });
   for (const id of ATTR_ORDER) {
     const r = byId.get(id);
     if (!r) continue;
     const table = xp?.attributes ?? null;
-    const spent = Array.isArray(table) ? (table[r.ranks] ?? 0) : 0;
+    const { cost1, cost10 } = statCosts(table, attrXp.get(id), r.ranks);
     items.push({
       key: `attribute:${id}`, kind: "attribute", id,
       name: ATTR_NAMES[id] ?? `Attribute ${id}`,
@@ -393,8 +450,7 @@ function buildAttributeModel(stats, xp) {
       value: String(r.cur), valueColor: valueColor(r.cur, r.base),
       current: r.cur, base: r.base,
       tip: r.cur !== r.base ? `Base ${r.base}, currently ${r.cur}` : `Base ${r.base}`,
-      cost1: statRaiseCost(table, r.ranks, spent, 1),
-      cost10: statRaiseCost(table, r.ranks, spent, 10),
+      cost1, cost10,
     });
   }
   const v = stats?.vitals ?? [];
@@ -405,8 +461,9 @@ function buildAttributeModel(stats, xp) {
     for (let i = 0; i + 3 < v.length; i += 4) {
       const id = v[i], cur = v[i + 1], base = v[i + 2], max = v[i + 3];
       const table = xp?.vitals ?? null;
-      const ranks = estimateVitalRanks(id, base, attrBase, id === 1 ? gear : 0);
-      const spent = Array.isArray(table) ? (table[ranks] ?? 0) : 0;
+      const real = vitalXp.get(id);
+      const { cost1, cost10 } = statCosts(table, real,
+        real && realStatXpEnabled() ? real.ranks : estimateVitalRanks(id, base, attrBase, id === 1 ? gear : 0));
       items.push({
         key: `vital:${id}`, kind: "vital", id,
         name: VITAL_NAMES[id] ?? `Vital ${id}`,
@@ -415,8 +472,7 @@ function buildAttributeModel(stats, xp) {
         value: `${cur}/${max}`, valueColor: valueColor(max - vitaeModifier(base, vitae), base),
         current: max, base,
         tip: `Maximum ${max} (base ${base}), currently ${cur}`,
-        cost1: statRaiseCost(table, ranks, spent, 1),
-        cost10: statRaiseCost(table, ranks, spent, 10),
+        cost1, cost10,
       });
     }
   }
@@ -523,7 +579,16 @@ export function footerModel(tab, rec, pools) {
     }
     return { title: "Select an Attribute to Improve", line1: xpLine, line2: credLine, raise1: off, raise10: off };
   }
-  if (rec.kind === "skill" && rec.group === "untrained") {
+  // training-1 (2026-10-08, round 4): retail gmSkillUI::UpdateSelection
+  // (acclient.c:213626) shows DisplaySelectionFooter_Untrained (:212913)
+  // for EVERY skill with SAC < 2 — the Unusable section (SAC 0, or SAC 1
+  // behind a SkillBase min_level > 1: the magic schools, Healing,
+  // Lockpick, …) only changes where the row is listed, not whether it can
+  // be trained. Train is enabled when `trained_cost && credits >= cost`.
+  // `?trainUnusable=off` restores the old "Cannot be trained" footer.
+  const trainable = rec.kind === "skill" && (rec.group === "untrained"
+    || (rec.group === "unusable" && (Number(rec.training) || 0) < TRAINING.TRAINED && trainUnusableEnabled()));
+  if (trainable) {
     const cost = rec.trainedCost >>> 0;
     return {
       title: rec.name,
@@ -550,12 +615,28 @@ export function footerModel(tab, rec, pools) {
   };
 }
 
+/** `?trainUnusable=off|0|false` → Unusable-section skills stay untrainable. */
+export function trainUnusableEnabled() {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search ?? "").get("trainUnusable");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+/**
+ * training-2 (2026-10-08, round 4): retail gmSkillUI::TrainSkill
+ * (acclient.c:213989) confirmation text, verbatim.
+ */
+export function trainConfirmText(name, cost) {
+  return `Are you sure you want to spend ${Math.round(Number(cost) || 0)} credits to train ${name}?`;
+}
+
 // ─── Confirm helper ──────────────────────────────────────────────────
 
-async function confirmAction(title, message, confirmLabel) {
+async function confirmAction(title, message, confirmLabel, cancelLabel = "Cancel") {
   try {
     if (typeof window.__modalConfirm === "function") {
-      return !!(await window.__modalConfirm({ title, message, confirmLabel, cancelLabel: "Cancel" }));
+      return !!(await window.__modalConfirm({ title, message, confirmLabel, cancelLabel }));
     }
   } catch (_) { /* fall through */ }
   if (typeof window.confirm === "function") return window.confirm(message);
@@ -900,8 +981,7 @@ export const view = {
       const handle = getHandle();
       try {
         if (rec.kind === "skill" && spec.action === "train") {
-          const ok = await confirmAction("Train Skill",
-            `Train ${rec.name} for ${fmt(spec.cost)} skill credit${spec.cost === 1 ? "" : "s"}?`, "Train");
+          const ok = await confirmAction("Train Skill", trainConfirmText(rec.name, spec.cost), "Yes", "No");
           if (!ok || !root.isConnected) return;
           const d = decideTrainAction({ kind: "train", skillId: rec.id, cost: spec.cost,
             availableXp: getAvailableXp(stats), availableCredits: getAvailableCredits() }, client);

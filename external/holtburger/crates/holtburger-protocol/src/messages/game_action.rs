@@ -58,6 +58,8 @@ pub enum GameAction {
     RecallAllegianceHometown(Box<RecallAllegianceHometownActionData>),
     AddFriend(Box<AddFriendActionData>),
     RemoveFriend(Box<RemoveFriendActionData>),
+    /// C2S `Social_ClearFriends` (0x0025): empty body.
+    RemoveAllFriends(Box<RemoveAllFriendsActionData>),
     ModifyCharacterSquelch(Box<ModifyCharacterSquelchActionData>),
     ModifyAccountSquelch(Box<ModifyAccountSquelchActionData>),
     ModifyGlobalSquelch(Box<ModifyGlobalSquelchActionData>),
@@ -233,6 +235,9 @@ impl ProtocolUnpack for GameActionMessage {
                 }
                 GameActionOpcode::RemoveFriend => GameAction::RemoveFriend(Box::new(
                     RemoveFriendActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RemoveAllFriends => GameAction::RemoveAllFriends(Box::new(
+                    RemoveAllFriendsActionData::unpack(data, offset)?,
                 )),
                 GameActionOpcode::ModifyCharacterSquelch => GameAction::ModifyCharacterSquelch(
                     Box::new(ModifyCharacterSquelchActionData::unpack(data, offset)?),
@@ -598,6 +603,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::RemoveFriend(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveFriend as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveAllFriends(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveAllFriends as u32)
                     .unwrap();
                 data.pack(buf);
             }

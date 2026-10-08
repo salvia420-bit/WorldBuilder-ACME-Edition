@@ -182,6 +182,70 @@ impl WorldState {
         self.server_run_rate_enabled = enabled;
     }
 
+    /// createobj-5 (2026-10-08 follow-ups): flip the per-object lifecycle
+    /// stamp gates (set once at world creation from `?lifecycleStampGates`,
+    /// ON unless `=off`). See the field doc on
+    /// `WorldState::lifecycle_stamp_gates_enabled`.
+    pub fn set_lifecycle_stamp_gates_enabled(&mut self, enabled: bool) {
+        self.lifecycle_stamp_gates_enabled = enabled;
+    }
+
+    pub fn lifecycle_stamp_gates_enabled(&self) -> bool {
+        self.lifecycle_stamp_gates_enabled
+    }
+
+    /// Retail `SmartBox::HandleDeleteObject` (acclient.c:143262-143296):
+    /// a DeleteObject for the local player is ignored (result 3, :143273);
+    /// an OLDER instance stamp is dropped (result 2). An equal instance
+    /// deletes; a NEWER instance (or an unknown object) is queued by retail
+    /// until the re-create lands — we have no blob queue, so it applies (the
+    /// `accept_set_state_sequence` no-queue precedent; an entity that never
+    /// saw an ObjectCreate holds instance 0 and is never wrongly kept). A
+    /// body without the instance stamp is ungated. Pure read: the routed
+    /// world handler and the wasm fan-out ask the same question.
+    pub fn rejects_object_delete(&self, guid: Guid, instance_sequence: Option<u16>) -> bool {
+        if !self.lifecycle_stamp_gates_enabled {
+            return false;
+        }
+        if guid != Guid::NULL && guid == self.player.guid {
+            return true;
+        }
+        match (instance_sequence, self.entities.get(guid)) {
+            (Some(instance), Some(entity)) => entity.is_older_instance(instance),
+            _ => false,
+        }
+    }
+
+    /// Post-route check (the remote-motion D8 pattern): did the routed
+    /// world handler REJECT a PickupEvent / ParentEvent for `guid`? The
+    /// handler records the position-channel stamp (`update_times[0]`) on
+    /// accept (`SmartBox::DoPickupEvent` / `DoParentEvent`,
+    /// acclient.c:143483-143530), so a known entity whose stamp differs
+    /// from the message's was stale or reordered. An exact duplicate reads
+    /// as accepted (harmless: the fan-out is idempotent). Unknown entities
+    /// are never "rejected": with `?objectBlobQueue` (held-3) the wasm
+    /// queues such an event before dispatch (`state::blob_queue`) and only
+    /// replays it once the object exists; with the queue off it applies
+    /// (JS `_pendingAttach` parks the render attach).
+    pub fn position_channel_event_rejected(&self, guid: Guid, position_sequence: u16) -> bool {
+        self.lifecycle_stamp_gates_enabled
+            && self
+                .entities
+                .get(guid)
+                .is_some_and(|entity| entity.position_sequence() != position_sequence)
+    }
+
+    /// Post-route check for ObjDescEvent: the routed world handler records
+    /// the visual-desc stamp (`update_times[7]`) on accept
+    /// (`SmartBox::UpdateVisualDesc`, acclient.c:143302-143330).
+    pub fn objdesc_event_rejected(&self, guid: Guid, visual_desc_sequence: u16) -> bool {
+        self.lifecycle_stamp_gates_enabled
+            && self
+                .entities
+                .get(guid)
+                .is_some_and(|entity| entity.visual_desc_sequence() != visual_desc_sequence)
+    }
+
     /// COMBAT-RADII (2026-07-28): flip the scene's size-aware
     /// combat-standoff switch (set once at world creation from
     /// `?combatRadii`, which is ON unless `=off`). See the field doc on

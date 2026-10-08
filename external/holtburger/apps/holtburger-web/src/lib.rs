@@ -439,6 +439,112 @@ fn parse_pickup_leave_world_flag(search: &str) -> bool {
     })
 }
 
+/// createobj-5 (2026-10-08 follow-ups): parse `?lifecycleStampGates=off`
+/// (or `&…`). DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, the
+/// remaining per-object stamp gates of retail `SmartBox::Handle*` apply:
+/// DeleteObject ignores the local player and drops an older instance
+/// (acclient.c:143262-143296); PickupEvent / ParentEvent need a strictly
+/// newer position stamp (:143483-143530, :144473-144552); ObjDescEvent a
+/// strictly newer visual-desc stamp (:143302-143330, :144356-144392); and
+/// UpdateMotion / VectorUpdate drop an older instance (:392816-392833,
+/// :144434-144470). The JS fan-out (KIND_REMOVE / ATTACH / APPEARANCE) is
+/// skipped for a message the routed world handler rejected. `=off` restores
+/// unconditional application. Carrier: `WorldState::
+/// set_lifecycle_stamp_gates_enabled`. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_lifecycle_stamp_gates_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "lifecycleStampGates=off" | "lifecycleStampGates=0" | "lifecycleStampGates=false"
+        )
+    })
+}
+
+/// streaming-teleport-2 (2026-10-08 follow-ups): parse `?teleportHook=off`
+/// (or `&…`). DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, the
+/// LOCAL player's teleport landing (the seq-matched TeleportArrived edge in
+/// `session/messages/position.rs`) runs retail's teleport hook: `SmartBox::
+/// PlayerPositionUpdated(teleporting=1)` (acclient.c:144695-144712) →
+/// `CPhysicsObj::teleport_hook` (:322237: CancelMoveTo(0x3C ITeleported),
+/// UnStick) + `CommandInterpreter::PlayerTeleported` (:716924: autorun off +
+/// a movement event) — `MovementSystemHandle::player_teleported`. `=off`
+/// keeps autorun / a pursuit alive across the portal. Read by the JS
+/// TeleportArrived arm too (`app/client_events.js`, the autorun mirror).
+/// Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_teleport_hook_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "teleportHook=off" | "teleportHook=0" | "teleportHook=false")
+    })
+}
+
+/// landdefs-terrain-1 (2026-10-08 follow-ups): parse `?openSeaWall=off` (or
+/// `&…`). DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, an
+/// entirely-water landblock (all 81 vertex terrain codes water —
+/// `CLandBlockStruct::CalcWater`, acclient.c:354566) is a wall for every mover
+/// but the viewer and missiles (`CLandCell::find_env_collisions`
+/// :355030-355033): the faithful outdoor cell carries the block water type
+/// (`faithful_bridge::build_outdoor_cell`), and the heightfield fallback walls
+/// the same blocks under `?fallbackWaterRetail`. Coastal (partly-water)
+/// blocks are never walls. Carrier: `SpatialScene::set_open_sea_wall_enabled`.
+/// `=off` lets the player walk out onto the open sea again. Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_open_sea_wall_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "openSeaWall=off" | "openSeaWall=0" | "openSeaWall=false")
+    })
+}
+
+/// landdefs-terrain-3 (2026-10-08 follow-ups): parse `?fallbackWaterRetail=off`
+/// (or `&…`). DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, the
+/// heightfield fallback (the walk path while the begin landblock's terrain is
+/// not yet scene-resident, and `?faithfulOutdoor=off`) uses retail's water
+/// model like the faithful path: water codes `16..=20` only
+/// (`TERRAIN_SURF_CHAR`, acclient.c:41303), the resting floor `water_depth`
+/// BELOW the plane (`validate_walkable` :314223-314227), and only an
+/// entirely-water landblock as a wall (with `?openSeaWall`). Carrier:
+/// `WorldState::set_fallback_water_retail`. `=off` restores the F4-4 model
+/// (22/23 water, raised floor, every all-water cell a wall). Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_fallback_water_retail_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "fallbackWaterRetail=off" | "fallbackWaterRetail=0" | "fallbackWaterRetail=false"
+        )
+    })
+}
+
+/// held-3 (2026-10-08 follow-ups): parse `?objectBlobQueue=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on (and the
+/// `?lifecycleStampGates` gates are on), a ParentEvent / PickupEvent that
+/// names an object the client does not have yet — or a NEWER instance of it —
+/// is not dispatched: the raw message is queued on that object and replayed,
+/// in arrival order, right after its ObjectCreate is handled (retail
+/// `SmartBox::HandleParentEvent` / `HandlePickupEvent` → `CObjectMaint::
+/// QueueBlobForObject`, acclient.c:144473-144552 / :310848-310860, replayed
+/// by `SmartBox::ProcessObjectNetBlobs` :145767 from `HandleCreateObject`
+/// :145996; 25 s placeholder expiry :310666). Carrier: `WorldState::
+/// set_object_blob_queue_enabled` (holtburger-world `state::blob_queue`).
+/// `=off` dispatches such events at once again. Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_object_blob_queue_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "objectBlobQueue=off" | "objectBlobQueue=0" | "objectBlobQueue=false"
+        )
+    })
+}
+
 /// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle`.
 /// When on, the entity-lifecycle message family (ObjectCreate /
 /// ObjectDelete / InventoryRemoveObject / ParentEvent / PickupEvent) is
@@ -661,6 +767,26 @@ fn parse_jump_launch_cap_flag(search: &str) -> bool {
 fn parse_jump_load_gate_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "jumpLoadGate=off")
+}
+
+/// outbound-5 remainder (2026-10-08 follow-ups): parse
+/// `?rawDefaultOmission=off` (or `&…`). DEFAULT-ON off-escape shape
+/// (`off`/`0`/`false`). When on, every outbound MoveToState omits the
+/// retail `RawMotionState::Pack` defaults that are neutral on ACE (a None
+/// current hold key, axis hold keys that follow it, unit forward/sidestep
+/// speeds — acclient.c:332970); the style and the turn speed stay explicit.
+/// `=off` restores the explicit fields. Native carrier:
+/// `USE_RETAIL_RAW_DEFAULT_OMISSION` (movement/common.rs). Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_raw_default_omission_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "rawDefaultOmission=off" | "rawDefaultOmission=0" | "rawDefaultOmission=false"
+        )
+    })
 }
 
 /// R1 outbound-1/2/3 (2026-10-08): parse `?apRetailGate=off` (or `&…`).
@@ -26470,6 +26596,49 @@ const CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED: u32 = 33;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_TELEPORT_ARRIVED: u32 = 66;
 
+/// `kind = 67` — RemoteMoveToPhase (R3 moveto-4, 2026-10-08 follow-ups).
+/// A REMOTE body's MoveToManager node motion changed this tick: retail plays
+/// the node's motion on the mover's own interp (`MoveToManager::_DoMotion`
+/// acclient.c:344753 → `CMotionInterp::DoInterpretedMotion`) —
+/// TurnRight / TurnLeft while a TurnToHeading node turns in place
+/// (`BeginTurnToHeading` :345489-345507), WalkForward / WalkBackwards /
+/// RunForward while a MoveToPosition node walks (`BeginMoveForward`
+/// :345371-345425), and Ready once the node stops or the directive ends
+/// (`BeginNextNode` arrival → `StopCompletely`, :345521-345545). Edges only
+/// (`SpatialScene::note_remote_moveto_motion`), drained by the TickMovement
+/// arm next to the D7 airborne edges. JS: `EntityManager.
+/// applyRemoteMoveToPhase` (`?remoteMoveToPhase=off` ignores it and keeps
+/// the COL-20 heading-error turn gate).
+///
+/// `u32Payload` = entity GUID; `u32Payload2` = the full MotionCommand
+/// (`0x6500000D` TurnRight, `0x6500000E` TurnLeft, `0x45000005`
+/// WalkForward, `0x45000006` WalkBackwards, `0x44000007` RunForward) or `0`
+/// (no node motion → Ready). Kind number above 66 to stay clear of the gap
+/// reserved for parallel waves.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_REMOTE_MOVETO_PHASE: u32 = 67;
+
+/// `kind = 70` — ConfirmationRequest (crafting-1, 2026-10-08 round 3).
+/// Server `CharacterConfirmationRequest` (GameEvent 0x0274): retail
+/// `ClientUISystem::Handle_Character__ConfirmationRequest`
+/// (acclient.c:401345) hands every type 1..=7 to a player dialog
+/// (SwearAllegiance, AlterSkill, AlterAttribute, Fellowship,
+/// CraftInteraction, Augmentation, YesNo). `u32Payload` = confirmation
+/// type, `u32Payload2` = server context, `stringPayload` = the server
+/// text. The bot queue (`pendingConfirmations`) is fed as before; this
+/// event drives plugins/server-confirm.js. Numbered well above 66 to stay
+/// clear of parallel waves.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CONFIRMATION_REQUEST: u32 = 70;
+
+/// `kind = 71` — ConfirmationDone (crafting-1). Server
+/// `CharacterConfirmationDone` (GameEvent 0x0276): retail
+/// `Handle_Character__ConfirmationDone` (acclient.c:401387) →
+/// `SendNotice_AbortConfirmationRequest` closes the open dialog for that
+/// (type, context). `u32Payload` = type, `u32Payload2` = context.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CONFIRMATION_DONE: u32 = 71;
+
 // Kinds 34-39 reserved for parallel-running waves (F.4 Vendor, F.5
 // Contracts, F.6 Emote) per the 2026-05-27 parallel-coordination plan.
 // Wave F.3 (allegiance) claims 40 + 41.
@@ -26866,6 +27035,14 @@ enum SessionCommand {
     /// Only valid while a character is in the deletion-pending grace
     /// window; ACE silently drops the request once the grace expires.
     RestoreCharacter { guid: u32 },
+    /// login-1 (2026-10-08, round 4): `SessionHandle.logOffCharacter()` —
+    /// sends `GameMessage::CharacterLogOff` (opcode 0xF653, retail
+    /// `Proto_UI::LogOffCharacter` from `CPlayerSystem::RequestLogOff`,
+    /// acclient.c:400355). ACE `CharacterHandler.CharacterLogOff` →
+    /// `Session.LogOffPlayer` saves and answers CharacterLogOff +
+    /// CharacterList. The page does not (yet) tear the world down to the
+    /// character list; see the JS caller.
+    LogOff,
     /// `SessionHandle.send_chat(text)` — sends a `GameAction::Talk`
     /// over the wire. Used today by the JS-side "Teleport to
     /// Holtburg" button to dispatch `@telepoi Holtburg`. ACE's
@@ -27589,6 +27766,13 @@ enum SessionCommand {
     RemoveFriend {
         friend_guid: u32,
     },
+    /// social-lists-1 (2026-10-08, round 4): `/friends remove -all` —
+    /// `GameAction::RemoveAllFriends` (0x0025, retail
+    /// `CM_Social::Event_ClearFriends`). ACE sends nothing back, so the
+    /// loop also empties the local friends snapshot the way retail
+    /// `gmFriendsUI::RecvNotice_ChatCommand_RemoveAllFriends` flushes its
+    /// list.
+    ClearFriends,
     /// Social: squelch (`add=true`) or unsquelch (`add=false`) a
     /// specific character. Maps to `GameAction::ModifyCharacterSquelch`
     /// (sub-opcode 0x0058). `message_type` is a `ChatMessageType`
@@ -28750,6 +28934,8 @@ pub struct PlayerStatsSnapshot {
     attributes: Vec<u32>,
     skills: Vec<u32>,
     level_info: Vec<u32>,
+    attribute_xp: Vec<u32>,
+    vital_xp: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -28796,6 +28982,28 @@ impl PlayerStatsSnapshot {
     #[wasm_bindgen(getter, js_name = levelInfo)]
     pub fn level_info(&self) -> Vec<u32> {
         self.level_info.clone()
+    }
+
+    /// training-3 (2026-10-08, round 4): flat `[type, ranks, start,
+    /// spent_xp, next_rank_cost, ...]` per attribute (stride 5, Strength=1
+    /// .. Self=6) — the real `_level_from_cp` / `_cp_spent` retail
+    /// `gmAttributeUI::GetCostToRaise{,10}` (acclient.c:214308 / :214364)
+    /// prices a raise from (`ExperienceToAttributeLevel(level + n) −
+    /// cp_spent`). `next_rank_cost` = cumulative next-rank xp − spent
+    /// (0 = max rank), like the skills stride.
+    #[wasm_bindgen(getter, js_name = attributeXp)]
+    pub fn attribute_xp(&self) -> Vec<u32> {
+        self.attribute_xp.clone()
+    }
+
+    /// training-3: the vital twin of [`Self::attribute_xp`] — `[type,
+    /// ranks, start, spent_xp, next_rank_cost, ...]` per vital (stride 5,
+    /// Health=1 / Stamina=3 / Mana=5; retail Attribute2nd `_level_from_cp`
+    /// / `_cp_spent`). Replaces the JS rank estimate back-solved from the
+    /// base max.
+    #[wasm_bindgen(getter, js_name = vitalXp)]
+    pub fn vital_xp(&self) -> Vec<u32> {
+        self.vital_xp.clone()
     }
 }
 
@@ -30702,9 +30910,16 @@ pub struct HouseStatusJs {
 impl HouseStatusJs {
     #[wasm_bindgen(getter, js_name = errorCode)]
     pub fn error_code(&self) -> u32 { self.error_code }
+    /// housing-2 (2026-10-08, round 4): always `false`. A HouseStatus
+    /// (0x0226) is retail's failed house transaction
+    /// (CM_House::DispatchUI_Recv_HouseStatus → SendNotice_Failed
+    /// HouseTransaction; gmHouseUI::Update(eError) drops the house data) —
+    /// ACE only ever sends BadParam (no house) or HouseEvicted. Ownership
+    /// is `playerHouseData()` being present (the recv loop clears one when
+    /// the other arrives). Kept for API compatibility.
     #[wasm_bindgen(getter, js_name = isHouseOwner)]
     pub fn is_house_owner(&self) -> bool {
-        self.error_code == 0
+        false
     }
 }
 
@@ -30985,6 +31200,11 @@ struct BookSnapshot {
     max_chars_per_page: u32,
     inscription: String,
     author_name: String,
+    /// books-journal-1: the book-level scribe id (BookDataResponse
+    /// `author_id`; ACE sends `ScribeIID ?? 0xFFFFFFFF`). Retail titles a
+    /// scribed book with its inscription (gmBookUI::OpenBook,
+    /// acclient.c:238737).
+    scribe_id: u32,
     pages: Vec<BookPageView>,
 }
 
@@ -30993,6 +31213,13 @@ struct BookSnapshot {
 struct BookPageView {
     author_name: String,
     text: String,
+    /// books-journal-1: per-page author + flags. Retail makes a page
+    /// editable only when `authorID == player || ignoreAuthor`
+    /// (gmBookUI::DisplayPageData, acclient.c:238214) and fetches a page
+    /// whose text was not included (gmBookUI::SetCurPage :238407).
+    author_id: u32,
+    ignore_author: bool,
+    text_included: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31001,6 +31228,9 @@ struct BookPageView {
 pub struct BookPageViewJs {
     author_name: String,
     text: String,
+    author_id: u32,
+    ignore_author: bool,
+    text_included: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31010,6 +31240,12 @@ impl BookPageViewJs {
     pub fn author_name(&self) -> String { self.author_name.clone() }
     #[wasm_bindgen(getter)]
     pub fn text(&self) -> String { self.text.clone() }
+    #[wasm_bindgen(getter, js_name = authorId)]
+    pub fn author_id(&self) -> u32 { self.author_id }
+    #[wasm_bindgen(getter, js_name = ignoreAuthor)]
+    pub fn ignore_author(&self) -> bool { self.ignore_author }
+    #[wasm_bindgen(getter, js_name = textIncluded)]
+    pub fn text_included(&self) -> bool { self.text_included }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31021,6 +31257,7 @@ pub struct BookSnapshotJs {
     max_chars_per_page: u32,
     inscription: String,
     author_name: String,
+    scribe_id: u32,
     pages: Vec<BookPageView>,
 }
 
@@ -31037,6 +31274,8 @@ impl BookSnapshotJs {
     pub fn inscription(&self) -> String { self.inscription.clone() }
     #[wasm_bindgen(getter, js_name = authorName)]
     pub fn author_name(&self) -> String { self.author_name.clone() }
+    #[wasm_bindgen(getter, js_name = scribeId)]
+    pub fn scribe_id(&self) -> u32 { self.scribe_id }
     #[wasm_bindgen(getter)]
     pub fn pages(&self) -> Vec<BookPageViewJs> {
         self.pages
@@ -31044,6 +31283,9 @@ impl BookSnapshotJs {
             .map(|p| BookPageViewJs {
                 author_name: p.author_name.clone(),
                 text: p.text.clone(),
+                author_id: p.author_id,
+                ignore_author: p.ignore_author,
+                text_included: p.text_included,
             })
             .collect()
     }
@@ -32406,6 +32648,10 @@ fn should_route_message_to_world(
     // A8-M1 (2026-06-11): canonical lifecycle routing, gated on
     // `worldLifecycle` (DEFAULT ON, `=off` escape — see the doc comment
     // above for the diagnosis + the M2 tick dependency).
+    // createobj-5 (2026-10-08 follow-ups): ObjDescEvent joins the family so
+    // the world records retail's visual-desc stamp (`UpdateVisualDesc`,
+    // acclient.c:143302-143330); the objects.rs arm skips the APPEARANCE
+    // fan-out for an event the world rejected.
     if world_lifecycle_on
         && matches!(
             message,
@@ -32414,6 +32660,7 @@ fn should_route_message_to_world(
                 | GameMessage::InventoryRemoveObject(_)
                 | GameMessage::ParentEvent(_)
                 | GameMessage::PickupEvent(_)
+                | GameMessage::ObjDescEvent(_)
         )
     {
         return true;
@@ -32635,6 +32882,89 @@ mod wire_state_packs_routing_tests {
         // Public frame; Private stays un-routed regardless.
         assert!(should_route_message_to_world(&public, false, true, true));
         assert!(!should_route_message_to_world(&private, true, true, true));
+    }
+
+    /// createobj-5 (2026-10-08 follow-ups): ObjDescEvent routes with the
+    /// lifecycle family (so the world records the visual-desc stamp), and
+    /// only then.
+    #[test]
+    fn objdesc_event_routes_with_the_lifecycle_family() {
+        let objdesc = GameMessage::ObjDescEvent(Box::new(ObjDescEventData {
+            guid: holtburger_common::Guid(0x5000_0002),
+            model_data: ModelData::default(),
+            instance_sequence: 1,
+            visual_desc_sequence: 2,
+        }));
+        assert!(should_route_message_to_world(&objdesc, true, false, false));
+        assert!(!should_route_message_to_world(&objdesc, false, true, true));
+    }
+
+    /// outbound-5 remainder: `?rawDefaultOmission` parse shape — DEFAULT-ON;
+    /// only `=off` / `=0` / `=false` disable.
+    #[test]
+    fn raw_default_omission_flag_defaults_on_unless_off() {
+        use super::parse_raw_default_omission_flag;
+        assert!(parse_raw_default_omission_flag(""));
+        assert!(parse_raw_default_omission_flag("?renderer=3d"));
+        assert!(!parse_raw_default_omission_flag("?rawDefaultOmission=off"));
+        assert!(!parse_raw_default_omission_flag("?nosw=1&rawDefaultOmission=false"));
+        assert!(!parse_raw_default_omission_flag("?rawDefaultOmission=0"));
+    }
+
+    /// createobj-5: `?lifecycleStampGates` parse shape — DEFAULT-ON; only
+    /// `=off` / `=0` / `=false` disable.
+    #[test]
+    fn lifecycle_stamp_gates_flag_defaults_on_unless_off() {
+        use super::parse_lifecycle_stamp_gates_flag;
+        assert!(parse_lifecycle_stamp_gates_flag(""));
+        assert!(parse_lifecycle_stamp_gates_flag("?renderer=3d"));
+        assert!(parse_lifecycle_stamp_gates_flag("?lifecycleStampGates=on"));
+        assert!(!parse_lifecycle_stamp_gates_flag("?lifecycleStampGates=off"));
+        assert!(!parse_lifecycle_stamp_gates_flag("?nosw=1&lifecycleStampGates=0"));
+        assert!(!parse_lifecycle_stamp_gates_flag("?lifecycleStampGates=false"));
+    }
+
+    /// held-3: `?objectBlobQueue` parse shape — DEFAULT-ON; only `=off` /
+    /// `=0` / `=false` disable.
+    #[test]
+    fn object_blob_queue_flag_defaults_on_unless_off() {
+        use super::parse_object_blob_queue_flag;
+        assert!(parse_object_blob_queue_flag(""));
+        assert!(parse_object_blob_queue_flag("?renderer=3d"));
+        assert!(parse_object_blob_queue_flag("?objectBlobQueue=on"));
+        assert!(!parse_object_blob_queue_flag("?objectBlobQueue=off"));
+        assert!(!parse_object_blob_queue_flag("?nosw=1&objectBlobQueue=0"));
+        assert!(!parse_object_blob_queue_flag("?objectBlobQueue=false"));
+    }
+
+    /// streaming-teleport-2: `?teleportHook` parse shape — DEFAULT-ON; only
+    /// `=off` / `=0` / `=false` disable.
+    #[test]
+    fn teleport_hook_flag_defaults_on_unless_off() {
+        use super::parse_teleport_hook_flag;
+        assert!(parse_teleport_hook_flag(""));
+        assert!(parse_teleport_hook_flag("?renderer=3d"));
+        assert!(parse_teleport_hook_flag("?teleportHook=on"));
+        assert!(!parse_teleport_hook_flag("?teleportHook=off"));
+        assert!(!parse_teleport_hook_flag("?nosw=1&teleportHook=0"));
+        assert!(!parse_teleport_hook_flag("?teleportHook=false"));
+    }
+
+    /// landdefs-terrain-1 / -3: `?openSeaWall` / `?fallbackWaterRetail` parse
+    /// shapes — DEFAULT-ON; only `=off` / `=0` / `=false` disable.
+    #[test]
+    fn open_sea_wall_and_fallback_water_flags_default_on_unless_off() {
+        use super::{parse_fallback_water_retail_flag, parse_open_sea_wall_flag};
+        assert!(parse_open_sea_wall_flag(""));
+        assert!(parse_open_sea_wall_flag("?openSeaWall=on"));
+        assert!(!parse_open_sea_wall_flag("?openSeaWall=off"));
+        assert!(!parse_open_sea_wall_flag("?nosw=1&openSeaWall=0"));
+        assert!(!parse_open_sea_wall_flag("?openSeaWall=false"));
+        assert!(parse_fallback_water_retail_flag(""));
+        assert!(parse_fallback_water_retail_flag("?openSeaWall=off"));
+        assert!(!parse_fallback_water_retail_flag("?fallbackWaterRetail=off"));
+        assert!(!parse_fallback_water_retail_flag("?nosw=1&fallbackWaterRetail=0"));
+        assert!(!parse_fallback_water_retail_flag("?fallbackWaterRetail=false"));
     }
 
     /// A2-P2 (W3+ S8): `?remoteInterp` parse shape — DEFAULT-ON
@@ -35336,6 +35666,11 @@ struct LatestStats {
     attributes: Vec<u32>,
     skills: Vec<u32>,
     level_info: Vec<u32>,
+    // training-3 (2026-10-08, round 4): stride-5 `[type, ranks, start,
+    // spent_xp, next_rank_cost]` rows for attributes / vitals (see
+    // `PlayerStatsSnapshot::attribute_xp`).
+    attribute_xp: Vec<u32>,
+    vital_xp: Vec<u32>,
     // Wave-D4 (paperdoll): Cached `WorldContextExt::player_burden()`
     // result (encumbrance / capacity). 0.0 pre-spawn / before any
     // stat hydration; can exceed 1.0 when over-encumbered (retail
@@ -35643,6 +35978,21 @@ impl SessionHandle {
             })
     }
 
+    /// login-1 (2026-10-08, round 4): retail log-off request — sends
+    /// `GameMessage::CharacterLogOff` (0xF653). ACE logs the character out
+    /// (save + leave the world) instead of waiting for the dead-session
+    /// timeout. Fire-and-forget; the caller prints retail's
+    /// "Logging off..." line.
+    #[wasm_bindgen(js_name = logOffCharacter)]
+    pub fn log_off_character(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::LogOff)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("logOffCharacter: cmd channel closed ({e})"))
+            })
+    }
+
     /// Phase 4 step 4 follow-on: most recent player-stats snapshot.
     /// Returns an "empty" snapshot (zeroed level info, no vitals /
     /// attributes / skills) until the player's biota lands. JS calls
@@ -35661,6 +36011,8 @@ impl SessionHandle {
             attributes: stats.attributes,
             skills: stats.skills,
             level_info: stats.level_info,
+            attribute_xp: stats.attribute_xp,
+            vital_xp: stats.vital_xp,
         }
     }
 
@@ -40786,6 +41138,21 @@ impl SessionHandle {
             })
     }
 
+    /// social-lists-1 (2026-10-08, round 4): clear the whole friends list
+    /// (`/friends remove -all`). Sends `GameAction::RemoveAllFriends`
+    /// (sub-opcode 0x0025) and empties the local `playerFriends()`
+    /// snapshot (ACE does not push an update), then raises
+    /// `friendsUpdated`.
+    #[wasm_bindgen(js_name = clearFriends)]
+    pub fn clear_friends(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::ClearFriends)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("clearFriends: cmd channel closed ({e})"))
+            })
+    }
+
     /// Social — squelch/unsquelch a specific character. Sends
     /// `GameAction::ModifyCharacterSquelch` (sub-opcode 0x0058). Pass
     /// `add=true` to squelch, `add=false` to unsquelch. `message_type`
@@ -41115,6 +41482,7 @@ impl SessionHandle {
             max_chars_per_page: b.max_chars_per_page,
             inscription: b.inscription.clone(),
             author_name: b.author_name.clone(),
+            scribe_id: b.scribe_id,
             pages: b.pages.clone(),
         })
     }
@@ -41197,9 +41565,10 @@ impl SessionHandle {
     /// Wave L2 (2026-05-26): house ownership status snapshot — `None`
     /// pre-event. Refreshed by the recv-loop on every
     /// `GameEvent::HouseStatus` (opcode 0x0226). Carries the
-    /// `WeenieError` code ACE sent: `0` (`None`) is treated as owner-
-    /// state; `0x0002` (`BadParam`) means no house owned;
-    /// `0x045F` (`HouseEvicted`) means the player was kicked out.
+    /// `WeenieError` code ACE sent: `0x0002` (`BadParam`) means no house
+    /// owned; `0x045F` (`HouseEvicted`) means the player was kicked out.
+    /// housing-2 (round 4): a HouseStatus clears `playerHouseData` and a
+    /// HouseData clears this, so at most one is `Some` — owner = data.
     /// Sync getter — no bus event; UI plugins poll on
     /// `playerStatsUpdated` or their own timer.
     #[wasm_bindgen(js_name = playerHouseStatus)]
@@ -41262,6 +41631,35 @@ impl SessionHandle {
                 guest_count: s.guest_count,
                 storage_count: s.storage_count,
             })
+    }
+
+    /// housing-3 (2026-10-08, round 4): the per-house RestrictionDB kept on
+    /// house object `guid` (CreateObject PWD + newer 0x0248 updates, see
+    /// `holtburger_world::house`) as JSON `{owner, ts, version, open,
+    /// monarch, guests: [[guid, perm], …], playerAllowed}`. `playerAllowed`
+    /// is retail `ACCWeenieObject::CanMoveInto` for the local player
+    /// (Admin + ImmuneCellRestrictions bypass; monarch from
+    /// PropertyInstanceId::Monarch). `undefined` when the object is unknown
+    /// or has no RestrictionDB. Read-only — the cell barrier itself is not
+    /// wired (landdefs-terrain-2 stays deferred).
+    #[wasm_bindgen(js_name = objectHouseRestrictions)]
+    pub fn object_house_restrictions(&self, guid: u32) -> Option<String> {
+        let world = self.world.try_borrow().ok()?;
+        let world = world.as_ref()?;
+        let house_guid = holtburger_common::Guid(guid);
+        let entity = world.entities.get(house_guid)?;
+        let db = entity.house_restriction_db.as_ref()?;
+        let guests: Vec<[u32; 2]> = db.table.iter().map(|(g, p)| [*g, *p]).collect();
+        let v = serde_json::json!({
+            "owner": entity.house_owner_iid(),
+            "ts": entity.house_restriction_ts,
+            "version": db.version,
+            "open": db.is_open(),
+            "monarch": db.monarch_id,
+            "guests": guests,
+            "playerAllowed": world.house_allows_player(house_guid),
+        });
+        serde_json::to_string(&v).ok()
     }
 
     /// Wave-H3 (2026-05-26): character title catalog snapshot — `None`
@@ -43382,6 +43780,35 @@ fn publish_player_stats_snapshot(
         attributes.push(attr.base);
         attributes.push(attr.ranks);
     }
+    // training-3 (2026-10-08, round 4): the real ranks / start / spent xp
+    // retail gmAttributeUI::GetCostToRaise prices from, plus the marginal
+    // next-rank cost (cumulative next_rank_xp − spent_xp; 0 = max rank).
+    let mut attribute_xp: Vec<u32> = Vec::with_capacity(world.player.attributes.len() * 5);
+    for attr in world.player.attribute_snapshot() {
+        attribute_xp.push(attr.attr_type as u32);
+        attribute_xp.push(attr.ranks);
+        attribute_xp.push(attr.start);
+        attribute_xp.push(attr.spent_xp);
+        attribute_xp.push(
+            attr
+                .next_rank_xp
+                .map(|cumulative| cumulative.saturating_sub(attr.spent_xp))
+                .unwrap_or(0),
+        );
+    }
+    let mut vital_xp: Vec<u32> = Vec::with_capacity(world.player.vitals.len() * 5);
+    for vital in world.player.vital_snapshot() {
+        vital_xp.push(vital.vital_type as u32);
+        vital_xp.push(vital.ranks);
+        vital_xp.push(vital.start);
+        vital_xp.push(vital.spent_xp);
+        vital_xp.push(
+            vital
+                .next_rank_xp
+                .map(|cumulative| cumulative.saturating_sub(vital.spent_xp))
+                .unwrap_or(0),
+        );
+    }
     let mut skills: Vec<u32> =
         Vec::with_capacity(world.player.skills.len() * 6);
     for skill in world.player.skill_snapshot() {
@@ -43594,6 +44021,8 @@ fn publish_player_stats_snapshot(
         attributes,
         skills,
         level_info,
+        attribute_xp,
+        vital_xp,
         burden,
         aetheria_bits,
         power_level,
@@ -44326,7 +44755,9 @@ fn publish_player_friends_snapshot(
                 }
             }
         }
-        F::FRIEND_REMOVED => {
+        // social-lists-2 (2026-10-08, round 4): RemoveSilent (3) removes
+        // like Remove (2) — retail ServerSays_RemoveFriend(list, silent).
+        F::FRIEND_REMOVED | F::FRIEND_REMOVED_SILENT => {
             if let Some(snap) = latest_friends.borrow_mut().as_mut() {
                 for entry in &payload.friends {
                     snap.friends.retain(|f| f.friend_id != entry.friend_id.0);
@@ -44442,6 +44873,9 @@ fn publish_player_book_snapshot(
             .map(|p| BookPageView {
                 author_name: p.author_name.clone(),
                 text: p.page_text.clone().unwrap_or_default(),
+                author_id: p.author_id,
+                ignore_author: p.ignore_author,
+                text_included: p.text_included,
             })
             .collect();
         Some(BookSnapshot {
@@ -44450,6 +44884,7 @@ fn publish_player_book_snapshot(
             max_chars_per_page: bd.max_num_chars_per_page.unwrap_or(0),
             inscription: bd.inscription.clone().unwrap_or_default(),
             author_name: bd.author_name.clone().unwrap_or_default(),
+            scribe_id: bd.author_id.unwrap_or(0),
             pages,
         })
     });
@@ -45432,6 +45867,9 @@ async fn recv_loop(
     movement.set_jump_launch_cap(parse_jump_launch_cap_flag(&flag_search()));
     movement.set_jump_load_gate(parse_jump_load_gate_flag(&flag_search()));
     movement.set_retail_position_event_gate(parse_ap_retail_gate_flag(&flag_search()));
+    // outbound-5 remainder (2026-10-08 follow-ups): `?rawDefaultOmission=off`
+    // — see `parse_raw_default_omission_flag`.
+    movement.set_retail_raw_default_omission(parse_raw_default_omission_flag(&flag_search()));
     // death-1 (R2 2026-10-08): `?deadInputGate=off` — retail PlayerIsDead
     // input refusal while the server says Dead (default ON); see
     // `parse_dead_input_gate_flag`.
@@ -45658,6 +46096,24 @@ async fn recv_loop(
     // held-4 (R2 2026-10-08): `?pickupLeaveWorld` (DEFAULT ON) — see
     // `parse_pickup_leave_world_flag` and the PickupEvent arm (objects.rs).
     let pickup_leave_world_on: bool = parse_pickup_leave_world_flag(&flag_search());
+    // createobj-5 (2026-10-08 follow-ups): `?lifecycleStampGates` (DEFAULT
+    // ON) — see `parse_lifecycle_stamp_gates_flag`; installed on the world at
+    // creation (login.rs / lifecycle.rs).
+    let lifecycle_stamp_gates_on: bool = parse_lifecycle_stamp_gates_flag(&flag_search());
+    // held-3 (2026-10-08 follow-ups): `?objectBlobQueue` (DEFAULT ON) — see
+    // `parse_object_blob_queue_flag`; installed on the world at creation
+    // (login.rs / lifecycle.rs), queued in session/messages/mod.rs, replayed
+    // by the recv loop below.
+    let object_blob_queue_on: bool = parse_object_blob_queue_flag(&flag_search());
+    // streaming-teleport-2 (2026-10-08 follow-ups): `?teleportHook` (DEFAULT
+    // ON) — see `parse_teleport_hook_flag`; read at the TeleportArrived edge
+    // (session/messages/position.rs).
+    let teleport_hook_on: bool = parse_teleport_hook_flag(&flag_search());
+    // landdefs-terrain-1 / -3 (2026-10-08 follow-ups): `?openSeaWall` /
+    // `?fallbackWaterRetail` (both DEFAULT ON) — installed on the world at
+    // creation (login.rs / lifecycle.rs), before any terrain is populated.
+    let open_sea_wall_on: bool = parse_open_sea_wall_flag(&flag_search());
+    let fallback_water_retail_on: bool = parse_fallback_water_retail_flag(&flag_search());
     // A8-M1 (2026-06-11): `?worldLifecycle` — route the lifecycle
     // message family through the canonical world dispatcher (single
     // CObjectMaint-style owner) instead of the apply_inventory_object_*
@@ -45905,6 +46361,11 @@ async fn recv_loop(
             spawn_hidden_state_on,
             wielded_spawn_on,
             pickup_leave_world_on,
+            lifecycle_stamp_gates_on,
+            object_blob_queue_on,
+            teleport_hook_on,
+            open_sea_wall_on,
+            fallback_water_retail_on,
             world_lifecycle_on,
             unified_tick_on,
             maint_prune_on,
@@ -45958,6 +46419,37 @@ async fn recv_loop(
                         session::messages::handle_message(&mut ctx, event).await
                     {
                         return;
+                    }
+                    // held-3 (2026-10-08 follow-ups, `?objectBlobQueue`):
+                    // replay the ParentEvent / PickupEvent blobs an
+                    // ObjectCreate just released, in arrival order, as
+                    // freshly received messages — retail
+                    // `SmartBox::ProcessObjectNetBlobs` (acclient.c:145767)
+                    // at the end of `HandleCreateObject` (:145996). Each
+                    // re-runs its wait check (a ParentEvent released by its
+                    // parent may wait on its child next). Only an
+                    // ObjectCreate releases, and a replayed blob is never
+                    // one, so this drains in one pass; the loop is a guard.
+                    loop {
+                        let replay = ctx
+                            .world
+                            .borrow_mut()
+                            .as_mut()
+                            .map(|w| w.take_ready_object_blobs())
+                            .unwrap_or_default();
+                        if replay.is_empty() {
+                            break;
+                        }
+                        for blob in replay {
+                            if let session::LoopFlow::Exit = session::messages::handle_message(
+                                &mut ctx,
+                                holtburger_session::SessionEvent::Message(blob),
+                            )
+                            .await
+                            {
+                                return;
+                            }
+                        }
                     }
                 }
             }

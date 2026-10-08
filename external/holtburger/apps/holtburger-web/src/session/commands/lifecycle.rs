@@ -21,6 +21,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         server_run_rate_on,
         retail_leash_on,
         leash_echo_gate_on,
+        lifecycle_stamp_gates_on,
+        object_blob_queue_on,
+        open_sea_wall_on,
+        fallback_water_retail_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -150,6 +154,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // MOVE-RUNRATE-105 (2026-08-11): prefer the
                 // server's my_run_rate (?serverRunRate, ON).
                 new_world.set_server_run_rate_enabled(server_run_rate_on);
+                // createobj-5 (2026-10-08 follow-ups): retail
+                // SmartBox::Handle* stamp gates (?lifecycleStampGates, ON).
+                new_world.set_lifecycle_stamp_gates_enabled(lifecycle_stamp_gates_on);
+                // held-3 (2026-10-08 follow-ups): retail QueueBlobForObject
+                // for ParentEvent / PickupEvent (?objectBlobQueue, ON).
+                new_world.set_object_blob_queue_enabled(object_blob_queue_on);
+                // landdefs-terrain-1 / -3 (2026-10-08 follow-ups): retail
+                // open-sea wall + heightfield-fallback water model
+                // (?openSeaWall / ?fallbackWaterRetail, both ON).
+                new_world.scene.set_open_sea_wall_enabled(open_sea_wall_on);
+                new_world.set_fallback_water_retail(fallback_water_retail_on);
                 // Physics-parity 2026-07-03: retail LOCAL
                 // lattice (?retailLeash=on).
                 new_world.set_local_retail_leash(retail_leash_on);
@@ -291,6 +306,21 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "CharacterRestoreRequest: {e}",
                 LoopFlow::Exit
             );
+        }
+        SessionCommand::LogOff => {
+            // login-1 (2026-10-08, round 4): retail
+            // CPlayerSystem::RequestLogOff → Proto_UI::LogOffCharacter
+            // (0xF653). ACE ignores the payload, so the bare opcode.
+            let msg = GameMessage::CharacterLogOff;
+            send_or_disconnect!(
+                queued_events,
+                e,
+                session.send_message(&msg).await,
+                "recv_loop: send CharacterLogOff: {e}",
+                "CharacterLogOff: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str("[logoff] CharacterLogOff sent");
         }
         _ => unreachable!("SessionCommand routed to the wrong handler module"),
     }

@@ -50,6 +50,7 @@ let _processing = false;
 let _domRefs = null;
 let _keyHandler = null;
 let _restoreFocusEl = null;
+let _currentEntry = null; // the entry whose dialog is open (crafting-1 dismiss)
 
 /** Retail DialogBox 8-piece frame + navy field as one multi-background
  *  declaration. Exported for tests / ad-hoc reuse. */
@@ -215,6 +216,7 @@ function ensureDom() {
 
 function openCurrent(entry) {
   const refs = ensureDom();
+  _currentEntry = entry;
   refs.titleEl.textContent = entry.title || "Confirm";
   refs.msgEl.textContent = entry.message || "";
   refs.msgEl.scrollTop = 0;
@@ -254,9 +256,55 @@ function openCurrent(entry) {
   try { refs.okBtn.focus({ preventScroll: true }); } catch (_) {}
 }
 
+// Tear the open dialog down (DOM, key handler, focus) without deciding it.
+function closeDom() {
+  const refs = _domRefs;
+  if (!refs) return;
+  refs.backdrop.setAttribute("data-open", "0");
+  refs.dialog.setAttribute("data-open", "0");
+  refs.okBtn.onclick = null;
+  refs.cancelBtn.onclick = null;
+  refs.backdrop.onclick = null;
+  if (_keyHandler) {
+    document.removeEventListener("keydown", _keyHandler, true);
+    _keyHandler = null;
+  }
+  const restore = _restoreFocusEl;
+  _restoreFocusEl = null;
+  try {
+    if (restore && restore.isConnected) restore.focus({ preventScroll: true });
+    else if (refs.dialog.contains(document.activeElement)) document.activeElement.blur();
+  } catch (_) {}
+}
+
+/**
+ * crafting-1 (2026-10-08): close an entry WITHOUT a decision — retail's
+ * DialogFactory::CloseDialog on a server ConfirmationDone. A queued entry is
+ * dropped; the open one is closed and `onDismiss` (not onConfirm/onCancel)
+ * runs. No dialog-result event fires. Returns true when the entry was found.
+ */
+function dismissEntry(entry) {
+  if (!entry) return false;
+  const qi = _activeQueue.indexOf(entry);
+  if (qi >= 0) {
+    _activeQueue.splice(qi, 1);
+    try { entry.onDismiss?.(); } catch (e) { console.warn("[modal-dialog] onDismiss threw:", e); }
+    return true;
+  }
+  if (_currentEntry !== entry) return false;
+  _currentEntry = null;
+  closeDom();
+  try { entry.onDismiss?.(); } catch (e) { console.warn("[modal-dialog] onDismiss threw:", e); }
+  try { entry.resolvePromise?.(false); } catch (_) {}
+  _processing = false;
+  setTimeout(processNext, 0);
+  return true;
+}
+
 function resolve(entry, accepted) {
   const refs = _domRefs;
   if (!refs) return;
+  if (_currentEntry === entry) _currentEntry = null;
   refs.backdrop.setAttribute("data-open", "0");
   refs.dialog.setAttribute("data-open", "0");
   refs.okBtn.onclick = null;
@@ -399,7 +447,7 @@ export function emitDialogResult(detail) {
  * forward to the rec #77 dispatcher.
  */
 export function modalConfirmCallback(opts) {
-  enqueue({
+  const entry = {
     title: opts?.title,
     message: opts?.message,
     confirmLabel: opts?.confirmLabel,
@@ -408,7 +456,17 @@ export function modalConfirmCallback(opts) {
     action: opts?.action,
     onConfirm: opts?.onConfirm,
     onCancel: opts?.onCancel,
-  });
+    onDismiss: opts?.onDismiss,
+  };
+  enqueue(entry);
+  // crafting-1 (2026-10-08): a handle so a caller can close the dialog
+  // without an answer (server ConfirmationDone). Callers that ignore the
+  // return value are unaffected.
+  return {
+    dismiss: () => dismissEntry(entry),
+    isOpen: () => _currentEntry === entry,
+    isPending: () => _currentEntry === entry || _activeQueue.includes(entry),
+  };
 }
 
 export const manifest = {

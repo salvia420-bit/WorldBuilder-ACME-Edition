@@ -515,6 +515,22 @@ function readStyleLinkSpeedFlag() {
   }
 }
 
+// ?styleChainRetail (2026-10-08, cmotiontable-5, DEFAULT ON; `=off`/`0`/`false`
+// escape) — two retail rules of the GetObjectSequence style branch
+// (acclient.c:337726-337745): (1) when the direct style link is missing, the
+// default-style hop 2 still plays even if hop 1 is missing too (add_motion is
+// null-safe); (2) a style change whose destination has no cycle is refused,
+// so its draw/sheathe links are not played. `this._styleChainRetailOn`.
+function readStyleChainRetailFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("styleChainRetail")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
 // ?linkOnlyBake (2026-10-08, cmotiontable-3, DEFAULT ON; `=off`/`0`/`false`
 // escape) — `_fetchLinkEntry` bakes a MotionTable link through the
 // geometry-free wasm `fetchMotionLinkKeyframes` (AnimationCache.getLink): no
@@ -1431,6 +1447,16 @@ import { getOcclusionCuller, ENTITY_PAD_M } from "./occlusion_cull.js";
 // analog, `?preCreateBuffer=on`). Pure dependency-free module; ALL wiring
 // and flag gating lives in this file (see readPreCreateBufferFlag above).
 import { createPreCreateBuffer } from "./pre_create_buffer.js";
+// R3 moveto-4 (2026-10-08 follow-ups) — remote MoveTo animation phase from the
+// Rust MoveToManager node (`?remoteMoveToPhase`, DEFAULT ON; off/0/false).
+// Pure module; the wiring is `applyRemoteMoveToPhase` /
+// `reapplyRemoteMoveToPhase` / `noteRemoteMoveToHint` below.
+import {
+  remoteMoveToPhaseEnabled,
+  planRemoteMoveToPhase,
+  remoteMoveToHintReapply,
+} from "./remote_moveto_phase.js";
+const REMOTE_MOVETO_PHASE_ON = remoteMoveToPhaseEnabled();
 // 2026-10-07 — terrain rounding step 3: rigs standing on the ground are DRAWN
 // on the rounded ground (render-only root-matrix offset; root.position stays
 // physics). DEFAULT-ON, `?terrainRoundObjects=off`. See scene3d/visual_ground.js.
@@ -3883,6 +3909,7 @@ export class EntityManager {
     this._hookFrameExitOn = readHookFrameExitFlag();
     this._cycleRestartOn = readCycleRestartAfterActionFlag();
     this._styleLinkSpeedOn = readStyleLinkSpeedFlag();
+    this._styleChainRetailOn = readStyleChainRetailFlag();
     // cmotiontable-3: geometry-free link bakes (`_fetchLinkEntry`).
     this._linkOnlyBakeOn = readLinkOnlyBakeFlag();
     // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
@@ -6391,7 +6418,89 @@ export class EntityManager {
    */
   noteRemoteMoveToHint(guid, isMoveTo) {
     const inst = this.entityMap.get(guid >>> 0);
-    if (inst) inst._motionFromMoveTo = isMoveTo === true;
+    if (!inst) return;
+    // R3 moveto-4: the remote's KIND_MOTION clock — a MoveTo stop edge plays
+    // Ready only if no server motion arrived since the phase it ends
+    // (`applyRemoteMoveToPhase`).
+    inst._kindMotionSeq = ((inst._kindMotionSeq | 0) + 1) | 0;
+    inst._lastHintMoveTo = isMoveTo === true;
+    // R3 moveto-4: once the Rust MoveTo node channel has spoken for this rig
+    // it owns the MoveTo clip, so the COL-20 heading-error gate (armed only
+    // when this flag is true) stays the FALLBACK for rigs it has not spoken
+    // for (stale pkg, `?remoteMoveTo=off`, `?remoteMoveToPhase=off`).
+    inst._motionFromMoveTo = isMoveTo === true && inst._moveToPhaseLive !== true;
+  }
+
+  /**
+   * R3 moveto-4 (2026-10-08 follow-ups, `?remoteMoveToPhase`, DEFAULT ON) — a
+   * REMOTE MoveToManager node-motion edge from the wasm (ClientEvent kind
+   * REMOTE_MOVETO_PHASE; `motion` = the full MotionCommand the node now holds,
+   * 0 = none). Retail plays a MoveTo node on the mover's own interp
+   * (`MoveToManager::_DoMotion` acclient.c:344753): TurnRight / TurnLeft while
+   * a TurnToHeading node turns in place (:345489-345507), Walk / WalkBackwards
+   * / Run while a MoveToPosition node walks (:345371-345425), Ready once the
+   * node stops (`BeginNextNode` → StopCompletely, :345521-345545). Before
+   * this, the clip came from the COL-20 heading-error gate, which the D5
+   * heading rows zero, so the run played while the node was still turning.
+   * ANIMATION ONLY — position and heading stay the Rust body's. The staleness
+   * rule (a newer server motion owns the clip) is
+   * `planRemoteMoveToPhase` in scene3d/remote_moveto_phase.js.
+   */
+  applyRemoteMoveToPhase(guid, motion) {
+    if (!REMOTE_MOVETO_PHASE_ON) return;
+    const g = guid >>> 0;
+    if (this._isLocalPlayerGuid(g)) return;
+    const inst = this.entityMap.get(g);
+    if (!inst) return;
+    const plan = planRemoteMoveToPhase(
+      { phase: inst._moveToPhase ?? 0, seq: inst._moveToPhaseSeq ?? 0 },
+      motion,
+      inst._kindMotionSeq ?? 0,
+    );
+    if (!plan) return;
+    // The node channel has spoken for this rig: it owns the MoveTo clip from
+    // now on (`noteRemoteMoveToHint` stops arming the COL-20 gate for it).
+    inst._moveToPhaseLive = true;
+    inst._moveToPhase = plan.phase;
+    inst._moveToPhaseSeq = plan.seq;
+    if (!plan.play) return;
+    // A dying / dead rig keeps its death pose (setMotion's CQ-06 guard lets
+    // Ready / Walk / Run through as a revival).
+    if (typeof inst._deathAt === "number") return;
+    this._playRemoteMoveToPhase(inst, g, plan.play);
+  }
+
+  /**
+   * R3 moveto-4 — after a REMOTE KIND_MOTION (loop.js `_armMotion`, after its
+   * setMotion). A re-sent MoveTo re-arms the Rust node; when the node motion
+   * comes out unchanged there is no new edge, so the envelope's walk/run hint
+   * must not replace a turn the node still holds. The live phase is re-played
+   * when it differs from the hint, and re-stamped as current (the stop edge
+   * that ends it then plays Ready). A non-MoveTo motion is left alone: its
+   * unpack cancelled the node, and the stop edge that follows is stale.
+   */
+  reapplyRemoteMoveToPhase(guid, hintCmd) {
+    if (!REMOTE_MOVETO_PHASE_ON) return;
+    const g = guid >>> 0;
+    const inst = this.entityMap.get(g);
+    if (!inst || inst._moveToPhaseLive !== true || inst._lastHintMoveTo !== true) return;
+    if (!((inst._moveToPhase ?? 0) >>> 0)) return;
+    inst._moveToPhaseSeq = inst._kindMotionSeq | 0;
+    if (typeof inst._deathAt === "number") return;
+    const cmd = remoteMoveToHintReapply(inst._moveToPhase, hintCmd);
+    if (cmd) this._playRemoteMoveToPhase(inst, g, cmd);
+  }
+
+  /** R3 moveto-4 — play a node motion (stance 0 = keep the rig's stance;
+   *  speed 1.0 like the MoveTo hint it replaces). */
+  _playRemoteMoveToPhase(inst, g, cmd) {
+    // The node IS the phase: drop a COL-20 gate a MoveTo hint armed before
+    // this rig's first edge (its tick release would start the queued run on
+    // its own clock), and keep the gate from re-substituting a turn over the
+    // walk / run played here.
+    inst._turnGateCmd = 0;
+    inst._motionFromMoveTo = false;
+    this.setMotion(g, cmd >>> 0, 0, 1.0);
   }
 
   setPose(guid, x, y, z, qw, qx, qy, qz) {
@@ -11618,6 +11727,9 @@ export class EntityManager {
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (typeof fetchKeyframes !== "function") return;
     let entry = null;
+    // cmotiontable-5: true only when the cycle lookup SUCCEEDED and found no
+    // cycle (a transient bake failure keeps the old "links still play" rule).
+    let cycleMissing = false;
     if (cacheKey !== inst.currentActionKey) {
       try {
         entry = await this.animationCache.get(
@@ -11633,6 +11745,7 @@ export class EntityManager {
             paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
           }
         );
+        cycleMissing = !entry?.clip;
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -11663,7 +11776,11 @@ export class EntityManager {
     // :339437, add_motion :337431); only the entry link and the cycle below
     // take the command's speed.
     const styleSpeed = this._styleLinkSpeedOn ? 1.0 : undefined;
-    for (const l of (styleLinks || [])) {
+    // cmotiontable-5 (?styleChainRetail): retail refuses a style change whose
+    // destination has no cycle, so nothing of it plays — no draw/sheathe
+    // links followed by the old cycle carrying on.
+    const styleRefused = this._styleChainRetailOn && cycleMissing;
+    for (const l of (styleRefused ? [] : (styleLinks || []))) {
       if (this._playLinkEntry(inst, l.entry, l.fromCmd ?? READY_SUBSTATE, l.toCmd, l.stance, styleSpeed)) {
         linked = true;
         styleN++;
@@ -13330,8 +13447,12 @@ export class EntityManager {
       this._fetchLinkEntry(inst, setupId, mtableId, READY_SUBSTATE, DEF, from),
       this._fetchLinkEntry(inst, setupId, mtableId, READY_SUBSTATE, to, DEF),
     ]);
-    if (!a) return [];
-    const out = [{ entry: a, toCmd: DEF, stance: from }];
+    // Retail appends both hops through the null-safe add_motion, so hop 2
+    // plays even when hop 1 is missing (?styleChainRetail; `=off` restores the
+    // old "no hop 1, no chain" rule).
+    if (!a && (!b || !this._styleChainRetailOn)) return [];
+    const out = [];
+    if (a) out.push({ entry: a, toCmd: DEF, stance: from });
     if (b) out.push({ entry: b, toCmd: to, stance: DEF });
     return out;
   }

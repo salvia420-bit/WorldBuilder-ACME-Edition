@@ -44,6 +44,7 @@ import { setAcText } from "../ui/ac_font.js";
 import { listManifestBindings } from "../ui/keymap.js";
 import { suggestedCombatModeFromInventory, activateOrUse, worldUseLeaf } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
+import { refuseCombatModeInPortalSpace } from "../ui/portal_busy.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { shouldQueryHealth, consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
 import {
@@ -498,6 +499,8 @@ export function mountToolbarControls(field, opts = {}) {
   function onStanceClick() {
     const handle = window.__sessionHandle;
     if (!handle) return;
+    // streaming-teleport-5: retail refuses a stance change in portal space.
+    if (refuseCombatModeInPortalSpace()) return;
     const now = Date.now();
     const live = readStanceMode();
     const curMode = now < state.optimisticUntil ? state.mode : live.mode;

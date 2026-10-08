@@ -368,6 +368,16 @@ impl MovementSystemHandle {
         self.inner.set_retail_position_event_gate(on);
     }
 
+    /// outbound-5 remainder (2026-10-08 follow-ups): install the
+    /// `?rawDefaultOmission=off` runtime carrier (default-ON — every outbound
+    /// MoveToState omits the ACE-neutral retail defaults: a None current
+    /// hold key, axis hold keys that follow the current key, unit forward /
+    /// sidestep speeds; `=off` restores the explicit fields). See
+    /// `common::USE_RETAIL_RAW_DEFAULT_OMISSION`.
+    pub fn set_retail_raw_default_omission(&mut self, on: bool) {
+        super::common::set_retail_raw_default_omission(Some(on));
+    }
+
     /// death-1 (R2 2026-10-08): install the `?deadInputGate=off` runtime
     /// carrier (default-ON — retail `PlayerIsDead`: while the server's
     /// interpreted forward command is Dead, movement keys and auto-run are
@@ -549,6 +559,15 @@ impl MovementSystemHandle {
     /// calls no-op. JS reaches this only under the default-off flag.
     pub fn set_auto_run(&mut self, on: bool) {
         self.inner.set_auto_run(on);
+    }
+
+    /// streaming-teleport-2 (2026-10-08 follow-ups, `?teleportHook`) — the
+    /// LOCAL player's teleport landed (the wasm TeleportArrived edge): queue
+    /// retail's teleport hook for the next tick — `CPhysicsObj::teleport_hook`
+    /// (CancelMoveTo 0x3C, UnStick) + `CommandInterpreter::PlayerTeleported`
+    /// (SetAutoRun(0,1) + SendMovementEvent), acclient.c:144695-144712.
+    pub fn player_teleported(&mut self) {
+        self.inner.player_teleported();
     }
 
     /// A4-Q2 (2026-06-12, W3+ S5) — public forward for the wasm

@@ -322,6 +322,13 @@ pub trait TransitionEnv {
     fn terrain_normal_at(&self, x: f32, y: f32) -> Option<Vector3>;
     fn water_depth_at(&self, x: f32, y: f32) -> f32;
     fn is_entirely_water_cell_at(&self, x: f32, y: f32) -> bool;
+    /// landdefs-terrain-3 — signed offset from the terrain plane to the
+    /// resting floor in water (`WorldState::water_floor_offset_at`: retail
+    /// `-water_depth`, legacy `+water_depth`). Default: the legacy raise
+    /// (test envs report depth 0, so either sign is 0 there).
+    fn water_floor_offset_at(&self, x: f32, y: f32) -> f32 {
+        self.water_depth_at(x, y)
+    }
     /// Collidable entity cylinders within `prefilter_dist` of `pose`
     /// (XY), excluding the mover itself. `skip_parented` mirrors FU-1.
     fn entity_colliders_near(
@@ -367,6 +374,10 @@ impl TransitionEnv for WorldState {
 
     fn is_entirely_water_cell_at(&self, x: f32, y: f32) -> bool {
         WorldState::is_entirely_water_cell_at(self, x, y)
+    }
+
+    fn water_floor_offset_at(&self, x: f32, y: f32) -> f32 {
+        WorldState::water_floor_offset_at(self, x, y)
     }
 
     fn entity_colliders_near(
@@ -1259,8 +1270,10 @@ fn resolve_floor_for_step(
         let Some(z) = env.terrain_height_at(global.x, global.y) else {
             return;
         };
+        // landdefs-terrain-3: the resting floor in water — retail sinks
+        // `water_depth` below the plane (`water_floor_offset_at`).
         let z = if gates.water_collision {
-            z + env.water_depth_at(global.x, global.y)
+            z + env.water_floor_offset_at(global.x, global.y)
         } else {
             z
         };
@@ -1381,7 +1394,7 @@ fn resolve_floor_for_step(
                     let g2 = pose.global_coords();
                     if let Some(z2) = env.terrain_height_at(g2.x, g2.y) {
                         let z2 = if gates.water_collision {
-                            z2 + env.water_depth_at(g2.x, g2.y)
+                            z2 + env.water_floor_offset_at(g2.x, g2.y)
                         } else {
                             z2
                         };
@@ -1576,7 +1589,7 @@ fn resolve_floor_for_step(
         if scene.cell_straddles_exterior_portal(cell_id, global, object.radius) {
             if let Some(tz) = env.terrain_height_at(global.x, global.y) {
                 let tz = if gates.water_collision {
-                    tz + env.water_depth_at(global.x, global.y)
+                    tz + env.water_floor_offset_at(global.x, global.y)
                 } else {
                     tz
                 };
