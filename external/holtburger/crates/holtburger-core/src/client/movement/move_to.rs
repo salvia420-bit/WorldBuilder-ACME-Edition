@@ -218,6 +218,22 @@ pub(crate) enum MoveToSteer {
         target: WorldPosition,
         away: bool,
         run: bool,
+        /// R3 moveto-3 (2026-10-08): the walk command is `WalkBackwards`
+        /// (the `towards_and_away` under-min arm). `adjust_motion` folds it
+        /// into WalkForward × −0.65 (acclient.c:343746), so the mover
+        /// backs away along its OWN facing.
+        backwards: bool,
+        /// R3 moveto-3: the `HandleMoveToPosition` aux turn
+        /// (`aux_command`: 0, TurnRight or TurnLeft) — retail rotates the
+        /// walker only outside the 20°/340° deadband
+        /// (acclient.c:345620-345651) and otherwise runs straight along
+        /// its facing.
+        aux: u32,
+        /// R3 moveto-5: `movement_params.speed` (sanitized finite > 0,
+        /// else 1.0) — `_DoMotion` hands it to `adjust_motion`
+        /// (acclient.c:344753, :345408-345414), scaling the motion's
+        /// velocity and omega (ACE charge = 1.5).
+        speed: f32,
     },
     /// Turn command active: face `heading_deg` (degrees, retail node
     /// domain). `hold_key` is the directive's `hold_key_to_apply`, which
@@ -226,7 +242,29 @@ pub(crate) enum MoveToSteer {
     /// wire never carries one), resolved by the consumer to the mover's
     /// current hold key exactly as `CMotionInterp::adjust_motion` does
     /// (:343746).
-    Turn { heading_deg: f32, hold_key: u32 },
+    Turn {
+        heading_deg: f32,
+        hold_key: u32,
+        /// R3 moveto-2 (2026-10-08): the active turn command
+        /// (`current_command`: TurnRight or TurnLeft). Retail turns the
+        /// motion WITHOUT stopping at the node and detects completion by
+        /// overshoot (`HandleTurnToHeading` → `heading_greater`,
+        /// acclient.c:345712), so the consumer must know the direction.
+        command: u32,
+        /// R3 moveto-5: `movement_params.speed` (sanitized, see `Walk`).
+        speed: f32,
+    },
+}
+
+/// R3 moveto-5 — the `movement_params.speed` a steer carries: finite and
+/// positive, else the ctor default 1.0 (a degenerate wire speed must not
+/// freeze or reverse the remote drive).
+fn steer_speed(speed: f32) -> f32 {
+    if speed.is_finite() && speed > 0.0 {
+        speed
+    } else {
+        1.0
+    }
 }
 
 /// The physics-domain effects one `use_time` returns instead of
@@ -1060,6 +1098,9 @@ impl MoveToManager {
                     target: self.current_target_position?,
                     away: self.moving_away,
                     run: self.movement_params.hold_key_to_apply == 2,
+                    backwards: self.current_command == MOTION_WALK_BACKWARDS,
+                    aux: self.aux_command,
+                    speed: steer_speed(self.movement_params.speed),
                 })
             }
             MoveToNode::TurnToHeading(heading)
@@ -1069,6 +1110,8 @@ impl MoveToManager {
                 Some(MoveToSteer::Turn {
                     heading_deg: *heading,
                     hold_key: self.movement_params.hold_key_to_apply,
+                    command: self.current_command,
+                    speed: steer_speed(self.movement_params.speed),
                 })
             }
             _ => None,
@@ -1454,6 +1497,96 @@ mod tests {
         assert_eq!(out.completion, Some(0));
         assert!(!manager.is_active());
         assert_eq!(manager.take_completion(), Some(0));
+    }
+
+    /// R3 moveto-2/3/5 (2026-10-08): the steer carries what the remote
+    /// consumer needs to realize the motions retail `_DoMotion`s — the
+    /// turn node's command (the overshoot direction, HandleTurnToHeading
+    /// :345712), the walk's aux turn (only outside the 20° deadband,
+    /// :345620-345651), WalkBackwards, and the sanitized
+    /// `movement_params.speed` (:345408-345414).
+    #[test]
+    fn steer_carries_turn_command_aux_backwards_and_speed() {
+        let now = Instant::now();
+
+        // TurnRight node (facing north 90, target east 180), speed 1.5.
+        let mut params = MovementParameters::default();
+        params.speed = 1.5;
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(50.0, 0.0), params);
+        let out = manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Turn { command, speed, .. })
+                if command == MOTION_TURN_RIGHT && (speed - 1.5).abs() < 1e-6),
+            "{:?}",
+            out.steer
+        );
+
+        // TurnLeft node (facing north 90, target west 0); a NaN wire
+        // speed degrades to the ctor default 1.0.
+        let mut params = MovementParameters::default();
+        params.speed = f32::NAN;
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(-50.0, 0.0), params);
+        let out = manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Turn { command, speed, .. })
+                if command == MOTION_TURN_LEFT && speed == 1.0),
+            "{:?}",
+            out.steer
+        );
+
+        // Walk: aligned (facing east 180) → the turn node pops and the
+        // walk begins with no aux.
+        let mut params = MovementParameters::default();
+        params.speed = 1.5;
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(50.0, 0.0), params);
+        let out = manager.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Walk { aux: 0, backwards: false, speed, .. })
+                if (speed - 1.5).abs() < 1e-6),
+            "{:?}",
+            out.steer
+        );
+        // 30° off the bearing (facing 150) → TurnRight aux in the steer.
+        let out = manager.use_time(&view(pose(0.0, 0.0, 150.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Walk { aux, .. }) if aux == MOTION_TURN_RIGHT),
+            "30° off → aux TurnRight: {:?}",
+            out.steer
+        );
+        // 15° off (facing 165) → inside the deadband: aux stopped.
+        let out = manager.use_time(&view(pose(0.0, 0.0, 165.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Walk { aux: 0, .. })),
+            "15° off → no aux: {:?}",
+            out.steer
+        );
+        // 30° off the other way (facing 210) → TurnLeft aux.
+        let out = manager.use_time(&view(pose(0.0, 0.0, 210.0), None, now));
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Walk { aux, .. }) if aux == MOTION_TURN_LEFT),
+            "{:?}",
+            out.steer
+        );
+
+        // towards_and_away under min_distance → WalkBackwards facing the
+        // target (get_desired_heading 0, :346224-346239).
+        let mut params = MovementParameters::default();
+        params.bitfield |= 0x100;
+        params.bitfield &= !0x400; // point metric
+        params.min_distance = 2.0;
+        params.distance_to_object = 4.0;
+        let mut manager = MoveToManager::default();
+        manager.move_to_position(origin(1.5, 0.0), params);
+        let out = manager.use_time(&view(pose(0.0, 0.0, 180.0), None, now));
+        assert_eq!(manager.current_command, MOTION_WALK_BACKWARDS);
+        assert!(
+            matches!(out.steer, Some(MoveToSteer::Walk { backwards: true, away: true, .. })),
+            "{:?}",
+            out.steer
+        );
     }
 
     /// moving_away arrival at `min_distance`; aux-turn engages > 20°

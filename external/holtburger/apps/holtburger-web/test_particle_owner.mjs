@@ -19,6 +19,7 @@ import {
   ParticleOwnerRegistry,
   ownerRegistry,
   particleOwnerOn,
+  particleOwnerRetireOn,
   _resetParticleOwnerFlagForTests,
 } from "./scene3d/particles/owner_registry.js";
 
@@ -56,6 +57,13 @@ class FakeManager {
   stopParticleEmitter(id) {
     if (!this.particleTable.has(id)) return false;
     this.stopped.add(id);
+    return true;
+  }
+  /** What ParticleManager.tick() does when an emitter FINISHES on its own
+   *  (stopped && no particles): drop it and fire `onEmitterRemoved`. */
+  retire(id) {
+    if (!this.particleTable.delete(id)) return false;
+    if (typeof this.onEmitterRemoved === "function") this.onEmitterRemoved(id, this);
     return true;
   }
 }
@@ -318,6 +326,98 @@ class FakeManager {
   check("sibling-race: despawn still tombstones an in-flight create",
     (await late) === 0);
   check("sibling-race: no owner record leaked after despawn", reg.ownerCount === 0);
+}
+
+// ---- 15. PLIFECYCLE-3 natural retirement (`?particleOwnerRetire`) ---------
+// Retail ParticleManager::UpdateParticles removes a finished emitter from the
+// object's particle_table (acclient.c:329516-329520) and
+// CreateBlockingParticleEmitter refuses only on a LIVE entry (:329528-329565).
+{
+  check("retire flag: no location (Node) → default ON", particleOwnerRetireOn() === true);
+  const reg = new ParticleOwnerRegistry();
+  const mgr = new FakeManager();
+  const first = await reg.addEmitter(7, mgr, { emitterId: 9, blocking: true });
+  check("retire: blocking create on a free handle succeeds", first !== 0);
+  check("retire: registry installed the manager callback", typeof mgr.onEmitterRemoved === "function");
+  check("retire: a second blocking create is refused while the emitter is live",
+    (await reg.addEmitter(7, mgr, { emitterId: 9, blocking: true })) === 0);
+  mgr.retire(first); // the finite emitter drained and tick() removed it
+  check("retire: the drained emitter is gone from the owner record", reg.emitterCountForOwner(7) === 0);
+  const again = await reg.addEmitter(7, mgr, { emitterId: 9, blocking: true });
+  check("retire: blocking create on the same handle is accepted again (retail table miss)",
+    again !== 0 && again !== first && mgr.particleTable.has(again), `id=${again}`);
+  reg.destroyAllForOwner(7);
+
+  // Anonymous emitters: the owner's id map stops growing and the record prunes.
+  const a = await reg.addEmitter(31, mgr, { emitterId: 0 });
+  const b = await reg.addEmitter(31, mgr, { emitterId: 0 });
+  check("retire: two anonymous emitters tracked", reg.emitterCountForOwner(31) === 2);
+  mgr.retire(a);
+  check("retire: count drops as each one finishes", reg.emitterCountForOwner(31) === 1);
+  mgr.retire(b);
+  check("retire: count returns to 0", reg.emitterCountForOwner(31) === 0);
+  check("retire: the empty owner record is pruned", reg.ownerCount === 0);
+  check("retire: diag counter", reg.retiredCount === 3, `retired=${reg.retiredCount}`);
+
+  // Emitter ids are allocated PER MANAGER: the same numeric id on a second
+  // manager must not be touched by the first manager's retirement.
+  const other = new FakeManager();
+  const onWorld = await reg.addEmitter(40, mgr, { emitterId: 0 });
+  other.nextEmitterId = onWorld;
+  const onStatics = await reg.addEmitter("static:40", other, { emitterId: 0 });
+  check("retire: setup — same numeric id on two managers", onWorld === onStatics);
+  mgr.retire(onWorld);
+  check("retire: only the retiring manager's owner loses it",
+    reg.emitterCountForOwner(40) === 0 && reg.emitterCountForOwner("static:40") === 1);
+  // Explicit destroys (which never fire the callback) forget the id too, so
+  // the reverse map cannot grow with spawn/despawn churn.
+  reg.destroyAllForOwner("static:40");
+  for (let i = 0; i < 10; i++) {
+    const k = await reg.addEmitter(41, mgr, { emitterId: 0 });
+    if (i % 2) reg.destroySome(41, [k]);
+  }
+  reg.destroyAllForOwner(41);
+  check("retire: reverse map is empty after explicit destroys (no growth)",
+    reg._byMgr.get(other).size === 0 && reg._byMgr.get(mgr).size === 0,
+    `statics=${reg._byMgr.get(other).size} world=${reg._byMgr.get(mgr).size}`);
+
+  // Another registry on the same manager CHAINS rather than replaces.
+  const reg2 = new ParticleOwnerRegistry();
+  const shared = new FakeManager();
+  const x = await reg.addEmitter(50, shared, { emitterId: 0 });
+  const y = await reg2.addEmitter(51, shared, { emitterId: 0 });
+  shared.retire(x);
+  shared.retire(y);
+  check("retire: two registries on one manager both hear their retirements",
+    reg.emitterCountForOwner(50) === 0 && reg2.emitterCountForOwner(51) === 0);
+
+  // `=off` escape: legacy bookkeeping (the handle stays bound after a drain).
+  globalThis.location = { search: "?particleOwnerRetire=off" };
+  _resetParticleOwnerFlagForTests();
+  try {
+    check("retire flag: =off parses false", particleOwnerRetireOn() === false);
+    const legacyReg = new ParticleOwnerRegistry();
+    const legacyMgr = new FakeManager();
+    const id = await legacyReg.addEmitter(7, legacyMgr, { emitterId: 9, blocking: true });
+    check("retire off: no callback installed", legacyMgr.onEmitterRemoved === undefined);
+    legacyMgr.retire(id);
+    check("retire off: legacy — the drained handle still refuses blocking creates",
+      (await legacyReg.addEmitter(7, legacyMgr, { emitterId: 9, blocking: true })) === 0);
+  } finally {
+    delete globalThis.location;
+    _resetParticleOwnerFlagForTests();
+  }
+  globalThis.location = { search: "?particleOwnerRetire=0" };
+  _resetParticleOwnerFlagForTests();
+  check("retire flag: =0 parses false", particleOwnerRetireOn() === false);
+  globalThis.location = { search: "?particleOwnerRetire=false" };
+  _resetParticleOwnerFlagForTests();
+  check("retire flag: =false parses false", particleOwnerRetireOn() === false);
+  globalThis.location = { search: "" };
+  _resetParticleOwnerFlagForTests();
+  check("retire flag: bare URL → ON", particleOwnerRetireOn() === true);
+  delete globalThis.location;
+  _resetParticleOwnerFlagForTests();
 }
 
 // ---- 14. singleton exists -------------------------------------------------

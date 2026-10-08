@@ -24,6 +24,8 @@ import {
 } from "../ui/ac_spell_shape.js";
 import { setUseFastMissiles, setAutoRepeatAttacks, isCharacterOptionEnabled, CHARACTER_OPTION } from "../ui/ac_character_options.js";
 import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import { spellTargetClass } from "../ui/ac_spell_target_type.js";
+import { announceCastRefusal, MSG_NO_SELECTION } from "../ui/ac_spell_target_compat.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
 import {
@@ -1279,12 +1281,9 @@ function installSpellStrip() {
     if (!tgt) {
       setName(`${meta?.name ?? `Spell ${id}`} — select a target first`);
       // WS14 — surface the retail client string (acclient.c:404772) on the
-      // shared toast surface, not just the strip name label.
-      try {
-        window.__pluginClient?.events?.emit?.("clientActionRejected", {
-          message: "You must select a suitable target before casting this spell.",
-        });
-      } catch (_) {}
+      // shared toast surface, not just the strip name label. spellcast-3:
+      // retail's string has no trailing period; also the transient chat line.
+      announceCastRefusal(MSG_NO_SELECTION, 0);
       return;
     }
     castSpellViaHandle(id, tgt);
@@ -2456,7 +2455,10 @@ function renderSpellPicker(bodyEl, state) {
 
       const tag = document.createElement("span");
       tag.className = "hb-cb-spell-tag";
-      tag.textContent = isUntargeted ? "self" : (meta?.school ? schoolName(meta.school) : "target");
+      // spellcast-2: a formula-untargeted spell (ring, wall) also casts
+      // without a target but not on the caster — tag it by school.
+      const selfTag = isUntargeted && spellTargetClass(meta) !== "none";
+      tag.textContent = selfTag ? "self" : (meta?.school ? schoolName(meta.school) : "target");
       row.appendChild(tag);
 
       // Tooltip mirrors the badge so screen-readers + hover both

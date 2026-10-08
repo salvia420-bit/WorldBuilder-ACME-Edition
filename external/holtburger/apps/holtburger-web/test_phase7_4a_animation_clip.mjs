@@ -129,12 +129,22 @@ const patched = animSrc
         /^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
         "",
     )
+    // 2026-10-08: and `retimeHooksToFrameExit` from ./hook_windows.js (the
+    // cache snapshot's frame-exit hook timeline) — pure, so the genuine
+    // module is inlined ahead of animation.js below.
+    .replace(
+        /^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/hook_windows\.js["'];?\s*$/m,
+        "",
+    )
     .replace(/^\s*export\s+function\s+/gm, "function ")
     .replace(/^\s*export\s+class\s+/gm, "class ");
+const hookWindowsSrc = (await import("node:fs"))
+    .readFileSync(resolvePath(__dirname, "scene3d", "hook_windows.js"), "utf8")
+    .replace(/^\s*export\s+function\s+/gm, "function ");
 // Wrap in a function that returns the symbols we need.
 const factory = new Function(
     "THREE",
-    `${patched}\n; return { buildAnimationClip, AnimationCache, cycleTimeScale };`,
+    `${hookWindowsSrc}\n${patched}\n; return { buildAnimationClip, AnimationCache, cycleTimeScale };`,
 );
 const { buildAnimationClip, AnimationCache, cycleTimeScale } = factory(THREE);
 

@@ -148,6 +148,10 @@ const toasts = [];
 globalThis.__ledger = ledger;
 globalThis.__realTakeInventorySnapshot = helpers.takeInventorySnapshot;
 globalThis.__realResolveContainedItemMeta = containedMeta.resolveContainedItemMeta;
+// item_drag.planBackpackPlacement over the REAL pure planner (2026-10-08):
+// nothing here stacks, so every take is a move into the main pack.
+globalThis.__plan = (item) => helpers.planPlaceInBackpack(
+  helpers.takeInventoryRows(handle), item, { playerGuid: ME });
 // executeItemAction stand-in: what the real one does for a take — send the
 // PutItemInContainer and file a pending "owned" expectation.
 globalThis.__exec = (action, _s, opts) => {
@@ -178,6 +182,7 @@ const STUBS = {
   registerDropZone: "() => {}",
   resolveDropAction: "() => null",
   executeItemAction: "globalThis.__exec",
+  planBackpackPlacement: "globalThis.__plan",
   pendingOps: "globalThis.__ledger",
   showItemTooltip: "() => {}",
   hideItemTooltip: "() => {}",

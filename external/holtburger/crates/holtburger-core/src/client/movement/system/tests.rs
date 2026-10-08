@@ -1,7 +1,8 @@
 use super::super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY,
     PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ,
-    TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND, WIRE_TURN_SPEED_BASE,
+    TURN_LEFT_MOTION_COMMAND, TURN_RIGHT_MOTION_COMMAND, WALK_FORWARD_MOTION_COMMAND,
+    WIRE_TURN_SPEED_BASE,
     build_autonomous_position, build_motion_state_raw_motion_state,
     raw_motion_state_with_motion_style,
 };
@@ -458,14 +459,14 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
     // `motion_state_raw_motion_state_adds_right_turn_when_requested`
     // for the symmetric reasoning.
     //
-    // Wave 2 Phase 2.5 (2026-05-26) — `Turn::Left` now emits the
-    // `TurnRight (0x6500000D)` motion code with a NEGATED speed.
-    // Retail's `InterpretedMotionState::ApplyMotion` only carries
-    // `TurnRight` (`~/ac-headers/acclient.c:332761-332765`); ACE's
-    // `MotionInterp.adjust_motion` (`MotionInterp.cs:409-412`) does
-    // the same Left → Right rewrite with `speed *= -1`. Player MT
-    // 0x09000001 has no `cycles[(stance, TurnLeft)]` entry, so the
-    // renderer cache lookup needs the Right code to land a clip.
+    // R1 outbound-4 (2026-10-08) — `Turn::Left` emits the REAL
+    // `TurnLeft (0x6500000E)` with a POSITIVE speed on the raw wire:
+    // retail `MovePlayer` (acclient.c:717953-717958) → `DoMotion`
+    // (:344600) applies the ORIGINAL motion to the raw state →
+    // `RawMotionState::ApplyMotion` (:332852) stores it verbatim. The
+    // old Phase-2.5 collapse (TurnRight + negated speed) was the
+    // INTERPRETED-layer rewrite (`adjust_motion`), which ACE performs
+    // server-side either way.
     let raw_motion_state = build_motion_state_raw_motion_state(
         &world,
         MotionState::builder().run().turn_left().build(),
@@ -479,15 +480,15 @@ fn motion_state_raw_motion_state_adds_left_turn_when_requested() {
     );
     assert_eq!(
         raw_motion_state.turn_command,
-        Some(TURN_RIGHT_MOTION_COMMAND),
-        "Phase 2.5 collapse: Turn::Left emits TurnRight code with signed speed",
+        Some(TURN_LEFT_MOTION_COMMAND),
+        "retail raw wire: Turn::Left is the TurnLeft enum",
     );
-    // F1-3 (movement bughunt 2026-06-09): base scalar 1.0 negated — the
-    // run factor rides turn_hold_key=Run; ACE applies it server-side.
+    // F1-3 (movement bughunt 2026-06-09): base scalar 1.0 — the run
+    // factor rides turn_hold_key=Run; ACE applies it server-side.
     assert_eq!(
         raw_motion_state.turn_speed,
-        Some(-WIRE_TURN_SPEED_BASE),
-        "Phase 2.5 collapse: negated speed signals left direction to ACE / observers",
+        Some(WIRE_TURN_SPEED_BASE),
+        "retail raw wire: positive speed, direction in the enum",
     );
     assert_eq!(raw_motion_state.turn_hold_key, Some(HoldKey::Run as u32));
     assert!(
@@ -795,10 +796,11 @@ fn autonomous_position_can_be_built_for_stationary_player() {
 }
 
 /// Physics deep-dive 2026-06-01 (gap 4): the heartbeat position-change
-/// gate. The first send always passes (no prior pose). After a send,
-/// an unchanged pose is skipped; a pose that moved beyond the epsilon,
-/// turned beyond the heading epsilon, crossed a landblock, or flipped
-/// the contact byte is re-sent. Mirrors retail `ShouldSendPositionEvent`.
+/// gate. The first send always passes (no prior pose — under the R1 retail
+/// gate on BOTH window branches, retail's `last_sent_position` starts at
+/// objcell 0). After a send, an unchanged pose is skipped; a pose that
+/// moved beyond the epsilon, turned beyond the heading epsilon, or crossed
+/// a landblock is re-sent. Mirrors retail `ShouldSendPositionEvent`.
 #[test]
 fn autonomous_pose_change_gate_skips_unchanged_and_sends_changed() {
     let movement = MovementSystem::new();
@@ -816,53 +818,141 @@ fn autonomous_pose_change_gate_skips_unchanged_and_sends_changed() {
         last_contact: contact,
     };
 
-    // First send: no prior pose recorded → always changed.
+    // First send: no prior pose recorded → always changed, in BOTH window
+    // branches (R1 outbound-1: retail compares against objcell 0).
     let first = pulse(base_pose, 1);
-    assert!(movement.autonomous_pose_changed(&first, true));
+    assert!(movement.autonomous_pose_changed(&first, true, None));
+    assert!(movement.autonomous_pose_changed(&first, false, None));
 
     let mut movement = movement;
-    movement.note_autonomous_position_sent(&first);
+    movement.note_autonomous_position_sent(&first, None);
 
     // Identical pose + contact → skip.
-    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 1), true));
+    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 1), true, None));
 
     // Sub-epsilon jitter (1 cm < 0.05 m) → still skipped.
     let jitter = WorldPosition {
         coords: Vector3::new(12.01, -4.0, 1.5),
         ..base_pose
     };
-    assert!(!movement.autonomous_pose_changed(&pulse(jitter, 1), true));
+    assert!(!movement.autonomous_pose_changed(&pulse(jitter, 1), true, None));
 
     // Meaningful translation (0.5 m > 0.05 m) → send.
     let moved = WorldPosition {
         coords: Vector3::new(12.5, -4.0, 1.5),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(moved, 1), true));
+    assert!(movement.autonomous_pose_changed(&pulse(moved, 1), true, None));
+    // ... but only past the window: in-window is cell/plane only.
+    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1), false, None));
 
     // Heading turn beyond the heading epsilon → send.
     let turned = WorldPosition {
         rotation: Quaternion::from_heading(1.0),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(turned, 1), true));
+    assert!(movement.autonomous_pose_changed(&pulse(turned, 1), true, None));
 
-    // Landblock crossing → send.
+    // Landblock crossing → send, in either branch.
     let crossed = WorldPosition {
         landblock_id: Guid(0x1000_0002),
         ..base_pose
     };
-    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1), true));
+    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1), true, None));
+    assert!(movement.autonomous_pose_changed(&pulse(crossed, 1), false, None));
 
-    // Within the 1s window, same pose but contact byte flipped (grounded →
-    // airborne) → send via the in-window contact-plane branch.
-    assert!(movement.autonomous_pose_changed(&pulse(base_pose, 0), false));
+    // R1 outbound-1: a contact-BYTE flip is no longer an in-window trigger
+    // (it only ever meant "went airborne", and airborne APs are suppressed
+    // before this gate is consulted).
+    assert!(!movement.autonomous_pose_changed(&pulse(base_pose, 0), false, None));
 
     // After re-sending the moved pose, the moved pose is the new
     // baseline and is itself skipped on repeat.
     let moved_pulse = pulse(moved, 1);
-    movement.note_autonomous_position_sent(&moved_pulse);
-    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1), true));
+    movement.note_autonomous_position_sent(&moved_pulse, None);
+    assert!(!movement.autonomous_pose_changed(&pulse(moved, 1), true, None));
+}
+
+/// `?apRetailGate=off` restores the pre-R1 gate byte-identical: the first
+/// send waits for the past-window branch, and the in-window branch re-sends
+/// on a contact-byte flip.
+#[test]
+fn autonomous_pose_change_gate_legacy_rules_under_ap_retail_gate_off() {
+    let mut movement = MovementSystem::new();
+    movement.set_retail_position_event_gate(false);
+    let pose = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(0.5),
+    };
+    let pulse = |contact: u8| AutonomousPositionActionData {
+        position: pose,
+        instance_sequence: 1,
+        server_control_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+        last_contact: contact,
+    };
+
+    assert!(movement.autonomous_pose_changed(&pulse(1), true, None));
+    assert!(
+        !movement.autonomous_pose_changed(&pulse(1), false, None),
+        "legacy: no in-window first send"
+    );
+    movement.note_autonomous_position_sent(&pulse(1), None);
+    assert!(
+        movement.autonomous_pose_changed(&pulse(0), false, None),
+        "legacy: in-window contact-byte flip re-sends"
+    );
+}
+
+/// R1 outbound-1 part 2 — retail's in-window trigger is a contact-PLANE
+/// change by `Plane::operator==` (acclient.c:717723: `|ΔN_i| <= 0.0002`,
+/// `|Δd| < 0.0002`). Default off (`USE_AP_CONTACT_PLANE_RESEND`); the
+/// comparison itself is pinned here through the test seam.
+#[test]
+fn in_window_contact_plane_change_sends() {
+    use holtburger_common::Plane;
+    let mut movement = MovementSystem::new();
+    let pose = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(0.5),
+    };
+    let pulse = AutonomousPositionActionData {
+        position: pose,
+        instance_sequence: 1,
+        server_control_sequence: 2,
+        teleport_sequence: 3,
+        force_position_sequence: 4,
+        last_contact: 1,
+    };
+    let plane = |d: f32| Plane {
+        normal: Vector3::new(0.0, 0.0, 1.0),
+        d,
+    };
+    movement.note_autonomous_position_sent(&pulse, Some(plane(-10.0)));
+
+    // Default: the plane branch is off — even a large plane change is quiet.
+    assert!(!movement.autonomous_pose_changed(&pulse, false, Some(plane(-12.0))));
+
+    movement.set_ap_contact_plane_resend_for_test(true);
+    // d differs by 3e-4 (>= 2e-4) → a different plane → send.
+    assert!(movement.autonomous_pose_changed(&pulse, false, Some(plane(-10.0003))));
+    // d differs by 1e-4 → retail-equal → quiet.
+    assert!(!movement.autonomous_pose_changed(&pulse, false, Some(plane(-10.0001))));
+    // Identical plane → quiet (a stationary player never re-sends in-window).
+    assert!(!movement.autonomous_pose_changed(&pulse, false, Some(plane(-10.0))));
+    // A tilted normal (ΔN.y 0.01) → send.
+    let tilted = Plane {
+        normal: Vector3::new(0.0, 0.01, 0.99995),
+        d: -10.0,
+    };
+    assert!(movement.autonomous_pose_changed(&pulse, false, Some(tilted)));
+    // An unknown plane on either side never triggers.
+    assert!(!movement.autonomous_pose_changed(&pulse, false, None));
+    movement.note_autonomous_position_sent(&pulse, None);
+    assert!(!movement.autonomous_pose_changed(&pulse, false, Some(plane(-12.0))));
 }
 
 #[tokio::test]
@@ -1023,7 +1113,8 @@ async fn held_run_input_ticks_once_for_wire_and_keeps_local_vectors_consistent()
         Some(holtburger_world::SolveProjectionBasis::Velocity { velocity, .. })
             if velocity.x.abs() < 1e-5 && (velocity.y - 4.5).abs() < 1e-5
     ));
-    assert_eq!(session.packet_sequence, 2);
+    // MoveToState + the first-frame AP (R1 outbound-1).
+    assert_eq!(session.packet_sequence, 3);
 
     movement
         .tick(start + Duration::from_millis(30), &mut world, &mut session)
@@ -1038,7 +1129,8 @@ async fn held_run_input_ticks_once_for_wire_and_keeps_local_vectors_consistent()
         Some(holtburger_world::SolveProjectionBasis::Velocity { velocity, .. })
             if velocity.x.abs() < 1e-5 && (velocity.y - 4.5).abs() < 1e-5
     ));
-    assert_eq!(session.packet_sequence, 2);
+    // MoveToState + the first-frame AP (R1 outbound-1).
+    assert_eq!(session.packet_sequence, 3);
 }
 
 #[tokio::test]
@@ -1070,7 +1162,8 @@ async fn pulsed_run_input_expires_on_tick_and_sends_stop_transition() {
         .tick(start, &mut world, &mut session)
         .await
         .expect("pulse should start movement");
-    assert_eq!(session.packet_sequence, 2);
+    // MoveToState + the first-frame AP (R1 outbound-1).
+    assert_eq!(session.packet_sequence, 3);
 
     movement
         .tick(start + Duration::from_millis(60), &mut world, &mut session)
@@ -1083,7 +1176,8 @@ async fn pulsed_run_input_expires_on_tick_and_sends_stop_transition() {
         .expect("synthetic player entity should exist");
     assert!(player.velocity.length_squared() <= 1e-6);
     assert!(player.omega.length_squared() <= 1e-6);
-    assert_eq!(session.packet_sequence, 4);
+    // + stop MoveToState + the final AP sync.
+    assert_eq!(session.packet_sequence, 5);
 }
 
 #[tokio::test]
@@ -1199,7 +1293,8 @@ async fn stop_input_clears_held_run_and_sends_stop_transition() {
         .expect("synthetic player entity should exist");
     assert!(player.velocity.length_squared() <= 1e-6);
     assert!(player.omega.length_squared() <= 1e-6);
-    assert_eq!(session.packet_sequence, 4);
+    // MoveToState + first-frame AP (R1 outbound-1) + stop + final AP sync.
+    assert_eq!(session.packet_sequence, 5);
 }
 
 #[tokio::test]
@@ -1234,14 +1329,16 @@ async fn autonomous_drive_gap_does_not_send_stop_pulse_without_explicit_stop() {
         .await
         .expect("autonomous drive should emit a motion pulse");
 
-    assert_eq!(session.packet_sequence, 2);
+    // MoveToState + the first-frame AP (R1 outbound-1).
+    assert_eq!(session.packet_sequence, 3);
 
     movement
         .tick(start + Duration::from_millis(30), &mut world, &mut session)
         .await
         .expect("autonomous drive gap should not synthesize a stop pulse");
 
-    assert_eq!(session.packet_sequence, 2);
+    // MoveToState + the first-frame AP (R1 outbound-1).
+    assert_eq!(session.packet_sequence, 3);
 }
 
 #[tokio::test]
@@ -1282,7 +1379,8 @@ async fn explicit_stop_after_autonomous_drive_sends_stop_pulse() {
         .await
         .expect("explicit stop should still emit a stop pulse");
 
-    assert_eq!(session.packet_sequence, 4);
+    // MoveToState + first-frame AP (R1 outbound-1) + stop + final AP sync.
+    assert_eq!(session.packet_sequence, 5);
 }
 
 #[tokio::test]
@@ -1317,7 +1415,9 @@ async fn transient_motion_reasserts_autonomous_locomotion_on_next_tick() {
         .await
         .expect("autonomous drive should emit a locomotion pulse");
 
-    assert_eq!(session.game_action_sequence, 1);
+    // MoveToState + the first-frame AP (R1 outbound-1); each later
+    // count carries that +1.
+    assert_eq!(session.game_action_sequence, 2);
 
     movement.enqueue_drive_intent(
         PlayerDriveIntent::Autonomous(autonomous_intent),
@@ -1352,7 +1452,7 @@ async fn transient_motion_reasserts_autonomous_locomotion_on_next_tick() {
     assert!(movement.server_motion_active);
     assert!(movement.last_server_motion_intent.is_none());
 
-    assert_eq!(session.game_action_sequence, 2);
+    assert_eq!(session.game_action_sequence, 3);
 
     movement.enqueue_drive_intent(
         PlayerDriveIntent::Autonomous(autonomous_intent),
@@ -1369,7 +1469,7 @@ async fn transient_motion_reasserts_autonomous_locomotion_on_next_tick() {
             .map(|state| server_motion_intent(state, MotionStyle::PreserveServer))
     );
 
-    assert_eq!(session.game_action_sequence, 3);
+    assert_eq!(session.game_action_sequence, 4);
 }
 
 #[tokio::test]
@@ -1607,10 +1707,17 @@ async fn arrival_pose_sync_updates_runtime_pose_and_clears_server_motion() {
         .body(SpatialBodyId::LocalPlayer(guid))
         .expect("local player runtime body should exist");
     assert_eq!(body.pose, arrival_pose);
-    assert_eq!(session.packet_sequence, 4);
+    // MoveToState + first-frame AP (R1 outbound-1) + arrival AP + stop.
+    assert_eq!(session.packet_sequence, 5);
     assert!(!movement.should_send_stop_pulse());
 }
 
+/// R1 outbound-1 (2026-10-08): retail's first eligible frame sends — the
+/// `CommandInterpreter` ctor zeroes `last_sent_position.objcell_id`
+/// (acclient.c:717760-717778), so `ShouldSendPositionEvent` sees a cell
+/// change on the first grounded `UseTime`. The poll that arms the window
+/// therefore also sends; a stationary player then stays quiet past the
+/// window (`Frame::is_equal` holds).
 #[tokio::test]
 async fn movement_heartbeat_arms_then_sends_for_stationary_player_with_valid_pose() {
     let mut world = WorldState::synthetic();
@@ -1636,8 +1743,55 @@ async fn movement_heartbeat_arms_then_sends_for_stationary_player_with_valid_pos
             MovementPacketMetadata::default(),
         )
         .await
-        .expect("movement heartbeat should arm successfully");
+        .expect("movement heartbeat should arm and send");
 
+    assert!(sent, "first eligible frame sends (objcell 0 baseline)");
+    assert_eq!(session.game_action_sequence, 1);
+    assert!(session.bytes_out > 0);
+    assert!(movement.next_autonomous_position_heartbeat_at.is_some());
+
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL + Duration::from_millis(1),
+            &world,
+            &mut session,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("past-window poll should succeed");
+
+    assert!(!sent, "stationary: Frame unchanged past the window → quiet");
+    assert_eq!(session.game_action_sequence, 1);
+}
+
+/// `?apRetailGate=off` keeps the legacy settle window: the first poll only
+/// arms, the past-window poll sends.
+#[tokio::test]
+async fn movement_heartbeat_legacy_settle_window_under_ap_retail_gate_off() {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x0102_0304);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(90.0_f32.to_radians()),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+
+    let mut movement = MovementSystem::new();
+    movement.set_retail_position_event_gate(false);
+    let mut session = Session::new_test();
+    let now = Instant::now();
+
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            now,
+            &world,
+            &mut session,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("arm");
     assert!(!sent);
     assert_eq!(session.game_action_sequence, 0);
 
@@ -1649,11 +1803,9 @@ async fn movement_heartbeat_arms_then_sends_for_stationary_player_with_valid_pos
             MovementPacketMetadata::default(),
         )
         .await
-        .expect("movement heartbeat should send once armed");
-
+        .expect("send");
     assert!(sent);
     assert_eq!(session.game_action_sequence, 1);
-    assert!(session.bytes_out > 0);
 }
 
 #[tokio::test]
@@ -1707,7 +1859,9 @@ async fn armed_movement_heartbeat_stays_armed_when_player_stops_moving() {
         .await
         .expect("moving heartbeat check should arm successfully");
 
-    assert!(!sent);
+    // R1 outbound-1: the arming poll is also the first eligible frame.
+    assert!(sent);
+    assert_eq!(session.game_action_sequence, 1);
     assert!(movement.next_autonomous_position_heartbeat_at.is_some());
 
     let stationary_entity = world
@@ -1725,9 +1879,11 @@ async fn armed_movement_heartbeat_stays_armed_when_player_stops_moving() {
             MovementPacketMetadata::default(),
         )
         .await
-        .expect("armed heartbeat should send one final stationary sync");
+        .expect("armed heartbeat poll should succeed");
 
-    assert!(sent);
+    // The pose never moved since that first send → nothing new to say, but
+    // the schedule stays armed (a skip never clears it).
+    assert!(!sent);
     assert_eq!(session.game_action_sequence, 1);
     assert!(movement.next_autonomous_position_heartbeat_at.is_some());
 }
@@ -1757,7 +1913,20 @@ async fn movement_tick_emits_autonomous_position_heartbeat_when_due() {
         .await
         .expect("first movement tick should arm the heartbeat");
 
-    assert_eq!(session.game_action_sequence, 0);
+    // R1 outbound-1: the first grounded tick sends (objcell 0 baseline).
+    assert_eq!(session.game_action_sequence, 1);
+
+    // In-window: the pose moved but the cell did not → quiet.
+    let moved = WorldPosition {
+        coords: Vector3::new(13.0, -4.0, 1.5),
+        ..position
+    };
+    let _ = world.set_local_player_runtime_pose(moved);
+    movement
+        .tick(start + Duration::from_millis(500), &mut world, &mut session)
+        .await
+        .expect("in-window tick");
+    assert_eq!(session.game_action_sequence, 1);
 
     movement
         .tick(
@@ -1768,7 +1937,7 @@ async fn movement_tick_emits_autonomous_position_heartbeat_when_due() {
         .await
         .expect("second movement tick should emit the heartbeat");
 
-    assert_eq!(session.game_action_sequence, 1);
+    assert_eq!(session.game_action_sequence, 2, "past the window the moved Frame sends");
 }
 
 #[tokio::test]
@@ -1805,6 +1974,319 @@ async fn stop_without_active_drive_keeps_autonomous_position_heartbeat_armed() {
         .expect("stop request should succeed");
 
     assert!(movement.next_autonomous_position_heartbeat_at.is_some());
+}
+
+// =====================================================================
+// R1 outbound-1/2/3 (2026-10-08) — the retail AutonomousPosition cadence
+// (`CommandInterpreter::SendPositionEvent` / `ShouldSendPositionEvent` /
+// `SendMovementEvent`, acclient.c:718108-718245; force-position ack in
+// `SmartBox::HandleReceivedPosition`, :145125-145249).
+// =====================================================================
+
+fn ap_test_world(position: WorldPosition) -> WorldState {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x0102_0304);
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    world
+}
+
+fn ap_test_pose() -> WorldPosition {
+    WorldPosition {
+        landblock_id: Guid(0x1000_0001),
+        coords: Vector3::new(12.0, -4.0, 1.5),
+        rotation: Quaternion::from_heading(0.0),
+    }
+}
+
+fn sent_aps(sink: &RecordingSink) -> Vec<AutonomousPositionActionData> {
+    sink.sent
+        .iter()
+        .filter_map(|action| match action {
+            GameAction::AutonomousPosition(data) => Some((**data).clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Retail builds the AP only with CONTACT && ON_WALKABLE
+/// (acclient.c:718225-718227) and stamps nothing otherwise, so a jump arc
+/// never produces an AP — even past the window with a moved pose — and the
+/// first grounded poll after landing sends one, with `last_contact = 1`.
+#[tokio::test]
+async fn heartbeat_suppressed_while_airborne_sends_on_landing() {
+    let position = ap_test_pose();
+    let mut world = ap_test_world(position);
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            t0,
+            &world,
+            &mut sink,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("baseline");
+    assert!(sent, "baseline AP on the first grounded poll");
+
+    world.player.begin_jump(5.0);
+    let _ = world.set_local_player_runtime_pose(WorldPosition {
+        coords: Vector3::new(15.0, -4.0, 3.0),
+        ..position
+    });
+    for ms in [100_u64, 1_500, 2_600] {
+        let sent = movement
+            .maybe_send_autonomous_position_heartbeat(
+                t0 + Duration::from_millis(ms),
+                &world,
+                &mut sink,
+                MovementPacketMetadata::default(),
+            )
+            .await
+            .expect("airborne poll");
+        assert!(!sent, "no AP mid-air (+{ms} ms)");
+    }
+    assert_eq!(sent_aps(&sink).len(), 1);
+
+    world.player.land();
+    let sent = movement
+        .maybe_send_autonomous_position_heartbeat(
+            t0 + Duration::from_millis(2_700),
+            &world,
+            &mut sink,
+            MovementPacketMetadata::default(),
+        )
+        .await
+        .expect("landing poll");
+    assert!(sent, "first grounded poll sends (nothing was stamped mid-air)");
+    let aps = sent_aps(&sink);
+    assert_eq!(aps.len(), 2);
+    assert!(
+        aps.iter().all(|ap| ap.last_contact == 1),
+        "every retail AP carries last_contact = 1"
+    );
+}
+
+/// The explicit syncs (stop / snap / arrival / server-controlled) ride the
+/// same guard: a stop issued mid-air sends its MoveToState but no AP.
+#[tokio::test]
+async fn stop_while_airborne_skips_the_final_position_sync() {
+    let mut world = ap_test_world(ap_test_pose());
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let now = Instant::now();
+
+    movement
+        .execute_motion_state_at(
+            MotionState::builder().run().forward().build(),
+            &mut world,
+            &mut sink,
+            now,
+        )
+        .await
+        .expect("drive");
+    world.player.begin_jump(5.0);
+    movement
+        .execute_stop_at(
+            now,
+            &mut world,
+            &mut sink,
+            MovementPacketMetadata::default(),
+            true,
+        )
+        .await
+        .expect("stop");
+
+    let move_to_states = sink
+        .sent
+        .iter()
+        .filter(|action| matches!(action, GameAction::MoveToState(_)))
+        .count();
+    assert_eq!(move_to_states, 2, "drive + stop MoveToStates still go out");
+    assert!(sent_aps(&sink).is_empty(), "no mid-air AP sync");
+}
+
+/// A grounded, stationary player on a fixed contact plane never re-sends:
+/// in-window the plane is unchanged, past the window the Frame is. With the
+/// (default-off) plane branch forced on, a real plane change IN-window sends
+/// exactly one AP (past the window retail tests only cell + Frame,
+/// acclient.c:718121-718128).
+#[tokio::test]
+async fn stationary_grounded_player_never_resends_in_window() {
+    use holtburger_common::Plane;
+    let position = ap_test_pose();
+    let mut world = ap_test_world(position);
+    let cell = u32::from(position.landblock_id);
+    world.player.last_contact_plane = Some((
+        Plane {
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            d: -1.5,
+        },
+        cell,
+    ));
+    let mut movement = MovementSystem::new();
+    movement.set_ap_contact_plane_resend_for_test(true);
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+
+    for ms in (0..=900_u64).step_by(30) {
+        movement
+            .tick(t0 + Duration::from_millis(ms), &mut world, &mut sink)
+            .await
+            .expect("tick");
+    }
+    assert_eq!(
+        sent_aps(&sink).len(),
+        1,
+        "only the first-frame AP: stationary on an unchanged plane"
+    );
+
+    // Step onto a different plane (d differs by 3e-4) inside the window.
+    world.player.last_contact_plane = Some((
+        Plane {
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            d: -1.5003,
+        },
+        cell,
+    ));
+    movement
+        .tick(t0 + Duration::from_millis(930), &mut world, &mut sink)
+        .await
+        .expect("tick");
+    assert_eq!(sent_aps(&sink).len(), 2, "in-window contact-plane change sends");
+
+    // The new plane is the new baseline; stationary past the next window
+    // too (Frame unchanged) → quiet.
+    for ms in (960..=3_000_u64).step_by(30) {
+        movement
+            .tick(t0 + Duration::from_millis(ms), &mut world, &mut sink)
+            .await
+            .expect("tick");
+    }
+    assert_eq!(sent_aps(&sink).len(), 2, "no further sends while stationary");
+}
+
+/// Retail `SendMovementEvent` stamps ONLY `last_sent_position_time`
+/// (acclient.c:718190-718191): after a MoveToState the AP gate stays in its
+/// cell/plane-only branch for 1 s, so starting to move costs no extra AP.
+#[tokio::test]
+async fn move_to_state_restarts_position_window() {
+    let position = ap_test_pose();
+    let mut world = ap_test_world(position);
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+
+    movement
+        .tick(t0, &mut world, &mut sink)
+        .await
+        .expect("baseline tick");
+    assert_eq!(sent_aps(&sink).len(), 1, "baseline AP");
+    movement
+        .tick(t0 + Duration::from_secs(2), &mut world, &mut sink)
+        .await
+        .expect("idle tick");
+    assert_eq!(sent_aps(&sink).len(), 1, "idle past the window: Frame unchanged");
+
+    movement.enqueue_drive_intent(
+        PlayerDriveIntent::ManualHeld(MotionState::builder().run().forward().build()),
+        t0 + Duration::from_secs(2),
+    );
+    movement
+        .tick(t0 + Duration::from_secs(2), &mut world, &mut sink)
+        .await
+        .expect("drive tick");
+    let mts_index = sink
+        .sent
+        .iter()
+        .rposition(|action| matches!(action, GameAction::MoveToState(_)))
+        .expect("the key press sent a MoveToState");
+
+    let _ = world.set_local_player_runtime_pose(WorldPosition {
+        coords: Vector3::new(12.0, -3.5, 1.5),
+        ..position
+    });
+    for ms in [2_100_u64, 2_900] {
+        movement
+            .tick(t0 + Duration::from_millis(ms), &mut world, &mut sink)
+            .await
+            .expect("in-window tick");
+    }
+    let aps_after_mts = |sink: &RecordingSink| {
+        sink.sent[mts_index..]
+            .iter()
+            .filter(|action| matches!(action, GameAction::AutonomousPosition(_)))
+            .count()
+    };
+    assert_eq!(
+        aps_after_mts(&sink),
+        0,
+        "the MoveToState restarted the window: a moved pose waits"
+    );
+
+    movement
+        .tick(t0 + Duration::from_millis(3_050), &mut world, &mut sink)
+        .await
+        .expect("past-window tick");
+    assert_eq!(aps_after_mts(&sink), 1, "one AP once the window elapses");
+}
+
+/// Retail `HandleReceivedPosition` answers a newer FORCE_POSITION stamp
+/// with `SendPositionEvent` at once (acclient.c:145244-145248) — one AP at
+/// the snapped pose carrying the new sequence, in-window. One-shot: an
+/// airborne snap sends nothing and leaves nothing pending.
+#[tokio::test]
+async fn force_position_advance_sends_immediate_autonomous_position() {
+    let mut world = ap_test_world(ap_test_pose());
+    world.player.force_position_sequence = 7;
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+
+    movement
+        .tick(t0, &mut world, &mut sink)
+        .await
+        .expect("tick");
+    let aps = sent_aps(&sink);
+    assert_eq!(aps.len(), 1, "baseline AP");
+    assert_eq!(aps[0].force_position_sequence, 7);
+
+    world.player.force_position_sequence = 8;
+    movement
+        .tick(t0 + Duration::from_millis(100), &mut world, &mut sink)
+        .await
+        .expect("tick");
+    let aps = sent_aps(&sink);
+    assert_eq!(aps.len(), 2, "the force advance is acked in-window");
+    assert_eq!(aps[1].force_position_sequence, 8);
+    assert_eq!(aps[1].last_contact, 1);
+
+    movement
+        .tick(t0 + Duration::from_millis(200), &mut world, &mut sink)
+        .await
+        .expect("tick");
+    assert_eq!(sent_aps(&sink).len(), 2, "no repeat ack for the same sequence");
+
+    // Airborne snap: nothing sent, nothing kept pending.
+    world.player.begin_jump(5.0);
+    world.player.force_position_sequence = 9;
+    movement
+        .tick(t0 + Duration::from_millis(300), &mut world, &mut sink)
+        .await
+        .expect("tick");
+    world.player.land();
+    movement
+        .tick(t0 + Duration::from_millis(400), &mut world, &mut sink)
+        .await
+        .expect("tick");
+    assert_eq!(
+        sent_aps(&sink).len(),
+        2,
+        "one-shot: the airborne ack is not replayed on landing (in-window, same cell)"
+    );
 }
 
 /// 2026-05-09 follow-up: lock in the contract that
@@ -2396,9 +2878,14 @@ async fn indoor_manual_drive_heartbeats_rederived_envcell() {
         "runtime pose low word must re-derive to the entered cell"
     );
 
-    // The heartbeat ships the re-derived cell: first poll arms the window,
-    // the past-window poll sends; the recorded sent pose is the pulse's
-    // `position` verbatim (`note_autonomous_position_sent`).
+    // The heartbeat ships the re-derived cell: the first poll arms the window
+    // AND sends (R1 outbound-1: retail's objcell-0 baseline makes the first
+    // eligible frame a send); the recorded sent pose is the pulse's
+    // `position` verbatim (`note_autonomous_position_sent`). The AP gate
+    // requires CONTACT (retail `SendPositionEvent`); this test pins the
+    // CELL the pulse carries, not the settle, so ground the mover
+    // explicitly.
+    world.player.land();
     let mut session = Session::new_test();
     let now = Instant::now();
     let sent = movement
@@ -2409,18 +2896,8 @@ async fn indoor_manual_drive_heartbeats_rederived_envcell() {
             MovementPacketMetadata::default(),
         )
         .await
-        .expect("heartbeat arm");
-    assert!(!sent, "first poll arms the settle window");
-    let sent = movement
-        .maybe_send_autonomous_position_heartbeat(
-            now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL + Duration::from_millis(1),
-            &world,
-            &mut session,
-            MovementPacketMetadata::default(),
-        )
-        .await
         .expect("heartbeat send");
-    assert!(sent, "past-window poll sends");
+    assert!(sent, "first eligible poll sends");
     assert_eq!(
         movement
             .last_sent_autonomous_pose
@@ -6233,6 +6710,233 @@ async fn successful_release_launches_with_clock_extent() {
         !world.player.standing_long_jump_charge,
         "charge root consumed by the release"
     );
+}
+
+// =====================================================================
+// R1 motioninterp-1 (2026-10-08) — the jump LAUNCH is retail
+// `get_leave_ground_velocity` (state velocity capped at 4 × run_rate,
+// acclient.c:343539-343594 / :343806-343842) on BOTH release arms.
+// =====================================================================
+
+fn planar_len(v: Vector3) -> f32 {
+    (v.x * v.x + v.y * v.y).sqrt()
+}
+
+fn sent_jump_velocity(sink: &RecordingSink) -> Vector3 {
+    sink.sent
+        .iter()
+        .find_map(|action| match action {
+            GameAction::Jump(data) => Some(data.velocity),
+            _ => None,
+        })
+        .expect("a Jump action reached the wire")
+}
+
+/// Run + forward + strafe-right at run rate 1.0: the ground composition is
+/// |(1.56, 4.0)| = 4.293 m/s; retail launches at the 4.0 × run_rate cap, on
+/// the non-charged (held-keys) arm too, and packs the same vector.
+#[tokio::test]
+async fn execute_jump_release_launch_is_capped_state_velocity() {
+    let mut world = seed_jump_world();
+    let capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.6, 4.0, 1.5);
+    let state = MotionState::builder().run().forward().strafe_right().build();
+    let heading = world
+        .local_player_runtime_pose()
+        .expect("seeded pose")
+        .rotation
+        .to_heading();
+    let uncapped = planar_len(interpreted_velocity_for_state(heading, state, &capabilities));
+    assert!(uncapped > 4.2, "the ground diagonal exceeds the cap ({uncapped})");
+
+    let mut movement = MovementSystem::new();
+    movement.set_active_manual_drive_for_test(state);
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("a running charge commences");
+    assert!(
+        !world.player.standing_long_jump_charge,
+        "held axes: no standstill root (the non-charged arm)"
+    );
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut sink)
+        .await
+        .expect("release must not error");
+    assert!(matches!(outcome, JumpOutcome::Jumped { .. }), "{outcome:?}");
+
+    let planar = world.player.current_planar_velocity;
+    assert!(
+        (planar_len(planar) - 4.0).abs() < 1e-4,
+        "launch capped at 4.0 × run_rate, got {}",
+        planar_len(planar)
+    );
+    assert_eq!(planar.z, 0.0);
+
+    let packed = sent_jump_velocity(&sink);
+    assert!(
+        (planar_len(packed) - 4.0).abs() < 1e-3,
+        "the JumpPack carries the capped vector, got {packed:?}"
+    );
+    assert!(
+        packed.x.abs() > 1.0 && packed.y.abs() > 1.0,
+        "still the forward+strafe diagonal, only rescaled: {packed:?}"
+    );
+    assert!(packed.z > 0.0, "vz rides the pack");
+}
+
+/// No keys held at release (keys let go after a running press): retail
+/// launches (0, 0, vz) — `get_leave_ground_velocity`'s physics-velocity
+/// fallback never fires for a jump — even while a residual slide is still
+/// on the body.
+#[tokio::test]
+async fn execute_jump_release_without_keys_launches_straight_up() {
+    let mut world = seed_jump_world();
+    seed_self_movement_capabilities_override(&mut world, 1.0, 2.6, 4.0, 1.5);
+    let guid = world.player.guid;
+    world
+        .entities
+        .get_mut(guid)
+        .expect("player entity")
+        .velocity = Vector3::new(3.0, 0.0, 0.0);
+
+    let mut movement = MovementSystem::new();
+    movement.set_active_manual_drive_for_test(MotionState::builder().run().forward().build());
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("a running charge commences");
+    // The keys come up before space does.
+    movement.set_active_manual_drive_for_test(MotionState::default());
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(400), &mut world, &mut sink)
+        .await
+        .expect("release must not error");
+    assert!(matches!(outcome, JumpOutcome::Jumped { .. }), "{outcome:?}");
+
+    assert_eq!(planar_len(world.player.current_planar_velocity), 0.0);
+    let packed = sent_jump_velocity(&sink);
+    assert!(planar_len(packed) < 1e-6, "straight up: {packed:?}");
+    assert!(packed.z > 0.0);
+}
+
+/// `?jumpLaunchCap=off` restores the legacy arms byte-identical: a
+/// non-charged release launches with the realized runtime velocity and
+/// leaves the planar store untouched.
+#[tokio::test]
+async fn execute_jump_release_launch_cap_off_keeps_legacy_arms() {
+    let mut world = seed_jump_world();
+    seed_self_movement_capabilities_override(&mut world, 1.0, 2.6, 4.0, 1.5);
+    let mut movement = MovementSystem::new();
+    movement.set_jump_launch_cap(false);
+    movement.set_active_manual_drive_for_test(
+        MotionState::builder().run().forward().strafe_right().build(),
+    );
+    let realized = world
+        .local_player_runtime_kinematics()
+        .map(|(_, velocity, _)| velocity)
+        .expect("runtime kinematics");
+    let store_before = world.player.current_planar_velocity;
+    let mut sink = RecordingSink::default();
+    let t0 = Instant::now();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("commence");
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut sink)
+        .await
+        .expect("release must not error");
+    assert!(matches!(outcome, JumpOutcome::Jumped { .. }), "{outcome:?}");
+
+    assert_eq!(
+        world.player.current_planar_velocity, store_before,
+        "legacy non-charged arm leaves the planar store alone"
+    );
+    let packed = sent_jump_velocity(&sink);
+    assert!(
+        (planar_len(packed) - planar_len(realized)).abs() < 1e-4,
+        "legacy arm packs the realized velocity: {packed:?} vs {realized:?}"
+    );
+}
+
+// =====================================================================
+// R1 motioninterp-2 (2026-10-08) — retail `CanJump` (load < 2.0,
+// acclient.c:442878-442884) at press AND release → error 73.
+// =====================================================================
+
+/// Strength 10 (capacity 1500) + the player's own wire EncumbranceVal.
+fn seed_jump_burden(world: &mut WorldState, encumbrance: i32) {
+    use holtburger_common::properties::PropertyInt;
+    world.player.attributes.insert(
+        AttributeType::StrengthAttr,
+        Attribute {
+            attr_type: AttributeType::StrengthAttr,
+            ranks: 0,
+            start: 10,
+            spent_xp: 0,
+            next_rank_xp: None,
+            base: 10,
+            current: 10,
+        },
+    );
+    world
+        .player_entity_mut()
+        .expect("player entity")
+        .properties
+        .ints
+        .insert(PropertyInt::EncumbranceVal, encumbrance);
+}
+
+#[tokio::test]
+async fn overloaded_jump_refuses_with_load_at_press_and_release() {
+    // Press while overloaded (load 2.0): refused, no charge pending.
+    let mut world = seed_jump_world();
+    seed_jump_burden(&mut world, 3000);
+    let mut movement = MovementSystem::new();
+    let t0 = Instant::now();
+    assert_eq!(
+        movement.jump_charge_commence(t0, &mut world),
+        Err(JumpRefusal::Load)
+    );
+    assert_eq!(
+        movement.jump_charge_power(t0 + Duration::from_millis(300), &world),
+        0.0,
+        "a refused press never starts the charge"
+    );
+
+    // Charge while light, overload before release: refused at release
+    // (73 from `jump_charge_is_allowed`), nothing on the wire, grounded.
+    let mut world = seed_jump_world();
+    seed_jump_burden(&mut world, 100);
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("light press commences");
+    seed_jump_burden(&mut world, 3000);
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut sink)
+        .await
+        .expect("release must not error");
+    assert_eq!(outcome, JumpOutcome::Refused(JumpRefusal::Load));
+    assert!(sink.sent.is_empty(), "no Jump action sent");
+    assert!(!world.player.is_airborne, "a refused release does not launch");
+
+    // `?jumpLoadGate=off` restores the permissive seam.
+    let mut world = seed_jump_world();
+    seed_jump_burden(&mut world, 3000);
+    let mut movement = MovementSystem::new();
+    movement.set_jump_load_gate(false);
+    let mut sink = RecordingSink::default();
+    movement
+        .jump_charge_commence(t0, &mut world)
+        .expect("gate off: overloaded press commences");
+    let outcome = movement
+        .execute_jump_release(t0 + Duration::from_millis(500), &mut world, &mut sink)
+        .await
+        .expect("release must not error");
+    assert!(matches!(outcome, JumpOutcome::Jumped { .. }), "{outcome:?}");
 }
 
 // =====================================================================

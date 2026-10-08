@@ -36,6 +36,9 @@ const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// otherwise blocks the udp→ws pump forever (kernel then drops
 /// ACE→client datagrams with no signal).
 const WS_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+/// net-3 (R2-net 2026-10-08): SO_RCVBUF for the per-connection ACE-facing
+/// UDP socket; same value as holtburger-session's native `Session::new`.
+const UDP_RECV_BUFFER_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Shared per-connection liveness clock (millis since the connection's
 /// own epoch; 0 = never happened).
@@ -196,6 +199,19 @@ async fn handle_connection(cfg: Arc<Config>, tcp: TcpStream, peer: SocketAddr) -
     let udp = UdpSocket::bind("0.0.0.0:0")
         .await
         .with_context(|| format!("[{peer}] bind ephemeral udp socket"))?;
+    // net-3 (R2-net 2026-10-08): while the udp→ws pump is parked on a slow
+    // browser reader, ACE's datagrams queue in this socket's kernel buffer
+    // and the overflow is dropped silently (see WS_SEND_TIMEOUT). The default
+    // buffer is small; a burst of lost S2C packets beyond the client's ISAAC
+    // search reach kills the session. Mirror holtburger-session's native
+    // `Session::new` (2 MiB). Linux clamps this to net.core.rmem_max unless
+    // the host raises it, so failure (or a clamp) is logged, never fatal.
+    if let Err(err) = socket2::SockRef::from(&udp).set_recv_buffer_size(UDP_RECV_BUFFER_SIZE_BYTES)
+    {
+        log::warn!(
+            "[{peer}] failed to set udp receive buffer to {UDP_RECV_BUFFER_SIZE_BYTES} bytes: {err}"
+        );
+    }
     let local = udp.local_addr().ok();
     log::info!("[{peer}] udp socket bound to {local:?}");
     let udp = Arc::new(udp);

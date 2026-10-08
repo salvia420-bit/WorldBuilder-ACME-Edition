@@ -84,7 +84,6 @@ const TIER1 = [
   { flag: "inputFunnelV2", file: "test_input_funnel_v2.mjs" },
   { flag: "heldKeyRelease", file: "test_held_key_release.mjs" },
   { flag: "hookDrain", file: "test_hook_windows.mjs" },
-  { flag: "hookDrain", file: "test_hook_fire_queue.mjs" },
   { flag: "surfaceUnified+surfaceParityV2", file: "test_f7_8_surface_bitfield.mjs" },
   { flag: "scriptQueue", file: "test_script_manager.mjs" },
   { flag: "moveTelemetry", file: "test_move_telemetry.mjs" },
@@ -162,7 +161,7 @@ const TIER4 = [
   { flag: "limbs", file: "tests/limbs.test.mjs" },
   { flag: "bloodDecals", file: "tests/blood_decals.test.mjs" },
   { flag: "ragdollEnv", file: "tests/ragdoll_env.test.mjs" },
-  { flag: "projectileLights+projectileLaunchClock+projectileTerrainStop", file: "tests/projectile_visual_fidelity.test.mjs" },
+  { flag: "projectileLights+projectileLaunchClock+projectileTerrainStop+projectileEnvSweep", file: "tests/projectile_visual_fidelity.test.mjs" },
   { flag: "ragdollEnergy", file: "tests/ragdoll_energy.test.mjs" },
   // 2026-10-07 — ragdoll landing on a corpse must settle (jiggle report).
   { flag: "ragdollStackLive", file: "tests/ragdoll_stack.test.mjs" },
@@ -221,6 +220,14 @@ const TIER5 = [
   { tier: 5, flag: "rig_indoor_layer", file: "test_rig_indoor_layer.mjs" },
   { tier: 5, flag: "c1_facing_camera", file: "tests/test_c1_facing_camera.cjs" },
   { tier: 5, flag: "cast_busy_clock", file: "tests/test_cast_busy_clock.mjs" },
+  // 2026-10-08 — spell-cast parity: formula-untargeted rings/walls cast without
+  // a selection (?formulaUntargeted); the local cast prediction gates on the
+  // wasm outstanding-request count, retail m_cBusy (?castBusyCount).
+  { tier: 5, flag: "formulaUntargeted", file: "tests/spell_target_type.test.mjs" },
+  { tier: 5, flag: "castBusyCount", file: "tests/cast_busy_count.test.mjs" },
+  // spellcast-3: retail target-compatibility pre-check + "Casting <spell>"
+  // (?spellTargetPrecheck) and the kind=14 UseDone chain cancel (?castUseDoneCancels).
+  { tier: 5, flag: "spellTargetPrecheck", file: "tests/spell_target_compat.test.mjs" },
   { tier: 5, flag: "cast_diag", file: "tests/test_cast_diag.mjs" },
   { tier: 5, flag: "drop_guard_item_tags", file: "tests/test_drop_guard_item_tags.mjs" },
   { tier: 5, flag: "ws01_note_gating", file: "tests/test_ws01_note_gating.mjs" },
@@ -367,6 +374,13 @@ const TIER5 = [
   // walk at their own clip tempo (?animSceneryOmega / ?creatureGait).
   { tier: 5, flag: "animSceneryOmega", file: "tests/animated_scenery_omega.test.mjs" },
   { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
+  // 2026-10-08 — playhead parity: retail hook timing on the real EntityManager
+  // (?hookFrameExit; also pins the end-of-tick hook queue the retired
+  // test_hook_fire_queue.mjs replica covered), cycle restart behind a one-shot
+  // (?cycleRestartAfterAction), CallPES hooks owned by their object.
+  { tier: 5, flag: "hookFrameExit", file: "tests/unified_hook_drain.test.mjs" },
+  { tier: 5, flag: "cycleRestartAfterAction", file: "tests/unified_handback.test.mjs" },
+  { tier: 5, flag: "animHookCallPes", file: "tests/anim_hook_callpes.test.mjs" },
   // 2026-10-07 moon nebula sheets as far-depth sky glows (the sky wedges) +
   // AerialPerspective takes the sky's sun (it was (0,0,0)).
   { tier: 5, flag: "skyGlow+aerialSun", file: "tests/sky_glow.test.mjs" },
@@ -399,6 +413,19 @@ const TIER5 = [
   { tier: 5, flag: "commerce_windows_smoke", file: "tests/commerce_windows_smoke.test.mjs" },
   { tier: 5, flag: "inventory_drag_rules", file: "tests/inventory_drag_rules.test.mjs" },
   { tier: 5, flag: "inventory_dnd_dom", file: "tests/inventory_dnd_dom.test.mjs" },
+  // 2026-10-08 — item handling parity: retail UseObject routing for shortcut
+  // keys / Use button (?hotbarActivate), per-item cooldown overlay
+  // (?slotCooldown), shortcut follows a merge / no wcid re-bind
+  // (?shortcutRetarget). PlaceInBackpack (?retailPickup) is pinned in
+  // inventory_drag_rules [9].
+  { tier: 5, flag: "hotbarActivate", file: "tests/item_primary_use.test.mjs" },
+  { tier: 5, flag: "slotCooldown", file: "tests/item_cooldown_step.test.mjs" },
+  { tier: 5, flag: "shortcutRetarget", file: "tests/hotbar_merge_retarget.test.mjs" },
+  // items-4 JS half (?retailAutoWear: AutoWearIsLegal refusal + ready-slot
+  // merge), toolbar Use → activateItem, vendor split-before-sell.
+  { tier: 5, flag: "retailAutoWear", file: "tests/item_wear_plan.test.mjs" },
+  { tier: 5, flag: "toolbarUseActivate", file: "tests/toolbar_use_activate.test.mjs" },
+  { tier: 5, flag: "vendorSellSplit", file: "tests/vendor_sell_split.test.mjs" },
   { tier: 5, flag: "init3d_idempotency_guard", file: "test_init3d_idempotency_guard.mjs" },
   { tier: 5, flag: "journal_panel", file: "test_journal_panel.mjs" },
   { tier: 5, flag: "landblock_lru_evict", file: "test_landblock_lru_evict.mjs" },
@@ -430,6 +457,10 @@ const TIER5 = [
   { tier: 5, flag: "particle_clock", file: "test_particle_clock.mjs" },
   { tier: 5, flag: "particle_null_slot_stall", file: "test_particle_null_slot_stall.mjs" },
   { tier: 5, flag: "particle_rp6_cull_authority", file: "test_particle_rp6_cull_authority.mjs" },
+  // 2026-10-08 PLIFECYCLE-2/-5: retail degrade freeze for RP6-culled emitters;
+  // static default_script hooks fire at their start_time.
+  { tier: 5, flag: "particleCullFreeze", file: "tests/particle_cull_freeze.test.mjs" },
+  { tier: 5, flag: "staticScriptHookTime", file: "tests/static_script_hooktime.test.mjs" },
   { tier: 5, flag: "particle_single_pass", file: "test_particle_single_pass.mjs" },
   { tier: 5, flag: "particles", file: "test_particles.mjs" },
   { tier: 5, flag: "phase7_5_camera", file: "test_phase7_5_camera.mjs" },
@@ -607,6 +638,9 @@ const TIER5 = [
   { tier: 5, flag: "remoteJumpArc", file: "tests/remote_jump_arc.test.mjs" },
   // Remote motion D6 regression pin: both sticky radii reach the wasm lane.
   { tier: 5, flag: "remoteStickyRadius", file: "tests/remote_sticky_radius.test.mjs" },
+  // moveto-1 (2026-10-08): a sticky-bit remote MoveToObject sticks on arrival,
+  // not at arm time (source pins over the wasm UpdateMotion arm).
+  { tier: 5, flag: "remoteMoveToStickyArrival", file: "tests/remote_moveto_sticky_arrival.test.mjs" },
   { tier: 5, flag: "harness_terrain_tier_ladder", file: "harness/test_terrain_tier_ladder.mjs",
     requires: "../../dist/manifest.json" },
   // 2026-10-06 — slow-link boot (666 kbps measured on the 1070): bandwidth
@@ -660,6 +694,12 @@ const TIER5 = [
   { tier: 5, flag: "terrain_volcano_shader", file: "test_terrain_volcano_shader.mjs" },
   // 2026-10-05 — appeared mid-session (concurrent shader work); executed, green.
   { tier: 5, flag: "shader_logdepth", file: "test_shader_logdepth.mjs" },
+  // 2026-10-08 — physupd-2 retail exact ballistic arc (`?projectileExactArc`).
+  { tier: 5, flag: "projectileExactArc", file: "tests/projectile_ballistic_arc.test.mjs" },
+  // 2026-10-08 — A3-selection: combat auto-target / range exit / retail cycle
+  // on a real EntityManager (`?autoTarget`), and the sphere pick fallback.
+  { tier: 5, flag: "autoTarget", file: "tests/auto_target.test.mjs" },
+  { tier: 5, flag: "pickSphereFallback", file: "tests/pick_math.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

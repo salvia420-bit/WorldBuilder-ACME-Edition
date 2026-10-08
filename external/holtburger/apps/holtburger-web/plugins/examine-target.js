@@ -53,7 +53,7 @@ import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
 import {
   itemTypeLabel, equipSlotsLabel, skillName, damageTypeLabel,
   formatThousands, protectionText, weaponSpeedText, damageRangeText,
-  highlightState, healthModel, examineHeaderModel,
+  highlightState, healthModel, examineHeaderModel, creatureAttributeRows,
 } from "./examine_format.js";
 
 const VIEW_ID_STYLE = "hb-examine-view-style";
@@ -160,6 +160,7 @@ function ensureStyles() {
     .hb-exa-body .hbk-kv.is-buffed > :last-child::after { content: " \\25B2"; font-size: 9px; }
     .hb-exa-body .hbk-kv.is-debuffed > :last-child { color: var(--hbk-warn); }
     .hb-exa-body .hbk-kv.is-debuffed > :last-child::after { content: " \\25BC"; font-size: 9px; }
+    .hb-exa-body .hbk-kv.is-incomplete > :last-child { opacity: 0.65; font-style: italic; }
     .hb-exa-grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
     .hb-exa-spells { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 2px; }
     .hb-exa-spell { display: flex; align-items: center; gap: 6px; min-height: 18px; }
@@ -241,6 +242,8 @@ function kvRow(parent, label, value, { tone = null, title = null } = {}) {
   row.className = "hbk-kv";
   if (tone === "buffed") { row.classList.add("is-buffed"); row.title = "Raised by an enchantment"; }
   else if (tone === "debuffed") { row.classList.add("is-debuffed"); row.title = "Lowered by an enchantment"; }
+  // enchstats-4: retail font 3 — the value of a failed assess.
+  else if (tone === "incomplete") { row.classList.add("is-incomplete"); row.title = "Assess failed"; }
   if (title) row.title = title;
   const l = document.createElement("span");
   l.textContent = label;
@@ -250,6 +253,21 @@ function kvRow(parent, label, value, { tone = null, title = null } = {}) {
   row.appendChild(v);
   parent.appendChild(row);
   return row;
+}
+
+/** enchstats-4: BasicCreatureExamineUI's attribute grid + vital rows from
+ *  `creatureAttributeRows` (rows with a null value are skipped). */
+function renderCreatureAttributeBlock(wrapEl, rows) {
+  sectionTitle(wrapEl, "Attributes");
+  const grid = document.createElement("div");
+  grid.className = "hb-exa-grid2";
+  for (const r of rows) {
+    if (r.kind === "attribute") kvRow(grid, r.label, r.value, { tone: r.tone });
+  }
+  wrapEl.appendChild(grid);
+  for (const r of rows) {
+    if (r.kind === "vital") kvRow(wrapEl, r.label, r.value, { tone: r.tone });
+  }
 }
 
 function sectionTitle(parent, text) {
@@ -627,6 +645,15 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
       ? "You fail to assess this creature. You will try again shortly."
       : "Your skill is not high enough to identify this item. You will try again shortly.";
     wrapEl.appendChild(fail);
+    // enchstats-4 (2026-10-08): retail still renders the creature block on
+    // a failed assess (AttributeInfoRegion / Attribute2ndInfoRegion::
+    // Update(AppraisalProfile*), acclient.c:285975 / :286022): attributes
+    // "???" and Health as "N %" in the incomplete font. The wasm stub ships
+    // the failed profile as `failedCreatureProfile` (never merged).
+    const fcp = snapshot.failedCreatureProfile || null;
+    if (fcp && (kind === "creature" || kind === "player")) {
+      renderCreatureAttributeBlock(wrapEl, creatureAttributeRows(fcp, false));
+    }
     return;
   }
 
@@ -694,21 +721,10 @@ function renderAppraisal(wrapEl, guid, snapshot, kind) {
       && (cp?.attributes || cp?.health != null || ints.Strength != null
         || ints.Endurance != null || ints.Coordination != null
         || ints.Quickness != null || ints.Focus != null || ints.Self != null)) {
-    sec("Attributes");
-    const a = cp?.attributes || {};
-    const grid = document.createElement("div");
-    grid.className = "hb-exa-grid2";
-    kvRow(grid, "Strength",     a.strength     ?? ints.Strength);
-    kvRow(grid, "Endurance",    a.endurance    ?? ints.Endurance);
-    kvRow(grid, "Coordination", a.coordination ?? ints.Coordination);
-    kvRow(grid, "Quickness",    a.quickness    ?? ints.Quickness);
-    kvRow(grid, "Focus",        a.focus        ?? ints.Focus);
-    kvRow(grid, "Self",         a.self_        ?? a.self ?? ints.Self);
-    wrapEl.appendChild(grid);
-    const pair = (cur, max) => (max != null ? `${formatThousands(cur)} / ${formatThousands(max)}` : (cur != null ? formatThousands(cur) : null));
-    row("Health",  pair(cp?.health, cp?.health_max) ?? (ints.MaxHealth != null ? formatThousands(ints.MaxHealth) : null));
-    row("Stamina", pair(a.stamina, a.stamina_max) ?? (ints.MaxStamina != null ? formatThousands(ints.MaxStamina) : null));
-    row("Mana",    pair(a.mana, a.mana_max) ?? (ints.MaxMana != null ? formatThousands(ints.MaxMana) : null));
+    // enchstats-4 (2026-10-08): rows (incl. the Self row — the wire field is
+    // `self_attr` — and the buff/debuff tints from `cp.buffs`) come from the
+    // pure examine_format.js helper.
+    renderCreatureAttributeBlock(wrapEl, creatureAttributeRows(cp, true, ints));
   }
   // Skills: data-blocked — CreatureProfile carries no per-skill data on
   // the wire (types.rs), so there is nothing to render until a
@@ -892,7 +908,8 @@ function renderHeader(refs, model, snapshot) {
   const strings = snapshot?.properties?.strings || {};
   let kind = model.kind;
   // An appraisal with a creature profile settles an unknown item/creature.
-  if (kind === "item" && !model.fromInventory && snapshot?.creatureProfile) kind = "creature";
+  if (kind === "item" && !model.fromInventory
+      && (snapshot?.creatureProfile || snapshot?.failedCreatureProfile)) kind = "creature";
   model.kind = kind;
   const head = examineHeaderModel({
     kind, ints, strings, item: model.item, meta: model.meta, isPK: model.isPK,

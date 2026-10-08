@@ -152,24 +152,50 @@ export function skillSpentXp(table, ranks, marginal) {
  * (player vitals start at 0); the formula is retail's SkillFormula::
  * Calculate (acclient.c: floor((x·attr1 + y·attr2) / z + 0.5)) over the
  * UNBUFFED attributes — Health = Endurance / 2, Stamina = Endurance,
- * Mana = Self (Attribute2ndTable). Enlightenment / gear max-health
- * bonuses are not visible client-side, so a Health estimate can be a
- * few ranks high for those characters; the server still validates.
+ * Mana = Self (Attribute2ndTable).
+ *
+ * enchstats-3 (2026-10-08): the Health `base` now includes GearMaxHealth
+ * (PropertyInt 379, retail CACQualities::InqAttribute2nd adds it to the RAW
+ * max), so pass it as `gearMaxHealth` and it is taken back out before the
+ * rank estimate. Enlightenment is still not visible client-side, so a
+ * Health estimate can be a few ranks high for those characters; the server
+ * still validates.
  *
  * @param {number} vitalId   1 Health, 3 Stamina, 5 Mana
  * @param {number} vitalBase unbuffed max
  * @param {Record<number, number>} attrBase  attribute id → unbuffed value
+ * @param {number} [gearMaxHealth=0] PropertyInt GearMaxHealth (Health only)
  * @returns {number}
  */
-export function estimateVitalRanks(vitalId, vitalBase, attrBase) {
+export function estimateVitalRanks(vitalId, vitalBase, attrBase, gearMaxHealth = 0) {
   const base = Number(vitalBase) || 0;
   const end = Number(attrBase?.[2]) || 0;
   const self = Number(attrBase?.[6]) || 0;
   let formula = 0;
-  if (vitalId === 1) formula = Math.floor(end / 2 + 0.5);
+  if (vitalId === 1) formula = Math.floor(end / 2 + 0.5) + Math.max(0, Number(gearMaxHealth) || 0);
   else if (vitalId === 3) formula = end;
   else if (vitalId === 5) formula = self;
   return Math.max(0, base - formula);
+}
+
+/**
+ * Retail SkillInfoRegion / Attribute2ndInfoRegion::GetVitaeModifier
+ * (acclient.c:285192 / :285287): with a vitae penalty in effect
+ * (`vitae < 1`), `(u64)(raw × vitae + 0.5) − raw` (≤ 0), else 0. The
+ * character sheet tints a value against `current − vitaeModifier` so the
+ * vitae loss alone never paints a skill or vital red — enchstats-2/3
+ * (2026-10-08), now that the client folds vitae into `current` / max the
+ * way retail and ACE do.
+ *
+ * @param {number} raw   the unbuffed (raw) value — the sheet's `base`
+ * @param {number} vitae the vitae multiplier (1 = none)
+ * @returns {number}
+ */
+export function vitaeModifier(raw, vitae) {
+  const r = Number(raw) || 0;
+  const v = Number(vitae);
+  if (!Number.isFinite(v) || v >= 1 || v < 0) return 0;
+  return Math.floor(r * v + 0.5) - r;
 }
 
 /**

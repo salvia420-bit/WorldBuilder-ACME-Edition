@@ -16,7 +16,7 @@ import {
   vendorAcceptability, vendorRejectText, VENDOR_ACCEPT, countCurrency, PYREAL_WCID,
   fmtNumber, fmtCompact, isOutOfRange, TRADE_RANGE, CYLINDER_RADII_ALLOWANCE,
   tradeStatus, mapCoordsText, rentDueInfo, MAINTENANCE_PERIOD_SECONDS,
-  houseTypeName, clampPage,
+  houseTypeName, clampPage, sellStagingPlan,
 } from "../plugins/commerce_logic.js";
 
 let passed = 0;
@@ -101,6 +101,39 @@ check("promissory notes are exempt from the max cap", () => {
 });
 check("no profile = no client-side restriction", () => {
   assert.equal(vendorAcceptability({}, { itemType: 0x80, value: 1, stackSize: 1 }), VENDOR_ACCEPT.OK);
+});
+
+console.log("[3b] sell staging (VendorSellUI::DragItemAcceptable + gmVendorUI::AddItem)");
+const SELL_VENDOR = { ...PICKY, buyAcceptCategories: 0x01 | 0x02 | 0x100 | 0x200, minValue: 1, maxValue: 50000 };
+const PACK = 0x80000020;
+const SELL_ROWS = [
+  { guid: PACK, name: "Sack", itemType: 0x200, value: 50, stackSize: 1, equipMask: 0, containerId: 0 },
+  { guid: 0x80000021, name: "Arrow", itemType: 0x100, value: 500, stackSize: 100, equipMask: 0, containerId: PACK },
+  { guid: 0x80000022, name: "Mace", itemType: 0x01, value: 90, stackSize: 1, equipMask: 0, containerId: PACK },
+  { guid: 0x80000023, name: "Apple", itemType: 0x20, value: 5, stackSize: 3, equipMask: 0, containerId: PACK },
+  { guid: 0x80000030, name: "Empty Pouch", itemType: 0x200, value: 40, stackSize: 1, equipMask: 0, containerId: 0 },
+  { guid: 0x80000031, name: "Iron Sword", itemType: 0x01, value: 300, stackSize: 1, equipMask: 0x100000, containerId: 0 },
+  { guid: 0x80000032, name: "Arrowhead", itemType: 0x100, value: 400, stackSize: 40, equipMask: 0, containerId: 0 },
+];
+check("a pack with contents stages each ACCEPTED child at its whole stack, not the pack", () => {
+  const plan = sellStagingPlan(SELL_ROWS, PACK, SELL_VENDOR);
+  assert.equal(plan.reject, undefined);
+  assert.equal(plan.message, "Selling contents of Sack");
+  assert.deepEqual(plan.stage.map((r) => [r.guid, r.amount]), [[0x80000021, 100], [0x80000022, 1]],
+    "the Apple (food — wrong type) is skipped quietly; the Sack is not staged");
+});
+check("an EMPTY pack is an ordinary item (staged itself)", () => {
+  const plan = sellStagingPlan(SELL_ROWS, 0x80000030, SELL_VENDOR);
+  assert.deepEqual(plan.stage.map((r) => [r.guid, r.amount]), [[0x80000030, 1]]);
+});
+check("a single stack is always staged whole (amount === stackSize)", () => {
+  const plan = sellStagingPlan(SELL_ROWS, 0x80000032, SELL_VENDOR);
+  assert.deepEqual(plan.stage.map((r) => [r.guid, r.amount]), [[0x80000032, 40]]);
+});
+check("wielded / unacceptable / not carried are refused with retail text", () => {
+  assert.match(sellStagingPlan(SELL_ROWS, 0x80000031, SELL_VENDOR).reject, /^Unequip Iron Sword/);
+  assert.equal(sellStagingPlan(SELL_ROWS, 0x80000023, SELL_VENDOR).reject, "That item cannot be sold here");
+  assert.equal(sellStagingPlan(SELL_ROWS, 0x8000FFFF, SELL_VENDOR).reject, "You can only sell items you are carrying");
 });
 
 console.log("[4] purse + formatting");

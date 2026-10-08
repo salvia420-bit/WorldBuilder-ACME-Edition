@@ -138,6 +138,13 @@ const body = spliceModule(src, {
     isCharacterOptionEnabled: "() => false",
     CHARACTER_OPTION: "Object.freeze({})",
     castSpellViaHandle: INERT,
+    // spellcast-2: spell-list tag helper (ui/ac_spell_target_type.js), not on
+    // the skill-stride path.
+    spellTargetClass: "() => 'target'",
+    // spellcast-3: retail cast-refusal display (ui/ac_spell_target_compat.js),
+    // not on the skill-stride path.
+    announceCastRefusal: INERT,
+    MSG_NO_SELECTION: "'You must select a suitable target before casting this spell'",
     getCastSequence: "() => null",
     wrongStanceForArmed: "() => false",
     castCooldownMs: "() => 0",

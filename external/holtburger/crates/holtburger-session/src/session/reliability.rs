@@ -62,7 +62,7 @@ impl Session {
     ///
     /// Two bounds, in order:
     /// 1. Drop anything further ahead than the retransmit window. We could
-    ///    never close such a gap anyway — `send_request_retransmit` errors on
+    ///    never close such a gap anyway — `send_request_retransmit` refuses
     ///    `missing_span > MAX_RETRANSMIT_SEQUENCE_WINDOW + 1` — so holding the
     ///    packet only costs memory.
     /// 2. An explicit ceiling, mirroring `maybe_cache_packet`'s
@@ -80,6 +80,10 @@ impl Session {
             );
             return;
         }
+
+        // net-4: a buffered packet proves `sequence` exists, so the gap below
+        // it stays armed for the timer-driven re-NAK.
+        self.note_server_seq_seen(sequence);
 
         self.pending_server_packets
             .entry(sequence)
@@ -179,19 +183,93 @@ impl Session {
         Ok(retransmission_packet)
     }
 
+    /// `true` when a RequestRetransmit for `[last_server_seq + 1,
+    /// received_sequence)` is well-formed and inside the reorder window.
+    pub(crate) fn retransmit_span_in_window(&self, received_sequence: u32) -> bool {
+        let desired_sequence = self.last_server_seq.wrapping_add(1);
+        is_newer_u32(received_sequence, desired_sequence)
+            && received_sequence.wrapping_sub(desired_sequence)
+                <= MAX_RETRANSMIT_SEQUENCE_WINDOW + 1
+    }
+
+    /// net-4 (R2-net 2026-10-08): record that S2C `sequence` is known to
+    /// exist (retail `SharedNet::ProcessNewestSeqNum` raising
+    /// `highestIDReceived_`, acclient.c:369054). Only sequences ahead of
+    /// `last_server_seq` matter; the newest one wins.
+    pub(crate) fn note_server_seq_seen(&mut self, sequence: u32) {
+        if !is_newer_u32(sequence, self.last_server_seq) {
+            return;
+        }
+        match self.highest_server_seq_seen {
+            Some(highest) if !is_newer_u32(sequence, highest) => {}
+            _ => self.highest_server_seq_seen = Some(sequence),
+        }
+    }
+
+    /// net-4: when the next timer-driven RequestRetransmit is due, or `None`
+    /// when no gap is open (so an idle, in-order session never arms a timer).
+    pub(crate) fn next_retransmit_deadline(&self) -> Option<Instant> {
+        let highest = self.highest_server_seq_seen?;
+        if !is_newer_u32(highest, self.last_server_seq) {
+            return None;
+        }
+        Some(match self.last_request_retransmit_time {
+            Some(last_request) => last_request + REQUEST_RETRANSMIT_INTERVAL,
+            None => Instant::now(),
+        })
+    }
+
+    /// net-4 (R2-net 2026-10-08): re-send the RequestRetransmit for an open
+    /// gap on the [`REQUEST_RETRANSMIT_INTERVAL`] timer, independent of new
+    /// arrivals. Retail runs `SharedNet::EnqueueNaks` every net pump while
+    /// the NAK set is non-empty (`ClientNet::ProcessConnection`,
+    /// acclient.c:372842), gated at 0.6 s (acclient.c:371458). Previously a
+    /// lost retransmission was only re-requested if some later out-of-order
+    /// packet happened to arrive.
+    ///
+    /// Returns `Ok(true)` when a request was queued. Never leaves a due
+    /// deadline in place without sending: an un-requestable gap is disarmed
+    /// instead, so the receive loop's timer cannot spin.
+    pub(crate) fn resend_request_retransmit_if_due(&mut self) -> Result<bool> {
+        let Some(deadline) = self.next_retransmit_deadline() else {
+            return Ok(false);
+        };
+        if Instant::now() < deadline {
+            return Ok(false);
+        }
+        let Some(highest) = self.highest_server_seq_seen else {
+            return Ok(false);
+        };
+        // `highest + 1` makes the [desired, received) builder include
+        // `highest` itself; ids already buffered are skipped by the builder.
+        let target = highest.wrapping_add(1);
+        if !self.retransmit_span_in_window(target) {
+            self.highest_server_seq_seen = None;
+            return Ok(false);
+        }
+        self.send_request_retransmit(target)?;
+        Ok(true)
+    }
+
     pub(crate) fn send_request_retransmit(&mut self, received_sequence: u32) -> Result<()> {
         let desired_sequence = self.last_server_seq.wrapping_add(1);
         let bottom = desired_sequence.wrapping_add(1);
-        let missing_span = received_sequence.wrapping_sub(desired_sequence);
 
-        if !is_newer_u32(received_sequence, desired_sequence)
-            || missing_span > MAX_RETRANSMIT_SEQUENCE_WINDOW + 1
-        {
-            return Err(anyhow!(
-                "Abnormal server packet sequence received: expected around {}, got {}",
-                desired_sequence,
-                received_sequence
-            ));
+        // net-3 (R2-net 2026-10-08): was an `Err` ("Abnormal server packet
+        // sequence"), which `recv_message` propagates and the client treats
+        // as a disconnect. Retail's `SharedNet::SeqIDSanityCheck`
+        // (acclient.c:371343) drops an out-of-window packet and keeps the
+        // session; do the same. A gap this wide cannot be closed anyway, and
+        // a session that really is wedged is reaped by the client's
+        // inbound-silence detector.
+        if !self.retransmit_span_in_window(received_sequence) {
+            log::warn!(
+                "Not requesting retransmit: S2C sequence {} is outside the {}-packet window above expected {}",
+                received_sequence,
+                MAX_RETRANSMIT_SEQUENCE_WINDOW,
+                desired_sequence
+            );
+            return Ok(());
         }
 
         let mut needed_sequences = Vec::with_capacity(MAX_RETRANSMIT_SEQUENCE_IDS);

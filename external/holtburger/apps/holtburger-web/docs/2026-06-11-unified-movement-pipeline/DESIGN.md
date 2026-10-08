@@ -506,16 +506,25 @@ A4-Q2 (AnimationDone wiring).
 - `jump_is_allowed` (343922-343974) consults, in order: `contact_allows_move`
   (343882 — LogOut/Dead/LifestoneRecall-class motions exempt), IsFullyConstrained,
   **the pending-queue HEAD's jump_error_code** (ACE MotionInterp.cs:753-754), then
-  `jump_charge_is_allowed` (343318-343341: weenie stamina vfptr → error 73;
+  `jump_charge_is_allowed` (343318-343341: weenie `CanJump` vfptr[15] → error 73;
   forward-command gate → 72) and `motion_allows_jump(forward_command)`.
+  [R1 motioninterp-2, 2026-10-08: vfptr[15] is `CanJump` (PDB vtable offset 60),
+  NOT stamina — `ACCWeenieObject::CanJump` (436885) → `CACQualities::CanJump`
+  (442878-442884) = `InqLoad && load < 2.0`. Stamina is vfptr[16]
+  `JumpStaminaCost`, the separate 71 gate.]
 - `charge_jump` (343845) sets `standing_longjump` only when on-ground + Ready + no
   sidestep/turn; `jump` (344224) cancels moveto, stamps `jump_extent`,
   `set_on_walkable(false)`; `get_jump_v_z` (343343): extent clamp 1.0, weenie
   scale, default 10.0. Our shipped gates (lib.rs:38260-38392, types.rs:64-72,
   :1710) already cover the non-queue terms (survey A3 §3 row 9 PARITY); the queue
-  head's error code is the missing input this amendment adds. Charge-time stamina
+  head's error code is the missing input this amendment adds. ~~Charge-time stamina
   error 73 stays UNRESOLVED (ACE gates at release only — survey A3 §6); do not
-  add a speculative charge-time gate.
+  add a speculative charge-time gate.~~ RESOLVED by R1 motioninterp-2
+  (2026-10-08): 73 is the BURDEN gate (`CanJump`, load < 2.0) and retail runs it
+  at BOTH charge (`charge_jump` 343845-343855, before the position check;
+  `CommenceJump` 408033-408078 never starts the bar) and release. Shipped
+  default-ON behind `?jumpLoadGate=off` (`JumpChargeClock::commence` +
+  `execute_jump_release`'s `can_jump`).
 
 **StopCompletely / PerformMovement dispatch:** `PerformMovement` (344670-344720)
 dispatches DoMotion / StopMotion / DoInterpretedMotion / StopInterpretedMotion /

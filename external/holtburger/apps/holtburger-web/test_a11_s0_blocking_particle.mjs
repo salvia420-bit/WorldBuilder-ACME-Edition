@@ -450,6 +450,40 @@ check(
   /partStorage\[i\];[\s\S]{0,80}this\._reclaimSlotMaterial\(slotMesh\.material\)/.test(pmSrc),
 );
 
+// =====================================================================
+console.log("PART 5 — PLIFECYCLE-3: a drained blocking emitter frees its handle (owner registry)");
+// =====================================================================
+// Retail ParticleManager::UpdateParticles drops a FINISHED emitter from the
+// object's particle_table (acclient.c:329516-329520), and
+// CreateBlockingParticleEmitter refuses only on a LIVE entry (:329528-329565):
+// the next loop iteration's hook 26 re-creates the effect. Through the REAL
+// manager's tick() auto-removal + the REAL owner registry singleton.
+{
+  const { ownerRegistry } = await import("./scene3d/particles/owner_registry.js");
+  const mgr = makeManager();
+  const OWNER = 0x5000aa01;
+  const HANDLE = 9;
+  const finite = () => ({
+    emitterInfo: makeInfo({ initialParticles: 1, totalParticles: 1, lifespan: 0.5 }),
+    parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+    partIndex: -1,
+    emitterId: HANDLE,
+    blocking: true,
+  });
+  const first = await ownerRegistry.addEmitter(OWNER, mgr, finite());
+  check("5.blocking create on a free handle succeeds", first !== 0 && mgr.particleTable.has(first));
+  check("5.a second blocking create is refused while it is live",
+    (await ownerRegistry.addEmitter(OWNER, mgr, finite())) === 0);
+  clock += 0.1; mgr.tick();       // emitted its one particle → stopped
+  clock += 1.0; mgr.tick();       // particle aged out → tick() removes it
+  check("5.the finite emitter drained and tick() removed it", !mgr.particleTable.has(first));
+  check("5.the owner record no longer holds it", ownerRegistry.emitterCountForOwner(OWNER) === 0);
+  const again = await ownerRegistry.addEmitter(OWNER, mgr, finite());
+  check("5.LIFECYCLE FIX: the next blocking create on the same handle is accepted",
+    again !== 0 && again !== first && mgr.particleTable.has(again), `id=${again}`);
+  ownerRegistry.destroyAllForOwner(OWNER);
+}
+
 // restore global hooks
 setCurrentTime(null);
 setRng(null);

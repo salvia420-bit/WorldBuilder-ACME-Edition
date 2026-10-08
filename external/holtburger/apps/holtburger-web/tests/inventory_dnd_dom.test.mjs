@@ -72,6 +72,8 @@ globalThis.__sessionHandle = {
   splitStackToContainer: rec("splitStackToContainer"),
   dropItem: rec("dropItem"),
   giveObject: rec("giveObject"),
+  useObject: rec("useObject"),
+  classifyUse: (g) => ({ needsTarget: g === 0x6000000a, free() {} }),
 };
 const busL = new Map();
 const bus = {
@@ -132,6 +134,11 @@ const inventoryMod = load("plugins/inventory.js", ["view"], {
     "takeInventoryRows", "rowUsesPackSlot", "pickWieldSlotMask", "createPackOrder", "packCapacity",
     "mergeAmount", "DROP_TARGET", "MAIN_PACK_KEY", "PACKS_KEY", "decideItemDrop",
     "wieldEventTouchesLocal",
+    // 2026-10-08: shared take/drag auto-merge rule + retail UseObject routing.
+    "findAutoMergeTarget", "primaryUseAction", "defaultOnUrlFlag",
+    // items-4: retail AutoWearIsLegal / ready-slot merge (?retailAutoWear).
+    "planWear", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
+    "DEFAULT_PLAYER_ITEMS_CAPACITY", "DEFAULT_PLAYER_CONTAINERS_CAPACITY",
     "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
     "showItemTooltip", "hideItemTooltip", "localPlayerGuid",
   ]),
@@ -145,6 +152,7 @@ const lootMod = load("plugins/corpse-loot-bar.js", ["openFor", "closeBar", "stat
   ...real([
     "attachWindowPosition", "makeTitlebar", "takeInventorySnapshot", "decideItemDrop", "DROP_TARGET",
     "MAIN_PACK_KEY", "PACKS_KEY", "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction",
+    "planBackpackPlacement",
     "pendingOps", "showItemTooltip", "hideItemTooltip", "showItemToast", "localPlayerGuid",
   ]),
 });
@@ -321,6 +329,65 @@ await check("double-click equips via the shared action path (setWielded + waitin
   cellOf(0x60000008).dispatchEvent(new FakeEvent("click", { button: 0, detail: 2 }));
   await settle();
   assert.deepEqual(lastCall("setWielded"), ["setWielded", 0x60000008, 0x00100000]);
+});
+// items-3 (2026-10-08): the shortcut bar / Use button / radial "Use" go
+// through window.__inventory.activateItem = retail ItemHolder::UseObject.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+await check("activateItem: unwielded sword → setWielded, no Use event; a repeat inside 0.2 s is swallowed", async () => {
+  await sleep(220);
+  const before = calls.length;
+  assert.equal(window.__inventory.activateItem(SW), true);
+  assert.deepEqual(lastCall("setWielded"), ["setWielded", SW, 0x00100000]);
+  assert.equal(calls.slice(before).some((c) => c[0] === "useObject"), false, "no bare Use (ACE has no wield path behind it)");
+  const n = calls.length;
+  assert.equal(window.__inventory.activateItem(B), true, "throttled, still handled");
+  assert.equal(calls.length, n, "nothing sent inside m_timeLastUsed + 0.2");
+});
+await check("activateItem: a kit enters target mode, a plain item is a Use, a non-owned guid is the caller's", async () => {
+  const KIT = 0x6000000a;
+  inv.push(row(KIT, "Healing Kit"));
+  let began = null;
+  globalThis.__useTargeting = { begin: (g, name) => { began = [g, name]; } };
+  await sleep(220);
+  assert.equal(window.__inventory.activateItem(KIT), true);
+  assert.deepEqual(began, [KIT, "Healing Kit"]);
+  await sleep(220);
+  assert.equal(window.__inventory.activateItem(B), true);
+  assert.deepEqual(lastCall("useObject"), ["useObject", B]);
+  assert.equal(window.__inventory.activateItem(0x7FFFFFF0), false, "not ours → caller sends its own Use");
+  inv = inv.filter((r) => r.guid !== KIT);
+  delete globalThis.__useTargeting;
+});
+// items-4 (2026-10-08, ?retailAutoWear): the same activateItem refuses an
+// overlapping wear before anything is sent, and merges a second stack of
+// the wielded ammo instead of swapping it.
+await check("activateItem: a coat over a worn breastplate is refused with retail text — nothing is sent", async () => {
+  const BP = 0x60000201, COAT = 0x60000202;
+  inv.push(row(BP, "Breastplate", { itemType: 0x2, validLocations: 0x200, equipMask: 0x200, clothingPriority: 0x400 }));
+  inv.push(row(COAT, "Coat", { itemType: 0x2, validLocations: 0x1a00, clothingPriority: 0x400 | 0x1000 | 0x2000 }));
+  await sleep(220);
+  const before = calls.length;
+  assert.equal(window.__inventory.activateItem(COAT), true);
+  assert.equal(calls.length, before, "no unequip, no wield, no Use");
+  assert.equal(document.getElementById("hb-item-toast")?.textContent, "You must remove your Breastplate to wear that");
+  inv = inv.filter((r) => r.guid !== BP);
+  await sleep(220);
+  assert.equal(window.__inventory.activateItem(COAT), true);
+  assert.deepEqual(lastCall("setWielded"), ["setWielded", COAT, 0x1a00], "a legal wear sends the FULL ValidLocations (AutoWear)");
+  inv = inv.filter((r) => r.guid !== COAT);
+  drag.pendingOps.fail(COAT);
+});
+await check("activateItem: arrows onto the wielded stack of the same wcid → mergeStacks, not a swap", async () => {
+  const QV = 0x60000203, AR = 0x60000204;
+  inv.push(row(QV, "Arrow", { wcid: 300, itemType: 0x100, validLocations: 0x800000, equipMask: 0x800000, stackSize: 200, maxStackSize: 250 }));
+  inv.push(row(AR, "Arrow", { wcid: 300, itemType: 0x100, validLocations: 0x800000, stackSize: 80, maxStackSize: 250 }));
+  await sleep(220);
+  const wields = calls.filter((c) => c[0] === "setWielded").length;
+  assert.equal(window.__inventory.activateItem(AR), true);
+  assert.deepEqual(lastCall("mergeStacks"), ["mergeStacks", AR, QV, 50], "min(80, 250 - 200)");
+  assert.equal(calls.filter((c) => c[0] === "setWielded").length, wields, "no wield");
+  drag.pendingOps.fail(AR);
+  inv = inv.filter((r) => r.guid !== QV && r.guid !== AR);
 });
 await check("clicking a side pack opens it (retitled 'Contents of …', open-container arrow)", async () => {
   inv.push(row(0x60000009, "Gem", { containerId: P1 }));

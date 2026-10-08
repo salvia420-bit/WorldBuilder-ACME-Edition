@@ -60,7 +60,7 @@
 import { setAcText, COMPACT_FONT_ID, HEADING_FONT_ID } from "../ui/ac_font.js";
 import {
   TRAINING, decideTrainAction, statRaiseCost, skillSpentXp,
-  estimateVitalRanks, levelProgress, skillGroupFor,
+  estimateVitalRanks, levelProgress, skillGroupFor, vitaeModifier,
 } from "./train-skills.js";
 
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
@@ -290,12 +290,38 @@ function getStats() {
       vitals: toArray(s.vitals),
       skills: toArray(s.skills),
       levelInfo: toArray(s.levelInfo),
+      // enchstats-2/3 (2026-10-08): the sheet's tint and rank estimate need
+      // the vitae multiplier and GearMaxHealth (PropertyInt 379) beside the
+      // snapshot.
+      vitae: readVitae(),
+      gearMaxHealth: readPlayerInt(379) ?? 0,
     };
   } catch (_) {
     return null;
   } finally {
     try { s.free?.(); } catch (_) {}
   }
+}
+
+/** Current vitae multiplier (1 = none) from the typed Character. */
+function readVitae() {
+  try {
+    const v = window.__pluginClient?.character?.vitae;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  } catch (_) {}
+  return 1;
+}
+
+/** A local-player PropertyInt off the wasm handle, null when unavailable. */
+function readPlayerInt(stype) {
+  try {
+    const handle = window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
+    if (typeof handle?.objectIntProperty !== "function" || typeof handle?.playerGuid !== "function") return null;
+    const guid = handle.playerGuid() >>> 0;
+    if (!guid) return null;
+    const v = handle.objectIntProperty(guid, stype);
+    return Number.isFinite(v) ? v : null;
+  } catch (_) { return null; }
 }
 
 function u64(lo, hi) { return (hi >>> 0) * 0x1_0000_0000 + (lo >>> 0); }
@@ -374,16 +400,19 @@ function buildAttributeModel(stats, xp) {
   const v = stats?.vitals ?? [];
   if (v.length >= 4) {
     items.push({ key: "h:vitals", kind: "header", group: "plain", label: "Vitals" });
+    const vitae = Number.isFinite(stats?.vitae) ? stats.vitae : 1;
+    const gear = Number(stats?.gearMaxHealth) || 0;
     for (let i = 0; i + 3 < v.length; i += 4) {
       const id = v[i], cur = v[i + 1], base = v[i + 2], max = v[i + 3];
       const table = xp?.vitals ?? null;
-      const ranks = estimateVitalRanks(id, base, attrBase);
+      const ranks = estimateVitalRanks(id, base, attrBase, id === 1 ? gear : 0);
       const spent = Array.isArray(table) ? (table[ranks] ?? 0) : 0;
       items.push({
         key: `vital:${id}`, kind: "vital", id,
         name: VITAL_NAMES[id] ?? `Vital ${id}`,
         icon: VITAL_ICONS[id] ? `${SP}/${VITAL_ICONS[id]}.png` : null,
-        value: `${cur}/${max}`, valueColor: valueColor(max, base),
+        // Retail Attribute2ndInfoRegion::Update: raw vs (max − vitae modifier).
+        value: `${cur}/${max}`, valueColor: valueColor(max - vitaeModifier(base, vitae), base),
         current: max, base,
         tip: `Maximum ${max} (base ${base}), currently ${cur}`,
         cost1: statRaiseCost(table, ranks, spent, 1),
@@ -410,6 +439,7 @@ function buildSkillModel(stats, table, xp) {
     snap.set(s[i], { cur: s[i + 1], base: s[i + 2], ranks: s[i + 3], training: s[i + 4], marginal: s[i + 5] });
   }
   const groups = { specialized: [], trained: [], untrained: [], unusable: [] };
+  const vitae = Number.isFinite(stats?.vitae) ? stats.vitae : 1;
   for (const sk of catalog) {
     const id = sk.skillIdInt;
     const r = snap.get(id) ?? null;
@@ -434,7 +464,10 @@ function buildSkillModel(stats, table, xp) {
       name: sk.name ?? `Skill ${id}`,
       icon: sk.iconIdHex ? `${SP}/${sk.iconIdHex}.png` : null,
       value: r ? String(cur) : "",
-      valueColor: group === "unusable" ? C_UNUSABLE : valueColor(cur, base),
+      // Retail SkillInfoRegion::Update: raw vs (current − vitae modifier),
+      // so vitae alone never tints a skill red; JackOfAllTrades / spec
+      // augmentations (current > raw) do tint it raised, as in retail.
+      valueColor: group === "unusable" ? C_UNUSABLE : valueColor(cur - vitaeModifier(base, vitae), base),
       nameColor: group === "unusable" ? C_UNUSABLE : C_NAME,
       current: cur, base,
       tip: [sk.name, sk.description, r ? (cur !== base ? `Base ${base}, currently ${cur}` : `Base ${base}`) : ""]

@@ -386,6 +386,35 @@ await check("drag-to-sell: equipped item refused, dagger staged at the BUY rate 
   findButton(byId("hb-vendor-bar"), "Sell All").click();
   assert.deepEqual(calls[0].slice(0, 4), ["sellToVendor", 0x70000001, [0x80000002], [1]]);
 });
+await check("items-1: a dropped pack sells its accepted contents, whole stacks, no quantity box", () => {
+  // VendorSellUI::DragItemAcceptable + gmVendorUI::AddItem(_addContents=1):
+  // the pack is not staged, each accepted child is; ACE sells whole stacks.
+  const PACK = 0x80000020;
+  const extra = [
+    { guid: PACK, wcid: 136, name: "Sack", value: 50, stackSize: 1, itemType: 0x200, iconId: 0, equipMask: 0, containerId: PLAYER },
+    { guid: 0x80000021, wcid: 300, name: "Arrow", value: 500, stackSize: 100, itemType: 0x100, iconId: 0, equipMask: 0, containerId: PACK },
+    { guid: 0x80000022, wcid: 301, name: "Mace", value: 90, stackSize: 1, itemType: 0x01, iconId: 0, equipMask: 0, containerId: PACK },
+  ];
+  inv.push(...extra);
+  try {
+    calls.length = 0;
+    window.__vendorPluginDebug.stageSell(PACK);
+    const root = byId("hb-vendor-bar");
+    const t = text("hb-vendor-bar");
+    assert.match(t, /Selling \(2\)/);
+    assert.match(t, /Selling contents of Sack/, "retail notice");
+    const rows = root.querySelectorAll(".hvb-row").map((r) => r.textContent);
+    assert.equal(rows.length, 2);
+    assert.ok(rows.some((r) => /Arrow/.test(r)) && rows.some((r) => /Mace/.test(r)), rows.join(" | "));
+    assert.ok(!rows.some((r) => /Sack/.test(r)), "the pack itself is not staged");
+    assert.match(rows.find((r) => /Arrow/.test(r)), /x100/, "the whole stack");
+    assert.equal(root.querySelectorAll(".hvb-row input").length, 0, "sell rows have no quantity box");
+    findButton(root, "Sell All").click();
+    assert.deepEqual(calls[0].slice(0, 4), ["sellToVendor", 0x70000001, [0x80000021, 0x80000022], [100, 1]]);
+  } finally {
+    inv.splice(inv.length - extra.length, extra.length);
+  }
+});
 await check("Buying tab empty state is player-facing text", () => {
   window.__vendorPluginDebug.switchTab("buying");
   assert.match(text("hb-vendor-bar"), /buying list is empty/i);

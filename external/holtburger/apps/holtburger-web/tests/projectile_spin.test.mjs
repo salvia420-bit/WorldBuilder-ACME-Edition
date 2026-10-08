@@ -43,6 +43,8 @@ const Harness = new Function(`
   const PROJECTILE_GRAVITY_Z = -9.8;
   const PROJECTILE_TERRAIN_STOP_ON = false;
   const PROJECTILE_TERRAIN_STOP_EPS = 0.25;
+  const PROJECTILE_EXACT_ARC_ON = true;
+  const PROJECTILE_ENV_SWEEP_ON = false; // the sweep is covered by projectile_visual_fidelity
   const _terrainZAt = () => null;
   return class { ${METHODS} };
 `)();

@@ -338,10 +338,32 @@ pub const RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z: f32 = -1.5;
 /// itself comes from holtburger-core's retail `MoveToManager` port.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RemoteMoveToDrive {
+    /// The node heading (turn node) or the direct bearing to the target
+    /// (walk node). R3 moveto-3 (2026-10-08): a walk no longer steers by
+    /// it — the body runs along its own facing and turns only by
+    /// [`Self::turn`]; the bearing is kept for diagnostics and the legacy
+    /// bearing steer (`SpatialScene::set_remote_moveto_facing_enabled`).
     pub heading_rad: f32,
     /// `Some(run)` while a walk/run node is active (`MoveToSteer::Walk`);
     /// `None` for a turn-in-place node.
     pub forward: Option<bool>,
+    /// R3 moveto-3: the walk command is WalkBackwards — retail
+    /// `adjust_motion` folds it into WalkForward × −0.65
+    /// (acclient.c:343746), so the body backs away along its facing.
+    pub backwards: bool,
+    /// R3 moveto-2/3: the turn MOTION the MoveToManager holds, signed
+    /// `+1.0` TurnRight (heading increasing) / `-1.0` TurnLeft. For a turn
+    /// node it is the node's command (the scene turns past the node so the
+    /// strict `heading_greater` completes it, acclient.c:345712); for a
+    /// walk it is the aux turn (`None` inside the 20° deadband,
+    /// acclient.c:345620-345651). `None` on a turn node = the legacy
+    /// shortest-arc clamp toward `heading_rad`.
+    pub turn: Option<f32>,
+    /// R3 moveto-5: `MovementParameters.speed` (sanitized > 0; ACE charge
+    /// 1.5) — scales the walk velocity and the turn rate the way
+    /// `_DoMotion` → `adjust_motion` scales the motion (acclient.c:344753,
+    /// :343439).
+    pub speed: f32,
 }
 
 /// OpenAC comparison 2026-10-04 (remote motion D7) — the airborne state of

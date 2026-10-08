@@ -25,6 +25,9 @@ log = { workspace = true }
 env_logger = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# net-3 (R2-net 2026-10-08): raise the ACE-facing UDP socket's SO_RCVBUF
+# (same 2 MiB as holtburger-session's native `Session::new`).
+socket2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

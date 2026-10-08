@@ -32,8 +32,11 @@
 //     to swap (application/x-hb-hotbar-slot). Server-persisted via
 //     AddShortcut/RemoveShortcut, cached in localStorage.
 //   - Click a bound slot or press 1-9 to fire it (decideFireAction):
-//       * item                    → useObject
+//       * item                    → retail UseObject (inventory.js
+//                                   activateItem: wield / wear / target /
+//                                   salvage / Use)
 //       * self-targeted spell     → cast on self
+//       * untargeted spell (ring) → CastUntargetedSpell, selection ignored
 //       * targeted spell + target → cast on the selected entity
 //       * targeted spell, none    → chat hint, no packet
 //   - In Magic mode the digits belong to the spell bar (retail per-mode
@@ -59,8 +62,15 @@ import {
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
-import { canBindToHotbar } from "./inventory_helpers.js";
-import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import {
+  canBindToHotbar,
+  cooldownStep,
+  defaultOnUrlFlag,
+  matchCooldownEnchantment,
+} from "./inventory_helpers.js";
+import { castSpellViaHandleResult } from "../ui/ac_cast_spell.js";
+import { announceCastRefusal, MSG_NO_SELECTION } from "../ui/ac_spell_target_compat.js";
+import { castNeedsNoSelection } from "../ui/ac_spell_target_type.js";
 import { mountToolbarControls, lookupObjectName, formatTipLabel } from "./target-bar.js";
 
 const OVERLAY_ID = "hb-hotbar";
@@ -142,6 +152,17 @@ export function spellIsSelfTargeted(rec) {
   return typeof f === "boolean" ? f : null;
 }
 
+/** spellcast-2: true when the spell casts without a selection — the
+ *  SelfTargeted flag or (?formulaUntargeted, default on) a formula whose
+ *  CSpellBase::InqTargetType is 0 (rings, walls; ClientMagicSystem::CastSpell
+ *  sends those untargeted). Null when the record doesn't say. */
+export function spellNeedsNoSelection(rec, formulaOn) {
+  const self = spellIsSelfTargeted(rec);
+  if (self == null) return null;
+  const components = (rec instanceof Map) ? rec.get("components") : rec.components;
+  return castNeedsNoSelection({ selfTargeted: self, components }, formulaOn);
+}
+
 /** Spell display name from a getSpellRecord() result (Map or object). */
 function spellRecordName(rec) {
   if (!rec) return null;
@@ -156,19 +177,25 @@ function spellRecordName(rec) {
 //
 // Returns one of:
 //   { kind: "none" }
-//   { kind: "useItem",         itemGuid }
+//   { kind: "activateItem",    itemGuid }     // retail ItemHolder::UseObject
 //   { kind: "castSelf",        spellId }
 //   { kind: "castOnTarget",    spellId, targetGuid }
 //   { kind: "needTarget",      spellId }      // armed but no selection
 //
-// `isSelfTargeted` is the spell's per-record flag (spellIsSelfTargeted()).
+// `isSelfTargeted` = the spell casts without a selection
+// (spellNeedsNoSelection(): SelfTargeted or a type-0 formula); castSelf then
+// sends with a null target, which castSpell resolves to our own guid for a
+// SelfTargeted spell and to CastUntargetedSpell otherwise.
 // When the spell table hasn't loaded yet, pass `true` so the cast
 // defaults to self — matches the JSON-catalog default in
 // plugins/spellbook.js:165.
 export function decideFireAction(bound, { isSelfTargeted, softTargetGuid }) {
   if (!bound) return { kind: "none" };
   if (bound.itemGuid) {
-    return { kind: "useItem", itemGuid: (bound.itemGuid >>> 0) };
+    // gmToolbarUI::UseShortcut (acclient.c:239995) → ItemHolder::UseObject:
+    // a weapon wields, armour wears, a kit enters target mode, … — not a
+    // bare Use event (plugins/inventory.js activateItem).
+    return { kind: "activateItem", itemGuid: (bound.itemGuid >>> 0) };
   }
   if (bound.spellId) {
     if (isSelfTargeted) {
@@ -181,6 +208,74 @@ export function decideFireAction(bound, { isSelfTargeted, softTargetGuid }) {
     return { kind: "castOnTarget", spellId: bound.spellId, targetGuid: g };
   }
   return { kind: "none" };
+}
+
+// spellcast-1 (2026-10-08): the "armed spell on an item shortcut" bridge is
+// part of the NON-retail click-to-cast mode. Retail has no such path —
+// ClientMagicSystem::CastSpell casts only at ACCWeenieObject::selectedID
+// (acclient.c:404755) and an item shortcut is ItemHolder::UseObject — so it
+// runs only under the same strict `?clickToCast=on` opt-in as
+// scene3d/picking.js.
+const CLICK_TO_CAST = (() => {
+  try {
+    return typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("clickToCast") === "on";
+  } catch { return false; }
+})();
+
+// items-6: `?shortcutRetarget=off` restores the pre-2026-10-08 shortcut
+// upkeep — a vanished item's shortcut re-binds to the first stack of the
+// same wcid, and a merge leaves the shortcut where it was.
+const SHORTCUT_RETARGET = typeof window !== "undefined" ? defaultOnUrlFlag("shortcutRetarget") : true;
+// items-5: `?slotCooldown=off` restores the 2.5 s sweep on EVERY slot
+// whenever any shared cooldown is active.
+const SLOT_COOLDOWN = typeof window !== "undefined" ? defaultOnUrlFlag("slotCooldown") : true;
+
+/** The cast an item shortcut press makes under click-to-cast: the armed
+ *  spell at the bound item. null = no cast (flag off, no armed spell, or
+ *  not an item binding) — the press is the item's own use. */
+export function resolveArmedItemCast(bound, armedSpellId, clickToCastOn) {
+  const spellId = (armedSpellId >>> 0) || 0;
+  const targetGuid = (bound?.itemGuid >>> 0) || 0;
+  if (!clickToCastOn || !spellId || !targetGuid) return null;
+  return { spellId, targetGuid };
+}
+
+/**
+ * Retail gmToolbarUI::RecvNotice_FullMergingItem (acclient.c:241250): after
+ * ItemHolder::AttemptMerge(from → to) — partial merges included — a shortcut
+ * on `from` moves to `to` in the same slot (RemoveShortcut + CreateShortcut
+ * ToItem; the only place a shortcut changes object). Pure: returns the new
+ * slot array and the changed indices; wcid is kept.
+ */
+export function retargetBindings(slots, from, to) {
+  const f = (from >>> 0) || 0;
+  const t = (to >>> 0) || 0;
+  const out = Array.isArray(slots) ? slots.slice() : [];
+  const changed = [];
+  if (!f || !t || f === t) return { slots: out, changed };
+  for (let i = 0; i < out.length; i++) {
+    const b = out[i];
+    if (!b?.itemGuid || (b.itemGuid >>> 0) !== f) continue;
+    out[i] = b.wcid ? { itemGuid: t, wcid: b.wcid } : { itemGuid: t };
+    changed.push(i);
+  }
+  return { slots: out, changed };
+}
+
+/**
+ * Stale item shortcut: "keep" while its item is in the inventory, or was
+ * never seen this session and the post-login grace has not passed; else
+ * "clear" (+ RemoveShortCut). Retail never re-binds a shortcut to another
+ * stack of the same wcid — RecvNotice_ServerSaysMoveItem (acclient.c:241723)
+ * just removes it.
+ */
+export function staleBindingAction(binding, invGuids, seenGuids, neverSeenMayGo) {
+  const g = (binding?.itemGuid >>> 0) || 0;
+  if (!g) return "keep";
+  if (invGuids?.has?.(g)) return "keep";
+  if (!seenGuids?.has?.(g) && !neverSeenMayGo) return "keep";
+  return "clear";
 }
 
 export const manifest = {
@@ -334,7 +429,9 @@ function ensureStyles() {
       content: ""; position: absolute; inset: 0; pointer-events: none;
       background: rgba(0,0,0,0.55);
       clip-path: polygon(50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0);
-      animation: hb-hotbar-cd 2500ms linear forwards;
+      /* Per-item cooldowns (refreshSlotCooldowns) set the item's real
+         duration and how far in it already is; unset = the 2.5 s sweep. */
+      animation: hb-hotbar-cd var(--hb-cd-dur, 2500ms) linear var(--hb-cd-delay, 0s) forwards;
     }
     @keyframes hb-hotbar-cd {
       0%   { clip-path: polygon(50% 50%, 50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0); }
@@ -792,26 +889,26 @@ export function mount(ctx) {
   }
   const migrateTimer = setTimeout(migrateClearContainerBindings, 1500);
 
-  // Armed-spell bridge: if combat-bar has an armed targeted spell AND
-  // this slot is an item binding, fire castTargetedSpell(itemGuid, spellId)
-  // and emit hbHotbarItemTargeted so combat-bar clears its armed state.
-  // This must run BEFORE the normal decideFireAction dispatch.
+  // Armed-spell bridge (click-to-cast mode only — see CLICK_TO_CAST): with
+  // a targeted spell armed on the spell bar, an item shortcut casts that
+  // spell AT the item and emits hbHotbarItemTargeted so combat-bar clears
+  // its armed state. Runs BEFORE the normal decideFireAction dispatch.
+  // spellcast-1: the old inline sender called castTargetedSpell(spell,
+  // item) against the wasm's (target, spell) signature, so ACE got the
+  // spell id as the target; castSpellViaHandle(spell, target) takes the
+  // ordinary cast path (combat-mode gate, precheck, gesture).
+  // spellcast-3: a cast a client gate refused (it already said why) is still
+  // handled — the item is not used instead.
   function tryFireArmedSpellOnItem(idx) {
-    const bound = state.slots[idx];
-    if (!bound?.itemGuid) return false;
-    const armed = (window.__combatBarState?.armedSpellId >>> 0) || 0;
-    if (!armed) return false;
-    const client = ctx?.client ?? window.__pluginClient ?? null;
-    const handle = window.__sessionHandle ?? null;
-    const fire =
-      (typeof handle?.castTargetedSpell === "function" && ((g, s) => handle.castTargetedSpell(s, g))) ||
-      (typeof client?.player?.castSpell === "function" && ((g, s) => client.player.castSpell(s, g)));
-    if (!fire) return false;
+    const cast = resolveArmedItemCast(state.slots[idx], window.__combatBarState?.armedSpellId, CLICK_TO_CAST);
+    if (!cast) return false;
     try {
-      fire(bound.itemGuid, armed);
+      const sent = castSpellViaHandleResult(cast.spellId, cast.targetGuid);
+      if (sent === "refused") return true;
+      if (sent !== "sent") return false;
       try {
         window.dispatchEvent(new CustomEvent("hbHotbarItemTargeted", {
-          detail: { slotIndex: idx, itemGuid: bound.itemGuid, spellId: armed },
+          detail: { slotIndex: idx, itemGuid: cast.targetGuid, spellId: cast.spellId },
         }));
       } catch (_) {}
       return true;
@@ -826,14 +923,14 @@ export function mount(ctx) {
     if (!bound) return;
     const handle = window.__sessionHandle ?? null;
 
-    // Resolve the spell's self-target flag from the wasm SpellTable
+    // Resolve whether the spell needs a selection from the wasm SpellTable
     // accessor. getSpellRecord returns null pre-WorldBootstrap and throws
     // when the SpellTable isn't loaded — fall back to true (self-cast) in
     // both cases (spellbook.js legacy `untargeted` default).
     let isSelfTargeted = true;
     if (bound.spellId) {
       try {
-        const v = spellIsSelfTargeted(handle?.getSpellRecord?.(bound.spellId));
+        const v = spellNeedsNoSelection(handle?.getSpellRecord?.(bound.spellId));
         if (v != null) isSelfTargeted = v;
       } catch (_) {
         // getSpellRecord throws if SpellTable not loaded — keep default.
@@ -846,13 +943,15 @@ export function mount(ctx) {
     });
 
     switch (action.kind) {
-      case "useItem": {
+      case "activateItem": {
         if (typeof handle?.useObject !== "function") {
           logToChat(`Hotbar ${idx + 1}: not logged in — useObject unavailable`);
           return;
         }
         try {
-          handle.useObject(action.itemGuid);
+          // Retail UseObject for an owned item (inventory.js); anything it
+          // does not own (or `?hotbarActivate=off`) is a plain Use.
+          if (window.__inventory?.activateItem?.(action.itemGuid) !== true) handle.useObject(action.itemGuid);
           // Successful fire → clear any armed item set by inventory click /
           // context menu. Keyboard 1-7 taps that resolve to needTarget/none
           // do NOT reach this branch, so muscle-memory taps don't nuke
@@ -865,7 +964,10 @@ export function mount(ctx) {
       }
       case "castSelf": {
         try {
-          if (!castSpellViaHandle(action.spellId, null)) {
+          // spellcast-3: "refused" = a client gate already showed the reason.
+          const sent = castSpellViaHandleResult(action.spellId, null);
+          if (sent === "refused") return;
+          if (sent !== "sent") {
             logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
             return;
           }
@@ -877,7 +979,11 @@ export function mount(ctx) {
       }
       case "castOnTarget": {
         try {
-          if (!castSpellViaHandle(action.spellId, action.targetGuid)) {
+          // spellcast-3: "refused" = a client gate (combat mode, the retail
+          // target-compatibility pre-check) already showed the reason.
+          const sent = castSpellViaHandleResult(action.spellId, action.targetGuid);
+          if (sent === "refused") return;
+          if (sent !== "sent") {
             logToChat(`Hotbar ${idx + 1}: not logged in — castSpell unavailable`);
             return;
           }
@@ -888,11 +994,11 @@ export function mount(ctx) {
         return;
       }
       case "needTarget": {
-        // Match retail UX: an armed targeted spell with no selection
-        // is a no-op. We surface a hint instead of silently swallowing
-        // so the player learns the binding works.
-        const name = boundName(bound) || `spell 0x${action.spellId.toString(16).toUpperCase()}`;
-        logToChat(`Hotbar ${idx + 1}: ${name} needs a target — click an entity first`);
+        // Retail ClientMagicSystem::CastSpell with no selection sends nothing
+        // and prints "You must select a suitable target before casting this
+        // spell" (acclient.c:404766-404772) — spellcast-3 replaced the old
+        // "<spell> needs a target — click an entity first" hint.
+        announceCastRefusal(MSG_NO_SELECTION, 0);
         return;
       }
       case "none":
@@ -1358,16 +1464,17 @@ export function mount(ctx) {
     if (!Array.isArray(inv) || inv.length === 0) return;
     for (const x of inv) seenItemGuids.add(x.guid >>> 0);
     const neverSeenMayGo = (Date.now() - reconcileDoneAt) >= NEVER_SEEN_GRACE_MS;
+    const invGuids = new Set(inv.map((x) => x.guid >>> 0));
     let dirty = false;
     for (let i = 0; i < SLOT_COUNT; i++) {
       const b = state.slots[i];
       if (!b?.itemGuid) continue;
-      const it = inv.find((x) => (x.guid >>> 0) === (b.itemGuid >>> 0));
-      if (it) continue;
-      if (!seenItemGuids.has(b.itemGuid >>> 0) && !neverSeenMayGo) continue;
-      // Stale binding; if wcid known, look for matching wcid on a different guid
-      // (post-restart objectGuid reuse).
-      if (b.wcid) {
+      if (staleBindingAction(b, invGuids, seenItemGuids, neverSeenMayGo) === "keep") continue;
+      // `?shortcutRetarget=off` only: the old re-bind to another stack of the
+      // same wcid ("post-restart objectGuid reuse" — ACE item guids are
+      // persistent, and retail never re-binds by class; a merge moves the
+      // shortcut instead, see onItemMerge).
+      if (!SHORTCUT_RETARGET && b.wcid) {
         const alt = inv.find((x) => (x.wcid >>> 0) === (b.wcid >>> 0));
         if (alt) {
           state.slots[i] = { itemGuid: alt.guid >>> 0, wcid: b.wcid };
@@ -1404,16 +1511,110 @@ export function mount(ctx) {
     refreshUnresolvedIcons();
     pruneStaleItemBindings();
   };
+  // items-6: a merge moves the shortcut with it (retail
+  // gmToolbarUI::RecvNotice_FullMergingItem) — item_drag.js dispatches
+  // hb:item-merge {from, to} when it sends a StackableMerge.
+  const onItemMerge = (ev) => {
+    if (!SHORTCUT_RETARGET) return;
+    const d = ev?.detail || {};
+    const r = retargetBindings(state.slots, d.from, d.to);
+    if (r.changed.length === 0) return;
+    state.slots = r.slots;
+    for (const i of r.changed) {
+      sendRemoveShortcut(i);
+      sendAddShortcut(i, d.to >>> 0, 0);
+    }
+    saveState(state);
+    for (const i of r.changed) renderSlot(i);
+  };
+  window.addEventListener("hb:item-merge", onItemMerge);
   // All bus subscriptions use the plugin facade (same channel index.html
   // emits playerInventoryChanged on); previous wave wrongly used the
   // window DOM event bus and the listener never fired.
   const client = ctx?.client ?? window.__pluginClient;
   const onLandblockChanged = () => { inWorld = true; };
-  // HUD rec #84 (2026-06-16): toggle .cooldown-active on every slot when
-  // the wasm side flags a shared-cooldown change. Future refinement:
-  // per-slot gating via playerEnchantments() COOLDOWN bit (0x1000000)
-  // matched against each slot's bound spell-id.
+  // items-5 — retail UIElement_UIItem::UpdateCooldownDisplay
+  // (acclient.c:272052): the overlay goes only on an ITEM whose shared
+  // cooldown id is cooling down (CEnchantmentRegistry::OnCooldown on
+  // id + 0x8000), for that cooldown's real length; spells never get it.
+  // Needs the wasm InventoryItem `sharedCooldown` / `cooldownDuration`
+  // getters: a pkg without them (and `?slotCooldown=off`) keeps HUD rec #84's
+  // sweep on every slot. A 250 ms timer runs only while a slot is cooling.
+  const cdReceivedAt = new Map(); // "spell:layer:start" -> wall-clock s first seen
+  let cdTimer = 0;
+  function clearSlotCooldown(el) {
+    if (!el.dataset.cdKey) return;
+    el.classList.remove("cooldown-active");
+    delete el.dataset.cdKey;
+    delete el.dataset.cdStep;
+    el.style.removeProperty?.("--hb-cd-dur");
+    el.style.removeProperty?.("--hb-cd-delay");
+  }
+  /** Per-item overlay pass; false = no per-item data (flag off / old pkg). */
+  function refreshSlotCooldowns() {
+    if (!SLOT_COOLDOWN) return false;
+    const handle = window.__sessionHandle ?? null;
+    let inv = [];
+    try { inv = handle?.playerInventory?.() || []; } catch (_) { inv = []; }
+    const cdByGuid = new Map();
+    let supported = false;
+    for (const it of inv) {
+      try {
+        if (typeof it.sharedCooldown === "number") {
+          supported = true;
+          cdByGuid.set(it.guid >>> 0, { id: it.sharedCooldown >>> 0, duration: Number(it.cooldownDuration) || 0 });
+        }
+      } catch (_) {}
+      try { it?.free?.(); } catch (_) {}
+    }
+    if (!supported) return false;
+    // Copy-then-free, as buffs-hud.js does: AC start_time is relative
+    // (<= 0) at receipt, so remaining = duration + start - time since seen.
+    const enchs = [];
+    let raw = [];
+    try { raw = handle?.playerEnchantments?.() || []; } catch (_) { raw = []; }
+    for (const e of raw) {
+      try {
+        enchs.push({
+          spellId: e.spellId >>> 0, layer: e.layer | 0,
+          startTime: Number(e.startTime) || 0, duration: Number(e.duration) || 0,
+        });
+      } catch (_) {}
+      try { e?.free?.(); } catch (_) {}
+    }
+    const nowS = Date.now() / 1000;
+    const liveKeys = new Set();
+    let anyActive = false;
+    for (let i = 0; i < slotEls.length; i++) {
+      const el = slotEls[i];
+      const b = state.slots[i];
+      const cd = b?.itemGuid ? cdByGuid.get(b.itemGuid >>> 0) : null;
+      const e = cd ? matchCooldownEnchantment(enchs, cd.id) : null;
+      if (!e) { clearSlotCooldown(el); continue; }
+      const key = `${e.spellId}:${e.layer}:${e.startTime}`;
+      liveKeys.add(key);
+      if (!cdReceivedAt.has(key)) cdReceivedAt.set(key, nowS);
+      const dur = cd.duration > 0 ? cd.duration : e.duration;
+      const remaining = e.duration + e.startTime - (nowS - cdReceivedAt.get(key));
+      const step = cooldownStep(dur, remaining);
+      if (step === 0) { clearSlotCooldown(el); continue; }
+      anyActive = true;
+      el.dataset.cdStep = String(step);
+      if (el.dataset.cdKey === key) continue;
+      clearSlotCooldown(el);
+      el.dataset.cdKey = key;
+      el.style.setProperty?.("--hb-cd-dur", `${dur}s`);
+      el.style.setProperty?.("--hb-cd-delay", `${-(dur - remaining)}s`);
+      el.classList.add("cooldown-active");
+    }
+    for (const k of Array.from(cdReceivedAt.keys())) if (!liveKeys.has(k)) cdReceivedAt.delete(k);
+    if (anyActive && !cdTimer) cdTimer = setInterval(refreshSlotCooldowns, 250);
+    else if (!anyActive && cdTimer) { clearInterval(cdTimer); cdTimer = 0; }
+    return true;
+  }
   const onSharedCooldown = (e) => {
+    if (refreshSlotCooldowns()) return;
+    // HUD rec #84 (2026-06-16) fallback: every slot, fixed 2.5 s sweep.
     const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
     for (const slot of slotEls) slot.classList.toggle("cooldown-active", active > 0);
   };
@@ -1504,6 +1705,8 @@ export function mount(ctx) {
 
   return () => {
     window.removeEventListener("keydown", onKey);
+    window.removeEventListener("hb:item-merge", onItemMerge);
+    if (cdTimer) clearInterval(cdTimer);
     for (const un of funnelUnbinds) { try { un?.(); } catch (_) {} }
     clearInterval(reconcileTimer);
     if (neverSeenSweepTimer) clearTimeout(neverSeenSweepTimer);

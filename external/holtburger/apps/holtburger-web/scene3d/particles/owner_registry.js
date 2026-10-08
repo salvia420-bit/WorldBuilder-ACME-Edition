@@ -116,9 +116,41 @@ export function particleOwnerPendingOn() {
   return on;
 }
 
+// PLIFECYCLE-3 (2026-10-08) — `?particleOwnerRetire` (DEFAULT ON;
+// `=off`/`0`/`false` restores the legacy never-unbind bookkeeping): an emitter
+// that FINISHES on its own (ParticleManager.tick's stopped && no-particles
+// removal) is dropped from its owner record, like retail removes it from the
+// object's `particle_table` (ParticleManager::UpdateParticles,
+// acclient.c:329516-329520). Before this only explicit destroys unbound it, so
+//   - a finite emitter created with handle H by CreateBlockingParticle(26)
+//     kept H bound after it drained, and every later blocking create on H was
+//     refused for the rest of the owner's life (retail refuses only while the
+//     table entry is live, `if ( v6->data ) return 0;`, :329528-329565 —
+//     OpenAC ParticleHookSink.OnEmitterDied prunes the same way);
+//   - `rec.ids` kept one dead id per finished emitter: every animation-hook
+//     emitter on the long-lived player, every CallPES loop iteration under a
+//     `static:<n>` owner, until the owner was torn down.
+let _retireFlagCache = null;
+
+export function particleOwnerRetireOn() {
+  if (_retireFlagCache !== null) return _retireFlagCache;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = (new URLSearchParams(globalThis.location.search || "").get("particleOwnerRetire") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) {
+    on = true;
+  }
+  _retireFlagCache = on;
+  return on;
+}
+
 export function _resetParticleOwnerFlagForTests() {
   _flagCache = null;
   _pendingFlagCache = null;
+  _retireFlagCache = null;
 }
 
 /**
@@ -144,9 +176,19 @@ export class ParticleOwnerRegistry {
     // owner key — bounded by session entity churn.
     /** @type {Map<number|string, number>} */
     this._epochs = new Map();
+    // PLIFECYCLE-3: manager → Map<underlying id, ownerKey>, for routing a
+    // manager's natural-retirement callback back to the owning record. Keyed
+    // by MANAGER first because emitter ids are allocated per manager (world,
+    // statics and the terrain systems each count from 1), so a bare id is
+    // ambiguous. `_hooked` = managers this registry installed its callback on.
+    /** @type {WeakMap<object, Map<number, number|string>>} */
+    this._byMgr = new WeakMap();
+    /** @type {WeakSet<object>} */
+    this._hooked = new WeakSet();
     // Diagnostics for leak assertions / __diag readers.
     this.addCount = 0;
     this.destroyCount = 0;
+    this.retiredCount = 0;
   }
 
   /** Number of owners currently holding live emitters. */
@@ -272,6 +314,7 @@ export class ParticleOwnerRegistry {
     if (handle !== 0 && rec.scoped.get(handle) === token) {
       rec.scoped.set(handle, id);
     }
+    if (particleOwnerRetireOn()) this._trackRetire(manager, id, ownerKey);
     this.addCount += 1;
     // A StopParticle for this handle landed while the create was in flight
     // (see stopEmitter) — apply it now, as retail's synchronous create would
@@ -282,11 +325,50 @@ export class ParticleOwnerRegistry {
     return id;
   }
 
+  /** PLIFECYCLE-3: remember which owner holds (manager, id), and install this
+   *  registry's natural-retirement callback on the manager once. A different
+   *  callback already there (another registry) is chained, not replaced. */
+  _trackRetire(manager, id, ownerKey) {
+    let byId = this._byMgr.get(manager);
+    if (!byId) {
+      byId = new Map();
+      this._byMgr.set(manager, byId);
+    }
+    byId.set(id, ownerKey);
+    if (this._hooked.has(manager)) return;
+    this._hooked.add(manager);
+    const prev = typeof manager.onEmitterRemoved === "function" ? manager.onEmitterRemoved : null;
+    manager.onEmitterRemoved = (rid, mgr) => {
+      this._onRetired(mgr ?? manager, rid);
+      if (prev) prev(rid, mgr);
+    };
+  }
+
+  /** PLIFECYCLE-3: `manager` removed emitter `id` because it finished. Drop it
+   *  from its owner record and unbind any scoped handle that pointed at it, so
+   *  a later CreateBlockingParticle on that handle is accepted again. */
+  _onRetired(manager, id) {
+    const byId = this._byMgr.get(manager);
+    if (!byId) return;
+    const ownerKey = byId.get(id);
+    if (ownerKey === undefined) return;
+    byId.delete(id);
+    const rec = this._owners.get(ownerKey);
+    if (!rec || rec.ids.get(id) !== manager) return;
+    rec.ids.delete(id);
+    for (const [h, v] of rec.scoped) {
+      if (v === id) rec.scoped.delete(h);
+    }
+    this.retiredCount += 1;
+    this._pruneOwner(ownerKey, rec);
+  }
+
   _destroyUnderlying(rec, id) {
     const manager = rec.ids.get(id);
     if (manager) {
       try { manager.destroyParticleEmitter(id); } catch (_) {}
       rec.ids.delete(id);
+      this._byMgr.get(manager)?.delete(id);
       this.destroyCount += 1;
     }
     // Drop any scoped alias pointing at this id.
@@ -427,6 +509,7 @@ export class ParticleOwnerRegistry {
     let n = 0;
     for (const [id, manager] of rec.ids) {
       try { manager.destroyParticleEmitter(id); } catch (_) {}
+      this._byMgr.get(manager)?.delete(id);
       this.destroyCount += 1;
       n += 1;
     }
@@ -454,8 +537,11 @@ export class ParticleOwnerRegistry {
   _resetForTests() {
     this._owners.clear();
     this._epochs.clear();
+    // Installed callbacks stay on their managers and read the fresh map.
+    this._byMgr = new WeakMap();
     this.addCount = 0;
     this.destroyCount = 0;
+    this.retiredCount = 0;
   }
 }
 

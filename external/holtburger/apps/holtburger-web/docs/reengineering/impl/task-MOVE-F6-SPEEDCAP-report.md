@@ -204,6 +204,17 @@ committed for this. Other fan-out worktrees will hit the same wall.
 
 ### Handoff 1 (the live gap this investigation actually found) — `manual_intent_velocity` launches uncapped
 
+> **LANDED 2026-10-08 (R1 motioninterp-1)** — wider than scoped here: BOTH
+> release arms of `MovementSystem::execute_jump_release` (the charged arm AND
+> the common non-charged arm, which launched with the realized integrator
+> velocity) now launch with `motion_interp::leave_ground_velocity_for_state`
+> (integrator fallback zero — a jump's `vz` disables retail's fallback,
+> acclient.c:343826) whenever the active drive is manual. Gate:
+> `USE_JUMP_LAUNCH_CAP` / `?jumpLaunchCap=off`. `manual_intent_velocity` itself
+> is unchanged (it still feeds the legacy `?jumpParity=off` arm via
+> `handle.rs` `charged_jump_launch_velocity`, kept byte-identical). Pins:
+> `system/tests.rs` `execute_jump_release_launch_*`.
+
 `MovementSystem::manual_intent_velocity` (`system.rs:7638-7650`) is the launch
 velocity for a **charged standing-long-jump release** (`system.rs:3192`, and the
 wasm Jump arm via `handle.rs:75`). Its own doc comment already says what it is

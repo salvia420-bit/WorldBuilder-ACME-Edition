@@ -3568,8 +3568,9 @@ mod remote_pose_driver {
 
     /// Full cycle, the F3-4 case (mob glued to the LOCAL player):
     /// install via the wire arm's API, per-slice step converges to the
-    /// retail standoff (cyl-dist − 0.3, radii 0.0 → 0.3 m) at the 15 m/s
-    /// floor with the heading facing the target, every sticky-stepped
+    /// retail standoff (cyl-dist − 0.3, radii 0.0 → 0.3 m) at the retail
+    /// `get_max_speed() × 5` pull (20 m/s at run rate 1.0, R3 moveto-6)
+    /// with the heading facing the target, every sticky-stepped
     /// frame lands in BOTH ledgers (pose rows + sticky flags), and the
     /// 1.0 s retail timeout clears it (acclient.c:388519-388720).
     #[test]
@@ -3593,10 +3594,11 @@ mod remote_pose_driver {
         scene.stick_remote_entity_to(GUID, player_guid, 0.0, 0.0);
         assert_eq!(scene.remote_sticky_target(GUID), Some(player_guid));
 
-        // Gap 10 m, speed floor 15 m/s (no Rust-side per-entity motion
-        // speed → max_speed 0.0, acclient.c:388569-388579) → 0.24 m per
-        // 16 ms slice → ~41 slices to the 0.3 m standoff; the 1.0 s
-        // timeout (62.5 slices) must NOT fire first.
+        // Gap 10 m, pull = retail get_max_speed() × 5 = my_run_rate 1.0 ×
+        // 4 × 5 = 20 m/s (acclient.c:343486, :388569-388579; R3 moveto-6 —
+        // was the 15 m/s no-minterp floor) → 0.32 m per 16 ms slice → ~31
+        // slices to the 0.3 m standoff; the 1.0 s timeout (62.5 slices)
+        // must NOT fire first.
         let mut converged_at = None;
         let mut sticky_rows = 0;
         for i in 0..55 {
@@ -3746,6 +3748,31 @@ mod remote_pose_driver {
         // Despawn cleanup: the holder's index entry is dropped.
         scene.remove_entity(GUID, lb);
         assert_eq!(scene.remote_sticky_target(GUID), None);
+    }
+
+    /// R3 moveto-6 (2026-10-08): retail `StickyManager::adjust_offset`
+    /// pulls at `CMotionInterp::get_max_speed() × 5` (acclient.c:388519),
+    /// and a remote's `get_max_speed` is `my_run_rate × 4` (:343486 — its
+    /// weenie has no InqRunRate); the 15 m/s floor is only for a missing
+    /// minterp. Radii 0/0, target 10 m away, one 0.05 s slice: run rate
+    /// 2.0 → 2 × 4 × 5 × 0.05 = 2.0 m (the floor gave 0.75 m); 1.0 → 1.0 m.
+    #[test]
+    fn remote_sticky_pull_uses_run_rate_max_speed() {
+        for (run_rate, expected) in [(2.0f32, 2.0f32), (1.0, 1.0)] {
+            let start = outdoor_pose(50.0, 50.0);
+            let (mut scene, body_id) = scene_with_remote_body(start);
+            scene.set_remote_sticky_enabled(true);
+            let target_guid = Guid(0x8000_0001);
+            scene.update_entity(target_guid, Guid(0x0102_0000), outdoor_pose(60.0, 50.0));
+            scene.body_mut(body_id).unwrap().my_run_rate = run_rate;
+            scene.stick_remote_entity_to(GUID, target_guid, 0.0, 0.0);
+            scene.step_remote_position_managers(0.05);
+            let moved = scene.body(body_id).unwrap().pose.coords.x - start.coords.x;
+            assert!(
+                (moved - expected).abs() < 1e-3,
+                "run rate {run_rate}: pulled {moved} m in one 0.05 s slice, expected {expected}"
+            );
+        }
     }
 
     // === OpenAC comparison 2026-10-04, remote motion D7 (wave-1 critic
@@ -4180,31 +4207,62 @@ mod remote_pose_driver {
 
     // === OpenAC comparison 2026-10-04, remote motion D5: remote MoveTo. ===
 
-    /// The scene realizes a remote MoveTo steer: the body runs along the
-    /// steer heading (run 4.0 × run rate, the RunForward the MoveToManager
-    /// `_DoMotion`s), turns toward it at the capped rate, and the slice is
-    /// exported as a heading-owned row (JS applies its quaternion).
+    /// A D5 steer for the tests: `forward` Some(run) = walk node, None =
+    /// turn node; `turn` the signed turn motion (R3 moveto-2/3); `speed`
+    /// the MovementParameters.speed (R3 moveto-5).
+    fn moveto_drive(
+        heading_rad: f32,
+        forward: Option<bool>,
+        turn: Option<f32>,
+        speed: f32,
+    ) -> crate::spatial::RemoteMoveToDrive {
+        crate::spatial::RemoteMoveToDrive {
+            heading_rad,
+            forward,
+            backwards: false,
+            turn,
+            speed,
+        }
+    }
+
+    /// Signed heading change `to − from` folded to (−π, π].
+    fn heading_delta(from: f32, to: f32) -> f32 {
+        let mut d = (to - from) % std::f32::consts::TAU;
+        if d > std::f32::consts::PI {
+            d -= std::f32::consts::TAU;
+        } else if d <= -std::f32::consts::PI {
+            d += std::f32::consts::TAU;
+        }
+        d
+    }
+
+    /// Flat-terrain scene with the remote body standing at (50, 50) facing
+    /// `heading` (AC heading radians).
+    fn facing_scene(heading: f32) -> (SpatialScene, SpatialBodyId, WorldPosition) {
+        let start = WorldPosition {
+            rotation: Quaternion::from_heading(heading),
+            ..arc_pose(50.0, 50.0, ARC_TERRAIN)
+        };
+        let (scene, body_id) = arc_scene(start);
+        (scene, body_id, start)
+    }
+
+    /// The scene realizes a remote MoveTo steer: the body runs (4.0 × run
+    /// rate, the RunForward the MoveToManager `_DoMotion`s) along its own
+    /// facing, does not turn while the steer holds no aux turn (R3 moveto-3),
+    /// and the slice is exported as a heading-owned row (JS applies its
+    /// quaternion — the drive owns the heading even when it does not turn).
     #[test]
     fn remote_moveto_drive_runs_toward_its_heading() {
-        let start = arc_pose(50.0, 50.0, ARC_TERRAIN);
-        let (mut scene, body_id) = arc_scene(start);
         let east = std::f32::consts::PI; // AC heading 180° = east
-        scene.set_remote_moveto(
-            GUID,
-            true,
-            Some(crate::spatial::RemoteMoveToDrive {
-                heading_rad: east,
-                forward: Some(true),
-            }),
-            None,
-        );
+        let (mut scene, body_id, start) = facing_scene(east);
+        scene.set_remote_moveto(GUID, true, Some(moveto_drive(east, Some(true), None, 1.0)), None);
         let _ = scene.take_remote_sticky_stepped();
         scene.step_remote_position_managers(0.1);
         let body = scene.body(body_id).unwrap();
         let moved = body.pose.global_coords() - start.global_coords();
         assert!((moved.x - 0.4).abs() < 1e-3 && moved.y.abs() < 1e-3, "ran 0.4 m east: {moved:?}");
-        let turned = (body.pose.rotation.to_heading() - start.rotation.to_heading()).abs();
-        assert!(turned > 0.0 && turned <= std::f32::consts::FRAC_PI_2 * 1.5 * 0.1 + 1e-3, "capped turn {turned}");
+        assert_eq!(body.pose.rotation, start.rotation, "aligned, no aux turn: heading unchanged");
         assert!(scene.take_remote_sticky_stepped().contains(&GUID), "heading-owned row");
         assert!(scene.take_remote_stepped_poses().iter().any(|(g, _)| *g == GUID));
 
@@ -4212,6 +4270,222 @@ mod remote_pose_driver {
         let before = scene.body(body_id).unwrap().pose;
         scene.step_remote_position_managers(0.1);
         assert_eq!(scene.body(body_id).unwrap().pose, before, "?remoteMoveTo=off: no steer");
+    }
+
+    /// R3 moveto-3 (2026-10-08): retail moves a MoveTo walker by its
+    /// RunForward/WalkForward motion in its OWN frame and tolerates up to 20°
+    /// of bearing error (HandleMoveToPosition acclient.c:345577-345651; ACE
+    /// MoveToManager.cs `diff > 20 && diff < 340`), so a steer whose bearing
+    /// is 15° off the facing advances ALONG THE FACING and does not turn. The
+    /// legacy bearing steer (`set_remote_moveto_facing_enabled(false)`) slid
+    /// along the bearing and turned toward it. WalkBackwards backs away
+    /// along the facing at WalkForward × −0.65 (adjust_motion :343746).
+    #[test]
+    fn remote_moveto_walk_advances_along_facing() {
+        let east = std::f32::consts::PI;
+        let bearing = east + 15f32.to_radians(); // 15° toward south
+        let (mut scene, body_id, start) = facing_scene(east);
+        scene.set_remote_moveto(GUID, true, Some(moveto_drive(bearing, Some(true), None, 1.0)), None);
+        scene.step_remote_position_managers(0.1);
+        let body = scene.body(body_id).unwrap();
+        let moved = body.pose.global_coords() - start.global_coords();
+        assert!((moved.x - 0.4).abs() < 1e-3 && moved.y.abs() < 1e-3, "along the facing (east): {moved:?}");
+        assert_eq!(body.pose.rotation, start.rotation, "inside the deadband: no turn");
+
+        // Legacy bearing steer: slides along the bearing and turns toward it.
+        let (mut legacy, legacy_id, start) = facing_scene(east);
+        legacy.set_remote_moveto_facing_enabled(false);
+        legacy.set_remote_moveto(GUID, true, Some(moveto_drive(bearing, Some(true), None, 1.0)), None);
+        legacy.step_remote_position_managers(0.1);
+        let body = legacy.body(legacy_id).unwrap();
+        let moved = body.pose.global_coords() - start.global_coords();
+        assert!(moved.y < -0.09, "legacy walks the bearing (south of east): {moved:?}");
+        let turned = heading_delta(east, body.pose.rotation.to_heading());
+        assert!(turned > 0.2, "legacy turns toward the bearing: {turned}");
+
+        // WalkBackwards (walk gait, rate 1): −0.65 × 3.12 m/s, backing WEST
+        // while facing east.
+        let (mut back, back_id, start) = facing_scene(east);
+        let mut drive = moveto_drive(east, Some(false), None, 1.0);
+        drive.backwards = true;
+        back.set_remote_moveto(GUID, true, Some(drive), None);
+        back.step_remote_position_managers(0.1);
+        let body = back.body(back_id).unwrap();
+        let moved = body.pose.global_coords() - start.global_coords();
+        assert!(
+            (moved.x + 0.65 * 3.12 * 0.1).abs() < 1e-3 && moved.y.abs() < 1e-3,
+            "backs away along the facing: {moved:?}"
+        );
+        assert_eq!(body.pose.rotation, start.rotation, "facing kept");
+    }
+
+    /// R3 moveto-3: the walker turns only by the aux turn the MoveToManager
+    /// holds (`turn`), at the run turn rate (base 1.5 × apply_run_to_command
+    /// 1.5, acclient.c:343469) in the commanded direction; None = straight.
+    #[test]
+    fn remote_moveto_aux_turn_only_when_commanded() {
+        let east = std::f32::consts::PI;
+        let quantum = 0.1;
+        let expected = 1.5 * 1.5 * quantum;
+        for sign in [1.0f32, -1.0] {
+            let (mut scene, body_id, _start) = facing_scene(east);
+            // The bearing is irrelevant to the facing steer — it turns by
+            // the aux command, not toward the bearing.
+            scene.set_remote_moveto(GUID, true, Some(moveto_drive(east, Some(true), Some(sign), 1.0)), None);
+            scene.step_remote_position_managers(quantum);
+            let after = scene.body(body_id).unwrap().pose.rotation.to_heading();
+            let turned = heading_delta(east, after);
+            assert!(
+                (turned - sign * expected).abs() < 1e-3,
+                "aux {sign}: turned {turned}, expected {}",
+                sign * expected
+            );
+        }
+    }
+
+    /// R3 moveto-3/2 gates: an active interpolation node on contact REPLACES
+    /// the offset frame, rotation included (InterpolationManager::adjust_offset
+    /// keep_heading, acclient.c:389178), so the D5 turn idles — the row stays
+    /// heading-owned (the drive owns the heading). A body the pump cannot step
+    /// (wire contact false: `remote_moveto_view`) never turns either.
+    #[test]
+    fn remote_moveto_turn_idles_while_interp_owns() {
+        let start = north_pose_on_terrain(0.0);
+        let north = start.rotation.to_heading();
+        let turn_node = moveto_drive(north + 1.0, None, Some(1.0), 1.0);
+
+        let (mut scene, body_id) = scene_with_remote_body(start);
+        scene.set_remote_moveto(GUID, true, Some(turn_node), None);
+        let target = WorldPosition {
+            coords: Vector3::new(52.0, 50.0, 0.0),
+            ..start
+        };
+        reconcile(&mut scene, body_id, target, AuthoritativeBodySync::Snapshot, ctx(Some(true), Some(start)));
+        assert!(scene.body(body_id).unwrap().position_manager.queue_active());
+        let _ = scene.take_remote_sticky_stepped();
+        scene.step_remote_position_managers(0.02);
+        let body = scene.body(body_id).unwrap();
+        assert!(
+            heading_delta(north, body.pose.rotation.to_heading()).abs() < 1e-4,
+            "no D5 turn while the node owns the offset"
+        );
+        assert!(body.pose.coords.x > start.coords.x, "the node itself advanced the body");
+        assert!(scene.take_remote_sticky_stepped().contains(&GUID), "drive-owned heading row");
+
+        // Legacy steer: no interp gate (the pre-R3 behaviour).
+        let (mut legacy, legacy_id) = scene_with_remote_body(start);
+        legacy.set_remote_moveto_facing_enabled(false);
+        legacy.set_remote_moveto(GUID, true, Some(turn_node), None);
+        reconcile(&mut legacy, legacy_id, target, AuthoritativeBodySync::Snapshot, ctx(Some(true), Some(start)));
+        legacy.step_remote_position_managers(0.02);
+        let turned = heading_delta(north, legacy.body(legacy_id).unwrap().pose.rotation.to_heading());
+        assert!(turned > 1e-3, "legacy turns under the node: {turned}");
+
+        // Wire contact false: the pump does not step the body → no turn.
+        let (mut airborne, air_id) = scene_with_remote_body(start);
+        airborne.body_mut(air_id).unwrap().last_wire_contact = Some(false);
+        airborne.set_remote_moveto(GUID, true, Some(turn_node), None);
+        airborne.step_remote_position_managers(0.1);
+        assert_eq!(
+            airborne.body(air_id).unwrap().pose.rotation,
+            start.rotation,
+            "no turn on a body the pump cannot step"
+        );
+    }
+
+    /// R3 moveto-2 (2026-10-08): retail completes a TurnToHeading node on
+    /// OVERSHOOT (`HandleTurnToHeading` → strict `heading_greater`,
+    /// acclient.c:345712/:344715) of a turn motion that does not stop at
+    /// the node. The old clamp landed exactly on the node, the f32 round
+    /// trip fell on either side, and a miss stalled the node forever. Both
+    /// directions: one slice carries the body just past the node (by the
+    /// overshoot), further slices hold — never an unbounded spin.
+    #[test]
+    fn remote_moveto_turn_overshoots_then_holds() {
+        let overshoot = crate::spatial::scene::REMOTE_MOVETO_TURN_OVERSHOOT_RAD;
+        for sign in [1.0f32, -1.0] {
+            let start = north_pose_on_terrain(0.0);
+            let north = start.rotation.to_heading();
+            let node = north + sign * 2f32.to_radians();
+            let (mut scene, body_id) = scene_with_remote_body(start);
+            scene.set_remote_moveto(GUID, true, Some(moveto_drive(node, None, Some(sign), 1.0)), None);
+            scene.step_remote_position_managers(1.0 / 30.0);
+            let after = scene.body(body_id).unwrap().pose.rotation;
+            let past = heading_delta(node, after.to_heading()) * sign;
+            assert!(
+                past > 0.5 * overshoot && past <= overshoot + 1e-5,
+                "sign {sign}: strictly past the node by the overshoot, past = {past}"
+            );
+            for _ in 0..10 {
+                scene.step_remote_position_managers(1.0 / 30.0);
+            }
+            assert_eq!(
+                scene.body(body_id).unwrap().pose.rotation,
+                after,
+                "sign {sign}: holds past the node until the pump snaps"
+            );
+        }
+    }
+
+    /// R3 moveto-2 edges of the pure turn step: a TurnRight node exactly
+    /// 180° ahead (BeginTurnToHeading's `diff <= 180` edge) turns forward,
+    /// TurnLeft turns negative, a node already passed holds; walks turn only
+    /// by their aux sign under the facing steer, legacy clamps to the bearing.
+    #[test]
+    fn remote_moveto_turn_delta_edges() {
+        use crate::spatial::scene::remote_moveto_turn_delta as delta;
+        let pi = std::f32::consts::PI;
+        let max = 0.05;
+        // TurnRight, node exactly π ahead → full step forward.
+        let d = delta(&moveto_drive(pi, None, Some(1.0), 1.0), 0.0, max, true);
+        assert!((d - max).abs() < 1e-6, "{d}");
+        // TurnLeft, node 0.5 rad behind (lower heading) → full step negative.
+        let d = delta(&moveto_drive(1.0, None, Some(-1.0), 1.0), 1.5, max, true);
+        assert!((d + max).abs() < 1e-6, "{d}");
+        // TurnRight already 0.01 rad past the node → hold.
+        assert_eq!(delta(&moveto_drive(1.0, None, Some(1.0), 1.0), 1.01, max, true), 0.0);
+        // TurnRight 0.0001 rad short → finishes past by the overshoot.
+        let d = delta(&moveto_drive(1.0, None, Some(1.0), 1.0), 0.9999, max, true);
+        assert!((d - (0.0001 + crate::spatial::scene::REMOTE_MOVETO_TURN_OVERSHOOT_RAD)).abs() < 1e-5, "{d}");
+        // Turn node without a command → legacy shortest-arc clamp.
+        let d = delta(&moveto_drive(1.0, None, None, 1.0), 0.99, max, true);
+        assert!((d - 0.01).abs() < 1e-5, "{d}");
+        // Walk, facing steer: aux sign × full step; no aux → straight.
+        assert!((delta(&moveto_drive(2.0, Some(true), Some(-1.0), 1.0), 1.0, max, true) + max).abs() < 1e-6);
+        assert_eq!(delta(&moveto_drive(2.0, Some(true), None, 1.0), 1.0, max, true), 0.0);
+        // Walk, legacy steer: clamp toward the bearing, aux ignored.
+        assert!((delta(&moveto_drive(2.0, Some(true), Some(-1.0), 1.0), 1.0, max, false) - max).abs() < 1e-6);
+    }
+
+    /// R3 moveto-5 (2026-10-08): `MovementParameters.speed` scales the
+    /// motion (`_DoMotion` → `adjust_motion`, acclient.c:344753/:343746;
+    /// ACE's charge sends 1.5, Player_Move.cs): run rate 1.0 × speed 1.5 →
+    /// 6.0 m/s along the facing (was a flat 4.0), and the aux turn rate
+    /// scales with it.
+    #[test]
+    fn remote_moveto_drive_speed_scales_with_params_speed() {
+        let east = std::f32::consts::PI;
+        let quantum = 0.1;
+        for (speed, expected) in [(1.5f32, 6.0f32), (1.0, 4.0)] {
+            let (mut scene, body_id, start) = facing_scene(east);
+            scene.set_remote_moveto(GUID, true, Some(moveto_drive(east, Some(true), None, speed)), None);
+            scene.step_remote_position_managers(quantum);
+            let moved = scene.body(body_id).unwrap().pose.global_coords() - start.global_coords();
+            let v = moved.x / quantum;
+            assert!((v - expected).abs() < expected * 0.01, "speed {speed}: {v} m/s, expected {expected}");
+        }
+        // Aux turn at speed 1.5: base 1.5 × 1.5 (speed) × 1.5 (run) rad/s.
+        let (mut scene, body_id, _) = facing_scene(east);
+        scene.set_remote_moveto(GUID, true, Some(moveto_drive(east, Some(true), Some(1.0), 1.5)), None);
+        scene.step_remote_position_managers(quantum);
+        let turned = heading_delta(east, scene.body(body_id).unwrap().pose.rotation.to_heading());
+        assert!((turned - 1.5 * 1.5 * 1.5 * quantum).abs() < 1e-3, "turned {turned}");
+        // A degenerate wire speed falls back to 1.0 (no frozen / reversed run).
+        let (mut scene, body_id, start) = facing_scene(east);
+        scene.set_remote_moveto(GUID, true, Some(moveto_drive(east, Some(true), None, 0.0)), None);
+        scene.step_remote_position_managers(quantum);
+        let moved = scene.body(body_id).unwrap().pose.global_coords() - start.global_coords();
+        assert!((moved.x - 0.4).abs() < 1e-3, "speed 0 → 1.0: {moved:?}");
     }
 
     /// `InterpolateTo(p, IsMovingTo())` (MoveOrTeleport acclient.c:323492):
@@ -4402,15 +4676,9 @@ mod remote_pose_driver {
             scene.set_remote_turn_enabled(enabled);
             scene.set_remote_turn_omega(body_id, omega);
             let current = start.rotation.to_heading();
-            scene.set_remote_moveto(
-                GUID,
-                true,
-                Some(crate::spatial::RemoteMoveToDrive {
-                    heading_rad: current + 1.0,
-                    forward: None,
-                }),
-                None,
-            );
+            // A TurnRight node 1 rad ahead (the pump's R3 steer): one slice
+            // turns the full rate × quantum.
+            scene.set_remote_moveto(GUID, true, Some(moveto_drive(current + 1.0, None, Some(1.0), 1.0)), None);
             scene.step_remote_position_managers(0.1);
             let after = scene.body(body_id).unwrap().pose.rotation.to_heading();
             let mut turned = (after - current).abs();
@@ -4456,10 +4724,7 @@ mod remote_pose_driver {
         steer.set_remote_moveto(
             GUID,
             true,
-            Some(crate::spatial::RemoteMoveToDrive {
-                heading_rad: start.rotation.to_heading(),
-                forward: None,
-            }),
+            Some(moveto_drive(start.rotation.to_heading(), None, None, 1.0)),
             None,
         );
         steer.step_remote_position_managers(0.1);

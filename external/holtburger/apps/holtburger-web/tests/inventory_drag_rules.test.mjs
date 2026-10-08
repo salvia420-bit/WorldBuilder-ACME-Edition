@@ -24,6 +24,7 @@ const {
   decideItemDrop, retailPlacement, mergeAmount, createPackOrder,
   createPendingLedger, pendingExpect, packCapacity, formatBurdenText,
   burdenMeterFraction, pickWieldSlotMask, copyInventoryRow,
+  planPlaceInBackpack, findAutoMergeTarget, containerOrder,
 } = H;
 
 let passed = 0;
@@ -323,6 +324,85 @@ check("copyInventoryRow is plain data with optional placement", () => {
   assert.ok(!("free" in r));
   assert.equal("maxStackSize" in r, false);
 });
+
+console.log("\n[9] planPlaceInBackpack — CPlayerSystem::PlaceInBackpack (takes / pickups)");
+{
+  const PACK_1 = 0x70000011;
+  const PACK_2 = 0x70000012;
+  // Owned rows as copyInventoryRow builds them (main pack = containerId 0).
+  const row = (guid, extra) => ({ guid, wcid: 0, name: "", stackSize: 1, equipMask: 0, containerId: 0, itemType: 0x80, ...extra });
+  const packRow = (guid, cap) => row(guid, { name: "Pack", itemType: 0x200, requiresBackpackSlot: true, itemsCapacity: cap });
+  const fill = (n, containerId, base) => Array.from({ length: n }, (_, i) => row(base + i, { containerId }));
+  const ownPyreals = row(0x60000100, { wcid: 273, name: "Pyreal", stackSize: 100, maxStackSize: 25000, containerId: PACK_1 });
+  const corpsePyreals = { guid: 0x90000001, wcid: 273, name: "Pyreal", stackSize: 50, itemType: 0x40 }; // no maxStackSize
+  const opts = { playerGuid: ME, mainCap: 4, packsCap: 7, playerName: "Tester" };
+
+  check("(a) corpse pyreals (no max) merge into an owned stack that has room — target's limit counts", () => {
+    const rows = [packRow(PACK_1, 24), ownPyreals, row(0x60000101)];
+    const a = planPlaceInBackpack(rows, corpsePyreals, opts);
+    assert.deepEqual(a, { op: "merge", guid: corpsePyreals.guid, target: ownPyreals.guid, amount: 50, targetStack: 100 });
+  });
+  check("(b) target without room for the WHOLE amount → no merge, a move", () => {
+    const nearlyFull = { ...ownPyreals, stackSize: 24990 };
+    const a = planPlaceInBackpack([packRow(PACK_1, 24), nearlyFull], corpsePyreals, opts);
+    assert.equal(a.op, "move");
+    assert.equal(a.container, ME);
+  });
+  check("(b2) no known stack limit on either side → never auto-merges", () => {
+    const noMax = { ...ownPyreals, maxStackSize: undefined };
+    assert.equal(planPlaceInBackpack([packRow(PACK_1, 24), noMax], corpsePyreals, opts).op, "move");
+    assert.equal(findAutoMergeTarget(corpsePyreals, 50, [noMax]), null);
+  });
+  check("(c) main pack full, pack 1 full, pack 2 has room → move into pack 2", () => {
+    const rows = [packRow(PACK_1, 2), packRow(PACK_2, 24), ...fill(4, 0, 0x61000000), ...fill(2, PACK_1, 0x62000000)];
+    const a = planPlaceInBackpack(rows, { guid: 0x90000002, name: "Gem", itemType: 0x800, stackSize: 1 }, opts);
+    assert.deepEqual(a, { op: "move", guid: 0x90000002, container: PACK_2, placement: 0, listKey: PACK_2, index: 0, amount: 1 });
+  });
+  check("(d) everything full → the retail refusal, nothing sent", () => {
+    const rows = [packRow(PACK_1, 2), ...fill(4, 0, 0x61000000), ...fill(2, PACK_1, 0x62000000)];
+    const a = planPlaceInBackpack(rows, { guid: 0x90000002, name: "Gem", itemType: 0x800 }, opts);
+    assert.deepEqual(a, { op: "reject", message: "Tester is completely full!" });
+  });
+  check("(e) the side pack open in the inventory wins over a main pack with room", () => {
+    const rows = [packRow(PACK_1, 24), packRow(PACK_2, 24), row(0x60000101)];
+    const a = planPlaceInBackpack(rows, { guid: 0x90000002, name: "Gem", itemType: 0x800 }, { ...opts, preferredPack: PACK_2 });
+    assert.equal(a.container, PACK_2);
+    const main = planPlaceInBackpack(rows, { guid: 0x90000002, name: "Gem", itemType: 0x800 }, { ...opts, preferredPack: 0 });
+    assert.equal(main.container, ME, "main pack open (0) → the main pack");
+    const full = [packRow(PACK_1, 24), packRow(PACK_2, 1), row(0x60000101, { containerId: PACK_2 })];
+    assert.equal(planPlaceInBackpack(full, { guid: 0x90000002, itemType: 0x800 }, { ...opts, preferredPack: PACK_2 }).container, ME,
+      "a full preferred pack falls through to the main pack");
+  });
+  check("(f) a container never merges and goes to the container list (or 'can carry no more containers!')", () => {
+    const bag = { guid: 0x90000003, wcid: 136, name: "Sack", itemType: 0x200, stackSize: 1 };
+    const a = planPlaceInBackpack([packRow(PACK_1, 24)], bag, opts);
+    assert.deepEqual(a, { op: "move", guid: bag.guid, container: ME, placement: 0, listKey: PACKS, index: 0, amount: 1 });
+    const r = planPlaceInBackpack([packRow(PACK_1, 24)], bag, { ...opts, packsCap: 1 });
+    assert.deepEqual(r, { op: "reject", message: "Tester can carry no more containers!" });
+  });
+  check("exhaustive order: main pack before side packs; server placement wins", () => {
+    const inMain = row(0x60000200, { wcid: 273, stackSize: 10, maxStackSize: 25000 });
+    const a = planPlaceInBackpack([packRow(PACK_1, 24), ownPyreals, inMain], corpsePyreals, opts);
+    assert.equal(a.target, inMain.guid);
+    const placed = [row(1, { placement: 1 }), row(2, { placement: 0 })];
+    assert.deepEqual(containerOrder(placed, MAIN), [2, 1]);
+  });
+  check("pending ledger: a merge from a source we never owned resolves on the TARGET growing", () => {
+    let t = 0;
+    const L = createPendingLedger({ now: () => t });
+    L.add(corpsePyreals.guid, { op: "merge", expect: pendingExpect.grew(ownPyreals.guid, 150) });
+    L.bump();
+    L.sweep(new Map([[ownPyreals.guid, { ...ownPyreals, stackSize: 100 }]]));
+    assert.equal(L.has(corpsePyreals.guid), true, "absent source row is NOT a resolve");
+    L.sweep(new Map([[ownPyreals.guid, { ...ownPyreals, stackSize: 150 }]]));
+    assert.equal(L.has(corpsePyreals.guid), false);
+  });
+  check("decideItemDrop MAIN_PACK still merges via ctx.autoMergeTarget (drag shares the rule)", () => {
+    const drag = { guid: corpsePyreals.guid, item: corpsePyreals, owned: false, sourceList: { key: CHEST, kind: "ext" }, sourceIndex: 0, split: 0 };
+    const ctx = { ...baseCtx, autoMergeTarget: (item, amount) => (findAutoMergeTarget(item, amount, [ownPyreals])?.guid >>> 0) || 0 };
+    assert.deepEqual(decideItemDrop(drag, { kind: T.MAIN_PACK }, ctx), { op: "merge", guid: corpsePyreals.guid, target: ownPyreals.guid, amount: 50 });
+  });
+}
 
 console.log(`\nSummary: ${passed} passed, ${failed} failed.`);
 process.exit(failed === 0 ? 0 : 1);

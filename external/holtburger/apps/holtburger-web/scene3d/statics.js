@@ -104,7 +104,7 @@ import { CULL_DIST_SQ } from "./culling.js";
 // ParticleManager is ticked from the main loop (loop.js manager phase) and
 // the private rAF below never arms. time_rng.js is dependency-free, so this
 // second specifier into the sibling particles/ package is cycle-safe.
-import { particleClockMode, rng } from "./particles/time_rng.js";
+import { currentTime, particleClockMode, rng } from "./particles/time_rng.js";
 // Task #7 — true mesh-animated scenery (flags/foliage). Static import is
 // cycle-safe: animated_scenery.js imports statics.js only via a deferred
 // dynamic import() inside a function, never at module load.
@@ -4270,6 +4270,30 @@ const STATIC_CALL_PES_ON = (() => {
   return true;
 })();
 
+// PLIFECYCLE-5 (2026-10-08) — `?staticScriptHookTime` (DEFAULT ON;
+// `=off`/`0`/`false` restores fire-everything-at-once), the statics twin of
+// the entity-side `?scriptHookTime`. Retail plays a static's Setup
+// default_script through the SAME ScriptManager as any object
+// (CPhysicsObj::InitDefaults → play_script_internal, acclient.c:320867-320868),
+// which fires each hook only once `Timer::cur_time >= script start +
+// entry.start_time` (ScriptManager::AddScriptInternal / NextHook /
+// UpdateScripts, :329069-329246; OpenAC routes statics through the same
+// PhysicsScriptRunner). This walker created every CreateParticle at once, at
+// landblock bake and on each CallPES loop pass — 427 of 4,248 PhysicsScripts
+// (10.1%) carry a start_time > 0 hook. Now a create with start_time > 0 is
+// deferred to `chainT0 + start_time` (chainT0 = when the chain began), and the
+// CallPES delay is measured from chainT0 too instead of from whenever the
+// walker reached the entry after awaiting earlier hooks' fetches.
+const STATIC_SCRIPT_HOOK_TIME_ON = (() => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = (new URLSearchParams(globalThis.location.search || "").get("staticScriptHookTime") || "").toLowerCase();
+      return !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) {}
+  return true;
+})();
+
 // Perf (2026-07-08) — time-slice the default_script ambient-emitter attach.
 // A dense town has hundreds of scripted statics per landblock (torches /
 // braziers / fountains); building their emitter chains ran as ONE macrotask
@@ -4563,8 +4587,10 @@ const _staticOffsetQuat = new THREE.Quaternion();
  * STATIC_MAX_CALL_PES_DEPTH to stop a cyclic script graph from spawn-storming.
  * The timer is tracked in `_staticCallPesTimeouts` so disposeStaticParticles
  * can cancel a still-pending loop. No-op in non-browser contexts (tests).
+ * PLIFECYCLE-5: `chainT0` (the chain's start, `currentTime()` seconds) anchors
+ * the start_time offset when `?staticScriptHookTime` is on.
  */
-function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, ownerKey, depth, chain = null) {
+function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, ownerKey, depth, chain = null, chainT0 = null) {
   if (!STATIC_CALL_PES_ON) return; // `?staticCallPes=off` — base emitters only.
   if (typeof setTimeout !== "function") return; // headless tests — no loop.
   const bytes = entry.hookData;
@@ -4596,7 +4622,12 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
   // own start_time offset within the script. rng() = Math.random by default.
   const pauseW = +callPesPause || 0;
   const randPause = pauseW < 0.0002 ? 0 : rng() * pauseW;
-  const delayMs = Math.max(0, ((+entry.startTime || 0) + randPause) * 1000);
+  let delayMs = Math.max(0, ((+entry.startTime || 0) + randPause) * 1000);
+  if (STATIC_SCRIPT_HOOK_TIME_ON && Number.isFinite(chainT0)) {
+    // PLIFECYCLE-5: due at chain start + start_time (+ the jitter), however
+    // long the walker spent awaiting earlier hooks' emitter fetches.
+    delayMs = Math.max(0, (chainT0 + (+entry.startTime || 0) + randPause - currentTime()) * 1000);
+  }
   const nextDepth = isLoop ? depth : depth + 1; // loops never cap.
   // A loop re-enters at the repeated script, so the chain is trimmed back to
   // its ancestors (bounded); fan-out extends it.
@@ -4627,6 +4658,85 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
 }
 
 /**
+ * Build ONE CreateParticle(13) / CreateBlockingParticle(26) emitter for the
+ * static walker from an already-decoded hook (`{ emitterId, partIndex,
+ * blocking, offset }`) — shared by the immediate path and the PLIFECYCLE-5
+ * deferred path. Returns 1 when an emitter was attached, else 0. Fail-soft.
+ */
+async function _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, ownerKey) {
+  try {
+    const req = {
+      emitterInfo,
+      parent: anchor, // THREE.Group at the static's world transform.
+      partIndex: hook.partIndex,
+      parentOffset: hook.offset,
+      // Interior particle layering (2026-08-04) — DERIVED FROM THE ANCHOR,
+      // deliberately NOT threaded as a `_runStaticParticleChain` parameter.
+      // The anchor already IS the interior/outdoor discriminator
+      // (`attachStaticDefaultScriptsWorld` stamps `isCellStaticScriptAnchor`
+      // at :4451, the outdoor twin at :4318 does not), and every one of the
+      // five call sites passes the anchor through unchanged — including the
+      // CallPES self-loop at :4078, which re-runs the chain on a timer and
+      // is how a looping emitter (e.g. the town-portal swirl, 2.7 s period)
+      // gets rebuilt over and over. A parameter would have to be plumbed
+      // correctly through all five, and the loop site is exactly the one a
+      // future edit would forget; reading the anchor cannot drift.
+      renderLayer:
+        (_indoorParticleLayerEnabled() && anchor?.userData?.isCellStaticScriptAnchor)
+          ? _RENDER_LAYER_INDOOR
+          : 0,
+      blocking: hook.blocking,
+      // 2026-10-07 `?skyGlow` — DERIVED FROM THE ANCHOR for the same reason
+      // as renderLayer above (the CallPES loop re-runs this with the anchor,
+      // never with extra params). Only sky_dome.js's sky-chain anchor carries
+      // the tag; the manager then makes these sky glows (sky_glow.js).
+      skyGlow: anchor?.userData?.isSkyGlowAnchor === true,
+    };
+    // A11-S2: per-anchor owner scoping when `?particleOwner=on`. The
+    // statics walker auto-assigns ids (no explicit handle), so the
+    // facade's win here is the scoped teardown (`destroyAllForOwner`
+    // per anchor) replacing the whole-table nuke.
+    // Leak fix (2026-07-07): ALWAYS route a keyed emitter through
+    // ownerRegistry (independent of `particleOwnerOn()`, which until
+    // 2026-10-07 read OFF on a bare URL), so owner-scoped teardown works
+    // with `?particleOwner=off` too — otherwise the `static:<lbKey>` key
+    // would be inert and the billboards would leak.
+    const id =
+      ownerKey !== null
+        ? await ownerRegistry.addEmitter(ownerKey, manager, req)
+        : await manager.addEmitter(req);
+    return id !== 0 ? 1 : 0;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[scene3d.statics/V1] addEmitter(0x${hook.emitterId.toString(16)}) failed:`,
+      err
+    );
+    return 0;
+  }
+}
+
+/**
+ * PLIFECYCLE-5 (`?staticScriptHookTime`) — fire a decoded create at `fireAt`
+ * (`currentTime()` seconds). Tracked in `_staticCallPesTimeouts` so
+ * disposeStaticParticles cancels it, and guarded exactly like the CallPES
+ * re-run (`_spDisposed`, a detached anchor) plus the owner epoch: an LB
+ * evict/park runs `destroyAllForOwner` on the anchor's key, and a hook armed
+ * before that must not rebuild an emitter on the torn-down owner.
+ */
+function _scheduleStaticCreate(manager, anchor, hook, emitterInfo, ownerKey, fireAt) {
+  const epoch = ownerKey !== null ? ownerRegistry._epoch(ownerKey) : 0;
+  const tid = setTimeout(() => {
+    _staticCallPesTimeouts.delete(tid);
+    if (_spDisposed) return; // scene torn down.
+    if (!anchor || !anchor.parent) return; // LB evicted — anchor detached.
+    if (ownerKey !== null && ownerRegistry._epoch(ownerKey) !== epoch) return;
+    _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, ownerKey).catch(() => {});
+  }, Math.max(0, (fireAt - currentTime()) * 1000));
+  _staticCallPesTimeouts.add(tid);
+}
+
+/**
  * Run ONE static placement's `default_script` PhysicsScript chain,
  * anchored to `anchor` (a THREE.Group at the static's world transform).
  * Mirrors the CreateParticle arm of entities.js
@@ -4640,6 +4750,9 @@ function _scheduleStaticCallPes(manager, anchor, scriptId, entry, wasmExports, o
  */
 async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, ownerKey = null, depth = 0, chain = null) {
   const chainHere = (Array.isArray(chain) ? chain : []).concat(pesId >>> 0);
+  // PLIFECYCLE-5: the script's start — retail arms every hook at script start
+  // + entry.start_time (ScriptManager::AddScriptInternal / NextHook).
+  const chainT0 = currentTime();
   let ps;
   try {
     ps = await wasmExports.fetchPhysicsScript(pesId);
@@ -4659,7 +4772,7 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
     // swarms. Schedule the sub-script re-run (self = perpetual loop) and move
     // on. Fire-and-forget; never blocks the create-particle hooks below.
     if ((e.hookType | 0) === STATIC_HOOK_CALL_PES) {
-      _scheduleStaticCallPes(manager, anchor, pesId, e, wasmExports, ownerKey, depth, chainHere);
+      _scheduleStaticCallPes(manager, anchor, pesId, e, wasmExports, ownerKey, depth, chainHere, chainT0);
       continue;
     }
     if (
@@ -4681,6 +4794,36 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
       );
       continue;
     }
+    const hook = {
+      emitterId,
+      partIndex:
+        e.createParticlePartIndex === 0xffffffff ? -1 : e.createParticlePartIndex | 0,
+      blocking:
+        ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
+        _blockingParticleParityOn(),
+      offset: null,
+    };
+    // PLIFECYCLE-5: a create authored after t=0 fires at chainT0 + start_time,
+    // like any ScriptManager hook. Decode its offset NOW (the wasm entry may
+    // be reclaimed) into vectors it owns — never the shared scratch below.
+    const hookAt = STATIC_SCRIPT_HOOK_TIME_ON ? (+e.startTime || 0) : 0;
+    if (hookAt > 0 && typeof setTimeout === "function") {
+      hook.offset = {
+        position: new THREE.Vector3(
+          e.createParticleOffsetX,
+          e.createParticleOffsetY,
+          e.createParticleOffsetZ
+        ),
+        quaternion: new THREE.Quaternion(
+          e.createParticleOffsetQX,
+          e.createParticleOffsetQY,
+          e.createParticleOffsetQZ,
+          e.createParticleOffsetQW
+        ),
+      };
+      _scheduleStaticCreate(manager, anchor, hook, emitterInfo, ownerKey, chainT0 + hookAt);
+      continue;
+    }
     _staticOffsetVec3.set(
       e.createParticleOffsetX,
       e.createParticleOffsetY,
@@ -4692,62 +4835,8 @@ async function _runStaticParticleChain(manager, anchor, pesId, wasmExports, owne
       e.createParticleOffsetQZ,
       e.createParticleOffsetQW
     );
-    const partIndex =
-      e.createParticlePartIndex === 0xffffffff ? -1 : e.createParticlePartIndex | 0;
-    try {
-      const req = {
-        emitterInfo,
-        parent: anchor, // THREE.Group at the static's world transform.
-        partIndex,
-        parentOffset: {
-          position: _staticOffsetVec3,
-          quaternion: _staticOffsetQuat,
-        },
-        // Interior particle layering (2026-08-04) — DERIVED FROM THE ANCHOR,
-        // deliberately NOT threaded as a `_runStaticParticleChain` parameter.
-        // The anchor already IS the interior/outdoor discriminator
-        // (`attachStaticDefaultScriptsWorld` stamps `isCellStaticScriptAnchor`
-        // at :4451, the outdoor twin at :4318 does not), and every one of the
-        // five call sites passes the anchor through unchanged — including the
-        // CallPES self-loop at :4078, which re-runs the chain on a timer and
-        // is how a looping emitter (e.g. the town-portal swirl, 2.7 s period)
-        // gets rebuilt over and over. A parameter would have to be plumbed
-        // correctly through all five, and the loop site is exactly the one a
-        // future edit would forget; reading the anchor cannot drift.
-        renderLayer:
-          (_indoorParticleLayerEnabled() && anchor?.userData?.isCellStaticScriptAnchor)
-            ? _RENDER_LAYER_INDOOR
-            : 0,
-        blocking:
-          ((e.hookType | 0) === STATIC_HOOK_CREATE_BLOCKING_PARTICLE) &&
-          _blockingParticleParityOn(),
-        // 2026-10-07 `?skyGlow` — DERIVED FROM THE ANCHOR for the same reason
-        // as renderLayer above (the CallPES loop re-runs this with the anchor,
-        // never with extra params). Only sky_dome.js's sky-chain anchor carries
-        // the tag; the manager then makes these sky glows (sky_glow.js).
-        skyGlow: anchor?.userData?.isSkyGlowAnchor === true,
-      };
-      // A11-S2: per-anchor owner scoping when `?particleOwner=on`. The
-      // statics walker auto-assigns ids (no explicit handle), so the
-      // facade's win here is the scoped teardown (`destroyAllForOwner`
-      // per anchor) replacing the whole-table nuke.
-      // Leak fix (2026-07-07): ALWAYS route a keyed emitter through
-      // ownerRegistry (independent of `particleOwnerOn()`, which until
-      // 2026-10-07 read OFF on a bare URL), so owner-scoped teardown works
-      // with `?particleOwner=off` too — otherwise the `static:<lbKey>` key
-      // would be inert and the billboards would leak.
-      const id =
-        ownerKey !== null
-          ? await ownerRegistry.addEmitter(ownerKey, manager, req)
-          : await manager.addEmitter(req);
-      if (id !== 0) attached += 1;
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[scene3d.statics/V1] addEmitter(0x${emitterId.toString(16)}) failed:`,
-        err
-      );
-    }
+    hook.offset = { position: _staticOffsetVec3, quaternion: _staticOffsetQuat };
+    attached += await _staticCreateFromDecoded(manager, anchor, hook, emitterInfo, ownerKey);
   }
   return attached;
 }

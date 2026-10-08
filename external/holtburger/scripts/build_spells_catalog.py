@@ -4,6 +4,8 @@ catalog format.
 
 Input:  ../LSD-Partial-2025-02-23_16-15/spells.json
         (5.2 MB; 6266 entries under table.spellBaseHash)
+        apps/holtburger-web/data/spell-table-attrs.json
+        (DAT-decrypted formula + bitfield; drives `untargeted`)
 Output: apps/holtburger-web/data/spells-catalog.json
         (one entry per learnable spell, ~1.3 MB)
 
@@ -12,7 +14,15 @@ Per-spell fields the spellbook plugin reads
   name        — display string
   school      — 1=War 2=Life 3=Item 4=Creature 5=Void
   level       — 1-8, parsed from the trailing roman numeral
-  untargeted  — bool, derived from SpellFlags.SelfTargeted (0x8)
+  untargeted  — bool: the cast needs no selection. Retail
+                ClientMagicSystem::CastSpell (acclient.c:404671) casts a
+                SelfTargeted (0x8) spell at the player and a spell whose
+                CSpellBase::InqTargetType (:449055) is 0 untargeted, so this
+                is SelfTargeted OR formula target type 0 (rings, walls,
+                sprays). Both come from the DAT-decrypted formula + bitfield
+                in data/spell-table-attrs.json (LSD's formula is garbage for
+                4024/4904); LSD is the fallback for ids missing there.
+                JS twin: ui/ac_spell_target_type.js.
   mana        — base_mana
   icon        — surface DID (0x06xxxxxx); rendered when DAT-surface
                 fetching is wired
@@ -46,6 +56,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LSD = ROOT / ".." / "LSD-Partial-2025-02-23_16-15" / "spells.json"
 OUT = ROOT / "apps" / "holtburger-web" / "data" / "spells-catalog.json"
+# DAT-authoritative formula (decrypted) + bitfield, from
+# apps/holtburger-web/scripts/build-spell-table-attrs.cjs.
+ATTRS = ROOT / "apps" / "holtburger-web" / "data" / "spell-table-attrs.json"
 
 ROMAN_TO_LEVEL = {
     "I": 1, "II": 2, "III": 3, "IV": 4,
@@ -86,6 +99,35 @@ def duration_from_meta_spell(meta_spell) -> float:
         return 0.0
     return float(d)
 
+def target_type_from_component_id(scid: int) -> int:
+    """SpellComponentTable::GetTargetTypeFromComponentID (acclient.c:487059)."""
+    if 0x31 <= scid <= 0x38 or 0x3C <= scid <= 0x3E or scid == 0xBE:
+        return 0x10
+    if scid == 0x39:
+        return 0x88B8F
+    if scid == 0x3B:
+        return 0x10010000
+    return 0
+
+
+def inq_target_type(formula) -> int:
+    """CSpellBase::InqTargetType (acclient.c:449055): SpellFormula::Complete
+    (first 5 components non-zero, :487706), then GetTargetingType (:487766) —
+    the last component of the non-zero run that starts at slot 4."""
+    comps = [n if isinstance(n, int) else 0 for n in (formula or [])][:8]
+    comps += [0] * (8 - len(comps))
+    if not all(comps[:5]):
+        return 0
+    v = 5
+    while v < 8 and comps[v] != 0:
+        v += 1
+    return target_type_from_component_id(comps[v - 1])
+
+
+def needs_no_selection(bitfield: int, formula) -> bool:
+    return bool(bitfield & SELF_TARGETED) or inq_target_type(formula) == 0
+
+
 def level_from_name(name: str) -> int:
     m = ROMAN_RE.search(name)
     if not m:
@@ -107,6 +149,12 @@ def main():
         print("LSD spellBaseHash not a list", file=sys.stderr)
         return 1
 
+    attrs = {}
+    if ATTRS.exists():
+        attrs = json.loads(ATTRS.read_text()).get("attrs", {})
+    else:
+        print(f"warning: missing {ATTRS}; untargeted falls back to LSD", file=sys.stderr)
+
     spells = {}
     for ent in sbh:
         sid = ent.get("key")
@@ -115,11 +163,16 @@ def main():
             continue
         name = v.get("name") or f"Spell #{sid}"
         bitfield = v.get("bitfield") or 0
+        formula = v.get("formula")
+        dat = attrs.get(str(sid))
+        if isinstance(dat, dict) and isinstance(dat.get("formula"), list):
+            bitfield = dat.get("bitfield") or 0
+            formula = dat["formula"]
         spells[str(sid)] = {
             "name": name,
             "school": v.get("school", 0),
             "level": level_from_name(name),
-            "untargeted": bool(bitfield & SELF_TARGETED),
+            "untargeted": needs_no_selection(bitfield, formula),
             "mana": v.get("base_mana", 0),
             "icon": v.get("iconID", 0),
             "desc": v.get("desc", ""),
@@ -132,8 +185,11 @@ def main():
             "Generated from external/LSD-Partial-2025-02-23_16-15/spells.json "
             "by scripts/build_spells_catalog.py. School: 1=War 2=Life 3=Item "
             "4=Creature 5=Void. level is the spell tier (1-8 = I-VIII) parsed "
-            "from the trailing roman numeral. untargeted is derived from "
-            "SpellFlags.SelfTargeted (0x8). duration is the enchantment "
+            "from the trailing roman numeral. untargeted = the cast needs no "
+            "selection: SpellFlags.SelfTargeted (0x8) OR formula target type "
+            "0 (CSpellBase::InqTargetType, acclient.c:449055 — rings, walls, "
+            "sprays), from the DAT-decrypted formula + bitfield in "
+            "data/spell-table-attrs.json. duration is the enchantment "
             "duration in SECONDS from meta_spell.spell.duration, emitted only "
             "for MetaSpellType Enchantment(1) / FellowEnchantment(12) — the "
             "two types whose DAT record carries one (ACE SpellBase.cs:78-84); "

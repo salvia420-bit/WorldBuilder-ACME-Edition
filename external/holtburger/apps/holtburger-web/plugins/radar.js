@@ -61,6 +61,18 @@ import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { getHudScale, hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
 import { readLocalPlayerPose } from "../scene3d/frame_pose.js";
 import { blipColorForEntity, readFellowshipRoster } from "../scene3d/selection_brackets.js";
+// The radar range / radar-visibility rules are shared with the selection
+// cycle (CPlayerSystem::SelectNext) and live in scene3d/target_cycle.js;
+// re-exported here for test_radar_projection.mjs and existing importers.
+import {
+  RADAR_RANGE_OUTDOOR,
+  RADAR_RANGE_INDOOR,
+  isOutdoorCell,
+  radarRangeForCell,
+  isShowableOnRadar,
+  fallbackRadarShowable,
+} from "../scene3d/target_cycle.js";
+export { RADAR_RANGE_OUTDOOR, RADAR_RANGE_INDOOR, isOutdoorCell, radarRangeForCell, isShowableOnRadar };
 
 const OVERLAY_ID = "hb-radar";
 const TOOLTIP_ID = "hb-radar-tooltip";
@@ -86,10 +98,6 @@ export const RADAR_TOKEN_RECTS = Object.freeze({
 // UpdateCompassTokens angle offsets added to the heading (radians).
 const TOKEN_ANGLE = Object.freeze({ n: Math.PI, e: Math.PI / 2, s: 0, w: 1.5 * Math.PI });
 
-/** CPlayerSystem::GetRadarRadius. */
-export const RADAR_RANGE_OUTDOOR = 75;
-export const RADAR_RANGE_INDOOR = 25;
-
 // Retail repaints the radar from gmRadarUI::UseTime every 0.025 s.
 const UPDATE_INTERVAL_MS = 25;
 const MAX_BLIPS = 200;
@@ -111,12 +119,7 @@ const ODF_PLAYER = 0x00000008;
 const ODF_ATTACKABLE = 0x00000010;
 const ODF_PLAYER_KILLER = 0x00000020;
 const ODF_UI_HIDDEN = 0x00000080;
-const ODF_VENDOR = 0x00000200;
-const ODF_CORPSE = 0x00002000;
-const ODF_LIFESTONE = 0x00004000;
-const ODF_PORTAL = 0x00040000;
 const ODF_PKLITE = 0x02000000;
-const ITEM_TYPE_CREATURE = 0x00000010;
 
 const BRIGHT_GREEN = "#00ff00"; // RGBAColor_RadarBrightGreen (player marker)
 
@@ -192,17 +195,6 @@ export function compassTokenPosition(dir, heading, geom = RADAR_GEOMETRY) {
   return { left: trunc0(cx - r.w * 0.5), top: trunc0(cy - r.h * 0.5) };
 }
 
-/** An outdoor LandCell (cell index 1..0x40 — SmartBox::is_player_outside). */
-export function isOutdoorCell(cellId) {
-  const c = (cellId >>> 0) & 0xffff;
-  return c >= 1 && c <= 0x40;
-}
-
-/** CPlayerSystem::GetRadarRadius. */
-export function radarRangeForCell(cellId) {
-  return isOutdoorCell(cellId) ? RADAR_RANGE_OUTDOOR : RADAR_RANGE_INDOOR;
-}
-
 /**
  * Outdoor cell id for a landblock-local position (cell = cx·8 + cy + 1, 24 m
  * cells). Keeps the landblock bytes of `landblockId`.
@@ -239,12 +231,6 @@ export function formatRadarCoords(ew, ns) {
 export function radarCoordsText(cellId) {
   const c = mapCoordsForCell(cellId);
   return c ? formatRadarCoords(c.ew, c.ns) : "";
-}
-
-/** ACCWeenieObject::InqShowableOnRadar (RadarBehavior 2/3/4). */
-export function isShowableOnRadar(radarBehavior) {
-  const b = Number(radarBehavior);
-  return b === 2 || b === 3 || b === 4;
 }
 
 /** Retail RadarBlipShape values (DrawBlip switch). */
@@ -355,14 +341,10 @@ function callNum(sh, fn, ...args) {
   } catch (_) { return undefined; }
 }
 
-// Heuristic used only when the wasm bundle can't tell us the RadarBehavior
-// (stale pkg/, or the property was never hydrated): living things, vendors,
-// portals and lifestones — the classes ACE stamps ShowableOnRadar on.
-function fallbackShowable(odf, itemType) {
-  if (odf & (ODF_UI_HIDDEN | ODF_CORPSE)) return false;
-  if (odf & (ODF_PLAYER | ODF_VENDOR | ODF_PORTAL | ODF_LIFESTONE)) return true;
-  return (itemType & ITEM_TYPE_CREATURE) !== 0;
-}
+// When the wasm bundle can't tell us the RadarBehavior (stale pkg/, or the
+// property was never hydrated) the radar falls back to
+// target_cycle.js `fallbackRadarShowable` (living things, vendors, portals,
+// lifestones — the classes ACE stamps ShowableOnRadar on).
 
 const _info = new Map(); // guid → cached radar properties
 let _infoPruneAt = 0;
@@ -375,7 +357,7 @@ function radarInfoFor(guid, meta, sh, now) {
   const behavior = callNum(sh, "objectIntProperty", guid, PROP_INT_SHOWABLE_ON_RADAR);
   const showable = behavior !== undefined
     ? isShowableOnRadar(behavior) && !(odf & ODF_UI_HIDDEN)
-    : fallbackShowable(odf, itemType);
+    : fallbackRadarShowable(odf, itemType);
   // Same lazy stash as entities.js setSelectedTarget so the target brackets
   // and the radar read one `meta.radarBlipColor`.
   let blipColor = meta?.radarBlipColor;

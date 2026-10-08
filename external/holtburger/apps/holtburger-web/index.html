@@ -1166,6 +1166,7 @@
     <link rel="modulepreload" href="./scene3d/gfx_relief.js">
     <link rel="modulepreload" href="./scene3d/grass_interior_mask.js">
     <link rel="modulepreload" href="./scene3d/ground_fog.js">
+    <link rel="modulepreload" href="./scene3d/hook_windows.js">
     <link rel="modulepreload" href="./scene3d/hud.js">
     <link rel="modulepreload" href="./scene3d/ibl_environment.js">
     <link rel="modulepreload" href="./scene3d/index.js?v=diag-followons-2026-05-23">
@@ -1182,6 +1183,7 @@
     <link rel="modulepreload" href="./scene3d/luminous_night.js">
     <link rel="modulepreload" href="./scene3d/materials.js">
     <link rel="modulepreload" href="./scene3d/mem_census.js">
+    <link rel="modulepreload" href="./scene3d/motion/handback.js">
     <link rel="modulepreload" href="./scene3d/motion/motion_command_full.js">
     <link rel="modulepreload" href="./scene3d/motion/motion_sequence.js">
     <link rel="modulepreload" href="./scene3d/motion_link_diag.js">
@@ -1196,6 +1198,7 @@
     <link rel="modulepreload" href="./scene3d/particles/owner_registry.js">
     <link rel="modulepreload" href="./scene3d/particles/time_rng.js">
     <link rel="modulepreload" href="./scene3d/particles_over_clouds.js">
+    <link rel="modulepreload" href="./scene3d/pick_math.js">
     <link rel="modulepreload" href="./scene3d/picking.js">
     <link rel="modulepreload" href="./scene3d/play_effect_vfx.js">
     <link rel="modulepreload" href="./scene3d/pool_class_key.js">
@@ -1211,6 +1214,7 @@
     <link rel="modulepreload" href="./scene3d/portal_space.js">
     <link rel="modulepreload" href="./scene3d/portal_stencil.js">
     <link rel="modulepreload" href="./scene3d/pre_create_buffer.js">
+    <link rel="modulepreload" href="./scene3d/projectile_sweep.js">
     <link rel="modulepreload" href="./scene3d/quality.js">
     <link rel="modulepreload" href="./scene3d/ragdoll.js">
     <link rel="modulepreload" href="./scene3d/recolor_flag.js">
@@ -1323,6 +1327,7 @@
     <link rel="modulepreload" href="./ui/ac_aim_level_for_velocity.js">
     <link rel="modulepreload" href="./ui/ac_attack_type_for_weapon.js">
     <link rel="modulepreload" href="./ui/ac_cast_precheck.js">
+    <link rel="modulepreload" href="./ui/ac_cast_predict.js">
     <link rel="modulepreload" href="./ui/ac_cast_spell.js">
     <link rel="modulepreload" href="./ui/ac_clothing.js">
     <link rel="modulepreload" href="./ui/ac_combat_maneuver.js">
@@ -1343,6 +1348,8 @@
     <link rel="modulepreload" href="./ui/ac_sneak_attack_predict.js">
     <link rel="modulepreload" href="./ui/ac_spell_cast_sequence.js">
     <link rel="modulepreload" href="./ui/ac_spell_shape.js">
+    <link rel="modulepreload" href="./ui/ac_spell_target_compat.js">
+    <link rel="modulepreload" href="./ui/ac_spell_target_type.js">
     <link rel="modulepreload" href="./ui/ac_strings.js">
     <link rel="modulepreload" href="./ui/ac_window_position.js">
     <link rel="modulepreload" href="./ui/bar.js">
@@ -3363,11 +3370,11 @@
           // ClosestMonster path — mode "closest" = the absolute nearest live
           // target, IGNORING the current selection — WITHOUT a keydown. Bare
           // `__selectNextTarget()` stays NextMonster for keybind parity. This
-          // matters because NextMonster cycles by weighted distance FROM the
-          // current selection and WRAPS TO THE FARTHEST once the nearest is
-          // already held (acclient.c:399717 / target_cycle.js). A driver that
-          // wants to "lock the nearest mob" must therefore ask for "closest",
-          // not "next" — "next" from the near drudge jumps to the far stray.
+          // matters because retail NextMonster (acclient.c:399739-399746)
+          // steps one mob OUTWARD from the selected (or previously selected)
+          // object, wraps to the nearest, and with nothing to anchor on picks
+          // the FARTHEST mob in radar range (target_cycle.js). A driver that
+          // wants to "lock the nearest mob" must therefore ask for "closest".
           em.cycleTarget(mode || "next", type || "monster");
           return em.selectedTargetInfo?.() ?? { guid: 0, name: null, dist: -1 };
         } catch (_) { return { guid: 0, name: null, dist: -1 }; }
@@ -3795,6 +3802,11 @@
             // trap). NAMESPACE access so a stale pkg/ degrades to "no limb
             // hierarchy" instead of a module-link error.
             fetchSetupParentIndex: __hbWasmNs.fetchSetupParentIndex,
+            // cmotiontable-3 (2026-10-08) — geometry-free MotionTable link
+            // bake read by entities.js `_fetchLinkEntry` (`?linkOnlyBake`).
+            // NAMESPACE access so a stale pkg/ yields undefined and the link
+            // path falls back to fetchEntityAnimationKeyframes.
+            fetchMotionLinkKeyframes: __hbWasmNs.fetchMotionLinkKeyframes,
             // ST7 `?slotGrid` (T20, 2026-08-09) — PackStore residency policy
             // surface (pins, budget enforcement, ladder budget/floor levers,
             // stats for `__diag.residency().packSource`) + the tile-keyed
@@ -4389,6 +4401,18 @@
               try { stanceTogglePlugin.mount({ client: pluginClient }); }
               catch (e) { console.warn("[stance-toggle] bar mount", e); }
             }
+            // A3-selection (2026-10-08, `?autoTarget=off`): retail's defender
+            // notifications stamp lastAttackedTime and, in melee/missile mode
+            // with nothing selected, auto-target the attacker or the closest
+            // hostile (ClientCombatSystem, acclient.c:409335-409345 /
+            // :409956-409964). EntityManager.noteAttacked owns the rule.
+            try {
+              const __onAttacked = () => {
+                try { window.liveScene3d?.entityManager?.noteAttacked?.(); } catch (_) {}
+              };
+              pluginClient.events.on("damageTaken", __onAttacked);
+              pluginClient.events.on("evadedAttacker", __onAttacked);
+            } catch (e) { console.warn("[autoTarget] attacked subscription", e); }
           }
 
           // Chorizite WorldObject typed-class hierarchy. Idempotent across

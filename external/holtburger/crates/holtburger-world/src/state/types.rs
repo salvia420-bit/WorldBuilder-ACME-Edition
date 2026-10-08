@@ -406,10 +406,26 @@ impl WorldState {
         }
     }
 
+    /// enchstats-2/3 (2026-10-08): pull the `InqSkill` / `InqAttribute2nd`
+    /// PropertyInt inputs (augmentations, GearMaxHealth) off the live player
+    /// bag into [`crate::player::types::StatAugInputs`] — but only the ones
+    /// the bag actually holds. An ABSENT live value keeps the cached one,
+    /// which was seeded from the login `PlayerDescription` dump (ORACLE open
+    /// defect #1: the live bag has been measured losing
+    /// `AugmentationJackOfAllTrades` after login). A `PrivateUpdatePropertyInt`
+    /// (e.g. ACE `HandleMaxHealthUpdate` sending GearMaxHealth, 0 on unequip)
+    /// lands in the bag first and is picked up here.
+    pub(crate) fn refresh_player_stat_aug_inputs(&mut self) {
+        let mut aug = self.player.stat_aug;
+        aug.refresh_present(|prop| self.player_int_property(prop));
+        self.player.stat_aug = aug;
+    }
+
     /// Phase 4 step 3.7 — exposed `pub` so the wasm recv loop can call
     /// it after hydrating the player from PlayerDescription. Body is
     /// unchanged from the original `pub(crate)` version.
     pub fn emit_player_derived_stats(&mut self, events: &mut Vec<WorldEvent>) {
+        self.refresh_player_stat_aug_inputs();
         self.player.refresh_cached_derived_stat_inputs();
 
         let current = crate::player::types::LastSentStats {

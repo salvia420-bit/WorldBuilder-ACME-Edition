@@ -404,6 +404,30 @@ check("deselect → 'No selection', meter hidden", () => {
   eq(field.querySelector(".htb-target-name").textContent, "No selection");
   ok(field.querySelector(".htb-target-health").hidden, "hidden");
 });
+check("items-3 follow-up: the toolbar Use button sends an OWNED item through activateItem; a world object keeps the bare Use", () => {
+  // Retail gmToolbarUI Use → ItemHolder::UseObject(selected): the same route
+  // as a shortcut key. activateItem returns false for a world object (and
+  // under ?hotbarActivate=off), so those keep today's useObject.
+  const OWNED = 0x7000BBBB;
+  const act = [];
+  window.__inventory = { activateItem: (g) => { act.push(g); return g === OWNED; }, setArmedItem() {} };
+  const useBtn = field.querySelector(".htb-use");
+  const uses = () => calls.filter((c) => c[0] === "useObject").length;
+  selected = OWNED;
+  window.__pluginClient.events.emit("selectionChanged", { guid: selected });
+  const n = uses();
+  dispatch(useBtn, "click");
+  eq(act, [OWNED], "activateItem");
+  eq(uses(), n, "no bare Use when activateItem handled it");
+  selected = 0x80000AAA;
+  window.__pluginClient.events.emit("selectionChanged", { guid: selected });
+  dispatch(useBtn, "click");
+  eq(act, [OWNED, 0x80000AAA], "asked first");
+  eq(lastCall("useObject"), ["useObject", 0x80000AAA], "world object → plain Use");
+  selected = 0;
+  window.__pluginClient.events.emit("selectionChanged", { guid: 0 });
+  delete window.__inventory;
+});
 
 console.log("\n[4] Shortcut slots");
 check("dropping a targeted spell binds it (server AddShortcut) and casts on the target", () => {
@@ -420,6 +444,45 @@ check("dropping a targeted spell binds it (server AddShortcut) and casts on the 
   eq(lastCall("castUntargetedSpell"), undefined, "no untargeted cast");
   stanceLow = 0x3D;
   selected = 0;
+});
+const ITEM = 0x7000BBBB;
+check("items-3: an item shortcut fires window.__inventory.activateItem (retail UseObject); unhandled → plain Use", () => {
+  const act = [];
+  window.__inventory = { activateItem: (g) => { act.push(g); return true; }, setArmedItem() {} };
+  window.__hotbar.bindItemToSlot(2, ITEM);
+  const slot = field.querySelectorAll(".hb-hotbar-slot")[2];
+  const uses = () => calls.filter((c) => c[0] === "useObject").length;
+  const n = uses();
+  dispatch(slot, "click");
+  eq(act, [ITEM], "activateItem");
+  eq(uses(), n, "no bare Use when activateItem handled it");
+  window.__inventory.activateItem = () => false;
+  dispatch(slot, "click");
+  eq(lastCall("useObject"), ["useObject", ITEM], "not ours → plain Use");
+  delete window.__inventory;
+});
+check("items-5: a shared cooldown overlays ONLY the item slot that shares it, for its real length", () => {
+  const h = window.__sessionHandle;
+  const prevInv = h.playerInventory;
+  const slots = field.querySelectorAll(".hb-hotbar-slot");
+  h.playerInventory = () => [{ guid: ITEM, sharedCooldown: 3, cooldownDuration: 30, free() {} }];
+  h.playerEnchantments = () => [{ spellId: 0x8003, layer: 1, startTime: 0, duration: 30, free() {} }];
+  window.__pluginClient.events.emit("sharedCooldownChanged", { activeCount: 1 });
+  ok(slots[2].classList.contains("cooldown-active"), "item slot cooling");
+  ok(!slots[0].classList.contains("cooldown-active"), "spell slot untouched");
+  eq(slots[2].dataset.cdStep, "10", "phase 10 at the start");
+  eq(slots[2].style.getPropertyValue("--hb-cd-dur"), "30s", "the item's own duration");
+  h.playerEnchantments = () => [];
+  window.__pluginClient.events.emit("sharedCooldownChanged", { activeCount: 0 });
+  ok(!slots[2].classList.contains("cooldown-active"), "cleared when the cooldown is gone");
+  // A pkg without the InventoryItem getters keeps HUD rec #84's sweep.
+  h.playerInventory = () => [{ guid: ITEM, free() {} }];
+  window.__pluginClient.events.emit("sharedCooldownChanged", { activeCount: 1 });
+  ok(slots[0].classList.contains("cooldown-active") && slots[2].classList.contains("cooldown-active"), "fallback: every slot");
+  window.__pluginClient.events.emit("sharedCooldownChanged", { activeCount: 0 });
+  h.playerInventory = prevInv;
+  delete h.playerEnchantments;
+  window.__hotbar.removeBinding(2);
 });
 check("ShortcutBar2 opt-in via setRowCount / grip double-click, persisted", () => {
   eq(window.__hotbar.setRowCount(2), 2);

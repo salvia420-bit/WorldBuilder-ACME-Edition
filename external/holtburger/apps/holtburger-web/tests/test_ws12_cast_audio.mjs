@@ -1,10 +1,12 @@
 // test_ws12_cast_audio.mjs — WS12 (cast audio: windup / cast / fizzle / launch / impact).
-//   PART 1 behavioral (7 checks): the windup-hum SoundTweaked hooks drain exactly
-//           once each across a simulated cast overlay at CAST_SPEED=2, using the
-//           REAL pure planner (scene3d/hook_windows.js). No THREE / no wasm / no
-//           browser. Ground truth (DAT raw bytes, anim 0x030005A0 @ 24fps, 60f=2.5s):
-//           SoundTweaked wave 0x0A000390 @ frames 0/15/30/53/57,
-//           [gid, prob=1.0, prio=0.9, vol 0.2..0.6].
+//   PART 1 behavioral: the windup-hum SoundTweaked hooks drain exactly once
+//           each across a simulated cast one-shot at CAST_SPEED=2, through the
+//           SHIPPED playhead hook helpers (scene3d/hook_windows.js: the
+//           frame-exit retime, the drain clock + windows, the direction gate).
+//           No THREE / no wasm / no browser. Ground truth (DAT raw bytes, anim
+//           0x030005A0 @ 24fps, 60f=2.5s): SoundTweaked wave 0x0A000390 @
+//           frames 0/15/30/53/57, [gid, prob=1.0, prio=0.9, vol 0.2..0.6].
+//           None is on the clip's last frame (59), so retail fires all five.
 //   PART 2 static: entities.js + url-flags.md carry the WS12 patch shapes —
 //           P1 (cancelCastSequence frees the playhead one-shot so trailing hum
 //               hooks don't fire post-cancel; the ?castCancelStops mixer gate
@@ -15,61 +17,59 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { planHookWindows } from "../scene3d/hook_windows.js";
+import {
+  retimeHooksToFrameExit, unifiedHookTime, drainHookWindows, hookFiresInDirection,
+} from "../scene3d/hook_windows.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 let failed = 0, passed = 0;
 const check = (n, ok, d) => { console.log(`  [${ok ? "OK" : "FAIL"}] ${n}${d ? " — " + d : ""}`); ok ? passed++ : failed++; };
 
-// ---- PART 1: windup-hum drain against the REAL planner ----
+// ---- PART 1: windup-hum drain through the shipped hook helpers ----
+const FPS = 24;
+const NF = 60;
+const FT = Float32Array.from({ length: NF }, (_, f) => f / FPS); // the bake's frame starts
 const HUM = [
-  { time: 0 / 24,  hookType: 21, direction: 1, soundProbability: 1.0, soundVolume: 0.2, soundWaveId: 0x0a000390 },
-  { time: 15 / 24, hookType: 21, direction: 1, soundProbability: 1.0, soundVolume: 0.3, soundWaveId: 0x0a000390 },
-  { time: 30 / 24, hookType: 21, direction: 1, soundProbability: 1.0, soundVolume: 0.4, soundWaveId: 0x0a000390 },
-  { time: 53 / 24, hookType: 21, direction: 1, soundProbability: 1.0, soundVolume: 0.5, soundWaveId: 0x0a000390 },
-  { time: 57 / 24, hookType: 21, direction: 1, soundProbability: 1.0, soundVolume: 0.6, soundWaveId: 0x0a000390 },
-];
-const CLIP = 60 / 24;
-// Replicates entities.js _fireHooksInRange (t <= lowExclusive) + _fireHook type-21
-// A-DIR/prob gate (probability >= 1.0 short-circuits; direction === -1 dropped).
-function fireRange(tl, low, high, fired, rng) {
-  for (const h of tl) {
-    if (h.time <= low) continue;
-    if (h.time > high) break;
-    if ((h.direction | 0) === -1) continue;               // A-DIR gate
-    if (!(h.soundProbability >= 1.0 || rng() < h.soundProbability)) continue;
-    fired.push(h);
-  }
-}
-// Simulates the LoopOnce overlay drain: advance action.time by dtWall*timeScale
-// each rAF, plan the hook windows with the real planner, fire, seed lastTime.
-function simulateOverlay(timeScale, dtWall, rng = () => 0) {
-  let lastTime = -1, actionTime = 0, running = true; const fired = []; let g = 0;
-  while (g++ < 100000) {
-    actionTime = Math.min(CLIP, actionTime + dtWall * timeScale);
-    running = actionTime < CLIP;
-    const plan = planHookWindows({ lastTime, currentTime: actionTime, clipDuration: CLIP, isRunning: running, isLoopOnce: true });
-    for (const w of plan.windows) fireRange(HUM, w[0], w[1], fired, rng);
-    if (running) lastTime = actionTime; else if (plan.drainedTo !== null) lastTime = plan.drainedTo;
-    if (!running) break;
+  { frame: 0,  soundVolume: 0.2 },
+  { frame: 15, soundVolume: 0.3 },
+  { frame: 30, soundVolume: 0.4 },
+  { frame: 53, soundVolume: 0.5 },
+  { frame: 57, soundVolume: 0.6 },
+].map((h) => ({ ...h, time: FT[h.frame], hookType: 21, direction: 1, soundProbability: 1.0, soundWaveId: 0x0a000390 }));
+const CLIP = NF / FPS;
+// A cast one-shot on the playhead: the clip time advances dtWall * timeScale
+// and clamps on the last frame (motion_sequence.rs one-shot `done`); each tick
+// drains the frame-exit timeline up to the floor frame's start, as
+// entities.js `_drainUnifiedHooks` does. probability 1.0 always passes.
+function simulateCast(timeScale, dtWall) {
+  const { timeline } = retimeHooksToFrameExit(HUM, FT, [0], [NF], NF, FPS);
+  const fired = [];
+  let cursor = -1;
+  let t = 0;
+  for (let g = 0; g < 100000 && t < CLIP; g += 1) {
+    t = Math.min(CLIP, t + dtWall * timeScale);
+    const gf = Math.min(NF - 1, Math.floor(t * FPS + 1e-9));
+    cursor = drainHookWindows(cursor, unifiedHookTime(gf, FT, FPS), CLIP, false, -1, (lo, hi) => {
+      for (const h of timeline) if (h.time > lo && h.time <= hi && hookFiresInDirection(h, 1)) fired.push(h);
+    });
   }
   return fired;
 }
 
-console.log("PART 1: windup-hum drain (real hook_windows.js planner)");
-{ const f = simulateOverlay(2.0, 1 / 60);
+console.log("PART 1: windup-hum drain (shipped hook_windows.js helpers)");
+{ const f = simulateCast(2.0, 1 / 60);
   check("CAST_SPEED=2: all 5 hum hooks fire exactly once", f.length === 5, `fired=${f.length}`);
   check("CAST_SPEED=2: waves are all 0x0A000390", f.every((h) => h.soundWaveId === 0x0a000390));
   check("CAST_SPEED=2: volume ramp preserved 0.2..0.6 in order",
     JSON.stringify(f.map((h) => h.soundVolume)) === JSON.stringify([0.2, 0.3, 0.4, 0.5, 0.6])); }
-{ const f = simulateOverlay(2.0, 1 / 60); check("frame-0 hum fires (lastTime=-1 seed)", f.some((h) => h.time === 0)); }
-{ const f = simulateOverlay(5.0, 1 / 60); check("timeScale=5 (compressed windup): all 5 fire once", f.length === 5, `fired=${f.length}`); }
-{ const f = simulateOverlay(2.0, 1 / 30);
-  check("30fps drain: trailing (2.208s,2.375s) hooks still fire",
-    f.length === 5 && f.some((h) => Math.abs(h.time - 57 / 24) < 1e-6), `fired=${f.length}`); }
-{ const f = simulateOverlay(2.0, 1 / 90); const t = f.map((h) => h.time);
-  check("no double-fire across fine 90fps ticks", new Set(t).size === t.length && t.length === 5, `times=${t.length}`); }
+{ const f = simulateCast(2.0, 1 / 60); check("frame-0 hum fires (as frame 0 is left)", f.some((h) => h.frame === 0)); }
+{ const f = simulateCast(5.0, 1 / 60); check("timeScale=5 (compressed windup): all 5 fire once", f.length === 5, `fired=${f.length}`); }
+{ const f = simulateCast(2.0, 1 / 30);
+  check("30fps drain: the frame-57 hum still fires before the clamp",
+    f.length === 5 && f.some((h) => h.frame === 57), `fired=${f.length}`); }
+{ const f = simulateCast(2.0, 1 / 90); const t = f.map((h) => h.frame);
+  check("no double-fire across fine 90fps ticks", new Set(t).size === t.length && t.length === 5, `frames=${t.length}`); }
 
 // ---- PART 2: static source shape ----
 console.log("PART 2: static source shape");

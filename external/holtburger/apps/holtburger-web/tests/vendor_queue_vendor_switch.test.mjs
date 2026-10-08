@@ -129,6 +129,9 @@ const src = readFileSync(path.join(APP, "plugins", "vendor-ui.js"), "utf8");
 const LOGIC_NAMES = [
   "vendorPurchasePrice", "vendorSaleCredit", "vendorAcceptability", "vendorRejectText",
   "VENDOR_ACCEPT", "countCurrency", "PYREAL_WCID", "fmtNumber", "fmtCompact",
+  "sellStagingPlan",
+  // items-1 step 2 (2026-10-08): split before sell.
+  "planSellSplit", "resolveSellSplits", "SELL_SPLIT_FAILED_TEXT",
 ];
 const body = spliceModule(src, {
   label: "plugins/vendor-ui.js",

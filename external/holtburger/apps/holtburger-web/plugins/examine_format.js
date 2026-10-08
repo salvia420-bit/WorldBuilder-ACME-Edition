@@ -264,6 +264,93 @@ export function healthModel({ cur, max, fraction } = {}) {
   return null;
 }
 
+// ── Creature attribute block (BasicCreatureExamineUI) ─────────────────
+
+/**
+ * CreatureAppraisalProfile highlight bits (acclient.c
+ * CreatureAppraisalProfile::InqAttributeEnchantmentMod :480644 for the six
+ * attributes, InqAttribute2ndEnchantmentMod :480707 for the MAX vitals).
+ * The wire splits the u32 into `buffs.highlights` / `buffs.colors` u16s, so
+ * bit i lines up in both (colour bit 1 = raised / green, 0 = lowered / red).
+ */
+export const CREATURE_ATTRIBUTE_BITS = Object.freeze({
+  Strength: 0x0001, Endurance: 0x0002, Quickness: 0x0004,
+  Coordination: 0x0008, Focus: 0x0010, Self: 0x0020,
+  Health: 0x0040, Stamina: 0x0080, Mana: 0x0100,
+});
+
+/**
+ * Rows of the creature / player assess block — enchstats-4 (2026-10-08).
+ *
+ * Retail AttributeInfoRegion::Update(AppraisalProfile*) (acclient.c:285975)
+ * prints `%d`, or `???` when the value is 0, in font
+ * `success ? (raised ? 1 : 2) : 3` (3 = incomplete). Attribute2ndInfoRegion::
+ * Update(AppraisalProfile*) (:286022) prints `cur/max` on success and only
+ * the MulDiv percentage `N %` on failure. ACE's failed CreatureProfile
+ * carries Health/HealthMax only, so Stamina/Mana read `???` there.
+ *
+ * `cp` is the wire CreatureProfile (`attributes.self_attr` — the Rust field
+ * name; `self_` / `self` / `ints.Self` are tolerated fallbacks). `ints` is the
+ * appraisal's PropertyInt bag, consulted on success only. A success row whose
+ * value is unknown entirely is returned with `value: null` (the panel skips
+ * it, as before).
+ *
+ * @returns {Array<{key: string, kind: "attribute"|"vital", label: string,
+ *   value: (string|null), tone: ("buffed"|"debuffed"|"incomplete"|null)}>}
+ */
+export function creatureAttributeRows(cp, success = true, ints = {}) {
+  const a = cp?.attributes || {};
+  const buffs = cp?.buffs || null;
+  const bag = ints || {};
+  const tone = (bit) => (success ? highlightState(buffs?.highlights, buffs?.colors, bit) : "incomplete");
+  const known = (v) => v != null && v !== "" && Number.isFinite(Number(v));
+  const attrValue = (v) => {
+    if (!success) return "???";
+    if (!known(v)) return null;
+    return Number(v) === 0 ? "???" : String(Number(v));
+  };
+  const rows = [];
+  const attr = (label, v) => rows.push({
+    key: label.toLowerCase(), kind: "attribute", label,
+    value: attrValue(v), tone: tone(CREATURE_ATTRIBUTE_BITS[label]),
+  });
+  // Display order kept from the pre-2026-10-08 panel.
+  attr("Strength", a.strength ?? bag.Strength);
+  attr("Endurance", a.endurance ?? bag.Endurance);
+  attr("Coordination", a.coordination ?? bag.Coordination);
+  attr("Quickness", a.quickness ?? bag.Quickness);
+  attr("Focus", a.focus ?? bag.Focus);
+  attr("Self", a.self_attr ?? a.self_ ?? a.self ?? bag.Self);
+
+  const pair = (cur, max) => {
+    if (known(max)) return `${formatThousands(known(cur) ? cur : 0)} / ${formatThousands(max)}`;
+    return known(cur) ? formatThousands(cur) : null;
+  };
+  const percent = (cur, max) => {
+    const c = Number(cur);
+    const m = Number(max);
+    if (!Number.isFinite(c) || !Number.isFinite(m) || m <= 0) return "???";
+    // Windows MulDiv(cur, 100, max): rounded, 4/7 → 57.
+    return `${Math.round((100 * c) / m)} %`;
+  };
+  const vital = (label, cur, max, intFallback) => {
+    let value;
+    if (success) {
+      value = pair(cur, max) ?? (known(intFallback) ? formatThousands(intFallback) : null);
+    } else {
+      value = label === "Health" ? percent(cur, max) : "???";
+    }
+    rows.push({
+      key: label.toLowerCase(), kind: "vital", label,
+      value, tone: tone(CREATURE_ATTRIBUTE_BITS[label]),
+    });
+  };
+  vital("Health", cp?.health, cp?.health_max, bag.MaxHealth);
+  vital("Stamina", a.stamina, a.stamina_max, bag.MaxStamina);
+  vital("Mana", a.mana, a.mana_max, bag.MaxMana);
+  return rows;
+}
+
 // ── Header model ──────────────────────────────────────────────────────
 
 /**

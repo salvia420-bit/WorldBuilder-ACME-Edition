@@ -105,6 +105,9 @@ export function initHudPanels(D) {
     if (!selectedItemGuid) return;
     const h = window.__sessionHandle;
     try {
+      // Retail ItemHolder::UseObject for an owned item (plugins/inventory.js
+      // activateItem): wield / wear / salvage / target mode before a Use.
+      if (window.__inventory?.activateItem?.(selectedItemGuid) === true) return;
       // Group C: if the item requires a target (Rust classifyUse), enter
       // targeting mode instead of firing a bare Use (0x0036).
       if (h && typeof h.classifyUse === "function") {

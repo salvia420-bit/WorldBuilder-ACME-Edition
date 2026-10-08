@@ -404,7 +404,9 @@ const USE_CLIFF_SLIDE: bool = true;
 /// emit a packet when the pose has meaningfully changed since the last
 /// one we sent — cell changed, origin/heading moved beyond
 /// [`AUTONOMOUS_POSE_EPSILON_M`]/[`AUTONOMOUS_POSE_HEADING_EPSILON_RAD`],
-/// or the contact byte flipped. Mirrors retail
+/// or (in-window) the contact plane changed — the contact-BYTE flip only
+/// under `?apRetailGate=off`, see [`USE_RETAIL_POSITION_EVENT_GATE`].
+/// Mirrors retail
 /// `CommandInterpreter::ShouldSendPositionEvent`
 /// (`acclient.c:718107-718141`): after the interval elapses it sends on
 /// `objcell_id != last || !Frame::is_equal(...)`, and within the
@@ -417,11 +419,59 @@ const USE_AUTONOMOUS_POSITION_CHANGE_GATE: bool = true;
 
 /// Physics deep-dive 2026-06-01 (gap 4) — "meaningfully changed"
 /// thresholds for the heartbeat position-change gate. Retail's
-/// `Frame::is_equal` is a bit-exact compare; we use small epsilons so
-/// integrator round-off (and the per-tick terrain-Z snap) doesn't read
-/// as a change and keep the heartbeat alive on a stationary player.
+/// `Frame::is_equal` (acclient.c:96700) is NOT bit-exact: it compares the
+/// origin per component with `AreEqual` (`|Δ| <= 0.0002`) and each
+/// quaternion component with `|Δ| < 0.0002`. We keep coarser epsilons
+/// because our f32 world-space poses carry ~2-4 mm of integrator round-off
+/// (and the per-tick terrain-Z snap), which at retail's 0.2 mm would read as
+/// a change and keep the heartbeat alive on a stationary player.
 const AUTONOMOUS_POSE_EPSILON_M: f32 = 0.05;
 const AUTONOMOUS_POSE_HEADING_EPSILON_RAD: f32 = 0.0035;
+
+/// R1 outbound-1/2/3 (2026-10-08) — the retail AutonomousPosition CADENCE,
+/// `CommandInterpreter::SendPositionEvent` / `ShouldSendPositionEvent` /
+/// `SendMovementEvent` (acclient.c:718108-718245) and the force-position
+/// acknowledgement in `SmartBox::HandleReceivedPosition` (:145125-145249).
+///
+/// `true` (DEFAULT):
+/// 1. **No airborne APs.** Retail builds the pack only `if (transient_state
+///    & CONTACT) && (transient_state & ON_WALKABLE)` (:718225-718227); off
+///    the ground the call is a no-op that stamps NOTHING, so the first
+///    grounded frame sends. Every AP therefore carries `last_contact = 1`.
+///    ([`MovementSystem::position_event_ready`] — also quiet while an
+///    arrival placement is still pending.)
+/// 2. **First grounded frame sends.** The ctor zeroes
+///    `last_sent_position.objcell_id` (:717760-717778), so the first
+///    eligible `UseTime` differs by cell and sends at once (was: a 1 s
+///    settle window first).
+/// 3. **MoveToState restarts the window.** `SendMovementEvent` stamps
+///    `last_sent_position_time` only (:718190-718191), so for 1 s after any
+///    MoveToState the position event stays in its cell/plane-only branch.
+/// 4. **Force-position ack.** A newer FORCE_POSITION stamp on our own
+///    UpdatePosition blips the player and calls `SendPositionEvent` once
+///    (:145244-145248) — one immediate AP at the snapped pose.
+/// 5. The in-window branch no longer re-sends on a contact-BYTE flip (that
+///    flip only ever meant "just went airborne", which (1) now suppresses);
+///    retail's in-window test is a contact-PLANE change, gated separately by
+///    [`USE_AP_CONTACT_PLANE_RESEND`].
+///
+/// Carrier: `?apRetailGate=off`
+/// ([`MovementSystem::retail_position_event_gate_runtime`]); `false`
+/// restores the pre-2026-10-08 cadence byte-identical.
+const USE_RETAIL_POSITION_EVENT_GATE: bool = true;
+
+/// R1 outbound-1 part 2 (2026-10-08) — retail's IN-window re-send trigger:
+/// `Plane::operator==(&last_sent_contact_plane, &player->contact_plane) == 0`
+/// (acclient.c:718131; `operator==` :717723 is `|ΔN_i| <= 0.0002` and
+/// `|Δd| < 0.0002`). Compares the stored `world.player.last_contact_plane`
+/// (only written under the retail-ground gate) at each poll against the
+/// plane recorded at the last send; both must be known.
+///
+/// DEFAULT OFF until a stationary multi-tick run and a flat-terrain held-run
+/// on real terrain show the per-tick plane is recomputed deterministically
+/// (a plane that jitters tick-to-tick would turn this into an AP per tick).
+/// Unit-tested through [`MovementSystem::ap_contact_plane_resend_runtime`].
+const USE_AP_CONTACT_PLANE_RESEND: bool = false;
 
 /// Track B1 — bounded age after which a server-controlled projection
 /// (installed by a MoveToObject during a cast) is abandoned if the
@@ -1015,6 +1065,39 @@ const USE_AIRBORNE_CHECK_CONTACT: bool = true;
 /// `true` (DEFAULT): steep faces give contact, never ground, and never a jump.
 /// `false`: the pre-2026-07-28 LANDING_Z grounding + bare `!is_airborne` jump gate.
 const USE_WALKABLE_LANDING_GROUND: bool = true;
+
+/// R1 motioninterp-1 (2026-10-08) — the jump LAUNCH planar velocity is
+/// retail's `CMotionInterp::get_leave_ground_velocity`, on BOTH release arms.
+/// `CMotionInterp::jump` → `set_on_walkable(0)` → `MovementManager::
+/// LeaveGround` → `CMotionInterp::LeaveGround` (acclient.c:344457-344489)
+/// runs `get_leave_ground_velocity` + `set_local_velocity` for EVERY jump;
+/// that is `get_state_velocity` (magnitude capped at `4.0 × run_rate`,
+/// :343539-343594) plus `get_jump_v_z`, and its physics-velocity fallback
+/// (:343826) needs `|vz| < 0.0002` too, so a jump never takes it.
+/// `ClientCombatSystem::DoJump` packs the resulting local physics velocity
+/// (:408178-408191), so the JumpPack carries the capped vector as well.
+///
+/// Holtburger launched the charged arm with the UNCAPPED ground form and the
+/// common arm with the realized integrator velocity — a running diagonal jump
+/// 7.3% hot (8.48 vs 7.90 m/s at the rig's rate), a no-key jump during a
+/// residual slide carrying the slide, and a slope/wall jump using the
+/// collision-reduced velocity.
+///
+/// Applies when the active drive is MANUAL (held keys, idle included); an
+/// autonomous MoveTo drive, or missing pose/capabilities, keeps the legacy
+/// arms. Carrier: `?jumpLaunchCap=off`
+/// ([`MovementSystem::jump_launch_cap_runtime`]) restores both legacy arms.
+const USE_JUMP_LAUNCH_CAP: bool = true;
+
+/// R1 motioninterp-2 (2026-10-08) — retail's weenie `CanJump` gate
+/// (`CACQualities::CanJump` = `load < 2.0`, acclient.c:442878-442884) at
+/// BOTH ends of a jump: press (`charge_jump`, :343845-343879, before the
+/// position check — the charge never starts) and release
+/// (`jump_charge_is_allowed`, :343318-343339 → `jump_is_allowed`).
+/// Error 73, scroll text "You are too encumbered to jump!".
+/// Carrier: `?jumpLoadGate=off` ([`MovementSystem::jump_load_gate_runtime`])
+/// restores the permissive `can_jump: true` seam.
+const USE_JUMP_LOAD_GATE: bool = true;
 
 /// (2026-07-02, mechanism replaced 2026-07-03) — retail MOVEMENT-AUTONOMY
 /// arbitration (the cast-movement feel: slidecast / fastcast / "fighting
@@ -1784,7 +1867,19 @@ pub(crate) struct MovementSystem {
     /// position-change gate (retail `last_sent_position` /
     /// `last_sent_contact_plane`). `None` until the first send.
     last_sent_autonomous_pose: Option<holtburger_common::position::WorldPosition>,
+    /// The contact BYTE of the last sent AP — consulted only by the legacy
+    /// (`?apRetailGate=off`) in-window branch.
     last_sent_autonomous_contact: Option<u8>,
+    /// R1 outbound-1 (2026-10-08) — retail `last_sent_contact_plane`
+    /// (acclient.c:718245): the stored contact plane at the last AP send,
+    /// compared by the in-window branch under [`USE_AP_CONTACT_PLANE_RESEND`].
+    last_sent_contact_plane: Option<holtburger_common::Plane>,
+    /// R1 outbound-3 (2026-10-08) — the `world.player.force_position_sequence`
+    /// value seen at the last send-phase check. A NEWER value means the
+    /// server force-positioned us (ACE z-hack / PK snapback) and earns one
+    /// immediate AP (retail `HandleReceivedPosition` → `SendPositionEvent`,
+    /// acclient.c:145244-145248). `None` until the first tick.
+    last_acked_force_position_sequence: Option<u16>,
     /// Phase 4 step 3.6 diagnostic — incremented every time the
     /// autonomous-position heartbeat or arrival sync fires. The wasm
     /// bundle reads this via [`MovementSystemHandle::heartbeats_sent`]
@@ -1889,6 +1984,21 @@ pub(crate) struct MovementSystem {
     /// `None` = the [`USE_WALKABLE_LANDING_GROUND`] const default (ON).
     /// Combined by [`Self::walkable_landing_ground_enabled`].
     walkable_landing_ground_runtime: Option<bool>,
+    /// R1 motioninterp-1 (2026-10-08) — runtime carrier of `?jumpLaunchCap=off`.
+    /// `None` = the [`USE_JUMP_LAUNCH_CAP`] const default (ON). Combined by
+    /// [`Self::jump_launch_cap_enabled`].
+    jump_launch_cap_runtime: Option<bool>,
+    /// R1 motioninterp-2 (2026-10-08) — runtime carrier of `?jumpLoadGate=off`.
+    /// `None` = the [`USE_JUMP_LOAD_GATE`] const default (ON). Combined by
+    /// [`Self::jump_load_gate_enabled`].
+    jump_load_gate_runtime: Option<bool>,
+    /// R1 outbound-1/2/3 (2026-10-08) — runtime carrier of `?apRetailGate=off`.
+    /// `None` = the [`USE_RETAIL_POSITION_EVENT_GATE`] const default (ON).
+    /// Combined by [`Self::retail_position_event_gate_enabled`].
+    retail_position_event_gate_runtime: Option<bool>,
+    /// R1 outbound-1 part 2 — runtime override of
+    /// [`USE_AP_CONTACT_PLANE_RESEND`] (test seam; no URL flag yet).
+    ap_contact_plane_resend_runtime: Option<bool>,
     /// F2 (2026-07-27) — runtime carrier of the `?serverMoveToDriver=off`
     /// URL flag. `None` = the [`USE_SERVER_MOVETO_DRIVER`] const default
     /// (ON); `Some(false)` sends server MoveTo 6/7 back down the
@@ -2391,6 +2501,8 @@ impl MovementSystem {
             next_autonomous_position_heartbeat_at: None,
             last_sent_autonomous_pose: None,
             last_sent_autonomous_contact: None,
+            last_sent_contact_plane: None,
+            last_acked_force_position_sequence: None,
             heartbeats_sent: 0,
             motion_table_manager: MotionTableManager::new(),
             local_motion_interp: MotionInterp::default(),
@@ -2411,6 +2523,10 @@ impl MovementSystem {
             terrain_plane_frame_runtime: None,
             airborne_check_contact_runtime: None,
             walkable_landing_ground_runtime: None,
+            jump_launch_cap_runtime: None,
+            jump_load_gate_runtime: None,
+            retail_position_event_gate_runtime: None,
+            ap_contact_plane_resend_runtime: None,
             server_moveto_driver_runtime: None,
             sticky_idle_step_runtime: None,
             server_moveto_drive: None,
@@ -2534,6 +2650,53 @@ impl MovementSystem {
     /// carrier (see [`USE_WALKABLE_LANDING_GROUND`]).
     pub(crate) fn set_walkable_landing_ground(&mut self, on: bool) {
         self.walkable_landing_ground_runtime = Some(on);
+    }
+
+    /// R1 motioninterp-1 (2026-10-08) — install the `?jumpLaunchCap=off`
+    /// runtime carrier (see [`USE_JUMP_LAUNCH_CAP`]).
+    pub(crate) fn set_jump_launch_cap(&mut self, on: bool) {
+        self.jump_launch_cap_runtime = Some(on);
+    }
+
+    /// [`USE_JUMP_LAUNCH_CAP`] effective predicate.
+    pub(crate) fn jump_launch_cap_enabled(&self) -> bool {
+        self.jump_launch_cap_runtime.unwrap_or(USE_JUMP_LAUNCH_CAP)
+    }
+
+    /// R1 motioninterp-2 (2026-10-08) — install the `?jumpLoadGate=off`
+    /// runtime carrier (see [`USE_JUMP_LOAD_GATE`]).
+    pub(crate) fn set_jump_load_gate(&mut self, on: bool) {
+        self.jump_load_gate_runtime = Some(on);
+    }
+
+    /// [`USE_JUMP_LOAD_GATE`] effective predicate.
+    pub(crate) fn jump_load_gate_enabled(&self) -> bool {
+        self.jump_load_gate_runtime.unwrap_or(USE_JUMP_LOAD_GATE)
+    }
+
+    /// R1 outbound-1/2/3 (2026-10-08) — install the `?apRetailGate=off`
+    /// runtime carrier (see [`USE_RETAIL_POSITION_EVENT_GATE`]).
+    pub(crate) fn set_retail_position_event_gate(&mut self, on: bool) {
+        self.retail_position_event_gate_runtime = Some(on);
+    }
+
+    /// [`USE_RETAIL_POSITION_EVENT_GATE`] effective predicate.
+    pub(crate) fn retail_position_event_gate_enabled(&self) -> bool {
+        self.retail_position_event_gate_runtime
+            .unwrap_or(USE_RETAIL_POSITION_EVENT_GATE)
+    }
+
+    /// Test seam for [`USE_AP_CONTACT_PLANE_RESEND`] (default off).
+    #[cfg(test)]
+    pub(crate) fn set_ap_contact_plane_resend_for_test(&mut self, on: bool) {
+        self.ap_contact_plane_resend_runtime = Some(on);
+    }
+
+    /// [`USE_AP_CONTACT_PLANE_RESEND`] effective predicate. Only meaningful
+    /// under [`Self::retail_position_event_gate_enabled`].
+    fn ap_contact_plane_resend_enabled(&self) -> bool {
+        self.ap_contact_plane_resend_runtime
+            .unwrap_or(USE_AP_CONTACT_PLANE_RESEND)
     }
 
     /// F2 (2026-07-27) — install the `?serverMoveToDriver=off` runtime
@@ -3469,7 +3632,9 @@ impl MovementSystem {
             Some(ActiveDriveIntent::Autonomous(_)) => false,
             None => true,
         };
-        self.jump_charge.commence(now, world, manual_axes_idle)
+        let load_gate = self.jump_load_gate_enabled();
+        self.jump_charge
+            .commence(now, world, manual_axes_idle, load_gate)
     }
 
     /// UI read — retail `GetJumpPowerLevel` (acclient.c:408081-408104):
@@ -3503,7 +3668,6 @@ impl MovementSystem {
         world: &mut WorldState,
         session: &mut dyn ActionSink,
     ) -> Result<JumpOutcome> {
-        use holtburger_common::stats::SkillType;
         use holtburger_world::context::WorldContextExt;
 
         // G-7 / F1-6 — capture the charge root BEFORE release()'s
@@ -3526,11 +3690,14 @@ impl MovementSystem {
         // (creature + gravity), constraint from the `?retailLeash`
         // budget, queue-head `jump_error_code` from the SAME
         // `pending_jump_error` input, posture from the server-echoed
-        // substate. The weenie seams resolve PERMISSIVE (`can_jump`
-        // true, no stamina refusal) — the zero-stamina FOLD below is
-        // the retail InqJumpVelocity arm (acclient.c:443838-443839),
-        // not a refusal; refusal codes are byte-identical to the old
-        // chain for every input (36/71/head-code/72).
+        // substate. The stamina weenie seam resolves PERMISSIVE (no
+        // stamina refusal) — the zero-stamina FOLD below is the retail
+        // InqJumpVelocity arm (acclient.c:443838-443839), not a refusal.
+        // R1 motioninterp-2 (2026-10-08): the `CanJump` seam is LIVE —
+        // retail `CACQualities::CanJump` = load < 2.0 (acclient.c:442878)
+        // → 73 from `jump_charge_is_allowed`, so the order is retail's
+        // 36 → 71 → queue head → 73 → 72 (`?jumpLoadGate=off` restores
+        // the permissive `can_jump: true` seam).
         let allow_env = super::motion_interp::JumpAllowEnv {
             weenie_noncreature: false,
             has_gravity: true,
@@ -3552,7 +3719,7 @@ impl MovementSystem {
                     })),
             fully_constrained: world.local_player_fully_constrained(),
             forward_substate: world.player.current_substate,
-            can_jump: true,
+            can_jump: !self.jump_load_gate_enabled() || world.player_can_jump(),
             has_weenie: false,
             jump_stamina_ok: true,
         };
@@ -3565,12 +3732,14 @@ impl MovementSystem {
         // Burden flows from ACE's `EncumbranceSystem.GetBurden` via
         // `WorldContextExt::player_burden`; fallback 0.5 keeps
         // BurdenMod = 1.0 when attributes haven't hydrated yet.
-        let jump_skill = world
-            .player
-            .skills
-            .get(&SkillType::Jump)
-            .map(|s| s.current as u32)
-            .unwrap_or(100);
+        //
+        // R1 motioninterp-5 (2026-10-08): the jump skill is retail
+        // `InqJumpVelocity`'s COMPOSED value (acclient.c:443773-443848) —
+        // wire Jump `current` + LumAugAllSkills / JackOfAllTrades (+5) /
+        // LumAugSkilledSpec (specialized) — not the bare wire value
+        // (`player_composed_jump_skill`). The zero-stamina fold below runs
+        // AFTER the composition, as in retail.
+        let jump_skill = world.player_composed_jump_skill().unwrap_or(100);
         let burden = world.player_burden().unwrap_or(0.5);
         // Retail PK arm (acclient.c:442887): PlayerKillerStatus in
         // {4, 64} AND LastPkAttackTimestamp + 20 s > now.
@@ -3639,16 +3808,45 @@ impl MovementSystem {
         // runtime kinematics fallback. begin_jump deliberately leaves
         // current_planar_velocity untouched, so install the intent
         // there for the airborne trajectory lock.
-        let lateral_velocity =
-            if charged_long_jump && let Some(intent_v) = self.manual_intent_velocity(world) {
-                world.player.current_planar_velocity = Vector3::new(intent_v.x, intent_v.y, 0.0);
-                Vector3::new(intent_v.x, intent_v.y, vz)
-            } else {
-                world
-                    .local_player_runtime_kinematics()
-                    .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
-                    .unwrap_or(Vector3::new(0.0, 0.0, vz))
-            };
+        //
+        // R1 motioninterp-1 (2026-10-08, `USE_JUMP_LAUNCH_CAP`): under a
+        // MANUAL drive both arms are replaced by retail's
+        // `get_leave_ground_velocity` — `CMotionInterp::LeaveGround`
+        // (acclient.c:344457-344489) runs it for EVERY jump, charged or
+        // not: the state velocity CAPPED at `4.0 × run_rate`
+        // (`get_state_velocity`, :343539-343594). The integrator fallback is
+        // passed as zero because a jump's `vz > 0.0002` disables retail's
+        // physics-velocity fallback (:343826): a no-key release launches
+        // (0,0,vz) even mid residual slide or after a standstill charge.
+        // An autonomous (MoveTo) drive, or no pose/capabilities, keeps the
+        // two legacy arms below; so does `?jumpLaunchCap=off`.
+        let capped_launch = if self.jump_launch_cap_enabled()
+            && let Some(ActiveDriveIntent::Manual(state)) =
+                self.active_drive.map(|active| active.intent)
+            && let Some(pose) = world.local_player_runtime_pose()
+            && let Ok(capabilities) = world.resolve_self_movement_capabilities()
+        {
+            Some(leave_ground_velocity_for_state(
+                pose.rotation.to_heading(),
+                state,
+                &capabilities,
+                Vector3::zero(),
+            ))
+        } else {
+            None
+        };
+        let lateral_velocity = if let Some(launch) = capped_launch {
+            world.player.current_planar_velocity = Vector3::new(launch.x, launch.y, 0.0);
+            Vector3::new(launch.x, launch.y, vz)
+        } else if charged_long_jump && let Some(intent_v) = self.manual_intent_velocity(world) {
+            world.player.current_planar_velocity = Vector3::new(intent_v.x, intent_v.y, 0.0);
+            Vector3::new(intent_v.x, intent_v.y, vz)
+        } else {
+            world
+                .local_player_runtime_kinematics()
+                .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
+                .unwrap_or(Vector3::new(0.0, 0.0, vz))
+        };
 
         // Bug 19 (2026-10-07): the JumpPack velocity is in the player's LOCAL
         // frame. Retail `DoJump` packs `get_local_physics_velocity`
@@ -3838,6 +4036,21 @@ impl MovementSystem {
     fn refresh_autonomous_position_heartbeat_schedule(&mut self, now: Instant, world: &WorldState) {
         self.next_autonomous_position_heartbeat_at = has_autonomous_position_sync_target(world)
             .then_some(now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL);
+    }
+
+    /// R1 outbound-2 (2026-10-08) — retail `SendMovementEvent`
+    /// (acclient.c:718142-718196) stamps ONLY `last_sent_position_time`
+    /// after a MoveToState (:718190-718191): the position-event window
+    /// restarts, while `last_sent_position` / `last_sent_contact_plane`
+    /// stay as they were. So for 1 s after any MoveToState the AP gate is in
+    /// its cell/plane-only branch, and starting to move does not cost an
+    /// extra AP (+ observer UpdatePosition broadcast) a few ticks later.
+    /// Called after every successful MoveToState send; a no-op under
+    /// `?apRetailGate=off`.
+    fn note_movement_event_sent(&mut self, now: Instant, world: &WorldState) {
+        if self.retail_position_event_gate_enabled() {
+            self.refresh_autonomous_position_heartbeat_schedule(now, world);
+        }
     }
 
     pub(crate) fn enqueue_drive_intent(&mut self, intent: PlayerDriveIntent, now: Instant) {
@@ -4282,6 +4495,7 @@ impl MovementSystem {
                 .await?;
             self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
             self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+            self.note_movement_event_sent(now, world);
         }
         // Combat requests queued behind the MaybeStopCompletely above —
         // sent only now, after the stop's MoveToState is on the wire.
@@ -4446,7 +4660,7 @@ impl MovementSystem {
         }
 
         let transient_sent = if let Some(intent) = self.pending_transient_motion.take() {
-            self.execute_transient_motion_at(intent, world, session)
+            self.execute_transient_motion_at(intent, world, session, now)
                 .await?;
             true
         } else {
@@ -4494,6 +4708,14 @@ impl MovementSystem {
             }
             _ => None,
         };
+
+        // R1 outbound-3 — a newer FORCE_POSITION stamp earns one immediate
+        // AP at the snapped pose (retail `HandleReceivedPosition`); runs
+        // before the heartbeat so the heartbeat then sees an in-window,
+        // just-stamped baseline.
+        if self.retail_position_event_gate_enabled() {
+            self.maybe_ack_force_position(now, world, session).await?;
+        }
 
         let _ = self
             .maybe_send_autonomous_position_heartbeat(
@@ -4924,7 +5146,12 @@ impl MovementSystem {
             }
         }
         match out.steer {
-            Some(MoveToSteer::Walk { target, away, run }) => {
+            // The local lane realizes its own drive (autonomous intent);
+            // the R3 remote-only steer fields (backwards/aux/speed) are
+            // not consumed here — behaviour unchanged.
+            Some(MoveToSteer::Walk {
+                target, away, run, ..
+            }) => {
                 let to_target = target.global_coords() - self_pos.global_coords();
                 let planar = Vector3::new(to_target.x, to_target.y, 0.0);
                 if planar.length_squared() > 1e-6 {
@@ -4971,7 +5198,9 @@ impl MovementSystem {
                 }
                 false
             }
-            Some(MoveToSteer::Turn { heading_deg, hold_key }) => {
+            Some(MoveToSteer::Turn {
+                heading_deg, hold_key, ..
+            }) => {
                 // Turn-in-place: zero delta + desired heading (the
                 // lane's turning realization). The gait picks the turn
                 // omega in `current_local_drive_control` (base TurnRight
@@ -9046,6 +9275,7 @@ impl MovementSystem {
                 self.server_motion_active,
             );
             Self::send_stop_pulse(world, session, metadata).await?;
+            self.note_movement_event_sent(now, world);
             if had_active_local_motion {
                 self.send_autonomous_position_sync(now, world, session, metadata)
                     .await?;
@@ -9062,7 +9292,7 @@ impl MovementSystem {
         metadata: MovementPacketMetadata,
         world: &mut WorldState,
         session: &mut dyn ActionSink,
-        _now: Instant,
+        now: Instant,
     ) -> Result<Vec<WorldEvent>> {
         let state_events = Vec::new();
 
@@ -9071,6 +9301,7 @@ impl MovementSystem {
             Self::send_motion_state_pulse(world, session, state, metadata).await?;
             self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
             self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+            self.note_movement_event_sent(now, world);
         }
 
         Ok(state_events)
@@ -9081,6 +9312,7 @@ impl MovementSystem {
         intent: TransientMotionIntent,
         world: &mut WorldState,
         session: &mut dyn ActionSink,
+        now: Instant,
     ) -> Result<()> {
         let movement_sequence = world.player.next_move_seq();
         let raw_motion_state = raw_motion_state_with_motion_style(
@@ -9098,6 +9330,7 @@ impl MovementSystem {
         );
         Self::send_transient_motion_pulse(world, session, raw_motion_state).await?;
         self.note_transient_motion_sent();
+        self.note_movement_event_sent(now, world);
         Ok(())
     }
 
@@ -9150,6 +9383,7 @@ impl MovementSystem {
             .await?;
 
         Self::send_stop_pulse(world, session, metadata).await?;
+        self.note_movement_event_sent(now, world);
         self.note_server_motion_cleared();
 
         Ok(world_events)
@@ -9191,36 +9425,79 @@ impl MovementSystem {
         Ok(world_events)
     }
 
+    /// R1 outbound-1 (2026-10-08) — retail `SendPositionEvent`'s guard
+    /// (acclient.c:718202-718227): the AutonomousPositionPack is built only
+    /// when `transient_state` has CONTACT (`& 1`) AND ON_WALKABLE (`& 2`);
+    /// otherwise the call is a no-op that stamps nothing. Our analog:
+    /// grounded (`!is_airborne`), and — when a contact plane is stored
+    /// (retail-ground gate) — that plane is walkable (`N.z >= FloorZ`, the
+    /// `SetPositionInternal` rule, acclient.c:322598-322604; an absent plane
+    /// is permitted, and `?walkableGround=off` drops the plane half — exactly
+    /// the predicate the jump release gate uses). Also quiet while an
+    /// arrival placement is pending: holtburger places in the tick, not
+    /// synchronously like retail `enter_world`, so a pre-placement pose must
+    /// not be the first AP.
+    fn position_event_ready(&self, world: &WorldState) -> bool {
+        !world.player.is_airborne
+            && !world.player.pending_arrival_placement
+            && (!self.walkable_landing_ground_enabled()
+                || world.player.last_contact_plane.is_none_or(|(plane, _)| {
+                    plane.normal.z >= holtburger_world::spatial::FLOOR_Z
+                }))
+    }
+
+    /// Retail `Plane::operator==` (acclient.c:717723): normals equal per
+    /// component within `<= 0.0002`, distances within `< 0.0002`.
+    fn retail_plane_eq(a: &holtburger_common::Plane, b: &holtburger_common::Plane) -> bool {
+        const EPS: f32 = 0.000_199_999_99;
+        (a.normal.x - b.normal.x).abs() <= EPS
+            && (a.normal.y - b.normal.y).abs() <= EPS
+            && (a.normal.z - b.normal.z).abs() <= EPS
+            && (a.d - b.d).abs() < EPS
+    }
+
     /// Physics deep-dive 2026-06-01 (gap 4) — retail
     /// `CommandInterpreter::ShouldSendPositionEvent`
-    /// (`acclient.c:718107-718141`) port for the heartbeat gate. Returns
-    /// `true` when the pulse differs from the last one we sent: cell
-    /// (landblock/objcell) changed, origin/heading moved beyond the pose
-    /// epsilons, or the contact byte flipped (the contact-plane-change
-    /// sub-branch). The first send (no prior pose) always passes.
-    /// Retail `ShouldSendPositionEvent` change test, window-split
+    /// (`acclient.c:718108-718138`) port for the heartbeat gate, window-split
     /// (acclient.c:718121-718132). A cell/landblock change triggers in BOTH
     /// branches. PAST the 1s window (`past_window = true`) it tests
-    /// `!Frame::is_equal` — origin + orientation; WITHIN the window it tests
-    /// only the contact-plane (the wire `last_contact` byte, grounded vs
-    /// airborne). This is the SEND-3/D1-POLL refinement: retail polls every
-    /// tick and can emit a mid-window contact-plane-only re-send, where the
-    /// prior boundary-only gate folded both branches together.
+    /// `!Frame::is_equal` — origin + orientation (with our coarser pose
+    /// epsilons, see [`AUTONOMOUS_POSE_EPSILON_M`]). WITHIN the window retail
+    /// tests only the contact PLANE (`Plane::operator==` against
+    /// `last_sent_contact_plane`, :718131).
+    ///
+    /// Under [`USE_RETAIL_POSITION_EVENT_GATE`] (R1 outbound-1, default):
+    /// - no prior send → `true` on BOTH branches (the ctor zeroes
+    ///   `last_sent_position.objcell_id`, :717760-717778, so the first
+    ///   eligible frame differs by cell);
+    /// - in-window → `current_plane` vs the plane recorded at the last send,
+    ///   both known and unequal by [`Self::retail_plane_eq`], only under
+    ///   [`USE_AP_CONTACT_PLANE_RESEND`]. The old contact-BYTE flip is gone:
+    ///   it only ever fired on going airborne, and airborne APs are now
+    ///   suppressed outright ([`Self::position_event_ready`]).
+    ///
+    /// `?apRetailGate=off` restores the pre-2026-10-08 rules: the first send
+    /// waits for the past-window branch and the in-window branch re-sends on
+    /// a contact-byte flip.
     fn autonomous_pose_changed(
         &self,
         pulse: &AutonomousPositionActionData,
         past_window: bool,
+        current_plane: Option<holtburger_common::Plane>,
     ) -> bool {
         if !USE_AUTONOMOUS_POSITION_CHANGE_GATE {
             return true;
         }
+        let retail_gate = self.retail_position_event_gate_enabled();
 
         let Some(last_pose) = self.last_sent_autonomous_pose else {
-            // No prior send to compare against: only the past-window (Frame)
-            // branch establishes the first baseline send; the in-window
-            // (contact-plane) branch stays quiet until that baseline exists,
-            // so a steady held-run within the first interval doesn't emit a
-            // spurious heartbeat before the window elapses.
+            if retail_gate {
+                // Retail compares against objcell 0 → always a cell change.
+                return true;
+            }
+            // Legacy: only the past-window (Frame) branch establishes the
+            // first baseline send; the in-window branch stays quiet until
+            // that baseline exists.
             return past_window;
         };
 
@@ -9244,11 +9521,19 @@ impl MovementSystem {
             if heading_delta.abs() > AUTONOMOUS_POSE_HEADING_EPSILON_RAD {
                 return true;
             }
+        } else if retail_gate {
+            // Within the window: contact-plane change only (retail
+            // `Plane::operator==`, acclient.c:718131).
+            if self.ap_contact_plane_resend_enabled()
+                && let Some(last_plane) = self.last_sent_contact_plane
+                && let Some(plane) = current_plane
+                && !Self::retail_plane_eq(&last_plane, &plane)
+            {
+                return true;
+            }
         } else {
-            // Within the window: contact-plane only. We don't carry a full
-            // plane, but the wire `last_contact` byte (grounded vs airborne)
-            // is the contact signal the server consumes; re-send when it
-            // flips even if origin/orientation are otherwise unchanged.
+            // Legacy in-window branch: the wire `last_contact` byte
+            // (grounded vs airborne) as the contact signal.
             if self.last_sent_autonomous_contact != Some(pulse.last_contact) {
                 return true;
             }
@@ -9257,11 +9542,18 @@ impl MovementSystem {
         false
     }
 
-    /// Record the pose + contact we just put on the wire so the next
-    /// [`Self::autonomous_pose_changed`] compares against it.
-    fn note_autonomous_position_sent(&mut self, pulse: &AutonomousPositionActionData) {
+    /// Record the pose + contact (byte and stored plane) we just put on the
+    /// wire so the next [`Self::autonomous_pose_changed`] compares against
+    /// it — retail's `last_sent_position` + `last_sent_contact_plane` stamp
+    /// (acclient.c:718242-718245).
+    fn note_autonomous_position_sent(
+        &mut self,
+        pulse: &AutonomousPositionActionData,
+        contact_plane: Option<holtburger_common::Plane>,
+    ) {
         self.last_sent_autonomous_pose = Some(pulse.position);
         self.last_sent_autonomous_contact = Some(pulse.last_contact);
+        self.last_sent_contact_plane = contact_plane;
     }
 
     async fn maybe_send_autonomous_position_heartbeat(
@@ -9275,6 +9567,7 @@ impl MovementSystem {
             self.clear_autonomous_position_heartbeat_schedule();
             return Ok(false);
         }
+        let retail_gate = self.retail_position_event_gate_enabled();
 
         // D1-POLL / SEND-3: retail polls ShouldSendPositionEvent EVERY tick
         // (acclient_2013 UseTime:699567) and branches on the 1s window. We poll
@@ -9282,18 +9575,27 @@ impl MovementSystem {
         // boundary, collapsing retail's two branches and unable to emit a
         // mid-window contact-plane-only re-send). `past_window` is true once
         // the interval since the last send has elapsed; the window resets on
-        // each send (refresh_..._schedule == retail last_sent_position_time).
+        // each send (refresh_..._schedule == retail last_sent_position_time)
+        // and, under the retail gate, on each MoveToState send
+        // ([`Self::note_movement_event_sent`], R1 outbound-2).
         // MUST come after B1/D3-SNAP: continuous-poll re-asserts a drifted pose
         // more often, which the force-position snap (now shipped) converges.
         // ACE tolerates this cadence (ACE-CADENCE-1: no inbound anti-flood).
         //
-        // On the first tick after acquiring a sync target, arm the window and
-        // don't send yet: the first interval is a settle window (retail's
-        // last_sent_position_time starts unset). Continuous-poll engages from
-        // the next tick.
-        let Some(next_heartbeat_at) = self.next_autonomous_position_heartbeat_at else {
-            self.refresh_autonomous_position_heartbeat_schedule(now, world);
-            return Ok(false);
+        // On the first tick after acquiring a sync target the window is
+        // armed. Under the retail gate (R1 outbound-1) that same tick is
+        // still EVALUATED: retail's `last_sent_position` starts at objcell 0,
+        // so the first eligible frame sends. Legacy (`?apRetailGate=off`):
+        // the first interval is a settle window and nothing is sent yet.
+        let next_heartbeat_at = match self.next_autonomous_position_heartbeat_at {
+            Some(at) => at,
+            None => {
+                self.refresh_autonomous_position_heartbeat_schedule(now, world);
+                if !retail_gate {
+                    return Ok(false);
+                }
+                now + AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL
+            }
         };
         let past_window = now >= next_heartbeat_at;
 
@@ -9320,14 +9622,23 @@ impl MovementSystem {
             return Ok(false);
         };
 
+        // R1 outbound-1: retail `SendPositionEvent` no-ops (and stamps
+        // nothing) unless CONTACT && ON_WALKABLE — no mid-air APs; the first
+        // grounded tick then sends because nothing was stamped.
+        if retail_gate && !self.position_event_ready(world) {
+            return Ok(false);
+        }
+
+        let contact_plane = world.player.last_contact_plane.map(|(plane, _)| plane);
+
         // Physics deep-dive 2026-06-01 (gap 4) + D1-POLL: window-split
         // position-change gate (retail `ShouldSendPositionEvent`). Skip the
         // send when nothing meaningful changed for this window branch so we
         // don't re-assert a stale/drifted pose. On a skip we do NOT advance the
         // schedule — we keep polling every tick so the moment the pose
-        // (past-window) or contact byte (in-window) changes, the next tick
+        // (past-window) or contact plane (in-window) changes, the next tick
         // sends, instead of waiting for the next 1s boundary.
-        if !self.autonomous_pose_changed(&pulse, past_window) {
+        if !self.autonomous_pose_changed(&pulse, past_window, contact_plane) {
             return Ok(false);
         }
 
@@ -9335,7 +9646,7 @@ impl MovementSystem {
             .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
         self.heartbeats_sent = self.heartbeats_sent.wrapping_add(1);
-        self.note_autonomous_position_sent(&pulse);
+        self.note_autonomous_position_sent(&pulse, contact_plane);
         // Reset the 1s window from this send (retail last_sent_position_time):
         // the next interval is in-window (contact-plane only) before the
         // past-window (Frame) branch re-engages.
@@ -9356,17 +9667,69 @@ impl MovementSystem {
             return Ok(false);
         };
 
+        // R1 outbound-1: every AP sender rides retail `SendPositionEvent`'s
+        // CONTACT && ON_WALKABLE guard (stop / snap-facing / arrival /
+        // server-controlled syncs and the force-position ack alike). A no-op
+        // stamps nothing; the ordinary heartbeat takes over on landing.
+        if self.retail_position_event_gate_enabled() && !self.position_event_ready(world) {
+            return Ok(false);
+        }
+
         // This is an explicit flush (arrival / drive sync), not the
         // throttled heartbeat — always send. Record the sent pose so
         // the next heartbeat's position-change gate compares against it.
         session
             .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
-        self.note_autonomous_position_sent(&pulse);
+        self.note_autonomous_position_sent(
+            &pulse,
+            world.player.last_contact_plane.map(|(plane, _)| plane),
+        );
 
         self.refresh_autonomous_position_heartbeat_schedule(now, world);
 
         Ok(true)
+    }
+
+    /// R1 outbound-3 (2026-10-08) — retail `SmartBox::HandleReceivedPosition`
+    /// (acclient.c:145125-145249): when our OWN UpdatePosition carries a newer
+    /// FORCE_POSITION stamp (ACE z-hack `Player_Tick.cs:488`, PK snapback
+    /// `Player.cs:1148`), retail keeps its heading, blips the player and
+    /// immediately calls `cmdinterp->SendPositionEvent()` (vfptr[7], flat slot
+    /// 22) — one AP at the snapped pose carrying the new sequence. Holtburger
+    /// waited up to 1 s for the heartbeat.
+    ///
+    /// Lane-independent detector: compares `world.player.force_position_sequence`
+    /// (the value the wire carries) against the last value seen here, so it
+    /// works whichever lane applied the UpdatePosition. One-shot: the sync
+    /// rides [`Self::position_event_ready`] (airborne → nothing sent, nothing
+    /// kept pending — retail calls `SendPositionEvent` once and the ordinary
+    /// gate takes over). Skipped while an arrival placement is pending. A
+    /// TELEPORT advance takes retail's `TeleportPlayer` arm instead (no AP);
+    /// ACE never bumps the force stamp on a teleport.
+    async fn maybe_ack_force_position(
+        &mut self,
+        now: Instant,
+        world: &WorldState,
+        session: &mut dyn ActionSink,
+    ) -> Result<()> {
+        let seq = world.player.force_position_sequence;
+        let advanced = matches!(
+            self.last_acked_force_position_sequence,
+            Some(old) if is_newer_u16(seq, old)
+        );
+        self.last_acked_force_position_sequence = Some(seq);
+        if advanced && !world.player.pending_arrival_placement {
+            let _ = self
+                .send_autonomous_position_sync(
+                    now,
+                    world,
+                    session,
+                    MovementPacketMetadata::default(),
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     fn should_send_motion_state_pulse(
@@ -9800,10 +10163,22 @@ pub(crate) fn drive_remote_movetos(
         let mut effects = MotionSideEffects::default();
         let out = manager.use_time_moveto(&view, &mut effects);
         let drive = match out.steer {
-            Some(MoveToSteer::Walk { target, away, run }) => {
+            Some(MoveToSteer::Walk {
+                target,
+                away,
+                run,
+                backwards,
+                aux,
+                speed,
+            }) => {
                 let to_target = target.global_coords() - self_pos.global_coords();
                 let planar = Vector3::new(to_target.x, to_target.y, 0.0);
                 if planar.length_squared() > 1e-6 {
+                    // The direct bearing: diagnostics, and the walk heading
+                    // of the legacy bearing steer (`?remoteMoveToFacing=off`
+                    // / USE_REMOTE_MOVETO_FACING). The default scene walks
+                    // along the body's own facing and turns only by `turn`
+                    // (R3 moveto-3).
                     let mut heading = Vector3::zero().heading_to(&planar);
                     if away {
                         // The away walk faces away (acclient.c:346224-346239).
@@ -9812,14 +10187,32 @@ pub(crate) fn drive_remote_movetos(
                     Some(holtburger_world::spatial::RemoteMoveToDrive {
                         heading_rad: heading,
                         forward: Some(run),
+                        backwards,
+                        // R3 moveto-3: the aux turn the state machine holds
+                        // (HandleMoveToPosition 20° deadband,
+                        // acclient.c:345620-345651); None = run straight.
+                        turn: remote_turn_sign(aux),
+                        speed,
                     })
                 } else {
                     None
                 }
             }
-            Some(MoveToSteer::Turn { heading_deg, .. }) => Some(holtburger_world::spatial::RemoteMoveToDrive {
+            Some(MoveToSteer::Turn {
+                heading_deg,
+                command,
+                speed,
+                ..
+            }) => Some(holtburger_world::spatial::RemoteMoveToDrive {
                 heading_rad: normalize_heading(heading_deg.to_radians()),
                 forward: None,
+                backwards: false,
+                // R3 moveto-2: the node's TurnRight/TurnLeft — the scene turns
+                // the motion PAST the node so HandleTurnToHeading's strict
+                // `heading_greater` fires (acclient.c:345712) and the
+                // `set_heading` snap below lands it.
+                turn: remote_turn_sign(command),
+                speed,
             }),
             None => None,
         };
@@ -9836,6 +10229,18 @@ pub(crate) fn drive_remote_movetos(
         world
             .scene
             .set_remote_moveto(guid, manager.is_moveto_active(), drive, out.set_heading);
+    }
+}
+
+/// R3 moveto-2/3 (2026-10-08) — a MoveTo turn command as the signed turn
+/// direction the remote scene realizes: TurnRight (heading increasing,
+/// clockwise from above) `+1.0`, TurnLeft `-1.0`, anything else (no aux /
+/// not a turn) `None`.
+fn remote_turn_sign(command: u32) -> Option<f32> {
+    match command {
+        super::motion_interp::MOTION_TURN_RIGHT => Some(1.0),
+        super::motion_interp::MOTION_TURN_LEFT => Some(-1.0),
+        _ => None,
     }
 }
 

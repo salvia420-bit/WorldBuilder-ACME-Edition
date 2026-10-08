@@ -85,3 +85,42 @@ export function shouldClearCastOnReject({ flagOn, code, chainActive, busyUntilMs
   // never set by an older/alternate cast path).
   return !!(busyUntilMs && Number.isFinite(nowMs) && nowMs < busyUntilMs);
 }
+
+// spellcast-3 (2026-10-08) — UseDone(None) that ENDS an in-flight local cast.
+//
+// ACE refuses some casts with a transient line + UseDone(WeenieError.None)
+// (VerifySpellTarget, Player_Magic.cs:413-421, after the rotate and before any
+// windup; also the post-windup TargetNotAcquired trailer). The wasm maps
+// UseDone(None) to kind=14, whose handler only cleared the busy flags
+// (entities.js clearCastBusy), so the predicted windup + cast gesture kept
+// playing for a cast that never happened. Retail decrements m_cBusy on every
+// UseDone (Handle_Item__UseDone, acclient.c:401924); a SUCCESS UseDone from ACE
+// comes only after FinishCast (cast gesture + the Ready return / 1 s recoil),
+// i.e. after the local chain has normally finished.
+//
+// So: cancel the local chain on a kind=14 only when a chain is still running
+// AND no request is outstanding after this UseDone (`getBusyState() === 0`; the
+// wasm decrements before it queues kind=14, game_event.rs). A UseDone for an
+// EARLIER action (a use whose UseDone lands just after a cast was sent) leaves
+// the count at >= 1 and the chain alone. Unknown count (a pkg without
+// getBusyState) never cancels.
+//
+// @param {object}  p
+// @param {boolean} p.flagOn       `?castUseDoneCancels` (default ON)
+// @param {boolean} p.chainActive  inst._castChainActive for the local player
+// @param {number|undefined} p.busyAfter  SessionHandle.getBusyState() now
+// @returns {boolean} true iff cancelCastSequence(lg, "server-done") should fire
+export function shouldCancelOnUseDone({ flagOn, chainActive, busyAfter } = {}) {
+  if (!flagOn) return false;
+  if (!chainActive) return false;
+  return Number.isFinite(busyAfter) && busyAfter === 0;
+}
+
+/** `?castUseDoneCancels` (default ON; `off` / `0` / `false` disable). */
+export function castUseDoneCancelsEnabled(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const v = new URLSearchParams(s).get("castUseDoneCancels")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}

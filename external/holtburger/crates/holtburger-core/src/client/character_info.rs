@@ -418,6 +418,13 @@ impl CharacterInfo {
 
     /// Filtered active enchantments — skills only. Mirrors
     /// `Character.cs:247-258`.
+    ///
+    /// TODO(enchstats-1, 2026-10-08): key-exact, so it misses retail's
+    /// `CullEnchantmentsFromList` wildcards (key-0 `MULTIPLE_STAT` and the
+    /// `ATTACK_SKILLS` / `DEFENSE_SKILLS` families, acclient.c:445810) that
+    /// `holtburger_world::magic` now applies. Not on the sheet / vitals
+    /// display path (that is `holtburger_world` `stats_calc`); port the
+    /// predicate here if this list ever feeds a displayed number.
     pub fn get_active_enchantments_skill(&self, skill: SkillType) -> Vec<CharacterEnchantment> {
         let filtered: Vec<_> = self
             .all_enchantments
@@ -451,6 +458,10 @@ impl CharacterInfo {
     }
 
     /// Filtered active enchantments — vital. Mirrors `Character.cs:286-297`.
+    ///
+    /// TODO(enchstats-1, 2026-10-08): key-exact like the skill filter above —
+    /// misses key-0 `MULTIPLE_STAT` vital (de)buffs such as 0x6002 "Blight
+    /// of the Swamp"; see `holtburger_world::magic`.
     pub fn get_active_enchantments_vital(&self, vital: VitalType) -> Vec<CharacterEnchantment> {
         let filtered: Vec<_> = self
             .all_enchantments

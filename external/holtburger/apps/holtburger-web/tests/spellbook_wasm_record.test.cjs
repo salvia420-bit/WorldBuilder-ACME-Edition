@@ -54,7 +54,9 @@ function spellRecordFromWasm(spellId, mockHandle) {
     school:      raw.school,
     level:       raw.roughLevel ?? 0,
     levelRoman:  raw.levelRoman ?? "",
-    untargeted:  !!raw.isSelfTargeted,
+    // untargeted: castNeedsNoSelection({ selfTargeted, components }) in the
+    // plugin (spellcast-2) — asserted against the REAL spellRecordFromWasm
+    // in realHelpers() below, not mirrored here.
     mana:        raw.baseMana,
     icon:        raw.iconId,
     desc:        raw.description,
@@ -411,6 +413,35 @@ async function realHelpers() {
     assert.equal(m.spellMetaLine({ level: 1, levelRoman: 'I', duration: 0, mana: 0 }), 'Level I');
     assert.equal(m.spellMetaLine({ _uncatalogued: true }), 'Unknown spell');
   });
+  // spellcast-2 — the coerced `untargeted` is SelfTargeted OR formula target
+  // type 0 (retail ClientMagicSystem::CastSpell), from the decrypted
+  // `components`; the wasm `isUntargeted` is a different predicate.
+  const recs = {
+    1783: { name: 'Searing Disc', isSelfTargeted: false, isUntargeted: false, components: [110, 110, 19, 67, 34, 37, 63, 58] },
+    1785: { name: "Cassius' Ring of Fire", isSelfTargeted: false, components: [110, 110, 19, 67, 34, 37, 63, 58] },
+    27: { name: 'Flame Bolt I', isSelfTargeted: false, isUntargeted: true, components: [1, 15, 34, 46, 55, 0, 0, 0] },
+    2: { name: 'Strength Self I', isSelfTargeted: true, components: [1, 7, 33, 44, 60] },
+  };
+  const prevHandle = window.__sessionHandle;
+  window.__sessionHandle = { getSpellRecord: (id) => (recs[id] ? new Map(Object.entries(recs[id])) : null) };
+  try {
+    check('spellcast-2: real spellRecordFromWasm — ring untargeted, bolt targeted, self untargeted', () => {
+      assert.equal(m.spellRecordFromWasm(1783).untargeted, true, 'ring (formula type 0)');
+      assert.equal(m.spellRecordFromWasm(27).untargeted, false, 'bolt (isUntargeted ignored)');
+      assert.equal(m.spellRecordFromWasm(2).untargeted, true, 'SelfTargeted');
+    });
+    check('spellcast-2: ?formulaUntargeted=off keeps only the SelfTargeted bit', () => {
+      const prevLoc = globalThis.location;
+      globalThis.location = { search: '?formulaUntargeted=off' };
+      try {
+        assert.equal(m.spellRecordFromWasm(1785).untargeted, false, 'ring, flag off');
+      } finally {
+        if (prevLoc === undefined) delete globalThis.location; else globalThis.location = prevLoc;
+      }
+    });
+  } finally {
+    window.__sessionHandle = prevHandle;
+  }
   check('spell-bar helpers keep their combat-bar contract', () => {
     for (const k of ['getSpellBarSlots', 'setSpellBarSlot', 'getActiveSpellBar', 'setActiveSpellBar', 'addToFirstEmptySlot', 'loadCatalog']) {
       assert.equal(typeof m[k], 'function', k);

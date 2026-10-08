@@ -60,6 +60,7 @@ impl Session {
             pending_server_packets: BTreeMap::new(),
             pending_control_packets: Vec::new(),
             last_request_retransmit_time: None,
+            highest_server_seq_seen: None,
             retransmit_requests_since_progress: 0,
             cached_packets: BTreeMap::new(),
             capture: None,

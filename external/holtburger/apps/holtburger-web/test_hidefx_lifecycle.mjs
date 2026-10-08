@@ -45,6 +45,11 @@
 //      batched hide+unhide racing the resolve, despawn while held).
 //   §10 AttribUpPurple / LevelUp drain on their own through the real resolver.
 //   §11 a script handle never stops an unrelated emitter (`scopedOnly`).
+//   §12 PLIFECYCLE-1 (`?oneShotDrain`): the one-shot reaper no longer hard-
+//      destroys a FINITE emitter (LevelUp's 3.0±0.25 s tail drains past the
+//      2.5 s budget), drops the bookkeeping once it is gone, and the `=off`
+//      arm reproduces the cut-off; the pure policy + backstop formula.
+//   §13 the same policy on the legacy `?particleOwner=off` bookkeeping.
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve as resolvePath, join } from "node:path";
@@ -527,19 +532,25 @@ const OWNER_URL = pathToFileURL(resolvePath(__dirname, "scene3d/particles/owner_
 const VFX_URL = pathToFileURL(resolvePath(__dirname, "scene3d/play_effect_vfx.js")).href;
 globalThis.location.search = "?playEffectLifecycle=off";
 const OFF = (await import(`${VFX_URL}?arm=off`)).__test;
+globalThis.location.search = "?oneShotDrain=off";
+const DRAIN_OFF = (await import(`${VFX_URL}?arm=drainoff`)).__test;
 globalThis.location.search = "";
 const ON = (await import(VFX_URL)).__test;
-const { ownerRegistry, particleOwnerOn } = await import(OWNER_URL);
+const { ownerRegistry, particleOwnerOn, _resetParticleOwnerFlagForTests } = await import(OWNER_URL);
 const { _clearPhysicsScriptTableCache } = await import(
   pathToFileURL(resolvePath(__dirname, "ui/ac_physics_script_table.js")).href);
 
 check("flag: bare URL ⇒ ?playEffectLifecycle ON", ON.playEffectLifecycleOn === true);
 check("flag: ?playEffectLifecycle=off ⇒ OFF", OFF.playEffectLifecycleOn === false);
 check("flag: owner registry path is on (production default)", particleOwnerOn() === true);
+check("flag: bare URL ⇒ ?oneShotDrain ON (independent of ?playEffectLifecycle)",
+  ON.oneShotDrainOn === true && OFF.oneShotDrainOn === true);
+check("flag: ?oneShotDrain=off ⇒ OFF", DRAIN_OFF.oneShotDrainOn === false);
 
 // Short real-time schedule; the particle clock is virtual (`sim.advance`).
 const TIMING = { oneShotBase: 40, holdGrace: 800, holdCheck: 60, holdMax: 20000, drain: 150 };
 OFF.setLifecycleTiming(TIMING);
+DRAIN_OFF.setLifecycleTiming(TIMING);
 ON.setLifecycleTiming(TIMING);
 
 const PS = { Hide: 0x74, UnHide: 0x75, Hidden: 0x76, AttribUpPurple: 0x10, LevelUp: 0x8A, Launch: 0x04 };
@@ -655,7 +666,7 @@ function setVisibility(arm, guid, visible, physicsState) {
   const G = 0x50000004;
   const root = spawn(G, 0x3400FFF0);
   sim.addDelayMs = 300;
-  const prev = ON.setLifecycleTiming({ oneShotBase: 150 });
+  const prev = ON.setLifecycleTiming({ oneShotBase: 150, drain: 400 });
   const before = ON.realVfxStats().lateAttachReaped;
   const r = await ON.tryResolveRealVfx(G, PS.Launch, 1.0);
   check("§4 synthetic Launch→Hide-bytes resolves (non-held path)", r === true && ON.hiddenState(G).holdGroups === 0);
@@ -663,9 +674,15 @@ function setVisibility(arm, guid, visible, physicsState) {
   check("§4 14 emitters attached AFTER the 150 ms reaper had run", sim.liveFor(root).length === 14,
     `${sim.liveFor(root).length}`);
   check("§4 each late attach scheduled its own reap", ON.realVfxStats().lateAttachReaped - before === 14);
-  await sleep(150 + 80);
+  await sleep(150 + 40);
+  // PLIFECYCLE-1: an infinite (0/0) emitter is STOPPED at its reap, so its
+  // live particles fade out, then reaped after the drain window.
+  check("§4 late infinite emitters STOPPED one base-lifetime after attaching (not hard-destroyed)",
+    sim.liveFor(root).length === 14 && emitting(root).length === 0,
+    `${sim.liveFor(root).length} live, ${emitting(root).length} emitting`);
+  await sleep(400);
   ON.setLifecycleTiming(prev);
-  check("§4 late infinite emitters reaped one base-lifetime after attaching",
+  check("§4 ...and gone after the drain window, owner record emptied",
     sim.liveFor(root).length === 0 && ownerRegistry.emitterCountForOwner(G) === 0,
     `${sim.liveFor(root).length} left`);
   entityMap.delete(G);
@@ -830,6 +847,127 @@ function setVisibility(arm, guid, visible, physicsState) {
     ownerRegistry.stopEmitter(G, 1005) === true);
   entityMap.delete(G);
   ownerRegistry.destroyAllForOwner(G);
+}
+
+// ===========================================================================
+// §12 — PLIFECYCLE-1 (`?oneShotDrain`): the one-shot reaper lets a FINITE
+// emitter drain. Retail removes an emitter only at stopped && num_particles == 0
+// (ParticleManager::UpdateParticles, acclient.c:329482-329525); there is no
+// timer-based destroy. LevelUp 0x320003AE/AF/B0 live 3.0 ± 0.25 s, past the
+// 2.5 s one-shot budget.
+// ===========================================================================
+{
+  // The pure policy first.
+  const table = new Map([
+    [1, { info: { emitterType: 1, birthrate: 0.05, totalParticles: 40, totalSeconds: 0, lifespan: 3.0, lifespanRand: 0.25 } }],
+    [2, { info: { emitterType: 1, birthrate: 0.1, totalParticles: 0, totalSeconds: 2.0, lifespan: 1.0, lifespanRand: 0 } }],
+    [3, { info: { emitterType: 2, birthrate: 0.05, totalParticles: 30, totalSeconds: 0, lifespan: 0.5, lifespanRand: 0 } }],
+    [4, { info: { emitterType: 1, birthrate: 0.05, totalParticles: 0, totalSeconds: 0, lifespan: 0.75, lifespanRand: 0 } }],
+    [6, {}],
+  ]);
+  const c = ON.classifyOneShotReap(table, [1, 2, 3, 4, 5, 6]);
+  check("§12 policy: finite = total_particles>0 || total_seconds>0",
+    JSON.stringify(c.finite) === "[1,2,3]", JSON.stringify(c.finite));
+  check("§12 policy: persistent 0/0 → stop-then-reap", JSON.stringify(c.persistent) === "[4]");
+  check("§12 policy: absent from the table → gone (finished)", JSON.stringify(c.gone) === "[5]");
+  check("§12 policy: no info → unknown (legacy destroy)", JSON.stringify(c.unknown) === "[6]");
+  check("§12 policy: no table → every id unknown",
+    JSON.stringify(ON.classifyOneShotReap(null, [7, 8]).unknown) === "[7,8]");
+  const bs = ON.oneShotFiniteBackstopSec;
+  check("§12 backstop: BirthratePerSec count emitter = total × birthrate + life + rand + 1 (LevelUp 6.25 s)",
+    Math.abs(bs(table.get(1).info) - 6.25) < 1e-9, `${bs(table.get(1).info)}`);
+  check("§12 backstop: total_seconds emitter = total_seconds + life + 1",
+    Math.abs(bs(table.get(2).info) - 4.0) < 1e-9);
+  check("§12 backstop: BirthratePerMeter count emitter gets a fixed 10 s (birthrate is metres)",
+    Math.abs(bs(table.get(3).info) - 11.5) < 1e-9);
+  check("§12 backstop: group backstop = max over its finite ids", Math.abs(c.backstopSec - 11.5) < 1e-9);
+
+  // The real resolver: LevelUp on a fresh guid with a 40 ms reaper.
+  _clearPhysicsScriptTableCache();
+  const G = 0x5000000C;
+  const root = spawn(G);
+  sim.addDelayMs = 0;
+  const prev = ON.setLifecycleTiming({ oneShotBase: 40, drain: 150, emitterSecondMs: 40 });
+  const before = ON.realVfxStats();
+  const r = await ON.tryResolveRealVfx(G, PS.LevelUp, 1.0);
+  await sleep(80);
+  check("§12 LevelUp resolves; its 40 ms one-shot reaper has run",
+    r === true && ON.realVfxStats().oneShotFiniteDrained > before.oneShotFiniteDrained);
+  check("§12 the 3 FINITE LevelUp emitters survive the reaper and keep emitting",
+    sim.liveFor(root).length === 3 && emitting(root).length === 3,
+    `${sim.liveFor(root).length} live, ${emitting(root).length} emitting`);
+  check("§12 the reaper counted them as left to drain",
+    ON.realVfxStats().oneShotFiniteDrained - before.oneShotFiniteDrained === 3);
+  sim.advance(3.3);
+  check("§12 they drain on their own by max lifespan (3.0 + 0.25 s)", sim.liveFor(root).length === 0,
+    `${sim.liveFor(root).length} left`);
+  await sleep(6.25 * 40 + 80);
+  check("§12 the far backstop drops the finished ids from the owner record",
+    ownerRegistry.emitterCountForOwner(G) === 0, `${ownerRegistry.emitterCountForOwner(G)}`);
+  check("§12 the backstop stopped nothing (they had already finished)",
+    ON.realVfxStats().oneShotStopped === before.oneShotStopped);
+  ON.setLifecycleTiming(prev);
+  entityMap.delete(G);
+  ownerRegistry.destroyAllForOwner(G);
+}
+{
+  // `?oneShotDrain=off` REPRODUCES the cut-off: the 2.5 s budget destroys them.
+  _clearPhysicsScriptTableCache();
+  const G = 0x5000000D;
+  const root = spawn(G);
+  sim.addDelayMs = 0;
+  const prev = DRAIN_OFF.setLifecycleTiming({ oneShotBase: 40 });
+  await DRAIN_OFF.tryResolveRealVfx(G, PS.LevelUp, 1.0);
+  await sleep(10);
+  sim.advance(2.5); // the real 2.5 s budget, on the virtual clock
+  const livingAtBudget = sim.liveFor(root).length;
+  await sleep(70);
+  check("§12 `=off` REPRO: LevelUp still had live particles at the budget, and the reaper hard-destroyed them",
+    livingAtBudget === 3 && sim.liveFor(root).length === 0,
+    `${livingAtBudget} live at 2.5 s → ${sim.liveFor(root).length} after the reaper`);
+  DRAIN_OFF.setLifecycleTiming(prev);
+  entityMap.delete(G);
+  ownerRegistry.destroyAllForOwner(G);
+}
+
+// ===========================================================================
+// §13 — the same policy on the legacy `?particleOwner=off` bookkeeping
+// (per-guid `_particleEmittersForGuid` map + direct manager calls).
+// ===========================================================================
+{
+  globalThis.location.search = "?particleOwner=off";
+  _resetParticleOwnerFlagForTests();
+  try {
+    check("§13 setup: owner registry path off", particleOwnerOn() === false);
+    _clearPhysicsScriptTableCache();
+    const em = globalThis.window.liveScene3d.entityManager;
+    const G = 0x5000000E;
+    const root = spawn(G);
+    const L = 0x5000000F;
+    const rootL = spawn(L, 0x3400FFF0); // Launch → the infinite Hide bytes
+    sim.addDelayMs = 0;
+    const prev = ON.setLifecycleTiming({ oneShotBase: 40, drain: 150, emitterSecondMs: 40 });
+    await ON.tryResolveRealVfx(G, PS.LevelUp, 1.0);
+    await ON.tryResolveRealVfx(L, PS.Launch, 1.0);
+    await sleep(80);
+    check("§13 legacy: finite LevelUp emitters left running by the reaper",
+      emitting(root).length === 3 && (em._particleEmittersForGuid.get(G)?.length ?? 0) === 3);
+    check("§13 legacy: infinite emitters STOPPED, still draining",
+      sim.liveFor(rootL).length === 14 && emitting(rootL).length === 0);
+    await sleep(150 + 40);
+    check("§13 legacy: infinite emitters destroyed after the drain window, map pruned",
+      sim.liveFor(rootL).length === 0 && !em._particleEmittersForGuid.has(L));
+    sim.advance(3.3);
+    await sleep(6.25 * 40);
+    check("§13 legacy: finished LevelUp ids pruned from the per-guid map by the backstop",
+      sim.liveFor(root).length === 0 && !em._particleEmittersForGuid.has(G));
+    ON.setLifecycleTiming(prev);
+    entityMap.delete(G);
+    entityMap.delete(L);
+  } finally {
+    globalThis.location.search = "";
+    _resetParticleOwnerFlagForTests();
+  }
 }
 
 console.log(`\n[test_hidefx_lifecycle] ${passed} passed, ${failed} failed`);

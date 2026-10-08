@@ -28,9 +28,9 @@
 //     inventory grid / a pack / the paperdoll / the hotbar; drop an
 //     inventory item onto the strip to put it in the chest (corpses refuse,
 //     as ACE does). Takes are optimistic (ghosted until the server agrees).
-//   * double-click / Take / Loot all move items into the main pack exactly
-//     like radial-menu.js "Take From Container": moveItem(item, player, 0)
-//     → PutItemInContainer 0x0019. Loot all paces one take per server echo.
+//   * double-click / Take / Loot all place items like retail
+//     CPlayerSystem::PlaceInBackpack, exactly as radial-menu.js "Take From
+//     Container" does (see takeItem). Loot all paces one take per server echo.
 //
 // Data feed: `handle.getContainerContents(guid)` (GUID list cached
 // wasm-side before the kind=21 event) + per-item meta from playerInventory
@@ -50,13 +50,14 @@ import {
   uiEffectIconsFor,
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
-import { takeInventorySnapshot, decideItemDrop, DROP_TARGET, MAIN_PACK_KEY, PACKS_KEY } from "./inventory_helpers.js";
+import { takeInventorySnapshot, decideItemDrop, DROP_TARGET } from "./inventory_helpers.js";
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
 import {
   beginItemDrag,
   registerDropZone,
   resolveDropAction,
   executeItemAction,
+  planBackpackPlacement,
   pendingOps,
   showItemTooltip,
   hideItemTooltip,
@@ -376,10 +377,14 @@ function playerHandle() {
   return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
 }
 
-// The take wire — identical to radial-menu.js's "Take From Container":
-// moveItem(itemGuid, localPlayerGuid, 0) → PutItemInContainer (0x0019) into
-// the main pack (ACE overflows into side packs). Optimistic: the cell is
-// ghosted and a ghost lands at the front of the main pack until ACE echoes.
+// The take — retail CPlayerSystem::PlaceInBackpack, shared with
+// radial-menu.js "Take From Container" and the ground pickup
+// (item_drag.planBackpackPlacement): a matching stack that takes it all is
+// merged into (StackableMerge), else PutItemInContainer (0x0019) into the
+// open side pack / the main pack / the first side pack with room. ACE does
+// not overflow a full main pack by itself (limitToMainPackOnly). Optimistic:
+// the cell is ghosted, and a moved item's ghost lands at the front of its
+// destination until ACE echoes.
 function takeItem(itemGuid) {
   const me = localPlayerGuid();
   const g = (itemGuid >>> 0) || 0;
@@ -387,12 +392,16 @@ function takeItem(itemGuid) {
   const meta = state.items.find((it) => (it.guid >>> 0) === g);
   if (!meta) return false;
   const isPack = ((meta.itemType >>> 0) & 0x200) !== 0;
-  const action = {
-    op: "move", guid: g, container: me, placement: 0,
-    listKey: isPack ? PACKS_KEY : MAIN_PACK_KEY, index: 0, amount: meta.stackSize || 1,
-  };
+  const action = planBackpackPlacement({ ...meta, isPack });
+  if (action.op === "reject") {
+    // "<player> is completely full!" — toasted, nothing sent.
+    executeItemAction(action, { guid: g, item: meta, owned: false });
+    return false;
+  }
   const sent = executeItemAction(action, { guid: g, item: meta, owned: false }, {
-    stub: { name: meta.name, iconId: meta.iconId, stackSize: meta.stackSize || 1, wcid: meta.wcid || 0, itemType: meta.itemType || 0, equipMask: 0 },
+    stub: action.op === "move"
+      ? { name: meta.name, iconId: meta.iconId, stackSize: meta.stackSize || 1, wcid: meta.wcid || 0, itemType: meta.itemType || 0, equipMask: 0 }
+      : null,
   });
   if (!sent) {
     // Pre-ledger fallback for a handle without the optimistic methods.

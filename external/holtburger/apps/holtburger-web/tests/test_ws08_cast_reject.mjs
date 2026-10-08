@@ -18,7 +18,7 @@
 //
 // Run: node tests/test_ws08_cast_reject.mjs   (from apps/holtburger-web/)
 
-import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
+import { isTerminalCastReject, shouldClearCastOnReject, shouldCancelOnUseDone, castUseDoneCancelsEnabled } from "../ui/cast_reject_policy.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; } else { fail++; console.log("  ✗ " + m); } };
@@ -110,6 +110,26 @@ ok(shouldClearCastOnReject({ flagOn: true, code: 0x0402, chainActive: true, busy
   "shouldClear: fizzle 0x0402 is not a terminal reject here -> false (castFizzle owns it)");
 ok(shouldClearCastOnReject({ flagOn: true, code: 0x001d, chainActive: true, busyUntilMs: 1000, nowMs: 500 }) === false,
   "shouldClear: YoureTooBusy 0x001D excluded -> false");
+
+// --- spellcast-3: kind=14 UseDone(None) ends an in-flight local cast ----------
+// ACE's VerifySpellTarget refusal = transient + UseDone(None) mid-windup. Cancel
+// only with a chain running AND nothing outstanding after this UseDone (an
+// earlier action's UseDone leaves the count >= 1). Unknown count never cancels.
+ok(shouldCancelOnUseDone({ flagOn: true, chainActive: true, busyAfter: 0 }) === true,
+  "useDone: flag on + chain active + busyAfter 0 -> cancel");
+ok(shouldCancelOnUseDone({ flagOn: true, chainActive: true, busyAfter: 1 }) === false,
+  "useDone: busyAfter 1 (another request outstanding) -> no cancel");
+ok(shouldCancelOnUseDone({ flagOn: true, chainActive: false, busyAfter: 0 }) === false,
+  "useDone: no chain running -> no cancel");
+ok(shouldCancelOnUseDone({ flagOn: false, chainActive: true, busyAfter: 0 }) === false,
+  "useDone: ?castUseDoneCancels=off -> no cancel");
+ok(shouldCancelOnUseDone({ flagOn: true, chainActive: true, busyAfter: undefined }) === false,
+  "useDone: unknown count (pkg without getBusyState) -> no cancel");
+ok(shouldCancelOnUseDone() === false, "useDone: no args -> no cancel");
+ok(castUseDoneCancelsEnabled("") === true, "castUseDoneCancels: default ON");
+for (const v of ["off", "0", "false"]) {
+  ok(castUseDoneCancelsEnabled(`?castUseDoneCancels=${v}`) === false, `castUseDoneCancels=${v} disables`);
+}
 
 console.log(fail ? `FAIL — ${pass} passed, ${fail} failed` : `PASS — ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

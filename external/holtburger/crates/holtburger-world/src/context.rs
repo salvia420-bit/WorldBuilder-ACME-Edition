@@ -275,9 +275,12 @@ pub struct RunRateInputs {
     /// it won. `None` = never observed, or the `?serverRunRate=off` escape
     /// is engaged.
     pub server_run_rate: Option<f32>,
-    /// MOVE-RUNRATE-105 fix B: the augmentation bonus folded into the
-    /// composed run skill ([`run_skill_augmentation_bonus`]). Reported so a
-    /// capture can tell "we and ACE agree" from "we and ACE agree by luck".
+    /// MOVE-RUNRATE-105 fix B: the augmentation bonus
+    /// ([`run_skill_augmentation_bonus`]). Since enchstats-2 (2026-10-08) it
+    /// is folded INTO the Run skill `current` by
+    /// `PlayerState::derive_skill_value` (retail `InqSkill`), so it is only
+    /// REPORTED here — a capture can still tell "we and ACE agree" from "we
+    /// and ACE agree by luck".
     pub run_skill_aug_bonus: f32,
     /// ORACLE open defect #1 (2026-08-11): the RAW
     /// `AugmentationJackOfAllTrades` read, `None` when the property is not in
@@ -498,8 +501,27 @@ pub trait WorldContextExt: WorldContext {
         self.get_entity(player_guid)?.monarch_id()
     }
 
+    /// The local player's total burden (the `encumb_val` input to retail
+    /// `EncumbranceSystem::Load`).
+    ///
+    /// R1 motioninterp-4 (2026-10-08): the PLAYER's own wire
+    /// `EncumbranceVal` (PropertyInt 5) wins. Retail `CACQualities::InqLoad`
+    /// (acclient.c:439762-439779) reads exactly that — `InqInt(5)` on the
+    /// player's qualities, never a sum over items — and ACE keeps it current:
+    /// `[SendOnLogin]` in PlayerDescription plus a
+    /// `PrivateUpdatePropertyInt(EncumbranceVal)` on every inventory change
+    /// (ace-server `Player_Inventory.cs`). The per-item sum below drifts:
+    /// `SetStackSize` carries no encumbrance, so every stack split / merge /
+    /// consume (arrows, pyreals, buying) leaves an item's `EncumbranceVal`
+    /// stale. A negative wire value clamps to 0, as retail `Load` does. The
+    /// item sum stays as the FALLBACK for the boot window before
+    /// PlayerDescription (and an ACE player whose property is null).
     fn player_encumbrance(&self) -> Option<f32> {
         let player_guid = self.get_player_guid()?;
+
+        if let Some(wire) = self.get_player_int_property(PropertyInt::EncumbranceVal) {
+            return Some(wire.max(0) as f32);
+        }
 
         let mut encumbrance = 0.0;
         for guid in self.iter_inventory() {
@@ -559,6 +581,43 @@ pub trait WorldContextExt: WorldContext {
         Some(encumbrance / capacity)
     }
 
+    /// R1 motioninterp-2 (2026-10-08) — retail `CACQualities::CanJump`
+    /// (acclient.c:442878-442884): `InqLoad(&load) && load < 2.0`, reached
+    /// through the weenie `vfptr[15]` (`ACCWeenieObject::CanJump`,
+    /// acclient.c:436885-436897; the PDB vtable puts `CanJump` at offset 60
+    /// = slot 15). `CMotionInterp::charge_jump` and `jump_charge_is_allowed`
+    /// refuse with error 73 ("You are too encumbered to jump!") when this is
+    /// false. The gate is BURDEN, not stamina.
+    ///
+    /// Unknown data never refuses: retail `InqLoad` always succeeds (it ORs
+    /// the attribute inquiry with 1), so a player whose strength has not
+    /// hydrated yet reads as load 0 and may jump. A known zero capacity reads
+    /// as load 3.0 ([`Self::player_burden`]) and refuses, matching retail
+    /// `EncumbranceSystem::Load`.
+    fn player_can_jump(&self) -> bool {
+        self.player_burden().is_none_or(|load| load < 2.0)
+    }
+
+    /// R1 motioninterp-5 (2026-10-08) — the jump SKILL retail
+    /// `CACQualities::InqJumpVelocity` composes (acclient.c:443773-443848),
+    /// the mirror of `InqRunRate` for skill 0x16: formula + init + ranks,
+    /// `LumAugAllSkills` (0x16D), `EnchantSkill` (vitae first), then
+    /// `AugmentationJackOfAllTrades` (0x146) +5 and `LumAugSkilledSpec`
+    /// (0x158) +2× when specialized.
+    ///
+    /// enchstats-2 (2026-10-08): that composition is exactly
+    /// `CACQualities::InqSkill(0x16, raw = 0)` (acclient.c:443603), which
+    /// `PlayerState::derive_skill_value` now implements for EVERY skill, so
+    /// the wire-side Jump `current` already carries all three augmentation
+    /// terms in retail order (LumAugAllSkills inside the multiplier, the
+    /// other two after it). Adding [`run_skill_augmentation_bonus`] here
+    /// again would double count them. Retail's zero-stamina fold
+    /// (`if (!stamina) jumpskill = 0`) runs AFTER this composition; callers
+    /// apply it (`PlayerState::exhausted_jump_skill`).
+    fn player_composed_jump_skill(&self) -> Option<u32> {
+        self.get_player_skill_current(SkillType::Jump)
+    }
+
     /// MOVE-RUNRATE-105 fix A (2026-08-11) — the local player's run rate,
     /// SERVER FIRST.
     ///
@@ -603,31 +662,21 @@ pub trait WorldContextExt: WorldContext {
         Some(run_rate_from_skill_and_burden(run_skill, burden))
     }
 
-    /// The run-SKILL value the composition feeds to the formula: the wire
-    /// `Current` plus [`run_skill_augmentation_bonus`] (MOVE-RUNRATE-105
-    /// fix B), folded through the gated exhaustion arm.
+    /// The run-SKILL value the composition feeds to the formula: the Run
+    /// skill `current`, folded through the gated exhaustion arm.
     ///
-    /// The augmentation terms are added AFTER the wire `current` — which
-    /// already carries `derive_skill_value`'s enchantment multiplier — so
-    /// this reproduces ACE's `CreatureSkill.Current` ordering exactly for
-    /// the JackOfAllTrades and SkilledSpec terms (ACE adds both after the
-    /// multiplier too, `CreatureSkill.cs:180-185`). `LumAugAllSkills` is
-    /// ACE's `GetAugBonus_Base`, i.e. INSIDE the multiplier; we add it
-    /// outside, which differs only for a player who both holds that
-    /// luminance aug AND is under a multiplicative Run enchantment. Noted,
-    /// not modelled — nothing in the movement suite exercises it, and the
-    /// server-first lane above makes it moot whenever the wire is live.
+    /// enchstats-2 (2026-10-08): retail `CACQualities::InqRunRate`
+    /// (acclient.c:443696-443770) inlines `InqSkill(0x18, raw = 0)`
+    /// (:443603) — formula + init + ranks + `LumAugAllSkills`, vitae and the
+    /// culled enchantments, then JackOfAllTrades +5 and `LumAugSkilledSpec`
+    /// +2× when specialized. `PlayerState::derive_skill_value` now IS that
+    /// composition, so `current` already carries the MOVE-RUNRATE-105 fix-B
+    /// augmentation terms (and vitae, the rest of commit 32afef1a's
+    /// 105-vs-109 gap) in retail order; adding [`run_skill_augmentation_bonus`]
+    /// here again would double count them. The bonus is still REPORTED in
+    /// [`RunRateInputs::run_skill_aug_bonus`] for capture diffs.
     fn player_composed_run_skill(&self) -> Option<f32> {
-        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32
-            + run_skill_augmentation_bonus(
-                self.get_player_int_property(PropertyInt::LumAugAllSkills)
-                    .unwrap_or(0),
-                self.get_player_int_property(PropertyInt::AugmentationJackOfAllTrades)
-                    .unwrap_or(0),
-                self.get_player_int_property(PropertyInt::LumAugSkilledSpec)
-                    .unwrap_or(0),
-                self.get_player_skill_is_specialized(SkillType::Run),
-            );
+        let run_skill = self.get_player_skill_current(SkillType::Run)? as f32;
         // A3-D2(a) exhaustion lane (2026-06-12): wire Stamina 0 →
         // exhausted rate 1.0, matching ACE's stamina==0 → runskill 0
         // chain (see [`USE_EXHAUSTION_RUN_RATE`]). Default-off.
@@ -1227,6 +1276,7 @@ mod tests {
         player_vitals: HashMap<VitalType, u32>,
         player_int_properties: Vec<(PropertyInt, i32)>,
         player_float_properties: Vec<(PropertyFloat, f64)>,
+        player_specialized_skills: HashSet<SkillType>,
     }
 
     impl WorldContext for TestWorld {
@@ -1260,6 +1310,10 @@ mod tests {
 
         fn get_player_skill_current(&self, skill: SkillType) -> Option<u32> {
             self.player_skills.get(&skill).copied()
+        }
+
+        fn get_player_skill_is_specialized(&self, skill: SkillType) -> bool {
+            self.player_specialized_skills.contains(&skill)
         }
 
         fn get_player_vital_current(&self, vital: VitalType) -> Option<u32> {
@@ -1537,6 +1591,12 @@ mod tests {
         );
 
         // (b) Property present on a live entity — what login measured.
+        // enchstats-2 (2026-10-08): the augmentation now lives INSIDE the
+        // skill `current` (retail `InqSkill`, folded by
+        // `PlayerState::derive_skill_value`), so the composition reads the
+        // wire value verbatim — the rig's 105 here stands for a current that
+        // already includes whatever the server folded. The bonus is still
+        // REPORTED, never added a second time.
         let mut augmented = rig();
         augmented.entities.insert(player_guid, entity(player_guid, "agentp09"));
         augmented
@@ -1545,7 +1605,7 @@ mod tests {
         let i = augmented.player_run_rate_inputs();
         assert_eq!(i.aug_joat, Some(1));
         assert_eq!(i.run_skill_aug_bonus, 5.0);
-        assert_eq!(i.run_skill_used, Some(110.0));
+        assert_eq!(i.run_skill_used, Some(105.0), "no second +5 on top of current");
         assert!(i.player_entity_present);
         assert!(i.to_json().contains("\"aug_joat\":1"));
         assert!(i.to_json().contains("\"player_entity_present\":true"));
@@ -1667,6 +1727,132 @@ mod tests {
             world.player_run_rate(),
             Some(run_rate_from_skill_and_burden(300.0, expected_burden))
         );
+    }
+
+    /// R1 motioninterp-4 (2026-10-08): retail `CACQualities::InqLoad`
+    /// (acclient.c:439762-439779) reads the PLAYER's own PropertyInt 5, never
+    /// a sum over items. When the wire total is present it wins over the
+    /// (stale-prone) item sum; a negative value clamps to 0 like retail
+    /// `EncumbranceSystem::Load`.
+    #[test]
+    fn player_burden_prefers_player_wire_encumbrance_val() {
+        let player_guid = Guid(0x5000_0001);
+        let item_a = Guid(0x8000_0001);
+        let item_b = Guid(0x8000_0002);
+        let mut world = TestWorld {
+            player_guid: Some(player_guid),
+            inventory: HashSet::from([item_a, item_b]),
+            // Strength 10 → capacity 1500.
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 10)]),
+            player_int_properties: vec![(PropertyInt::EncumbranceVal, 4000)],
+            ..Default::default()
+        };
+        for (guid, burden) in [(item_a, 100), (item_b, 200)] {
+            let mut item = item_in_container(guid, player_guid, "Stale Stack");
+            item.properties.ints.insert(PropertyInt::EncumbranceVal, burden);
+            world.entities.insert(guid, item);
+        }
+
+        assert_eq!(
+            world.player_encumbrance(),
+            Some(4000.0),
+            "the player's wire total wins over the 300 item sum"
+        );
+        assert_eq!(world.player_capacity(), Some(1500.0));
+        assert_eq!(world.player_burden(), Some(4000.0 / 1500.0));
+
+        // Negative wire value → 0 (retail Load clamps), not the item sum.
+        world.player_int_properties = vec![(PropertyInt::EncumbranceVal, -50)];
+        assert_eq!(world.player_encumbrance(), Some(0.0));
+
+        // No wire value (boot window) → the item-sum fallback.
+        world.player_int_properties.clear();
+        assert_eq!(world.player_encumbrance(), Some(300.0));
+    }
+
+    /// R1 motioninterp-2 (2026-10-08): retail `CACQualities::CanJump`
+    /// (acclient.c:442878-442884) — `load < 2.0`, strict. Unknown strength
+    /// never refuses (retail `InqLoad` always succeeds).
+    #[test]
+    fn player_can_jump_refuses_at_load_two() {
+        let player_guid = Guid(0x5000_0001);
+        let with_burden = |burden: i32| TestWorld {
+            player_guid: Some(player_guid),
+            // Strength 10 → capacity 1500; 3000 burden = load 2.0 exactly.
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 10)]),
+            player_int_properties: vec![(PropertyInt::EncumbranceVal, burden)],
+            ..Default::default()
+        };
+
+        assert!(!with_burden(3000).player_can_jump(), "load 2.0 → refused (73)");
+        assert!(!with_burden(4500).player_can_jump(), "load 3.0 → refused");
+        assert!(with_burden(2990).player_can_jump(), "load 1.993 → allowed");
+        assert!(with_burden(0).player_can_jump());
+
+        // Strength not hydrated → burden unknown → allowed.
+        let unknown = TestWorld {
+            player_guid: Some(player_guid),
+            player_int_properties: vec![(PropertyInt::EncumbranceVal, 99_999)],
+            ..Default::default()
+        };
+        assert_eq!(unknown.player_burden(), None);
+        assert!(unknown.player_can_jump());
+
+        // Known zero capacity → load 3.0 → refused (retail Load).
+        let weak = TestWorld {
+            player_guid: Some(player_guid),
+            player_attributes: HashMap::from([(AttributeType::StrengthAttr, 0)]),
+            ..Default::default()
+        };
+        assert_eq!(weak.player_burden(), Some(3.0));
+        assert!(!weak.player_can_jump());
+    }
+
+    /// R1 motioninterp-5 (2026-10-08): retail `InqJumpVelocity`
+    /// (acclient.c:443773-443848) folds the same three augmentation terms
+    /// into the jump skill that `InqRunRate` folds into the run skill.
+    ///
+    /// enchstats-2 (2026-10-08): both are `InqSkill(raw = 0)`, which
+    /// `PlayerState::derive_skill_value` now implements, so the augmentation
+    /// terms are already INSIDE the Jump `current` the context reports. The
+    /// composition must read it verbatim — the properties below are present
+    /// only to prove they are not added a second time. (The fold itself is
+    /// pinned in `player::tests::skill_current_folds_joat_after_vitae` and
+    /// `specialized_lum_aug_after_enchant`.)
+    #[test]
+    fn player_composed_jump_skill_reads_current_verbatim() {
+        let player_guid = Guid(0x5000_0001);
+        let base = || TestWorld {
+            player_guid: Some(player_guid),
+            player_skills: HashMap::from([(SkillType::Jump, 200)]),
+            ..Default::default()
+        };
+
+        assert_eq!(base().player_composed_jump_skill(), Some(200));
+
+        let mut augmented = base();
+        augmented.player_specialized_skills.insert(SkillType::Jump);
+        augmented
+            .player_int_properties
+            .push((PropertyInt::AugmentationJackOfAllTrades, 1));
+        augmented
+            .player_int_properties
+            .push((PropertyInt::LumAugSkilledSpec, 2));
+        augmented
+            .player_int_properties
+            .push((PropertyInt::LumAugAllSkills, 3));
+        assert_eq!(
+            augmented.player_composed_jump_skill(),
+            Some(200),
+            "the augmentation terms live in `current`; never add them twice"
+        );
+
+        // No wire Jump skill → None (the caller keeps its fallback).
+        let none = TestWorld {
+            player_guid: Some(player_guid),
+            ..Default::default()
+        };
+        assert_eq!(none.player_composed_jump_skill(), None);
     }
 
     #[test]

@@ -41,7 +41,7 @@
 //
 //   build_motion_state_raw_motion_state_emits_both_forward_and_sidestep        — W+D both slots
 //   build_motion_state_raw_motion_state_suppresses_turn_when_only_sidestep_active — turn-gating with sidestep
-//   turn_left_emits_right_code_with_negated_speed                              — Q wire shape
+//   turn_left_emits_left_code_with_positive_speed                              — Q wire shape (outbound-4, 2026-10-08: retail raw TurnLeft)
 //   turn_right_emits_right_code_with_positive_speed                            — E wire shape
 //   sidestep_left_emits_right_code_with_negated_speed                          — A wire shape
 //   sidestep_right_emits_right_code_with_positive_speed                        — D wire shape
@@ -129,7 +129,7 @@ const PLAN_MAPPED_TESTS = [
   // common.rs — Wave 2 wire-shape tests (post-Phase 2.2 + 2.5).
   ["W+D both slots", "build_motion_state_raw_motion_state_emits_both_forward_and_sidestep"],
   ["turn-gating with sidestep", "build_motion_state_raw_motion_state_suppresses_turn_when_only_sidestep_active"],
-  ["Q (StrafeLeft → SideStepRight + -speed)", "turn_left_emits_right_code_with_negated_speed"],
+  ["Q (Turn::Left → raw TurnLeft + +speed, outbound-4)", "turn_left_emits_left_code_with_positive_speed"],
   ["E (StrafeRight → SideStepRight + +speed)", "turn_right_emits_right_code_with_positive_speed"],
   ["A (Turn::Left → TurnRight + -speed)", "sidestep_left_emits_right_code_with_negated_speed"],
   ["D (Turn::Right → TurnRight + +speed)", "sidestep_right_emits_right_code_with_positive_speed"],

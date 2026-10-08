@@ -70,7 +70,7 @@ test("picking.js gates the attack and routes non-attackable clicks to use", () =
   assert.match(src, /import \{ objectIsAttackable, itemIsUseable \} from "\.\/target_cycle\.js";/);
   // fireAttackOnSelectedTarget refuses before any wire send.
   const fire = src.slice(src.indexOf("function fireAttackOnSelectedTarget("));
-  const gate = fire.indexOf("if (!entityIsAttackableTarget(targetGuid))");
+  const gate = fire.indexOf("if (targetGuid === 0 || !entityIsAttackableTarget(targetGuid))");
   assert.ok(gate > 0, "attack gate present");
   assert.ok(gate < fire.indexOf("missileAttack("), "gate precedes the missile send");
   assert.ok(gate < fire.indexOf("const fireOnce"), "gate precedes the melee/missile senders");
@@ -101,4 +101,34 @@ test("bug 9/10: retail Use and health-meter policies (target_cycle.js)", async (
   assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x08 }, me), true);   // another player
   assert.equal(tc.shouldQueryHealth({ itemType: 0x10, objDescFlags: 0x04, petOwner: 0x50000002 }, me), true);
   assert.equal(tc.shouldQueryHealth(null, me), false);
+});
+
+// selection-6 (2026-10-08) — retail ClientCombatSystem::GetAttackTarget
+// (acclient.c:407570-407597): a selected wielded item is attacked through its
+// wielder (CPhysicsObj::parent), an item the player owns attacks nobody, and
+// ExecuteAttack (:408626-408660) prints one line for no / invalid target.
+test("resolveAttackTarget: wielder redirect, owned items, plain targets", async () => {
+  const { resolveAttackTarget } = await import("../scene3d/target_cycle.js");
+  const ME = 0x50000001, MOB = 0x80000001, SWORD = 0x80000002;
+  const r = (o) => resolveAttackTarget({ me: ME, ownerContainer: 0, ownerWielder: 0,
+    attachedParentGuid: 0, parentKnown: false, ...o });
+  assert.equal(r({ sel: SWORD, attachedParentGuid: MOB, parentKnown: true }), MOB, "monster's weapon → monster");
+  assert.equal(r({ sel: SWORD, attachedParentGuid: MOB, parentKnown: false }), 0, "wielder unknown → nobody");
+  assert.equal(r({ sel: SWORD, ownerWielder: ME, attachedParentGuid: ME, parentKnown: true }), 0, "my own wielded weapon");
+  assert.equal(r({ sel: SWORD, ownerContainer: ME }), 0, "an item in my pack");
+  assert.equal(r({ sel: MOB }), MOB, "a plain monster");
+  assert.equal(r({ sel: 0 }), 0, "nothing selected");
+});
+
+test("picking.js attacks the resolved target and uses retail's single refusal line", () => {
+  const src = readFileSync(new URL("../scene3d/picking.js", import.meta.url), "utf8");
+  const fire = src.slice(src.indexOf("function fireAttackOnSelectedTarget("));
+  const head = fire.slice(0, fire.indexOf("const cb = window.__combatBarState;"));
+  assert.doesNotMatch(head, /Select a target first\./);
+  const resolve = head.indexOf("em.attackTargetFor(selGuid)");
+  const gate = head.indexOf("if (targetGuid === 0 || !entityIsAttackableTarget(targetGuid))");
+  assert.ok(resolve > 0 && gate > resolve, "resolve the attack target before the gate");
+  const ent = readFileSync(new URL("../scene3d/entities.js", import.meta.url), "utf8");
+  assert.match(ent, /^  attackTargetFor\(guid\) \{/m);
+  assert.match(ent, /return resolveAttackTarget\(\{/);
 });

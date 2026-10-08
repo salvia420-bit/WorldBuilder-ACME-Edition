@@ -469,6 +469,11 @@ export function copyInventoryRow(it) {
   // look like server truth (placement) or a 0-size stack limit.
   if (Number.isFinite(it?.placement) && it.placement >= 0) row.placement = it.placement | 0;
   if (Number.isFinite(it?.maxStackSize) && it.maxStackSize > 0) row.maxStackSize = it.maxStackSize | 0;
+  // items-4 (2026-10-08): ClothingPriority (PropertyInt 4, the coverage
+  // mask retail AutoWearIsLegal intersects) and CombatUse (PropertyInt 51)
+  // — only on a wasm that has the InventoryItem getters; absent = unknown.
+  if (typeof it?.clothingPriority === "number") row.clothingPriority = it.clothingPriority >>> 0;
+  if (typeof it?.combatUse === "number") row.combatUse = it.combatUse >>> 0;
   return row;
 }
 
@@ -578,7 +583,8 @@ function reject(message) { return { op: "reject", message }; }
  *   playerGuid, canUseWith(src,dst)→bool|null, capacity(key)→{used,cap}|null,
  *   isCorpse(guid)→bool, containerName(key)→string,
  *   canEquip(item, mask)→{ok,reason}, packWithRoom(excludeKey)→guid|0,
- *   autoMergeTarget(item, amount, key)→guid|0
+ *   autoMergeTarget(item, amount, key)→guid|0, and (items-4, optional)
+ *   wearPlan(item)→planWear result, readySlotOccupant(mask)→row|null
  * @returns {object} { op: "noop"|"reject"|"merge"|"usewith"|"move"|"wield"|"wear"|"give"|"drop", … }
  */
 export function decideItemDrop(drag, target, ctx = {}) {
@@ -637,6 +643,18 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const vl = (it.validLocations >>> 0) || 0;
       if (!vl && ((mask & (mask - 1)) >>> 0) !== 0) return reject("Item attributes pending — try again.");
       const loc = ((vl & mask) >>> 0) ? pickWieldSlotMask(vl & mask) : mask;
+      // items-4 (`?retailAutoWear`, ctx hooks absent = old path): an
+      // overlapping wear is refused before anything moves (planWear), and a
+      // second stack of the wielded ammo / thrown weapon merges into it
+      // (planAmmoWield) instead of swapping.
+      if ((loc & WEARABLE_LOCATIONS) !== 0 && typeof ctx.wearPlan === "function") {
+        const p = ctx.wearPlan({ ...it, guid });
+        if (p?.op === "reject") return reject(p.message);
+      }
+      if (typeof ctx.readySlotOccupant === "function") {
+        const p = planAmmoWield({ ...it, guid }, ctx.readySlotOccupant(loc >>> 0), { amount });
+        if (p.op === "merge" || p.op === "reject") return p;
+      }
       return { op: "wield", guid, slotMask: loc >>> 0, amount, speculative: !!verdict?.speculative };
     }
 
@@ -646,6 +664,12 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const vl = (it.validLocations >>> 0) || 0;
       if ((vl & WEARABLE_LOCATIONS) === 0) return reject("You can't put that item there");
       if ((it.equipMask >>> 0) !== 0) return NOOP;
+      // items-4: retail AutoWearIsLegal → AutoWear (full ValidLocations).
+      if (typeof ctx.wearPlan === "function") {
+        const p = ctx.wearPlan({ ...it, guid });
+        if (p?.op === "reject") return reject(p.message);
+        if (p?.op === "wear") return { op: "wear", guid, slotMask: p.slotMask >>> 0 };
+      }
       return { op: "wear", guid, slotMask: pickWieldSlotMask(vl & WEARABLE_LOCATIONS) };
     }
 
@@ -909,7 +933,8 @@ export function createPackOrder({ now = () => Date.now(), settleMs = 3000 } = {}
 }
 
 /** Expectation factories for the pending ledger (row = the item's current
- *  plain inventory row, or undefined when the player no longer owns it). */
+ *  plain inventory row, or undefined when the player no longer owns it;
+ *  the second argument is the whole Map<guid, row> of the sweep). */
 export const pendingExpect = Object.freeze({
   /** item now sits in `key` (MAIN_PACK_KEY or a pack guid), unequipped */
   inContainer: (key) => (row) => !!row && (row.equipMask >>> 0) === 0
@@ -922,6 +947,9 @@ export const pendingExpect = Object.freeze({
   owned: () => (row) => !!row,
   /** source stack shrank or vanished (split / partial merge / give part) */
   reduced: (orig) => (row) => !row || (row.stackSize | 0) < (orig | 0),
+  /** an owned stack reached `want` (a merge whose source we never owned —
+   *  a corpse / ground take — so the source row cannot show it) */
+  grew: (target, want) => (_row, rows) => ((rows?.get?.(target >>> 0)?.stackSize | 0) >= (want | 0)),
 });
 
 /**
@@ -964,7 +992,7 @@ export function createPendingLedger({ now = () => Date.now(), ttlMs = 6000 } = {
       for (const [g, e] of Array.from(entries)) {
         let done = false;
         if (e.epoch < epoch) {
-          try { done = typeof e.expect === "function" ? !!e.expect(rowsByGuid.get(g)) : false; } catch (_) { done = false; }
+          try { done = typeof e.expect === "function" ? !!e.expect(rowsByGuid.get(g), rowsByGuid) : false; } catch (_) { done = false; }
         }
         if (done) {
           entries.delete(g); changed++;
@@ -1057,4 +1085,389 @@ export function wieldEventTouchesLocal(detail, localGuid, isMine) {
   if (!me) return true;
   if (((detail?.u32Payload2 ?? 0) >>> 0) === me) return true;
   try { return !!isMine?.(item); } catch (_) { return true; }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 2026-10-08 — retail item placement / activation / cooldown rules.
+//
+// Pure, like the drag core above: planPlaceInBackpack (corpse / chest
+// takes and ground pickups), primaryUseAction (shortcut keys, the Use
+// button, double-click) and the per-item cooldown overlay step. Pinned by
+// tests/inventory_drag_rules.test.mjs, tests/item_primary_use.test.mjs and
+// tests/item_cooldown_step.test.mjs.
+// ════════════════════════════════════════════════════════════════════
+
+/** ACE human Player weenie (ItemsCapacity 102, ContainersCapacity 7) — used
+ *  while the snapshot has not surfaced the player's own value yet. */
+export const DEFAULT_PLAYER_ITEMS_CAPACITY = 102;
+export const DEFAULT_PLAYER_CONTAINERS_CAPACITY = 7;
+
+/** Default-ON behaviour flag: false only for `?name=off`, `=0` or `=false`
+ *  (docs/url-flags.md). `search` defaults to the page's query string. */
+export function defaultOnUrlFlag(name, search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const v = new URLSearchParams(s).get(name);
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+/**
+ * Guids of one of the player's lists (MAIN_PACK_KEY, PACKS_KEY or a pack
+ * guid) in server placement order when every row carries one, else in
+ * snapshot order. The inventory panel passes its own createPackOrder order
+ * instead while it is mounted.
+ */
+export function containerOrder(rows, key) {
+  const list = [];
+  for (const r of rows || []) {
+    if (!r || (r.equipMask >>> 0) !== 0) continue;
+    const c = (r.containerId >>> 0) || 0;
+    if (key === MAIN_PACK_KEY) { if (c !== 0 || rowUsesPackSlot(r)) continue; }
+    else if (key === PACKS_KEY) { if (c !== 0 || !rowUsesPackSlot(r)) continue; }
+    else if (c !== (key >>> 0)) continue;
+    list.push(r);
+  }
+  if (list.length > 0 && list.every((r) => Number.isInteger(r.placement))) {
+    list.sort((a, b) => a.placement - b.placement);
+  }
+  return list.map((r) => r.guid >>> 0);
+}
+
+/**
+ * ItemHolder::AttemptAutoMerge (acclient.c:432634) for ONE candidate stack:
+ * a legal merge that takes the WHOLE amount (`splitSize <= max - stack`).
+ * The stack limit is the target's (same wcid ⇒ same limit; corpse and
+ * ground rows carry none), else the item's own; unknown or <= 1 (not
+ * stackable) never auto-merges.
+ */
+export function autoMergeFits(item, row, amount) {
+  const lim = (v) => (Number.isFinite(v) && v > 0 ? v : NaN);
+  const max = Number.isFinite(lim(row?.maxStackSize)) ? lim(row.maxStackSize) : lim(item?.maxStackSize);
+  if (!(max > 1)) return false;
+  const want = Math.max(1, amount | 0 || item?.stackSize | 0 || 1);
+  return mergeAmount(item, { ...row, maxStackSize: max }, want) >= want;
+}
+
+/** First row of `candidates` (exhaustive order) that auto-merge takes, or null. */
+export function findAutoMergeTarget(item, amount, candidates) {
+  for (const r of candidates || []) {
+    if (r && autoMergeFits(item, r, amount)) return r;
+  }
+  return null;
+}
+
+/**
+ * CPlayerSystem::PlaceInBackpack (acclient.c:395895) →
+ * ItemHolder::AttemptToPlaceInContainer(item, player, preferred, autoMerge=1)
+ * (acclient.c:432899) — where an item the player picks up or takes out of a
+ * corpse / chest goes:
+ *   1. AttemptAutoMerge: the first stack in the exhaustive item list (main
+ *      pack, then each side pack) that takes the whole amount → merge;
+ *   2. the preferred container — the side pack open in the inventory
+ *      (mOpenContainerID) — when it has room;
+ *   3. the main pack (the top container);
+ *   4. the first side pack with room (GetContainedContainersList order);
+ *   5. else "<player> is completely full!" / "<player> can carry no more
+ *      containers!" (the top container is the player).
+ * ACE does none of this server-side: PutItemInContainer adds with
+ * limitToMainPackOnly (Player_Inventory.cs DoHandleActionPutItemInContainer
+ * → Container.TryAddToInventory), so a full main pack just fails, and a
+ * take never merges (only an explicit StackableMerge does).
+ *
+ * @param {Array<object>} rows  the player's inventory (copyInventoryRow rows)
+ * @param {object} item  guid, wcid, name, stackSize, maxStackSize?, itemType, isPack?
+ * @param {object} opts  playerGuid, amount?, preferredPack? (0 / the player
+ *   = main pack), mainCap?, packsCap?, playerName?, order?(key) → guid[],
+ *   capacityOf?(key) → {used, cap}
+ * @returns {object} decideItemDrop-shaped action (merge carries targetStack)
+ */
+export function planPlaceInBackpack(rows, item, opts = {}) {
+  const me = (opts.playerGuid >>> 0) || 0;
+  const guid = (item?.guid >>> 0) || 0;
+  if (!me || !guid) return NOOP;
+  const list = Array.isArray(rows) ? rows : [];
+  const stack = Math.max(1, item.stackSize | 0 || 1);
+  const amount = opts.amount > 0 && opts.amount < stack ? (opts.amount | 0) : stack;
+  const isPack = typeof item.isPack === "boolean" ? item.isPack : rowUsesPackSlot(item);
+  const capOf = typeof opts.capacityOf === "function"
+    ? opts.capacityOf
+    : (key) => packCapacity(list, key, { mainCap: opts.mainCap, packsCap: opts.packsCap });
+  const hasRoom = (key) => {
+    let c = null;
+    try { c = capOf(key); } catch (_) { c = null; }
+    return !(c && c.cap > 0 && c.used >= c.cap);
+  };
+  const orderOf = (key) => {
+    let o = null;
+    try { o = opts.order?.(key); } catch (_) { o = null; }
+    return Array.isArray(o) ? o : containerOrder(list, key);
+  };
+  const packs = orderOf(PACKS_KEY).map((g) => g >>> 0);
+  if (!isPack) {
+    const byGuid = new Map(list.map((r) => [r.guid >>> 0, r]));
+    const candidates = [];
+    for (const key of [MAIN_PACK_KEY, ...packs]) {
+      for (const g of orderOf(key)) {
+        const r = byGuid.get(g >>> 0);
+        if (r) candidates.push(r);
+      }
+    }
+    const into = findAutoMergeTarget(item, amount, candidates);
+    if (into) {
+      return { op: "merge", guid, target: into.guid >>> 0, amount, targetStack: Math.max(1, into.stackSize | 0 || 1) };
+    }
+  }
+  const move = (container, listKey) => ({ op: "move", guid, container, placement: 0, listKey, index: 0, amount });
+  const who = opts.playerName || "Your pack";
+  if (isPack) {
+    // A container only ever goes in the player's container list.
+    return hasRoom(PACKS_KEY) ? move(me, PACKS_KEY) : reject(`${who} can carry no more containers!`);
+  }
+  const pref = (opts.preferredPack >>> 0) || 0;
+  if (pref && pref !== me && pref !== guid && packs.includes(pref) && hasRoom(pref)) return move(pref, pref);
+  if (hasRoom(MAIN_PACK_KEY)) return move(me, MAIN_PACK_KEY);
+  for (const p of packs) {
+    if (p !== guid && hasRoom(p)) return move(p, p);
+  }
+  return reject(`${who} is completely full!`);
+}
+
+const ITEM_TYPE_CASTER = 0x00008000;
+const ITEM_TYPE_TINKERING_TOOL = 0x20000000;
+/** Weapon-family wield locations (MeleeWeapon, Shield, MissileWeapon,
+ *  MissileAmmo, Held, TwoHanded). Stands in for retail's combatUse /
+ *  WieldOnUse test, which the inventory snapshot does not carry yet. */
+export const WIELD_ON_USE_LOCATIONS = 0x03f00000;
+/** DetermineUseResult's AutoSort groups: armour (BYTE1 & 0x7E), clothing /
+ *  cloak (0x80001FF) and jewellery / trinket / sigils (0x7C0F8000). */
+const AUTOSORT_GROUPS = [0x00007e00, 0x080001ff, 0x7c0f8000];
+/** CombatUse (PropertyInt 51; ACE CombatUse: Melee 1, Missile 2, Ammo 3,
+ *  Shield 4, TwoHanded 5) → the ready slot it wields to. */
+const COMBAT_USE_SLOT = Object.freeze({
+  1: EQUIP.MeleeWeapon, 2: EQUIP.MissileWeapon, 3: EQUIP.MissileAmmo, 4: EQUIP.Shield, 5: EQUIP.TwoHanded,
+});
+
+/**
+ * ItemHolder::DetermineUseResult (acclient.c:433086) as ItemHolder::UseObject
+ * (acclient.c:433354) applies it to an OWNED inventory row — what a shortcut
+ * key, the Use button or a double-click does:
+ *   { kind: "open" }               a pack (the inventory opens it)
+ *   { kind: "wield", slotMask }    3 / 8 → CPlayerSystem::UsingItem → AutoWield
+ *   { kind: "wear", slotMask }     4 → AutoSort (armour / clothing / jewellery)
+ *   { kind: "salvage" }            6 → SendNotice_OpenSalvagePanel (TinkeringTool)
+ *   { kind: "target" }             IsUseable_Targeted → "Choose a target for the %s"
+ *   { kind: "use" }                Event_UseEvent
+ * Results 2..7 send no Use event at all — and ACE has no wield path behind
+ * one (WorldObject.OnActivate → ActOnUse "undefined" for weapons/clothing).
+ *
+ * @param {object} row  copyInventoryRow row
+ * @param {object} opts needsTarget (Rust classifyUse), equippedMask (OR of the
+ *   player's worn locations: AutoWear takes the free ring / bracelet bit)
+ */
+export function primaryUseAction(row, opts = {}) {
+  if (!row) return { kind: "none" };
+  if (rowUsesPackSlot(row)) return { kind: "open" };
+  const it = (row.itemType >>> 0) || 0;
+  const vl = (row.validLocations >>> 0) || 0;
+  const loc = (row.equipMask >>> 0) || 0;
+  // A row without ValidLocations (the weenie lacks the property) still has
+  // its slot inferred — from CombatUse when the wasm surfaces it (items-4),
+  // else from ItemType, as the double-click always did.
+  const typeSlot = (it & 0x1) ? EQUIP.MeleeWeapon
+    : (it & 0x100) ? EQUIP.MissileWeapon
+      : (it & ITEM_TYPE_CASTER) ? EQUIP.Held : 0;
+  const weapon = vl ? (vl & WIELD_ON_USE_LOCATIONS) : (COMBAT_USE_SLOT[(row.combatUse >>> 0) || 0] || typeSlot);
+  if (weapon && loc === 0) return { kind: "wield", slotMask: pickWieldSlotMask(weapon) >>> 0 };
+  for (const group of AUTOSORT_GROUPS) {
+    if ((vl & group) === 0 || (loc & group) !== 0) continue;
+    const want = (vl & group) >>> 0;
+    const free = (want & ~((opts.equippedMask >>> 0) || 0)) >>> 0;
+    return { kind: "wear", slotMask: pickWieldSlotMask(free || want) >>> 0 };
+  }
+  if ((it & ITEM_TYPE_TINKERING_TOOL) !== 0) return { kind: "salvage" };
+  if (opts.needsTarget) return { kind: "target" };
+  return { kind: "use" };
+}
+
+/**
+ * UIElement_UIItem::UpdateCooldownDisplay (acclient.c:272052): the overlay
+ * step `(unsigned)(time_left / duration * 100 * 0.1 + 1)`, one of the ten
+ * m_elem_Icon_Cooldown_10..100 elements. 0 = no overlay (no cooldown, or
+ * it ran out — OnCooldown drops an entry at time_left <= 0).
+ */
+export function cooldownStep(duration, remaining) {
+  const d = Number(duration);
+  const r = Number(remaining);
+  if (!(d > 0) || !(r > 0)) return 0;
+  return Math.max(1, Math.min(10, Math.trunc((r / d) * 10 + 1)));
+}
+
+/**
+ * CEnchantmentRegistry::OnCooldown (acclient.c:445755) lookup: an item's
+ * shared-cooldown id N is the cooldown enchantment whose 16-bit spell id is
+ * N + 0x8000 (ACE EnchantmentManager.GetCooldownSpellID = 0x8000 | N).
+ * `enchs` are rows with a `spellId`. Returns the entry or null.
+ */
+export function matchCooldownEnchantment(enchs, sharedCooldown) {
+  const id = (sharedCooldown >>> 0) || 0;
+  if (!id) return null;
+  const want = (id + 0x8000) & 0xffff;
+  for (const e of enchs || []) {
+    if ((((e?.spellId ?? 0) >>> 0) & 0xffff) === want) return e;
+  }
+  return null;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 2026-10-08 — items-4: retail auto-wear refusal and ready-slot merge
+// (`?retailAutoWear`, default ON). The wasm WieldFromPack no longer strips
+// a worn piece for a pure wearable nor swaps a same-wcid ammo stack
+// (holtburger-world equip.rs); these planners give the player retail's
+// answer BEFORE anything is sent. Pinned by tests/item_wear_plan.test.mjs.
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * ACCWeenieObject::GetObjectName(NAME_PLURAL) (acclient.c:439093): the
+ * weenie's PluralName when it has one, else the name + "es" when it ends
+ * in 's', else + "s".
+ */
+export function retailPluralName(name, pluralName) {
+  if (typeof pluralName === "string" && pluralName.length > 0) return pluralName;
+  const n = String(name || "");
+  if (!n) return n;
+  return n.endsWith("s") ? `${n}es` : `${n}s`;
+}
+
+/**
+ * CPlayerSystem::AutoWearIsLegal (acclient.c:397338) → AutoWear (:398318)
+ * for an armour / clothing / cloak piece (ValidLocations & 0x8007FFF):
+ *   - the player's clothingPriorityMask is the OR of the ClothingPriority of
+ *     every worn item in that family (gmPaperDollUI keeps it, :222094);
+ *   - no overlap with the item's own priority → wear with the FULL mask
+ *     (UIAttemptWield(item, valid_locations); ACE also normalises Clothing
+ *     to ValidLocations);
+ *   - the item itself is worn → "The %s is already being worn";
+ *   - else the first worn item (GetObjectAtLocation: priority AND location
+ *     overlap, wield order) → "You must remove your %s to wear that".
+ * Nothing is moved — retail never strips a piece to make room.
+ * A row without ClothingPriority (a wasm without the getter — which also
+ * predates the WieldFromPack no-strip guard) keeps the old single-bit wear:
+ * no pre-check, and a full mask would make that wasm strip MORE pieces.
+ *
+ * @param {object} item  copyInventoryRow row: guid, name, validLocations,
+ *   equipMask, clothingPriority?
+ * @param {Array<object>} rows  the player's inventory (the worn rows count)
+ * @returns {{op:"wear", guid:number, slotMask:number}|{op:"reject", message:string}|{op:"none"}}
+ */
+export function planWear(item, rows) {
+  const vl = (item?.validLocations >>> 0) || 0;
+  const wear = (vl & WEARABLE_LOCATIONS) >>> 0;
+  if (!item || !wear) return { op: "none" };
+  const guid = (item.guid >>> 0) || 0;
+  if (typeof item.clothingPriority !== "number") return { op: "wear", guid, slotMask: pickWieldSlotMask(wear) >>> 0 };
+  const prio = (item.clothingPriority >>> 0) || 0;
+  const worn = [];
+  let mask = 0;
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const loc = (r?.equipMask >>> 0) || 0;
+    if (!loc) continue;
+    worn.push(r);
+    if ((loc & WEARABLE_LOCATIONS) !== 0) mask |= (r.clothingPriority >>> 0) || 0;
+  }
+  if (((mask & prio) >>> 0) === 0) return { op: "wear", guid, slotMask: wear };
+  const name = item.name || "item";
+  if ((item.equipMask >>> 0) !== 0 || worn.some((r) => (r.guid >>> 0) === guid)) {
+    return reject(`The ${name} is already being worn`);
+  }
+  const overlaps = (r) => (r.guid >>> 0) !== guid && (((r.clothingPriority >>> 0) & prio) >>> 0) !== 0;
+  // Retail stays silent when no worn item also shares a location; name the
+  // first priority overlap instead so the refusal is never blank.
+  const blocker = worn.find((r) => overlaps(r) && (((r.equipMask >>> 0) & vl) >>> 0) !== 0)
+    || worn.find((r) => overlaps(r) && ((r.equipMask >>> 0) & WEARABLE_LOCATIONS) !== 0);
+  return reject(`You must remove your ${blocker?.name || "armor"} to wear that`);
+}
+
+/** The weapon-ready slot family AutoWield merges into first
+ *  (MeleeWeapon | MissileWeapon | Held | TwoHanded = 0x3500000). */
+export const WEAPON_READY_LOCATIONS = 0x03500000;
+
+/**
+ * The equipped row occupying the ready slot `slotMask` wields to: the ammo
+ * slot for MissileAmmo, the weapon-ready slot for a weapon / held bit, else
+ * null (a shield, armour or jewellery slot never merges).
+ */
+export function readySlotOccupant(rows, slotMask) {
+  const m = (slotMask >>> 0) || 0;
+  const family = (m & EQUIP.MissileAmmo) ? EQUIP.MissileAmmo
+    : (m & WEAPON_READY_LOCATIONS) ? WEAPON_READY_LOCATIONS : 0;
+  if (!family) return null;
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (r && (((r.equipMask >>> 0) & family) >>> 0) !== 0) return r;
+  }
+  return null;
+}
+
+/**
+ * CPlayerSystem::AutoWield's ready-slot merge (acclient.c:398828, the
+ * weapon-ready and ammo branches ~399250-399335): when the slot is already
+ * held by a stack of the SAME wcid, ItemHolder::AttemptMerge (:432468)
+ * moves min(amount, max - held) into it — no swap. A full (or
+ * non-stackable) ammo stack of the same wcid → "You cannot wield more %s"
+ * (plural name); a full weapon-ready stack falls through to the unblock
+ * swap. A different wcid, or an empty slot, wields as before (the wasm
+ * WieldFromPack unblock moves the old item to the pack).
+ * Stack limit: the held stack's MaxStackSize, else the item's; unknown →
+ * ammo merges the whole amount (ACE refuses an overflow), a weapon merges
+ * only when either side is visibly a stack.
+ *
+ * @param {object} item  the row being wielded (guid, wcid, name, stackSize,
+ *   maxStackSize?, pluralName?)
+ * @param {object|null} wielded  readySlotOccupant() for its slot
+ * @param {object} [opts] amount — the split (default: the whole stack)
+ * @returns {{op:"merge", guid, target, amount, targetStack}|{op:"reject", message}|{op:"wield"}}
+ */
+export function planAmmoWield(item, wielded, opts = {}) {
+  const WIELD = { op: "wield" };
+  const guid = (item?.guid >>> 0) || 0;
+  const target = (wielded?.guid >>> 0) || 0;
+  if (!guid || !target || guid === target) return WIELD;
+  if (!item.wcid || (item.wcid >>> 0) !== (wielded.wcid >>> 0)) return WIELD;
+  const ammo = (((wielded.equipMask >>> 0) & EQUIP.MissileAmmo) >>> 0) !== 0;
+  const stack = Math.max(1, item.stackSize | 0 || 1);
+  const want = opts.amount > 0 && opts.amount < stack ? (opts.amount | 0) : stack;
+  const held = Math.max(1, wielded.stackSize | 0 || 1);
+  const lim = (v) => (Number.isFinite(v) && v > 0 ? v : NaN);
+  const max = Number.isFinite(lim(wielded.maxStackSize)) ? lim(wielded.maxStackSize) : lim(item.maxStackSize);
+  let amount = 0;
+  if (Number.isFinite(max)) amount = max > 1 ? Math.max(0, Math.min(want, max - held)) : 0;
+  else if (ammo || stack > 1 || held > 1) amount = want;
+  if (amount > 0) return { op: "merge", guid, target, amount, targetStack: held };
+  if (!ammo) return WIELD;
+  return reject(`You cannot wield more ${retailPluralName(item.name || "ammunition", item.pluralName)}`);
+}
+
+/**
+ * The toolbar Use button (gmToolbarUI 0x1000019D → ItemHolder::UseObject(
+ * selectedID)) and any other "use the selected thing" control: an owned
+ * item goes through `activate` (inventory.js activateItem — wield / wear /
+ * salvage / target mode; it returns false for a world object and under
+ * `?hotbarActivate=off`), everything else is a plain `use`.
+ * @returns {"activated"|"used"|"none"}
+ */
+export function activateOrUse(guid, { activate, use } = {}) {
+  const g = (guid >>> 0) || 0;
+  if (!g) return "none";
+  if (typeof activate === "function") {
+    let handled;
+    try { handled = activate(g); } catch (e) {
+      // It may already have sent something — never follow with a Use.
+      console.warn("[use] activateItem failed:", e);
+      return "none";
+    }
+    if (handled === true) return "activated";
+  }
+  if (typeof use !== "function") return "none";
+  use(g);
+  return "used";
 }

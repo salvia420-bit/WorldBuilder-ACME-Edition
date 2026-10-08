@@ -1627,11 +1627,12 @@ impl MotionInterp {
     /// Ready/Walk/Run locomotion (postures live in
     /// `world.player.current_substate`), so the caller passes the
     /// server-echoed substate — the SAME approximation the charge clock
-    /// makes (`jump_charge.rs:134-140`, spec §6 Q5). NOTE: the charge
-    /// clock deliberately does NOT run this gate at charge-*commence*
-    /// time (`jump_charge.rs:141`, DESIGN.md) — per ADJ-10 the
-    /// charge-commence behavior stays per DESIGN.md until a golden
-    /// replay says otherwise; this method is the release-gate arm.
+    /// makes (`jump_charge.rs`, spec §6 Q5). This method is the
+    /// release-gate arm; `can_jump` is retail `CACQualities::CanJump`
+    /// (load < 2.0, acclient.c:442878-442884 — R1 motioninterp-2 settled
+    /// spec §6 Q1 as BURDEN). The press-time twin (`charge_jump`'s same
+    /// 73 check, acclient.c:343845-343855) runs in
+    /// `JumpChargeClock::commence`.
     pub(crate) fn jump_charge_is_allowed(&self, can_jump: bool, forward_substate: u32) -> u32 {
         if !can_jump {
             return WEENIE_ERROR_CANT_JUMP_LOADED_DOWN; // 73

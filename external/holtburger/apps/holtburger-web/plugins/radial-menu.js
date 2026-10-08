@@ -393,11 +393,18 @@ function buildItems(ctx) {
       },
     });
   }
-  // Use — for items with itemType USABLE bit or consumable items.
+  // Use — retail ItemHolder::UseObject: inventory.js activateItem wields a
+  // weapon, wears armour, opens salvage or enters target mode before it
+  // falls back to a plain Use.
   if (invItem && typeof handle?.useObject === "function") {
     items.push({
       label: "Use",
-      action: () => { try { handle.useObject(guid); } catch (e) { console.warn("[ctx-menu] use failed:", e); } },
+      action: () => {
+        try {
+          if (window.__inventory?.activateItem?.(guid) === true) return;
+          handle.useObject(guid);
+        } catch (e) { console.warn("[ctx-menu] use failed:", e); }
+      },
     });
   }
   // Drop — Attuned blocks; Bonded gets confirm overlay.
@@ -497,7 +504,13 @@ function buildItems(ctx) {
         action: () => {
           const me = (typeof window.getLocalPlayerGuid === "function") ? (window.getLocalPlayerGuid() >>> 0) : 0;
           if (!me) return;
-          try { handle.moveItem(guid, me, 0); } catch (e) { console.warn("[ctx-menu] take failed:", e); }
+          try {
+            // Retail PlaceInBackpack (merge / open pack / overflow) —
+            // the corpse window's own take (item_drag.placeInBackpack).
+            const place = window.__itemDrag?.placeInBackpack;
+            if (typeof place === "function") { place(guid); return; }
+            handle.moveItem(guid, me, 0);
+          } catch (e) { console.warn("[ctx-menu] take failed:", e); }
         },
       });
     }

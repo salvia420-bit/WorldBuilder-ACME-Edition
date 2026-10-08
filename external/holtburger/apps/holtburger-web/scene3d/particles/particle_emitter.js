@@ -50,6 +50,25 @@ function _eagerParticleSlots() {
   return on;
 }
 
+// PLIFECYCLE-4 (2026-10-08) — `?initialParticlesRetail` (DEFAULT ON;
+// `=off`/`0`/`false` restores the totalParticles fallback burst). Read lazily
+// so headless tests can flip `globalThis.location` and reset the cache.
+let _initialRetailFlag;
+function _initialParticlesRetail() {
+  if (_initialRetailFlag !== undefined) return _initialRetailFlag;
+  let on = true;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location) {
+      const v = (new URLSearchParams(globalThis.location.search || "").get("initialParticlesRetail") || "").toLowerCase();
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _initialRetailFlag = on;
+  return on;
+}
+/** Test-only: forget the cached `?initialParticlesRetail` read. */
+export function _resetInitialParticlesRetailForTests() { _initialRetailFlag = undefined; }
+
 // E4 (2026-05-18): per-tick scratch for the BirthratePerMeter branch of
 // shouldEmitParticle(). The Vector3 is filled via subVectors(parent.position,
 // lastEmitOffset) and only `.lengthSq()` is read downstream by
@@ -534,15 +553,21 @@ export class ParticleEmitter {
    * their starting seed and made one-shots over-spawn. (ACE actually uses
    * initial_particles too — the old "do not fix" comment was wrong.)
    *
-   * Fail-soft: if `initialParticles` is missing/0 (e.g. a record that never
-   * carried one), fall back to `totalParticles` so we don't silently emit
-   * an empty t=0 burst and regress effects that relied on the old behavior.
+   * PLIFECYCLE-4 (2026-10-08): no fallback. Retail InitEnd
+   * (acclient.c:331278-331285) only loops `while (i < initial_particles)`, so
+   * an initial_particles == 0 emitter starts EMPTY and fills through
+   * ShouldEmitParticle, one per update (OpenAC SpawnEmitter is the same). The
+   * old `totalParticles` fallback dropped up to ~6 stacked particles at t=0 on
+   * every DAT emitter with initial=0 && total>0 and finished it that many
+   * birthrates early. Every synthesized POJO emitter sets initialParticles and
+   * has totalParticles 0, so only DAT emitters change.
+   * `?initialParticlesRetail=off` restores the fallback.
    */
   initEnd() {
     this.creationTime = currentTime();
-    const burst = this.info.initialParticles > 0
-      ? this.info.initialParticles
-      : this.info.totalParticles;
+    const burst = _initialParticlesRetail()
+      ? (this.info.initialParticles | 0)
+      : (this.info.initialParticles > 0 ? this.info.initialParticles : this.info.totalParticles);
     for (let i = 0; i < burst; i++) {
       this.emitParticle();
     }

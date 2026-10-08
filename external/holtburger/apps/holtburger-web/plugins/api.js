@@ -546,6 +546,11 @@ export function createClient(sessionHandle, opts = {}) {
       // ACE's TargetCategory.Self path (see
       // ui/ac_cast_spell.js::selfTargetGuidFor for the full trace;
       // live-verified 2026-07-01).
+      // spellcast-4: the wasm outstanding-request count (retail m_cBusy),
+      // read BEFORE this send so the local prediction below can tell a cast
+      // ACE will refuse as YoureTooBusy (ui/ac_cast_predict.js). Undefined on
+      // a pkg without getBusyState → the old time-window gate.
+      const busyBefore = host.call("GetBusyState");
       let resolvedTarget = targetGuid;
       if (resolvedTarget == null) {
         try {
@@ -601,7 +606,7 @@ export function createClient(sessionHandle, opts = {}) {
         const em = window.liveScene3d?.entityManager;
         const localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
         if (em && localGuid && typeof em.playCastSequence === "function") {
-          em.playCastSequence(localGuid, (spellId >>> 0));
+          em.playCastSequence(localGuid, (spellId >>> 0), { busyBefore });
         }
       } catch (_) { /* never block the cast on the local animation */ }
     },

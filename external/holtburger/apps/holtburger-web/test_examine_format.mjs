@@ -130,5 +130,54 @@ console.log("== examineHeaderModel ==");
   check("player: no hex / ids anywhere in the lines", m.lines.every((l) => !/0x|\d{3,}/.test(l.text)), JSON.stringify(m));
 }
 
+console.log("== creatureAttributeRows (enchstats-4: AttributeInfoRegion / Attribute2ndInfoRegion) ==");
+{
+  const byLabel = (rows) => Object.fromEntries(rows.map((r) => [r.label, r]));
+  const full = {
+    health: 50, health_max: 60,
+    attributes: {
+      strength: 10, endurance: 20, quickness: 30, coordination: 40, focus: 50,
+      self_attr: 123, stamina: 3, stamina_max: 9, mana: 1, mana_max: 2,
+    },
+  };
+  const ok = byLabel(F.creatureAttributeRows(full, true));
+  is("Self row reads the wire field self_attr", ok.Self.value, "123");
+  is("Strength value", ok.Strength.value, "10");
+  is("success Health = cur / max", ok.Health.value, "50 / 60");
+  is("success Stamina = cur / max", ok.Stamina.value, "3 / 9");
+  is("no buffs → no tone", ok.Strength.tone, null);
+  is("six attributes then three vitals", F.creatureAttributeRows(full, true).map((r) => r.kind).join(","),
+    "attribute,attribute,attribute,attribute,attribute,attribute,vital,vital,vital");
+
+  const buffed = byLabel(F.creatureAttributeRows({ ...full, buffs: { highlights: 0x0001, colors: 0x0001 } }, true));
+  is("highlight 0x1 + colour 0x1 → Strength buffed", buffed.Strength.tone, "buffed");
+  is("Endurance untouched", buffed.Endurance.tone, null);
+  const debuffed = byLabel(F.creatureAttributeRows({ ...full, buffs: { highlights: 0x0002, colors: 0 } }, true));
+  is("highlight 0x2 + colour 0 → Endurance debuffed", debuffed.Endurance.tone, "debuffed");
+  const self = byLabel(F.creatureAttributeRows({ ...full, buffs: { highlights: 0x0020, colors: 0x0020 } }, true));
+  is("Self bit is 0x20", self.Self.tone, "buffed");
+  const vit = byLabel(F.creatureAttributeRows({ ...full, buffs: { highlights: 0x01C0, colors: 0x0040 } }, true));
+  is("Health (max) bit 0x40", vit.Health.tone, "buffed");
+  is("Stamina (max) bit 0x80", vit.Stamina.tone, "debuffed");
+  is("Mana (max) bit 0x100", vit.Mana.tone, "debuffed");
+
+  const zero = byLabel(F.creatureAttributeRows({ ...full, attributes: { ...full.attributes, quickness: 0 } }, true));
+  is("success value 0 → ??? (retail)", zero.Quickness.value, "???");
+  const bare = byLabel(F.creatureAttributeRows(null, true, { Strength: 77, MaxHealth: 1200 }));
+  is("no profile: PropertyInt fallback", bare.Strength.value, "77");
+  is("no profile: unknown attribute → null (row skipped)", bare.Focus.value, null);
+  is("no profile: MaxHealth fallback", bare.Health.value, "1,200");
+
+  const failed = byLabel(F.creatureAttributeRows({ health: 4, health_max: 7 }, false));
+  is("failed: attributes ???", failed.Strength.value, "???");
+  is("failed: Self ???", failed.Self.value, "???");
+  is("failed: Health = MulDiv percent (4/7 → 57 %)", failed.Health.value, "57 %");
+  is("failed: Stamina ???", failed.Stamina.value, "???");
+  is("failed: incomplete tone", failed.Strength.tone, "incomplete");
+  is("failed: Health incomplete tone", failed.Health.tone, "incomplete");
+  is("failed: zero max → ???", byLabel(F.creatureAttributeRows({ health: 0, health_max: 0 }, false)).Health.value, "???");
+  is("failed ignores the PropertyInt bag", byLabel(F.creatureAttributeRows({ health: 1, health_max: 2 }, false, { Strength: 5 })).Strength.value, "???");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

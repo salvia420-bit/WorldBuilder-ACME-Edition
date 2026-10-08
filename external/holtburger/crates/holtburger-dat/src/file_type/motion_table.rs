@@ -81,6 +81,38 @@ impl MotionTable {
         self.cycles.get(&cycle_key(stance, command))
     }
 
+    /// cmotiontable-4 (2026-10-08): the retail cycle lookup with its
+    /// `default_style` fallback. `CMotionTable::GetObjectSequence`'s substate
+    /// branch (acclient.c:337766-337768) looks up
+    /// `cycles[(style << 16) | (motion & 0xFFFFFF)]` and, on a miss,
+    /// `cycles[(default_style << 16) | (motion & 0xFFFFFF)]`; OpenAC
+    /// `CMotionTable.cs:216-221` does the same. [`Self::motion_data_for_cycle`]
+    /// is the first lookup only.
+    ///
+    /// The fallback is GATED on `style` being a style this table knows
+    /// (`style_defaults` holds `0x8000_0000 | (style & 0xFFFF)`). Retail refuses
+    /// a style change to a style the table lacks (the style branch needs
+    /// `cycles[new_style | default]`) and keeps the old style, so a lookup under
+    /// an unknown style must not pick up the default style's cycle. There is no
+    /// command-class gate: callers sometimes pass a bare low-16 command, and
+    /// `cycle_key` masks the command to 24 bits either way.
+    ///
+    /// Callers keep the REQUESTED style as their resolved stance. Retail's
+    /// `MotionState.style` stays the current style; only the `MotionData`
+    /// comes from `default_style`.
+    pub fn cycle_for(&self, style: u32, command: u32) -> Option<&MotionData> {
+        if let Some(md) = self.motion_data_for_cycle(style, command) {
+            return Some(md);
+        }
+        if !self
+            .style_defaults
+            .contains_key(&(0x8000_0000 | (style & 0xFFFF)))
+        {
+            return None;
+        }
+        self.motion_data_for_cycle(self.default_style, command)
+    }
+
     /// T1-base-speed: resolve `stance == 0` to the table's `default_style`,
     /// mirroring `motion_cycle_base_speed`'s stance handling so callers don't
     /// duplicate it.
@@ -103,7 +135,8 @@ impl MotionTable {
     /// wasm caller (lib.rs) between this and `cycle_anim_dist_base_speed`.
     pub fn cycle_velocity_base_speed(&self, stance: u32, command: u32) -> Option<f32> {
         let resolved_stance = self.resolve_stance(stance);
-        let md = self.motion_data_for_cycle(resolved_stance, command)?;
+        // cmotiontable-4: retail's default_style fallback (see `cycle_for`).
+        let md = self.cycle_for(resolved_stance, command)?;
         let v = md.velocity?;
         let mag = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
         if mag > 1e-4 { Some(mag) } else { None }
@@ -123,7 +156,8 @@ impl MotionTable {
         pos_frames: &[Frame],
     ) -> Option<f32> {
         let resolved_stance = self.resolve_stance(stance);
-        let md = self.motion_data_for_cycle(resolved_stance, command)?;
+        // cmotiontable-4: retail's default_style fallback (see `cycle_for`).
+        let md = self.cycle_for(resolved_stance, command)?;
         let dist = md.get_anim_dist(pos_frames);
         if dist > 1e-4 { Some(dist) } else { None }
     }
@@ -898,6 +932,160 @@ mod tests {
         // Outer: low-24 alias selects the same group (retail parity).
         let md = t.get_link(Q4_STYLE, 0x0003, 1.0, Q4_WALK, 1.0).unwrap();
         assert_eq!(md.bitfield, 1);
+    }
+
+    // ---- cmotiontable-4: cycle_for (retail default_style fallback) ----
+
+    const C4_NONCOMBAT: u32 = 0x8000_003D;
+    const C4_HANDCOMBAT: u32 = 0x8000_003C;
+    const C4_MAGIC: u32 = 0x8000_0049;
+    const C4_READY: u32 = 0x4100_0003;
+    const C4_DEAD: u32 = 0x4000_0011;
+    const C4_WALK: u32 = 0x4500_0005;
+
+    /// default_style = NonCombat; `style_defaults` knows NonCombat and
+    /// HandCombat (Magic is a style this table does not have). Cycles:
+    /// - `NonCombat|Ready` = marker 1, `NonCombat|Dead` = marker 2
+    /// - `HandCombat|Ready` = marker 3 (HandCombat has no Dead)
+    fn c4_table() -> MotionTable {
+        let mut cycles = HashMap::new();
+        cycles.insert(cycle_key(C4_NONCOMBAT, C4_READY), marked(1));
+        cycles.insert(cycle_key(C4_NONCOMBAT, C4_DEAD), marked(2));
+        cycles.insert(cycle_key(C4_HANDCOMBAT, C4_READY), marked(3));
+        let mut style_defaults = HashMap::new();
+        style_defaults.insert(C4_NONCOMBAT, C4_READY);
+        style_defaults.insert(C4_HANDCOMBAT, C4_READY);
+        MotionTable {
+            id: 0x0900_0C04,
+            default_style: C4_NONCOMBAT,
+            style_defaults,
+            cycles,
+            modifiers: HashMap::new(),
+            links: HashMap::new(),
+        }
+    }
+
+    /// A known style without the substate plays the default style's cycle
+    /// (acclient.c:337766-337768), in both the full and the wire's bare
+    /// low-16 encodings.
+    #[test]
+    fn cycle_for_falls_back_to_default_style_when_style_known() {
+        let t = c4_table();
+        assert!(t.motion_data_for_cycle(C4_HANDCOMBAT, C4_DEAD).is_none());
+        assert_eq!(t.cycle_for(C4_HANDCOMBAT, C4_DEAD).unwrap().bitfield, 2);
+        assert_eq!(t.cycle_for(0x003C, 0x0011).unwrap().bitfield, 2);
+    }
+
+    /// The exact `(style, command)` cycle wins over the fallback.
+    #[test]
+    fn cycle_for_prefers_exact_style() {
+        let t = c4_table();
+        assert_eq!(t.cycle_for(C4_HANDCOMBAT, C4_READY).unwrap().bitfield, 3);
+        assert_eq!(t.cycle_for(C4_NONCOMBAT, C4_READY).unwrap().bitfield, 1);
+        assert_eq!(t.cycle_for(C4_NONCOMBAT, C4_DEAD).unwrap().bitfield, 2);
+    }
+
+    /// A style the table does not know never falls back (retail refuses that
+    /// style change and keeps the old style), and a command no style has
+    /// misses after the fallback too.
+    #[test]
+    fn cycle_for_unknown_style_does_not_fall_back() {
+        let t = c4_table();
+        assert!(t.cycle_for(C4_MAGIC, C4_READY).is_none());
+        assert!(t.cycle_for(C4_MAGIC, C4_DEAD).is_none());
+        assert!(t.cycle_for(C4_HANDCOMBAT, C4_WALK).is_none());
+    }
+
+    /// The base-speed resolver takes the same fallback.
+    #[test]
+    fn cycle_velocity_base_speed_takes_default_style_fallback() {
+        let mut t = c4_table();
+        let mut walk = marked(4);
+        walk.flags = MotionDataFlags::HAS_VELOCITY;
+        walk.velocity = Some(Vector3 { x: 0.0, y: 3.0, z: 4.0 });
+        t.cycles.insert(cycle_key(C4_NONCOMBAT, C4_WALK), walk);
+        assert_eq!(t.cycle_velocity_base_speed(C4_HANDCOMBAT, C4_WALK), Some(5.0));
+        assert_eq!(t.cycle_velocity_base_speed(C4_MAGIC, C4_WALK), None);
+    }
+
+    /// cmotiontable-4 census (portal.dat-gated, report only): how many
+    /// `(table, known non-default style, command)` cycle lookups resolve ONLY
+    /// through the `default_style` fallback, over every command the default
+    /// style carries and for the named Ready/Dead/Walk/Run substates.
+    #[test]
+    fn census_cycle_for_default_style_fallback_retail() {
+        use crate::DatDatabase;
+        let path = match retail_portal_dat_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("[census_cycle_for] SKIP — no client_portal.dat available");
+                return;
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+        let mut ids: Vec<u32> = dat
+            .files
+            .keys()
+            .copied()
+            .filter(|id| (0x0900_0000..=0x0900_FFFF).contains(id))
+            .collect();
+        ids.sort();
+        const NAMED: [(u32, &str); 4] = [
+            (0x4100_0003, "Ready"),
+            (0x4000_0011, "Dead"),
+            (0x4500_0005, "WalkForward"),
+            (0x4400_0007, "RunForward"),
+        ];
+        let mut tables = 0usize;
+        let mut tables_with_fallback = 0usize;
+        let mut fallback_lookups = 0usize;
+        let mut named = [0usize; 4];
+        for &id in &ids {
+            let Ok(bytes) = dat.get_file(id) else { continue };
+            let Ok(mt) = MotionTable::read(&mut std::io::Cursor::new(bytes)) else {
+                continue;
+            };
+            tables += 1;
+            let def_low = mt.default_style & 0xFFFF;
+            // Every command the default style has a cycle for (retail keys
+            // carry no command high byte, so key >> 16 is the style).
+            let default_cmds: Vec<u32> = mt
+                .cycles
+                .keys()
+                .filter(|&&k| (k >> 16) == def_low)
+                .map(|&k| k & 0xFFFF)
+                .collect();
+            let mut hit = false;
+            for &style in mt.style_defaults.keys() {
+                if (style & 0xFFFF) == def_low {
+                    continue;
+                }
+                for &cmd in &default_cmds {
+                    if mt.motion_data_for_cycle(style, cmd).is_none()
+                        && mt.cycle_for(style, cmd).is_some()
+                    {
+                        fallback_lookups += 1;
+                        hit = true;
+                    }
+                }
+                for (i, (cmd, _)) in NAMED.iter().enumerate() {
+                    if mt.motion_data_for_cycle(style, *cmd).is_none()
+                        && mt.cycle_for(style, *cmd).is_some()
+                    {
+                        named[i] += 1;
+                    }
+                }
+            }
+            if hit {
+                tables_with_fallback += 1;
+            }
+        }
+        assert!(tables > 0, "retail portal.dat should carry motion tables");
+        eprintln!(
+            "[census_cycle_for] tables={tables} tables_with_fallback_only_lookups={tables_with_fallback} \
+             fallback_only_lookups={fallback_lookups} {}={} {}={} {}={} {}={}",
+            NAMED[0].1, named[0], NAMED[1].1, named[1], NAMED[2].1, named[2], NAMED[3].1, named[3],
+        );
     }
 
     // ---- T1-base-speed: GetAnimDist (vector-sum-then-magnitude) ----

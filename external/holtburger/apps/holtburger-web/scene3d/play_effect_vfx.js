@@ -1728,6 +1728,11 @@ const _realVfxStats = {
   stopHooksFired: 0,
   destroyHooksFired: 0,
   lateAttachReaped: 0,
+  // PLIFECYCLE-1 (`?oneShotDrain`): finite one-shot emitters the reaper left
+  // to drain on their own; emitters it STOPPED (persistent, or a finite one
+  // still alive at its far backstop) instead of hard-destroying.
+  oneShotFiniteDrained: 0,
+  oneShotStopped: 0,
   hiddenHolds: 0,
   hiddenReleased: 0,
   hiddenStateScriptsPlayed: 0,
@@ -1823,6 +1828,90 @@ const PLAY_EFFECT_LIFECYCLE_ON = (() => {
   }
 })();
 
+// =====================================================================
+// PLIFECYCLE-1 (2026-10-08) — `?oneShotDrain` (DEFAULT ON; `=off`/`0`/`false`
+// restores the hard destroy at ONE_SHOT_LIFETIME_MS). Independent of
+// `?playEffectLifecycle` (that flag is the HIDEFX hidden-state hold).
+// =====================================================================
+// The one-shot reaper HARD-destroyed every emitter of a PlayEffect group 2.5 s
+// (+ the largest hook StartTime) after the resolve — live particles and all.
+// Retail has no timer-based destroy: ParticleManager::UpdateParticles removes
+// an emitter only when ParticleEmitter::UpdateParticles returns 0, i.e.
+// stopped && num_particles == 0 (acclient.c:329482-329525 / :331224-331227),
+// and StopEmitter stops only on total_seconds / total_particles
+// (:330295-330309). So every finite effect whose emission + lifespan runs past
+// ~2.5 s was cut off mid-fade: LevelUp's 0x320003AE/AF/B0 (lifespan 3.0±0.25 s)
+// and AttribUpPurple's 0x32000048 (2.5±0.5 s) lost up to 0.75 s of tail, and on
+// a cold mesh cache (the timer starts before addEmitter's async build) more.
+// OpenAC's ParticleHookSink likewise has no TTL. Now, per emitter id:
+//   - gone from the manager table → it already finished; drop the bookkeeping;
+//   - FINITE (total_particles > 0 || total_seconds > 0) → leave it running;
+//     tick() removes it when it drains. A far backstop (emission time +
+//     lifespan + lifespan_rand + 1 s) stops and reaps it if it somehow never
+//     finishes (e.g. a count-bounded emitter starved of slots);
+//   - PERSISTENT (0/0) → STOP it and reap after the drain window. Documented
+//     deviation: retail keeps it until the object is torn down; a one-shot cue
+//     with an infinite emitter would otherwise emit for the session.
+// The late-attach reap (HIDEFX fix (c)) and the far backstop use the same
+// policy. HIDEFX's "no one-shot emitter (finite or not) outlives the budget"
+// is deliberately reversed for FINITE emitters: they are self-bounding.
+const ONE_SHOT_DRAIN_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("oneShotDrain") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+
+/** PLIFECYCLE-1 — the far backstop for one FINITE emitter, in emitter seconds
+ *  from now: worst-case emission time + lifespan + lifespan_rand + 1 s. A
+ *  total_seconds emitter emits for total_seconds; a BirthratePerSec count
+ *  emitter needs total_particles emits at one per update at most, so a
+ *  birthrate under ~one 20 fps frame is charged a frame per particle; a
+ *  BirthratePerMeter count emitter reaches its count by DISTANCE (birthrate is
+ *  metres), so it gets a fixed 10 s. */
+export function oneShotFiniteBackstopSec(info) {
+  const life = (+info?.lifespan || 0) + (+info?.lifespanRand || 0);
+  let emitting;
+  if (info?.totalSeconds > 0) emitting = +info.totalSeconds;
+  else if ((info?.emitterType | 0) === 1 /* EmitterType.BirthratePerSec */) {
+    emitting = (info.totalParticles | 0) * Math.max(+info.birthrate || 0, 0.05);
+  } else emitting = 10;
+  return emitting + life + 1;
+}
+
+/**
+ * PLIFECYCLE-1 — sort a one-shot group's emitter ids by what the reaper may do
+ * to them (pure; `table` is the manager's `particleTable`):
+ *   `gone`       not in the table any more — finished (tick() auto-removed it)
+ *                or destroyed; only bookkeeping is left;
+ *   `finite`     total_particles > 0 || total_seconds > 0 — self-bounding,
+ *                leave it running; `backstopSec` = max far backstop over them;
+ *   `persistent` 0/0 — stop it and reap after the drain window;
+ *   `unknown`    no table / no info to judge by — the legacy hard destroy.
+ */
+export function classifyOneShotReap(table, ids) {
+  const out = { gone: [], finite: [], persistent: [], unknown: [], backstopSec: 0 };
+  const canLook = !!table && typeof table.get === "function";
+  for (const raw of ids || []) {
+    const id = raw >>> 0;
+    if (!canLook) { out.unknown.push(id); continue; }
+    const e = table.get(id);
+    if (!e) { out.gone.push(id); continue; }
+    const info = e.info;
+    if (!info) { out.unknown.push(id); continue; }
+    if (info.totalParticles > 0 || info.totalSeconds > 0) {
+      out.finite.push(id);
+      out.backstopSec = Math.max(out.backstopSec, oneShotFiniteBackstopSec(info));
+    } else {
+      out.persistent.push(id);
+    }
+  }
+  return out;
+}
+
 // PhysicsState bits (acclient.h `PhysicsState`; the wasm visibility gate in
 // src/lib.rs CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED reads the same three).
 const _PHYS_STATE_NO_DRAW = 0x20;
@@ -1850,6 +1939,9 @@ const _LIFECYCLE_MS = {
   // After a stop, reap the drained emitters' owner records. Hide/Hidden
   // emitters 0x3200028C / 0x3200028B have 0.5 s / 0.75 s lifespans.
   drain: 2000,
+  // PLIFECYCLE-1: ms per emitter second when arming a finite one-shot
+  // emitter's far backstop (`oneShotFiniteBackstopSec`).
+  emitterSecondMs: 1000,
 };
 
 /** guid → true while the last observed physics state carried HIDDEN. */
@@ -1880,12 +1972,76 @@ function _stopAndReapIds(ownerKey, ids) {
   }, _LIFECYCLE_MS.drain);
 }
 
+/** Legacy (`?particleOwner=off`) per-guid map: forget `ids` for `guid`. */
+function _pruneGuidEmitterIds(em, guid, ids) {
+  if (!ids || ids.length === 0) return;
+  try {
+    const list = em?._particleEmittersForGuid?.get(guid);
+    if (!list || list.length === 0) return;
+    const drop = new Set(ids);
+    const rest = list.filter((id) => !drop.has(id));
+    if (rest.length === 0) em._particleEmittersForGuid.delete(guid);
+    else em._particleEmittersForGuid.set(guid, rest);
+  } catch (_) {}
+}
+
+/**
+ * PLIFECYCLE-1 (`?oneShotDrain`) — the one-shot reaper's per-id policy (see
+ * the flag note): drop the bookkeeping of finished ids, leave finite emitters
+ * running under a far backstop, stop-then-reap persistent ones. `final` is the
+ * backstop pass, where a finite emitter still alive is stopped and reaped too.
+ * Routes through the owner registry when it is on, else the legacy per-guid
+ * map + direct manager calls.
+ */
+function _reapOneShotIds(em, wm, guid, ids, final = false) {
+  const c = classifyOneShotReap(wm?.particleTable, ids);
+  const stopNow = final ? c.persistent.concat(c.finite) : c.persistent;
+  _realVfxStats.oneShotFiniteDrained += final ? 0 : c.finite.length;
+  _realVfxStats.oneShotStopped += stopNow.length;
+  if (particleOwnerOn()) {
+    const owner = guid >>> 0;
+    // destroySome is idempotent: a gone id only loses its stale owner entry;
+    // an unknown one gets the legacy hard destroy.
+    const drop = c.gone.concat(c.unknown);
+    if (drop.length) {
+      try { ownerRegistry.destroySome(owner, drop); } catch (_) {}
+    }
+    _stopAndReapIds(owner, stopNow);
+  } else {
+    for (const id of c.unknown) {
+      try { wm?.destroyParticleEmitter?.(id); } catch (_) {}
+    }
+    _pruneGuidEmitterIds(em, guid, c.gone.concat(c.unknown));
+    if (stopNow.length) {
+      for (const id of stopNow) {
+        try { wm?.stopParticleEmitter?.(id); } catch (_) {}
+      }
+      setTimeout(() => {
+        for (const id of stopNow) {
+          try { wm?.destroyParticleEmitter?.(id); } catch (_) {}
+        }
+        _pruneGuidEmitterIds(em, guid, stopNow);
+      }, _LIFECYCLE_MS.drain);
+    }
+  }
+  if (!final && c.finite.length) {
+    setTimeout(() => _reapOneShotIds(em, wm, guid, c.finite, true),
+      c.backstopSec * _LIFECYCLE_MS.emitterSecondMs);
+  }
+}
+
 /** HIDEFX fix (c): an emitter that attached after its group's one-shot reaper
  *  ran gets its own reap one base-lifetime after it landed — a late cue is
- *  still seen, but no one-shot emitter (finite or not) outlives the budget. */
+ *  still seen, but never leaks. PLIFECYCLE-1 (`?oneShotDrain`, default on):
+ *  that reap applies the same per-id policy as the group reaper, so a late
+ *  FINITE emitter drains on its own; `=off` keeps the hard destroy. */
 function _reapLateAttach(em, wm, guid, emitterId) {
   _realVfxStats.lateAttachReaped += 1;
   setTimeout(() => {
+    if (ONE_SHOT_DRAIN_ON) {
+      _reapOneShotIds(em, wm, guid, [emitterId]);
+      return;
+    }
     if (particleOwnerOn()) {
       try { ownerRegistry.destroySome(guid >>> 0, [emitterId]); } catch (_) {}
       return;
@@ -2733,6 +2889,11 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
     //     they even spawn (their setTimeout fires at +maxStartTimeMs).
     //     HIDEFX: the 2500 base now lives in `_LIFECYCLE_MS.oneShotBase`
     //     (same value; the headless suite shortens it).
+    //
+    //     PLIFECYCLE-1 (2026-10-08, `?oneShotDrain`): this is no longer a
+    //     hard destroy. Finite emitters are left to drain (LevelUp's 3.25 s
+    //     tail used to be cut at 2.5 s), persistent ones are stopped and
+    //     reaped after the drain window — see `_reapOneShotIds`.
     const ONE_SHOT_LIFETIME_MS = _LIFECYCLE_MS.oneShotBase + maxStartTimeMs;
     setTimeout(() => {
       // HIDEFX: from here on a late attach reaps itself (see `.then` above).
@@ -2740,6 +2901,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       // RP6: drop from the cap registry first (idempotent if already
       // FIFO-evicted — indexOf returns -1 and the splice is a no-op).
       _unregisterEmitterGroup(_rp6Group);
+      if (ONE_SHOT_DRAIN_ON) {
+        _reapOneShotIds(em, wm, targetGuid, spawnedEmitterIds);
+        return;
+      }
       // A11-S2 on-path: one-shot reap routes through the facade so its
       // owner tracking stays honest (idempotent on already-evicted /
       // entity-removed ids); the legacy map below was never written.
@@ -4319,9 +4484,14 @@ export const __test = Object.freeze({
   playEffectEmitterGroupCount: () => _playEffectEmitterGroups.length,
   // HIDEFX (2026-10-07) — `?playEffectLifecycle` introspection + clock knob.
   // `hiddenState(guid)` = { hidden, epoch, holdGroups }; `setLifecycleTiming`
-  // overrides any of {oneShotBase, holdGrace, holdCheck, holdMax, drain} (ms)
-  // and returns the previous values so a suite can restore them.
+  // overrides any of {oneShotBase, holdGrace, holdCheck, holdMax, drain,
+  // emitterSecondMs} (ms) and returns the previous values so a suite can
+  // restore them.
   playEffectLifecycleOn: PLAY_EFFECT_LIFECYCLE_ON,
+  // PLIFECYCLE-1 (2026-10-08) — `?oneShotDrain` + the pure reaper policy.
+  oneShotDrainOn: ONE_SHOT_DRAIN_ON,
+  classifyOneShotReap,
+  oneShotFiniteBackstopSec,
   hiddenState: (guid) => {
     const g = guid >>> 0;
     return Object.freeze({

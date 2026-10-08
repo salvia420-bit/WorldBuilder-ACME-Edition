@@ -127,6 +127,7 @@ function load() {
       estimateVitalRanks: "globalThis.__TS.estimateVitalRanks",
       levelProgress: "globalThis.__TS.levelProgress",
       skillGroupFor: "globalThis.__TS.skillGroupFor",
+      vitaeModifier: "globalThis.__TS.vitaeModifier",
     },
   });
   // eslint-disable-next-line no-new-func

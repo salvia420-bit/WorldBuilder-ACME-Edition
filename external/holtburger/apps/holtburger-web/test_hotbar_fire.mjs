@@ -8,16 +8,20 @@
 // fireSlot() consumes:
 //
 //   - empty slot                          → kind: "none"
-//   - item slot                           → kind: "useItem", itemGuid
+//   - item slot                           → kind: "activateItem", itemGuid
+//                                           (items-3, 2026-10-08: retail
+//                                           ItemHolder::UseObject, not a bare Use)
 //   - self-targeted spell                 → kind: "castSelf", spellId
 //   - targeted spell + soft target        → kind: "castOnTarget"
 //   - targeted spell, no soft target      → kind: "needTarget"
+//   - formula-untargeted spell (ring)     → kind: "castSelf" (spellcast-2)
 //
 // Pattern matches test_status_indicators.mjs (Wave 1.F closing summary)
 // for parity with sibling test files.
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
+import { readFileSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -83,7 +87,8 @@ installDomShim();
 const url = pathToFileURL(
   resolvePath(__dirname, "plugins/hotbar.js")
 ).href;
-const { decideFireAction, manifest } = await import(url);
+const { decideFireAction, resolveArmedItemCast, spellNeedsNoSelection, manifest } = await import(url);
+const { castSpellViaHandle } = await import(pathToFileURL(resolvePath(__dirname, "ui/ac_cast_spell.js")).href);
 
 let passed = 0;
 let failed = 0;
@@ -149,11 +154,11 @@ check("empty object binding → kind=none", () => {
 
 console.log("\n[3] decideFireAction — item slots");
 
-check("itemGuid binding → useItem regardless of target", () => {
+check("itemGuid binding → activateItem regardless of target", () => {
   assertEq(
     decideFireAction({ itemGuid: 0x12345678 }, { isSelfTargeted: false, softTargetGuid: 0 }),
-    { kind: "useItem", itemGuid: 0x12345678 },
-    "item useItem (no target)",
+    { kind: "activateItem", itemGuid: 0x12345678 },
+    "item activateItem (no target)",
   );
 });
 
@@ -162,7 +167,7 @@ check("itemGuid binding coerces to u32", () => {
   // Pre-coerce sanity: 0x80000000 should round-trip cleanly through `>>> 0`.
   assertEq(
     decideFireAction({ itemGuid: 0x80000000 }, { isSelfTargeted: true, softTargetGuid: 0 }),
-    { kind: "useItem", itemGuid: 0x80000000 >>> 0 },
+    { kind: "activateItem", itemGuid: 0x80000000 >>> 0 },
     "item u32 coercion",
   );
 });
@@ -176,7 +181,7 @@ check("itemGuid wins over spellId when both present (item branch first)", () => 
       { itemGuid: 0xAABBCCDD, spellId: 0x1234 },
       { isSelfTargeted: true, softTargetGuid: 0 },
     ),
-    { kind: "useItem", itemGuid: 0xAABBCCDD },
+    { kind: "activateItem", itemGuid: 0xAABBCCDD },
     "item-wins-over-spell",
   );
 });
@@ -266,6 +271,96 @@ check("soft-target GUID coerced to u32 via >>> 0", () => {
     { kind: "castOnTarget", spellId: 0x4000, targetGuid: 0x90000001 >>> 0 },
     "high-bit target GUID",
   );
+});
+
+console.log("\n[6] spellcast-1 — armed spell on an item shortcut (click-to-cast only)");
+
+check("clickToCast off (retail default): an item press is never a cast", () => {
+  assertEq(resolveArmedItemCast({ itemGuid: 0x5000ABCD }, 27, false), null, "flag off");
+});
+
+check("clickToCast on: the armed spell AT the item, spell first / target second", () => {
+  assertEq(resolveArmedItemCast({ itemGuid: 0x5000ABCD }, 27, true), { spellId: 27, targetGuid: 0x5000ABCD }, "flag on");
+});
+
+check("no armed spell, or a spell binding → no bridge cast", () => {
+  assertEq(resolveArmedItemCast({ itemGuid: 0x5000ABCD }, 0, true), null, "nothing armed");
+  assertEq(resolveArmedItemCast({ spellId: 5 }, 27, true), null, "spell binding");
+});
+
+check("the dispatch reaches the wasm as castTargetedSpell(TARGET, SPELL)", () => {
+  // The old inline sender called handle.castTargetedSpell(spell, item)
+  // against the wasm's (target_guid, spell_id) signature (lib.rs).
+  const calls = [];
+  const prevClient = globalThis.__pluginClient;
+  const prevHandle = globalThis.__sessionHandle;
+  delete globalThis.__pluginClient;
+  globalThis.__sessionHandle = { castTargetedSpell: (...a) => calls.push(a) };
+  try {
+    if (castSpellViaHandle(27, 0x5000ABCD) !== true) throw new Error("castSpellViaHandle did not dispatch");
+    assertEq(calls[0], [0x5000ABCD, 27], "wire order");
+  } finally {
+    globalThis.__pluginClient = prevClient;
+    globalThis.__sessionHandle = prevHandle;
+  }
+});
+
+check("hotbar.js no longer sends castTargetedSpell(spell, item) itself", () => {
+  const src = readFileSync(resolvePath(__dirname, "plugins/hotbar.js"), "utf8");
+  if (src.includes("castTargetedSpell(s, g)")) throw new Error("swapped inline sender is back");
+});
+
+console.log("\n[7] spellcast-2 — formula-untargeted spells (rings, walls) need no selection");
+
+// getSpellRecord shapes (serde-wasm-bindgen Maps); formulas are the
+// DAT-decrypted ones from data/spell-table-attrs.json.
+const ringRec = new Map([["isSelfTargeted", false], ["components", [110, 110, 19, 67, 34, 37, 63, 58]],
+  ["flags", new Map([["selfTargeted", false]])]]);           // 1783 Searing Disc
+const boltRec = new Map([["isSelfTargeted", false], ["components", [1, 15, 34, 46, 55]]]); // 27 Flame Bolt I
+const selfRec = new Map([["isSelfTargeted", true], ["components", [1, 7, 33, 44, 60]]]);   // 2 Strength Self I
+
+check("spellNeedsNoSelection: ring true, bolt false, self true, no record null", () => {
+  assertEq(spellNeedsNoSelection(ringRec), true, "ring");
+  assertEq(spellNeedsNoSelection(boltRec), false, "bolt");
+  assertEq(spellNeedsNoSelection(selfRec), true, "self");
+  assertEq(spellNeedsNoSelection(null), null, "no record");
+});
+
+check("?formulaUntargeted=off: the ring needs a target again", () => {
+  assertEq(spellNeedsNoSelection(ringRec, false), false, "ring, flag off");
+  assertEq(spellNeedsNoSelection(selfRec, false), true, "self, flag off");
+});
+
+check("untargeted ring with no soft target → castSelf (null target)", () => {
+  assertEq(
+    decideFireAction({ spellId: 1783 }, { isSelfTargeted: spellNeedsNoSelection(ringRec), softTargetGuid: 0 }),
+    { kind: "castSelf", spellId: 1783 },
+    "ring, no selection",
+  );
+  assertEq(
+    decideFireAction({ spellId: 1783 }, { isSelfTargeted: spellNeedsNoSelection(ringRec), softTargetGuid: 0x50000123 }),
+    { kind: "castSelf", spellId: 1783 },
+    "ring ignores the selection",
+  );
+});
+
+check("castSelf on the ring reaches the wasm as castUntargetedSpell", () => {
+  const calls = [];
+  const prevClient = globalThis.__pluginClient;
+  const prevHandle = globalThis.__sessionHandle;
+  delete globalThis.__pluginClient;
+  globalThis.__sessionHandle = {
+    getSpellRecord: () => ringRec,
+    castUntargetedSpell: (...a) => calls.push(["untargeted", ...a]),
+    castTargetedSpell: (...a) => calls.push(["targeted", ...a]),
+  };
+  try {
+    if (castSpellViaHandle(1783, null) !== true) throw new Error("castSpellViaHandle did not dispatch");
+    assertEq(calls, [["untargeted", 1783]], "wire call");
+  } finally {
+    globalThis.__pluginClient = prevClient;
+    globalThis.__sessionHandle = prevHandle;
+  }
 });
 
 console.log("\n===========================================================");

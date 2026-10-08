@@ -469,29 +469,38 @@ pub(crate) fn handle_event(
 ) -> bool {
     match &event.event {
         GameEvent::PlayerDescription(data) => {
+            // enchstats-5: the receive clock the enchantment layers are
+            // rebased onto (retail `Enchantment::UnPack`, acclient.c:502627).
+            let now = state.current_server_time();
             state.player.hydrate_from_player_description(
                 data,
                 &state.xp_table,
                 &state.skill_table,
+                now,
                 events,
             );
             state.emit_player_derived_stats(events);
             false
         }
         GameEvent::MagicUpdateEnchantment(data) => {
-            let handled = state
-                .player
-                .upsert_enchantment(data.target, data.enchantment, events);
+            let now = state.current_server_time();
+            let handled =
+                state
+                    .player
+                    .upsert_enchantment(data.target, data.enchantment, now, events);
             if handled {
                 state.emit_player_derived_stats(events);
             }
             handled
         }
         GameEvent::MagicUpdateMultipleEnchantments(data) => {
-            let handled =
-                state
-                    .player
-                    .upsert_multiple_enchantments(data.target, &data.enchantments, events);
+            let now = state.current_server_time();
+            let handled = state.player.upsert_multiple_enchantments(
+                data.target,
+                &data.enchantments,
+                now,
+                events,
+            );
             if handled {
                 state.emit_player_derived_stats(events);
             }

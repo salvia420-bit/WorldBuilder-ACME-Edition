@@ -1188,3 +1188,487 @@ async fn test_max_size_message_at_boundary_still_sends() {
     session.send_message(&over_limit).await.unwrap();
     assert_eq!(sent_handle.sent_packets().await.len(), 1);
 }
+
+// ── R2-net (2026-10-08): net-2 / net-3 / net-4 / net-5 ──────────────────
+
+/// A transport whose receive side never yields (a quiet server), so the
+/// receive loop can only wake on its own timers.
+#[derive(Clone)]
+struct SilentTransport {
+    sent: Arc<Mutex<Vec<SentPacket>>>,
+}
+
+impl SilentTransport {
+    fn new() -> Self {
+        Self {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    async fn sent_packets(&self) -> Vec<Vec<u8>> {
+        self.sent
+            .lock()
+            .await
+            .iter()
+            .map(|(_, bytes)| bytes.clone())
+            .collect()
+    }
+}
+
+#[async_trait]
+impl Transport for SilentTransport {
+    async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize> {
+        self.sent.lock().await.push((addr, buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        std::future::pending::<Result<(usize, SocketAddr)>>().await
+    }
+}
+
+fn force_pending_control_packets_due(session: &mut Session) {
+    for pending in session.pending_control_packets.iter_mut() {
+        pending.ready_at = web_time::Instant::now();
+    }
+}
+
+fn request_retransmit_ids(packet: &[u8]) -> Vec<u32> {
+    let payload = &packet[transport::HEADER_SIZE..];
+    let count = LittleEndian::read_u32(&payload[0..4]) as usize;
+    (0..count)
+        .map(|index| LittleEndian::read_u32(&payload[4 + index * 4..8 + index * 4]))
+        .collect()
+}
+
+fn is_request_retransmit(packet: &[u8]) -> bool {
+    (unpack_header(packet).flags & packet_flags::REQUEST_RETRANSMIT) != 0
+}
+
+fn build_cleartext_nak_packet(borrowed_sequence: u32, c2s_ids: &[u32]) -> Vec<u8> {
+    let mut payload = (c2s_ids.len() as u32).to_le_bytes().to_vec();
+    for id in c2s_ids {
+        payload.extend_from_slice(&id.to_le_bytes());
+    }
+    build_transport_packet(
+        PacketHeader {
+            sequence: borrowed_sequence,
+            flags: packet_flags::REQUEST_RETRANSMIT,
+            ..Default::default()
+        },
+        &payload,
+    )
+}
+
+fn build_ack_only_packet(borrowed_sequence: u32, acked: u32) -> Vec<u8> {
+    build_transport_packet(
+        PacketHeader {
+            sequence: borrowed_sequence,
+            flags: packet_flags::ACK_SEQUENCE,
+            ..Default::default()
+        },
+        &acked.to_le_bytes(),
+    )
+}
+
+/// net-2: ACE stamps its cleartext NAK with `CurrentValue` (a BORROWED id).
+/// Data packet 6 was lost; ACE's NAK (seq 6) arrives first. It must not be
+/// ordered as packet 6, must not ACK 6, and the real packet 6 must still be
+/// delivered when it arrives.
+#[tokio::test]
+async fn test_cleartext_nak_does_not_consume_lost_data_sequence() {
+    let transport = ScriptedTransport::new(
+        vec![
+            build_cleartext_nak_packet(6, &[3]),
+            build_single_fragment_packet(6, &[0xAA, 0xBB]),
+        ],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+
+    let first = session.recv_message().await.unwrap();
+    assert!(first.is_empty());
+    assert_eq!(session.last_server_seq, 5, "a cleartext NAK must not consume a sequence");
+
+    // Flush everything the NAK caused: no ACK may go out (ACE prunes its
+    // retransmit cache below an ACK), only our own request for 6 (net-4 hint).
+    force_pending_control_packets_due(&mut session);
+    session.flush_pending_control_packets().await.unwrap();
+    let sent_before_data = sent_handle.sent_packets().await;
+    assert!(
+        sent_before_data
+            .iter()
+            .all(|packet| unpack_header(packet).flags != packet_flags::ACK_SEQUENCE),
+        "no ACK may be sent for the NAK's borrowed id"
+    );
+    let nak = sent_before_data
+        .iter()
+        .find(|packet| is_request_retransmit(packet))
+        .expect("the borrowed id should be requested");
+    assert_eq!(request_retransmit_ids(nak), vec![6]);
+
+    let second = session.recv_message().await.unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(matches!(second[0], SessionEvent::Message(ref msg) if msg == &vec![0xAA, 0xBB]));
+    assert_eq!(session.last_server_seq, 6);
+    assert_eq!(session.highest_server_seq_seen, None);
+
+    // The data packet itself is ACKed, with the cumulative watermark.
+    force_pending_control_packets_due(&mut session);
+    session.flush_pending_control_packets().await.unwrap();
+    let sent = sent_handle.sent_packets().await;
+    let ack = sent
+        .iter()
+        .rev()
+        .find(|packet| unpack_header(packet).flags == packet_flags::ACK_SEQUENCE)
+        .expect("ordered data packet should be ACKed");
+    assert_eq!(
+        LittleEndian::read_u32(&ack[transport::HEADER_SIZE..transport::HEADER_SIZE + 4]),
+        6
+    );
+}
+
+/// net-2 sibling: NAK (borrowed 6) arrives while 5 and 6 are both still in
+/// flight; both data packets are delivered in order.
+#[tokio::test]
+async fn test_cleartext_nak_ahead_of_two_data_packets_delivers_both() {
+    let transport = ScriptedTransport::new(
+        vec![
+            build_cleartext_nak_packet(6, &[3]),
+            build_single_fragment_packet(5, &[0x05]),
+            build_single_fragment_packet(6, &[0x06]),
+        ],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 4;
+    session.has_server_seq = true;
+
+    assert!(session.recv_message().await.unwrap().is_empty());
+    assert_eq!(session.last_server_seq, 4);
+
+    let five = session.recv_message().await.unwrap();
+    assert!(matches!(five[0], SessionEvent::Message(ref msg) if msg == &vec![0x05]));
+    let six = session.recv_message().await.unwrap();
+    assert!(matches!(six[0], SessionEvent::Message(ref msg) if msg == &vec![0x06]));
+    assert_eq!(session.last_server_seq, 6);
+}
+
+/// net-3: a gap wider than the reorder window is dropped (retail
+/// SeqIDSanityCheck), never an `Err` that disconnects the session.
+#[tokio::test]
+async fn test_gap_wider_than_window_is_dropped_not_fatal() {
+    use crate::session::types::MAX_RETRANSMIT_SEQUENCE_WINDOW;
+
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 1;
+    session.has_server_seq = true;
+
+    session
+        .send_request_retransmit(1 + 1 + MAX_RETRANSMIT_SEQUENCE_WINDOW + 10)
+        .unwrap();
+    assert!(session.pending_control_packets.is_empty());
+    assert!(session.last_request_retransmit_time.is_none());
+    assert!(!session.flush_pending_control_packets().await.unwrap());
+    assert!(sent_handle.sent_packets().await.is_empty());
+}
+
+/// net-3: the same through the receive path. An ordered packet far past the
+/// window used to surface as "Abnormal server packet sequence" (a
+/// disconnect); now it is dropped and the loop keeps receiving.
+#[tokio::test]
+async fn test_gap_wider_than_window_packet_does_not_end_session() {
+    use crate::session::types::MAX_RETRANSMIT_SEQUENCE_WINDOW;
+
+    let far_sequence = 1 + MAX_RETRANSMIT_SEQUENCE_WINDOW + 10;
+    let transport = ScriptedTransport::new(
+        vec![build_transport_packet(
+            PacketHeader {
+                sequence: far_sequence,
+                ..Default::default()
+            },
+            &[],
+        )],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 1;
+    session.has_server_seq = true;
+
+    let error = session.recv_message().await.unwrap_err();
+    assert!(error.to_string().contains("Empty"), "unexpected error: {error}");
+    assert!(!error.to_string().contains("Abnormal"));
+    assert!(session.pending_server_packets.is_empty());
+    assert!(
+        sent_handle
+            .sent_packets()
+            .await
+            .iter()
+            .all(|packet| !is_request_retransmit(packet))
+    );
+}
+
+/// net-4: ACE's ack-only packet carries `CurrentValue` (its last data
+/// sequence). Newer than ours means packets were lost: NAK through AND
+/// INCLUDING the borrowed id, without waiting for the next encrypted packet.
+#[tokio::test]
+async fn test_cleartext_ack_with_newer_sequence_naks_through_it() {
+    let transport = ScriptedTransport::new(
+        vec![build_ack_only_packet(7, 5)],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+
+    let events = session.recv_message().await.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(session.last_server_seq, 5);
+    assert_eq!(session.highest_server_seq_seen, Some(7));
+
+    assert!(session.flush_pending_control_packets().await.unwrap());
+    let sent = sent_handle.sent_packets().await;
+    let nak = sent
+        .iter()
+        .find(|packet| is_request_retransmit(packet))
+        .expect("missing retransmit request packet");
+    assert_eq!(unpack_header(nak).flags, packet_flags::REQUEST_RETRANSMIT);
+    assert_eq!(request_retransmit_ids(nak), vec![6, 7]);
+}
+
+/// net-4: an ack-only packet that is NOT newer is no hint.
+#[tokio::test]
+async fn test_cleartext_ack_at_current_sequence_requests_nothing() {
+    let transport = ScriptedTransport::new(
+        vec![build_ack_only_packet(5, 5)],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+
+    assert!(session.recv_message().await.unwrap().is_empty());
+    assert_eq!(session.highest_server_seq_seen, None);
+    assert!(session.pending_control_packets.is_empty());
+    assert!(session.next_retransmit_deadline().is_none());
+}
+
+/// net-4: a hint far beyond the window is ignored, never fatal.
+#[tokio::test]
+async fn test_cleartext_ack_hint_beyond_window_is_not_fatal() {
+    use crate::session::types::MAX_RETRANSMIT_SEQUENCE_WINDOW;
+
+    let transport = ScriptedTransport::new(
+        vec![build_ack_only_packet(5 + MAX_RETRANSMIT_SEQUENCE_WINDOW + 100, 5)],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+
+    assert!(session.recv_message().await.unwrap().is_empty());
+    assert_eq!(session.highest_server_seq_seen, None);
+    assert!(session.pending_control_packets.is_empty());
+}
+
+/// net-4: a gap whose first request went out 700 ms ago (and was lost) is
+/// re-requested by the receive loop itself, with no new arrival; the timer
+/// then re-arms 600 ms out instead of spinning.
+#[tokio::test]
+async fn test_pending_gap_renaks_on_timer() {
+    use crate::session::types::ReceivedPacket;
+
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+    session.buffer_out_of_order_packet(
+        8,
+        ReceivedPacket {
+            header: PacketHeader {
+                sequence: 8,
+                ..Default::default()
+            },
+            data: Vec::new(),
+        },
+    );
+    assert_eq!(session.highest_server_seq_seen, Some(8));
+    session.last_request_retransmit_time =
+        Some(web_time::Instant::now() - std::time::Duration::from_millis(700));
+
+    let error = session.recv_message().await.unwrap_err();
+    assert!(error.to_string().contains("Empty"));
+
+    let sent = sent_handle.sent_packets().await;
+    let naks: Vec<_> = sent.iter().filter(|packet| is_request_retransmit(packet)).collect();
+    assert_eq!(naks.len(), 1);
+    // 8 is buffered, so only 6 and 7 are requested.
+    assert_eq!(request_retransmit_ids(naks[0]), vec![6, 7]);
+
+    let next = session
+        .next_retransmit_deadline()
+        .expect("gap still open, timer stays armed");
+    assert!(next > web_time::Instant::now());
+}
+
+/// net-4: with a silent server the receive loop re-sends the request on the
+/// 0.6 s cadence by itself — and does not busy-loop.
+#[tokio::test]
+async fn test_pending_gap_renaks_on_cadence_with_silent_server() {
+    use crate::session::types::ReceivedPacket;
+
+    let transport = SilentTransport::new();
+    let sent_handle = transport.clone();
+
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+    session.buffer_out_of_order_packet(
+        8,
+        ReceivedPacket {
+            header: PacketHeader {
+                sequence: 8,
+                ..Default::default()
+            },
+            data: Vec::new(),
+        },
+    );
+    // The first request just went out.
+    session.last_request_retransmit_time = Some(web_time::Instant::now());
+
+    let waited = tokio::time::timeout(
+        std::time::Duration::from_millis(2000),
+        session.recv_message(),
+    )
+    .await;
+    assert!(waited.is_err(), "nothing was received, so recv must still be waiting");
+
+    let sent = sent_handle.sent_packets().await;
+    let naks: Vec<_> = sent.iter().filter(|packet| is_request_retransmit(packet)).collect();
+    // Nominally at ~0.6 s, ~1.2 s and ~1.8 s.
+    assert!(
+        (2..=4).contains(&naks.len()),
+        "expected 2-4 timer re-requests in 2 s, got {}",
+        naks.len()
+    );
+    for nak in naks {
+        assert_eq!(request_retransmit_ids(nak), vec![6, 7]);
+    }
+}
+
+/// net-4: no gap, no timer (an idle in-order session must not wake up); and
+/// the timer disarms once ordering catches up with the newest known id.
+#[tokio::test]
+async fn test_retransmit_timer_disarms_when_gap_closes() {
+    let transport = ScriptedTransport::new(
+        vec![
+            build_single_fragment_packet(6, &[0x06]),
+            build_single_fragment_packet(7, &[0x07]),
+        ],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+
+    let mut session = Session::new_test();
+    assert!(session.next_retransmit_deadline().is_none());
+
+    session.transport = Box::new(transport);
+    session.last_server_seq = 5;
+    session.has_server_seq = true;
+    session.note_server_seq_seen(7);
+    session.last_request_retransmit_time = Some(web_time::Instant::now());
+    assert!(session.next_retransmit_deadline().is_some());
+
+    session.recv_message().await.unwrap();
+    assert_eq!(session.last_server_seq, 6);
+    assert_eq!(session.highest_server_seq_seen, Some(7));
+
+    session.recv_message().await.unwrap();
+    assert_eq!(session.last_server_seq, 7);
+    assert_eq!(session.highest_server_seq_seen, None);
+    assert!(session.next_retransmit_deadline().is_none());
+}
+
+/// net-5: a server EchoRequest must not produce a packet that reuses the
+/// server's sequence/id, burns a C2S ISAAC word, or lands in the C2S
+/// retransmit cache. The packet is still ordered and ACKed normally.
+#[tokio::test]
+async fn test_server_echo_request_does_not_emit_packet_with_server_sequence() {
+    let transport = ScriptedTransport::new(
+        vec![build_transport_packet(
+            PacketHeader {
+                sequence: 2,
+                flags: packet_flags::ECHO_REQUEST,
+                id: 0x0B,
+                ..Default::default()
+            },
+            &1.5f32.to_le_bytes(),
+        )],
+        "127.0.0.1:9000".parse().unwrap(),
+    );
+    let sent_handle = transport.clone();
+
+    let seed = 0x99E7_7855;
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.isaac_c2s = Some(holtburger_protocol::crypto::Isaac::new(seed));
+    let c2s_key_before = session.isaac_c2s.as_ref().unwrap().current_key;
+
+    let events = session.recv_message().await.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(session.last_server_seq, 2);
+
+    force_pending_control_packets_due(&mut session);
+    session.flush_pending_control_packets().await.unwrap();
+
+    let sent = sent_handle.sent_packets().await;
+    assert!(
+        sent.iter()
+            .all(|packet| unpack_header(packet).flags & packet_flags::ECHO_RESPONSE == 0),
+        "no EchoResponse packet may be emitted"
+    );
+    assert!(
+        sent.iter().all(|packet| unpack_header(packet).sequence != 2),
+        "nothing may go out under the server's sequence"
+    );
+    assert!(!session.cached_packets.contains_key(&2));
+    assert_eq!(
+        session.isaac_c2s.as_ref().unwrap().current_key,
+        c2s_key_before,
+        "no C2S ISAAC word may be consumed"
+    );
+
+    // The normal cleartext ACK for 2 still goes out.
+    let ack = sent
+        .iter()
+        .find(|packet| unpack_header(packet).flags == packet_flags::ACK_SEQUENCE)
+        .expect("ordered packet should still be ACKed");
+    assert_eq!(
+        LittleEndian::read_u32(&ack[transport::HEADER_SIZE..transport::HEADER_SIZE + 4]),
+        2
+    );
+}

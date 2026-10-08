@@ -45,6 +45,12 @@ import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/key
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { getIconImmediate, fetchIconDataUrl, fetchSpellIconDataUrl } from "../ui/ac_icon_cache.js";
 import { hudPoint, hudViewport } from "../ui/hud_scale.js";
+import {
+  castNeedsNoSelection,
+  catalogSelfTargetedOnly,
+  formulaUntargetedEnabled,
+  spellTargetClass,
+} from "../ui/ac_spell_target_type.js";
 
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 // Task C follow-up (2026-07-01): retail-corrected counts, verified
@@ -63,7 +69,10 @@ function loadCatalog() {
   if (!catalogPromise) {
     catalogPromise = fetch("./data/spells-catalog.json", { cache: "force-cache" })
       .then((r) => r.json())
-      .then((j) => j.spells || {})
+      // spellcast-2: `untargeted` = SelfTargeted OR formula target type 0
+      // (ui/ac_spell_target_type.js); `?formulaUntargeted=off` keeps only the
+      // SelfTargeted bit.
+      .then((j) => (formulaUntargetedEnabled() ? (j.spells || {}) : catalogSelfTargetedOnly(j.spells)))
       .catch((e) => {
         console.warn("[spellbook] catalog load failed:", e);
         return {};
@@ -143,7 +152,13 @@ function spellRecordFromWasm(spellId) {
     school:      raw.school,
     level:       raw.roughLevel ?? 0,
     levelRoman:  raw.levelRoman ?? "",
-    untargeted:  !!raw.isSelfTargeted,
+    // spellcast-2: retail casts a SelfTargeted spell at the caster and a
+    // formula-target-type-0 spell (rings, walls) untargeted. `components` is
+    // the decrypted DAT formula; `isUntargeted` is a different predicate.
+    untargeted:  castNeedsNoSelection({
+      selfTargeted: !!raw.isSelfTargeted,
+      components: raw.components,
+    }),
     mana:        raw.baseMana,
     icon:        raw.iconId,
     desc:        raw.description,
@@ -597,7 +612,7 @@ function showSpellDetail(meta, ev, componentNames) {
   metaEl.className = "hb-sb-detail-meta";
   const school = SCHOOL_NAMES[meta.school] ?? "Unknown school";
   const bits = [school, spellMetaLine(meta) + manaConvNote(meta)];
-  bits.push(meta.untargeted ? "Self" : "Targeted");
+  bits.push({ self: "Self", none: "Untargeted", target: "Targeted" }[spellTargetClass(meta)]);
   metaEl.textContent = bits.filter(Boolean).join(" · ");
   card.appendChild(metaEl);
 
@@ -1194,4 +1209,5 @@ export {
   SPELL_BAR_SLOTS,
   SPELL_BAR_TABS,
   loadCatalog,
+  spellRecordFromWasm,
 };

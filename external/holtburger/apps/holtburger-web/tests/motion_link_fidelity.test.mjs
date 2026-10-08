@@ -6,13 +6,19 @@
 //   · a link's INNER key is the FULL 32-bit command — a bare low-16 target
 //     misses (the C3 invariant);
 //   · a missed link FALLS BACK to the target's cycle, flagged `isLink:false`.
+//   · `fetchMotionLinkKeyframes` (cmotiontable-3, lib.rs build_link_only_inner)
+//     returns only the link's keyframes, and `undefined` on a miss.
 // The older unified_motion_authority mock matched links on low-16 and
 // returned nothing on a miss, so it could not see either half of the bug.
 //
-//   L1  a missed link's cycle fallback never plays as a one-shot (S1)
+//   L1  a missed link's cycle fallback never plays as a one-shot (S1); the
+//       link goes through the geometry-free export and its miss is cached
+//   L1b a pkg/ without that export, or `?linkOnlyBake=off`, keeps the old path
 //   L2  a remote BARE Ready after Run finds the real Run→Ready link (full key)
 //   L3  turn / strafe / run commands never cut a windup on the playhead (S2)
 //   L4  a combat toggle while running plays exit → draw → entry → cycle (bug 18)
+//   L4b ...the exit and draw links at speed 1.0, the entry at the run speed
+//       (`?styleLinkSpeed`, cmotiontable-1)
 //   L5  setLocalStance while running plays that chain instead of only stamping
 //   L6  motions arriving while the rig is still spawning are replayed (bug 15)
 //   L7  a cast burst (more than the old 3-deep queue) keeps every windup
@@ -92,18 +98,23 @@ function cycleId(cmd, stance) {
 
 let spawnDelayMs = 0;
 const bakes = [];
+// cmotiontable-3: calls into the geometry-free link export.
+const linkBakes = [];
+// Real get_link: the inner key is the FULL command.
+const linkIdFor = (stance, fromMotion, cmd) => {
+  const style = (stance || NONCOMBAT) & 0xffff;
+  return LINKS.get(`${style.toString(16)}:${(fromMotion & 0xffff).toString(16)}:${cmd}`) ?? null;
+};
 const wasmExports = {
   async fetchEntityAnimationKeyframes(_setupId, _mc, _tc, _pal, _subs, _mtableId, cmd, stance, fromMotion) {
     cmd >>>= 0; stance >>>= 0; fromMotion >>>= 0;
     bakes.push({ cmd, stance, fromMotion });
     if (spawnDelayMs && !fromMotion) await new Promise((r) => setTimeout(r, spawnDelayMs));
-    const style = (stance || NONCOMBAT) & 0xffff;
     let id = null;
     let isLink = false;
     let n = 0;
     if (fromMotion) {
-      // Real get_link: the inner key is the FULL command.
-      const hit = LINKS.get(`${style.toString(16)}:${(fromMotion & 0xffff).toString(16)}:${cmd}`);
+      const hit = linkIdFor(stance, fromMotion, cmd);
       if (hit != null) { id = hit; isLink = true; n = LINK_FRAMES; }
     }
     if (id == null) {
@@ -120,6 +131,23 @@ const wasmExports = {
       isLink,
       partFrames: n ? frames(id, n) : new Float32Array(0),
       takePartMeshes() { return meshes.splice(0); },
+    };
+  },
+  // cmotiontable-3: like the real lib.rs `fetchMotionLinkKeyframes` — only the
+  // link's keyframes (no part meshes), `undefined` on a miss (no cycle bake).
+  async fetchMotionLinkKeyframes(_setupId, _mtableId, stance, fromMotion, cmd, _urgent) {
+    cmd >>>= 0; stance >>>= 0; fromMotion >>>= 0;
+    linkBakes.push({ cmd, stance, fromMotion });
+    const id = linkIdFor(stance, fromMotion, cmd);
+    if (id == null) return undefined;
+    return {
+      partCount: PART_COUNT,
+      numFrames: LINK_FRAMES,
+      framerate: FRAMERATE,
+      resolvedStance: stance || NONCOMBAT,
+      isLink: true,
+      partFrames: frames(id, LINK_FRAMES),
+      takePartMeshes() { return []; },
     };
   },
   async fetch_surfaces_pixels(dids) {
@@ -163,12 +191,61 @@ const clipOf = (y) => Math.floor(y / 10) * 10;
 test("L1 a missed link's cycle fallback never plays as a one-shot", async () => {
   const em = makeManager();
   const inst = await em.spawn(spawnMeta());
+  const b0 = bakes.length;
+  const l0 = linkBakes.length;
   await em.setMotion(inst.guid, WALK, NONCOMBAT);
-  // Ready → Walk has no link: the bake returned the Walk CYCLE as isLink:false.
+  // Ready → Walk has no link: the link-only bake answers "no link".
   assert.equal(inst._unifiedSeq ?? null, null, "no fake link on the playhead");
   em.tick(0.02);
   assert.equal(clipOf(partY(inst)), 50, "the walk cycle plays at once");
+  // cmotiontable-3: the link went through the geometry-free export, so no
+  // full-rig bake with a `fromMotion` (and no cycle fallback) happened.
+  assert.equal(bakes.slice(b0).filter((b) => b.fromMotion).length, 0, "no full-rig link bake");
+  const readyToWalk = () =>
+    linkBakes.slice(l0).filter((b) => (b.fromMotion & 0xffff) === 0x0003 && b.cmd === WALK).length;
+  assert.equal(readyToWalk(), 1, "one link-only lookup for Ready → Walk");
+  // Walk → Ready → Walk: the cached miss answers without a second wasm call.
+  await em.setMotion(inst.guid, READY, NONCOMBAT);
+  await em.setMotion(inst.guid, WALK, NONCOMBAT);
+  assert.equal(readyToWalk(), 1, "the authoritative miss is cached");
+  let linkOnlyKeys = 0;
+  for (const [key, p] of em.animationCache.entries) {
+    if (!key.includes(":linkonly:")) continue;
+    linkOnlyKeys += 1;
+    const e = await p;
+    assert.ok(
+      e === null || (Array.isArray(e.partGroups) && e.partGroups.length === 0),
+      `no part geometry on ${key}`,
+    );
+  }
+  assert.ok(linkOnlyKeys >= 2, `link-only entries cached (${linkOnlyKeys})`);
   em.dispose();
+});
+
+test("L1b a pkg/ without fetchMotionLinkKeyframes, or ?linkOnlyBake=off, keeps the full-rig link path", async () => {
+  const { fetchMotionLinkKeyframes: _omit, ...stale } = wasmExports;
+  const makers = [
+    () => new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, stale),
+    () => {
+      const em = makeManager();
+      em._linkOnlyBakeOn = false;
+      return em;
+    },
+  ];
+  for (const mk of makers) {
+    const em = mk();
+    const inst = await em.spawn(spawnMeta());
+    const b0 = bakes.length;
+    const l0 = linkBakes.length;
+    await em.setMotion(inst.guid, RUN & 0xffff, NONCOMBAT & 0xffff);
+    await em.setMotion(inst.guid, 0x0003, 0x003d);
+    assert.ok(inst._unifiedSeq?.clearOnDone, "a link is playing");
+    em.tick(0.01);
+    assert.equal(clipOf(partY(inst)), 600, "the Run→Ready link still plays");
+    assert.equal(linkBakes.length, l0, "the link-only export is not called");
+    assert.ok(bakes.slice(b0).some((b) => b.fromMotion), "the full-rig export baked the link");
+    em.dispose();
+  }
 });
 
 test("L2 a remote bare Ready after Run plays the real Run→Ready link", async () => {
@@ -214,6 +291,29 @@ test("L4 a combat toggle while running plays exit → draw → entry → combat 
   assert.equal(order[order.length - 1], COMBAT_OFFSET + 100, "lands on the combat run cycle");
   assert.ok(!order.slice(0, i450).includes(COMBAT_OFFSET + 100), "no pop into the combat run first");
   em.dispose();
+});
+
+test("L4b the exit and draw links play at 1.0; only the entry link takes the run speed", async () => {
+  // Retail appends the style change from a fresh MovementParameters (speed
+  // 1.0) before it sets the forward speed (CMotionInterp::
+  // apply_interpreted_movement, acclient.c:344147; ctor :339437).
+  const speeds = async (styleLinkSpeedOn) => {
+    const em = makeManager();
+    em._styleLinkSpeedOn = styleLinkSpeedOn;
+    const inst = await em.spawn(spawnMeta());
+    await em.setMotion(inst.guid, RUN, NONCOMBAT, 2.5);
+    em.tick(0.05);
+    await em.setMotion(inst.guid, RUN, HANDCOMBAT, 2.5);
+    const sp = new Map(inst._unifiedQueue.list.map((n) => [n.motion >>> 0, n.payload?.speed]));
+    em.dispose();
+    return sp;
+  };
+  const sp = await speeds(true);
+  assert.equal(sp.get(READY), 1, "exit link (Run → Ready) at 1.0");
+  assert.equal(sp.get(HANDCOMBAT), 1, "draw link at 1.0");
+  assert.equal(sp.get(RUN), 2.5, "entry link (Ready → Run) at the run speed");
+  const legacy = await speeds(false);
+  assert.equal(legacy.get(HANDCOMBAT), 2.5, "`=off`: the draw link runs at the command speed");
 });
 
 test("L5 setLocalStance while running plays the chain instead of only stamping", async () => {

@@ -5,7 +5,7 @@
 // Surface mirrors the wasm-bindgen class the client reads off
 // `window.__hbWasm.MotionSequence`: `fromDescriptor(numFrames, framerate,
 // duration, frameTimes, segmentStarts, segmentCounts, cyclic)`, `advance(dt)`,
-// `globalFrameIndex`, `done`, `phase`, `seekPhase(p)`, `free()` (zeroes
+// `globalFrameIndex`, `done`, `phase`, `seekPhase(p)`, `reset()`, `free()` (zeroes
 // `__wbg_ptr` like wasm-bindgen does). Timing is the simple single-node case
 // (frame = floor(t * framerate)); the real multi-node CSequence math is
 // cargo-tested in Rust — this only has to be faithful enough for the JS
@@ -52,6 +52,11 @@ export class FakeMotionSequence {
   seekPhase(p) {
     const q = ((+p % 1) + 1) % 1;
     this.t = q * this.duration;
+  }
+
+  reset() {
+    this.t = 0;
+    this._done = false;
   }
 
   free() {

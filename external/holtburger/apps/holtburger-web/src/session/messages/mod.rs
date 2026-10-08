@@ -63,6 +63,21 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         js_spawned_guids,
         ..
     } = &mut *ctx;
+    // PR-SS 2026-05-23: stamp the recv timestamp for the
+    // link-status indicator. Any inbound server frame
+    // counts as "the link is alive" — staleness > 2s
+    // tints the indicator red, > 0.5s yellow.
+    //
+    // net-1 (R2-net 2026-10-08): moved ABOVE the event match
+    // so a TimeSync stamps it too. This instant is also the
+    // recv loop's dead-session signal (session_liveness.rs).
+    // At character select / chargen ACE sends no game
+    // messages, only a TimeSync every 20 s, so the old
+    // message-only stamp went stale and the detector
+    // disconnected a healthy session. A TimeSync is encrypted
+    // and only surfaces once its ISAAC key validated, so it
+    // still proves the S2C stream is healthy.
+    *last_recv_instant.borrow_mut() = Some(web_time::Instant::now());
     let bytes = match event {
         SessionEvent::Message(bytes) => bytes,
         // P4.2 TIMESYNC (2026-07-27): adopt the server clock
@@ -82,11 +97,6 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             return LoopFlow::Continue;
         }
     };
-    // PR-SS 2026-05-23: stamp the recv timestamp for the
-    // link-status indicator. Any inbound server frame
-    // counts as "the link is alive" — staleness > 2s
-    // tints the indicator red, > 0.5s yellow.
-    *last_recv_instant.borrow_mut() = Some(web_time::Instant::now());
     let mut offset = 0;
     let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
         return LoopFlow::Continue;
@@ -454,16 +464,11 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                     .borrow_mut()
                     .insert(g, (succ, flags_bits));
                 if !succ {
-                    let stub = serde_json::json!({
-                        "guid": g,
-                        "identifySuccess": false,
-                        "identifyFlags": flags_bits,
-                        "properties": {
-                            "ints": {}, "int64s": {}, "bools": {},
-                            "floats": {}, "strings": {}, "dids": {},
-                        },
-                        "spellBook": [],
-                    });
+                    // enchstats-4 (2026-10-08): the stub also carries
+                    // the failed response's creature profile as
+                    // `failedCreatureProfile` (never merged into the
+                    // entity) for retail's degraded assess view.
+                    let stub = failed_identify_snapshot_json(data);
                     latest_appraisals
                         .borrow_mut()
                         .insert(g, stub.to_string());

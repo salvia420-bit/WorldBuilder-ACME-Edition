@@ -35,6 +35,28 @@ const WALK_BACKWARD_MOTION_COMMAND: u32 = 0x4500_0006;
 // See `forward_command_for_state` for the full broadcast-converter
 // rationale (`MovementData.cs:99-119`).
 pub(super) const TURN_RIGHT_MOTION_COMMAND: u32 = 0x6500_000d;
+/// R1 outbound-4 (2026-10-08): retail's RAW wire carries the real
+/// `TurnLeft (0x6500000E)` — see [`USE_RAW_TURN_LEFT_WIRE`].
+pub(super) const TURN_LEFT_MOTION_COMMAND: u32 = 0x6500_000e;
+/// R1 outbound-4 (2026-10-08) — the RAW MoveToState turn field carries the
+/// key the player actually holds: `TurnLeft (0x6500000E)` with a POSITIVE
+/// speed for a left turn, not `TurnRight` with a negated speed. Retail
+/// `CommandInterpreter::MovePlayer` issues `DoMotion(0x6500000E, speed)`
+/// for start_turn_left (acclient.c:717953-717958, :717986);
+/// `CMotionInterp::DoMotion` (acclient.c:344600) runs `adjust_motion` on a
+/// COPY but applies the ORIGINAL motion to the raw state
+/// (`RawMotionState::ApplyMotion(&raw_state, motion, params)`), whose
+/// 0x6500000D/0x6500000E arm stores `turn_command = motion; turn_speed =
+/// params->speed` verbatim (acclient.c:332852), and
+/// `RawMotionState::Pack` (acclient.c:332970) writes it unchanged. The
+/// Left→Right+negate canonicalization is the INTERPRETED layer's
+/// (`adjust_motion`), which ACE runs server-side either way — so default-ACE
+/// observers see the identical result, while ACE's
+/// `client_movement_formula` path (`OnMoveToState_ClientMethod`, which
+/// replays `rawState.TurnCommand` at default speed) and any raw-reading
+/// server no longer turn a left-turner RIGHT. Wire-only (local omega is
+/// keyed off the `Turn` enum); `false` restores the Phase-2.5 collapse.
+const USE_RAW_TURN_LEFT_WIRE: bool = true;
 // F5-1 (movement bughunt 2026-06-09): the RAW C2S wire carries the REAL
 // sidestep enum — `SideStepLeft (0x65000010)` for a left strafe — because
 // ACE's broadcast converter (`ACE.Server/Network/Motion/MovementData.cs:
@@ -48,8 +70,10 @@ pub(super) const TURN_RIGHT_MOTION_COMMAND: u32 = 0x6500_000d;
 // saw a left-strafing player strafe RIGHT until the ~1 Hz heartbeat
 // snapped them back. ACE's own `RawMotionState.cs:38-40` comment documents
 // that the one-direction+negated-speed convention applies to the TURN raw
-// field ONLY — so the turn collapse below stays (retail-correct), and the
-// sidestep collapse is reverted. The Left→Right rewrite (with negated
+// field ONLY — the sidestep collapse was reverted here, and R1 outbound-4
+// (2026-10-08) reverted the turn collapse too: the decomp contradicts that
+// ACE comment (retail's raw state stores TurnLeft verbatim, acclient.c:
+// 717953-717958 / 344600 / 332852 — see `USE_RAW_TURN_LEFT_WIRE`). The Left→Right rewrite (with negated
 // speed) is the SERVER's job in the broadcast; observers therefore still
 // only ever receive `SideStepRight` and the renderer's MT cache lookup
 // (which has no SideStepLeft cycles) is unaffected.
@@ -121,9 +145,14 @@ fn resolve_contact(world: &WorldState, metadata: MovementPacketMetadata) -> bool
     // cell change while `player.LastContact` is true, falsely re-grounding
     // an airborne player in server physics. `is_airborne` is maintained by
     // the integrator (`begin_jump`/`begin_fall`/`land`) and is current the
-    // tick it changes — which also makes the in-window contact-flip
-    // heartbeat re-send (`autonomous_pose_changed`, built precisely for the
-    // airborne flip) live for the first time.
+    // tick it changes.
+    //
+    // R1 outbound-1 (2026-10-08): under the default retail AP gate
+    // (`USE_RETAIL_POSITION_EVENT_GATE`) no AutonomousPosition is sent while
+    // airborne at all — retail `SendPositionEvent` requires CONTACT &&
+    // ON_WALKABLE (acclient.c:718225-718227) — so every AP carries 1 here and
+    // the contact flip is no longer an AP trigger. The MoveToState byte (and
+    // the `?apRetailGate=off` legacy cadence) still read this.
     metadata.contact.unwrap_or(!world.player.is_airborne)
 }
 
@@ -297,18 +326,24 @@ fn sidestep_command_for_state(sidestep: SidestepLocomotion) -> (u32, f32) {
     }
 }
 
-/// Wave 2 Phase 2.5 (2026-05-26): collapse `TurnLeft (0x6500000E)` into
-/// `TurnRight (0x6500000D)` with NEGATED speed. Same retail contract as the
-/// sidestep case above — `InterpretedMotionState::ApplyMotion` only carries
-/// `TurnRight` (`~/ac-headers/acclient.c:332761-332765`); ACE's
-/// `adjust_motion` rewrites `TurnLeft` to `TurnRight` with `speed *= -1`
-/// (`MotionInterp.cs:409-412`). The player MotionTable has no
-/// `cycles[(stance, TurnLeft)]` entry — the renderer's cache lookup for
-/// `0x6500000E` returns null.
+/// The RAW wire turn command for a held turn key.
+///
+/// R1 outbound-4 (2026-10-08, [`USE_RAW_TURN_LEFT_WIRE`]): `Turn::Left`
+/// emits the real `TurnLeft (0x6500000E)` with a POSITIVE speed — retail
+/// `MovePlayer` → `DoMotion` → `RawMotionState::ApplyMotion` stores the
+/// original motion in the raw state (acclient.c:717953-717958, :344600,
+/// :332852). The Wave-2 Phase-2.5 collapse (TurnRight + negated speed)
+/// cited `InterpretedMotionState::ApplyMotion` (acclient.c:332761-332765)
+/// and ACE `adjust_motion` (`MotionInterp.cs:409-412`) — both the
+/// INTERPRETED layer, which ACE derives server-side from this raw field.
+/// Raw MoveToState packs feed no local renderer (the MotionTable
+/// `cycles[(stance, TurnLeft)]` gap only matters for interpreted states).
+/// `USE_RAW_TURN_LEFT_WIRE = false` restores the collapse.
 ///
 /// Returns `(motion_command, speed_sign)`.
 fn turn_motion_command_for_state(turn: Turn) -> (u32, f32) {
     match turn {
+        Turn::Left if USE_RAW_TURN_LEFT_WIRE => (TURN_LEFT_MOTION_COMMAND, 1.0),
         Turn::Left => (TURN_RIGHT_MOTION_COMMAND, -1.0),
         Turn::Right => (TURN_RIGHT_MOTION_COMMAND, 1.0),
     }
@@ -396,14 +431,13 @@ pub(super) fn build_motion_state_raw_motion_state(
         raw_motion_state.flags |= RawMotionFlags::TURN_COMMAND
             | RawMotionFlags::TURN_HOLD_KEY
             | RawMotionFlags::TURN_SPEED;
-        // Phase 2.5 collapse (KEPT — this one is retail-correct): the
-        // raw wire carries `TurnRight (0x6500000D)` with a signed
-        // speed for both directions. ACE's own `RawMotionState.cs:38-40`
-        // comment documents the one-direction+negative-speed convention
-        // as the RAW-wire contract for the turn field (and ONLY the
-        // turn field — contrast the F5-1 sidestep revert above), and
-        // `MovementData.cs:141-145` passes the signed raw TurnSpeed
-        // through to the broadcast.
+        // R1 outbound-4 (2026-10-08): the raw wire carries the REAL turn
+        // key — `TurnLeft (0x6500000E)` + positive speed for a left turn —
+        // as retail's raw state does (acclient.c:717953-717958, :344600,
+        // :332852). The Phase-2.5 collapse leaned on ACE's
+        // `RawMotionState.cs:38-40` comment, which the decomp contradicts;
+        // ACE's `adjust_motion` still canonicalizes server-side, so default
+        // observers are unchanged. See `turn_motion_command_for_state`.
         let (command, sign) = turn_motion_command_for_state(turn);
         raw_motion_state.turn_command = Some(command);
         raw_motion_state.turn_hold_key = Some(axis_hold_key);
@@ -434,8 +468,9 @@ pub(super) fn build_motion_state_raw_motion_state(
 ///   the send never re-broadcasts a server gesture as raw input.
 /// - **real sidestep enum, positive unit speed** (F5-1): ACE derives the
 ///   observers' strafe direction from the enum only.
-/// - **turn collapsed to `TurnRight` ± speed** (the raw-wire contract ACE's
-///   own `RawMotionState.cs:38-40` documents for the turn field only).
+/// - **real turn enum, positive speed** (R1 outbound-4): `TurnLeft` /
+///   `TurnRight` with the unsigned magnitude, as retail's raw state carries
+///   it (`USE_RAW_TURN_LEFT_WIRE`; off = the old `TurnRight` ± collapse).
 /// - **hold keys**: each axis key resolves `Invalid → current` (the
 ///   `adjust_motion` rule, applied HERE so the wire matches the legacy
 ///   builder byte-for-byte — it stamps the gait key on every axis);
@@ -509,15 +544,19 @@ pub(super) fn build_raw_state_raw_motion_state(
         raw_motion_state.flags |= RawMotionFlags::TURN_COMMAND
             | RawMotionFlags::TURN_HOLD_KEY
             | RawMotionFlags::TURN_SPEED;
-        let sign = match turn {
-            RawTurnCommand::TurnLeft => -1.0,
-            RawTurnCommand::TurnRight => 1.0,
+        // R1 outbound-4 (USE_RAW_TURN_LEFT_WIRE): the real turn enum with
+        // the unsigned magnitude, as retail's raw state carries it; the
+        // legacy collapse (TurnRight ± speed) when the const is off.
+        let (command, sign) = match turn {
+            RawTurnCommand::TurnLeft if USE_RAW_TURN_LEFT_WIRE => (TURN_LEFT_MOTION_COMMAND, 1.0),
+            RawTurnCommand::TurnLeft => (TURN_RIGHT_MOTION_COMMAND, -1.0),
+            RawTurnCommand::TurnRight => (TURN_RIGHT_MOTION_COMMAND, 1.0),
         };
-        raw_motion_state.turn_command = Some(TURN_RIGHT_MOTION_COMMAND);
+        raw_motion_state.turn_command = Some(command);
         raw_motion_state.turn_hold_key =
             Some(wire_hold_key(raw.turn_holdkey, raw.current_holdkey));
         // Magnitude from the live raw state (keyboard = 1.0; a camera-lane
-        // override rides through), sign from the collapsed direction.
+        // override rides through), sign from the direction encoding.
         raw_motion_state.turn_speed = Some(raw.turn_speed.abs() * sign);
     }
 
@@ -947,17 +986,15 @@ fn cap_state_velocity(velocity: Vector3, max_speed: f32) -> Vector3 {
 /// [`local_velocity_for_state`] for the uncapped ground contract and the
 /// four decomp anchors behind it.
 ///
-/// Staged: the live launch sites are in `movement/system.rs`
-/// (`manual_intent_velocity` :7638, whose own doc already names
-/// `get_leave_ground_velocity` as the retail form it is standing in for,
-/// and whose BOTH arms currently hand back an uncapped GROUND vector).
-/// That file is another task's active scope — wiring is a one-line
-/// handoff, recorded in `impl/task-MOVE-F6-SPEEDCAP-report.md`. The
-/// interpreted-pipeline sibling is
-/// [`super::motion_interp::leave_ground_velocity_for_state`]; the
-/// equivalence of the two is pinned by
+/// The live jump launch (R1 motioninterp-1, 2026-10-08,
+/// `USE_JUMP_LAUNCH_CAP` / `?jumpLaunchCap`) is wired through the
+/// interpreted-pipeline sibling,
+/// [`super::motion_interp::leave_ground_velocity_for_state`], in
+/// `MovementSystem::execute_jump_release` (both charged and non-charged
+/// arms); the walk-off stamp uses the same sibling. This axis-helper form
+/// stays as the cross-check: the equivalence of the two is pinned by
 /// `capped_composition_matches_the_interpreted_leave_ground_port`.
-#[allow(dead_code)] // staged: launch-site wiring is system.rs (see above)
+#[allow(dead_code)] // cross-check of the interpreted launch port (see above)
 pub(super) fn local_state_velocity_for_state(
     current_heading: f32,
     state: MotionState,
@@ -1262,8 +1299,9 @@ mod tests {
         assert!(raw.flags.contains(RawMotionFlags::SIDE_STEP_COMMAND));
         // F2-4: turn rides the wire alongside the strafe.
         assert!(raw.flags.contains(RawMotionFlags::TURN_COMMAND));
-        assert_eq!(raw.turn_command, Some(TURN_RIGHT_MOTION_COMMAND));
-        assert_eq!(raw.turn_speed, Some(-WIRE_TURN_SPEED_BASE));
+        // R1 outbound-4: the real TurnLeft enum, positive speed.
+        assert_eq!(raw.turn_command, Some(TURN_LEFT_MOTION_COMMAND));
+        assert_eq!(raw.turn_speed, Some(WIRE_TURN_SPEED_BASE));
     }
 
     /// F5-2/F2-1 (movement bughunt 2026-06-09) — the Run gait emits
@@ -1557,10 +1595,16 @@ mod tests {
     /// (`~/ac-headers/acclient.c:332761-332765`), and ACE's
     /// `MotionInterp.adjust_motion` (`external/ACE/Source/ACE.Server/Physics/
     /// Animation/MotionInterp.cs:409-412`) does the same rewrite server-side.
-    /// Player MT 0x09000001 lacks a `cycles[(stance, TurnLeft)]` entry, so
-    /// the renderer's cache lookup needs the Right code to land a clip.
+    /// R1 outbound-4 (2026-10-08): retail's RAW wire carries the key the
+    /// player holds — `TurnLeft (0x6500000E)` with a POSITIVE speed
+    /// (`MovePlayer` acclient.c:717953-717958 → `DoMotion` :344600 applies
+    /// the ORIGINAL motion to the raw state → `RawMotionState::ApplyMotion`
+    /// :332852 stores it verbatim). The Phase-2.5 collapse (TurnRight +
+    /// negated speed) belonged to the interpreted layer. Both builders
+    /// agree (the M1 parity property below covers the full lattice).
     #[test]
-    fn turn_left_emits_right_code_with_negated_speed() {
+    fn turn_left_emits_left_code_with_positive_speed() {
+        use crate::client::movement::raw_state::RawState;
         let world = holtburger_world::WorldState::synthetic();
         let state = MotionState::builder().walk().turn_left().build();
 
@@ -1570,17 +1614,39 @@ mod tests {
         assert!(raw.flags.contains(RawMotionFlags::TURN_COMMAND));
         assert_eq!(
             raw.turn_command,
-            Some(TURN_RIGHT_MOTION_COMMAND),
-            "Phase 2.5: Turn::Left collapses to TurnRight code (retail RAW-wire \
-             convention for the turn field — ACE RawMotionState.cs:38-40)",
+            Some(TURN_LEFT_MOTION_COMMAND),
+            "retail raw wire: Turn::Left is the TurnLeft enum",
         );
-        // F1-3: the wire turn speed is the BASE scalar (1.0) negated —
-        // never the pre-multiplied run factor.
-        assert_eq!(
-            raw.turn_speed,
-            Some(-WIRE_TURN_SPEED_BASE),
-            "Phase 2.5: negated speed signals left direction",
+        // F1-3: the wire turn speed is the BASE scalar (1.0) — never the
+        // pre-multiplied run factor — and unsigned.
+        assert_eq!(raw.turn_speed, Some(WIRE_TURN_SPEED_BASE));
+
+        // The interpreter-lane converter emits the same bytes.
+        let native = build_raw_state_raw_motion_state(
+            &world,
+            &RawState::from_motion_state(state),
+            MotionStyle::PreserveServer,
         );
+        assert_eq!(native.turn_command, Some(TURN_LEFT_MOTION_COMMAND));
+        assert_eq!(native.turn_speed, Some(WIRE_TURN_SPEED_BASE));
+
+        // A camera-lane override keeps its magnitude, unsigned, on both
+        // builders (left and right now clamp symmetrically in ACE's
+        // `MovementData` `TurnSpeed <= 1.5` test).
+        let fast = MotionState::builder()
+            .walk()
+            .turn_left()
+            .with_turn_speed(2.0)
+            .build();
+        let raw = build_motion_state_raw_motion_state(&world, fast, MotionStyle::PreserveServer);
+        assert_eq!(raw.turn_command, Some(TURN_LEFT_MOTION_COMMAND));
+        assert_eq!(raw.turn_speed, Some(2.0));
+        let mut camera = RawState::from_motion_state(fast);
+        camera.turn_speed = -2.0;
+        let native =
+            build_raw_state_raw_motion_state(&world, &camera, MotionStyle::PreserveServer);
+        assert_eq!(native.turn_command, Some(TURN_LEFT_MOTION_COMMAND));
+        assert_eq!(native.turn_speed, Some(2.0));
     }
 
     /// Wave 2 Phase 2.5 (2026-05-26) — `Turn::Right` continues to emit the

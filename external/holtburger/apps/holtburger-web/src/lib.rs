@@ -621,6 +621,45 @@ fn parse_walkable_ground_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "walkableGround=off")
 }
 
+/// R1 motioninterp-1 (2026-10-08): parse `?jumpLaunchCap=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, a jump under a manual drive launches
+/// with retail `CMotionInterp::get_leave_ground_velocity` — the state
+/// velocity capped at `4.0 × run_rate` (acclient.c:343539-343594,
+/// :343806-343842) — on charged AND non-charged releases; `=off` restores
+/// the uncapped intent / realized-velocity arms. Native carrier:
+/// `USE_JUMP_LAUNCH_CAP` (movement/system.rs). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_jump_launch_cap_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "jumpLaunchCap=off")
+}
+
+/// R1 motioninterp-2 (2026-10-08): parse `?jumpLoadGate=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, retail `CACQualities::CanJump`
+/// (load < 2.0, acclient.c:442878-442884) refuses an over-encumbered jump
+/// with error 73 at press (`charge_jump`) and release
+/// (`jump_charge_is_allowed`); `=off` restores the permissive seam. Native
+/// carrier: `USE_JUMP_LOAD_GATE` (movement/system.rs). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_jump_load_gate_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "jumpLoadGate=off")
+}
+
+/// R1 outbound-1/2/3 (2026-10-08): parse `?apRetailGate=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, the AutonomousPosition cadence is
+/// retail `CommandInterpreter`'s (acclient.c:718108-718245): no airborne APs,
+/// the first grounded frame sends, a MoveToState restarts the 1 s window, and
+/// a force-position snap is acked with one immediate AP
+/// (`HandleReceivedPosition`, :145244-145248); `=off` restores the
+/// pre-2026-10-08 cadence. Native carrier: `USE_RETAIL_POSITION_EVENT_GATE`
+/// (movement/system.rs). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_ap_retail_gate_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "apRetailGate=off")
+}
+
 /// F2 (2026-07-27): parse `?serverMoveToDriver=off` (or `&serverMoveToDriver=off`).
 /// DEFAULT-ON off-escape shape (mirrors `parse_retail_ground_flag`): returns
 /// `true` UNLESS `serverMoveToDriver=off` is present. When on, the LOCAL
@@ -893,6 +932,50 @@ fn get_link_flag() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         false
+    }
+}
+
+/// cmotiontable-4 (2026-10-08): parse `?cycleDefaultStyle=off`. DEFAULT ON:
+/// the cycle lookup takes retail's `default_style` fallback
+/// (`MotionTable::cycle_for`; `CMotionTable::GetObjectSequence`,
+/// acclient.c:337766-337768). `=off` = the single exact `(style, cmd)` lookup.
+#[cfg(target_arch = "wasm32")]
+fn parse_cycle_default_style_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "cycleDefaultStyle=off")
+}
+
+/// cmotiontable-4: the `?cycleDefaultStyle=` gate, parsed once. Native builds
+/// (tests/CLI) take the default (the retail fallback).
+#[cfg(any(target_arch = "wasm32", test))]
+fn cycle_default_style_flag() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| parse_cycle_default_style_flag(&flag_search()))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
+/// cmotiontable-4: THE cycle lookup of the bake and speed paths
+/// (`try_resolve_cycle_frames`, `motion_cycle_base_speed`,
+/// `motion_cycle_omega`): `MotionTable::cycle_for` (exact style, then the
+/// table's `default_style` when the style is one the table knows) unless
+/// `?cycleDefaultStyle=off`. Callers keep the REQUESTED style as their
+/// resolved stance; only the MotionData can come from `default_style`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn lookup_cycle(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    style: u32,
+    command: u32,
+) -> Option<&holtburger_dat::file_type::motion_table::MotionData> {
+    if cycle_default_style_flag() {
+        mtable.cycle_for(style, command)
+    } else {
+        mtable.motion_data_for_cycle(style, command)
     }
 }
 
@@ -1444,6 +1527,12 @@ mod motion_sequence;
 // pluggable session) + the net_worker's own wasm entry. See net_worker.rs.
 #[cfg(target_arch = "wasm32")]
 mod net_worker;
+
+// net-1 (R2-net 2026-10-08): the recv loop's dead-session decision (retail
+// 140 s server silence + client-stall guard). Same `wasm32 OR test` gate as
+// `walk_dedup` so the decision is unit-tested natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod session_liveness;
 
 // RND-04 — retail static-light vertex bake (`SetStaticLightingVertexColors`
 // acclient.c:454918 / `calc_point_light` acclient.c:454579). Gate mirrors
@@ -7787,7 +7876,11 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // WALK_FORWARD_COMMAND (0x4500_0000) is stripped before the lookup,
     // leaving the command substate. Phase C's idle path also works because
     // style_defaults stores the pre-masked substate, not the full command.
-    let motion_data = mtable.motion_data_for_cycle(resolved_stance, command)?;
+    // cmotiontable-4 (2026-10-08): `lookup_cycle` adds retail's default_style
+    // fallback (`MotionTable::cycle_for`) when this known style lacks the
+    // substate. `resolved_stance` stays the REQUESTED style (retail's
+    // MotionState.style does not change; it seeds the JS spawn stance).
+    let motion_data = lookup_cycle(&mtable, resolved_stance, command)?;
     // T4 (2026-05-28): concatenate ALL AnimData segments (was `anims.first()`
     // only) with per-segment timing + reverse playback. See
     // `build_concatenated_motion_frames`.
@@ -7814,7 +7907,8 @@ fn motion_cycle_base_speed(
     } else {
         stance
     };
-    match mtable.motion_data_for_cycle(resolved_stance, command) {
+    // cmotiontable-4: same default_style fallback as the cycle bake.
+    match lookup_cycle(mtable, resolved_stance, command) {
         Some(md) => md
             .velocity
             .map(|v| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt())
@@ -8182,7 +8276,8 @@ fn motion_cycle_omega(
     } else {
         stance
     };
-    let md = mtable.motion_data_for_cycle(resolved_stance, command)?;
+    // cmotiontable-4: same default_style fallback as the cycle bake.
+    let md = lookup_cycle(mtable, resolved_stance, command)?;
     let o = md.omega?;
     let mag = (o.x * o.x + o.y * o.y + o.z * o.z).sqrt();
     if mag > 1e-6 { Some([o.x, o.y, o.z]) } else { None }
@@ -8388,17 +8483,32 @@ fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // negative-speed reversed lookups + style_defaults bridge are
     // resolver-covered (dat q4_* tests) but unreachable here until a
     // caller carries a signed speed. Flag off = single hop, byte-identical.
-    let motion_data = if get_link_flag() {
-        mtable.get_link(resolved_stance, from_command, 1.0, to_command, 1.0)?
-    } else {
-        mtable.motion_data_for_link(resolved_stance, from_command, to_command)?
-    };
+    // cmotiontable-3: shared with `build_link_only_inner` (one lookup).
+    let motion_data =
+        resolve_link_motion_data(&mtable, resolved_stance, from_command, to_command)?;
     // T4 (2026-05-28): concatenate ALL AnimData segments with per-segment
     // timing + reverse playback (was `anims.first()`). Links are commonly
     // multi-segment (windup → strike → recover → settle) and ~22% of retail
     // AnimData are reverse-framerate, which previously produced a null clip.
     let bake = build_concatenated_motion_frames(source, motion_data)?;
     Some((bake, resolved_stance))
+}
+
+/// The link lookup of `try_resolve_link_frames` and `build_link_only_inner`
+/// (cmotiontable-3): the retail two-hop `MotionTable::get_link` (forward,
+/// speeds pinned 1.0) under `?getLink` (default on), else the single hop.
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_link_motion_data(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    resolved_stance: u32,
+    from_command: u32,
+    to_command: u32,
+) -> Option<&holtburger_dat::file_type::motion_table::MotionData> {
+    if get_link_flag() {
+        mtable.get_link(resolved_stance, from_command, 1.0, to_command, 1.0)
+    } else {
+        mtable.motion_data_for_link(resolved_stance, from_command, to_command)
+    }
 }
 
 /// T4 (2026-05-28) — concatenate ALL `AnimData` segments of a `MotionData`
@@ -24376,6 +24486,42 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             }
         },
     };
+    // cmotiontable-3 (2026-10-08): the descriptor half lives in
+    // `inner_from_motion_bake`, shared with the geometry-free
+    // `build_link_only_inner`, so a link baked either way carries
+    // byte-identical frames, times, segments, hooks and root motion.
+    Ok(inner_from_motion_bake(
+        bake,
+        resolved_stance,
+        part_count,
+        parts_tris,
+        rest_origins,
+        rest_orientations,
+        part_did_degrades,
+        is_link,
+    ))
+}
+
+/// cmotiontable-3 (2026-10-08): the DESCRIPTOR half of an entity animation
+/// bake. Flattens a `ConcatenatedMotionBake` into the
+/// `EntityAnimationKeyframesInner` keyframe layout (`part_count` transforms
+/// per frame, identity filler for parts the Animation does not carry), the
+/// sorted hook timeline, the per-segment arrays and the 7-float root-motion
+/// net. The RIG half (`part_tris`, rest pose, `part_did_degrades`) passes
+/// through untouched: `build_entity_animation_data_inner_v2` hands in the
+/// triangulated rig, `build_link_only_inner` hands in empty vectors.
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+fn inner_from_motion_bake(
+    bake: ConcatenatedMotionBake,
+    resolved_stance: u32,
+    part_count: usize,
+    part_tris: Vec<Vec<Tri>>,
+    rest_origins: Vec<f32>,
+    rest_orientations: Vec<f32>,
+    part_did_degrades: Vec<u32>,
+    is_link: bool,
+) -> EntityAnimationKeyframesInner {
     let ConcatenatedMotionBake {
         frames,
         frame_times,
@@ -24445,8 +24591,8 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
     } else {
         0.0
     };
-    Ok(EntityAnimationKeyframesInner {
-        part_tris: parts_tris,
+    EntityAnimationKeyframesInner {
+        part_tris,
         part_count: part_count as u32,
         num_frames: num_frames as u32,
         framerate,
@@ -24465,7 +24611,104 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
         segment_anim_ids,
         part_did_degrades,
         is_link,
-    })
+    }
+}
+
+/// cmotiontable-3 (2026-10-08): post-prefetch body of
+/// `fetchMotionLinkKeyframes`, the GEOMETRY-FREE link bake. Retail
+/// `CMotionTable::get_link` (acclient.c:337585-337639) is a hash lookup that
+/// returns 0 on a miss, and `add_motion` (:337431) appends only AnimData: no
+/// mesh work happens per transition. `build_entity_animation_data_inner_v2`
+/// triangulates the whole rig before it resolves the link and, on a miss,
+/// bakes the target's whole CYCLE. This resolves the link the SAME way
+/// (`resolve_link_motion_data`, then `build_concatenated_motion_frames`) and
+/// flattens it through the SAME `inner_from_motion_bake`, with no part
+/// meshes, no rest pose and no cycle fallback.
+///
+/// - `Ok(Some(inner))`: the link resolved. `is_link = true`, `part_tris` and
+///   the rest pose are empty, `part_count = setup.parts.len()` (the keyframe
+///   stride of the full bake).
+/// - `Ok(None)`: an AUTHORITATIVE miss: no MotionTable, no such link in the
+///   parsed table (`?getLink` two-hop honoured), or a link whose anims yield
+///   no usable frame while every record read succeeded. JS caches it.
+/// - `Err`: transient. The Setup or MotionTable could not be read or parsed,
+///   or an Animation record the link names was not resident (the bake would
+///   be short or empty). JS must not cache it.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn build_link_only_inner<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    mt_override: Option<u32>,
+    stance: u32,
+    from_motion_command: u32,
+    motion_command: u32,
+) -> Result<Option<EntityAnimationKeyframesInner>, String> {
+    use holtburger_dat::file_type::{MotionTable, SetupModel};
+    use holtburger_dat::ResourceKey;
+
+    // Same gates as the full bake: `from == 0` is a cycle request, and a raw
+    // GfxObj (non-0x02) has no MotionTable.
+    if from_motion_command == 0 || (setup_id >> 24) as u8 != 0x02 {
+        return Ok(None);
+    }
+    let setup_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .map_err(|e| format!("build_link_only_inner: setup 0x{setup_id:08X} load: {e}"))?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
+        .map_err(|e| format!("build_link_only_inner: setup 0x{setup_id:08X} parse: {e}"))?;
+    // MotionTable + stance resolution: identical to `try_resolve_link_frames`.
+    let Some(mt_id) = mt_override
+        .filter(|&id| id != 0)
+        .or(setup.default_motion_table)
+    else {
+        return Ok(None);
+    };
+    if (mt_id >> 24) != 0x09 {
+        return Ok(None);
+    }
+    let mt_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", mt_id))
+        .map_err(|e| format!("build_link_only_inner: motion table 0x{mt_id:08X} load: {e}"))?;
+    let mtable = MotionTable::read(&mut std::io::Cursor::new(&mt_bytes))
+        .map_err(|e| format!("build_link_only_inner: motion table 0x{mt_id:08X} parse: {e}"))?;
+    let resolved_stance = if stance == 0 {
+        mtable.default_style
+    } else {
+        stance
+    };
+    let Some(motion_data) =
+        resolve_link_motion_data(&mtable, resolved_stance, from_motion_command, motion_command)
+    else {
+        return Ok(None);
+    };
+    // Count record misses: a link whose Animation records are not resident
+    // yet bakes short or empty, and must be neither cached as "no link" nor
+    // cached as a truncated link.
+    let counting = MissCountingSource {
+        inner: source,
+        misses: std::sync::atomic::AtomicU32::new(0),
+    };
+    let bake = build_concatenated_motion_frames(&counting, motion_data);
+    let misses = counting.misses.load(std::sync::atomic::Ordering::Relaxed);
+    if misses > 0 {
+        return Err(format!(
+            "build_link_only_inner: link 0x{from_motion_command:08X}->0x{motion_command:08X} \
+             (mtable 0x{mt_id:08X}): {misses} animation record(s) not resident"
+        ));
+    }
+    let Some(bake) = bake else {
+        return Ok(None);
+    };
+    Ok(Some(inner_from_motion_bake(
+        bake,
+        resolved_stance,
+        setup.parts.len(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        true,
+    )))
 }
 
 /// BUG-3 helper (2026-08-04): identity that PINS a walk closure to the
@@ -24884,6 +25127,118 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         segment_framerates: inner.segment_framerates,
         segment_anim_ids: inner.segment_anim_ids,
         is_link: inner.is_link,
+    }
+}
+
+/// cmotiontable-3 (2026-10-08) — geometry-free LINK bake for
+/// `scene3d/entities.js::_fetchLinkEntry` (via `AnimationCache.getLink`).
+///
+/// `fetchEntityAnimationKeyframes(…, fromMotion)` triangulates the whole rig
+/// and ships every part mesh across the boundary for each new (setup, outfit,
+/// stance, from, to) link, and on a missing link bakes the target's full
+/// CYCLE (returned `isLink = false`, then thrown away by JS but kept in its
+/// LRU). Retail `get_link` is one hash lookup. This walks and reads only the
+/// Setup, the MotionTable and the link's Animation chain
+/// (`build_link_only_inner`) and returns:
+///   - an `EntityAnimationData` with the same keyframes, frame times,
+///     segments, hooks, posFrames and rootMotionNet the full bake carries for
+///     that link, `isLink = true`, `takePartMeshes()` → `[]`, no rest pose;
+///   - `undefined` for an authoritative miss (JS caches "no link");
+///   - a rejection for a transient failure (records not resident after one
+///     retry walk) — JS does not cache it.
+///
+/// The walk dedup key includes `from` and `to`, so a link fetch never latches
+/// onto an in-flight cycle walk that would not warm the link's Animations.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchMotionLinkKeyframes)]
+pub async fn fetch_motion_link_keyframes(
+    setup_id: u32,
+    mtable_id: u32,
+    stance: u32,
+    from_motion_command: u32,
+    motion_command: u32,
+    // BUG-3 / Bug 15 lane hint (same contract as
+    // `fetch_entity_animation_keyframes`'s `urgent`): swing / cast links ride
+    // the urgent prefetch lane. Absent = normal lane.
+    urgent: Option<bool>,
+) -> Result<Option<EntityAnimationData>, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let urgent = urgent.unwrap_or(false);
+    if from_motion_command == 0 || (setup_id >> 24) as u8 != 0x02 {
+        return Ok(None);
+    }
+    let mt_override = if mtable_id == 0 { None } else { Some(mtable_id) };
+    let source = global_source::global_source();
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(2);
+    initial.push(ResourceKey::new("eor/portal", setup_id));
+    if let Some(mt) = mt_override {
+        initial.push(ResourceKey::new("eor/portal", mt));
+    }
+    // Lane-distinct key name (BUG-3: an urgent caller must not latch onto a
+    // normal-lane walk) over every input that changes the walk's miss set.
+    let cache_key = prefetch::WalkCacheKey::new(if urgent {
+        "fetchMotionLinkKeyframes:urgent"
+    } else {
+        "fetchMotionLinkKeyframes"
+    })
+    .with_u32(setup_id)
+    .with_u32(mtable_id)
+    .with_u32(stance)
+    .with_u32(from_motion_command)
+    .with_u32(motion_command);
+    // The walk is the build itself: it touches exactly the records the build
+    // reads (no triangulation, no cycle).
+    let walk = as_walk_fn(move |s: &dyn ResourceSource| {
+        let _ = build_link_only_inner(
+            s,
+            setup_id,
+            mt_override,
+            stance,
+            from_motion_command,
+            motion_command,
+        );
+    });
+    if urgent {
+        prefetch::ensure_walk_prefetched_keyed_urgent(cache_key, &source, &initial, walk).await?;
+    } else {
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
+    }
+    let mut result = build_link_only_inner(
+        &*source,
+        setup_id,
+        mt_override,
+        stance,
+        from_motion_command,
+        motion_command,
+    );
+    if result.is_err() {
+        // One fresh, un-deduped walk and rebuild (the geom-audit retry shape
+        // of `build_entity_animation_counted`).
+        let _ = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+            let _ = build_link_only_inner(
+                s,
+                setup_id,
+                mt_override,
+                stance,
+                from_motion_command,
+                motion_command,
+            );
+        })
+        .await;
+        result = build_link_only_inner(
+            &*source,
+            setup_id,
+            mt_override,
+            stance,
+            from_motion_command,
+            motion_command,
+        );
+    }
+    match result {
+        Ok(Some(inner)) => Ok(Some(inner_to_wasm_animation_data(inner))),
+        Ok(None) => Ok(None),
+        Err(e) => Err(JsValue::from_str(&e)),
     }
 }
 
@@ -28466,6 +28821,26 @@ pub struct InventoryItem {
     /// the item isn't stackable or the wire hasn't sent it. Lets the drag
     /// rules refuse a merge into a full stack and auto-merge on pickup.
     max_stack_size: u32,
+    /// items-5 (2026-10-08): `PropertyInt::SharedCooldown` (280) — the
+    /// item's cooldown group id. Retail `UIElement_UIItem::
+    /// UpdateCooldownDisplay` (acclient.c:272052) reads it (weenie +308) and
+    /// shows the overlay only while `CEnchantmentRegistry::OnCooldown(id +
+    /// 0x8000)` finds a live cooldown enchantment
+    /// (`(spell_id & 0xFFFF) == id + 0x8000`). `0` = no cooldown group.
+    shared_cooldown: u32,
+    /// items-5: `PropertyFloat::CooldownDuration` (167) seconds — the
+    /// divisor of retail's overlay step `time_left / duration * 10 + 1`.
+    /// `0.0` when absent.
+    cooldown_duration: f64,
+    /// items-4 (2026-10-08): `PropertyInt::ClothingPriority` (4) — the
+    /// coverage-layer mask retail `CPlayerSystem::AutoWearIsLegal`
+    /// (acclient.c:397338) intersects with every worn item's priority
+    /// before allowing a wear ("You must remove your %s to wear that").
+    /// `0` for non-wearables.
+    clothing_priority: u32,
+    /// items-4: `PropertyInt::CombatUse` (51) — melee / missile / ammo /
+    /// shield / two-handed classification. `0` when absent.
+    combat_use: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -28647,6 +29022,33 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = requiresBackpackSlot)]
     pub fn requires_backpack_slot(&self) -> bool {
         self.requires_backpack_slot
+    }
+
+    /// items-5 (2026-10-08): `PropertyInt::SharedCooldown` — the cooldown
+    /// group id; the matching cooldown enchantment has
+    /// `(spellId & 0xFFFF) === sharedCooldown + 0x8000`. `0` = none.
+    #[wasm_bindgen(getter, js_name = sharedCooldown)]
+    pub fn shared_cooldown(&self) -> u32 {
+        self.shared_cooldown
+    }
+
+    /// items-5: `PropertyFloat::CooldownDuration` in seconds, `0` when absent.
+    #[wasm_bindgen(getter, js_name = cooldownDuration)]
+    pub fn cooldown_duration(&self) -> f64 {
+        self.cooldown_duration
+    }
+
+    /// items-4 (2026-10-08): `PropertyInt::ClothingPriority` coverage mask
+    /// (retail `AutoWearIsLegal` overlap test), `0` for non-wearables.
+    #[wasm_bindgen(getter, js_name = clothingPriority)]
+    pub fn clothing_priority(&self) -> u32 {
+        self.clothing_priority
+    }
+
+    /// items-4: `PropertyInt::CombatUse`, `0` when absent.
+    #[wasm_bindgen(getter, js_name = combatUse)]
+    pub fn combat_use(&self) -> u32 {
+        self.combat_use
     }
 }
 
@@ -29753,6 +30155,118 @@ fn build_appraisal_snapshot(
         "resistColor": entity.resist_color,
     });
     serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
+}
+
+/// enchstats-4 (2026-10-08) — the appraisal snapshot for a FAILED
+/// `IdentifyObjectResponse` (HUD rec #53's stub, now carrying the degraded
+/// creature data).
+///
+/// Retail `AppraisalProfile::UnPack` (acclient.c:478413) unpacks every
+/// section whatever `success_flag` says, and the creature panel still renders
+/// on a failed assess: `Attribute2ndInfoRegion::Update(AppraisalProfile*)`
+/// (:286022) prints Health as `"%d %%"` and `AttributeInfoRegion::Update`
+/// (:285975) prints `"???"`, both in the incomplete font. ACE's
+/// `CreatureProfile(creature, success = false)` still sends Health /
+/// HealthMax (no `ShowAttributes`), so the data exists on the wire.
+///
+/// The failed profile rides in its OWN key, `failedCreatureProfile`, and is
+/// never merged into the entity: `holtburger_world::identify` still drops a
+/// failed response, so an attribute-less failure cannot wipe data a
+/// successful assess merged earlier. `null` unless the response flagged a
+/// creature profile.
+#[cfg(any(target_arch = "wasm32", test))]
+fn failed_identify_snapshot_json(
+    data: &holtburger_protocol::messages::object::events::IdentifyObjectResponseEventData,
+) -> serde_json::Value {
+    use holtburger_protocol::messages::object::events::IdentifyResponseFlags;
+    let failed_creature_profile = if data
+        .flags
+        .contains(IdentifyResponseFlags::CREATURE_PROFILE)
+    {
+        data.creature_profile.as_ref()
+    } else {
+        None
+    };
+    serde_json::json!({
+        "guid": u32::from(data.object_guid),
+        "identifySuccess": false,
+        "identifyFlags": data.flags.bits(),
+        "properties": {
+            "ints": {}, "int64s": {}, "bools": {},
+            "floats": {}, "strings": {}, "dids": {},
+        },
+        "spellBook": [],
+        "failedCreatureProfile": failed_creature_profile,
+    })
+}
+
+#[cfg(test)]
+mod tests_failed_identify_snapshot {
+    use super::failed_identify_snapshot_json;
+    use holtburger_common::Guid;
+    use holtburger_protocol::messages::object::events::{
+        IdentifyObjectResponseEventData, IdentifyResponseFlags,
+    };
+    use holtburger_protocol::messages::object::types::{CreatureProfile, CreatureProfileFlags};
+
+    fn failed_response(
+        flags: IdentifyResponseFlags,
+        creature_profile: Option<CreatureProfile>,
+    ) -> IdentifyObjectResponseEventData {
+        IdentifyObjectResponseEventData {
+            object_guid: Guid(0x8000_1234),
+            flags,
+            success: false,
+            properties: Default::default(),
+            spell_book: Vec::new(),
+            armor_profile: None,
+            creature_profile,
+            weapon_profile: None,
+            hook_profile: None,
+            armor_highlight: None,
+            armor_color: None,
+            weapon_highlight: None,
+            weapon_color: None,
+            resist_highlight: None,
+            resist_color: None,
+            armor_levels: None,
+        }
+    }
+
+    /// The degraded creature view's data: Health / HealthMax survive a failed
+    /// assess, in their own key, with no attributes.
+    #[test]
+    fn failed_identify_keeps_creature_health() {
+        let profile = CreatureProfile {
+            flags: CreatureProfileFlags::empty(),
+            health: 4,
+            health_max: 7,
+            attributes: None,
+            buffs: None,
+        };
+        let v = failed_identify_snapshot_json(&failed_response(
+            IdentifyResponseFlags::CREATURE_PROFILE,
+            Some(profile),
+        ));
+        assert_eq!(v["identifySuccess"], serde_json::json!(false));
+        assert_eq!(v["guid"], serde_json::json!(0x8000_1234u32));
+        assert_eq!(v["failedCreatureProfile"]["health"], serde_json::json!(4));
+        assert_eq!(v["failedCreatureProfile"]["health_max"], serde_json::json!(7));
+        assert!(v["failedCreatureProfile"]["attributes"].is_null());
+        // The stub never carries a merged `creatureProfile`.
+        assert!(v.get("creatureProfile").is_none());
+    }
+
+    /// No CREATURE_PROFILE flag (an item) → `failedCreatureProfile: null`.
+    #[test]
+    fn failed_identify_without_creature_flag_has_no_profile() {
+        let v = failed_identify_snapshot_json(&failed_response(
+            IdentifyResponseFlags::INT_STATS_TABLE,
+            None,
+        ));
+        assert!(v["failedCreatureProfile"].is_null());
+        assert_eq!(v["identifyFlags"], serde_json::json!(1));
+    }
 }
 
 /// to its JS-facing snapshot. Walks the records list flagging the
@@ -32100,6 +32614,34 @@ mod wire_state_packs_routing_tests {
         assert!(parse_cast_move_lock_flag("?castMoveLock=on"));
         assert!(!parse_cast_move_lock_flag("?castMoveLock=off"));
         assert!(!parse_cast_move_lock_flag("?nosw=1&castMoveLock=off"));
+    }
+
+    /// R1 (2026-10-08): `?jumpLaunchCap` / `?jumpLoadGate` / `?apRetailGate`
+    /// — DEFAULT-ON; only an exact `=off` disables (the movement-flag house
+    /// shape).
+    #[test]
+    fn r1_movement_flags_default_on_unless_off() {
+        use super::{
+            parse_ap_retail_gate_flag, parse_jump_launch_cap_flag, parse_jump_load_gate_flag,
+        };
+        for parse in [
+            parse_jump_launch_cap_flag as fn(&str) -> bool,
+            parse_jump_load_gate_flag,
+            parse_ap_retail_gate_flag,
+        ] {
+            assert!(parse(""));
+            assert!(parse("?nosw=1"));
+            assert!(parse("?walkableGround=off"), "another flag's =off must not match");
+        }
+        assert!(!parse_jump_launch_cap_flag("?jumpLaunchCap=off"));
+        assert!(!parse_jump_launch_cap_flag("?nosw=1&jumpLaunchCap=off"));
+        assert!(parse_jump_launch_cap_flag("?jumpLaunchCap=on"));
+        assert!(!parse_jump_load_gate_flag("?jumpLoadGate=off"));
+        assert!(!parse_jump_load_gate_flag("?nosw=1&jumpLoadGate=off"));
+        assert!(parse_jump_load_gate_flag("?jumpLoadGate=on"));
+        assert!(!parse_ap_retail_gate_flag("?apRetailGate=off"));
+        assert!(!parse_ap_retail_gate_flag("?nosw=1&apRetailGate=off"));
+        assert!(parse_ap_retail_gate_flag("?apRetailGate=on"));
     }
 
     /// F2 (2026-07-27): `?serverMoveToDriver` / `?stickyIdleStep` parse
@@ -42878,6 +43420,18 @@ fn publish_player_inventory_snapshot(
             .get_int_prop(PropertyInt::MaxStackSize)
             .map(|v| v.max(0) as u32)
             .unwrap_or(0);
+        // items-5 (2026-10-08): the per-item cooldown group + duration the
+        // hotbar overlay needs (retail UIElement_UIItem::UpdateCooldownDisplay,
+        // acclient.c:272052). Hydrated by holtburger-world hydration.rs.
+        let shared_cooldown = entity.cooldown_id().unwrap_or(0);
+        let cooldown_duration = entity
+            .cooldown_duration()
+            .filter(|d| d.is_finite() && *d > 0.0)
+            .unwrap_or(0.0);
+        // items-4 (2026-10-08): the wear-legality inputs (retail
+        // CPlayerSystem::AutoWearIsLegal, acclient.c:397338).
+        let clothing_priority = entity.priority().unwrap_or(0);
+        let combat_use = entity.combat_use().unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -42903,6 +43457,10 @@ fn publish_player_inventory_snapshot(
             requires_backpack_slot,
             placement,
             max_stack_size,
+            shared_cooldown,
+            cooldown_duration,
+            clothing_priority,
+            combat_use,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS
@@ -44388,6 +44946,13 @@ async fn recv_loop(
     movement.set_terrain_plane_frame(parse_terrain_plane_frame_flag(&flag_search()));
     movement.set_airborne_check_contact(parse_airborne_contact_flag(&flag_search()));
     movement.set_walkable_landing_ground(parse_walkable_ground_flag(&flag_search()));
+    // R1 (2026-10-08): `?jumpLaunchCap=off` / `?jumpLoadGate=off` /
+    // `?apRetailGate=off` — the retail jump-launch cap, the CanJump burden
+    // gate and the retail AutonomousPosition cadence (all default ON). See the
+    // parse fns for what each rolls back.
+    movement.set_jump_launch_cap(parse_jump_launch_cap_flag(&flag_search()));
+    movement.set_jump_load_gate(parse_jump_load_gate_flag(&flag_search()));
+    movement.set_retail_position_event_gate(parse_ap_retail_gate_flag(&flag_search()));
     // F2 (2026-07-27): `?serverMoveToDriver=off` — return the LOCAL player's
     // server-commanded MoveTo 6/7 to the `ServerControlledProjection` lane
     // (default ON: the faithful `MoveToManager` driver owns it — turn-first
@@ -44770,6 +45335,10 @@ async fn recv_loop(
     // retransmitting at 1 Hz into a server that drops every packet at
     // DEBUG. The keepalive arm below now reaps it.
     let loop_started_at = web_time::Instant::now();
+    // net-1 (R2-net 2026-10-08): retail `lastDidUseTime_` — the previous
+    // keepalive tick, for the client-stall guard in
+    // `session_liveness::session_presumed_dead`.
+    let mut prev_keepalive_tick = loop_started_at;
 
     // recv_loop split (2026-10-05): the shared loop state, see `session::LoopCtx`.
     let mut ctx = session::LoopCtx {
@@ -44916,19 +45485,33 @@ async fn recv_loop(
             // eventual disconnect through `recv_message`.
             _ = keepalive_interval.next() => {
                 // conn-fix (2026-07-18): dead-session detector. If ACE has
-                // sent nothing for 90s (or never sent anything within 60s
-                // of loop start), the session is gone server-side — ACE's
-                // own timeout is 60s, and a booted duplicate-login session
-                // is removed from its session map entirely (packets from
-                // us are silently dropped). Terminate so the transport
-                // Drop closes the WS + bridge UDP flow instead of
-                // retransmitting into the void forever.
-                let inbound_dead = match *last_recv_instant.borrow() {
-                    Some(t) => t.elapsed() > std::time::Duration::from_secs(90),
-                    None => loop_started_at.elapsed() > std::time::Duration::from_secs(60),
-                };
+                // sent nothing decodable for too long (or never sent
+                // anything within 60s of loop start), the session is gone
+                // server-side — ACE's own timeout is 60s, and a booted
+                // duplicate-login session is removed from its session map
+                // entirely (packets from us are silently dropped).
+                // Terminate so the transport Drop closes the WS + bridge
+                // UDP flow instead of retransmitting into the void forever.
+                //
+                // net-1 (R2-net 2026-10-08): retail threshold and guard
+                // (`ClientNet::ProcessConnection`, acclient.c:372914-372915):
+                // 140 s of silence (was 90 s), where TimeSync now counts as
+                // inbound (session/messages/mod.rs stamp), and no judgement
+                // on a tick that comes 140 s or more after the previous one
+                // (the loop itself was stalled; let the recv arm drain first).
+                // Fixes the false disconnect at character select/chargen,
+                // where ACE sends only a TimeSync every 20 s.
+                let now = web_time::Instant::now();
+                let inbound_dead = session_liveness::session_presumed_dead(
+                    *last_recv_instant.borrow(),
+                    loop_started_at,
+                    prev_keepalive_tick,
+                    now,
+                    session_liveness::SERVER_SILENCE_TIMEOUT,
+                );
+                prev_keepalive_tick = now;
                 if inbound_dead {
-                    let msg = "no inbound traffic (90s stale / 60s never) — server-side session presumed dead".to_string();
+                    let msg = "no inbound traffic (140s stale / 60s never) — server-side session presumed dead".to_string();
                     log::warn!("recv_loop terminating: {msg}");
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_DISCONNECTED,
@@ -49063,6 +49646,367 @@ mod tests_animation_keyframes_batch {
         .expect("cycle inner (again)");
         assert!(!inner.is_link);
     }
+
+    // =================================================================
+    // cmotiontable-3 (2026-10-08) — geometry-free link-only bake
+    // (`build_link_only_inner`, the body of `fetchMotionLinkKeyframes`).
+    // =================================================================
+
+    struct C3Fixture {
+        source: MockSource,
+        setup_id: u32,
+        part_ids: [u32; 2],
+        mt_id: u32,
+        stance: u32,
+        cycle_cmd: u32,
+        from_cmd: u32,
+        to_cmd: u32,
+        cycle_anim: u32,
+        link_anim: u32,
+    }
+
+    /// A 2-part setup (the 1-part Animations exercise the identity filler)
+    /// whose MotionTable has one cycle `(NonCombat, WalkForward)` and one
+    /// link `(NonCombat, Ready) → 0x10000042` playing a 3-frame Animation
+    /// with one SoundTable hook per frame.
+    fn c3_fixture() -> C3Fixture {
+        let setup_id: u32 = 0x0200_C300;
+        let part_ids: [u32; 2] = [0x0100_C301, 0x0100_C302];
+        let mt_id: u32 = 0x0900_C300;
+        let cycle_anim: u32 = 0x0300_C301;
+        let link_anim: u32 = 0x0300_C302;
+        let stance: u32 = 0x8000_003D;
+        let cycle_cmd: u32 = 0x4500_0005;
+        let from_cmd: u32 = 0x4100_0003;
+        let to_cmd: u32 = 0x1000_0042;
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: part_ids.to_vec(),
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: Some(mt_id),
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part_ids[0]), synth_gfx(part_ids[0], 0xAA00_C301, 0.0));
+        files.insert(("eor/portal".into(), part_ids[1]), synth_gfx(part_ids[1], 0xAA00_C302, 1.0));
+        files.insert(
+            ("eor/portal".into(), mt_id),
+            synth_motion_table(mt_id, stance, cycle_cmd, cycle_anim, from_cmd, to_cmd, link_anim),
+        );
+        files.insert(("eor/portal".into(), cycle_anim), synth_animation(cycle_anim, &[0.5, 1.5]));
+        files.insert(
+            ("eor/portal".into(), link_anim),
+            synth_animation_one_hook_per_frame(link_anim, &[1, 0, 1]),
+        );
+        C3Fixture {
+            source: MockSource { files },
+            setup_id,
+            part_ids,
+            mt_id,
+            stance,
+            cycle_cmd,
+            from_cmd,
+            to_cmd,
+            cycle_anim,
+            link_anim,
+        }
+    }
+
+    /// Records every file id a bake reads.
+    struct ReadLog<'a> {
+        inner: &'a MockSource,
+        reads: std::sync::Mutex<Vec<u32>>,
+    }
+
+    impl ResourceSource for ReadLog<'_> {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.reads.lock().unwrap().push(key.file_id);
+            self.inner.get_file_by_key(key)
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.inner.get_metadata_by_key(key)
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.inner.has_namespace(namespace)
+        }
+    }
+
+    fn f32_bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    fn hook_rows(v: &[HookDataPlain]) -> Vec<(u64, u32, i32, Vec<u8>)> {
+        v.iter()
+            .map(|h| (h.time_in_clip_s.to_bits(), h.hook_type, h.direction, h.hook_data.clone()))
+            .collect()
+    }
+
+    /// A link that exists: the link-only bake's descriptor is bit-identical to
+    /// the full rig bake's (frames, times, segments, hooks, root motion), with
+    /// no part geometry and no rest pose.
+    #[test]
+    fn link_only_bake_matches_full_bake_descriptor() {
+        let fx = c3_fixture();
+        let full = build_entity_animation_data_inner_v2(
+            &fx.source, fx.setup_id, &[], &[], None, fx.to_cmd, fx.stance, fx.from_cmd, 0,
+        )
+        .expect("full bake");
+        assert!(full.is_link, "fixture link resolves through the full bake");
+        assert!(!full.part_tris.is_empty(), "the full bake carries the rig");
+        let link = build_link_only_inner(
+            &fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, fx.to_cmd,
+        )
+        .expect("not transient")
+        .expect("the link resolves");
+        assert!(link.is_link);
+        assert!(link.part_tris.is_empty(), "no part geometry");
+        assert!(link.rest_origins.is_empty() && link.rest_orientations.is_empty());
+        assert!(link.part_did_degrades.is_empty());
+        assert_eq!(link.part_count, 2);
+        assert_eq!(link.part_count, full.part_count);
+        assert_eq!(link.num_frames, 3);
+        assert_eq!(link.num_frames, full.num_frames);
+        assert_eq!(link.framerate.to_bits(), full.framerate.to_bits());
+        assert_eq!(link.duration.to_bits(), full.duration.to_bits());
+        assert_eq!(link.resolved_stance, full.resolved_stance);
+        assert_eq!(f32_bits(&link.part_frames), f32_bits(&full.part_frames));
+        assert_eq!(f32_bits(&link.frame_times), f32_bits(&full.frame_times));
+        assert_eq!(f32_bits(&link.pos_frames), f32_bits(&full.pos_frames));
+        assert_eq!(f32_bits(&link.root_motion_net), f32_bits(&full.root_motion_net));
+        assert_eq!(link.segment_starts, full.segment_starts);
+        assert_eq!(link.segment_counts, full.segment_counts);
+        assert_eq!(
+            f32_bits(&link.segment_framerates),
+            f32_bits(&full.segment_framerates)
+        );
+        assert_eq!(link.segment_anim_ids, full.segment_anim_ids);
+        assert_eq!(link.hooks.len(), 3, "one SoundTable hook per link frame");
+        assert_eq!(hook_rows(&link.hooks), hook_rows(&full.hooks));
+    }
+
+    /// A link the table does not have: `Ok(None)` (authoritative, cacheable),
+    /// and neither the target's cycle Animation nor any part GfxObj is read.
+    /// The full bake, by contrast, triangulates and falls back to the cycle.
+    #[test]
+    fn link_only_bake_authoritative_miss_returns_none_without_cycle_bake() {
+        let fx = c3_fixture();
+        let full = build_entity_animation_data_inner_v2(
+            &fx.source, fx.setup_id, &[], &[], None, fx.cycle_cmd, fx.stance, fx.from_cmd, 0,
+        )
+        .expect("full bake");
+        assert!(!full.is_link && full.num_frames > 0, "full bake falls back to the cycle");
+
+        let log = ReadLog { inner: &fx.source, reads: std::sync::Mutex::new(Vec::new()) };
+        let miss = build_link_only_inner(
+            &log, fx.setup_id, None, fx.stance, fx.from_cmd, fx.cycle_cmd,
+        )
+        .expect("a missing link is authoritative, not transient");
+        assert!(miss.is_none());
+        let reads = log.reads.lock().unwrap().clone();
+        assert!(!reads.contains(&fx.cycle_anim), "no cycle bake: {reads:x?}");
+        assert!(!reads.contains(&fx.link_anim), "{reads:x?}");
+        assert!(
+            !reads.iter().any(|id| fx.part_ids.contains(id)),
+            "no triangulation: {reads:x?}"
+        );
+
+        // A hit reads the Setup, the table and the link's Animation only.
+        let log = ReadLog { inner: &fx.source, reads: std::sync::Mutex::new(Vec::new()) };
+        let hit = build_link_only_inner(&log, fx.setup_id, None, fx.stance, fx.from_cmd, fx.to_cmd)
+            .expect("not transient")
+            .expect("hit");
+        assert_eq!(hit.num_frames, 3);
+        let reads = log.reads.lock().unwrap().clone();
+        assert!(reads.contains(&fx.link_anim), "{reads:x?}");
+        assert!(!reads.contains(&fx.cycle_anim), "{reads:x?}");
+        assert!(!reads.iter().any(|id| fx.part_ids.contains(id)), "{reads:x?}");
+    }
+
+    /// Records that are not resident are a TRANSIENT `Err` (JS must not cache
+    /// "no link" or a truncated link for them).
+    #[test]
+    fn link_only_bake_missing_records_are_transient() {
+        let mut fx = c3_fixture();
+        fx.source.files.remove(&("eor/portal".to_string(), fx.link_anim));
+        assert!(
+            build_link_only_inner(&fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, fx.to_cmd)
+                .is_err(),
+            "link Animation not resident"
+        );
+        let mut fx = c3_fixture();
+        fx.source.files.remove(&("eor/portal".to_string(), fx.mt_id));
+        assert!(
+            build_link_only_inner(&fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, fx.to_cmd)
+                .is_err(),
+            "MotionTable not resident"
+        );
+        let fx = c3_fixture();
+        assert!(
+            build_link_only_inner(&fx.source, 0x0200_DEAD, None, fx.stance, fx.from_cmd, fx.to_cmd)
+                .is_err(),
+            "Setup not resident"
+        );
+    }
+
+    /// No `from` (a cycle request), a raw GfxObj, or a Setup without a
+    /// MotionTable: an authoritative `Ok(None)`.
+    #[test]
+    fn link_only_bake_without_table_or_from_is_none() {
+        let fx = c3_fixture();
+        assert!(build_link_only_inner(&fx.source, fx.setup_id, None, fx.stance, 0, fx.to_cmd)
+            .unwrap()
+            .is_none());
+        assert!(build_link_only_inner(
+            &fx.source, fx.part_ids[0], None, fx.stance, fx.from_cmd, fx.to_cmd,
+        )
+        .unwrap()
+        .is_none());
+        let (src, ids) = build_k_setup_source(1);
+        assert!(build_link_only_inner(&src, ids[0], None, fx.stance, fx.from_cmd, fx.to_cmd)
+            .unwrap()
+            .is_none());
+    }
+
+    // =================================================================
+    // cmotiontable-4 (2026-10-08) — cycle bake with retail's default_style
+    // fallback (`lookup_cycle` → `MotionTable::cycle_for`).
+    // =================================================================
+
+    /// MotionTable bytes with `style_defaults` and N cycles (one AnimData
+    /// each, framerate 10, whole range). Wire layout as `synth_motion_table`.
+    fn synth_motion_table_styles(
+        mt_id: u32,
+        default_style: u32,
+        style_defaults: &[(u32, u32)],
+        cycles: &[(u32, u32, u32)],
+    ) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&mt_id.to_le_bytes());
+        b.extend_from_slice(&default_style.to_le_bytes());
+        b.extend_from_slice(&(style_defaults.len() as u32).to_le_bytes());
+        for (style, substate) in style_defaults {
+            b.extend_from_slice(&style.to_le_bytes());
+            b.extend_from_slice(&substate.to_le_bytes());
+        }
+        b.extend_from_slice(&(cycles.len() as u32).to_le_bytes());
+        for (style, cmd, anim) in cycles {
+            let key = ((style & 0xFFFF) << 16) | (cmd & 0x00FF_FFFF);
+            b.extend_from_slice(&key.to_le_bytes());
+            b.push(1); // num_anims
+            b.push(0); // bitfield
+            b.push(0); // flags
+            b.push(0); // align pad to 4
+            b.extend_from_slice(&anim.to_le_bytes());
+            b.extend_from_slice(&0i32.to_le_bytes()); // low_frame
+            b.extend_from_slice(&(-1i32).to_le_bytes()); // high_frame
+            b.extend_from_slice(&10.0f32.to_le_bytes());
+        }
+        b.extend_from_slice(&0u32.to_le_bytes()); // modifiers count
+        b.extend_from_slice(&0u32.to_le_bytes()); // links count
+        b
+    }
+
+    /// HandCombat (a style the table knows) lacks Dead: the cycle bake plays
+    /// NonCombat's Dead (acclient.c:337766-337768) and still reports the
+    /// REQUESTED stance. A style the table lacks does not fall back.
+    #[test]
+    fn c4_cycle_bake_takes_default_style_fallback_and_keeps_requested_stance() {
+        let setup_id: u32 = 0x0200_C400;
+        let part_id: u32 = 0x0100_C400;
+        let mt_id: u32 = 0x0900_C400;
+        let noncombat: u32 = 0x8000_003D;
+        let handcombat: u32 = 0x8000_003C;
+        let magic: u32 = 0x8000_0049;
+        let ready: u32 = 0x4100_0003;
+        let dead: u32 = 0x4000_0011;
+        let nc_dead_anim: u32 = 0x0300_C401;
+        let hc_ready_anim: u32 = 0x0300_C402;
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part_id],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: Some(mt_id),
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(("eor/portal".into(), part_id), synth_gfx(part_id, 0xAA00_C400, 0.0));
+        files.insert(
+            ("eor/portal".into(), mt_id),
+            synth_motion_table_styles(
+                mt_id,
+                noncombat,
+                &[(noncombat, ready), (handcombat, ready)],
+                &[(noncombat, dead, nc_dead_anim), (handcombat, ready, hc_ready_anim)],
+            ),
+        );
+        files.insert(("eor/portal".into(), nc_dead_anim), synth_animation(nc_dead_anim, &[7.0, 8.0]));
+        files.insert(("eor/portal".into(), hc_ready_anim), synth_animation(hc_ready_anim, &[1.0]));
+        let source = MockSource { files };
+
+        let (bake, resolved) = try_resolve_cycle_frames(&source, &setup, None, handcombat, dead)
+            .expect("default_style fallback resolves");
+        assert_eq!(resolved, handcombat, "resolved stance stays the requested style");
+        assert_eq!(bake.frames.len(), 2);
+        assert!(close(bake.frames[0].frames[0].origin.x, 7.0), "NonCombat's Dead frames");
+
+        let (bake, resolved) = try_resolve_cycle_frames(&source, &setup, None, handcombat, ready)
+            .expect("exact style");
+        assert_eq!(resolved, handcombat);
+        assert!(close(bake.frames[0].frames[0].origin.x, 1.0), "HandCombat's own Ready");
+
+        assert!(
+            try_resolve_cycle_frames(&source, &setup, None, magic, dead).is_none(),
+            "a style the table lacks does not fall back"
+        );
+
+        // The entity bake (what JS caches) agrees.
+        let inner = build_entity_animation_data_inner_v2(
+            &source, setup_id, &[], &[], None, dead, handcombat, 0, 0,
+        )
+        .expect("inner");
+        assert_eq!(inner.num_frames, 2);
+        assert_eq!(inner.resolved_stance, handcombat);
+    }
 }
 
 // =====================================================================
@@ -49407,6 +50351,45 @@ mod tests_soa_parity {
         assert!((motion_cycle_base_speed(&mt, 0, command) - 5.0).abs() < 1e-4);
         // Unknown command → 0 (no scaling).
         assert_eq!(motion_cycle_base_speed(&mt, stance, 0x4500_00FF), 0.0);
+    }
+
+    /// cmotiontable-4 (2026-10-08): `motion_cycle_base_speed` takes retail's
+    /// default_style fallback (`lookup_cycle` → `MotionTable::cycle_for`) for a
+    /// style the table knows, and not for a style it lacks.
+    #[test]
+    fn motion_cycle_base_speed_takes_default_style_fallback() {
+        use holtburger_common::math::Vector3;
+        use holtburger_dat::file_type::motion_table::{MotionData, MotionDataFlags};
+        use holtburger_dat::file_type::MotionTable;
+        use std::collections::HashMap;
+
+        let noncombat = 0x8000_003Du32;
+        let handcombat = 0x8000_003Cu32;
+        let magic = 0x8000_0049u32;
+        let command = MotionTable::WALK_FORWARD_COMMAND;
+        let key = ((noncombat & 0xFFFF) << 16) | (command & 0x00FF_FFFF);
+        let md = MotionData {
+            bitfield: 0,
+            flags: MotionDataFlags::HAS_VELOCITY,
+            anims: Vec::new(),
+            velocity: Some(Vector3 { x: 3.0, y: 4.0, z: 0.0 }), // |v| = 5
+            omega: None,
+        };
+        let mut cycles = HashMap::new();
+        cycles.insert(key, md);
+        let mut style_defaults = HashMap::new();
+        style_defaults.insert(noncombat, 0x4100_0003u32);
+        style_defaults.insert(handcombat, 0x4100_0003u32);
+        let mt = MotionTable {
+            id: 0x0900_0C04,
+            default_style: noncombat,
+            style_defaults,
+            cycles,
+            modifiers: HashMap::new(),
+            links: HashMap::new(),
+        };
+        assert!((motion_cycle_base_speed(&mt, handcombat, command) - 5.0).abs() < 1e-4);
+        assert_eq!(motion_cycle_base_speed(&mt, magic, command), 0.0);
     }
 
     /// **T1 (2026-06-02).** `state_ground_speed_inner` mirrors retail

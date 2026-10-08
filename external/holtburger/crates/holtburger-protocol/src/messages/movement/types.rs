@@ -531,9 +531,24 @@ impl ProtocolUnpack for RawMotionState {
 }
 
 impl ProtocolPack for RawMotionState {
+    /// R1 outbound-5 (2026-10-08): the header bits are derived from FIELD
+    /// PRESENCE at pack time, exactly the fields written below — retail
+    /// `RawMotionState::Pack` (acclient.c:332970) computes every flag bit
+    /// from the field it then writes, so header and body cannot disagree.
+    /// Previously the header came from `self.flags` while the body followed
+    /// the `Option`s; a builder that set one without the other emitted a
+    /// header ACE would misparse the position/sequence quartet behind. The
+    /// action count rides bits 11-15 (retail's `u16 & 0xF800`, 5 bits). A
+    /// `flags`/`Option` disagreement still fails loudly in debug builds.
     fn pack(&self, buf: &mut Vec<u8>) {
-        let mut packed_flags = self.flags.bits() & 0x7FF;
-        packed_flags |= (self.commands.len() as u32) << 11;
+        let presence = self.presence_flags();
+        debug_assert_eq!(
+            presence.bits(),
+            self.flags.bits() & 0x7FF,
+            "RawMotionState flags/Option mismatch"
+        );
+        let packed_flags =
+            presence.bits() | (((self.commands.len() as u32) & 0x1F) << 11);
         buf.extend_from_slice(&packed_flags.to_le_bytes());
 
         if let Some(val) = self.current_hold_key {
@@ -577,6 +592,25 @@ impl ProtocolPack for RawMotionState {
 }
 
 impl RawMotionState {
+    /// The header flag bits implied by which fields are PRESENT — what
+    /// [`ProtocolPack::pack`] writes (retail `RawMotionState::Pack`,
+    /// acclient.c:332970, derives the header the same way).
+    pub fn presence_flags(&self) -> RawMotionFlags {
+        let mut flags = RawMotionFlags::empty();
+        flags.set(RawMotionFlags::CURRENT_HOLD_KEY, self.current_hold_key.is_some());
+        flags.set(RawMotionFlags::CURRENT_STYLE, self.current_style.is_some());
+        flags.set(RawMotionFlags::FORWARD_COMMAND, self.forward_command.is_some());
+        flags.set(RawMotionFlags::FORWARD_HOLD_KEY, self.forward_hold_key.is_some());
+        flags.set(RawMotionFlags::FORWARD_SPEED, self.forward_speed.is_some());
+        flags.set(RawMotionFlags::SIDE_STEP_COMMAND, self.sidestep_command.is_some());
+        flags.set(RawMotionFlags::SIDE_STEP_HOLD_KEY, self.sidestep_hold_key.is_some());
+        flags.set(RawMotionFlags::SIDE_STEP_SPEED, self.sidestep_speed.is_some());
+        flags.set(RawMotionFlags::TURN_COMMAND, self.turn_command.is_some());
+        flags.set(RawMotionFlags::TURN_HOLD_KEY, self.turn_hold_key.is_some());
+        flags.set(RawMotionFlags::TURN_SPEED, self.turn_speed.is_some());
+        flags
+    }
+
     pub fn current_stance(&self) -> Option<MotionStance> {
         self.current_style.and_then(MotionStance::from_repr)
     }
@@ -607,6 +641,84 @@ mod tests {
         assert!(state.flags.contains(RawMotionFlags::CURRENT_STYLE));
         assert_eq!(state.current_style, Some(MotionStance::Magic as u32));
         assert_eq!(state.current_stance(), Some(MotionStance::Magic));
+    }
+
+    /// R1 outbound-5 (2026-10-08): retail `RawMotionState::Pack`
+    /// (acclient.c:332970) derives each header bit from the field it writes.
+    /// A consistent state round-trips with header == flags; the derived
+    /// header covers all eleven fields plus the 5-bit action count.
+    #[test]
+    fn raw_motion_pack_header_matches_field_presence_and_round_trips() {
+        let state = RawMotionState {
+            flags: RawMotionFlags::all(),
+            current_hold_key: Some(2),
+            current_style: Some(0x8000_003D),
+            forward_command: Some(0x4500_0005),
+            forward_hold_key: Some(2),
+            forward_speed: Some(1.0),
+            sidestep_command: Some(0x6500_0010),
+            sidestep_hold_key: Some(2),
+            sidestep_speed: Some(1.0),
+            turn_command: Some(0x6500_000E),
+            turn_hold_key: Some(2),
+            turn_speed: Some(1.0),
+            commands: vec![MotionItem::new(0x0087u16, 3, true, 1.0)],
+        };
+        assert_eq!(state.presence_flags(), RawMotionFlags::all());
+
+        let mut buf = Vec::new();
+        state.pack(&mut buf);
+        let header = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert_eq!(header & 0x7FF, 0x7FF, "every present field flagged");
+        assert_eq!(header >> 11, 1, "one action in bits 11-15");
+
+        let mut offset = 0;
+        let unpacked = RawMotionState::unpack(&buf, &mut offset).expect("round trip");
+        assert_eq!(offset, buf.len(), "body length matches the header");
+        assert_eq!(unpacked, state);
+
+        // A W+Run shape: hold key + forward command only.
+        let walk = RawMotionState {
+            flags: RawMotionFlags::CURRENT_HOLD_KEY | RawMotionFlags::FORWARD_COMMAND,
+            current_hold_key: Some(2),
+            forward_command: Some(0x4500_0005),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        walk.pack(&mut buf);
+        assert_eq!(
+            u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            0x5,
+            "retail W+Run header"
+        );
+        assert_eq!(buf.len(), 12, "header + two u32 fields");
+    }
+
+    /// R1 outbound-5: a builder that sets an `Option` without its flag used
+    /// to emit a header that disagreed with the body (ACE then misparses
+    /// everything after it). The header now follows the field, and the
+    /// disagreement itself fails loudly in debug builds.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "RawMotionState flags/Option mismatch")
+    )]
+    fn raw_motion_pack_header_follows_field_presence() {
+        let state = RawMotionState {
+            flags: RawMotionFlags::empty(),
+            forward_command: Some(0x4500_0005),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        state.pack(&mut buf); // debug: panics here (the loud failure)
+
+        // Release builds: the header carries the bit for the written field.
+        let header = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        assert_eq!(header, RawMotionFlags::FORWARD_COMMAND.bits());
+        let mut offset = 0;
+        let unpacked = RawMotionState::unpack(&buf, &mut offset).expect("round trip");
+        assert_eq!(offset, buf.len());
+        assert_eq!(unpacked.forward_command, Some(0x4500_0005));
     }
 
     #[test]

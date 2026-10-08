@@ -340,6 +340,34 @@ impl MovementSystemHandle {
         self.inner.set_walkable_landing_ground(on);
     }
 
+    /// R1 motioninterp-1 (2026-10-08): install the `?jumpLaunchCap=off`
+    /// runtime carrier (default-ON — a jump under held keys launches with
+    /// retail `get_leave_ground_velocity`, the state velocity capped at
+    /// `4.0 × run_rate`, on charged AND non-charged releases; `=off`
+    /// restores the uncapped intent / realized-velocity arms). Forwards to
+    /// `MovementSystem::set_jump_launch_cap`.
+    pub fn set_jump_launch_cap(&mut self, on: bool) {
+        self.inner.set_jump_launch_cap(on);
+    }
+
+    /// R1 motioninterp-2 (2026-10-08): install the `?jumpLoadGate=off`
+    /// runtime carrier (default-ON — retail `CanJump`, load < 2.0, refuses
+    /// an over-encumbered jump with 73 at press and release; `=off` restores
+    /// the permissive seam). Forwards to `MovementSystem::set_jump_load_gate`.
+    pub fn set_jump_load_gate(&mut self, on: bool) {
+        self.inner.set_jump_load_gate(on);
+    }
+
+    /// R1 outbound-1/2/3 (2026-10-08): install the `?apRetailGate=off`
+    /// runtime carrier (default-ON — retail AutonomousPosition cadence: no
+    /// airborne APs, first grounded frame sends, MoveToState restarts the
+    /// 1 s window, one immediate AP after a force-position snap; `=off`
+    /// restores the pre-2026-10-08 cadence). Forwards to
+    /// `MovementSystem::set_retail_position_event_gate`.
+    pub fn set_retail_position_event_gate(&mut self, on: bool) {
+        self.inner.set_retail_position_event_gate(on);
+    }
+
     /// F2 (2026-07-27): install the `?serverMoveToDriver=off` runtime
     /// carrier (default-ON — the LOCAL player's server-commanded MoveTo
     /// 6/7 runs the faithful `MoveToManager` driver, giving turn-first
@@ -583,8 +611,9 @@ impl MovementSystemHandle {
     /// A14-I4 (W3+ S11) — press-time half of the retail jump charge
     /// clock (`ClientCombatSystem::CommenceJump`,
     /// acclient.c:408033-408078). `Err(JumpRefusal::Position)` mirrors
-    /// retail's press-time 72 refusal (the charge-time 73 gate is
-    /// deliberately absent — DESIGN.md:460-462). The wasm
+    /// retail's press-time 72 refusal; `Err(JumpRefusal::Load)` the
+    /// charge-time 73 `CanJump` (load >= 2.0) refusal, checked first as in
+    /// retail `charge_jump` (R1 motioninterp-2, `?jumpLoadGate`). The wasm
     /// `JumpChargeCommence` arm calls this under `?jumpParity=on`.
     pub fn jump_charge_commence(
         &mut self,

@@ -175,6 +175,7 @@ const CORPSE_STUBS = {
   registerDropZone: NOT_ON_SNAPSHOT_PATH("registerDropZone"),
   resolveDropAction: NOT_ON_SNAPSHOT_PATH("resolveDropAction"),
   executeItemAction: NOT_ON_SNAPSHOT_PATH("executeItemAction"),
+  planBackpackPlacement: NOT_ON_SNAPSHOT_PATH("planBackpackPlacement"),
   pendingOps: "Object.freeze({ has: () => false })",
   showItemTooltip: NOT_ON_SNAPSHOT_PATH("showItemTooltip"),
   hideItemTooltip: NOT_ON_SNAPSHOT_PATH("hideItemTooltip"),

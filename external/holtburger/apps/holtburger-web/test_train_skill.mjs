@@ -67,6 +67,7 @@ const {
   estimateVitalRanks,
   levelProgress,
   skillGroupFor,
+  vitaeModifier,
   view,
 } = await import(url);
 const { readFileSync } = await import("node:fs");
@@ -281,6 +282,26 @@ check("estimateVitalRanks: Health = End/2 (round half up), Stamina = End, Mana =
   assertEq(estimateVitalRanks(3, 101 + 12, attrs), 12, "stamina");
   assertEq(estimateVitalRanks(5, 90, attrs), 0, "mana, unraised");
   assertEq(estimateVitalRanks(5, 80, attrs), 0, "never negative");
+});
+
+check("estimateVitalRanks: Health base carries GearMaxHealth (enchstats-3)", () => {
+  const attrs = { 2: 100, 6: 90 };
+  // base = 50 (End/2) + 7 ranks + 20 gear
+  assertEq(estimateVitalRanks(1, 50 + 7 + 20, attrs, 20), 7, "gear taken back out");
+  assertEq(estimateVitalRanks(1, 50 + 7, attrs), 7, "no gear argument = 0");
+  assertEq(estimateVitalRanks(3, 100 + 4, attrs, 20), 4, "gear is Health-only");
+  assertEq(estimateVitalRanks(1, 50 + 7, attrs, -5), 7, "negative gear ignored");
+});
+
+check("vitaeModifier mirrors SkillInfoRegion::GetVitaeModifier (enchstats-2/3)", () => {
+  assertEq(vitaeModifier(100, 1), 0, "no vitae");
+  assertEq(vitaeModifier(100, 0.95), -5, "(u64)(95 + 0.5) - 100");
+  assertEq(vitaeModifier(105, 0.99), -1, "(u64)(103.95 + 0.5) - 105");
+  assertEq(vitaeModifier(100, NaN), 0, "garbage vitae");
+  // A vitae'd vital with no buffs reads neutral: max − mod == base.
+  assertEq(95 - vitaeModifier(100, 0.95), 100, "tint neutral under vitae alone");
+  // JackOfAllTrades on top of vitae still reads raised (retail-faithful).
+  assertEq(109 - vitaeModifier(105, 0.99) > 105, true, "JoAT still raised");
 });
 
 check("levelProgress mirrors gmStatManagementUI::UpdateExperience", () => {

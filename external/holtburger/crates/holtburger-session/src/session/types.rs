@@ -21,10 +21,12 @@ pub(crate) const MAX_CACHED_PACKETS: usize = 512;
 /// The C2S retransmit cache has always had [`MAX_CACHED_PACKETS`]; its inbound
 /// twin had NO bound at all, so a server (or anything that can pass the
 /// checksum) streaming ever-higher sequence numbers grew the map without limit
-/// for the ~180 s it takes [`RETRANSMIT_GIVE_UP_REQUESTS`] to fire at the 1 Hz
-/// request cadence. `MAX_RETRANSMIT_SEQUENCE_WINDOW + 2` is the real bound:
-/// `send_request_retransmit` refuses a gap wider than the window, so a packet
-/// further ahead than that can never be ordered and buffering it is pure waste.
+/// for the ~180 s it takes [`RETRANSMIT_GIVE_UP_REQUESTS`] to fire at the
+/// [`REQUEST_RETRANSMIT_INTERVAL`] cadence. `MAX_RETRANSMIT_SEQUENCE_WINDOW + 2`
+/// is the real bound: `send_request_retransmit` refuses a gap wider than the
+/// window, so a packet further ahead than that can never be ordered and
+/// buffering it is pure waste. (net-3: with the 4160-wide window this is ~4 K
+/// entries of at most ~1 KB each, ~4 MB worst case.)
 pub(crate) const MAX_PENDING_SERVER_PACKETS: usize =
     MAX_RETRANSMIT_SEQUENCE_WINDOW as usize + 2;
 pub(crate) const MAX_RETRANSMIT_SEQUENCE_IDS: usize = 115;
@@ -42,13 +44,27 @@ pub(crate) const MAX_RETRANSMIT_SEQUENCE_IDS: usize = 115;
 /// well under 1 MB). Tune upward if a legitimate transfer is ever seen to
 /// exceed it; the rejection is logged at `warn`.
 pub(crate) const MAX_FRAGMENTS_PER_MESSAGE: usize = 16384;
-pub(crate) const MAX_RETRANSMIT_SEQUENCE_WINDOW: u32 = 256;
-pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_secs(1);
+/// net-3 (R2-net 2026-10-08): was 256. Sized from the S2C ISAAC search reach
+/// plus slack, deliberately WIDER than [`Isaac::MAXIMUM_EFFORT_LEVEL`]: a
+/// packet that validates has already consumed its key, so discarding it for
+/// being outside the reorder window would make its retransmission
+/// unvalidatable. Retail's own limit is 0x7FFF (`SharedNet::SeqIDSanityCheck`,
+/// acclient.c:371343), and it drops rather than disconnects.
+pub(crate) const MAX_RETRANSMIT_SEQUENCE_WINDOW: u32 = Isaac::MAXIMUM_EFFORT_LEVEL as u32 + 64;
+// net-3: the coupling above is load-bearing; fail the build if it is undone.
+const _: () = assert!(MAX_RETRANSMIT_SEQUENCE_WINDOW as usize > Isaac::MAXIMUM_EFFORT_LEVEL);
+/// net-4 (R2-net 2026-10-08): was 1 s. Retail re-sends its NAK list on a
+/// 0.6 s gate while any id is outstanding (`SharedNet::EnqueueNaks`,
+/// acclient.c:371458 `cur_time - timeStamp_ > 0.6`); OpenAC
+/// `AckNakScheduler.NakGateSeconds = 0.6`.
+pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_millis(600);
 // conn-fix (2026-07-18): give-up ceiling for consecutive retransmit
-// requests with zero ordering progress (~3 min at the 1 Hz cadence).
-// A healthy server answers a retransmit request within a round-trip;
-// a server that ignores 180 in a row has dropped this session.
-pub(crate) const RETRANSMIT_GIVE_UP_REQUESTS: u32 = 180;
+// requests with zero ordering progress. A healthy server answers a
+// retransmit request within a round-trip; a server that ignores this many
+// in a row has dropped this session.
+// net-4 (R2-net 2026-10-08): rescaled 180 -> 300 with the 1 s -> 0.6 s
+// cadence so the give-up stays at ~3 min (300 x 0.6 s = 180 s).
+pub(crate) const RETRANSMIT_GIVE_UP_REQUESTS: u32 = 300;
 pub(crate) const DEFAULT_LOGIN_PROTOCOL_VERSION: &str = "1802";
 
 // `Transport` is cfg-split between native (Send + Sync, async-trait Send
@@ -217,6 +233,13 @@ pub struct Session {
     pub(crate) pending_server_packets: BTreeMap<u32, ReceivedPacket>,
     pub(crate) pending_control_packets: Vec<PendingControlPacket>,
     pub(crate) last_request_retransmit_time: Option<Instant>,
+    // net-4 (R2-net 2026-10-08): retail `highestIDReceived_` while it is
+    // AHEAD of `last_server_seq` — the newest S2C sequence known to exist,
+    // learned from a buffered out-of-order packet or from the borrowed
+    // sequence of a cleartext ACK/NAK. `Some` means a gap is open and the
+    // receive loop re-sends the RequestRetransmit on the
+    // `REQUEST_RETRANSMIT_INTERVAL` timer; cleared once ordering catches up.
+    pub(crate) highest_server_seq_seen: Option<u32>,
     // conn-fix (2026-07-18): consecutive retransmit requests issued
     // without any ordering progress. Reset whenever an ordered packet
     // finalizes; when it exceeds RETRANSMIT_GIVE_UP_REQUESTS the

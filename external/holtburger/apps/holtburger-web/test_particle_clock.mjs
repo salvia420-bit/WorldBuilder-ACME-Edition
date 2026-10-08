@@ -298,8 +298,10 @@ check("throwing static manager tick is swallowed", !stThrew);
 const staticsSrc = readFileSync(joinPath(__dirname, "scene3d", "statics.js"), "utf8");
 check("statics rAF arm gated to particleClockMode() === \"off\"",
   /if \(typeof window !== "undefined" && _staticScriptsEnabled\(\) && particleClockMode\(\) === "off"\)/.test(staticsSrc));
-check("statics.js imports particleClockMode (+ rng for the CallPES loop) from time_rng.js",
-  /import \{ particleClockMode(, rng)? \} from "\.\/particles\/time_rng\.js"/.test(staticsSrc));
+// PLIFECYCLE-5 (2026-10-08): + currentTime, the clock `?staticScriptHookTime`
+// measures each hook's start_time against.
+check("statics.js imports particleClockMode (+ rng for the CallPES loop, + currentTime for hook start_time) from time_rng.js",
+  /import \{ (currentTime, )?particleClockMode(, rng)? \} from "\.\/particles\/time_rng\.js"/.test(staticsSrc));
 
 const indexSrc = readFileSync(joinPath(__dirname, "scene3d", "index.js"), "utf8");
 check("index.js installs the =sim clock hook (setCurrentTime over _particleSimNowS)",

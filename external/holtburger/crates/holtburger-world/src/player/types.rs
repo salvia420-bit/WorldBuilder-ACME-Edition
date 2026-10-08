@@ -1154,6 +1154,111 @@ mod expand_motion_command_low16_tests {
 pub struct SkillBase {
     pub ranks: u32,
     pub init: u32,
+    /// enchstats-2 (2026-10-08): the raw wire skill advancement class
+    /// (retail `Skill::_sac`: 0 Inactive, 1 Untrained, 2 Trained,
+    /// 3 Specialized). Gates the attribute-formula term against
+    /// [`Self::min_level`] and the `LumAugSkilledSpec` term (`sac == 3`).
+    #[serde(default)]
+    pub sac: u32,
+    /// enchstats-2: the SkillTable `SkillBase::_min_level` for this skill
+    /// (portal.dat `0x0E000004`; 1 = usable untrained, 2 = must be trained).
+    /// Retail `CACQualities::InqSkillBaseLevel` (acclient.c:443298) adds the
+    /// attribute formula only when `sac >= min_level`, else the base is 0.
+    /// `0` (the `Default`) never gates.
+    #[serde(default)]
+    pub min_level: u32,
+}
+
+/// enchstats-2/3 (2026-10-08) — the player PropertyInt inputs retail's
+/// `CACQualities::InqSkill` (acclient.c:443603) and `InqAttribute2nd`
+/// (:443223) read on top of ranks/init/formula:
+///
+/// | field | PropertyInt | retail use |
+/// |---|---|---|
+/// | `lum_aug_all_skills` | 365 (0x16D) `LumAugAllSkills` | `+v` (if > 0), raw |
+/// | `aug_skilled_melee` | 300 `AugmentationSkilledMelee` | `+10` on 0x29/0x2C/0x2D/0x2E/0x31, raw |
+/// | `aug_skilled_missile` | 301 `AugmentationSkilledMissile` | `+10` on 0x2F, raw |
+/// | `aug_skilled_magic` | 302 `AugmentationSkilledMagic` | `+10` on 0x1F/0x20/0x21/0x22/0x2B, raw |
+/// | `jack_of_all_trades` | 326 (0x146) `AugmentationJackOfAllTrades` | `+5` after enchantments |
+/// | `lum_aug_skilled_spec` | 344 (0x158) `LumAugSkilledSpec` | `+2v` after enchantments, specialized only |
+/// | `gear_max_health` | 379 (0x17B) `GearMaxHealth` | `+v` on Max Health, before vitae/enchantments |
+///
+/// Cached on [`PlayerState`] because the stat math lives there and the
+/// property bag lives on the player ENTITY. Seeded from the login
+/// `PlayerDescription` dump itself (`hydrate_from_player_description`) and
+/// refreshed from the live bag in `WorldState::emit_player_derived_stats`
+/// only for properties the bag actually holds — ORACLE open defect #1
+/// (`state/types.rs` `AugTraceEntry`) measured JackOfAllTrades reading
+/// ABSENT from the live bag while present in the login dump, so an absent
+/// live value must never zero the cached one.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatAugInputs {
+    pub lum_aug_all_skills: i32,
+    pub aug_skilled_melee: i32,
+    pub aug_skilled_missile: i32,
+    pub aug_skilled_magic: i32,
+    pub jack_of_all_trades: i32,
+    pub lum_aug_skilled_spec: i32,
+    pub gear_max_health: i32,
+}
+
+impl StatAugInputs {
+    /// Every property this cache mirrors.
+    pub const PROPERTIES: [holtburger_common::properties::PropertyInt; 7] = [
+        holtburger_common::properties::PropertyInt::LumAugAllSkills,
+        holtburger_common::properties::PropertyInt::AugmentationSkilledMelee,
+        holtburger_common::properties::PropertyInt::AugmentationSkilledMissile,
+        holtburger_common::properties::PropertyInt::AugmentationSkilledMagic,
+        holtburger_common::properties::PropertyInt::AugmentationJackOfAllTrades,
+        holtburger_common::properties::PropertyInt::LumAugSkilledSpec,
+        holtburger_common::properties::PropertyInt::GearMaxHealth,
+    ];
+
+    fn slot_mut(&mut self, prop: holtburger_common::properties::PropertyInt) -> Option<&mut i32> {
+        use holtburger_common::properties::PropertyInt;
+        match prop {
+            PropertyInt::LumAugAllSkills => Some(&mut self.lum_aug_all_skills),
+            PropertyInt::AugmentationSkilledMelee => Some(&mut self.aug_skilled_melee),
+            PropertyInt::AugmentationSkilledMissile => Some(&mut self.aug_skilled_missile),
+            PropertyInt::AugmentationSkilledMagic => Some(&mut self.aug_skilled_magic),
+            PropertyInt::AugmentationJackOfAllTrades => Some(&mut self.jack_of_all_trades),
+            PropertyInt::LumAugSkilledSpec => Some(&mut self.lum_aug_skilled_spec),
+            PropertyInt::GearMaxHealth => Some(&mut self.gear_max_health),
+            _ => None,
+        }
+    }
+
+    /// Fresh snapshot: every mirrored property from `lookup`, absent = 0.
+    /// Used on a full `PlayerDescription` hydrate.
+    pub fn from_lookup(
+        lookup: impl Fn(holtburger_common::properties::PropertyInt) -> Option<i32>,
+    ) -> Self {
+        let mut out = Self::default();
+        for prop in Self::PROPERTIES {
+            if let Some(slot) = out.slot_mut(prop) {
+                *slot = lookup(prop).unwrap_or(0);
+            }
+        }
+        out
+    }
+
+    /// Overwrite only the properties `lookup` actually has (an absent live
+    /// value keeps the cached one — see the type docs). Returns whether
+    /// anything changed.
+    pub fn refresh_present(
+        &mut self,
+        lookup: impl Fn(holtburger_common::properties::PropertyInt) -> Option<i32>,
+    ) -> bool {
+        let before = *self;
+        for prop in Self::PROPERTIES {
+            if let Some(value) = lookup(prop)
+                && let Some(slot) = self.slot_mut(prop)
+            {
+                *slot = value;
+            }
+        }
+        before != *self
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
@@ -1424,6 +1529,16 @@ pub struct PlayerState {
     pub local_position_overlays: HashMap<PositionType, holtburger_common::position::WorldPosition>,
     /// List of all active enchantments (buffs/debuffs) currently affecting the player.
     pub enchantments: Vec<Enchantment>,
+    /// enchstats-5 (2026-10-08): absolute (receive-clock) start time per
+    /// `(spell_id, layer)`, stamped `now + wire.start_time` when the layer
+    /// arrives (retail `Enchantment::UnPack`, acclient.c:502627:
+    /// `_start_time = Timer::cur_time + _start_time`). The wire value itself
+    /// stays untouched in [`Self::enchantments`] (the JS buffs HUD keys on
+    /// it). Read through [`Self::abs_start_time`] by the same-power duel.
+    pub enchantment_abs_start: HashMap<(u16, u16), f64>,
+    /// enchstats-2/3 (2026-10-08): the PropertyInt augmentation / gear inputs
+    /// of retail `InqSkill` / `InqAttribute2nd`. See [`StatAugInputs`].
+    pub stat_aug: StatAugInputs,
     /// Master list of known spells (Knowledge). Maps SpellID -> Power/Modifier level.
     pub spells: BTreeMap<u32, f32>,
     /// Primary character option mask retained from PlayerDescription.
@@ -1804,6 +1919,8 @@ impl PlayerState {
             movement_sequence: 0,
             local_position_overlays: HashMap::new(),
             enchantments: Vec::new(),
+            enchantment_abs_start: HashMap::new(),
+            stat_aug: StatAugInputs::default(),
             spells: BTreeMap::new(),
             options1: CharacterOptions1::empty(),
             options2: CharacterOptions2::empty(),
@@ -2013,9 +2130,11 @@ impl PlayerState {
         }
         self.is_airborne = true;
         // F1-6 — the charge (if any) is consumed by this dispatch; the
-        // caller decides the launch planar velocity (interpreted intent
-        // for a standing long jump, integrator store otherwise) BEFORE
-        // calling begin_jump.
+        // caller decides the launch planar velocity AFTER calling
+        // begin_jump (holtburger-core `execute_jump_release`: retail
+        // `get_leave_ground_velocity` — the state velocity capped at
+        // 4 × run_rate — under a manual drive, R1 motioninterp-1; the
+        // legacy intent / integrator-store arms otherwise).
         self.standing_long_jump_charge = false;
         // Trajectory lock (Track B3) — deliberately leave
         // `current_planar_velocity` untouched: the last grounded tick's
@@ -2109,6 +2228,18 @@ impl PlayerState {
 
     pub fn vitae(&self) -> f32 {
         crate::magic::get_total_vitae(&self.enchantments)
+    }
+
+    /// enchstats-5 (2026-10-08): the enchantment's absolute start time for
+    /// the same-power duel — the receive-time stamp when one was recorded,
+    /// else the raw wire `start_time` (tests and any layer pushed without a
+    /// stamp; mixing the two domains cannot happen on the live path, where
+    /// every layer arrives through a stamping mutator).
+    pub fn abs_start_time(&self, enchantment: &Enchantment) -> f64 {
+        self.enchantment_abs_start
+            .get(&(enchantment.spell_id, enchantment.layer))
+            .copied()
+            .unwrap_or(enchantment.start_time)
     }
 
     pub fn local_position_overlay(

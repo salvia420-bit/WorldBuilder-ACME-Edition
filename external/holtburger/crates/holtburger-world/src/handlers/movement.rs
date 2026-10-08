@@ -45,6 +45,36 @@ pub(crate) fn resolve_movement_target(
     }
 }
 
+/// R3 moveto-1 (2026-10-08) — the sticky target a REMOTE object's
+/// UpdateMotion installs on the remote sticky lane (and the JS F3-4 glue,
+/// KIND_MOTION `model_id`); `0` = unstick. Retail
+/// `MovementManager::unpack_movement` (acclient.c:339492) runs
+/// `cancel_moveto` + `unstick_from_object` for EVERY movement message and
+/// sticks only from the case-0 (interpreted) `sticky_object`; a MoveToObject
+/// (case 6) only arms the MoveTo. Its Sticky bit (0x80, ACE sets it on every
+/// monster chase) sticks ON ARRIVAL (`MoveToManager::BeginNextNode`
+/// :345521 → `PositionManager::StickTo`), which the client-side remote
+/// MoveTo pump realizes (`drive_remote_movetos`, `out.stick_to`). Sticking
+/// at arm time suppressed the chase walk and dragged the mob at the sticky
+/// pull speed with no distance cap.
+///
+/// `rust_moveto_sticks` = that pump runs AND the remote sticky lane is live.
+/// When it is false (`?remoteMoveTo=off` / `?stickyRetail=off`) nothing
+/// would stick on arrival, so the legacy F3-4 source is kept: a sticky-bit
+/// MoveToObject names its target at arm time.
+pub fn remote_motion_sticky_target(data: &MovementTypeData, rust_moveto_sticks: bool) -> u32 {
+    const STICKY: u32 = 0x80;
+    match data {
+        MovementTypeData::Invalid(inv) => inv.sticky_object.map(u32::from).unwrap_or(0),
+        MovementTypeData::MoveToObject(m)
+            if !rust_moveto_sticks && m.params.movement_parameters & STICKY != 0 =>
+        {
+            u32::from(m.target)
+        }
+        _ => 0,
+    }
+}
+
 /// A3-D3 (2026-06-12): emit the UNCONDITIONAL per-message
 /// [`WorldEvent::EntityMovementEvent`] for a REMOTE entity — retail's
 /// `unpack_movement` preamble is per-unpack, not change-gated
@@ -554,5 +584,51 @@ mod tests {
         // directions — that is the bug this table exists to retire.
         assert!(floor(table[&tusker_setup], 1.0) > 1.3);
         assert!(floor(table[&human_setup], 0.5) < 1.3);
+    }
+
+    /// R3 moveto-1 (2026-10-08): retail `unpack_movement`
+    /// (acclient.c:339492) sticks only from the case-0 `sticky_object`; a
+    /// sticky-bit MoveToObject sticks on ARRIVAL (BeginNextNode :345521),
+    /// which the client remote MoveTo pump does. So while that pump owns the
+    /// arrival stick, a chase MoveToObject unsticks (0) instead of sticking
+    /// at arm time; with the pump off the legacy F3-4 arm-time source stays.
+    #[test]
+    fn remote_motion_sticky_target_sticks_case0_and_defers_moveto_to_arrival() {
+        use holtburger_protocol::messages::movement::messages::motion::MovementInvalid;
+        let target = holtburger_common::Guid(0x8000_0042);
+        let chase = |movement_parameters: u32| {
+            MovementTypeData::MoveToObject(MoveToObject {
+                target,
+                origin: Origin::default(),
+                params: MoveToParameters {
+                    movement_parameters,
+                    ..MoveToParameters::default()
+                },
+                run_rate: 1.0,
+            })
+        };
+        // ACE's chase: CanRun | Sticky (Creature_Navigation.cs).
+        let sticky_chase = chase(0x2 | 0x80);
+        assert_eq!(
+            remote_motion_sticky_target(&sticky_chase, true),
+            0,
+            "the pump sticks on arrival: no arm-time stick (retail preamble unsticks)"
+        );
+        assert_eq!(
+            remote_motion_sticky_target(&sticky_chase, false),
+            0x8000_0042,
+            "pump off (?remoteMoveTo=off / ?stickyRetail=off): legacy arm-time stick"
+        );
+        assert_eq!(remote_motion_sticky_target(&chase(0x2), false), 0, "no sticky bit");
+
+        // Case 0 (a melee swing's StickToObject) sticks either way.
+        let swing = MovementTypeData::Invalid(MovementInvalid {
+            sticky_object: Some(target),
+            ..MovementInvalid::default()
+        });
+        assert_eq!(remote_motion_sticky_target(&swing, true), 0x8000_0042);
+        assert_eq!(remote_motion_sticky_target(&swing, false), 0x8000_0042);
+        let plain = MovementTypeData::Invalid(MovementInvalid::default());
+        assert_eq!(remote_motion_sticky_target(&plain, true), 0, "no sticky_object: unstick");
     }
 }

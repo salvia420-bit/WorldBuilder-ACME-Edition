@@ -215,6 +215,23 @@ impl Session {
     }
 
     fn should_order_server_packet(&self, header: &PacketHeader) -> bool {
+        // net-2 (R2-net 2026-10-08): a CLEARTEXT RequestRetransmit does not
+        // own its sequence. ACE stamps its NAKs with `CurrentValue`, the last
+        // data sequence it sent (NetworkSession.cs FlushPackets `if (Flags ==
+        // AckSequence || isNak) Sequence = CurrentValue`), exactly like its
+        // pure ACKs. Ordering it let a NAK stand in for a lost data packet N:
+        // `last_server_seq` became N, N was ACKed (ACE then pruned it from its
+        // retransmit cache) and the real N was later dropped as a duplicate.
+        // Retail never lets a cleartext packet satisfy a sequence
+        // (`SharedNet::ProcessNewestSeqNum` acclient.c:369054 `if
+        // (!(header_ & 2)) ++v2;`, `SharedNet::ProcessNewSeqNum`
+        // acclient.c:372062). ACE's cleartext RejectRetransmit stays ordered:
+        // ACE gives it a fresh `NextValue` sequence.
+        if header.flags & packet_flags::REQUEST_RETRANSMIT != 0
+            && header.flags & packet_flags::ENCRYPTED_CHECKSUM == 0
+        {
+            return false;
+        }
         header.flags != packet_flags::ACK_SEQUENCE
             && (header.sequence != 0 || (header.flags & packet_flags::BLOB_FRAGMENTS) != 0)
     }
@@ -235,19 +252,131 @@ impl Session {
             // conn-fix (2026-07-18): ordering progressed — reset the
             // retransmit give-up counter (see send_request_retransmit).
             self.retransmit_requests_since_progress = 0;
+            // net-4: ordering caught up with the newest known sequence, so
+            // the gap is closed and the re-NAK timer disarms.
+            if let Some(highest) = self.highest_server_seq_seen
+                && !is_newer_u32(highest, self.last_server_seq)
+            {
+                self.highest_server_seq_seen = None;
+            }
+            // net-2 (R2-net 2026-10-08): ACK only sequences that ordering
+            // actually consumed, with the cumulative watermark. The old rule
+            // (`sequence > 0 && flags != ACK_SEQUENCE`) also ACKed a cleartext
+            // NAK's BORROWED id, and ACE prunes every cached packet below an
+            // ACK (`x < sequence`), so a lost data packet could never be
+            // retransmitted.
+            let ack_sequence = self.last_server_seq;
+            self.queue_ack(ack_sequence)?;
         }
 
-        if packet.header.sequence > 0 && packet.header.flags != packet_flags::ACK_SEQUENCE {
-            self.queue_ack(packet.header.sequence)?;
-        }
-
-        if packet.header.flags & packet_flags::ECHO_REQUEST != 0 {
-            let mut resp = packet.header.clone();
-            resp.flags = packet_flags::ECHO_RESPONSE;
-            self.queue_packet_to_addr(resp, &[], self.server_addr, Instant::now())?;
-        }
+        // net-5 (R2-net 2026-10-08): the old S2C EchoRequest reply cloned the
+        // SERVER's header (its sequence and id), sent it encrypted with an
+        // empty 8-byte EchoResponse body, burned a C2S ISAAC word ACE never
+        // matches, and cached it in the C2S retransmit cache under the
+        // server's sequence. Retail answers mask 0x2000000 with a
+        // CEchoResponseHeader optional header on a LATER outgoing packet
+        // (`SharedNet::ProcessOptionalHeader`, acclient.c:370711), never a new
+        // packet; vanilla ACE never sends an S2C EchoRequest (it only answers
+        // ours, NetworkSession.cs:439-443). OpenAC ignores it too. Deleted.
 
         Ok(())
+    }
+
+    /// net-4 (R2-net 2026-10-08): retail uses a CLEARTEXT packet's borrowed
+    /// sequence as a loss hint. `SharedNet::ProcessNewestSeqNum`
+    /// (acclient.c:369054) NAKs every id up to AND INCLUDING the borrowed id
+    /// when it is newer than `highestIDReceived_`. ACE's ack-only packets (and
+    /// its NAKs) carry `CurrentValue`, the last data sequence it sent, every
+    /// 2 s, so a lost LAST packet of a burst is noticed within ~2.6 s instead
+    /// of waiting for the next encrypted packet (up to 20 s at char select).
+    /// Out-of-window hints are ignored, never fatal.
+    fn note_cleartext_sequence_hint(&mut self, header: &PacketHeader) -> Result<()> {
+        let sequence = header.sequence;
+        if !self.has_server_seq
+            || sequence == 0
+            || header.flags & packet_flags::ENCRYPTED_CHECKSUM != 0
+            || !is_newer_u32(sequence, self.last_server_seq)
+        {
+            return Ok(());
+        }
+
+        // `sequence + 1` makes the [desired, received) builder include the
+        // borrowed id itself, as retail's `++v2` does.
+        let target = sequence.wrapping_add(1);
+        if !self.retransmit_span_in_window(target) {
+            log::debug!(
+                "Ignoring cleartext sequence hint {}: outside the retransmit window above {}",
+                sequence,
+                self.last_server_seq
+            );
+            return Ok(());
+        }
+
+        self.note_server_seq_seen(sequence);
+        let expected = self.next_expected_server_sequence();
+        if self.should_request_retransmit(expected, target) {
+            self.send_request_retransmit(target)?;
+        }
+        Ok(())
+    }
+
+    /// One validated-or-dropped inbound packet through checksum, metadata and
+    /// ordering. `Ok(Some(packet))` = deliver it now; `Ok(None)` = keep
+    /// receiving (dropped, duplicate, or buffered out of order). Shared by
+    /// the timer and plain paths of [`Self::recv_ordered_packet`], which used
+    /// to carry two verbatim copies of this body.
+    fn process_inbound_packet(
+        &mut self,
+        header: PacketHeader,
+        data: Vec<u8>,
+    ) -> Result<Option<ReceivedPacket>> {
+        if !self.validate_received_packet_checksum(&header, &data)? {
+            return Ok(None);
+        }
+
+        self.process_received_packet_metadata(&header, &data)?;
+
+        let packet = ReceivedPacket { header, data };
+
+        if !self.should_order_server_packet(&packet.header) {
+            self.note_cleartext_sequence_hint(&packet.header)?;
+            self.finalize_ordered_server_packet(&packet)?;
+            return Ok(Some(packet));
+        }
+
+        let received_sequence = packet.header.sequence;
+        let expected = self.next_expected_server_sequence();
+        if !is_newer_u32(received_sequence, self.last_server_seq) {
+            log::debug!(
+                "Server packet {} received again; last ordered sequence is {}",
+                received_sequence,
+                self.last_server_seq
+            );
+            return Ok(None);
+        }
+
+        if received_sequence != expected {
+            if !is_newer_u32(received_sequence, expected) {
+                log::debug!(
+                    "Server packet {} is newer than {} but not the expected sequence {}",
+                    received_sequence,
+                    self.last_server_seq,
+                    expected
+                );
+                return Ok(None);
+            }
+
+            // F-sweep: bounded insert (was unbounded).
+            self.buffer_out_of_order_packet(received_sequence, packet);
+
+            if self.should_request_retransmit(expected, received_sequence) {
+                self.send_request_retransmit(received_sequence)?;
+            }
+            return Ok(None);
+        }
+
+        self.finalize_ordered_server_packet(&packet)?;
+        Ok(Some(packet))
     }
 
     async fn recv_ordered_packet(&mut self) -> Result<ReceivedPacket> {
@@ -261,7 +390,24 @@ impl Session {
                 continue;
             }
 
-            if let Some(deadline) = self.next_pending_control_deadline() {
+            // net-4 (R2-net 2026-10-08): timer-driven re-NAK while a gap is
+            // open (queued here, flushed at the loop top).
+            if self.resend_request_retransmit_if_due()? {
+                continue;
+            }
+
+            // Wake for whichever comes first: the next deferred control packet
+            // or (net-4) the next re-NAK. Both are `None` on an idle, in-order
+            // session, which then blocks on the socket alone as before.
+            let deadline = match (
+                self.next_pending_control_deadline(),
+                self.next_retransmit_deadline(),
+            ) {
+                (Some(control), Some(renak)) => Some(control.min(renak)),
+                (control, renak) => control.or(renak),
+            };
+
+            if let Some(deadline) = deadline {
                 // Native: `web_time::Instant` re-exports `std::time::Instant`,
                 // so `from_std` accepts the deadline directly.
                 //
@@ -294,106 +440,19 @@ impl Session {
                         self.recv_raw_packet_with_addr(&mut buf).await
                     } => {
                         let (header, data, _) = result?;
-
-                        if !self.validate_received_packet_checksum(&header, &data)? {
-                            continue;
-                        }
-
-                        self.process_received_packet_metadata(&header, &data)?;
-
-                        let packet = ReceivedPacket { header, data };
-
-                        if !self.should_order_server_packet(&packet.header) {
-                            self.finalize_ordered_server_packet(&packet)?;
+                        if let Some(packet) = self.process_inbound_packet(header, data)? {
                             return Ok(packet);
                         }
-
-                        let received_sequence = packet.header.sequence;
-                        let expected = self.next_expected_server_sequence();
-                        if !is_newer_u32(received_sequence, self.last_server_seq) {
-                            log::debug!(
-                                "Server packet {} received again; last ordered sequence is {}",
-                                received_sequence,
-                                self.last_server_seq
-                            );
-                            continue;
-                        }
-
-                        if received_sequence != expected {
-                            if !is_newer_u32(received_sequence, expected) {
-                                log::debug!(
-                                    "Server packet {} is newer than {} but not the expected sequence {}",
-                                    received_sequence,
-                                    self.last_server_seq,
-                                    expected
-                                );
-                                continue;
-                            }
-
-                            // F-sweep: bounded insert (was unbounded).
-                            self.buffer_out_of_order_packet(received_sequence, packet);
-
-                            if self.should_request_retransmit(expected, received_sequence) {
-                                self.send_request_retransmit(received_sequence)?;
-                            }
-                            continue;
-                        }
-
-                        self.finalize_ordered_server_packet(&packet)?;
-                        return Ok(packet);
+                        continue;
                     }
                 }
             }
 
             let mut buf = [0u8; RECV_SCRATCH_BYTES];
             let (header, data, _) = self.recv_raw_packet_with_addr(&mut buf).await?;
-
-            if !self.validate_received_packet_checksum(&header, &data)? {
-                continue;
-            }
-
-            self.process_received_packet_metadata(&header, &data)?;
-
-            let packet = ReceivedPacket { header, data };
-
-            if !self.should_order_server_packet(&packet.header) {
-                self.finalize_ordered_server_packet(&packet)?;
+            if let Some(packet) = self.process_inbound_packet(header, data)? {
                 return Ok(packet);
             }
-
-            let received_sequence = packet.header.sequence;
-            let expected = self.next_expected_server_sequence();
-            if !is_newer_u32(received_sequence, self.last_server_seq) {
-                log::debug!(
-                    "Server packet {} received again; last ordered sequence is {}",
-                    received_sequence,
-                    self.last_server_seq
-                );
-                continue;
-            }
-
-            if received_sequence != expected {
-                if !is_newer_u32(received_sequence, expected) {
-                    log::debug!(
-                        "Server packet {} is newer than {} but not the expected sequence {}",
-                        received_sequence,
-                        self.last_server_seq,
-                        expected
-                    );
-                    continue;
-                }
-
-                // F-sweep: bounded insert (was unbounded).
-                self.buffer_out_of_order_packet(received_sequence, packet);
-
-                if self.should_request_retransmit(expected, received_sequence) {
-                    self.send_request_retransmit(received_sequence)?;
-                }
-                continue;
-            }
-
-            self.finalize_ordered_server_packet(&packet)?;
-            return Ok(packet);
         }
     }
 

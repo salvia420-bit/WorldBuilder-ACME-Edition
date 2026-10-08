@@ -38,13 +38,18 @@ import { getIconImmediate, getItemIconImmediate, fetchItemIconDataUrl } from "..
 import {
   createPendingLedger,
   decideItemDrop,
+  defaultOnUrlFlag,
+  DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+  DEFAULT_PLAYER_ITEMS_CAPACITY,
   DROP_TARGET,
   MAIN_PACK_KEY,
   PACKS_KEY,
   pendingExpect,
+  planPlaceInBackpack,
   rowUsesPackSlot,
   takeInventoryRows,
 } from "./inventory_helpers.js";
+import { resolveContainedItemMeta } from "./contained_item_meta.js";
 
 export const INV_MIME = "application/x-hb-inv-guid";
 export const INV_TEXT_MIME = "text/x-hb-item-guid";
@@ -635,8 +640,19 @@ export function executeItemAction(action, s, opts = {}) {
       break;
     }
     case "merge": {
-      sent = call("mergeStacks", guid, action.target >>> 0, amount);
-      if (sent) pendingOps.add(guid, { op: "merge", amount, expect: pendingExpect.reduced(stack), undo });
+      const to = action.target >>> 0;
+      sent = call("mergeStacks", guid, to, amount);
+      if (sent) {
+        // A source we never owned (corpse / ground auto-merge) has no row to
+        // shrink: wait for the target stack to grow instead.
+        const expect = s?.owned === false && Number.isFinite(action.targetStack)
+          ? pendingExpect.grew(to, action.targetStack + amount)
+          : pendingExpect.reduced(stack);
+        pendingOps.add(guid, { op: "merge", amount, expect, undo });
+        // Retail ItemHolder::AttemptMerge → SendNotice_FullMergingItem(from, to):
+        // the toolbar moves a shortcut on `from` to `to` (hotbar.js).
+        try { window.dispatchEvent(new CustomEvent("hb:item-merge", { detail: { from: guid, to } })); } catch (_) {}
+      }
       break;
     }
     case "wield":
@@ -674,6 +690,79 @@ export function executeItemAction(action, s, opts = {}) {
   }
   if (!sent && undo) { try { undo(); } catch (_) {} }
   return sent;
+}
+
+// ── takes and ground pickups — CPlayerSystem::PlaceInBackpack ────────
+// `?retailPickup=off` restores the old fixed destination, moveItem(item,
+// player, 0): no auto-merge, no side-pack overflow, no open-pack preference.
+const RETAIL_PICKUP = hasDom ? defaultOnUrlFlag("retailPickup") : true;
+
+function playerDisplayName() {
+  try {
+    return String(document.getElementById("char-name")?.textContent
+      || window.__pluginClient?.player?.stats?.name || "").trim();
+  } catch (_) { return ""; }
+}
+function handleNumber(h, name) {
+  try {
+    if (typeof h?.[name] === "number") return h[name];
+    if (typeof h?.[name] === "function") return Number(h[name]()) || 0;
+  } catch (_) {}
+  return 0;
+}
+
+/**
+ * Where an item the player is about to take goes, against the live
+ * inventory (inventory_helpers.planPlaceInBackpack): a matching stack that
+ * takes the whole amount, else the side pack open in the inventory, the
+ * main pack, the first side pack with room. `item` = {guid, wcid, name,
+ * stackSize, itemType, maxStackSize?}.
+ */
+export function planBackpackPlacement(item, { amount } = {}) {
+  const guid = (item?.guid >>> 0) || 0;
+  const me = localPlayerGuid();
+  if (!guid || !me) return { op: "noop" };
+  const isPack = typeof item.isPack === "boolean" ? item.isPack : rowUsesPackSlot(item);
+  if (!RETAIL_PICKUP) {
+    const stack = Math.max(1, item.stackSize | 0 || 1);
+    return {
+      op: "move", guid, container: me, placement: 0,
+      listKey: isPack ? PACKS_KEY : MAIN_PACK_KEY, index: 0, amount: amount ?? stack,
+    };
+  }
+  const h = sessionHandle();
+  let preferredPack = 0;
+  try { preferredPack = (window.__inventory?.selectedPack?.() >>> 0) || 0; } catch (_) { preferredPack = 0; }
+  return planPlaceInBackpack(takeInventoryRows(h), { ...item, guid, isPack }, {
+    playerGuid: me,
+    amount,
+    preferredPack,
+    mainCap: (handleNumber(h, "playerItemsCapacity") >>> 0) || DEFAULT_PLAYER_ITEMS_CAPACITY,
+    packsCap: (handleNumber(h, "playerContainersCapacity") >>> 0) || DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+    playerName: playerDisplayName(),
+  });
+}
+
+/**
+ * Plan and send a take / pickup through executeItemAction, so it is
+ * optimistic like a drag (pending ledger; a ghost stub for a move). `meta`
+ * defaults to the wasm entity store's view of the object. Returns
+ * {sent, action}; a "reject" action has already been toasted.
+ */
+export function placeInBackpack(guid, meta = null) {
+  const g = (guid >>> 0) || 0;
+  // One request per item in flight (a repeated double-click / menu take).
+  if (!g || pendingOps.has(g)) return { sent: false, action: { op: "noop" } };
+  const item = meta || resolveContainedItemMeta(sessionHandle(), g) || { guid: g, name: "", stackSize: 1 };
+  const action = planBackpackPlacement({ ...item, guid: g });
+  const stub = action.op === "move"
+    ? {
+      name: item.name || "", iconId: (item.iconId >>> 0) || 0, stackSize: action.amount ?? item.stackSize ?? 1,
+      wcid: (item.wcid >>> 0) || 0, itemType: (item.itemType >>> 0) || 0, equipMask: 0,
+    }
+    : null;
+  const sent = executeItemAction(action, { guid: g, item, owned: false }, { stub });
+  return { sent, action };
 }
 
 // ── tooltip ─────────────────────────────────────────────────────────
@@ -876,5 +965,11 @@ if (hasDom && !window.__hbItemDragInstalled) {
     session: () => session,
     pending: () => pendingOps.all(),
     zones: () => zones.size,
+    // scene3d/picking.js ground pickup + radial-menu "Take From Container".
+    placeInBackpack,
+    // vendor-ui.js split-before-sell (shift-drop → amount prompt → split
+    // through the pending ledger) without importing this DOM module.
+    executeItemAction,
+    promptStackAmount,
   };
 }

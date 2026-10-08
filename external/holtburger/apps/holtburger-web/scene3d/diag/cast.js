@@ -98,7 +98,9 @@ export function attachCast(diag) {
     echo: { noted: 0, consumedHit: 0, consumedMiss: 0 },
 
     // ── early-return / suppression counters (S1(e), S1(b)) ──
-    suppress: { noSpell: 0, tableNotLoaded: 0, noSetSwing: 0, busyWindow: 0 },
+    // busyOutstanding: spellcast-4 — a local recast while the wasm busy count
+    // (outstanding requests) was > 0 (ui/ac_cast_predict.js).
+    suppress: { noSpell: 0, tableNotLoaded: 0, noSetSwing: 0, busyWindow: 0, busyOutstanding: 0 },
 
     // ── aggregate lifecycle counters ──
     counters: {
@@ -162,7 +164,8 @@ export function attachCast(diag) {
     },
 
     /** Any of the fallback early-returns fired (no spellId / table not loaded
-     *  / no setSwingMotion / busy-window). reason ∈ the suppress keys. */
+     *  / no setSwingMotion / busy-window / busy-outstanding). reason ∈ the
+     *  suppress keys. */
     onCastSuppressed(meta) {
       if (!meta) return;
       const g = (meta.guid >>> 0);

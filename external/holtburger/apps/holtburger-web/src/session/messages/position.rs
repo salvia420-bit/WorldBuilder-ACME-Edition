@@ -1026,6 +1026,34 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 }
                 _ => 0,
             };
+            // R3 moveto-1 (2026-10-08) — the REMOTE sticky
+            // source. The MoveToObject half above predates the
+            // client-side remote MoveTo: retail
+            // `unpack_movement` (acclient.c:339492) sticks
+            // only from the case-0 `sticky_object`; a sticky-
+            // bit MoveToObject sticks ON ARRIVAL
+            // (BeginNextNode :345521), which
+            // `drive_remote_movetos` already does. Sticking at
+            // arm time zeroed the D5 chase walk and dragged
+            // the mob at the sticky pull speed. While that
+            // pump owns the arrival stick
+            // (`remote_moveto_active()` + the remote sticky
+            // lane), a remote MoveToObject unsticks (the
+            // per-unpack preamble) and KIND_MOTION carries 0
+            // (no JS glue lunge); otherwise the legacy F3-4
+            // source stays. The LOCAL branch below keeps
+            // `sticky_target` (player charges; the local
+            // driver also sticks on arrival — follow-up).
+            let rust_moveto_sticks = remote_sticky_on
+                && world
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|w| w.scene.remote_moveto_active());
+            let remote_sticky_target: u32 =
+                holtburger_world::handlers::movement::remote_motion_sticky_target(
+                    &data.data,
+                    rust_moveto_sticks,
+                );
             // A2-P3 (2026-06-12, W3+ S9; RULINGS item 4)
             // — LOCAL-player sticky install on the
             // DEFAULT wasm path (NOT ?wireStatePacks-
@@ -1085,12 +1113,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 && w.player.guid != holtburger_common::Guid::NULL
                 && data.guid != w.player.guid
             {
-                if sticky_target != 0 {
+                if remote_sticky_target != 0 {
                     // Retail sticky keeps cylinder distance
                     // between the two BODIES (radius each,
                     // remote motion D6); same radius source
                     // as the local lane's `?combatRadii`.
-                    let target = holtburger_common::Guid(sticky_target);
+                    let target = holtburger_common::Guid(remote_sticky_target);
                     let holder_radius = w.combat_part_dims(data.guid).0;
                     let target_radius = w.combat_sticky_radius(target);
                     w.scene.stick_remote_entity_to(
@@ -1134,7 +1162,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 kind: ENTITY_UPDATE_KIND_MOTION,
                 guid: u32::from(data.guid),
                 // F3-4: sticky target guid (0 = none/clear).
-                model_id: sticky_target,
+                // R3 moveto-1: the remote source — 0 for a
+                // chase MoveToObject while the Rust pump sticks
+                // on arrival (JS ignores the local guid).
+                model_id: remote_sticky_target,
                 landblock_id: 0,
                 x: 0.0,
                 y: 0.0,

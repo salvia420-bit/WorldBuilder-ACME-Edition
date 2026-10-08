@@ -256,6 +256,7 @@ fn test_stat_floors() {
         SkillBase {
             ranks: 100,
             init: 0,
+            ..Default::default()
         },
     );
     // Skill formula for MeleeDefense is (Quick + Coord) / 3.
@@ -356,7 +357,11 @@ fn test_buff_calculations() {
     // Base was (100 + 100) / 3 = 66.66 -> 67
     player.skill_bases.insert(
         stats::SkillType::HeavyWeapons,
-        SkillBase { ranks: 10, init: 0 },
+        SkillBase {
+            ranks: 10,
+            init: 0,
+            ..Default::default()
+        },
     );
 
     let val = player.derive_skill_value(stats::SkillType::HeavyWeapons, 10, 0, true);
@@ -1463,4 +1468,534 @@ fn skill_attribute_formula_matches_portal_dat() {
         player.derive_skill_value(SkillType::MissileDefense, 40, 5, false),
         50 + 40 + 5
     );
+}
+
+// ---------------------------------------------------------------------------
+// enchstats-2 (2026-10-08) — retail `CACQualities::InqSkill`
+// (acclient.c:443603) / `InqSkillBaseLevel` (:443298) / `EnchantSkill`
+// (:445984), folded into `PlayerState::derive_skill_value`.
+// ---------------------------------------------------------------------------
+
+/// Spell 666 Vitae: 0xA06012 (Vitae | AdditiveDegrade | Multiplicative |
+/// MultipleStat | Skill | SecondAtt), key 0.
+fn vitae_enchantment(value: f32) -> Enchantment {
+    Enchantment {
+        spell_id: 666,
+        layer: 1,
+        spell_category: 204,
+        power_level: 1,
+        stat_mod_type: 0x00A0_6012,
+        stat_mod_key: 0,
+        stat_mod_value: value,
+        ..Default::default()
+    }
+}
+
+fn skill_base(ranks: u32, init: u32, sac: u32, min_level: u32) -> SkillBase {
+    SkillBase {
+        ranks,
+        init,
+        sac,
+        min_level,
+    }
+}
+
+fn skill_mult(category: u16, skill: stats::SkillType, value: f32) -> Enchantment {
+    Enchantment {
+        spell_id: category,
+        layer: 1,
+        spell_category: category,
+        power_level: 100,
+        stat_mod_type: (EnchantmentTypeFlags::SKILL | EnchantmentTypeFlags::MULTIPLICATIVE).bits(),
+        stat_mod_key: skill as u32,
+        stat_mod_value: value,
+        ..Default::default()
+    }
+}
+
+/// The 32afef1a oracle capture: Run raw 105 (Quickness 100 + 5 ranks),
+/// AugmentationJackOfAllTrades = 1, Vitae 0.99. ACE published 109 =
+/// round(105 × 0.99) + 5 — vitae FIRST, JoAT after the enchantments.
+#[test]
+fn skill_current_folds_joat_after_vitae() {
+    use crate::stats::SkillType::Run;
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::QuicknessAttr, 100);
+    player.skill_bases.insert(Run, skill_base(5, 0, 2, 1));
+    player.stat_aug.jack_of_all_trades = 1;
+
+    assert_eq!(player.derive_skill_value(Run, 5, 0, false), 105, "raw base");
+    assert_eq!(player.derive_skill_value(Run, 5, 0, true), 110, "no vitae");
+
+    player.enchantments.push(vitae_enchantment(0.99));
+    assert_eq!(
+        player.derive_skill_value(Run, 5, 0, true),
+        109,
+        "round(103.95) + 5, the value ACE published"
+    );
+    assert_eq!(
+        player.derive_skill_value(Run, 5, 0, false),
+        105,
+        "vitae never touches the raw base"
+    );
+}
+
+/// `AugmentationSkilledMagic` (+10) is part of the RAW value, so it is
+/// scaled by the skill multiplier.
+#[test]
+fn skilled_magic_aug_inside_multiplier() {
+    use crate::stats::SkillType::WarMagic;
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::FocusAttr, 100);
+    set_attr(&mut player, stats::AttributeType::SelfAttr, 100);
+    // (Focus + Self) / 4 = 50; + 10 ranks + 10 init = 70.
+    player.skill_bases.insert(WarMagic, skill_base(10, 10, 2, 2));
+    player.enchantments.push(skill_mult(7, WarMagic, 1.1));
+
+    assert_eq!(player.derive_skill_value(WarMagic, 10, 10, false), 70);
+    assert_eq!(player.derive_skill_value(WarMagic, 10, 10, true), 77);
+
+    player.stat_aug.aug_skilled_magic = 1;
+    assert_eq!(player.derive_skill_value(WarMagic, 10, 10, false), 80);
+    assert_eq!(
+        player.derive_skill_value(WarMagic, 10, 10, true),
+        88,
+        "round((70 + 10) × 1.1)"
+    );
+
+    // The melee / missile augmentations do not reach a magic skill.
+    player.stat_aug.aug_skilled_magic = 0;
+    player.stat_aug.aug_skilled_melee = 1;
+    player.stat_aug.aug_skilled_missile = 1;
+    assert_eq!(player.derive_skill_value(WarMagic, 10, 10, false), 70);
+}
+
+/// `LumAugSkilledSpec` adds 2× AFTER the enchantments and only to a
+/// SPECIALIZED skill; `LumAugAllSkills` is raw (inside the multiplier).
+#[test]
+fn specialized_lum_aug_after_enchant() {
+    use crate::stats::SkillType::MeleeDefense;
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::QuicknessAttr, 90);
+    set_attr(&mut player, stats::AttributeType::CoordinationAttr, 90);
+    // (Quick + Coord) / 3 = 60; + 20 ranks + 10 init = 90.
+    player.skill_bases.insert(MeleeDefense, skill_base(20, 10, 3, 1));
+    player.enchantments.push(skill_mult(8, MeleeDefense, 1.1));
+    player.stat_aug.lum_aug_skilled_spec = 2;
+
+    // 90 × 1.1 = 99, + 2 × 2.
+    assert_eq!(player.derive_skill_value(MeleeDefense, 20, 10, true), 103);
+    assert_eq!(
+        player.derive_skill_value(MeleeDefense, 20, 10, false),
+        90,
+        "the spec term is not raw"
+    );
+
+    // Trained (sac 2): no spec term.
+    player.skill_bases.insert(MeleeDefense, skill_base(20, 10, 2, 1));
+    assert_eq!(player.derive_skill_value(MeleeDefense, 20, 10, true), 99);
+
+    // LumAugAllSkills 3 is raw: (90 + 3) × 1.1 = 102.3 → 102.
+    player.stat_aug.lum_aug_all_skills = 3;
+    assert_eq!(player.derive_skill_value(MeleeDefense, 20, 10, false), 93);
+    assert_eq!(player.derive_skill_value(MeleeDefense, 20, 10, true), 102);
+}
+
+/// Retail `InqSkillBaseLevel`: a train-only skill (SkillTable min_level 2)
+/// held Untrained (sac 1) gets NO attribute formula — base is init + ranks.
+#[test]
+fn untrained_min_level2_skill_has_no_formula_bonus() {
+    use crate::stats::SkillType::WarMagic;
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::FocusAttr, 100);
+    set_attr(&mut player, stats::AttributeType::SelfAttr, 100);
+    player.skill_bases.insert(WarMagic, skill_base(3, 5, 1, 2));
+
+    assert_eq!(player.derive_skill_value(WarMagic, 3, 5, false), 8);
+    assert_eq!(player.derive_skill_value(WarMagic, 3, 5, true), 8);
+
+    // Trained: the formula comes back (50 + 8).
+    player.skill_bases.insert(WarMagic, skill_base(3, 5, 2, 2));
+    assert_eq!(player.derive_skill_value(WarMagic, 3, 5, false), 58);
+}
+
+/// A usable-untrained skill (min_level 1) keeps its formula at sac 1.
+#[test]
+fn usable_untrained_keeps_formula() {
+    use crate::stats::SkillType::Run;
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::QuicknessAttr, 100);
+    player.skill_bases.insert(Run, skill_base(4, 0, 1, 1));
+    assert_eq!(player.derive_skill_value(Run, 4, 0, false), 104);
+}
+
+/// `update_skill` stores the wire status and the SkillTable min_level, so a
+/// live `PrivateUpdateSkill` for an untrained War Magic drops the formula.
+#[test]
+fn update_skill_records_sac_and_min_level() {
+    use holtburger_dat::file_type::skill_table::{
+        SkillBase as DatSkillBase, SkillFormula as DatSkillFormula,
+    };
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::FocusAttr, 100);
+    set_attr(&mut player, stats::AttributeType::SelfAttr, 100);
+    let skill_table = holtburger_dat::file_type::SkillTable {
+        id: holtburger_dat::file_type::SkillTable::FILE_ID,
+        skill_base_hash: std::collections::HashMap::from([(
+            stats::SkillType::WarMagic as u32,
+            DatSkillBase {
+                description: String::new(),
+                name: "War Magic".to_string(),
+                icon_id: 0,
+                trained_cost: 6,
+                specialized_cost: 12,
+                category: 0,
+                chargen_use: 1,
+                min_level: 2,
+                formula: DatSkillFormula {
+                    w: 0,
+                    x: 1,
+                    y: 1,
+                    z: 4,
+                    attr1: stats::AttributeType::FocusAttr as u32,
+                    attr2: stats::AttributeType::SelfAttr as u32,
+                },
+                upper_bound: 0.0,
+                lower_bound: 0.0,
+                learn_mod: 0.0,
+            },
+        )]),
+    };
+    let xp_table = holtburger_dat::file_type::XpTable::default();
+    let mut events = Vec::new();
+    player.update_skill(
+        mutations::SkillUpdateParams {
+            skill_id: stats::SkillType::WarMagic as u32,
+            ranks: 0,
+            status: 1,
+            init: 0,
+            xp: 0,
+            xp_table: &xp_table,
+            skill_table: &skill_table,
+        },
+        &mut events,
+    );
+    let base = player.skill_bases[&stats::SkillType::WarMagic];
+    assert_eq!((base.sac, base.min_level), (1, 2));
+    assert_eq!(player.skills[&stats::SkillType::WarMagic].base, 0);
+    assert_eq!(player.skills[&stats::SkillType::WarMagic].current, 0);
+}
+
+/// The login `PlayerDescription` seeds the augmentation inputs from its own
+/// property dump, and an augmentation that later goes ABSENT from the live
+/// bag (ORACLE open defect #1) does not silently drop the +5.
+#[test]
+fn stat_aug_survives_absent_live_property() {
+    use holtburger_common::properties::WorldObjectProperties;
+    use holtburger_protocol::messages::player::events::{
+        Attribute as WireAttribute, PlayerDescriptionEventData,
+    };
+    use holtburger_protocol::messages::player::skills::CreatureSkill;
+    use holtburger_protocol::messages::{GameEvent, GameEventMessage};
+
+    let player_guid = Guid(0x5000_0099);
+    let mut state = WorldState::synthetic();
+    state.player.guid = player_guid;
+
+    let mut properties = WorldObjectProperties::default();
+    properties
+        .ints
+        .insert(PropertyInt::AugmentationJackOfAllTrades, 1);
+    let mut attributes = std::collections::BTreeMap::new();
+    attributes.insert(
+        stats::AttributeType::QuicknessAttr as u32,
+        WireAttribute {
+            ranks: 0,
+            start: 100,
+            xp: 0,
+            current: None,
+        },
+    );
+    let mut skills = std::collections::BTreeMap::new();
+    skills.insert(
+        stats::SkillType::Run as u32,
+        CreatureSkill {
+            sk_type: stats::SkillType::Run as u32,
+            ranks: 5,
+            status: 2,
+            xp: 0,
+            init: 0,
+            resistance: 0,
+            last_used: 0.0,
+        },
+    );
+    let description = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: player_guid,
+        sequence: 1,
+        event: GameEvent::PlayerDescription(Box::new(PlayerDescriptionEventData {
+            guid: player_guid,
+            sequence: 1,
+            name: "Augmented".to_string(),
+            wee_type: 1,
+            pos: Some(WorldPosition::default()),
+            properties,
+            positions: std::collections::BTreeMap::new(),
+            attributes,
+            skills,
+            enchantments: vec![vitae_enchantment(0.99)],
+            spells: std::collections::BTreeMap::new(),
+            has_health: true,
+            options1: CharacterOptions1::empty(),
+            options2: CharacterOptions2::empty(),
+            shortcuts: Vec::new(),
+            hotbar_spells: Vec::new(),
+            desired_comps: Vec::new(),
+            spellbook_filters: 0,
+            gameplay_options: Vec::new(),
+            inventory: Vec::new(),
+            equipped_objects: Vec::new(),
+        })),
+    }));
+    let _ = state.handle_message(&description);
+
+    assert_eq!(state.player.stat_aug.jack_of_all_trades, 1);
+    let run = &state.player.skills[&stats::SkillType::Run];
+    assert_eq!(run.base, 105);
+    assert_eq!(run.current, 109, "105 × 0.99 → 104, + JackOfAllTrades 5");
+
+    // The live bag loses the property; the cached login value holds.
+    state
+        .player_entity_mut()
+        .expect("login bootstraps the player entity")
+        .properties
+        .ints
+        .0
+        .remove(&PropertyInt::AugmentationJackOfAllTrades);
+    state.emit_player_derived_stats(&mut Vec::new());
+    assert_eq!(state.player.stat_aug.jack_of_all_trades, 1);
+    assert_eq!(state.player.skills[&stats::SkillType::Run].current, 109);
+
+    // A live value that IS present wins (e.g. a PrivateUpdatePropertyInt).
+    state
+        .player_entity_mut()
+        .expect("player entity")
+        .properties
+        .set_int_prop(PropertyInt::AugmentationJackOfAllTrades, 0);
+    state.emit_player_derived_stats(&mut Vec::new());
+    assert_eq!(state.player.stat_aug.jack_of_all_trades, 0);
+    assert_eq!(state.player.skills[&stats::SkillType::Run].current, 104);
+}
+
+// ---------------------------------------------------------------------------
+// enchstats-3 (2026-10-08) — retail `CACQualities::InqAttribute2nd`
+// (acclient.c:443223) + `EnchantAttribute2nd` (:445921).
+// ---------------------------------------------------------------------------
+
+fn vital_rig(health_start: u32) -> PlayerState {
+    let mut player = PlayerState::new();
+    set_attr(&mut player, stats::AttributeType::EnduranceAttr, 100);
+    set_attr(&mut player, stats::AttributeType::SelfAttr, 100);
+    player.vital_bases.insert(
+        stats::VitalType::Health,
+        VitalBase {
+            ranks: 0,
+            start: health_start,
+        },
+    );
+    player
+        .vital_bases
+        .insert(stats::VitalType::Stamina, VitalBase { ranks: 0, start: 0 });
+    player
+        .vital_bases
+        .insert(stats::VitalType::Mana, VitalBase { ranks: 0, start: 0 });
+    player
+}
+
+/// Vitae scales the max vital (vitae FIRST, then the culled enchantments);
+/// the raw base is untouched.
+#[test]
+fn vital_max_applies_vitae_first() {
+    let mut player = vital_rig(50);
+    player.enchantments.push(vitae_enchantment(0.95));
+
+    // Health: 50 + End/2 (50) = 100 → 95.
+    assert_eq!(player.calculate_vital_base(stats::VitalType::Health), 100);
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Health), 95);
+    // Stamina: End (100) → 95. Mana: Self (100) → 95.
+    assert_eq!(player.calculate_vital_base(stats::VitalType::Stamina), 100);
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Stamina), 95);
+    assert_eq!(player.calculate_vital_base(stats::VitalType::Mana), 100);
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Mana), 95);
+
+    // A +10 Max Health additive lands AFTER vitae (not scaled by it).
+    player.enchantments.push(Enchantment {
+        spell_id: 50,
+        layer: 1,
+        spell_category: 50,
+        power_level: 100,
+        stat_mod_type: (EnchantmentTypeFlags::SECOND_ATT | EnchantmentTypeFlags::ADDITIVE).bits(),
+        stat_mod_key: stats::VitalType::Health as u32,
+        stat_mod_value: 10.0,
+        ..Default::default()
+    });
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Health), 105);
+}
+
+/// GearMaxHealth (int 0x17B) is part of the raw Max Health and is NOT clamped
+/// away by the derived-stat refresh.
+#[test]
+fn gear_max_health_raises_base_and_max() {
+    let mut player = vital_rig(50);
+    player.stat_aug.gear_max_health = 20;
+    player.vitals.insert(
+        stats::VitalType::Health,
+        stats::Vital {
+            vital_type: stats::VitalType::Health,
+            ranks: 0,
+            start: 50,
+            spent_xp: 0,
+            next_rank_xp: None,
+            base: 100,
+            buffed_max: 100,
+            current: 120,
+        },
+    );
+
+    assert_eq!(player.calculate_vital_base(stats::VitalType::Health), 120);
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Health), 120);
+    // Gear is Health-only.
+    assert_eq!(player.calculate_vital_base(stats::VitalType::Stamina), 100);
+
+    player.refresh_cached_derived_stat_inputs();
+    let health = &player.vitals[&stats::VitalType::Health];
+    assert_eq!((health.base, health.buffed_max), (120, 120));
+    assert_eq!(health.current, 120, "the server's current HP is not clamped");
+
+    // Gear is scaled by vitae like the rest of the raw max.
+    player.enchantments.push(vitae_enchantment(0.95));
+    assert_eq!(player.calculate_vital_current(stats::VitalType::Health), 114);
+}
+
+/// The floor is 5, or 1 when the PRE-enchantment value is below 5.
+#[test]
+fn vitae_floor_uses_pre_enchant_value() {
+    let mut player = PlayerState::new();
+    // No attributes: Stamina = start only (End reads 1 enchanted → pre 4).
+    player
+        .vital_bases
+        .insert(stats::VitalType::Stamina, VitalBase { ranks: 0, start: 3 });
+    player.enchantments.push(Enchantment {
+        spell_id: 60,
+        layer: 1,
+        spell_category: 60,
+        power_level: 100,
+        stat_mod_type: (EnchantmentTypeFlags::SECOND_ATT | EnchantmentTypeFlags::ADDITIVE).bits(),
+        stat_mod_key: stats::VitalType::Stamina as u32,
+        stat_mod_value: -100.0,
+        ..Default::default()
+    });
+    assert_eq!(
+        player.calculate_vital_current(stats::VitalType::Stamina),
+        1,
+        "pre 4 < 5 → floor 1"
+    );
+
+    player
+        .vital_bases
+        .insert(stats::VitalType::Stamina, VitalBase { ranks: 0, start: 10 });
+    assert_eq!(
+        player.calculate_vital_current(stats::VitalType::Stamina),
+        5,
+        "pre ≥ 5 → floor 5"
+    );
+}
+
+/// `UpdateHealth` fractions rebuild the absolute HP from the vitae-scaled
+/// max, the max the server itself uses.
+#[test]
+fn update_health_fraction_uses_vitae_max() {
+    let player_guid = Guid(0x5000_0098);
+    let mut state = WorldState::synthetic();
+    state.seed_local_player_entity(player_guid, "Vitae", WorldPosition::default());
+    set_attr(&mut state.player, stats::AttributeType::EnduranceAttr, 100);
+    state.player.vital_bases.insert(
+        stats::VitalType::Health,
+        VitalBase {
+            ranks: 0,
+            start: 50,
+        },
+    );
+    state.player.vitals.insert(
+        stats::VitalType::Health,
+        stats::Vital {
+            vital_type: stats::VitalType::Health,
+            ranks: 0,
+            start: 50,
+            spent_xp: 0,
+            next_rank_xp: None,
+            base: 100,
+            buffed_max: 100,
+            current: 95,
+        },
+    );
+    state.player.enchantments.push(vitae_enchantment(0.95));
+    state.emit_player_derived_stats(&mut Vec::new());
+    assert_eq!(state.player.vitals[&stats::VitalType::Health].buffed_max, 95);
+
+    let mut events = Vec::new();
+    assert!(state.update_health_fraction(player_guid, 0.5, &mut events));
+    assert_eq!(state.player.vitals[&stats::VitalType::Health].current, 47);
+}
+
+// ---------------------------------------------------------------------------
+// enchstats-5 (2026-10-08) — receive-time stamping on the live mutators.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn upsert_stamps_receive_time_for_the_duel() {
+    use crate::stats::SkillType::Run;
+    let mut player = PlayerState::new();
+    player.guid = Guid(0x5000_0097);
+    let guid = player.guid;
+    let flags = (EnchantmentTypeFlags::SKILL | EnchantmentTypeFlags::ADDITIVE).bits();
+    let a = Enchantment {
+        spell_id: 100,
+        layer: 1,
+        spell_category: 9,
+        power_level: 100,
+        start_time: 0.0,
+        stat_mod_type: flags,
+        stat_mod_key: Run as u32,
+        stat_mod_value: 1.0,
+        ..Default::default()
+    };
+    let b = Enchantment {
+        spell_id: 101,
+        stat_mod_value: 2.0,
+        ..a
+    };
+    let mut events = Vec::new();
+
+    assert!(player.upsert_enchantment(guid, a, 10.0, &mut events));
+    assert!(player.upsert_enchantment(guid, b, 20.0, &mut events));
+    assert_eq!(player.get_skill_additive(Run), 2.0, "B arrived later");
+
+    // A re-cast of A refreshes it IN PLACE (Vec slot 0) — it is now newest.
+    assert!(player.upsert_enchantment(guid, a, 30.0, &mut events));
+    assert_eq!(player.enchantments[0].spell_id, 100);
+    assert_eq!(player.get_skill_additive(Run), 1.0, "refreshed A wins");
+    assert_eq!(player.abs_start_time(&player.enchantments[0]), 30.0);
+
+    // An aged layer (wire start -25) received at 50 sits at 25: older than A.
+    let aged = Enchantment {
+        start_time: -25.0,
+        ..b
+    };
+    assert!(player.upsert_multiple_enchantments(guid, &[aged], 50.0, &mut events));
+    assert_eq!(player.get_skill_additive(Run), 1.0);
+
+    // Removal prunes the stamp.
+    assert!(player.remove_enchantment(guid, 100, 1, &mut events));
+    assert!(!player.enchantment_abs_start.contains_key(&(100, 1)));
+    assert_eq!(player.get_skill_additive(Run), 2.0);
 }

@@ -396,6 +396,72 @@ function readDeathAnimFlag() {
   }
 }
 
+// ?hookFrameExit (2026-10-08, DEFAULT ON; `=off`/`0`/`false` escape) — retail
+// animation-hook timing on the playhead (CSequence::update_internal,
+// acclient.c:340659-340776): a frame's hooks fire when the playhead LEAVES it
+// (they fired on entry, one frame early), a segment's last frame never fires,
+// frame 0 fires on every loop (the wrap re-armed at t=0 and skipped it after
+// the first), a phase carry or a backstep→forward resume no longer bursts every
+// hook up to the carried frame, and a cycle played backward fires its
+// Both/Backward hooks. `=off` is the legacy frame-entry drain. Read once in the
+// constructor into `this._hookFrameExitOn` (node tests flip it).
+function readHookFrameExitFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("hookFrameExit")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
+// ?cycleRestartAfterAction (2026-10-08, DEFAULT ON; `=off`/`0`/`false` escape) —
+// when a one-shot hands back, the cycle behind it restarts at its first frame
+// with the one-shot's leftover time, as retail re-appends the base cycle behind
+// every action (CMotionTable::GetObjectSequence, acclient.c:337854-337855).
+// `=off` resumes the cycle at the phase it froze at. `this._cycleRestartOn`.
+function readCycleRestartAfterActionFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("cycleRestartAfterAction")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
+// ?styleLinkSpeed (2026-10-08, DEFAULT ON; `=off`/`0`/`false` escape) — the exit
+// and draw/sheathe links of a stance change play at 1.0, not the forward
+// command's speed: retail builds them from a fresh MovementParameters (speed
+// 1.0, acclient.c:339437) before it sets the forward speed
+// (CMotionInterp::apply_interpreted_movement, :344147). `this._styleLinkSpeedOn`.
+function readStyleLinkSpeedFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("styleLinkSpeed")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
+// ?linkOnlyBake (2026-10-08, cmotiontable-3, DEFAULT ON; `=off`/`0`/`false`
+// escape) — `_fetchLinkEntry` bakes a MotionTable link through the
+// geometry-free wasm `fetchMotionLinkKeyframes` (AnimationCache.getLink): no
+// rig meshes across the boundary, no cycle bake on a missing link, one entry
+// per (setup, mtable, stance, from, to) for every outfit. A pkg/ without the
+// export, or `=off`, keeps the full-rig `fetchEntityAnimationKeyframes` path.
+// `this._linkOnlyBakeOn`.
+function readLinkOnlyBakeFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("linkOnlyBake")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+}
+
 // === Wave R3.B — transparency depth-sort via AC's authored sort center
 // (2026-05-29) ===
 // `?sortCenter=on` opt-in. Default OFF → no `renderOrder` writes on entity
@@ -1002,6 +1068,15 @@ import {
 // Bugs 2/15/18 (2026-10-07): bare low-16 → full 32-bit MotionCommand, so
 // every link lookup uses the full inner key (scene3d/motion/motion_command_full.js).
 import { fullMotionCommand } from "./motion/motion_command_full.js";
+// ?hookFrameExit (2026-10-08): retail animation-hook timing on the playhead —
+// a frame's hooks fire when it is LEFT, every loop, never on a reposition
+// (pure helpers, table-tested in test_hook_windows.mjs).
+import {
+  unifiedHookTime, drainHookWindows, framesCrossedBackward, hookFiresInDirection,
+} from "./hook_windows.js";
+// ?cycleRestartAfterAction (2026-10-08): a finished one-shot restarts the cycle
+// behind it with the leftover time (scene3d/motion/handback.js).
+import { oneShotSpill, handBackToCycle } from "./motion/handback.js";
 // Pending one-shots kept behind the playhead (see `_enqueueUnifiedOneShot`).
 // Bug 2 (2026-10-07): 3 → 8. With movement no longer cutting the playhead
 // (`_preemptUnifiedForMotion`), a cast burst (windups + gesture) or a swing
@@ -1101,11 +1176,23 @@ const SELECTION_INDICATOR_MODE = readSelectionIndicatorMode();
 // C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
 // SelectNext, acclient.c:397944). Import-free helper so the ordering logic
 // is unit-testable under plain node (tests/target_cycle.test.cjs).
+// A3-selection (2026-10-08): + the radar-range candidate gate, combat
+// auto-target, the range-exit drop and the wielded-item attack redirect.
 import {
   SELECTION_TYPE,
   computeSelectNext,
   matchesSelectionType,
   weightedDistance,
+  cycleCandidateOk,
+  radarRangeForCell,
+  isShowableOnRadar,
+  fallbackRadarShowable,
+  objectIsAttackable,
+  autoTargetChoice,
+  selectionRangeExit,
+  resolveAttackTarget,
+  CHARACTER_OPTION_AUTO_TARGET,
+  PROP_IID_CURRENT_ATTACKER,
 } from "./target_cycle.js";
 // P6/R-6 (net-fixwave 2026-07-10) — entity program warm: per-spawn rig
 // compileAsync (Step E) + the one-shot archetype-matrix warm armed on the
@@ -1272,6 +1359,14 @@ import { createPreCreateBuffer } from "./pre_create_buffer.js";
 // on the rounded ground (render-only root-matrix offset; root.position stays
 // physics). DEFAULT-ON, `?terrainRoundObjects=off`. See scene3d/visual_ground.js.
 import { installVisualGroundRoot, visualGroundBeginFrame } from "./visual_ground.js";
+// physupd-1 (2026-10-08) — ballistic missile vs building/EnvCell/door sweep
+// (`?projectileEnvSweep=off`). Pure, dependency-free; see the module header.
+import {
+  PROJECTILE_SWEEP_RADIUS,
+  sweepProjectileSegment,
+  projectileSweepCells,
+  projectileStopPoint,
+} from "./projectile_sweep.js";
 
 // T11 (2026-05-28) — `?velScale=on` gates velocity-scaled locomotion cycle
 // speed (anti-ice-skating): the walk/run cycle's playback rate is scaled by
@@ -1513,6 +1608,20 @@ const CAST_BUSY_SCOPE = (() => {
     return new URLSearchParams(window.location.search).get("castBusyScope")?.toLowerCase() !== "off";
   } catch (_) { return true; }
 })();
+// spellcast-4 — `?castBusyCount` (DEFAULT-ON; `off`/`0`/`false` escape): the
+// LOCAL caster's prediction gate reads the outstanding-request count taken
+// before the send (SessionHandle.getBusyState(), retail m_cBusy; passed as
+// playCastSequence `opts.busyBefore`) instead of the time window above. Vanilla
+// ACE refuses a cast sent while another is outstanding (YoureTooBusy), so that
+// cast is not predicted. Rides `?castStateMachine`; remote casters and an old
+// pkg without getBusyState keep the castBusyScope window. ui/ac_cast_predict.js.
+const CAST_BUSY_COUNT = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("castBusyCount")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
 // WS01 — the only magic stance retail uses (low16; the wasm masks &0xFFFF, and the
 // DAT bake helpers mask &0xFFFF too, so low16 resolves the identical clip as the
 // full 0x80000049). index.html stance consts.
@@ -1714,8 +1823,23 @@ const PROJECTILE_DEFAULT_SCRIPT_SPAWN_SKIP_ON = _projFlagOn("projectileDefaultSc
 // `Frame::grotate(omega·quantum)` (acclient.c:317777-317783, grotate =
 // pre-multiply, acclient.c:357422). Off = legacy (no spin).
 const PROJECTILE_OMEGA_ON = _projFlagOn("projectileOmega");
+// physupd-2 (2026-10-08, `?projectileExactArc=off` escape, default ON): integrate
+// a ballistic substep in retail `UpdatePhysicsInternal` order — offset from the
+// OLD velocity plus ½·a·q², THEN v += a·q (acclient.c:317756-317776) — which is
+// exact for constant gravity at any step size. ALIGN_PATH then faces the step's
+// chord (acclient.c:322800-322804). Off = legacy semi-implicit Euler, which
+// sank 0.5·g·q·T below ACE's arc (frame-rate dependent).
+const PROJECTILE_EXACT_ARC_ON = _projFlagOn("projectileExactArc");
+// physupd-1 (2026-10-08, `?projectileEnvSweep=off` escape, default ON): sweep
+// each ballistic substep against building / EnvCell / door geometry and stop
+// the bolt at the first contact (retail missiles run a CTransition every
+// quantum, acclient.c:322812). See scene3d/projectile_sweep.js. Off = legacy
+// (only the outdoor terrain stop; walls stop nothing until ACE's impact).
+const PROJECTILE_ENV_SWEEP_ON = _projFlagOn("projectileEnvSweep");
 /** PhysicsState::LIGHTING_ON (acclient.c:322181 `BYTE1(new_state) & 8`). */
 const PHYSICS_STATE_LIGHTING_ON = 0x800;
+/** PhysicsState::HAS_PHYSICS_BSP (acclient.c:316229 `state & 0x10000`). */
+const PHYSICS_STATE_HAS_PHYSICS_BSP = 0x10000;
 /** Below-terrain tolerance (m) before the client-side terrain stop fires. */
 const PROJECTILE_TERRAIN_STOP_EPS = 0.25;
 /** A pending impact stop older than this (ms) is stale and pruned. */
@@ -1902,6 +2026,7 @@ const CALL_PES_LOOP_ON = (() => {
 })();
 const MAX_OWNER_SCRIPT_QUEUE = 8;
 import { getCastSequence } from "../ui/ac_spell_cast_sequence.js";
+import { castSuppressReason } from "../ui/ac_cast_predict.js";
 // Track B7 (2026-06-08): spawn-time PhysicsScriptTable prewarm. Reuses the
 // Phase 49 cached facade so the first object-triggered PlayEffect on this
 // entity resolves warm (table + scripts + emitters already in the DAT
@@ -1982,10 +2107,10 @@ const SCRIPT_HOOK_TIME_ON = (() => {
 // A5-P1 (2026-06-12, W3+ S5) — `?hookDrain` (DEFAULT-ON — `!== "off"`
 // reader; `=off` disables) routes the
 // animation-timeline hook executor through the retail queue-then-drain
-// shape: (a) finish-drain — a LoopOnce overlay that crosses its clip end
-// between two rAFs still fires its trailing hooks in (lastTime, duration]
-// exactly once (retail clamp-at-high_frame + fire-every-crossed-frame,
-// acclient.c:340697-340727; pure planner `scene3d/hook_windows.js`); and
+// shape: (a) finish-drain — the mixer-era LoopOnce planner is retired with
+// the mixer; the playhead drain (`_drainUnifiedHooks`, helpers in
+// `scene3d/hook_windows.js`) fires every frame crossed in the tick, never a
+// segment's last frame (acclient.c:340710-340726, `?hookFrameExit`); and
 // (b) deferred fire — hooks queue into `inst._hookFireQueue` (retail
 // `add_anim_hook`, acclient.c:322063-322073) with the overlay's `animDone`
 // record AFTER its trailing hooks (acclient.c:340725 → :340764-340774)
@@ -3535,6 +3660,44 @@ export class EntityManager {
         if ((flag ?? "").toLowerCase() === "off") this._targetCycleEnabled = false;
       }
     } catch (_) {}
+    // A3-selection (2026-10-08) — retail selection rules, each DEFAULT-ON with
+    // an `=off`/`0`/`false` escape (docs/url-flags.md):
+    //   retailSelectNext   — Next/Previous Monster in retail order, anchored
+    //                        on the selected (or previously selected) object.
+    //   cycleRadarFilter   — cycle candidates limited to radar range and the
+    //                        retail per-type filter.
+    //   autoTarget         — melee/missile auto-target (honours the AutoTarget
+    //                        character option).
+    //   selectionRangeExit — drop a selection that is out of radar range and
+    //                        off-screen.
+    //   attackWielder      — attacking with a wielded item selected attacks
+    //                        its wielder.
+    const _selFlagOff = (v) => {
+      const s = (v ?? "").toLowerCase();
+      return s === "off" || s === "0" || s === "false";
+    };
+    let _selQ = null;
+    try {
+      if (typeof window !== "undefined" && window.location) {
+        _selQ = new URLSearchParams(window.location.search);
+      }
+    } catch (_) {}
+    this._retailSelectNextOn = !_selFlagOff(_selQ?.get("retailSelectNext"));
+    this._cycleRadarFilterOn = !_selFlagOff(_selQ?.get("cycleRadarFilter"));
+    this._autoTargetOn = !_selFlagOff(_selQ?.get("autoTarget"));
+    this._selectionRangeExitOn = !_selFlagOff(_selQ?.get("selectionRangeExit"));
+    this._attackWielderOn = !_selFlagOff(_selQ?.get("attackWielder"));
+    // Retail ACCWeenieObject::prevSelectedID (set by SetSelectedObject and by
+    // Remove of the selected object) — the cycle's anchor when nothing is
+    // selected. `_targetWillinglyLost` is ClientCombatSystem::
+    // targetWillinglyLost (a deliberate deselect skips one auto-target);
+    // `_lastAttackedAt` its lastAttackedTime (ms, performance clock).
+    this._prevSelectedGuid = 0;
+    this._targetWillinglyLost = false;
+    this._lastAttackedAt = -Infinity;
+    this._selRemovedGuid = 0;     // despawn-cleared selection, resolved in tick
+    this._selRangeNextAt = 0;     // next 1 s range-exit check (ms)
+    this._lastCombatMode = 0;     // SetCombatMode edge detector
     // === Wave R2.A (2026-05-28) — entity-attached dynamic lights.
     // Read the `?entityLights=on` opt-in HERE (constructor) — the same
     // scope as every consumer (`_attachEntityLights`, `_fireHook` SetLight
@@ -3632,6 +3795,13 @@ export class EntityManager {
     // anchor on `finished`. Read once HERE; consumed in `_tryPlayLink`
     // (arm) + `_applyRootMotionToAnchor` (apply) via `this.`.
     this._rootMotionObjectOn = readRootMotionObjectFlag();
+    // 2026-10-08 playhead parity escapes (readers above): retail hook timing,
+    // cycle restart behind a finished one-shot, style links at speed 1.0.
+    this._hookFrameExitOn = readHookFrameExitFlag();
+    this._cycleRestartOn = readCycleRestartAfterActionFlag();
+    this._styleLinkSpeedOn = readStyleLinkSpeedFlag();
+    // cmotiontable-3: geometry-free link bakes (`_fetchLinkEntry`).
+    this._linkOnlyBakeOn = readLinkOnlyBakeFlag();
     // === Wave R3.B (2026-05-29) — transparency depth-sort via AC sort center.
     // Read the `?sortCenter=on` opt-in HERE (constructor) so every consumer
     // (`_attachSortCenters` at spawn, the `tick` sort pass) reads
@@ -4867,7 +5037,7 @@ export class EntityManager {
           st0Key ? (((st0Key & 0xffff) | 0x80000000) >>> 0) : 0,
         );
         _spawnOnPlayhead = this._installUnifiedLoco(
-          inst, animEntry.sequenceDescriptor, cacheKey0, animEntry.hooks, initialMotion,
+          inst, animEntry.sequenceDescriptor, cacheKey0, animEntry, initialMotion,
         );
         // Seed the motion-state memory with the spawn state so the FIRST server
         // Motion broadcast (e.g. Use → On) resolves its MotionTable LINK
@@ -5078,6 +5248,11 @@ export class EntityManager {
         inst._ballisticAlignPath = this.projectileAlignsPath(guid);
         // PROJ-SPIN: RotationSpeed missiles carry a PhysicsDesc omega.
         inst._ballisticOmega = PROJECTILE_OMEGA_ON ? this.projectileOmega(guid) : null;
+        // physupd-1: the env sweep's launch window and own-cell seed.
+        inst._ballisticCellId = lbId;
+        const lp = inst.root?.position;
+        inst._ballisticLaunch = lp ? { x: lp.x, y: lp.y, z: lp.z } : null;
+        inst._ballisticSteps = 0;
       }
     }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
@@ -7786,6 +7961,14 @@ export class EntityManager {
         prev._selectionRing = null;
       }
     }
+    if (((this._selectedGuid >>> 0) || 0) !== next) {
+      // Retail SetSelectedObject (acclient.c:436826-436830): a CHANGE records
+      // the old id as prevSelectedID; RecvNotice_SetSelectedItem re-registers
+      // the 1 s range check for the new selection (:398689-398696).
+      this._prevSelectedGuid = (this._selectedGuid >>> 0) || 0;
+      this._selRangeNextAt =
+        ((typeof performance !== "undefined") ? performance.now() : Date.now()) + 1000;
+    }
     this._selectedGuid = next;
     // === RETAIL TARGET INDICATOR (2026-08-02, `?selectionIndicator`) ======
     // Retail draws nothing in the 3D scene for a selected target — it runs a
@@ -7948,7 +8131,9 @@ export class EntityManager {
       const lbId = (pose.landblockId ?? 0) >>> 0;
       const lbX = (lbId >>> 24) & 0xff;
       const lbY = (lbId >>> 16) & 0xff;
-      return { x: pose.x + lbX * 192, y: pose.y + lbY * 192, z: pose.z };
+      // `cellId` keeps the full id (landblock + cell) for the radar-range
+      // fallback when `getCurrentCellId` has not published yet.
+      return { x: pose.x + lbX * 192, y: pose.y + lbY * 192, z: pose.z, cellId: lbId };
     } catch (_) {
       return null;
     } finally {
@@ -8210,35 +8395,136 @@ export class EntityManager {
 
   /**
    * Gather the live candidate list for a selection type: every entity in
-   * `entityMap` that passes the type filter, is not the local player, is
-   * not mid-death (`_deadFrozen`, set by the collapse handoff), and has a
-   * world position to rank by. Dead/destroyed entities never reach here —
-   * they're removed from `entityMap` (or become corpses, excluded by the
-   * ODF_CORPSE filter) — so they drop out of the cycle.
+   * `entityMap` that passes the type filter, is not mid-death
+   * (`_deadFrozen`, set by the collapse handoff), and has a world position
+   * to rank by. Dead/destroyed entities never reach here — they're removed
+   * from `entityMap` (or become corpses, excluded by the ODF_CORPSE filter)
+   * — so they drop out of the cycle. The local player is skipped later by
+   * `computeSelectNext`.
+   *
+   * selection-3 (2026-10-08, `?cycleRadarFilter=off` = the legacy
+   * type-only gather): the retail SelectNext gate (target_cycle.js
+   * `cycleCandidateOk`) — within radar range by 2D distance (75 m out, 25 m
+   * in), drawn, not UI-hidden, not mounted on a wielder, and the per-type
+   * rule (MONSTER = ObjectIsAttackable, not a vendor, not a fellow, shown on
+   * radar). Ordering stays the weighted distance.
    *
    * @param {string} type — a SELECTION_TYPE value
-   * @param {{x:number,y:number,z:number}} pose — player world pose
+   * @param {{x:number,y:number,z:number,cellId?:number}} pose — player world pose
    * @returns {Array<{guid:number, dist:number}>}
    */
   _gatherCycleCandidates(type, pose) {
     const out = [];
+    if (this._cycleRadarFilterOn === false) {
+      for (const [guid, inst] of this.entityMap) {
+        if (!inst || !inst.root || !inst.root.position) continue;
+        if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
+        if (!matchesSelectionType(inst.meta, type)) continue;
+        const p = inst.root.position;
+        out.push({
+          guid: (guid >>> 0) || 0,
+          dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }),
+        });
+      }
+      return out;
+    }
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const playerMeta = this._localAttackMeta(this._localPlayerGuid());
+    const range = this._radarRange(pose);
+    // One wasm read per gather (a key press / auto-target), not per entity.
+    const fellows = (type === SELECTION_TYPE.PLAYER || type === SELECTION_TYPE.ANY)
+      ? null
+      : readFellowshipRoster()?.members ?? null;
     for (const [guid, inst] of this.entityMap) {
       if (!inst || !inst.root || !inst.root.position) continue;
       if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
-      if (!matchesSelectionType(inst.meta, type)) continue;
+      const g = (guid >>> 0) || 0;
       const p = inst.root.position;
-      out.push({
-        guid: (guid >>> 0) || 0,
-        dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }),
-      });
+      const ok = cycleCandidateOk(inst.meta, {
+        playerMeta,
+        isFellow: !!fellows?.has(g),
+        showable: () => this._radarShowable(sh, g, inst.meta),
+        stateVisible: inst._stateVisible !== false,
+        attached: inst._attachedParentGuid != null,
+        dist2d: Math.hypot(p.x - pose.x, p.y - pose.y),
+        range,
+      }, type);
+      if (!ok) continue;
+      out.push({ guid: g, dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }) });
     }
     return out;
   }
 
   /**
+   * CPlayerSystem::GetRadarRadius for the player's current cell (75 m
+   * outdoors, 25 m indoors). Falls back to the pose's landblock/cell id
+   * while `getCurrentCellId` has not published yet.
+   */
+  _radarRange(pose) {
+    let cell = 0;
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      cell = (sh?.getCurrentCellId?.() ?? 0) >>> 0;
+    } catch (_) { cell = 0; }
+    return radarRangeForCell(cell || ((pose?.cellId ?? 0) >>> 0));
+  }
+
+  /**
+   * ACCWeenieObject::InqShowableOnRadar for `guid` from its hydrated
+   * RadarBehavior (PropertyInt 133). Absent = hidden, as in retail; the
+   * radar's ODF heuristic applies only when the wasm bundle has no
+   * `objectIntProperty` at all (stale pkg/).
+   */
+  _radarShowable(sh, guid, meta) {
+    if (!sh || typeof sh.objectIntProperty !== "function") {
+      return fallbackRadarShowable(
+        (meta?.objDescFlags >>> 0) || 0, (meta?.itemType >>> 0) || 0);
+    }
+    let v;
+    try { v = sh.objectIntProperty(guid >>> 0, 133); } catch (_) { v = undefined; }
+    return isShowableOnRadar(v);
+  }
+
+  /**
+   * The local player's spawn meta for `objectIsAttackable` (its PK bits), or
+   * a flags-only stand-in read from wasm when the player rig is not spawned.
+   */
+  _localAttackMeta(selfGuid) {
+    const m = this.entityMap.get(selfGuid >>> 0)?.meta;
+    if (m) return m;
+    let odf = 0;
+    try {
+      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+      odf = (sh?.objectDescFlags?.(selfGuid >>> 0) ?? 0) >>> 0;
+    } catch (_) { odf = 0; }
+    return { objDescFlags: odf };
+  }
+
+  /**
+   * selection-1 — the SelectNext anchor: the selected object, or with
+   * nothing selected the previously selected one (retail prevSelectedID,
+   * acclient.c:398004), whether or not it passes the cycle's type filter.
+   * A wielded child ranks at its wielder's position (its own root is local
+   * to the wielder's hand). Null when neither exists any more.
+   */
+  _cycleAnchor(pose) {
+    const g = (this._selectedGuid >>> 0) || (this._prevSelectedGuid >>> 0) || 0;
+    if (!g) return null;
+    let inst = this.entityMap.get(g);
+    if (inst && inst._attachedParentGuid != null) {
+      inst = this.entityMap.get(inst._attachedParentGuid >>> 0);
+    }
+    const p = inst?.root?.position;
+    if (!p) return null;
+    return { guid: g, dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }) };
+  }
+
+  /**
    * Commit a selection change: update the ring, fire `selectionChanged` on
    * the plugin bus (the target-bar HUD listens), return the new guid.
-   * No-op emit when the guid is unchanged.
+   * No-op emit when the guid is unchanged. A change to "nothing selected" is
+   * retail's RecvNotice_SelectionChanged with selectedID 0, which may
+   * auto-target in melee/missile mode (selection-2).
    */
   _commitSelection(newGuid) {
     const next = (newGuid >>> 0) || 0;
@@ -8251,6 +8537,9 @@ export class EntityManager {
         prevGuid: prev,
       });
     } catch (_) { /* never block cycling on a subscriber fault */ }
+    if (prev !== 0 && ((this._selectedGuid >>> 0) || 0) === 0) {
+      this._autoTarget("notice");
+    }
     return (this._selectedGuid >>> 0) || 0;
   }
 
@@ -8258,23 +8547,32 @@ export class EntityManager {
    * Retail CPlayerSystem::SelectNext primitive (acclient.c:397944). Selects
    * the next candidate of `type` in the given direction and commits it.
    *
-   * @param {boolean} closer — step toward the nearer neighbour (extreme:
-   *        nearest). false = toward the farther neighbour (extreme: farthest).
-   * @param {boolean} extreme — ignore the current selection, jump to the
-   *        absolute nearest/farthest (the wrap-around fallback).
+   * @param {boolean} closer — with an anchor, step one candidate INWARD
+   *        (Previous Monster); with none (or extreme), pick the nearest.
+   *        false = step OUTWARD (Next Monster) / pick the farthest.
+   * @param {boolean} extreme — ignore the anchor, jump to the absolute
+   *        nearest/farthest (the wrap-around fallback).
    * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ANY.
    * @returns {number} the guid selected this call, or 0 when nothing changed
    *        (retail leaves selectedID untouched; the caller then wraps).
    */
   selectNext(closer, extreme, type = SELECTION_TYPE.MONSTER) {
     if (this._targetCycleEnabled === false) return 0;
+    return this._selectNextImpl(closer, extreme, type);
+  }
+
+  /** `selectNext` without the `?targetCycle` keybind gate (auto-target uses it). */
+  _selectNextImpl(closer, extreme, type) {
     const pose = this._localPlayerWorldPose();
     if (!pose) return 0; // can't rank without a player position
     const selfGuid = this._localPlayerGuid();
     const candidates = this._gatherCycleCandidates(type, pose);
     if (candidates.length === 0) return 0;
     const cur = (this._selectedGuid >>> 0) || 0;
-    const pick = computeSelectNext(candidates, cur, selfGuid, !!closer, !!extreme);
+    // selection-1: anchor on the selected/previous object wherever it is;
+    // `?retailSelectNext=off` keeps the old in-candidate-list-only anchor.
+    const anchor = this._retailSelectNextOn === false ? cur : this._cycleAnchor(pose);
+    const pick = computeSelectNext(candidates, anchor, selfGuid, !!closer, !!extreme);
     if (!pick || pick === cur) return 0;
     // `_commitSelection` → `setSelectedTarget` refuses a guid that isn't a
     // live, ringable entity (one that despawned between the candidate gather
@@ -8289,7 +8587,11 @@ export class EntityManager {
   /**
    * Keybind-level cycle: mirrors the retail dispatch's "try the incremental
    * step; if the selection didn't move, re-issue with extreme=1 to wrap"
-   * pattern (acclient.c:399717-399746).
+   * pattern (CPlayerSystem::OnAction acclient.c:399729-399747):
+   *   Closest  0x10000035 = (1, 1) — the nearest.
+   *   Previous 0x10000036 = (1, 0) one step inward, else (0, 1) = farthest.
+   *   Next     0x10000037 = (0, 0) one step outward, else (1, 1) = nearest.
+   * `?retailSelectNext=off` restores the pre-2026-10-08 swapped pair.
    *
    * @param {"next"|"previous"|"closest"} mode
    * @param {string} [type] — SELECTION_TYPE.MONSTER (default) / PLAYER / ANY.
@@ -8298,20 +8600,199 @@ export class EntityManager {
   cycleTarget(mode, type = SELECTION_TYPE.MONSTER) {
     if (this._targetCycleEnabled === false) return (this._selectedGuid >>> 0) || 0;
     if (mode === "closest") {
-      // ClosestMonster (1, 1) — absolute nearest.
       const g = this.selectNext(true, true, type);
       return g || ((this._selectedGuid >>> 0) || 0);
     }
-    if (mode === "previous") {
-      // PreviousMonster (0, 0); if unchanged → wrap (1, 1) = nearest.
-      let g = this.selectNext(false, false, type);
-      if (!g) g = this.selectNext(true, true, type);
-      return g || ((this._selectedGuid >>> 0) || 0);
-    }
-    // "next" — NextMonster (1, 0); if unchanged → wrap (0, 1) = farthest.
-    let g = this.selectNext(true, false, type);
-    if (!g) g = this.selectNext(false, true, type);
+    const outward = (mode !== "previous") !== (this._retailSelectNextOn === false);
+    let g = this.selectNext(!outward, false, type);
+    if (!g) g = this.selectNext(outward, true, type);
     return g || ((this._selectedGuid >>> 0) || 0);
+  }
+
+  /**
+   * selection-6 — the guid an attack on `guid` goes to (retail
+   * ClientCombatSystem::GetAttackTarget, target_cycle.js
+   * `resolveAttackTarget`): 0 for nothing or a player-owned item, the
+   * wielder for a wielded item (`?attackWielder=off` skips the redirect),
+   * else `guid`. Used by picking.js `fireAttackOnSelectedTarget` and the
+   * combat-mode entry rule below.
+   */
+  attackTargetFor(guid) {
+    const sel = (guid >>> 0) || 0;
+    if (!sel) return 0;
+    const me = this._localPlayerGuid();
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const iid = (stype) => {
+      try { return sh?.objectInstanceIdProperty?.(sel, stype); } catch (_) { return undefined; }
+    };
+    const parent = this._attackWielderOn
+      ? ((this.entityMap.get(sel)?._attachedParentGuid ?? 0) >>> 0)
+      : 0;
+    return resolveAttackTarget({
+      sel,
+      me,
+      ownerContainer: iid(2),
+      ownerWielder: iid(3),
+      attachedParentGuid: parent,
+      parentKnown: parent !== 0 && this.entityMap.has(parent),
+    });
+  }
+
+  /** ClientCombatSystem::ObjectIsAttackable for a live entity (never self). */
+  _isAttackableTarget(guid) {
+    const g = (guid >>> 0) || 0;
+    if (!g) return false;
+    const me = this._localPlayerGuid();
+    if (me !== 0 && g === me) return false;
+    const inst = this.entityMap.get(g);
+    if (!inst) return false;
+    return objectIsAttackable(inst.meta, this._localAttackMeta(me));
+  }
+
+  /**
+   * selection-2 — retail combat auto-target (target_cycle.js
+   * `autoTargetChoice`). `reason`:
+   *   "notice"     — the selection just became empty
+   *                  (RecvNotice_SelectionChanged, acclient.c:408741);
+   *                  consumes a willingly-lost mark.
+   *   "attacked"   — a damage/evade notification with nothing selected
+   *                  (defender tails :409335-409345, :409956-409964).
+   *   "combatMode" — entering melee/missile without an attackable target
+   *                  (SetCombatMode :408892-408901).
+   * `?autoTarget=off` disables it.
+   * @returns {number} the guid auto-selected, or 0
+   */
+  _autoTarget(reason) {
+    const fromNotice = reason === "notice";
+    const willinglyLost = fromNotice && this._targetWillinglyLost === true;
+    if (fromNotice) this._targetWillinglyLost = false;
+    if (!this._autoTargetOn || willinglyLost) return 0;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh) return 0;
+    let combatMode = 1;
+    let optionOn = false;
+    try { combatMode = (sh.combatMode?.() ?? 1) >>> 0; } catch (_) { combatMode = 1; }
+    if (combatMode !== 2 && combatMode !== 4) return 0;
+    try {
+      optionOn = typeof sh.isCharacterOptionEnabled === "function" &&
+        !!sh.isCharacterOptionEnabled(CHARACTER_OPTION_AUTO_TARGET);
+    } catch (_) { optionOn = false; }
+    const me = this._localPlayerGuid();
+    let attacker = 0;
+    try {
+      attacker = (sh.objectInstanceIdProperty?.(me, PROP_IID_CURRENT_ATTACKER) ?? 0) >>> 0;
+    } catch (_) { attacker = 0; }
+    const ai = attacker ? this.entityMap.get(attacker) : null;
+    const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    const choice = autoTargetChoice({
+      combatMode,
+      autoTargetOn: optionOn,
+      willinglyLost: false,
+      attackerGuid: attacker,
+      // Retail: the weenie exists and is not being removed. A collapsing
+      // (`_deadFrozen`) or delete-deferred (`_removePending`) rig is gone.
+      attackerLive: !!ai?.root && !ai._deadFrozen && !ai._removePending,
+      msSinceAttacked: now - this._lastAttackedAt,
+    });
+    if (choice === "attacker") return this._commitSelection(attacker);
+    if (choice === "closest") return this._selectNextImpl(true, true, SELECTION_TYPE.COMPASS_COMBAT);
+    return 0;
+  }
+
+  /**
+   * selection-2 — a damageTaken / evadedAttacker notification (index.html
+   * bus subscription): stamp lastAttackedTime and, with nothing selected,
+   * auto-target.
+   */
+  noteAttacked() {
+    this._lastAttackedAt = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (((this._selectedGuid >>> 0) || 0) === 0) this._autoTarget("attacked");
+  }
+
+  /**
+   * A deliberate deselect (retail Escape, ClientUISystem::OnAction
+   * acclient.c:402199-402203): marks the target willingly lost so the
+   * resulting empty-selection notice does not auto-target, then clears.
+   */
+  deselectTarget() {
+    if (((this._selectedGuid >>> 0) || 0) === 0) return 0;
+    this._targetWillinglyLost = true;
+    return this._commitSelection(0);
+  }
+
+  /**
+   * selection-2 — ClientCombatSystem::SetCombatMode entering Melee/Missile
+   * (acclient.c:408881-408901): a non-attackable selection (other than
+   * yourself) is cleared, a wielded item's wielder is re-selected, and with
+   * still no attackable target AutoTarget runs.
+   */
+  _onEnterAttackMode() {
+    const sel = (this._selectedGuid >>> 0) || 0;
+    const me = this._localPlayerGuid();
+    if (sel !== me) {
+      const atk = this.attackTargetFor(sel);
+      if (!this._isAttackableTarget(atk)) this._commitSelection(0);
+      else if (atk !== sel) this._commitSelection(atk);
+    }
+    const atk = this.attackTargetFor(this._selectedGuid);
+    if (!this._isAttackableTarget(atk)) this._autoTarget("combatMode");
+  }
+
+  /**
+   * Per-tick selection rules (EntityManager.tick):
+   *   - resolve a despawn-cleared selection one tick later: a guid that is
+   *     being re-spawned (dynamic-LOD swap / re-create) is re-selected once
+   *     it lands, a real removal runs the empty-selection notice;
+   *   - selection-2: entering melee/missile mode (`combatMode()` edge);
+   *   - selection-4: every 1 s, drop a selection beyond radar range that is
+   *     not on screen (`?selectionRangeExit=off`).
+   * @param {{x:number,y:number,z:number,cellId?:number}|null} pose
+   */
+  _tickSelectionRules(pose) {
+    const gone = (this._selRemovedGuid >>> 0) || 0;
+    if (gone && !this.spawnInFlight.has(gone)) {
+      this._selRemovedGuid = 0;
+      if (((this._selectedGuid >>> 0) || 0) === 0) {
+        if (this.entityMap.has(gone)) this._commitSelection(gone);
+        else this._autoTarget("notice");
+      }
+    }
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (!sh || !pose) return;
+    if (this._autoTargetOn) {
+      let mode = 1;
+      try { mode = (sh.combatMode?.() ?? 1) >>> 0; } catch (_) { mode = 1; }
+      if (mode !== this._lastCombatMode) {
+        this._lastCombatMode = mode;
+        if (mode === 2 || mode === 4) this._onEnterAttackMode();
+      }
+    }
+    if (!this._selectionRangeExitOn) return;
+    const sel = (this._selectedGuid >>> 0) || 0;
+    if (!sel) return;
+    const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+    if (now < this._selRangeNextAt) return;
+    this._selRangeNextAt = now + 1000;
+    const me = this._localPlayerGuid();
+    const inst = this.entityMap.get(sel);
+    // Self, and wielded children (their root is local to the wielder's
+    // hand), are never range-checked.
+    if (sel === me || !inst?.root || inst._attachedParentGuid != null) return;
+    let owned = false;
+    try {
+      owned = me !== 0 &&
+        (((sh.objectInstanceIdProperty?.(sel, 2) ?? 0) >>> 0) === me ||
+         ((sh.objectInstanceIdProperty?.(sel, 3) ?? 0) >>> 0) === me);
+    } catch (_) { owned = false; }
+    const p = inst.root.position;
+    if (selectionRangeExit({
+      xyDist: Math.hypot(p.x - pose.x, p.y - pose.y),
+      range: this._radarRange(pose),
+      inView: inst.root.visible === true,
+      exempt: owned,
+    })) {
+      this._commitSelection(0); // not willingly lost → auto-target may follow
+    }
   }
 
   /**
@@ -8746,10 +9227,20 @@ export class EntityManager {
       // spell (spam-click protection); a different-spell weave the server will
       // accept still animates its windup locally.
       const sameSpell = !CAST_BUSY_SCOPE || (inst._castBusySpellId === (spellId >>> 0));
-      if (sameSpell && inst._castBusyUntilMs && nowMs < inst._castBusyUntilMs) {
-        this._castDiag("busyDropped");
-        try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: "busyWindow" }); } catch (_) {}
-        return; // already casting this spell — ignore the recast
+      // spellcast-4: a local send passes `busyBefore` (the wasm outstanding-
+      // request count read before it sent); with ?castBusyCount that count
+      // alone decides — >0 means ACE answers this cast YoureTooBusy.
+      const suppress = castSuppressReason({
+        countOn: CAST_BUSY_COUNT,
+        busyBefore: opts?.busyBefore,
+        sameSpell,
+        busyUntilMs: inst._castBusyUntilMs,
+        nowMs,
+      });
+      if (suppress) {
+        this._castDiag(suppress === "busyWindow" ? "busyDropped" : suppress);
+        try { window.__diag?.cast?.onCastSuppressed?.({ guid: g, spellId, reason: suppress }); } catch (_) {}
+        return; // a cast is still outstanding — don't restart the windup
       }
       let estMs = 0;
       // WS11: size the busy window off the same source the chain sleeps on
@@ -9209,7 +9700,7 @@ export class EntityManager {
     // a MotionTable link gesture), so drop any pending tail rather than let it
     // be promoted behind this one.
     this._clearUnifiedQueue(inst);
-    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: entry?.hooks || null, lastHookTime: -1,
+    inst._unifiedSeq = { seq, desc: d, clearOnDone, hooks: this._hookTimeline(entry), lastHookTime: -1,
       speed: this._unifiedOneShotSpeed(inst) };
     return true;
   }
@@ -9223,8 +9714,9 @@ export class EntityManager {
   // (open/closed) frame, with no hook timeline (spawning or snapping a door into
   // a state must not replay its swing sounds). Returns false when no sequence
   // could be built (no wasm class / no descriptor) — the caller keeps its
-  // previous state.
-  _installUnifiedLoco(inst, d, cacheKey, hooks, cmd, carryPhase = true) {
+  // previous state. `hookEntry` is the animation-cache entry whose hooks the
+  // cycle drains (see `_hookTimeline`).
+  _installUnifiedLoco(inst, d, cacheKey, hookEntry, cmd, carryPhase = true) {
     const MS = _motionSequenceClass();
     if (!MS || !d) return false;
     const hold = isDoorStateMotion(cmd >>> 0);
@@ -9235,8 +9727,16 @@ export class EntityManager {
     );
     if (!seq) return false;
     const prev = inst._unifiedLoco;
+    let hookCursor = -1;
     if (carryPhase && !hold && prev?.seq && !prev.hold && typeof seq.seekPhase === "function") {
       try { seq.seekPhase(prev.seq.phase); } catch (_) {}
+      // ?hookFrameExit: the carry REPOSITIONS the playhead, and retail fires
+      // hooks only for frames it crosses (acclient.c:340713). Start the hook
+      // clock at the landed frame, which then fires when it is left, instead
+      // of replaying every hook from frame 0 to the carried phase in one tick.
+      if (this._hookFrameExitOn) {
+        try { hookCursor = unifiedHookTime(seq.globalFrameIndex, d.frameTimes, +d.framerate || 0); } catch (_) {}
+      }
     }
     if (prev?.seq) { try { prev.seq.free(); } catch (_) {} }
     if (hold) {
@@ -9246,7 +9746,9 @@ export class EntityManager {
     // the snapshot froze a stale run base onto idle).
     inst._unifiedLoco = {
       seq, desc: d, cacheKey, hold,
-      hooks: hold ? null : (hooks || null), lastHookTime: -1,
+      hooks: hold ? null : this._hookTimeline(hookEntry), lastHookTime: hookCursor,
+      // Per-frame hooks for a cycle played backward (`_drainUnifiedHooksBackward`).
+      hooksByFrame: hold || !this._hookFrameExitOn ? null : (hookEntry?.exitHooks?.byFrame ?? null),
     };
     inst._locoCycleKey = cacheKey;
     return true;
@@ -9394,32 +9896,55 @@ export class EntityManager {
     return true;
   }
 
+  // The hook list a playhead record drains: the animation-cache entry's
+  // frame-exit timeline (`exitHooks`, animation.js) or, under
+  // `?hookFrameExit=off`, its raw frame-entry list.
+  _hookTimeline(entry) {
+    if (!entry) return null;
+    return (this._hookFrameExitOn && entry.exitHooks ? entry.exitHooks.timeline : entry.hooks) || null;
+  }
+
   // Drain a unified sequence's hook timeline (swoosh/chime/strike/footfall) by
   // the sequence's current frame-time, through the SHARED _fireHooksInRange.
-  // Wrap-aware: for a looping cycle whose frame-time rolled back to a new loop,
-  // fire the prior loop's tail (lastHookTime, end] then restart the window — so
-  // a cycle's footfalls fire every loop. One-shots never wrap → the wrap branch
-  // is inert. `ua` is the _unifiedSeq / _unifiedLoco record { seq, desc, hooks,
-  // lastHookTime }.
-  _drainUnifiedHooks(inst, ua) {
+  // Wrap-aware: for a looping cycle whose frame-time rolled back to a new loop
+  // (or whose step ran a full loop, `wrapped`), fire the prior loop's tail
+  // (lastHookTime, end] then the new loop's head, so a cycle's footfalls fire
+  // every loop. One-shots never wrap → the wrap branch is inert. `ua` is the
+  // _unifiedSeq / _unifiedLoco record { seq, desc, hooks, lastHookTime }.
+  _drainUnifiedHooks(inst, ua, wrapped = false) {
     if (!ua.hooks || !ua.hooks.length) return;
+    const exit = this._hookFrameExitOn;
+    const ft = ua.desc.frameTimes;
+    const curT = unifiedHookTime(ua.seq.globalFrameIndex, ft, +ua.desc.framerate || 0);
+    if (curT === ua.lastHookTime && !(exit && wrapped)) return; // no frame crossed
     const audioMgr = this.scene3d?.audioManager ?? null;
     const cache = this.scene3d?.soundTableCache ?? null;
-    const gf = ua.seq.globalFrameIndex;
-    const ft = ua.desc.frameTimes;
-    const fr = +ua.desc.framerate || 0;
-    const curT = (ft && gf < ft.length) ? ft[gf] : (fr > 0 ? gf / fr : 0);
-    if (curT < ua.lastHookTime) {
-      // Cycle wrapped: fire the tail of the prior loop, then restart at 0.
-      const dur = +ua.desc.duration || (ft && ft.length ? ft[ft.length - 1] : 0);
-      if (dur > ua.lastHookTime) {
-        this._fireHooksInRange(inst, ua.hooks, ua.lastHookTime, dur, audioMgr, cache);
-      }
-      ua.lastHookTime = 0;
-    }
-    if (curT > ua.lastHookTime) {
-      this._fireHooksInRange(inst, ua.hooks, ua.lastHookTime, curT, audioMgr, cache);
-      ua.lastHookTime = curT;
+    const dur = +ua.desc.duration || (ft && ft.length ? ft[ft.length - 1] : 0);
+    // A wrap restarts the window at -1 so a hook on frame 0's exit (or, `=off`,
+    // at t=0) fires every loop; the legacy cursor 0 skipped t=0 after loop 1.
+    ua.lastHookTime = drainHookWindows(ua.lastHookTime, curT, dur, exit && wrapped, exit ? -1 : 0,
+      (lo, hi) => this._fireHooksInRange(inst, ua.hooks, lo, hi, audioMgr, cache));
+  }
+
+  // ?hookFrameExit: a cycle played BACKWARD (backstep, the negative-speed
+  // branch of the tick) fires the Both and Backward hooks of every frame the
+  // step LEFT, never a segment's first frame (retail's backward loop,
+  // CSequence::update_internal acclient.c:340733-340759). Reverse-baked
+  // segments need no special case: the bake already negated their hook
+  // directions, so the same gate gives retail's set. Afterwards the forward
+  // clock sits at the landed frame, so turning forward again fires nothing
+  // until a frame is crossed (it used to burst every hook up to here).
+  _drainUnifiedHooksBackward(inst, lo, prevGf, wrapped) {
+    const d = lo.desc;
+    const gf = lo.seq.globalFrameIndex;
+    lo.lastHookTime = unifiedHookTime(gf, d.frameTimes, +d.framerate || 0);
+    const byFrame = lo.hooksByFrame;
+    if (!byFrame || byFrame.size === 0 || (gf === prevGf && !wrapped)) return;
+    const audioMgr = this.scene3d?.audioManager ?? null;
+    const cache = this.scene3d?.soundTableCache ?? null;
+    for (const f of framesCrossedBackward(prevGf, gf, wrapped, d.segmentStarts, d.segmentCounts, d.numFrames >>> 0)) {
+      const hooks = byFrame.get(f);
+      if (hooks) for (const h of hooks) this._emitAnimHook(inst, h, audioMgr, cache, -1);
     }
   }
 
@@ -9656,7 +10181,7 @@ export class EntityManager {
     );
     if (!seq) return;
     const optSpeed = +(opts?.speed) > 0 ? +opts.speed : 1.0;
-    const rec = { seq, desc: d, clearOnDone: true, hooks: entry.hooks || null, lastHookTime: -1,
+    const rec = { seq, desc: d, clearOnDone: true, hooks: this._hookTimeline(entry), lastHookTime: -1,
       speed: this._unifiedOneShotSpeed(inst) * optSpeed };
     this._enqueueUnifiedOneShot(inst, resolvedCmd, (d.segmentCounts?.length || 1), rec);
     console.log(
@@ -10481,7 +11006,7 @@ export class EntityManager {
             // deathHold:true → the CQ-06 guard at setMotion entry refuses any
             // non-revival motion from freeing this hold (retail: no links out
             // of the Dead substate — the corpse pose is sticky).
-            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, deathHold: true, hooks: entry?.hooks || null, lastHookTime: -1,
+            inst._unifiedSeq = { seq, desc: d, clearOnDone: false, deathHold: true, hooks: this._hookTimeline(entry), lastHookTime: -1,
               speed: this._unifiedOneShotSpeed(inst) };
             // (2026-07-06) Stamp the REAL collapse length so loop.js `_armRemove`
             // holds the rig for exactly this creature's authored death animation
@@ -10800,8 +11325,14 @@ export class EntityManager {
     // forward command's link, then the cycle — retail's order.
     let linked = false;
     let styleN = 0;
+    // ?styleLinkSpeed: the exit and draw/sheathe links run at 1.0 — retail
+    // appends them from the style command's fresh MovementParameters (speed
+    // 1.0) before the forward command's speed is set (acclient.c:344147,
+    // :339437, add_motion :337431); only the entry link and the cycle below
+    // take the command's speed.
+    const styleSpeed = this._styleLinkSpeedOn ? 1.0 : undefined;
     for (const l of (styleLinks || [])) {
-      if (this._playLinkEntry(inst, l.entry, l.fromCmd ?? READY_SUBSTATE, l.toCmd, l.stance)) {
+      if (this._playLinkEntry(inst, l.entry, l.fromCmd ?? READY_SUBSTATE, l.toCmd, l.stance, styleSpeed)) {
         linked = true;
         styleN++;
       }
@@ -10843,7 +11374,7 @@ export class EntityManager {
     // (_unifiedSeq) suppresses this during a swing, then resumes it. By here
     // attack/cast actions and death have already returned, so cls is a cycle
     // (walk/run/idle/Ready/held door state/held cast gesture).
-    if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry.hooks, cmd, !linked)) {
+    if (this._installUnifiedLoco(inst, entry.sequenceDescriptor, cacheKey, entry, cmd, !linked)) {
       try { window.__diag?.motion?.onMotionApplied?.(guid, inst); } catch (_) {}
     }
   }
@@ -11849,6 +12380,13 @@ export class EntityManager {
     // still resolve the old name from prevGuid if they need it.
     if ((this._selectedGuid >>> 0) === g && g !== 0) {
       this._selectedGuid = 0;
+      // Retail ACCWeenieObject::Remove (acclient.c:438598-438601): the removed
+      // selection becomes prevSelectedID. Its SelectionChanged notice (which
+      // may auto-target, selection-2) is resolved by `_tickSelectionRules`
+      // next tick, after this rig is gone — and skipped for a dynamic-LOD /
+      // re-create respawn of the same guid, which is re-selected instead.
+      this._prevSelectedGuid = g;
+      this._selRemovedGuid = g;
       // Retail target indicator (2026-08-02): drop the overlay too, else the
       // brackets keep projecting a disposed rig. Retail's equivalent is
       // `SmartBox::GetObjectBoundingBox` returning status 3 (object unknown)
@@ -12452,21 +12990,19 @@ export class EntityManager {
     return out;
   }
 
-  // Fetch + play the stance-change links on their own (kept for callers
-  // outside setMotion; setMotion commits them with the cycle instead).
-  async _playStyleLink(inst, setupId, mtableId, fromStyle, toStyle) {
-    const links = await this._resolveStyleLinks(inst, setupId, mtableId, fromStyle, toStyle);
-    if (!this.entityMap.has(inst.guid >>> 0)) return;
-    for (const l of links) this._playLinkEntry(inst, l.entry, READY_SUBSTATE, l.toCmd, l.stance);
-  }
-
   // Resolve a MotionTable link `links[(stance, fromCmd)][toCmd]` through the
   // animation cache. Returns the cache entry, or null when no link exists, the
   // bake failed, or the entity was removed meanwhile. No side effects on the
   // playhead.
   async _fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance) {
+    // cmotiontable-3 (2026-10-08, `?linkOnlyBake=off` escape): a link needs
+    // only its keyframes and hooks. `fetchMotionLinkKeyframes` bakes exactly
+    // that (no rig meshes, no cycle bake on a miss; a miss is cached as null).
+    // A pkg/ without the export keeps the full-rig path below.
+    const fetchLink = this._linkOnlyBakeOn ? this.wasmExports?.fetchMotionLinkKeyframes : undefined;
+    const linkOnly = typeof fetchLink === "function";
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
-    if (typeof fetchKeyframes !== "function") return null;
+    if (!linkOnly && typeof fetchKeyframes !== "function") return null;
     // Bug 15 (2026-10-07): a swing / cast link is player-visible combat
     // feedback, so its bake rides the urgent fetch lane (BUG-3
     // `?appearanceUrgent`) instead of queueing behind world streaming; after
@@ -12476,21 +13012,23 @@ export class EntityManager {
     const urgent = APPEARANCE_URGENT_ON && (tcls === "attack" || tcls === "cast");
     let entry;
     try {
-      entry = await this.animationCache.get(
-        setupId,
-        mtableId,
-        toCmd,
-        stance,
-        fetchKeyframes,
-        {
-          modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
-          textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
-          paletteId: (inst.meta.paletteId ?? 0) >>> 0,
-          paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
-          fromMotion: fromCmd,
-          urgent,
-        },
-      );
+      entry = linkOnly
+        ? await this.animationCache.getLink(setupId, mtableId, toCmd, stance, fromCmd, fetchLink, { urgent })
+        : await this.animationCache.get(
+          setupId,
+          mtableId,
+          toCmd,
+          stance,
+          fetchKeyframes,
+          {
+            modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+            textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+            paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+            paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
+            fromMotion: fromCmd,
+            urgent,
+          },
+        );
     } catch (_) {
       return null;
     }
@@ -12549,7 +13087,7 @@ export class EntityManager {
     if (!seq) return false;
     const sp = (Number.isFinite(+speed) && +speed > 0) ? +speed : this._unifiedOneShotSpeed(inst);
     // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
-    const rec = { seq, desc: d, clearOnDone: true, hooks: entry?.hooks || null, lastHookTime: -1,
+    const rec = { seq, desc: d, clearOnDone: true, hooks: this._hookTimeline(entry), lastHookTime: -1,
       speed: sp };
     // `numAnims` is the link's AnimData segment count — retail's `num_anims`
     // is exactly that (CMotionTable fills it in as it appends nodes).
@@ -12688,7 +13226,7 @@ export class EntityManager {
       // forth by that amount. The mixer bake had the same subtraction
       // (buildAnimationClip B1-render v2); retail never had any of it.
       inPlace: false,
-      hooks: entry.hooks || null, lastHookTime: -1,
+      hooks: this._hookTimeline(entry), lastHookTime: -1,
       speed: this._unifiedOneShotSpeed(inst),
     };
     // No `?rootMotionObject` arm here. The link HOLDS its final frame, and that
@@ -14489,6 +15027,7 @@ export class EntityManager {
   _tickBallisticProjectiles() {
     if (!this.entityMap || this.entityMap.size === 0) return;
     const now = typeof performance !== "undefined" ? performance.now() : 0;
+    this._projectileSweepCtx = null; // physupd-1: rebuilt lazily per pass
     for (const inst of this.entityMap.values()) {
       if (!inst || !inst._ballistic || !inst.lastVel || !inst.root) continue;
       const lv = inst.lastVel;
@@ -14517,21 +15056,50 @@ export class EntityManager {
       // Substep at <=0.1 s (native MAX_QUANTUM) so a recovered multi-frame gap
       // integrates the full path instead of one oversized Euler step.
       let remaining = rdt;
+      let chordVz = lv.vz;
+      let hitWall = false;
       while (remaining > 1e-4) {
         const step = remaining > 0.1 ? 0.1 : remaining;
-        // G-4 (?projectileGravity=on): semi-implicit Euler — decay vertical
-        // velocity first, then integrate, matching the retail arc for gravity-
-        // class missiles. Flag off / non-gravity class → lv.vz untouched (flat).
-        if (inst._ballisticGravity) lv.vz += PROJECTILE_GRAVITY_Z * step;
-        pos.x += lv.vx * step;
-        pos.y += lv.vy * step;
-        pos.z += lv.vz * step;
+        const x0 = pos.x, y0 = pos.y, z0 = pos.z;
+        if (PROJECTILE_EXACT_ARC_ON) {
+          // physupd-2: retail UpdatePhysicsInternal — offset = v·q + ½·a·q²
+          // from the OLD velocity, then v += a·q (acclient.c:317756-317776).
+          // G-4: only gravity-class missiles accelerate (else a = 0, flat).
+          const az = inst._ballisticGravity ? PROJECTILE_GRAVITY_Z : 0;
+          const vz0 = lv.vz;
+          pos.x += lv.vx * step;
+          pos.y += lv.vy * step;
+          pos.z += vz0 * step + 0.5 * az * step * step;
+          lv.vz = vz0 + az * step;
+          chordVz = vz0 + 0.5 * az * step; // the step's displacement / q
+        } else {
+          // Legacy semi-implicit Euler (sinks 0.5·g·q per second of flight).
+          if (inst._ballisticGravity) lv.vz += PROJECTILE_GRAVITY_Z * step;
+          pos.x += lv.vx * step;
+          pos.y += lv.vy * step;
+          pos.z += lv.vz * step;
+        }
         remaining -= step;
+        // physupd-1: stop at the first wall / cell static / door on this step.
+        if (PROJECTILE_ENV_SWEEP_ON && this._sweepBallisticStep(inst, x0, y0, z0)) {
+          hitWall = true;
+          break;
+        }
       }
       // PROJ-SPIN: retail order — omega spin (grotate) first, then the
-      // ALIGN_PATH heading (ACE never sets both on one missile).
+      // ALIGN_PATH heading (ACE never sets both on one missile). Retail heads
+      // along the step's chord (acclient.c:322800-322804).
       if (inst._ballisticOmega) this._spinProjectile(inst, rdt);
-      if (inst._ballisticAlignPath) this._alignToVelocity(inst, lv);
+      if (inst._ballisticAlignPath) {
+        this._alignToVelocity(
+          inst,
+          PROJECTILE_EXACT_ARC_ON ? { vx: lv.vx, vy: lv.vy, vz: chordVz } : lv,
+        );
+      }
+      if (hitWall) {
+        this._stopBallisticProjectile(inst);
+        continue;
+      }
       // PROJ-VIS: client-side terrain collision (retail collides missiles
       // locally; ACE's zero-velocity impact arrives a round-trip later). Only
       // when the launch point was above our terrain sample, and only outdoors.
@@ -14548,12 +15116,80 @@ export class EntityManager {
   }
 
   /**
+   * physupd-1 (2026-10-08): sweep the substep `(x0,y0,z0) → root.position`
+   * against building / EnvCell / door geometry (scene3d/projectile_sweep.js).
+   * On a hit, parks the bolt just short of the contact and returns true (the
+   * caller stops it). The launch window — the first substep, or until the
+   * bolt is 2·radius from its spawn point — ignores an embedded start, so a
+   * launch point touching a door frame does not kill the bolt.
+   */
+  _sweepBallisticStep(inst, x0, y0, z0) {
+    const steps = inst._ballisticSteps | 0;
+    inst._ballisticSteps = steps + 1;
+    const ctx = this._projectileSweepCtx || (this._projectileSweepCtx = this._buildProjectileSweepCtx());
+    if (!ctx.sh) return false;
+    const L = inst._ballisticLaunch || (inst._ballisticLaunch = { x: x0, y: y0, z: z0 });
+    const launchWindow = steps === 0
+      || Math.hypot(x0 - L.x, y0 - L.y, z0 - L.z) < 2 * PROJECTILE_SWEEP_RADIUS;
+    const p0 = { x: x0, y: y0, z: z0 };
+    const pos = inst.root.position;
+    const t = sweepProjectileSegment(ctx.sh, p0, pos, {
+      cells: projectileSweepCells(ctx.renderSet, inst._ballisticCellId ?? 0),
+      entities: ctx.entities,
+      launchWindow,
+    });
+    if (t == null) return false;
+    const stop = projectileStopPoint(p0, pos, t);
+    pos.x = stop.x;
+    pos.y = stop.y;
+    pos.z = stop.z;
+    return true;
+  }
+
+  /** physupd-1: per-pass sweep inputs — the session handle, the player's
+   *  depth-1 render set, and whether the door (entity) layer is safe. */
+  _buildProjectileSweepCtx() {
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const ctx = { sh: sh || null, renderSet: null, entities: false };
+    if (!sh) return ctx;
+    try {
+      if (typeof sh.getRenderSet === "function") {
+        const rs = sh.getRenderSet(1);
+        if (rs && rs.length > 0) ctx.renderSet = rs instanceof Uint32Array ? rs : new Uint32Array(rs);
+      }
+    } catch (_) { /* no cell layers this pass */ }
+    // Retail `OBJECTINFO::missile_ignore` (acclient.c:314070): a missile never
+    // collides with another MISSILE. The wasm entity sweep can only exclude the
+    // player, and a missile's wasm entity sits at its stale wire position, so a
+    // BSP-bearing missile (itself or a volley-mate) would stop the bolt at its
+    // own launch point. Skip the door layer while any live missile has a BSP
+    // (or its state is unreadable) — a conservative miss, never a false stop.
+    ctx.entities = typeof sh.objectPhysicsState === "function";
+    if (ctx.entities) {
+      for (const e of this.entityMap.values()) {
+        if (!e || !e._isProjectile) continue;
+        if (e._missileHasBsp == null) {
+          let st = 0;
+          try { st = sh.objectPhysicsState(e.guid >>> 0) >>> 0; } catch (_) { /* unknown */ }
+          if (st !== 0) e._missileHasBsp = (st & PHYSICS_STATE_HAS_PHYSICS_BSP) !== 0;
+        }
+        if (e._missileHasBsp !== false) {
+          ctx.entities = false;
+          break;
+        }
+      }
+    }
+    return ctx;
+  }
+
+  /**
    * PROJ-VIS (2026-10-05): end a ballistic projectile's self-integration —
    * the single stop path shared by the in-flight impact VectorUpdate
-   * (setVelocity), an impact that raced the rig build (`_ballisticStopMs`) and
-   * the client terrain stop. Also extinguishes the projectile's Setup lights:
-   * ACE clears LightsStatus in the same ProjectileImpact (SpellProjectile.cs:
-   * 209-238) and retail's set_state then DestroyLights (acclient.c:322188).
+   * (setVelocity), an impact that raced the rig build (`_ballisticStopMs`), the
+   * client terrain stop and the physupd-1 environment sweep. Also extinguishes
+   * the projectile's Setup lights: ACE clears LightsStatus in the same
+   * ProjectileImpact (SpellProjectile.cs:209-238) and retail's set_state then
+   * DestroyLights (acclient.c:322188).
    */
   _stopBallisticProjectile(inst) {
     if (!inst) return;
@@ -14744,6 +15380,9 @@ export class EntityManager {
     // and pin the table to its very first read — so bump it here too when the
     // stride is off. Bounded-growth is fine (compared by subtraction).
     if (!_smoothStrideOn) this._smoothFrame = (this._smoothFrame | 0) + 1;
+    // A3-selection (2026-10-08): despawn-clear notice, combat-mode-entry
+    // auto-target and the 1 s range-exit drop (reuses the pose above).
+    try { this._tickSelectionRules(_sepPlayerPose); } catch (_) { /* never break the tick */ }
     for (const inst of this.entityMap.values()) {
       // Perf B1 (2026-05-18) — distance + local-player + active-tween
       // gate. When false, skip mixer.update, hook execution, and the
@@ -15113,7 +15752,12 @@ export class EntityManager {
           // is that multiplier, captured when the one-shot was built. The `?? 1`
           // keeps any older record (or a rebuilt-mid-flight one) at 1.0x rather
           // than NaN-ing the playhead.
-          ua.seq.advance(dt * (ua.speed ?? 1));
+          const uaSpeed = ua.speed ?? 1;
+          // ?cycleRestartAfterAction: the clip time before this advance, so the
+          // part of the step the one-shot does not use can go to the cycle.
+          const uaT0 = this._cycleRestartOn && ua.clearOnDone
+            ? ua.seq.phase * (+ua.desc.duration || 0) : 0;
+          ua.seq.advance(dt * uaSpeed);
           poseRigAt(ua.seq.globalFrameIndex, ua.desc, inst.parts, ua.inPlace === true);
           this._drainUnifiedHooks(inst, ua); // swoosh / chime / strike (Step 6)
           if (ua.rootMotion) this._applyUnifiedRootMotionIfDone(inst, ua);
@@ -15123,6 +15767,18 @@ export class EntityManager {
             // J5: retire it from pending_animations and promote the next
             // queued gesture onto the SAME playhead (retail AnimationDone).
             this._unifiedOneShotFinished(inst, ua);
+            // ?cycleRestartAfterAction (csequence-4): retail re-appends the base
+            // cycle behind every action and enters it at its starting frame
+            // with the leftover quantum (acclient.c:337854-337855, :340567,
+            // :340776). Ours sat frozen mid-stride and popped back there.
+            // Skipped while the queue promoted another one-shot: the cycle
+            // restarts behind the last of them.
+            const lo = inst._unifiedLoco;
+            if (this._cycleRestartOn && !inst._unifiedSeq && lo && !lo.hold) {
+              handBackToCycle(lo,
+                oneShotSpill(uaT0, dt * uaSpeed, +ua.desc.duration || 0, uaSpeed),
+                this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0));
+            }
           }
         } else if (inst._unifiedLoco) {
           // The cyclic locomotion sequence, with gait scaling (anti-ice-skating
@@ -15136,20 +15792,26 @@ export class EntityManager {
             // raw. In place is for locomotion strides only (see
             // _playStateHoldLink).
             poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, lo.hold !== true);
-            this._drainUnifiedHooks(inst, lo); // footfalls (wrap-aware)
+            // Footfalls (wrap-aware). A step of a whole loop or more wrapped
+            // even when the clock landed past where it started.
+            this._drainUnifiedHooks(inst, lo, step >= (+lo.desc.duration || Infinity));
           } else {
             // 2026-10-05: advance() ignores dt<=0 (motion_sequence.rs
             // advance_impl), so a backstep/left-strafe (negative speed) froze
             // the cycle. Retail runs it backwards (CSequence::update_internal,
             // acclient.c:340659) — step the phase back and seek.
             const dur = +lo.desc.duration || 0;
+            const prevGf = lo.seq.globalFrameIndex;
+            let wrapped = false;
             if (dur > 0) {
               let p = lo.seq.phase + step / dur;
+              wrapped = p < 0;
               p -= Math.floor(p);
               lo.seq.seekPhase(p);
             }
             poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
-            lo.lastHookTime = -1; // no reverse footfall spam
+            if (this._hookFrameExitOn) this._drainUnifiedHooksBackward(inst, lo, prevGf, wrapped);
+            else lo.lastHookTime = -1; // legacy: no reverse footfalls
           }
         }
         // Neither → no animation resolved for this entity (rest pose).
@@ -15309,7 +15971,7 @@ export class EntityManager {
         for (const rec of fireQueue) {
           try {
             if (rec.kind === "hook") {
-              this._fireHook(inst, rec.hook, _audioMgr, _stCache);
+              this._fireHook(inst, rec.hook, _audioMgr, _stCache, rec.dir);
             }
           } catch (e) {
             // eslint-disable-next-line no-console
@@ -15711,17 +16373,23 @@ export class EntityManager {
       const t = h.time;
       if (t <= lowExclusive) continue;
       if (t > highInclusive) break; // sorted asc — no later entries match
-      if (HOOK_DRAIN_ON) {
-        // A5-P1b — queue instead of firing inline (retail add_anim_hook,
-        // acclient.c:322063-322073); the per-instance end-of-tick drain
-        // executes via the SAME `_fireHook`. Only the animation-timeline
-        // executor routes here — ScriptManager/PhysicsScript callers
-        // invoke `_fireHook` directly and stay inline.
-        inst._hookFireQueue.push({ kind: "hook", hook: h });
-        continue;
-      }
-      this._fireHook(inst, h, audioMgr, cache);
+      this._emitAnimHook(inst, h, audioMgr, cache, 1);
     }
+  }
+
+  // One animation-timeline hook crossed while playing in direction `dir`
+  // (+1 forward, -1 backward — `_fireHook`'s direction gate).
+  _emitAnimHook(inst, h, audioMgr, cache, dir) {
+    if (HOOK_DRAIN_ON) {
+      // A5-P1b — queue instead of firing inline (retail add_anim_hook,
+      // acclient.c:322063-322073); the per-instance end-of-tick drain
+      // executes via the SAME `_fireHook`. Only the animation-timeline
+      // executor routes here — ScriptManager/PhysicsScript callers
+      // invoke `_fireHook` directly and stay inline.
+      inst._hookFireQueue.push({ kind: "hook", hook: h, dir });
+      return;
+    }
+    this._fireHook(inst, h, audioMgr, cache, dir);
   }
 
   /**
@@ -15730,7 +16398,7 @@ export class EntityManager {
    * CreateParticle (13) + SoundTweaked (21) + others are debug-counted
    * (Task E scope is Sound + SoundTable; the rest are follow-ons).
    */
-  _fireHook(inst, hook, audioMgr, cache) {
+  _fireHook(inst, hook, audioMgr, cache, dir = 1) {
     // === A-DIR (render-completeness wave 3, 2026-05-29) — direction gate ===
     // Retail/ACE `Sequence.execute_hooks` fires a hook iff
     // `hook.Direction == Both(0) || hook.Direction == dir`, where `dir` is
@@ -15764,7 +16432,13 @@ export class EntityManager {
     // for it: a stray -2 is NOT -1, so it fires (treated as Both/unconditional),
     // which is the correct fallback. The Rust reverse-segment baker also clamps
     // its negation so -2 can never become +2.
-    if ((hook.direction | 0) === -1) return;
+    // ?hookFrameExit (2026-10-08): `dir` is no longer always Forward. A cycle
+    // played BACKWARD passes -1 (`_drainUnifiedHooksBackward`), so the gate is
+    // "drop the opposite direction" (hook_windows.js hookFiresInDirection) —
+    // for dir = 1 exactly the `=== -1` test above. Event payloads below report
+    // `hook.frameTime` (the hook's own frame) when present: on the frame-exit
+    // timeline `time` is the drain key, one frame later.
+    if (!hookFiresInDirection(hook, dir)) return;
     const hookType = hook.hookType | 0;
     const pos = inst.root.position;
     // Phase F.C — runtime event log probe. Same no-op stub shape as
@@ -15791,7 +16465,7 @@ export class EntityManager {
             // stance is folded into currentActionKey; no separate field
             // on EntityInstance (the (cmd, stance) tuple is the cache key).
             hook_type: 1,
-            hook_time: +hook.time,
+            hook_time: +(hook.frameTime ?? hook.time),
           },
         });
       }
@@ -15942,7 +16616,7 @@ export class EntityManager {
       try {
         window.__pluginClient?.events?.emit?.("combatStrikeFrame", {
           attackerGuid: (inst.guid >>> 0),
-          hookTimeInClipS: +hook.time,
+          hookTimeInClipS: +(hook.frameTime ?? hook.time),
         });
       } catch (_) {}
       // Phase F.C — runtime event log probe symmetry with sound hooks.
@@ -15957,7 +16631,7 @@ export class EntityManager {
             entity_guid: (inst.guid >>> 0),
             motion_command: (inst.currentActionKey ?? null),
             hook_type: 3,
-            hook_time: +hook.time,
+            hook_time: +(hook.frameTime ?? hook.time),
           },
         });
       }
@@ -16019,8 +16693,8 @@ export class EntityManager {
     }
     if (hookType === 19) {
       // CallPES — invoke a PhysicsScript on this entity after
-      // `callPesPause` seconds. Delegates to the existing chain walker
-      // which fans out into its own CreateParticleHook entries.
+      // `callPesPause` seconds, on the owner's script queue (or, with
+      // `?scriptQueue=off`, the chain walker).
       const pesId = hook.callPesDid >>> 0;
       const pause = +hook.callPesPause;
       if (pesId !== 0) {
@@ -16029,18 +16703,36 @@ export class EntityManager {
         // window < 0.0002). acclient.c:318987.
         const pauseW = pause || 0;
         const randPause = pauseW < 0.0002 ? 0 : timeRng() * pauseW;
-        const delayMs = Math.max(0, randPause * 1000);
         const guidU = (inst.guid >>> 0);
-        const root = inst.root;
-        setTimeout(() => {
-          // Late-fire guard: bail if the entity has been released while
-          // the timer was pending (matches the Sound-hook pattern at
-          // line ~4525). `_attachParticleChainForEntity` itself also
-          // soft-noops on unknown guids, but the explicit check keeps
-          // the per-fire log spam down.
-          if (!this.entityMap.has(guidU)) return;
-          this._attachParticleChainForEntity(guidU, root, pesId).catch(() => {});
-        }, delayMs);
+        // anim-hooks-3 (2026-10-08): retail CPhysicsObj::CallPES
+        // (acclient.c:318973-319005) parks the delayed call on the OBJECT's
+        // own hook list, so it dies with the object. Both arms below check
+        // the same INSTANCE, not the guid: a despawn + respawn under the same
+        // guid inside the pause is a new object (the guid-only check attached
+        // the old object's effect to it).
+        if (SCRIPT_QUEUE_ON && typeof this.wasmExports?.fetchPhysicsScript === "function") {
+          // Queue path: the owner's ScriptManager is that hook list (despawn
+          // clears it). Start the sub-script at now + RollDice(0, pause), the
+          // script-sourced CallPES shape in `_executeScriptHook`.
+          const subStart = currentTime() + randPause;
+          this.wasmExports.fetchPhysicsScript(pesId).then((ps) => {
+            if (this.entityMap.get(guidU) !== inst) return;
+            this._queuePhysicsScript(guidU, inst.root, pesId, ps.takeEntries(), 0, -1, subStart);
+          }).catch(() => {});
+        } else {
+          // `?scriptQueue=off`: a wall-clock timer, registered with the
+          // guid's timers so despawn cancels it (self-removed on fire).
+          const tid = setTimeout(() => {
+            const bucket = this._soundTimeoutsForGuid.get(guidU);
+            const i = bucket ? bucket.indexOf(tid) : -1;
+            if (i !== -1) bucket.splice(i, 1);
+            if (this.entityMap.get(guidU) !== inst) return;
+            this._attachParticleChainForEntity(guidU, inst.root, pesId).catch(() => {});
+          }, Math.max(0, randPause * 1000));
+          let bucket = this._soundTimeoutsForGuid.get(guidU);
+          if (!bucket) this._soundTimeoutsForGuid.set(guidU, (bucket = []));
+          bucket.push(tid);
+        }
       }
       this._callPesHookFires = (this._callPesHookFires | 0) + 1;
       return;
@@ -16087,7 +16779,7 @@ export class EntityManager {
             entity_guid: (inst.guid >>> 0),
             motion_command: (inst.currentActionKey ?? null),
             hook_type: 21,
-            hook_time: +hook.time,
+            hook_time: +(hook.frameTime ?? hook.time),
             probability,
             priority: +hook.soundPriority,
             gain,
@@ -16128,7 +16820,7 @@ export class EntityManager {
         window.__pluginClient?.events?.emit?.("animationHookDone", {
           guid: (inst.guid >>> 0),
           motionCommand: (inst.currentActionKey ?? null),
-          hookTimeInClipS: +hook.time,
+          hookTimeInClipS: +(hook.frameTime ?? hook.time),
         });
       } catch (_) {}
       this._animationDoneHookFires = (this._animationDoneHookFires | 0) + 1;

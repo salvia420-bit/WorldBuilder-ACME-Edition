@@ -523,73 +523,26 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // GetAndWield") and rejects with
             // InventoryServerSaveFailed when the client
             // skips it (slot occupied / weapon collision).
-            // Conflict set mirrors CheckWeaponCollision:
-            // same-slot, one-weapon-at-a-time, launcher/
-            // two-hander/caster vs shield (both ways).
+            // items-4 (2026-10-08): the conflict set lives in
+            // `holtburger_world::equip::wield_unequip_conflicts`
+            // — ACE CheckWeaponCollision for the HELD slots,
+            // but a pure armor/clothing wear (retail
+            // AutoWearIsLegal refuses, it never strips) and a
+            // same-wcid ammo stack (retail AttemptMerge) move
+            // nothing.
             if let Some(w) = world.borrow().as_ref() {
-                use holtburger_common::properties::{
-                    EquipMask as PropEquipMask, WorldObjectExt,
-                };
-                use holtburger_world::context::WorldContext;
+                use holtburger_common::properties::EquipMask as PropEquipMask;
                 let requested =
                     PropEquipMask::from_bits_truncate(equip_mask);
-                let weapon_family = PropEquipMask::MELEE_WEAPON
-                    | PropEquipMask::MISSILE_WEAPON
-                    | PropEquipMask::TWO_HANDED
-                    | PropEquipMask::CASTER;
-                let new_ammo_type = w
-                    .get_entity(Guid(item_guid))
-                    .and_then(|e| e.ammo_type())
-                    .unwrap_or(0);
-                let new_is_launcher = requested
-                    .intersects(PropEquipMask::MISSILE_WEAPON)
-                    && new_ammo_type != 0;
-                let new_blocks_shield = new_is_launcher
-                    || requested.intersects(
-                        PropEquipMask::TWO_HANDED
-                            | PropEquipMask::CASTER,
-                    );
-                let mut to_unequip: Vec<u32> = Vec::new();
-                for g in w.iter_equipment() {
-                    if g.0 == item_guid {
-                        continue;
-                    }
-                    let Some(e) = w.get_entity(g) else {
-                        continue;
-                    };
-                    let loc = e.wield_location();
-                    let same_slot = loc.intersects(requested);
-                    let weapon_swap = requested
-                        .intersects(weapon_family)
-                        && loc.intersects(weapon_family);
-                    let shield_clear = new_blocks_shield
-                        && loc.intersects(PropEquipMask::SHIELD);
-                    let shield_vs_weapon = requested
-                        .intersects(PropEquipMask::SHIELD)
-                        && (loc.intersects(
-                            PropEquipMask::TWO_HANDED
-                                | PropEquipMask::CASTER,
-                        ) || (loc.intersects(
-                            PropEquipMask::MISSILE_WEAPON,
-                        ) && e.ammo_type().unwrap_or(0) != 0));
-                    // Launcher swap with mismatched equipped
-                    // ammo (e.g. longbow over quarrels) — ACE
-                    // rejects the wield on AmmoType mismatch,
-                    // so pull the stale ammo too.
-                    let ammo_mismatch = new_is_launcher
-                        && loc.intersects(PropEquipMask::MISSILE_AMMO)
-                        && e.ammo_type().unwrap_or(0) != 0
-                        && e.ammo_type().unwrap_or(0)
-                            != new_ammo_type;
-                    if same_slot
-                        || weapon_swap
-                        || shield_clear
-                        || shield_vs_weapon
-                        || ammo_mismatch
-                    {
-                        to_unequip.push(g.0);
-                    }
-                }
+                let to_unequip: Vec<u32> =
+                    holtburger_world::equip::wield_unequip_conflicts(
+                        w,
+                        Guid(item_guid),
+                        requested,
+                    )
+                    .into_iter()
+                    .map(|g| g.0)
+                    .collect();
                 let pack_guid = w.player.guid.0;
                 for g in to_unequip {
                     console_log_str(&format!(

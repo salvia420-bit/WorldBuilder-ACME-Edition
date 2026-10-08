@@ -25,7 +25,8 @@ import {
   fetchIconDataUrl as fetchIconDataUrlShared,
   getIconImmediate as getIconImmediateShared,
 } from "../ui/ac_icon_cache.js";
-import { castSpellViaHandle } from "../ui/ac_cast_spell.js";
+import { castSpellViaHandleResult } from "../ui/ac_cast_spell.js";
+import { catalogSelfTargetedOnly, formulaUntargetedEnabled } from "../ui/ac_spell_target_type.js";
 import { makeTitlebar } from "../ui/hud_kit.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
 
@@ -67,6 +68,8 @@ function loadSpellCatalog() {
     .then((r) => r.json())
     .then((d) => {
       spellCatalog = d?.spells ?? d ?? {};
+      // spellcast-2: `?formulaUntargeted=off` keeps only the SelfTargeted bit.
+      if (!formulaUntargetedEnabled()) spellCatalog = catalogSelfTargetedOnly(spellCatalog);
       return spellCatalog;
     })
     .catch((e) => {
@@ -402,7 +405,10 @@ function castFromRow(id, meta) {
     // routes plugin-client → wasm sessionHandle in one place; matches
     // hotbar.js + combat-bar.js to keep error handling and null-checks
     // identical across every HUD-driven cast site.
-    if (!castSpellViaHandle(id, untargeted ? null : targetGuid)) {
+    // spellcast-3: "refused" = a client gate already showed the reason.
+    const sent = castSpellViaHandleResult(id, untargeted ? null : targetGuid);
+    if (sent === "refused") return;
+    if (sent !== "sent") {
       toast("Cast unavailable — no session.");
       return;
     }

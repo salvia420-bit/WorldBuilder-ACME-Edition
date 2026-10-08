@@ -1139,6 +1139,7 @@ mod runrate_105 {
         RunSkillSource, WorldContextExt, run_rate_from_skill_and_burden,
         run_skill_augmentation_bonus,
     };
+    use holtburger_world::player::SkillBase;
     use holtburger_world::stats::{Attribute, AttributeType, Skill, SkillType, TrainingLevel};
     use holtburger_protocol::messages::movement::{
         InterpretedMotionCommand, MovementEventData, MovementInvalid, MovementType,
@@ -1220,8 +1221,13 @@ mod runrate_105 {
 
     /// The oracle rig's character, as read out of `ace_shard` on
     /// 2026-08-11: Quickness 100, Run `level_From_P_P` 5 / `init_Level` 0
-    /// (so the wire `Current` composes to 105), and
+    /// (so the raw InqSkill value composes to 105), and
     /// `AugmentationJackOfAllTrades = 1`.
+    ///
+    /// enchstats-2 (2026-10-08): the Run `current` is DERIVED here exactly as
+    /// the live path does (`emit_player_derived_stats` →
+    /// `PlayerState::derive_skill_value`, retail `InqSkill`), so it carries
+    /// the JackOfAllTrades +5 itself: base 105, current 110.
     fn rig_world() -> WorldState {
         let mut world = WorldState::synthetic();
         let guid = Guid(0x5000_017B);
@@ -1248,6 +1254,28 @@ mod runrate_105 {
                 current: 40,
             },
         );
+        // Quickness 100 — Run's SkillTable formula is Quickness / 1.
+        world.player.attributes.insert(
+            AttributeType::QuicknessAttr,
+            Attribute {
+                attr_type: AttributeType::QuicknessAttr,
+                ranks: 0,
+                start: 100,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 100,
+                current: 100,
+            },
+        );
+        world.player.skill_bases.insert(
+            SkillType::Run,
+            SkillBase {
+                ranks: 5,
+                init: 0,
+                sac: TrainingLevel::Trained as u32,
+                min_level: 1,
+            },
+        );
         world.player.skills.insert(
             SkillType::Run,
             Skill {
@@ -1268,6 +1296,12 @@ mod runrate_105 {
                 .properties
                 .set_int_prop(PropertyInt::AugmentationJackOfAllTrades, 1);
         }
+        world.emit_player_derived_stats(&mut Vec::new());
+        assert_eq!(
+            world.player.skills[&SkillType::Run].current,
+            110,
+            "fixture: InqSkill folds JackOfAllTrades into Run current"
+        );
         world
     }
 
@@ -1282,7 +1316,9 @@ mod runrate_105 {
 
         let inputs = world.player_run_rate_inputs();
         assert_eq!(inputs.run_skill_source, RunSkillSource::WireRunSkill);
-        assert_eq!(inputs.run_skill_wire, Some(105));
+        // enchstats-2: the wire-side `current` now IS InqSkill (augmentation
+        // folded in), so "wire" and "used" agree; the bonus is only reported.
+        assert_eq!(inputs.run_skill_wire, Some(110));
         assert_eq!(inputs.run_skill_used, Some(110.0));
         assert_eq!(inputs.run_skill_aug_bonus, 5.0);
         assert_eq!(inputs.server_run_rate, None);
@@ -1493,5 +1529,195 @@ mod runrate_105 {
         // A server DIRECTIVE to the local player (MoveTo/TurnTo) is not
         // autonomous -> unpacked, by both retail and us.
         assert!(retail_unpacks(false, true));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R1 motioninterp-5 (2026-10-08) — the JUMP skill folds the same augmentation
+// terms the run skill does (MOVE-RUNRATE-105 fix B covered Run only).
+//
+// Retail `CACQualities::InqJumpVelocity` (acclient.c:443773-443848) mirrors
+// `InqRunRate` for skill 0x16: `LumAugAllSkills` (0x16D) adds its value,
+// `AugmentationJackOfAllTrades` (0x146) adds 5, `LumAugSkilledSpec` (0x158)
+// adds 2x when the skill is specialized; then `if (!stamina) jumpskill = 0`;
+// then `GetJumpHeight` and `sqrt(h * 19.6)`. ACE applies the client's
+// JumpPack velocity, so the 5-point shortfall was visible to observers too.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod jump_skill_augs {
+    use super::super::jump_charge::JumpOutcome;
+    use super::super::system::MovementSystem;
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::properties::{PropertyInt, WorldObjectPropertyAccessorsMut};
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    use holtburger_session::Session;
+    use holtburger_world::context::WorldContextExt;
+    use holtburger_world::player::{PlayerState, SkillBase, VitalBase};
+    use holtburger_world::stats::{
+        Attribute, AttributeType, Skill, SkillType, TrainingLevel, Vital, VitalType,
+    };
+    use holtburger_world::WorldState;
+    use std::time::Duration;
+    use web_time::Instant;
+
+    /// A rested JackOfAllTrades character with a raw Jump of 200.
+    ///
+    /// enchstats-2 (2026-10-08): the Jump `current` is DERIVED the way the
+    /// live path does it (`emit_player_derived_stats` → retail `InqSkill`),
+    /// so the augmentation terms are inside `current` and
+    /// `player_composed_jump_skill` reads it verbatim. Re-run
+    /// `emit_player_derived_stats` after changing an augmentation property.
+    fn jumper_world(training: TrainingLevel) -> WorldState {
+        let mut world = WorldState::synthetic();
+        let guid = Guid(0x5000_017C);
+        world.seed_local_player_entity(
+            guid,
+            "Jumper",
+            WorldPosition {
+                landblock_id: Guid(0x977B_0000),
+                coords: Vector3::new(100.0, 100.0, 0.0),
+                rotation: Quaternion::from_heading(0.0),
+            },
+        );
+        // Strength 40 → capacity 6000; empty pack → load 0.
+        world.player.attributes.insert(
+            AttributeType::StrengthAttr,
+            Attribute {
+                attr_type: AttributeType::StrengthAttr,
+                ranks: 0,
+                start: 40,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 40,
+                current: 40,
+            },
+        );
+        // Coordination 40 so Jump's formula, (Str + Coord) / 2, is 40 on
+        // both the raw and the enchanted side (an ABSENT attribute reads 0
+        // raw but floors to 1 enchanted); init 160 makes the raw value 200.
+        world.player.attributes.insert(
+            AttributeType::CoordinationAttr,
+            Attribute {
+                attr_type: AttributeType::CoordinationAttr,
+                ranks: 0,
+                start: 40,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 40,
+                current: 40,
+            },
+        );
+        world.player.skill_bases.insert(
+            SkillType::Jump,
+            SkillBase {
+                ranks: 0,
+                init: 160,
+                sac: training as u32,
+                min_level: 1,
+            },
+        );
+        world.player.skills.insert(
+            SkillType::Jump,
+            Skill {
+                skill_type: SkillType::Jump,
+                ranks: 0,
+                init: 160,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 200,
+                current: 200,
+                training,
+                trained_cost: 0,
+                specialized_cost: 0,
+            },
+        );
+        // Stamina > 0 so retail's zero-stamina fold stays out of the way
+        // (the vital base keeps the derived-stat refresh from clamping it).
+        world.player.vital_bases.insert(
+            VitalType::Stamina,
+            VitalBase {
+                ranks: 0,
+                start: 100,
+            },
+        );
+        world.player.vitals.insert(
+            VitalType::Stamina,
+            Vital {
+                vital_type: VitalType::Stamina,
+                ranks: 0,
+                start: 100,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 100,
+                buffed_max: 100,
+                current: 100,
+            },
+        );
+        if let Some(entity) = world.entities.get_mut(guid) {
+            entity
+                .properties
+                .set_int_prop(PropertyInt::AugmentationJackOfAllTrades, 1);
+        }
+        world.emit_player_derived_stats(&mut Vec::new());
+        world
+    }
+
+    #[test]
+    fn jump_skill_folds_jack_of_all_trades() {
+        let world = jumper_world(TrainingLevel::Trained);
+        assert_eq!(world.player_composed_jump_skill(), Some(205));
+        // Retail's arithmetic: 3.010 m at 200, 3.074 m at 205 (full extent).
+        let v200 = PlayerState::compute_jump_velocity_z(1.0, 0.0, 200);
+        let v205 = PlayerState::compute_jump_velocity_z(1.0, 0.0, 205);
+        assert!(v205 > v200, "{v205} vs {v200}");
+    }
+
+    /// `LumAugSkilledSpec` counts only for a SPECIALIZED Jump (`_sac == 3`).
+    #[test]
+    fn jump_skill_folds_skilled_spec_only_when_specialized() {
+        let mut trained = jumper_world(TrainingLevel::Trained);
+        let mut specialized = jumper_world(TrainingLevel::Specialized);
+        for world in [&mut trained, &mut specialized] {
+            let guid = world.player.guid;
+            world
+                .entities
+                .get_mut(guid)
+                .expect("player entity")
+                .properties
+                .set_int_prop(PropertyInt::LumAugSkilledSpec, 2);
+            world.emit_player_derived_stats(&mut Vec::new());
+        }
+        assert_eq!(trained.player_composed_jump_skill(), Some(205));
+        assert_eq!(specialized.player_composed_jump_skill(), Some(209));
+    }
+
+    /// The release pipeline consumes the composed skill: `Jumped.jump_skill`
+    /// reports 205 and `vz` is `compute_jump_velocity_z(extent, burden, 205)`.
+    #[tokio::test]
+    async fn jump_release_uses_the_composed_jump_skill() {
+        let mut world = jumper_world(TrainingLevel::Trained);
+        let mut movement = MovementSystem::new();
+        let mut session = Session::new_test();
+        let t0 = Instant::now();
+        movement
+            .jump_charge_commence(t0, &mut world)
+            .expect("press commences");
+        let outcome = movement
+            .execute_jump_release(t0 + Duration::from_millis(1_000), &mut world, &mut session)
+            .await
+            .expect("release must not error");
+        match outcome {
+            JumpOutcome::Jumped {
+                extent,
+                vz,
+                jump_skill,
+                burden,
+            } => {
+                assert_eq!(jump_skill, 205, "wire 200 + JackOfAllTrades 5");
+                let expected = PlayerState::compute_jump_velocity_z(extent, burden, 205);
+                assert!((vz - expected).abs() < 1e-6, "vz {vz} vs {expected}");
+            }
+            other => panic!("expected Jumped, got {other:?}"),
+        }
     }
 }

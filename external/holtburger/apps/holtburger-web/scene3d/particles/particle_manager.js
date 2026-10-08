@@ -163,6 +163,9 @@ const _RP6 = {
   // predicate. 30 s is deliberately conservative: far longer than any
   // pan-away/pan-back, and persistent (0/0) emitters are excluded outright, so
   // this can only ever reap an emitter that was already going to finish.
+  // PLIFECYCLE-2 (`?particleCullFreeze`): culled finite emitters now emit
+  // virtually, so `totalEmitted` advances; this stays as the backstop for the
+  // ones that still cannot finish (a stationary BirthratePerMeter emitter).
   culledStopSeconds: 30,
 };
 const _RP6_MAX_DIST_SQ = _RP6.maxDistance * _RP6.maxDistance;
@@ -172,6 +175,99 @@ export const PARTICLE_RP6_STATS = {
   // Count-bounded emitters force-stopped after `culledStopSeconds` off-screen.
   culledForceStopped: 0,
 };
+
+// PLIFECYCLE-2 (2026-10-08) — `?particleCullFreeze` (DEFAULT ON;
+// `=off`/`0`/`false` restores the plain skip). Retail never frustum-culls
+// particle simulation; its only cull is the distance degrade inside
+// `ParticleEmitter::UpdateParticles` (acclient.c:331097-331239), which:
+//   - PERSISTENT (total_particles == 0 && total_seconds == 0): stamps every
+//     slot's `birthtime = curr_time` each degraded update. Particle::Update's
+//     persistent path uses birthtime as its last-update stamp
+//     (`lifetime += curr - birthtime`, :330395-330401), so ages FREEZE with no
+//     catch-up and the emitter is full again the moment it is back in range.
+//   - FINITE: keeps aging/killing by birthtime AND runs
+//     `if (ShouldEmitParticle) RecordParticleEmission; StopEmitter`, so
+//     total_emitted / last_emit_time advance on schedule and the emitter stops
+//     on time even while degraded.
+// RP6 skipped updateParticles() outright. A persistent emitter's particles then
+// kept their pre-cull `lastUpdateTime`, so the first update after re-entry
+// added the whole off-screen interval and killed them all: look away from
+// chimney smoke or fountain mist for longer than one lifespan and it came back
+// EMPTY and refilled at one emit per tick. A count-bounded emitter froze its
+// `totalEmitted`, so a one-shot culled mid-emission resumed late on re-entry
+// (or hit the `culledStopSeconds` force-stop). OpenAC mirrors retail
+// (ParticleSystem.AdvanceDegradedEmitter: FrozenTime for infinite emitters,
+// virtual emission for finite ones). Mirrored here at zero per-particle cost:
+//   (a) persistent: stamp `_rp6FrozenAt` on the cull transition and shift the
+//       live particles' `lastUpdateTime` by the culled interval on re-entry
+//       (`_rp6Thaw`). Deliberate deviation: a persistent emitter STOPPED while
+//       culled is thawed once and then drains on the existing culled drain
+//       path (retail would hold it frozen until it is back in range; our
+//       frustum cull is far more frequent than retail's distance degrade, so
+//       the drain keeps freeing its slots, the same reason that path exists).
+//   (b) finite, not stopped: retail's virtual emission (`_rp6VirtualEmit`):
+//       totalEmitted / lastEmitOffset / lastEmitTime advance without a slot or
+//       a numParticles bump, so stopEmitter() fires on the retail schedule and
+//       the culled drain removes it. `culledStopSeconds` stays as the backstop
+//       (a stationary BirthratePerMeter count-bounded emitter never finishes).
+let _CULL_FREEZE_ON = null;
+export function particleCullFreezeEnabled() {
+  if (_CULL_FREEZE_ON === null) {
+    try {
+      const v = (new URLSearchParams(location.search).get("particleCullFreeze") || "").toLowerCase();
+      _CULL_FREEZE_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _CULL_FREEZE_ON = true;
+    }
+  }
+  return _CULL_FREEZE_ON;
+}
+/** Test/A-B seam: force the flag (`null` re-reads the URL on next use). */
+export function setParticleCullFreezeFlag(on) { _CULL_FREEZE_ON = on == null ? null : !!on; }
+
+/** Retail's persistent/standing emitter test (`!total_particles && total_seconds == 0`). */
+export function _isPersistentEmitter(emitter) {
+  const info = emitter?.info;
+  return !!info && info.totalParticles === 0 && info.totalSeconds === 0;
+}
+
+/**
+ * PLIFECYCLE-2 (a) — un-freeze a persistent emitter: shift each LIVE
+ * particle's `lastUpdateTime` past the interval it spent culled, so the next
+ * update ages it by one frame instead of the whole off-screen dwell. Clears
+ * the stamp, so a second call (re-entry after a culled drain) is a no-op and
+ * time is never counted twice. Returns the seconds skipped (0 when not frozen).
+ */
+export function _rp6Thaw(emitter, now) {
+  const at = emitter._rp6FrozenAt;
+  emitter._rp6FrozenAt = undefined;
+  if (typeof at !== "number") return 0;
+  const dt = now - at;
+  if (!(dt > 0)) return 0;
+  const parts = emitter.parts || [];
+  const particles = emitter.particles || [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] !== null && parts[i] !== undefined && particles[i]) {
+      particles[i].lastUpdateTime += dt;
+    }
+  }
+  return dt;
+}
+
+/**
+ * PLIFECYCLE-2 (b) — retail's degraded-branch emission for a FINITE emitter
+ * (`if (ShouldEmitParticle) RecordParticleEmission`): advance totalEmitted, the
+ * per-metre baseline and the emit clock, but claim no slot and leave
+ * numParticles alone (retail's num_particles++ there is an inflation nothing
+ * ever decrements, since no particle exists to kill). Returns true on an emit.
+ */
+export function _rp6VirtualEmit(emitter, now) {
+  if (typeof emitter.shouldEmitParticle !== "function" || !emitter.shouldEmitParticle()) return false;
+  emitter.totalEmitted += 1;
+  if (typeof emitter._emitterOrigin === "function") emitter._emitterOrigin(emitter.lastEmitOffset);
+  emitter.lastEmitTime = now;
+  return true;
+}
 
 // ── Particle instancing (2026-07-14, `?particleInstancing=on`, default OFF) ──
 //
@@ -1156,6 +1252,14 @@ export class ParticleManager {
     this.nextEmitterId = 1;
     /** @type {Map<number, ParticleEmitter>} */
     this.particleTable = new Map();
+    // PLIFECYCLE-3 (2026-10-08) — `(id, manager) => void`, called once per
+    // emitter tick() removes because it FINISHED (stopped && no particles;
+    // retail ParticleManager::UpdateParticles drops it from the per-object
+    // table, acclient.c:329516-329520). owner_registry.js installs it so a
+    // scoped handle unbinds and the owner's id map stops growing. Explicit
+    // destroyParticleEmitter() does NOT fire it: those callers already clean
+    // their own bookkeeping, and they call in while iterating it.
+    this.onEmitterRemoved = null;
     this._scene = opts.scene;
     this._geometryFactory = opts.geometryFactory;
     this._materialFactory = opts.materialFactory;
@@ -1798,7 +1902,15 @@ export class ParticleManager {
           // Re-entry also clears the off-screen dwell stamp: the count-bounded
           // force-stop bound below measures CONTINUOUS time culled only.
           emitter._rp6CulledSinceSec = undefined;
+          // PLIFECYCLE-2 (a): a frozen persistent emitter resumes at the age it
+          // was culled at (no-op unless `_rp6FrozenAt` was stamped below).
+          _rp6Thaw(emitter, currentTime());
           _setPartsVisible(emitter, true);
+        } else if (nowCulled && !wasCulled && emitter.stopped !== true
+                   && _isPersistentEmitter(emitter) && particleCullFreezeEnabled()) {
+          // PLIFECYCLE-2 (a): freeze a running persistent emitter's ages for
+          // as long as it stays culled (retail degraded birthtime reset).
+          emitter._rp6FrozenAt = currentTime();
         }
       }
 
@@ -1831,9 +1943,18 @@ export class ParticleManager {
         // Persistent (totalParticles==0 && totalSeconds==0) emitters never
         // stop here — they're MEANT to run forever and simply resume on
         // re-entry (the intended perf win), so we keep skipping their
-        // walk entirely. One-shot PlayEffect emitters additionally carry a
-        // hard destroy timer on the spawning side (play_effect_vfx
-        // ONE_SHOT_LIFETIME_MS) as a belt-and-braces reaper.
+        // walk entirely (PLIFECYCLE-2: with their ages frozen, see
+        // `_rp6Thaw`). One-shot PlayEffect emitters additionally carry a
+        // reaper on the spawning side (play_effect_vfx ONE_SHOT_LIFETIME_MS:
+        // stop-then-reap for persistent ones, a far backstop for finite ones).
+        //
+        // PLIFECYCLE-2 (b): a FINITE emitter keeps emitting VIRTUALLY on the
+        // retail schedule while culled, so the stopEmitter() below flips on
+        // its count as well as its clock.
+        if (emitter.stopped !== true && emitter.info && !_isPersistentEmitter(emitter)
+            && particleCullFreezeEnabled()) {
+          try { _rp6VirtualEmit(emitter, currentTime()); } catch (_) {}
+        }
         try {
           if (typeof emitter.stopEmitter === "function") emitter.stopEmitter();
         } catch (_) {}
@@ -1865,6 +1986,11 @@ export class ParticleManager {
           // waiting for numParticles to reach 0 organically (it can't,
           // while the full walk is skipped). updateParticles() does no
           // emission when stopped — just the kill-walk.
+          // PLIFECYCLE-2 (a): a persistent emitter stopped while frozen drops
+          // its frozen interval ONCE here (the stamp is cleared), then ages
+          // normally on this drain; re-entry finds no stamp, so no time is
+          // counted twice.
+          _rp6Thaw(emitter, currentTime());
           drained = !emitter.updateParticles();
           if (drained) removeIds.push(id);
         }
@@ -1929,6 +2055,11 @@ export class ParticleManager {
         }
       }
       this.particleTable.delete(id);
+      // PLIFECYCLE-3: tell the owner registry this emitter finished (see the
+      // ctor note on `onEmitterRemoved`). Never let a listener break the tick.
+      if (typeof this.onEmitterRemoved === "function") {
+        try { this.onEmitterRemoved(id, this); } catch (_) {}
+      }
     }
   }
 

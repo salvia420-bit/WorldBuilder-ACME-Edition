@@ -31,7 +31,21 @@ fn is_level_8_aura_self(spell_id: u16) -> bool {
     LEVEL_8_AURA_SELF_SPELLS.contains(&spell_id)
 }
 
-fn is_higher_priority_enchantment(current: &Enchantment, challenger: &Enchantment) -> bool {
+/// enchstats-5 (2026-10-08) — the default "absolute start time" key for
+/// callers that hold no receive-time stamps (item enchantments, tests): the
+/// raw wire `start_time`. The local player passes
+/// [`crate::player::PlayerState::abs_start_time`] instead, which rebases the
+/// wire value onto the receive clock like retail `Enchantment::UnPack`
+/// (acclient.c:502627: `_start_time = Timer::cur_time + _start_time`).
+pub fn wire_start_time(enchantment: &Enchantment) -> f64 {
+    enchantment.start_time
+}
+
+fn is_higher_priority_enchantment(
+    current: &Enchantment,
+    challenger: &Enchantment,
+    abs_start: &dyn Fn(&Enchantment) -> f64,
+) -> bool {
     if challenger.power_level != current.power_level {
         return challenger.power_level > current.power_level;
     }
@@ -55,30 +69,126 @@ fn is_higher_priority_enchantment(current: &Enchantment, challenger: &Enchantmen
     if challenger_is_set {
         challenger.spell_id > current.spell_id
     } else {
-        challenger.start_time > current.start_time
+        // enchstats-5 (2026-10-08) — retail `Enchantment::Duel`
+        // (acclient.c:502375): the incumbent survives an equal-power duel
+        // only when the challenger is STRICTLY older
+        // (`challenger->_start_time < this->_start_time`), so an exact tie
+        // goes to the CHALLENGER (`>=`). The times compared are ABSOLUTE
+        // (rebased at receipt, `Enchantment::UnPack` :502627) — two layers
+        // cast in separate `MagicUpdateEnchantment` events both carry a wire
+        // `start_time` of ~0, and only the receive-time rebase tells the
+        // newer one apart.
+        abs_start(challenger) >= abs_start(current)
     }
 }
 
-fn get_top_enchantments(
-    enchantments: &[Enchantment],
+/// Retail `Enchantment::AffectsAttackSkills` (acclient.c:502467): the skill
+/// keys an `ATTACK_SKILLS` (0x10000) enchantment reaches — Life/War Magic,
+/// Two Handed, Void, Heavy/Light/Finesse, Missile Weapons, Dual Wield.
+const ATTACK_SKILL_KEYS: [u32; 9] = [0x21, 0x22, 0x29, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x31];
+
+/// Retail `Enchantment::AffectsDefenseSkills` (acclient.c:502499): the skill
+/// keys a `DEFENSE_SKILLS` (0x20000) enchantment reaches — Melee/Missile/Magic
+/// Defense and Shield.
+const DEFENSE_SKILL_KEYS: [u32; 4] = [0x06, 0x07, 0x0F, 0x30];
+
+/// enchstats-1 (2026-10-08) — retail `CEnchantmentRegistry::CullEnchantmentsFromList`
+/// (acclient.c:445810) key predicate for the attribute / vital / skill
+/// families (`EnchantAttribute` :445870 type 1, `EnchantAttribute2nd`
+/// :445921 type 2, `EnchantSkill` :445984 type 0x10):
+///
+/// ```text
+/// v8 & type && (BYTE1(v8) & 0x20 /*MultipleStat*/ || key == key
+///              || AffectsAttackSkills(key) || AffectsDefenseSkills(key))
+/// ```
+///
+/// So a key-0 `MULTIPLE_STAT` enchantment ("Cloaked in Skill" +20 all skills,
+/// the Society blessings, Mucor Blight …) reaches EVERY key of its family,
+/// and the Dirty Fighting assaults reach the whole attack / defense family
+/// rather than only the key in the record.
+///
+/// Vitae and cooldowns never match: retail keeps them out of the mult/add
+/// lists entirely (`CEnchantmentRegistry::_vitae` / `_cooldown_list`, see
+/// `RemoveEnchantment`). Vitae carries `SECOND_ATT|SKILL|MULTIPLE_STAT|MULT`
+/// (spell 666 = 0xA06012), so without this exclusion the wildcard would
+/// apply it a second time on top of the explicit vitae step in
+/// `stats_calc.rs`.
+fn stat_family_matches(enchantment: &Enchantment, family: u32, key: u32) -> bool {
+    let t = enchantment.stat_mod_type;
+    if t & (EnchantmentTypeFlags::VITAE.bits() | EnchantmentTypeFlags::COOLDOWN.bits()) != 0 {
+        return false;
+    }
+    if t & EnchantmentTypeFlags::MULTIPLE_STAT.bits() != 0 || enchantment.stat_mod_key == key {
+        return true;
+    }
+    if family & EnchantmentTypeFlags::SKILL.bits() != 0 {
+        if t & EnchantmentTypeFlags::ATTACK_SKILLS.bits() != 0 && ATTACK_SKILL_KEYS.contains(&key) {
+            return true;
+        }
+        if t & EnchantmentTypeFlags::DEFENSE_SKILLS.bits() != 0 && DEFENSE_SKILL_KEYS.contains(&key)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// How a query's `stat_mod_key` selects enchantments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyMatch {
+    /// Body armor / damage / variance and vitae: the key is ignored.
+    Keyless,
+    /// INT / FLOAT properties (resistances): the key must match exactly.
+    Exact,
+    /// Attribute / vital / skill families: retail's cull predicate,
+    /// [`stat_family_matches`]. The payload is the family bits.
+    StatFamily(u32),
+}
+
+fn key_match_for(stat_mod_type: u32) -> KeyMatch {
+    let keyless = EnchantmentTypeFlags::BODY_ARMOR_VALUE.bits()
+        | EnchantmentTypeFlags::BODY_DAMAGE_VALUE.bits()
+        | EnchantmentTypeFlags::BODY_DAMAGE_VARIANCE.bits()
+        | EnchantmentTypeFlags::VITAE.bits();
+    let family_bits = EnchantmentTypeFlags::ATTRIBUTE.bits()
+        | EnchantmentTypeFlags::SECOND_ATT.bits()
+        | EnchantmentTypeFlags::SKILL.bits();
+    let property_bits = EnchantmentTypeFlags::INT.bits() | EnchantmentTypeFlags::FLOAT.bits();
+    if stat_mod_type & keyless != 0 {
+        KeyMatch::Keyless
+    } else if stat_mod_type & family_bits != 0 && stat_mod_type & property_bits == 0 {
+        KeyMatch::StatFamily(stat_mod_type & family_bits)
+    } else {
+        KeyMatch::Exact
+    }
+}
+
+fn get_top_enchantments<'a>(
+    enchantments: &'a [Enchantment],
     required_flags: u32,
     stat_mod_key: u32,
-    is_keyless: bool,
-) -> Vec<&Enchantment> {
-    let mut top_by_category: HashMap<u16, &Enchantment> = HashMap::new();
+    key_match: KeyMatch,
+    abs_start: &dyn Fn(&Enchantment) -> f64,
+) -> Vec<&'a Enchantment> {
+    let mut top_by_category: HashMap<u16, &'a Enchantment> = HashMap::new();
 
     for enchantment in enchantments {
         if (enchantment.stat_mod_type & required_flags) != required_flags {
             continue;
         }
-        if !is_keyless && enchantment.stat_mod_key != stat_mod_key {
+        let key_ok = match key_match {
+            KeyMatch::Keyless => true,
+            KeyMatch::Exact => enchantment.stat_mod_key == stat_mod_key,
+            KeyMatch::StatFamily(family) => stat_family_matches(enchantment, family, stat_mod_key),
+        };
+        if !key_ok {
             continue;
         }
 
         top_by_category
             .entry(enchantment.spell_category)
             .and_modify(|current| {
-                if is_higher_priority_enchantment(current, enchantment) {
+                if is_higher_priority_enchantment(current, enchantment, abs_start) {
                     *current = enchantment;
                 }
             })
@@ -93,19 +203,33 @@ pub fn get_enchantment_multiplier(
     stat_mod_type: u32,
     stat_mod_key: u32,
 ) -> f32 {
+    get_enchantment_multiplier_with_start(
+        enchantments,
+        stat_mod_type,
+        stat_mod_key,
+        &wire_start_time,
+    )
+}
+
+/// [`get_enchantment_multiplier`] with an explicit absolute-start-time key
+/// for the same-power duel (enchstats-5; see [`wire_start_time`]).
+pub fn get_enchantment_multiplier_with_start(
+    enchantments: &[Enchantment],
+    stat_mod_type: u32,
+    stat_mod_key: u32,
+    abs_start: &dyn Fn(&Enchantment) -> f64,
+) -> f32 {
     let required_flags = stat_mod_type | EnchantmentTypeFlags::MULTIPLICATIVE.bits();
 
-    // Stats that don't use the stat_mod_key for filtering
-    let is_keyless = (stat_mod_type
-        & (EnchantmentTypeFlags::BODY_ARMOR_VALUE.bits()
-            | EnchantmentTypeFlags::BODY_DAMAGE_VALUE.bits()
-            | EnchantmentTypeFlags::BODY_DAMAGE_VARIANCE.bits()
-            | EnchantmentTypeFlags::VITAE.bits()))
-        != 0;
-
-    get_top_enchantments(enchantments, required_flags, stat_mod_key, is_keyless)
-        .into_iter()
-        .fold(1.0f32, |acc, enchantment| acc * enchantment.stat_mod_value)
+    get_top_enchantments(
+        enchantments,
+        required_flags,
+        stat_mod_key,
+        key_match_for(stat_mod_type),
+        abs_start,
+    )
+    .into_iter()
+    .fold(1.0f32, |acc, enchantment| acc * enchantment.stat_mod_value)
 }
 
 pub fn get_enchantment_additive(
@@ -113,19 +237,28 @@ pub fn get_enchantment_additive(
     stat_mod_type: u32,
     stat_mod_key: u32,
 ) -> f32 {
+    get_enchantment_additive_with_start(enchantments, stat_mod_type, stat_mod_key, &wire_start_time)
+}
+
+/// [`get_enchantment_additive`] with an explicit absolute-start-time key for
+/// the same-power duel (enchstats-5; see [`wire_start_time`]).
+pub fn get_enchantment_additive_with_start(
+    enchantments: &[Enchantment],
+    stat_mod_type: u32,
+    stat_mod_key: u32,
+    abs_start: &dyn Fn(&Enchantment) -> f64,
+) -> f32 {
     let required_flags = stat_mod_type | EnchantmentTypeFlags::ADDITIVE.bits();
 
-    // Stats that don't use the stat_mod_key for filtering
-    let is_keyless = (stat_mod_type
-        & (EnchantmentTypeFlags::BODY_ARMOR_VALUE.bits()
-            | EnchantmentTypeFlags::BODY_DAMAGE_VALUE.bits()
-            | EnchantmentTypeFlags::BODY_DAMAGE_VARIANCE.bits()
-            | EnchantmentTypeFlags::VITAE.bits()))
-        != 0;
-
-    get_top_enchantments(enchantments, required_flags, stat_mod_key, is_keyless)
-        .into_iter()
-        .fold(0.0f32, |acc, enchantment| acc + enchantment.stat_mod_value)
+    get_top_enchantments(
+        enchantments,
+        required_flags,
+        stat_mod_key,
+        key_match_for(stat_mod_type),
+        abs_start,
+    )
+    .into_iter()
+    .fold(0.0f32, |acc, enchantment| acc + enchantment.stat_mod_value)
 }
 
 fn get_player_natural_resistance(
@@ -157,8 +290,13 @@ pub fn get_player_enchanted_resistance(
     let required_flags = EnchantmentTypeFlags::FLOAT.bits()
         | EnchantmentTypeFlags::SINGLE_STAT.bits()
         | EnchantmentTypeFlags::MULTIPLICATIVE.bits();
-    let top_enchantments =
-        get_top_enchantments(enchantments, required_flags, resistance_key, false);
+    let top_enchantments = get_top_enchantments(
+        enchantments,
+        required_flags,
+        resistance_key,
+        KeyMatch::Exact,
+        &wire_start_time,
+    );
 
     let mut protection_mod = 1.0f32;
     let mut vulnerability_mod = 1.0f32;
@@ -506,5 +644,205 @@ mod tests {
             ..other8.clone()
         };
         assert_eq!(get_enchantment_additive(&[early, late], flags, key), 2.0);
+    }
+
+    // ---------------------------------------------------------------------
+    // enchstats-1 (2026-10-08) — retail `CullEnchantmentsFromList`
+    // (acclient.c:445810). Spell type/key/value from the LSD spell dump.
+    // ---------------------------------------------------------------------
+
+    fn stat_enchant(category: u16, stat_mod_type: u32, key: u32, value: f32) -> Enchantment {
+        Enchantment {
+            spell_id: category,
+            spell_category: category,
+            power_level: 100,
+            stat_mod_type,
+            stat_mod_key: key,
+            stat_mod_value: value,
+            ..Default::default()
+        }
+    }
+
+    const SKILL_FAMILY: u32 = EnchantmentTypeFlags::SKILL.bits();
+    const ATTRIBUTE_FAMILY: u32 = EnchantmentTypeFlags::ATTRIBUTE.bits();
+    const VITAL_FAMILY: u32 = EnchantmentTypeFlags::SECOND_ATT.bits();
+
+    /// Spell 5753 "Cloaked in Skill": 0x0200A010 (Beneficial | Additive |
+    /// MultipleStat | Skill), key 0, +20 — "Increases all of the target's
+    /// skills by 20".
+    #[test]
+    fn multiple_stat_skill_buff_applies_to_every_skill() {
+        let e = [stat_enchant(1, 0x0200_A010, 0, 20.0)];
+        assert_eq!(
+            get_enchantment_additive(&e, SKILL_FAMILY, SkillType::Run as u32),
+            20.0
+        );
+        assert_eq!(
+            get_enchantment_additive(&e, SKILL_FAMILY, SkillType::WarMagic as u32),
+            20.0
+        );
+        assert_eq!(
+            get_enchantment_additive(&e, SKILL_FAMILY, SkillType::MeleeDefense as u32),
+            20.0
+        );
+        // The wildcard never leaks across families.
+        assert_eq!(get_enchantment_additive(&e, ATTRIBUTE_FAMILY, 1), 0.0);
+        assert_eq!(get_enchantment_additive(&e, VITAL_FAMILY, 1), 0.0);
+    }
+
+    /// Spell 4904 "Society Master's Blessing": 0xA001 (Additive |
+    /// MultipleStat | Attribute), key 0, +15 — "Increases all attributes by 15".
+    #[test]
+    fn society_blessing_all_attributes() {
+        let e = [stat_enchant(2, 0xA001, 0, 15.0)];
+        for key in 1..=6 {
+            assert_eq!(
+                get_enchantment_additive(&e, ATTRIBUTE_FAMILY, key),
+                15.0,
+                "attr {key}"
+            );
+        }
+        assert_eq!(get_enchantment_additive(&e, VITAL_FAMILY, 1), 0.0);
+        assert_eq!(get_enchantment_additive(&e, SKILL_FAMILY, 24), 0.0);
+    }
+
+    /// "Blight of the Swamp"-shaped vital debuff: 0x6002 (Multiplicative |
+    /// MultipleStat | SecondAtt), key 0, x0.6 — every max vital.
+    #[test]
+    fn multiple_stat_vital_debuff() {
+        let e = [stat_enchant(3, 0x6002, 0, 0.6)];
+        for key in [1, 3, 5] {
+            let m = get_enchantment_multiplier(&e, VITAL_FAMILY, key);
+            assert!((m - 0.6).abs() < 1e-6, "vital {key}: {m}");
+        }
+        assert_eq!(get_enchantment_multiplier(&e, SKILL_FAMILY, 24), 1.0);
+    }
+
+    /// Spell 666 Vitae: 0xA06012 (Vitae | AdditiveDegrade | Multiplicative |
+    /// MultipleStat | Skill | SecondAtt), key 0. Retail keeps it in
+    /// `CEnchantmentRegistry::_vitae`, never in the culled lists, so the
+    /// MultipleStat wildcard must NOT pick it up (stats_calc applies it once,
+    /// explicitly).
+    #[test]
+    fn vitae_not_matched_by_wildcard() {
+        let e = [stat_enchant(204, 0x00A0_6012, 0, 0.95)];
+        assert_eq!(get_enchantment_multiplier(&e, SKILL_FAMILY, 24), 1.0);
+        assert_eq!(get_enchantment_multiplier(&e, VITAL_FAMILY, 1), 1.0);
+        assert!((get_total_vitae(&e) - 0.95).abs() < 1e-6);
+    }
+
+    /// Spell 5938 "Blinding Assault": 0x18010 (AttackSkills | Additive |
+    /// Skill), key 45, -20 — "all of the target's attack skills"
+    /// (`Enchantment::AffectsAttackSkills`, acclient.c:502467).
+    #[test]
+    fn blinding_assault_attack_family() {
+        let e = [stat_enchant(4, 0x1_8010, 45, -20.0)];
+        for key in [33, 34, 41, 43, 44, 45, 46, 47, 49] {
+            assert_eq!(
+                get_enchantment_additive(&e, SKILL_FAMILY, key),
+                -20.0,
+                "skill {key}"
+            );
+        }
+        assert_eq!(
+            get_enchantment_additive(&e, SKILL_FAMILY, 24),
+            0.0,
+            "Run untouched"
+        );
+        assert_eq!(
+            get_enchantment_additive(&e, SKILL_FAMILY, 6),
+            0.0,
+            "defense untouched"
+        );
+    }
+
+    /// Spell 5940 "Unbalancing Assault": 0x28010 (DefenseSkills | Additive |
+    /// Skill), key 15, -20 (`Enchantment::AffectsDefenseSkills`, :502499).
+    #[test]
+    fn unbalancing_assault_defense_family() {
+        let e = [stat_enchant(5, 0x2_8010, 15, -20.0)];
+        for key in [6, 7, 15, 48] {
+            assert_eq!(
+                get_enchantment_additive(&e, SKILL_FAMILY, key),
+                -20.0,
+                "skill {key}"
+            );
+        }
+        assert_eq!(get_enchantment_additive(&e, SKILL_FAMILY, 45), 0.0);
+    }
+
+    // ---------------------------------------------------------------------
+    // enchstats-5 (2026-10-08) — retail `Enchantment::Duel` (acclient.c:502375)
+    // on receive-time-rebased start times (`Enchantment::UnPack` :502627).
+    // ---------------------------------------------------------------------
+
+    fn same_power_pair() -> (Enchantment, Enchantment, u32, u32) {
+        let flags = (EnchantmentTypeFlags::SKILL | EnchantmentTypeFlags::ADDITIVE).bits();
+        let key = SkillType::Run as u32;
+        let a = Enchantment {
+            spell_id: 100,
+            layer: 1,
+            spell_category: 9,
+            power_level: 100,
+            start_time: 0.0,
+            stat_mod_type: flags,
+            stat_mod_key: key,
+            stat_mod_value: 1.0,
+            ..Default::default()
+        };
+        let b = Enchantment {
+            spell_id: 101,
+            stat_mod_value: 2.0,
+            ..a
+        };
+        (a, b, flags, key)
+    }
+
+    /// Two same-category, same-power layers delivered in SEPARATE
+    /// `MagicUpdateEnchantment` events both carry wire start_time 0; only the
+    /// receive-time rebase says which is newer, and retail keeps the newer.
+    #[test]
+    fn duel_newer_same_power_wins_across_separate_updates() {
+        let (a, b, flags, key) = same_power_pair();
+        let a_then_b = |e: &Enchantment| if e.spell_id == 100 { 10.0 } else { 20.0 };
+        assert_eq!(
+            get_enchantment_additive_with_start(&[a, b], flags, key, &a_then_b),
+            2.0
+        );
+        assert_eq!(
+            get_enchantment_additive_with_start(&[b, a], flags, key, &a_then_b),
+            2.0,
+            "Vec order must not matter once the times differ"
+        );
+        let b_then_a = |e: &Enchantment| if e.spell_id == 100 { 20.0 } else { 10.0 };
+        assert_eq!(
+            get_enchantment_additive_with_start(&[a, b], flags, key, &b_then_a),
+            1.0
+        );
+
+        // An exact tie goes to the CHALLENGER (the later list entry).
+        let tie = |_: &Enchantment| 5.0;
+        assert_eq!(
+            get_enchantment_additive_with_start(&[a, b], flags, key, &tie),
+            2.0
+        );
+        assert_eq!(
+            get_enchantment_additive_with_start(&[b, a], flags, key, &tie),
+            1.0
+        );
+    }
+
+    /// `upsert_enchantment` refreshes an existing (spell, layer) IN PLACE, so
+    /// a re-cast layer keeps its early Vec slot. Its rebased time (100) must
+    /// still beat a layer that arrived at 50 — a bare `>=` on the wire value
+    /// (both 0) would wrongly pick the later Vec entry.
+    #[test]
+    fn refreshed_in_place_layer_wins() {
+        let (a, b, flags, key) = same_power_pair();
+        let abs = |e: &Enchantment| if e.spell_id == 100 { 100.0 } else { 50.0 };
+        assert_eq!(
+            get_enchantment_additive_with_start(&[a, b], flags, key, &abs),
+            1.0
+        );
     }
 }

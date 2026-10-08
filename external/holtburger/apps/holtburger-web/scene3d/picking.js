@@ -9,6 +9,7 @@ import {
 import { getAimLevelForVelocity, getAimLevelForBallisticArc } from "../ui/ac_aim_level_for_velocity.js";
 import { isAttackerBehindDefender } from "../ui/ac_sneak_attack_predict.js";
 import { classifySpell } from "../ui/ac_spell_shape.js";
+import { readBusyCount } from "../ui/ac_cast_predict.js";
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { pickSkillLevel, determineSpellRange, decideRangeWarn } from "./spell_range.js";
 import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
@@ -18,6 +19,7 @@ import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 // this file behaves byte-identically.
 import { serverTurnOwnsFacing } from "./server_turn.js";
 import { objectIsAttackable, itemIsUseable } from "./target_cycle.js";
+import { pickNearestSphereHit } from "./pick_math.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
@@ -247,6 +249,17 @@ const SERVER_SWING = (() => {
     return typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("serverSwing") !== "off";
   } catch { return false; }
+})();
+
+// selection-5 (2026-10-08) — retail drawing-sphere pick fallback
+// (Render::GetMouseSelectionObjectID, acclient.c:380089; scene3d/pick_math.js).
+// DEFAULT-ON; `?pickSphereFallback=off` (or 0/false) = polygon hits only.
+const PICK_SPHERE_FALLBACK = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("pickSphereFallback")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch { return true; }
 })();
 
 // Fallback AttackType for the CombatManeuverTable lookup when the
@@ -921,7 +934,61 @@ export function setupClickPicking({
       if (hidden) continue;
       if (obj) return guidByRoot.get(obj);
     }
-    return null;
+    // selection-5: no polygon hit → the nearest drawing-sphere hit, as
+    // retail's GetMouseSelectionObjectID falls back to (pick_math.js).
+    return PICK_SPHERE_FALLBACK ? pickBySphere(em, guidByRoot, localGuid) : null;
+  }
+
+  // selection-5 scratch. The sphere pass runs on every hover miss
+  // (hover-tooltip mousemove, debug-overlay rAF), so it allocates nothing in
+  // steady state: one scratch Sphere and a pooled record array.
+  const _pickSphere = new THREE.Sphere();
+  const _pickSpheres = [];
+
+  // An object is drawn only when it and every ancestor are visible (a held
+  // item under a culled wielder is not drawn either).
+  function drawnChain(obj) {
+    for (let o = obj; o; o = o.parent) if (o.visible === false) return false;
+    return true;
+  }
+
+  // Retail tests each drawn PART's drawing sphere (Render::
+  // GfxObjUnderSelectionRay, acclient.c:380036). Our parts are the rig's
+  // `inst.parts` groups; their surface meshes carry three's vertex-derived
+  // bounding spheres (cached on the geometry), transformed to world here.
+  // Only rig-part meshes are tested — never the legacy selection ring,
+  // particles or sprites. A wielded item is its own entity, so its sphere
+  // picks the item. The local player's own held items stay unpickable, like
+  // its rig.
+  function pickBySphere(em, guidByRoot, localGuid) {
+    let n = 0;
+    for (const [root, g] of guidByRoot) {
+      const inst = em.entityMap.get(g);
+      const parts = inst?.parts;
+      if (!Array.isArray(parts) || parts.length === 0) continue;
+      if (inst._attachedParentGuid != null && (inst._attachedParentGuid >>> 0) === localGuid) continue;
+      if (!drawnChain(root)) continue;
+      for (const part of parts) {
+        if (!part || part.visible === false) continue;
+        for (const m of part.children) {
+          if (!m.isMesh || m.visible === false || !m.geometry) continue;
+          if (!raycaster.layers.test(m.layers)) continue;
+          const geo = m.geometry;
+          if (!geo.boundingSphere) geo.computeBoundingSphere();
+          if (!(geo.boundingSphere?.radius > 0)) continue;
+          _pickSphere.copy(geo.boundingSphere).applyMatrix4(m.matrixWorld);
+          const rec = _pickSpheres[n] || (_pickSpheres[n] = { guid: 0, cx: 0, cy: 0, cz: 0, r: 0 });
+          rec.guid = g;
+          rec.cx = _pickSphere.center.x;
+          rec.cy = _pickSphere.center.y;
+          rec.cz = _pickSphere.center.z;
+          rec.r = _pickSphere.radius;
+          n += 1;
+        }
+      }
+    }
+    if (n === 0) return null;
+    return pickNearestSphereHit(raycaster.ray.origin, raycaster.ray.direction, _pickSpheres, n);
   }
 
   function onPointerDown(ev) {
@@ -1002,12 +1069,18 @@ export function setupClickPicking({
       // (Player_Inventory.cs CreateMoveToChain/StartPickup), so no
       // client-side charge. Double-click retained — same misclick guard
       // as every other world action; single click stays select+assess.
+      // 2026-10-08: the destination is retail PlaceInBackpack's
+      // (plugins/item_drag.js placeInBackpack — auto-merge into a matching
+      // stack, open side pack, main pack, side-pack overflow), the same as a
+      // corpse take; the bare moveItem(player, 0) is the fallback.
       if (entityIsGroundItem(guid) && typeof sessionHandle.moveItem === "function") {
         if (doubleClickGate(guid, ev)) {
           const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
           if (me !== 0) {
             cancelClientMove();
-            sessionHandle.moveItem(guid >>> 0, me, 0);
+            const place = window.__itemDrag?.placeInBackpack;
+            if (typeof place === "function") place(guid >>> 0);
+            else sessionHandle.moveItem(guid >>> 0, me, 0);
           }
         }
         return;
@@ -1118,6 +1191,9 @@ export function setupClickPicking({
           // caster. The caster stands still otherwise (no auto-charge),
           // so an in-place turn is correct.
           const doCast = () => {
+            // spellcast-4: outstanding requests BEFORE this send decide whether
+            // the local chain is predicted (entities.js playCastSequence).
+            const busyBefore = readBusyCount(sessionHandle);
             sessionHandle.castTargetedSpell(guid, spellId);
             // C1 (2026-07-12) — bias the follow-camera lookAt toward the cast
             // target while the cast is in flight (?castCamBias=on; the camera
@@ -1158,6 +1234,7 @@ export function setupClickPicking({
                   em.playCastSequence(localGuid, spellId, {
                     onBeforeCastGesture: () =>
                       turnToFaceThenAct(guid, () => {}, CAST_REFACE),
+                    busyBefore,
                   });
                 } else {
                   em?.setCastPose?.(localGuid);
@@ -1320,16 +1397,21 @@ export function setupClickPicking({
   // selector's power, which ACE's AttackQueue hands to the auto-repeat
   // swings (Entity/AttackQueue.cs). No lockout, turn, prediction or sticky.
   function fireAttackOnSelectedTarget(height, power, opts) {
-    const targetGuid = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
-    if (targetGuid === 0) {
-      console.log("[fire-attack] no target selected — click a monster first");
-      emitActionRejected("Select a target first."); // F11-5
-      return;
-    }
-    // Retail ExecuteAttack (acclient.c:408640) drops a target that fails
-    // ObjectIsAttackable and prints this line instead of attacking.
-    if (!entityIsAttackableTarget(targetGuid)) {
-      emitActionRejected("You must select a valid combat target before attacking");
+    // selection-6 (2026-10-08) — retail ClientCombatSystem::GetAttackTarget
+    // (acclient.c:407570): a selected wielded item (a monster's weapon) is
+    // attacked through its WIELDER, an item the player owns attacks nobody,
+    // and the selection itself stays put (EntityManager.attackTargetFor,
+    // `?attackWielder=off` skips the wielder redirect).
+    const em = liveScene3d.entityManager;
+    const selGuid = (em?.getSelectedTarget?.() ?? 0) >>> 0;
+    const targetGuid = typeof em?.attackTargetFor === "function"
+      ? ((em.attackTargetFor(selGuid) ?? 0) >>> 0)
+      : selGuid;
+    // Retail ExecuteAttack (acclient.c:408626-408660) drops a missing target
+    // or one that fails ObjectIsAttackable and prints this one line for both.
+    if (targetGuid === 0 || !entityIsAttackableTarget(targetGuid)) {
+      if (selGuid === 0) console.log("[fire-attack] no target selected — click a monster first");
+      emitActionRejected("You must select a valid combat target before attacking"); // F11-5
       return;
     }
     const cb = window.__combatBarState;

@@ -85,8 +85,24 @@ impl PlayerState {
                 _ => stats::TrainingLevel::Unusable,
             };
 
-            self.skill_bases
-                .insert(skill_type, SkillBase { ranks, init });
+            // enchstats-2 (2026-10-08): keep the raw advancement class and
+            // the SkillTable min_level so `derive_skill_value` can apply
+            // retail's `InqSkillBaseLevel` usability gate and the
+            // specialized-only `LumAugSkilledSpec` term.
+            let min_level = skill_table
+                .skill_base_hash
+                .get(&(skill_type as u32))
+                .map(|b| b.min_level)
+                .unwrap_or(1);
+            self.skill_bases.insert(
+                skill_type,
+                SkillBase {
+                    ranks,
+                    init,
+                    sac: status,
+                    min_level,
+                },
+            );
 
             let base_val = self.derive_skill_value(skill_type, ranks, init, false);
             let current_val = self.derive_skill_value(skill_type, ranks, init, true);
@@ -470,15 +486,32 @@ impl PlayerState {
         self.frames_stationary_fall = 0;
     }
 
+    /// `now` is the receive clock (`WorldState::current_server_time`) the
+    /// enchantment layers are rebased onto (enchstats-5; retail
+    /// `Enchantment::UnPack`, acclient.c:502627).
     pub fn hydrate_from_player_description(
         &mut self,
         data: &PlayerDescriptionEventData,
         xp_table: &holtburger_dat::file_type::XpTable,
         skill_table: &holtburger_dat::file_type::SkillTable,
+        now: f64,
         _events: &mut Vec<WorldEvent>,
     ) {
+        use holtburger_common::properties::WorldObjectPropertyAccessors as _;
+
         self.guid = data.guid;
         self.enchantments = data.enchantments.clone();
+        self.enchantment_abs_start.clear();
+        for enchantment in &data.enchantments {
+            self.stamp_enchantment_start(enchantment, now);
+        }
+        // enchstats-2/3 (2026-10-08): seed the InqSkill / InqAttribute2nd
+        // property inputs from THIS dump, not from the live entity bag —
+        // the world handler runs this hydrate before the login handler
+        // bootstraps the entity from the same dump, and ORACLE open defect #1
+        // measured the live bag losing JackOfAllTrades afterwards.
+        self.stat_aug =
+            super::types::StatAugInputs::from_lookup(|prop| data.properties.get_int_prop(prop));
 
         self.spells = data.spells.clone();
         self.options1 = data.options1;
@@ -548,11 +581,18 @@ impl PlayerState {
                 let training = stats::TrainingLevel::from_repr(skill.status)
                     .unwrap_or(stats::TrainingLevel::Untrained);
 
+                let min_level = skill_table
+                    .skill_base_hash
+                    .get(&(skill_type as u32))
+                    .map(|b| b.min_level)
+                    .unwrap_or(1);
                 self.skill_bases.insert(
                     skill_type,
                     SkillBase {
                         ranks: skill.ranks,
                         init: skill.init,
+                        sac: skill.status,
+                        min_level,
                     },
                 );
 
@@ -596,16 +636,34 @@ impl PlayerState {
         }
     }
 
+    /// enchstats-5 (2026-10-08): record `now + wire start_time` for one
+    /// layer (retail `Enchantment::UnPack`, acclient.c:502627). A refresh of
+    /// an existing (spell, layer) re-stamps it, so a re-cast layer that keeps
+    /// its old Vec slot still reads as the newest.
+    fn stamp_enchantment_start(&mut self, enchantment: &Enchantment, now: f64) {
+        let start = if enchantment.start_time.is_finite() {
+            enchantment.start_time
+        } else {
+            0.0
+        };
+        self.enchantment_abs_start
+            .insert((enchantment.spell_id, enchantment.layer), now + start);
+    }
+
+    /// `now`: the receive clock (`WorldState::current_server_time`), see
+    /// [`Self::stamp_enchantment_start`].
     pub fn upsert_enchantment(
         &mut self,
         target: Guid,
         enchantment: Enchantment,
+        now: f64,
         events: &mut Vec<WorldEvent>,
     ) -> bool {
         if target != self.guid {
             return false;
         }
 
+        self.stamp_enchantment_start(&enchantment, now);
         if let Some(existing) = self
             .enchantments
             .iter_mut()
@@ -624,6 +682,7 @@ impl PlayerState {
         &mut self,
         target: Guid,
         enchantments: &[Enchantment],
+        now: f64,
         events: &mut Vec<WorldEvent>,
     ) -> bool {
         if target != self.guid {
@@ -631,6 +690,7 @@ impl PlayerState {
         }
 
         for enchantment in enchantments {
+            self.stamp_enchantment_start(enchantment, now);
             if let Some(existing) = self
                 .enchantments
                 .iter_mut()
@@ -659,6 +719,7 @@ impl PlayerState {
 
         self.enchantments
             .retain(|e| e.spell_id != spell_id || e.layer != layer);
+        self.enchantment_abs_start.remove(&(spell_id, layer));
         self.emit_enchantments_updated(events);
         true
     }
@@ -676,6 +737,7 @@ impl PlayerState {
         for (spell_id, layer) in spells {
             self.enchantments
                 .retain(|e| e.spell_id != *spell_id || e.layer != *layer);
+            self.enchantment_abs_start.remove(&(*spell_id, *layer));
         }
 
         self.emit_enchantments_updated(events);
@@ -701,6 +763,7 @@ impl PlayerState {
                 flags.contains(EnchantmentTypeFlags::VITAE)
             }
         });
+        self.prune_enchantment_abs_start();
 
         self.emit_enchantments_updated(events);
         true
@@ -721,6 +784,18 @@ impl PlayerState {
             spell_id,
             spell_ids: self.current_spell_ids(),
         });
+    }
+
+    /// Drop receive-time stamps for layers no longer in
+    /// [`Self::enchantments`] (purge paths).
+    fn prune_enchantment_abs_start(&mut self) {
+        let live: std::collections::HashSet<(u16, u16)> = self
+            .enchantments
+            .iter()
+            .map(|e| (e.spell_id, e.layer))
+            .collect();
+        self.enchantment_abs_start
+            .retain(|key, _| live.contains(key));
     }
 
     fn emit_enchantments_updated(&mut self, events: &mut Vec<WorldEvent>) {

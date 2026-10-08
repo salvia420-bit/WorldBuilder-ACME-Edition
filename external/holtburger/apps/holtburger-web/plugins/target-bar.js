@@ -42,7 +42,7 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { listManifestBindings } from "../ui/keymap.js";
-import { suggestedCombatModeFromInventory } from "./inventory_helpers.js";
+import { suggestedCombatModeFromInventory, activateOrUse } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
 import { shouldQueryHealth } from "../scene3d/target_cycle.js";
@@ -539,11 +539,20 @@ export function mountToolbarControls(field, opts = {}) {
     const handle = window.__sessionHandle;
     if (!handle?.useObject || !state.selectedGuid) return;
     const guid = state.selectedGuid >>> 0;
+    // Retail gmToolbarUI Use (0x1000019D) → ItemHolder::UseObject(selected):
+    // an OWNED item takes the shortcut-key route (inventory.js activateItem —
+    // wield / wear / salvage / target mode, no bare Use ACE cannot act on);
+    // a world object, or `?hotbarActivate=off`, keeps the plain Use.
+    let route = "none";
     try {
-      handle.useObject(guid);
+      route = activateOrUse(guid, {
+        activate: window.__inventory?.activateItem,
+        use: (g) => handle.useObject(g),
+      });
     } catch (e) {
       console.warn("[toolbar] useObject failed", e);
     }
+    if (route !== "used") return;
     // HUD rec #180 (2026-06-16): a book (object-description flag BOOK =
     // 0x100) also needs a bookData() request — ACE's Use on a book only
     // acks; the server ignores BookData on non-book GUIDs.

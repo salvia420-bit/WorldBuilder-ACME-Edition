@@ -6,6 +6,8 @@
 // tested under node (tests/commerce_logic.test.mjs) without a DOM. Each rule
 // cites the retail decomp function it mirrors.
 
+import { retailPluralName } from "./inventory_helpers.js";
+
 // ─── Vendor prices ─────────────────────────────────────────────────────
 //
 // THE DIRECTION TRAP (fixed 2026-10-05). The VendorProfile wire block is
@@ -109,6 +111,140 @@ export function vendorAcceptability(vendor, item) {
 
 export function vendorRejectText(code) {
   return VENDOR_REJECT_TEXT[code] ?? "You cannot sell that here";
+}
+
+/**
+ * What dropping an inventory item on the vendor stages for sale —
+ * VendorSellUI::DragItemAcceptable (acclient.c:244306) then
+ * gmVendorUI::AddItem (acclient.c:243845, _addContents = 1):
+ *   - not carried → "You can only sell items you are carrying";
+ *   - a pack WITH contents is accepted without its own acceptability test
+ *     and is not staged itself: "Selling contents of <pack>", then every
+ *     child the vendor accepts (_excludeIfUnacceptable — the rest are
+ *     skipped quietly). An EMPTY pack is an ordinary item;
+ *   - wielded → refused (ACE Player_Commerce will not sell a wielded item);
+ *   - else InqAcceptability's rejection text, or the item itself.
+ * Every staged row is a WHOLE stack (`amount = stackSize`):
+ * VendorProfile::VendorBuyPrice (acclient.c:509885) prices the full
+ * _stackSize, and ACE removes and pays for the whole stack whatever amount
+ * the Sell message carries (Player_Commerce
+ * TryRemoveFromInventoryWithNetworking) — a trimmed amount only made the
+ * window show less than was sold.
+ *
+ * @param {Array<object>} rows  inventory rows (guid, containerId, equipMask,
+ *   stackSize, value, itemType, name)
+ * @returns {{stage: Array<object>, message?: string, reject?: string}}
+ */
+export function sellStagingPlan(rows, droppedGuid, vendor) {
+  const g = droppedGuid >>> 0;
+  const list = Array.isArray(rows) ? rows : [];
+  const item = g ? list.find((r) => (r?.guid >>> 0) === g) : null;
+  if (!item) return { stage: [], reject: "You can only sell items you are carrying" };
+  const whole = (r) => ({ ...r, amount: Math.max(1, Number(r.stackSize) || 1) });
+  const children = list.filter((r) => (r?.containerId >>> 0) === g);
+  if (children.length > 0) {
+    const stage = children
+      .filter((c) => (c.equipMask >>> 0) === 0 && vendorAcceptability(vendor, c) === VENDOR_ACCEPT.OK)
+      .map(whole);
+    return { stage, message: `Selling contents of ${item.name || "the pack"}` };
+  }
+  if ((item.equipMask >>> 0) !== 0) return { stage: [], reject: `Unequip ${item.name || "it"} before selling it` };
+  const code = vendorAcceptability(vendor, item);
+  if (code !== VENDOR_ACCEPT.OK) return { stage: [], reject: vendorRejectText(code) };
+  return { stage: [whole(item)] };
+}
+
+// ─── Split before sell (items-1 step 2, 2026-10-08) ──────────────────
+//
+// VendorSellUI::AcceptDragObject (acclient.c:246860): when the drag carries
+// a split size (GenItemHolder::splitSize != maxSplitSize — the browser
+// equivalent is a shift-drop + the stack-amount prompt) the stack is first
+// split IN PLACE, ItemHolder::AttemptToPlaceInContainer(item, player,
+// item's own container, autoMerge = 0) → a StackableSplitToContainer, with
+// "Splitting the %s before selling them" (NAME_APPROPRIATE: plural for a
+// stack); a refusal says "Cannot split the stack to sell it". The window
+// then remembers the split's class id + size (m_splitItemClassID /
+// m_splitItemStackSize) and VendorSellUI::ItemAttributesChanged (:246005)
+// stages the NEW object of that wcid and exactly that stack size when it
+// arrives — so only the split part is ever sold (a sale is always a whole
+// stack, see sellStagingPlan).
+
+/** How long a split waits for the server's new stack before it is dropped. */
+export const SELL_SPLIT_TTL_MS = 10000;
+export const SELL_SPLIT_FAILED_TEXT = "Cannot split the stack to sell it";
+
+/**
+ * Plan the split for selling `amount` of the staged stack `item` (a
+ * sellStagingPlan row). Null when no split is needed (a whole stack, an
+ * amount out of range or a single item).
+ * @param {object} item  guid, wcid, name, stackSize, containerId
+ * @param {number} amount  how many to sell (1 .. stackSize - 1)
+ * @param {Array<object>} rows  the player's inventory right now
+ * @param {object} opts  playerGuid (a main-pack row may carry containerId 0)
+ * @returns {null | {reject: string} | {action: object, pending: object, message: string}}
+ *   action = an item_drag.executeItemAction "move" with a split amount;
+ *   pending = {sourceGuid, wcid, amount, containerId, name, preGuids}
+ */
+export function planSellSplit(item, amount, rows, { playerGuid } = {}) {
+  const guid = (item?.guid >>> 0) || 0;
+  const stack = Math.max(1, Number(item?.stackSize) || 1);
+  const n = Math.floor(Number(amount));
+  if (!guid || !(n >= 1) || n >= stack) return null;
+  const me = (playerGuid >>> 0) || 0;
+  const container = (item.containerId >>> 0) || me;
+  if (!container || !(item.wcid >>> 0)) return { reject: SELL_SPLIT_FAILED_TEXT };
+  const name = item.name || "item";
+  return {
+    action: {
+      op: "move", guid, container, placement: 0,
+      listKey: container === me ? 0 : container, index: 0, amount: n,
+    },
+    pending: {
+      sourceGuid: guid,
+      wcid: item.wcid >>> 0,
+      amount: n,
+      containerId: container,
+      name,
+      preGuids: (Array.isArray(rows) ? rows : []).map((r) => (r?.guid >>> 0) || 0).filter(Boolean),
+    },
+    message: `Splitting the ${retailPluralName(name, item.pluralName)} before selling them`,
+  };
+}
+
+/**
+ * VendorSellUI::ItemAttributesChanged for every split in flight: the first
+ * inventory row of the split's wcid with exactly the split's stack size
+ * that was NOT in the inventory when the split was sent (and is not the
+ * source, nor already staged / claimed) is the new stack. Splits older than
+ * `ttlMs` (no echo — the server merged or dropped it) expire.
+ * @param {Array<object>} pending  planSellSplit().pending + `at` (ms)
+ * @param {Array<object>} rows  the player's inventory now
+ * @param {object} opts  claimed (Set of guids already staged), now, ttlMs
+ * @returns {{staged: Array<{pending, row}>, waiting: Array<object>, expired: Array<object>}}
+ */
+export function resolveSellSplits(pending, rows, { claimed = null, now = Date.now(), ttlMs = SELL_SPLIT_TTL_MS } = {}) {
+  const taken = new Set(claimed ? Array.from(claimed, (g) => g >>> 0) : []);
+  const list = Array.isArray(rows) ? rows : [];
+  const out = { staged: [], waiting: [], expired: [] };
+  for (const p of Array.isArray(pending) ? pending : []) {
+    const pre = new Set((p?.preGuids || []).map((g) => g >>> 0));
+    const row = list.find((r) => {
+      const g = (r?.guid >>> 0) || 0;
+      return g !== 0 && g !== (p.sourceGuid >>> 0) && !pre.has(g) && !taken.has(g)
+        && (r.wcid >>> 0) === (p.wcid >>> 0)
+        && Math.max(1, Number(r.stackSize) || 1) === p.amount
+        && (r.equipMask >>> 0) === 0;
+    });
+    if (row) {
+      taken.add(row.guid >>> 0);
+      out.staged.push({ pending: p, row });
+    } else if (Number.isFinite(p?.at) && now - p.at > ttlMs) {
+      out.expired.push(p);
+    } else {
+      out.waiting.push(p);
+    }
+  }
+  return out;
 }
 
 /** Sum of `stackSize` over inventory rows with this wcid (pyreals = 273;

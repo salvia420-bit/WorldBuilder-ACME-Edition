@@ -136,11 +136,15 @@ const serverTurnOwnsFacing = () => false;
 // camera_math.js is a pure, import-free module — inline the GENUINE
 // faceDeadzoneRad / faceTurnStep rather than stubbing the face-turn math.
 const cameraMathSrc = stripExports(readFileSync(resolvePath(__dirname, "scene3d/camera_math.js"), "utf8"));
+// selection-5 (2026-10-08): pick_math.js is pure and import-free too — inline
+// the GENUINE sphere fallback so the no-polygon-hit path is exercised below.
+const pickMathSrc = stripExports(readFileSync(resolvePath(__dirname, "scene3d/pick_math.js"), "utf8"));
 
 const pickingComposite =
     "// === picking.js ===\n" +
     uiStubs +
     "// === camera_math.js (genuine) ===\n" + cameraMathSrc + "\n" +
+    "// === pick_math.js (genuine) ===\n" + pickMathSrc + "\n" +
     stripExports(pickingSrc) +
     "\n; return { setupClickPicking };";
 
@@ -330,6 +334,54 @@ console.log("\nPICK-VIS — hidden entities and hidden parts are not pickable");
     check("hidden part skipped, drawn part of the same rig picks it",
         (pickEntityAt(100, 100) >>> 0) === (VIS >>> 0));
     THREE.Raycaster.prototype.intersectObjects = prev;
+}
+
+// selection-5 (2026-10-08): with no polygon hit, the nearest drawing sphere
+// of a drawn rig part wins (retail Render::GetMouseSelectionObjectID,
+// acclient.c:380089). The stubbed raycaster keeps three's default ray:
+// origin (0,0,0) looking down -Z.
+console.log("\nselection-5 — sphere fallback when no polygon is hit");
+{
+    const LOCAL = 0x62000001;
+    const NEAR = 0x62000002;
+    const FAR = 0x62000003;
+    const MINE = 0x62000004;
+    const { em, pickEntityAt } = buildPicking(LOCAL, []);
+    const map = em.entityManager.entityMap;
+    const add = (guid, z, r, extra = {}) => {
+        const root = new THREE.Group();
+        const part = new THREE.Group();
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 6, 4), new THREE.MeshBasicMaterial());
+        part.add(mesh);
+        root.add(part);
+        root.position.set(0, 0, z);
+        root.updateMatrixWorld(true);
+        map.set(guid, { root, parts: [part], _attachedParentGuid: null, ...extra });
+        return mesh;
+    };
+    const nearMesh = add(NEAR, -5, 1);
+    const farMesh = add(FAR, -20, 1);
+    nextHits = [];
+    check("no polygon hit -> the nearest sphere the ray enters",
+        (pickEntityAt(100, 100) >>> 0) === (NEAR >>> 0));
+    nextHits = [farMesh];
+    check("any polygon hit beats a nearer sphere",
+        (pickEntityAt(100, 100) >>> 0) === (FAR >>> 0));
+    nextHits = [];
+    nearMesh.visible = false;
+    check("an undrawn part mesh has no sphere -> the next one",
+        (pickEntityAt(100, 100) >>> 0) === (FAR >>> 0));
+    nearMesh.visible = true;
+    map.get(NEAR).root.scale.setScalar(10);   // eye now inside NEAR's sphere
+    map.get(NEAR).root.updateMatrixWorld(true);
+    check("a sphere containing the eye is not a hit (retail c <= 0)",
+        (pickEntityAt(100, 100) >>> 0) === (FAR >>> 0));
+    map.delete(NEAR);
+    add(MINE, -3, 1, { _attachedParentGuid: LOCAL });
+    check("the local player's own held item is never sphere-picked",
+        (pickEntityAt(100, 100) >>> 0) === (FAR >>> 0));
+    map.get(FAR).root.visible = false;
+    check("nothing drawn under the ray -> null", pickEntityAt(100, 100) === null);
 }
 
 // ===================================================================

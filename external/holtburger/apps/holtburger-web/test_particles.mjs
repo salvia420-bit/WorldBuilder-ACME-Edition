@@ -130,7 +130,7 @@ const composite =
   "\n// === particles_over_clouds.js stub (tests/particles_over_clouds.test.mjs covers the real one) ===\nfunction registerLateFxSource() { return () => {}; }\n" +
   "\n// === additive_fog.js ===\n" + stripped[5] +
   "\n// === particle_manager.js ===\n" + stripped[4] +
-  "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket };";
+  "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket, _resetInitialParticlesRetailForTests };";
 
 const factory = new Function("THREE", composite);
 const mod = factory(THREE);
@@ -139,7 +139,7 @@ const {
   setCurrentTime, setRng, normalizeCheckSmall, localToGlobalVec, setTranslucency,
   // Module-private in the real files; in scope here because the harness
   // concatenates the sources into ONE closure (see `composite` above).
-  setParticleInstancingFlag, _growBucket,
+  setParticleInstancingFlag, _growBucket, _resetInitialParticlesRetailForTests,
 } = mod;
 
 // ---- shared deterministic mocks --------------------------------------
@@ -631,6 +631,9 @@ check(
   const info = new ParticleEmitterInfo(makeBaseInfo({
     particleType: ParticleType.Still,
     maxParticles: 2,
+    // PLIFECYCLE-4: retail InitEnd bursts initial_particles only (no
+    // totalParticles fallback), so the t=0 seed is authored explicitly.
+    initialParticles: 2,
     totalParticles: 2,
     lifespan: 5.0,
     lifespanRand: 0.0,
@@ -642,7 +645,7 @@ check(
   // setInfo is async — await it.
   await e.setInfo(info);
   e.setParenting(-1, { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() });
-  e.initEnd(); // spawns 2 initial particles per TotalParticles
+  e.initEnd(); // spawns the 2 authored initialParticles
   check(
     "killParticle setup: initEnd spawned 2 particles → numParticles=2",
     e.numParticles === 2,
@@ -657,6 +660,79 @@ check(
     e.numParticles === 0,
     `numParticles=${e.numParticles}`
   );
+}
+
+// ============================================================
+// Test 9b: PLIFECYCLE-4 — initEnd bursts initial_particles ONLY (retail
+// ParticleEmitter::InitEnd, acclient.c:331278-331285: no totalParticles
+// fallback). An initial=0 emitter starts empty and fills one particle per
+// update through ShouldEmitParticle. `?initialParticlesRetail=off` restores
+// the legacy fallback burst.
+// ============================================================
+{
+  const makeEmitter = async () => {
+    const info = new ParticleEmitterInfo(makeBaseInfo({
+      emitterType: EmitterType.BirthratePerSec,
+      particleType: ParticleType.Still,
+      birthrate: 0.1,
+      maxParticles: 5,
+      initialParticles: 0,
+      totalParticles: 5,
+      lifespan: 100.0,
+      lifespanRand: 0.0,
+    }));
+    const e = new ParticleEmitter({
+      parent: { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() },
+      meshFactory: () => makeMesh(),
+    });
+    await e.setInfo(info);
+    e.setParenting(-1, { position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion() });
+    return e;
+  };
+  mockTime = 0;
+  mockRngVal = 0.5;
+  const e = await makeEmitter();
+  e.initEnd();
+  check(
+    "initEnd retail: initialParticles=0, totalParticles=5 → NO t=0 burst",
+    e.numParticles === 0 && e.totalEmitted === 0,
+    `numParticles=${e.numParticles} totalEmitted=${e.totalEmitted}`
+  );
+  mockTime = 0.15;
+  e.updateParticles();
+  check(
+    "initEnd retail: the first particle arrives on birthrate (0.15 s > 0.1 s) via updateParticles",
+    e.numParticles === 1 && e.totalEmitted === 1,
+    `numParticles=${e.numParticles} totalEmitted=${e.totalEmitted}`
+  );
+  mockTime = 0.16;
+  e.updateParticles();
+  check(
+    "initEnd retail: at most one emit per birthrate (0.01 s later → still 1)",
+    e.numParticles === 1,
+    `numParticles=${e.numParticles}`
+  );
+
+  // `=off` arm — the legacy totalParticles fallback (capped by the lazily
+  // pre-built slots: max(initial + 6, 6) → all 5 here).
+  const hadLocation = Object.prototype.hasOwnProperty.call(globalThis, "location");
+  const savedLocation = globalThis.location;
+  globalThis.location = { search: "?initialParticlesRetail=off" };
+  _resetInitialParticlesRetailForTests();
+  try {
+    mockTime = 0;
+    const legacy = await makeEmitter();
+    legacy.initEnd();
+    check(
+      "initEnd ?initialParticlesRetail=off: legacy fallback bursts totalParticles at t=0",
+      legacy.numParticles === 5,
+      `numParticles=${legacy.numParticles}`
+    );
+  } finally {
+    if (hadLocation) globalThis.location = savedLocation;
+    else delete globalThis.location;
+    _resetInitialParticlesRetailForTests();
+  }
 }
 
 // ============================================================
@@ -711,6 +787,7 @@ check(
     emitterInfo: makeBaseInfo({
       particleType: ParticleType.Still,
       maxParticles: 1,
+      initialParticles: 1, // PLIFECYCLE-4: the t=0 seed is authored, not inferred
       totalParticles: 1,
       totalSeconds: 0,
       lifespan: 2.0,

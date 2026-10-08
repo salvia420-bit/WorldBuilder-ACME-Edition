@@ -333,6 +333,103 @@ const REMOTE_ARC_MAX_S: f32 = 4.0;
 /// its height instead of dropping it.
 const REMOTE_UNKNOWN_FLOOR_M: f32 = 0.3;
 
+/// R3 moveto-3 (2026-10-08) — native baseline for
+/// [`SpatialScene::set_remote_moveto_facing_enabled`]. `true`: a remote
+/// MoveTo walk advances along the body's OWN facing (retail moves the object
+/// by its RunForward/WalkForward motion in its local frame,
+/// `CSequence::apply_physics`) and turns only by the aux turn the
+/// MoveToManager holds outside its 20° deadband (`HandleMoveToPosition`,
+/// acclient.c:345577-345651); the D5 turn idles while an interpolation node
+/// owns the offset (`InterpolationManager::adjust_offset` replaces the whole
+/// offset with `keep_heading`, :389178). `false`: the pre-R3 bearing steer
+/// (translation along the direct bearing, continuous turn toward it). Not
+/// URL-plumbed: a `?remoteMoveToFacing=off` escape needs a lib.rs parse fn
+/// plus this setter at the login/lifecycle world construction.
+const USE_REMOTE_MOVETO_FACING: bool = true;
+
+/// R3 moveto-2 (2026-10-08) — how far past a MoveTo turn node the remote D5
+/// turn carries the body (rad, ≈0.057°). Retail turns the TurnRight/TurnLeft
+/// motion with no stop at the node and completes the node on OVERSHOOT
+/// (`HandleTurnToHeading` → strict `heading_greater`, acclient.c:345712,
+/// :344715), then snaps (`set_heading`). The old clamp landed exactly on the
+/// node, so the f32 heading round trip (~1e-5°) fell on either side and a
+/// miss never completed — the node stalled forever. Well above that noise;
+/// the pump's snap removes the overshoot on its next tick.
+pub(crate) const REMOTE_MOVETO_TURN_OVERSHOOT_RAD: f32 = 1.0e-3;
+
+/// R3 moveto-5 — a drive's `MovementParameters.speed`, finite and positive,
+/// else the ctor default 1.0.
+fn remote_moveto_speed(drive: &super::RemoteMoveToDrive) -> f32 {
+    if drive.speed.is_finite() && drive.speed > 0.0 {
+        drive.speed
+    } else {
+        1.0
+    }
+}
+
+/// R3 moveto-3/5 — the body-local forward velocity (m/s along the facing) of
+/// a remote MoveTo walk drive: RunForward 4.0 × run rate, WalkForward 3.12
+/// (the `get_state_velocity` constants), both × `MovementParameters.speed`
+/// (`_DoMotion` → `adjust_motion` → `apply_run_to_command`,
+/// acclient.c:344753, :343746, :343439); WalkBackwards is WalkForward ×
+/// −0.65 (× run rate under a Run hold key, which keeps it WalkForward).
+fn remote_moveto_forward_speed(drive: &super::RemoteMoveToDrive, run: bool, my_run_rate: f32) -> f32 {
+    let speed = remote_moveto_speed(drive);
+    if drive.backwards {
+        -0.65 * 3.12 * speed * if run { my_run_rate } else { 1.0 }
+    } else if run {
+        4.0 * my_run_rate * speed
+    } else {
+        3.12 * speed
+    }
+}
+
+/// R3 moveto-2/3 — this slice's D5 heading change (rad; + = heading
+/// increasing = TurnRight) for a remote MoveTo `drive`, from the body's
+/// `current` heading and the slice's `max_step` (rate × quantum).
+/// - Turn node with its command (`forward: None`, `turn: Some(s)`): turn in
+///   the command direction until just past the node
+///   ([`REMOTE_MOVETO_TURN_OVERSHOOT_RAD`]), then HOLD until the pump sees
+///   the overshoot and snaps (never an unbounded spin).
+/// - Walk under the facing steer: the aux turn motion at the full rate
+///   (`turn: Some(s)`); nothing inside the deadband (`None`).
+/// - Otherwise (legacy bearing steer, or a turn node with no command): the
+///   shortest-arc clamp toward `heading_rad`.
+pub(crate) fn remote_moveto_turn_delta(
+    drive: &super::RemoteMoveToDrive,
+    current: f32,
+    max_step: f32,
+    facing: bool,
+) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    match (drive.forward, drive.turn) {
+        (None, Some(sign)) => {
+            // Remaining angle in the command direction, folded to
+            // (−π/2, 3π/2]: just past the node reads slightly negative; a
+            // node ~180° away (BeginTurnToHeading's TurnRight edge) still
+            // turns forward.
+            let r = ((drive.heading_rad - current) * sign).rem_euclid(TAU);
+            let remaining = if r > TAU - FRAC_PI_2 { r - TAU } else { r };
+            if remaining <= -0.5 * REMOTE_MOVETO_TURN_OVERSHOOT_RAD {
+                0.0
+            } else {
+                sign * (remaining + REMOTE_MOVETO_TURN_OVERSHOOT_RAD).min(max_step)
+            }
+        }
+        (Some(_), Some(sign)) if facing => sign * max_step,
+        (Some(_), None) if facing => 0.0,
+        _ => {
+            let mut diff = (drive.heading_rad - current) % TAU;
+            if diff > PI {
+                diff -= TAU;
+            } else if diff < -PI {
+                diff += TAU;
+            }
+            diff.clamp(-max_step, max_step)
+        }
+    }
+}
+
 /// D7: clear a remote body's arc (hit ground / hard set), recording the
 /// hit-ground edge. Retail `CMotionInterp::HitGround` (acclient.c:344429)
 /// re-applies the current movement, which hands locomotion back to the
@@ -1387,6 +1484,10 @@ pub struct SpatialScene {
     /// OpenAC comparison 2026-10-04 (remote motion D5): remote bodies follow
     /// their client-side MoveTo steer (`?remoteMoveTo=off`).
     remote_moveto_enabled: bool,
+    /// R3 moveto-3 (2026-10-08): the remote MoveTo walk runs along the
+    /// body's facing and turns only by the aux turn (see
+    /// [`USE_REMOTE_MOVETO_FACING`]); `false` = the pre-R3 bearing steer.
+    remote_moveto_facing_enabled: bool,
     /// NETSYNC-1 (2026-10-07, Coldeve capture): a remote body KEEPS its
     /// interpreted motion state across a wire position correction
     /// (`?remoteMotionKeep=off`). Retail `MoveOrTeleport`
@@ -1602,6 +1703,7 @@ impl SpatialScene {
             remote_root_motion_enabled: true,
             remote_jump_arc_enabled: true,
             remote_moveto_enabled: true,
+            remote_moveto_facing_enabled: USE_REMOTE_MOVETO_FACING,
             remote_motion_keep_enabled: true,
             remote_turn_enabled: true,
             remote_airborne_changes: Vec::new(),
@@ -1873,6 +1975,13 @@ impl SpatialScene {
     /// `?remoteMoveTo=off` escape for the D5 remote MoveTo steer.
     pub fn set_remote_moveto_enabled(&mut self, enabled: bool) {
         self.remote_moveto_enabled = enabled;
+    }
+
+    /// R3 moveto-3 escape (`false` = the pre-R3 bearing steer: walk along
+    /// the direct bearing, turn continuously toward it, no interp gate).
+    /// Default [`USE_REMOTE_MOVETO_FACING`]; no URL flag plumbed yet.
+    pub fn set_remote_moveto_facing_enabled(&mut self, enabled: bool) {
+        self.remote_moveto_facing_enabled = enabled;
     }
 
     /// `?remoteMotionKeep=off` escape for NETSYNC-1 (remote bodies keep
@@ -5467,9 +5576,11 @@ impl SpatialScene {
                         // then ConstrainTo anchored on the object's OWN
                         // post-move position (acclient.c:145223-145227)
                         // with the shared start/max constants
-                        // (acclient.c:315885-315929). `keep_heading =
-                        // false` this stage — remote entities run no
-                        // client-side MoveTo yet (S8 OPEN Q4).
+                        // (acclient.c:315885-315929). `keep_heading` =
+                        // `IsMovingTo()` (`MoveOrTeleport` :323492): the
+                        // remote MoveTo pump (D5) sets
+                        // `remote_moving_to` while a directive is active,
+                        // so wire headings do not fight its steer.
                         let indoor = pose.is_indoors();
                         let blip = if indoor {
                             REMOTE_BLIP_INDOOR_M
@@ -5669,14 +5780,20 @@ impl SpatialScene {
                     && !self.remote_sticky_targets.contains_key(&guid);
                 // D5: an active remote MoveTo steer supplies the motion the
                 // retail MoveToManager `_DoMotion`s (RunForward / WalkForward
-                // — walk 3.12, run 4.0 × run rate, the get_state_velocity
-                // constants; a turn node moves nothing forward).
+                // × movement_params.speed — `remote_moveto_forward_speed`; a
+                // turn node moves nothing forward). R3 moveto-3: along the
+                // body's OWN facing, as the motion moves it (the legacy
+                // bearing steer walked the direct bearing and slid sideways).
                 let drive = if self.remote_moveto_enabled { body.remote_moveto } else { None };
                 let walk_v = match drive {
-                    Some(super::RemoteMoveToDrive { heading_rad, forward: Some(run) }) if walk => {
-                        let speed = if run { 4.0 * body.my_run_rate } else { 3.12 };
-                        holtburger_common::Quaternion::from_heading(heading_rad)
-                            .rotate_vector(Vector3::new(0.0, speed, 0.0))
+                    Some(d) if walk && d.forward.is_some() => {
+                        let y = remote_moveto_forward_speed(&d, d.forward == Some(true), body.my_run_rate);
+                        if self.remote_moveto_facing_enabled {
+                            body.pose.rotation.rotate_vector(Vector3::new(0.0, y, 0.0))
+                        } else {
+                            holtburger_common::Quaternion::from_heading(d.heading_rad)
+                                .rotate_vector(Vector3::new(0.0, y.abs(), 0.0))
+                        }
                     }
                     Some(_) => Vector3::zero(),
                     None => {
@@ -5866,9 +5983,21 @@ impl SpatialScene {
             // `apply_run_to_command`, acclient.c:343469). The heading rides
             // the export as a heading-owned row (the sticky-row channel: JS
             // applies its quaternion).
+            // R3 (2026-10-08): the turn is the MOTION the MoveToManager
+            // holds (`remote_moveto_turn_delta`): a turn node turns past the
+            // node and holds (moveto-2), a walk turns only by its aux turn
+            // (moveto-3). Gates: the pump's own contact view
+            // (`remote_moveto_view`: `last_wire_contact != Some(false)`) — a
+            // body the pump does not step must not turn, it would never see
+            // the overshoot — and, under the facing steer, an active
+            // interpolation node on contact, which REPLACES the offset frame
+            // rotation included (`adjust_offset` keep_heading,
+            // acclient.c:389178; the NETSYNC-3 `interp_owns` predicate).
             if self.remote_moveto_enabled
                 && body.remote_arc.is_none()
+                && body.last_wire_contact != Some(false)
                 && let Some(drive) = body.remote_moveto
+                && !(self.remote_moveto_facing_enabled && body.position_manager.queue_active())
             {
                 // NETSYNC-3: the body's own motion-table TurnRight rate
                 // (|MotionData.omega.z|; player tables 1.5 rad/s, DAT-pinned —
@@ -5882,20 +6011,21 @@ impl SpatialScene {
                 } else {
                     std::f32::consts::FRAC_PI_2
                 };
-                let rate = if drive.forward == Some(true) {
-                    base * 1.5
-                } else {
-                    base
-                };
+                // R3 moveto-5: × movement_params.speed (adjust_motion scales
+                // the turn's omega). × 1.5 only under a Run walk (the aux
+                // turn's hold key, apply_run_to_command TurnRight
+                // :343469); whether a turn NODE's Invalid hold key resolves
+                // to Run (raw_state.current_holdkey) is untraced — it keeps
+                // the walk rate.
+                let run_factor = if drive.forward == Some(true) { 1.5 } else { 1.0 };
+                let rate = base * remote_moveto_speed(&drive) * run_factor;
                 let current = body.pose.rotation.to_heading();
-                let mut diff = (drive.heading_rad - current) % std::f32::consts::TAU;
-                if diff > std::f32::consts::PI {
-                    diff -= std::f32::consts::TAU;
-                } else if diff < -std::f32::consts::PI {
-                    diff += std::f32::consts::TAU;
-                }
-                let max = rate * quantum;
-                let turn = diff.clamp(-max, max);
+                let turn = remote_moveto_turn_delta(
+                    &drive,
+                    current,
+                    rate * quantum,
+                    self.remote_moveto_facing_enabled,
+                );
                 if turn.abs() > 1e-5 {
                     body.pose.rotation = holtburger_common::Quaternion::from_heading(current + turn);
                     self.remote_sticky_stepped.insert(guid);
@@ -5964,12 +6094,31 @@ impl SpatialScene {
                     self.remote_sticky_targets.remove(&guid);
                 } else if let Some(pose) = body.position_manager.step_sticky_pose(
                     body.pose, my_radius,
-                    /* max_speed → retail floor 15.0 */ 0.0, quantum,
+                    // R3 moveto-6: retail `get_max_speed()` for a remote —
+                    // `my_run_rate × 4` (acclient.c:343486; its weenie has
+                    // no InqRunRate) — pulled at ×5 (:388519). The 15 m/s
+                    // floor stays inside for a degenerate 0.
+                    body.my_run_rate.max(0.0) * 4.0,
+                    quantum,
                 ) {
                     body.pose = pose;
                     self.remote_sticky_stepped.insert(guid);
                     stepped = true;
                 }
+            }
+            // R3 moveto-3: a MoveTo drive owns the body's heading
+            // (`IsMovingTo()` → keep_heading) whether or not it turned this
+            // slice — the facing walk runs straight inside the 20° deadband
+            // and the turn idles under an interp node — so its grounded
+            // stepped rows stay heading-owned (JS applies the body's
+            // quaternion, not its wire-heading ease). The old continuous
+            // turn flagged them as a side effect.
+            if stepped
+                && self.remote_moveto_enabled
+                && body.remote_moveto.is_some()
+                && body.remote_arc.is_none()
+            {
+                self.remote_sticky_stepped.insert(guid);
             }
             if stepped {
                 self.remote_stepped_poses.insert(guid, body.pose);

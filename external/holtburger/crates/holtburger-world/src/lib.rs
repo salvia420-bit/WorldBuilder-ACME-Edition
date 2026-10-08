@@ -14,6 +14,7 @@ pub mod context;
 pub mod crafting;
 pub mod damage;
 pub mod entity;
+pub mod equip;
 pub mod events;
 pub mod handlers;
 pub mod hydration;

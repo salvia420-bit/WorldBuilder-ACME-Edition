@@ -68,15 +68,22 @@ import {
   formatAppraisalTooltip,
   takeInventoryRows,
   rowUsesPackSlot,
-  pickWieldSlotMask,
   createPackOrder,
   packCapacity,
-  mergeAmount,
   DROP_TARGET,
   MAIN_PACK_KEY,
   PACKS_KEY,
   decideItemDrop,
   wieldEventTouchesLocal,
+  findAutoMergeTarget,
+  primaryUseAction,
+  defaultOnUrlFlag,
+  planWear,
+  planAmmoWield,
+  readySlotOccupant,
+  WEARABLE_LOCATIONS,
+  DEFAULT_PLAYER_ITEMS_CAPACITY,
+  DEFAULT_PLAYER_CONTAINERS_CAPACITY,
 } from "./inventory_helpers.js";
 import {
   beginItemDrag,
@@ -128,8 +135,8 @@ function iconMetaForRow(row) {
 }
 // Retail human defaults when the snapshot has not surfaced the property
 // yet (ACE human weenie: ItemsCapacity 102, ContainersCapacity 7).
-const DEFAULT_MAIN_CAP = 102;
-const DEFAULT_PACKS_CAP = 7;
+const DEFAULT_MAIN_CAP = DEFAULT_PLAYER_ITEMS_CAPACITY;
+const DEFAULT_PACKS_CAP = DEFAULT_PLAYER_CONTAINERS_CAPACITY;
 const SP = "./data/ui-sprites";
 
 // Item-type-bit → placeholder tint while the real icon fetches.
@@ -561,11 +568,111 @@ function openPack(guid) {
   return true;
 }
 
+// Retail ItemHolder::UseObject for an OWNED item (acclient.c:433354) — the
+// grid double-click, and through window.__inventory.activateItem the
+// shortcut keys, the Use button and the radial "Use". DetermineUseResult
+// (inventory_helpers.primaryUseAction) wields a weapon / ammo / shield,
+// wears armour / clothing / jewellery, opens salvage for a tinkering tool,
+// enters target mode for a kit / stone; only the rest is a plain Use
+// (ACE has no wield path behind Use). Module-level so the hotbar works
+// before the panel was ever opened. Returns false when `guid` is not ours
+// (the caller then sends its own Use); a repeat inside retail's 0.2 s
+// m_timeLastUsed throttle is swallowed (true).
+//
+// items-4 (2026-10-08, `?retailAutoWear=off` = the old path): an armour /
+// clothing wear first runs retail AutoWearIsLegal (planWear — "You must
+// remove your X to wear that", nothing moves) and is sent with the full
+// ValidLocations; a weapon / ammo wield onto a ready slot holding the SAME
+// wcid merges into it (planAmmoWield — AttemptMerge, or "You cannot wield
+// more X") instead of swapping. The drag-to-paperdoll path gets the same
+// rules through dropCtx (wearPlan / readySlotOccupant).
+const RETAIL_AUTO_WEAR = typeof window !== "undefined" ? defaultOnUrlFlag("retailAutoWear") : true;
+const ACTIVATE_THROTTLE_MS = 200;
+let lastActivateAt = -Infinity;
+function activateItem(guid, { cell = null } = {}) {
+  const g = (guid >>> 0) || 0;
+  if (!g) return false;
+  const h = sessionHandleNow();
+  const rows = takeInventoryRows(h);
+  const row = rows.find((r) => r.guid === g);
+  if (!row) return false;
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  if (now - lastActivateAt < ACTIVATE_THROTTLE_MS) return true;
+  lastActivateAt = now;
+  let needsTarget = false;
+  if (typeof h?.classifyUse === "function") {
+    let intent = null;
+    try { intent = h.classifyUse(g); needsTarget = !!intent?.needsTarget; } catch (_) { needsTarget = false; }
+    finally { try { intent?.free?.(); } catch (_) {} }
+  }
+  let equippedMask = 0;
+  for (const r of rows) equippedMask |= (r.equipMask >>> 0);
+  const act = primaryUseAction(row, { needsTarget, equippedMask: equippedMask >>> 0 });
+  const src = { guid: g, item: { ...row, isPack: rowUsesPackSlot(row) }, owned: true, sourceEl: cell };
+  switch (act.kind) {
+    case "open":
+      if ((row.containerId >>> 0) === 0) openPack(g);
+      else { try { window.__openContainerFor?.(g, row.name); } catch (_) {} }
+      return true;
+    case "wield":
+    case "wear": {
+      if (typeof h?.setWielded !== "function" && typeof h?.wieldFromPack !== "function") break;
+      let slotMask = act.slotMask >>> 0;
+      if (RETAIL_AUTO_WEAR) {
+        if (act.kind === "wear" && (slotMask & WEARABLE_LOCATIONS) !== 0) {
+          const plan = planWear(row, rows);
+          if (plan.op === "reject") { executeItemAction(plan, src); return true; }
+          if (plan.op === "wear") slotMask = plan.slotMask >>> 0;
+        } else if (act.kind === "wield") {
+          const plan = planAmmoWield(row, readySlotOccupant(rows, slotMask));
+          if (plan.op === "merge" || plan.op === "reject") { executeItemAction(plan, src); return true; }
+        }
+      }
+      const state = buildPlayerEquipState(rows, {
+        stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+        inCombatMode: !!window.__combatBarState?.inCombatMode,
+      });
+      const verdict = canEquipInSlot(row, slotMask, state);
+      if (verdict && verdict.ok === false) {
+        executeItemAction({ op: "reject", message: verdict.reason || "Cannot equip there." }, src);
+        return true;
+      }
+      executeItemAction({ op: act.kind, guid: g, slotMask, amount: row.stackSize }, src);
+      return true;
+    }
+    case "salvage":
+      if (typeof window.__openSalvagePanel === "function") {
+        try { window.__openSalvagePanel(g); return true; } catch (_) {}
+      }
+      break;
+    case "target":
+      if (typeof window.__useTargeting?.begin === "function") {
+        window.__useTargeting.begin(g, row.name);
+        return true;
+      }
+      break;
+    default:
+      break;
+  }
+  if (typeof h?.useObject === "function") {
+    try { h.useObject(g); } catch (e) { console.warn("[inv-use] useObject failed:", e); }
+    // HUD rec #180: writable items (ItemType WRITABLE 0x2000) need an
+    // explicit bookData follow-up.
+    try { if (((row.itemType >>> 0) & 0x00002000) !== 0 && h.bookData) h.bookData(g); } catch (_) {}
+  }
+  return true;
+}
+// `?hotbarActivate=off` gives the shortcut bar, Use button and radial
+// menu their old bare useObject back (the grid double-click always runs
+// activateItem — it wielded / opened / salvaged before this, too).
+const HOTBAR_ACTIVATE = typeof window !== "undefined" ? defaultOnUrlFlag("hotbarActivate") : true;
+
 if (typeof window !== "undefined") {
   if (!window.__inventory) window.__inventory = { armedGuid: 0 };
   window.__inventory.setArmedItem = setArmedItem;
   window.__inventory.openPack = openPack;
   window.__inventory.selectedPack = () => lastSelectedPack;
+  window.__inventory.activateItem = (guid, opts) => (HOTBAR_ACTIVATE ? activateItem(guid, opts) : false);
 }
 
 // Inline note anchored to the paperdoll (speculative-equip notice).
@@ -1151,47 +1258,11 @@ function doMount(parentEl, _ctx) {
     hideItemTooltip();
   }
 
-  // Double-click / Ctrl-click: container → open, wieldable → equip,
-  // tinkering tool → salvage panel, else UseObject (+ book follow-up).
+  // Double-click / Ctrl-click = retail ItemHolder::UseObject (module-level
+  // activateItem): pack → open, weapon → wield, armour → wear, tinkering
+  // tool → salvage, kit / stone → target mode, else Use (+ book follow-up).
   function useOrEquip(row, cell) {
-    const g = row.guid >>> 0;
-    const h = sessionHandleNow();
-    if (rowUsesPackSlot(row)) {
-      if ((row.containerId >>> 0) === 0) { selectPack(g); return; }
-      try { window.__openContainerFor?.(g, row.name); } catch (_) {}
-      return;
-    }
-    const validLocs = (row.validLocations >>> 0) || 0;
-    // validLocations is 0 for weenies whose DB row lacks the property;
-    // fall back to a sane slot per ItemType so double-click still equips.
-    const it = (row.itemType >>> 0) || 0;
-    const fallbackMask = (it & 0x1) ? 0x00100000 : (it & 0x100) ? 0x00400000 : (it & 0x10000) ? 0x01000000 : 0;
-    const effectiveVL = validLocs || fallbackMask;
-    if (effectiveVL && (h?.setWielded || h?.wieldFromPack) && (row.equipMask >>> 0) === 0) {
-      const mask = pickWieldSlotMask(effectiveVL);
-      const verdict = canEquipInSlot(row, mask >>> 0, equipState());
-      if (verdict && verdict.ok === false) {
-        paperdollToast(verdict.reason || "Cannot equip there.");
-        try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
-        cell?.classList.add("hb-server-rejected");
-        setTimeout(() => cell?.classList.remove("hb-server-rejected"), 420);
-        return;
-      }
-      const action = { op: "wield", guid: g, slotMask: mask >>> 0, amount: row.stackSize };
-      executeItemAction(action, { guid: g, item: withPack(row), owned: true, sourceEl: cell });
-      scheduleRebuild();
-      return;
-    }
-    // R13: tinkering tool (IT_TINKERING_TOOL 0x20000000) opens salvage.
-    if (((it & 0x20000000) !== 0) && typeof window.__openSalvagePanel === "function") {
-      try { window.__openSalvagePanel(g); return; } catch (_) {}
-    }
-    if (typeof h?.useObject === "function") {
-      try { h.useObject(g); } catch (e) { console.warn("[inv-click] useObject failed:", e); }
-      // HUD rec #180: writable items (ItemType WRITABLE 0x2000) need an
-      // explicit bookData follow-up.
-      try { if ((it & 0x00002000) !== 0 && h.bookData) h.bookData(g); } catch (_) {}
-    }
+    activateItem(row.guid, { cell });
   }
 
   // ── packs / title ───────────────────────────────────────────────
@@ -1483,18 +1554,26 @@ function doMount(parentEl, _ctx) {
         }
         return 0;
       },
-      // ItemHolder::AttemptAutoMerge — only with an exact stack limit.
+      // ItemHolder::AttemptAutoMerge — the same rule a take uses
+      // (inventory_helpers.findAutoMergeTarget): the TARGET's stack limit
+      // counts, so a corpse / chest row without one still merges.
       autoMergeTarget: (item, amount, key) => {
-        if (!Number.isFinite(item?.maxStackSize)) return 0;
         const keys = key === MAIN_PACK_KEY ? [MAIN_PACK_KEY, ...(orders.get(PACKS_KEY) || [])] : [key];
+        const rowsInOrder = [];
         for (const k of keys) {
           for (const g of orders.get(k) || []) {
             const r = rowsByGuid.get(g);
-            if (r && mergeAmount(item, r, amount) >= amount) return g;
+            if (r) rowsInOrder.push(r);
           }
         }
-        return 0;
+        return (findAutoMergeTarget(item, amount, rowsInOrder)?.guid >>> 0) || 0;
       },
+      // items-4 (`?retailAutoWear`): AutoWearIsLegal refusal on the figure /
+      // an armour slot, AttemptMerge onto a held ready-slot stack.
+      ...(RETAIL_AUTO_WEAR ? {
+        wearPlan: (item) => planWear(rowsByGuid.get(item?.guid >>> 0) || item, rows),
+        readySlotOccupant: (mask) => readySlotOccupant(rows, mask),
+      } : {}),
     };
   }
   // Re-derive the source index at drop time (the list may have changed

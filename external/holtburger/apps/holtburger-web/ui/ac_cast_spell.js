@@ -1,5 +1,12 @@
 import { castPrecheckMode, preCheckSpell } from "./ac_cast_precheck.js";
 import { castWouldBeSilentlyRejected } from "./ac_combat_mode_intent.js";
+import {
+  announceCastRefusal,
+  castingNotice,
+  checkSpellTarget,
+  showTransientLine,
+  spellTargetPrecheckEnabled,
+} from "./ac_spell_target_compat.js";
 
 // Spell-cast dispatcher (Rec #13, 2026-06-16). Tries the plugin-client
 // path first (window.__pluginClient.player.castSpell) and falls back to
@@ -11,7 +18,10 @@ import { castWouldBeSilentlyRejected } from "./ac_combat_mode_intent.js";
 // Returns true when a dispatch was issued, false when neither path is
 // available (e.g. pre-login). Callers should treat false as "no-op,
 // surface a user-facing message" rather than retrying — the failure is
-// terminal until the session handle exists.
+// terminal until the session handle exists. false is ALSO returned when a
+// client gate (castPrecheck, the C8 combat-mode gate, the spellcast-3 target
+// pre-check) refused the cast and already displayed why; callers that print
+// their own "unavailable" line use castSpellViaHandleResult to tell them apart.
 
 // Task C step 5 (2026-07-01) — self-target promotion for SelfTargeted
 // spells. ACE's UNTARGETED handler (0x0048) threads `target = null`
@@ -49,8 +59,20 @@ export function selfTargetGuidFor(spellId) {
 }
 
 export function castSpellViaHandle(spellId, targetGuid) {
+  return castSpellViaHandleResult(spellId, targetGuid) === "sent";
+}
+
+/**
+ * castSpellViaHandle with the outcome spelled out, so a caller can tell a
+ * client-side refusal (the gate already showed the player why) from a missing
+ * session:
+ *   "sent"        — dispatched
+ *   "refused"     — a client gate refused it and displayed the message
+ *   "unavailable" — no spell id / no session / the dispatch threw
+ */
+export function castSpellViaHandleResult(spellId, targetGuid) {
   const sid = (spellId >>> 0) || 0;
-  if (!sid) return false;
+  if (!sid) return "unavailable";
   const tgt = (targetGuid == null) ? null : ((targetGuid >>> 0) || 0);
   // WS14 — optional client pre-cast checks (?castPrecheck, default-OFF). Retail
   // gated COMPONENTS client-side before the send (acclient.c:404710); mana was
@@ -67,7 +89,7 @@ export function castSpellViaHandle(spellId, targetGuid) {
         // string on the shared toast surface (same as the server-reject path).
         try { bus?.emit?.("clientActionRejected", { message: fail }); } catch (_) {}
         try { bus?.emit?.("spellCastRejected", { spellId: sid, casterGuid: (window.getLocalPlayerGuid?.() ?? 0) >>> 0, reason: fail }); } catch (_) {}
-        return false; // do NOT send — send stays authoritative only when the flag is off
+        return "refused"; // do NOT send — send stays authoritative only when the flag is off
       }
     }
   } catch (_) { /* a precheck fault never blocks the cast — fail-open */ }
@@ -99,9 +121,38 @@ export function castSpellViaHandle(spellId, targetGuid) {
           reason: message,
         });
       } catch (_) {}
-      return false;
+      return "refused";
     }
   } catch (_) { /* a faulting gate never blocks the cast — fail-open */ }
+  // spellcast-3 (2026-10-08) — retail target-compatibility pre-check
+  // (ClientMagicSystem::CastSpell → ObjectCompatibleWithSpell →
+  // ObjectCompatibleWithSpellTargetType, acclient.c:404755 / :404473 /
+  // :403992; rules in ui/ac_spell_target_compat.js). Only a cast WITH a target
+  // (`tgt != null`) is checked, and only for a targeted, non-SelfTargeted spell
+  // with a known formula. A refusal shows retail's string and sends nothing —
+  // no request, no predicted windup. A pass prints retail's "Casting <spell>"
+  // once the cast is dispatched. Fail-open on missing data; `?spellTargetPrecheck=off`.
+  let castNotice = null;
+  if (tgt != null) {
+    try {
+      if (spellTargetPrecheckEnabled()) {
+        const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        const playerGuid = ((typeof window !== "undefined" ? window.getLocalPlayerGuid?.() : 0) ?? 0) >>> 0;
+        const verdict = checkSpellTarget(handle, sid, tgt, playerGuid);
+        if (verdict.verdict === "refuse") {
+          announceCastRefusal(verdict.message, sid);
+          return "refused";
+        }
+        if (verdict.verdict === "pass" && verdict.spellName) castNotice = castingNotice(verdict.spellName);
+      }
+    } catch (_) { /* a faulting check never blocks the cast — fail-open */ }
+  }
+  const sent = dispatchCast(sid, tgt);
+  if (sent && castNotice) showTransientLine(castNotice);
+  return sent ? "sent" : "unavailable";
+}
+
+function dispatchCast(sid, tgt) {
   try {
     const client = (typeof window !== "undefined") ? window.__pluginClient : null;
     if (typeof client?.player?.castSpell === "function") {

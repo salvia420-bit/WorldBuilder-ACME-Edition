@@ -15,7 +15,10 @@
 //      tagged, and go dark on impact / NoDraw;
 //   6. particle managers tick during the dt=0 recovery window;
 //   7. RP6 never culls an emitter riding a ballistic parent;
-//   8. loop.js missile-launch classifier.
+//   8. loop.js missile-launch classifier;
+//   9. physupd-1 environment sweep (`?projectileEnvSweep`): building / EnvCell
+//      / door layers stop the bolt short of contact, launch-window and
+//      embedded-start rules, the missile-BSP door guard, never the AABB statics.
 //
 // Run: node tests/projectile_visual_fidelity.test.mjs
 
@@ -24,6 +27,14 @@ import assert from "node:assert/strict";
 import * as THREE from "three";
 import { EntityManager } from "../scene3d/entities.js";
 import { lightSelectionSortKey } from "../scene3d/lighting.js";
+import {
+  PROJECTILE_SWEEP_RADIUS,
+  landblockOfWorld,
+  projectileHitStops,
+  projectileSweepCells,
+  projectileStopPoint,
+  sweepProjectileSegment,
+} from "../scene3d/projectile_sweep.js";
 import { installFakeMotionSequence } from "../harness/lib/fake_motion_sequence.mjs";
 
 installFakeMotionSequence();
@@ -80,6 +91,22 @@ const wasmExports = {
   },
 };
 
+// physupd-1 sweep mocks. `sweep.<layer>` is a (from, to, radius, last) →
+// hit|null function per wasm export (null = clean miss, the default); every
+// call is logged so a test can assert which layers ran with which arguments.
+const sweep = { building: null, cellMesh: null, cellStatics: null, entities: null };
+const sweepCalls = [];
+let freedHits = 0;
+let aabbStaticsCalls = 0;
+let renderSet = new Uint32Array(0);
+function sweepExport(layer) {
+  return (fx, fy, fz, tx, ty, tz, r, last) => {
+    sweepCalls.push({ layer, from: { x: fx, y: fy, z: fz }, to: { x: tx, y: ty, z: tz }, r, last });
+    const hit = sweep[layer]?.({ x: fx, y: fy, z: fz }, { x: tx, y: ty, z: tz }, r, last);
+    return hit ? { normalX: 0, normalY: 0, normalZ: 0, ...hit, free() { freedHits += 1; } } : undefined;
+  };
+}
+
 window.__sessionHandle = {
   entityIsProjectile: () => true,
   entityProjectileHasGravity: () => false,
@@ -88,6 +115,13 @@ window.__sessionHandle = {
   terrainHeightAt: () => terrainZ,
   entityDefaultScript: () => { defaultScriptReads += 1; return 0x5a; },
   entityDefaultScriptIntensity: () => 1,
+  getRenderSet: () => renderSet,
+  sweepSphereAgainstBuildingMesh: sweepExport("building"),
+  sweepSphereAgainstCellMesh: sweepExport("cellMesh"),
+  sweepSphereAgainstCellStatics: sweepExport("cellStatics"),
+  sweepSphereAgainstEntities: sweepExport("entities"),
+  // Whole-AABB statics sweep — must never be used for missiles.
+  sweepSphereAgainstStatics: () => { aabbStaticsCalls += 1; return undefined; },
 };
 
 let nextGuid = 0x80000001;
@@ -215,6 +249,161 @@ test("client terrain stop: a bolt diving under the terrain stops on it", async (
   assert.equal(inst2._ballistic, true, "below-terrain launch keeps flying (server decides)");
   terrainZ = 0;
   em.dispose();
+});
+
+// ---- physupd-1: environment sweep (building / EnvCell / door) ----------------
+const LB_X0 = 0xa9 * 192; // boltMeta's landblock 0xA9B4 → world x origin
+const R = PROJECTILE_SWEEP_RADIUS;
+function resetSweep() {
+  for (const k of Object.keys(sweep)) sweep[k] = null;
+  sweepCalls.length = 0;
+  renderSet = new Uint32Array(0);
+}
+/** A wall plane at world x = `wx`, hit from -x: the sphere touches at wx - R. */
+function wallAt(wx) {
+  return (a, b, r) => {
+    const c = wx - r;
+    if (a.x >= c || b.x < c) return null;
+    return { t: (c - a.x) / (b.x - a.x), x: wx, y: a.y, z: a.z, normalX: -1 };
+  };
+}
+/** An embedded-start hit (t = 0) when the step starts at world x = `wx`. */
+function embeddedAt(wx, normalX) {
+  return (a) => (Math.abs(a.x - wx) < 1e-9 ? { t: 0, normalX } : null);
+}
+const tickAfter = (em, ms) => new Promise((r) => setTimeout(() => { em.tick(0.016); r(); }, ms));
+
+test("pure helpers: landblock, hit acceptance, cell set, stop point", () => {
+  assert.equal(landblockOfWorld(LB_X0 + 10, 0xb4 * 192 + 5), 0xa9b40000);
+  assert.equal(landblockOfWorld(LB_X0 - 0.01, 0), 0xa8000000);
+  assert.equal(projectileHitStops(0.5, -1, true), true, "real contact ahead stops, even at launch");
+  assert.equal(projectileHitStops(0, -1, true), false, "embedded launch point ignored");
+  assert.equal(projectileHitStops(0, -1, false), true, "embedded + moving in after launch stops");
+  assert.equal(projectileHitStops(0, 1, false), false, "embedded + moving away never stops");
+  assert.equal(projectileHitStops(0, 0, false), false, "embedded + grazing never stops");
+  assert.equal(projectileHitStops(NaN, -1, false), false);
+  const rs = Uint32Array.of(0xa9b40100, 0xa9b40101);
+  assert.equal(projectileSweepCells(rs, 0xa9b40001), rs, "outdoor bolt: the render set as-is");
+  assert.equal(projectileSweepCells(new Uint32Array(0), 0xa9b40001), null);
+  assert.equal(projectileSweepCells(rs, 0xa9b40101), rs, "own cell already present");
+  assert.deepEqual([...projectileSweepCells(rs, 0xa9b40105)], [0xa9b40100, 0xa9b40101, 0xa9b40105]);
+  assert.deepEqual([...projectileSweepCells(null, 0xa9b40105)], [0xa9b40105]);
+  const p = projectileStopPoint({ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, 0.5);
+  assert.ok(Math.abs(p.x - (1 - 0.05)) < 1e-12, "backed off along the path");
+  assert.equal(projectileStopPoint({ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, 0).x, 0, "never behind p0");
+});
+
+test("sweepProjectileSegment: both LBs on a crossing, earliest t, hits freed, stale pkg", () => {
+  resetSweep();
+  const freed0 = freedHits;
+  const sh = window.__sessionHandle;
+  sweep.building = (a, b, r, lb) => (lb === 0xaa000000 ? { t: 0.8, normalX: -1 } : null);
+  sweep.entities = () => ({ t: 0.6, normalX: -1 });
+  const a = { x: LB_X0 + 191, y: 1, z: 1 }, b = { x: LB_X0 + 193, y: 1, z: 1 };
+  assert.equal(sweepProjectileSegment(sh, a, b, { cells: null }), 0.6);
+  const lbs = sweepCalls.filter((c) => c.layer === "building").map((c) => c.last);
+  assert.deepEqual(lbs, [0xa9000000, 0xaa000000], "building mesh swept in both landblocks");
+  assert.ok(Math.abs(sweepCalls.find((c) => c.layer === "entities").last - 7) < 1e-9, "door scan = |d| + 5 m");
+  assert.equal(freedHits - freed0, 2, "every hit box freed");
+  assert.equal(sweepProjectileSegment(sh, a, b, { entities: false }), 0.8, "door layer skippable");
+  assert.equal(sweepProjectileSegment({}, a, b), null, "no exports → no hit");
+  assert.equal(sweepProjectileSegment(null, a, b), null);
+  resetSweep();
+});
+
+test("env sweep: a bolt stops short of a building wall", async () => {
+  resetSweep();
+  const em = makeManager();
+  sweep.building = wallAt(LB_X0 + 12);
+  const freed0 = freedHits;
+  const inst = await em.spawn(boltMeta({ recvMs: performance.now() - 200 }));
+  em.tick(0.016);
+  assert.equal(inst._ballistic, false, "stopped at the wall");
+  assert.equal(inst._projectileImpacted, true);
+  // First 0.1 s substep: 10 → 12, contact at t = 0.95, backed off 0.05 m.
+  assert.ok(Math.abs(inst.root.position.x - (LB_X0 + 11.85)) < 1e-6, `x ${inst.root.position.x - LB_X0}`);
+  assert.equal(sweepCalls.find((c) => c.layer === "building").last, 0xa9b40000, "the bolt's landblock");
+  assert.ok(freedHits > freed0, "hit box freed");
+  const xs = inst.root.position.x;
+  await tickAfter(em, 20);
+  assert.equal(inst.root.position.x, xs, "stays put");
+  em.dispose();
+});
+
+test("env sweep: no hit leaves the flight unchanged", async () => {
+  resetSweep();
+  const em = makeManager();
+  const inst = await em.spawn(boltMeta({ recvMs: performance.now() - 150 }));
+  const x0 = inst.root.position.x;
+  em.tick(0.016);
+  const rdt = (inst._ballisticLastMs - inst.lastVelMs) / 1000;
+  assert.equal(inst._ballistic, true);
+  assert.ok(Math.abs(inst.root.position.x - x0 - 20 * rdt) < 1e-6, "x = x0 + v·t");
+  assert.ok(sweepCalls.length > 0, "layers were swept");
+  em.dispose();
+});
+
+test("env sweep: an embedded launch point is ignored, a later embedded contact stops", async () => {
+  resetSweep();
+  const em = makeManager();
+  sweep.building = embeddedAt(LB_X0 + 10, -1); // launch point touching a door frame
+  const inst = await em.spawn(boltMeta({ recvMs: performance.now() - 120 }));
+  em.tick(0.016);
+  assert.equal(inst._ballistic, true, "launch-window embedded hit ignored");
+  const x1 = inst.root.position.x;
+  assert.ok(x1 > LB_X0 + 12, "flew on");
+  // Embedded but moving AWAY from the surface: never a stop.
+  sweep.building = embeddedAt(x1, +1);
+  await tickAfter(em, 20);
+  assert.equal(inst._ballistic, true, "separating embedded hit ignored");
+  // Embedded and moving INTO it, past the launch window: stop where it is.
+  const x2 = inst.root.position.x;
+  sweep.building = embeddedAt(x2, -1);
+  await tickAfter(em, 20);
+  assert.equal(inst._ballistic, false, "stopped");
+  assert.equal(inst.root.position.x, x2, "at the contact, not past it");
+  em.dispose();
+});
+
+test("env sweep: indoors, EnvCell layers get the render set + the bolt's own cell", async () => {
+  resetSweep();
+  const em = makeManager();
+  renderSet = Uint32Array.of(0xa9b40100, 0xa9b40101);
+  sweep.cellStatics = wallAt(LB_X0 + 12);
+  const inst = await em.spawn(boltMeta({ landblockId: 0xa9b40105, recvMs: performance.now() - 200 }));
+  em.tick(0.016);
+  assert.equal(inst._ballistic, false, "stopped by a cell static");
+  const cells = sweepCalls.find((c) => c.layer === "cellMesh")?.last;
+  assert.ok(cells instanceof Uint32Array, "cell ids passed as Uint32Array");
+  assert.deepEqual([...cells], [0xa9b40100, 0xa9b40101, 0xa9b40105]);
+  em.dispose();
+});
+
+test("env sweep: a closed door stops the bolt; skipped while a missile has a physics BSP", async () => {
+  resetSweep();
+  let em = makeManager();
+  sweep.entities = wallAt(LB_X0 + 12);
+  const inst = await em.spawn(boltMeta({ recvMs: performance.now() - 200 }));
+  em.tick(0.016);
+  assert.equal(inst._ballistic, false, "door stop");
+  em.dispose();
+  // A BSP-bearing missile's stale wasm entity would stop its own bolt
+  // (retail missile_ignore): the door layer stands down.
+  resetSweep();
+  physicsState = 0x28b48 | 0x10000;
+  em = makeManager();
+  sweep.entities = wallAt(LB_X0 + 12);
+  const inst2 = await em.spawn(boltMeta({ recvMs: performance.now() - 200 }));
+  em.tick(0.016);
+  assert.equal(inst2._ballistic, true, "flies on");
+  assert.equal(sweepCalls.filter((c) => c.layer === "entities").length, 0, "door layer not swept");
+  physicsState = 0x28b48;
+  em.dispose();
+  resetSweep();
+});
+
+test("env sweep never uses the whole-AABB statics sweep", () => {
+  assert.equal(aabbStaticsCalls, 0);
 });
 
 test("particle managers tick during the dt=0 recovery window", () => {

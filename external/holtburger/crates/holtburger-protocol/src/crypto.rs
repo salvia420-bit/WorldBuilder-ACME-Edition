@@ -39,7 +39,21 @@ pub struct Isaac {
 }
 
 impl Isaac {
-    const MAXIMUM_EFFORT_LEVEL: usize = 256;
+    /// How many keystream words [`Isaac::search`] may walk ahead of the last
+    /// consumed key (and the ceiling on the out-of-order key set `xors`).
+    ///
+    /// net-3 (R2-net 2026-10-08): was 256, so a burst of more than 256 lost
+    /// server packets (bridge kernel drops while a browser reader stalled)
+    /// put the S2C keystream permanently out of reach: every later encrypted
+    /// packet failed its checksum silently and nothing was ever NAKed. Retail
+    /// has no such cliff: it parks one key per missing sequence
+    /// (`ReceiverData::AddNakked`, acclient.c:376642) and only drops packets
+    /// more than 0x7FFF past the highest id (`SharedNet::SeqIDSanityCheck`,
+    /// acclient.c:371343). 4096 is the mitigation (the full per-sequence key
+    /// park is a separate change); a duplicate or forged packet now walks at
+    /// most 4096 words. `holtburger-session` sizes its S2C reorder window
+    /// from this constant, so keep them coupled.
+    pub const MAXIMUM_EFFORT_LEVEL: usize = 4096;
 
     pub fn new(seed: u32) -> Self {
         let mut isaac = Isaac {
@@ -235,6 +249,60 @@ mod tests {
         assert!(actual.search(first));
         actual.consume_key_value(first);
         assert_eq!(actual.current_key, third);
+    }
+
+    /// net-3 (R2-net 2026-10-08): a burst of 299 lost packets (beyond the old
+    /// 256-word cliff) is still recoverable, the skipped keys validate when
+    /// the retransmissions arrive, and a second burst after that is found too.
+    #[test]
+    fn search_recovers_gap_larger_than_256() {
+        let seed = 0xC83824AB;
+        let mut shadow = Isaac::new(seed);
+        let mut burst = Vec::with_capacity(300);
+        for _ in 0..300 {
+            burst.push(shadow.current_key);
+            shadow.consume_key();
+        }
+
+        let mut actual = Isaac::new(seed);
+        // Packets 0..299 lost; packet 299 arrives first.
+        assert!(actual.search(burst[299]));
+        actual.consume_key_value(burst[299]);
+
+        // The retransmissions of 0..299 arrive late and still validate.
+        for &key in &burst[..299] {
+            assert!(actual.search(key));
+            actual.consume_key_value(key);
+        }
+
+        // A second 299-packet burst is found as well.
+        let mut second = Vec::with_capacity(300);
+        for _ in 0..300 {
+            second.push(shadow.current_key);
+            shadow.consume_key();
+        }
+        assert!(actual.search(second[299]));
+        actual.consume_key_value(second[299]);
+        assert_eq!(actual.current_key, shadow.current_key);
+    }
+
+    /// net-3: the walk reaches exactly `MAXIMUM_EFFORT_LEVEL` words past the
+    /// current key and no further.
+    #[test]
+    fn search_reach_is_bounded_by_effort_level() {
+        let seed = 0xDEADBEEF;
+        let mut shadow = Isaac::new(seed);
+        let mut words = Vec::with_capacity(Isaac::MAXIMUM_EFFORT_LEVEL + 2);
+        for _ in 0..Isaac::MAXIMUM_EFFORT_LEVEL + 2 {
+            words.push(shadow.current_key);
+            shadow.consume_key();
+        }
+
+        let mut at_limit = Isaac::new(seed);
+        assert!(at_limit.search(words[Isaac::MAXIMUM_EFFORT_LEVEL]));
+
+        let mut past_limit = Isaac::new(seed);
+        assert!(!past_limit.search(words[Isaac::MAXIMUM_EFFORT_LEVEL + 1]));
     }
 
     #[test]

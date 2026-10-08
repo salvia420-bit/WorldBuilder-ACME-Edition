@@ -59,8 +59,9 @@ import {
   wireDropTarget, inventoryRows, entityWorldPos, localPlayerWorldPos, devHex,
 } from "./commerce_window.js";
 import {
-  vendorPurchasePrice, vendorSaleCredit, vendorAcceptability, vendorRejectText,
-  VENDOR_ACCEPT, countCurrency, PYREAL_WCID, fmtNumber, fmtCompact,
+  vendorPurchasePrice, vendorSaleCredit, sellStagingPlan,
+  countCurrency, PYREAL_WCID, fmtNumber, fmtCompact,
+  planSellSplit, resolveSellSplits, SELL_SPLIT_FAILED_TEXT,
 } from "./commerce_logic.js";
 
 const OVERLAY_ID = "hb-vendor-bar";
@@ -235,6 +236,7 @@ let state = {
   gridKey: "",
   buyQueue: [],              // [{ itemGuid, name, value, amount, iconId, itemType, stackSize, wcid }]
   sellQueue: [],             // same shape, inventory items
+  sellSplits: [],            // split-before-sell in flight (commerce_logic.planSellSplit().pending + at)
   rangeCheckTimer: null,     // HUD rec #18 — 2Hz approach-distance watchdog
 };
 
@@ -361,9 +363,10 @@ function buildOverlay() {
   btn.add.title = "Add to your buying list";
 
   // Drag-to-sell anywhere on the window (retail VendorSellUI drop).
-  wireDropTarget(overlay, DropItemFlags.VENDOR, (guid) => stageSell(guid));
+  // A shift-drop asks how many to sell (split before sell, see stageSell).
+  wireDropTarget(overlay, DropItemFlags.VENDOR, (guid, ev) => stageSell(guid, dropOpts(ev)));
   // Sub-highlight the list well too so the target reads clearly.
-  wireDropTarget(list, DropItemFlags.VENDOR, (guid) => stageSell(guid));
+  wireDropTarget(list, DropItemFlags.VENDOR, (guid, ev) => stageSell(guid, dropOpts(ev)));
 
   state.refs = { tabs: tabEls, purse, info, list, actions, cat, qtyWrap, qtyInput, btn };
   return overlay;
@@ -393,6 +396,7 @@ function onHidden() {
   // Drop queues on close so reopening a different vendor is clean.
   state.buyQueue = [];
   state.sellQueue = [];
+  state.sellSplits = [];
   state.selectedItemGuid = null;
   stopVendorRangeWatchdog();
 }
@@ -401,45 +405,141 @@ function onHidden() {
 // Drag-to-sell staging
 // ─────────────────────────────────────────────────────────────────
 
-function stageSell(guid) {
+function uiError() {
+  try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+}
+
+/** Drop-event options for stageSell: a shift-drop (on the drop, or held
+ *  when the inventory drag started) asks for an amount. */
+function dropOpts(ev) {
+  let dragShift = false;
+  try { dragShift = !!window.__itemDrag?.session?.()?.shift; } catch (_) { dragShift = false; }
+  return { split: !!ev?.shiftKey || dragShift, anchor: ev || null };
+}
+
+async function stageSell(guid, opts = {}) {
   const vs = state.vendorState;
   if (!vs) return;
-  const item = inventoryRows().find((i) => i.guid === (guid >>> 0));
-  if (!item) {
-    // VendorSellUI::DragItemAcceptable — not owned.
-    toast("You can only sell items you are carrying", "err");
+  // Retail VendorSellUI::DragItemAcceptable + gmVendorUI::AddItem
+  // (commerce_logic.sellStagingPlan): a pack sells its contents, every row
+  // is a whole stack.
+  const rows = inventoryRows();
+  const plan = sellStagingPlan(rows, guid, vs);
+  if (plan.reject) {
+    toast(plan.reject, "err");
+    uiError();
     return;
   }
-  // ACE rejects sells of wielded items (Player_Commerce); retail never
-  // lets them into the list either.
-  if ((item.equipMask >>> 0) !== 0) {
-    toast(`Unequip ${item.name} before selling it`, "err");
-    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+  // Split before sell (VendorSellUI::AcceptDragObject): a shift-drop of one
+  // stack asks how many (item_drag's stack prompt — retail's splitSize);
+  // fewer than the stack splits it in place first and stages the new stack
+  // once the server creates it (resolvePendingSellSplits).
+  const one = plan.stage.length === 1 && !plan.message ? plan.stage[0] : null;
+  const prompt = window.__itemDrag?.promptStackAmount;
+  if (opts.split && one && one.amount > 1 && typeof prompt === "function") {
+    let n = null;
+    try {
+      n = await prompt({
+        max: one.amount,
+        initial: Math.max(1, Math.floor(one.amount / 2)),
+        clientX: opts.anchor?.clientX ?? 0,
+        clientY: opts.anchor?.clientY ?? 0,
+        name: one.name || "",
+      });
+    } catch (_) { n = null; }
+    if (n == null) return;
+    // The vendor may have closed or changed, and the stack moved or
+    // changed size, while the prompt was up: re-read both.
+    if (((state.vendorState?.vendorGuid >>> 0) || 0) !== ((vs.vendorGuid >>> 0) || 0) || !state.win?.isOpen?.()) return;
+    const now = inventoryRows();
+    const cur = now.find((r) => (r.guid >>> 0) === (one.guid >>> 0));
+    if (!cur || (cur.equipMask >>> 0) !== 0) return;
+    const stackNow = Math.max(1, Number(cur.stackSize) || 1);
+    if (n < stackNow) {
+      beginSellSplit({ ...one, ...cur, amount: stackNow }, n, now);
+      return;
+    }
+    stageSellRows([{ ...one, ...cur, amount: stackNow }]);
     return;
   }
-  const code = vendorAcceptability(vs, item);
-  if (code !== VENDOR_ACCEPT.OK) {
-    toast(vendorRejectText(code), "err");
-    try { window.__audioOptimistic?.playUiError?.(); } catch (_) {}
+  if (plan.message) toast(plan.message);
+  stageSellRows(plan.stage);
+}
+
+function beginSellSplit(item, amount, rows) {
+  const vs = state.vendorState;
+  const me = (window.getLocalPlayerGuid?.() >>> 0) || 0;
+  const split = planSellSplit(item, amount, rows, { playerGuid: me });
+  if (!split) return;
+  let sent = false;
+  if (!split.reject) {
+    const exec = window.__itemDrag?.executeItemAction;
+    try {
+      if (typeof exec === "function") {
+        // The inventory's pending ledger + ghosting, like a shift-drag split.
+        sent = !!exec(split.action, { guid: item.guid >>> 0, item: { ...item }, owned: true });
+      } else if (typeof window.__sessionHandle?.splitStackToContainer === "function") {
+        window.__sessionHandle.splitStackToContainer(item.guid >>> 0, split.action.container >>> 0, 0, split.action.amount);
+        sent = true;
+      }
+    } catch (e) {
+      console.warn("[vendor-ui] split-before-sell failed", e);
+      sent = false;
+    }
+  }
+  if (!sent) {
+    toast(SELL_SPLIT_FAILED_TEXT, "err");
+    uiError();
     return;
   }
+  state.sellSplits.push({ ...split.pending, vendorGuid: (vs?.vendorGuid >>> 0) || 0, at: Date.now() });
+  toast(split.message);
+}
+
+/** Stage the new stacks of finished splits; drop the expired ones. True
+ *  when something was staged. Runs on every playerInventoryChanged. */
+function resolvePendingSellSplits() {
+  if (state.sellSplits.length === 0) return false;
+  const vg = (state.vendorState?.vendorGuid >>> 0) || 0;
+  const live = state.sellSplits.filter((p) => !p.vendorGuid || p.vendorGuid === vg);
+  const r = resolveSellSplits(live, inventoryRows(), {
+    claimed: new Set(state.sellQueue.map((q) => q.itemGuid >>> 0)),
+    now: Date.now(),
+  });
+  state.sellSplits = r.waiting;
+  if (r.staged.length === 0) return false;
+  stageSellRows(r.staged.map(({ pending, row }) => ({ ...row, amount: pending.amount })));
+  return true;
+}
+
+/** A server refusal (InventoryServerSaveFailed) of a split we sent. */
+function failSellSplit(guid) {
+  const g = guid >>> 0;
+  if (!g || !state.sellSplits.some((p) => p.sourceGuid === g)) return false;
+  state.sellSplits = state.sellSplits.filter((p) => p.sourceGuid !== g);
+  toast(SELL_SPLIT_FAILED_TEXT, "err");
+  uiError();
+  return true;
+}
+
+function stageSellRows(stage) {
   state.currentTab = "selling";
-  const stack = Math.max(1, item.stackSize || 1);
-  const existing = state.sellQueue.find((q) => q.itemGuid === item.guid);
-  if (existing) {
-    existing.amount = stack; // re-dropping a stack re-stages the whole stack
-  } else {
-    // Retail VendorSellUI::AddItemToSell stages the whole stack; the
-    // quantity box on the row trims it.
+  for (const item of stage) {
+    const existing = state.sellQueue.find((q) => q.itemGuid === item.guid);
+    if (existing) {
+      // Re-dropping re-stages the whole (current) stack.
+      Object.assign(existing, { value: item.value, stackSize: item.amount, amount: item.amount });
+      continue;
+    }
     state.sellQueue.push({
       itemGuid: item.guid,
       wcid: item.wcid,
       name: item.name,
       value: item.value,
-      stackSize: stack,
+      stackSize: item.amount,
       itemType: item.itemType,
       iconId: item.iconId,
-      amount: stack,
+      amount: item.amount,
     });
   }
   render();
@@ -726,21 +826,29 @@ function renderQueuePane(which, cur) {
       const nm = el("div", "hbk-grow", row);
       setAcText(nm, q.name || "Unnamed item", { color: KIT_COLOR.text, fit: true });
       nm.title = q.name || "";
-      const qty = el("input", "hbk-input", row);
-      qty.type = "number";
-      qty.min = "1";
-      qty.max = String(buying ? MAX_QTY : Math.max(1, q.stackSize || 1));
-      qty.value = String(q.amount);
-      qty.title = "Quantity";
-      // Reprice in place while typing — a full render() would destroy
-      // the focused <input> and eat the next keystroke.
-      qty.addEventListener("input", () => {
-        const max = buying ? MAX_QTY : Math.max(1, q.stackSize || 1);
-        const n = parseInt(qty.value, 10);
-        q.amount = Math.max(1, Math.min(max, Number.isFinite(n) ? n : 1));
-        repaintTotals();
-      });
-      qty.addEventListener("change", () => render());
+      if (buying) {
+        const qty = el("input", "hbk-input", row);
+        qty.type = "number";
+        qty.min = "1";
+        qty.max = String(MAX_QTY);
+        qty.value = String(q.amount);
+        qty.title = "Quantity";
+        // Reprice in place while typing — a full render() would destroy
+        // the focused <input> and eat the next keystroke.
+        qty.addEventListener("input", () => {
+          const n = parseInt(qty.value, 10);
+          q.amount = Math.max(1, Math.min(MAX_QTY, Number.isFinite(n) ? n : 1));
+          repaintTotals();
+        });
+        qty.addEventListener("change", () => render());
+      } else {
+        // A sale is always the whole stack (sellStagingPlan) — ACE sells
+        // and pays for all of it whatever amount is sent, so there is no
+        // quantity box to trim it with.
+        const n = el("div", "hvb-row-qty", row);
+        setAcText(n, `x${fmtNumber(q.amount)}`, { color: KIT_COLOR.text });
+        n.title = "The whole stack is sold. To sell part of a stack, hold Shift when you drop it here.";
+      }
       const pr = el("div", "hvb-row-price", row);
       priceCells.push({ q, el: pr });
       const rm = el("button", "hbk-icon-btn", row);
@@ -939,6 +1047,8 @@ export function mount(ctx) {
 
     const onInvChanged = () => {
       if (!state.vendorState?.vendorGuid || !state.win?.isOpen()) return;
+      // Split before sell: the new stack arrived → stage it.
+      try { resolvePendingSellSplits(); } catch (e) { console.warn("[vendor-ui] split resolve failed", e); }
       try {
         const vendorGuid = state.vendorState.vendorGuid >>> 0;
         const raw = handle.getVendorState(vendorGuid);
@@ -970,6 +1080,11 @@ export function mount(ctx) {
     client.events.on("kind:12", onVendorOpened);
     client.events.on("VendorOpened", onVendorOpened);
     client.events.on("playerInventoryChanged", onInvChanged);
+    const onActionFailed = (evt) => {
+      const p = evt?.detail ?? evt ?? {};
+      if (failSellSplit((p.u32Payload >>> 0) || 0)) render();
+    };
+    client.events.on("inventoryActionFailed", onActionFailed);
     client.events.on("portalSpaceEntered", onPortalSpace);
     client.events.on("death", onDeath);
 
@@ -978,6 +1093,7 @@ export function mount(ctx) {
       client.events.off?.("kind:12", onVendorOpened);
       client.events.off?.("VendorOpened", onVendorOpened);
       client.events.off?.("playerInventoryChanged", onInvChanged);
+      client.events.off?.("inventoryActionFailed", onActionFailed);
       client.events.off?.("portalSpaceEntered", onPortalSpace);
       client.events.off?.("death", onDeath);
     };
@@ -996,6 +1112,7 @@ export function mount(ctx) {
     if (nextVendorGuid !== prevVendorGuid) {
       state.buyQueue = [];
       state.sellQueue = [];
+      state.sellSplits = [];
     }
     // A fresh open (or a different vendor) starts on the Items tab; a
     // same-vendor refresh while open keeps the player's tab, selection
@@ -1087,6 +1204,6 @@ if (typeof window !== "undefined") {
     close: () => hideOverlay(),
     switchTab: (id) => { state.currentTab = id; render(); },
     refs: () => state.refs,
-    stageSell: (guid) => stageSell(guid),
+    stageSell: (guid, opts) => stageSell(guid, opts),
   };
 }

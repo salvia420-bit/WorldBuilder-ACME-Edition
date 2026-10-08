@@ -23,7 +23,8 @@ import { inferAttackTypeForWeapon, ATTACK_TYPE } from "../ui/ac_attack_type_for_
 import { getAimLevelForVelocity } from "../ui/ac_aim_level_for_velocity.js";
 import { preloadCastSequenceTable } from "../ui/ac_spell_cast_sequence.js";
 import { preloadSpellShapeTable } from "../ui/ac_spell_shape.js";
-import { isTerminalCastReject, shouldClearCastOnReject } from "../ui/cast_reject_policy.js";
+import { isTerminalCastReject, shouldClearCastOnReject, shouldCancelOnUseDone, castUseDoneCancelsEnabled } from "../ui/cast_reject_policy.js";
+import { readBusyCount } from "../ui/ac_cast_predict.js";
 import { acToThree } from "../scene3d/adapter.js";
 import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
@@ -1412,6 +1413,23 @@ export function dispatchClientEvent(evt, D) {
       const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       // WS16 diag: UseDone landed — server finished the action.
       try { window.__diag?.cast?.onUseDone?.({ guid: lg }); } catch (_) {}
+      // spellcast-3 (?castUseDoneCancels, default ON): an ACE-side cast refusal
+      // (VerifySpellTarget → transient + UseDone(None)) lands here mid-windup.
+      // With nothing left outstanding the server has ended the cast, so stop
+      // the predicted chain instead of letting it play out
+      // (ui/cast_reject_policy.js shouldCancelOnUseDone). Must run before
+      // clearCastBusy, which drops `_castChainActive`.
+      try {
+        const inst = em?.entityMap?.get?.(lg);
+        if (em && lg && inst && typeof em.cancelCastSequence === "function" &&
+            shouldCancelOnUseDone({
+              flagOn: castUseDoneCancelsEnabled(),
+              chainActive: !!inst._castChainActive,
+              busyAfter: readBusyCount(window.__sessionHandle),
+            })) {
+          em.cancelCastSequence(lg, "server-done");
+        }
+      } catch (_) {}
       if (em && lg && typeof em.clearCastBusy === "function") {
         em.clearCastBusy(lg);
       }

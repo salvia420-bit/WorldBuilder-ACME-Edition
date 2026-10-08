@@ -11,6 +11,7 @@
 //! default path, byte-identical).
 
 use holtburger_world::WorldState;
+use holtburger_world::context::WorldContextExt;
 use web_time::Instant;
 
 /// Retail `MIN_JUMP_EXTENT` — the floor `GetJumpPowerLevel` applies
@@ -47,11 +48,16 @@ pub enum JumpRefusal {
     /// Retail 72 — blocked forward command (Fallen / crouch-sit-sleep
     /// band, `jump_charge_is_allowed` acclient.c:343856-343862).
     Position = 72,
-    /// Retail 73 — the charge-time weenie vfptr[15] gate
-    /// (acclient.c:343855, scroll text `cant_jump_load`). NEVER
-    /// produced here: DESIGN.md:460-462 rules "no speculative
-    /// charge-time gate" (spec §6 Q1); kept so the A4-Q1 queue-head
-    /// lane can carry it.
+    /// Retail 73 — the weenie `vfptr[15]` gate, `CanJump` (the PDB
+    /// vtable puts it at offset 60 = slot 15) → `CACQualities::CanJump`
+    /// = `load < 2.0` (acclient.c:442878-442884; scroll text
+    /// `cant_jump_load`). R1 motioninterp-2 (2026-10-08) settles spec §6
+    /// Q1 (DESIGN.md:509/:517-518 had it UNRESOLVED and mislabelled
+    /// "weenie stamina"): the gate is BURDEN. Produced at press time by
+    /// [`JumpChargeClock::commence`] (`charge_jump`, acclient.c:343845-
+    /// 343879) and at release by `jump_charge_is_allowed`
+    /// (acclient.c:343318-343339), both under `?jumpLoadGate` (default
+    /// ON). The A4-Q1 queue-head lane can also carry it.
     Load = 73,
 }
 
@@ -120,16 +126,30 @@ impl JumpChargeClock {
     /// no turn`, acclient.c:343864-343870), computed by
     /// `MovementSystem::jump_charge_commence` from the active manual
     /// drive — NOT from JS.
+    ///
+    /// `load_gate` carries `?jumpLoadGate` (default ON, R1
+    /// motioninterp-2): when set, an over-encumbered player (load >= 2.0,
+    /// retail `CACQualities::CanJump`) is refused with 73 BEFORE the
+    /// position check — retail `charge_jump` runs the weenie `CanJump`
+    /// first (acclient.c:343845-343855) — and the charge never starts
+    /// (`ClientCombatSystem::CommenceJump` prints `cant_jump_load` and
+    /// returns, acclient.c:408033-408078).
     pub(super) fn commence(
         &mut self,
         now: Instant,
         world: &mut WorldState,
         manual_axes_idle: bool,
+        load_gate: bool,
     ) -> Result<(), JumpRefusal> {
         // Double-press no-op: clock NOT restarted
         // (acclient.c:408039-408041).
         if self.jump_pending {
             return Ok(());
+        }
+        // Weenie CanJump gate (73) — retail order: before the position
+        // gate (acclient.c:343855).
+        if load_gate && !world.player_can_jump() {
+            return Err(JumpRefusal::Load);
         }
         // Position gate (acclient.c:343856-343862). NOTE: retail reads
         // the INTERPRETED forward command; ours reads the server-echoed
@@ -137,8 +157,6 @@ impl JumpChargeClock {
         // approximation the shipped release gate makes (spec §6 Q5:
         // upgrade point = this predicate input, when A3-D1 Stage-2's
         // interpreted state goes live).
-        //
-        // NO charge-time error-73 gate — DESIGN.md:460-462 (spec §6 Q1).
         if !holtburger_world::player::motion_allows_jump(world.player.current_substate) {
             return Err(JumpRefusal::Position);
         }
@@ -264,7 +282,7 @@ mod tests {
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
         assert_eq!(clock.level(t0, &world), 0.0, "pre-commence level must be 0");
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         assert!((clock.level(t0 + Duration::from_millis(500), &world) - 0.5).abs() < 1e-3);
         assert!((clock.level(t0 + Duration::from_secs(1), &world) - 1.0).abs() < 1e-6);
         assert_eq!(clock.level(t0 + Duration::from_secs(2), &world), 1.0);
@@ -278,7 +296,7 @@ mod tests {
         world.player.update_last_server_motion_style(0x0046);
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         assert_eq!(clock.level(t0 + Duration::from_millis(800), &world), 1.0);
         assert!((clock.level(t0 + Duration::from_millis(400), &world) - 0.5).abs() < 1e-3);
     }
@@ -290,7 +308,7 @@ mod tests {
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         let extent = clock.release(t0, &mut world).expect("charging");
         assert_eq!(extent, MIN_JUMP_EXTENT);
     }
@@ -302,10 +320,10 @@ mod tests {
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         let stamp = clock.build_start().expect("build started");
         clock
-            .commence(t0 + Duration::from_millis(300), &mut world, true)
+            .commence(t0 + Duration::from_millis(300), &mut world, true, true)
             .expect("second press is Ok");
         assert_eq!(clock.build_start(), Some(stamp), "build_start unchanged");
     }
@@ -319,10 +337,84 @@ mod tests {
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
         assert_eq!(
-            clock.commence(t0, &mut world, true),
+            clock.commence(t0, &mut world, true, true),
             Err(JumpRefusal::Position)
         );
         assert!(!clock.is_pending(), "refused press must not arm the clock");
+    }
+
+    /// Seed Strength 10 (capacity 1500) and the player's own wire
+    /// `EncumbranceVal` (PropertyInt 5) so `player_burden` = burden/1500.
+    fn seed_burden(world: &mut WorldState, encumbrance: i32) {
+        use holtburger_common::properties::PropertyInt;
+        use holtburger_world::stats::{Attribute, AttributeType};
+        world.player.attributes.insert(
+            AttributeType::StrengthAttr,
+            Attribute {
+                attr_type: AttributeType::StrengthAttr,
+                ranks: 0,
+                start: 10,
+                spent_xp: 0,
+                next_rank_xp: None,
+                base: 10,
+                current: 10,
+            },
+        );
+        world
+            .player_entity_mut()
+            .expect("player entity seeded")
+            .properties
+            .ints
+            .insert(PropertyInt::EncumbranceVal, encumbrance);
+    }
+
+    // R1 motioninterp-2 — retail `charge_jump` runs the weenie CanJump
+    // (load < 2.0) gate first (acclient.c:343845-343855); a refused press
+    // never arms the clock (`CommenceJump`, acclient.c:408033-408078).
+    #[test]
+    fn overloaded_press_refuses_load_and_never_charges() {
+        let t0 = Instant::now();
+        // 3000 / 1500 = load 2.0 → refused.
+        let mut world = test_world();
+        seed_burden(&mut world, 3000);
+        let mut clock = JumpChargeClock::new();
+        assert_eq!(
+            clock.commence(t0, &mut world, true, true),
+            Err(JumpRefusal::Load)
+        );
+        assert!(!clock.is_pending(), "refused press must not arm the clock");
+        assert!(
+            !world.player.standing_long_jump_charge,
+            "no standstill root on a refused press"
+        );
+
+        // 2990 / 1500 = load 1.993 → allowed.
+        let mut world = test_world();
+        seed_burden(&mut world, 2990);
+        let mut clock = JumpChargeClock::new();
+        assert_eq!(clock.commence(t0, &mut world, true, true), Ok(()));
+        assert!(clock.is_pending());
+
+        // `?jumpLoadGate=off` → the pre-gate behaviour (charges anyway).
+        let mut world = test_world();
+        seed_burden(&mut world, 3000);
+        let mut clock = JumpChargeClock::new();
+        assert_eq!(clock.commence(t0, &mut world, true, false), Ok(()));
+        assert!(clock.is_pending());
+    }
+
+    // R1 motioninterp-2 — retail order: CanJump (73) before the position
+    // gate (72).
+    #[test]
+    fn load_refusal_precedes_position_refusal() {
+        let mut world = test_world();
+        seed_burden(&mut world, 4500);
+        world.player.current_substate = 0x4100_0012; // Crouch
+        let mut clock = JumpChargeClock::new();
+        assert_eq!(
+            clock.commence(Instant::now(), &mut world, true, true),
+            Err(JumpRefusal::Load)
+        );
     }
 
     // Spec test 6 — standstill root matrix (acclient.c:343864-343870).
@@ -332,19 +424,19 @@ mod tests {
         // grounded + no axes → root set
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         assert!(world.player.standing_long_jump_charge);
         // held axis → not set
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
-        clock.commence(t0, &mut world, false).expect("commence");
+        clock.commence(t0, &mut world, false, true).expect("commence");
         assert!(!world.player.standing_long_jump_charge);
         // airborne → not set (clock still arms; release gate refuses
         // later, retail's in-air ordering)
         let mut world = test_world();
         world.player.is_airborne = true;
         let mut clock = JumpChargeClock::new();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         assert!(!world.player.standing_long_jump_charge);
     }
 
@@ -354,7 +446,7 @@ mod tests {
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         clock.finish(&mut world);
         assert_eq!(clock.release(t0 + Duration::from_secs(1), &mut world), None);
     }
@@ -368,7 +460,7 @@ mod tests {
         let mut world = test_world();
         let mut clock = JumpChargeClock::new();
         let t0 = Instant::now();
-        clock.commence(t0, &mut world, true).expect("commence");
+        clock.commence(t0, &mut world, true, true).expect("commence");
         assert!(world.player.standing_long_jump_charge);
         let extent = clock
             .release(t0 + Duration::from_millis(700), &mut world)

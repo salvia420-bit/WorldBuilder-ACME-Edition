@@ -141,11 +141,21 @@ export function entitiesCtorPrelude() {
   // full-command boundary). Pure; wrapped so its private tables cannot
   // collide with entities.js top-level names.
   const mcf = readFileSync(new URL("../../scene3d/motion/motion_command_full.js", import.meta.url), "utf8");
+  // 2026-10-08: the playhead hook-timing helpers (`_fireHook`'s direction
+  // gate, `_drainUnifiedHooks`, animation.js's frame-exit retime) and the
+  // one-shot hand-back (`tick`). Pure; wrapped like fullMotionCommand.
+  const hw = readFileSync(new URL("../../scene3d/hook_windows.js", import.meta.url), "utf8");
+  const hb = readFileSync(new URL("../../scene3d/motion/handback.js", import.meta.url), "utf8");
+  const hwNames = "unifiedHookTime, drainHookWindows, framesCrossedBackward, hookFiresInDirection, retimeHooksToFrameExit";
   return "// === pre_create_buffer.js (genuine) ===\n" + stripExports(pcb) + "\n" +
     "// === part_degrade.js (genuine) ===\n" + stripExports(pd) + "\n" +
     "// === motion_link_diag.js (genuine) ===\n" + stripExports(mld) + "\n" +
     "// === motion/motion_command_full.js (genuine) ===\n" +
     "const fullMotionCommand = (() => {\n" + stripExports(mcf) + "\nreturn fullMotionCommand;\n})();\n" +
+    "// === hook_windows.js + motion/handback.js (genuine) ===\n" +
+    `const { ${hwNames} } = (() => {\n` + stripExports(hw) + `\nreturn { ${hwNames} };\n})();\n` +
+    "const { oneShotSpill, handBackToCycle } = (() => {\n" + stripExports(hb) +
+    "\nreturn { oneShotSpill, handBackToCycle };\n})();\n" +
     // 2026-10-07 — terrain rounding step 3 (./visual_ground.js): the
     // EntityInstance constructor calls installVisualGroundRoot and `tick`
     // calls visualGroundBeginFrame. Not inlined (it imports terrain_round /
