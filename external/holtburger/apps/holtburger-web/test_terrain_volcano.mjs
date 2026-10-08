@@ -308,7 +308,7 @@ check("H3: the pass asks the composer for a depth texture",
 check("H3: atmosphere_pipeline builds ONE post-chain EffectPass (plus only the nanScrub guard)",
   (PIPE_SRC.match(/new EffectPass\(/g) || []).length === 1 + (PIPE_SRC.match(/new EffectPass\(camera, scrub\)/g) || []).length);
 check("H3: heatHaze is inside the fxPass argument list, behind filter(Boolean)",
-  /\.\.\.\[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/
+  /\.\.\.\[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/
     .test(PIPE_SRC));
 check("H3: heatHaze is never given its own pass",
   !/composer\.addPass\(\s*heatHaze/.test(PIPE_SRC));

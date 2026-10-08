@@ -5681,6 +5681,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               atmosphereRuntime,
               bloom: !!quality.flags.bloom,
               vignette: !!quality.flags.vignette,
+              // 2026-10-07 — screen-space AO (ssao.js); `?ssao=on|off` rides
+              // quality.js BOOL_FLAGS, so the preset value already folds it in.
+              ssao: !!quality.flags.ssao,
               // 2026-08-05 — MSAA on the composer RTs (see `msaaSampleCount`).
               // Preset-gated: `low` sets antialias false and gets 0 samples.
               msaa: quality.flags.antialias ? msaaSampleCount() : 0,

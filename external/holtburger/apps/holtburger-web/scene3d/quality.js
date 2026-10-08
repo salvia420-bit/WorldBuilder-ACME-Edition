@@ -154,6 +154,10 @@ export const PRESETS = {
         vignette: false,
         lensFlare: false,
         lightShafts: false,
+        // 2026-10-07 — screen-space ambient occlusion (scene3d/ssao.js, SAO):
+        // contact darkening where walls meet the ground, eaves, recesses.
+        // Half-res + depth-aware blur, ~0.5-1 ms on the 1070; high/ultra only.
+        ssao: false,
         // Terrain VFX (Wave 0B, docs/2026-07-31-terrain-vfx-plan.md §2.2/§5.8).
         // `terrainTrail` = the shared stomp/footprint render-target trail map.
         // SHIPS FALSE ON EVERY TIER (§5.9 "ship OFF, promote deliberately");
@@ -309,6 +313,7 @@ export const PRESETS = {
         vignette: false,
         lensFlare: false,
         lightShafts: false,
+        ssao: false,
         // Terrain VFX grass — see the `low` tier for the rationale. 24336 =
         // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
         terrainGrass: terrainMaster("grass", "mid"),
@@ -408,6 +413,7 @@ export const PRESETS = {
         // cloud effect, which is only constructed under the `clouds` opt-in.
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
+        ssao: true,
         // Terrain VFX grass — see the `low` tier. 60025 = 245², the plan's
         // reference budget (240k tris, one draw call, <= 3.5 ms on an R9 290 —
         // a hypothesis, §8 risk 6: measure before fixing this number).
@@ -501,6 +507,7 @@ export const PRESETS = {
         // cloud effect, which is only constructed under the `clouds` opt-in.
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
+        ssao: true,
         // Terrain VFX grass — see the `low` tier. 119716 = 346².
         terrainGrass: terrainMaster("grass", "ultra"),
         terrainGrassBlades: 119716,
@@ -602,6 +609,7 @@ const BOOL_FLAGS = new Set([
     "vignette",
     "lensFlare",
     "lightShafts",
+    "ssao",
 ]);
 
 // Integer-typed flags.

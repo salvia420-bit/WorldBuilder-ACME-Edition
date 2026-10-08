@@ -109,6 +109,7 @@
 // reproduce it exactly.
 
 import { registerTerrainVfx, wireframeActive } from "./terrain_vfx.js";
+import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 import { FAM_GRASS, familyForCode } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL, scatterHash01 } from "./terrain_scatter.js";
 import { ensureVfxHashVarying, VFX_HASH_ASSIGN_VERTEX } from "./vfx/per_instance.js";
@@ -288,7 +289,9 @@ const GRASS_VERTEX_DECLS = [
   "varying vec3 vGrassTint;",
 ];
 
-const GRASS_FRAGMENT_DECLS = ["varying vec3 vGrassTint;"];
+const GRASS_FRAGMENT_DECLS = ["varying vec3 vGrassTint;", "uniform float uSsaoGrassMarker;"];
+// The AO composite's grass marker (ssao_marker.js) is written at the very end.
+export const GRASS_OUTPUT_SEAM = "#include <dithering_fragment>";
 
 function _grassVertexSnippet() {
   return [
@@ -371,6 +374,14 @@ function _grassVertexSnippet() {
 // no sky light, and rendered as a black spike: half of every field read as
 // black thorns at Holtburg. Re-take the interpolated normal unflipped, so both
 // faces light exactly like the ground they grow from.
+function _grassMarkerSnippet() {
+  return [
+    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, ssao marker) ----",
+    "  gl_FragColor.a = mix(gl_FragColor.a, 0.0, uSsaoGrassMarker);",
+    "  // ---- " + GRASS_END + " ----",
+  ].join("\n");
+}
+
 function _grassNormalSnippet() {
   return [
     "  // ---- " + GRASS_MARKER + " (terrain_grass.js, normal) ----",
@@ -464,6 +475,10 @@ export function injectTerrainGrassShader(shader) {
   shader.fragmentShader = shader.fragmentShader.replace(
     GRASS_NORMAL_SEAM,
     GRASS_NORMAL_SEAM + "\n" + _grassNormalSnippet(),
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    GRASS_OUTPUT_SEAM,
+    GRASS_OUTPUT_SEAM + "\n" + _grassMarkerSnippet(),
   );
   return shader;
 }
@@ -634,6 +649,9 @@ export function createTerrainGrassProvider(opts = {}) {
     uTrailRadius: { value: 48 },
     uTrailTexel: { value: 0.375 },
     uTrailEnabled: { value: 0 },
+    // Shared by reference with the AO composite (ssao_marker.js): 1 while it
+    // exists, so the grass is marked only when something restores the alpha.
+    uSsaoGrassMarker: SSAO_GRASS_MARKER,
   };
 
   // Wind frame, resolved once: the SAME flags the trees read

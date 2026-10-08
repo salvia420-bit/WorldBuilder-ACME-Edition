@@ -67,6 +67,8 @@ import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_eff
 import { particlesOverCloudsEnabled, collectLateFx } from "./particles_over_clouds.js";
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
+import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
+import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -816,6 +818,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     height: optH,
     bloom: bloomOpt = true,
     vignette: vignetteOpt = false,
+    ssao: ssaoOpt = false,
     lensFlare: lensFlareOpt = false,
     portalStencil = false,
     portalPunch = false,
@@ -1378,6 +1381,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // Display-referred look (contrast / warmth / night tint), merged into the
   // same pass right after the curve; null under `?grade=off` (color_grade.js).
   const colorGrade = createColorGradeEffect();
+  // Screen-space AO (ssao.js): its own half-res pass before the atmosphere
+  // pass, composited as the FIRST effect of that pass so aerial perspective
+  // (and the clouds) apply on top — distant haze is never darkened.
+  const ssaoPass = ssaoOpt ? new SsaoPass(camera) : null;
+  const ssaoComposite = ssaoPass ? new SsaoCompositeEffect(ssaoPass) : null;
+  // The composite restores the grass marker's alpha, so only mark while it exists.
+  SSAO_GRASS_MARKER.value = ssaoComposite ? 1 : 0;
   const dithering = new DitheringEffect();
 
   // Bloom — HDR halo around bright pixels (sun disc, lava, lit windows,
@@ -1386,10 +1396,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // takes the GPU's mip chain for a cheap 5-level downsample (~1ms @ 1080p
   // R9 290; ~0.5ms 1440p 1070) vs. ~3ms for the gaussian path. Disable by
   // passing `bloom: false` in opts.
+  // 2026-10-07 (1070 look pass, Neutral tone curve): 1.0 / 0.85 was tuned
+  // under AGX, whose shoulder compressed the halo; through Neutral the low sun
+  // bloomed into an orange wash over the whole lower frame at dusk and dawn
+  // (live A/B at 21:20 game time: 0.55 / 1.1 keeps a crisp disc + glow, the
+  // ground and cloud detail, and still lets fires / lanterns / spells bloom).
   const bloom = bloomOpt
     ? new BloomEffect({
-        intensity: 1.0,
-        luminanceThreshold: 0.85,
+        intensity: 0.55,
+        luminanceThreshold: 1.1,
         luminanceSmoothing: 0.1,
         mipmapBlur: true,
         radius: 0.85,
@@ -1511,7 +1526,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // composite: HeatHaze → Clouds → AerialPerspective → [HorizonDissolve]
     // | particles | LensFlare → Bloom → Vignette → ToneMapping → ColorGrade
     // → Dithering.
-    const atmosEffects = [heatHaze, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
+    const atmosEffects = [heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
     const postEffects = [lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
     if (nanScrubOn) {
@@ -1542,13 +1557,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // before AerialPerspective's update() reads the overlay map it produces
       // (pmndrs updates effects in list order; all three carry DEPTH so the
       // stable attribute sort keeps this order).
-      ...[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
+      ...[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
     );
   }
   if (nanScrubOn) {
     const scrub = makeNanScrub();
     composer.addPass(new EffectPass(camera, scrub));
   }
+  // AO reads the composer's stable depth copy (needsDepthTexture), so it must
+  // run after the world pass and before the pass that composites it.
+  if (ssaoPass) composer.addPass(ssaoPass);
   composer.addPass(fxPass);
   if (particlesOverCloudsPass) {
     composer.addPass(particlesOverCloudsPass);
@@ -1577,6 +1595,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // snapshot of what the terrain provider is publishing. No-op when off.
   installHeatHazeHandle(heatHaze);
   installColorGradeHandle(colorGrade);
+  installSsaoHandle(ssaoPass);
 
   // `?particlesOverClouds` runtime state. `lateArmed` is the no-reload A/B
   // seam (`__particlesOverClouds.set(false)` puts the particles back in the
@@ -1712,6 +1731,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     toneMapping,
     // null under `?grade=off`; live handle `window.__grade`.
     colorGrade,
+    // null unless the preset / `?ssao=on`; live handle `window.__ssao`.
+    ssaoPass,
     dithering,
     skyRenderPass,
     worldRenderPass,
@@ -2104,6 +2125,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       worldRenderPass.camera = cam;
       cellsRenderPass.camera = cam;
       aerialPerspective.camera = cam;
+      ssaoPass?.setCamera?.(cam);
       worldMaskPass.setCamera(cam);
       cellsMaskPass.setCamera(cam);
       cellsPostMaskPass.setCamera(cam);
@@ -2136,6 +2158,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       heatHaze?.dispose?.();
       toneMapping.dispose?.();
       colorGrade?.dispose?.();
+      if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;
       dithering.dispose?.();
     },
   };

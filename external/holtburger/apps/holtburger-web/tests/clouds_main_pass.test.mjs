@@ -65,8 +65,8 @@ console.log("-- C1 pipeline source ---------------------------------------------
 const PIPE = readFileSync(path.join(APP, "scene3d", "atmosphere_pipeline.js"), "utf8");
 check("cloudsMainPassEnabled is default-on with an =off escape",
   /export function cloudsMainPassEnabled\(\)[\s\S]{0,200}get\("cloudsMainPass"\) !== "off"/.test(PIPE));
-check("fxPass list: heatHaze, cloudsMain, aerialPerspective, ... toneMapping, colorGrade, dithering",
-  /\.\.\.\[heatHaze, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/.test(PIPE));
+check("fxPass list: heatHaze, ssaoComposite, cloudsMain, aerialPerspective, ... toneMapping, colorGrade, dithering",
+  /\.\.\.\[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/.test(PIPE));
 check("cloudsMain is null unless the flag is on",
   /const cloudOverlayForMain = cloudsMainPassEnabled\(\)\s*\?/.test(PIPE));
 const addAt = PIPE.indexOf("composer.addPass(fxPass);");

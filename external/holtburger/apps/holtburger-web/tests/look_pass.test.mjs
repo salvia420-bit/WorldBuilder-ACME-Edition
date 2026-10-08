@@ -217,10 +217,46 @@ console.log("\n-- L8 ?swayShadow -----------------------------------------------
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- L10 ?ssao ---------------------------------------------------");
+{
+  const A = await import("../scene3d/ssao.js");
+  const Q = await import("../scene3d/quality.js");
+  check("preset decides by default (high/ultra on, low/mid off)",
+    A.ssaoEnabled(Q.PRESETS.ultra, "") === true && A.ssaoEnabled(Q.PRESETS.high, "") === true
+    && A.ssaoEnabled(Q.PRESETS.mid, "") === false && A.ssaoEnabled(Q.PRESETS.low, "") === false);
+  check("?ssao=off beats the preset, ?ssao=on lifts a low tier",
+    A.ssaoEnabled(Q.PRESETS.ultra, "?ssao=off") === false && A.ssaoEnabled(Q.PRESETS.low, "?ssao=on") === true);
+  const pass = new A.SsaoPass({ isPerspectiveCamera: true, projectionMatrix: { elements: new Array(16).fill(1) }, far: 5000 });
+  pass.setSize(1920, 1080);
+  check("AO renders at half resolution", pass.rtA.width === 960 && pass.rtA.height === 540);
+  check("the pass asks the composer for its depth texture and never swaps", pass.needsDepthTexture === true && pass.needsSwap === false);
+  const fx = new A.SsaoCompositeEffect(pass);
+  pass.enabled = false; fx.update();
+  check("`off` zeroes the composite strength (alpha restore still runs)", fx.uniforms.get("uSsaoStrength").value === 0);
+  const ssaoSrc = src("scene3d/ssao.js");
+  check("composite restores the grass marker's alpha to 1", /mix\(inputColor\.a, 1\.0, grass\)/.test(ssaoSrc));
+  check("log depth decoded as exp2(d * log2(far + 1)) - 1", /exp2\(d \* uLogFC\) - 1\.0/.test(ssaoSrc));
+  const pipe = src("scene3d/atmosphere_pipeline.js");
+  check("composite is the first atmosphere effect after heat haze (before clouds + aerial)",
+    pipe.includes("[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve]"));
+  check("the AO pass is added right before fxPass", /if \(ssaoPass\) composer\.addPass\(ssaoPass\);\s*composer\.addPass\(fxPass\);/.test(pipe));
+  check("grass is marked only while a composite exists", pipe.includes("SSAO_GRASS_MARKER.value = ssaoComposite ? 1 : 0;"));
+  const Gr = await import("../scene3d/terrain_grass.js");
+  const sh = {
+    vertexShader: "#include <common>\nvoid main() {\n#include <begin_vertex>\n#include <project_vertex>\n}",
+    fragmentShader: "#include <common>\nvoid main() {\n#include <normal_fragment_begin>\n#include <color_fragment>\n#include <dithering_fragment>\n}",
+  };
+  Gr.injectTerrainGrassShader(sh);
+  check("grass writes the marker after dithering and declares its uniform",
+    sh.fragmentShader.indexOf("gl_FragColor.a = mix(gl_FragColor.a, 0.0, uSsaoGrassMarker);") > sh.fragmentShader.indexOf("#include <dithering_fragment>")
+    && sh.fragmentShader.includes("uniform float uSsaoGrassMarker;"));
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- L9 docs ------------------------------------------------------");
 {
   const doc = src("docs/url-flags.md");
-  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow"]) {
+  for (const f of ["tone", "grade", "lumNight", "adaptiveResBootGrace", "swayShadow", "ssao"]) {
     check(`url-flags.md row: ${f}`, doc.includes("| `" + f + "` |"));
   }
 }
