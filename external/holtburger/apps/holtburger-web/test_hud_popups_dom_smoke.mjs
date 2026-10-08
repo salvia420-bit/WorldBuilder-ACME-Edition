@@ -488,6 +488,49 @@ await guard("menu open + keys", async () => {
   check("Enter in the field splits 3", split.length === 1 && split[0][1] === 3 && !document.getElementById("hb-radial-menu"), JSON.stringify(split));
   h.playerInventory = prevInv;
 });
+// B2-use-items (2026-10-08 round 2): the scene3d "Use" entry runs the
+// double-click's retail ItemHolder::UseObject rules — a loose item is "Pick
+// Up" (picking.js __worldUseIsPickup → item_drag placeInBackpack, decided
+// before IsUseable), and every send spends the shared 0.2 s use throttle.
+await guard("scene3d Pick Up / Use (retail UseObject rules)", async () => {
+  const { _resetUseThrottleForTests } = await load("scene3d/target_cycle.js");
+  const LOOSE = 0x80000101, NPC = 0x80000102;
+  const h = window.__sessionHandle;
+  const used = [], picked = [];
+  const saved = ["liveScene3d", "getLocalPlayerGuid", "__worldUseIsPickup", "__entityIsUsable",
+    "__entityIsAttackableTarget", "__itemDrag"].map((k) => [k, window[k]]);
+  h.useObject = (g) => used.push(g);
+  window.liveScene3d = { entityManager: { setSelectedTarget() {}, entityMap: new Map([
+    [LOOSE, { meta: { name: "Dagger", itemType: 0x1, objDescFlags: 0x12 } }],
+    [NPC, { meta: { name: "Guard", itemType: 0x10, objDescFlags: 0x4 } }],
+  ]) } };
+  window.getLocalPlayerGuid = () => 0x50000009;
+  window.__worldUseIsPickup = (g) => g === LOOSE;
+  window.__entityIsUsable = (g) => g === NPC;
+  window.__entityIsAttackableTarget = () => false;
+  window.__itemDrag = { placeInBackpack: (g) => picked.push(g) };
+  const rowNamed = (re) => [...document.getElementById("hb-radial-menu").querySelectorAll(".hb-rm-item")]
+    .find((r) => re.test(r.textContent));
+  try {
+    _resetUseThrottleForTests();
+    window.__openContextMenuFor({ source: "scene3d", guid: LOOSE, clientX: 50, clientY: 50 });
+    const pick = rowNamed(/Pick Up/);
+    check("a loose (not usable) item offers 'Pick Up'", !!pick && !rowNamed(/^(Use|Talk)$/));
+    pick.click();
+    check("Pick Up takes it through placeInBackpack — no Use event", picked.length === 1 && picked[0] === LOOSE && used.length === 0,
+      JSON.stringify({ picked, used }));
+    window.__openContextMenuFor({ source: "scene3d", guid: NPC, clientX: 50, clientY: 50 });
+    rowNamed(/Talk/).click();
+    check("a Talk inside 0.2 s of the pickup is dropped (retail m_timeLastUsed)", used.length === 0);
+    _resetUseThrottleForTests();
+    window.__openContextMenuFor({ source: "scene3d", guid: NPC, clientX: 50, clientY: 50 });
+    rowNamed(/Talk/).click();
+    check("…and sends the Use once the window has passed", used.length === 1 && used[0] === NPC);
+  } finally {
+    for (const [k, v] of saved) window[k] = v;
+    delete h.useObject;
+  }
+});
 
 // ── Modal / salvage / lifestone ────────────────────────────────────────
 console.log("== confirms ==");

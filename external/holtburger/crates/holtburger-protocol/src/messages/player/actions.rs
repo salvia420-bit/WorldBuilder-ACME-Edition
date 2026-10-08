@@ -650,6 +650,38 @@ impl ProtocolPack for AllegianceInfoRequestActionData {
     }
 }
 
+/// C2S `Allegiance_UpdateRequest` (0x001F): ask the server to send the
+/// player's allegiance tree (`GameEventOpcode::AllegianceUpdate`).
+///
+/// Wire: one `u32` (`On` — whether the allegiance panel is visible).
+/// Chorizite shape: `Messages/C2S/Actions/Allegiance_UpdateRequest.generated.cs`.
+/// Retail: `CM_Allegiance::Event_UpdateRequest` (acclient.c 704098), sent
+/// from `gmAllegianceUI::RecvNotice_PlayerDescReceived` (1) and
+/// `gmAllegianceUI::OnVisibilityChanged` (1 on show / 0 on hide). ACE reads
+/// the flag but replies with `AllegianceUpdate` + `AllegianceUpdateDone`
+/// either way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AllegianceUpdateRequestActionData {
+    pub on: bool,
+}
+
+impl ProtocolUnpack for AllegianceUpdateRequestActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let on = LittleEndian::read_u32(&data[*offset..*offset + 4]) != 0;
+        *offset += 4;
+        Some(Self { on })
+    }
+}
+
+impl ProtocolPack for AllegianceUpdateRequestActionData {
+    fn pack(&self, writer: &mut Vec<u8>) {
+        writer.write_u32::<LittleEndian>(u32::from(self.on)).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,6 +834,36 @@ mod tests {
         let parsed = GameActionMessage::unpack(&buf, &mut off).expect("unpack");
         assert_eq!(off, buf.len(), "no trailing bytes");
         assert_eq!(parsed, action);
+    }
+
+    #[test]
+    fn test_allegiance_update_request_round_trip() {
+        // C2S Allegiance_UpdateRequest (0x001F): sequence:u32 +
+        // opcode:u32 + u32 on. Retail CM_Allegiance::Event_UpdateRequest
+        // writes `31` then `i_on`.
+        let action = GameActionMessage {
+            sequence: 0x0A0B0C0D,
+            action: GameAction::AllegianceUpdateRequest(Box::new(
+                AllegianceUpdateRequestActionData { on: true },
+            )),
+        };
+        let mut buf = Vec::new();
+        action.pack(&mut buf);
+        assert_eq!(buf.len(), 12);
+        assert_eq!(&buf[4..8], &[0x1F, 0x00, 0x00, 0x00]);
+        assert_eq!(&buf[8..12], &[0x01, 0x00, 0x00, 0x00]);
+
+        let fixture = hex::decode("0D0C0B0A1F00000001000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &action);
+
+        let off_action = GameActionMessage {
+            sequence: 2,
+            action: GameAction::AllegianceUpdateRequest(Box::new(
+                AllegianceUpdateRequestActionData { on: false },
+            )),
+        };
+        let fixture_off = hex::decode("020000001F00000000000000").unwrap();
+        assert_pack_unpack_parity(&fixture_off, &off_action);
     }
 
     #[test]

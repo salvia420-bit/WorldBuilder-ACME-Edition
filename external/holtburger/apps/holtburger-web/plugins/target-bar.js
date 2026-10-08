@@ -42,10 +42,10 @@
 
 import { setAcText } from "../ui/ac_font.js";
 import { listManifestBindings } from "../ui/keymap.js";
-import { suggestedCombatModeFromInventory, activateOrUse } from "./inventory_helpers.js";
+import { suggestedCombatModeFromInventory, activateOrUse, worldUseLeaf } from "./inventory_helpers.js";
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
-import { shouldQueryHealth } from "../scene3d/target_cycle.js";
+import { shouldQueryHealth, consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
 import {
   COMBAT_MODE,
   combatModeForStance,
@@ -543,16 +543,32 @@ export function mountToolbarControls(field, opts = {}) {
     // an OWNED item takes the shortcut-key route (inventory.js activateItem —
     // wield / wear / salvage / target mode, no bare Use ACE cannot act on);
     // a world object, or `?hotbarActivate=off`, keeps the plain Use.
+    // B2-use-items (2026-10-08 round 2): that world leaf runs the
+    // double-click's rules (inventory_helpers.worldUseLeaf) — the 0.2 s
+    // throttle, a loose item picked up instead of Used, a non-useable object
+    // refused with retail's line. The throttle is spent here, at the leaf
+    // only: activateItem spends it itself for an owned item.
     let route = "none";
+    let leaf = "none";
     try {
       route = activateOrUse(guid, {
         activate: window.__inventory?.activateItem,
-        use: (g) => handle.useObject(g),
+        use: (g) => {
+          leaf = worldUseLeaf(g, {
+            throttleOk: () => consumeWorldUseThrottle(performance.now()),
+            isPickup: window.__worldUseIsPickup,
+            pickUp: window.__itemDrag?.placeInBackpack,
+            refusal: window.__worldUseRefusal,
+            reject: (message) => window.__pluginClient?.events?.emit?.("clientActionRejected", { message }),
+            use: (u) => handle.useObject(u),
+          });
+        },
       });
     } catch (e) {
       console.warn("[toolbar] useObject failed", e);
     }
-    if (route !== "used") return;
+    // A pickup is not a Use: a book taken off the floor is not opened.
+    if (route !== "used" || leaf !== "used") return;
     // HUD rec #180 (2026-06-16): a book (object-description flag BOOK =
     // 0x100) also needs a bookData() request — ACE's Use on a book only
     // acks; the server ignores BookData on non-book GUIDs.

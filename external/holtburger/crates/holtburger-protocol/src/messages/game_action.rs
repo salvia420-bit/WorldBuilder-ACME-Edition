@@ -51,6 +51,9 @@ pub enum GameAction {
     /// `GameEventOpcode::AllegianceInfoResponse` (0x027C). Wire:
     /// `string16L TargetName`. Opcode `AllegianceInfoRequest = 0x027B`.
     AllegianceInfoRequest(Box<AllegianceInfoRequestActionData>),
+    /// C2S `Allegiance_UpdateRequest` (0x001F): `u32 on`. Asks the server
+    /// for the player's allegiance tree (`AllegianceUpdate` reply).
+    AllegianceUpdateRequest(Box<AllegianceUpdateRequestActionData>),
     DoAllegianceLockAction(Box<DoAllegianceLockActionActionData>),
     RecallAllegianceHometown(Box<RecallAllegianceHometownActionData>),
     AddFriend(Box<AddFriendActionData>),
@@ -70,6 +73,8 @@ pub enum GameAction {
     FellowshipRecruit(Box<FellowshipRecruitActionData>),
     FellowshipAssignNewLeader(Box<FellowshipAssignNewLeaderActionData>),
     FellowshipUpdateRequest(Box<FellowshipUpdateRequestActionData>),
+    /// C2S `Fellowship_ChangeFellowOpeness` (0x0291): `u32 open`.
+    FellowshipChangeOpenness(Box<FellowshipChangeOpennessActionData>),
     BuyHouse(Box<BuyHouseActionData>),
     HouseQuery(Box<HouseQueryActionData>),
     AbandonHouse(Box<AbandonHouseActionData>),
@@ -214,6 +219,9 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::AllegianceInfoRequest => GameAction::AllegianceInfoRequest(
                     Box::new(AllegianceInfoRequestActionData::unpack(data, offset)?),
                 ),
+                GameActionOpcode::AllegianceUpdateRequest => GameAction::AllegianceUpdateRequest(
+                    Box::new(AllegianceUpdateRequestActionData::unpack(data, offset)?),
+                ),
                 GameActionOpcode::DoAllegianceLockAction => GameAction::DoAllegianceLockAction(
                     Box::new(DoAllegianceLockActionActionData::unpack(data, offset)?),
                 ),
@@ -272,6 +280,9 @@ impl ProtocolUnpack for GameActionMessage {
                 }
                 GameActionOpcode::FellowshipUpdateRequest => GameAction::FellowshipUpdateRequest(
                     Box::new(FellowshipUpdateRequestActionData::unpack(data, offset)?),
+                ),
+                GameActionOpcode::FellowshipChangeOpenness => GameAction::FellowshipChangeOpenness(
+                    Box::new(FellowshipChangeOpennessActionData::unpack(data, offset)?),
                 ),
                 GameActionOpcode::BuyHouse => {
                     GameAction::BuyHouse(Box::new(BuyHouseActionData::unpack(data, offset)?))
@@ -565,6 +576,11 @@ impl ProtocolPack for GameActionMessage {
                     .unwrap();
                 data.pack(buf);
             }
+            GameAction::AllegianceUpdateRequest(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AllegianceUpdateRequest as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
             GameAction::DoAllegianceLockAction(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::DoAllegianceLockAction as u32)
                     .unwrap();
@@ -657,6 +673,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::FellowshipUpdateRequest(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::FellowshipUpdateRequest as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::FellowshipChangeOpenness(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::FellowshipChangeOpenness as u32)
                     .unwrap();
                 data.pack(buf);
             }

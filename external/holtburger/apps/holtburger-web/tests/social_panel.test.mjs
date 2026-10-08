@@ -162,6 +162,23 @@ check("patron == monarch → merged 'Patron / Monarch' row with my passed-up XP"
   assert.deepEqual(vm.breakTarget, { guid: 1, name: "Boss" }, "Break still targets the patron");
 });
 
+check("ACE shape: patron == monarch packs NO patron record → still 'Patron / Monarch' (AllegianceHierarchy::GetPatron)", () => {
+  // ACE AllegianceHierarchy writes a patron record only when the patron is
+  // not the monarch; the self record hangs straight off the monarch.
+  const vm = alleg.buildAllegianceViewModel({
+    name: "Order", rank: 2, totalMembers: 5, totalVassals: 0,
+    monarch: M(1, "Boss"), patron: null, myself: M(9, "Me", { cpTithed: 777 }), vassals: [],
+  });
+  assert.equal(vm.monarch.label, "Patron / Monarch");
+  assert.equal(vm.hasPatron, true);
+  assert.equal(vm.monarch.xpProduced, 777, "my passed-up XP in the merged row");
+  assert.equal(vm.patron, null, "no separate patron field");
+  assert.deepEqual(vm.breakTarget, { guid: 1, name: "Boss" });
+  const st = alleg.allegianceButtonStates(vm, { selectedGuid: 5, playerGuid: 9, selectedIsPlayer: true });
+  assert.equal(st.brk, true, "Break enabled (UpdateBreakButton: GetPatron != 0)");
+  assert.equal(st.swear, false, "Swear disabled — already sworn");
+});
+
 check("distinct patron → 'Monarch' (no XP frame) + 'Patron' with my passed-up XP", () => {
   const vm = alleg.buildAllegianceViewModel({
     name: "Order", rank: 1, totalMembers: 9, totalVassals: 0,

@@ -578,14 +578,15 @@ function reject(message) { return { op: "reject", message }; }
  * @param {object} target
  *   kind (DROP_TARGET), listKey, listKind ("inventory"|"ext"), index,
  *   count (items in that list), item (occupant row), packGuid, packName,
- *   slotMask, entity {guid, isSelf, isCreature, isOpenContainer, name}
+ *   slotMask, entity {guid, isSelf, isCreature, isPlayer, isOpenContainer, name}
  * @param {object} ctx
  *   playerGuid, canUseWith(src,dst)→bool|null, capacity(key)→{used,cap}|null,
  *   isCorpse(guid)→bool, containerName(key)→string,
  *   canEquip(item, mask)→{ok,reason}, packWithRoom(excludeKey)→guid|0,
  *   autoMergeTarget(item, amount, key)→guid|0, and (items-4, optional)
- *   wearPlan(item)→planWear result, readySlotOccupant(mask)→row|null
- * @returns {object} { op: "noop"|"reject"|"merge"|"usewith"|"move"|"wield"|"wear"|"give"|"drop", … }
+ *   wearPlan(item)→planWear result, readySlotOccupant(mask)→row|null,
+ *   (charopt-4) dragOnPlayerOpensTrade
+ * @returns {object} { op: "noop"|"reject"|"merge"|"usewith"|"move"|"wield"|"wear"|"give"|"trade"|"drop", … }
  */
 export function decideItemDrop(drag, target, ctx = {}) {
   const guid = (drag?.guid >>> 0) || 0;
@@ -624,6 +625,11 @@ export function decideItemDrop(drag, target, ctx = {}) {
           if (ctx.isCorpse?.(ent.guid)) return reject(`The ${ent.name || "corpse"} cannot accept items`);
           return { op: "move", guid, container: ent.guid >>> 0, placement: 0, listKey: ent.guid >>> 0, index: 0, amount, external: true };
         }
+        // charopt-4 — with "Drag item onto player opens trade" on, another
+        // player gets a secure-trade offer of the whole item, not a gift
+        // (PlayerModule::DragItemOnPlayerOpensSecureTrade → ClientTradeSystem::
+        // AttemptToTradeItem, acclient.c:433262, ahead of the creature give).
+        if (ctx.dragOnPlayerOpensTrade && ent.isPlayer) return { op: "trade", guid, target: ent.guid >>> 0 };
         if (ent.isCreature) return { op: "give", guid, target: ent.guid >>> 0, amount };
       }
       return { op: "drop", guid, amount };
@@ -1165,7 +1171,10 @@ export function findAutoMergeTarget(item, amount, candidates) {
  *   1. AttemptAutoMerge: the first stack in the exhaustive item list (main
  *      pack, then each side pack) that takes the whole amount → merge;
  *   2. the preferred container — the side pack open in the inventory
- *      (mOpenContainerID) — when it has room;
+ *      (mOpenContainerID) — when it has room; with the MainPackPreferred
+ *      character option (0x29) on, or for retail's pick-up-to-main-pack
+ *      action (PlaceInBackpack(sel, 1), acclient.c:399631), the preferred
+ *      container is the player, so this step is the main pack (charopt-3);
  *   3. the main pack (the top container);
  *   4. the first side pack with room (GetContainedContainersList order);
  *   5. else "<player> is completely full!" / "<player> can carry no more
@@ -1178,7 +1187,8 @@ export function findAutoMergeTarget(item, amount, candidates) {
  * @param {Array<object>} rows  the player's inventory (copyInventoryRow rows)
  * @param {object} item  guid, wcid, name, stackSize, maxStackSize?, itemType, isPack?
  * @param {object} opts  playerGuid, amount?, preferredPack? (0 / the player
- *   = main pack), mainCap?, packsCap?, playerName?, order?(key) → guid[],
+ *   = main pack), mainPackPreferred? / forceMainPack? (ignore preferredPack),
+ *   mainCap?, packsCap?, playerName?, order?(key) → guid[],
  *   capacityOf?(key) → {used, cap}
  * @returns {object} decideItemDrop-shaped action (merge carries targetStack)
  */
@@ -1224,7 +1234,7 @@ export function planPlaceInBackpack(rows, item, opts = {}) {
     // A container only ever goes in the player's container list.
     return hasRoom(PACKS_KEY) ? move(me, PACKS_KEY) : reject(`${who} can carry no more containers!`);
   }
-  const pref = (opts.preferredPack >>> 0) || 0;
+  const pref = (opts.mainPackPreferred || opts.forceMainPack) ? 0 : ((opts.preferredPack >>> 0) || 0);
   if (pref && pref !== me && pref !== guid && packs.includes(pref) && hasRoom(pref)) return move(pref, pref);
   if (hasRoom(MAIN_PACK_KEY)) return move(me, MAIN_PACK_KEY);
   for (const p of packs) {
@@ -1466,6 +1476,40 @@ export function activateOrUse(guid, { activate, use } = {}) {
       return "none";
     }
     if (handled === true) return "activated";
+  }
+  if (typeof use !== "function") return "none";
+  use(g);
+  return "used";
+}
+
+/**
+ * B2-use-items (2026-10-08 round 2) — the world-object leaf of the toolbar /
+ * radial Use (`activateOrUse`'s `use`), run as retail ItemHolder::UseObject
+ * (acclient.c:433354) runs it for the 3D double-click: the shared 0.2 s
+ * throttle first (use-4, dropped silently), then a loose item is picked up
+ * — DetermineUseResult 2 → PlaceInBackpack (use-1) — and an object retail
+ * will not use is refused with its line (use-2); only the rest is a Use
+ * event. Callers wire scene3d/picking.js's `window.__worldUseIsPickup` /
+ * `__worldUseRefusal` and target_cycle.js `consumeWorldUseThrottle`; every
+ * dependency is optional.
+ * @param {number} guid
+ * @param {{throttleOk?:() => boolean, isPickup?:(g:number) => boolean,
+ *          pickUp?:(g:number) => any, refusal?:(g:number) => string|null,
+ *          reject?:(message:string) => void, use?:(g:number) => void}} deps
+ * @returns {"throttled"|"pickup"|"refused"|"used"|"none"}
+ */
+export function worldUseLeaf(guid, { throttleOk, isPickup, pickUp, refusal, reject, use } = {}) {
+  const g = (guid >>> 0) || 0;
+  if (!g) return "none";
+  if (typeof throttleOk === "function" && throttleOk() === false) return "throttled";
+  if (typeof pickUp === "function" && typeof isPickup === "function" && isPickup(g) === true) {
+    pickUp(g);
+    return "pickup";
+  }
+  const why = typeof refusal === "function" ? refusal(g) : null;
+  if (why != null) {
+    if (why && typeof reject === "function") reject(why);
+    return "refused";
   }
   if (typeof use !== "function") return "none";
   use(g);

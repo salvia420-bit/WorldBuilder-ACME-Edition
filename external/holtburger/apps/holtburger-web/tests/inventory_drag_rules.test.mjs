@@ -190,6 +190,31 @@ check("world: no entity → drop; creature → give whole stack; self → backpa
   const s = decideItemDrop({ ...inv(equipped, null, -1), sourceList: null }, { kind: T.WORLD, entity: { guid: ME, isSelf: true } }, baseCtx);
   assert.deepEqual([s.op, s.container], ["move", ME]);
 });
+// charopt-4 (2026-10-08 round 2) — PlayerModule::DragItemOnPlayerOpensSecureTrade
+// (character option 0x17): AttemptPlaceIn3D tries ClientTradeSystem::
+// AttemptToTradeItem on a player before the creature give (acclient.c:433262).
+check("charopt-4: with the option on, a player gets a trade offer of the whole item — never a gift", () => {
+  const ctx = { ...baseCtx, dragOnPlayerOpensTrade: true };
+  const bob = { guid: 0x50000002, isCreature: true, isPlayer: true, name: "Bob" };
+  assert.deepEqual(decideItemDrop(inv(pyrealsA, MAIN, 0), { kind: T.WORLD, entity: bob }, ctx),
+    { op: "trade", guid: pyrealsA.guid, target: 0x50000002 });
+  const split = { ...inv(pyrealsA, MAIN, 0), split: 10 };
+  assert.equal(decideItemDrop(split, { kind: T.WORLD, entity: bob }, ctx).op, "trade", "no split size");
+  assert.equal(decideItemDrop(inv(pyrealsA, MAIN, 0), { kind: T.WORLD, entity: bob }, baseCtx).op, "give",
+    "option off (the retail default) → give, as before");
+});
+check("charopt-4: an NPC is still given to, yourself still takes it, an un-owned item is still refused", () => {
+  const ctx = { ...baseCtx, dragOnPlayerOpensTrade: true };
+  const npc = { guid: 0x7C000001, isCreature: true, isPlayer: false };
+  assert.equal(decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: npc }, ctx).op, "give");
+  const equipped = { ...sword, equipMask: 0x00100000 };
+  const self = decideItemDrop({ ...inv(equipped, null, -1), sourceList: null },
+    { kind: T.WORLD, entity: { guid: ME, isSelf: true, isCreature: true, isPlayer: true } }, ctx);
+  assert.deepEqual([self.op, self.container], ["move", ME]);
+  const d = { guid: sword.guid, item: sword, owned: false, sourceList: { key: CHEST, kind: "ext" }, sourceIndex: 0 };
+  assert.equal(decideItemDrop(d, { kind: T.WORLD, entity: { guid: 0x50000002, isCreature: true, isPlayer: true } }, ctx).message,
+    "You must first pick up the Sword");
+});
 check("world: un-owned (chest) item → 'You must first pick up'", () => {
   const d = { guid: sword.guid, item: sword, owned: false, sourceList: { key: CHEST, kind: "ext" }, sourceIndex: 0 };
   assert.equal(decideItemDrop(d, { kind: T.WORLD }, baseCtx).message, "You must first pick up the Sword");
@@ -372,6 +397,28 @@ console.log("\n[9] planPlaceInBackpack — CPlayerSystem::PlaceInBackpack (takes
     const full = [packRow(PACK_1, 24), packRow(PACK_2, 1), row(0x60000101, { containerId: PACK_2 })];
     assert.equal(planPlaceInBackpack(full, { guid: 0x90000002, itemType: 0x800 }, { ...opts, preferredPack: PACK_2 }).container, ME,
       "a full preferred pack falls through to the main pack");
+  });
+  // charopt-3 (2026-10-08 round 2) — PlayerModule::MainPackPreferred
+  // (character option 0x29): PlaceInBackpack's preferred container is the
+  // player, not the open side pack (acclient.c:395895-395912).
+  check("(e2) MainPackPreferred: the main pack wins over the open side pack", () => {
+    const rows = [packRow(PACK_1, 24), packRow(PACK_2, 24), row(0x60000101)];
+    const gem = { guid: 0x90000002, name: "Gem", itemType: 0x800 };
+    const a = planPlaceInBackpack(rows, gem, { ...opts, preferredPack: PACK_2, mainPackPreferred: true });
+    assert.deepEqual([a.op, a.container, a.listKey], ["move", ME, MAIN]);
+    const b = planPlaceInBackpack(rows, gem, { ...opts, preferredPack: PACK_2, mainPackPreferred: false });
+    assert.equal(b.container, PACK_2, "option off → the open side pack, as before");
+    const c = planPlaceInBackpack(rows, gem, { ...opts, preferredPack: PACK_2, forceMainPack: true });
+    assert.equal(c.container, ME, "retail pick-up-to-main-pack (PlaceInBackpack(sel, 1))");
+  });
+  check("(e3) MainPackPreferred: a full main pack still overflows to the first side pack with room; merges still win", () => {
+    const rows = [packRow(PACK_1, 2), packRow(PACK_2, 24), ...fill(4, 0, 0x61000000), ...fill(2, PACK_1, 0x62000000)];
+    const a = planPlaceInBackpack(rows, { guid: 0x90000002, name: "Gem", itemType: 0x800 },
+      { ...opts, preferredPack: PACK_1, mainPackPreferred: true });
+    assert.equal(a.container, PACK_2);
+    const m = planPlaceInBackpack([packRow(PACK_1, 24), ownPyreals, row(0x60000101)], corpsePyreals,
+      { ...opts, preferredPack: PACK_1, mainPackPreferred: true });
+    assert.deepEqual([m.op, m.target], ["merge", ownPyreals.guid], "AttemptAutoMerge runs first regardless");
   });
   check("(f) a container never merges and goes to the container list (or 'can carry no more containers!')", () => {
     const bag = { guid: 0x90000003, wcid: 136, name: "Sack", itemType: 0x200, stackSize: 1 };

@@ -24,10 +24,23 @@ pub(crate) fn handle_event(
             state.reset_trade(events);
             true
         }
-        GameEvent::DeclineTrade(_)
-        | GameEvent::ClearTradeAcceptance
-        | GameEvent::TradeFailure(_) => {
-            state.clear_trade_acceptance(events);
+        // trade-1 (2026-10-08): retail treats these three differently.
+        // ClientTradeSystem::Handle_Trade__Recv_DeclineTrade (acclient.c
+        // 410398) clears only the decliner's accepted flag.
+        GameEvent::DeclineTrade(data) => {
+            state.decline_trade(data.who_declined, events);
+            true
+        }
+        // gmSecureTradeUI::RecvNotice_ClearTradeAcceptance → Reset →
+        // FlushTradeLists (both offers emptied). ACE ClearTradeAcceptance
+        // empties ItemsInTradeWindow for both players (failed finalize).
+        GameEvent::ClearTradeAcceptance => {
+            state.reset_trade(events);
+            true
+        }
+        // Handle_Trade__Recv_TradeFailure → Trade::RemoveItem(item, 1).
+        GameEvent::TradeFailure(data) => {
+            state.trade_failure(data.object_guid, events);
             true
         }
         GameEvent::CloseTrade(_) => {

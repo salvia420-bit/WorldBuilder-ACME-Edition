@@ -246,6 +246,8 @@ window.__getCurrentStanceLow = () => stanceLow;
 
 const hotbar = await import(pathToFileURL(resolvePath(__dirname, "plugins/hotbar.js")).href);
 const targetBar = await import(pathToFileURL(resolvePath(__dirname, "plugins/target-bar.js")).href);
+// B2-use-items: the toolbar's world Use spends retail's shared 0.2 s throttle.
+const { _resetUseThrottleForTests } = await import(pathToFileURL(resolvePath(__dirname, "scene3d/target_cycle.js")).href);
 
 let pass = 0;
 let fail = 0;
@@ -421,9 +423,14 @@ check("items-3 follow-up: the toolbar Use button sends an OWNED item through act
   eq(uses(), n, "no bare Use when activateItem handled it");
   selected = 0x80000AAA;
   window.__pluginClient.events.emit("selectionChanged", { guid: selected });
+  _resetUseThrottleForTests(); // the earlier Use click spent the 0.2 s window
+  const m = uses();
   dispatch(useBtn, "click");
   eq(act, [OWNED, 0x80000AAA], "asked first");
+  eq(uses(), m + 1, "one Use event");
   eq(lastCall("useObject"), ["useObject", 0x80000AAA], "world object → plain Use");
+  dispatch(useBtn, "click");
+  eq(uses(), m + 1, "a repeat inside retail's 0.2 s m_timeLastUsed sends nothing");
   selected = 0;
   window.__pluginClient.events.emit("selectionChanged", { guid: 0 });
   delete window.__inventory;

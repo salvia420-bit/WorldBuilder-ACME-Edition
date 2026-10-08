@@ -9,6 +9,12 @@
 //
 // The listeners are installed at module scope against `window`, so the fake
 // window must exist BEFORE the dynamic import below.
+//
+// audio-1 (2026-10-08 round 2): by default an ITEM cue (0x8C-0x90) is no
+// longer predicted — retail plays it only from the server's 0xF750, and the
+// prediction double-played every pickup / drop. The arms up to "retail
+// parity" pin the prediction machinery, which `?retailItemSounds=off` still
+// runs, so they set that flag; the "audio-1" section pins the default.
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -51,6 +57,8 @@ globalThis.performance = globalThis.performance ?? { now: () => Date.now() };
 const mod = await import("./plugins/audio_optimistic.js");
 const { playOptimistic, shouldSuppressEcho, SOUND } = mod;
 const LPG = 0x5000_0001;
+// The prediction arms below run with the escape flag (see the header).
+window.location = { search: "?retailItemSounds=off" };
 
 const fire = (type, target) => {
   for (const fn of listeners.get(type) || []) fn({ target });
@@ -174,6 +182,67 @@ console.log("\n=== retail parity (2026-10-05) ===");
   check("UI_GeneralError plays from the centre at the row volume",
     played.length === 1 && played[0].center === true && played[0].vol === 0.7, JSON.stringify(played));
   shouldSuppressEcho(SOUND.UI_ERROR, LPG);
+}
+
+console.log("\n=== audio-1: item cues are the server's (retail default) ===");
+{
+  // Retail has no client-predicted item sound (CPhysicsObj::play_sound's only
+  // caller is SmartBox::HandleSoundEvent, acclient.c:143333 / 316424).
+  window.location = { search: "" };
+  entityMap = new Map();
+  entityMap.set(LPG, makeInst(LPG, 1, 2, 3));
+  resolveSoundImpl = async () => ({ waveDid: 0x0A00_0010, volume: 1, probability: 1 });
+  for (const [name, id] of [["PICKUP", SOUND.PICKUP], ["DROP", SOUND.DROP], ["WIELD", SOUND.WIELD],
+    ["UNWIELD", SOUND.UNWIELD], ["RECEIVE", SOUND.RECEIVE]]) {
+    played.length = 0; resolved.length = 0;
+    await playOptimistic(id, 0x1234);
+    await tick();
+    check(`${name}: nothing played or resolved at click time`,
+      played.length === 0 && resolved.length === 0, JSON.stringify({ played, resolved }));
+    check(`${name}: no claim, so the server's 0xF750 plays`, shouldSuppressEcho(id, LPG) === false);
+  }
+  delete window.location;
+  played.length = 0;
+  await playOptimistic(SOUND.DROP, 0x1);
+  await tick();
+  check("no window.location at all → retail default too", played.length === 0);
+
+  // UI cues are never echoed by the server: they still play here.
+  window.location = { search: "" };
+  resolveSoundImpl = async () => ({ waveDid: 0x0A00_0011, volume: 0.5, probability: 1 });
+  played.length = 0;
+  await playOptimistic(SOUND.UI_ERROR, 0x1);
+  await tick();
+  check("UI_GeneralError still plays from the centre",
+    played.length === 1 && played[0].center === true, JSON.stringify(played));
+  shouldSuppressEcho(SOUND.UI_ERROR, LPG);
+
+  // The owner-visible bug: a pickup whose echo lands after ACE's move-to +
+  // pickup animation (+1200 ms, past the 300 ms window). Count what the
+  // player hears: the click-time cue plus the echo unless it is suppressed.
+  const realNow = performance.now.bind(performance);
+  const heard = async (search) => {
+    window.location = { search };
+    played.length = 0;
+    await playOptimistic(SOUND.PICKUP, 0x1);
+    await tick();
+    const atClick = played.length;
+    performance.now = () => realNow() + 1200;
+    const echo = shouldSuppressEcho(SOUND.PICKUP, LPG) ? 0 : 1;
+    performance.now = realNow;
+    return atClick + echo;
+  };
+  check("retail default: the pickup is heard once (the server's echo)", (await heard("")) === 1);
+  check("?retailItemSounds=off: the old prediction is back (and double-plays a late echo)",
+    (await heard("?retailItemSounds=off")) === 2);
+  check("?retailItemSounds=0 / =false are the same escape",
+    (await heard("?retailItemSounds=0")) === 2 && (await heard("?retailItemSounds=false")) === 2);
+  window.location = { search: "?retailItemSounds=off" };
+  played.length = 0;
+  await playOptimistic(SOUND.WIELD, 0x1);
+  await tick();
+  check("?retailItemSounds=off: a fast echo inside 300 ms is still suppressed",
+    played.length === 1 && shouldSuppressEcho(SOUND.WIELD, LPG) === true);
 }
 
 console.log("\n=== slider held-set does not latch ===");

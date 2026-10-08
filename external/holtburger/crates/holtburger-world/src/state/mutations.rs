@@ -2143,8 +2143,39 @@ impl WorldState {
         }
     }
 
-    pub(crate) fn clear_trade_acceptance(&mut self, events: &mut Vec<WorldEvent>) {
+    /// trade-1: `DeclineTrade(who)` clears only the decliner's accepted
+    /// flag (retail `ClientTradeSystem::Handle_Trade__Recv_DeclineTrade`:
+    /// `if (source == player_id) _accepted = 0; else _p_accepted = 0;`).
+    /// ACE `HandleActionDeclineTrade` likewise leaves the other side's
+    /// `TradeAccepted` untouched, so the partner pressing Trade still
+    /// completes the exchange.
+    pub(crate) fn decline_trade(&mut self, who_declined: Guid, events: &mut Vec<WorldEvent>) {
         if let Some(trade) = self.trade.as_mut() {
+            if who_declined == self.player.guid {
+                trade.self_side.accepted = false;
+            } else {
+                trade.partner_side.accepted = false;
+            }
+            events.push(WorldEvent::TradeStateUpdated(Some(trade.clone())));
+        }
+    }
+
+    /// trade-1: `TradeFailure(item)` — retail
+    /// `Handle_Trade__Recv_TradeFailure` removes the item from the
+    /// player's own list (`Trade::RemoveItem(item, 1)`); ACE has already
+    /// reset both `TradeAccepted` flags before its failure checks. Under
+    /// ACE the failed item was never echoed by AddToTrade, so the remove is
+    /// a defensive no-op there.
+    pub(crate) fn trade_failure(&mut self, object_guid: Guid, events: &mut Vec<WorldEvent>) {
+        let was_listed = self
+            .trade
+            .as_ref()
+            .is_some_and(|trade| trade.self_side.items.contains(&object_guid));
+        if was_listed {
+            self.clear_trade_preview(object_guid);
+        }
+        if let Some(trade) = self.trade.as_mut() {
+            trade.self_side.items.retain(|guid| *guid != object_guid);
             trade.self_side.accepted = false;
             trade.partner_side.accepted = false;
             events.push(WorldEvent::TradeStateUpdated(Some(trade.clone())));

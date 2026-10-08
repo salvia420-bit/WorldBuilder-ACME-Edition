@@ -38,6 +38,11 @@ check("advancement = colorCyan", colorForCategory(C.ADVANCEMENT) === "#3fdcdc");
 check("combat = colorDarkRed", colorForCategory(C.COMBAT) === "#ff3f3f");
 check("system + unknown = default colorGreen",
   colorForCategory(C.SYSTEM) === "#80ff7f" && colorForCategory(99) === "#80ff7f");
+// R-chat (2026-10-08): retail text types split out of tell / allegiance.
+check("outgoing tell (server copy) = colorTan", colorForCategory(C.TELL_SEND) === RGB.tan);
+check("social (heard allegiance channel) = colorYellow", colorForCategory(C.SOCIAL) === RGB.yellow);
+check("social send (own allegiance channel) = colorTan", colorForCategory(C.SOCIAL_SEND) === RGB.tan);
+check("channel = colorPink", colorForCategory(C.CHANNEL) === RGB.pink);
 check("every CHAT_CATEGORY has a hex colour",
   Object.values(C).every((c) => /^#[0-9a-f]{6}$/.test(colorForCategory(c))));
 
@@ -55,6 +60,9 @@ check("inbound tell (string data-cat) → yellow / tell group", inbound.color ==
 check("emote → local group", filterGroupForCategory(C.EMOTE) === "local");
 check("allegiance → chan group", filterGroupForCategory(C.ALLEGIANCE) === "chan");
 check("combat → other group", filterGroupForCategory(C.COMBAT) === "other");
+check("outgoing tell → tell group", filterGroupForCategory(C.TELL_SEND) === "tell");
+check("social + social send → chan group",
+  filterGroupForCategory(C.SOCIAL) === "chan" && filterGroupForCategory(C.SOCIAL_SEND) === "chan");
 check("All shows other", lineVisibleInFilter("all", "other"));
 check("Local hides tells", !lineVisibleInFilter("local", "tell"));
 check("Channels shows chan", lineVisibleInFilter("channels", "chan"));
@@ -73,6 +81,8 @@ check("reply → /r", buildOutgoingLine(talkFocusById("reply"), "ok") === "/r ok
 check("typed /command ignores focus", buildOutgoingLine(talkFocusById("trade"), "/a hi") === "/a hi");
 check("typed @command ignores focus", buildOutgoingLine(talkFocusById("trade"), "@loc") === "@loc");
 check("blank → empty", buildOutgoingLine(talkFocusById("trade"), "   ") === "");
+check("typed :emote ignores focus", buildOutgoingLine(talkFocusById("trade"), ":waves") === ":waves");
+check("typed ;emote ignores focus", buildOutgoingLine(talkFocusById("general"), ";bows") === ";bows");
 // Every prefix must be one app/slash_commands.js routes (no `/b` broadcast
 // fall-through to `@b`, the pre-overhaul bug).
 const ROUTED = new Set(["", "/me ", "/r ", "/t ", "/f ", "/a ", "/p ", "/v ", "/m ", "/cg ", "/ct ", "/clfg ", "/crp ", "/society ", "/olthoi "]);
@@ -90,6 +100,12 @@ check("`Name tells you,`", s3 && s3.name === "+Admin", JSON.stringify(s3));
 check("`You say` is not a sender", parseChatSender('You say, "x"') === null);
 check("system line has no sender", parseChatSender("You have entered the General channel.") === null);
 check("echo `You tell` has no sender", parseChatSender('You tell Bob, "hi"') === null);
+const s4 = parseChatSender('Your patron Sir Bob says to you, "hi"');
+check("`Your patron Name says to you,`", s4 && s4.name === "Sir Bob" && s4.start === 12, JSON.stringify(s4));
+const s5 = parseChatSender('[Fellowship] Bob says, "inc"');
+check("`[Fellowship] Name says,`", s5 && s5.name === "Bob", JSON.stringify(s5));
+check("`You say to your Vassals` has no sender", parseChatSender('You say to your Vassals, "hi"') === null);
+check("`You think` has no sender", parseChatSender('You think, "hm"') === null);
 
 console.log("5. pinning / pill / timestamps");
 check("at bottom", isNearBottom({ scrollTop: 100, scrollHeight: 173, clientHeight: 73 }));

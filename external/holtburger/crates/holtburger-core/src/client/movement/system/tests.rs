@@ -9880,6 +9880,167 @@ async fn cmd_interp_event_stream_feeds_js_consumers() {
     );
 }
 
+/// death-1 fixture — a non-autonomous self `Invalid` UpdateMotion whose
+/// interpreted forward command is `forward` (`None` = flag absent, which
+/// retail `InterpretedMotionState::UnPack` reads as Ready, acclient.c:333493).
+fn self_forward_event_for(
+    guid: Guid,
+    movement_sequence: u16,
+    forward: Option<u16>,
+) -> holtburger_protocol::messages::MovementEventData {
+    use holtburger_protocol::messages::MovementTypeData;
+    use holtburger_protocol::messages::movement::MovementStateFlags;
+
+    let mut data = cast_gesture_event_for(guid);
+    data.movement_sequence = movement_sequence;
+    if let MovementTypeData::Invalid(invalid) = &mut data.data {
+        invalid.state.flags = if forward.is_some() {
+            MovementStateFlags::FORWARD_COMMAND
+        } else {
+            MovementStateFlags::empty()
+        };
+        invalid.state.forward_command = forward.map(Into::into);
+        invalid.state.forward_speed = None;
+    }
+    data
+}
+
+/// death-1 (R2 2026-10-08) — retail `CommandInterpreter::MovePlayer`
+/// (acclient.c:717828-717833): while the server's interpreted forward
+/// command is Dead (`PlayerIsDead`, :717695-717705) every movement key is
+/// answered with LoseKeyboardFocus + SetAutoRun(0,0) and nothing moves; the
+/// refused edge pushes no DriveApplied (its idle Ready would stand the local
+/// rig up — verify correction 2). The server's Ready (forward absent)
+/// re-opens input. `?deadInputGate=off` restores the old seam.
+#[tokio::test]
+async fn cmd_interp_refuses_movement_while_local_player_dead() {
+    use super::super::system::CmdInterpEvent;
+
+    let guid = Guid(0x5000_0131);
+    let mut world = WorldState::synthetic();
+    world.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    let mut movement = MovementSystem::new();
+    let mut sink = RecordingSink::default();
+    let now = Instant::now();
+    movement.set_cmd_interp(true);
+    // First in-world tick attaches the interpreter (F3).
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    let _ = movement.take_cmd_interp_events();
+    sink.sent.clear();
+
+    // Server: Dead (low-16 0x0011).
+    assert!(world.player.apply_self_update_motion(&self_forward_event_for(guid, 2, Some(0x0011))));
+    assert!(world.player.server_forward_dead);
+    movement.note_server_authored_motion(false);
+
+    let forward_sent = |sink: &RecordingSink| {
+        sink.sent.iter().any(|action| {
+            matches!(
+                action,
+                GameAction::MoveToState(data)
+                    if data.raw_motion_state.forward_command == Some(WALK_FORWARD_MOTION_COMMAND)
+            )
+        })
+    };
+    let manual_drive = |movement: &MovementSystem| match movement.active_drive {
+        Some(ActiveDriveState {
+            intent: ActiveDriveIntent::Manual(state),
+            ..
+        }) => Some(state),
+        _ => None,
+    };
+
+    // W press while dead → refused: no forward on the wire, no moving
+    // drive, no DriveApplied for the renderer (and no stack overflow — the
+    // LoseKeyboardFocus re-apply runs under the dead ⇒ controlled mirror).
+    movement.enqueue_key_action(0x29, true);
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    assert!(!forward_sent(&sink), "a dead W press sends no forward: {:?}", sink.sent);
+    if let Some(drive) = manual_drive(&movement) {
+        assert!(
+            drive.is_locomotion_idle() && drive.turning.is_none(),
+            "a dead press installs no locomotion, got {drive:?}"
+        );
+    }
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, CmdInterpEvent::DriveApplied { .. })),
+        "no DriveApplied (Ready revival) while dead, got {events:?}"
+    );
+
+    // Auto-run while dead → toggled on, then MovePlayer's SetAutoRun(0,0).
+    movement.enqueue_key_action(0x30, true);
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    assert!(
+        !movement
+            .command_interpreter
+            .as_ref()
+            .expect("interpreter attached")
+            .auto_run,
+        "auto-run is cleared while dead"
+    );
+    assert!(!forward_sent(&sink), "auto-run while dead sends no forward");
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, CmdInterpEvent::DriveApplied { .. })),
+        "no DriveApplied for the refused auto-run, got {events:?}"
+    );
+
+    // Server: NonCombat Ready (forward flag absent) → alive; W drives.
+    assert!(world.player.apply_self_update_motion(&self_forward_event_for(guid, 3, None)));
+    assert!(!world.player.server_forward_dead);
+    movement.enqueue_key_action(0x29, true);
+    movement.tick(now, &mut world, &mut sink).await.expect("tick");
+    let drive = manual_drive(&movement).expect("alive press installs a manual drive");
+    assert_eq!(drive.forward, Some(ForwardLocomotion::Forward));
+    assert!(forward_sent(&sink), "alive W reaches the wire: {:?}", sink.sent);
+    let events = movement.take_cmd_interp_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, CmdInterpEvent::DriveApplied { forward: 1, .. })),
+        "alive press drives the renderer, got {events:?}"
+    );
+
+    // Escape: `?deadInputGate=off` → a dead player's W drives again (the
+    // pre-fix seam).
+    let mut legacy = MovementSystem::new();
+    let mut legacy_sink = RecordingSink::default();
+    legacy.set_cmd_interp(true);
+    legacy.set_dead_input_gate(false);
+    let mut world2 = WorldState::synthetic();
+    world2.seed_local_player_entity(
+        guid,
+        "Player",
+        WorldPosition {
+            landblock_id: Guid(0x1234_0000),
+            ..Default::default()
+        },
+    );
+    assert!(world2.player.apply_self_update_motion(&self_forward_event_for(guid, 2, Some(0x0011))));
+    legacy.enqueue_key_action(0x29, true);
+    legacy
+        .tick(now, &mut world2, &mut legacy_sink)
+        .await
+        .expect("tick");
+    assert_eq!(
+        manual_drive(&legacy).and_then(|drive| drive.forward),
+        Some(ForwardLocomotion::Forward),
+        "gate off: the dead flag is ignored"
+    );
+}
+
 /// Step-5 live-smoke regression (found on the A/B): a bare Shift edge
 /// (HoldRun 0x32) must INSTALL the gait change — retail SetHoldRun
 /// applies to the minterp immediately (:716995) even though the edge

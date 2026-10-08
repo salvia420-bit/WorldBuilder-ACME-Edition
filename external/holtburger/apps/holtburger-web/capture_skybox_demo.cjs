@@ -37,7 +37,8 @@ try {
 //
 // `t` = time-of-day [0, 1) per Sky-B's wasm. `day` + `year` are passed
 // to setGameDayOverride if both are non-null, otherwise the default
-// (real-world today via AC_LAUNCH_UNIX_EPOCH derivation) is used.
+// (the server PortalYearTicks clock since daytime-1, 2026-10-08; the
+// AC_LAUNCH_UNIX_EPOCH wall clock under ?skyServerClock=off) is used.
 //
 // Naming convention: NN-<time-label>-<weather-label>.png so the file
 // listing sorts in viewing order.

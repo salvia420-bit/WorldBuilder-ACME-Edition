@@ -48,6 +48,16 @@
 //   removed `probability`-weighted prefix-sum picker — that was a
 //   divergence from retail GetSound and the live code at `resolveSound`
 //   already does the uniform pick. Doc-only sync; no behavior change.
+//
+// audio-5 (2026-10-08 round 2) — row memo. `resolveSound` used to cross
+// the wasm boundary on EVERY play: `entriesForSound` clones the Vec and
+// hands back N fresh `SoundEntryJs` wrappers (4 getter calls on the pick,
+// then N frees through the FinalizationRegistry) for data that never
+// changes — every footstep, server sound and UI click. Retail
+// SoundManager::GetSound (acclient.c:383433) is a lookup into the resident
+// table that copies four fields to the stack. Now each (did, enum) is read
+// once into frozen plain rows (`_rows`, empty for an enum the table lacks)
+// and the pick runs on those. The pick itself is unchanged.
 
 const SOUND_TABLE_PREFIX = 0x20;
 
@@ -99,6 +109,9 @@ export class SoundTableCache {
     this.cached = new Map();
     /** @type {Map<number, Promise<any|null>>} did → in-flight fetch */
     this.pending = new Map();
+    /** @type {Map<number, Map<number, ReadonlyArray<ResolvedSoundEntry>>>}
+     *  did → soundEnum → frozen plain rows (audio-5) */
+    this._rows = new Map();
 
     // Diagnostics — read by capture scripts via `cache.stats()`.
     this.hitCount = 0;
@@ -201,8 +214,8 @@ export class SoundTableCache {
    *
    * The returned object is a PLAIN POJO snapshot (NOT the wasm-bindgen
    * `SoundEntryJs` handle) — callers can hold a reference indefinitely
-   * without worrying about wasm-side `.free()` semantics. The picked
-   * wasm entries are freed before this method returns.
+   * without worrying about wasm-side `.free()` semantics. The wasm entries
+   * are read once per (did, enum) and freed at once (audio-5 `_rowsFor`).
    *
    * @param {number} did SoundTable DID (`0x20xxxxxx`).
    * @param {number} soundEnum AC `Sound` enum value (e.g. `0x46` =
@@ -212,27 +225,13 @@ export class SoundTableCache {
   async resolveSound(did, soundEnum) {
     const stb = await this.get(did);
     if (!stb) return null;
-    const enumU32 = soundEnum >>> 0;
-    /** @type {any[]} */
-    let entries;
-    try {
-      entries = stb.entriesForSound(enumU32);
-    } catch (e) {
-      this.lastError = String(e?.message ?? e);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[H3/sound-cache] entriesForSound(0x${enumU32
-          .toString(16)}) on 0x${(did >>> 0).toString(16)} threw:`,
-        e
-      );
-      return null;
-    }
-    if (!entries || entries.length === 0) {
+    const rows = this._rowsFor(did >>> 0, soundEnum >>> 0, stb);
+    if (!rows || rows.length === 0) {
       return null;
     }
     let picked;
-    if (entries.length === 1) {
-      picked = entries[0];
+    if (rows.length === 1) {
+      picked = rows[0];
     } else {
       // followup (2026-06-03): retail GetSound (acclient.c:383446-383450) picks a
       // UNIFORM index `(uint64)((num-1) * RollDice(0,1))` over the entries and does
@@ -243,26 +242,61 @@ export class SoundTableCache {
       // This only negligibly under-weights the last entry (within retail's own
       // quirk territory) and is intentionally left bit-faithful to GetSound — do
       // NOT "fix" the half-open vs inclusive range here.
-      const idx = Math.floor((entries.length - 1) * this._rng());
-      picked = entries[Math.min(Math.max(idx, 0), entries.length - 1)];
+      const idx = Math.floor((rows.length - 1) * this._rng());
+      picked = rows[Math.min(Math.max(idx, 0), rows.length - 1)];
     }
-    // Snapshot to a plain object BEFORE freeing the wasm handles.
-    const out = {
-      waveDid: picked.waveDid >>> 0,
-      priority: +picked.priority,
-      probability: +picked.probability,
-      volume: +picked.volume,
-    };
-    // Free every wasm-bindgen entry handle (including `picked`,
-    // since the snapshot doesn't reference it anymore). The
-    // `SoundTableJs` itself stays cached.
-    for (let i = 0; i < entries.length; i += 1) {
-      const e = entries[i];
-      if (e && typeof e.free === "function") {
+    // A caller's own copy: the cached row stays untouched.
+    return { ...picked };
+  }
+
+  /**
+   * audio-5 — the plain rows for (did, soundEnum), read from the wasm table
+   * once and memoized (an enum the table lacks memoizes as an empty list).
+   * Every wasm-bindgen `SoundEntryJs` handle is freed right after the
+   * snapshot. A throwing `entriesForSound` is not memoized (so it retries).
+   * @returns {ReadonlyArray<ResolvedSoundEntry>|null}
+   */
+  _rowsFor(did, enumU32, stb) {
+    let byEnum = this._rows.get(did);
+    const hit = byEnum?.get(enumU32);
+    if (hit) return hit;
+    /** @type {any[]} */
+    let entries;
+    try {
+      entries = stb.entriesForSound(enumU32);
+    } catch (e) {
+      this.lastError = String(e?.message ?? e);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[H3/sound-cache] entriesForSound(0x${enumU32
+          .toString(16)}) on 0x${did.toString(16)} threw:`,
+        e
+      );
+      return null;
+    }
+    const rows = [];
+    const list = entries || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const e = list[i];
+      if (!e) continue;
+      // Snapshot to a plain object BEFORE freeing the wasm handle.
+      rows.push(Object.freeze({
+        waveDid: e.waveDid >>> 0,
+        priority: +e.priority,
+        probability: +e.probability,
+        volume: +e.volume,
+      }));
+      if (typeof e.free === "function") {
         try { e.free(); } catch (_) {}
       }
     }
-    return out;
+    const frozen = Object.freeze(rows);
+    if (!byEnum) {
+      byEnum = new Map();
+      this._rows.set(did, byEnum);
+    }
+    byEnum.set(enumU32, frozen);
+    return frozen;
   }
 
   /**
@@ -327,6 +361,7 @@ export class SoundTableCache {
       }
     }
     this.cached.clear();
+    this._rows.clear();
     // Don't clear `pending` — those promises are still in-flight and
     // their `.finally(() => this.pending.delete(key))` will tidy up.
   }

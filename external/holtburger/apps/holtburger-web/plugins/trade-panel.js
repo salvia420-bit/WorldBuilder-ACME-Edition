@@ -29,7 +29,14 @@
 //   • Range: the partner is registered at range 5.0 with use-cylinders
 //     (RecvNotice_RegisterTrade); OnObjectRangeExit closes the
 //     negotiation (CloseTradeNegotiations). The old 24-m decline was not
-//     retail.
+//     retail. trade-2 (2026-10-08 round 2): the distance is 3D, and a
+//     partner who is gone from the world (portal, recall, logout) closes it
+//     too, as retail's ObjectsInRange fails on a missing object.
+//   • charopt-4 (2026-10-08 round 2): with "Drag item onto player opens
+//     trade" on, an item dropped on another player in the 3D view comes
+//     here (window.__tradePanel.attemptToTradeItem, retail
+//     ClientTradeSystem::AttemptToTradeItem): added to the open trade, or
+//     the trade is opened and the item added when it registers.
 //
 // Wire (DO NOT regress): snapshot via `tradeUpdated` / `kind:23` bus event →
 // handle.playerTrade() (null = closed); addToTrade(itemGuid, 0) on drop
@@ -46,7 +53,7 @@ import {
   inventoryRows, entityWorldPos, localPlayerWorldPos, selectedTargetGuid,
   objectDisplayName, objectIconId, chatNotice,
 } from "./commerce_window.js";
-import { tradeStatus, isOutOfRange, TRADE_RANGE, fmtNumber } from "./commerce_logic.js";
+import { tradeStatus, tradeRangeVerdict, tradeItemAttempt, fmtNumber } from "./commerce_logic.js";
 
 const OVERLAY_ID = "hb-trade-panel";
 const STYLE_ID = "hb-trade-panel-style";
@@ -59,6 +66,13 @@ let lastSnap = null;
 let currentPartnerGuid = 0;
 let rangeTimerId = 0;
 let rangeBreachFired = false;
+// trade-2: consecutive polls the partner was missing from the world, counted
+// only once it has been seen (a trade opened before its rig streams in).
+let partnerMisses = 0;
+let partnerSeen = false;
+// charopt-4: retail attemptTradeToPlayerID / attemptTradeObjectID — the
+// item to add once the trade with that player registers.
+let pendingOffer = null; // { target, guid } | null
 
 function ensureStyles() {
   if (typeof document === "undefined") return;
@@ -163,6 +177,8 @@ function buildOverlay() {
       stopRangeWatcher();
       currentPartnerGuid = 0;
       rangeBreachFired = false;
+      partnerMisses = 0;
+      partnerSeen = false;
     },
   });
   // Centred by default via left:0/right:0 + auto margins (no transform —
@@ -214,25 +230,60 @@ function onTradeButton() {
   }
 }
 
+/** Offer an item; true when addToTrade went out. */
 function offerItem(guid) {
   const g = guid >>> 0;
   const mineGuids = new Set((lastSnap?.myItems || []).map((i) => i.guid >>> 0));
   if (mineGuids.has(g)) {
     win?.toast("That item is already in the trade.", "err");
-    return;
+    return false;
   }
   const item = inventoryRows().find((r) => r.guid === g);
   if (!item) {
     win?.toast("You can only trade items you are carrying", "err");
-    return;
+    return false;
   }
   if ((item.equipMask >>> 0) !== 0) {
     win?.toast(`Unequip ${item.name} before trading it`, "err");
-    return;
+    return false;
   }
   const h = window.__sessionHandle;
-  try { h?.addToTrade?.(g, 0); }
-  catch (e) { console.warn("[trade-panel] addToTrade failed:", e); }
+  if (typeof h?.addToTrade !== "function") return false;
+  try { h.addToTrade(g, 0); return true; }
+  catch (e) { console.warn("[trade-panel] addToTrade failed:", e); return false; }
+}
+
+/**
+ * charopt-4 — retail ClientTradeSystem::AttemptToTradeItem (acclient.c:
+ * 410566) for an owned item dropped on player `target` (plugins/item_drag.js
+ * executeItemAction "trade"). Returns {sent, message?}: the caller toasts a
+ * refusal.
+ */
+function attemptToTradeItem(target, guid) {
+  const t = (target >>> 0) || 0;
+  const g = (guid >>> 0) || 0;
+  const h = window.__sessionHandle;
+  if (!t || !g || !h) return { sent: false };
+  let snap = null;
+  try { snap = typeof h.playerTrade === "function" ? h.playerTrade() : null; } catch (_) { snap = null; }
+  let combatMode = 1;
+  try { if (typeof h.combatMode === "function") combatMode = h.combatMode(); } catch (_) { combatMode = 1; }
+  switch (tradeItemAttempt({ partnerGuid: snap ? snap.partnerGuid : 0, target: t, combatMode })) {
+    case "add":
+      return { sent: offerItem(g) };
+    case "elsewhere":
+      return { sent: false, message: "You are already trading with someone else." };
+    case "peace":
+      return { sent: false, message: "You need to be in peace mode to trade." };
+    default:
+      if (typeof h.openTrade !== "function") return { sent: false };
+      try { h.openTrade(t); } catch (e) {
+        console.warn("[trade-panel] openTrade failed:", e);
+        return { sent: false };
+      }
+      pendingOffer = { target: t, guid: g };
+      return { sent: true };
+  }
 }
 
 function toRows(list) {
@@ -285,6 +336,7 @@ function renderHalf(r, label, items, accepted, emptyText) {
 function renderSnapshot(snapshot) {
   if (!snapshot) {
     lastSnap = null;
+    pendingOffer = null;
     win?.close();
     return;
   }
@@ -299,7 +351,11 @@ function renderSnapshot(snapshot) {
     partnerAccepted: !!snapshot.partnerAccepted,
     partnerName, partnerGuid,
   };
-  if (partnerGuid !== currentPartnerGuid) rangeBreachFired = false;
+  if (partnerGuid !== currentPartnerGuid) {
+    rangeBreachFired = false;
+    partnerMisses = 0;
+    partnerSeen = false;
+  }
   currentPartnerGuid = partnerGuid;
 
   win.setTitle(`Trading with ${partnerName}`);
@@ -330,6 +386,13 @@ function renderSnapshot(snapshot) {
 
   win.open();
   startRangeWatcher();
+
+  // charopt-4 — Handle_Trade__Recv_RegisterTrade (acclient.c:410603): the
+  // item dragged onto this player goes in now; the stash is spent by the
+  // first trade snapshot whoever the partner is.
+  const offer = pendingOffer;
+  pendingOffer = null;
+  if (offer && offer.target === partnerGuid) offerItem(offer.guid);
 }
 
 // Range enforcement — retail closes the negotiation once the partner
@@ -349,8 +412,14 @@ function checkPartnerRange() {
   if (!win?.isOpen() || rangeBreachFired || !currentPartnerGuid) return;
   const me = localPlayerWorldPos();
   const them = entityWorldPos(currentPartnerGuid);
-  if (!me || !them) return;
-  if (!isOutOfRange(me, them, TRADE_RANGE)) return;
+  if (them) {
+    partnerSeen = true;
+    partnerMisses = 0;
+  } else if (me && partnerSeen) {
+    partnerMisses += 1;
+  }
+  const verdict = tradeRangeVerdict({ me, them, misses: partnerSeen ? partnerMisses : 0 });
+  if (verdict !== "close") return;
   rangeBreachFired = true;
   chatNotice(`${lastSnap?.partnerName || "Your trade partner"} is too far away. The trade was closed.`);
   requestClose();
@@ -428,6 +497,8 @@ if (typeof window !== "undefined") {
     }
   };
   window.__closeTradePanel = () => requestClose();
+  // item_drag.js drag-onto-player trade (charopt-4).
+  window.__tradePanel = { offerItem, attemptToTradeItem };
   // Verifier hook: render a synthetic snapshot without a server.
   window.__tradePanelDebug = {
     render: (snap) => renderSnapshot(snap ?? {

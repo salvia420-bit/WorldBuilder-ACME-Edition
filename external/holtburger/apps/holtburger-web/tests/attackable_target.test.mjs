@@ -67,7 +67,8 @@ test("unknown target is not attackable", () => {
 
 test("picking.js gates the attack and routes non-attackable clicks to use", () => {
   const src = readFileSync(new URL("../scene3d/picking.js", import.meta.url), "utf8");
-  assert.match(src, /import \{ objectIsAttackable, itemIsUseable \} from "\.\/target_cycle\.js";/);
+  // (2026-10-08 round 2: the import list grew — B2-use-items world Use rules.)
+  assert.match(src, /import \{[^}]*\bobjectIsAttackable, itemIsUseable\b[^}]*\} from "\.\/target_cycle\.js";/);
   // fireAttackOnSelectedTarget refuses before any wire send.
   const fire = src.slice(src.indexOf("function fireAttackOnSelectedTarget("));
   const gate = fire.indexOf("if (targetGuid === 0 || !entityIsAttackableTarget(targetGuid))");

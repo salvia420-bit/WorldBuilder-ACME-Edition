@@ -202,6 +202,9 @@ function predictLocal(motion, held) {
   }
 }
 
+// app/chat_log.js CHAT_CATEGORY.EMOTE (src/lib.rs CHAT_CATEGORY_EMOTE).
+const CHAT_CATEGORY_EMOTE = 4;
+
 function echo(text, category = null) {
   try { window.__appendChatLine?.(text, category); } catch (_) {}
 }
@@ -306,7 +309,9 @@ export const view = {
     function run(entry) {
       const r = performEmote(entry, getHandle(), window.__routeSlashCommand, predictLocal);
       if (r.ok) {
-        if (r.echo) echo(r.echo, null);
+        // R-chat (2026-10-08): retail Pose's local `You …` line is an
+        // emote-type (grey) line; the server echo of it is dropped.
+        if (r.echo) echo(r.echo, CHAT_CATEGORY_EMOTE);
         setStatus(r.echo ?? `/${entry.token}`, "#e8dfc8");
       } else {
         setStatus(r.error ?? "Could not perform that emote.", "#ff8a70");
@@ -381,7 +386,8 @@ export const view = {
       if (!handle?.sendEmote) { setStatus("Enter the world to use emotes.", "#ff8a70"); return; }
       try {
         handle.sendEmote(text);
-        echo(`> ${text}`, null);
+        // R-chat chat-3 (2026-10-08): no local `> text` echo — ACE
+        // rebroadcasts the emote to you too (wasm: `Name text`).
         setStatus(`You ${text}`, "#e8dfc8");
         meInput.value = "";
       } catch (e) {

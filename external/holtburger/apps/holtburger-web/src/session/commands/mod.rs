@@ -93,6 +93,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::FellowshipRecruit { .. }
         | SessionCommand::FellowshipUpdateRequest { .. }
         | SessionCommand::FellowshipAssignNewLeader { .. }
+        | SessionCommand::FellowshipChangeOpenness { .. }
         | SessionCommand::SwearAllegiance { .. }
         | SessionCommand::ConfirmationResponse { .. }
         | SessionCommand::BreakAllegiance { .. }
@@ -108,7 +109,8 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::RemoveAllegianceBan { .. }
         | SessionCommand::BreakAllegianceBoot { .. }
         | SessionCommand::DoAllegianceLockAction { .. }
-        | SessionCommand::AllegianceInfoRequest { .. }) => social::handle(ctx, c).await,
+        | SessionCommand::AllegianceInfoRequest { .. }
+        | SessionCommand::AllegianceUpdateRequest { .. }) => social::handle(ctx, c).await,
         c @ (SessionCommand::RaiseSkill { .. }
         | SessionCommand::TrainSkill { .. }
         | SessionCommand::RaiseAttribute { .. }

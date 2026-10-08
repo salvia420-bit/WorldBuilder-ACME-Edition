@@ -422,6 +422,23 @@ fn parse_wielded_spawn_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "wieldedSpawn=off")
 }
 
+/// held-4 (R2 2026-10-08): parse `?pickupLeaveWorld=off` (or `&…`). DEFAULT-ON
+/// off-escape shape (`off`/`0`/`false`). When on, a `PickupEvent` for an item
+/// its wielder still owns (Wielder IID set — ACE hides held ammo this way on
+/// every missile shot) keeps the JS rig and sends a kind=7 detach carrying
+/// `ATTACH_PLACEMENT_LEAVE_WORLD` instead of a KIND_REMOVE: retail
+/// `SmartBox::DoPickupEvent` (acclient.c:143483-143500) only does
+/// `unset_parent` + `leave_world`, and the next ParentEvent re-shows the same
+/// object. `=off` restores the remove + lossy re-synthesis per shot. Read by
+/// the JS side too (`scene3d/entities.js` readPickupLeaveWorldFlag).
+#[cfg(target_arch = "wasm32")]
+fn parse_pickup_leave_world_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "pickupLeaveWorld=off" | "pickupLeaveWorld=0" | "pickupLeaveWorld=false")
+    })
+}
+
 /// A8-M1 (2026-06-11, unification survey): parse `?worldLifecycle`.
 /// When on, the entity-lifecycle message family (ObjectCreate /
 /// ObjectDelete / InventoryRemoveObject / ParentEvent / PickupEvent) is
@@ -658,6 +675,22 @@ fn parse_jump_load_gate_flag(search: &str) -> bool {
 fn parse_ap_retail_gate_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "apRetailGate=off")
+}
+
+/// death-1 (R2 2026-10-08): parse `?deadInputGate=off` (or `&…`). DEFAULT-ON
+/// off-escape shape (`off`/`0`/`false`). When on, retail
+/// `CommandInterpreter::PlayerIsDead` (acclient.c:717695-717705) gates input:
+/// while the server's interpreted forward command is Dead, `MovePlayer`
+/// refuses every movement key and clears auto-run (:717828-717833) and
+/// `TakeControlFromServer` refuses (:716934-716940); `=off` restores the
+/// pre-fix seam (a dead player could walk). Native carrier:
+/// `USE_DEAD_INPUT_GATE` (movement/system.rs). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_dead_input_gate_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "deadInputGate=off" | "deadInputGate=0" | "deadInputGate=false")
+    })
 }
 
 /// F2 (2026-07-27): parse `?serverMoveToDriver=off` (or `&serverMoveToDriver=off`).
@@ -1491,6 +1524,16 @@ mod walk_dedup;
 // `wasm32 OR test` gate so the predicate is unit-tested natively.
 #[cfg(any(target_arch = "wasm32", test))]
 mod combat_toggle;
+
+// R-chat (round 2, 2026-10-08): retail chat-line wording + client-side
+// CanHear/squelch decisions (chat_format) and the PlayerKilled /
+// Victim-Killer notification gates (death_chat). Same `wasm32 OR test` gate
+// so `cargo test -p holtburger-web --lib chat_format death_chat` runs them
+// natively; the recv-loop arms in session/messages only call in.
+#[cfg(any(target_arch = "wasm32", test))]
+mod chat_format;
+#[cfg(any(target_arch = "wasm32", test))]
+mod death_chat;
 
 // §2.1a (SCOPE-2.1 §1c) — the pool-facing decode handle that keeps the
 // `!Send` fetch machinery unreachable from worker threads. Same
@@ -17767,6 +17810,131 @@ struct SkyShadow {
 }
 
 #[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// daytime-1 (R2 2026-10-08) — the latest server PortalYearTicks sample
+    /// `(ticks, local Unix seconds at receipt)` from the session's
+    /// ConnectRequest / TimeSync ([`note_sky_server_time`]). Kept across the
+    /// sky's lifetime so each `populate_sky_desc_from_region_impl` seeds its
+    /// fresh evaluator from it (the sky populates on EnteredWorld, AFTER the
+    /// handshake's ConnectRequest sample — so the in-world sky never shows
+    /// the private clock at all). Always the LATEST sample (no forward-only
+    /// rule here), so a reconnect to a restarted server re-seeds cleanly;
+    /// the live evaluator applies retail's forward-only rule itself.
+    static SKY_SERVER_CLOCK: std::cell::Cell<Option<(f64, f64)>> =
+        const { std::cell::Cell::new(None) };
+    /// daytime-1 — `?skyServerClock` read once (see
+    /// [`sky_server_clock_enabled`]).
+    static SKY_SERVER_CLOCK_ON: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// daytime-1 (R2 2026-10-08): parse `?skyServerClock=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`). When on, the sky's time
+/// of day and DayGroup run on the server's PortalYearTicks clock (retail
+/// `GameTime::UseTime` reads `Timer::cur_time`, which `HandleTimeSynch`
+/// sets from every TimeSync — acclient.c:463395, :371516 → :75365); `=off`
+/// keeps the private 1999-anchored wall clock (`AC_LAUNCH_UNIX_EPOCH`) for
+/// the whole session. The sky LOOK is unchanged either way. Needs a wasm
+/// rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_sky_server_clock_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "skyServerClock=off" | "skyServerClock=0" | "skyServerClock=false")
+    })
+}
+
+/// daytime-1 — [`parse_sky_server_clock_flag`] over this instance's query
+/// string, read once and cached.
+#[cfg(target_arch = "wasm32")]
+fn sky_server_clock_enabled() -> bool {
+    SKY_SERVER_CLOCK_ON.with(|cell| {
+        if let Some(on) = cell.get() {
+            return on;
+        }
+        let on = parse_sky_server_clock_flag(&flag_search());
+        cell.set(Some(on));
+        on
+    })
+}
+
+/// daytime-1 (R2 2026-10-08) — a server clock sample arrived (the recv
+/// loop's `SessionEvent::TimeSync` arm, both net lanes). Stash it for the
+/// next sky populate and hand it to a live evaluator, which adopts the
+/// first sample and then only moves forward
+/// ([`holtburger_world::SkyEvalState::set_server_clock`]). No-op under
+/// `?skyServerClock=off`, and for a non-positive / non-finite sample (a
+/// real PortalYearTicks is ~3e8 s; `0` is "no clock", the same rule as the
+/// map panel's calendar) — the sky never jumps to tick 0.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn note_sky_server_time(portal_ticks: f64) {
+    if !portal_ticks.is_finite() || portal_ticks <= 0.0 || !sky_server_clock_enabled() {
+        return;
+    }
+    let at_unix = js_date_now_ms() / 1000.0;
+    SKY_SERVER_CLOCK.with(|cell| cell.set(Some((portal_ticks, at_unix))));
+    SKY_SHADOW.with(|shadow| {
+        if let Some(s) = shadow.borrow_mut().as_mut() {
+            s.evaluator.set_server_clock(portal_ticks, at_unix);
+        }
+    });
+}
+
+/// daytime-1 — the sky clock's PortalYearTicks-domain value now (the
+/// server's clock once synced; the legacy wall clock's equivalent before
+/// that or under `?skyServerClock=off`), or NaN before
+/// `populateSkyDescFromRegion` lands. `atmosphere_sky.js` derives the
+/// moon/star date from it so they stay locked to the AC sun.
+#[cfg(target_arch = "wasm32")]
+fn sky_portal_ticks_now() -> f64 {
+    let now_unix = js_date_now_ms() / 1000.0;
+    SKY_SHADOW.with(|shadow| {
+        shadow
+            .borrow()
+            .as_ref()
+            .map(|s| s.evaluator.portal_ticks_at(now_unix))
+            .unwrap_or(f64::NAN)
+    })
+}
+
+/// daytime-3 (R2 2026-10-08) — the retail map calendar
+/// (`GameTime::CalcDayBegin` / `CalcTimeOfDay` / `GetDateTimeString`,
+/// acclient.c:463203-463349) for `portal_ticks`, from the populated
+/// Region's GameTime tables. `undefined` before `populateSkyDescFromRegion`
+/// lands or when the tables cannot produce a date.
+#[cfg(target_arch = "wasm32")]
+fn dereth_calendar_js(portal_ticks: f64) -> JsValue {
+    SKY_SHADOW.with(|shadow| {
+        let shadow = shadow.borrow();
+        let Some(s) = shadow.as_ref() else {
+            return JsValue::UNDEFINED;
+        };
+        let Some(c) = holtburger_world::sky::dereth_calendar(&s.game_time, portal_ticks) else {
+            return JsValue::UNDEFINED;
+        };
+        // A PLAIN object (serde_wasm_bindgen would hand back a JS Map —
+        // see plugins/hotbar.js spellIsSelfTargeted).
+        let obj = js_sys::Object::new();
+        let fields: [(&str, JsValue); 10] = [
+            ("year", JsValue::from_f64(c.year as f64)),
+            ("dayOfYear", JsValue::from_f64(c.day_of_year as f64)),
+            ("seasonIndex", JsValue::from_f64(c.season_index as f64)),
+            ("seasonName", JsValue::from_str(&c.season_name)),
+            ("dayInSeason", JsValue::from_f64(c.day_in_season as f64)),
+            ("timeOfDayIndex", JsValue::from_f64(c.time_of_day_index as f64)),
+            ("presentTimeOfDay", JsValue::from_f64(c.present_time_of_day)),
+            ("isNight", JsValue::from_bool(c.is_night)),
+            ("dateString", JsValue::from_str(&c.date_string)),
+            ("timeString", JsValue::from_str(&c.time_string)),
+        ];
+        for (key, value) in fields {
+            let _ = js_sys::Reflect::set(&obj, &JsValue::from_str(key), &value);
+        }
+        obj.into()
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
 struct CellGraphPending {
     aabbs: Vec<(u32, holtburger_common::Aabb)>,
     /// 2026-06-04 (Phase 4 ambient-sound gate): per-cell SeenOutside bit
@@ -19709,12 +19877,15 @@ pub async fn populate_scenery_colliders_for_landblock(
 /// so JS smoke tests can assert non-zero without re-reading the
 /// shadow. Returns an error on prefetch / parse failures.
 ///
-/// **Time anchor:** the new evaluator is constructed against
-/// [`holtburger_world::AC_LAUNCH_UNIX_EPOCH`] (`1999-11-02 UTC`).
-/// See `crates/holtburger-world/src/sky.rs` for the rationale on
-/// why this anchor is load-bearing (deterministic across browser
-/// sessions, no server-broadcast time-sync packet available in the
-/// ACE bundle).
+/// **Time anchor (daytime-1, R2 2026-10-08):** the new evaluator is
+/// seeded from the latest server PortalYearTicks sample
+/// (`SKY_SERVER_CLOCK`, stashed by [`note_sky_server_time`] from the
+/// handshake's ConnectRequest and every TimeSync), so the in-world sky runs
+/// on the server clock retail's `GameTime::UseTime` reads. With no sample
+/// yet — or under `?skyServerClock=off` — it keeps the legacy
+/// [`holtburger_world::AC_LAUNCH_UNIX_EPOCH`] (`1999-11-02 UTC`) wall
+/// clock; a later first sample then re-anchors it once. See
+/// `crates/holtburger-world/src/sky.rs`.
 #[cfg(target_arch = "wasm32")]
 async fn populate_sky_desc_from_region_impl(region_file_id: u32) -> Result<u32, JsValue> {
     use holtburger_dat::file_type::Region;
@@ -19762,11 +19933,20 @@ async fn populate_sky_desc_from_region_impl(region_file_id: u32) -> Result<u32, 
     let game_time = region.game_time;
     let day_group_count = sky_desc.day_groups.len() as u32;
 
+    // daytime-1: a fresh evaluator adopts the latest server clock sample
+    // unconditionally (its first sync).
+    let mut evaluator = holtburger_world::SkyEvalState::new();
+    if sky_server_clock_enabled()
+        && let Some((portal_ticks, at_unix)) = SKY_SERVER_CLOCK.with(|cell| cell.get())
+    {
+        evaluator.set_server_clock(portal_ticks, at_unix);
+    }
+
     SKY_SHADOW.with(|shadow| {
         *shadow.borrow_mut() = Some(SkyShadow {
             sky_desc,
             game_time,
-            evaluator: holtburger_world::SkyEvalState::new(),
+            evaluator,
         });
     });
 
@@ -25554,33 +25734,9 @@ impl EntityAnimationKeyframesBatch {
 // + a CharacterList re-fire, and the SessionHandle's
 // `character_list` shared state updates to include the new entry.
 
-/// Phase 4 step 4: human-readable label for a `ChatChannelId.raw()`
-/// value. Used by the `GameEvent::ChannelBroadcast` arm to format
-/// `"[Vassals] Sender says, ..."` etc. Falls back to a hex string
-/// for unknown channels (rare — covers any custom-server channel
-/// IDs not in the retail set).
-#[cfg(target_arch = "wasm32")]
-fn chat_channel_label(raw: u32) -> String {
-    use holtburger_protocol::messages::ChatChannel;
-    match ChatChannel::from_repr(raw) {
-        Some(ChatChannel::Abuse) => "Abuse".into(),
-        Some(ChatChannel::Admin) => "Admin".into(),
-        Some(ChatChannel::Audit) => "Audit".into(),
-        Some(ChatChannel::Advocate1) => "Advocate1".into(),
-        Some(ChatChannel::Advocate2) => "Advocate2".into(),
-        Some(ChatChannel::Advocate3) => "Advocate3".into(),
-        Some(ChatChannel::Sentinel) => "Sentinel".into(),
-        Some(ChatChannel::Help) => "Help".into(),
-        Some(ChatChannel::Fellow) => "Fellow".into(),
-        Some(ChatChannel::Vassals) => "Vassals".into(),
-        Some(ChatChannel::Patron) => "Patron".into(),
-        Some(ChatChannel::Monarch) => "Monarch".into(),
-        Some(ChatChannel::CoVassals) => "CoVassals".into(),
-        Some(ChatChannel::AllegianceBroadcast) => "Allegiance".into(),
-        Some(ChatChannel::FellowBroadcast) => "Fellowship".into(),
-        None => format!("Channel 0x{raw:08X}"),
-    }
-}
+// R-chat (2026-10-08): `chat_channel_label` (the "[Vassals] X says" label)
+// was replaced by the retail per-channel sentences in
+// `chat_format::format_channel_broadcast` (acclient.c 412975).
 
 // Phase 4 step 4 — chat-category taxonomy. Every chat-bearing message
 // the recv loop normalises into a `kind=2 ChatReceived` event also
@@ -25640,6 +25796,18 @@ const CHAT_CATEGORY_BROADCAST: u32 = 21;
 const CHAT_CATEGORY_SOCIETY: u32 = 22;
 #[cfg(target_arch = "wasm32")]
 const CHAT_CATEGORY_OLTHOI: u32 = 23;
+// R-chat (2026-10-08): retail text types the old taxonomy folded away
+// (ChatInterface::BuildChatColorLookupTable acclient.c:287161).
+/// OutgoingTell (4) — the server's `You tell X, "…"` copy (retail tan).
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_TELL_SEND: u32 = 24;
+/// Social (10) — heard patron/vassal/follower, Co-Vassals and Allegiance
+/// Broadcast channel lines (retail yellow; channel filter group).
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_SOCIAL: u32 = 25;
+/// SocialSend (11) — your own `You say to your Vassals, "…"` (retail tan).
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_SOCIAL_SEND: u32 = 26;
 
 /// Phase 4 step 4: map a raw `ChatMessageType` byte (the `chat_type`
 /// field carried by `ServerMessage`, `HearSpeech`, `HearRangedSpeech`,
@@ -25652,12 +25820,15 @@ const CHAT_CATEGORY_OLTHOI: u32 = 23;
 fn chat_category_for_message_type(chat_type_raw: u32) -> u32 {
     use holtburger_protocol::messages::chat::types::ChatMessageType;
     match ChatMessageType::from_repr(chat_type_raw) {
-        Some(ChatMessageType::Tell)
-        | Some(ChatMessageType::OutgoingTell)
-        | Some(ChatMessageType::AdminTell) => CHAT_CATEGORY_TELL,
-        Some(ChatMessageType::Speech)
-        | Some(ChatMessageType::Channel)
-        | Some(ChatMessageType::ChannelSend) => CHAT_CATEGORY_LOCAL,
+        Some(ChatMessageType::Tell) | Some(ChatMessageType::AdminTell) => CHAT_CATEGORY_TELL,
+        // R-chat (2026-10-08): retail colours OutgoingTell tan (not the
+        // incoming-tell yellow) and Channel/ChannelSend pink (not speech
+        // white) — BuildChatColorLookupTable, acclient.c:287161.
+        Some(ChatMessageType::OutgoingTell) => CHAT_CATEGORY_TELL_SEND,
+        Some(ChatMessageType::Speech) => CHAT_CATEGORY_LOCAL,
+        Some(ChatMessageType::Channel) | Some(ChatMessageType::ChannelSend) => {
+            CHAT_CATEGORY_CHANNEL
+        }
         Some(ChatMessageType::Combat)
         | Some(ChatMessageType::CombatEnemy)
         | Some(ChatMessageType::CombatSelf) => CHAT_CATEGORY_COMBAT,
@@ -25670,43 +25841,20 @@ fn chat_category_for_message_type(chat_type_raw: u32) -> u32 {
         Some(ChatMessageType::Craft) | Some(ChatMessageType::Salvaging) => CHAT_CATEGORY_CRAFT,
         Some(ChatMessageType::Appraisal) => CHAT_CATEGORY_APPRAISAL,
         Some(ChatMessageType::WorldBroadcast) => CHAT_CATEGORY_BROADCAST,
-        Some(ChatMessageType::Emote)
-        | Some(ChatMessageType::Social)
-        | Some(ChatMessageType::SocialSend) => CHAT_CATEGORY_EMOTE,
+        Some(ChatMessageType::Emote) => CHAT_CATEGORY_EMOTE,
+        Some(ChatMessageType::Social) => CHAT_CATEGORY_SOCIAL,
+        Some(ChatMessageType::SocialSend) => CHAT_CATEGORY_SOCIAL_SEND,
         // Broadcast / AllChannels / System / x1A..x1E / Abuse all fall
         // into "system text" — green-on-grey in retail.
         _ => CHAT_CATEGORY_SYSTEM,
     }
 }
 
-/// Phase 4 step 4: map a raw `ChatChannel` bitmask (the `channel` field
-/// on a `GameEvent::ChannelBroadcast`) to a `CHAT_CATEGORY_*`. The
-/// retail UI paints allegiance ranks (Vassals/Patron/Monarch) the same
-/// colour as Allegiance broadcast; fellowship ranks similarly fold in.
-/// Mirrors the cli's `channel_tags()` in `chat.rs:646-660`.
-#[cfg(target_arch = "wasm32")]
-fn chat_category_for_channel(channel_raw: u32) -> u32 {
-    use holtburger_protocol::messages::ChatChannel;
-    match ChatChannel::from_repr(channel_raw) {
-        Some(ChatChannel::Fellow) | Some(ChatChannel::FellowBroadcast) => {
-            CHAT_CATEGORY_FELLOWSHIP
-        }
-        Some(ChatChannel::Vassals)
-        | Some(ChatChannel::Patron)
-        | Some(ChatChannel::Monarch)
-        | Some(ChatChannel::CoVassals)
-        | Some(ChatChannel::AllegianceBroadcast) => CHAT_CATEGORY_ALLEGIANCE,
-        Some(ChatChannel::Help) => CHAT_CATEGORY_HELP,
-        Some(ChatChannel::Abuse)
-        | Some(ChatChannel::Admin)
-        | Some(ChatChannel::Audit)
-        | Some(ChatChannel::Advocate1)
-        | Some(ChatChannel::Advocate2)
-        | Some(ChatChannel::Advocate3)
-        | Some(ChatChannel::Sentinel) => CHAT_CATEGORY_SYSTEM,
-        None => CHAT_CATEGORY_CHANNEL,
-    }
-}
+// R-chat (2026-10-08): `chat_category_for_channel` (every allegiance-family
+// line orange) was replaced by the retail text type
+// (`chat_format::legacy_channel_text_type`) fed through
+// `chat_category_for_message_type` — heard patron/vassal/co-vassal lines are
+// Social (yellow), your own "You say to your …" SocialSend (tan).
 
 /// Phase 4 step 4: map a `TurbineChatType` (the modern channel chat
 /// taxonomy — General / Trade / LFG / Roleplay / Allegiance / Society /
@@ -26749,9 +26897,12 @@ enum SessionCommand {
     /// sends a `GameMessage::TurbineChat` with a `RequestSendToRoomById`
     /// payload routed to the room_id ACE advertised in its
     /// `SetTurbineChatChannels` event. `chat_type` is the
-    /// `TurbineChatType` repr (General=1, Trade=2, Lfg=3, Roleplay=4,
-    /// Society=5, SocietyCelHan=6, SocietyEldWeb=7, SocietyRadBlo=8,
-    /// Olthoi=9, Allegiance=10). The recv loop reads the cached
+    /// `TurbineChatType` repr = retail `ChatTypeEnum` (acclient.h:4464:
+    /// Allegiance=1, General=2, Trade=3, Lfg=4, Roleplay=5, Society=6,
+    /// SocietyCelHan=7, SocietyEldWeb=8, SocietyRadBlo=9, Olthoi=10).
+    /// Allegiance with turbine chat disabled falls back to the legacy
+    /// AllegianceBroadcast channel (retail `a` = DoStupidChannelHack
+    /// until StartupTurbineChatSystem runs). The recv loop reads the cached
     /// `turbine_chat_state` to look up the channel, then increments
     /// the rolling `next_context_id`. Failures (channel not yet
     /// advertised, chat_type unknown, turbine chat disabled at
@@ -27317,6 +27468,13 @@ enum SessionCommand {
     FellowshipAssignNewLeader {
         new_leader_guid: u32,
     },
+    /// Fellowship: leader-only — open (`true`) or close the fellowship to
+    /// recruiting by members. Maps to `GameAction::FellowshipChangeOpenness`
+    /// (sub-opcode 0x0291). ACE refuses non-leaders / locked fellowships
+    /// with a WeenieError; on success every member gets a FullUpdate.
+    FellowshipChangeOpenness {
+        open: bool,
+    },
     /// House: purchase a house. Maps to `GameAction::BuyHouse`
     /// (sub-opcode 0x021C). Wire payload is the slumlord NPC guid plus
     /// a PackableList<uint> of item guids (pyreals / trade notes etc.)
@@ -27654,15 +27812,24 @@ enum SessionCommand {
     AbandonContract {
         contract_id: u32,
     },
-    /// Wave F.3 follow-on (2026-05-27): JS-side allegiance-info refresh
-    /// action. Sends `GameAction::AllegianceInfoRequest` (sub-opcode
-    /// 0x027B) carrying a target player name. ACE
-    /// `Player.HandleActionAllegianceInfoRequest` responds with a
-    /// `GameEventAllegianceInfoResponse` (0x027C); the recv-loop's
-    /// allegiance arm folds it into `latest_allegiance` and the JS
-    /// allegiance-panel re-renders on the `allegianceUpdated` event.
+    /// Wave F.3 follow-on (2026-05-27): officer-only named-member query
+    /// (retail `/allegiance info <name>`). Sends
+    /// `GameAction::AllegianceInfoRequest` (sub-opcode 0x027B) carrying a
+    /// target player name. ACE `Player.HandleActionAllegianceInfoRequest`
+    /// (≥ Seneschal) responds with a `GameEventAllegianceInfoResponse`
+    /// (0x027C); the recv-loop caches it in `latest_allegiance_info`
+    /// (client-event kind 41) — it does NOT touch `latest_allegiance`.
     AllegianceInfoRequest {
         target_name: String,
+    },
+    /// Ask the server for the player's allegiance tree. Sends
+    /// `GameAction::AllegianceUpdateRequest` (sub-opcode 0x001F) with
+    /// `u32 on`. Retail `CM_Allegiance::Event_UpdateRequest` is sent on
+    /// PlayerDescription receipt (1) and on allegiance-panel show (1) /
+    /// hide (0). ACE replies with `AllegianceUpdate` + `AllegianceUpdateDone`
+    /// (which fold into `latest_allegiance`) regardless of the flag.
+    AllegianceUpdateRequest {
+        on: bool,
     },
     /// Wave 4.A (2026-05-28): JS-side progression action — spend
     /// experience to raise a skill rank. Sends
@@ -27937,7 +28104,16 @@ const ENTITY_UPDATE_KIND_APPEARANCE: u32 = 6;
 ///   `motion_command` = `ParentEvent.location` (RightHand=1, LeftHand=2, …)
 ///   `motion_stance`  = `ParentEvent.placement` (the child's own grip pose key)
 /// All other fields are zeroed; JS resolves geometry from the cached rigs.
+/// A DETACH whose `motion_stance` is `ATTACH_PLACEMENT_LEAVE_WORLD` is a
+/// PickupEvent "leave world" instead (held-4, `?pickupLeaveWorld`).
 const ENTITY_UPDATE_KIND_ATTACH: u32 = 7;
+/// held-4 (R2 2026-10-08): `motion_stance` sentinel on a kind=7 DETACH
+/// (`model_id` 0) — the item left the world but its wielder still owns it
+/// (retail `SmartBox::DoPickupEvent`, acclient.c:143483-143500: `unset_parent`
+/// + `leave_world`, object kept). JS `EntityManager.leaveWorld` keeps the rig
+/// hidden for the next ParentEvent. Never a real Placement key (all < 0x100).
+#[cfg(target_arch = "wasm32")]
+const ATTACH_PLACEMENT_LEAVE_WORLD: u32 = 0xFFFF_FFFF;
 /// Wave 2 (2026-06-08) — a one-shot Action-class motion command (a
 /// creature attack swing for B10, the local player's eat/drink for B6, or
 /// an emote/gesture) extracted from the `UpdateMotion` (0xF74C) action
@@ -32616,6 +32792,34 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_cast_move_lock_flag("?nosw=1&castMoveLock=off"));
     }
 
+    /// death-1 (R2 2026-10-08): `?deadInputGate` — DEFAULT-ON; `=off`, `=0`
+    /// or `=false` disables.
+    #[test]
+    fn dead_input_gate_flag_defaults_on_unless_off() {
+        use super::parse_dead_input_gate_flag;
+        assert!(parse_dead_input_gate_flag(""));
+        assert!(parse_dead_input_gate_flag("?nosw=1"));
+        assert!(parse_dead_input_gate_flag("?deadInputGate=on"));
+        assert!(parse_dead_input_gate_flag("?apRetailGate=off"));
+        assert!(!parse_dead_input_gate_flag("?deadInputGate=off"));
+        assert!(!parse_dead_input_gate_flag("?nosw=1&deadInputGate=0"));
+        assert!(!parse_dead_input_gate_flag("deadInputGate=false"));
+    }
+
+    /// daytime-1 (R2 2026-10-08): `?skyServerClock` — DEFAULT-ON; `=off`,
+    /// `=0` or `=false` keeps the private 1999-anchored sky clock.
+    #[test]
+    fn sky_server_clock_flag_defaults_on_unless_off() {
+        use super::parse_sky_server_clock_flag;
+        assert!(parse_sky_server_clock_flag(""));
+        assert!(parse_sky_server_clock_flag("?nosw=1"));
+        assert!(parse_sky_server_clock_flag("?skyServerClock=on"));
+        assert!(parse_sky_server_clock_flag("?skytime=19"));
+        assert!(!parse_sky_server_clock_flag("?skyServerClock=off"));
+        assert!(!parse_sky_server_clock_flag("?nosw=1&skyServerClock=0"));
+        assert!(!parse_sky_server_clock_flag("skyServerClock=false"));
+    }
+
     /// R1 (2026-10-08): `?jumpLaunchCap` / `?jumpLoadGate` / `?apRetailGate`
     /// — DEFAULT-ON; only an exact `=off` disables (the movement-flag house
     /// shape).
@@ -34287,6 +34491,12 @@ pub struct SessionHandle {
     /// pre-event. JS reads via [`SessionHandle::player_squelch`] from
     /// the kind=27 SquelchUpdated drain.
     latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    /// R-chat chat-5 (2026-10-08): the `/reply` target — name of the last
+    /// PLAYER (guid 0x50000001..=0x6FFFFFFF, never yourself) who sent you a
+    /// tell, markers trimmed. Written by the recv loop's `GameEvent::Tell`
+    /// arm (retail HearDirectSpeech → SetLastTellerName); JS reads it via
+    /// [`SessionHandle::last_teller_name`].
+    last_teller: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     /// Wave-H3 (2026-05-26): local player's character title catalog.
     /// Refreshed by the recv loop on `GameEvent::CharacterTitle`
     /// (opcode 0x0029, full replace) or `GameEvent::UpdateTitle`
@@ -36978,11 +37188,24 @@ impl SessionHandle {
             None => (0u32, 0u32),
         };
 
-        // Substitute `%p` -> "their" matching CLI's
-        // render_soul_emote_text (commands.rs:53-55).
+        // Substitute `%p` -> "their" in the actor's own text, matching
+        // CLI's render_soul_emote_text (commands.rs:53-55).
         let render_text = |text: &str| -> String { text.replace("%p", "their") };
         let my_emote = resolved.my_emote.map(render_text).unwrap_or_default();
-        let other_emote = resolved.other_emote.map(render_text).unwrap_or_default();
+        // R-chat chat-4 (2026-10-08): retail `ClientCommunicationSystem::Pose`
+        // (acclient.c:425512) rewrites `%p` in the BROADCAST text
+        // (otherEmote) only: "his" when PropertyInt Gender (0x71) is 1 —
+        // also the default when the property is absent — otherwise "her".
+        let gender = self.world.try_borrow().ok().and_then(|w| {
+            w.as_ref().and_then(|w| {
+                w.player_int_property(holtburger_common::properties::PropertyInt::Gender)
+            })
+        });
+        let possessive = crate::chat_format::possessive_for_gender(gender);
+        let other_emote = resolved
+            .other_emote
+            .map(|text| text.replace("%p", possessive))
+            .unwrap_or_default();
 
         Some(SoulEmoteResolution {
             pose,
@@ -38093,6 +38316,29 @@ impl SessionHandle {
         get_sky_override_object_ids()
     }
 
+    /// daytime-1 (R2 2026-10-08): the sky clock in PortalYearTicks seconds
+    /// right now — the server's clock once a ConnectRequest/TimeSync sample
+    /// has been adopted, the legacy 1999-anchored wall clock's equivalent
+    /// before that (or under `?skyServerClock=off`). NaN until
+    /// `populateSkyDescFromRegion` lands. `scene3d/atmosphere_sky.js` maps
+    /// it to the moon/star date (`scene3d/sky_game_date.js`).
+    #[wasm_bindgen(js_name = getSkyPortalTicks)]
+    pub fn get_sky_portal_ticks(&self) -> f64 {
+        sky_portal_ticks_now()
+    }
+
+    /// daytime-3 (R2 2026-10-08): the retail map-panel calendar for
+    /// `portal_ticks` from the Region's GameTime tables — `{year,
+    /// dayOfYear, seasonIndex, seasonName, dayInSeason, timeOfDayIndex,
+    /// presentTimeOfDay, isNight, dateString, timeString}` (retail
+    /// `GameTime::GetDateTimeString`, acclient.c:463286-463349), or
+    /// `undefined` before `populateSkyDescFromRegion` lands.
+    /// `plugins/map-panel.js` prefers it over its hardcoded tables.
+    #[wasm_bindgen(js_name = derethCalendarAt)]
+    pub fn dereth_calendar_at(&self, portal_ticks: f64) -> JsValue {
+        dereth_calendar_js(portal_ticks)
+    }
+
     /// Workstream A (3D camera/game-feel fix): authoritative local-
     /// player runtime pose, refreshed by the recv-loop on each
     /// TickMovement after the integrator tick. JS reads this every rAF
@@ -38489,6 +38735,50 @@ impl SessionHandle {
         };
         let scene = self.collision_scene.borrow();
         let hit = scene.sweep_sphere_against_statics(&pose, delta, radius)?;
+        Some(CollisionHit::from_generic(hit))
+    }
+
+    /// camera-3 stage 1 (2026-10-08 round 2): sweep against the baked
+    /// procedural SCENERY colliders (trunk cylspheres, boulder spheres —
+    /// `SpatialScene::scenery_colliders`, the index the player path already
+    /// collides with), which `sweepSphereAgainstStatics` does not hold.
+    /// Retail's viewer transit (`SmartBox::update_viewer` acclient.c:144991)
+    /// collides with every shadow object it crosses and exempts only
+    /// creatures (`CPhysicsObj::FindObjCollisions` :316159); scenery has no
+    /// weenie, so the camera stops at a trunk. Same landblock-local pose
+    /// synthesis as `sweepSphereAgainstStatics`; the scene widens to the 3x3
+    /// landblock ring. Step 4b of camera.js `_clipCameraAgainstWorld`.
+    #[wasm_bindgen(js_name = sweepSphereAgainstScenery)]
+    pub fn sweep_sphere_against_scenery(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        landblock_id: u32,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Guid, Quaternion, Vector3};
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let delta = end - start;
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as f32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as f32;
+        let pose = WorldPosition {
+            landblock_id: Guid(landblock_id),
+            coords: Vector3::new(
+                start.x - lb_x * 192.0,
+                start.y - lb_y * 192.0,
+                start.z,
+            ),
+            rotation: Quaternion::identity(),
+        };
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_scenery(&pose, delta, radius)?;
         Some(CollisionHit::from_generic(hit))
     }
 
@@ -38944,9 +39234,10 @@ impl SessionHandle {
     }
 
     /// Send a TurbineChat channel message (`/cg /ct /clfg /crp
-    /// /society /olthoi`). `chat_type` is the `TurbineChatType`
-    /// u32 (General=1, Trade=2, Lfg=3, Roleplay=4, Society=5,
-    /// Olthoi=9, etc.). Fails if turbine chat isn't enabled or the
+    /// /society /olthoi`, and `/a /guild /gu`). `chat_type` is the
+    /// `TurbineChatType` u32 = retail `ChatTypeEnum` (Allegiance=1,
+    /// General=2, Trade=3, Lfg=4, Roleplay=5, Society=6, CelHan=7,
+    /// EldWeb=8, RadBlo=9, Olthoi=10). Fails if turbine chat isn't enabled or the
     /// channel hasn't been advertised by ACE yet.
     #[wasm_bindgen(js_name = sendTurbineChannel)]
     pub fn send_turbine_channel(&self, chat_type: u32, message: String) -> Result<(), JsValue> {
@@ -39992,10 +40283,13 @@ impl SessionHandle {
     /// `CharacterOption` from the cached `LatestStats` snapshot. The
     /// snapshot is hydrated by `PlayerDescription` (server-authoritative,
     /// login-time) and optimistically updated on every
-    /// `setCharacterOption` call. Returns `false` before the first
-    /// stats publish (i.e. pre-login or before the player Entity lands)
-    /// — this matches the cli's `character_option_enabled(option)` reading
-    /// the default-empty bitfield.
+    /// `setCharacterOption` call. Before the first stats publish (pre-login
+    /// or before PlayerDescription lands) it answers from retail's
+    /// `PlayerModule` constructor defaults (acclient.c `PlayerModule::
+    /// PlayerModule`: options_ = 0x50C4A54A, options2_ = 0x948700 —
+    /// `CharacterOptions1::DEFAULT` / `CharacterOptions2::DEFAULT`), the
+    /// same seed `PlayerState::new()` uses (charopt-6), so e.g. ToggleRun /
+    /// AutoTarget / HearGeneralChat read ON instead of all-false.
     ///
     /// `option` is the `holtburger_common::CharacterOption` enum INDEX
     /// (0x00..0x36 per `crates/holtburger-common/src/character.rs:117`),
@@ -40012,13 +40306,19 @@ impl SessionHandle {
             ))
         })?;
         let stats = self.latest_stats.borrow();
-        let Some(stats) = stats.as_ref() else { return Ok(false); };
+        let (options1_bits, options2_bits) = match stats.as_ref() {
+            Some(stats) => (stats.character_options1, stats.character_options2),
+            None => (
+                CharacterOptions1::DEFAULT.bits(),
+                CharacterOptions2::DEFAULT.bits(),
+            ),
+        };
         Ok(match character_option_mask(option) {
             CharacterOptionMask::Options1(flag) => {
-                CharacterOptions1::from_bits_truncate(stats.character_options1).contains(flag)
+                CharacterOptions1::from_bits_truncate(options1_bits).contains(flag)
             }
             CharacterOptionMask::Options2(flag) => {
-                CharacterOptions2::from_bits_truncate(stats.character_options2).contains(flag)
+                CharacterOptions2::from_bits_truncate(options2_bits).contains(flag)
             }
         })
     }
@@ -40229,6 +40529,23 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!(
                     "fellowshipAssignNewLeader: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Fellowship — leader-only — open (`true`) or close the fellowship to
+    /// recruiting by members. Sends `GameAction::FellowshipChangeOpenness`
+    /// (sub-opcode 0x0291); retail `gmFellowshipUI` Open button →
+    /// `CM_Fellowship::Event_ChangeFellowOpeness`. The server's FullUpdate
+    /// echo refreshes `fellowshipSnapshot().open`.
+    #[wasm_bindgen(js_name = fellowshipChangeOpenness)]
+    pub fn fellowship_change_openness(&self, open: bool) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::FellowshipChangeOpenness { open })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "fellowshipChangeOpenness: cmd channel closed ({e})"
                 ))
             })
     }
@@ -40864,6 +41181,17 @@ impl SessionHandle {
             globals_mask: s.globals_mask,
             globals_name: s.globals_name.clone(),
         })
+    }
+
+    /// R-chat chat-5 (2026-10-08): the `/reply` target — the last PLAYER
+    /// who sent you a tell (retail HearDirectSpeech only records senders in
+    /// 0x50000001..=0x6FFFFFFF, never NPC tells or a tell to yourself), with
+    /// ACE's `^`/`&` name suffix trimmed. `undefined` until one arrives.
+    /// app/client_events.js mirrors it into
+    /// `window.__chatLastIncomingTellSender` on each incoming tell line.
+    #[wasm_bindgen(js_name = lastTellerName)]
+    pub fn last_teller_name(&self) -> Option<String> {
+        self.last_teller.try_borrow().ok().and_then(|t| t.clone())
     }
 
     /// Wave L2 (2026-05-26): house ownership status snapshot — `None`
@@ -41878,6 +42206,9 @@ pub async fn start_session(
     let latest_squelch: std::rc::Rc<
         std::cell::RefCell<Option<SquelchSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // R-chat chat-5 (2026-10-08): `/reply` target, set by the Tell arm.
+    let last_teller: std::rc::Rc<std::cell::RefCell<Option<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
     // Wave-H3 (2026-05-26): title catalog snapshot, refreshed on
     // `GameEvent::CharacterTitle` (replace) or `GameEvent::UpdateTitle`
     // (append).
@@ -42073,6 +42404,7 @@ pub async fn start_session(
         let latest_allegiance_info_inner = latest_allegiance_info.clone();
         let latest_friends_inner = latest_friends.clone();
         let latest_squelch_inner = latest_squelch.clone();
+        let last_teller_inner = last_teller.clone();
         let latest_title_inner = latest_title.clone();
         let latest_house_status_inner = latest_house_status.clone();
         let latest_house_data_inner = latest_house_data.clone();
@@ -42124,6 +42456,7 @@ pub async fn start_session(
                 latest_allegiance_info_inner,
                 latest_friends_inner,
                 latest_squelch_inner,
+                last_teller_inner,
                 latest_title_inner,
                 latest_house_status_inner,
                 latest_house_data_inner,
@@ -42271,6 +42604,7 @@ pub async fn start_session(
         latest_allegiance_info,
         latest_friends,
         latest_squelch,
+        last_teller,
         latest_title,
         latest_house_status,
         latest_house_data,
@@ -43581,7 +43915,7 @@ fn publish_player_enchantments_snapshot(
 /// already implements register / add-item / accept / reset / clear /
 /// close semantics across all 9 trade GameEvent arms via
 /// `state.register_trade / add_trade_item / accept_trade /
-/// clear_trade_acceptance / reset_trade / close_trade`, so a single
+/// decline_trade / trade_failure / reset_trade / close_trade`, so a single
 /// republish covers every arm. `partner_name` + per-item meta (name,
 /// icon, stack-size) are resolved from `world.entities` since the
 /// canonical `TradeState` only carries GUIDs.
@@ -43725,14 +44059,156 @@ fn publish_player_fellowship_snapshot(
     *latest_fellowship.borrow_mut() = next;
 }
 
+/// Where the local player's patron comes from in an `AllegianceUpdate`
+/// (see [`split_allegiance_records`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PatronRef {
+    /// No patron (the player is the monarch, or it can't be resolved).
+    None,
+    /// The patron IS the monarch (`payload.monarch`). ACE packs no
+    /// separate patron record in that case.
+    Monarch,
+    /// The patron is `records[i]`.
+    Record(usize),
+}
+
+/// allegiance-2 (2026-10-08): bucket an `AllegianceUpdate`'s
+/// `(tree_parent_guid, character_guid)` records into patron / self /
+/// vassals, the way retail resolves them: `AllegianceHierarchy::UnPack`
+/// attaches every record under its parent and `GetPatron` (acclient.c
+/// 481833) is the parent link of the player's own node. ACE
+/// (`Network/Structure/AllegianceHierarchy.cs`) writes the patron record
+/// (parent = monarch) ONLY when the patron is not the monarch, then self
+/// (parent = patron), then vassals (parent = self) — so a first-tier
+/// vassal's patron is the monarch, with no patron record at all.
+///
+/// Returns `(patron, self index, vassal indices)`. When the player is
+/// the monarch, self is `None` (the monarch row is the player) and every
+/// record is a vassal. When `own_guid` is 0 or not among the records,
+/// falls back to the old heuristic (first record parented to the monarch
+/// is the patron, the rest are vassals).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn split_allegiance_records(
+    monarch_guid: u32,
+    own_guid: u32,
+    records: &[(u32, u32)],
+) -> (PatronRef, Option<usize>, Vec<usize>) {
+    if own_guid != 0 && own_guid == monarch_guid {
+        let mut vassals = Vec::new();
+        for (i, rec) in records.iter().enumerate() {
+            if rec.1 != own_guid {
+                vassals.push(i);
+            }
+        }
+        return (PatronRef::None, None, vassals);
+    }
+    let self_idx = if own_guid != 0 {
+        records.iter().position(|rec| rec.1 == own_guid)
+    } else {
+        None
+    };
+    let Some(self_idx) = self_idx else {
+        let mut patron = PatronRef::None;
+        let mut vassals = Vec::new();
+        for (i, rec) in records.iter().enumerate() {
+            if rec.0 == monarch_guid && patron == PatronRef::None {
+                patron = PatronRef::Record(i);
+            } else {
+                vassals.push(i);
+            }
+        }
+        return (patron, None, vassals);
+    };
+    let my_parent = records[self_idx].0;
+    let patron = if my_parent == monarch_guid {
+        PatronRef::Monarch
+    } else {
+        match records
+            .iter()
+            .position(|rec| rec.1 == my_parent && rec.1 != own_guid)
+        {
+            Some(i) => PatronRef::Record(i),
+            None => PatronRef::None,
+        }
+    };
+    let patron_idx = match patron {
+        PatronRef::Record(i) => Some(i),
+        _ => None,
+    };
+    let mut vassals = Vec::new();
+    for i in 0..records.len() {
+        if i != self_idx && Some(i) != patron_idx {
+            vassals.push(i);
+        }
+    }
+    (patron, Some(self_idx), vassals)
+}
+
+#[cfg(test)]
+mod allegiance_split_tests {
+    use super::{split_allegiance_records, PatronRef};
+
+    const M: u32 = 0x5000_0001;
+    const P: u32 = 0x5000_0002;
+    const S: u32 = 0x5000_0009;
+    const V: u32 = 0x5000_0004;
+    const V2: u32 = 0x5000_0005;
+
+    #[test]
+    fn split_allegiance_records_direct_vassal_patron_is_monarch() {
+        // ACE: no patron record; self hangs off the monarch.
+        let (patron, me, vassals) = split_allegiance_records(M, S, &[(M, S), (S, V)]);
+        assert_eq!(patron, PatronRef::Monarch);
+        assert_eq!(me, Some(0));
+        assert_eq!(vassals, vec![1]);
+        // No vassals at all.
+        let (patron, me, vassals) = split_allegiance_records(M, S, &[(M, S)]);
+        assert_eq!(patron, PatronRef::Monarch);
+        assert_eq!(me, Some(0));
+        assert!(vassals.is_empty());
+    }
+
+    #[test]
+    fn split_allegiance_records_distinct_patron() {
+        let (patron, me, vassals) = split_allegiance_records(M, S, &[(M, P), (P, S), (S, V)]);
+        assert_eq!(patron, PatronRef::Record(0));
+        assert_eq!(me, Some(1));
+        assert_eq!(vassals, vec![2]);
+    }
+
+    #[test]
+    fn split_allegiance_records_player_is_monarch() {
+        let (patron, me, vassals) = split_allegiance_records(S, S, &[(S, V), (S, V2)]);
+        assert_eq!(patron, PatronRef::None);
+        assert_eq!(me, None);
+        assert_eq!(vassals, vec![0, 1]);
+    }
+
+    #[test]
+    fn split_allegiance_records_unknown_self_falls_back() {
+        // own_guid 0 (world not up): old heuristic — first record parented
+        // to the monarch is the patron, the rest are vassals.
+        let (patron, me, vassals) = split_allegiance_records(M, 0, &[(M, P), (P, S), (S, V)]);
+        assert_eq!(patron, PatronRef::Record(0));
+        assert_eq!(me, None);
+        assert_eq!(vassals, vec![1, 2]);
+        // Player not among the records: same fallback.
+        let (patron, me, vassals) = split_allegiance_records(M, 0x5000_0077, &[(M, P), (P, V)]);
+        assert_eq!(patron, PatronRef::Record(0));
+        assert_eq!(me, None);
+        assert_eq!(vassals, vec![1]);
+    }
+}
+
 // Wave-F2 (2026-05-26): publish a JS-facing allegiance snapshot folded
 // directly from the wire payload. `holtburger-world` has no allegiance
 // handler today, so unlike fellowship/trade/book we don't bounce through
 // `world.allegiance` — the recv-loop arm just hands us the
-// `AllegianceUpdateEventData`. ACE orders the `records` list patron →
-// self → vassals, but only the patron's `tree_parent_guid` actually
-// equals the monarch's guid — self's parent is the patron, vassals'
-// parent is self. We split using the tree-parent topology + own guid.
+// `AllegianceUpdateEventData`. ACE orders the `records` list patron (only
+// when the patron is not the monarch; parent = monarch) → self (parent =
+// patron) → vassals (parent = self). `split_allegiance_records` resolves
+// the patron through self's tree parent, like retail `GetPatron`.
 //
 // `own_guid`: the local player's GUID, passed by the recv-arm from its
 // `LoopState::InWorld { player_guid }`. Zero pre-PlayerCreate (won't
@@ -43773,26 +44249,28 @@ fn publish_player_allegiance_snapshot(
     let monarch = payload.monarch.as_ref().map(to_member);
     let monarch_guid = monarch.as_ref().map(|m| m.guid).unwrap_or(0);
 
-    let mut patron: Option<AllegianceMember> = None;
-    let mut myself: Option<AllegianceMember> = None;
-    let mut vassals: Vec<AllegianceMember> = Vec::new();
-
-    // ACE writes records in this order: (parent=monarch) patron,
-    // (parent=patron) self, (parent=self) vassals. Use the topology to
-    // bucket. If `own_guid == monarch_guid`, the local player IS the
-    // monarch — `myself` stays None (use `monarch` for the self row).
-    let player_is_monarch = own_guid != 0 && own_guid == monarch_guid;
-    for (tree_parent, entry) in &payload.records {
-        let member = to_member(entry);
-        if entry.character_id.0 == own_guid {
-            myself = Some(member);
-        } else if tree_parent.0 == monarch_guid && patron.is_none() && !player_is_monarch {
-            // Direct child of monarch + first such record => patron.
-            patron = Some(member);
-        } else {
-            vassals.push(member);
-        }
-    }
+    // allegiance-2: resolve patron / self / vassals through the tree
+    // topology (retail `AllegianceHierarchy::GetPatron`). If
+    // `own_guid == monarch_guid`, the local player IS the monarch —
+    // `myself` stays None (use `monarch` for the self row). A first-tier
+    // vassal's patron is the monarch itself (ACE packs no patron record).
+    let topology: Vec<(u32, u32)> = payload
+        .records
+        .iter()
+        .map(|(tree_parent, entry)| (tree_parent.0, entry.character_id.0))
+        .collect();
+    let (patron_ref, self_idx, vassal_idx) =
+        split_allegiance_records(monarch_guid, own_guid, &topology);
+    let patron: Option<AllegianceMember> = match patron_ref {
+        PatronRef::None => None,
+        PatronRef::Monarch => monarch.clone(),
+        PatronRef::Record(i) => Some(to_member(&payload.records[i].1)),
+    };
+    let myself: Option<AllegianceMember> = self_idx.map(|i| to_member(&payload.records[i].1));
+    let vassals: Vec<AllegianceMember> = vassal_idx
+        .iter()
+        .map(|&i| to_member(&payload.records[i].1))
+        .collect();
 
     *latest_allegiance.borrow_mut() = Some(AllegianceSnapshot {
         name: payload.allegiance_name.clone(),
@@ -44801,6 +45279,7 @@ async fn recv_loop(
     >,
     latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    last_teller: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
     latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,
@@ -44953,6 +45432,10 @@ async fn recv_loop(
     movement.set_jump_launch_cap(parse_jump_launch_cap_flag(&flag_search()));
     movement.set_jump_load_gate(parse_jump_load_gate_flag(&flag_search()));
     movement.set_retail_position_event_gate(parse_ap_retail_gate_flag(&flag_search()));
+    // death-1 (R2 2026-10-08): `?deadInputGate=off` — retail PlayerIsDead
+    // input refusal while the server says Dead (default ON); see
+    // `parse_dead_input_gate_flag`.
+    movement.set_dead_input_gate(parse_dead_input_gate_flag(&flag_search()));
     // F2 (2026-07-27): `?serverMoveToDriver=off` — return the LOCAL player's
     // server-commanded MoveTo 6/7 to the `ServerControlledProjection` lane
     // (default ON: the faithful `MoveToManager` driver owns it — turn-first
@@ -45172,6 +45655,9 @@ async fn recv_loop(
     // ParentEvent time, for (b) emit the kind=7 ATTACH from the ObjectCreate
     // PhysicsDesc parent fields.
     let wielded_spawn_on: bool = parse_wielded_spawn_flag(&flag_search());
+    // held-4 (R2 2026-10-08): `?pickupLeaveWorld` (DEFAULT ON) — see
+    // `parse_pickup_leave_world_flag` and the PickupEvent arm (objects.rs).
+    let pickup_leave_world_on: bool = parse_pickup_leave_world_flag(&flag_search());
     // A8-M1 (2026-06-11): `?worldLifecycle` — route the lifecycle
     // message family through the canonical world dispatcher (single
     // CObjectMaint-style owner) instead of the apply_inventory_object_*
@@ -45362,6 +45848,7 @@ async fn recv_loop(
         latest_allegiance_info,
         latest_friends,
         latest_squelch,
+        last_teller,
         latest_title,
         latest_house_status,
         latest_house_data,
@@ -45417,6 +45904,7 @@ async fn recv_loop(
             skip_contained_spawn_on,
             spawn_hidden_state_on,
             wielded_spawn_on,
+            pickup_leave_world_on,
             world_lifecycle_on,
             unified_tick_on,
             maint_prune_on,
@@ -51744,8 +52232,9 @@ mod contracts_tests {
 //   4. `SessionHandle::requestAllegianceInfo(target_name)` — C2S
 //      `GameAction::AllegianceInfoRequest` (0x027B). Sends through the
 //      same recv-loop dispatch as `AbandonContract`. Server replies
-//      with an `AllegianceInfoResponse` (0x027C) that the existing
-//      allegiance arm folds into `latest_allegiance`.
+//      with an `AllegianceInfoResponse` (0x027C) that the recv-loop
+//      caches in `latest_allegiance_info` (kind 41), separate from
+//      `latest_allegiance`.
 // ─────────────────────────────────────────────────────────────────
 
 /// Wave F.1 follow-on (2026-05-27): synchronous SpellCategory name
@@ -52004,12 +52493,12 @@ pub fn get_contract_record(contract_id: u32) -> JsValue {
 #[wasm_bindgen]
 impl SessionHandle {
     /// Wave F.3 follow-on (2026-05-27): query allegiance info for a
-    /// player by name. Sends `GameAction::AllegianceInfoRequest`
-    /// (sub-opcode 0x027B). Server (ACE
-    /// `Player.HandleActionAllegianceInfoRequest`) responds with a
+    /// player by name (retail `/allegiance info <name>`). Sends
+    /// `GameAction::AllegianceInfoRequest` (sub-opcode 0x027B). Server
+    /// (ACE `Player.HandleActionAllegianceInfoRequest`) responds with a
     /// `GameEventAllegianceInfoResponse` (0x027C) which the recv-loop
-    /// folds into `latest_allegiance`. UI plugins observe the refresh
-    /// via the existing `allegianceUpdated` bus event.
+    /// caches in `latest_allegiance_info` (client-event kind 41) — it is
+    /// NOT the player's own tree; use `allegianceUpdateRequest` for that.
     ///
     /// ACE requires the caller to have `AllegiancePermissionLevel >=
     /// Seneschal` and the target to be a member of the caller's
@@ -52019,6 +52508,21 @@ impl SessionHandle {
         self.cmd_tx
             .unbounded_send(SessionCommand::AllegianceInfoRequest { target_name })
             .map_err(|e| JsValue::from_str(&format!("request_allegiance_info: {e}")))
+    }
+
+    /// Ask the server for the player's own allegiance tree. Sends
+    /// `GameAction::AllegianceUpdateRequest` (sub-opcode 0x001F, `u32 on`).
+    /// Retail (`gmAllegianceUI::RecvNotice_PlayerDescReceived` /
+    /// `OnVisibilityChanged`) sends `true` once the player description
+    /// arrives and whenever the allegiance panel is shown, `false` when it
+    /// is hidden. ACE answers every request with `AllegianceUpdate` +
+    /// `AllegianceUpdateDone`, which publish `playerAllegiance()` and fire
+    /// `allegianceUpdated`.
+    #[wasm_bindgen(js_name = allegianceUpdateRequest)]
+    pub fn allegiance_update_request(&self, on: bool) -> Result<(), JsValue> {
+        self.cmd_tx
+            .unbounded_send(SessionCommand::AllegianceUpdateRequest { on })
+            .map_err(|e| JsValue::from_str(&format!("allegianceUpdateRequest: {e}")))
     }
 }
 

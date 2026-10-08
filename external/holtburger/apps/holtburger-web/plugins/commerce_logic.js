@@ -287,14 +287,60 @@ export const CYLINDER_RADII_ALLOWANCE = 0.96;
 // the partner at range 5.0; OnObjectRangeExit → CloseTradeNegotiations.
 export const TRADE_RANGE = 5.0;
 
-export function horizontalDistance(a, b) {
+// trade-2 (2026-10-08 round 2): the trade handler is registered with
+// xy_only = 0, so ACCWeenieObject::ObjectsInRange (acclient.c:436730)
+// measures in 3D (CPhysicsObj::get_distance_to_object → cylinder distance);
+// a centre-to-centre 3D distance against range + both radii is the same test
+// on the level and slightly more lenient straight up or down. The old XY-only
+// distance kept a trade open between floors. Positions are AC frame (Z up);
+// a missing z counts as 0.
+export function distance3D(a, b) {
   if (!a || !b) return NaN;
-  return Math.hypot((a.x ?? 0) - (b.x ?? 0), (a.y ?? 0) - (b.y ?? 0));
+  return Math.hypot((a.x ?? 0) - (b.x ?? 0), (a.y ?? 0) - (b.y ?? 0), (a.z ?? 0) - (b.z ?? 0));
 }
 
 export function isOutOfRange(a, b, range) {
-  const d = horizontalDistance(a, b);
+  const d = distance3D(a, b);
   return Number.isFinite(d) && d > range + CYLINDER_RADII_ALLOWANCE;
+}
+
+// Consecutive polls the partner may be missing from the world before the
+// trade closes: 2 × the 500 ms poll ≈ retail's 1.0 s handler interval, and
+// a one-poll respawn gap rides through.
+export const TRADE_PARTNER_MISS_LIMIT = 2;
+
+/**
+ * trade-2 — one poll of the secure-trade range handler. Retail
+ * ObjectsInRange returns 0 when EITHER object is gone (GetObjectA fails), so
+ * a partner who portalled, recalled or logged out closes the trade
+ * (OnObjectRangeExit → CloseTradeNegotiations, acclient.c:251819); ACE
+ * itself never closes a trade on teleport, and both players stayed
+ * IsTrading. Our own position unknown (scene not ready) decides nothing.
+ * @param {{me:object|null, them:object|null, misses?:number, range?:number}} p
+ *   `misses` = consecutive polls the partner has been missing, this one
+ *   included.
+ * @returns {"close"|"ok"|"unknown"}
+ */
+export function tradeRangeVerdict({ me, them, misses = 0, range = TRADE_RANGE }) {
+  if (!me) return "unknown";
+  if (!them) return misses >= TRADE_PARTNER_MISS_LIMIT ? "close" : "ok";
+  return isOutOfRange(me, them, range) ? "close" : "ok";
+}
+
+/**
+ * charopt-4 — retail ClientTradeSystem::AttemptToTradeItem (acclient.c:
+ * 410566) for an owned item dragged onto `target`: trading with that player
+ * already → add it ("add"); trading with someone else → "You are already
+ * trading with someone else." ("elsewhere"); no trade → open one
+ * (ItemHolder::UseObject → AttemptToOpenTradeNegotiations :410538, which
+ * refuses outside peace mode, combatMode 1: "You need to be in peace mode to
+ * trade." — "peace") and add the item once it registers ("open").
+ * @returns {"add"|"elsewhere"|"peace"|"open"}
+ */
+export function tradeItemAttempt({ partnerGuid = 0, target = 0, combatMode = 1 } = {}) {
+  const partner = (partnerGuid >>> 0) || 0;
+  if (partner !== 0) return partner === ((target >>> 0) || 0) ? "add" : "elsewhere";
+  return ((combatMode >>> 0) || 1) === 1 ? "open" : "peace";
 }
 
 // ─── Secure trade ─────────────────────────────────────────────────────

@@ -295,8 +295,9 @@ check(
   entitiesSrc.includes("this._preCreate.purgeGuid(g);"),
 );
 check(
-  "_detachChild + direct mount cancel ONLY parked attaches",
-  (entitiesSrc.match(/this\._preCreate\.removeMatching\(\(g, ev\) => g === cGuid && ev\.kind === "attach"\)/g) || []).length === 2,
+  // 2026-10-08: + leaveWorld (held-4, a PickupEvent supersedes a parked attach).
+  "_detachChild + direct mount + leaveWorld cancel ONLY parked attaches",
+  (entitiesSrc.match(/this\._preCreate\.removeMatching\(\(g, ev\) => g === cGuid && ev\.kind === "attach"\)/g) || []).length === 3,
 );
 check(
   "tick(dt) runs the once-per-second 25 s expiry sweep",

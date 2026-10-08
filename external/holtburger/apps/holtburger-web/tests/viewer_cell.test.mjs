@@ -143,6 +143,10 @@ await t("V3 a stale pkg without the exports keeps the player's cell", () => {
 });
 
 await t("V4 viewer_cell.js state", () => {
+  // camera-4 (2026-10-08 round 2): retail viewer sphere + CAMERA_DEFAULT_PIVOT_Z,
+  // shared with camera.js's clip chain (acclient.c:145543 / :39550).
+  assert.equal(vc.VIEWER_SPHERE_RADIUS_M, 0.3);
+  assert.equal(vc.VIEWER_PIVOT_Z_M, 1.5);
   vc.resetViewerCell();
   assert.equal(vc.viewerIndoorOr(true), true, "unpublished → the fallback");
   assert.equal(vc.viewerIndoorOr(false), false);

@@ -1,11 +1,22 @@
 // Wave C / PR10 (2026-06-06) — optimistic-audio helper.
 //
-// Fires inventory-action sound cues at click time, BEFORE the wire send,
-// so the player hears the wield/unwield/pickup/drop sound immediately
-// instead of after the ACE round-trip (typically 100-300ms). The server
-// broadcasts a matching GameMessageSound 0xF750 a few hundred ms later;
-// the recent-fire ring here lets the server-broadcast consumer in
-// index.html suppress the echo to avoid double-playing.
+// Fired inventory-action sound cues at click time, BEFORE the wire send,
+// and suppressed the server's matching GameMessageSound 0xF750 echo for
+// 300 ms through the recent-fire ring below.
+//
+// audio-1 (2026-10-08 round 2) — RETAIL HAS NO CLIENT-PREDICTED ITEM SOUND.
+// The pickup / drop / wield sound plays only when the server's Sound message
+// arrives (SmartBox::HandleSoundEvent → CPhysicsObj::play_sound →
+// SoundManager::PlaySoundA, acclient.c:143333 / 316424 / 383655 — its only
+// caller), i.e. when the action really happens. ACE sends Sound.PickUpItem /
+// DropItem only after the move-to AND the pickup animation
+// (Player_Inventory.cs:1089 / :1445), far past the 300 ms window, so every
+// ground / chest pickup and every drop played twice — and a refused action
+// (too far, encumbered, already taken) played a sound for nothing. Now the
+// item cues (0x8C-0x90) are left to the 0xF750 handler; `?retailItemSounds=off`
+// (or 0/false) restores the click-time prediction. The UI cues below (error,
+// slider) are never echoed by the server and still play here. The call sites
+// (item_drag.js, radial-menu.js, inventory.js) are unchanged: one gate here.
 //
 // Retail parity (2026-10-05):
 //   - UI_* cues (error, slider grab/release) are UI sounds: retail
@@ -57,6 +68,16 @@ import { playUiSound, rollProbability } from "../scene3d/audio/retail_sound_rule
 
 // UI_* sounds go through the UI SoundTable from the centre (see header).
 const UI_SOUNDS = new Set([0x6D, 0x73, 0x74]);
+
+// audio-1 — `?retailItemSounds=off` (or 0/false) predicts the item cues
+// again. Read on every call: cheap, and the test toggles it per arm.
+function _predictItemSounds() {
+  try {
+    const search = (typeof window !== "undefined" && window.location) ? window.location.search : "";
+    const v = new URLSearchParams(search || "").get("retailItemSounds")?.toLowerCase();
+    return v === "off" || v === "0" || v === "false";
+  } catch (_) { return false; }
+}
 
 const _slidersHeld = new WeakSet();
 // The WeakSet alone cannot express "release whatever is held" — a WeakSet is
@@ -161,12 +182,17 @@ export function shouldSuppressEcho(soundId, playerGuid) {
 }
 
 /**
- * Fire an inventory-action sound at the local player's position. Resolves
- * the wave through the entity's SoundTable + the shared SoundTableCache,
- * then plays via the global AudioManager. Records the fire in the recent
- * ring so the matching server broadcast can be suppressed.
+ * Play a UI cue from the centre, or — only under `?retailItemSounds=off` —
+ * an inventory-action sound at the local player's position: resolves the
+ * wave through the entity's SoundTable + the shared SoundTableCache, plays
+ * via the global AudioManager and records the fire in the recent ring so the
+ * matching server broadcast can be suppressed. By default an item cue is a
+ * no-op (audio-1).
  */
 export async function playOptimistic(soundId, itemGuid) {
+  // audio-1: an item cue is the server's to play (header). Before any claim
+  // is recorded, so the genuine echo is never suppressed.
+  if (!UI_SOUNDS.has(soundId >>> 0) && !_predictItemSounds()) return;
   try {
     const live = window.liveScene3d;
     const audioMgr = live?.audioManager;

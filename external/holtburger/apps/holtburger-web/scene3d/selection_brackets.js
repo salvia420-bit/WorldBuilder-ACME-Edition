@@ -345,15 +345,17 @@ const BF_PKLITE_PKSTATUS = 0x02000000;
  * Port of `gmRadarUI::GetBlipColor` (acclient.c:262708) over the data an
  * entity instance already carries. `meta.objDescFlags` is the wire
  * `PublicWeenieDescription.obj_desc_flags` (loop.js toMeta :2408 /
- * entity_update_clone.js:114).
+ * entity_update_clone.js:114); `meta.itemType` feeds IsCreature. Both live
+ * callers (radar, target brackets) overlay the CURRENT flags and blip colour
+ * from `resolveRadarLook` below — the spawn meta goes stale on a PK change.
  *
  * Both former gaps are now CLOSED (2026-08-02):
  *  - `_blipColor` — parsed by the protocol crate as
  *    `PublicWeenieDescription.radar_blip_color` (description.rs:455) and
  *    hydrated to `PropertyInt::RadarBlipColor`
  *    (holtburger-world/src/hydration.rs:143). Now surfaced per-guid by the
- *    wasm export `SessionHandle::entityRadarBlipColor` (src/lib.rs) and fed
- *    onto `meta.radarBlipColor` by `entities.js` at selection time. This is
+ *    wasm export `SessionHandle::entityRadarBlipColor` (src/lib.rs); since
+ *    2026-10-08 read live via `resolveRadarLook` (int 95). This is
  *    what makes a lifestone BLUE and an NPC YELLOW — without it both fell
  *    through to the type ladder's gold/white.
  *  - fellowship — the leader/fellow override (:262842) is applied from
@@ -388,10 +390,13 @@ export function blipColorForEntity(inst, fellowship) {
   if (bits & BF_PORTAL) return BLIP_COLOR.Portal;                  // :262776
   if (bits & BF_VENDOR) return BLIP_COLOR.Vendor;                  // :262782
   const isPlayer = (bits & BF_PLAYER) !== 0;                       // IsPlayer :437199
-  // :262788 — IsCreature() is itself `bitfield & 0x10` (:436879), so the
-  // retail predicate `BF_ATTACKABLE && IsCreature() && !IsPlayer()` collapses
-  // to "attackable and not a player".
-  if ((bits & BF_ATTACKABLE) && !isPlayer) return BLIP_COLOR.Creature;
+  // :262788 — `BF_ATTACKABLE && IsCreature() && !IsPlayer()`. IsCreature is
+  // vfptr[11] (CWeenieObject vtable offset 44, PDB field list 0x5a39) =
+  // ACCWeenieObject::IsCreature (:436879) = InqType() (`pwd._type`, :437223)
+  // & TYPE_CREATURE — the ITEM TYPE, not the 0x10 ODF bit. ACE stamps
+  // Attackable on nearly every item, chest and door; those stay Default.
+  const isCreature = (((meta.itemType ?? 0) >>> 0) & 0x10) !== 0;
+  if ((bits & BF_ATTACKABLE) && isCreature && !isPlayer) return BLIP_COLOR.Creature;
   if (!isPlayer) return BLIP_COLOR.Default;                        // :262796
   // --- players only, base = Default (:262804) ---
   if ((bits & BF_ADMIN) && !(bits & BF_HIDDEN_ADMIN)) return BLIP_COLOR.Admin; // :262833
@@ -399,6 +404,62 @@ export function blipColorForEntity(inst, fellowship) {
   if (bits & BF_PKLITE_PKSTATUS) return BLIP_COLOR.PKLite;         // IsPKLite :262818
   if (bits & BF_FREE_PKSTATUS) return BLIP_COLOR.Creature;         // :262825
   return BLIP_COLOR.Default;
+}
+
+/**
+ * radar-3 (2026-10-08 round 2): `?radarLiveFlags=off` (or 0/false) restores
+ * the spawn-meta-first reads in `resolveRadarLook`. DEFAULT-ON.
+ */
+export const RADAR_LIVE_FLAGS_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("radarLiveFlags") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
+
+function _shNum(sh, fn, ...args) {
+  try {
+    if (!sh || typeof sh[fn] !== "function") return undefined;
+    const v = sh[fn](...args);
+    return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  } catch (_) { return undefined; }
+}
+
+/**
+ * radar-3 (2026-10-08 round 2) — the CURRENT GetBlipColor / GetBlipShape
+ * inputs for `guid`. Retail keeps them on the live PublicWeenieDesc:
+ * ACCWeenieObject::OnStatUpdated (acclient.c:438720) writes `_blipColor` on
+ * int 0x5F (:438779) and the PK bits through SetPlayerKillerStatus on 0x86
+ * (:438785 → :470685), and gmRadarUI::OnQualityChanged (:263725) re-looks
+ * the blip. The spawn meta never changes after spawn, so it showed another
+ * player's PK colour/shape from spawn time forever. Reads the wasm entity's
+ * flags (`objectDescFlags`, PK bits refreshed by holtburger-world
+ * properties.rs `refresh_pk_bits`) and int 95; falls back to the meta for an
+ * unknown guid (flags 0), an unset int, or a stale pkg/ (no export).
+ *
+ * @param {object|null} sh  the wasm SessionHandle (or null)
+ * @param {number} guid
+ * @param {{objDescFlags?:number, radarBlipColor?:number}|null} meta spawn meta
+ * @param {boolean} [live]  defaults to `?radarLiveFlags` (on)
+ * @returns {{odf:number, blipColor:number}}
+ */
+export function resolveRadarLook(sh, guid, meta, live = RADAR_LIVE_FLAGS_ON) {
+  const g = guid >>> 0;
+  if (!live) {
+    return {
+      odf: (meta?.objDescFlags ?? _shNum(sh, "objectDescFlags", g) ?? 0) >>> 0,
+      blipColor: (meta?.radarBlipColor ?? _shNum(sh, "entityRadarBlipColor", g) ?? 0) >>> 0,
+    };
+  }
+  const wf = _shNum(sh, "objectDescFlags", g);
+  const bc = _shNum(sh, "objectIntProperty", g, 95); // PropertyInt RadarBlipColor
+  return {
+    odf: ((wf !== undefined && wf !== 0) ? wf : (meta?.objDescFlags ?? 0)) >>> 0,
+    blipColor: (bc !== undefined
+      ? bc
+      : (meta?.radarBlipColor ?? _shNum(sh, "entityRadarBlipColor", g) ?? 0)) >>> 0,
+  };
 }
 
 /**

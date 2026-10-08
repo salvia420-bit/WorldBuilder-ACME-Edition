@@ -202,6 +202,30 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                     return LoopFlow::Continue;
                 }
             };
+            // R-chat chat-1 (2026-10-08): retail binds `a` / `guild` /
+            // `gu` to the Turbine allegiance room only once
+            // StartupTurbineChatSystem has run (acclient.c:424334); with
+            // turbine chat disabled `a` stays DoStupidChannelHack, i.e.
+            // the legacy AllegianceBroadcast channel (0x02000000).
+            let is_allegiance = matches!(chat_type_enum, TurbineChatType::Allegiance);
+            let turbine_enabled = turbine_chat_state.borrow().enabled;
+            if is_allegiance && !turbine_enabled {
+                use holtburger_protocol::messages::chat::actions::ChatChannelActionData;
+                use holtburger_protocol::messages::ChatChannelId;
+                let action = GameAction::ChatChannel(Box::new(ChatChannelActionData {
+                    channel: ChatChannelId::from_raw(0x0200_0000),
+                    message,
+                }));
+                send_or_disconnect!(
+                    queued_events,
+                    e,
+                    send_ordered!(movement, session, action),
+                    "recv_loop: send_action(ChatChannel AB fallback): {e}",
+                    "send_turbine_channel: {e}",
+                    LoopFlow::Exit
+                );
+                return LoopFlow::Continue;
+            }
             // Snapshot resolved state OUT of the borrow so
             // the mutable next_context_id update doesn't
             // re-enter the cell.
@@ -225,11 +249,27 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 }
             };
             let Some((room_id, context_id)) = resolved else {
+                // R-chat chat-1: retail DoTurbineChat_Allegiance with no
+                // allegiance room → HandleFailureEvent(0x414
+                // YouAreNotInAllegiance) — no legacy fallback while
+                // turbine chat is on.
+                let allegiance_room_missing = is_allegiance
+                    && turbine_chat_state
+                        .borrow()
+                        .channels
+                        .as_ref()
+                        .map(|c| c.allegiance.is_none())
+                        .unwrap_or(false);
+                let text = if allegiance_room_missing {
+                    "You are not in an allegiance!".to_string()
+                } else {
+                    format!(
+                        "send_turbine_channel: channel {chat_type_enum:?} not advertised (turbine chat may be disabled or not yet bootstrapped)"
+                    )
+                };
                 queued_events.borrow_mut().push(ClientEvent {
                     kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                    string_payload: Some(format!(
-                        "send_turbine_channel: channel {chat_type_enum:?} not advertised (turbine chat may be disabled or not yet bootstrapped)"
-                    )),
+                    string_payload: Some(text),
                     u32_payload: None,
                     u32_payload_2: None,
                     f32_payload: None,
@@ -409,6 +449,28 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             console_log_str(&format!(
                 "[fellowship/assign-leader] new_leader=0x{new_leader_guid:08X}",
             ));
+        }
+        SessionCommand::FellowshipChangeOpenness { open } => {
+            // Retail gmFellowshipUI Open button →
+            // `CM_Fellowship::Event_ChangeFellowOpeness` (0x0291,
+            // u32 open). ACE `HandleActionFellowshipChangeOpenness`
+            // is leader-only, refuses a locked fellowship, and on
+            // success sends every member a FullUpdate.
+            use holtburger_protocol::messages::{
+                FellowshipChangeOpennessActionData, GameAction,
+            };
+            let action = GameAction::FellowshipChangeOpenness(Box::new(
+                FellowshipChangeOpennessActionData { open },
+            ));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(FellowshipChangeOpenness): {e}",
+                "fellowship_change_openness: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str(&format!("[fellowship/openness] open={open}"));
         }
         SessionCommand::SwearAllegiance { target_guid } => {
             use holtburger_common::Guid;
@@ -766,8 +828,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // permission-checks ≥ Seneschal, looks up the
             // player by name, enqueues an
             // `AllegianceInfoResponse` (0x027C) which the
-            // recv-loop's allegiance arm folds into
-            // `latest_allegiance`.
+            // recv-loop caches in `latest_allegiance_info`
+            // (kind 41) — not `latest_allegiance`.
             use holtburger_protocol::messages::{
                 AllegianceInfoRequestActionData, GameAction,
             };
@@ -787,6 +849,28 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             console_log_str(&format!(
                 "[allegiance/info-request] target={target_name:?}",
             ));
+        }
+        SessionCommand::AllegianceUpdateRequest { on } => {
+            // Retail `CM_Allegiance::Event_UpdateRequest`
+            // (0x001F, u32 on): sent on PlayerDescription
+            // receipt and on allegiance-panel show/hide. ACE
+            // `GameActionAllegianceUpdateRequest` replies with
+            // `AllegianceUpdate` + `AllegianceUpdateDone`.
+            use holtburger_protocol::messages::{
+                AllegianceUpdateRequestActionData, GameAction,
+            };
+            let action = GameAction::AllegianceUpdateRequest(Box::new(
+                AllegianceUpdateRequestActionData { on },
+            ));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(AllegianceUpdateRequest): {e}",
+                "allegiance_update_request: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str(&format!("[allegiance/update-request] on={on}"));
         }
         _ => unreachable!("SessionCommand routed to the wrong handler module"),
     }

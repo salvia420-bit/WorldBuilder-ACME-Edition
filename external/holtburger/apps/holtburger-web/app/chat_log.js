@@ -20,6 +20,11 @@ export const CHAT_CATEGORY = Object.freeze({
   LFG: 13, ROLEPLAY: 14, GENERAL: 15, FELLOWSHIP: 16, ALLEGIANCE: 17,
   RECALL: 18, CRAFT: 19, APPRAISAL: 20, BROADCAST: 21, SOCIETY: 22,
   OLTHOI: 23,
+  // R-chat (2026-10-08): retail text types the old taxonomy folded away —
+  // OutgoingTell (4, the server's `You tell X, "…"` copy), Social (10,
+  // heard patron/vassal/co-vassal/AB lines), SocialSend (11, your own
+  // `You say to your Vassals, "…"`).
+  TELL_SEND: 24, SOCIAL: 25, SOCIAL_SEND: 26,
 });
 
 // ── Retail chat colours ───────────────────────────────────────────────────
@@ -76,6 +81,9 @@ const CATEGORY_COLOR = Object.freeze({
   [C.BROADCAST]: RGB.green,
   [C.SOCIETY]: RGB.blueGrey,
   [C.OLTHOI]: RGB.orange,
+  [C.TELL_SEND]: RGB.tan,
+  [C.SOCIAL]: RGB.yellow,
+  [C.SOCIAL_SEND]: RGB.tan,
 });
 
 /** Retail colour for a CHAT_CATEGORY id (unknown → default green). */
@@ -131,10 +139,10 @@ export function chatLineStyle(category, text, isEcho = false) {
 export const FILTER_GROUP = Object.freeze({ LOCAL: "local", TELL: "tell", CHAN: "chan", OTHER: "other" });
 
 const LOCAL_CATS = new Set([C.LOCAL, C.EMOTE]);
-const TELL_CATS = new Set([C.TELL]);
+const TELL_CATS = new Set([C.TELL, C.TELL_SEND]);
 const CHAN_CATS = new Set([
   C.CHANNEL, C.HELP, C.TRADE, C.LFG, C.ROLEPLAY, C.GENERAL, C.FELLOWSHIP,
-  C.ALLEGIANCE, C.SOCIETY, C.OLTHOI,
+  C.ALLEGIANCE, C.SOCIETY, C.OLTHOI, C.SOCIAL, C.SOCIAL_SEND,
 ]);
 
 export function filterGroupForCategory(category) {
@@ -199,14 +207,15 @@ export function talkFocusById(id) {
 
 /**
  * Outgoing chat-bar line for `text` under `focus`. A line the player
- * starts with `/` or `@` is a command and goes out verbatim whatever the
- * focus (retail ChatInterface::ProcessCommand parses prefixes first).
+ * starts with `/` or `@` is a command, and `:` / `;` an emote (retail
+ * ClientCommunicationSystem::OnChatCommand, acclient.c:426126), so it goes
+ * out verbatim whatever the focus (retail parses prefixes first).
  * Returns "" for blank input.
  */
 export function buildOutgoingLine(focus, text) {
   const t = String(text ?? "").trim();
   if (!t) return "";
-  if (t.startsWith("/") || t.startsWith("@")) return t;
+  if (/^[/@:;]/.test(t)) return t;
   return `${focus?.prefix ?? ""}${t}`;
 }
 
@@ -214,10 +223,12 @@ export function buildOutgoingLine(focus, text) {
 // Retail tags the sender in every spoken line (`<Tell:IIDString:…>Name<\Tell>
 // says, "…"`, ChatRoomTracker::GetChatFormat acclient.c:505642) and a click
 // on it calls ChatInterface::StartTell (gmMainChatUI::RecvNotice_TextTag_
-// IIDStringClick, acclient.c:254238). The wasm formats the same three
-// shapes as plain text (src/session/messages/chat.rs / game_event.rs):
+// IIDStringClick, acclient.c:254238). The wasm formats the same shapes
+// as plain text (src/session/messages/chat.rs / game_event.rs):
 //   `Name says, "…"`  ·  `[Channel] Name says, "…"`  ·  `Name tells you, "…"`
-const SENDER_RE = /^(\[[^\]]{1,32}\] )?([^\s"[\]][^"[\]]{0,40}?) (says|tells you), "/;
+//   ·  `Your patron|vassal|follower Name says to you, "…"` (retail
+//   ChannelBroadcast allegiance lines, acclient.c:412975).
+const SENDER_RE = /^(\[[^\]]{1,32}\] |Your (?:patron|vassal|follower) )?([^\s"[\]][^"[\]]{0,40}?) (says to you|says|tells you), "/;
 
 /** `{ name, start, end }` (char offsets into `text`) or null. */
 export function parseChatSender(text) {

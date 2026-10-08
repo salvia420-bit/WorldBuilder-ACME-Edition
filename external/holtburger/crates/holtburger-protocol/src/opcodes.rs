@@ -562,8 +562,12 @@ pub enum GameActionOpcode {
     SwearAllegiance = 0x001D,
     /// C2S: Break allegiance from a patron/vassal.
     BreakAllegiance = 0x001E,
-    // /// C2S: Request an update of allegiance information.
-    // AllegianceUpdateRequest = 0x001F,
+    /// C2S: Ask the server to (re)send the player's allegiance tree
+    /// (`GameEventOpcode::AllegianceUpdate`). Payload: `u32 on` (panel
+    /// visible). Retail: `CM_Allegiance::Event_UpdateRequest` (acclient.c
+    /// 704098), sent on PlayerDescription receipt and on allegiance-panel
+    /// show (1) / hide (0). ACE: `GameActionAllegianceUpdateRequest`.
+    AllegianceUpdateRequest = 0x001F,
     /// C2S: Add a player to the friends list.
     AddFriend = 0x0018,
     /// C2S: Remove a player from the friends list.
@@ -635,8 +639,11 @@ pub enum GameActionOpcode {
     FellowshipUpdateRequest = 0x00A6,
     /// C2S: Designate a new fellowship leader.
     FellowshipAssignNewLeader = 0x0290,
-    // /// C2S: Toggle the fellowship's open/closed enrollment status.
-    // FellowshipChangeOpenness = 0x0291,
+    /// C2S: Toggle the fellowship's open/closed enrollment status.
+    /// Payload: `u32 open`. Retail: `CM_Fellowship::Event_ChangeFellowOpeness`
+    /// (acclient.c 703025). ACE: `HandleActionFellowshipChangeOpenness`
+    /// (leader-only; refused while locked).
+    FellowshipChangeOpenness = 0x0291,
 
     // --- Housing ---
     /// C2S: Purchase a selected house.

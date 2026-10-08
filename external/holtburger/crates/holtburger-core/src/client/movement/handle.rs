@@ -368,6 +368,16 @@ impl MovementSystemHandle {
         self.inner.set_retail_position_event_gate(on);
     }
 
+    /// death-1 (R2 2026-10-08): install the `?deadInputGate=off` runtime
+    /// carrier (default-ON — retail `PlayerIsDead`: while the server's
+    /// interpreted forward command is Dead, movement keys and auto-run are
+    /// refused, acclient.c:717828-717833; `=off` restores the pre-fix seam
+    /// that never reports Dead). Forwards to
+    /// `MovementSystem::set_dead_input_gate`.
+    pub fn set_dead_input_gate(&mut self, on: bool) {
+        self.inner.set_dead_input_gate(on);
+    }
+
     /// F2 (2026-07-27): install the `?serverMoveToDriver=off` runtime
     /// carrier (default-ON — the LOCAL player's server-commanded MoveTo
     /// 6/7 runs the faithful `MoveToManager` driver, giving turn-first

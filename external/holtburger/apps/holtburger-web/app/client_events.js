@@ -25,8 +25,9 @@ import { preloadCastSequenceTable } from "../ui/ac_spell_cast_sequence.js";
 import { preloadSpellShapeTable } from "../ui/ac_spell_shape.js";
 import { isTerminalCastReject, shouldClearCastOnReject, shouldCancelOnUseDone, castUseDoneCancelsEnabled } from "../ui/cast_reject_policy.js";
 import { readBusyCount } from "../ui/ac_cast_predict.js";
-import { acToThree } from "../scene3d/adapter.js";
 import { serverSoundPlan, environSoundType, playUiSound, playSoundFromCenter, pendingObjectSounds } from "../scene3d/audio/retail_sound_rules.js";
+import { emitterPosThree, threeToAc } from "../scene3d/audio/emitter_position.js";
+import { radarBlankAfterEnviron } from "../scene3d/target_cycle.js";
 import { escapeHtml, showDisconnectBanner } from "./dom_utils.js";
 
 /** Returned by dispatchClientEvent when the inline loop used to `return` out of
@@ -123,14 +124,21 @@ export function dispatchClientEvent(evt, D) {
     // Incoming-tell stickiness for /reply. chat_type ==
     // ChatMessageType::Tell (0x03) only — exclude the
     // OutgoingTell (0x04) echo and AdminTell paths.
-    // Sender is parsed from the wasm-formatted line
-    // ("X tells you, \"Y\"") because the protocol-level
-    // event carries it as sender_name but lib.rs folds
-    // it into stringPayload before publishing. The
-    // non-greedy `.+?` handles multi-word names.
+    // R-chat chat-5 (2026-10-08): the wasm Tell arm records the
+    // reply target itself — PLAYER senders only (retail
+    // HearDirectSpeech 0x50000001..0x6FFFFFFF: never an NPC quest
+    // tell, never a tell to yourself), Olthoi `^`/`&` suffix
+    // trimmed — and exposes it as handle.lastTellerName(). A
+    // stale pkg without the getter keeps the old line regex.
     if ((evt.u32Payload >>> 0) === 0x03) {
-      const m = text.match(/^(.+?) tells you, "/);
-      if (m) window.__chatLastIncomingTellSender = m[1];
+      const tellHandle = handle ?? window.__sessionHandle;
+      if (typeof tellHandle?.lastTellerName === "function") {
+        const teller = tellHandle.lastTellerName();
+        if (teller) window.__chatLastIncomingTellSender = teller;
+      } else {
+        const m = text.match(/^(.+?) tells you, "/);
+        if (m) window.__chatLastIncomingTellSender = m[1];
+      }
     }
     // P6.1 chat hook — retail AddTextToScroll parity
     // (IACPlugin::OnChatWindowText): fires AFTER wire-state
@@ -574,6 +582,9 @@ export function dispatchClientEvent(evt, D) {
       ts: Date.now(),
       reason: evt.stringPayload || "",
     };
+    // radar-4: the session's radar blackout ends with it (retail
+    // ClientUISystem::OnEndCharacterSession, acclient.c:402065).
+    window.__radarBlank = false;
     showDisconnectBanner(
       "DISCONNECTED — session dead, reload to reconnect" +
         (evt.stringPayload ? ` (${evt.stringPayload})` : ""),
@@ -749,6 +760,10 @@ export function dispatchClientEvent(evt, D) {
     const containerItemCount = evt.u32Payload2 >>> 0;
     // eslint-disable-next-line no-console
     console.log(`[PR-HH] ContainerOpened ${containerName} guid=0x${containerGuidHex} items=${containerItemCount}`);
+    // death-5 (2026-10-08 round 2): retail SetGroundObject marks an opened
+    // corpse (SetCorpseOpened, acclient.c:401686-401690) — it leaves the
+    // unopened-corpse cycle.
+    try { window.liveScene3d?.entityManager?.noteContainerOpened?.(containerGuidU32); } catch (_) {}
     if (window.__pluginClient && window.__pluginClient.events) {
       window.__pluginClient.events.emit("containerOpened", {
         stringPayload: containerName,
@@ -1965,8 +1980,12 @@ export function dispatchClientEvent(evt, D) {
               // Snapshot position at resolve-time so a
               // moving entity's audio lands at its current
               // location (matches Task E's snapshot pattern).
-              const pos = inst.root?.position;
-              if (!pos) {
+              // Three.js listener frame; audio-2 (2026-10-08): at
+              // the object's WORLD position — a sound on a wielded
+              // item's guid used to read its hand-local root and
+              // play near the map origin (audio/emitter_position.js).
+              const sndT = emitterPosThree(inst, emgr?.entityMap);
+              if (!sndT) {
                 stats.lastError = "no_position";
                 return;
               }
@@ -1987,11 +2006,12 @@ export function dispatchClientEvent(evt, D) {
               // captured yet).
               const pushEventRecord = scene3d?._pushEventRecord;
               if (pushEventRecord) {
+                const wp = threeToAc(sndT);
                 pushEventRecord({
                   type: "sound",
                   wave_did: (entry.waveDid >>> 0),
                   parent_entity_guid: (sndGuid >>> 0),
-                  world_pos: [+pos.x, +pos.y, +pos.z],
+                  world_pos: [wp.x, wp.y, wp.z],
                   t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
                   source: "GameMessageSound",
                   source_meta: {
@@ -2015,19 +2035,16 @@ export function dispatchClientEvent(evt, D) {
                   return Promise.resolve();
                 }
               } catch (_) {}
-              // D4-NEW-1 (2026-06-05): transform the RAW AC-frame
-              // entity position (inst.root.position; the worldRoot
-              // -π/2 rotation never reaches the AudioContext) into the
-              // three.js listener frame so the panner pans the correct
-              // HRTF bearing (north→overhead bug otherwise). The
-              // event-log world_pos above stays AC-frame for cross-
-              // source diffing; only the panner value is transformed.
-              // Mirrors the scene3d/entities.js Sound(1) sibling
-              // (~:8498) and scene3d/index.js GameMessageSound (~:3520).
-              const sndT = acToThree(pos.x, pos.y, pos.z);
+              // D4-NEW-1 (2026-06-05): `sndT` is in the three.js
+              // listener frame (the worldRoot -π/2 rotation never
+              // reaches the AudioContext) so the panner pans the
+              // correct HRTF bearing (north→overhead bug otherwise).
+              // The event-log world_pos above stays AC-frame for
+              // cross-source diffing. Mirrors the scene3d/entities.js
+              // Sound(1) sibling (`_fireHook`).
               return audioMgr.play(
                 entry.waveDid,
-                { x: sndT[0], y: sndT[1], z: sndT[2] },
+                sndT,
                 { gain },
               ).then(() => {
                 stats.played += 1;
@@ -2053,6 +2070,11 @@ export function dispatchClientEvent(evt, D) {
     // evt.u32Payload = EnvironChangeType:
     //   0x00 Clear · 0x01-0x06 fog tint · 0x65-0x7B environment sound.
     const ec = evt.u32Payload >>> 0;
+    // radar-4: BlackFog2 (6) blanks the radar blips, 0-5 and 9999 restore
+    // them, the sounds leave it (ClientUISystem::m_bRadarBlank). Before the
+    // fog/sound split: 9999 lands in the sound arm but still clears it.
+    // plugins/radar.js reads the global every tick (it may mount later).
+    window.__radarBlank = radarBlankAfterEnviron(window.__radarBlank === true, ec);
     if (ec <= 0x06) {
       // FOG: set a global override the distance-fog tick
       // (scene3d/loop.js::tickDistanceFogColor) respects until a

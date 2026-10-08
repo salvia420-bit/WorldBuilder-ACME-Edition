@@ -20,6 +20,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         latest_allegiance_info,
         latest_friends,
         latest_squelch,
+        last_teller,
         latest_title,
         latest_house_status,
         latest_house_data,
@@ -80,12 +81,28 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     turbine_chat_state.borrow_mut().channels = Some(*data);
                 }
                 holtburger_protocol::messages::GameEvent::Tell(data) => {
+                    // R-chat chat-3/chat-5 (2026-10-08): retail
+                    // Handle_Communication__HearDirectSpeech
+                    // (acclient.c:413504) — a tell to yourself reads
+                    // `You think, "…"`; only a PLAYER sender
+                    // (0x50000001..=0x6FFFFFFF, never yourself or an NPC
+                    // quest tell) becomes the /reply target, with ACE's
+                    // `^`/`&` name suffix trimmed.
                     let category = chat_category_for_message_type(data.chat_type);
+                    if let Some(target) = crate::chat_format::tell_reply_target(
+                        data.sender_id,
+                        data.target_id,
+                        &data.sender_name,
+                    ) {
+                        *last_teller.borrow_mut() = Some(target);
+                    }
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(format!(
-                            "{} tells you, \"{}\"",
-                            data.sender_name, data.message
+                        string_payload: Some(crate::chat_format::format_tell(
+                            data.sender_id,
+                            data.target_id,
+                            crate::chat_format::strip_name_markers(&data.sender_name),
+                            &data.message,
                         )),
                         u32_payload: Some(data.chat_type),
                         u32_payload_2: Some(category),
@@ -149,20 +166,40 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 holtburger_protocol::messages::GameEvent::ChannelBroadcast(
                     data,
                 ) => {
-                    let channel_label =
-                        chat_channel_label(data.channel.raw());
-                    let category =
-                        chat_category_for_channel(data.channel.raw());
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(format!(
-                            "[{}] {} says, \"{}\"",
-                            channel_label, data.sender_name, data.message
-                        )),
-                        u32_payload: Some(data.channel.raw()),
-                        u32_payload_2: Some(category),
-                        f32_payload: None,
-                    });
+                    // R-chat chat-3 (2026-10-08): retail
+                    // Handle_Communication__ChannelBroadcast
+                    // (acclient.c:412975). ACE echoes your own channel line
+                    // with sender "" → `[Fellowship] You say, "…"` /
+                    // `You say to your Vassals, "…"`; heard allegiance lines
+                    // read `Your patron X says to you, "…"`. The category
+                    // follows the retail text type (Social yellow,
+                    // SocialSend tan, Channel pink), and a globally
+                    // squelched type is dropped (IsSquelched(0, …, type)).
+                    let chan = data.channel.raw();
+                    let sender = crate::chat_format::strip_name_markers(&data.sender_name);
+                    let text_type =
+                        crate::chat_format::legacy_channel_text_type(chan, sender.is_empty());
+                    let globals_mask = latest_squelch
+                        .try_borrow()
+                        .ok()
+                        .and_then(|s| s.as_ref().map(|s| s.globals_mask))
+                        .unwrap_or(0);
+                    if crate::chat_format::textbox_visible(text_type, globals_mask) {
+                        let category = chat_category_for_message_type(text_type);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(
+                                crate::chat_format::format_channel_broadcast(
+                                    chan,
+                                    sender,
+                                    &data.message,
+                                ),
+                            ),
+                            u32_payload: Some(chan),
+                            u32_payload_2: Some(category),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::CommunicationTransientString(
                     data,
@@ -398,26 +435,33 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // have died!" / "Drudge slew you!"
                     // / "You killed yourself with a
                     // spell!" — so just relay it.
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(data.death_message.clone()),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_DEATH),
-                        f32_payload: None,
-                    });
+                    // death-6 (2026-10-08): retail
+                    // HandleVictimNotificationEvent (acclient.c:409151)
+                    // prints only a non-empty message.
+                    if crate::death_chat::notification_line_visible(&data.death_message) {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(data.death_message.clone()),
+                            u32_payload: Some(0),
+                            u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::KillerNotification(
                     data,
                 ) => {
                     // Survivor's POV: "You killed the
-                    // drudge!"
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(data.death_message.clone()),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_DEATH),
-                        f32_payload: None,
-                    });
+                    // drudge!" (death-6: non-empty only, as above.)
+                    if crate::death_chat::notification_line_visible(&data.death_message) {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(data.death_message.clone()),
+                            u32_payload: Some(0),
+                            u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::PlayerDescription(
                     data,
@@ -799,7 +843,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         let code = data.error as u32;
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_USE_FAILED,
-                            string_payload: Some(label.clone()),
+                            string_payload: Some(label),
                             u32_payload: Some(code),
                             u32_payload_2: None,
                             f32_payload: None,
@@ -808,27 +852,51 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         // mana / range / indoors / in-air —
                         // ACE Player_Magic SendUseDoneEvent
                         // sites) get the retail client text
-                        // as a transient toast-line; every
-                        // other use-failure keeps the
-                        // generic labelled system line.
-                        let (message, category) =
-                            match spellcast_error_text(code) {
-                                Some(text) => (
-                                    text.to_string(),
-                                    CHAT_CATEGORY_TRANSIENT,
-                                ),
-                                None => (
-                                    format!("[Use failed] {label}"),
-                                    CHAT_CATEGORY_SYSTEM,
-                                ),
-                            };
-                        queued_events.borrow_mut().push(ClientEvent {
-                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                            string_payload: Some(message),
-                            u32_payload: Some(0),
-                            u32_payload_2: Some(category),
-                            f32_payload: None,
-                        });
+                        // as a transient toast-line.
+                        // use-3 (2026-10-08): every other code goes
+                        // through retail HandleFailureEvent's text
+                        // (acclient.c:413716; `You're too busy!`,
+                        // `Unable to move to object!`, …) at the same
+                        // transient type (0x1A), instead of the
+                        // `[Use failed] <Debug>` label. Codes retail keeps
+                        // silent (ILeftTheWorld / ITeleported) print
+                        // nothing; an unknown code keeps the readable
+                        // sentence-case fallback as a system line.
+                        let line = match spellcast_error_text(code) {
+                            Some(text) => {
+                                Some((text.to_string(), CHAT_CATEGORY_TRANSIENT))
+                            }
+                            None if holtburger_core::errors::is_silent_failure(
+                                data.error,
+                            ) =>
+                            {
+                                None
+                            }
+                            None => Some(
+                                match holtburger_core::errors::retail_failure_text(
+                                    data.error,
+                                ) {
+                                    Some(text) => {
+                                        (text.to_string(), CHAT_CATEGORY_TRANSIENT)
+                                    }
+                                    None => (
+                                        holtburger_core::errors::format_weenie_error(
+                                            data.error, None,
+                                        ),
+                                        CHAT_CATEGORY_SYSTEM,
+                                    ),
+                                },
+                            ),
+                        };
+                        if let Some((message, category)) = line {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(message),
+                                u32_payload: Some(0),
+                                u32_payload_2: Some(category),
+                                f32_payload: None,
+                            });
+                        }
                     }
                 }
                 holtburger_protocol::messages::GameEvent::InventoryServerSaveFailed(

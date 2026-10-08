@@ -161,7 +161,16 @@ import {
   // camera origin in XY (camera clipped to the player's head), producing a
   // camera basis with horizontal forward exactly (0, 0). Guarded below.
   guardLookHorizontal,
+  // 2026-10-08 round 2 (camera parity): retail viewer order (camera-2),
+  // in-place turn follow (camera-5), ViewCombatTarget (charopt-2).
+  camFlagOff,
+  retailViewerStep,
+  inPlaceTurnYawDelta,
+  trackedTargetYaw,
 } from "./camera_math.js";
+// camera-4 (2026-10-08 round 2): one viewer sphere + pivot for the clip
+// chain and the viewer-cell walk (cells.js).
+import { VIEWER_SPHERE_RADIUS_M, VIEWER_PIVOT_Z_M } from "./viewer_cell.js";
 // F17 (2026-07-03, physics-parity dossier A row 42) — `?rustPose=on`
 // (default OFF): camera framing reads the wasm integrator pose directly
 // (`_safePlayerPos` short-circuit below), matching loop.js's rig bypass so
@@ -247,6 +256,14 @@ const AUTOFOLLOW_MOVE_EPS = 1e-3; // metres of pos-delta below which we call it 
 const AUTOFOLLOW_DEADZONE = 0.02; // rad: within this of heading, stop easing
 
 /**
+ * charopt-2 — `holtburger_common::CharacterOption::KeepCombatTargetsInView`
+ * (= ViewCombatTarget, 0x07; the enum INDEX `isCharacterOptionEnabled`
+ * takes), polled from the player stats at most this often.
+ */
+const CHARACTER_OPTION_VIEW_COMBAT_TARGET = 0x07;
+const VIEW_COMBAT_TARGET_POLL_MS = 250;
+
+/**
  * CAM-STAB (2026-08-04, `?camIndoorObjects=on`) — metres of slack added to the
  * pivot→camera segment length when bounding the step-5c entity scan. An entity
  * ORIGIN can sit this far outside the segment and still have geometry the
@@ -255,6 +272,26 @@ const AUTOFOLLOW_DEADZONE = 0.02; // rad: within this of heading, stop easing
  * door with margin while keeping the per-frame walk local.
  */
 const CAM_ENTITY_MARGIN_M = 2.0;
+
+/**
+ * Clip-chain sphere (Workstream C, 2026-05-11): a 0.5 m sphere stopped 0.2 m
+ * short of contact, swept from player z + 1.6. camera-4 (2026-10-08 round 2,
+ * `?camRetailSphere=off` restores these) swaps in retail's viewer sphere —
+ * radius 0.3 (`viewer_sphere`, acclient.c:145543 = 0x3E99999A) from the
+ * CAMERA_DEFAULT_PIVOT_Z = 1.5 pivot (:39550), stopped AT contact
+ * (PATH_CLIPPED, no backoff in `SmartBox::update_viewer`) — plus a 0.02 m
+ * numerical skin. The 0.1 near plane's corner sits ~0.155 m from the eye at
+ * 60° FOV, inside 0.3.
+ *
+ * The step-1 terrain floor keeps the legacy 0.5 + 0.2 margin either way: it
+ * samples the height at the eye XY only, not a sphere sweep, so on a steep
+ * slope a 0.3 m floor would let the near plane dip under the ground beside
+ * the eye (camera-4 verify).
+ */
+const CAM_LEGACY_RADIUS_M = 0.5;
+const CAM_LEGACY_BACKOFF_M = 0.2;
+const CAM_LEGACY_PIVOT_Z_M = 1.6;
+const CAM_CONTACT_SKIN_M = 0.02;
 
 /** Top-down ortho view: metres visible vertically at zoom=1. */
 const TOPDOWN_FRUSTUM_HEIGHT_M = 100.0;
@@ -634,7 +671,26 @@ export class CameraSwitcher {
       // `window.__setCamIndoorObjects` toggles live.
       this._camIndoorObjectsOn =
         params?.get("camIndoorObjects")?.toLowerCase() !== "off";
+      // 2026-10-08 round 2 (camera parity) — default-ON escapes read from the
+      // same URLSearchParams; each accepts off/0/false (camFlagOff).
+      // camera-2: smooth toward the unclipped eye, THEN sweep (_applyViewerStep).
+      this._camViewerStepOn = !camFlagOff(params?.get("camViewerStep"));
+      // camera-4: retail 0.3 m viewer sphere from the 1.5 m pivot.
+      this._camRetailSphereOn = !camFlagOff(params?.get("camRetailSphere"));
+      // camera-3 stage 1: clip step 4b scenery sweep (inert until the export lands).
+      this._camSceneryOn = !camFlagOff(params?.get("camScenery"));
+      // camera-5: keyless in-place turns carry the camera (_updateAutoFollow).
+      this._autoFollowTurnsOn = !camFlagOff(params?.get("autoFollowTurns"));
+      // charopt-2: CharacterOption 0x07 target tracking.
+      this._combatTargetViewOn = !camFlagOff(params?.get("combatTargetView"));
     }
+    // camera-2 state: last published (swept) eye in AC coords — the FROM end
+    // of the retail stiffness lerp. null = unseeded (next frame snaps).
+    this._prevEyeAc = null;
+    // camera-5 state: last frame's heading in the followYaw convention.
+    this._lastFollowHeading = null;
+    // charopt-2 state: cached CharacterOption 0x07 read ({t, on}).
+    this._viewCombatTargetOpt = null;
     // Autofollow runtime state.
     this._followDragging = false; // true while right-mouse HELD (free-look)
     this._lastUserYawMs = null; // performance.now() of the last right-drag yaw edit
@@ -707,6 +763,7 @@ export class CameraSwitcher {
       window.__setAutoFollowInvert = (on) => {
         this._autoFollowInvert = !!on; // flip if the camera trails to the wrong side
         this._autoFollowDiagCount = 0; // re-log the convention diag
+        this._lastFollowHeading = null; // camera-5: no sign-flip "turn"
         return this._autoFollowInvert;
       };
       window.__setCamIndoorObjects = (on) => {
@@ -725,6 +782,30 @@ export class CameraSwitcher {
         this._camCellClampOn = !!on;
         return this._camCellClampOn;
       };
+      // 2026-10-08 round 2 camera escapes (A/B without a reload).
+      window.__setCamViewerStep = (on) => {
+        this._camViewerStepOn = !!on;
+        this._prevEyeAc = null; // re-seed: next frame snaps
+        this._stiffSeeded = false;
+        return this._camViewerStepOn;
+      };
+      window.__setCamRetailSphere = (on) => {
+        this._camRetailSphereOn = !!on;
+        return this._camRetailSphereOn;
+      };
+      window.__setCamScenery = (on) => {
+        this._camSceneryOn = !!on;
+        return this._camSceneryOn;
+      };
+      window.__setAutoFollowTurns = (on) => {
+        this._autoFollowTurnsOn = !!on;
+        this._lastFollowHeading = null;
+        return this._autoFollowTurnsOn;
+      };
+      window.__setCombatTargetView = (on) => {
+        this._combatTargetViewOn = !!on;
+        return this._combatTargetViewOn;
+      };
       // Retail-preference live setters (wired to the Camera options tab —
       // ui/camera_settings.js). Stiffness null = hard-lock (retail stiffness
       // 1.0 ≈ snap, so we map ≥1 → null). mouseSmooth 0 = off.
@@ -733,6 +814,7 @@ export class CameraSwitcher {
         this._camStiffness =
           Number.isFinite(f) && f > 0 && f < 1.0 ? f : null;
         this._stiffSeeded = false; // re-seed the smoother on the next frame
+        this._prevEyeAc = null;
         return this._camStiffness;
       };
       window.__setMouseSens = (v) => {
@@ -827,6 +909,9 @@ export class CameraSwitcher {
       this._listeners.length = 0;
     }
 
+    // camera-2: orbit/topDown move the perspective camera elsewhere, so the
+    // first follow frame after a mode change snaps instead of lerping.
+    this._prevEyeAc = null;
     this.mode = next;
     if (next === "follow") {
       // Retail Asheron's Call mouselook: cursor stays visible (no
@@ -1055,7 +1140,10 @@ export class CameraSwitcher {
     // body — that second forward integrator (flat 4.5 m/s, collision-blind)
     // was the snap-back / dual-predictor sawtooth, retired 2026-06-29.
     this._smoothToIntegrator(dt);
-    this._updateAutoFollow(dt);
+    // charopt-2: while the combat-target track owns followYaw, autofollow
+    // only samples the heading (camera-5) and skips its own ease.
+    const tracking = this._updateCombatTargetTracking(dt);
+    this._updateAutoFollow(dt, tracking);
     this.positionCamera(dt);
     if (this.controls && typeof this.controls.update === "function") {
       try {
@@ -1077,8 +1165,26 @@ export class CameraSwitcher {
    * immediately yanked back. Only trails while the character is actually being
    * driven (position moved this frame OR a drive/turn key is held) — idle holds
    * the camera where the user left it, matching the requested feel.
+   *
+   * camera-5 (2026-10-08 round 2, `?autoFollowTurns=off` escape): a KEYLESS
+   * in-place turn (turn-to-face on attack/cast, server TurnTo, pursuit) is
+   * not "idle" in retail — the boom lives in the player's frame — so it
+   * rotates followYaw by the same angle (`inPlaceTurnYawDelta`), keeping
+   * the user's orbit offset instead of swinging to directly behind.
+   * `tracking` (charopt-2) = the combat-target track owns followYaw.
    */
-  _updateAutoFollow(dt) {
+  _updateAutoFollow(dt, tracking = false) {
+    // Sample the heading EVERY frame, before any early return, so a drag,
+    // grace window or target track never leaves a stale reference that a
+    // later frame would read as one big turn.
+    let turnPrevH = null;
+    let turnH = null;
+    if (this._autoFollowTurnsOn) {
+      turnPrevH = this._lastFollowHeading;
+      turnH = this._followHeadingSample();
+      this._lastFollowHeading = turnH;
+    }
+    if (tracking) return;
     if (!this._autoFollowOn) return;
     if (this.mode !== "follow") return;
     if (this._retailZoomOn && this._inHead) return; // first-person: yaw = look dir
@@ -1090,7 +1196,19 @@ export class CameraSwitcher {
     ) {
       return; // post-drag grace: let the manual aim settle
     }
-    if (!this._isPlayerDriving()) return;
+    const drive = this._followDriveState();
+    if (this._autoFollowTurnsOn) {
+      const turn = inPlaceTurnYawDelta(turnPrevH, turnH, {
+        moved: drive.moved,
+        keyed: drive.keyed,
+        dragging: this._followDragging,
+      });
+      if (turn !== 0) {
+        this.followYaw += turn; // rigid: the ease below governs driving only
+        return;
+      }
+    }
+    if (!(drive.moved || drive.keyed)) return;
     const h = this._playerHeadingForFollow();
     if (h == null) return;
     // Shortest-arc error, wrapped to [-π, π].
@@ -1103,11 +1221,12 @@ export class CameraSwitcher {
   }
 
   /**
-   * True when the character is being driven this frame — either its world
-   * position moved beyond AUTOFOLLOW_MOVE_EPS (covers server-driven autorun)
-   * or a movement/turn key is held. Updates `_lastFollowPos` as a side effect.
+   * Whether the character is being driven this frame: `moved` = its world
+   * position moved beyond AUTOFOLLOW_MOVE_EPS (covers server-driven autorun),
+   * `keyed` = a movement/turn key is held. Autofollow trails while either is
+   * true. Updates `_lastFollowPos` as a side effect.
    */
-  _isPlayerDriving() {
+  _followDriveState() {
     let moved = false;
     try {
       const p = this._safePlayerPos();
@@ -1123,7 +1242,109 @@ export class CameraSwitcher {
     } catch (_) {}
     const k = this.keys || {};
     const keyed = !!(k.w || k.a || k.s || k.d || k.q || k.e);
-    return moved || keyed;
+    return { moved, keyed };
+  }
+
+  /**
+   * camera-5 — this frame's heading in the followYaw convention, read
+   * quietly (no diag log): the per-frame pose snapshot (frame_pose.js — the
+   * one wasm crossing loop.js already makes inside tickPerFrame) negated,
+   * else the rig heading. Same sign rules as `_playerHeadingForFollow`.
+   */
+  _followHeadingSample() {
+    let h = null;
+    try {
+      const pose = readLocalPlayerPose(this._getSessionHandle?.());
+      if (pose && Number.isFinite(pose.heading)) h = -pose.heading;
+    } catch (_) {}
+    if (h == null) {
+      try {
+        const v = typeof this.getPlayerHeading === "function"
+          ? this.getPlayerHeading()
+          : null;
+        if (typeof v === "number" && Number.isFinite(v)) h = v;
+      } catch (_) {}
+    }
+    if (h == null) return null;
+    return this._autoFollowInvert ? -h : h;
+  }
+
+  /**
+   * charopt-2 (2026-10-08 round 2, `?combatTargetView=off` escape) — "Keep
+   * combat target in view", CharacterOption 0x07 (ViewCombatTarget). Retail
+   * `ClientCombatSystem::UpdateTargetTracking` (acclient.c:407600): with the
+   * option on, in melee (2) or missile (4) mode, and an attackable attack
+   * target (`GetAttackTarget` + `ObjectIsAttackable`), `CameraSet::TrackTarget`
+   * (:148758) aims the boom along pivot→(target + 0,0,0.5);
+   * `SetTargetForOffset` (:148214) then sets LOOK_AT_PIVOT|LOOK_AT_OBJECT,
+   * which drops the player-heading term, and skips first person and the map
+   * view. Yaw-only approximation (`trackedTargetYaw`), eased at the
+   * autofollow rate. Returns true while tracking so `_updateAutoFollow`
+   * stands down; the ease itself holds during a right-drag and its grace
+   * window, as autofollow does.
+   */
+  _updateCombatTargetTracking(dt) {
+    if (!this._combatTargetViewOn) return false;
+    if (this.mode !== "follow") return false;
+    if (this._retailZoomOn && this._inHead) return false;
+    const handle = this._getSessionHandle?.();
+    if (!handle || !this._viewCombatTargetOption(handle)) return false;
+    let combatMode = 1;
+    try {
+      combatMode = (handle.combatMode?.() ?? 1) >>> 0;
+    } catch (_) {
+      return false;
+    }
+    if (combatMode !== 2 && combatMode !== 4) return false;
+    const em = this.scene3d && this.scene3d.entityManager;
+    if (!em || typeof em._isAttackableTarget !== "function") return false;
+    let target = 0;
+    try {
+      const sel = (em.getSelectedTarget?.() ?? 0) >>> 0;
+      target = typeof em.attackTargetFor === "function"
+        ? (em.attackTargetFor(sel) >>> 0)
+        : sel;
+      if (!target || !em._isAttackableTarget(target)) return false;
+    } catch (_) {
+      return false;
+    }
+    const tp = em.entityMap?.get?.(target)?.root?.position;
+    if (!tp) return false;
+    const yaw = trackedTargetYaw(
+      this._safePlayerPos(),
+      { x: tp.x, y: tp.y, z: tp.z + 0.5 },
+    );
+    if (yaw == null || this._followDragging) return true;
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    if (
+      this._lastUserYawMs != null &&
+      now - this._lastUserYawMs < AUTOFOLLOW_GRACE_MS
+    ) {
+      return true;
+    }
+    const err = wrapAngle(yaw - this.followYaw);
+    const frac = 1 - Math.exp(-this._autoFollowRate * (dt > 0 ? dt : 0));
+    this.followYaw += err * frac;
+    return true;
+  }
+
+  /**
+   * CharacterOption 0x07 (ViewCombatTarget; retail default OFF), re-read
+   * from the wasm player stats at most every VIEW_COMBAT_TARGET_POLL_MS.
+   */
+  _viewCombatTargetOption(handle) {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const c = this._viewCombatTargetOpt;
+    if (c && now - c.t < VIEW_COMBAT_TARGET_POLL_MS) return c.on;
+    let on = false;
+    try {
+      on = typeof handle.isCharacterOptionEnabled === "function" &&
+        !!handle.isCharacterOptionEnabled(CHARACTER_OPTION_VIEW_COMBAT_TARGET);
+    } catch (_) {
+      on = false;
+    }
+    this._viewCombatTargetOpt = { t: now, on };
+    return on;
   }
 
   /**
@@ -1309,9 +1530,21 @@ export class CameraSwitcher {
       // and EnvCell triangles. Order matters: cheapest rejects first,
       // most expensive last. Each sweep narrows the camera's target
       // toward the player; the nearest hit wins.
+      //
+      // camera-2 (2026-10-08 round 2, `?camViewerStep=off` restores the
+      // clip-first order): retail smooths toward the UNCLIPPED eye and only
+      // then sweeps (`_applyViewerStep`), so here only the step-1 terrain
+      // floor touches the ideal — the view direction is taken after it, so
+      // an uphill-raised eye still frames the player.
       let finalX = idealX, finalY = idealY, finalZ = idealZ;
-      const camera = this._clipCameraAgainstWorld(p, finalX, finalY, finalZ);
-      finalX = camera.x; finalY = camera.y; finalZ = camera.z;
+      let clipCtx = null;
+      if (this._camViewerStepOn) {
+        clipCtx = this._camClipContext();
+        finalZ = this._terrainFloorZ(clipCtx, finalX, finalY, finalZ);
+      } else {
+        const camera = this._clipCameraAgainstWorld(p, finalX, finalY, finalZ);
+        finalX = camera.x; finalY = camera.y; finalZ = camera.z;
+      }
 
       // Phase 3 (Cohere-D follow-on, 2026-05-12): lookAt moves with
       // mouse-pitch so the view direction genuinely tilts up/down,
@@ -1364,7 +1597,9 @@ export class CameraSwitcher {
       // resulting basis has NO yaw. Live-measured at
       // PHY-07-LIVE-RUN-2026-07-26 §LIVE-03; it froze that run's turn loop.
       // Ships direct (broken-behaviour fix, no flag): the guard is inert
-      // whenever the horizontal separation is healthy.
+      // whenever the horizontal separation is healthy. Under camViewerStep
+      // finalX/finalY are still the IDEAL eye's, so the guard backs up the
+      // collision-independent view direction and stays inert in practice.
       {
         const g = guardLookHorizontal(
           finalX, finalY, lookX, lookY,
@@ -1376,7 +1611,11 @@ export class CameraSwitcher {
         this._lastGoodLookDir = { x: g.dirX, y: g.dirY };
         if (g.degenerate) this._degenerateBasisFrames += 1;
       }
-      if (this._camStiffness != null) {
+      if (this._camViewerStepOn) {
+        this._applyViewerStep(
+          dt, p, clipCtx, finalX, finalY, finalZ, lookX, lookY, lookZ,
+        );
+      } else if (this._camStiffness != null) {
         // A12-C3 (?camStiffness=): exponential interpolation of the camera
         // frame toward the sought (clipped) frame instead of the hard-set.
         this._applyStiffness(dt, finalX, finalY, finalZ, lookX, lookY, lookZ);
@@ -1442,6 +1681,13 @@ export class CameraSwitcher {
    *   4. **Outdoor static sweep** (`sweepSphereAgainstStatics`). Same
    *      Minkowski-sum AABB test, but against the tree/sign/prop
    *      index.
+   *   4b. **Outdoor scenery sweep** (`sweepSphereAgainstScenery`,
+   *      camera-3 stage 1, 2026-10-08 round 2, `?camScenery=off`). The
+   *      procedural scenery colliders (trunk cylspheres, boulder spheres)
+   *      the player already collides with; step 4's index holds only the
+   *      LandBlockInfo stabs. Retail's viewer transit exempts creatures
+   *      only (`CPhysicsObj::FindObjCollisions` acclient.c:316159), and
+   *      scenery has no weenie, so the camera stops at a trunk.
    *   5. **EnvCell triangle sweep** (`sweepSphereAgainstCellMesh`),
    *      gated on the cells in the BFS render set. Dungeons + apartments.
    *      Room SHELL only — `Environment.physics_polygons`.
@@ -1465,56 +1711,35 @@ export class CameraSwitcher {
    *
    * Each hit clips `final` to `start + (final - start) * (t - backoff)`,
    * so subsequent sweeps run against the already-clipped target. The
-   * 0.2 m backoff keeps the camera slightly off the surface so the
-   * pull-in tracks smoothly when the player walks toward a wall.
+   * legacy 0.2 m backoff kept the camera slightly off the surface so the
+   * pull-in tracked smoothly when the player walked toward a wall; under
+   * `?camRetailSphere` (camera-4) it is a 0.02 m skin on retail's 0.3 m
+   * viewer sphere (see CAM_LEGACY_RADIUS_M).
+   *
+   * `ctx` (`_camClipContext`) and `terrainFloor` let camera-2's viewer step
+   * floor the IDEAL eye once and sweep only the smoothed one; the default
+   * arguments are the original one-call chain.
    *
    * Returns `{x, y, z}` to be passed to `acToThree(...)` by the caller.
    * No-ops when the SessionHandle isn't wired (synthetic test path) or
    * pre-spawn (the shadow scene is empty and every sweep returns null).
    */
-  _clipCameraAgainstWorld(playerPos, idealX, idealY, idealZ) {
-    const handle = this._getSessionHandle();
-    const CAM_RADIUS = 0.5; // metres
-    const BACKOFF = 0.2; // metres short of contact
-
+  _clipCameraAgainstWorld(
+    playerPos, idealX, idealY, idealZ,
+    ctx = this._camClipContext(), terrainFloor = true,
+  ) {
     let finalX = idealX, finalY = idealY, finalZ = idealZ;
-    if (!handle) {
+    if (!ctx) {
       return { x: finalX, y: finalY, z: finalZ };
     }
-
-    // Player's current landblock id (full packed value: high 16 bits = block,
-    // low 16 bits = cell). Cell >= 0x0100 == an indoor EnvCell (dungeon /
-    // building interior / apartment). Read once, used by every sweep below.
-    let landblockId = 0;
-    try {
-      const pose = handle.getLocalPlayerPose?.();
-      if (pose && typeof pose.landblockId === "number") {
-        landblockId = pose.landblockId;
-      }
-      pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
-    } catch (_) {}
-    // `?indoorCam=on`: when indoors, the outdoor collision layers (terrain
-    // heightfield floor + building/static AABB sweeps) are WRONG — the terrain
-    // sample returns the OUTDOOR surface height above the dungeon, which floors
-    // the camera up toward/through the ceiling ("angled too high, unlike the
-    // overworld"). Indoors the EnvCell triangle sweep (step 5) is the correct
-    // collider, so skip the outdoor layers entirely. Default OFF pending live
-    // A/B on a real GPU (window.__setIndoorCam to toggle without a reload).
-    const indoor = this._indoorCamOn && (landblockId & 0xffff) >= 0x0100;
+    const { handle, landblockId, indoor } = ctx;
+    const retailSphere = this._camRetailSphereOn;
+    const CAM_RADIUS = retailSphere ? VIEWER_SPHERE_RADIUS_M : CAM_LEGACY_RADIUS_M;
+    const BACKOFF = retailSphere ? CAM_CONTACT_SKIN_M : CAM_LEGACY_BACKOFF_M;
 
     // ---- 1. Continuous heightfield clamp (outdoor only) ----
-    if (!indoor) {
-      try {
-        if (typeof handle.terrainHeightAt === "function") {
-          const terrainZ = handle.terrainHeightAt(finalX, finalY);
-          if (typeof terrainZ === "number" && Number.isFinite(terrainZ)) {
-            const minZ = terrainZ + CAM_RADIUS + BACKOFF;
-            if (finalZ < minZ) {
-              finalZ = minZ;
-            }
-          }
-        }
-      } catch (_) {}
+    if (terrainFloor) {
+      finalZ = this._terrainFloorZ(ctx, finalX, finalY, finalZ);
     }
 
     // The chain of sweep sweeps operates against (start, end) =
@@ -1522,7 +1747,8 @@ export class CameraSwitcher {
     // we clip `final` to `start + delta * (t - backoff/delta_len)`.
     const startX = playerPos.x;
     const startY = playerPos.y;
-    const startZ = playerPos.z + 1.6;
+    const startZ =
+      playerPos.z + (retailSphere ? VIEWER_PIVOT_Z_M : CAM_LEGACY_PIVOT_Z_M);
 
     // The sweeps return wasm-bindgen `CollisionHit` BOXES and this chain runs
     // every frame the boom touches geometry (up to ~5 sweeps indoors): copy
@@ -1587,6 +1813,22 @@ export class CameraSwitcher {
           if (hit) { clipFinalTo(hit); freeHit(hit); }
         }
       } catch (_) {}
+
+      // ---- 4b. Outdoor scenery sweep (camera-3 stage 1, `?camScenery=off`;
+      // a pkg/ built before the export skips it) ----
+      if (this._camSceneryOn) {
+        try {
+          if (typeof handle.sweepSphereAgainstScenery === "function") {
+            const hit = handle.sweepSphereAgainstScenery(
+              startX, startY, startZ,
+              finalX, finalY, finalZ,
+              CAM_RADIUS,
+              landblockId,
+            );
+            if (hit) { clipFinalTo(hit); freeHit(hit); }
+          }
+        } catch (_) {}
+      }
     }
 
     // ---- 5. EnvCell triangle sweep (cells in current render set) ----
@@ -1686,6 +1928,56 @@ export class CameraSwitcher {
     return { x: finalX, y: finalY, z: finalZ };
   }
 
+  /**
+   * Per-frame inputs of the clip chain: the session handle plus the player's
+   * landblock id (full packed value: high 16 bits = block, low 16 bits =
+   * cell; cell >= 0x0100 == an indoor EnvCell — dungeon / building interior
+   * / apartment) and the indoor gate. null when no handle is wired.
+   */
+  _camClipContext() {
+    const handle = this._getSessionHandle();
+    if (!handle) return null;
+    let landblockId = 0;
+    try {
+      const pose = handle.getLocalPlayerPose?.();
+      if (pose && typeof pose.landblockId === "number") {
+        landblockId = pose.landblockId;
+      }
+      pose?.free?.(); // wasm-boxed struct — release after copying (see _integratorWorldPose)
+    } catch (_) {}
+    // `?indoorCam=on`: when indoors, the outdoor collision layers (terrain
+    // heightfield floor + building/static AABB sweeps) are WRONG — the terrain
+    // sample returns the OUTDOOR surface height above the dungeon, which floors
+    // the camera up toward/through the ceiling ("angled too high, unlike the
+    // overworld"). Indoors the EnvCell triangle sweep (step 5) is the correct
+    // collider, so skip the outdoor layers entirely. Default OFF pending live
+    // A/B on a real GPU (window.__setIndoorCam to toggle without a reload).
+    const indoor = this._indoorCamOn && (landblockId & 0xffff) >= 0x0100;
+    return { handle, landblockId, indoor };
+  }
+
+  /**
+   * Step 1 of the clip chain: raise `z` to the outdoor terrain floor at
+   * (x, y). The legacy 0.5 + 0.2 margin stands under every flag (see
+   * CAM_LEGACY_RADIUS_M). Indoors / no handle → `z` unchanged.
+   */
+  _terrainFloorZ(ctx, x, y, z) {
+    if (!ctx || ctx.indoor) return z;
+    const handle = ctx.handle;
+    try {
+      if (typeof handle.terrainHeightAt === "function") {
+        const terrainZ = handle.terrainHeightAt(x, y);
+        if (typeof terrainZ === "number" && Number.isFinite(terrainZ)) {
+          const minZ = terrainZ + CAM_LEGACY_RADIUS_M + CAM_LEGACY_BACKOFF_M;
+          if (z < minZ) {
+            return minZ;
+          }
+        }
+      }
+    } catch (_) {}
+    return z;
+  }
+
   // ---- A12-C2/C3 retail camera (default-off) ------------------------
 
   /**
@@ -1721,7 +2013,54 @@ export class CameraSwitcher {
     // Re-seed the C3 smoother on the way back out to third person so the
     // first post-in-head frame snaps instead of swooshing from the head.
     this._stiffSeeded = false;
+    this._prevEyeAc = null;
     this._applyCameraPlayerFade(0.0);
+  }
+
+  /**
+   * camera-2 (2026-10-08 round 2, `?camViewerStep=off` escape) — retail
+   * viewer order (`retailViewerStep`, camera_math.js): lerp from the last
+   * published (swept) eye toward the UNCLIPPED ideal by the stiffness frac,
+   * THEN sweep pivot→sought (clip-chain steps 2-6; the caller already
+   * floored the ideal), and publish the swept eye. The orientation is the
+   * SOUGHT one — from the ideal eye to the look point — so a pull-in never
+   * tilts the view; with stiffness set it slerps by the same frac
+   * (`interpolate_rotation`, acclient.c:147842). Hard-lock (stiffness null)
+   * = frac 1: sought == ideal, exactly retail at stiffness 1.0.
+   */
+  _applyViewerStep(dt, p, ctx, idealX, idealY, idealZ, lookX, lookY, lookZ) {
+    if (!this._stiffTmp) {
+      this._stiffTmp = {
+        pos: new THREE.Vector3(),
+        look: new THREE.Vector3(),
+        m: new THREE.Matrix4(),
+        q: new THREE.Quaternion(),
+      };
+    }
+    const t = this._stiffTmp;
+    const frac =
+      this._camStiffness != null ? stiffnessFrac(this._camStiffness, dt) : 1.0;
+    const step = retailViewerStep(
+      this._prevEyeAc,
+      { x: idealX, y: idealY, z: idealZ },
+      frac,
+      (s) => this._clipCameraAgainstWorld(p, s.x, s.y, s.z, ctx, false),
+      { x: lookX, y: lookY, z: lookZ },
+    );
+    const eye = step.eye;
+    this._prevEyeAc = { x: eye.x, y: eye.y, z: eye.z };
+    t.pos.set(...acToThree(eye.x, eye.y, eye.z));
+    this.persp.position.copy(t.pos);
+    const f = step.fwd;
+    if (!f) return; // look == ideal eye: keep the last orientation
+    t.look.set(...acToThree(eye.x + f.x, eye.y + f.y, eye.z + f.z));
+    if (step.snapped) {
+      this.persp.lookAt(t.look);
+      return;
+    }
+    t.m.lookAt(t.pos, t.look, this.persp.up);
+    t.q.setFromRotationMatrix(t.m);
+    this.persp.quaternion.slerp(t.q, frac);
   }
 
   /**

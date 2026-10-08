@@ -62,6 +62,10 @@ bitflags! {
     }
 }
 
+/// Retail spellbook-filter default (`PlayerModule::PlayerModule` /
+/// `PlayerModule::UnPack` without flag 0x20): `spell_filters_ = 0x3FFF`.
+pub const DEFAULT_SPELLBOOK_FILTERS: u32 = 0x3FFF;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct CharacterOptionDataFlag: u32 {
@@ -573,15 +577,22 @@ impl PlayerDescriptionEventData {
             }
         }
 
-        let spellbook_filters = if *offset + 4 <= data.len() {
-            let val = LittleEndian::read_u32(&data[*offset..*offset + 4]);
-            *offset += 4;
-            val
-        } else {
-            0
-        };
+        // charopt-6: retail `PlayerModule::UnPack` reads spell_filters_ only
+        // under flag 0x20 (else 0x3FFF) and options2_ only under 0x40 (else
+        // 0x948700 = `CharacterOptions2::DEFAULT`). ACE always sets both.
+        let spellbook_filters =
+            if option_flags.contains(CharacterOptionDataFlag::SPELLBOOK_FILTERS) {
+                if *offset + 4 > data.len() {
+                    return None;
+                }
+                let val = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+                *offset += 4;
+                val
+            } else {
+                DEFAULT_SPELLBOOK_FILTERS
+            };
 
-        let mut options2 = CharacterOptions2::empty();
+        let mut options2 = CharacterOptions2::DEFAULT;
         if option_flags.contains(CharacterOptionDataFlag::CHARACTER_OPTIONS2) {
             if *offset + 4 > data.len() {
                 return None;
@@ -835,6 +846,9 @@ impl ProtocolPack for PlayerDescriptionEventData {
         if !self.desired_comps.is_empty() {
             o_flags.insert(CharacterOptionDataFlag::DESIRED_COMPS);
         }
+        // spellbook_filters + options2 are always written below, so always
+        // flag them (retail PlayerModule::Pack / ACE set 0x20 and 0x40).
+        o_flags.insert(CharacterOptionDataFlag::SPELLBOOK_FILTERS);
         o_flags.insert(CharacterOptionDataFlag::CHARACTER_OPTIONS2);
         if !self.gameplay_options.is_empty() {
             o_flags.insert(CharacterOptionDataFlag::GAMEPLAY_OPTIONS);
@@ -913,7 +927,88 @@ impl ProtocolUnpack for PlayerDescriptionEventData {
 
 #[cfg(test)]
 mod tests {
+    use super::{DEFAULT_SPELLBOOK_FILTERS, PlayerDescriptionEventData};
     use crate::test_fixtures;
+    use crate::traits::ProtocolPack;
+    use holtburger_common::{CharacterOptions2, Guid};
+
+    // `player_description_minimal.bin` layout (raw PD body): the option
+    // block starts at 212 — flags 0x460 (SPELL_LISTS8 | SPELLBOOK_FILTERS |
+    // CHARACTER_OPTIONS2), options1 0x4D2, eight empty spell lists
+    // (220..252), spellbook filters 0xABCD (252), options2 0x5678 (256),
+    // empty inventory + equipped counts (260..268).
+    const MIN_OPT_FLAGS_AT: usize = 212;
+
+    fn parse_pd(data: &[u8]) -> PlayerDescriptionEventData {
+        let mut off = 0;
+        let pd = PlayerDescriptionEventData::unpack(Guid(0), 0, data, &mut off)
+            .expect("PlayerDescription unpack");
+        assert_eq!(off, data.len(), "consumed the whole body");
+        pd
+    }
+
+    fn with_option_flags(flags: u32, drop_spellbook: bool, drop_options2: bool) -> Vec<u8> {
+        let src = test_fixtures::PLAYER_DESCRIPTION_MINIMAL;
+        let mut out = Vec::with_capacity(src.len());
+        out.extend_from_slice(&src[..MIN_OPT_FLAGS_AT]);
+        out.extend_from_slice(&flags.to_le_bytes());
+        out.extend_from_slice(&src[MIN_OPT_FLAGS_AT + 4..252]);
+        if !drop_spellbook {
+            out.extend_from_slice(&src[252..256]);
+        }
+        if !drop_options2 {
+            out.extend_from_slice(&src[256..260]);
+        }
+        out.extend_from_slice(&src[260..]);
+        out
+    }
+
+    #[test]
+    fn test_player_description_option_block_flagged_fields() {
+        let pd = parse_pd(test_fixtures::PLAYER_DESCRIPTION_MINIMAL);
+        assert_eq!(pd.options1.bits(), 0x4D2);
+        assert_eq!(pd.spellbook_filters, 0xABCD);
+        assert_eq!(pd.options2.bits(), 0x5678);
+        assert_eq!(pd.hotbar_spells.len(), 8);
+    }
+
+    #[test]
+    fn test_player_description_missing_option_flags_use_retail_defaults() {
+        // charopt-6: retail PlayerModule::UnPack — no 0x20 → spell_filters_
+        // = 0x3FFF, no 0x40 → options2_ = 0x948700.
+        let pd = parse_pd(&with_option_flags(0x400, true, true));
+        assert_eq!(pd.spellbook_filters, DEFAULT_SPELLBOOK_FILTERS);
+        assert_eq!(pd.spellbook_filters, 0x3FFF);
+        assert_eq!(pd.options2, CharacterOptions2::DEFAULT);
+        assert_eq!(pd.options2.bits(), 0x0094_8700);
+        assert_eq!(pd.options1.bits(), 0x4D2);
+        assert!(pd.inventory.is_empty() && pd.equipped_objects.is_empty());
+
+        // 0x20 present, 0x40 absent: filters read, options2 defaulted.
+        let pd = parse_pd(&with_option_flags(0x420, false, true));
+        assert_eq!(pd.spellbook_filters, 0xABCD);
+        assert_eq!(pd.options2, CharacterOptions2::DEFAULT);
+
+        // 0x40 present, 0x20 absent: the u32 after the spell lists is
+        // options2, not the spellbook filters.
+        let pd = parse_pd(&with_option_flags(0x440, true, false));
+        assert_eq!(pd.spellbook_filters, 0x3FFF);
+        assert_eq!(pd.options2.bits(), 0x5678);
+    }
+
+    #[test]
+    fn test_player_description_pack_flags_spellbook_filters() {
+        // pack() always writes the filters + options2 words, so it must
+        // flag both or a pack -> unpack round trip misaligns.
+        let pd = parse_pd(&with_option_flags(0x400, true, true));
+        let mut buf = Vec::new();
+        pd.pack(&mut buf);
+        let reparsed = parse_pd(&buf);
+        assert_eq!(reparsed.spellbook_filters, pd.spellbook_filters);
+        assert_eq!(reparsed.options1, pd.options1);
+        assert_eq!(reparsed.options2, pd.options2);
+        assert_eq!(reparsed.inventory, pd.inventory);
+    }
 
     #[test]
     fn test_gameplay_options_fixture_basic_shape() {

@@ -15,6 +15,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         skip_contained_spawn_on,
         spawn_hidden_state_on,
         wielded_spawn_on,
+        pickup_leave_world_on,
         ..
     } = ctx.flags;
     let LoopCtx {
@@ -1154,6 +1155,73 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // (and clickable) for the rest of the session.
             // Treat it as a removal, keyed by guid (the drop-
             // to-ground case re-creates via a fresh ObjectCreate).
+            //
+            // held-4 (R2 2026-10-08, `?pickupLeaveWorld`): an item
+            // its wielder still OWNS (Wielder IID set — the world
+            // handler already ran) is only leaving the world. ACE
+            // hides held ammo this way on every missile shot
+            // (Player_Missile.cs "hide previously held ammo",
+            // Monster_Missile.cs, Creature_Missile.cs) and re-arms
+            // it with a ParentEvent on reload. Retail
+            // `SmartBox::DoPickupEvent` (acclient.c:143483-143500)
+            // is `unset_parent` + `leave_world`; the object
+            // survives. Keep the rig: a kind=7 DETACH carrying
+            // `ATTACH_PLACEMENT_LEAVE_WORLD` (JS
+            // `EntityManager.leaveWorld`), and keep the guid in
+            // `js_spawned_guids` so the reload ParentEvent re-mounts
+            // that rig instead of re-synthesizing a palette-less
+            // one. The local player's own unwield clears Wielder
+            // first (ACE Player_Inventory), so it still removes.
+            let owned = pickup_leave_world_on
+                && world
+                    .borrow()
+                    .as_ref()
+                    .and_then(|w| w.entities.get(data.guid))
+                    .is_some_and(|e| {
+                        use holtburger_common::properties::WorldObjectExt as _;
+                        e.wielder_id().is_some()
+                    });
+            if owned {
+                entity_updates.borrow_mut().push(EntityUpdate {
+                    kind: ENTITY_UPDATE_KIND_ATTACH,
+                    guid: u32::from(data.guid),
+                    model_id: 0,
+                    landblock_id: 0,
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    qw: 1.0,
+                    qx: 0.0,
+                    qy: 0.0,
+                    qz: 0.0,
+                    wcid: 0,
+                    item_type: 0,
+                    name: String::new(),
+                    obj_scale: 1.0,
+                    icon_id: 0,
+                    palette_id: 0,
+                    mtable_id: 0,
+                    model_changes: Vec::new(),
+                    texture_changes: Vec::new(),
+                    sub_palettes: Vec::new(),
+                    placement_id: 0,
+                    portal_destination: String::new(),
+                    vx: 0.0,
+                    vy: 0.0,
+                    vz: 0.0,
+                    omega_z: 0.0,
+                    motion_command: 0,
+                    motion_stance: ATTACH_PLACEMENT_LEAVE_WORLD,
+                    physics_script_did: 0,
+                    sound_table_did: 0,
+                    obj_desc_flags: 0,
+                    weenie_flags: 0,
+                    motion_speed: 1.0,
+                    physics_translucency: 0.0,
+                    is_autonomous: false,
+                });
+                return LoopFlow::Continue;
+            }
             // wieldedSpawn (2026-06-11): rig removed — drop the
             // live-rig ledger entry, so a later wield-from-pack
             // of this picked-up item re-synthesizes its spawn.

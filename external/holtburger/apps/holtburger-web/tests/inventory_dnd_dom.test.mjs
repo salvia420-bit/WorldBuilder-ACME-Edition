@@ -103,7 +103,9 @@ const helpers = await import(pathToFileURL(path.join(APP, "plugins", "inventory_
 const drag = await import(pathToFileURL(path.join(APP, "plugins", "item_drag.js")).href);
 const wpos = await import(pathToFileURL(path.join(APP, "ui", "ac_window_position.js")).href);
 const kit = await import(pathToFileURL(path.join(APP, "ui", "hud_kit.js")).href);
-globalThis.__T = { ...helpers, ...drag, ...wpos, ...kit };
+// use-4 (2026-10-08 round 2): activateItem spends the shared retail use throttle.
+const tcycle = await import(pathToFileURL(path.join(APP, "scene3d", "target_cycle.js")).href);
+globalThis.__T = { ...helpers, ...drag, ...wpos, ...kit, consumeUseThrottle: tcycle.consumeUseThrottle };
 const real = (names) => Object.fromEntries(names.map((n) => [n, `globalThis.__T.${n}`]));
 const COMMON = {
   setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
@@ -140,7 +142,7 @@ const inventoryMod = load("plugins/inventory.js", ["view"], {
     "planWear", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
     "DEFAULT_PLAYER_ITEMS_CAPACITY", "DEFAULT_PLAYER_CONTAINERS_CAPACITY",
     "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
-    "showItemTooltip", "hideItemTooltip", "localPlayerGuid",
+    "showItemTooltip", "hideItemTooltip", "localPlayerGuid", "consumeUseThrottle",
   ]),
 });
 const containedMeta = await import(pathToFileURL(path.join(APP, "plugins", "contained_item_meta.js")).href);
@@ -301,6 +303,36 @@ await check("drop on an NPC → give the whole stack (not also a ground drop)", 
   assert.equal(calls.filter((c) => c[0] === "dropItem").length, drops, "no double action");
   globalThis.__pickEntityAt = () => 0;
 });
+// charopt-4 (2026-10-08 round 2): with "Drag item onto player opens trade"
+// (character option 0x17) a drop on another player is retail
+// ClientTradeSystem::AttemptToTradeItem (the trade panel), never a gift.
+await check("charopt-4: drop on a player with the trade option → the trade panel, no GiveObject", async () => {
+  const BOB = 0x50000002;
+  globalThis.__pickEntityAt = () => BOB;
+  globalThis.liveScene3d.entityManager.entityMap.set(BOB, { meta: { name: "Bob", itemType: 0x10, objDescFlags: 0x8 } });
+  const traded = [];
+  globalThis.__tradePanel = { attemptToTradeItem: (t, g) => { traded.push([t, g]); return { sent: true }; } };
+  const handle = globalThis.__sessionHandle;
+  handle.isCharacterOptionEnabled = (o) => o === 0x17;
+  try {
+    const gives = calls.filter((c) => c[0] === "giveObject").length;
+    await dragDrop(cellOf(C), canvas);
+    assert.deepEqual(traded, [[BOB, C]]);
+    assert.equal(calls.filter((c) => c[0] === "giveObject").length, gives, "nothing given away");
+    await dragDrop(cellOf(S2), canvas, { shiftKey: true });
+    assert.deepEqual(traded.at(-1), [BOB, S2], "a shift-drop trades the whole stack");
+    assert.notEqual(document.getElementById("hb-stack-split")?.dataset.open, "1", "no amount prompt");
+    handle.isCharacterOptionEnabled = () => false; // the retail default
+    await dragDrop(cellOf(C), canvas);
+    assert.deepEqual(lastCall("giveObject"), ["giveObject", BOB, C, 1], "option off → give, as before");
+    assert.equal(traded.length, 2);
+  } finally {
+    delete handle.isCharacterOptionEnabled;
+    delete globalThis.__tradePanel;
+    globalThis.liveScene3d.entityManager.entityMap.delete(BOB);
+    globalThis.__pickEntityAt = () => 0;
+  }
+});
 
 console.log("\n[2b] clicks, tooltips, packs");
 await check("hover shows the shared item tooltip; click selects (ItemSlot_Icon_Selected)", () => {
@@ -410,6 +442,24 @@ await check("window.__inventory.openPack selects a pack from outside (container-
   window.__inventory.openPack(0);
   await settle();
   assert.equal(panelTitle, "Inventory of Tester");
+});
+// charopt-3 (2026-10-08 round 2): "Use main pack as default pickup
+// destination" (character option 0x29, retail PlayerModule::MainPackPreferred
+// in CPlayerSystem::PlaceInBackpack, acclient.c:395895).
+await check("charopt-3: MainPackPreferred sends a take to the main pack while a side pack is open", async () => {
+  const h = globalThis.__sessionHandle;
+  const gem = { guid: 0x90000077, name: "Gem", itemType: 0x800, stackSize: 1 };
+  window.__inventory.openPack(P1);
+  await settle();
+  try {
+    assert.equal(drag.planBackpackPlacement(gem).container, P1, "option off → the open side pack");
+    h.isCharacterOptionEnabled = (o) => o === 0x29;
+    assert.equal(drag.planBackpackPlacement(gem).container, ME, "option on → the main pack");
+  } finally {
+    delete h.isCharacterOptionEnabled;
+    window.__inventory.openPack(0);
+    await settle();
+  }
 });
 
 console.log("\n[3] external container window (chest)");

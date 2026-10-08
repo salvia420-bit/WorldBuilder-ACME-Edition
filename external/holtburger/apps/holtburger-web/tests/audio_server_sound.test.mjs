@@ -18,6 +18,14 @@
 //     option 115 played 0x84 instead of nothing, and environ sounds went
 //     through play() at the camera instead of playFromCenter.
 //
+// 2026-10-08 round 2:
+//   - radar-4: environ BlackFog2 (6) sets the radar blank
+//     (`window.__radarBlank`, Handle_Admin__Environs :396415); 0-5 and 9999
+//     clear it (:396341, 9999 rides the sound arm), sounds leave it. The old
+//     code had no radar state at all.
+//   - audio-2: an 0xF750 on a WIELDED item played at its hand-local root
+//     (near the map origin) instead of the hand's world position.
+//
 // Run: node tests/audio_server_sound.test.mjs   (from apps/holtburger-web/)
 
 import assert from "node:assert/strict";
@@ -31,6 +39,7 @@ globalThis.document = {
   body: { appendChild() {} },
 };
 
+const THREE = await import("three");
 const rules = await import("../scene3d/audio/retail_sound_rules.js");
 const { dispatchClientEvent } = await import("../app/client_events.js");
 const { ClientEventKind } = await import("../scene3d/client_event_kinds.js");
@@ -128,6 +137,24 @@ await test("environ 117 -> UI_Squeal from the UI table via playFromCenter at row
   assert.equal(calls[0].wave, 0x0a000222);
   assert.equal(calls[0].vol, 0.6);
 });
+await test("radar-4: BlackFog2 blanks the radar; sounds keep it; Clear / 9999 restore it", async () => {
+  window.__radarBlank = false;
+  const env = (o) => dispatchClientEvent(evt(ClientEventKind.ENVIRON_CHANGE, { u32Payload: o }), D);
+  env(6);
+  assert.equal(window.__radarBlank, true, "BlackFog2");
+  env(117);
+  assert.equal(window.__radarBlank, true, "a sound option leaves it");
+  env(0);
+  assert.equal(window.__radarBlank, false, "Clear");
+  env(6);
+  env(9999);
+  assert.equal(window.__radarBlank, false, "9999 clears it from the sound arm");
+  env(6);
+  env(3);
+  assert.equal(window.__radarBlank, false, "another fog clears it");
+  for (let i = 0; i < 5; i++) await tick();
+  window.__environFogOverride = null;
+});
 await test("environ 115 plays nothing", async () => {
   calls.length = 0;
   rows = new Map([[`${0x2000004b}:${0x84}`, { waveDid: 1, probability: 1, volume: 1, priority: 0 }]]);
@@ -182,6 +209,34 @@ await test("the 25 s deadline slides: a sound queued at 20 s keeps both alive at
   assert.equal(q.size, 0);
   assert.equal(q.expired, 2);
   assert.equal(played, 0);
+});
+
+// ── audio-2: a sound on a wielded item (hand-local root under the wielder) ──
+await test("0xF750 on a wielded item plays at the hand's world position", async () => {
+  calls.length = 0;
+  const scene = new THREE.Scene();
+  const worldRoot = new THREE.Group();
+  worldRoot.rotation.x = -Math.PI / 2; // index.js init3D
+  scene.add(worldRoot);
+  const wielderRoot = new THREE.Group();
+  wielderRoot.position.set(100, 200, 10);
+  worldRoot.add(wielderRoot);
+  const hand = new THREE.Group();
+  hand.position.set(0, 0, 1);
+  wielderRoot.add(hand);
+  const itemRoot = new THREE.Group();
+  itemRoot.position.set(0.5, 0, 0); // hand-local
+  hand.add(itemRoot);
+  const ITEM = 0x80000042;
+  window.liveScene3d.entityManager.entityMap.set(ITEM,
+    { soundTableDid: 0x20000001, root: itemRoot, _attachedParentGuid: 0x50000009 });
+  rows = new Map([[`${0x20000001}:${0x8c}`, { waveDid: 0x0a000444, probability: 1, volume: 1, priority: 0 }]]);
+  dispatchClientEvent(evt(ClientEventKind.SOUND_TRIGGERED, { u32Payload: ITEM, u32Payload2: 0x8c, f32Payload: 1 }), D);
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(calls.length, 1, JSON.stringify(calls));
+  // AC (100.5, 200, 11) → three (x, z, −y); the old read gave (0.5, 0, −0).
+  const p = calls[0].pos;
+  assert.ok(Math.abs(p.x - 100.5) < 1e-6 && Math.abs(p.y - 11) < 1e-6 && Math.abs(p.z + 200) < 1e-6, JSON.stringify(p));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", FAILURES above" : ""}`);

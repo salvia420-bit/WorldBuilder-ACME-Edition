@@ -2,6 +2,10 @@
 // A3-selection (2026-10-08): retail Next/Previous order + the off-list /
 // previous-selection anchor (selection-1), the radar-range candidate gate
 // (selection-3) and the range-exit drop (selection-4).
+// A2-death round 2 (2026-10-08): the UNOPENED_CORPSE type (death-5,
+// SelectNext case 5) and its four corpse-loot binds.
+// A3-radar round 2 (2026-10-08): the shared radar-visibility rule
+// (`radarShowableFor`, radar-1) and the BlackFog2 radar blank (radar-4).
 //
 // Pins the PURE selection math (scene3d/target_cycle.js — import-free, loads
 // under plain node) against CPlayerSystem::SelectNext (acclient.c:397944) and
@@ -132,6 +136,15 @@ async function main() {
   check('missing meta never throws (defaults to 0 flags)', () => {
     assert.equal(matchesSelectionType(undefined, SELECTION_TYPE.MONSTER), false);
     assert.equal(matchesSelectionType(null, SELECTION_TYPE.ANY), false);
+  });
+  check('UNOPENED_CORPSE (death-5, case 5 :398069-398072) = a corpse not yet opened', () => {
+    const U = SELECTION_TYPE.UNOPENED_CORPSE;
+    assert.equal(matchesSelectionType({ objDescFlags: ODF_CORPSE }, U), true);
+    assert.equal(matchesSelectionType({ objDescFlags: ODF_CORPSE }, U, { corpseOpened: true }), false, 'opened');
+    assert.equal(matchesSelectionType({ itemType: CREATURE, objDescFlags: ODF_ATTACK }, U), false, 'a live mob');
+    assert.equal(matchesSelectionType(undefined, U), false);
+    // every other cycle still rejects a corpse, opened or not
+    assert.equal(matchesSelectionType({ itemType: CREATURE, objDescFlags: ODF_ATTACK | ODF_CORPSE }, SELECTION_TYPE.MONSTER, { corpseOpened: false }), false);
   });
 
   // ── (4) computeSelectNext — the SelectNext primitive ────────────────────
@@ -323,6 +336,33 @@ async function main() {
     assert.deepEqual([0, 1, 2, 3, 4, 5, undefined].map(m.isShowableOnRadar),
       [false, false, true, true, true, false, false]);
   });
+  // radar-1: InqShowableOnRadar (:436764) + AddObject's UI-hidden gate
+  // (:264435). Old radar code fell back to the ODF/itemType heuristic when
+  // RadarBehavior was ABSENT, blipping creature-typed props retail hides
+  // (Exploration Marker, levers, pedestals).
+  check('radarShowableFor: absent RadarBehavior hides even a creature-typed object', () => {
+    const rb = (v) => ({ objectIntProperty: (g, s) => (s === 133 ? v : undefined) });
+    assert.equal(m.radarShowableFor(rb(undefined), 1, 0, CREATURE), false);
+    assert.equal(m.radarShowableFor(rb(4), 1, 0, 0), true);
+    assert.equal(m.radarShowableFor(rb(2), 1, 0, 0), true);
+    assert.equal(m.radarShowableFor(rb(3), 1, 0, 0), true);
+    assert.equal(m.radarShowableFor(rb(1), 1, 0, CREATURE), false, 'ShowNever');
+    assert.equal(m.radarShowableFor(rb(4), 1, 0x80, 0), false, 'UI-hidden');
+    const throws = { objectIntProperty: () => { throw new Error('freed'); } };
+    assert.equal(m.radarShowableFor(throws, 1, 0, CREATURE), false);
+  });
+  check('radarShowableFor: the heuristic only for a bundle with no objectIntProperty', () => {
+    assert.equal(m.radarShowableFor({}, 1, 0, CREATURE), true);
+    assert.equal(m.radarShowableFor(null, 1, ODF_PLAYER, 0), true);
+    assert.equal(m.radarShowableFor(null, 1, 0, 0x1), false);
+  });
+  // radar-4: CPlayerSystem::Handle_Admin__Environs (:396298) m_bRadarBlank.
+  check('radarBlankAfterEnviron: 6 sets; 0-5 and 9999 clear; sounds / others keep', () => {
+    assert.equal(m.radarBlankAfterEnviron(false, 6), true);
+    for (const o of [0, 1, 2, 3, 4, 5, 9999]) assert.equal(m.radarBlankAfterEnviron(true, o), false, String(o));
+    for (const o of [0x65, 7, 117, 124, 200, -1]) assert.equal(m.radarBlankAfterEnviron(true, o), true, String(o));
+    assert.equal(m.radarBlankAfterEnviron(false, 0x70), false);
+  });
   check('PLAYER needs the Player bit and radar visibility', () => {
     const other = { itemType: CREATURE, objDescFlags: ODF_PLAYER };
     assert.equal(ok(other, {}, SELECTION_TYPE.PLAYER), true);
@@ -345,6 +385,21 @@ async function main() {
     assert.equal(calls, 0);
     assert.equal(ok(MOB, { showable: thunk }), true);
     assert.equal(calls, 1);
+  });
+
+  check('cycleCandidateOk UNOPENED_CORPSE: an unopened corpse in radar range; no radar-showable test', () => {
+    const U = SELECTION_TYPE.UNOPENED_CORPSE;
+    const CORPSE = { itemType: 0x200, objDescFlags: ODF_CORPSE | 0x1 };
+    let calls = 0;
+    assert.equal(ok(CORPSE, { showable: () => { calls += 1; return false; } }, U), true);
+    assert.equal(calls, 0, 'retail case 5 never calls InqShowableOnRadar');
+    assert.equal(ok(CORPSE, { corpseOpened: true }, U), false, 'already opened');
+    assert.equal(ok(CORPSE, { dist2d: 76 }, U), false, 'out of radar range');
+    assert.equal(ok(CORPSE, { dist2d: 26, range: IN }, U), false, 'indoor range');
+    assert.equal(ok(CORPSE, { stateVisible: false }, U), false, 'hidden (corpse handoff)');
+    assert.equal(ok({ ...CORPSE, objDescFlags: ODF_CORPSE | 0x80 }, {}, U), false, 'UI hidden');
+    assert.equal(ok(MOB, {}, U), false, 'a live mob');
+    assert.equal(ok(CORPSE, {}), false, 'MONSTER still rejects a corpse');
   });
 
   // ── (5c) selectionRangeExit (selection-4, acclient.c:398710-398737) ─────
@@ -420,6 +475,29 @@ async function main() {
     assert.match(RADAR_SRC, /export \{ RADAR_RANGE_OUTDOOR, RADAR_RANGE_INDOOR, isOutdoorCell, radarRangeForCell, isShowableOnRadar \};/);
     assert.doesNotMatch(RADAR_SRC, /export function radarRangeForCell/);
   });
+  check('radar-1: the radar and the cycle share radarShowableFor (the heuristic only behind ?radarRetailShowable=off)', () => {
+    const info = RADAR_SRC.slice(RADAR_SRC.indexOf('function radarInfoFor('));
+    const body = info.slice(0, info.indexOf('\n}\n'));
+    assert.match(body, /if \(RADAR_RETAIL_SHOWABLE_ON\) \{\s*showable = radarShowableFor\(sh, guid, odf, itemType\);/);
+    assert.match(body, /const \{ odf, blipColor \} = resolveRadarLook\(sh, guid, meta\);/);
+    assert.doesNotMatch(body, /meta\.radarBlipColor = /, 'no one-time stash onto the spawn meta');
+    const rs = ENTITIES_SRC.slice(ENTITIES_SRC.indexOf('  _radarShowable(sh, guid, meta) {'));
+    assert.match(rs.slice(0, 300), /return radarShowableFor\(sh, guid, /);
+  });
+  check('radar-4: client_events writes __radarBlank before the fog/sound split; radar.js skips only the draws', () => {
+    const CE = fs.readFileSync(path.join(__dirname, '..', 'app', 'client_events.js'), 'utf8');
+    const at = CE.indexOf('ClientEventKind.ENVIRON_CHANGE) {');
+    const arm = CE.slice(at, at + 1500);
+    assert.ok(arm.indexOf('window.__radarBlank = radarBlankAfterEnviron(') < arm.indexOf('if (ec <= 0x06) {'));
+    assert.match(RADAR_SRC, /const blank = RADAR_BLANK_ON && window\.__radarBlank === true;/);
+    assert.match(RADAR_SRC, /if \(!blank\) \{\s*drawPixels\(k, blipPixels\(shape\)/);
+    // hover / click still see the blank blips (DrawObjects picks before DrawBlip)
+    assert.match(RADAR_SRC, /\}\s*drawn\.push\(\{/);
+  });
+  check('radar-5: update() no longer builds the debug snapshot each tick', () => {
+    assert.doesNotMatch(RADAR_SRC, /_lastSnapshot = \{/);
+    assert.match(RADAR_SRC, /snapshot: \(\) => \(_snapFormat && _snapRaw\.valid \? _snapFormat\(\) : null\)/);
+  });
 
   // ── (7) keymap.js binds (Tab / Shift+Tab / T), no collision ─────────────
   check('keymap defines Next/Previous/Closest Monster local actions', () => {
@@ -445,7 +523,27 @@ async function main() {
     assert.equal(tabRows, 2);
   });
 
+  check('death-5: four unbound corpse-loot local actions with unique labelHashes', () => {
+    for (const [label, hash, id] of [
+      ['Closest Unopened Corpse', '0xFF00002C', 'CLOSEST_UNOPENED_CORPSE'],
+      ['Next Unopened Corpse', '0xFF00002D', 'NEXT_UNOPENED_CORPSE'],
+      ['Use Closest Unopened Corpse', '0xFF00002E', 'USE_CLOSEST_UNOPENED_CORPSE'],
+      ['Use Next Unopened Corpse', '0xFF00002F', 'USE_NEXT_UNOPENED_CORPSE'],
+    ]) {
+      assert.match(KEYMAP_SRC, new RegExp(`labelHash: "${hash}", label: "${label}", defaultCode: null`));
+      assert.match(KEYMAP_SRC, new RegExp(`${id}: "${hash}"`));
+      assert.equal((KEYMAP_SRC.match(new RegExp(`labelHash: "${hash}"`, 'g')) || []).length, 1, hash);
+    }
+  });
+
   // ── (8) index.html dispatch + harness hooks ─────────────────────────────
+  check('death-5: index.html dispatches the corpse-loot binds to unopenedCorpseAction', () => {
+    assert.match(INDEX_SRC, /\[__LOCAL_ACTION_IDS\.CLOSEST_UNOPENED_CORPSE, "closest", false\]/);
+    assert.match(INDEX_SRC, /\[__LOCAL_ACTION_IDS\.USE_NEXT_UNOPENED_CORPSE, "next", true\]/);
+    assert.match(INDEX_SRC, /em\.unopenedCorpseAction\(corpseAct\[1\], corpseAct\[2\] \? handle : null\)/);
+    const g = ENTITIES_SRC.slice(ENTITIES_SRC.indexOf('  _gatherCycleCandidates(type, pose) {'));
+    assert.match(g.slice(0, 3000), /corpseOpened: this\._openedCorpses\.has\(g\),/);
+  });
   check('index.html keydown dispatches cycleTarget on the binds', () => {
     assert.match(INDEX_SRC, /NEXT_MONSTER/);
     assert.match(INDEX_SRC, /PREV_MONSTER/);
@@ -481,6 +579,11 @@ async function main() {
   check('docs/url-flags.md documents ?targetCycle (default-on, =off escape)', () => {
     assert.match(FLAGS_SRC, /`targetCycle`/);
     assert.match(FLAGS_SRC, /targetCycle=off/);
+  });
+  check('docs/url-flags.md documents the A3-radar round 2 flags', () => {
+    for (const f of ['radarRetailShowable', 'radarLiveFlags', 'radarBlank', 'attachedSoundPos']) {
+      assert.match(FLAGS_SRC, new RegExp('^\\| `' + f + '`=off \\(default \\*\\*ON\\*\\*\\)', 'm'), f);
+    }
   });
   check('docs/url-flags.md documents the A3-selection flags', () => {
     for (const f of ['retailSelectNext', 'cycleRadarFilter', 'selectionRangeExit']) {

@@ -140,20 +140,26 @@ fn test_resistance_derivation_matches_ace_player_rules() {
 fn test_character_option_helpers_read_and_update_both_masks() {
     let mut player = PlayerState::new();
 
+    // Both options are OFF in retail's PlayerModule defaults (charopt-6
+    // seeds options1/options2 with CharacterOptions1/2::DEFAULT).
     assert!(!player.character_option_enabled(CharacterOption::UseCraftingChanceOfSuccessDialog,));
-    assert!(!player.character_option_enabled(CharacterOption::ShowYourHelmOrHeadGear));
+    assert!(!player.character_option_enabled(CharacterOption::AllowOthersToSeeYourDateOfBirth));
 
     player.set_character_option_enabled(CharacterOption::UseCraftingChanceOfSuccessDialog, true);
-    player.set_character_option_enabled(CharacterOption::ShowYourHelmOrHeadGear, true);
+    player.set_character_option_enabled(CharacterOption::AllowOthersToSeeYourDateOfBirth, true);
 
     assert!(player.character_option_enabled(CharacterOption::UseCraftingChanceOfSuccessDialog,));
-    assert!(player.character_option_enabled(CharacterOption::ShowYourHelmOrHeadGear));
+    assert!(player.character_option_enabled(CharacterOption::AllowOthersToSeeYourDateOfBirth));
     assert!(
         player
             .options1
             .contains(CharacterOptions1::USE_CRAFT_SUCCESS_DIALOG)
     );
-    assert!(player.options2.contains(CharacterOptions2::SHOW_HELM));
+    assert!(
+        player
+            .options2
+            .contains(CharacterOptions2::DISPLAY_DATE_OF_BIRTH)
+    );
 
     player.set_character_option_enabled(CharacterOption::UseCraftingChanceOfSuccessDialog, false);
 
@@ -163,7 +169,77 @@ fn test_character_option_helpers_read_and_update_both_masks() {
             .options1
             .contains(CharacterOptions1::USE_CRAFT_SUCCESS_DIALOG)
     );
-    assert!(player.options2.contains(CharacterOptions2::SHOW_HELM));
+    assert!(
+        player
+            .options2
+            .contains(CharacterOptions2::DISPLAY_DATE_OF_BIRTH)
+    );
+}
+
+#[test]
+fn test_character_option_new_player_uses_retail_player_module_defaults() {
+    // charopt-6: retail PlayerModule::PlayerModule — options_ = 0x50C4A54A,
+    // options2_ = 0x948700, spell_filters_ = 0x3FFF.
+    let player = PlayerState::new();
+    assert_eq!(player.options1.bits(), 0x50C4_A54A);
+    assert_eq!(player.options2.bits(), 0x0094_8700);
+    assert_eq!(player.spellbook_filters, 0x3FFF);
+    assert!(player.character_option_enabled(CharacterOption::RunAsDefaultMovement));
+    assert!(player.character_option_enabled(CharacterOption::ListenToGeneralChat));
+    assert!(player.character_option_enabled(CharacterOption::AutoTarget));
+    assert!(player.character_option_enabled(CharacterOption::IgnoreFellowshipRequests));
+    assert!(player.character_option_enabled(CharacterOption::ShowYourHelmOrHeadGear));
+    assert!(!player.character_option_enabled(CharacterOption::AutomaticallyAcceptFellowshipRequests));
+}
+
+#[test]
+fn test_character_option_apply_fellowship_exclusion() {
+    // charopt-1: CPlayerModule::OnChanged — enabling AutoAccept on a default
+    // character (Ignore ON) clears Ignore first, then sets AutoAccept.
+    let mut p = PlayerState::new();
+    p.options1 = CharacterOptions1::DEFAULT;
+    let sends = p.apply_character_option(CharacterOption::AutomaticallyAcceptFellowshipRequests, true);
+    assert_eq!(
+        sends,
+        vec![
+            (CharacterOption::IgnoreFellowshipRequests, false),
+            (CharacterOption::AutomaticallyAcceptFellowshipRequests, true),
+        ]
+    );
+    assert_eq!(p.options1.bits() & 0x0000_0008, 0, "Ignore bit cleared");
+    assert_ne!(p.options1.bits() & 0x2000_0000, 0, "AutoAccept bit set");
+
+    // Symmetric: enabling Ignore while AutoAccept is on clears AutoAccept.
+    let sends = p.apply_character_option(CharacterOption::IgnoreFellowshipRequests, true);
+    assert_eq!(
+        sends,
+        vec![
+            (CharacterOption::AutomaticallyAcceptFellowshipRequests, false),
+            (CharacterOption::IgnoreFellowshipRequests, true),
+        ]
+    );
+    assert_ne!(p.options1.bits() & 0x0000_0008, 0);
+    assert_eq!(p.options1.bits() & 0x2000_0000, 0);
+
+    // Pair already off → only the primary is sent.
+    p.options1 = CharacterOptions1::empty();
+    let sends = p.apply_character_option(CharacterOption::AutomaticallyAcceptFellowshipRequests, true);
+    assert_eq!(
+        sends,
+        vec![(CharacterOption::AutomaticallyAcceptFellowshipRequests, true)]
+    );
+
+    // Disabling never touches the pair.
+    p.options1 = CharacterOptions1::IGNORE_FELLOWSHIP_REQUESTS
+        | CharacterOptions1::AUTO_ACCEPT_FELLOW_REQUEST;
+    let sends = p.apply_character_option(CharacterOption::IgnoreFellowshipRequests, false);
+    assert_eq!(sends, vec![(CharacterOption::IgnoreFellowshipRequests, false)]);
+    assert!(p.options1.contains(CharacterOptions1::AUTO_ACCEPT_FELLOW_REQUEST));
+
+    // Unrelated options are a single send.
+    let sends = p.apply_character_option(CharacterOption::AutoTarget, false);
+    assert_eq!(sends, vec![(CharacterOption::AutoTarget, false)]);
+    assert!(!p.character_option_enabled(CharacterOption::AutoTarget));
 }
 
 #[test]
@@ -804,6 +880,75 @@ fn test_self_update_motion_autonomous_echo_updates_sequences_only() {
     // A replayed echo (equal movement sequence) drops entirely.
     assert!(!player.apply_self_update_motion(&self_motion(21, 32, true)));
     assert_eq!(player.server_control_sequence, 31);
+}
+
+/// death-1 fixture — [`self_motion`] with an explicit interpreted
+/// forward command (`None` = the flag absent on the wire).
+fn self_motion_forward(
+    movement_sequence: u16,
+    server_control_sequence: u16,
+    autonomous: bool,
+    forward: Option<InterpretedMotionCommand>,
+) -> MovementEventData {
+    let mut data = self_motion(movement_sequence, server_control_sequence, autonomous);
+    if let MovementTypeData::Invalid(invalid) = &mut data.data {
+        invalid.state.flags = if forward.is_some() {
+            MovementStateFlags::FORWARD_COMMAND
+        } else {
+            MovementStateFlags::empty()
+        };
+        invalid.state.forward_command = forward;
+    }
+    data
+}
+
+/// death-1 (R2 2026-10-08) — retail `PlayerIsDead` input
+/// (acclient.c:717695-717705): a non-autonomous `Invalid` envelope with
+/// forward Dead (0x0011) marks the player dead; a later non-autonomous
+/// envelope with NO forward command (retail `UnPack` defaults it to
+/// Ready, :333493 — ACE's NonCombat revive) clears it; an AUTONOMOUS echo
+/// never touches it (retail never unpacks it, :311186-311190).
+#[test]
+fn apply_self_update_motion_tracks_dead_then_ready() {
+    let mut player = PlayerState::new();
+    player.movement_sequence = 20;
+    player.server_control_sequence = 30;
+    assert!(!player.server_forward_dead, "a fresh player is alive");
+
+    // Server Dead → dead.
+    assert!(player.apply_self_update_motion(&self_motion_forward(
+        21,
+        30,
+        false,
+        Some(InterpretedMotionCommand::DEAD),
+    )));
+    assert!(player.server_forward_dead);
+
+    // An autonomous echo (forward absent) while dead → still dead.
+    assert!(player.apply_self_update_motion(&self_motion_forward(22, 30, true, None)));
+    assert!(
+        player.server_forward_dead,
+        "an autonomous echo is never unpacked, so it cannot revive"
+    );
+
+    // A dropped (stale) non-autonomous envelope → still dead.
+    assert!(!player.apply_self_update_motion(&self_motion_forward(22, 30, false, None)));
+    assert!(player.server_forward_dead, "a gate-1 drop changes nothing");
+
+    // Server NonCombat Ready (forward flag absent) → alive.
+    assert!(player.apply_self_update_motion(&self_motion_forward(23, 30, false, None)));
+    assert!(!player.server_forward_dead, "absent forward == Ready revives");
+
+    // Dead again, then any other explicit forward (RunForward) → alive.
+    assert!(player.apply_self_update_motion(&self_motion_forward(
+        24,
+        30,
+        false,
+        Some(InterpretedMotionCommand::DEAD),
+    )));
+    assert!(player.server_forward_dead);
+    assert!(player.apply_self_update_motion(&self_motion(25, 30, false)));
+    assert!(!player.server_forward_dead);
 }
 
 #[test]

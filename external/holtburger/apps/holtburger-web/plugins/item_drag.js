@@ -27,7 +27,9 @@
 //   * effectAllowed "all" — the inventory used "move", which silently
 //     vetoed hotbar.js ("copy") and tinker-panel.js ("link") drops;
 //   * the 3D view: retail ItemHolder::AttemptPlaceIn3D (self → pack,
-//     creature → give the whole stack, open chest → put in, else drop). It
+//     creature → give the whole stack — or, with the "Drag item onto player
+//     opens trade" option, a player → secure trade — open chest → put in,
+//     else drop). It
 //     used to be BOTH inventory.js's dropItem AND picking.js's giveObject
 //     on the same drop (an item dropped on an NPC was given AND dropped);
 //     for drags we started, the capture-phase handler now owns it;
@@ -50,6 +52,7 @@ import {
   takeInventoryRows,
 } from "./inventory_helpers.js";
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
+import { CHARACTER_OPTION, isCharacterOptionEnabled } from "../ui/ac_character_options.js";
 
 export const INV_MIME = "application/x-hb-inv-guid";
 export const INV_TEXT_MIME = "text/x-hb-item-guid";
@@ -499,18 +502,22 @@ export function describeWorldEntity(guid) {
     meta = ent?.meta || ent || {};
   } catch (_) {}
   const itemType = (meta.itemType >>> 0) || 0;
+  const h = sessionHandle();
   let ground = 0;
   try {
-    const h = sessionHandle();
     const v = typeof h?.groundContainerId === "function" ? h.groundContainerId() : h?.groundContainerId;
     ground = (v >>> 0) || 0;
   } catch (_) { ground = 0; }
+  let odf = 0;
+  try { odf = ((meta.objDescFlags ?? h?.objectDescFlags?.(g)) >>> 0) || 0; } catch (_) { odf = 0; }
   return {
     guid: g,
     isSelf: g === me,
     // ItemType.Creature 0x10 (players, monsters, NPCs) — retail gives to
     // anything whose object type is a creature (vfptr[6] == 16).
     isCreature: (itemType & 0x10) !== 0 || meta.category === "creature",
+    // ODF Player 0x8 — retail ACCWeenieObject::IsPlayer (acclient.c:437199).
+    isPlayer: (odf & 0x8) !== 0,
     isOpenContainer: !!ground && ground === g,
     name: meta.name || "",
   };
@@ -535,6 +542,9 @@ function defaultCtx() {
       try { return !!h.canUseWith(a >>> 0, b >>> 0); } catch (_) { return null; }
     },
     isCorpse: (g) => isCorpseGuid(g),
+    // charopt-4: the "Drag item onto player opens trade" character option.
+    dragOnPlayerOpensTrade:
+      isCharacterOptionEnabled(CHARACTER_OPTION.DragItemOnPlayerOpensSecureTrade, false) === true,
   };
 }
 
@@ -564,6 +574,10 @@ export async function resolveDropAction(s, target, { ctx = null, anchor = null }
   const stack = Math.max(1, s.item?.stackSize | 0 || 1);
   let split = 0;
   if (s.shift && stack > 1 && target.kind !== DROP_TARGET.DOLL) {
+    // A trade takes the whole object (ClientTradeSystem::AttemptToTradeItem
+    // has no split size), so it never asks how many.
+    const whole = decideItemDrop({ ...s, split: 0 }, target, merged);
+    if (whole.op === "trade") return whole;
     const n = await promptStackAmount({
       max: stack,
       initial: Math.max(1, Math.floor(stack / 2)),
@@ -671,6 +685,23 @@ export function executeItemAction(action, s, opts = {}) {
       }
       break;
     }
+    case "trade": {
+      // charopt-4 — ClientTradeSystem::AttemptToTradeItem (acclient.c:
+      // 410566), owned by plugins/trade-panel.js: add to the open trade with
+      // this player, refuse while trading with someone else or out of peace
+      // mode, else open the trade and add the item once it registers. The
+      // item does not move, so there is no pending-ledger entry.
+      const attempt = window.__tradePanel?.attemptToTradeItem;
+      if (typeof attempt !== "function") return call("openTrade", action.target >>> 0);
+      let r = null;
+      try { r = attempt(action.target >>> 0, guid); } catch (e) { console.warn("[item-drag] trade failed:", e); }
+      if (r?.message) {
+        showItemToast(r.message);
+        uiError();
+        flashElement(s?.sourceEl);
+      }
+      return !!r?.sent;
+    }
     case "give": {
       sent = call("giveObject", action.target >>> 0, guid, amount);
       if (sent) pendingOps.add(guid, { op: "give", amount, expect: pendingExpect.reduced(stack), undo });
@@ -737,6 +768,9 @@ export function planBackpackPlacement(item, { amount } = {}) {
     playerGuid: me,
     amount,
     preferredPack,
+    // charopt-3 — "Use main pack as default pickup destination" (retail
+    // PlayerModule::MainPackPreferred, acclient.c:395895).
+    mainPackPreferred: isCharacterOptionEnabled(CHARACTER_OPTION.MainPackPreferred, false) === true,
     mainCap: (handleNumber(h, "playerItemsCapacity") >>> 0) || DEFAULT_PLAYER_ITEMS_CAPACITY,
     packsCap: (handleNumber(h, "playerContainersCapacity") >>> 0) || DEFAULT_PLAYER_CONTAINERS_CAPACITY,
     playerName: playerDisplayName(),

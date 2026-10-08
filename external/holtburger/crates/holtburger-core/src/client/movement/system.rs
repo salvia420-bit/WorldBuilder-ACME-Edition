@@ -1099,6 +1099,23 @@ const USE_JUMP_LAUNCH_CAP: bool = true;
 /// restores the permissive `can_jump: true` seam.
 const USE_JUMP_LOAD_GATE: bool = true;
 
+/// death-1 (R2 2026-10-08) — retail `CommandInterpreter::PlayerIsDead`
+/// (acclient.c:717695-717705: the interpreted `forward_command == Dead`)
+/// gates input: `MovePlayer` (:717828-717833) answers a dead player's key
+/// with `LoseKeyboardFocus` + `SetAutoRun(0,0)` and returns, and
+/// `TakeControlFromServer` (:716934-716940) refuses. The interpreted Dead
+/// comes from the server's non-autonomous `UpdateMotion`
+/// (`PlayerState::server_forward_dead`). Retail ALSO runs
+/// `LoseControlToServer` on every such motion (SmartBox dispatch,
+/// :392779-392781 / :392827-392828), so `controlled_by_server` is always set
+/// while dead; the interpreter lane mirrors that (see
+/// [`MovementSystem::local_player_dead_gated`]) — without it the dead
+/// `LoseKeyboardFocus → ApplyCurrentMovement → MovePlayer` chain would
+/// recurse. Carrier: `?deadInputGate=off`
+/// ([`MovementSystem::dead_input_gate_runtime`]) restores the pre-fix
+/// seam (`PlayerIsDead` never true).
+const USE_DEAD_INPUT_GATE: bool = true;
+
 /// (2026-07-02, mechanism replaced 2026-07-03) — retail MOVEMENT-AUTONOMY
 /// arbitration (the cast-movement feel: slidecast / fastcast / "fighting
 /// the cast"). The engine is retail's `last_move_was_autonomous` LATCH,
@@ -1999,6 +2016,10 @@ pub(crate) struct MovementSystem {
     /// R1 outbound-1 part 2 — runtime override of
     /// [`USE_AP_CONTACT_PLANE_RESEND`] (test seam; no URL flag yet).
     ap_contact_plane_resend_runtime: Option<bool>,
+    /// death-1 (R2 2026-10-08) — runtime carrier of `?deadInputGate=off`.
+    /// `None` = the [`USE_DEAD_INPUT_GATE`] const default (ON). Combined by
+    /// [`Self::dead_input_gate_enabled`].
+    dead_input_gate_runtime: Option<bool>,
     /// F2 (2026-07-27) — runtime carrier of the `?serverMoveToDriver=off`
     /// URL flag. `None` = the [`USE_SERVER_MOVETO_DRIVER`] const default
     /// (ON); `Some(false)` sends server MoveTo 6/7 back down the
@@ -2527,6 +2548,7 @@ impl MovementSystem {
             jump_load_gate_runtime: None,
             retail_position_event_gate_runtime: None,
             ap_contact_plane_resend_runtime: None,
+            dead_input_gate_runtime: None,
             server_moveto_driver_runtime: None,
             sticky_idle_step_runtime: None,
             server_moveto_drive: None,
@@ -2684,6 +2706,24 @@ impl MovementSystem {
     pub(crate) fn retail_position_event_gate_enabled(&self) -> bool {
         self.retail_position_event_gate_runtime
             .unwrap_or(USE_RETAIL_POSITION_EVENT_GATE)
+    }
+
+    /// death-1 (R2 2026-10-08) — install the `?deadInputGate=off` runtime
+    /// carrier (see [`USE_DEAD_INPUT_GATE`]).
+    pub(crate) fn set_dead_input_gate(&mut self, on: bool) {
+        self.dead_input_gate_runtime = Some(on);
+    }
+
+    /// [`USE_DEAD_INPUT_GATE`] effective predicate.
+    pub(crate) fn dead_input_gate_enabled(&self) -> bool {
+        self.dead_input_gate_runtime.unwrap_or(USE_DEAD_INPUT_GATE)
+    }
+
+    /// death-1 — retail `PlayerIsDead` as this lane sees it: the gate is on
+    /// AND the server's interpreted forward command is Dead
+    /// (`PlayerState::server_forward_dead`).
+    pub(crate) fn local_player_dead_gated(&self, world: &WorldState) -> bool {
+        self.dead_input_gate_enabled() && world.player.server_forward_dead
     }
 
     /// Test seam for [`USE_AP_CONTACT_PLANE_RESEND`] (default off).
@@ -3122,8 +3162,15 @@ impl MovementSystem {
         // inert — raw input always drives (the legacy carrier's
         // `USE_CAST_MOVE=false` semantic).
         let scene_controlled = world.scene.local_server_controlled();
-        interp.controlled_by_server = interp.honor_autonomy_latch && scene_controlled;
-        if !interp.honor_autonomy_latch && scene_controlled {
+        // death-1: while the server says Dead, retail is ALWAYS
+        // server-controlled (the Dead UpdateMotion ran LoseControlToServer,
+        // acclient.c:392779-392781, and TakeControlFromServer refuses while
+        // dead, :716934) — independent of the castMove alias. Without it a
+        // dead press would recurse MovePlayer → LoseKeyboardFocus →
+        // ApplyCurrentMovement → MovePlayer (see [`USE_DEAD_INPUT_GATE`]).
+        let dead = self.local_player_dead_gated(world);
+        interp.controlled_by_server = (interp.honor_autonomy_latch && scene_controlled) || dead;
+        if !interp.honor_autonomy_latch && scene_controlled && !dead {
             // The leash still returns to the player on any edge (the
             // legacy lane's latch-raising edge arms all take control
             // too) — just without the retail stomp/revival.
@@ -3135,7 +3182,18 @@ impl MovementSystem {
         // carry (retail: an edge dispatches ONE axis; the others keep
         // their last-applied slots), gait from the interpreter's own
         // persistent hold_run (F2 — see `interp_base_drive`).
+        // death-1: a dead player's input composes onto NO locomotion — the
+        // refused edge must not re-send or re-install axes held at the
+        // moment of death (the server's Dead owns the body).
         let base = self.interp_base_drive(&interp);
+        let base = if dead {
+            MotionState {
+                gait: base.gait,
+                ..MotionState::default()
+            }
+        } else {
+            base
+        };
         let mut seams = SystemInterpreterSeams {
             system: self,
             world,
@@ -3175,7 +3233,12 @@ impl MovementSystem {
         // installed drive to the JS consumers (eviction first — the
         // renderer cuts, then re-bases on the new drive).
         self.drain_interp_effects(&mut interp);
-        if dispatched {
+        // death-1 (verify correction 2): the refused edge still "dispatches"
+        // (LoseKeyboardFocus → SetHoldRun → minterp_set_hold_run), but its
+        // idle DriveApplied would play Ready on the local rig — which the
+        // JS death-hold guard accepts as a revival. While dead only the
+        // server's Ready may revive, so the renderer event is withheld.
+        if dispatched && !dead {
             self.cmd_interp_events
                 .push(Self::drive_applied_event(&drive));
         }
@@ -3260,9 +3323,11 @@ impl MovementSystem {
         let Some(mut interp) = self.command_interpreter.take() else {
             return;
         };
-        // Same honor-gated control mirror as the edge ingest.
+        // Same honor-gated control mirror as the edge ingest (death-1:
+        // dead ⇒ controlled, so the FU-A reclaim refuses while dead).
+        let dead = self.local_player_dead_gated(world);
         interp.controlled_by_server =
-            interp.honor_autonomy_latch && world.scene.local_server_controlled();
+            (interp.honor_autonomy_latch && world.scene.local_server_controlled()) || dead;
         let base = self.interp_base_drive(&interp);
         let mut seams = SystemInterpreterSeams {
             system: self,
@@ -9929,7 +9994,17 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         self.drive.is_locomotion_idle() && self.drive.turning.is_none()
     }
     fn player_forward_command(&self) -> Option<u32> {
-        None // local player death routes through the wire lane; never Dead here
+        // death-1 (R2 2026-10-08) — retail `PlayerIsDead` reads the
+        // INTERPRETED forward command (acclient.c:717695-717705), which
+        // only the server's non-autonomous UpdateMotion writes
+        // (`PlayerState::server_forward_dead`). Anything but Dead reads
+        // as Ready (retail `UnPack`'s default, :333493). `?deadInputGate=off`
+        // restores the pre-fix "never Dead here".
+        Some(if self.system.local_player_dead_gated(self.world) {
+            super::command_interpreter::MOTION_COMMAND_DEAD
+        } else {
+            super::motion_interp::MOTION_READY
+        })
     }
     fn player_has_interp_motion_state(&self) -> bool {
         true

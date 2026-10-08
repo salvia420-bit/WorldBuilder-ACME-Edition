@@ -31,6 +31,8 @@
 import { hudPoint, hudRect, hudViewport, getHudScale } from "../ui/hud_scale.js";
 import { placeNearPointer } from "./hover-tooltip.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
+import { worldUseLeaf } from "./inventory_helpers.js";
+import { consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
 
 const OVERLAY_ID = "hb-radial-menu";
 const SUBMENU_ID = "hb-radial-submenu";
@@ -532,15 +534,28 @@ function buildItems(ctx) {
     const usable = typeof window.__entityIsUsable === "function"
       ? window.__entityIsUsable(guid) === true
       : false;
-    if (!invItem && guid !== localPlayerGuid && usable && !attackable
+    // B2-use-items (2026-10-08 round 2): a loose item is offered as "Pick
+    // Up" and taken like the double-click takes it (retail DetermineUseResult
+    // 2 → PlaceInBackpack, picking.js `__worldUseIsPickup`; usable or not,
+    // as retail classifies before IsUseable), and the send spends retail's
+    // shared 0.2 s use throttle (inventory_helpers.worldUseLeaf).
+    const pickUp = window.__itemDrag?.placeInBackpack;
+    const pickup = !invItem && typeof pickUp === "function"
+      && typeof window.__worldUseIsPickup === "function" && window.__worldUseIsPickup(guid) === true;
+    if (!invItem && guid !== localPlayerGuid && (pickup || (usable && !attackable))
         && typeof handle?.useObject === "function") {
       items.splice(1, 0, {
-        label: isCreature(ent) ? "Talk" : "Use",
+        label: pickup ? "Pick Up" : isCreature(ent) ? "Talk" : "Use",
         action: () => {
           try {
             window.liveScene3d?.entityManager?.setSelectedTarget?.(guid);
-            console.info(`[use-or-attack] 0x${(guid >>> 0).toString(16)} use (radial)`);
-            handle.useObject(guid);
+            console.info(`[use-or-attack] 0x${(guid >>> 0).toString(16)} ${pickup ? "pickup" : "use"} (radial)`);
+            worldUseLeaf(guid, {
+              throttleOk: () => consumeWorldUseThrottle(performance.now()),
+              isPickup: () => pickup,
+              pickUp,
+              use: (g) => handle.useObject(g),
+            });
           } catch (e) { console.warn("[ctx-menu] use failed:", e); }
         },
       });

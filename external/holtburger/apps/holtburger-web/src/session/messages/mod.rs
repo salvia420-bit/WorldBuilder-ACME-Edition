@@ -94,6 +94,11 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             if let Some(w) = world.borrow_mut().as_mut() {
                 let _ = w.set_server_time_sync(server_time, stamped_at);
             }
+            // daytime-1 (R2 2026-10-08): the sky's GameTime runs on the
+            // same clock (retail GameTime::UseTime reads Timer::cur_time,
+            // acclient.c:463395). Stashed even before the world/sky exist
+            // (the ConnectRequest sample arrives at handshake).
+            crate::note_sky_server_time(server_time);
             return LoopFlow::Continue;
         }
     };

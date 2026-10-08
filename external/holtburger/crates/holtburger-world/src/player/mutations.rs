@@ -356,6 +356,18 @@ impl PlayerState {
             if let Some(forward) = invalid.state.forward_command {
                 self.update_current_substate_from_low16(forward.raw());
             }
+            // death-1 (R2 2026-10-08) — retail `PlayerIsDead` input
+            // (acclient.c:717695-717705): the unpacked interpreted
+            // forward_command. An ABSENT forward is Ready
+            // (`InterpretedMotionState::UnPack`, :333493), so any envelope
+            // without Dead clears it. Below the autonomous early-return
+            // above: retail never unpacks the player's autonomous echo
+            // (:311186-311190). Non-`Invalid` envelopes (MoveTo/TurnTo)
+            // leave it untouched.
+            self.server_forward_dead = invalid
+                .state
+                .forward_command
+                .is_some_and(|forward| forward.is_dead());
         }
         true
     }

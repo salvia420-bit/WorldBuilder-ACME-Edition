@@ -306,6 +306,9 @@ const TIER5 = [
   // 2026-10-07 bug 5: 1 Hz terrain hole self-heal.
   { tier: 5, flag: "terrain_hole_audit", file: "tests/terrain_hole_audit.test.mjs" },
   { tier: 5, flag: "viewerCell", file: "tests/viewer_cell.test.mjs" },
+  // 2026-10-08 round 2 — camera parity on the real CameraSwitcher: retail
+  // viewer order, viewer sphere, scenery sweep, in-place turns, ViewCombatTarget.
+  { tier: 5, flag: "cameraViewerStep", file: "tests/camera_viewer_step.test.mjs" },
   { tier: 5, flag: "motionLinkFidelity", file: "tests/motion_link_fidelity.test.mjs" },
   { tier: 5, flag: "world-state", file: "tests/world-state.test.cjs" },
   { tier: 5, flag: "world_object", file: "tests/world_object.test.cjs" },
@@ -405,6 +408,7 @@ const TIER5 = [
   { tier: 5, flag: "chat_panel_mount", file: "test_chat_panel_mount.mjs" },
   { tier: 5, flag: "social_panel", file: "tests/social_panel.test.mjs" },
   { tier: 5, flag: "social_panel_dom", file: "tests/social_panel_dom.test.mjs" },
+  { tier: 5, flag: "optionsFellowshipExclusion", file: "tests/options_fellowship_exclusion.test.mjs" },
   { tier: 5, flag: "hud_popup_placement", file: "test_hud_popup_placement.mjs" },
   { tier: 5, flag: "examine_format", file: "test_examine_format.mjs" },
   { tier: 5, flag: "options_panel_helpers", file: "test_options_panel_helpers.mjs" },
@@ -700,6 +704,32 @@ const TIER5 = [
   // on a real EntityManager (`?autoTarget`), and the sphere pick fallback.
   { tier: 5, flag: "autoTarget", file: "tests/auto_target.test.mjs" },
   { tier: 5, flag: "pickSphereFallback", file: "tests/pick_math.test.mjs" },
+  // 2026-10-08 — R-chat round 2: retail chat command routing (Turbine room
+  // ids, @ / : / ; prefixes, verb aliases, inline *pose*, /reply strings).
+  { tier: 5, flag: "slashCommands", file: "tests/slash_commands.test.mjs" },
+  // 2026-10-08 — R-misc round 2 daytime-1: the moon/star date follows the
+  // server-synced sky clock (`?skyServerClock`).
+  { tier: 5, flag: "skyServerClock", file: "tests/sky_game_date.test.mjs" },
+  // 2026-10-08 — A1-held round 2: held-item attachment parity on a real
+  // EntityManager (wire spawn decides the parent, PickupEvent leave-world,
+  // per-child attach generation, no mount without a holding location).
+  { tier: 5, flag: "wieldLedgerAuthority", file: "tests/held_ledger_wire_spawn.test.mjs" },
+  { tier: 5, flag: "pickupLeaveWorld", file: "tests/pickup_leave_world.test.mjs" },
+  { tier: 5, flag: "attachGen", file: "tests/held_attach_generation.test.mjs" },
+  { tier: 5, flag: "heldMountStrict", file: "tests/held_missing_location.test.mjs" },
+  // 2026-10-08 — B2-use-items round 2: retail ItemHolder::UseObject world
+  // rules (Stuck fixtures are Used, toolbar / radial pickups, non-useable
+  // refusals), the shared 0.2 s use throttle, and the SoundTable row memo.
+  { tier: 5, flag: "retailUseResult", file: "tests/world_use_result.test.mjs" },
+  { tier: 5, flag: "retailUseThrottle", file: "tests/use_throttle.test.mjs" },
+  { tier: 5, flag: "soundTableRowMemo", file: "tests/audio_sound_table_cache.test.mjs" },
+  // 2026-10-08 — A2-death round 2: selection drop at the server delete of a
+  // death-held rig, the local-player corpse-claim exclusion, the death-hold
+  // test the local revive reads, and the unopened-corpse cycle.
+  { tier: 5, flag: "deathSelectRelease", file: "tests/death_selection.test.mjs" },
+  // 2026-10-08 — A3-radar-audio round 2 audio-2: sounds on a wielded item play
+  // at the hand's world position (real EntityManager + attachChildToParent).
+  { tier: 5, flag: "attachedSoundPos", file: "tests/audio_attached_emitter.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

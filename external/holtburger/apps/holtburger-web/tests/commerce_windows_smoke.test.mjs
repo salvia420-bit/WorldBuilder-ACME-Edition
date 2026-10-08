@@ -281,6 +281,7 @@ let book = {
   pages: [{ text: "The first page.", authorName: "Gaerlan" }, { text: "The second page.", authorName: "Gaerlan" }],
 };
 let trade = null;
+let combatMode = 1;
 const handle = {
   playerInventory: () => inv.map((i) => ({ ...i })),
   objectName: (g) => ({ 0x80000010: "Tome of Lore", 0x70000001: "Lin the Trader", 0x60000001: "Covenant Crystal" })[g >>> 0]
@@ -291,6 +292,8 @@ const handle = {
   sellToVendor: (v, g, a) => calls.push(["sellToVendor", v, Array.from(g), Array.from(a), g.constructor.name, a.constructor.name]),
   getVendorState: () => null,
   playerTrade: () => trade,
+  combatMode: () => combatMode,
+  openTrade: (g) => calls.push(["openTrade", g]),
   addToTrade: (g, s) => calls.push(["addToTrade", g, s]),
   acceptTrade: () => calls.push(["acceptTrade"]),
   declineTrade: () => calls.push(["declineTrade"]),
@@ -482,6 +485,66 @@ await check("dropping an inventory item offers it via addToTrade(guid, 0)", () =
   assert.equal(calls.filter((c) => c[0] === "addToTrade").length, 1, "nested targets fire the drop once");
   assert.ok(!well.classList.contains("is-drop-target") && !root.classList.contains("is-drop-target"),
     "both highlights clear after the drop");
+});
+// charopt-4 (2026-10-08 round 2) — an item dragged onto a player with the
+// "Drag item onto player opens trade" option (plugins/item_drag.js "trade"
+// op) = retail ClientTradeSystem::AttemptToTradeItem (acclient.c:410566).
+await check("charopt-4: dragged onto the trade partner → offered; onto someone else → refused", () => {
+  const tp = window.__tradePanel;
+  calls.length = 0;
+  assert.deepEqual(tp.attemptToTradeItem(0x50000002, 0x80000001), { sent: true });
+  assert.deepEqual(calls, [["addToTrade", 0x80000001, 0]]);
+  calls.length = 0;
+  const r = tp.attemptToTradeItem(0x50000009, 0x80000001);
+  assert.deepEqual(r, { sent: false, message: "You are already trading with someone else." });
+  assert.equal(calls.length, 0, "nothing sent");
+});
+await check("charopt-4: no trade → peace mode opens one, and the item goes in when it registers (once)", () => {
+  const tp = window.__tradePanel;
+  const open = trade;
+  trade = null;
+  bus.emit("tradeUpdated", {});
+  calls.length = 0;
+  combatMode = 2;
+  assert.deepEqual(tp.attemptToTradeItem(0x50000002, 0x80000001),
+    { sent: false, message: "You need to be in peace mode to trade." });
+  assert.equal(calls.length, 0, "AttemptToOpenTradeNegotiations refuses outside peace mode");
+  combatMode = 1;
+  assert.deepEqual(tp.attemptToTradeItem(0x50000002, 0x80000001), { sent: true });
+  assert.deepEqual(calls, [["openTrade", 0x50000002]]);
+  trade = { ...open, myItems: [] }; // RegisterTrade with that partner
+  bus.emit("tradeUpdated", {});
+  assert.deepEqual(calls.filter((c) => c[0] === "addToTrade"), [["addToTrade", 0x80000001, 0]]);
+  bus.emit("tradeUpdated", {});
+  assert.equal(calls.filter((c) => c[0] === "addToTrade").length, 1, "the stash is spent by the first snapshot");
+  trade = open;
+  bus.emit("tradeUpdated", {});
+});
+// trade-2 (2026-10-08 round 2) — retail ObjectsInRange fails when the
+// partner object is gone (portal / recall / logout) and the 1 s handler
+// closes the negotiation; ACE never closes it on a teleport.
+await check("trade-2: a partner who leaves the world closes the trade after ~1 s", async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const at = (x, y, z) => ({ root: { position: { x, y, z } } });
+  const entityMap = new Map([[PLAYER, at(10, 10, 0)], [0x50000002, at(12, 10, 0)]]);
+  window.liveScene3d = { entityManager: { entityMap } };
+  try {
+    await sleep(600); // a poll sees the partner in range
+    assert.ok(isOpen("hb-trade-panel"), "in range: stays open");
+    calls.length = 0;
+    entityMap.delete(0x50000002); // portalled away
+    await sleep(1100); // two missed polls
+    assert.ok(calls.some((c) => c[0] === "closeTrade"), "CloseTradeNegotiations sent");
+    assert.ok(!isOpen("hb-trade-panel"), "window closed");
+  } finally {
+    delete window.liveScene3d;
+    trade = {
+      partnerGuid: 0x50000002, partnerName: "Bob", myAccepted: false, partnerAccepted: true,
+      myItems: [{ guid: 0x80000002, name: "Iron Dagger", iconId: 0, stackSize: 1 }],
+      partnerItems: [{ guid: 0x80000099, name: "Gold Ring", iconId: 0, stackSize: 1 }],
+    };
+    bus.emit("tradeUpdated", {}); // reopen for the window-stack checks below
+  }
 });
 
 /* ── [3] salvage ──────────────────────────────────────────────────────── */

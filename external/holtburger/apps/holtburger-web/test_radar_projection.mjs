@@ -42,6 +42,7 @@ import {
   RADAR_RANGE_OUTDOOR,
   RADAR_RANGE_INDOOR,
 } from "./plugins/radar.js";
+import { resolveRadarLook } from "./scene3d/selection_brackets.js";
 
 let passed = 0;
 let failed = 0;
@@ -243,6 +244,15 @@ test("mutual PK or mutual PK-lite ×", () => {
 });
 test("UI-hidden objects get no blip", () => {
   assert.equal(blipShapeFor({ objDescFlags: ODF_UI_HIDDEN, guid: 9 }, {}, null), BLIP_SHAPE.NONE);
+});
+// radar-3 (2026-10-08 round 2): the shape reads the LIVE flags (OnStatUpdated
+// 0x86 → SetPlayerKillerStatus); the spawn meta kept the pre-altar CROSS.
+test("a player who turned PK after spawn: live flags give the mutual-PK ×", () => {
+  const sh = { objectDescFlags: () => ODF_PLAYER | ODF_PK, objectIntProperty: () => undefined };
+  const look = resolveRadarLook(sh, 9, { objDescFlags: ODF_PLAYER });
+  const me = { objDescFlags: ODF_PLAYER | ODF_PK };
+  assert.equal(blipShapeFor({ objDescFlags: look.odf, guid: 9 }, me, null), BLIP_SHAPE.X);
+  assert.equal(blipShapeFor({ objDescFlags: ODF_PLAYER, guid: 9 }, me, null), BLIP_SHAPE.CROSS, "stale meta");
 });
 
 console.log("[pixels] DrawBlip / DrawSelected / DrawChildren");

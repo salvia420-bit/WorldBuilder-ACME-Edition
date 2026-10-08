@@ -41,16 +41,14 @@ import {
   getECIToECEFRotationMatrix,
 } from "@takram/three-atmosphere";
 
-// AC time anchor — Asheron's Call launch, 1999-11-02 00:00:00 UTC.
-// `holtburger-world/src/sky.rs:62: AC_LAUNCH_UNIX_EPOCH = 941_500_800.0`.
-const AC_LAUNCH_UNIX_EPOCH_MS = 941_500_800 * 1000;
-
-// Retail Dereth game-day length in real seconds. `holtburger-world/src/sky.rs`
-// (header comment around line 344): "day_length=7620s for retail Dereth".
-// One game-day = 7620 real seconds = ~2 h 7 min. One real second advances
-// `86400 / 7620 ≈ 11.34` game-seconds.
-const AC_DAY_LENGTH_S = 7620;
-const AC_TIME_COMPRESSION = 86400 / AC_DAY_LENGTH_S;
+// AC time anchor (1999-11-02 UTC) + the 7620 s retail day live in
+// sky_game_date.js (pure, node-tested).
+// daytime-1 (R2 2026-10-08): the moon/star date now follows the SAME clock as
+// the wasm sky's AC sun — `SessionHandle.getSkyPortalTicks()`, the server's
+// PortalYearTicks once synced (`?skyServerClock=off` keeps the private clock).
+// Before the sky is populated (NaN / stale pkg) the legacy formula is used
+// unchanged.
+import { gameDateMsNow } from "./sky_game_date.js";
 
 /**
  * Synthesize a Date that advances at AC game-time pace from the launch
@@ -62,9 +60,7 @@ const AC_TIME_COMPRESSION = 86400 / AC_DAY_LENGTH_S;
  * Mutates and returns `outDate` (a single Date instance reused per frame).
  */
 function gameDateNow(outDate) {
-  const realElapsedMs = Date.now() - AC_LAUNCH_UNIX_EPOCH_MS;
-  const gameElapsedMs = realElapsedMs * AC_TIME_COMPRESSION;
-  outDate.setTime(AC_LAUNCH_UNIX_EPOCH_MS + gameElapsedMs);
+  outDate.setTime(gameDateMsNow(globalThis.window?.__sessionHandle, Date.now()));
   return outDate;
 }
 

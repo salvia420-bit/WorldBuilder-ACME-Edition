@@ -118,6 +118,17 @@ export const LOCAL_ACTIONS = [
   // #hb-map-overlay); retail only had the F3 gmMapUI panel. M is free
   // (movement WASDQE, T = target) and is ignored while typing.
   { labelHash: "0xFF00002B", label: "World Map (toggle)", defaultCode: "KeyM" },
+  // death-5 (2026-10-08 round 2) — retail corpse-loot actions
+  // (CPlayerSystem::OnAction acclient.c:399807-399833; action names
+  // SelectionClosest/NextUnopenedCorpse 0x10000121/0x10000122 and
+  // SelectionUseClosest/NextUnopenedCorpse 0x1000003E/0x1000003F). Unbound by
+  // default (no retail default in the docs/action-map finding) — bind them in
+  // Options → Controls. Dispatched by the index.html keydown handler to
+  // EntityManager.unopenedCorpseAction.
+  { labelHash: "0xFF00002C", label: "Closest Unopened Corpse", defaultCode: null },
+  { labelHash: "0xFF00002D", label: "Next Unopened Corpse", defaultCode: null },
+  { labelHash: "0xFF00002E", label: "Use Closest Unopened Corpse", defaultCode: null },
+  { labelHash: "0xFF00002F", label: "Use Next Unopened Corpse", defaultCode: null },
 ];
 
 /** Stable identifiers for synthetic local actions — handlers call
@@ -168,6 +179,11 @@ export const LOCAL_ACTION_IDS = Object.freeze({
   PREV_MONSTER: "0xFF000029",
   CLOSEST_MONSTER: "0xFF00002A",
   WORLD_MAP: "0xFF00002B",
+  // death-5 (round 2) — corpse-loot cycle.
+  CLOSEST_UNOPENED_CORPSE: "0xFF00002C",
+  NEXT_UNOPENED_CORPSE: "0xFF00002D",
+  USE_CLOSEST_UNOPENED_CORPSE: "0xFF00002E",
+  USE_NEXT_UNOPENED_CORPSE: "0xFF00002F",
 });
 
 let cache = null;

@@ -36,11 +36,19 @@ export const VIEWER_CELL_ON = (() => {
   }
 })();
 
-/** OpenAC `PhysicsCameraCollisionProbe.ViewerSphereRadius`. */
+/**
+ * Retail `viewer_sphere` radius (acclient.c:145543, 0x3E99999A = 0.3f;
+ * OpenAC `PhysicsCameraCollisionProbe.ViewerSphereRadius`). camera.js sweeps
+ * the same sphere under `?camRetailSphere` (camera-4, 2026-10-08 round 2).
+ */
 export const VIEWER_SPHERE_RADIUS_M = 0.3;
 
-/** Head pivot above the player's feet; the same one camera.js sweeps from. */
-export const VIEWER_PIVOT_Z_M = 1.6;
+/**
+ * Pivot above the player's feet: `CAMERA_DEFAULT_PIVOT_Z` (acclient.c:39550),
+ * the same one camera.js sweeps from under `?camRetailSphere` (was 1.6, the
+ * legacy clip-chain head height, before 2026-10-08 round 2).
+ */
+export const VIEWER_PIVOT_Z_M = 1.5;
 
 /** An EnvCell id (low word ≥ 0x100) is an indoor cell. */
 export function isIndoorCellId(cell) {

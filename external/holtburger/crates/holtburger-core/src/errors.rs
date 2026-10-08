@@ -1,10 +1,45 @@
 use holtburger_protocol::errors::WeenieError;
 
+/// use-3 (2026-10-08): the retail client's own text for the use / move /
+/// pickup failure codes, verbatim from
+/// `ClientCommunicationSystem::HandleFailureEvent` (acclient.c:413716,
+/// cases at :415837-:415890) — the function both `Handle_Item__UseDone`
+/// (:401924) and `Handle_Communication__WeenieError` (:420742) call.
+/// `None` for codes outside this set.
+pub fn retail_failure_text(error: WeenieError) -> Option<&'static str> {
+    match error {
+        WeenieError::YoureTooBusy => Some("You're too busy!"),
+        WeenieError::Dead => Some("You can't do that... you're dead!"),
+        WeenieError::MotionFailure
+        | WeenieError::ObjectGone
+        | WeenieError::NoObject
+        | WeenieError::CantGetThere => Some("Unable to move to object!"),
+        WeenieError::YouChargedTooFar => Some("You charged too far!"),
+        WeenieError::ActionCancelled => Some("Action cancelled!"),
+        WeenieError::Frozen => Some("The item is under someone else's control!"),
+        WeenieError::Stuck => Some("You cannot pick that up!"),
+        WeenieError::YouAreTooEncumbered => Some("You are too encumbered to carry that!"),
+        _ => None,
+    }
+}
+
+/// use-3 (2026-10-08): failure codes retail never prints
+/// (`HandleFailureEvent` has no case for 0x3B / 0x3C, so they fall to its
+/// silent default branch).
+pub fn is_silent_failure(error: WeenieError) -> bool {
+    matches!(error, WeenieError::ILeftTheWorld | WeenieError::ITeleported)
+}
+
 pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> String {
+    // use-3: the retail HandleFailureEvent strings win (none of them take
+    // a parameter).
+    if let Some(text) = retail_failure_text(error) {
+        return text.to_string();
+    }
     // Some errors have custom formatting templates.
     let template = match error {
         // WeenieError (Parameter-less)
-        WeenieError::YoureTooBusy => Some("You're too busy!"),
+        // (YoureTooBusy → `retail_failure_text` above.)
         WeenieError::YouCantJumpWhileInTheAir => Some("You can't jump while in the air!"),
         WeenieError::YouAreTooTiredToDoThat => Some("You are too tired to do that!"),
         WeenieError::YouCantJumpFromThisPosition => Some("You can't jump from this position"),
@@ -311,4 +346,67 @@ pub fn is_actually_weenie_error(err: WeenieError) -> bool {
             | WeenieError::YouHaveEnteredTheChannel
             | WeenieError::CharacterNotAvailable
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn use_failures_read_as_retail() {
+        assert_eq!(format_weenie_error(WeenieError::YoureTooBusy, None), "You're too busy!");
+        assert_eq!(format_weenie_error(WeenieError::ActionCancelled, None), "Action cancelled!");
+        assert_eq!(
+            format_weenie_error(WeenieError::NoObject, None),
+            "Unable to move to object!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::CantGetThere, None),
+            "Unable to move to object!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::MotionFailure, None),
+            "Unable to move to object!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::ObjectGone, None),
+            "Unable to move to object!"
+        );
+        assert_eq!(format_weenie_error(WeenieError::Stuck, None), "You cannot pick that up!");
+        assert_eq!(
+            format_weenie_error(WeenieError::YouChargedTooFar, None),
+            "You charged too far!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::Frozen, None),
+            "The item is under someone else's control!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::YouAreTooEncumbered, None),
+            "You are too encumbered to carry that!"
+        );
+        assert_eq!(
+            format_weenie_error(WeenieError::Dead, None),
+            "You can't do that... you're dead!"
+        );
+    }
+
+    #[test]
+    fn retail_text_only_for_the_failure_set() {
+        assert_eq!(retail_failure_text(WeenieError::Stuck), Some("You cannot pick that up!"));
+        assert_eq!(retail_failure_text(WeenieError::YouKilledYourself), None);
+        // Other templates still apply.
+        assert_eq!(
+            format_weenie_error(WeenieError::YouKilledYourself, None),
+            "Ack! You killed yourself!"
+        );
+    }
+
+    #[test]
+    fn silent_failures() {
+        assert!(is_silent_failure(WeenieError::ITeleported));
+        assert!(is_silent_failure(WeenieError::ILeftTheWorld));
+        assert!(!is_silent_failure(WeenieError::Stuck));
+        assert!(!is_silent_failure(WeenieError::YoureTooBusy));
+    }
 }

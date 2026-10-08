@@ -20,6 +20,15 @@ export const CHARACTER_OPTION = Object.freeze({
   // and-watch auto-attack). Mirrors `holtburger_common::CharacterOption
   // ::AutoRepeatAttacks = 0x00` (character.rs:118). ACE defaults it OFF.
   AutoRepeatAttacks: 0x00,
+  // `DragItemToPlayerOpensTrade` (character.rs) — retail PlayerModule::
+  // DragItemOnPlayerOpensSecureTrade: an item dropped on another player
+  // opens / extends a secure trade instead of giving it
+  // (ItemHolder::AttemptPlaceIn3D, acclient.c:433262). Default off.
+  DragItemOnPlayerOpensSecureTrade: 0x17,
+  // `UseMainPackAsDefaultForPickingUpItems` (character.rs) — retail
+  // PlayerModule::MainPackPreferred: pickups go to the main pack even while
+  // a side pack is open (CPlayerSystem::PlaceInBackpack, acclient.c:395895).
+  MainPackPreferred: 0x29,
   // ACE CharacterOption.cs:144 — boosts arrow/bolt/dart launcher
   // velocity by 1.2× server-side. Wave 10 Phase 32 wired the client-
   // side prediction half; Wave 11 Phase 33 wires the wire-side bit.

@@ -36,6 +36,8 @@ use holtburger_protocol::messages::{
     FellowshipFullUpdateEventData, FellowshipMemberData, FellowshipQuitEventData,
     FellowshipUpdateFellowEventData, GameMessage, PlayerTeleportData,
 };
+use holtburger_protocol::errors::WeenieError;
+use holtburger_protocol::messages::trade::events::{DeclineTradeEventData, TradeFailureEventData};
 use holtburger_protocol::traits::ProtocolPack;
 use tempfile::tempdir;
 
@@ -5073,14 +5075,21 @@ fn test_reset_trade_sweeps_preview_only_entities() {
     );
 }
 
-#[test]
-fn test_clear_trade_acceptance_does_not_sweep_preview_entities() {
+/// trade-1: build a trade with both sides accepted and one item per side
+/// (the partner's is a preview-only entity), for the arm-split tests.
+fn trade_with_both_accepted(
+    player_guid: Guid,
+    partner_guid: Guid,
+    own_item: Guid,
+    preview_guid: Guid,
+) -> WorldState {
     let mut state = WorldState::synthetic();
-    let player_guid = Guid(0x50000142);
-    let preview_guid = Guid(0x60000143);
-
+    state.server_time = Some(ServerTimeSync {
+        server_time: 100.0,
+        local_time: Instant::now(),
+    });
     state.player.guid = player_guid;
-    state.register_trade(player_guid, Guid(0x5000BEEF), &mut Vec::new());
+    state.register_trade(player_guid, partner_guid, &mut Vec::new());
 
     let mut preview_entity = Entity::new(
         preview_guid,
@@ -5092,26 +5101,150 @@ fn test_clear_trade_acceptance_does_not_sweep_preview_entities() {
     state.mark_trade_preview(preview_guid);
 
     if let Some(trade) = state.trade.as_mut() {
-        trade.self_side.items.push(preview_guid);
+        trade.self_side.items.push(own_item);
+        trade.partner_side.items.push(preview_guid);
         trade.self_side.accepted = true;
         trade.partner_side.accepted = true;
     }
+    state
+}
+
+fn trade_event(target: Guid, event: GameEvent) -> GameEventMessage {
+    GameEventMessage {
+        target,
+        sequence: 1,
+        event,
+    }
+}
+
+#[test]
+fn test_clear_trade_acceptance_flushes_offers() {
+    // trade-1: gmSecureTradeUI::RecvNotice_ClearTradeAcceptance → Reset →
+    // FlushTradeLists; ACE ClearTradeAcceptance empties both windows after
+    // a failed finalize (busy / encumbered / no free slots).
+    let player_guid = Guid(0x50000142);
+    let own_item = Guid(0x80000143);
+    let preview_guid = Guid(0x60000143);
+    let mut state =
+        trade_with_both_accepted(player_guid, Guid(0x5000BEEF), own_item, preview_guid);
 
     let mut events = Vec::new();
-    state.clear_trade_acceptance(&mut events);
+    let handled = crate::handlers::trade::handle_event(
+        &mut state,
+        &trade_event(player_guid, GameEvent::ClearTradeAcceptance),
+        &mut events,
+    );
+    assert!(handled);
 
-    assert!(state.entities.get(preview_guid).is_some());
+    let trade = state.trade.as_ref().expect("trade stays open");
+    assert!(trade.self_side.items.is_empty(), "my offer flushed");
+    assert!(trade.partner_side.items.is_empty(), "partner offer flushed");
+    assert!(!trade.self_side.accepted);
+    assert!(!trade.partner_side.accepted);
+    assert!(
+        !state
+            .entity_lifecycle_state(preview_guid)
+            .is_some_and(|state| state.trade_preview),
+        "partner preview released"
+    );
     assert!(
         state
             .entity_lifecycle_state(preview_guid)
-            .is_some_and(|state| state.trade_preview)
+            .and_then(|state| state.prune_deadline)
+            .is_some(),
+        "preview-only entity becomes prune-eligible"
     );
+    assert!(state.entities.get(preview_guid).is_some(), "despawn waits for tick");
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::TradeStateUpdated(Some(_))))
+    );
+}
+
+#[test]
+fn test_decline_trade_clears_only_decliner() {
+    // trade-1: ClientTradeSystem::Handle_Trade__Recv_DeclineTrade —
+    // `if (source == player_id) _accepted = 0; else _p_accepted = 0;`.
+    let player_guid = Guid(0x50000144);
+    let partner_guid = Guid(0x5000BEF0);
+    let own_item = Guid(0x80000145);
+    let preview_guid = Guid(0x60000145);
+
+    // Partner declines: my acceptance stands (ACE still holds it).
+    let mut state = trade_with_both_accepted(player_guid, partner_guid, own_item, preview_guid);
+    let mut events = Vec::new();
+    assert!(crate::handlers::trade::handle_event(
+        &mut state,
+        &trade_event(
+            player_guid,
+            GameEvent::DeclineTrade(Box::new(DeclineTradeEventData {
+                who_declined: partner_guid,
+            })),
+        ),
+        &mut events,
+    ));
+    let trade = state.trade.as_ref().expect("trade stays open");
+    assert!(trade.self_side.accepted, "my acceptance is untouched");
+    assert!(!trade.partner_side.accepted);
+    assert_eq!(trade.self_side.items, vec![own_item], "offers are kept");
+    assert_eq!(trade.partner_side.items, vec![preview_guid]);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, WorldEvent::TradeStateUpdated(Some(_))))
+    );
+
+    // I decline: the partner's acceptance stands.
+    let mut state = trade_with_both_accepted(player_guid, partner_guid, own_item, preview_guid);
+    assert!(crate::handlers::trade::handle_event(
+        &mut state,
+        &trade_event(
+            player_guid,
+            GameEvent::DeclineTrade(Box::new(DeclineTradeEventData {
+                who_declined: player_guid,
+            })),
+        ),
+        &mut Vec::new(),
+    ));
+    let trade = state.trade.as_ref().expect("trade stays open");
+    assert!(!trade.self_side.accepted);
+    assert!(trade.partner_side.accepted, "partner acceptance is untouched");
     assert!(
         state
-            .trade
-            .as_ref()
-            .is_some_and(|trade| trade.self_side.items == vec![preview_guid])
+            .entity_lifecycle_state(preview_guid)
+            .is_some_and(|state| state.trade_preview),
+        "a decline does not sweep previews"
     );
+}
+
+#[test]
+fn test_trade_failure_removes_item_and_clears_flags() {
+    // trade-1: Handle_Trade__Recv_TradeFailure → Trade::RemoveItem(item, 1);
+    // ACE resets both TradeAccepted flags before its failure checks.
+    let player_guid = Guid(0x50000146);
+    let own_item = Guid(0x80000147);
+    let preview_guid = Guid(0x60000147);
+    let mut state =
+        trade_with_both_accepted(player_guid, Guid(0x5000BEF1), own_item, preview_guid);
+
+    let mut events = Vec::new();
+    assert!(crate::handlers::trade::handle_event(
+        &mut state,
+        &trade_event(
+            player_guid,
+            GameEvent::TradeFailure(Box::new(TradeFailureEventData {
+                object_guid: own_item,
+                reason: WeenieError::None,
+            })),
+        ),
+        &mut events,
+    ));
+    let trade = state.trade.as_ref().expect("trade stays open");
+    assert!(trade.self_side.items.is_empty(), "the rejected item leaves my list");
+    assert_eq!(trade.partner_side.items, vec![preview_guid], "partner offer kept");
+    assert!(!trade.self_side.accepted);
+    assert!(!trade.partner_side.accepted);
     assert!(
         events
             .iter()

@@ -326,6 +326,11 @@
       #chat-log li.cat-21 { color: #cc0000; font-weight: 700; }            /* broadcast */
       #chat-log li.cat-22 { color: #5c2e91; }                              /* society */
       #chat-log li.cat-23 { color: #5fa53f; }                              /* olthoi */
+      /* R-chat (2026-10-08): retail text types split out of tell/allegiance;
+         painted like the dev-log lines they used to be. */
+      #chat-log li.cat-24 { color: #7a1f9b; font-weight: 500; }            /* outgoing tell */
+      #chat-log li.cat-25 { color: #008080; }                              /* social (heard allegiance channel) */
+      #chat-log li.cat-26 { color: #008080; }                              /* social send (own allegiance channel) */
       /* Outbound echo (local user input) — neutral grey, mono. */
       #chat-log li.echo { color: #888; }
       /* Tab filtering. data-tab on #chat-log selects which categories
@@ -337,8 +342,8 @@
          own input regardless of which tab is active. */
       #chat-log[data-tab="local"] li:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
       #chat-log[data-tab="combat"] li:not(.cat-5):not(.cat-6):not(.echo) { display: none; }
-      #chat-log[data-tab="channels"] li:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
-      #chat-log[data-tab="tell"] li:not(.cat-2):not(.echo) { display: none; }
+      #chat-log[data-tab="channels"] li:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.cat-25):not(.cat-26):not(.echo) { display: none; }
+      #chat-log[data-tab="tell"] li:not(.cat-2):not(.cat-24):not(.echo) { display: none; }
       #chat-log[data-tab="magic"] li:not(.cat-7):not(.echo) { display: none; }
       #chat-log[data-tab="system"] li:not(.cat-0):not(.cat-8):not(.cat-9):not(.cat-10):not(.cat-11):not(.cat-18):not(.cat-19):not(.cat-20):not(.cat-21):not(.echo) { display: none; }
       #chat-form { display: flex; gap: 0.4rem; padding: 0.4rem; border-top: 1px solid #ddd; background: #f0f0f0; }
@@ -1102,6 +1107,7 @@
     <link rel="modulepreload" href="./scene3d/audio/ambient_runtime.js">
     <link rel="modulepreload" href="./scene3d/audio/audio_manager.js">
     <link rel="modulepreload" href="./scene3d/audio/baked_ambient_source.js">
+    <link rel="modulepreload" href="./scene3d/audio/emitter_position.js">
     <link rel="modulepreload" href="./scene3d/audio/retail_mixer.js">
     <link rel="modulepreload" href="./scene3d/audio/retail_sound_rules.js">
     <link rel="modulepreload" href="./scene3d/audio/sound_table_cache.js">
@@ -1129,6 +1135,7 @@
     <link rel="modulepreload" href="./scene3d/color_grade.js">
     <link rel="modulepreload" href="./scene3d/csm.js">
     <link rel="modulepreload" href="./scene3d/culling.js">
+    <link rel="modulepreload" href="./scene3d/death_hold.js">
     <link rel="modulepreload" href="./scene3d/diag.js">
     <link rel="modulepreload" href="./scene3d/diag/assets.js">
     <link rel="modulepreload" href="./scene3d/diag/cast.js">
@@ -1166,6 +1173,7 @@
     <link rel="modulepreload" href="./scene3d/gfx_relief.js">
     <link rel="modulepreload" href="./scene3d/grass_interior_mask.js">
     <link rel="modulepreload" href="./scene3d/ground_fog.js">
+    <link rel="modulepreload" href="./scene3d/held_location.js">
     <link rel="modulepreload" href="./scene3d/hook_windows.js">
     <link rel="modulepreload" href="./scene3d/hud.js">
     <link rel="modulepreload" href="./scene3d/ibl_environment.js">
@@ -1231,6 +1239,7 @@
     <link rel="modulepreload" href="./scene3d/skip_empty_multidraw.js">
     <link rel="modulepreload" href="./scene3d/skip_hidden_matrix.js">
     <link rel="modulepreload" href="./scene3d/sky_dome.js">
+    <link rel="modulepreload" href="./scene3d/sky_game_date.js">
     <link rel="modulepreload" href="./scene3d/sky_glow.js">
     <link rel="modulepreload" href="./scene3d/sky_lighting.js">
     <link rel="modulepreload" href="./scene3d/spawns.js">
@@ -1329,6 +1338,7 @@
     <link rel="modulepreload" href="./ui/ac_cast_precheck.js">
     <link rel="modulepreload" href="./ui/ac_cast_predict.js">
     <link rel="modulepreload" href="./ui/ac_cast_spell.js">
+    <link rel="modulepreload" href="./ui/ac_character_options.js">
     <link rel="modulepreload" href="./ui/ac_clothing.js">
     <link rel="modulepreload" href="./ui/ac_combat_maneuver.js">
     <link rel="modulepreload" href="./ui/ac_combat_mode_intent.js">
@@ -4801,7 +4811,7 @@
             }, 3000);
           }, __sessionUiOpts);
 
-          const { routeSlashCommand } = initSlashCommands();
+          const { routeSlashCommand, routePublicChat } = initSlashCommands();
 
           chatForm.addEventListener("submit", (ev) => {
             ev.preventDefault();
@@ -4833,34 +4843,52 @@
               if (routed.error) {
                 appendChatLine(`[Chat] ${routed.error}`, 10);
               } else if (routed.echo) {
-                // OutgoingTell category (4) for tell echoes, neutral
-                // for channel messages.
-                appendChatLine(routed.echo, null);
+                // R-chat chat-3 (2026-10-08): only lines the server
+                // never echoes carry a local echo now — the soul-emote
+                // `You …` line (category EMOTE, retail Pose) and the
+                // `> @cmd` server-command line (neutral).
+                appendChatLine(
+                  routed.echo,
+                  typeof routed.category === "number" ? routed.category : null,
+                );
               }
               chatInput.value = "";
               chatInput.focus();
               return;
             }
 
-            // Fall-through: plain say or @admin command via Talk.
-            try {
-              activeHandle.sendChat(message);
-            } catch (err) {
-              // Send-error gets the popup category (10) so users see
-              // it visually distinct from an ACE-pushed line.
-              appendChatLine(
-                `[Send error] ${String(err?.message ?? err)}`,
-                10,
-              );
-              return;
+            // Fall-through: plain say or a server @command via Talk.
+            // R-chat chat-4 (2026-10-08): plain speech is retail
+            // PublicChat — inline *pose* / <pose> tokens soul-emote and
+            // drop out of the spoken text; only a non-empty remainder
+            // is sent.
+            const isServerCommand = message.startsWith("@");
+            let spoken = message;
+            if (!isServerCommand && typeof routePublicChat === "function") {
+              const pub = routePublicChat(activeHandle, message);
+              for (const err of pub.errors) appendChatLine(`[Chat] ${err}`, 10);
+              for (const line of pub.echoes) appendChatLine(line, pub.category);
+              spoken = pub.spoken;
             }
-            // Local echo so users can see their own commands
-            // immediately. ACE doesn't echo Talk back to the sender
-            // for ad-hoc speech, so without this the command appears
-            // to have done nothing visually. Pass `null` so it picks
-            // up the `.echo` neutral class and stays visible across
-            // every tab filter.
-            appendChatLine(`> ${message}`, null);
+            if (spoken) {
+              try {
+                activeHandle.sendChat(spoken);
+              } catch (err) {
+                // Send-error gets the popup category (10) so users see
+                // it visually distinct from an ACE-pushed line.
+                appendChatLine(
+                  `[Send error] ${String(err?.message ?? err)}`,
+                  10,
+                );
+                return;
+              }
+            }
+            // R-chat chat-3 (2026-10-08): no local echo for speech — ACE
+            // echoes HearSpeech to the speaker and the wasm prints the
+            // retail `You say, "…"` (the old `> text` echo doubled every
+            // line). ACE does not echo a server @command, so that one
+            // keeps its neutral `> @cmd` line.
+            if (isServerCommand) appendChatLine(`> ${message}`, null);
             chatInput.value = "";
             chatInput.focus();
           }, __sessionUiOpts);
@@ -5362,6 +5390,25 @@
                 if (cycled) {
                   try { em.cycleTarget(cycled, "monster"); } catch (e) {
                     console.warn("[targetCycle] cycleTarget failed:", e);
+                  }
+                  ev.preventDefault();
+                  return;
+                }
+              }
+              // death-5 (2026-10-08 round 2) — retail corpse-loot keys
+              // (CPlayerSystem::OnAction acclient.c:399807-399833), unbound
+              // by default (Options → Controls). The Use variants also Use the
+              // selected corpse.
+              if (em && typeof em.unopenedCorpseAction === "function") {
+                const corpseAct = [
+                  [__LOCAL_ACTION_IDS.CLOSEST_UNOPENED_CORPSE, "closest", false],
+                  [__LOCAL_ACTION_IDS.NEXT_UNOPENED_CORPSE, "next", false],
+                  [__LOCAL_ACTION_IDS.USE_CLOSEST_UNOPENED_CORPSE, "closest", true],
+                  [__LOCAL_ACTION_IDS.USE_NEXT_UNOPENED_CORPSE, "next", true],
+                ].find(([id]) => __matchesKeyBinding(ev, __resolveLocalBinding(id, null)));
+                if (corpseAct) {
+                  try { em.unopenedCorpseAction(corpseAct[1], corpseAct[2] ? handle : null); } catch (e) {
+                    console.warn("[targetCycle] unopenedCorpseAction failed:", e);
                   }
                   ev.preventDefault();
                   return;

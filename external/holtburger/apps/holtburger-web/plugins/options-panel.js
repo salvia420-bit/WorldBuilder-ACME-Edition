@@ -855,6 +855,23 @@ function renderOfflineBanner(bodyEl, ctx) {
   }
 }
 
+// charopt-1: retail CPlayerModule::OnChanged (acclient.c 452957) keeps
+// IgnoreFellowshipRequests (0x02) and FellowshipAutoAcceptRequests (0x12)
+// mutually exclusive — turning one ON first clears the other and sends
+// (pair, false), then (option, true). The wasm SetCharacterOption arm does
+// the same; sending the pair-off here first keeps an older wasm correct and
+// costs nothing on a new one (the pair is already off when the primary
+// lands, so it sends no duplicate).
+const FELLOWSHIP_OPTION_PAIR = Object.freeze({ 0x02: 0x12, 0x12: 0x02 });
+
+/** The option a toggle must clear first (retail OnChanged pair), or null. */
+export function fellowshipPairToClear(idx, value, isOn) {
+  if (!value) return null;
+  const pair = FELLOWSHIP_OPTION_PAIR[idx >>> 0];
+  if (pair === undefined) return null;
+  return isOn(pair) ? pair : null;
+}
+
 function buildCharacterOptionRow(opt, ctx, env) {
   const { handle, localCache, offline } = ctx;
   const { row, cb } = boolOptionRow(
@@ -863,6 +880,21 @@ function buildCharacterOptionRow(opt, ctx, env) {
     (value) => {
       if (env?.session && !env.session.charOptions.has(opt.idx)) {
         env.session.charOptions.set(opt.idx, !value);
+      }
+      const pair = fellowshipPairToClear(opt.idx, value, (i) => readCharacterOption(i, handle, localCache));
+      if (pair != null) {
+        // Record the pair's original so Cancel (revertSession) restores it.
+        if (env?.session && !env.session.charOptions.has(pair)) {
+          env.session.charOptions.set(pair, true);
+        }
+        saveCharacterOption(pair, false);
+        const pairBox = env?.charBoxes?.get(pair);
+        if (pairBox) pairBox.checked = false;
+        try {
+          handle?.setCharacterOption?.(pair >>> 0, false);
+        } catch (e) {
+          console.warn(`[options-panel] setCharacterOption(0x${pair.toString(16)}=false) failed:`, e);
+        }
       }
       saveCharacterOption(opt.idx, value);
       try {

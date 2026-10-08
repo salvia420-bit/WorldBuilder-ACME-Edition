@@ -35,7 +35,7 @@
 // `init3D`'s render loop calls this once per requestAnimationFrame
 // frame, BEFORE `renderer.render(scene, camera)`.
 
-import { shouldDeferDeathRemove, deathHoldVerdict, DEATH_CLAIM_POLL_MS } from "./death_hold.js";
+import { shouldDeferDeathRemove, deathHoldVerdict, DEATH_CLAIM_POLL_MS, serverReviveLocalCmd } from "./death_hold.js";
 import { asyncLinkBusy } from "./async_link_guard.js";
 // NETSYNC-4b (2026-10-07): ghost player-rig backstop (see sweepGhostRigs).
 import { GHOST_RIG_SWEEP_ON, GHOST_RIG_SWEEP_INTERVAL_MS, ghostRigSweepStep } from "./ghost_rigs.js";
@@ -193,6 +193,10 @@ const KIND_APPEARANCE = KIND.APPEARANCE;
 // Reuses EntityUpdate fields: model_id = parent (wielder) guid (0 = detach),
 // motionCommand = ParentEvent.location, motionStance = ParentEvent.placement.
 const KIND_ATTACH = KIND.ATTACH;
+// held-4 (2026-10-08): KIND_ATTACH with model_id 0 and this motionStance is a
+// PickupEvent "leave world" (wasm `ATTACH_PLACEMENT_LEAVE_WORLD`, lib.rs) —
+// never a real placement (retail Placement keys are < 0x100).
+const ATTACH_LEAVE_WORLD = 0xFFFFFFFF;
 // Wave 2 (2026-06-08) — a one-shot Action-class motion command (creature
 // attack swing B10, local eat/drink B6, emote/gesture) from the UpdateMotion
 // action `commands` list. motionCommand is the FULL 32-bit MotionCommand
@@ -309,6 +313,22 @@ const CAST_GESTURE_PARITY_ON = (() => {
 })();
 // Magic cast-gesture substate low-16 band (MagicBlast 0x2B .. MagicPray 0x39).
 function isLocalPredictedCastGestureLow(low) { return low >= 0x2b && low <= 0x39; }
+
+// death-2 (2026-10-08 round 2) — `?localDeathRevive` (default ON, `=off`/`0`/
+// `false` = the old skip). The server's resurrect Ready (motionCmd 0) is the
+// only thing that stands the local corpse-posed rig back up (death-1 gates
+// input while dead); FORCE_MOTION_LOCAL skips it as locomotion and the CQ-06
+// death-hold guard refuses a 0. `_armMotion` translates it into an explicit
+// Ready for a death-held local rig (death_hold.js `serverReviveLocalCmd`).
+const LOCAL_DEATH_REVIVE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("localDeathRevive")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch (_) {
+    return true;
+  }
+})();
 
 // A2 (perf plan 2026-05-18) — module-scratch object passed to
 // `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
@@ -3496,6 +3516,10 @@ function _armRemove(scene3d, em, upd) {
   // Item #2 — drop a still-queued (not-yet-dispatched) spawn for this guid so
   // a spawn-then-despawn in the same burst can't later materialise an orphan.
   _cancelDeferredSpawn(g);
+  // held-4/held-5 (2026-10-08): a real removal (not an internal respawn) —
+  // drop any attach still resolving for this guid and the left-world items it
+  // owned. Before the death-hold deferral below, which only delays the rig.
+  try { em?.noteWireRemove?.(g); } catch (_) {}
   // (2026-07-02) — defer the visual disposal of a creature that JUST
   // received its Dead motion (entities.js stamps `_deathAt`), so the
   // collapse one-shot / frozen death pose renders instead of an instant
@@ -3506,6 +3530,13 @@ function _armRemove(scene3d, em, upd) {
     const inst = em?.entityMap?.get?.(g);
     const deadAt = inst?._deathAt;
     if (inst && typeof deadAt === "number") {
+      // death-3 (2026-10-08 round 2, `?deathSelectRelease`): the object is
+      // gone NOW even though its rig lingers below — retail
+      // ACCWeenieObject::Remove (acclient.c:438580-438606) drops the selection
+      // at the delete so auto-target can move on. Runs in the same call that
+      // marks `_removePending` (or after the claim), which the next tick's
+      // re-select guard reads.
+      try { em.releaseSelectionOnServerDelete?.(g, true); } catch (_) {}
       // (2026-07-06) If a corpse handoff has claimed this creature, the corpse's
       // own reveal timer removes it exactly when the collapse ends (and reveals
       // the corpse in the same beat) — don't also schedule our own disposal.
@@ -3697,6 +3728,19 @@ function _armMotion(scene3d, em, upd) {
       // through so the echo is the single animation source. Fail-open.
     }
   }
+  // death-2 (`?localDeathRevive`): the server's NON-autonomous Ready (wire
+  // motionCmd 0) for the death-held LOCAL rig is an explicit Ready — retail
+  // unpacks it (acclient.c:311186-311190) and the player stands up at the
+  // lifestone. Applied in the skip branch below: setMotion's Ready passes the
+  // CQ-06 guard and its Bug-6 block clears the local death state.
+  const revive = (LOCAL_DEATH_REVIVE_ON && !isAuto && isLocalPlayerGuid(motionGuid))
+    ? serverReviveLocalCmd({
+      isLocal: true,
+      isAuto,
+      motionCmd,
+      deathHeld: !!em.isDeathHeld?.(motionGuid),
+    })
+    : 0;
   // FORCE_MOTION_LOCAL (B5#2 + SG-B): when ON, a server-FORCED
   // (`!isAuto`) NON-LOCOMOTION pose/action passes through to the
   // local rig; an autonomous echo OR a locomotion-class command is
@@ -3720,6 +3764,8 @@ function _armMotion(scene3d, em, upd) {
       st,
       +(upd.motionSpeed ?? 1.0)
     );
+  } else if (revive) {
+    em.setMotion(motionGuid, revive, st || em.getStance?.(motionGuid) || 0x8000003d, 1.0);
   } else if (st !== 0) {
     // Track B9 (2026-06-08): skip the local LOCOMOTION command but
     // restore the server-authoritative STANCE half of UpdateMotion
@@ -3902,6 +3948,19 @@ function _armAttach(scene3d, em, upd) {
   // resolved holding-location frame.
   const childGuid = upd.guid >>> 0;
   const parentGuid = (upd.modelId ?? 0) >>> 0;
+  // held-4 (2026-10-08, `?pickupLeaveWorld`): a detach whose placement is the
+  // leave-world sentinel is the wasm's PickupEvent for an item its wielder
+  // still owns (retail DoPickupEvent = unset_parent + leave_world): keep the
+  // rig, hidden, for the next ParentEvent. An older EntityManager without
+  // `leaveWorld` falls through to the plain detach.
+  if (
+    parentGuid === 0 &&
+    ((upd.motionStance ?? 0) >>> 0) === ATTACH_LEAVE_WORLD &&
+    typeof em.leaveWorld === "function"
+  ) {
+    em.leaveWorld(childGuid);
+    return;
+  }
   // Bug 14 (2026-10-07): a held item's spawn (pushed just before this
   // attach in the same batch) used to wait its turn in the time-sliced spawn
   // queue, then build at the WIELDER's pose — which sent it through the

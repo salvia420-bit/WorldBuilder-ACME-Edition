@@ -99,6 +99,10 @@ const TOLERANCE = 1e-4;
 // The port treats the supplied gameTimeSec as "seconds since
 // AC_LAUNCH_UNIX_EPOCH" — identical convention to
 // CommandEngine.Skybox.cs's BuildSnapshotForGameTimeSec.
+// (daytime-1, 2026-10-08: the LIVE evaluator now re-anchors on the server's
+// PortalYearTicks via SkyEvalState::set_server_clock; this port takes an
+// explicit seconds-since-anchor input, so it is anchor-agnostic — feed it
+// PortalYearTicks to reproduce a server-synced frame.)
 
 function calcPresentDayGroup(day, year, daysPerYear, numGroups) {
   if (numGroups === 0) return 0;

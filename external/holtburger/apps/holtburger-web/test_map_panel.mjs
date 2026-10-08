@@ -32,7 +32,7 @@ const {
   headingToBearingDeg, bearingToCompass, waypointVector, formatDistance,
   zoomAt, fitView, centreView, clampView, toMapPx, toLocalPx, MAP_W, MAP_H,
   gridStep, scaleBarFor, placeLabels, sanitizeWaypoint, derethDateTime, mapIsCrisp,
-  blipKindOf, blipColor, readRoster,
+  blipKindOf, blipColor, readRoster, DERETH_MONTHS, calendarFromHandle,
 } = M;
 
 let passed = 0, failed = 0;
@@ -280,6 +280,51 @@ check("ACE yearZeroTicks = Snowreap 1, 10 P.Y.; yearOneTicks = Morningthaw 1, 11
 });
 check("calendar rejects pre-session 0, NaN and past ACE's MaxValue", () => {
   assertEq([derethDateTime(0), derethDateTime(NaN), derethDateTime(1073741829), derethDateTime(1.79e9)], [null, null, null, null], "invalid");
+});
+// daytime-3 (R2 2026-10-08): GetDateTimeString (acclient.c:463286) prints the
+// DAT season name verbatim; Region 0x13000000 spells the 7th "HarvestGain".
+check("season names are the Region DAT's (HarvestGain, not Harvestgain)", () => {
+  assertEq(DERETH_MONTHS, [
+    "Morningthaw", "Solclaim", "Seedsow", "Leafdawning", "Verdantine", "Thistledown",
+    "HarvestGain", "Leafcull", "Frostfell", "Snowreap", "Coldeve", "Wintersebb",
+  ], "all 12");
+  assertEq(derethDateTime(4020 + 7620 * 179).date, "HarvestGain 1, 10 P.Y.", "day 180");
+});
+check("calendarFromHandle prefers the wasm GameTime port, same shape", () => {
+  const calls = [];
+  const handle = {
+    derethCalendarAt(t) {
+      calls.push(t);
+      return {
+        year: 10, dayOfYear: 180, seasonIndex: 6, seasonName: "HarvestGain", dayInSeason: 1,
+        timeOfDayIndex: 0, presentTimeOfDay: 0, isNight: true,
+        dateString: "HarvestGain 1, 10 P.Y.", timeString: "Darktide",
+      };
+    },
+  };
+  const d = calendarFromHandle(handle, 1368000);
+  assertEq(calls, [1368000], "called once with the ticks");
+  assertEq(d, {
+    year: 10, month: "HarvestGain", day: 1, hour: "Darktide", hourIndex: 0, timeOfDay: 0,
+    date: "HarvestGain 1, 10 P.Y.", time: "Darktide",
+  }, "mapped");
+  // With the retail tables the port and the fallback print the same strip.
+  const fb = derethDateTime(1368000);
+  assertEq([d.date, d.time], [fb.date, fb.time], "same strip text");
+  // A Map-shaped record (serde-wasm-bindgen) reads the same.
+  const m = calendarFromHandle({ derethCalendarAt: () => new Map(Object.entries(handle.derethCalendarAt(1368000))) }, 1368000);
+  assertEq(m, d, "Map shape");
+});
+check("calendarFromHandle falls back to the hardcoded tables", () => {
+  const fb = derethDateTime(210);
+  assertEq(calendarFromHandle(null, 210), fb, "no handle");
+  assertEq(calendarFromHandle({}, 210), fb, "stale pkg (no export)");
+  assertEq(calendarFromHandle({ derethCalendarAt: () => undefined }, 210), fb, "sky not populated");
+  assertEq(calendarFromHandle({ derethCalendarAt: () => { throw new Error("x"); } }, 210), fb, "throws");
+  assertEq(calendarFromHandle({ derethCalendarAt: () => ({ dateString: 5 }) }, 210), fb, "malformed");
+  let called = false;
+  assertEq(calendarFromHandle({ derethCalendarAt: () => { called = true; return {}; } }, 0), null, "pre-session 0");
+  assertEq(called, false, "invalid ticks never reach the wasm");
 });
 
 console.log("\n===========================================================");

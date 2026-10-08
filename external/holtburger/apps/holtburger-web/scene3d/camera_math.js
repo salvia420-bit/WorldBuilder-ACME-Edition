@@ -378,3 +378,107 @@ export function guardLookHorizontal(
     dirX, dirY,
   };
 }
+
+// ---- 2026-10-08 round 2: viewer order / in-place turns / combat target -----
+
+/**
+ * Default-ON camera escape reader: true only for `off` / `0` / `false`
+ * (docs/url-flags.md, 2026-10-08 round 2 camera rows).
+ */
+export function camFlagOff(v) {
+  const s = String(v ?? "").toLowerCase();
+  return s === "off" || s === "0" || s === "false";
+}
+
+/**
+ * Unit vector from `from` to `to` ({x,y,z}), or null when they coincide.
+ */
+export function viewerForward(from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (!(len > 1e-6) || !Number.isFinite(len)) return null;
+  return { x: dx / len, y: dy / len, z: dz / len };
+}
+
+/**
+ * camera-2 — one retail viewer update: smooth FIRST, then collide.
+ *
+ * `CameraManager::UpdateCamera` (acclient.c:147425) interpolates FROM the
+ * previously published viewer — the swept eye — TOWARD the UNCLIPPED sought
+ * frame (`Frame::interpolate_origin` :147841, frac = stiffness*quantum*10).
+ * `SmartBox::update_viewer` (:144991) then sweeps the viewer sphere from the
+ * pivot to that sought origin (`init_object(player, 0x5C)` :145086) and
+ * publishes the transit's `curr_pos` (:145091). So a pull-in is immediate,
+ * re-extension is damped, and the published eye is always a swept one.
+ * FREE_ROTATE keeps the sought orientation, so the view direction comes from
+ * the IDEAL eye and never from the collided one.
+ *
+ * @param {{x,y,z}|null} prevEye last published eye (null = unseeded → snap)
+ * @param {{x,y,z}} idealEye the unclipped sought eye
+ * @param {number} frac `stiffnessFrac` (1 = hard-lock)
+ * @param {(sought:{x,y,z})=>{x,y,z}} [sweepFn] pivot→sought collision sweep
+ * @param {{x,y,z}} [look] look point; `fwd` = unit(look - idealEye)
+ * @returns {{sought, eye, fwd, snapped}} `snapped` = the orientation should
+ *   snap too (unseeded, hard-lock, or a > STIFFNESS_TELEPORT_SNAP_M jump).
+ */
+export function retailViewerStep(prevEye, idealEye, frac, sweepFn, look) {
+  let sought = idealEye;
+  let snapped = !prevEye || !(frac < 1);
+  if (!snapped) {
+    const dx = idealEye.x - prevEye.x;
+    const dy = idealEye.y - prevEye.y;
+    const dz = idealEye.z - prevEye.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(d <= STIFFNESS_TELEPORT_SNAP_M)) {
+      snapped = true; // teleport (ours-only guard, see the constant) or NaN
+    } else if (d > STIFFNESS_SNAP_DIST_M) {
+      sought = {
+        x: prevEye.x + dx * frac,
+        y: prevEye.y + dy * frac,
+        z: prevEye.z + dz * frac,
+      };
+    }
+  }
+  const eye = typeof sweepFn === "function" ? sweepFn(sought) : sought;
+  const fwd = look ? viewerForward(idealEye, look) : null;
+  return { sought, eye, fwd, snapped };
+}
+
+/** Heading change (rad) below which a frame counts as "not turning". */
+export const IN_PLACE_TURN_EPS_RAD = 1e-3;
+
+/**
+ * camera-5 — followYaw delta for a keyless in-place turn. Retail keeps
+ * viewer_offset in the player's frame (`CameraManager::UpdateCamera`
+ * acclient.c:147425 rebuilds pivot_frame from the player every update, no
+ * movement gate; `CameraSet::Rotate` :148788 rotates the offset inside it),
+ * so a turn-to-face, server TurnTo or pursuit turn carries the camera round
+ * by the same angle — a rigid follow, not an ease to directly behind.
+ *
+ * Returns the wrapped `h - prevH` (followYaw convention), or 0 when the
+ * player is moving, a drive/turn key is held, the user is dragging, either
+ * heading is missing, or the change is ≤ IN_PLACE_TURN_EPS_RAD.
+ */
+export function inPlaceTurnYawDelta(prevH, h, { moved, keyed, dragging } = {}) {
+  if (moved || keyed || dragging) return 0;
+  if (!Number.isFinite(prevH) || !Number.isFinite(h)) return 0;
+  const d = Math.atan2(Math.sin(h - prevH), Math.cos(h - prevH));
+  return Math.abs(d) > IN_PLACE_TURN_EPS_RAD ? d : 0;
+}
+
+/**
+ * charopt-2 — ViewCombatTarget (CharacterOption 0x07) camera heading.
+ * `ClientCombatSystem::UpdateTargetTracking` (acclient.c:407600) tracks the
+ * attack target in melee (2) / missile (4) mode; `CameraSet::TrackTarget`
+ * (:148758) aims the boom along pivot→(target + 0,0,0.5) in place of the
+ * player heading. Yaw-only approximation in followYaw's (sin, cos) forward
+ * convention: atan2(dx, dy). Null when the target sits on the pivot.
+ */
+export function trackedTargetYaw(pivot, target) {
+  const dx = target.x - pivot.x;
+  const dy = target.y - pivot.y;
+  if (!(Math.hypot(dx, dy) >= 1e-4)) return null;
+  return Math.atan2(dx, dy);
+}

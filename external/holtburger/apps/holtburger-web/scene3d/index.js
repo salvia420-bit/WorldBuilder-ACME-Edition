@@ -157,6 +157,8 @@ import { armEnvCellPoolGroups, envCellPoolCensus } from "./pool_envcells.js";
 import { currentTime, particleClockMode, setCurrentTime } from "./particles/time_rng.js";
 import { ownerRegistry as particleOwnerRegistry } from "./particles/owner_registry.js"; // P3.8 __diag.particles() bridge
 import { EntityManager } from "./entities.js";
+// held-6 (2026-10-08): flushWieldedDirty's fallback mount = ACE GetPlacementLocation.
+import { heuristicParentLocation } from "./held_location.js";
 // `entMB` instrument + `?recolor` arm label for `__diag.entityOwned()`
 // (2026-07-26, RESULTS-matcache-falsifier next-move 1).
 import { entityOwnedTally } from "./entity_owned_tally.js";
@@ -208,6 +210,7 @@ import {
   readSelectionIndicatorMode,
 } from "./selection_brackets.js";
 import { AudioManager } from "./audio/audio_manager.js";
+import { emitterPosThree } from "./audio/emitter_position.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
@@ -2496,9 +2499,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         const emap = liveScene3dRef?.entityManager?.entityMap;
         if (emap) {
           liveScene3dRef.audioManager.updateFollowingPositions((guid) => {
-            const inst = emap.get(guid >>> 0);
-            const p = inst?.root?.position;
-            if (!p) return null;
             // D4-NEW-1 (2026-06-05) — listener/emitter coordinate-frame
             // parity. The listener is set above from `cam.position`, which
             // is a three.js-frame vector. `inst.root.position` is the LOCAL
@@ -2512,8 +2512,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             // Retail keeps emitter+listener in one shared AC Position frame
             // (acclient.c:383163-383164). (audio-fidelity-deep
             // D4-NEW-1-verification.md, verdict PARTIAL/HIGH.)
-            const [tx, ty, tz] = acToThree(p.x, p.y, p.z);
-            return { x: tx, y: ty, z: tz };
+            // audio-2 (2026-10-08): `emitterPosThree` does that, and gives a
+            // wielded item (hand-local root) its WORLD position.
+            return emitterPosThree(emap.get(guid >>> 0), emap);
           });
         }
       } catch (_) {
@@ -3197,6 +3198,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // default-ON readers); this scope reuses the manager's parsed value.
   const entityManager = new EntityManager(scene3dForBuilders, wasmExports);
   const wieldHandAttach = entityManager._wieldHandAttach;
+  // held-6 (2026-10-08): `?heldMountStrict` (DEFAULT ON), parsed by the
+  // EntityManager (entities.js readHeldMountStrictFlag) — see flushWieldedDirty.
+  const heldMountStrict = entityManager._heldMountStrict !== false;
 
   // Wielded-children pass for the local player rig in the world scene
   // + ALL remote players. The recv loop emits kind=47 EntityDetached
@@ -3363,8 +3367,35 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // is no longer dropped from the attach pass.
         const heldMask = wieldHandAttach ? 0x3F00000 : 0x3700000;
         if (((it.equipMask >>> 0) & heldMask) === 0) continue;
+        // FU-2: is this held child ALREADY mounted on this wielder? That, not
+        // the snapshot's length, is what "resolved" means.
+        heldSeen++;
+        let mounted = false;
+        let leftWorld = false;
+        try {
+          const ci = entityManager.entityMap?.get(childGuid);
+          mounted = !!ci && (ci._attachedParentGuid >>> 0) === (wielderGuid >>> 0);
+          leftWorld = !!ci?._leftWorld;
+        } catch (_) {}
+        // held-4 (2026-10-08): a PickupEvent took this item out of the world
+        // (held ammo between shots); only its next ParentEvent shows it again.
+        // Nothing for this pass to do.
+        if (mounted || leftWorld) { heldAttached++; continue; }
         let loc = (it.parentLocation >>> 0) || 0;
-        if (loc === 0) {
+        let place = (it.placement >>> 0) || 0;
+        if (loc === 0 && heldMountStrict) {
+          // held-6 (2026-10-08, `?heldMountStrict`): no authoritative
+          // ParentLocation yet — use ACE's own GetPlacementLocation mapping
+          // (location AND placement; scene3d/held_location.js), or wait for
+          // the server attach when the snapshot cannot decide (MissileWeapon:
+          // bow/crossbow vs thrown hangs on a combat style it does not carry).
+          const h = heuristicParentLocation(it.equipMask, it.itemType, {
+            ammoQuiver: wieldHandAttach,
+          });
+          if (!h) continue;
+          loc = h.loc;
+          if (place === 0) place = h.place;
+        } else if (loc === 0) {
           // FU-1 (2026-06-11): ACE usually omits PropertyInt::ParentLocation
           // (52) on wielded items, so `parent_location` falls through to 0.
           // With loc=0 the holding-location lookup misses and the weapon mounts
@@ -3372,6 +3403,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // of appearing in the hand on login. Implement the equip_mask
           // heuristic the lib.rs comment promised: Shield→Shield(3); every
           // main-hand weapon/caster (Melee|Missile|Held|TwoHanded)→RightHand(1).
+          // (`?heldMountStrict=off` only — the non-retail pre-held-6 guess.)
           const em = it.equipMask >>> 0;
           if (em & 0x00200000) loc = 3;
           else if (em & 0x03500000) loc = 1;
@@ -3380,16 +3412,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           // RightHand(1) when the wielder SetupModel has no Quiver frame.
           else if (wieldHandAttach && (em & 0x00800000)) loc = 5;
         }
-        const place = (it.placement >>> 0) || 0;
-        // FU-2: is this held child ALREADY mounted on this wielder? That, not
-        // the snapshot's length, is what "resolved" means.
-        heldSeen++;
-        let mounted = false;
-        try {
-          const ci = entityManager.entityMap?.get(childGuid);
-          mounted = !!ci && (ci._attachedParentGuid >>> 0) === (wielderGuid >>> 0);
-        } catch (_) {}
-        if (mounted) { heldAttached++; continue; }
         try {
           entityManager.attachChildToParent(childGuid, wielderGuid >>> 0, loc, place);
         } catch (_) {}

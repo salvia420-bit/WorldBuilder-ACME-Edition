@@ -145,6 +145,36 @@ impl ProtocolPack for FellowshipUpdateRequestActionData {
     }
 }
 
+/// C2S `Fellowship_ChangeFellowOpeness` (0x0291): the leader opens or closes
+/// the fellowship to recruiting by members.
+///
+/// Wire: one `u32` (`Open`). Chorizite shape:
+/// `Messages/C2S/Actions/Fellowship_ChangeFellowOpeness.generated.cs`.
+/// Retail: `CM_Fellowship::Event_ChangeFellowOpeness` (acclient.c 703025),
+/// sent from `gmFellowshipUI::ListenToElementMessage` (Open button).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FellowshipChangeOpennessActionData {
+    pub open: bool,
+}
+
+impl ProtocolUnpack for FellowshipChangeOpennessActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+
+        let open = u32::from_le_bytes(data[*offset..*offset + 4].try_into().ok()?) != 0;
+        *offset += 4;
+        Some(Self { open })
+    }
+}
+
+impl ProtocolPack for FellowshipChangeOpennessActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&u32::from(self.open).to_le_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +260,28 @@ mod tests {
 
         let fixture = hex::decode("CDAB3412A600000001000000").unwrap();
         assert_pack_unpack_parity(&fixture, &action);
+    }
+
+    #[test]
+    fn test_fellowship_change_openness_fixture() {
+        // Retail CM_Fellowship::Event_ChangeFellowOpeness writes 657
+        // (0x0291) then the u32 i_open.
+        let action = GameActionMessage {
+            sequence: 0x01020304,
+            action: GameAction::FellowshipChangeOpenness(Box::new(
+                FellowshipChangeOpennessActionData { open: true },
+            )),
+        };
+        let fixture = hex::decode("040302019102000001000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &action);
+
+        let closed = GameActionMessage {
+            sequence: 0x01020304,
+            action: GameAction::FellowshipChangeOpenness(Box::new(
+                FellowshipChangeOpennessActionData { open: false },
+            )),
+        };
+        let fixture = hex::decode("040302019102000000000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &closed);
     }
 }

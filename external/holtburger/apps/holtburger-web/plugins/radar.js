@@ -31,6 +31,9 @@
 //   * ACCWeenieObject::InqShowableOnRadar — only RadarBehavior (PropertyInt
 //     ShowableOnRadar 133) ∈ {ShowMovement 2, ShowAttacking 3, ShowAlways 4}
 //     is listed. Pure membership: a standing ShowMovement monster still blips.
+//     An object the server sent no RadarBehavior for never blips.
+//   * CPlayerSystem::Handle_Admin__Environs — BlackFog2 sets m_bRadarBlank
+//     and gmRadarUI::DrawBlip then draws no blips (centre plus stays).
 //   * CPlayerSystem::GetRadarRadius — range 75 m outdoors, 25 m indoors.
 //   * gmRadarUI::UpdateCoordinates / CPlayerSystem::InqPlayerCoords /
 //     LandDefs::gid_to_lcoord — "%.1f%s,%.1f%s" (NS first, no space), from the
@@ -60,7 +63,7 @@ import { setAcText } from "../ui/ac_font.js";
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { getHudScale, hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
 import { readLocalPlayerPose } from "../scene3d/frame_pose.js";
-import { blipColorForEntity, readFellowshipRoster } from "../scene3d/selection_brackets.js";
+import { blipColorForEntity, readFellowshipRoster, resolveRadarLook } from "../scene3d/selection_brackets.js";
 // The radar range / radar-visibility rules are shared with the selection
 // cycle (CPlayerSystem::SelectNext) and live in scene3d/target_cycle.js;
 // re-exported here for test_radar_projection.mjs and existing importers.
@@ -71,6 +74,8 @@ import {
   radarRangeForCell,
   isShowableOnRadar,
   fallbackRadarShowable,
+  radarShowableFor,
+  ITEM_TYPE_CREATURE,
 } from "../scene3d/target_cycle.js";
 export { RADAR_RANGE_OUTDOOR, RADAR_RANGE_INDOOR, isOutdoorCell, radarRangeForCell, isShowableOnRadar };
 
@@ -333,6 +338,25 @@ const RADAR_HOSTILE_ONLY_BY_URL = (() => {
   } catch (_) { return false; }
 })();
 
+// 2026-10-08 round 2 (docs/url-flags.md), DEFAULT-ON; `=off`/`0`/`false`
+// restores the previous rule.
+// `?radarRetailShowable` (radar-1): an absent RadarBehavior hides the blip.
+const RADAR_RETAIL_SHOWABLE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("radarRetailShowable") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
+// `?radarBlank` (radar-4): honour the AdminEnvirons BlackFog2 blackout.
+const RADAR_BLANK_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("radarBlank") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+})();
+
 function callNum(sh, fn, ...args) {
   try {
     if (!sh || typeof sh[fn] !== "function") return undefined;
@@ -341,10 +365,11 @@ function callNum(sh, fn, ...args) {
   } catch (_) { return undefined; }
 }
 
-// When the wasm bundle can't tell us the RadarBehavior (stale pkg/, or the
-// property was never hydrated) the radar falls back to
-// target_cycle.js `fallbackRadarShowable` (living things, vendors, portals,
-// lifestones — the classes ACE stamps ShowableOnRadar on).
+// Which objects blip is target_cycle.js `radarShowableFor`, shared with the
+// selection cycle: RadarBehavior 2/3/4 and not UI-hidden; an absent
+// RadarBehavior is hidden (radar-1). Its `fallbackRadarShowable` heuristic
+// (living things, vendors, portals, lifestones) applies only when the wasm
+// bundle has no `objectIntProperty` export at all (stale pkg/).
 
 const _info = new Map(); // guid → cached radar properties
 let _infoPruneAt = 0;
@@ -352,19 +377,20 @@ let _infoPruneAt = 0;
 function radarInfoFor(guid, meta, sh, now) {
   let rec = _info.get(guid);
   if (rec && now - rec.t < INFO_TTL_MS) { rec.seen = now; return rec; }
-  const odf = (meta?.objDescFlags ?? callNum(sh, "objectDescFlags", guid) ?? 0) >>> 0;
+  // radar-3: the LIVE flags (PK bits) and blip colour, shared with the
+  // target brackets (selection_brackets.js `resolveRadarLook`); re-read every
+  // INFO_TTL_MS, so a PK change shows within 2 s.
+  const { odf, blipColor } = resolveRadarLook(sh, guid, meta);
   const itemType = (meta?.itemType ?? callNum(sh, "objectIntProperty", guid, PROP_INT_ITEM_TYPE) ?? 0) >>> 0;
-  const behavior = callNum(sh, "objectIntProperty", guid, PROP_INT_SHOWABLE_ON_RADAR);
-  const showable = behavior !== undefined
-    ? isShowableOnRadar(behavior) && !(odf & ODF_UI_HIDDEN)
-    : fallbackRadarShowable(odf, itemType);
-  // Same lazy stash as entities.js setSelectedTarget so the target brackets
-  // and the radar read one `meta.radarBlipColor`.
-  let blipColor = meta?.radarBlipColor;
-  if (blipColor === undefined) {
-    const v = callNum(sh, "entityRadarBlipColor", guid);
-    blipColor = v === undefined ? 0 : (v >>> 0);
-    if (v !== undefined && meta) meta.radarBlipColor = blipColor;
+  let showable;
+  if (RADAR_RETAIL_SHOWABLE_ON) {
+    showable = radarShowableFor(sh, guid, odf, itemType);
+  } else {
+    // `?radarRetailShowable=off`: the heuristic also covers an absent value.
+    const rb = callNum(sh, "objectIntProperty", guid, PROP_INT_SHOWABLE_ON_RADAR);
+    showable = rb === undefined
+      ? fallbackRadarShowable(odf, itemType)
+      : isShowableOnRadar(rb) && !(odf & ODF_UI_HIDDEN);
   }
   let name = typeof meta?.name === "string" ? meta.name : "";
   if (!name) {
@@ -584,7 +610,16 @@ function ensureStyles() {
 let _overlayEl = null;
 let _hostileEl = null;
 let _radarHostileOnly = RADAR_HOSTILE_ONLY_BY_URL;
-let _lastSnapshot = null;
+// radar-5: update() only stores the raw per-tick values here (the `drawn`
+// array is already a fresh per-tick array kept for hover);
+// `window.__radar.snapshot()` formats them on demand through `_snapFormat`
+// (set by mount). Building the formatted object every 25 ms tick was pure
+// garbage for a debug hook nothing calls in play.
+const _snapRaw = {
+  valid: false, source: "none", heading: 0, range: 0, cellId: null, coords: null,
+  drawn: null, blank: false,
+};
+let _snapFormat = null;
 
 function setRadarHostileOnly(enabled) {
   _radarHostileOnly = !!enabled;
@@ -844,6 +879,12 @@ export function mount(_ctx) {
 
     const drawn = [];
     let source = "none";
+    // radar-4: AdminEnvirons BlackFog2 blanks every blip and the DrawSelected
+    // bracket (gmRadarUI::DrawBlip :263651 `if (!m_bRadarBlank)`); DrawObjects
+    // still computes the blip under the mouse, so hover/click keep working,
+    // and DrawChildren's centre plus stays. `window.__radarBlank` is written
+    // by app/client_events.js (ENVIRON_CHANGE), which may arrive before mount.
+    const blank = RADAR_BLANK_ON && window.__radarBlank === true;
     if (player) {
       source = (em?.entityMap?.size ?? 0) > 1 ? "scene" : "wasm";
       const cands = gatherCandidates(sh, em, localGuid, player, range, now);
@@ -855,20 +896,23 @@ export function mount(_ctx) {
       for (const c of cands) {
         if (drawn.length >= MAX_BLIPS) break;
         const info = c.info;
-        if (_radarHostileOnly && !((info.odf & ODF_ATTACKABLE) && !(info.odf & ODF_PLAYER))) continue;
+        // Non-retail filter; "hostile" = GetBlipColor's Creature predicate.
+        if (_radarHostileOnly && !((info.odf & ODF_ATTACKABLE) && (info.itemType & ITEM_TYPE_CREATURE)
+            && !(info.odf & ODF_PLAYER))) continue;
         const shape = blipShapeFor(
           { objDescFlags: info.odf, guid: c.guid, monarch: info.monarch }, _slow.player, fellowship,
         );
         if (shape === BLIP_SHAPE.NONE) continue;
         const p = projectToRadar(c.dx, c.dy, heading, range);
         if (!p) continue;
-        const base = blipColorForEntity(
-          { meta: { objDescFlags: info.odf, radarBlipColor: info.blipColor, guid: c.guid } },
-          fellowship,
-        );
+        const base = blipColorForEntity({
+          meta: { objDescFlags: info.odf, itemType: info.itemType, radarBlipColor: info.blipColor, guid: c.guid },
+        }, fellowship);
         const color = blipIntensity(c.dz) < 1 ? dimColor(base) : base;
-        drawPixels(k, blipPixels(shape), p.x, p.y, color);
-        if (selected && c.guid === selected) drawPixels(k, SELECTED_PIXELS, p.x, p.y, color);
+        if (!blank) {
+          drawPixels(k, blipPixels(shape), p.x, p.y, color);
+          if (selected && c.guid === selected) drawPixels(k, SELECTED_PIXELS, p.x, p.y, color);
+        }
         drawn.push({
           guid: c.guid, x: p.x, y: p.y, shape, color: base, name: info.name,
           dist: Math.sqrt(c.d2), dz: c.dz,
@@ -881,22 +925,35 @@ export function mount(_ctx) {
     blips = drawn;
     if (mouse || hoverGuid) refreshHover();
 
-    _lastSnapshot = {
-      source,
-      headingDeg: Math.round((heading * 180 / Math.PI) * 10) / 10,
-      range,
-      cellId: player ? `0x${(player.cellId >>> 0).toString(16).padStart(8, "0")}` : null,
-      coords: coordsText || null,
-      tokens: Object.fromEntries(["n", "e", "s", "w"].map((d) => [
-        d, { left: parseInt(tokens[d].style.left, 10), top: parseInt(tokens[d].style.top, 10) },
-      ])),
-      blips: drawn.map((b) => ({
-        guid: `0x${b.guid.toString(16).padStart(8, "0")}`, name: b.name,
-        x: b.x, y: b.y, shape: b.shape, color: b.color, dist: Math.round(b.dist * 10) / 10,
-      })),
-      locked: !!winPos?.isLocked?.(),
-    };
+    _snapRaw.valid = true;
+    _snapRaw.source = source;
+    _snapRaw.heading = heading;
+    _snapRaw.range = range;
+    _snapRaw.cellId = player ? (player.cellId >>> 0) : null;
+    _snapRaw.coords = coordsText || null;
+    _snapRaw.drawn = drawn;
+    _snapRaw.blank = blank;
   }
+
+  // radar-5: the debug snapshot, built only when `window.__radar.snapshot()`
+  // asks. Tokens / lock state are read at call time (they only change in
+  // update() / on a lock click).
+  _snapFormat = () => ({
+    source: _snapRaw.source,
+    headingDeg: Math.round((_snapRaw.heading * 180 / Math.PI) * 10) / 10,
+    range: _snapRaw.range,
+    cellId: _snapRaw.cellId == null ? null : `0x${_snapRaw.cellId.toString(16).padStart(8, "0")}`,
+    coords: _snapRaw.coords,
+    tokens: Object.fromEntries(["n", "e", "s", "w"].map((d) => [
+      d, { left: parseInt(tokens[d].style.left, 10), top: parseInt(tokens[d].style.top, 10) },
+    ])),
+    blips: (_snapRaw.drawn || []).map((b) => ({
+      guid: `0x${b.guid.toString(16).padStart(8, "0")}`, name: b.name,
+      x: b.x, y: b.y, shape: b.shape, color: b.color, dist: Math.round(b.dist * 10) / 10,
+    })),
+    blank: _snapRaw.blank,
+    locked: !!winPos?.isLocked?.(),
+  });
 
   function tick(now) {
     rafId = requestAnimationFrame(tick);
@@ -922,7 +979,9 @@ export function mount(_ctx) {
     tooltip.remove();
     _overlayEl = null;
     _hostileEl = null;
-    _lastSnapshot = null;
+    _snapFormat = null;
+    _snapRaw.valid = false;
+    _snapRaw.drawn = null;
     _info.clear();
     _slow.t = -Infinity;
   };
@@ -931,11 +990,12 @@ export function mount(_ctx) {
 // Runtime hooks: the hostile-only filter (also `?radarHostileOnly=1`) and a
 // read-only snapshot for verification —
 // `window.__radar.snapshot()` → {source, headingDeg, range, cellId, coords,
-// tokens:{n,e,s,w}, blips:[{guid,name,x,y,shape,color,dist}], locked}.
+// tokens:{n,e,s,w}, blips:[{guid,name,x,y,shape,color,dist}], blank, locked}
+// (`blips` still lists what a BlackFog2 blank hides from the canvas).
 if (typeof window !== "undefined") {
   window.__radar = {
     setRadarHostileOnly,
-    snapshot: () => (_lastSnapshot ? JSON.parse(JSON.stringify(_lastSnapshot)) : null),
+    snapshot: () => (_snapFormat && _snapRaw.valid ? _snapFormat() : null),
     isMounted: () => !!_overlayEl,
   };
 }

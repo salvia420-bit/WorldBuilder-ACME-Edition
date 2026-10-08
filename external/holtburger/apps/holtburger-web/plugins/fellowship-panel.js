@@ -28,7 +28,8 @@
 //     Request(visible): the server only streams fellow vitals while the
 //     panel is open. Replaces the old manual "Vital Updates" button.
 //   • gmFellowshipUI::UpdateButtons — Quit always; leader-only Disband /
-//     Open; Leader & Dismiss need a selected fellow who is not you;
+//     Open (no lock gate — ACE answers a locked toggle with
+//     FellowshipIsLocked); Leader & Dismiss need a selected fellow who is not you;
 //     Recruit needs a selected PLAYER who is not a fellow, room in the
 //     fellowship (Fellowship::IsFull: 9) and you leading or it being open.
 //   • ListenToElementMessage — a list click also selects that fellow in
@@ -38,12 +39,15 @@
 //     FellowshipSystem::GetEvenSplitXPPctg when the split is even.
 //   • CreateFellowship — name from the entry box, share-XP from the
 //     FellowshipShareXP option; the button needs a non-empty name.
+//   • ListenToElementMessage case 0x1000027D (Open button) — toggles
+//     _open_fellow and sends CM_Fellowship::Event_ChangeFellowOpeness; here
+//     the server's FullUpdate echo flips the label (Open ↔ Close).
 //
 // Wire: FellowshipCreate 0x00A2 · Quit 0x00A3 · Dismiss 0x00A4 ·
 // Recruit 0x00A5 · UpdateRequest 0x00A6 · AssignNewLeader 0x0290 ·
-// SetCharacterOption (fellowship option ordinals below). Changing openness
-// (GameAction FellowshipChangeOpenness 0x0291) has no wasm binding yet, so
-// the Open button stays disabled with an explanation.
+// ChangeOpenness 0x0291 · SetCharacterOption (fellowship option ordinals
+// below). A wasm build without the fellowshipChangeOpenness binding keeps
+// the Open button disabled.
 
 import {
   registerSocialPage, mountSocialHub, ensureSocialStyles,
@@ -123,6 +127,12 @@ export function vitalPct(cur, max) {
   const mx = Number(max) || 0;
   if (mx <= 0) return 0;
   return Math.max(0, Math.min(100, (c / mx) * 100));
+}
+
+function openTitle(isOpen) {
+  return isOpen
+    ? "Close the fellowship to recruiting by members"
+    : "Let members recruit into the fellowship";
 }
 
 /** gmFellowshipUI::UpdateButtons enable rules. */
@@ -473,9 +483,10 @@ function mountFellowshipPage(pageEl) {
           },
         });
       }, { title: "Leave the fellowship" }),
-      open: makeKitButton(snapshot.open ? "Close" : "Open", null, {
-        title: "Opening a fellowship to recruiting by members is not available yet",
-      }),
+      open: makeKitButton(snapshot.open ? "Close" : "Open", () => {
+        const next = !snapshot?.open;
+        withSession("fellowshipChangeOpenness", (h) => h.fellowshipChangeOpenness(next));
+      }, { title: openTitle(!!snapshot.open) }),
       recruit: makeKitButton("Recruit", () => {
         const g = selectedTargetGuid();
         if (g) withSession("fellowshipRecruit", (h) => h.fellowshipRecruit(g));
@@ -525,8 +536,12 @@ function mountFellowshipPage(pageEl) {
       selectedIsFellow: members.some((m) => m.guid === world),
     });
     for (const k of Object.keys(btns)) btns[k].disabled = !st[k];
-    // No wasm binding for FellowshipChangeOpenness (0x0291) yet.
-    btns.open.disabled = true;
+    // Label follows the server's openness (FullUpdate echo).
+    const label = snapshot.open ? "Close" : "Open";
+    if (btns.open.textContent !== label) btns.open.textContent = label;
+    btns.open.title = openTitle(!!snapshot.open);
+    // A wasm build without the FellowshipChangeOpenness (0x0291) binding.
+    if (typeof getHandle()?.fellowshipChangeOpenness !== "function") btns.open.disabled = true;
   }
 
   function render(snap) {

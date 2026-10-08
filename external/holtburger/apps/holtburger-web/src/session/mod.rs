@@ -33,6 +33,7 @@ pub(crate) struct LoopFlags {
     pub(crate) skip_contained_spawn_on: bool,
     pub(crate) spawn_hidden_state_on: bool,
     pub(crate) wielded_spawn_on: bool,
+    pub(crate) pickup_leave_world_on: bool,
     pub(crate) world_lifecycle_on: bool,
     pub(crate) unified_tick_on: bool,
     pub(crate) maint_prune_on: bool,
@@ -82,6 +83,9 @@ pub(crate) struct LoopCtx {
     >,
     pub(crate) latest_friends: std::rc::Rc<std::cell::RefCell<Option<FriendsSnapshot>>>,
     pub(crate) latest_squelch: std::rc::Rc<std::cell::RefCell<Option<SquelchSnapshot>>>,
+    /// R-chat chat-5 (2026-10-08): `/reply` target (last PLAYER teller),
+    /// shared with `SessionHandle::last_teller_name`.
+    pub(crate) last_teller: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     pub(crate) latest_title: std::rc::Rc<std::cell::RefCell<Option<TitleSnapshot>>>,
     pub(crate) latest_house_status: std::rc::Rc<std::cell::RefCell<Option<HouseStatus>>>,
     pub(crate) latest_house_data: std::rc::Rc<std::cell::RefCell<Option<HouseData>>>,

@@ -304,15 +304,21 @@ export function sanitizeWaypoint(raw) {
 // years, zero_time_of_year 3600 (ticks 0 = Morningthaw 1, 10 P.Y.,
 // Morntide-and-Half — ACE's dayZero/hourOne/dayOne/yearZero anchors all
 // reproduce exactly). The P.Y. rolls at Morningthaw, so Snowreap,
-// Coldeve and Wintersebb close the year. Names: acpedia "Time" (region
-// data). ACE caps ticks at 1073741828 (acclient crashes beyond).
+// Coldeve and Wintersebb close the year. Names: the Region 0x13000000
+// GameTime season/time-of-day names, which GameTime::GetDateTimeString
+// (acclient.c:463286-463349) prints verbatim — the DAT spells the 7th
+// season "HarvestGain" (all three Region copies; ACE Months enum too).
+// daytime-3 (R2 2026-10-08): these tables are the FALLBACK; the strip
+// prefers the wasm port of the retail lookup over the parsed Region tables
+// (`handle.derethCalendarAt`, see calendarFromHandle). ACE caps ticks at
+// 1073741828 (acclient crashes beyond).
 const DAY_TICKS = 7620;
 const ZERO_TIME_OF_YEAR = 3600;
 const ZERO_YEAR = 10;
 const MAX_PORTAL_TICKS = 1073741828;
 export const DERETH_MONTHS = Object.freeze([
   "Morningthaw", "Solclaim", "Seedsow", "Leafdawning", "Verdantine", "Thistledown",
-  "Harvestgain", "Leafcull", "Frostfell", "Snowreap", "Coldeve", "Wintersebb",
+  "HarvestGain", "Leafcull", "Frostfell", "Snowreap", "Coldeve", "Wintersebb",
 ]);
 export const DERETH_HOURS = Object.freeze([
   "Darktide", "Darktide-and-Half", "Foredawn", "Foredawn-and-Half",
@@ -335,6 +341,42 @@ export function derethDateTime(ticks) {
   const day = (dayOfYear % 30) + 1;
   const hour = DERETH_HOURS[hourIndex];
   return { year, month, day, hour, hourIndex, timeOfDay, date: `${month} ${day}, ${year} P.Y.`, time: hour };
+}
+
+/**
+ * daytime-3 (R2 2026-10-08) — the strip's date for `ticks`: the wasm port of
+ * retail GameTime::CalcDayBegin / CalcTimeOfDay / GetDateTimeString over the
+ * Region's parsed GameTime tables (`handle.derethCalendarAt(ticks)`, present
+ * once the sky Region is loaded), else the hardcoded derethDateTime(). Same
+ * validity domain as derethDateTime (null for 0 / NaN / past ACE's cap), same
+ * object shape, so the strip renders identically either way.
+ */
+export function calendarFromHandle(handle, ticks) {
+  const fallback = derethDateTime(ticks);
+  if (!fallback) return null;
+  let c = null;
+  try {
+    c = typeof handle?.derethCalendarAt === "function" ? handle.derethCalendarAt(Number(ticks)) : null;
+  } catch (_) {
+    c = null;
+  }
+  if (c instanceof Map) c = Object.fromEntries(c); // serde-wasm-bindgen shape
+  if (!c || typeof c.dateString !== "string" || typeof c.timeString !== "string") return fallback;
+  const year = Number(c.year);
+  const day = Number(c.dayInSeason);
+  const hourIndex = Number(c.timeOfDayIndex);
+  const timeOfDay = Number(c.presentTimeOfDay);
+  if (![year, day, hourIndex, timeOfDay].every(Number.isFinite)) return fallback;
+  return {
+    year,
+    month: typeof c.seasonName === "string" ? c.seasonName : fallback.month,
+    day,
+    hour: c.timeString,
+    hourIndex,
+    timeOfDay,
+    date: c.dateString,
+    time: c.timeString,
+  };
 }
 
 // gmMapUI s_rgLocations[53] (acclient.c, `gmMapUI::LocationRolloverInfo
@@ -644,7 +686,7 @@ function sampleFix(now) {
     shared.house = readHouse(handle);
     let t = 0;
     try { t = Number(handle?.serverTime?.()) || 0; } catch (_) { t = 0; }
-    shared.date = derethDateTime(t);
+    shared.date = calendarFromHandle(handle, t);
   }
   return shared.fix;
 }

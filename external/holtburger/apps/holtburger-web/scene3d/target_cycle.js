@@ -22,13 +22,15 @@
 // combat-relevant cycles) + a synthetic "any" that takes every attackable
 // object, plus COMPASS_COMBAT: SELECTION_TYPE_COMPASS_ITEM (2) as
 // ClientCombatSystem::AutoTarget issues it in melee/missile mode
-// (acclient.c:408728, filter :398090-398106). ITEM/CORPSE cycles are out of
-// scope.
+// (acclient.c:408728, filter :398090-398106), and UNOPENED_CORPSE (5, death-5
+// 2026-10-08 round 2): a corpse this client has not opened (:398069-398072),
+// the loot-cycle keys. The ITEM cycle is out of scope.
 export const SELECTION_TYPE = Object.freeze({
   MONSTER: "monster",
   PLAYER: "player",
   ANY: "any",
   COMPASS_COMBAT: "compassCombat",
+  UNOPENED_CORPSE: "unopenedCorpse",
 });
 
 // ACE ItemType.Creature (ItemType.cs:13) — the "this object is a creature"
@@ -75,16 +77,22 @@ export function weightedDistance(pose, tpos) {
  *   - MONSTER: attackable creature, not a player, not a corpse.
  *   - PLAYER:  carries the Player ODF bit, not a corpse.
  *   - ANY:     any attackable non-corpse.
- * Corpses are always excluded (they leave the live cycle). This is the
+ *   - UNOPENED_CORPSE: a corpse not yet opened (`opts.corpseOpened`, the
+ *     caller's HasCorpseBeenOpened answer — passed in so this stays pure).
+ * Every other type excludes corpses (they leave the live cycle). This is the
  * type-only rule `?cycleRadarFilter=off` keeps (COMPASS_COMBAT reads as
  * MONSTER here); the retail gate is `cycleCandidateOk` below.
  *
  * @param {{itemType?:number, objDescFlags?:number}} meta
  * @param {string} type — a SELECTION_TYPE value
+ * @param {{corpseOpened?:boolean}} [opts]
  */
-export function matchesSelectionType(meta, type) {
+export function matchesSelectionType(meta, type, opts) {
   const it = (meta?.itemType >>> 0) || 0;
   const odf = (meta?.objDescFlags >>> 0) || 0;
+  if (type === SELECTION_TYPE.UNOPENED_CORPSE) {
+    return (odf & ODF_CORPSE) !== 0 && !opts?.corpseOpened;
+  }
   if ((odf & ODF_CORPSE) !== 0) return false;
   switch (type) {
     case SELECTION_TYPE.PLAYER:
@@ -145,6 +153,41 @@ export function fallbackRadarShowable(odf, itemType) {
   if (odf & (ODF_UI_HIDDEN | ODF_CORPSE)) return false;
   if (odf & (ODF_PLAYER | ODF_VENDOR | ODF_PORTAL | ODF_LIFESTONE)) return true;
   return (itemType & ITEM_TYPE_CREATURE) !== 0;
+}
+
+/**
+ * radar-1 (2026-10-08 round 2) — does `guid` get a radar blip? Shared by the
+ * radar plugin and the selection cycle. gmRadarUI::AddObject (acclient.c:
+ * 264435) needs the object not UI-hidden (`SLOBYTE(_bitfield) >= 0`) and
+ * InqShowableOnRadar (:264472) over its hydrated RadarBehavior (int 133). An
+ * absent RadarBehavior is hidden: PublicWeenieDesc reset sets `_radar_enum =
+ * 0` (:470967) and UnPack writes it only under its header bit (:471522); ACE
+ * sends that bit only when the property is set. `fallbackRadarShowable`
+ * applies only when the bundle has no `objectIntProperty` export (stale pkg/).
+ */
+export function radarShowableFor(sh, guid, odf, itemType) {
+  const bits = odf >>> 0;
+  if (!sh || typeof sh.objectIntProperty !== "function") {
+    return fallbackRadarShowable(bits, itemType >>> 0);
+  }
+  let v;
+  try { v = sh.objectIntProperty(guid >>> 0, 133); } catch (_) { v = undefined; }
+  return isShowableOnRadar(v) && !(bits & ODF_UI_HIDDEN);
+}
+
+/**
+ * radar-4 (2026-10-08 round 2) — ClientUISystem::m_bRadarBlank after an
+ * AdminEnvirons option (CPlayerSystem::Handle_Admin__Environs, acclient.c:
+ * 396298): BlackFog2 (6) sets it (:396415); Clear (0), the fogs 1-5 and 9999
+ * clear it (LABEL_46 :396341); the sounds (101-124) and every other value
+ * return without touching it. While set, gmRadarUI::DrawBlip (:263651) draws
+ * no blip and no DrawSelected bracket; hover/pick and the centre plus stay.
+ */
+export function radarBlankAfterEnviron(prev, option) {
+  const o = option >>> 0;
+  if (o === 6) return true;
+  if (o <= 5 || o === 9999) return false;
+  return !!prev;
 }
 
 /**
@@ -318,10 +361,13 @@ export function computeSelectNext(candidates, anchor, selfGuid, closer, extreme)
  * CPlayerSystem::SelectNext (acclient.c:398049-398155), over values the
  * caller resolves (`ctx`):
  *   common — not UI-hidden (`SLOBYTE(bitfield) >= 0`, ODF 0x80, :398123),
- *            not a corpse, not mounted on a wielder, drawn (retail tests
- *            CLOAKED state 0x100000; `stateVisible` also covers NoDraw /
- *            Hidden), and within radar range by 2D distance only
+ *            not a corpse (except for UNOPENED_CORPSE), not mounted on a
+ *            wielder, drawn (retail tests CLOAKED state 0x100000;
+ *            `stateVisible` also covers NoDraw / Hidden), and within radar
+ *            range by 2D distance only
  *            (`GetRadarRadius() >= Get2DDistance`, :398153-398155).
+ *   UNOPENED_CORPSE (5, death-5) — a corpse with `!ctx.corpseOpened`
+ *            (HasCorpseBeenOpened, :398069-398072); no radar test.
  *   MONSTER (3) — ObjectIsAttackable, not a vendor, shown on radar, not a
  *            fellow (:398079-398089). So a mutual-PK player is IN and a pet
  *            is OUT.
@@ -336,7 +382,8 @@ export function computeSelectNext(candidates, anchor, selfGuid, closer, extreme)
  * @param {{itemType?:number, objDescFlags?:number, petOwner?:number}|null} meta
  * @param {{playerMeta?:object|null, isFellow?:boolean,
  *          showable?:boolean|(() => boolean), stateVisible?:boolean,
- *          attached?:boolean, dist2d:number, range:number}} ctx
+ *          attached?:boolean, dist2d:number, range:number,
+ *          corpseOpened?:boolean}} ctx
  *        `showable` may be a thunk so the caller's wasm lookup runs only for
  *        candidates that pass every cheaper rule.
  * @param {string} type — a SELECTION_TYPE value
@@ -345,6 +392,10 @@ export function cycleCandidateOk(meta, ctx, type) {
   const odf = (meta?.objDescFlags >>> 0) || 0;
   if (ctx.attached) return false;
   if (ctx.stateVisible === false) return false;
+  if (type === SELECTION_TYPE.UNOPENED_CORPSE) {
+    if ((odf & ODF_UI_HIDDEN) !== 0 || !(ctx.dist2d <= ctx.range)) return false;
+    return (odf & ODF_CORPSE) !== 0 && !ctx.corpseOpened;
+  }
   if ((odf & (ODF_UI_HIDDEN | ODF_CORPSE)) !== 0) return false;
   if (!(ctx.dist2d <= ctx.range)) return false;
   const showable = () =>
@@ -445,4 +496,165 @@ export function resolveAttackTarget({
   const parent = (attachedParentGuid >>> 0) || 0;
   if (parent !== 0) return parentKnown ? parent : 0;
   return g;
+}
+
+// ── B2-use-items (2026-10-08 round 2) — world Use rules ──────────────────
+// Retail `ItemHolder::UseObject` (acclient.c:433354) is the one entry point
+// for the 3D double-click (:275702), the toolbar Use (:241619) and the
+// keyboard use-selected; these are its client-side rules for an object the
+// player does not own. scene3d/picking.js, plugins/target-bar.js and
+// plugins/radial-menu.js call them.
+
+export const ODF_STUCK = 0x00000004;             // BF_STUCK (acclient.h:6435)
+export const ODF_DOOR = 0x00001000;              // BF_DOOR
+export const ODF_REQUIRES_PACKSLOT = 0x00800000; // BF_REQUIRES_PACKSLOT (acclient.h:6455)
+
+// P15 (2026-07-04) takeable-class belt, moved here from picking.js: a
+// positive list of inventory ItemTypes. Not in the mask (⇒ never a floor
+// pickup): Creature 0x10, Container 0x200, Portal 0x10000, Lockable
+// 0x20000, Service 0x100000, LifeStone 0x10000000, Gameboard 0x80000000.
+export const GROUND_ITEM_TYPE_MASK =
+  0x00000001 | // MeleeWeapon
+  0x00000002 | // Armor
+  0x00000004 | // Clothing
+  0x00000008 | // Jewelry
+  0x00000020 | // Food
+  0x00000040 | // Money
+  0x00000080 | // Misc (doors and levers too — excluded by ODF Door / Stuck)
+  0x00000100 | // MissileWeapon
+  0x00000400 | // Useless (trophies/junk — still takeable)
+  0x00000800 | // Gem
+  0x00001000 | // SpellComponents
+  0x00002000 | // Writable (scrolls / books)
+  0x00004000 | // Key
+  0x00008000 | // Caster
+  0x00040000 | // PromissoryNote
+  0x00080000 | // ManaStone
+  0x00200000 | // MagicWieldable
+  0x00400000 | // CraftCookingBase
+  0x00800000 | // CraftAlchemyBase
+  0x02000000 | // CraftFletchingBase
+  0x04000000 | // CraftAlchemyIntermediate
+  0x08000000 | // CraftFletchingIntermediate
+  0x20000000 | // TinkeringTool
+  0x40000000;  // TinkeringMaterial
+// ODF bits of a world interactable / actor (ACE ObjectDescriptionFlag.cs):
+// Player | Vendor | Door | Corpse | LifeStone | Portal.
+export const GROUND_ITEM_ODF_EXCLUDE =
+  ODF_PLAYER | ODF_VENDOR | ODF_DOOR | ODF_CORPSE | ODF_LIFESTONE | ODF_PORTAL;
+
+/**
+ * The P15 type belt alone: a takeable ItemType (multi-bit types such as
+ * Lockable|Container chests: any disqualifying bit wins) with no world-
+ * interactable ODF bit. This was the whole ground-pickup test before
+ * use-1, and is again under `?retailUseResult=off`.
+ * @param {{itemType?:number, objDescFlags?:number}|null} meta
+ */
+export function isGroundItemType(meta) {
+  const odf = (meta?.objDescFlags >>> 0) || 0;
+  if ((odf & GROUND_ITEM_ODF_EXCLUDE) !== 0) return false;
+  const it = (meta?.itemType >>> 0) || 0;
+  if (!it) return false;
+  return (it & ~GROUND_ITEM_TYPE_MASK) === 0;
+}
+
+/**
+ * use-1 — retail `ItemHolder::DetermineUseResult` category 2 (acclient.c:
+ * 433086): PlaceInBackpack, i.e. a PutItemInContainer pickup, never a Use
+ * event (`CPlayerSystem::UsingItem` case 2, :400434). The object must be
+ * loose (no container and NOT Stuck, or inside the open ground container),
+ * not wielded by someone else, and not a pack-slot item or a container
+ * (RequiresPackSlot, ItemsCapacity, ContainersCapacity). A lever, a button
+ * or a quest statue is Misc + Stuck, so it is Used; ACE refuses a Stuck
+ * pickup (Player_Inventory.cs WeenieError.Stuck) and the lever never pulled.
+ * Retail lets a component pack through the capacity test
+ * (`IsComponentPack`, a DAT lookup by wcid); it is not ported, and the
+ * type belt keeps every Container out.
+ *
+ * @param {{itemType?:number, objDescFlags?:number}|null} meta
+ * @param {{itemsCapacity?:number, containersCapacity?:number, wielder?:number,
+ *          me?:number, containerId?:number, groundObject?:number}} [ctx]
+ *        PropertyInt 6 / 7, PropertyInstanceId 3 (Wielder) / 2 (Container),
+ *        the local player, the open ground container (0 = none).
+ */
+export function worldUseIsPickup(meta, {
+  itemsCapacity = 0, containersCapacity = 0, wielder = 0, me = 0, containerId = 0, groundObject = 0,
+} = {}) {
+  const odf = (meta?.objDescFlags >>> 0) || 0;
+  const cont = (containerId >>> 0) || 0;
+  const ground = (groundObject >>> 0) || 0;
+  const loose = (cont === 0 && (odf & ODF_STUCK) === 0) || (ground !== 0 && cont === ground);
+  if (!loose) return false;
+  const w = (wielder >>> 0) || 0;
+  if (w !== 0 && w !== ((me >>> 0) || 0)) return false;
+  if ((odf & ODF_REQUIRES_PACKSLOT) !== 0 || (itemsCapacity | 0) !== 0 || (containersCapacity | 0) !== 0) {
+    return false;
+  }
+  return isGroundItemType(meta);
+}
+
+/**
+ * use-2 — what retail `ItemHolder::UseObject` does with an object that
+ * fails `ItemUses::IsUseable` (acclient.c:433528-433563): it sends NOTHING
+ * and prints one line — a door "You can't open or close this X that way";
+ * an attack target in peace mode (combatMode 1) "To attack X, click on the
+ * dove icon first"; a non-target, or anything in peace mode, "The X cannot
+ * be used"; an attack target out of peace mode stays silent. ACE walks the
+ * player to whatever it is sent a Use for (Player_Use.cs CreateMoveToChain)
+ * and never reads ItemUseable.
+ *
+ * @param {{useable?:number|null, odf?:number, attackable?:boolean,
+ *          inPeace?:boolean, name?:string}} o  `useable` = PropertyInt
+ *        ItemUseable (16), absent = usable; `attackable` = retail
+ *        ObjectIsAttackable (`objectIsAttackable` above).
+ * @returns {string|null} null = send the Use; otherwise refuse, printing
+ *        the string when it is not empty.
+ */
+export function worldUseRejection({ useable, odf = 0, attackable = false, inPeace = false, name = "object" } = {}) {
+  if (itemIsUseable(useable)) return null;
+  if (((odf >>> 0) & ODF_DOOR) !== 0) return `You can't open or close this ${name} that way`;
+  if (attackable && inPeace) return `To attack ${name}, click on the dove icon first`;
+  if (!attackable || inPeace) return `The ${name} cannot be used`;
+  return "";
+}
+
+/**
+ * use-4 — retail's 0.2 s use throttle: ONE static `ItemHolder::
+ * m_timeLastUsed` checked first thing in `ItemHolder::UseObject`
+ * (acclient.c:433389-433391) for every caller, so a refused or picked-up
+ * object spends it too and a throttled call is dropped silently. Shared
+ * here by the inventory (plugins/inventory.js activateItem) and the world
+ * paths (`consumeWorldUseThrottle`). Clock: performance.now().
+ */
+export const RETAIL_USE_THROTTLE_MS = 200;
+let lastUseAt = -Infinity;
+/** @returns {boolean} true = go ahead (the time is recorded), false = drop. */
+export function consumeUseThrottle(nowMs) {
+  if (nowMs - lastUseAt < RETAIL_USE_THROTTLE_MS) return false;
+  lastUseAt = nowMs;
+  return true;
+}
+
+// `?retailUseThrottle=off` (or 0/false): the world paths (double-click,
+// toolbar Use, radial Use) go unthrottled again; the inventory keeps the
+// throttle it always had. Read once, lazily (this module loads under node).
+let worldUseThrottleOn = null;
+function retailUseThrottleOn() {
+  if (worldUseThrottleOn === null) {
+    try {
+      const search = globalThis.location?.search ?? "";
+      const v = new URLSearchParams(search).get("retailUseThrottle")?.toLowerCase();
+      worldUseThrottleOn = !(v === "off" || v === "0" || v === "false");
+    } catch (_) { worldUseThrottleOn = true; }
+  }
+  return worldUseThrottleOn;
+}
+/** `consumeUseThrottle` for a world Use / pickup (see the flag above). */
+export function consumeWorldUseThrottle(nowMs) {
+  return !retailUseThrottleOn() || consumeUseThrottle(nowMs);
+}
+/** Test hook: forget the last use and re-read the flag. */
+export function _resetUseThrottleForTests() {
+  lastUseAt = -Infinity;
+  worldUseThrottleOn = null;
 }

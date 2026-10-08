@@ -58,7 +58,7 @@ globalThis.__sessionHandle = {
     "allegianceChatGag", "addAllegianceBan", "removeAllegianceBan", "doAllegianceLockAction",
     "recallAllegianceHometown", "requestAllegianceInfo", "fellowshipCreate", "fellowshipQuit",
     "fellowshipRecruit", "fellowshipDismiss", "fellowshipAssignNewLeader", "fellowshipUpdateRequest",
-    "abandonContract", "bookData",
+    "fellowshipChangeOpenness", "allegianceUpdateRequest", "abandonContract", "bookData",
   ].map((n) => [n, rec(n)])),
 };
 const busL = new Map();
@@ -143,7 +143,40 @@ function confirmModal() {
   ok.click();
 }
 const lastCall = (name) => [...calls].reverse().find((c) => c[0] === name);
+const callsOf = (name) => calls.filter((c) => c[0] === name);
 const M = (guid, name, extra = {}) => ({ guid, name, rank: 2, level: 60, loggedIn: true, cpTithed: 0, ...extra });
+
+// ── allegiance tree request (retail RecvNotice_PlayerDescReceived) ──────
+console.log("── allegiance login request ───────────────────────────────");
+
+check("boot: one AllegianceUpdateRequest(true) per handle once in world", () => {
+  // social.mount() ran the boot hooks with the stub handle in world.
+  assert.deepEqual(callsOf("allegianceUpdateRequest"), [["allegianceUpdateRequest", true]]);
+  bus.emit("playerStatsUpdated", {});
+  assert.equal(callsOf("allegianceUpdateRequest").length, 1, "not re-sent on a stats push");
+  assert.equal(alleg.maybeSendLoginAllegianceRequest(), false, "same handle → no repeat");
+});
+
+check("login request waits for the in-world transition, then fires once on a new handle", () => {
+  const original = globalThis.__sessionHandle;
+  const own = [];
+  const fresh = { ...original, allegianceUpdateRequest: (v) => own.push(v) };
+  globalThis.__sessionHandle = fresh;
+  try {
+    globalThis.__bootStateHistory = [{ state: "connecting" }, { state: "ready" }, { state: "spawning" }];
+    assert.equal(alleg.maybeSendLoginAllegianceRequest(), false, "SelectCharacter set the guid, not yet in world");
+    globalThis.__bootStateHistory.push({ state: "in-world" }, { state: "ready" });
+    bus.emit("playerStatsUpdated", {});
+    assert.deepEqual(own, [true], "sent on the stats push after in-world");
+    assert.equal(alleg.maybeSendLoginAllegianceRequest(), false);
+    // A wasm build without the binding never throws.
+    globalThis.__sessionHandle = { ...original, allegianceUpdateRequest: undefined };
+    assert.equal(alleg.maybeSendLoginAllegianceRequest(), false);
+  } finally {
+    globalThis.__sessionHandle = original;
+    delete globalThis.__bootStateHistory;
+  }
+});
 
 // ── social hub ──────────────────────────────────────────────────────────
 console.log("── social hub ─────────────────────────────────────────────");
@@ -153,7 +186,11 @@ check("'social' view is registered by the bar-slot mount", () => {
 });
 
 check("F8 opens ONE tab strip with four retail labels, each drawn once", () => {
+  const reqBefore = callsOf("allegianceUpdateRequest").length;
   globalThis.__mainPanel.showView("allegiance");
+  const reqs = callsOf("allegianceUpdateRequest");
+  assert.equal(reqs.length, reqBefore + 1, "showing the page asks for the tree");
+  assert.deepEqual(reqs.at(-1), ["allegianceUpdateRequest", true], "retail OnVisibilityChanged(true)");
   assert.equal(mpTitle, "Social");
   const strips = qa(".hbk-tabs");
   assert.equal(strips.length, 1, "exactly one tab strip");
@@ -185,9 +222,10 @@ check("Ignore Allegiance Requests orb round-trips CharacterOption 0x01", () => {
 });
 
 check("sworn: Patron / Monarch row, vassals, Break → patron, Kick → selected vassal", () => {
+  // ACE shape: no patron record when the patron IS the monarch.
   state.allegiance = {
     name: "Order of Tests", rank: 3, isLocked: true, motd: "Hi", totalMembers: 6, totalVassals: 1,
-    monarch: M(0x50000001, "Boss"), patron: M(0x50000001, "Boss"),
+    monarch: M(0x50000001, "Boss"), patron: null,
     myself: M(ME, "Me", { cpTithed: 1234 }),
     vassals: [M(0x50000004, "Vassal Val", { cpTithed: 5000 }), M(0x50000007, "Sleepy", { loggedIn: false })],
   };
@@ -213,7 +251,9 @@ check("sworn: Patron / Monarch row, vassals, Break → patron, Kick → selected
 });
 
 check("Manage opens the Allegiance Management floaty (zoomable #hb-* root)", () => {
+  const reqBefore = callsOf("allegianceUpdateRequest").length;
   btn("Manage").click();
+  assert.equal(callsOf("allegianceUpdateRequest").length, reqBefore, "page already visible → ref-counted, no new request");
   const win = document.getElementById("hb-alleg-standalone");
   assert.ok(win && !win.hidden);
   assert.equal(win.parentNode, document.body, "direct <body> child → hud_scale zooms it");
@@ -229,8 +269,15 @@ check("Manage opens the Allegiance Management floaty (zoomable #hb-* root)", () 
   assert.deepEqual(lastCall("breakAllegianceBoot"), ["breakAllegianceBoot", "Vassal Val", false]);
   btn("Apply", win).click();
   assert.deepEqual(lastCall("doAllegianceLockAction"), ["doAllegianceLockAction", 2]);
+  const infoBefore = callsOf("requestAllegianceInfo").length;
+  const reqMid = callsOf("allegianceUpdateRequest").length;
+  btn("Refresh", win).click();
+  assert.equal(callsOf("allegianceUpdateRequest").length, reqMid + 1);
+  assert.deepEqual(lastCall("allegianceUpdateRequest"), ["allegianceUpdateRequest", true], "Refresh asks for the tree");
+  assert.equal(callsOf("requestAllegianceInfo").length, infoBefore, "not the officer-only InfoRequest");
   globalThis.__closeAllegiancePanel();
   assert.equal(win.hidden, true);
+  assert.deepEqual(lastCall("allegianceUpdateRequest"), ["allegianceUpdateRequest", true], "page still open → no hide request");
 });
 
 check("tab click routes through the main panel (F9 view) and fellowship asks for vitals", () => {
@@ -242,6 +289,7 @@ check("tab click routes through the main panel (F9 view) and fellowship asks for
   assert.equal(reqs.length, before + 1);
   assert.deepEqual(reqs.at(-1), ["fellowshipUpdateRequest", true], "retail OnVisibilityChanged(true)");
   assert.equal(bus.count("allegianceUpdated"), 0, "allegiance page unsubscribed on unmount");
+  assert.deepEqual(lastCall("allegianceUpdateRequest"), ["allegianceUpdateRequest", false], "leaving allegiance → OnVisibilityChanged(false)");
 });
 
 check("fellowship alone: orb options, Create gated on a name", () => {
@@ -283,7 +331,28 @@ check("fellowship (leader): rows with vitals, Dismiss/Leader on a selected fello
   assert.deepEqual(lastCall("fellowshipDismiss"), ["fellowshipDismiss", 0x50000006]);
   btn("Leader").click();
   assert.deepEqual(lastCall("fellowshipAssignNewLeader"), ["fellowshipAssignNewLeader", 0x50000006]);
-  assert.equal(btn("Open").disabled, true, "no openness binding yet");
+  assert.equal(btn("Open").disabled, false, "leader may open the fellowship (UpdateButtons state 1)");
+  btn("Open").click();
+  assert.deepEqual(lastCall("fellowshipChangeOpenness"), ["fellowshipChangeOpenness", true]);
+});
+
+check("fellowship openness: FullUpdate echo flips Open → Close; locked stays enabled (retail); non-leader disabled", () => {
+  state.fellowship = { ...state.fellowship, open: true, isLocked: true, updateType: 1 };
+  bus.emit("fellowshipUpdated", {});
+  assert.equal(btn("Open"), undefined, "label follows the server's openness");
+  assert.equal(btn("Close").disabled, false, "no lock gate on the leader's button");
+  btn("Close").click();
+  assert.deepEqual(lastCall("fellowshipChangeOpenness"), ["fellowshipChangeOpenness", false]);
+  const saved = globalThis.__sessionHandle.fellowshipChangeOpenness;
+  globalThis.__sessionHandle.fellowshipChangeOpenness = undefined;
+  bus.emit("fellowshipUpdated", {});
+  assert.equal(btn("Close").disabled, true, "older wasm without the binding");
+  globalThis.__sessionHandle.fellowshipChangeOpenness = saved;
+  state.fellowship = { ...state.fellowship, leaderGuid: 0x50000006, updateType: 1 };
+  bus.emit("fellowshipUpdated", {});
+  assert.equal(btn("Close").disabled, true, "only the leader toggles openness");
+  state.fellowship = { ...state.fellowship, leaderGuid: ME, open: false, isLocked: false, updateType: 1 };
+  bus.emit("fellowshipUpdated", {});
 });
 
 check("fellowship vitals patch in place on a Vitals(3) update", () => {

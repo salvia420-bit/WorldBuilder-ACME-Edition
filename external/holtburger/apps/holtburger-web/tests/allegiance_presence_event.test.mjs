@@ -131,7 +131,7 @@ const body = spliceModule(src, {
       "makeSpacer", "makeColHead", "makeListRow", "setRowSelected", "withSession",
       "selectedTargetGuid", "selectedTargetName", "localPlayerGuid",
       "isPlayerGuid", "onBus", "confirmAction", "readCharacterOption", "fmtInt",
-      "socialEmit", "uid", "attachWindowPosition", "makeTitlebar",
+      "socialEmit", "uid", "attachWindowPosition", "makeTitlebar", "getHandle",
     ].map((n) => [n, `() => { throw new Error('${n} must not be reached from the presence path'); }`])),
   },
 });

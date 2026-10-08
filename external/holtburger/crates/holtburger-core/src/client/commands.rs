@@ -602,13 +602,19 @@ impl ClientRuntime {
             }
             ClientCommand::SetCharacterOption { option, value } => {
                 log::info!(">>> Setting character option {:?} to {}", option, value);
-                self.send_game_action(GameAction::SetSingleCharacterOption(Box::new(
-                    SetSingleCharacterOptionActionData { option, value },
-                )))
-                .await?;
-                self.world
-                    .player
-                    .set_character_option_enabled(option, value);
+                // charopt-1: retail CPlayerModule::OnChanged clears the
+                // Ignore/AutoAccept fellowship pair first and sends both
+                // changes, pair first.
+                let sends = self.world.player.apply_character_option(option, value);
+                for (send_option, send_value) in sends {
+                    self.send_game_action(GameAction::SetSingleCharacterOption(Box::new(
+                        SetSingleCharacterOptionActionData {
+                            option: send_option,
+                            value: send_value,
+                        },
+                    )))
+                    .await?;
+                }
                 self.emit_player_options_updated();
                 Ok(())
             }
@@ -1484,6 +1490,36 @@ mod tests {
         }
 
         assert!(saw_projection);
+    }
+
+    #[tokio::test]
+    async fn set_character_option_clears_fellowship_pair_first() {
+        // charopt-1: a default character has IgnoreFellowshipRequests ON;
+        // enabling AutoAccept must also send (Ignore, false) — two actions.
+        let mut client = build_test_client();
+        client.world.player.options1 = CharacterOptions1::DEFAULT;
+
+        client
+            .handle_command(ClientCommand::SetCharacterOption {
+                option: CharacterOption::AutomaticallyAcceptFellowshipRequests,
+                value: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(client.session.game_action_sequence, 2);
+        assert!(
+            client
+                .world
+                .player
+                .character_option_enabled(CharacterOption::AutomaticallyAcceptFellowshipRequests)
+        );
+        assert!(
+            !client
+                .world
+                .player
+                .character_option_enabled(CharacterOption::IgnoreFellowshipRequests)
+        );
     }
 
     #[tokio::test]

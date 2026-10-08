@@ -1065,7 +1065,9 @@ export class RynthWebHost {
         const routed = route(this.s, line);
         if (routed && routed.dispatched) {
           const echo = routed.error ? `[Chat] ${routed.error}` : routed.echo;
-          if (echo) this.WriteToChatWindow(echo, routed.error ? 10 : null);
+          // R-chat (2026-10-08): a routed echo may carry its chat category
+          // (the soul-emote `You …` line is EMOTE); most routes echo nothing.
+          if (echo) this.WriteToChatWindow(echo, routed.error ? 10 : (typeof routed.category === "number" ? routed.category : null));
           return true;
         }
       } catch (e) {

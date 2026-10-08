@@ -18,7 +18,10 @@ import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 // the retail chain). Flag-off `serverTurnOwnsFacing()` is a constant false and
 // this file behaves byte-identically.
 import { serverTurnOwnsFacing } from "./server_turn.js";
-import { objectIsAttackable, itemIsUseable } from "./target_cycle.js";
+import {
+  objectIsAttackable, itemIsUseable, isGroundItemType, worldUseIsPickup, worldUseRejection,
+  consumeWorldUseThrottle, ODF_PLAYER, ODF_CORPSE,
+} from "./target_cycle.js";
 import { pickNearestSphereHit } from "./pick_math.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
@@ -261,6 +264,39 @@ const PICK_SPHERE_FALLBACK = (() => {
     return v !== "off" && v !== "0" && v !== "false";
   } catch { return true; }
 })();
+
+// use-1 (2026-10-08 round 2) — the ground-pickup test is retail
+// DetermineUseResult category 2 (target_cycle.js worldUseIsPickup: a Stuck
+// lever is Used, not picked up), and the toolbar / radial Use pick a loose
+// item up as the double-click does. DEFAULT-ON; `?retailUseResult=off` (or
+// 0/false) = the P15 type belt alone and a bare Use from the toolbar / radial.
+const RETAIL_USE_RESULT = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("retailUseResult")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch { return true; }
+})();
+
+// use-2 (2026-10-08 round 2) — a double-click / toolbar Use on an object
+// retail will not use (ItemUseable No) sends nothing and prints retail's
+// line (target_cycle.js worldUseRejection). DEFAULT-ON;
+// `?retailUseReject=off` (or 0/false) = send the Use regardless.
+const RETAIL_USE_REJECT = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("retailUseReject")?.toLowerCase();
+    return v !== "off" && v !== "0" && v !== "false";
+  } catch { return true; }
+})();
+
+// use-4 (2026-10-08 round 2) — retail's shared 0.2 s m_timeLastUsed, spent
+// by every world Use / pickup send (target_cycle.js consumeWorldUseThrottle;
+// `?retailUseThrottle=off` there).
+function worldUseThrottleOk() {
+  const t = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  return consumeWorldUseThrottle(t);
+}
 
 // Fallback AttackType for the CombatManeuverTable lookup when the
 // per-weapon inference (Wave 1 Phase 3, 2026-05-26) returns
@@ -621,65 +657,37 @@ export function setupClickPicking({
   // Retail classifies clicks CLIENT-side (ItemHolder::DetermineUseResult,
   // acclient.c:433086): a loose, un-owned, non-container item ⇒ category 2
   // ⇒ PlaceInBackpack ⇒ PutItemInContainer 0x0019 (acclient.c:433157/
-  // 400454/708849) — never a UseEvent. Our wire meta carries itemType (ACE
-  // ItemType bits) + objDescFlags, so the conservative port is a positive
-  // list of takeable inventory classes with every world-interactable ODF
-  // bit excluded; anything unknown falls through to the old useObject path
-  // (portals, doors, vendors, chests, lifestones, NPCs keep their feel).
-  const GROUND_ITEM_TYPE_MASK =
-    0x00000001 | // MeleeWeapon
-    0x00000002 | // Armor
-    0x00000004 | // Clothing
-    0x00000008 | // Jewelry
-    0x00000020 | // Food
-    0x00000040 | // Money
-    0x00000080 | // Misc (doors are Misc too — excluded via ODF.Door below)
-    0x00000100 | // MissileWeapon
-    0x00000400 | // Useless (trophies/junk — still takeable)
-    0x00000800 | // Gem
-    0x00001000 | // SpellComponents
-    0x00002000 | // Writable (scrolls / books)
-    0x00004000 | // Key
-    0x00008000 | // Caster
-    0x00040000 | // PromissoryNote
-    0x00080000 | // ManaStone
-    0x00200000 | // MagicWieldable
-    0x00400000 | // CraftCookingBase
-    0x00800000 | // CraftAlchemyBase
-    0x02000000 | // CraftFletchingBase
-    0x04000000 | // CraftAlchemyIntermediate
-    0x08000000 | // CraftFletchingIntermediate
-    0x20000000 | // TinkeringTool
-    0x40000000;  // TinkeringMaterial
-  // Not in the mask (⇒ disqualify): Creature 0x10, Container 0x200,
-  // Portal 0x10000, Lockable 0x20000, Service 0x100000, LifeStone
-  // 0x10000000, Gameboard 0x80000000.
-  // ODF bits that mark a world interactable / actor, never a floor pickup
-  // (ACE ObjectDescriptionFlag.cs): Player|Vendor|Door|Corpse|LifeStone|
-  // Portal. Deliberately NOT Stuck (0x4) / Attackable (0x10): ACE stamps
-  // Attackable on loose ITEMS (live dagger ODF=0x12) and Stuck|Attackable
-  // on creatures — creatures/NPCs are excluded via ItemType.Creature, so
-  // excluding on those bits here just breaks every real pickup
-  // (s7 leg-2 finding, 2026-07-04).
-  const GROUND_ITEM_ODF_EXCLUDE =
-    0x8 | 0x200 | 0x1000 | 0x2000 | 0x4000 | 0x40000;
+  // 400454/708849) — never a UseEvent. Anything else falls through to the
+  // useObject path (portals, doors, vendors, chests, lifestones, NPCs).
+  // use-1 (2026-10-08 round 2): the category-2 test itself is ported
+  // (target_cycle.js worldUseIsPickup) on top of the P15 type belt. Stuck IS
+  // excluded now: it is retail BF_STUCK, and ACE refuses a Stuck pickup
+  // (Player_Inventory.cs WeenieError.Stuck), so no real pickup can break —
+  // only Attackable was ever shown to (live dagger ODF 0x12, s7 leg-2
+  // finding, 2026-07-04) and it is still ignored. A lever / button / quest
+  // statue (Misc + Stuck) is Used again. Capacities and the wielder /
+  // container come from the wasm object store (the spawn PWD).
   function entityIsGroundItem(guid) {
     try {
       const em = liveScene3d?.entityManager;
-      const ent =
-        em?.entityMap?.get?.(guid >>> 0) ||
-        em?.entityMap?.get?.(String(guid >>> 0)) ||
-        null;
+      const g = guid >>> 0;
+      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
       if (!ent) return false;
       const meta = ent.meta || ent;
-      const odf = (meta?.objDescFlags >>> 0) || 0;
-      if ((odf & GROUND_ITEM_ODF_EXCLUDE) !== 0) return false;
-      const it = (meta?.itemType >>> 0) || 0;
-      if (!it) return false;
-      // Multi-bit itemTypes exist — ANY disqualifying bit wins even when a
-      // takeable bit is also set (e.g. Lockable|Container chests).
-      if ((it & ~GROUND_ITEM_TYPE_MASK) !== 0) return false;
-      return true;
+      if (!RETAIL_USE_RESULT) return isGroundItemType(meta);
+      const prop = (name, stype) => {
+        try { return (sessionHandle[name]?.(g, stype) >>> 0) || 0; } catch (_) { return 0; }
+      };
+      let ground = 0;
+      try { ground = (sessionHandle.groundContainerId?.() >>> 0) || 0; } catch (_) { ground = 0; }
+      return worldUseIsPickup(meta, {
+        itemsCapacity: prop("objectIntProperty", 6),
+        containersCapacity: prop("objectIntProperty", 7),
+        containerId: prop("objectInstanceIdProperty", 2),
+        wielder: prop("objectInstanceIdProperty", 3),
+        me: (getLocalPlayerGuid?.() ?? 0) >>> 0,
+        groundObject: ground,
+      });
     } catch (_) { return false; }
   }
 
@@ -709,6 +717,37 @@ export function setupClickPicking({
     let u;
     try { u = sessionHandle.objectIntProperty?.(guid >>> 0, 16); } catch (_) { u = undefined; }
     return itemIsUseable(u);
+  }
+
+  // use-2 (2026-10-08 round 2) — retail ItemHolder::UseObject's refusal of
+  // an object that is not useable (target_cycle.js worldUseRejection): null =
+  // send the Use, "" = send nothing silently, text = send nothing and print
+  // it. Players keep today's send (retail result 5 opens a secure trade
+  // instead, ClientTradeSystem::AttemptToOpenTradeNegotiations), corpses
+  // keep their open, and yourself is exempt as in retail.
+  function worldUseRefusal(guid) {
+    if (!RETAIL_USE_REJECT) return null;
+    try {
+      const g = guid >>> 0;
+      const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      if (g === 0 || g === me) return null;
+      const em = liveScene3d?.entityManager;
+      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+      const meta = ent ? (ent.meta || ent) : {};
+      const odf = ((meta.objDescFlags ?? sessionHandle.objectDescFlags?.(g)) >>> 0) || 0;
+      if ((odf & (ODF_PLAYER | ODF_CORPSE)) !== 0) return null;
+      let useable;
+      try { useable = sessionHandle.objectIntProperty?.(g, 16); } catch (_) { useable = undefined; }
+      let name = meta.name || "";
+      if (!name) { try { name = sessionHandle.objectStringProperty?.(g, 1) || ""; } catch (_) { name = ""; } }
+      return worldUseRejection({
+        useable,
+        odf,
+        attackable: entityIsAttackableTarget(g),
+        inPeace: !isInMeleeStance?.() && !isInRangedStance?.() && !isInMagicStance?.(),
+        name: name || "object",
+      });
+    } catch (_) { return null; }
   }
 
   // F17-2 double-click bookkeeping, shared by every use-class branch:
@@ -1051,8 +1090,10 @@ export function setupClickPicking({
       // no corpse path at all, so a caster standing over a fresh kill
       // either no-oped or cast AT the corpse. Single click still only
       // selects/assesses; the double-click gate is unchanged.
+      // use-4: every world Use / pickup send below spends retail's shared
+      // 0.2 s throttle first (worldUseThrottleOk); a throttled one is dropped.
       if (entityIsCorpse(guid) && typeof sessionHandle.useObject === "function") {
-        if (doubleClickGate(guid, ev)) {
+        if (doubleClickGate(guid, ev) && worldUseThrottleOk()) {
           cancelClientMove();
           sessionHandle.useObject(guid >>> 0);
         }
@@ -1076,7 +1117,7 @@ export function setupClickPicking({
       if (entityIsGroundItem(guid) && typeof sessionHandle.moveItem === "function") {
         if (doubleClickGate(guid, ev)) {
           const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-          if (me !== 0) {
+          if (me !== 0 && worldUseThrottleOk()) {
             cancelClientMove();
             const place = window.__itemDrag?.placeInBackpack;
             if (typeof place === "function") place(guid >>> 0);
@@ -1293,7 +1334,18 @@ export function setupClickPicking({
         // first click and the second click of the double-click closed it
         // again — and a recall button never belonged on the lifestone
         // (retail recalls with the Lifestone Recall spell / @ls).
+        //
+        // use-2 (2026-10-08 round 2): on the completing click, an object
+        // retail will not use (a peace-mode monster, a statue, a lever-only
+        // door) sends nothing and prints retail's line; ACE would walk the
+        // player up to it.
         if (doubleClickGate(guid, ev)) {
+          if (!worldUseThrottleOk()) return;
+          const refusal = worldUseRefusal(guid);
+          if (refusal != null) {
+            if (refusal) emitActionRejected(refusal);
+            return;
+          }
           cancelClientMove();
           console.info(
             `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
@@ -1788,6 +1840,13 @@ export function setupClickPicking({
     // tests the click dispatch uses.
     window.__entityIsAttackableTarget = entityIsAttackableTarget;
     window.__entityIsUsable = entityIsUsable;
+    // B2-use-items (2026-10-08 round 2): the toolbar Use (target-bar.js) and
+    // the radial Use apply the double-click's retail ItemHolder::UseObject
+    // rules — a loose item is picked up (use-1; never under
+    // `?retailUseResult=off`, where they kept a bare Use) and a non-useable
+    // object is refused with retail's line (use-2).
+    window.__worldUseIsPickup = (guid) => RETAIL_USE_RESULT && entityIsGroundItem(guid);
+    window.__worldUseRefusal = worldUseRefusal;
   }
 
   // Phase I.1 follow-on (handoff Tier 1): manual-input override.

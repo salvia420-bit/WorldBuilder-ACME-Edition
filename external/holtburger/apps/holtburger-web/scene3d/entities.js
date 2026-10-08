@@ -244,6 +244,76 @@ const WIELD_PERSIST_ON = readWieldPersistFlag();
 /** LRU bound on the `_lastAttach` re-attach ledger (long-session leak guard). */
 const LAST_ATTACH_MAX = 512;
 
+// === HELD-ITEM round 2 (2026-10-08) — four retail held-item rules ===========
+// Each DEFAULT-ON with an `=off`/`0`/`false` escape (docs/url-flags.md):
+//
+// `?wieldLedgerAuthority` (held-2) — a WIRE spawn decides its own parent.
+//   Retail only ever parents an object from its CreateObject PhysicsDesc
+//   (acclient.c:391950-391961) or a ParentEvent; nothing remembers an old
+//   wielder. With `_wieldedSpawn` on, every parented CreateObject arrives with
+//   its kind=7 attach in the same batch (parked at commit), so a wire spawn
+//   with NO parked attach was created unparented (ACE: unequip = DeleteObject,
+//   a later drop = a fresh world CreateObject) and must not be re-mounted from
+//   `_lastAttach`. Only the internal respawns (appearance / dynamic LOD, which
+//   tag `meta._internalRespawn`) still replay the ledger.
+function readWieldLedgerAuthorityFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("wieldLedgerAuthority") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+// `?attachGen` (held-5) — the last server request for a child wins.
+//   Retail DoParentEvent / DoPickupEvent (acclient.c:143483-143528) run
+//   synchronously in arrival order; our attach awaits two wasm fetches, so a
+//   per-child generation (bumped by every attach, explicit detach, PickupEvent
+//   and wire removal) drops a resumed request that a newer one superseded.
+function readAttachGenFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("attachGen") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+// `?heldMountStrict` (held-6) — no holding location, no mount. Retail
+//   `CPhysicsObj::add_child` (acclient.c:316729-316760) fails when the
+//   wielder's Setup has no holding location for the key, and `set_parent`
+//   (:322952-322992) then does nothing: the child is simply not drawn. `=off`
+//   restores the old mount at the wielder's root origin (its feet).
+function readHeldMountStrictFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("heldMountStrict") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+// `?pickupLeaveWorld` (held-4) — a PickupEvent for an item its wielder still
+//   owns only takes it out of the world. Retail `SmartBox::DoPickupEvent`
+//   (acclient.c:143483-143500) is `unset_parent` + `leave_world`; the object
+//   survives and the next ParentEvent (`set_parent` :322952) shows it again.
+//   ACE hides held ammo this way on every missile shot. The wasm reads the same
+//   flag and sends a kind=7 detach carrying the leave-world sentinel instead of
+//   a KIND_REMOVE; this JS reader only matters for a pkg/JS mismatch.
+function readPickupLeaveWorldFlag() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("pickupLeaveWorld") ?? "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+}
+const WIELD_LEDGER_AUTHORITY_ON = readWieldLedgerAuthorityFlag();
+const ATTACH_GEN_ON = readAttachGenFlag();
+const HELD_MOUNT_STRICT_ON = readHeldMountStrictFlag();
+const PICKUP_LEAVE_WORLD_ON = readPickupLeaveWorldFlag();
+
 // A8-M4 (2026-06-11 unification survey); DEFAULT-ON since 2026-07-27
 // (P4.3 / LEAK-02), `?preCreateBuffer=off` is the escape.
 // ON → events addressed to a guid whose rig isn't built yet park in ONE
@@ -1014,9 +1084,11 @@ import {
   meshToGeometryGroups,
   surfacePixelsToTexture,
   acQuatToThree,
-  acToThree,
 } from "./adapter.js";
 import { retailVolume } from "./audio/retail_sound_rules.js";
+// audio-2 (2026-10-08 round 2): sound emitters at the object's WORLD position
+// (a wielded rig's root is hand-local).
+import { emitterPosThree, threeToAc } from "./audio/emitter_position.js";
 import { AnimationCache, cycleTimeScale } from "./animation.js";
 // Routes the recolored/paletted entity-surface decode through the bake worker
 // (off the main thread) with a transparent main-thread fallback.
@@ -1171,6 +1243,7 @@ import {
   selectionSphereStats,
   blipColorForEntity,
   readFellowshipRoster,
+  resolveRadarLook,
 } from "./selection_brackets.js";
 const SELECTION_INDICATOR_MODE = readSelectionIndicatorMode();
 // C2 (2026-07-12) — retail target-cycling ordering math (CPlayerSystem::
@@ -1185,15 +1258,18 @@ import {
   weightedDistance,
   cycleCandidateOk,
   radarRangeForCell,
-  isShowableOnRadar,
-  fallbackRadarShowable,
+  radarShowableFor,
   objectIsAttackable,
   autoTargetChoice,
   selectionRangeExit,
   resolveAttackTarget,
   CHARACTER_OPTION_AUTO_TARGET,
   PROP_IID_CURRENT_ATTACKER,
+  consumeWorldUseThrottle,
 } from "./target_cycle.js";
+// A2-death (2026-10-08 round 2): the selection / corpse-claim rules around the
+// death hold (pure; scene3d/death_hold.js).
+import { shouldReselectAfterRemoval, isCorpseHandoffCandidate } from "./death_hold.js";
 // P6/R-6 (net-fixwave 2026-07-10) — entity program warm: per-spawn rig
 // compileAsync (Step E) + the one-shot archetype-matrix warm armed on the
 // local player's commit. See bake_prewarm.js for flags + rationale.
@@ -3687,6 +3763,13 @@ export class EntityManager {
     this._autoTargetOn = !_selFlagOff(_selQ?.get("autoTarget"));
     this._selectionRangeExitOn = !_selFlagOff(_selQ?.get("selectionRangeExit"));
     this._attackWielderOn = !_selFlagOff(_selQ?.get("attackWielder"));
+    this._deathSelectReleaseOn = !_selFlagOff(_selQ?.get("deathSelectRelease"));
+    // ^ death-3 (round 2): drop the selection at a dying creature's server
+    // delete, not when its death-held rig is finally removed.
+    // death-5 (round 2): retail ACCWeenieObject::m_openedCorpses — corpses this
+    // client opened (SetCorpseOpened on ContainerOpened), pruned at their
+    // server delete (SetCorpseDeleted, `noteWireRemove`).
+    this._openedCorpses = new Set();
     // Retail ACCWeenieObject::prevSelectedID (set by SetSelectedObject and by
     // Remove of the selected object) — the cycle's anchor when nothing is
     // selected. `_targetWillinglyLost` is ClientCombatSystem::
@@ -3926,6 +4009,20 @@ export class EntityManager {
     // wielded. Cleared only by an explicit detach (`_detachChild`).
     /** @type {Map<number, {parentGuid:number, location:number, placement:number}>} */
     this._lastAttach = new Map();
+    // held-5 (2026-10-08, `?attachGen`) — childGuid → generation of the
+    // newest server attach / detach / PickupEvent for that child. Values come
+    // from one manager-wide counter, so deleting an entry (wire removal) can
+    // never let an older in-flight request match a later one.
+    /** @type {Map<number, number>} */
+    this._attachGen = new Map();
+    this._attachGenSeq = 0;
+    // held-4 (2026-10-08, `?pickupLeaveWorld`) — childGuid → former wielder
+    // guid for an item a PickupEvent took out of the world (rig kept, hidden,
+    // unparented) until its next ParentEvent. See `leaveWorld`.
+    /** @type {Map<number, number>} */
+    this._leftWorldChildren = new Map();
+    // held-6 (2026-10-08) — index.js's flushWieldedDirty reads this.
+    this._heldMountStrict = HELD_MOUNT_STRICT_ON;
     // A8-M4 (2026-06-12) — `?preCreateBuffer` (default ON): the generic
     // guid-keyed pre-create FIFO that REPLACES `_pendingAttach` when on. It
     // also carries the F16-5 spawn-time draw gate: the wasm spawn-hidden emit
@@ -5338,6 +5435,17 @@ export class EntityManager {
     if (this._wieldedSpawn && hasParkedAttach) {
       _setEntityStateVisible(inst, false);
     }
+    // held-4 (2026-10-08) — an item a PickupEvent took out of the world stays
+    // out across an INTERNAL rebuild (appearance / LOD respawn) of its rig; a
+    // WIRE spawn is the server re-creating it, which ends the left-world state.
+    if (this._leftWorldChildren.size > 0 && this._leftWorldChildren.has(guid)) {
+      if (meta._internalRespawn) {
+        _setEntityStateVisible(inst, false);
+        inst._leftWorld = true;
+      } else {
+        this._leftWorldChildren.delete(guid);
+      }
+    }
     // HELD-ITEM (2026-08-02, `?wieldPersist`) — durable re-attach replay.
     // Runs on BOTH drain arms below (the park queues only hold OUTSTANDING
     // requests; a re-created wielded item has none). See `_replayLastAttach`.
@@ -6541,7 +6649,8 @@ export class EntityManager {
     // is hidden). Its own ObjectCreate often carries a NULL landblock once
     // equipped, which would otherwise drive a spurious visible=false here
     // and blank the in-hand weapon. Skip — the parent hierarchy decides.
-    if (inst._attachedParentGuid != null) return;
+    // held-4: a left-world item stays hidden until its next ParentEvent.
+    if (inst._attachedParentGuid != null || inst._leftWorld) return;
     // FCULL (2026-06-08) — route through the composite so a concurrent
     // frustum/distance cull (`_renderCullHidden`) and this STATE-authoritative
     // visibility don't fight: the rendered flag is `stateVisible &&
@@ -6634,9 +6743,12 @@ export class EntityManager {
     const cGuid = childGuid >>> 0;
     const pGuid = parentGuid >>> 0;
     if (pGuid === 0) {
+      // held-5: an explicit detach supersedes any attach still resolving.
+      this._bumpAttachGen(cGuid);
       this._detachChild(cGuid);
       return;
     }
+    const gen = this._bumpAttachGen(cGuid);
     const childInst = this.entityMap.get(cGuid);
     const parentInst = this.entityMap.get(pGuid);
     if (!childInst || !parentInst) {
@@ -6653,6 +6765,10 @@ export class EntityManager {
       // eslint-disable-next-line no-console
       console.warn("[attach] holding-location resolve failed:", e);
     }
+    // held-5: a newer attach / detach / PickupEvent / wire removal for this
+    // child arrived during the await — it owns the child now. Drop this one
+    // without re-parking (a re-park would replay these stale args later).
+    if (this._attachSuperseded(cGuid, gen)) return;
     // FU-1 (2026-06-11): behind ?wieldHandAttach=on, when the kind=7
     // ParentEvent attach for ammo carries location=ParentLocation=0 (ACE
     // ammo weenies usually lack ParentLocation), `_resolveHoldingLocation`
@@ -6685,6 +6801,7 @@ export class EntityManager {
             }
           } catch (_) {}
         }
+        if (this._attachSuperseded(cGuid, gen)) return; // held-5
       }
     }
     // Re-check liveness after the await — either rig may have despawned.
@@ -6706,6 +6823,18 @@ export class EntityManager {
     const p = this.entityMap.get(pGuid);
     if (!c || !c.root || !p || !p.root) {
       this._parkAttach(cGuid, pGuid, location, placement);
+      return;
+    }
+    // held-6 (2026-10-08, `?heldMountStrict`): no holding location for this
+    // key on the wielder's Setup → retail `add_child` fails and `set_parent`
+    // returns without touching the child (acclient.c:316729-316760 /
+    // :322952-322992). An unmounted child therefore never enters the world
+    // (CreateObject skips enter_world for a parented object, :145986-145994;
+    // ACE takes a ground item out with a PickupEvent first): hide it. A child
+    // already mounted keeps that mount. The next kind=7 / flushWieldedDirty
+    // pass re-issues the attach; the ledger is untouched.
+    if (!loc && HELD_MOUNT_STRICT_ON) {
+      if (c._attachedParentGuid == null) _setEntityStateVisible(c, false);
       return;
     }
     // Mount point: the wielder part the holding location names, else root.
@@ -6736,8 +6865,8 @@ export class EntityManager {
       c.root.position.set(loc.ox, loc.oy, loc.oz);
       c.root.quaternion.copy(acQuatToThree(loc.qw, loc.qx, loc.qy, loc.qz));
     } else {
-      // No holding entry for this location key — best-effort mount at the
-      // part origin so the weapon at least tracks the hand (tunable).
+      // `?heldMountStrict=off` only: no holding entry for this location key —
+      // best-effort mount at the part origin (non-retail; see held-6 above).
       c.root.position.set(0, 0, 0);
       c.root.quaternion.identity();
     }
@@ -6748,6 +6877,10 @@ export class EntityManager {
     // while attached the child is excluded from the cull walk (it follows
     // the wielder's hierarchy visibility) so `_renderCullHidden` stays clear.
     _setEntityStateVisible(c, true);
+    // held-4: the ParentEvent that re-arms a left-world item (retail
+    // `set_parent` re-shows the surviving object) ends its out-of-world state.
+    c._leftWorld = false;
+    this._leftWorldChildren.delete(cGuid);
     c._attachedParentGuid = pGuid;
     c._attachedPlacement = placement >>> 0;
     // Remembered so an appearance-change respawn of the WIELDER can
@@ -6805,7 +6938,7 @@ export class EntityManager {
     // placement correction picks up automatically.
     const childSetupId = (c.meta?.setupId ?? c.meta?.modelId ?? 0) >>> 0;
     try {
-      await this._applyChildPlacementFrames(cGuid, childSetupId, placement >>> 0);
+      await this._applyChildPlacementFrames(cGuid, childSetupId, placement >>> 0, gen, pGuid);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[attach] placement-frame re-pose failed:", e);
@@ -6839,6 +6972,19 @@ export class EntityManager {
     this._preCreate.removeMatching((g, ev) => g === cGuid && ev.kind === "attach");
     const c = this.entityMap.get(cGuid);
     if (!c || !c.root) return;
+    // visibility intentionally left at its current value (true) so ground-
+    // drops render the item at its new position. ObjectDelete reaches the
+    // normal despawn path that fully removes the entity.
+    this._unlinkChildRig(c, cGuid);
+  }
+
+  /**
+   * Take a child rig off its wielder: unlink it from the wielder's
+   * `_attachedChildren`, re-home its root to `entitiesGroup`, clear the
+   * EQUIP-3 mount brand and `_attachedParentGuid`. Visibility untouched.
+   * Shared by `_detachChild` and `leaveWorld`.
+   */
+  _unlinkChildRig(c, cGuid) {
     const parentGuid = c._attachedParentGuid;
     if (parentGuid != null) {
       const p = this.entityMap.get(parentGuid >>> 0);
@@ -6848,10 +6994,82 @@ export class EntityManager {
     // EQUIP-3: clear the mount brand (see `attachChildToParent`).
     if (c.root.userData) delete c.root.userData.__attachedChildOf;
     if (this.scene3d?.entitiesGroup) this.scene3d.entitiesGroup.add(c.root);
-    // visibility intentionally left at its current value (true) so ground-
-    // drops render the item at its new position. ObjectDelete reaches the
-    // normal despawn path that fully removes the entity.
     c._attachedParentGuid = null;
+  }
+
+  /** held-5 — start a new server request generation for `childGuid`. */
+  _bumpAttachGen(childGuid) {
+    this._attachGenSeq = (this._attachGenSeq + 1) | 0;
+    this._attachGen.set(childGuid >>> 0, this._attachGenSeq);
+    return this._attachGenSeq;
+  }
+
+  /** held-5 — has a newer request for `childGuid` replaced generation `gen`? */
+  _attachSuperseded(childGuid, gen) {
+    return ATTACH_GEN_ON && this._attachGen.get(childGuid >>> 0) !== gen;
+  }
+
+  /**
+   * held-4 (2026-10-08, `?pickupLeaveWorld`) — a PickupEvent for an item its
+   * wielder still owns (ACE hides held ammo this way on every missile shot:
+   * Player_Missile.cs "hide previously held ammo", Monster_Missile.cs). Retail
+   * `SmartBox::DoPickupEvent` (acclient.c:143483-143500) only does
+   * `unset_parent` + `leave_world`: the object survives, and the reload
+   * ParentEvent's `set_parent` (:322952) shows the SAME object again. So keep
+   * the rig (and its ObjDesc) in `entityMap`, unparented and state-hidden;
+   * `attachChildToParent` re-shows it. Before this, the wasm sent KIND_REMOVE
+   * and re-synthesized a palette-less rig from the ParentEvent on every shot.
+   * The `_lastAttach` ledger is kept; ledger replays skip `_leftWorld` rigs.
+   * A rig not built yet parks the event so its spawn commit replays it.
+   */
+  leaveWorld(childGuid) {
+    const cGuid = childGuid >>> 0;
+    if (!PICKUP_LEAVE_WORLD_ON) {
+      this._detachChild(cGuid);
+      return;
+    }
+    this._bumpAttachGen(cGuid);
+    this._pendingAttach.delete(cGuid);
+    this._preCreate.removeMatching((g, ev) => g === cGuid && ev.kind === "attach");
+    const c = this.entityMap.get(cGuid);
+    if (!c || !c.root) {
+      if (this._preCreateBufferOn) {
+        this._preCreate.enqueue(cGuid, "leaveWorld", {}, { dedupeKind: true });
+      }
+      return;
+    }
+    const former = c._attachedParentGuid ?? this._lastAttach.get(cGuid)?.parentGuid ?? 0;
+    this._unlinkChildRig(c, cGuid);
+    _setEntityStateVisible(c, false);
+    c._leftWorld = true;
+    this._leftWorldChildren.set(cGuid, former >>> 0);
+  }
+
+  /**
+   * The wasm removed `guid` (ObjectDelete / ground PickupEvent / maint prune;
+   * loop.js `_armRemove`, before any death-hold deferral). Retail
+   * `CObjectMaint::DeleteObject` (acclient.c:309917) destroys the object with
+   * its parent link, so:
+   *  - held-5: forget its attach generation — an attach still resolving for
+   *    it is dropped instead of re-parking stale args onto a later re-creation
+   *    (deleting is safe: generations come from one manager-wide counter);
+   *  - held-4: a left-world item it owned goes with it (ACE also deletes each
+   *    tracked equipped item, Player_Tracking.cs; this is the backstop).
+   * Internal respawns call `remove()` directly and never come through here.
+   */
+  noteWireRemove(guid) {
+    const g = guid >>> 0;
+    this._attachGen.delete(g);
+    // death-5: ACCObjectMaint::DeleteObject → SetCorpseDeleted (acclient.c:390935).
+    this._openedCorpses.delete(g);
+    if (this._leftWorldChildren.size === 0) return;
+    this._leftWorldChildren.delete(g);
+    for (const [childGuid, wielderGuid] of [...this._leftWorldChildren]) {
+      if (wielderGuid !== g) continue;
+      this._leftWorldChildren.delete(childGuid);
+      this._attachGen.delete(childGuid);
+      this.remove(childGuid);
+    }
   }
 
   /**
@@ -6890,9 +7108,13 @@ export class EntityManager {
           if (typeof bundle.free === "function") {
             try { bundle.free(); } catch (_) {}
           }
+          // held-6: cache only a table the wasm actually returned. A missing
+          // export or a null bundle (transient fetch failure) used to cache
+          // an EMPTY table, which under `?heldMountStrict` would hide every
+          // item this wielder Setup holds for the rest of the session.
+          this._holdingLocCache.set(sid, table);
         }
       }
-      this._holdingLocCache.set(sid, table);
     }
     return table.get(locationKey >>> 0) ?? null;
   }
@@ -6909,8 +7131,11 @@ export class EntityManager {
    * Placement, surfaced through the wielded-item snapshot / ParentEvent).
    * No-op when the child is a single-part GfxObj (no placement table) or
    * the wasm export is absent (old bundle) — matches prior behaviour.
+   * held-5: `gen` / `parentGuid` (from `attachChildToParent`) make a frame
+   * fetch that resolves after a newer attach, detach or re-placement a no-op;
+   * callers without them skip that check.
    */
-  async _applyChildPlacementFrames(childGuid, setupId, placement) {
+  async _applyChildPlacementFrames(childGuid, setupId, placement, gen, parentGuid) {
     // `?childPlacement=off` — revert to the (broken) pre-2026-08-02 behaviour
     // where the grip re-pose never ran and the item kept the spawn bake's
     // Resting(101) pose. See `readChildPlacementFlag`.
@@ -6948,6 +7173,17 @@ export class EntityManager {
     // Re-check liveness after the await — the child may have despawned.
     const c = this.entityMap.get(cGuid);
     if (!c || !c.parts) return;
+    // held-5: only the newest request poses the parts (two fetches for
+    // different placements can resolve out of call order).
+    if (
+      gen !== undefined &&
+      (this._attachSuperseded(cGuid, gen) ||
+        (ATTACH_GEN_ON &&
+          (c._attachedParentGuid !== (parentGuid >>> 0) ||
+            c._attachedPlacement !== (placement >>> 0))))
+    ) {
+      return;
+    }
     for (let i = 0; i < c.parts.length; i += 1) {
       const fr = frames.get(i);
       const g = c.parts[i];
@@ -6985,6 +7221,9 @@ export class EntityManager {
         this.attachChildToParent(g, ev.data.parentGuid, ev.data.location, ev.data.placement);
       } else if (ev.kind === "visibility") {
         this.setVisibility(g, ev.data.visible);
+      } else if (ev.kind === "leaveWorld") {
+        // held-4: a PickupEvent that beat this rig's spawn (`leaveWorld`).
+        this.leaveWorld(g);
       } else if (!this._preCreateUnknownKindWarned) {
         this._preCreateUnknownKindWarned = true;
         // eslint-disable-next-line no-console
@@ -7026,24 +7265,40 @@ export class EntityManager {
   _replayLastAttach(guid, hasParkedAttach) {
     if (!WIELD_PERSIST_ON || this._lastAttach.size === 0) return;
     const g = guid >>> 0;
+    // held-2 (2026-10-08, `?wieldLedgerAuthority`): with `_wieldedSpawn` on,
+    // a parented CreateObject always parks its kind=7 before this commit, so
+    // a WIRE spawn reaching here unparked was created WITHOUT a parent (ACE
+    // unequip = DeleteObject; a later drop = a fresh world CreateObject).
+    // Retail parents only from the PhysicsDesc / a ParentEvent
+    // (acclient.c:391950-391961), never from memory: forget the ledger entry.
+    // Internal respawns (`meta._internalRespawn`) still replay it.
+    const wireDecides = WIELD_LEDGER_AUTHORITY_ON && this._wieldedSpawn;
     if (!hasParkedAttach) {
       const last = this._lastAttach.get(g);
       if (last) {
         const inst = this.entityMap.get(g);
         const wielder = this.entityMap.get(last.parentGuid >>> 0);
-        if (inst && inst._attachedParentGuid == null && wielder) {
+        if (wireDecides && inst && !inst.meta?._internalRespawn) {
+          this._lastAttach.delete(g);
+        } else if (inst && inst._attachedParentGuid == null && !inst._leftWorld && wielder) {
           this.attachChildToParent(g, last.parentGuid, last.location, last.placement);
         }
       }
     }
     // …and the mirror case: this guid is the WIELDER coming back; re-mount
-    // every remembered child that is live but currently unparented.
-    for (const [childGuid, rec] of this._lastAttach) {
+    // every remembered child that is live but currently unparented. held-2:
+    // an unparented child that came from a wire spawn was re-created without
+    // a parent (its own parked attach, if any, lands via the park drain), so
+    // its entry goes; a left-world child (held-4) waits for its ParentEvent.
+    for (const [childGuid, rec] of [...this._lastAttach]) {
       if ((rec.parentGuid >>> 0) !== g) continue;
       const c = this.entityMap.get(childGuid >>> 0);
-      if (c && c._attachedParentGuid == null) {
-        this.attachChildToParent(childGuid, g, rec.location, rec.placement);
+      if (!c || c._attachedParentGuid != null || c._leftWorld) continue;
+      if (wireDecides && !c.meta?._internalRespawn) {
+        this._lastAttach.delete(childGuid);
+        continue;
       }
+      this.attachChildToParent(childGuid, g, rec.location, rec.placement);
     }
   }
 
@@ -7938,6 +8193,21 @@ export class EntityManager {
   }
 
   /**
+   * death-2 (2026-10-08 round 2) — is `guid`'s rig held in its Dead pose?
+   * The same test as setMotion's CQ-06 death-hold guard (only Ready / Walk /
+   * Run get through it). loop.js `_armMotion` reads it to turn the server's
+   * resurrect Ready (motionCmd 0) into an explicit Ready for the local rig.
+   * @param {number} guid
+   * @returns {boolean}
+   */
+  isDeathHeld(guid) {
+    const inst = this.entityMap.get((guid >>> 0) || 0);
+    if (!inst) return false;
+    return (inst._unifiedSeq?.deathHold === true) ||
+      ((inst.lastMotionCommand ?? 0) & 0xffff) === CMD_LOW_DEAD;
+  }
+
+  /**
    * Phase D — persistent selection indicator on the currently targeted
    * entity. A flat ring is parented under the entity's root so it
    * follows position/rotation automatically and is GC'd when the
@@ -8004,24 +8274,19 @@ export class EntityManager {
         // switch at :262726) — that is what makes a lifestone BLUE and an NPC
         // YELLOW rather than the type ladder's default gold.
         //
-        // Read lazily HERE rather than in `toMeta`: the value is only needed
-        // for the one selected entity, the wasm lookup is an O(1) HashMap hit,
-        // and doing it at selection time keeps the per-frame meta hot path and
-        // loop.js untouched. Cached onto `meta` so a re-select is free.
-        // typeof-guarded: a stale `pkg/` (no `entityRadarBlipColor` export)
-        // leaves it 0, which is exactly retail's "use the type ladder"
-        // sentinel — so the pre-existing colours survive a wasm skew.
-        if (inst.meta && inst.meta.radarBlipColor === undefined) {
-          let _bc = 0;
-          try {
-            const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
-            if (sh && typeof sh.entityRadarBlipColor === "function") {
-              _bc = sh.entityRadarBlipColor(next >>> 0) >>> 0;
-            }
-          } catch (_) { _bc = 0; }
-          inst.meta.radarBlipColor = _bc;
-        }
-        _selLayer.setColor(blipColorForEntity(inst, readFellowshipRoster()));
+        // Read HERE rather than in `toMeta`: the value is only needed for the
+        // one selected entity, and the wasm lookups are O(1) HashMap hits.
+        // radar-3 (2026-10-08 round 2): read LIVE at every selection, like
+        // retail SetSelected over the current PublicWeenieDesc — the flags
+        // (PK bits) and int 95 both change after spawn, so the old one-time
+        // stash onto `meta` went stale (`resolveRadarLook`, which falls back
+        // to the meta for a stale `pkg/`; `?radarLiveFlags=off`).
+        const _sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        const _look = resolveRadarLook(_sh, next, inst.meta);
+        _selLayer.setColor(blipColorForEntity({
+          guid: next,
+          meta: { ...inst.meta, objDescFlags: _look.odf, radarBlipColor: _look.blipColor },
+        }, readFellowshipRoster()));
         // FU-2 — bracket BOUNDS. Prefer the real `CSetup.selection_sphere`
         // (CPartArray::GetSelectionSphere acclient.c:326293); the Box3
         // heuristic is only the fallback for setups that have none. The wasm
@@ -8409,6 +8674,10 @@ export class EntityManager {
    * rule (MONSTER = ObjectIsAttackable, not a vendor, not a fellow, shown on
    * radar). Ordering stays the weighted distance.
    *
+   * Round 2 (2026-10-08): a rig that outlives its server delete
+   * (`_removePending`, or claimed by a corpse) is out too (death-3), and
+   * UNOPENED_CORPSE reads the opened-corpse ledger (death-5).
+   *
    * @param {string} type — a SELECTION_TYPE value
    * @param {{x:number,y:number,z:number,cellId?:number}} pose — player world pose
    * @returns {Array<{guid:number, dist:number}>}
@@ -8419,7 +8688,9 @@ export class EntityManager {
       for (const [guid, inst] of this.entityMap) {
         if (!inst || !inst.root || !inst.root.position) continue;
         if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
-        if (!matchesSelectionType(inst.meta, type)) continue;
+        if (inst._removePending || inst._corpseHandoffGuid) continue; // deleted
+        const corpseOpened = this._openedCorpses.has((guid >>> 0) || 0);
+        if (!matchesSelectionType(inst.meta, type, { corpseOpened })) continue;
         const p = inst.root.position;
         out.push({
           guid: (guid >>> 0) || 0,
@@ -8432,12 +8703,14 @@ export class EntityManager {
     const playerMeta = this._localAttackMeta(this._localPlayerGuid());
     const range = this._radarRange(pose);
     // One wasm read per gather (a key press / auto-target), not per entity.
-    const fellows = (type === SELECTION_TYPE.PLAYER || type === SELECTION_TYPE.ANY)
+    const fellows = (type === SELECTION_TYPE.PLAYER || type === SELECTION_TYPE.ANY ||
+        type === SELECTION_TYPE.UNOPENED_CORPSE)
       ? null
       : readFellowshipRoster()?.members ?? null;
     for (const [guid, inst] of this.entityMap) {
       if (!inst || !inst.root || !inst.root.position) continue;
       if (inst._deadFrozen) continue; // dead/collapsing — out of the cycle
+      if (inst._removePending || inst._corpseHandoffGuid) continue; // deleted
       const g = (guid >>> 0) || 0;
       const p = inst.root.position;
       const ok = cycleCandidateOk(inst.meta, {
@@ -8448,6 +8721,7 @@ export class EntityManager {
         attached: inst._attachedParentGuid != null,
         dist2d: Math.hypot(p.x - pose.x, p.y - pose.y),
         range,
+        corpseOpened: this._openedCorpses.has(g),
       }, type);
       if (!ok) continue;
       out.push({ guid: g, dist: weightedDistance(pose, { x: p.x, y: p.y, z: p.z }) });
@@ -8473,16 +8747,12 @@ export class EntityManager {
    * ACCWeenieObject::InqShowableOnRadar for `guid` from its hydrated
    * RadarBehavior (PropertyInt 133). Absent = hidden, as in retail; the
    * radar's ODF heuristic applies only when the wasm bundle has no
-   * `objectIntProperty` at all (stale pkg/).
+   * `objectIntProperty` at all (stale pkg/). One rule with the radar
+   * plugin (target_cycle.js `radarShowableFor`; its UI-hidden term is
+   * also filtered by `cycleCandidateOk`).
    */
   _radarShowable(sh, guid, meta) {
-    if (!sh || typeof sh.objectIntProperty !== "function") {
-      return fallbackRadarShowable(
-        (meta?.objDescFlags >>> 0) || 0, (meta?.itemType >>> 0) || 0);
-    }
-    let v;
-    try { v = sh.objectIntProperty(guid >>> 0, 133); } catch (_) { v = undefined; }
-    return isShowableOnRadar(v);
+    return radarShowableFor(sh, guid, (meta?.objDescFlags >>> 0) || 0, (meta?.itemType >>> 0) || 0);
   }
 
   /**
@@ -8607,6 +8877,66 @@ export class EntityManager {
     let g = this.selectNext(!outward, false, type);
     if (!g) g = this.selectNext(outward, true, type);
     return g || ((this._selectedGuid >>> 0) || 0);
+  }
+
+  /**
+   * death-5 (2026-10-08 round 2) — the retail corpse-loot actions
+   * (CPlayerSystem::OnAction acclient.c:399807-399833), SelectNext over
+   * SELECTION_TYPE_UNOPENED_CORPSE (case 5: a corpse this client has not
+   * opened, :398069-398072):
+   *   "closest" 0x10000121 / Use 0x1000003E — SelectNext(1, 1);
+   *   "next"    0x10000122 / Use 0x1000003F — SelectNext(0, 0), and when the
+   *             selection did not move, SelectNext(1, 1).
+   * With `useVia` (the SessionHandle) the selection is then Used when it is a
+   * corpse — ItemHolder::UseObject(selectedID, 1, 0), behind the shared 0.2 s
+   * use throttle — even when the cycle found nothing new, as in retail.
+   * @param {"closest"|"next"} mode
+   * @param {{useObject?:Function, stopStick?:Function, cancelPursuit?:Function}|null} [useVia]
+   * @returns {number} the guid now selected (0 = none)
+   */
+  unopenedCorpseAction(mode, useVia = null) {
+    const T = SELECTION_TYPE.UNOPENED_CORPSE;
+    if (mode === "next") {
+      if (!this.selectNext(false, false, T)) this.selectNext(true, true, T);
+    } else {
+      this.selectNext(true, true, T);
+    }
+    const sel = (this._selectedGuid >>> 0) || 0;
+    const odf = (this.entityMap.get(sel)?.meta?.objDescFlags >>> 0) || 0;
+    if (useVia && sel && (odf & ODF_CORPSE) !== 0 && typeof useVia.useObject === "function") {
+      const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+      if (consumeWorldUseThrottle(now)) {
+        // As picking.js's corpse double-click: drop a sticky / pursuit first.
+        try { useVia.stopStick?.(); useVia.cancelPursuit?.(); } catch (_) {}
+        useVia.useObject(sel);
+      }
+    }
+    return sel;
+  }
+
+  /**
+   * death-5 — a ContainerOpened (ViewContents) for `guid`. Retail
+   * ClientUISystem::SetGroundObject marks a corpse ground container opened
+   * (ACCWeenieObject::SetCorpseOpened, acclient.c:401686-401690), which takes
+   * it out of the unopened-corpse cycle until its server delete.
+   * @param {number} guid
+   */
+  noteContainerOpened(guid) {
+    const g = (guid >>> 0) || 0;
+    if (!g) return;
+    let odf = (this.entityMap.get(g)?.meta?.objDescFlags >>> 0) || 0;
+    if (!odf) {
+      try {
+        const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        odf = (sh?.objectDescFlags?.(g) ?? 0) >>> 0;
+      } catch (_) { odf = 0; }
+    }
+    if ((odf & ODF_CORPSE) !== 0) this._openedCorpses.add(g);
+  }
+
+  /** death-5 — ACCWeenieObject::HasCorpseBeenOpened. */
+  hasCorpseBeenOpened(guid) {
+    return this._openedCorpses.has((guid >>> 0) || 0);
   }
 
   /**
@@ -8753,7 +9083,9 @@ export class EntityManager {
     if (gone && !this.spawnInFlight.has(gone)) {
       this._selRemovedGuid = 0;
       if (((this._selectedGuid >>> 0) || 0) === 0) {
-        if (this.entityMap.has(gone)) this._commitSelection(gone);
+        // death-3: a rig still mapped only as a death-held / corpse-claimed
+        // body is a deleted object — auto-target instead of re-selecting it.
+        if (shouldReselectAfterRemoval(this.entityMap.get(gone))) this._commitSelection(gone);
         else this._autoTarget("notice");
       }
     }
@@ -11793,6 +12125,9 @@ export class EntityManager {
       }
     }
 
+    // held-2: an internal rebuild, not a server re-creation — the spawn
+    // commit may still replay the `_lastAttach` ledger for it.
+    newMeta._internalRespawn = true;
     this.remove(g);
     await this.spawn(newMeta);
     for (const r of reattach) {
@@ -12222,26 +12557,34 @@ export class EntityManager {
     for (const inst of this.entityMap.values()) {
       if (inst === corpseInst) continue;
       if (typeof inst._deathAt !== "number") continue;
-      if (inst._corpseHandoffGuid) continue; // already owns a corpse
       // Correlation window: the authored-collapse clock, EXTENDED while a
       // ragdoll is still live (the sim runs 2-4s, and the corpse's async
       // time-sliced spawn can land after a short authored collapse expired —
       // 2026-08-02 trace, bug #3) plus a grace for busy spawn queues.
       const endAt = inst._deathEndAt ?? (inst._deathAt + DEATH_HOLD_FALLBACK_MS);
       const ragdollLive = RAGDOLL_ON && inst._ragdoll && !inst._ragdoll.sim?.done;
-      // Bug 6 (2026-10-07): a creature whose server delete already arrived is
-      // held by `_armRemove` only so a corpse can claim it — always in-window.
-      if (!ragdollLive && !inst._removePending && now >= endAt + DEATH_CORRELATE_GRACE_MS) continue;
       const p = inst.root?.position;
       if (!p) continue;
       const dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
       const d2 = dx * dx + dy * dy + dz * dz;
-      // Live-ragdoll creatures match at 2× radius: a monster that died
-      // mid-charge can dead-reckon several metres past the server death spot
-      // before the freeze lands, and a missed correlation here IS the
-      // "authored corpse appears" failure.
-      const maxD2 = ragdollLive ? DEATH_COLLAPSE_RADIUS_SQ * 4 : DEATH_COLLAPSE_RADIUS_SQ;
-      if (d2 < maxD2 && d2 < bestD2) { bestD2 = d2; best = inst; }
+      const ok = isCorpseHandoffCandidate({
+        hasDeathAt: true,
+        claimed: !!inst._corpseHandoffGuid, // already owns a corpse
+        // death-4 (2026-10-08 round 2): never the LOCAL player — ACE drops the
+        // player's corpse where the player died, and a claim here ends in
+        // remove() of the avatar, which the wasm never re-spawns.
+        isLocal: this._isLocalPlayerGuid(inst.guid >>> 0),
+        // Bug 6 (2026-10-07): a creature whose server delete already arrived is
+        // held by `_armRemove` only so a corpse can claim it — always in-window.
+        inWindow: ragdollLive || !!inst._removePending || now < endAt + DEATH_CORRELATE_GRACE_MS,
+        d2,
+        // Live-ragdoll creatures match at 2× radius: a monster that died
+        // mid-charge can dead-reckon several metres past the server death spot
+        // before the freeze lands, and a missed correlation here IS the
+        // "authored corpse appears" failure.
+        maxD2: ragdollLive ? DEATH_COLLAPSE_RADIUS_SQ * 4 : DEATH_COLLAPSE_RADIUS_SQ,
+      });
+      if (ok && d2 < bestD2) { bestD2 = d2; best = inst; }
     }
     if (!best) {
       if (RAGDOLL_ON) {
@@ -12249,6 +12592,7 @@ export class EntityManager {
         let near = null, nearD2 = Infinity, why = "none";
         for (const inst of this.entityMap.values()) {
           if (inst === corpseInst || typeof inst._deathAt !== "number") continue;
+          if (this._isLocalPlayerGuid(inst.guid >>> 0)) continue; // death-4
           const p = inst.root?.position;
           if (!p) continue;
           const d2 = (p.x - cp.x) ** 2 + (p.y - cp.y) ** 2 + (p.z - cp.z) ** 2;
@@ -12342,6 +12686,58 @@ export class EntityManager {
     setTimeout(() => finishReveal(8), remaining);
   }
 
+  /**
+   * Drop the selection of an object the server deleted. Called by `remove()`
+   * and — death-3 (2026-10-08 round 2) — by loop.js `_armRemove` at the
+   * delete of a dying creature whose rig stays on screen for the death hold /
+   * ragdoll / corpse reveal (`deferred`; `?deathSelectRelease=off` leaves
+   * those to `remove()`). Idempotent: a second call finds nothing selected.
+   * @param {number} guid
+   * @param {boolean} [deferred]
+   */
+  releaseSelectionOnServerDelete(guid, deferred = false) {
+    const g = guid >>> 0;
+    if (deferred && this._deathSelectReleaseOn === false) return;
+    // F16-4 — clear the selected target when its entity despawns
+    // (ObjectDelete / corpse swap / out-of-vision). Otherwise the target
+    // bar keeps showing the dead guid and the next attack/cast/Use is sent
+    // against a nonexistent object and silently fails — reads as "combat
+    // stopped working". Emitted BEFORE entityMap.delete so subscribers can
+    // still resolve the old name from prevGuid if they need it.
+    if ((this._selectedGuid >>> 0) === g && g !== 0) {
+      this._selectedGuid = 0;
+      // Retail ACCWeenieObject::Remove (acclient.c:438598-438601): the removed
+      // selection becomes prevSelectedID. Its SelectionChanged notice (which
+      // may auto-target, selection-2) is resolved by `_tickSelectionRules`
+      // next tick, after this rig is gone — and skipped for a dynamic-LOD /
+      // re-create respawn of the same guid, which is re-selected instead.
+      this._prevSelectedGuid = g;
+      this._selRemovedGuid = g;
+      // Retail target indicator (2026-08-02): drop the overlay too, else the
+      // brackets keep projecting a disposed rig. Retail's equivalent is
+      // `SmartBox::GetObjectBoundingBox` returning status 3 (object unknown)
+      // once CObjectMaint no longer resolves the iid (acclient.c:144083).
+      try { this.scene3d?.selectionBracketLayer?.setTarget(0, null, null); } catch (_) {}
+      // The legacy ring (`?selectionIndicator=ring|both`) rides the rig, which
+      // a deferred delete leaves on screen.
+      const inst = this.entityMap.get(g);
+      if (inst?._selectionRing) {
+        try {
+          inst.root?.remove(inst._selectionRing);
+          inst._selectionRing.geometry?.dispose();
+          inst._selectionRing.material?.dispose();
+        } catch (_) {}
+        inst._selectionRing = null;
+      }
+      try {
+        window.__pluginClient?.events?.emit?.("selectionChanged", {
+          guid: 0,
+          prevGuid: g,
+        });
+      } catch (_) { /* never block despawn on a subscriber fault */ }
+    }
+  }
+
   remove(guid) {
     const g = guid >>> 0;
     // Batch 9 #2 (2026-06-07): bump the spawn generation FIRST — even on
@@ -12372,33 +12768,7 @@ export class EntityManager {
     this._preCreate.purgeGuid(g);
     const inst = this.entityMap.get(g);
     if (!inst) return;
-    // F16-4 — clear the selected target when its entity despawns
-    // (ObjectDelete / corpse swap / out-of-vision). Otherwise the target
-    // bar keeps showing the dead guid and the next attack/cast/Use is sent
-    // against a nonexistent object and silently fails — reads as "combat
-    // stopped working". Emitted BEFORE entityMap.delete so subscribers can
-    // still resolve the old name from prevGuid if they need it.
-    if ((this._selectedGuid >>> 0) === g && g !== 0) {
-      this._selectedGuid = 0;
-      // Retail ACCWeenieObject::Remove (acclient.c:438598-438601): the removed
-      // selection becomes prevSelectedID. Its SelectionChanged notice (which
-      // may auto-target, selection-2) is resolved by `_tickSelectionRules`
-      // next tick, after this rig is gone — and skipped for a dynamic-LOD /
-      // re-create respawn of the same guid, which is re-selected instead.
-      this._prevSelectedGuid = g;
-      this._selRemovedGuid = g;
-      // Retail target indicator (2026-08-02): drop the overlay too, else the
-      // brackets keep projecting a disposed rig. Retail's equivalent is
-      // `SmartBox::GetObjectBoundingBox` returning status 3 (object unknown)
-      // once CObjectMaint no longer resolves the iid (acclient.c:144083).
-      try { this.scene3d?.selectionBracketLayer?.setTarget(0, null, null); } catch (_) {}
-      try {
-        window.__pluginClient?.events?.emit?.("selectionChanged", {
-          guid: 0,
-          prevGuid: g,
-        });
-      } catch (_) { /* never block despawn on a subscriber fault */ }
-    }
+    this.releaseSelectionOnServerDelete(g);
     // Render-completeness audit (2026-05-29) — wielded-item lifecycle.
     // If this entity is a WIELDER with attached children, detach them first
     // so they aren't dragged out of the scene (and left tracked-but-orphaned)
@@ -13711,7 +14081,6 @@ export class EntityManager {
     if (!desc) return;
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
-    const rig = inst.root;
     const audioMgr = this.scene3d?.audioManager;
     const ht = desc.hookType | 0;
     const delayMs = Math.max(0, (+desc.startTime || 0) * 1000);
@@ -13727,15 +14096,17 @@ export class EntityManager {
       // Coin-flip on probability (only SoundTweaked carries != 1.0).
       if (!(probability >= 1.0 || Math.random() < probability)) return;
       setTimeout(() => {
-        if (!this.entityMap.has(guid >>> 0)) return;
-        // Transform the entity's RAW AC-frame position into the three.js frame
-        // the AudioContext listener lives in (acToThree), same as the H2 arm.
-        const pos = rig?.position ?? { x: 0, y: 0, z: 0 };
-        const a4t = acToThree(pos.x, pos.y, pos.z);
+        // The record at FIRE time (a respawned rig replaces it), at its WORLD
+        // position in the three.js listener frame (acToThree, same as the H2
+        // arm; audio-2: a wielded item's root is hand-local — an item-enchant
+        // TargetEffect addresses the item's own guid).
+        const cur = this.entityMap.get(guid >>> 0);
+        const a4t = emitterPosThree(cur, this.entityMap);
+        if (!a4t) return;
         audioMgr
           // Plain SoundHook (ht 1) applies the effect slider twice, as retail
           // PlaySoundA(gid, obj) → GetAttenuation (acclient.c:342190, 383481, 383092-383095).
-          .play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0), sliderTwice: ht === 1 })
+          .play(waveId, a4t, { gain: volume, followGuid: (guid >>> 0), sliderTwice: ht === 1 })
           .catch(() => {});
       }, delayMs);
       return;
@@ -13845,22 +14216,23 @@ export class EntityManager {
             const tid = setTimeout(() => {
               // Read the entity's current world position at fire-time.
               // The rig was passed in; .position tracks the entity if
-              // it has moved between attach + fire.
-              const pos = {
-                x: rig.position.x,
-                y: rig.position.y,
-                z: rig.position.z,
-              };
+              // it has moved between attach + fire. Three.js listener
+              // frame; audio-2: a wielded rig (EQUIP-3 mount brand) plays
+              // at its WORLD position, not its hand-local root.position
+              // (audio/emitter_position.js).
+              const a4t = emitterPosThree({ root: rig }, this.entityMap);
+              if (!a4t) return;
               // Phase F.C — record the actual fire moment (after the
               // setTimeout delay), not the schedule moment. F.D's
               // validator time-correlates against the PhysicsScript
               // start_time + the attach instant.
               if (pushEventRecord) {
+                const wp = threeToAc(a4t);
                 pushEventRecord({
                   type: "sound",
                   wave_did: waveId,
                   parent_entity_guid: (guid >>> 0),
-                  world_pos: [+pos.x, +pos.y, +pos.z],
+                  world_pos: [wp.x, wp.y, wp.z],
                   t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
                   source: "PhysicsScriptHook",
                   source_meta: {
@@ -13873,21 +14245,19 @@ export class EntityManager {
                 });
               }
               // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
-              // D4-NEW-1 (2026-06-05): `pos` here is the entity's RAW AC-frame
-              // position (rig.position lives under worldRoot, whose -π/2 X
-              // rotation never reaches the AudioContext). The listener is set
-              // in three.js frame (index.js:1479-1480), so the emitter must be
-              // transformed into the SAME frame or its panned DIRECTION is
-              // permuted (AC-north → overhead instead of three.js -Z forward).
-              // Apply acToThree (ax,ay,az)→(ax,az,-ay); distance is preserved
-              // either way. Retail shares one frame (acclient.c:383163-383164).
-              // (D4-NEW-1-verification.md — verdict PARTIAL/HIGH.) NOTE: this
-              // followGuid sound's per-rAF panner update lives in
-              // index.js updateFollowingPositions and must apply the same
-              // transform there to stay corrected after frame 0.
-              const a4t = acToThree(pos.x, pos.y, pos.z);
+              // D4-NEW-1 (2026-06-05): rig.position is the RAW AC-frame
+              // position (it lives under worldRoot, whose -π/2 X rotation
+              // never reaches the AudioContext). The listener is set in
+              // three.js frame (index.js:1479-1480), so `a4t` is in the SAME
+              // frame or its panned DIRECTION would be permuted (AC-north →
+              // overhead instead of three.js -Z forward): acToThree
+              // (ax,ay,az)→(ax,az,-ay). Retail shares one frame
+              // (acclient.c:383163-383164). (D4-NEW-1-verification.md —
+              // verdict PARTIAL/HIGH.) NOTE: this followGuid sound's per-rAF
+              // panner update lives in index.js updateFollowingPositions,
+              // which resolves the same emitterPosThree.
               // SoundHook (1) applies the effect slider twice (acclient.c:342190, 383481, 383092-383095).
-              audioMgr.play(waveId, { x: a4t[0], y: a4t[1], z: a4t[2] }, { gain: volume, followGuid: (guid >>> 0), sliderTwice: e.hookType === 1 }).catch(() => {});
+              audioMgr.play(waveId, a4t, { gain: volume, followGuid: (guid >>> 0), sliderTwice: e.hookType === 1 }).catch(() => {});
             }, delayMs);
             timeoutIds.push(tid);
           }
@@ -14939,6 +15309,13 @@ export class EntityManager {
       // re-seeded the flight from the stale ObjectCreate velocity (even after
       // the impact stop). Retail swaps degrade levels inside the part array.
       if (inst._isProjectile || inst._ballistic) continue;
+      // held-2 (2026-10-08): never LOD-respawn a held child. It has no
+      // distance of its own (EQUIP-3 — retail resolves degrade from the
+      // wielder's real position); its `root.position` is HAND-LOCAL, so the
+      // distance below was measured to the map origin and `_respawnForLod`
+      // rebuilt it from that hand-local pose. A left-world item (held-4) is
+      // out of the world entirely.
+      if (inst._attachedParentGuid != null || inst._leftWorld) continue;
       const p = inst.root?.position;
       if (!p) continue;
       // Entity WORLD horizontal distance. entitiesGroup is under worldRoot
@@ -15001,6 +15378,7 @@ export class EntityManager {
       try {
         window.__diag?.lod?.onDynamicSwap?.({ guid: g, motion: newMeta.motionCommand });
       } catch (_) {}
+      newMeta._internalRespawn = true; // held-2 (see applyAppearance)
       this.remove(g);
       await this.spawn(newMeta);
     } catch (_) {
@@ -16451,12 +16829,22 @@ export class EntityManager {
       // Position is read at fire-time so the panner pans to the
       // entity's current location (matches PhatSDK retail behaviour
       // — sound positions update with the body during animation).
+      // D4-NEW-1 (2026-06-05): in the three.js frame the AudioContext
+      // listener lives in (acToThree (ax,ay,az)→(ax,az,-ay)); otherwise the
+      // panner pans a permuted DIRECTION (north→overhead). This Sound(1) hook
+      // carries no followGuid, so the one-time position fully corrects it.
+      // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
+      // audio-2 (2026-10-08): the object's WORLD position — a wielded item's
+      // root is hand-local (audio/emitter_position.js).
+      const sndT = emitterPosThree(inst, this.entityMap);
+      if (!sndT) return;
       if (pushEventRecord) {
+        const wp = threeToAc(sndT);
         pushEventRecord({
           type: "sound",
           wave_did: waveId,
           parent_entity_guid: (inst.guid >>> 0),
-          world_pos: [+pos.x, +pos.y, +pos.z],
+          world_pos: [wp.x, wp.y, wp.z],
           t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
           source: "AnimationHook",
           source_meta: {
@@ -16469,16 +16857,9 @@ export class EntityManager {
           },
         });
       }
-      // D4-NEW-1 (2026-06-05): transform the RAW AC-frame entity position into
-      // the three.js frame the AudioContext listener lives in (acToThree
-      // (ax,ay,az)→(ax,az,-ay)); otherwise the panner pans a permuted
-      // DIRECTION (north→overhead). Distance is preserved. This Sound(1) hook
-      // carries no followGuid, so the one-time transform fully corrects it.
-      // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
-      const sndT = acToThree(pos.x, pos.y, pos.z);
       audioMgr
         // Retail applies the effect slider twice on SoundHook (acclient.c:342190, 383481, 383092-383095).
-        .play(waveId, { x: sndT[0], y: sndT[1], z: sndT[2] }, { sliderTwice: true })
+        .play(waveId, sndT, { sliderTwice: true })
         .catch(() => {});
       this._soundHookFires = (this._soundHookFires | 0) + 1;
       return;
@@ -16556,20 +16937,22 @@ export class EntityManager {
           // Snapshot pos again at await-resolution time so a moving
           // entity's audio lands at its current location, not where
           // it was at hook-fire time. (For instant-resolve from a
-          // warm cache the two are identical.)
-          const px = inst.root.position.x;
-          const py = inst.root.position.y;
-          const pz = inst.root.position.z;
+          // warm cache the two are identical.) Three.js listener frame, at
+          // the object's WORLD position (audio-2: a wielded item's root is
+          // hand-local — audio/emitter_position.js).
+          const stbT = emitterPosThree(inst, this.entityMap);
+          if (!stbT) return;
           // Phase F.C — emit event log record BEFORE play(). Source
           // is still "AnimationHook" (the hook is the trigger; the
           // SoundTable resolve is just the lookup mechanism). The
           // hookType field disambiguates from raw Sound (1) hooks.
           if (pushEventRecord) {
+            const wp = threeToAc(stbT);
             pushEventRecord({
               type: "sound",
               wave_did: (entry.waveDid >>> 0),
               parent_entity_guid: (inst.guid >>> 0),
-              world_pos: [+px, +py, +pz],
+              world_pos: [wp.x, wp.y, wp.z],
               t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
               source: "AnimationHook",
               source_meta: {
@@ -16585,14 +16968,13 @@ export class EntityManager {
             });
           }
           // Wave 3 / A4 — follow the entity so HRTF tracks moving sources.
-          // D4-NEW-1 (2026-06-05): transform the RAW AC-frame snapshot into the
-          // three.js listener frame (acToThree (ax,ay,az)→(ax,az,-ay)) so the
-          // panned direction matches the listener; distance is preserved.
-          // followGuid: the per-rAF panner refresh in index.js
-          // updateFollowingPositions must apply the same transform to keep this
-          // corrected past frame 0. (D4-NEW-1-verification.md; acclient.c:383163-383164.)
-          const stbT = acToThree(px, py, pz);
-          audioMgr.play(entry.waveDid, { x: stbT[0], y: stbT[1], z: stbT[2] }, { gain, followGuid: (inst.guid >>> 0) }).catch(() => {});
+          // D4-NEW-1 (2026-06-05): `stbT` is in the three.js listener frame
+          // (acToThree (ax,ay,az)→(ax,az,-ay)) so the panned direction matches
+          // the listener; distance is preserved. followGuid: the per-rAF
+          // panner refresh in index.js updateFollowingPositions resolves the
+          // same emitterPosThree to keep this corrected past frame 0.
+          // (D4-NEW-1-verification.md; acclient.c:383163-383164.)
+          audioMgr.play(entry.waveDid, stbT, { gain, followGuid: (inst.guid >>> 0) }).catch(() => {});
         })
         .catch(() => {});
       this._soundTableHookFires = (this._soundTableHookFires | 0) + 1;
@@ -16767,12 +17149,17 @@ export class EntityManager {
         return;
       }
       const gain = retailVolume(+hook.soundVolume); // vol 0 = silent (acclient.c:342209, 383096)
+      // audio-2: the object's WORLD position in the three.js listener frame
+      // (a wielded item's root is hand-local — audio/emitter_position.js).
+      const twkT = emitterPosThree(inst, this.entityMap);
+      if (!twkT) return;
       if (pushEventRecord) {
+        const wp = threeToAc(twkT);
         pushEventRecord({
           type: "sound",
           wave_did: waveId,
           parent_entity_guid: (inst.guid >>> 0),
-          world_pos: [+pos.x, +pos.y, +pos.z],
+          world_pos: [wp.x, wp.y, wp.z],
           t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
           source: "AnimationHook",
           source_meta: {
@@ -16790,15 +17177,14 @@ export class EntityManager {
       // the panner follows a moving source. Important for SoundTweaked
       // (e.g. monster idle vocalizations on a creature that's pursuing
       // the player).
-      // D4-NEW-1 (2026-06-05): transform the RAW AC-frame entity position into
-      // the three.js listener frame (acToThree (ax,ay,az)→(ax,az,-ay)) so the
-      // panned direction is correct; distance is preserved. followGuid: the
-      // per-rAF panner refresh in index.js updateFollowingPositions must apply
-      // the same transform to stay corrected past frame 0.
+      // D4-NEW-1 (2026-06-05): `twkT` is in the three.js listener frame
+      // (acToThree (ax,ay,az)→(ax,az,-ay)) so the panned direction is correct;
+      // distance is preserved. followGuid: the per-rAF panner refresh in
+      // index.js updateFollowingPositions resolves the same emitterPosThree
+      // to stay corrected past frame 0.
       // (D4-NEW-1-verification.md PARTIAL/HIGH; retail acclient.c:383163-383164.)
-      const twkT = acToThree(pos.x, pos.y, pos.z);
       audioMgr
-        .play(waveId, { x: twkT[0], y: twkT[1], z: twkT[2] }, { gain, followGuid: (inst.guid >>> 0) })
+        .play(waveId, twkT, { gain, followGuid: (inst.guid >>> 0) })
         .catch(() => {});
       this._soundTweakedHookFires = (this._soundTweakedHookFires | 0) + 1;
       return;
@@ -17907,6 +18293,11 @@ export class EntityManager {
     // is live. Drop all three in lockstep with `entityMap`.
     this._pendingAttach.clear();
     this._preCreate.clear();
+    // held-4 / held-5 per-guid attach state, same dead-session guid space.
+    this._attachGen.clear();
+    this._leftWorldChildren.clear();
+    // death-5: the opened-corpse ledger, same guid space.
+    this._openedCorpses.clear();
   }
 
   /**
@@ -17951,7 +18342,8 @@ export class EntityManager {
       // Bug 14: an item mounted on a wielder rides that wielder whatever
       // landblock it was spawned in (a pre-fix synthesized wield spawn carried
       // the wielder's landblock and was reaped ~30 s after a long port).
-      if (inst?._attachedParentGuid != null) continue;
+      // held-4: so does a left-world item until its next ParentEvent.
+      if (inst?._attachedParentGuid != null || inst?._leftWorld) continue;
       const lx = (lb >>> 24) & 0xff;
       const ly = (lb >>> 16) & 0xff;
       const cheb = Math.max(Math.abs(lx - cx), Math.abs(ly - cy));

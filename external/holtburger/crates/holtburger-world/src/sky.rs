@@ -14,21 +14,31 @@
 //! `clock_offset` is the server-broadcast wall-clock sync delta and
 //! `time_zero_start_delta` is per-client init bookkeeping.
 //!
-//! Sky-B's investigation of ACE's network surface found **no
-//! time-of-day broadcast message** in the bundled `ACE.Server` tree
-//! (the network layer isn't in this repo's vendored slice) nor in
-//! `holtburger-protocol::opcodes` (no `WorldTime`, `GameTime`,
-//! `ServerTick`, or any related opcode). The opcode `0xF7E1`
-//! `ServerName` is the only server-broadcast metadata at session
-//! handshake, and it carries no time payload.
+//! **Server clock (daytime-1, R2 2026-10-08 — the default).** Retail's
+//! `GameTime::UseTime` (acclient.c:463395-463416) evaluates `time =
+//! Timer::cur_time + clock_offset + time_zero_start_delta`, where
+//! `Timer::cur_time` IS the server clock: `ClientNet::HandleTimeSynch`
+//! (:371516-371533) → `Timer::set_time` (:75365-75407) writes the
+//! CTimeSyncHeader's PortalYearTicks into it (clock_offset is only ever
+//! zeroed; time_zero_start_delta is the `GameSky::s_timeAdjustment` debug
+//! knob). ACE sends PortalYearTicks in the ConnectRequest and every
+//! TimeSync. [`SkyEvalState::set_server_clock`] adopts that sample, so
+//! `world_time_seconds = PortalYearTicks + zero_time_of_year` — retail
+//! `GameTime::CalcDayBegin`'s `total_time` (:463203-463240) — and the
+//! DayGroup hash (`SkyDesc::CalcPresentDayGroup`, :301664-301690) sees the
+//! same `(day, year)` as every retail client on the server.
 //!
-//! **Decision: Hypothesis B (wall-clock UTC derivation).** We anchor
-//! game time deterministically on real UTC seconds, using AC's actual
-//! launch date `1999-11-02 00:00:00 UTC` (Unix `941500800`) as the
-//! [`AC_LAUNCH_UNIX_EPOCH`] reference. The `GameTime.zero_time_of_year`
-//! field (which retail Dereth ships as `3600` — 1 hour past
-//! `zero_year=10`) lands as `seconds_into_world += zero_time_of_year`
-//! so day-group selection is stable per real-day rotation.
+//! **Pre-sync / `?skyServerClock=off` fallback: wall-clock UTC.** The
+//! original Sky-B rationale assumed no server time was available (the
+//! TimeSync adoption landed later, P4.2). Until the first sample arrives
+//! (or forever under the escape flag), game time is anchored on real UTC
+//! seconds from AC's launch date `1999-11-02 00:00:00 UTC` (Unix
+//! `941500800`, [`AC_LAUNCH_UNIX_EPOCH`]). That private clock runs
+//! `(ACE_EMU_EPOCH_UNIX - AC_LAUNCH_UNIX_EPOCH) mod 7620 = 780 s` ahead of
+//! the server's and on a different calendar day. The
+//! `GameTime.zero_time_of_year` field (retail Dereth ships `3600` — 1 hour
+//! past `zero_year=10`) lands as `seconds_into_world += zero_time_of_year`
+//! in both modes.
 //!
 //! A `__sky_time_override` clamp (set via `SkyEvalState::set_time_of_day_override`)
 //! drives a demo accelerated day for capture work (URL param `?skytime=accel`
@@ -60,6 +70,15 @@ use holtburger_dat::file_type::{
 /// is the absolute "seconds into world history" measure, against
 /// which `day_length` and `days_per_year` divide cleanly.
 pub const AC_LAUNCH_UNIX_EPOCH: f64 = 941_500_800.0;
+
+/// daytime-1 (R2 2026-10-08) — ACE's PortalYearTicks zero in Unix seconds:
+/// `DerethDateTime.UtcNowToEMUTime = (UtcNow - 5 h) - 2017-01-31 12:00`
+/// (ACE DerethDateTime.cs:1062), i.e. `2017-01-31 17:00:00 UTC`. A freshly
+/// started ACE's PortalYearTicks ≈ `now_unix - ACE_EMU_EPOCH_UNIX` (it then
+/// accumulates per world loop, WorldManager.cs:391, so it can drift). Kept
+/// for reference/tests; the live clock comes from
+/// [`SkyEvalState::set_server_clock`].
+pub const ACE_EMU_EPOCH_UNIX: f64 = 1_485_882_000.0;
 
 // ---- SkyObject.properties bit decode (Workstream Sky-G) -------------
 //
@@ -322,9 +341,11 @@ pub struct SkyObjectSnapshot {
 /// expensive `f64 * f64` doesn't run per frame.
 #[derive(Debug, Clone)]
 pub struct SkyEvalState {
-    /// Real-time wall-clock baseline anchor (Unix seconds, f64). Set
-    /// once at construction; the per-tick advance reads `now_unix -
-    /// anchor_unix` and folds in `GameTime.zero_time_of_year`.
+    /// Real-time wall-clock baseline anchor (Unix seconds, f64): the
+    /// Unix second the clock calls tick 0. Set at construction and
+    /// re-set by [`Self::set_server_clock`] (`at_unix - portal_ticks`);
+    /// the per-tick advance reads `now_unix - anchor_unix` and folds in
+    /// `GameTime.zero_time_of_year`.
     anchor_unix: f64,
     /// Per-session start anchor (Unix seconds, f64). Set to the FIRST
     /// `now_unix` passed to `evaluate` (or via
@@ -358,7 +379,14 @@ pub struct SkyEvalState {
     /// cached entry and recomputes on mismatch. Crossings happen at
     /// midnight in game time (`day_length=7620s` for retail Dereth,
     /// so every ~127 minutes of real time the day rolls over).
-    cached_day_group: Option<(u32, u32, u32)>,
+    /// daytime-1: the tuple is `(day, year, days_per_year, index)` — the
+    /// LCG key folds in `GameTime.days_per_year`, so it is part of the key.
+    cached_day_group: Option<(u32, u32, u32, u32)>,
+    /// daytime-1 (R2 2026-10-08) — `true` once a server PortalYearTicks
+    /// sample re-anchored this evaluator ([`Self::set_server_clock`]).
+    /// Before that the anchor is the construction anchor (the legacy
+    /// [`AC_LAUNCH_UNIX_EPOCH`] wall clock in production).
+    server_clock_synced: bool,
 }
 
 impl Default for SkyEvalState {
@@ -371,7 +399,9 @@ impl SkyEvalState {
     /// Construct an evaluator anchored to AC's launch date
     /// (`1999-11-02 UTC`). The anchor is load-bearing for
     /// reproducibility across browser sessions — the same wall-clock
-    /// `now` yields the same world time on every machine.
+    /// `now` yields the same world time on every machine. daytime-1: this
+    /// is the PRE-SYNC clock; [`Self::set_server_clock`] re-anchors it on
+    /// the server's PortalYearTicks.
     pub fn new() -> Self {
         Self::default()
     }
@@ -387,7 +417,59 @@ impl SkyEvalState {
             game_day_override: None,
             time_of_day_override: None,
             cached_day_group: None,
+            server_clock_synced: false,
         }
+    }
+
+    /// daytime-1 (R2 2026-10-08) — adopt a server clock sample: the
+    /// session's PortalYearTicks `portal_ticks` (ACE ConnectRequest /
+    /// TimeSync), received at local Unix time `at_unix`. Afterwards
+    /// `world_time_seconds(now)` = `portal_ticks + (now - at_unix) +
+    /// zero_time_of_year` — retail `GameTime::CalcDayBegin`'s `total_time`
+    /// with `Timer::cur_time` = the server clock (acclient.c:463203,
+    /// :371516 → :75365).
+    ///
+    /// The FIRST sample after construction is adopted unconditionally (one
+    /// snap — `Timer::set_time` snaps, it never slews). Later samples are
+    /// FORWARD-ONLY, as retail's `Timer::set_time` acts only when `srvtime >
+    /// m_tExternalTime` (:75385): a sample that would move world time
+    /// backwards (latency jitter straddling a day boundary would otherwise
+    /// flip the DayGroup back and forth) is ignored. The session-relative
+    /// cloud UV scroll (`session_start_unix`) is untouched, so a re-anchor
+    /// never jumps the cloud texture. Non-finite input is ignored.
+    ///
+    /// Returns `true` when the anchor changed.
+    pub fn set_server_clock(&mut self, portal_ticks: f64, at_unix: f64) -> bool {
+        if !portal_ticks.is_finite() || !at_unix.is_finite() {
+            return false;
+        }
+        let new_anchor = at_unix - portal_ticks;
+        if self.server_clock_synced && new_anchor >= self.anchor_unix {
+            return false;
+        }
+        self.anchor_unix = new_anchor;
+        self.server_clock_synced = true;
+        self.cached_day_group = None;
+        true
+    }
+
+    /// daytime-1 — whether a server clock sample has been adopted.
+    pub fn server_clock_synced(&self) -> bool {
+        self.server_clock_synced
+    }
+
+    /// The Unix second this evaluator's clock calls tick 0 (diagnostic).
+    pub fn anchor_unix(&self) -> f64 {
+        self.anchor_unix
+    }
+
+    /// daytime-1 — the sky clock's PortalYearTicks-domain value at
+    /// `now_unix` (`world_time_seconds - zero_time_of_year`). Server-synced
+    /// this is the server's PortalYearTicks; before the first sample it is
+    /// the legacy wall clock's equivalent (`now - AC_LAUNCH_UNIX_EPOCH`).
+    /// JS drives the moon/star date from it so they stay locked to the sun.
+    pub fn portal_ticks_at(&self, now_unix: f64) -> f64 {
+        now_unix - self.anchor_unix
     }
 
     /// Force the session-start anchor used by tex_offset accumulation.
@@ -507,7 +589,8 @@ impl SkyEvalState {
         } else {
             self.world_day_and_year(now_unix, game_time)
         };
-        let day_group_index = self.select_day_group(sky_desc, day, year);
+        let day_group_index =
+            self.select_day_group(sky_desc, day, year, game_time.days_per_year);
         let day_group = &sky_desc.day_groups[day_group_index as usize];
         let time_of_day = self.current_time_of_day_normalized(now_unix, game_time);
 
@@ -544,33 +627,29 @@ impl SkyEvalState {
     }
 
     /// Cache-aware wrapper around `SkyDesc::calc_present_day_group`.
-    /// Invalidates the cache when `(day, year, num_groups)` changes.
-    fn select_day_group(&mut self, sky_desc: &SkyDesc, day: u32, year: u32) -> u32 {
+    /// Invalidates the cache when `(day, year, days_per_year)` changes.
+    /// daytime-1: `days_per_year` is the Region's `GameTime.days_per_year`
+    /// (retail `CalcPresentDayGroup` reads it off `GameTime`,
+    /// acclient.c:301664-301690) — previously a hardcoded 360.
+    fn select_day_group(
+        &mut self,
+        sky_desc: &SkyDesc,
+        day: u32,
+        year: u32,
+        days_per_year: u32,
+    ) -> u32 {
         let num_groups = sky_desc.day_groups.len() as u32;
-        if let Some((cached_day, cached_year, cached_idx)) = self.cached_day_group
+        if let Some((cached_day, cached_year, cached_dpy, cached_idx)) = self.cached_day_group
             && cached_day == day
             && cached_year == year
+            && cached_dpy == days_per_year
         {
             return cached_idx.min(num_groups.saturating_sub(1));
         }
-        let idx = calc_present_day_group(day, year, game_time_dpy(sky_desc, day, year), num_groups);
-        self.cached_day_group = Some((day, year, idx));
+        let idx = calc_present_day_group(day, year, days_per_year, num_groups);
+        self.cached_day_group = Some((day, year, days_per_year, idx));
         idx
     }
-}
-
-/// Helper for `select_day_group` — fetches `days_per_year` if we can,
-/// else falls back to whatever we have cached. We can't reach into
-/// `GameTime` from `&SkyDesc` directly (they're peer fields of the
-/// outer `Region`), but the LCG hash takes it as a separate input so
-/// callers thread it through. This helper exists for the cached path
-/// where we don't have GameTime in hand. For now we re-derive from
-/// `(day, year)` — see `calc_present_day_group` for the math. Returns
-/// `360` (the canonical Dereth `days_per_year`) as a hardcoded fallback
-/// only used when caller doesn't have GameTime in scope; both real
-/// callers DO pass GameTime through `evaluate`.
-fn game_time_dpy(_sky_desc: &SkyDesc, _day: u32, _year: u32) -> u32 {
-    360
 }
 
 /// Verbatim port of `SkyDesc::CalcPresentDayGroup` from
@@ -597,6 +676,134 @@ pub fn calc_present_day_group(day: u32, year: u32, days_per_year: u32, num_group
     let fraction = hashed as f64 * INV_U32_MAX;
     let idx = (fraction * num_groups as f64).floor() as u32;
     idx.min(num_groups - 1)
+}
+
+/// daytime-3 (R2 2026-10-08) — the retail map-panel calendar for one clock
+/// value: [`dereth_calendar`]'s result. Field names follow retail
+/// `GameTime` (acclient.c:463203-463349).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerethCalendarSnapshot {
+    /// `current_year` = `zero_year + floor(total_time / year_length)`.
+    pub year: u32,
+    /// `current_day` — 0-based day of the year.
+    pub day_of_year: u32,
+    /// `current_season` — index into `GameTime.seasons` (the last season
+    /// whose `start` is `<= day_of_year`).
+    pub season_index: u32,
+    /// `seasons[season_index].name`, verbatim from the DAT.
+    pub season_name: String,
+    /// `day - season.begin + 1` — the day number the date string prints.
+    pub day_in_season: i64,
+    /// `current_time_of_day` — index into `GameTime.times_of_day` (the last
+    /// entry whose `start` is `<= present_time_of_day`).
+    pub time_of_day_index: u32,
+    /// `present_time_of_day` — the fraction of the day elapsed, `[0, 1)`.
+    pub present_time_of_day: f64,
+    /// `times_of_day[time_of_day_index].is_night`.
+    pub is_night: bool,
+    /// `"<season> <day>, <year> <year_spec>"` (`"%s %s, %s %s"`).
+    pub date_string: String,
+    /// `times_of_day[time_of_day_index].name`.
+    pub time_string: String,
+}
+
+/// daytime-3 (R2 2026-10-08) — port of retail `GameTime::CalcDayBegin`
+/// (acclient.c:463203-463240), `GameTime::CalcTimeOfDay` (:463243-463282)
+/// and `GameTime::GetDateTimeString` (:463286-463349) over the Region's
+/// parsed GameTime tables, for the PortalYearTicks value `portal_ticks`
+/// (retail `Timer::cur_time`; `clock_offset` is only ever zeroed and
+/// `time_zero_start_delta` is a debug knob, :463395-463416).
+///
+/// - `total_time = ticks + zero_time_of_year`; `year = zero_year +
+///   floor(total / (day_length * days_per_year))`; `day = floor(offset_in_year
+///   / day_length)`.
+/// - Season and time-of-day are BRACKET searches over the DAT `start`
+///   values (scan from index 1, stop at the first `start` greater than the
+///   value) — not a uniform division.
+/// - Strings are the DAT names verbatim (`"HarvestGain"`), with retail's
+///   overflow guards: a time name of 30+ chars, or a date whose parts reach
+///   60 chars, prints `" "`.
+///
+/// `None` for a non-finite clock, a pre-zero (negative) year, or a
+/// GameTime that cannot produce a date (no day length, no days per year,
+/// no TimeOfDay or Season entries — retail would index past the end).
+pub fn dereth_calendar(game_time: &GameTime, portal_ticks: f64) -> Option<DerethCalendarSnapshot> {
+    let day_length = game_time.day_length as f64;
+    if !portal_ticks.is_finite()
+        || !day_length.is_finite()
+        || day_length <= 0.0
+        || game_time.days_per_year == 0
+        || game_time.times_of_day.is_empty()
+        || game_time.seasons.is_empty()
+    {
+        return None;
+    }
+    // CalcDayBegin (:463216-463225).
+    let year_length = day_length * game_time.days_per_year as f64;
+    let total_time = portal_ticks + game_time.zero_time_of_year;
+    if !total_time.is_finite() || total_time < 0.0 {
+        return None;
+    }
+    let years = (total_time / year_length).floor();
+    let year = game_time.zero_year.checked_add(u32::try_from(years as u64).ok()?)?;
+    let offset_in_year = total_time - years * year_length;
+    let day_of_year =
+        ((offset_in_year / day_length).floor() as u32).min(game_time.days_per_year - 1);
+    // :463226-463237 — season bracket.
+    let mut season_index = 0usize;
+    for (i, season) in game_time.seasons.iter().enumerate().skip(1) {
+        if day_of_year < season.start {
+            break;
+        }
+        season_index = i;
+    }
+    // :463239 time_of_day_begin → present_time_of_day (UseTime :463405).
+    let present_time_of_day = (offset_in_year - day_of_year as f64 * day_length) / day_length;
+    // CalcTimeOfDay (:463251-463262) — time-of-day bracket.
+    let mut time_of_day_index = 0usize;
+    for (i, tod) in game_time.times_of_day.iter().enumerate().skip(1) {
+        if present_time_of_day < tod.start as f64 {
+            break;
+        }
+        time_of_day_index = i;
+    }
+    // GetDateTimeString (:463310-463349).
+    let tod = &game_time.times_of_day[time_of_day_index];
+    let time_string = if tod.name.len() >= 30 {
+        " ".to_string()
+    } else {
+        tod.name.clone()
+    };
+    let season = &game_time.seasons[season_index];
+    let day_in_season = day_of_year as i64 - season.start as i64 + 1;
+    let day_str = day_in_season.to_string();
+    let year_str = year.to_string();
+    let date_string = if season.name.len()
+        + day_str.len()
+        + year_str.len()
+        + game_time.year_spec.len()
+        + 9
+        >= 60
+    {
+        " ".to_string()
+    } else {
+        format!(
+            "{} {day_str}, {year_str} {}",
+            season.name, game_time.year_spec
+        )
+    };
+    Some(DerethCalendarSnapshot {
+        year,
+        day_of_year,
+        season_index: season_index as u32,
+        season_name: season.name.clone(),
+        day_in_season,
+        time_of_day_index: time_of_day_index as u32,
+        present_time_of_day,
+        is_night: tod.is_night,
+        date_string,
+        time_string,
+    })
 }
 
 /// Walk the `DayGroup`'s `SkyTimeOfDay` keyframes to find the two
@@ -2334,5 +2541,336 @@ mod tests {
         let sky_time = vec![make_keyframe(0.0, 0, 0.0, 0, 0x00_AB_CD_EF)];
         let out = acclient_world_fog_color(&sky_time, 0.42);
         assert_eq!(out, 0x00_AB_CD_EF);
+    }
+
+    // ---- daytime-1 (R2 2026-10-08): the server PortalYearTicks clock ----
+
+    /// A local "now" (integer seconds, so `now - (now - ticks)` is exact).
+    const SYNC_NOW: f64 = 1_790_000_000.0;
+
+    /// An evaluator synced to `ticks` at [`SYNC_NOW`].
+    fn synced(ticks: f64) -> SkyEvalState {
+        let mut evaluator = SkyEvalState::new();
+        assert!(evaluator.set_server_clock(ticks, SYNC_NOW), "first sync adopts");
+        evaluator
+    }
+
+    /// The retail anchors ACE `DerethDateTime` and `test_map_panel.mjs`
+    /// pin: ticks 0 = Morntide-and-Half (3600/7620) of Morningthaw 1,
+    /// 10 P.Y.; ticks 210 = Midsong (0.5); ticks 4020 = day 1, 0.0;
+    /// 4020 + 7620*359 = day 0 of year 11. `world_time_seconds` is retail
+    /// `CalcDayBegin`'s `total_time = Timer::cur_time + zero_time_of_year`.
+    #[test]
+    fn server_clock_matches_retail_calendar_anchors() {
+        let game_time = make_game_time();
+        let ev = synced(0.0);
+        assert!(ev.server_clock_synced());
+        assert_eq!(ev.world_time_seconds(SYNC_NOW, &game_time), 3600.0);
+        let tod = ev.current_time_of_day_normalized(SYNC_NOW, &game_time);
+        assert!((tod - (3600.0 / 7620.0) as f32).abs() < 1e-5, "tick 0 tod {tod}");
+        assert_eq!(ev.world_day_and_year(SYNC_NOW, &game_time), (0, 10));
+
+        let tod = synced(210.0).current_time_of_day_normalized(SYNC_NOW, &game_time);
+        assert!((tod - 0.5).abs() < 1e-5, "tick 210 = Midsong, got {tod}");
+
+        let ev = synced(4020.0);
+        let tod = ev.current_time_of_day_normalized(SYNC_NOW, &game_time);
+        assert!(tod.abs() < 1e-5, "tick 4020 = midnight, got {tod}");
+        assert_eq!(ev.world_day_and_year(SYNC_NOW, &game_time), (1, 10));
+
+        let ev = synced(4020.0 + 7620.0 * 359.0);
+        assert_eq!(ev.world_day_and_year(SYNC_NOW, &game_time), (0, 11));
+
+        // The clock keeps running from the sample: 210 s later is Midsong.
+        let ev = synced(0.0);
+        let tod = ev.current_time_of_day_normalized(SYNC_NOW + 210.0, &game_time);
+        assert!((tod - 0.5).abs() < 1e-5, "advances with local time, got {tod}");
+        assert_eq!(ev.portal_ticks_at(SYNC_NOW + 210.0), 210.0);
+    }
+
+    /// The evaluate() path (the SkyState the renderer reads) follows the
+    /// server clock too.
+    #[test]
+    fn evaluate_uses_the_server_clock() {
+        let sky_desc = make_min_sky_desc();
+        let game_time = make_game_time();
+        let mut ev = synced(210.0);
+        let (state, _) = ev.evaluate(&sky_desc, &game_time, SYNC_NOW).unwrap();
+        assert!((state.time_of_day_normalized - 0.5).abs() < 1e-5);
+    }
+
+    /// Before any sample (and forever under `?skyServerClock=off`) the
+    /// evaluator is today's private clock, bit for bit: anchored on
+    /// `AC_LAUNCH_UNIX_EPOCH`, which runs 780 s (mod one 7620 s day) ahead
+    /// of ACE's PortalYearTicks zero.
+    #[test]
+    fn pre_sync_clock_is_the_legacy_wall_clock() {
+        let game_time = make_game_time();
+        let ev = SkyEvalState::new();
+        assert!(!ev.server_clock_synced());
+        assert_eq!(ev.anchor_unix(), AC_LAUNCH_UNIX_EPOCH);
+        assert_eq!(
+            ev.world_time_seconds(AC_LAUNCH_UNIX_EPOCH + 100.0, &game_time),
+            3700.0
+        );
+        assert_eq!(ev.portal_ticks_at(AC_LAUNCH_UNIX_EPOCH + 100.0), 100.0);
+        assert_eq!((ACE_EMU_EPOCH_UNIX - AC_LAUNCH_UNIX_EPOCH).rem_euclid(7620.0), 780.0);
+    }
+
+    /// Retail `Timer::set_time` (acclient.c:75385) only acts on a sample
+    /// AHEAD of the clock: after the first sync, a backwards sample is
+    /// ignored and a forwards one moves the anchor. The FIRST sample is
+    /// adopted whatever its direction — the production one moves world
+    /// time back by ~5.4e8 s (1999 anchor → ACE's 2017 zero).
+    #[test]
+    fn server_clock_is_forward_only_after_the_first_sample() {
+        let mut ev = SkyEvalState::new();
+        let now = SYNC_NOW;
+        assert!(ev.set_server_clock(now - ACE_EMU_EPOCH_UNIX, now), "first sample adopted");
+        assert_eq!(ev.anchor_unix(), ACE_EMU_EPOCH_UNIX);
+
+        let mut ev = synced(1000.0);
+        assert!(!ev.set_server_clock(999.99, SYNC_NOW), "backwards sample ignored");
+        assert_eq!(ev.anchor_unix(), SYNC_NOW - 1000.0);
+        assert!(!ev.set_server_clock(1000.0, SYNC_NOW), "an equal sample changes nothing");
+        assert!(ev.set_server_clock(1000.5, SYNC_NOW), "forwards sample adopted");
+        assert_eq!(ev.anchor_unix(), SYNC_NOW - 1000.5);
+
+        // Non-finite samples are ignored (and do not count as a sync).
+        let mut ev = SkyEvalState::new();
+        assert!(!ev.set_server_clock(f64::NAN, SYNC_NOW));
+        assert!(!ev.set_server_clock(1.0, f64::INFINITY));
+        assert!(!ev.server_clock_synced());
+        assert_eq!(ev.anchor_unix(), AC_LAUNCH_UNIX_EPOCH);
+    }
+
+    /// A re-anchor never touches the session-relative cloud UV scroll.
+    #[test]
+    fn server_clock_keeps_the_cloud_scroll_anchor() {
+        let sky_desc = make_min_sky_desc();
+        let game_time = make_game_time();
+        let mut ev = SkyEvalState::new();
+        let _ = ev.evaluate(&sky_desc, &game_time, 100.0).unwrap();
+        assert_eq!(ev.session_start_unix, Some(100.0));
+        assert!(ev.set_server_clock(5000.0, 200.0));
+        assert_eq!(ev.session_start_unix, Some(100.0));
+    }
+
+    /// `SkyDesc::CalcPresentDayGroup` keys on `GameTime.days_per_year`
+    /// (acclient.c:301664-301690), not a hardcoded 360.
+    #[test]
+    fn day_group_follows_game_time_days_per_year() {
+        let mut day_groups = Vec::with_capacity(20);
+        for i in 0..20_u32 {
+            day_groups.push(DayGroup {
+                chance_of_occur: 1.0,
+                day_name: format!("Day-{i}"),
+                sky_objects: Vec::new(),
+                sky_time: vec![make_keyframe(0.0, 0xFF00_0000 | i, 1.0, 0, 0)],
+            });
+        }
+        let sky_desc = SkyDesc {
+            tick_size: 3.0,
+            light_tick_size: 20.0,
+            day_groups,
+        };
+        let mut game_time = make_game_time();
+        game_time.zero_time_of_year = 0.0;
+        game_time.days_per_year = 100;
+        let mut discriminated = false;
+        for k in 0..300_u32 {
+            let mut ev = synced(k as f64 * 7620.0 + 100.0);
+            let (state, _) = ev.evaluate(&sky_desc, &game_time, SYNC_NOW).unwrap();
+            let (day, year) = (k % 100, 10 + k / 100);
+            assert_eq!(ev.world_day_and_year(SYNC_NOW, &game_time), (day, year));
+            let expected = calc_present_day_group(day, year, 100, 20);
+            assert_eq!(state.day_group_index, expected, "k={k}");
+            discriminated |= calc_present_day_group(day, year, 360, 20) != expected;
+        }
+        assert!(discriminated, "the probe must tell dpy=100 from the old 360");
+    }
+
+    // ---- daytime-3 (R2 2026-10-08): the retail map calendar port ----
+
+    const RETAIL_HOURS: [&str; 16] = [
+        "Darktide",
+        "Darktide-and-Half",
+        "Foredawn",
+        "Foredawn-and-Half",
+        "Dawnsong",
+        "Dawnsong-and-Half",
+        "Morntide",
+        "Morntide-and-Half",
+        "Midsong",
+        "Midsong-and-Half",
+        "Warmtide",
+        "Warmtide-and-Half",
+        "Evensong",
+        "Evensong-and-Half",
+        "Gloaming",
+        "Gloaming-and-Half",
+    ];
+    /// Region 0x13000000 season names as the DAT spells them
+    /// ("HarvestGain", not "Harvestgain").
+    const RETAIL_SEASONS: [&str; 12] = [
+        "Morningthaw",
+        "Solclaim",
+        "Seedsow",
+        "Leafdawning",
+        "Verdantine",
+        "Thistledown",
+        "HarvestGain",
+        "Leafcull",
+        "Frostfell",
+        "Snowreap",
+        "Coldeve",
+        "Wintersebb",
+    ];
+
+    /// The retail Dereth GameTime shape: 16 uniform TimeOfDay slots, 12
+    /// thirty-day seasons, year_spec "P.Y.".
+    fn make_retail_calendar_game_time() -> GameTime {
+        use holtburger_dat::file_type::{Season, TimeOfDay};
+        let mut game_time = make_game_time();
+        game_time.times_of_day = RETAIL_HOURS
+            .iter()
+            .enumerate()
+            .map(|(k, name)| TimeOfDay {
+                start: k as f32 / 16.0,
+                is_night: !(4..14).contains(&k),
+                name: (*name).into(),
+            })
+            .collect();
+        game_time.seasons = RETAIL_SEASONS
+            .iter()
+            .enumerate()
+            .map(|(k, name)| Season {
+                start: 30 * k as u32,
+                name: (*name).into(),
+            })
+            .collect();
+        game_time
+    }
+
+    fn calendar_strings(game_time: &GameTime, ticks: f64) -> (String, String) {
+        let c = dereth_calendar(game_time, ticks).expect("calendar");
+        (c.date_string, c.time_string)
+    }
+
+    /// The same anchors `test_map_panel.mjs` pins for the JS calendar
+    /// (ACE DerethDateTime dayZero / hourOne / dayOne / yearZero / yearOne).
+    #[test]
+    fn dereth_calendar_matches_retail_anchors() {
+        let gt = make_retail_calendar_game_time();
+        let c = dereth_calendar(&gt, 0.0).unwrap();
+        assert_eq!(c.date_string, "Morningthaw 1, 10 P.Y.");
+        assert_eq!(c.time_string, "Morntide-and-Half");
+        assert_eq!((c.year, c.day_of_year, c.season_index), (10, 0, 0));
+        assert_eq!((c.time_of_day_index, c.day_in_season), (7, 1));
+        assert!((c.present_time_of_day - 3600.0 / 7620.0).abs() < 1e-12);
+
+        assert_eq!(calendar_strings(&gt, 209.9).1, "Morntide-and-Half");
+        assert_eq!(calendar_strings(&gt, 210.0).1, "Midsong");
+        let c = dereth_calendar(&gt, 4020.0).unwrap();
+        assert_eq!(
+            (c.date_string.as_str(), c.time_string.as_str()),
+            ("Morningthaw 2, 10 P.Y.", "Darktide")
+        );
+        assert!(c.is_night);
+        assert_eq!(
+            calendar_strings(&gt, 4020.0 + 7620.0 * 179.0).0,
+            "HarvestGain 1, 10 P.Y."
+        );
+        assert_eq!(
+            calendar_strings(&gt, 4020.0 + 7620.0 * 269.0).0,
+            "Snowreap 1, 10 P.Y."
+        );
+        assert_eq!(
+            calendar_strings(&gt, 4020.0 + 7620.0 * 359.0).0,
+            "Morningthaw 1, 11 P.Y."
+        );
+        // OpenAC DerethDateTimeTests.cs:91-98 (origin 3600).
+        assert_eq!(
+            calendar_strings(&gt, 291_408_060.0).0,
+            "Seedsow 24, 116 P.Y."
+        );
+    }
+
+    /// The map calendar and the sky's DayGroup clock agree on (day, year)
+    /// for the same server ticks — one clock, two readers.
+    #[test]
+    fn dereth_calendar_agrees_with_the_sky_clock() {
+        let gt = make_retail_calendar_game_time();
+        for ticks in [0.0, 210.0, 4020.0, 1_368_000.0, 291_408_060.0] {
+            let c = dereth_calendar(&gt, ticks).unwrap();
+            let ev = synced(ticks);
+            assert_eq!(
+                ev.world_day_and_year(SYNC_NOW, &gt),
+                (c.day_of_year, c.year),
+                "ticks {ticks}"
+            );
+            let tod = ev.current_time_of_day_normalized(SYNC_NOW, &gt) as f64;
+            assert!((tod - c.present_time_of_day).abs() < 1e-5, "ticks {ticks}");
+        }
+    }
+
+    /// CalcTimeOfDay / CalcDayBegin BRACKET the DAT `start` values — a
+    /// non-uniform table is honoured (a `floor(t * N)` lookup would say
+    /// slot 1 at t = 0.32 here).
+    #[test]
+    fn dereth_calendar_brackets_non_uniform_tables() {
+        use holtburger_dat::file_type::{Season, TimeOfDay};
+        let tod = |start: f32, is_night: bool, name: &str| TimeOfDay {
+            start,
+            is_night,
+            name: name.into(),
+        };
+        let season = |start: u32, name: &str| Season {
+            start,
+            name: name.into(),
+        };
+        let gt = GameTime {
+            zero_time_of_year: 0.0,
+            zero_year: 7,
+            day_length: 100.0,
+            days_per_year: 10,
+            year_spec: "AY".into(),
+            times_of_day: vec![
+                tod(0.0, true, "Dawn"),
+                tod(0.3, false, "Mid"),
+                tod(0.31, false, "Late"),
+                tod(0.9, true, "Night"),
+            ],
+            days_of_week: Vec::new(),
+            seasons: vec![season(0, "A"), season(3, "B"), season(7, "C")],
+        };
+        let c = dereth_calendar(&gt, 432.0).unwrap();
+        assert_eq!((c.time_of_day_index, c.time_string.as_str()), (2, "Late"));
+        assert_eq!((c.season_index, c.day_in_season), (1, 2));
+        assert_eq!(c.date_string, "B 2, 7 AY");
+        assert_eq!(calendar_strings(&gt, 430.5).1, "Mid");
+        let c = dereth_calendar(&gt, 790.0).unwrap();
+        assert_eq!((c.date_string.as_str(), c.time_string.as_str()), ("C 1, 7 AY", "Night"));
+        assert!(c.is_night);
+        assert_eq!(calendar_strings(&gt, 1000.0).0, "A 1, 8 AY", "year rolls");
+    }
+
+    /// Retail's string guards and the unusable inputs.
+    #[test]
+    fn dereth_calendar_guards() {
+        let mut gt = make_retail_calendar_game_time();
+        assert!(dereth_calendar(&gt, f64::NAN).is_none());
+        assert!(dereth_calendar(&gt, -4000.0).is_none(), "before the calendar zero");
+        // A 30+ char time name prints " " (GetDateTimeString :463315).
+        gt.times_of_day[7].name = "X".repeat(30);
+        assert_eq!(calendar_strings(&gt, 0.0).1, " ");
+        // A 60+ char date prints " " (:463345).
+        gt.seasons[0].name = "Y".repeat(50);
+        assert_eq!(calendar_strings(&gt, 0.0).0, " ");
+        gt.seasons.clear();
+        assert!(dereth_calendar(&gt, 0.0).is_none());
+        let mut gt = make_retail_calendar_game_time();
+        gt.times_of_day.clear();
+        assert!(dereth_calendar(&gt, 0.0).is_none());
     }
 }

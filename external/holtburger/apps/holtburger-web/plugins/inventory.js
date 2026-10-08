@@ -95,6 +95,7 @@ import {
   hideItemTooltip,
   localPlayerGuid,
 } from "./item_drag.js";
+import { consumeUseThrottle } from "../scene3d/target_cycle.js";
 
 /** Retail LayoutDescs covering the inventory window (documentation; the
  *  region boxes are now CSS — see the header note on the title offset).
@@ -577,7 +578,9 @@ function openPack(guid) {
 // (ACE has no wield path behind Use). Module-level so the hotbar works
 // before the panel was ever opened. Returns false when `guid` is not ours
 // (the caller then sends its own Use); a repeat inside retail's 0.2 s
-// m_timeLastUsed throttle is swallowed (true).
+// m_timeLastUsed throttle is swallowed (true). use-4 (2026-10-08 round 2):
+// that throttle is the ONE retail static, shared with the world Use paths
+// (target_cycle.js consumeUseThrottle).
 //
 // items-4 (2026-10-08, `?retailAutoWear=off` = the old path): an armour /
 // clothing wear first runs retail AutoWearIsLegal (planWear — "You must
@@ -587,8 +590,6 @@ function openPack(guid) {
 // more X") instead of swapping. The drag-to-paperdoll path gets the same
 // rules through dropCtx (wearPlan / readySlotOccupant).
 const RETAIL_AUTO_WEAR = typeof window !== "undefined" ? defaultOnUrlFlag("retailAutoWear") : true;
-const ACTIVATE_THROTTLE_MS = 200;
-let lastActivateAt = -Infinity;
 function activateItem(guid, { cell = null } = {}) {
   const g = (guid >>> 0) || 0;
   if (!g) return false;
@@ -597,8 +598,7 @@ function activateItem(guid, { cell = null } = {}) {
   const row = rows.find((r) => r.guid === g);
   if (!row) return false;
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-  if (now - lastActivateAt < ACTIVATE_THROTTLE_MS) return true;
-  lastActivateAt = now;
+  if (!consumeUseThrottle(now)) return true;
   let needsTarget = false;
   if (typeof h?.classifyUse === "function") {
     let intent = null;

@@ -124,27 +124,43 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // mid-session, we optimistically apply the same
             // bitflag mutation locally + re-publish the stats
             // snapshot so JS getters see the new state.
+            //
+            // charopt-1 (2026-10-08): retail `CPlayerModule::OnChanged`
+            // keeps IgnoreFellowshipRequests / FellowshipAutoAccept-
+            // Requests mutually exclusive — enabling one first clears
+            // and sends the other. `apply_character_option` applies the
+            // local bits and returns the sends in wire order. The
+            // RefCell borrow is dropped before any send.
             use holtburger_protocol::messages::{
                 GameAction, SetSingleCharacterOptionActionData,
             };
-            let action = GameAction::SetSingleCharacterOption(Box::new(
-                SetSingleCharacterOptionActionData { option, value },
-            ));
-            send_or_disconnect!(
-                queued_events,
-                e,
-                send_ordered!(movement, session, action),
-                "recv_loop: send_action(SetSingleCharacterOption {option:?} = {value}): {e}",
-                "set_character_option: {e}",
-                LoopFlow::Exit
-            );
-            if let Some(w) = world.borrow_mut().as_mut() {
-                w.player.set_character_option_enabled(option, value);
+            let sends: Vec<(holtburger_common::CharacterOption, bool)> =
+                match world.borrow_mut().as_mut() {
+                    Some(w) => w.player.apply_character_option(option, value),
+                    None => vec![(option, value)],
+                };
+            for (send_option, send_value) in sends {
+                let action = GameAction::SetSingleCharacterOption(Box::new(
+                    SetSingleCharacterOptionActionData {
+                        option: send_option,
+                        value: send_value,
+                    },
+                ));
+                send_or_disconnect!(
+                    queued_events,
+                    e,
+                    send_ordered!(movement, session, action),
+                    "recv_loop: send_action(SetSingleCharacterOption {send_option:?} = {send_value}): {e}",
+                    "set_character_option: {e}",
+                    LoopFlow::Exit
+                );
+                console_log_str(&format!(
+                    "[character-option] set: {send_option:?} = {send_value}",
+                ));
+            }
+            if let Some(w) = world.borrow().as_ref() {
                 publish_player_stats_snapshot(w, &latest_stats);
             }
-            console_log_str(&format!(
-                "[character-option] set: {option:?} = {value}",
-            ));
         }
         SessionCommand::AddShortcut { index, object_guid, spell_id, layer } => {
             // P1-6 follow-up: send GameAction::AddShortcut

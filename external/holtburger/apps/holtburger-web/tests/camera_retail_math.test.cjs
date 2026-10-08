@@ -243,11 +243,13 @@ async function main() {
     assert.match(CAMERA_SRC, /const g = guardLookHorizontal\(/); // called
     assert.match(CAMERA_SRC, /this\._lastGoodLookDir = \{ x: g\.dirX, y: g\.dirY \}/);
     assert.match(CAMERA_SRC, /if \(g\.degenerate\) this\._degenerateBasisFrames \+= 1/);
-    // Guard must run BEFORE both the stiffness and hard-set branches, or the
-    // smoothed path keeps emitting the degenerate basis.
+    // Guard must run BEFORE the viewer-step, stiffness and hard-set branches,
+    // or the smoothed path keeps emitting the degenerate basis.
     const guardAt = CAMERA_SRC.indexOf('const g = guardLookHorizontal(');
     const stiffAt = CAMERA_SRC.indexOf('this._applyStiffness(dt, finalX');
+    const stepAt = CAMERA_SRC.indexOf('this._applyViewerStep(');
     assert.ok(guardAt > 0 && stiffAt > guardAt, 'guard must precede _applyStiffness');
+    assert.ok(stepAt > guardAt, 'guard must precede _applyViewerStep');
   });
 
   check('camera.js exposes the basis-guard counter for harnesses', () => {
@@ -269,6 +271,161 @@ async function main() {
     assert.match(ENTITIES_SRC, /setLocalPlayerCameraOpacity\(guid, opacity\)/);
     assert.match(ENTITIES_SRC, /__preCamFadeOpacity/);
     assert.match(ENTITIES_SRC, /__preCamFadeDepthWrite/);
+  });
+
+  // ── 2026-10-08 round 2: retail viewer order (camera-2) ──────────────────
+  // CameraManager::UpdateCamera (acclient.c:147425) lerps from the previous
+  // SWEPT viewer toward the UNCLIPPED sought frame (:147841); update_viewer
+  // (:144991) sweeps afterwards. Fake sweep: a wall at x = -1 (pivot at 0,
+  // ideal eye at x = -6), so the sweep clamps x to ≥ -1.
+  const IDEAL = { x: -6, y: 0, z: 2 };
+  const LOOK = { x: 0, y: 0, z: 1.6 };
+  const wall = (s) => ({ x: Math.max(s.x, -1), y: s.y, z: s.z });
+  const frac45 = m.stiffnessFrac(0.45, 1 / 60); // 0.075
+
+  check('retailViewerStep (a): frame 1 publishes on the wall, never beyond it', () => {
+    const r = m.retailViewerStep(null, IDEAL, frac45, wall, LOOK);
+    assert.equal(r.snapped, true);
+    assert.equal(r.sought, IDEAL);
+    assert.equal(r.eye.x, -1);
+  });
+
+  check('retailViewerStep (b): after the clamp releases the eye moves only frac out', () => {
+    const r = m.retailViewerStep({ x: -1, y: 0, z: 2 }, IDEAL, frac45, (s) => s, LOOK);
+    assert.equal(r.snapped, false);
+    assert.ok(Math.abs(r.eye.x - (-1 - 5 * frac45)) < 1e-12, `x=${r.eye.x}`);
+  });
+
+  check('retailViewerStep (c): pressed against the wall the eye holds (< 1e-3 / frame)', () => {
+    let prev = m.retailViewerStep(null, IDEAL, frac45, wall, LOOK).eye;
+    for (let i = 0; i < 30; i++) {
+      const e = m.retailViewerStep(prev, IDEAL, frac45, wall, LOOK).eye;
+      assert.ok(Math.hypot(e.x - prev.x, e.y - prev.y, e.z - prev.z) < 1e-3);
+      assert.ok(e.x >= -1);
+      prev = e;
+    }
+  });
+
+  check('retailViewerStep (d): frac = 1 (hard-lock) seeks the ideal outright', () => {
+    const r = m.retailViewerStep({ x: -1, y: 0, z: 2 }, IDEAL, 1.0, null, LOOK);
+    assert.equal(r.sought, IDEAL);
+    assert.equal(r.eye, IDEAL);
+    assert.equal(r.snapped, true);
+  });
+
+  check('retailViewerStep (e): the view direction ignores the clamp', () => {
+    const a = m.retailViewerStep(null, IDEAL, 1.0, wall, LOOK).fwd;
+    const b = m.retailViewerStep(null, IDEAL, 1.0, (s) => s, LOOK).fwd;
+    assert.deepEqual(a, b);
+    assert.ok(Math.abs(Math.hypot(a.x, a.y, a.z) - 1) < 1e-12);
+    assert.ok(a.x > 0.99, 'aims from the ideal eye at the look point');
+  });
+
+  check('retailViewerStep: teleport snaps, the 4e-4 m early-out seeks the ideal', () => {
+    const far = m.retailViewerStep({ x: 500, y: 0, z: 2 }, IDEAL, frac45, null);
+    assert.equal(far.snapped, true);
+    assert.equal(far.sought, IDEAL);
+    const near = m.retailViewerStep({ x: -6.0001, y: 0, z: 2 }, IDEAL, frac45, null);
+    assert.equal(near.snapped, false); // rotation still slerps
+    assert.equal(near.sought, IDEAL);
+    assert.equal(near.fwd, null); // no look point passed
+  });
+
+  check('camera.js viewer step: lerp first, sweep after, orientation from the ideal', () => {
+    assert.match(CAMERA_SRC, /this\._camViewerStepOn = !camFlagOff\(params\?\.get\("camViewerStep"\)\)/);
+    const body = CAMERA_SRC.slice(CAMERA_SRC.indexOf('  _applyViewerStep(dt, p, ctx'));
+    assert.match(body, /retailViewerStep\(\s*this\._prevEyeAc,/);
+    assert.match(body, /\(s\) => this\._clipCameraAgainstWorld\(p, s\.x, s\.y, s\.z, ctx, false\)/);
+    assert.match(body, /this\._prevEyeAc = \{ x: eye\.x, y: eye\.y, z: eye\.z \}/);
+    assert.match(body, /this\.persp\.quaternion\.slerp\(t\.q, frac\)/);
+    // camera_math: the sweep runs on the LERPED sought, after the lerp.
+    const MATH_SRC = fs.readFileSync(
+      path.join(__dirname, '..', 'scene3d', 'camera_math.js'), 'utf8');
+    const lerpAt = MATH_SRC.indexOf('x: prevEye.x + dx * frac');
+    const sweepAt = MATH_SRC.indexOf('sweepFn(sought)');
+    assert.ok(lerpAt > 0 && sweepAt > lerpAt, 'sweep must follow the lerp');
+    // Flag on: only the terrain floor touches the ideal before the look.
+    assert.match(CAMERA_SRC, /finalZ = this\._terrainFloorZ\(clipCtx, finalX, finalY, finalZ\)/);
+    // Every re-seed site clears the published eye.
+    const seeds = CAMERA_SRC.match(/this\._prevEyeAc = null;/g) || [];
+    assert.ok(seeds.length >= 4, `expected ≥4 re-seed sites, got ${seeds.length}`);
+  });
+
+  // ── camera-4: retail viewer sphere + pivot ─────────────────────────────
+  check('camera.js clip chain: retail 0.3 m sphere / 1.5 m pivot, legacy behind =off', () => {
+    assert.match(CAMERA_SRC, /import \{ VIEWER_SPHERE_RADIUS_M, VIEWER_PIVOT_Z_M \} from "\.\/viewer_cell\.js"/);
+    assert.match(CAMERA_SRC, /this\._camRetailSphereOn = !camFlagOff\(params\?\.get\("camRetailSphere"\)\)/);
+    assert.match(CAMERA_SRC, /CAM_RADIUS = retailSphere \? VIEWER_SPHERE_RADIUS_M : CAM_LEGACY_RADIUS_M/);
+    assert.match(CAMERA_SRC, /BACKOFF = retailSphere \? CAM_CONTACT_SKIN_M : CAM_LEGACY_BACKOFF_M/);
+    assert.match(CAMERA_SRC, /retailSphere \? VIEWER_PIVOT_Z_M : CAM_LEGACY_PIVOT_Z_M/);
+    const num = (name) => Number((CAMERA_SRC.match(new RegExp(`const ${name} = ([0-9.]+);`)) || [])[1]);
+    assert.ok(num('CAM_CONTACT_SKIN_M') <= 0.02);
+    assert.equal(num('CAM_LEGACY_RADIUS_M'), 0.5);
+    assert.equal(num('CAM_LEGACY_BACKOFF_M'), 0.2);
+    assert.equal(num('CAM_LEGACY_PIVOT_Z_M'), 1.6);
+    // The terrain floor keeps the legacy margin (point sample, not a sweep).
+    assert.match(CAMERA_SRC, /terrainZ \+ CAM_LEGACY_RADIUS_M \+ CAM_LEGACY_BACKOFF_M/);
+  });
+
+  // ── camera-3 stage 1: scenery sweep (step 4b) ──────────────────────────
+  check('camera.js step 4b sweeps scenery behind camScenery, typeof-guarded, frees the hit', () => {
+    assert.match(CAMERA_SRC, /this\._camSceneryOn = !camFlagOff\(params\?\.get\("camScenery"\)\)/);
+    const at = CAMERA_SRC.indexOf('---- 4b. Outdoor scenery sweep');
+    assert.ok(at > 0);
+    const blk = CAMERA_SRC.slice(at, at + 700);
+    assert.match(blk, /if \(this\._camSceneryOn\)/);
+    assert.match(blk, /typeof handle\.sweepSphereAgainstScenery === "function"/);
+    assert.match(blk, /if \(hit\) \{ clipFinalTo\(hit\); freeHit\(hit\); \}/);
+    const LIB_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib.rs'), 'utf8');
+    assert.match(LIB_SRC, /#\[wasm_bindgen\(js_name = sweepSphereAgainstScenery\)\]/);
+    assert.match(LIB_SRC, /scene\.sweep_sphere_against_scenery\(&pose, delta, radius\)\?/);
+  });
+
+  // ── camera-5: keyless in-place turns ────────────────────────────────────
+  check('inPlaceTurnYawDelta: keyless turns follow rigidly, gated + wrapped', () => {
+    assert.ok(Math.abs(m.inPlaceTurnYawDelta(0, 0.3, { moved: false, keyed: false }) - 0.3) < 1e-12);
+    assert.equal(m.inPlaceTurnYawDelta(0, 5e-4, {}), 0);
+    assert.equal(m.inPlaceTurnYawDelta(0, 0.3, { keyed: true }), 0);
+    assert.equal(m.inPlaceTurnYawDelta(0, 0.3, { moved: true }), 0);
+    assert.equal(m.inPlaceTurnYawDelta(0, 0.3, { dragging: true }), 0);
+    assert.equal(m.inPlaceTurnYawDelta(null, 0.3, {}), 0);
+    const d = m.inPlaceTurnYawDelta(3.1, -3.1, {});
+    assert.ok(Math.abs(d - (2 * Math.PI - 6.2)) < 1e-12, `wrapped ${d}`);
+  });
+
+  check('camera.js _updateAutoFollow samples the heading before its early returns', () => {
+    const at = CAMERA_SRC.indexOf('  _updateAutoFollow(dt, tracking = false) {');
+    assert.ok(at > 0);
+    const body = CAMERA_SRC.slice(at, CAMERA_SRC.indexOf('\n  }\n', at));
+    const writeAt = body.indexOf('this._lastFollowHeading = turnH;');
+    assert.ok(writeAt > 0 && writeAt < body.indexOf('if (tracking) return;'));
+    assert.ok(writeAt < body.indexOf('if (!this._autoFollowOn) return;'));
+    assert.match(body, /inPlaceTurnYawDelta\(turnPrevH, turnH, \{/);
+    assert.match(CAMERA_SRC, /this\._autoFollowTurnsOn = !camFlagOff\(params\?\.get\("autoFollowTurns"\)\)/);
+    // The owner-tuned ease rate stays (verify: 4.5 is not a retail constant).
+    assert.match(CAMERA_SRC, /const AUTOFOLLOW_RATE_DEFAULT = 4\.0;/);
+  });
+
+  // ── charopt-2: ViewCombatTarget ──────────────────────────────────────────
+  check('trackedTargetYaw: followYaw convention (north 0, east π/2, south ±π)', () => {
+    const o = { x: 10, y: 10 };
+    assert.equal(m.trackedTargetYaw(o, { x: 10, y: 20 }), 0);
+    assert.ok(Math.abs(m.trackedTargetYaw(o, { x: 20, y: 10 }) - Math.PI / 2) < 1e-12);
+    assert.ok(Math.abs(Math.abs(m.trackedTargetYaw(o, { x: 10, y: 0 })) - Math.PI) < 1e-12);
+    assert.equal(m.trackedTargetYaw(o, { x: 10, y: 10 }), null);
+  });
+
+  check('camera.js tracks the combat target: option 0x07, melee/missile, autofollow stands down', () => {
+    assert.match(CAMERA_SRC, /this\._combatTargetViewOn = !camFlagOff\(params\?\.get\("combatTargetView"\)\)/);
+    assert.match(CAMERA_SRC, /const CHARACTER_OPTION_VIEW_COMBAT_TARGET = 0x07;/);
+    assert.match(CAMERA_SRC, /if \(combatMode !== 2 && combatMode !== 4\) return false;/);
+    assert.match(CAMERA_SRC,
+      /const tracking = this\._updateCombatTargetTracking\(dt\);\s*\n\s*this\._updateAutoFollow\(dt, tracking\);/);
+  });
+
+  check('camFlagOff accepts off / 0 / false only', () => {
+    for (const v of ['off', 'OFF', '0', 'false', 'False']) assert.equal(m.camFlagOff(v), true, v);
+    for (const v of [undefined, null, '', 'on', '1', 'true']) assert.equal(m.camFlagOff(v), false, String(v));
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -15,6 +15,7 @@ import {
   shopSellPrice, shopBuyPrice, unitValueOf, vendorPurchasePrice, vendorSaleCredit,
   vendorAcceptability, vendorRejectText, VENDOR_ACCEPT, countCurrency, PYREAL_WCID,
   fmtNumber, fmtCompact, isOutOfRange, TRADE_RANGE, CYLINDER_RADII_ALLOWANCE,
+  tradeRangeVerdict, distance3D, tradeItemAttempt,
   tradeStatus, mapCoordsText, rentDueInfo, MAINTENANCE_PERIOD_SECONDS,
   houseTypeName, clampPage, sellStagingPlan,
 } from "../plugins/commerce_logic.js";
@@ -162,6 +163,36 @@ check("trade closes past 5.0 + the two collision radii, not at 24 m", () => {
   assert.equal(isOutOfRange(me, { x: TRADE_RANGE + CYLINDER_RADII_ALLOWANCE - 0.01, y: 0 }, TRADE_RANGE), false);
   assert.equal(isOutOfRange(me, { x: 6.5, y: 0 }, TRADE_RANGE), true);
   assert.equal(isOutOfRange(me, null, TRADE_RANGE), false, "unknown position never closes");
+});
+// trade-2 (2026-10-08 round 2): the trade handler is registered xy_only = 0
+// (gmSecureTradeUI::RecvNotice_RegisterTrade, acclient.c:251881), and
+// ACCWeenieObject::ObjectsInRange (:436730) fails when either object is gone.
+check("trade-2: the distance is 3D — a partner a floor up is out of range", () => {
+  const me = { x: 0, y: 0, z: 0 };
+  assert.equal(tradeRangeVerdict({ me, them: { x: 0, y: 0, z: 6.5 } }), "close");
+  assert.equal(tradeRangeVerdict({ me, them: { x: 5.9, y: 0, z: 0 } }), "ok");
+  assert.equal(tradeRangeVerdict({ me, them: { x: 3, y: 0, z: 5.5 } }), "close", "6.26 m in 3D, 3 m in XY");
+  assert.equal(isOutOfRange(me, { x: 3, y: 0, z: 5.5 }, TRADE_RANGE), true);
+  assert.equal(tradeRangeVerdict({ me, them: { x: 3, y: 0, z: 4.5 } }), "ok", "5.41 m ≤ 5.0 + both radii");
+  assert.equal(distance3D({ x: 1, y: 2 }, { x: 1, y: 2, z: 3 }), 3, "a missing z counts as 0");
+  assert.ok(Number.isNaN(distance3D(me, null)));
+});
+check("trade-2: a partner gone from the world closes after 2 missed polls; no own position decides nothing", () => {
+  const me = { x: 0, y: 0, z: 0 };
+  assert.equal(tradeRangeVerdict({ me, them: null, misses: 1 }), "ok", "one-poll grace (respawn)");
+  assert.equal(tradeRangeVerdict({ me, them: null, misses: 2 }), "close", "≈ retail's 1.0 s interval");
+  assert.equal(tradeRangeVerdict({ me: null, them: null, misses: 5 }), "unknown");
+  assert.equal(tradeRangeVerdict({ me: null, them: { x: 99, y: 0, z: 0 } }), "unknown");
+});
+// charopt-4 (2026-10-08 round 2): ClientTradeSystem::AttemptToTradeItem
+// (acclient.c:410566) + AttemptToOpenTradeNegotiations (:410538).
+check("charopt-4: drag-to-trade decision (add / someone else / peace mode / open)", () => {
+  assert.equal(tradeItemAttempt({ partnerGuid: 0x50000002, target: 0x50000002, combatMode: 2 }), "add");
+  assert.equal(tradeItemAttempt({ partnerGuid: 0x50000002, target: 0x50000003 }), "elsewhere");
+  assert.equal(tradeItemAttempt({ partnerGuid: 0, target: 0x50000003, combatMode: 1 }), "open");
+  assert.equal(tradeItemAttempt({ partnerGuid: 0, target: 0x50000003, combatMode: 2 }), "peace");
+  assert.equal(tradeItemAttempt({ partnerGuid: 0, target: 0x50000003, combatMode: 8 }), "peace");
+  assert.equal(tradeItemAttempt({ target: 0x50000003 }), "open", "unknown combat mode reads as NonCombat");
 });
 
 console.log("[6] secure-trade status / Trade-button state");

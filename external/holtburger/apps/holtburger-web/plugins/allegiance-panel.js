@@ -39,17 +39,31 @@
 //     (CloseKickConfirmationDialog → Event_BreakAllegiance(vassal)).
 //     All three confirm first (Make*ConfirmationDialog).
 //
+//   • Tree request — AllegianceUpdateRequest 0x001F (u32 on): retail
+//     gmAllegianceUI::RecvNotice_PlayerDescReceived sends Event_UpdateRequest(1)
+//     once the player description lands, and OnVisibilityChanged sends 1 on
+//     show / 0 on hide. ACE never pushes the tree at login, so without the
+//     request playerAllegiance() stays null all session. Sent once per
+//     SessionHandle after the player is in world, and ref-counted over the
+//     page + Management floaty. The floaty's Refresh asks for the tree too.
+//   • Patron resolution — AllegianceHierarchy::GetPatron is the parent link
+//     of the player's node. ACE never writes a separate patron record when
+//     the patron IS the monarch, so a non-monarch member with no patron
+//     record is a direct vassal of the monarch (buildAllegianceViewModel).
+//
 // Wire: SwearAllegiance 0x001D · BreakAllegiance 0x001E ·
-// SetCharacterOption IgnoreAllegianceRequests (ordinal 0x01) · officer
-// tools in the floaty: SetAllegianceName, SetAllegianceOfficer,
-// AllegianceChatGag, Add/RemoveAllegianceBan, BreakAllegianceBoot,
-// DoAllegianceLockAction, RecallAllegianceHometown, AllegianceInfoRequest.
+// AllegianceUpdateRequest 0x001F · SetCharacterOption
+// IgnoreAllegianceRequests (ordinal 0x01) · officer tools in the floaty:
+// SetAllegianceName, SetAllegianceOfficer, AllegianceChatGag,
+// Add/RemoveAllegianceBan, BreakAllegianceBoot, DoAllegianceLockAction,
+// RecallAllegianceHometown.
 
 import {
   registerSocialPage, mountSocialHub, ensureSocialStyles, onSocialBoot,
   el, makeKitButton, makeOrb, makeSpacer, makeColHead, makeListRow, setRowSelected,
   withSession, selectedTargetGuid, selectedTargetName, localPlayerGuid,
   isPlayerGuid, onBus, confirmAction, readCharacterOption, fmtInt, socialEmit, uid,
+  getHandle,
 } from "./social-panel.js";
 import { attachWindowPosition } from "../ui/ac_window_position.js";
 import { makeTitlebar } from "../ui/hud_kit.js";
@@ -110,8 +124,14 @@ export function buildAllegianceViewModel(snap) {
     };
   }
   const monarch = member(snap.monarch);
-  const patron = member(snap.patron);
   const myself = member(snap.myself);
+  // AllegianceHierarchy::GetPatron = the player's tree parent. ACE packs no
+  // patron record when the patron IS the monarch (the self record just
+  // hangs off the monarch), so an older wasm snapshot reports patron=null
+  // for every first-tier vassal; a non-monarch member with no patron
+  // record is a direct vassal of the monarch.
+  const patron = member(snap.patron)
+    ?? ((myself && monarch && myself.guid !== monarch.guid) ? monarch : null);
   const vassals = (Array.isArray(snap.vassals) ? snap.vassals : []).map(member).filter(Boolean);
   const isMonarch = !!monarch && !myself;
   const me = isMonarch ? monarch : myself;
@@ -179,6 +199,102 @@ function fetchAllegianceSnapshot() {
   } catch (_) {
     return null;
   }
+}
+
+// ─── AllegianceUpdateRequest (0x001F) ───────────────────────────────────
+
+// typeof-guarded: a wasm build without the binding just never asks.
+function sendAllegianceUpdateRequest(on, handle = getHandle()) {
+  if (typeof handle?.allegianceUpdateRequest !== "function") return false;
+  try {
+    handle.allegianceUpdateRequest(!!on);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Retail gmAllegianceUI::OnVisibilityChanged → Event_UpdateRequest(visible),
+// ref-counted so the hub page and the Management floaty can both be open.
+let allegVisibleCount = 0;
+function allegianceVisible(delta) {
+  const before = allegVisibleCount;
+  allegVisibleCount = Math.max(0, allegVisibleCount + delta);
+  if (before === 0 && allegVisibleCount > 0) sendAllegianceUpdateRequest(true);
+  else if (before > 0 && allegVisibleCount === 0) sendAllegianceUpdateRequest(false);
+}
+
+// Retail gmAllegianceUI::RecvNotice_PlayerDescReceived → Event_UpdateRequest(1)
+// (OpenAC: RuntimeAllegianceState.NoteEnteredWorld, once per session). Sent
+// once per SessionHandle (a reconnect builds a new handle → asks again), and
+// only once the player is in world: the eager SelectCharacter WorldState
+// sets playerGuid() before ACE has a Player to answer.
+const loginRequestSent = new WeakSet();
+let loginPollTimer = null;
+let loginPollDeadline = 0;
+const LOGIN_POLL_MS = 1000;
+const LOGIN_POLL_WINDOW_MS = 60000;
+
+function playerInWorld() {
+  if (!localPlayerGuid()) return false;
+  const hist = (typeof window !== "undefined") ? window.__bootStateHistory : null;
+  // No boot-state plumbing (harness / tests): the guid gate is all we have.
+  if (!Array.isArray(hist)) return true;
+  // The latest session-phase transition must be "in-world" ("ready" is the
+  // scene latch, which can land on either side of it).
+  for (let i = hist.length - 1; i >= 0; i -= 1) {
+    const st = hist[i]?.state;
+    if (st === "in-world") return true;
+    if (st && st !== "ready") return false;
+  }
+  return false;
+}
+
+/** One login-time tree request per handle; true when it was sent now. */
+export function maybeSendLoginAllegianceRequest() {
+  const h = getHandle();
+  if (!h || typeof h !== "object" || loginRequestSent.has(h)) return false;
+  if (typeof h.allegianceUpdateRequest !== "function") return false;
+  if (!playerInWorld()) return false;
+  if (!sendAllegianceUpdateRequest(true, h)) return false;
+  loginRequestSent.add(h);
+  return true;
+}
+
+function stopLoginPoll() {
+  if (loginPollTimer != null) { try { clearTimeout(loginPollTimer); } catch (_) {} }
+  loginPollTimer = null;
+}
+
+// Retry for a bounded window (~60 s at ~1 s) after boot / each stats push,
+// so the request goes out right after the in-world transition even when
+// PlayerDescription beat PlayerCreate.
+function scheduleLoginAllegianceRequest() {
+  if (maybeSendLoginAllegianceRequest()) { stopLoginPoll(); return; }
+  loginPollDeadline = Date.now() + LOGIN_POLL_WINDOW_MS;
+  if (loginPollTimer != null) return;
+  const tick = () => {
+    loginPollTimer = null;
+    if (maybeSendLoginAllegianceRequest()) return;
+    if (Date.now() >= loginPollDeadline) return;
+    loginPollTimer = setTimeout(tick, LOGIN_POLL_MS);
+    try { loginPollTimer?.unref?.(); } catch (_) {}
+  };
+  loginPollTimer = setTimeout(tick, LOGIN_POLL_MS);
+  try { loginPollTimer?.unref?.(); } catch (_) {}
+}
+
+let loginHookOff = null;
+function installLoginAllegianceRequest() {
+  if (typeof window === "undefined") return;
+  // PlayerDescription publishes the stats snapshot (playerStatsUpdated), the
+  // closest JS-side analogue of RecvNotice_PlayerDescReceived.
+  if (!loginHookOff) {
+    loginHookOff = onBus("playerStatsUpdated", () => {
+      try { scheduleLoginAllegianceRequest(); } catch (_) {}
+    });
+  }
+  scheduleLoginAllegianceRequest();
 }
 
 // Wave F.3: per-member login/logout chat line (opcode 0x027A,
@@ -303,6 +419,7 @@ function memberLine(m, { showXp }) {
 function mountAllegiancePage(pageEl) {
   ensureStyles();
   installPresenceOnce();
+  allegianceVisible(+1);
   const col = el("div", "hb-soc-col");
 
   // PlayerField — name / followers / rank.
@@ -478,6 +595,7 @@ function mountAllegiancePage(pageEl) {
   return () => {
     for (const off of offs) { try { off(); } catch (_) {} }
     col.remove();
+    allegianceVisible(-1);
   };
 }
 
@@ -485,6 +603,8 @@ registerSocialPage("allegiance", { mount: mountAllegiancePage });
 // The login/logout chat line is page-lifetime (retail receives
 // RecvNotice_AllegianceLogin whether or not the panel is open).
 onSocialBoot(installPresenceOnce);
+// The login-time tree request (RecvNotice_PlayerDescReceived) is too.
+onSocialBoot(installLoginAllegianceRequest);
 
 // Main-panel view "allegiance" (F8, toolbar Social button) — the social
 // hub opened on its Allegiance tab.
@@ -673,8 +793,15 @@ function buildStandalone() {
     });
   }, { title: "Portal to your allegiance's hometown" }));
   footer.appendChild(makeKitButton("Refresh", () => {
-    // AllegianceInfoRequest (0x027B): ACE answers with the hierarchy of the
-    // named member; the AllegianceUpdate push refreshes the page.
+    // AllegianceUpdateRequest (0x001F): ACE answers any member with
+    // AllegianceUpdate, which refreshes the page. (AllegianceInfoRequest
+    // 0x027B is retail's officer-only `/allegiance info <name>` and its
+    // reply is not the player's own tree.)
+    if (typeof getHandle()?.allegianceUpdateRequest === "function") {
+      withSession("allegianceUpdateRequest", (h) => h.allegianceUpdateRequest(true));
+      return;
+    }
+    // Older wasm without the binding: the legacy officer query.
     const snap = fetchAllegianceSnapshot();
     const target = selectedTargetName() || snap?.monarch?.name || "";
     withSession("requestAllegianceInfo", (h) => h.requestAllegianceInfo(target));
@@ -692,7 +819,7 @@ function buildStandalone() {
     ignoreSelector: ".hbk-close",
     defaultPos: { right: "640px", top: "96px" },
   });
-  return { win, summary, cleanup: null };
+  return { win, summary, cleanup: null, visible: false };
 }
 
 function renderStandaloneSummary() {
@@ -712,6 +839,7 @@ function openStandalone() {
   if (typeof document === "undefined") return;
   if (!sa) sa = buildStandalone();
   sa.win.hidden = false;
+  if (!sa.visible) { sa.visible = true; allegianceVisible(+1); }
   renderStandaloneSummary();
   if (!sa.cleanup) sa.cleanup = onBus("allegianceUpdated", () => { try { renderStandaloneSummary(); } catch (_) {} });
 }
@@ -721,6 +849,7 @@ function closeStandalone() {
   sa.win.hidden = true;
   if (sa.cleanup) { try { sa.cleanup(); } catch (_) {} }
   sa.cleanup = null;
+  if (sa.visible) { sa.visible = false; allegianceVisible(-1); }
 }
 
 if (typeof window !== "undefined") {

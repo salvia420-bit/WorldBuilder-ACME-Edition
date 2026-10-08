@@ -1282,6 +1282,11 @@ pub enum CharacterOptionMask {
     Options2(CharacterOptions2),
 }
 
+/// charopt-6: retail spellbook filter default — `PlayerModule::PlayerModule`
+/// and `PlayerModule::UnPack` (no 0x20 flag) both use `spell_filters_ =
+/// 0x3FFF`.
+pub const DEFAULT_SPELLBOOK_FILTERS: u32 = 0x3FFF;
+
 /// Map a `CharacterOption` enum index to the underlying
 /// `CharacterOptions1` or `CharacterOptions2` bitflag value. Exposed so
 /// downstream crates (the wasm SessionHandle's `isCharacterOptionEnabled`
@@ -1668,6 +1673,26 @@ pub struct PlayerState {
     /// Default: `Ready (0x41000003)` — the at-rest substate after
     /// character spawn before any UpdateMotion arrives.
     pub current_substate: u32,
+    /// death-1 (R2 2026-10-08) — the server-authored interpreted
+    /// `forward_command` is `Dead` (0x40000011). Retail
+    /// `CommandInterpreter::PlayerIsDead` (acclient.c:717695-717705)
+    /// reads `InqInterpretedMotionState(player)->forward_command ==
+    /// 0x40000011`, an interpreted state only the server's
+    /// NON-autonomous `UpdateMotion` writes (`CPhysics::SetObjectMovement`,
+    /// :311149-311193 — an autonomous echo of the player is never
+    /// unpacked). `MovePlayer` (:717828-717833) and
+    /// `TakeControlFromServer` (:716934-716940) refuse while it holds.
+    ///
+    /// Written ONLY by [`Self::apply_self_update_motion`] on an accepted
+    /// non-autonomous `Invalid` envelope: `forward_command == Dead` sets
+    /// it; any other forward (or an absent one, which retail
+    /// `InterpretedMotionState::UnPack` defaults to Ready, :333493)
+    /// clears it. Kept separate from [`Self::current_substate`] because
+    /// local land()/begin_fall() overwrite that one (a mid-air death
+    /// would otherwise reopen the gate on touchdown).
+    ///
+    /// Default: `false` (a fresh `PlayerState` per world build).
+    pub server_forward_dead: bool,
     /// Wave 10 Phase 10.3 (movement-animation overhaul, 2026-05-26):
     /// smoothed lateral (X/Y) velocity in world meters per second.
     /// Mirrors `CPhysicsObj::m_velocityVector` from PhatSDK
@@ -1922,12 +1947,16 @@ impl PlayerState {
             enchantment_abs_start: HashMap::new(),
             stat_aug: StatAugInputs::default(),
             spells: BTreeMap::new(),
-            options1: CharacterOptions1::empty(),
-            options2: CharacterOptions2::empty(),
+            // charopt-6: retail `PlayerModule::PlayerModule` seeds
+            // options_ = 0x50C4A54A, options2_ = 0x948700 and
+            // spell_filters_ = 0x3FFF before any PlayerDescription, so
+            // pre-PD option reads match retail instead of all-false.
+            options1: CharacterOptions1::DEFAULT,
+            options2: CharacterOptions2::DEFAULT,
             hotbar_spells: vec![Vec::new(); 8],
             shortcuts: Vec::new(),
             desired_comps: Vec::new(),
-            spellbook_filters: 0,
+            spellbook_filters: DEFAULT_SPELLBOOK_FILTERS,
             gameplay_options: Vec::new(),
             inventory: HashSet::new(),
             equipment: HashMap::new(),
@@ -1945,6 +1974,8 @@ impl PlayerState {
             // (the at-rest pose) so a fresh character can jump
             // before any UpdateMotion has arrived from the server.
             current_substate: MotionCommandCode::READY,
+            // death-1 — alive until the server's interpreted Dead.
+            server_forward_dead: false,
             // Wave 10 Phase 10.3 (2026-05-26) — player spawns
             // stationary; the integrator ramps from zero.
             current_planar_velocity: Vector3::zero(),
@@ -2315,6 +2346,52 @@ impl PlayerState {
                 self.options2.set(flag, enabled);
             }
         }
+    }
+
+    /// charopt-1: apply a user option toggle the way retail
+    /// `CPlayerModule::OnChanged(PlayerOption)` (acclient.c 452957) does
+    /// and return the `SetSingleCharacterOption` sends it implies, in
+    /// wire order.
+    ///
+    /// IgnoreFellowshipRequests (2) and FellowshipAutoAcceptRequests (0x12)
+    /// are mutually exclusive: turning one ON while the other is set first
+    /// clears the other (`SetFellowshipAutoAcceptRequests(0)` /
+    /// `SetIgnoreFellowshipRequests(0)`, which re-enter OnChanged and, both
+    /// being `IsAutoSaveOption`s, send `(pair, false)`), then sends
+    /// `(option, enabled)`. The pair is only cleared/sent when its bit was
+    /// actually set; turning an option OFF never touches the pair. ACE has
+    /// no server-side exclusion (`GameActionSetSingleCharacterOption`), and
+    /// `Player_Fellowship` checks Ignore first, so without the clear an
+    /// AutoAccept toggle on a default character (Ignore ON) does nothing.
+    ///
+    /// [`Self::set_character_option_enabled`] stays the raw single-bit
+    /// setter.
+    pub fn apply_character_option(
+        &mut self,
+        option: CharacterOption,
+        enabled: bool,
+    ) -> Vec<(CharacterOption, bool)> {
+        let mut sends = Vec::with_capacity(2);
+        if enabled {
+            let pair = match option {
+                CharacterOption::IgnoreFellowshipRequests => {
+                    Some(CharacterOption::AutomaticallyAcceptFellowshipRequests)
+                }
+                CharacterOption::AutomaticallyAcceptFellowshipRequests => {
+                    Some(CharacterOption::IgnoreFellowshipRequests)
+                }
+                _ => None,
+            };
+            if let Some(pair) = pair
+                && self.character_option_enabled(pair)
+            {
+                self.set_character_option_enabled(pair, false);
+                sends.push((pair, false));
+            }
+        }
+        self.set_character_option_enabled(option, enabled);
+        sends.push((option, enabled));
+        sends
     }
 }
 
