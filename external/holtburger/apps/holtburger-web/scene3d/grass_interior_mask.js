@@ -180,6 +180,10 @@ export function createInteriorMask(opts = {}) {
   let signature = "";
   let entries = [];
   let buckets = new Map();
+  // 2026-10-08 — cellId -> box of the last build, to report WHICH boxes a
+  // rebuild added or removed (null = "everything": first build / cleared).
+  let boxById = new Map();
+  let changed = null;
   const st = { rebuilds: 0, cells: 0, boxes: 0, pending: 0, tests: 0, hits: 0 };
   const p = [0, 0, 0];
 
@@ -200,11 +204,13 @@ export function createInteriorMask(opts = {}) {
     const rootInv = rootW ? mat4AffineInverse(rootW) : null;
     const nextEntries = [];
     const nextBuckets = new Map();
+    const nextById = new Map();
     let pending = 0;
-    for (const c of map.values()) {
+    for (const [id, c] of map) {
       const box = cellBoxFor(c, rootInv);
       if (!box) { pending += 1; continue; }
       nextEntries.push(box);
+      nextById.set(id, box);
       const bx0 = Math.floor(box.x0 / BUCKET_M), bx1 = Math.floor(box.x1 / BUCKET_M);
       const by0 = Math.floor(box.y0 / BUCKET_M), by1 = Math.floor(box.y1 / BUCKET_M);
       for (let bx = bx0; bx <= bx1; bx += 1) {
@@ -216,6 +222,12 @@ export function createInteriorMask(opts = {}) {
         }
       }
     }
+    // The boxes that appeared or disappeared since the last build (the first
+    // build reports all of its boxes as added).
+    changed = [];
+    for (const [id, b] of nextById) if (!boxById.has(id)) changed.push([b.x0, b.y0, b.x1, b.y1]);
+    for (const [id, b] of boxById) if (!nextById.has(id)) changed.push([b.x0, b.y0, b.x1, b.y1]);
+    boxById = nextById;
     entries = nextEntries;
     buckets = nextBuckets;
     st.rebuilds += 1;
@@ -230,7 +242,9 @@ export function createInteriorMask(opts = {}) {
     const map = scene3d && scene3d.cellContainers3d;
     if (!(map instanceof Map) || map.size === 0) {
       if (entries.length === 0 && signature === "") return false;
+      changed = [...boxById.values()].map((b) => [b.x0, b.y0, b.x1, b.y1]);
       entries = []; buckets = new Map(); signature = ""; st.cells = 0; st.boxes = 0;
+      boxById = new Map();
       return true;
     }
     const sig = signatureOf(map);
@@ -262,6 +276,11 @@ export function createInteriorMask(opts = {}) {
   return {
     sync,
     contains,
+    /**
+     * After a sync() that returned true: the world AABBs [x0, y0, x1, y1] of
+     * the boxes that rebuild added or removed.
+     */
+    lastChanged: () => changed,
     stats: () => ({ ...st, enabled: true }),
   };
 }

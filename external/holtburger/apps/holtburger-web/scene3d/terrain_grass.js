@@ -742,7 +742,11 @@ export function createTerrainGrassProvider(opts = {}) {
         radiusM: cfg.radiusM,
         sliceSize: GRASS_DEFAULTS.sliceSize,
         fadeFraction: GRASS_DEFAULTS.fadeFraction,
-        shape: "disc",
+        // 2026-10-08 — place the whole square window, fade as a disc: see
+        // terrain_scatter.js fadeShape (blades entering at the leading edge are
+        // ready before they fade in, instead of spawning in front of a runner).
+        shape: "square",
+        fadeShape: "disc",
         seed,
         heightOffsetM: GRASS_DEFAULTS.heightOffsetM,
         // NO family gate on the pool: the dithered corner draw in `fill` is what
@@ -807,8 +811,26 @@ export function createTerrainGrassProvider(opts = {}) {
       if (!pool) return;
       if (!ctx || ctx.hasPlayer !== true) return;
       // The loaded interior cells changed (a building's interior baked or was
-      // evicted): re-examine every blade over the pool's amortised laps.
-      if (indoorMask && indoorMask.sync(ctx.scene3d || opts.scene3d || null)) pool.invalidate();
+      // evicted). 2026-10-08: re-examine only the blades near the boxes that
+      // changed — clipped to the pool window, one merged region — not the whole
+      // pool: cells stream in and out constantly while running through a town,
+      // and a full invalidate() stalled the ground ahead of the player.
+      if (indoorMask && indoorMask.sync(ctx.scene3d || opts.scene3d || null)) {
+        const changed = typeof indoorMask.lastChanged === "function" ? indoorMask.lastChanged() : null;
+        if (!changed) {
+          pool.invalidate();
+        } else if (changed.length) {
+          const r = cfg.radiusM, pp = ctx.playerPos;
+          const wx0 = pp.x - r, wy0 = pp.y - r, wx1 = pp.x + r, wy1 = pp.y + r;
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (const b of changed) {
+            if (b[2] < wx0 || b[0] > wx1 || b[3] < wy0 || b[1] > wy1) continue;
+            if (b[0] < x0) x0 = b[0]; if (b[1] < y0) y0 = b[1];
+            if (b[2] > x1) x1 = b[2]; if (b[3] > y1) y1 = b[3];
+          }
+          if (x1 >= x0) pool.invalidateRegion(Math.max(x0, wx0), Math.max(y0, wy0), Math.min(x1, wx1), Math.min(y1, wy1));
+        }
+      }
 
       // The single time source (plan §2.3) — the same `frameTime.tsSec` that
       // `tickVfxOscillators` writes into VFX_GLOBALS.uTime, so the tree sway and

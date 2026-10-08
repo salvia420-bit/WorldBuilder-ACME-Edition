@@ -316,12 +316,25 @@ export function createScatterPool(opts = {}) {
   const radiusM = _num(opts.radiusM, SCATTER_DEFAULTS.radiusM, 1, 4096);
   const cellSizeM = cellSizeFor(radiusM, gridSize);
   const sliceSize = Math.max(1, Math.round(_num(opts.sliceSize, SCATTER_DEFAULTS.sliceSize, 1, count)));
+  // 2026-10-08 — the leading edge's own per-frame budget (opts.edgeBudget,
+  // default 3 x sliceSize). Measured on the 1070 at ultra: a run at ~10.6 m/s
+  // and ~34 fps scrolls ~1.35 cells a frame, i.e. ~470 slots per axis (~930
+  // diagonally) — over the 512 slice, so the queue backed up and blades landed
+  // 10-30 m from the player. Edge work only exists while moving.
+  const edgeBudget = Math.max(sliceSize, Math.round(_num(opts.edgeBudget, 3 * sliceSize, 1, count)));
   const scanBudget = Math.max(sliceSize, Math.round(
     _num(opts.scanBudget, Math.max(SCATTER_DEFAULTS.scanBudget, sliceSize), 1, count),
   ));
   const fadeFraction = _num(opts.fadeFraction, SCATTER_DEFAULTS.fadeFraction, 0, 1);
   const jitter = _num(opts.jitter, SCATTER_DEFAULTS.jitter, 0, 1);
   const shape = opts.shape === "square" ? "square" : "disc";
+  // 2026-10-08 — the VISIBLE fade may be round while placement covers the whole
+  // square window (opts.fadeShape; default = shape). Grass does exactly that:
+  // a disc-shaped PLACEMENT rejects most of every column entering at the
+  // leading edge (it lies outside the circle), and those blades could only be
+  // placed later by a scan lap, i.e. visibly, in front of a running player.
+  // Placing the full square keeps them ready; the round fade hides the corners.
+  const fadeShape = opts.fadeShape === "square" ? "square" : (opts.fadeShape === "disc" ? "disc" : shape);
   const seed = (Number.isFinite(opts.seed) ? opts.seed : SCATTER_DEFAULTS.seed) | 0;
   // Per-pool salt for the `ctx.rand` stream ONLY (see the opts doc). Folded
   // into a separate seed with the same golden-ratio mix `scatterHashU32`
@@ -382,6 +395,13 @@ export function createScatterPool(opts = {}) {
   // lap. Family rejects are resolved on purpose: retrying them every lap would
   // burn the whole slice budget over non-matching terrain.
   const resolvedFlags = new Uint8Array(count);
+  // 2026-10-08 — 1 = rejected ONLY because the cell lay outside the disc. Such
+  // an instance keeps its cell while the player walks toward it, so the plain
+  // "cell changed / unresolved" test never looked at it again: a column that
+  // entered at the leading edge (almost entirely outside the disc) stayed bare
+  // until the player stood on it — the owner's "missing a patch where im
+  // standing". The scans re-test these cheaply and place them once in range.
+  const outFlags = new Uint8Array(count);
   // `cellX/cellY` start at a value no real cell can hold so the first pass
   // always re-scatters.
   cellX.fill(0x7fffffff);
@@ -514,7 +534,7 @@ export function createScatterPool(opts = {}) {
   // the in-parameter exists to remove.
   _adopt("uScatterRadius", () => radiusM).value = radiusM;
   _adopt("uScatterFadeStart", () => 0).value = radiusM * (1 - fadeFraction);
-  _adopt("uScatterShape", () => 0).value = shape === "square" ? 1 : 0;
+  _adopt("uScatterShape", () => 0).value = fadeShape === "square" ? 1 : 0;
 
   const state = {
     name,
@@ -523,6 +543,10 @@ export function createScatterPool(opts = {}) {
     centerZ: 0,
     centered: false,
     cursor: 0,
+    // 2026-10-08 — edge-first re-scatter bookkeeping (see update()).
+    lastGxMin: null,
+    lastGyMin: null,
+    edgeRescatters: 0,
     frames: 0,
     scans: 0,
     rescatters: 0,
@@ -748,10 +772,12 @@ export function createScatterPool(opts = {}) {
     // oracle for them is the point.
     if (shape !== "square" && dist > radiusM) {
       resolvedFlags[i] = 1;
+      outFlags[i] = 1;
       state.outOfRange += 1;
       commitDegenerate(i, x, y, 0);
       return;
     }
+    outFlags[i] = 0;
 
     const oracle = resolveOracle();
     const s = oracle && typeof oracle.sample === "function" ? oracle.sample(x, y, _sample) : null;
@@ -824,7 +850,7 @@ export function createScatterPool(opts = {}) {
     _ctx.cornerCodes = s.cornerCodes || null;
     _ctx.sample = s;
     _ctx.dist = dist;
-    _ctx.fade = fadeFor(dx, dy, radiusM, fadeFraction, shape);
+    _ctx.fade = fadeFor(dx, dy, radiusM, fadeFraction, fadeShape);
     _ctx.live = true;
     setOffsets(i);
 
@@ -884,6 +910,99 @@ export function createScatterPool(opts = {}) {
     centerVec.z = state.centerZ;
   }
 
+  // 2026-10-08 — EDGE-FIRST re-scatter. Owner on the 1070: "grass slow to load
+  // and missing patches. like i run up to it and it only loads after". The
+  // window is a torus: scrolling it one cell in x re-assigns exactly one slot
+  // COLUMN (gridSize instances), one cell in y one slot ROW. The round-robin
+  // alone needed count / scanBudget frames to discover them (ultra: 119,716 /
+  // 2,048 = 58 frames, about a second), so the ground ahead of a running
+  // player filled in metres late. The lines a scroll invalidates are queued
+  // here and re-scattered FIRST, inside the same sliceSize budget; the
+  // round-robin still covers everything else (unbaked retries, invalidate()).
+  const edgeLines = [];                       // FIFO of { axis, slot, next }
+  let edgeHead = 0;
+  const edgeLineBySlot = [new Array(gridSize).fill(null), new Array(gridSize).fill(null)];
+
+  /**
+   * An instance rejected only for distance whose cell is now a full cell
+   * INSIDE the disc. The slack makes the re-test conservative against the
+   * jittered placement test (jitter moves a point by under half a cell), so a
+   * stationary pool never re-tries the same boundary instance every frame;
+   * that outer band is inside the shader's distance fade anyway.
+   */
+  function backInRange(i) {
+    if (outFlags[i] !== 1) return false;
+    const dx = (cellX[i] + 0.5) * cellSizeM - state.centerX;
+    const dy = (cellY[i] + 0.5) * cellSizeM - state.centerY;
+    const r = radiusM - cellSizeM;
+    return r > 0 && dx * dx + dy * dy <= r * r;
+  }
+
+  function enqueueEdgeLine(axis, slot) {
+    const existing = edgeLineBySlot[axis][slot];
+    if (existing) { existing.next = 0; return; }   // scrolled again: restart it
+    const line = { axis, slot, next: 0 };
+    edgeLineBySlot[axis][slot] = line;
+    edgeLines.push(line);
+  }
+
+  /** Queue the slot lines a window scroll from oldMin to newMin re-assigned. */
+  function enqueueScrolled(axis, oldMin, newMin) {
+    const d = newMin - oldMin;
+    if (d === 0) return;
+    if (Math.abs(d) >= gridSize) {
+      for (let k = 0; k < gridSize; k += 1) enqueueEdgeLine(axis, k);
+      return;
+    }
+    // The cells that left are [oldMin, newMin) (d > 0) or [newMin + g, oldMin + g)
+    // (d < 0); the slot of a cell is the cell modulo the grid either way.
+    const c0 = d > 0 ? oldMin : newMin + gridSize;
+    for (let c = c0; c < c0 + Math.abs(d); c += 1) {
+      const m = c % gridSize;
+      enqueueEdgeLine(axis, m < 0 ? m + gridSize : m);
+    }
+  }
+
+  function clearEdgeLines() {
+    for (let k = edgeHead; k < edgeLines.length; k += 1) {
+      const line = edgeLines[k];
+      edgeLineBySlot[line.axis][line.slot] = null;
+    }
+    edgeLines.length = 0;
+    edgeHead = 0;
+  }
+
+  /** Drain queued lines (oldest first) until `budget` re-scatters are spent. */
+  function drainEdgeLines(gxMin, gyMin, budget) {
+    let written = 0;
+    while (edgeHead < edgeLines.length && written < budget) {
+      const line = edgeLines[edgeHead];
+      const g = gridSize;
+      let k = line.next;
+      for (; k < g && written < budget; k += 1) {
+        // axis 0 = an x-scroll: slot column sx = line.slot, every row sy = k.
+        // axis 1 = a y-scroll: slot row sy = line.slot, every column sx = k.
+        const i = line.axis === 0 ? k * g + line.slot : line.slot * g + k;
+        const gx = wrapSlotToCell(i % g, gxMin, g);
+        const gy = wrapSlotToCell((i / g) | 0, gyMin, g);
+        if (gx !== cellX[i] || gy !== cellY[i] || resolvedFlags[i] === 0 || backInRange(i)) {
+          scatterInstance(i, gx, gy);
+          written += 1;
+        }
+      }
+      line.next = k;
+      if (k >= g) {
+        edgeLineBySlot[line.axis][line.slot] = null;
+        edgeHead += 1;
+      }
+    }
+    if (edgeHead > 64 && edgeHead * 2 > edgeLines.length) {
+      edgeLines.splice(0, edgeHead);
+      edgeHead = 0;
+    }
+    return written;
+  }
+
   /**
    * Full, non-amortised re-scatter of every instance. THE teleport entry point
    * (plan §3.1 "On teleport: full re-scatter"); also used for the very first
@@ -900,6 +1019,9 @@ export function createScatterPool(opts = {}) {
     }
     const gxMin = windowMinCell(state.centerX);
     const gyMin = windowMinCell(state.centerY);
+    clearEdgeLines();
+    state.lastGxMin = gxMin;
+    state.lastGyMin = gyMin;
     runCount = 0;
     runOverflow = false;
     for (let i = 0; i < count; i += 1) {
@@ -950,13 +1072,25 @@ export function createScatterPool(opts = {}) {
     let written = 0;
     runCount = 0;
     runOverflow = false;
+    // Edge-first: the lines this scroll re-assigned, before the round-robin.
+    if (state.lastGxMin !== null) {
+      enqueueScrolled(0, state.lastGxMin, gxMin);
+      enqueueScrolled(1, state.lastGyMin, gyMin);
+    }
+    state.lastGxMin = gxMin;
+    state.lastGyMin = gyMin;
+    if (edgeHead < edgeLines.length) {
+      const e = drainEdgeLines(gxMin, gyMin, edgeBudget);
+      written += e;
+      state.edgeRescatters += e;
+    }
     let i = state.cursor;
     while (scanned < scanBudget && written < sliceSize && scanned < count) {
       const sx = i % gridSize;
       const sy = (i / gridSize) | 0;
       const gx = wrapSlotToCell(sx, gxMin, gridSize);
       const gy = wrapSlotToCell(sy, gyMin, gridSize);
-      if (gx !== cellX[i] || gy !== cellY[i] || resolvedFlags[i] === 0) {
+      if (gx !== cellX[i] || gy !== cellY[i] || resolvedFlags[i] === 0 || backInRange(i)) {
         scatterInstance(i, gx, gy);
         written += 1;
       }
@@ -980,6 +1114,26 @@ export function createScatterPool(opts = {}) {
    */
   function invalidate() {
     resolvedFlags.fill(0);
+  }
+
+  /**
+   * 2026-10-08 — re-examine only the instances whose cell lies in the AC
+   * world box [x0, x1] x [y0, y1] (grown by one cell). The building-interior
+   * mask changes every time a building's cells stream in or out — often while
+   * running through a town — and a full invalidate() made the round-robin
+   * re-place every blade (count / sliceSize frames) instead of filling the
+   * ground ahead. Returns the number of instances marked.
+   */
+  function invalidateRegion(x0, y0, x1, y1) {
+    if (!(x1 >= x0) || !(y1 >= y0)) return 0;
+    const c0x = Math.floor(x0 / cellSizeM) - 1, c1x = Math.floor(x1 / cellSizeM) + 1;
+    const c0y = Math.floor(y0 / cellSizeM) - 1, c1y = Math.floor(y1 / cellSizeM) + 1;
+    let n = 0;
+    for (let i = 0; i < count; i += 1) {
+      const cx = cellX[i], cy = cellY[i];
+      if (cx >= c0x && cx <= c1x && cy >= c0y && cy <= c1y) { resolvedFlags[i] = 0; n += 1; }
+    }
+    return n;
   }
 
   /**
@@ -1049,6 +1203,9 @@ export function createScatterPool(opts = {}) {
       offRoadVergeM,
       roadRejects: state.roadRejects,
       excludeRejects: state.excludeRejects,
+      edgeRescatters: state.edgeRescatters,
+      edgeBudget,
+      edgePending: edgeLines.length - edgeHead,
       outOfRange: state.outOfRange,
       noHeight: state.noHeight,
       fillRejects: state.fillRejects,
@@ -1077,6 +1234,10 @@ export function createScatterPool(opts = {}) {
     update,
     rescatterAll,
     invalidate,
+    invalidateRegion,
+    // Test seams (read-only by convention): the per-instance cell indices.
+    _cellX: cellX,
+    _cellY: cellY,
     setOffRoad,
     dispose,
     stats,

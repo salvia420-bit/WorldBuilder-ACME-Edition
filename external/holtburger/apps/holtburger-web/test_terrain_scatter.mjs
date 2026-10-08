@@ -522,13 +522,17 @@ console.log("\n-- L6: amortisation — a 10 m move touches ≤ sliceSize --");
       }
       return true;
     })());
-  check("a small sliceSize is honoured exactly",
+  // 2026-10-08 — edge-first: the lines a scroll re-assigns drain under their
+  // own budget (edgeBudget, default 3 x sliceSize: a ~10 m/s run at ~34 fps
+  // scrolls ~470 slots per axis per frame on the 1070); the round-robin only
+  // spends what is left of sliceSize. So a frame is bounded by edgeBudget.
+  check("a small sliceSize is honoured exactly (edge work bounded by edgeBudget = 3 x slice)",
     (() => {
       const p = makePool({ sliceSize: 64 }).pool;
       p.update(0.016, 2000, 2000, 0);
       for (let i = 0; i < 40; i += 1) p.update(0.016, 2000, 2000, 0);
       const n = p.update(0.016, 2020, 2000, 0);
-      return n <= 64;
+      return p.stats().edgeBudget === 192 && n <= 192;
     })());
   check("a bad centre (NaN) is a no-op, not a crash",
     (() => {
@@ -564,7 +568,7 @@ console.log("\n-- L7: teleport ⇒ full, non-amortised re-scatter --");
       const p = makePool({ autoTeleport: false }).pool;
       p.update(0.016, 100, 100, 0);
       const m = p.update(0.016, 9000, 9000, 0);
-      return m <= p.sliceSize;
+      return m <= p.stats().edgeBudget;
     })());
   check("a sub-landblock move is NOT a teleport",
     (() => {

@@ -25,6 +25,8 @@
 //       sample the ground plane, and ?farHarmonize softens far type borders.
 //   L17 ?paintLight (warm light / cool shade on far slopes, shared tail, near +
 //       far ring) and ?layerHaze (distance + altitude haze over all geometry).
+//   L18 grass keeps up with a running player: scrolled lines first (edge-first),
+//       and an interior-cell change only re-checks blades near it.
 //
 // Fails on the pre-change code: tone_curve.js / color_grade.js /
 // luminous_night.js / sway_shadow.js do not exist, the composer was AGX-only,
@@ -423,7 +425,7 @@ console.log("\n-- L13 ?grassIndoorCull -----------------------------------------
   const g = src("scene3d/terrain_grass.js");
   check("terrain_grass.js feeds the mask to the pool and re-examines on a change",
     g.includes("exclude: indoorMask ? (x, y, z) => indoorMask.contains(x, y, z) : undefined")
-    && /indoorMask\.sync\([^)]*\)\) pool\.invalidate\(\)/.test(g));
+    && /if \(indoorMask && indoorMask\.sync\([^)]*\)\) \{[\s\S]{0,400}pool\.invalidate\(\);[\s\S]{0,900}pool\.invalidateRegion\(/.test(g));
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +591,56 @@ console.log("\n-- L17 painted light + layered haze ----------------------------"
   const ap = src("scene3d/atmosphere_pipeline.js");
   check("pipeline: split chain = after the late scrub, before the bloom / tone-map pass",
     /if \(lateScrubPass\) composer\.addPass\(lateScrubPass\);[\s\S]{0,260}if \(layeredHaze\) composer\.addPass\(layeredHaze\);\s*composer\.addPass\(fxPostPass\);/.test(ap));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- L18 grass keeps up with a running player ---------------------");
+{
+  const { createScatterPool, wrapSlotToCell } = await import("../scene3d/terrain_scatter.js");
+  const oracle = { sample: (x, y, out) => Object.assign(out || {}, { code: 1, family: 1, hasHeight: true, height: 10, normal: { x: 0, y: 0, z: 1 }, cornerCodes: null }) };
+  const mk = () => createScatterPool({ count: 4096, radiusM: 32, seed: 5, oracle, shape: "square", attributes: [{ name: "aScale", itemSize: 1 }] });
+  // How many instances sit in the wrong cell for the current window?
+  const stale = (pool) => {
+    const st = pool.stats(), g = st.gridSize, cs = st.cellSizeM;
+    const gxMin = Math.floor((st.centerX - st.radiusM) / cs), gyMin = Math.floor((st.centerY - st.radiusM) / cs);
+    const cx = pool._cellX, cy = pool._cellY; let n = 0;
+    for (let i = 0; i < g * g; i++) if (cx[i] !== wrapSlotToCell(i % g, gxMin, g) || cy[i] !== wrapSlotToCell((i / g) | 0, gyMin, g)) n++;
+    return n;
+  };
+  const pool = mk();
+  pool.update(0.016, 500, 500, 10);                 // first frame: full scatter
+  const cs = pool.stats().cellSizeM;
+  pool.update(0.016, 500 + 3.2 * cs, 500 - 2.1 * cs, 10);   // a run: 3 columns + 2 rows enter at once
+  check("one frame after a 3 x 2 cell scroll, NO blade is left in a stale cell (edge-first)",
+    stale(pool) === 0 && pool.stats().edgeRescatters > 0, `stale ${stale(pool)} edge ${pool.stats().edgeRescatters}`);
+  // Walking back and forth must not leave half-processed lines behind.
+  for (let k = 0; k < 20; k++) pool.update(0.016, 500 + (k % 2 ? 1 : -1) * 1.5 * cs, 500, 10);
+  check("back-and-forth scrolls converge too", stale(pool) === 0 && pool.stats().edgePending === 0);
+  check("pool exposes its per-instance cells for this check", pool._cellX instanceof Int32Array);
+  // The walking hole (owner: "missing a patch where im standing"): a DISC pool
+  // rejects the cells outside its circle; those keep their cell as the player
+  // walks toward them and must still be placed once inside.
+  {
+    const disc = createScatterPool({ count: 4096, radiusM: 32, seed: 9, oracle, shape: "disc", attributes: [{ name: "aScale", itemSize: 1 }] });
+    disc.update(0.016, 1000, 1000, 10);
+    for (let k = 1; k <= 120; k++) disc.update(0.016, 1000 + k * 0.25, 1000 + k * 0.1, 10);   // walk ~32 m
+    const st = disc.stats(), cs2 = st.cellSizeM, X = disc._cellX, Y = disc._cellY, sc = disc.arrays.aScale;
+    let inner = 0, bare = 0;
+    for (let i = 0; i < X.length; i++) {
+      const d = Math.hypot((X[i] + 0.5) * cs2 - st.centerX, (Y[i] + 0.5) * cs2 - st.centerY);
+      if (d < 16) { inner++; if (!(sc[i] > 0)) bare++; }
+    }
+    check("after a 32 m walk the ground under the player is fully covered (no walking hole)",
+      inner > 500 && bare === 0, `bare ${bare} of ${inner}`);
+    // Two frames to pick up the last step's leftovers, then it must be quiet.
+    for (let k = 0; k < 2; k++) disc.update(0.016, st.centerX, st.centerY, 10);
+    const before = disc.stats().rescatters;
+    for (let k = 0; k < 5; k++) disc.update(0.016, st.centerX, st.centerY, 10);
+    check("...and a standing pool re-scatters nothing (no boundary churn)", disc.stats().rescatters === before);
+  }
+  const g = src("scene3d/terrain_grass.js");
+  check("an interior-cell change re-checks only the blades near the changed boxes",
+    g.includes("pool.invalidateRegion(") && src("scene3d/terrain_scatter.js").includes("function invalidateRegion(x0, y0, x1, y1)"));
 }
 
 // ---------------------------------------------------------------------------

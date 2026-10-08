@@ -577,5 +577,39 @@ console.log("\n-- registration gate: ship-OFF registers NOTHING --");
   _resetVfxFlags();
 }
 
+// ---------------------------------------------------------------------------
+// 2026-10-08 — the building-interior cull, driven through the REAL provider
+// update(): a building's interior streams in next to a standing player. No
+// throw; blades inside its ground-level box are refused; only the blades near
+// the new box are re-examined (the owner saw grass lag behind a running
+// player while cells streamed in and every one re-placed the whole pool).
+console.log("\n-- L-indoor: interior cells streaming in (provider update) --");
+{
+  const { provider } = makeProvider({ config: { blades: 4096, density: 1, radiusM: 30, stomp: false, seed: 31 } });
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const cells = new Map();
+  const scene3d = { cellContainers3d: cells, worldRoot: { matrixWorld: { elements: I } } };
+  const ctx = makeCtx(4000, 4000, { oracle: makeStubOracle() });
+  ctx.scene3d = scene3d;
+  let threw = null;
+  try { for (let k = 0; k < 40; k++) provider.update(0.016, ctx); } catch (e) { threw = e; }
+  const before = provider.stats().pool;
+  // A 10 x 10 m ground-floor cell at (4005, 4005), floor at the stub's terrain height.
+  const z = 20 + 0.01 * 4005 + 0.02 * 4005;
+  const world = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 4005, 4005, z, 1];
+  const geom = { boundingBox: { min: { x: -5, y: -5, z: 0 }, max: { x: 5, y: 5, z: 3 } } };
+  const mg = { name: "mesh-a1", matrixWorld: { elements: world }, children: [{ isMesh: true, geometry: geom, matrixWorld: { elements: world }, children: [] }] };
+  cells.set(0xA9B40100, { name: "envcell-a1", children: [mg] });
+  try { for (let k = 0; k < 400; k++) provider.update(0.016, ctx); } catch (e) { threw = threw || e; }
+  const after = provider.stats();
+  check("streaming an interior in never throws through update()", threw === null, String(threw));
+  check("blades inside the new ground-floor box are refused", after.indoorRejects > 0, `rejects ${after.indoorRejects}`);
+  // Only the region near the box was re-examined: far fewer re-scatters than a
+  // whole-pool invalidate (4096) would cost.
+  const extra = after.pool.rescatters - before.rescatters;
+  check("only blades near the changed box were re-examined", extra > 0 && extra < 2048, `re-scatters ${extra}`);
+  provider.dispose();
+}
+
 console.log(`\nterrain grass scatter: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
