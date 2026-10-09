@@ -138,34 +138,112 @@ export function transitionState(from, action) {
   return next || null;
 }
 
+/** Retail texts for name problems (client_local_English.dat). */
+export const NAME_REQUIRED_TEXT = "You must enter a name for this character!";
+export const NAME_NOT_PERMITTED_TEXT = "Sorry, but that name is not permitted. Please choose another.";
+
 /**
- * Name validation per ACE's `Player.HandleCharacterCreate` invariants
- * (crates/holtburger-protocol shipped a min/max via the HTML form +
- * `CharacterGenValidationError::EmptyName` at character_gen.rs:597).
- * Retail enforces 1-32 chars; we require 3-32 alphanumeric + space
- * for sanity in the wizard (server is still authoritative — if the
- * server rejects we surface `NameInUse` / `NameBanned`).
+ * `gmCharGenMainUI::DoFinish` (acclient.c:278642) trims "[", "]" and spaces
+ * from both ends of the typed name.
+ */
+export function trimNameDecorations(raw) {
+  return String(raw ?? "").replace(/^[\[\] ]+|[\[\] ]+$/g, "");
+}
+
+const _letter = (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+// Retail's neighbour tests also count bytes >= 0x80 as letters.
+const _letterish = (c) => c !== null && (_letter(c) || c >= 0x80);
+
+/**
+ * `ACCharGenData::FormatName` (acclient.c:488655), the form retail
+ * `CharGenState::SetName` stores and `VerifyCharacterGenerationResult`
+ * requires (`strcmp(FormatName(name), name) == 0`). Mirrors
+ * `holtburger_core::character_gen::format_character_name`.
  *
- * @returns {{ ok: true } | { ok: false, reason: string }}
+ * Trailing spaces go, then the first 32 characters are filtered: letters
+ * stay; a space stays unless it follows a space or starts or ends the name;
+ * an apostrophe stays after a letter, or after another non-apostrophe
+ * character when a letter follows; a hyphen stays between a letter and a
+ * letter or hyphen. Digits and everything else are dropped. "prev" is the
+ * previous typed character, kept or not. Case: the first letter upper, the
+ * rest lower, except the letter after a space / hyphen / apostrophe or a
+ * Mac/Mc/Fitz/Von/Van/De/Di/Du/Le/La prefix (left as typed); a word of
+ * capital I/V/X only is upper (roman numerals).
+ */
+export function formatCharacterName(raw) {
+  const src = String(raw ?? "").replace(/ +$/, "").slice(0, 32);
+  const code = (i) => (i >= 0 && i < src.length ? src.charCodeAt(i) : null);
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    const prev = code(i - 1);
+    const next = code(i + 1);
+    let keep = false;
+    if (_letter(c)) keep = true;
+    else if (c === 32) keep = !(prev === null || prev === 32 || next === null);
+    else if (c === 39) keep = _letterish(prev) || (prev !== null && prev !== 39 && _letterish(next));
+    else if (c === 45) keep = prev !== 45 && _letterish(prev) && (_letterish(next) || next === 45);
+    if (keep) out += src[i];
+  }
+  const n = out.length;
+  // 0 = upper, 1 = lower, 2 = either (as typed) — retail CharCase.
+  const cases = new Array(n).fill(1);
+  if (n > 0) cases[0] = 0;
+  const prefixes = [["mac", 3], ["mc", 2], ["fitz", 4], ["von", 3], ["van", 3],
+                    ["de", 2], ["di", 2], ["du", 2], ["le", 2], ["la", 2]];
+  const isSep = (ch) => ch === " " || ch === "-" || ch === "'";
+  for (let w = 0; w < n; ) {
+    if (w > 0) cases[w] = 2;
+    for (const [prefix, len] of prefixes) {
+      if (w + len < n && out.slice(w, w + len).toLowerCase() === prefix) cases[w + len] = 2;
+    }
+    let sep = -1;
+    for (let j = w; j < n; j++) if (isSep(out[j])) { sep = j; break; }
+    if (sep < 0) break;
+    w = sep + 1;
+  }
+  for (let i = 0; i < n; ) {
+    if (!_letter(out.charCodeAt(i))) { i++; continue; }
+    const start = i;
+    while (i < n && _letter(out.charCodeAt(i))) i++;
+    if (/^[IVX]+$/.test(out.slice(start, i))) cases.fill(0, start, i);
+  }
+  let res = "";
+  for (let i = 0; i < n; i++) {
+    const ch = out[i];
+    res += cases[i] === 0 ? ch.toUpperCase() : cases[i] === 1 ? ch.toLowerCase() : ch;
+  }
+  return res;
+}
+
+/**
+ * Name check before Next / submit. The name sent is
+ * `formatCharacterName(trimNameDecorations(name))`; it must be 1..32
+ * characters and stable under FormatName, which is the server's check.
+ *
+ * @returns {{ ok: true, formatted: string } | { ok: false, reason: string }}
  */
 export function validateCharacterName(name) {
-  if (!name || typeof name !== "string") return { ok: false, reason: "Name is required." };
-  const trimmed = name.trim();
-  if (trimmed.length < 3) return { ok: false, reason: "Name must be at least 3 characters." };
-  if (trimmed.length > 32) return { ok: false, reason: "Name must be at most 32 characters." };
-  if (!/^[a-zA-Z0-9 ']+$/.test(trimmed)) {
-    return { ok: false, reason: "Name may only contain letters, numbers, spaces, and apostrophes." };
+  if (!name || typeof name !== "string") return { ok: false, reason: NAME_REQUIRED_TEXT };
+  const raw = trimNameDecorations(name);
+  if (raw.length > 32) return { ok: false, reason: "Name must be at most 32 characters." };
+  const formatted = formatCharacterName(raw);
+  if (!formatted) return { ok: false, reason: NAME_REQUIRED_TEXT };
+  if (formatCharacterName(formatted) !== formatted) {
+    return { ok: false, reason: NAME_NOT_PERMITTED_TEXT };
   }
-  return { ok: true };
+  return { ok: true, formatted };
 }
 
 /**
  * Skill-credit math. Mirrors `validate_skills` (crates/holtburger-core/
- * src/character_gen.rs:352-411) exactly:
+ * src/character_gen.rs) and retail `CharGenState::
+ * UpdateRemainingSkillCredits` (acclient.c:495070):
  *
  *   - Inactive / Untrained skills cost 0.
  *   - Trained skill cost = `trainedCost` (heritage override or base).
- *   - Specialized skill cost = `trainedCost + specializedCost`.
+ *   - Specialized skill cost = `specializedCost` — the TOTAL cost of the
+ *     tier, never trained + specialized.
  *
  * `skillStates` is `{ [skillId]: { class: SkillAdvancementClass } }`
  * keyed by the skillId emitted from `client.characters.getCatalog().skills`.
@@ -179,32 +257,122 @@ export function computeSkillBudget(skillStates, costsForSkill, budget) {
   let spent = 0;
   for (const [skillIdStr, info] of Object.entries(skillStates || {})) {
     if (!info || info.class === undefined) continue;
-    const skillId = Number(skillIdStr);
-    const c = costsForSkill(skillId);
+    const c = costsForSkill(Number(skillIdStr));
     if (!c) continue;
-    // SkillAdvancementClass: Inactive=0, Untrained=1, Trained=2, Specialized=3
-    if (info.class === 2 /* Trained */) {
-      spent += c.trainedCost;
-    } else if (info.class === 3 /* Specialized */) {
-      spent += c.trainedCost + c.specializedCost;
-    }
+    spent += skillClassCost(c, info.class);
   }
   const remaining = budget - spent;
   return { spent, budget, remaining, valid: remaining >= 0 };
 }
 
+/** The cost of holding `cls` (SkillAdvancementClass 0..3). */
+export function skillClassCost(c, cls) {
+  if (cls === 2 /* Trained */) return c.trainedCost | 0;
+  if (cls === 3 /* Specialized */) return c.specializedCost | 0;
+  return 0;
+}
+
+/**
+ * The lowest class a skill may take: retail `CharGenState::
+ * ResetSkillLevels` (acclient.c:495832) and the skills page's
+ * bUntrainable / bUnspecializable (`gmCGSkillsPage::DoSkillRecords`):
+ * free to train → Trained (2), free to specialise too → Specialized (3),
+ * otherwise Untrained (1).
+ */
+export function skillFloorClass(c) {
+  if (c.trainedCost <= 0) return c.specializedCost <= 0 ? 3 : 2;
+  return 1;
+}
+
+/**
+ * A catalog entry that is a real SkillTable skill (not slot 0, not one of
+ * the retired placeholders holtburger-dat injects). A pkg built before the
+ * `retired` field still marks them by their "Retired skill:" description.
+ */
+export function isCreationTableSkill(skill) {
+  if (!Number.isInteger(skill?.skillId) || skill.skillId < 1) return false;
+  if (typeof skill.retired === "boolean") return !skill.retired;
+  return !String(skill.description ?? "").startsWith("Retired skill:");
+}
+
+/**
+ * Retail `CharGenState::ResetSkillLevels`: every real table skill at its
+ * floor. Slot 0, retired placeholders and skills without costs stay out
+ * (sent as Inactive).
+ */
+export function resetSkillStates(catalogSkills, costsForSkill) {
+  const out = {};
+  for (const skill of catalogSkills || []) {
+    if (!isCreationTableSkill(skill)) continue;
+    const c = costsForSkill(skill.skillId);
+    if (!c || !(c.trainedCost >= 0) || !(c.specializedCost >= 0)) continue;
+    out[skill.skillId] = { class: skillFloorClass(c) };
+  }
+  return out;
+}
+
+/**
+ * The skill half of retail `CharGenState::ApplyTemplate` (acclient.c:
+ * 496607) on top of a reset: train each normal skill, then specialise each
+ * primary skill, each step only when the credits it leaves are not
+ * negative (`SetSkillLevel` refunds the current tier first).
+ */
+export function applyTemplateSkills(states, template, costsForSkill, budget) {
+  const out = {};
+  for (const [id, info] of Object.entries(states || {})) out[id] = { class: info.class };
+  let remaining = computeSkillBudget(out, costsForSkill, budget).remaining;
+  const steps = [
+    ...(template?.normalSkills || []).map((id) => [id, 2]),
+    ...(template?.primarySkills || []).map((id) => [id, 3]),
+  ];
+  for (const [id, cls] of steps) {
+    const cur = out[id];
+    if (!cur) continue;
+    const c = costsForSkill(Number(id));
+    if (!c) continue;
+    const after = remaining + skillClassCost(c, cur.class) - skillClassCost(c, cls);
+    if (after >= 0) {
+      remaining = after;
+      out[id] = { class: cls };
+    }
+  }
+  return out;
+}
+
+/** Reset, then apply `template` (what the wizard does on a template pick). */
+export function templateSkillStates(catalogSkills, template, costsForSkill, budget) {
+  return applyTemplateSkills(resetSkillStates(catalogSkills, costsForSkill), template, costsForSkill, budget);
+}
+
+/**
+ * Which classes the skills page offers for one skill: never below its floor
+ * (`gmCGSkillsPage::DecreaseSkillLevel`), and a raise only when the
+ * credits cover the difference (`IncreaseSkillLevel`).
+ */
+export function skillClassChoices(c, currentClass, remaining) {
+  const floor = skillFloorClass(c);
+  const curCost = skillClassCost(c, currentClass);
+  return [1, 2, 3].map((cls) => ({
+    cls,
+    enabled: cls >= floor && (cls <= currentClass || skillClassCost(c, cls) - curCost <= remaining),
+  }));
+}
+
+/** Retail ID_CharGen_CreditWarning (client_local_English.dat). */
+export const ATTRIBUTE_CREDIT_WARNING_TEXT =
+  "Warning!\n\nYou have not used up your entire available Attribute Credits.  If you do not use them now you will lose them.  Do you wish to continue?";
+
 /**
  * J4.B.2 — Attribute budget math. Mirrors `validate_attributes`
- * (holtburger-core/src/character_gen.rs:313-350):
+ * (holtburger-core/src/character_gen.rs):
  *
  *   - Each attribute must be in `[CHARACTER_GEN_MIN_ATTRIBUTE,
  *     CHARACTER_GEN_MAX_ATTRIBUTE]` (`[10, 100]`).
- *   - Sum MUST equal `attributeBudget` (heritage.attributeCredits).
- *     Both Exceeded (sum > budget) and Incomplete (sum < budget) fire
- *     as validation errors server-side.
+ *   - The sum may not exceed `attributeBudget` (heritage.attributeCredits),
+ *     as retail `VerifyCharacterGenerationResult` checks. Unspent credits
+ *     are legal; `unspent` drives retail's one-time warning at Finish.
  *
- * Returns `{ spent, budget, remaining, valid, perAttrValid: bool, error }`.
- * `valid` is true iff every attribute is in range AND remaining === 0.
+ * Returns `{ spent, budget, remaining, valid, unspent, perAttrValid, error }`.
  */
 export function computeAttributeBudget(attributes, attributeBudget) {
   const total =
@@ -219,12 +387,12 @@ export function computeAttributeBudget(attributes, attributeBudget) {
   let error = null;
   if (!allInRange) error = `Each attribute must be ${CHARACTER_GEN_MIN_ATTRIBUTE}-${CHARACTER_GEN_MAX_ATTRIBUTE}.`;
   else if (total > attributeBudget) error = `Attribute total ${total} exceeds budget ${attributeBudget}.`;
-  else if (total < attributeBudget) error = `Attribute total ${total} below budget ${attributeBudget} (${remaining} unspent).`;
   return {
     spent: total,
     budget: attributeBudget,
     remaining,
-    valid: allInRange && remaining === 0,
+    valid: allInRange && remaining >= 0,
+    unspent: remaining > 0,
     perAttrValid: allInRange,
     error,
   };
@@ -309,33 +477,12 @@ export function buildCharGenPayload(args) {
     focusAbility:        attributes.focus,
     selfAbility:         attributes.self,
     skillAdvancementClasses,
-    name: (name || "").trim(),
+    name: formatCharacterName(trimNameDecorations(name)),
     startArea,
     appearance,
     // Omit characterSlot so the wasm auto-assigns (mirrors
     // create_test_character; documented as the supported path).
   };
-}
-
-/**
- * Pre-populate skill state from a `CharacterGenTemplate`. Template
- * primary_skills→Specialized (3), normal_skills→Trained (2),
- * everything else→Inactive (0). Mirrors
- * `minimum_skill_advancement_for_template` (holtburger-core/src/
- * character_gen.rs:59-73).
- *
- * @param {object} template — { primarySkills: number[], normalSkills: number[] }
- * @returns {object} { [skillId]: { class: 0..=3 } }
- */
-export function seedSkillStatesFromTemplate(template) {
-  const out = {};
-  for (const skillId of template?.primarySkills || []) {
-    out[skillId] = { class: 3 /* Specialized */ };
-  }
-  for (const skillId of template?.normalSkills || []) {
-    out[skillId] = { class: 2 /* Trained */ };
-  }
-  return out;
 }
 
 /**
@@ -697,10 +844,21 @@ function createWizardInstance(client, catalog, ctx) {
 
   document.body.appendChild(overlay);
 
+  // Heritage-aware skill costs; falls back to the catalog's base costs when
+  // the per-heritage lookup is unavailable.
+  const costsFor = (heritageId) => (skillId) => {
+    try {
+      const c = client.characters?.skillCostsFor?.(heritageId, skillId);
+      if (c) return c;
+    } catch (_) {}
+    const s = catalog.skills?.find?.((x) => x.skillId === skillId);
+    return s ? { trainedCost: s.trainedCost, specializedCost: s.specializedCost } : null;
+  };
+
   // ── Initialise page-1 defaults from the catalog. ──
   const firstHeritage = catalog.heritages[0];
   state.heritageId = firstHeritage.heritageId;
-  applyHeritageDefaults(state, firstHeritage);
+  applyHeritageDefaults(state, firstHeritage, catalog, costsFor(firstHeritage.heritageId));
 
   // ── Event-bus subscription for outcome (kind=5 / kind=6) ──
   let unsubSuccess = null;
@@ -842,7 +1000,7 @@ function createWizardInstance(client, catalog, ctx) {
     heritageSel.addEventListener("change", () => {
       state.heritageId = Number(heritageSel.value);
       const h = findHeritage(catalog, state.heritageId);
-      if (h) applyHeritageDefaults(state, h);
+      if (h) applyHeritageDefaults(state, h, catalog, costsFor(state.heritageId));
       // Heritage change invalidates the cached appearance strips.
       state.appearanceStrips = null;
       render();
@@ -903,7 +1061,8 @@ function createWizardInstance(client, catalog, ctx) {
           coordination: t.coordination, quickness: t.quickness,
           focus: t.focus, self: t["self"],
         };
-        state.skillStates = seedSkillStatesFromTemplate(t);
+        state.skillStates = templateSkillStates(
+          catalog.skills, t, costsFor(state.heritageId), heritage.skillCredits);
       }
       render();
     });
@@ -995,13 +1154,19 @@ function createWizardInstance(client, catalog, ctx) {
         next.disabled = !v.ok;
       }
     });
+    // CharGenState::SetName stores the FormatName form; show it once the
+    // field is left.
+    nameInput.addEventListener("change", () => {
+      const v = validateCharacterName(nameInput.value);
+      if (v.ok) nameInput.value = state.name = v.formatted;
+    });
     nameRow.appendChild(nameLabel);
     nameRow.appendChild(nameInput);
     body.appendChild(nameRow);
 
     const nameHint = document.createElement("div");
     nameHint.className = "hb-cc-hint";
-    setAcText(nameHint, "3-32 characters; letters, numbers, spaces, apostrophes.");
+    setAcText(nameHint, "Up to 32 characters; letters, spaces, apostrophes and hyphens.");
     body.appendChild(nameHint);
 
     // ── Footer ──
@@ -1017,7 +1182,12 @@ function createWizardInstance(client, catalog, ctx) {
     nextBtn.className = "hb-cc-btn primary";
     setAcText(nextBtn, "Next →");
     nextBtn.disabled = !validateCharacterName(state.name).ok;
-    nextBtn.addEventListener("click", () => transition("next"));
+    nextBtn.addEventListener("click", () => {
+      const v = validateCharacterName(state.name);
+      if (!v.ok) return;
+      state.name = v.formatted;
+      transition("next");
+    });
     footer.appendChild(nextBtn);
   }
 
@@ -1155,7 +1325,7 @@ function createWizardInstance(client, catalog, ctx) {
     banner.className = `hb-cc-budget${budget.valid ? "" : " exceeded"}`;
     setAcText(banner,
       `Attribute credits: ${budget.spent} spent / ${budget.budget} budget` +
-      (budget.valid ? " (fully allocated)"
+      (budget.remaining === 0 ? " (fully allocated)"
                      : budget.remaining > 0 ? ` (${budget.remaining} unspent)`
                                             : ` (over by ${-budget.remaining})`));
     body.appendChild(banner);
@@ -1164,7 +1334,7 @@ function createWizardInstance(client, catalog, ctx) {
     hint.className = "hb-cc-hint";
     setAcText(hint,
       `Each attribute is ${CHARACTER_GEN_MIN_ATTRIBUTE}-${CHARACTER_GEN_MAX_ATTRIBUTE}; ` +
-      `total must equal ${heritage.attributeCredits} to advance.`);
+      `the total may not exceed ${heritage.attributeCredits}.`);
     body.appendChild(hint);
 
     const attrs = [
@@ -1278,7 +1448,7 @@ function createWizardInstance(client, catalog, ctx) {
     nextBtn.className = "hb-cc-btn primary";
     setAcText(nextBtn, "Next →");
     nextBtn.disabled = !budget.valid;
-    nextBtn.title = budget.valid ? "" : (budget.error || "Allocate exactly the budget to advance.");
+    nextBtn.title = budget.valid ? "" : (budget.error || "Attribute credits over budget.");
     nextBtn.addEventListener("click", () => transition("next"));
     footer.appendChild(nextBtn);
   }
@@ -1295,11 +1465,7 @@ function createWizardInstance(client, catalog, ctx) {
     if (!heritage) return;
 
     // Budget banner — heritage skill_credits with override-aware spend.
-    const costsForSkill = (skillId) => {
-      try {
-        return client.characters.skillCostsFor(state.heritageId, skillId);
-      } catch { return null; }
-    };
+    const costsForSkill = costsFor(state.heritageId);
     const budget = computeSkillBudget(state.skillStates, costsForSkill, heritage.skillCredits);
 
     const banner = document.createElement("div");
@@ -1318,22 +1484,26 @@ function createWizardInstance(client, catalog, ctx) {
 
     for (const skill of catalog.skills) {
       // Hide skills that the chargen UI flagged as non-chargen-usable
-      // (mirrors `chargenUse` filter — character_gen.rs:379-384). These
-      // can still appear as Inactive but the user shouldn't see them.
-      if (!skill.chargenUse) continue;
+      // (mirrors `chargenUse` filter — character_gen.rs), slot 0 and the
+      // retired placeholders (not in the real SkillTable; sent Inactive).
+      if (!skill.chargenUse || !isCreationTableSkill(skill)) continue;
       const cur = state.skillStates[skill.skillId];
+      const c = costsForSkill(skill.skillId);
       const tr = document.createElement("tr");
       const tdName = document.createElement("td");
       setAcText(tdName, skill.name || `Skill #${skill.skillId}`);
       const tdStatus = document.createElement("td");
       const sel = document.createElement("select");
-      // SkillAdvancementClass options. Untrained=1 is the "available
-      // but un-allocated" default for chargen-usable skills.
+      // SkillAdvancementClass options. A free tier can't be given up and a
+      // raise needs the credits (retail Decrease/IncreaseSkillLevel).
+      const choices = c ? skillClassChoices(c, cur?.class ?? 1, budget.remaining) : [];
       for (const [val, label] of [[1, "Untrained"], [2, "Trained"], [3, "Specialized"]]) {
         const opt = document.createElement("option");
         opt.value = String(val);
         opt.textContent = label;
         if (cur?.class === val) opt.selected = true;
+        const choice = choices.find((x) => x.cls === val);
+        if (choice && !choice.enabled && cur?.class !== val) opt.disabled = true;
         sel.appendChild(opt);
       }
       sel.addEventListener("change", () => {
@@ -1344,10 +1514,7 @@ function createWizardInstance(client, catalog, ctx) {
       tdStatus.appendChild(sel);
       const tdCost = document.createElement("td");
       tdCost.className = "cost";
-      const c = costsForSkill(skill.skillId);
-      const myCost = !c ? "-" :
-        cur?.class === 3 ? `${c.trainedCost + c.specializedCost}` :
-        cur?.class === 2 ? `${c.trainedCost}` : "0";
+      const myCost = !c ? "-" : `${skillClassCost(c, cur?.class)}`;
       setAcText(tdCost, myCost);
       tr.appendChild(tdName);
       tr.appendChild(tdStatus);
@@ -1437,7 +1604,16 @@ function createWizardInstance(client, catalog, ctx) {
     submitBtn.type = "button";
     submitBtn.className = "hb-cc-btn primary";
     setAcText(submitBtn, "Create");
-    submitBtn.addEventListener("click", () => transition("submit"));
+    submitBtn.addEventListener("click", () => {
+      // gmCharGenMainUI::DoFinish: unspent attribute credits get one
+      // warning (MakeCreditWarningDialog); Yes sends anyway.
+      if (computeAttributeBudget(state.attributes, heritage.attributeCredits).unspent
+          && typeof window !== "undefined" && typeof window.confirm === "function"
+          && !window.confirm(ATTRIBUTE_CREDIT_WARNING_TEXT)) {
+        return;
+      }
+      transition("submit");
+    });
     footer.appendChild(submitBtn);
   }
 
@@ -1503,7 +1679,7 @@ function findHeritage(catalog, heritageId) {
   return catalog?.heritages?.find?.((h) => h.heritageId === heritageId) || null;
 }
 
-function applyHeritageDefaults(state, heritage) {
+function applyHeritageDefaults(state, heritage, catalog, costsForSkill) {
   state.genderId = heritage.genders?.[0]?.genderId ?? null;
   const tmpl = pickDefaultTemplate(heritage);
   state.templateOption = tmpl?.templateOption ?? heritage.templates[0]?.templateOption ?? 0;
@@ -1513,8 +1689,9 @@ function applyHeritageDefaults(state, heritage) {
       coordination: tmpl.coordination, quickness: tmpl.quickness,
       focus: tmpl.focus, self: tmpl["self"],
     };
-    state.skillStates = seedSkillStatesFromTemplate(tmpl);
   }
+  state.skillStates = templateSkillStates(
+    catalog?.skills, tmpl, costsForSkill, heritage.skillCredits | 0);
   state.startArea = pickDefaultStartArea(heritage) ?? 0;
   const g = heritage.genders?.[0];
   if (g) state.appearance = randomizeAppearance(g);

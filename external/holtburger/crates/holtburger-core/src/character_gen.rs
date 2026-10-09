@@ -1,6 +1,7 @@
 use holtburger_content::CharacterGenCatalog;
 use holtburger_content::character_gen::{
-    CharacterGenHeritageGroup, CharacterGenSkillCosts, CharacterGenTemplate,
+    CharacterGenHeritageGroup, CharacterGenSkillCosts, CharacterGenSkillDefinition,
+    CharacterGenTemplate,
 };
 use holtburger_protocol::messages::{
     CharacterCreateAppearanceData, CharacterCreateRequestData, SkillAdvancementClass,
@@ -36,40 +37,238 @@ pub fn custom_template_for_heritage(
         .or_else(|| heritage.templates.first())
 }
 
+/// Whether a catalog skill is one of the real SkillTable entries retail
+/// character creation walks: id >= 1 (`CharGenState::ResetSkillLevels` and
+/// `UpdateRemainingSkillCredits` start at skill 1) and not a retired-skill
+/// placeholder holtburger-dat injects.
+pub fn is_creation_table_skill(definition: &CharacterGenSkillDefinition) -> bool {
+    definition.skill_id >= 1 && !definition.retired
+}
+
+/// The heritage-adjusted cost of holding `advancement`. Each tier's cost is
+/// its full price: retail charges a specialised skill `specialized_cost`
+/// alone, never trained + specialized (`CharGenState::
+/// UpdateRemainingSkillCredits`, acclient.c:495070), and `SetSkillLevel`
+/// (495350) refunds the old tier's full cost before charging the new one.
+pub fn skill_advancement_cost(
+    costs: CharacterGenSkillCosts,
+    advancement: SkillAdvancementClass,
+) -> i64 {
+    match advancement {
+        SkillAdvancementClass::Trained => i64::from(costs.trained_cost),
+        SkillAdvancementClass::Specialized => i64::from(costs.specialized_cost),
+        SkillAdvancementClass::Untrained | SkillAdvancementClass::Inactive => 0,
+    }
+}
+
+/// Retail `CharGenState::ResetSkillLevels` (acclient.c:495832) for one table
+/// skill: Trained when training is free (heritage trained cost <= 0),
+/// Specialized when specialising is free too, otherwise Untrained. Negative
+/// costs leave the slot Inactive. The same costs are the skills page's
+/// floors: `gmCGSkillsPage::DoSkillRecords` sets `bUntrainable = trainCost
+/// != 0` and `bUnspecializable = specCost != 0`, and `DecreaseSkillLevel`
+/// refuses to go below them. Template skills are not floors.
+pub fn skill_advancement_floor(costs: CharacterGenSkillCosts) -> SkillAdvancementClass {
+    if costs.trained_cost < 0 || costs.specialized_cost < 0 {
+        SkillAdvancementClass::Inactive
+    } else if costs.trained_cost <= 0 {
+        if costs.specialized_cost <= 0 {
+            SkillAdvancementClass::Specialized
+        } else {
+            SkillAdvancementClass::Trained
+        }
+    } else {
+        SkillAdvancementClass::Untrained
+    }
+}
+
+/// The floor of one skill slot for a heritage (see `skill_advancement_floor`).
+/// Slots that are not real table skills (slot 0, retired placeholders,
+/// unknown ids) stay Inactive.
 pub fn minimum_skill_advancement_for_heritage(
     catalog: &CharacterGenCatalog,
     heritage_id: u32,
     skill_id: u32,
 ) -> SkillAdvancementClass {
-    let Some(heritage) = catalog.heritage_group(heritage_id) else {
-        return SkillAdvancementClass::Untrained;
-    };
-
-    let Some(template) = custom_template_for_heritage(heritage) else {
-        return SkillAdvancementClass::Untrained;
-    };
-
-    minimum_skill_advancement_for_template(
-        template,
-        catalog.skill_costs_for_heritage(heritage_id, skill_id),
-        skill_id,
-    )
+    if !catalog
+        .skill_definition(skill_id)
+        .is_some_and(is_creation_table_skill)
+    {
+        return SkillAdvancementClass::Inactive;
+    }
+    catalog
+        .skill_costs_for_heritage(heritage_id, skill_id)
+        .map(skill_advancement_floor)
+        .unwrap_or(SkillAdvancementClass::Inactive)
 }
 
-pub fn minimum_skill_advancement_for_template(
-    template: &CharacterGenTemplate,
-    costs: Option<CharacterGenSkillCosts>,
-    skill_id: u32,
-) -> SkillAdvancementClass {
-    if template.primary_skills.contains(&skill_id) {
-        SkillAdvancementClass::Specialized
-    } else if template.normal_skills.contains(&skill_id)
-        || costs.is_some_and(|costs| costs.trained_cost == 0)
-    {
-        SkillAdvancementClass::Trained
-    } else {
-        SkillAdvancementClass::Untrained
+/// Retail `CharGenState::ResetSkillLevels` over every skill slot.
+pub fn reset_skill_levels(
+    catalog: &CharacterGenCatalog,
+    heritage_id: u32,
+) -> Vec<SkillAdvancementClass> {
+    let mut classes = vec![SkillAdvancementClass::Inactive; catalog.expected_skill_slots];
+    for definition in catalog.skill_definitions.values() {
+        if let Some(slot) = classes.get_mut(definition.skill_id as usize) {
+            *slot = minimum_skill_advancement_for_heritage(catalog, heritage_id, definition.skill_id);
+        }
     }
+    classes
+}
+
+/// The skill half of retail `CharGenState::ApplyTemplate` (acclient.c:496607):
+/// reset, then train each of the template's normal skills and specialise
+/// each primary skill, each step only when the credits it leaves are not
+/// negative (`SetSkillLevel` 495350 refunds the current tier first). Retail
+/// forces template 0 for heritages 12 and 13; callers pick the template.
+pub fn template_skill_levels(
+    catalog: &CharacterGenCatalog,
+    heritage_id: u32,
+    template: &CharacterGenTemplate,
+) -> Vec<SkillAdvancementClass> {
+    let mut classes = reset_skill_levels(catalog, heritage_id);
+    let mut remaining = catalog
+        .heritage_group(heritage_id)
+        .map(|heritage| i64::from(heritage.skill_credits))
+        .unwrap_or_default();
+    let steps = template
+        .normal_skills
+        .iter()
+        .map(|skill| (*skill, SkillAdvancementClass::Trained))
+        .chain(
+            template
+                .primary_skills
+                .iter()
+                .map(|skill| (*skill, SkillAdvancementClass::Specialized)),
+        );
+    for (skill_id, advancement) in steps {
+        if !catalog
+            .skill_definition(skill_id)
+            .is_some_and(is_creation_table_skill)
+        {
+            continue;
+        }
+        let Some(costs) = catalog.skill_costs_for_heritage(heritage_id, skill_id) else {
+            continue;
+        };
+        let Some(slot) = classes.get_mut(skill_id as usize) else {
+            continue;
+        };
+        let after = remaining + skill_advancement_cost(costs, *slot)
+            - skill_advancement_cost(costs, advancement);
+        if after >= 0 {
+            remaining = after;
+            *slot = advancement;
+        }
+    }
+    classes
+}
+
+fn advancement_rank(advancement: SkillAdvancementClass) -> u8 {
+    match advancement {
+        SkillAdvancementClass::Inactive => 0,
+        SkillAdvancementClass::Untrained => 1,
+        SkillAdvancementClass::Trained => 2,
+        SkillAdvancementClass::Specialized => 3,
+    }
+}
+
+/// `ACCharGenData::FormatName` (acclient.c:488655) — the name retail's
+/// `CharGenState::SetName` stores and `VerifyCharacterGenerationResult`
+/// requires (`strcmp(FormatName(name), name) == 0`). Keeps letters, and
+/// spaces / apostrophes / hyphens where they join letters; drops digits and
+/// everything else; caps the scan at 32 bytes; then capitalises the first
+/// letter, lowercases the rest except after a space, hyphen or apostrophe
+/// or a Mac/Mc/Fitz/Von/Van/De/Di/Du/Le/La prefix (left as typed), and
+/// uppercases I/V/X roman-numeral words.
+pub fn format_character_name(raw: &str) -> String {
+    let bytes = raw.trim_end_matches(' ').as_bytes();
+    let window = &bytes[..bytes.len().min(32)];
+    let letterish = |c: Option<u8>| c.is_some_and(|c| c.is_ascii_alphabetic() || c >= 0x80);
+    let mut out: Vec<u8> = Vec::with_capacity(window.len());
+    for (i, &c) in window.iter().enumerate() {
+        let prev = i.checked_sub(1).map(|j| window[j]);
+        let next = window.get(i + 1).copied();
+        let keep = match c {
+            b'A'..=b'Z' | b'a'..=b'z' => true,
+            b' ' => !(prev.is_none() || prev == Some(b' ') || next.is_none()),
+            b'\'' => {
+                letterish(prev) || (prev.is_some() && prev != Some(b'\'') && letterish(next))
+            }
+            b'-' => prev != Some(b'-') && letterish(prev) && (letterish(next) || next == Some(b'-')),
+            _ => false,
+        };
+        if keep {
+            out.push(c);
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Case {
+        Upper,
+        Lower,
+        Either,
+    }
+    let n = out.len();
+    let mut cases = vec![Case::Lower; n];
+    if n > 0 {
+        cases[0] = Case::Upper;
+    }
+    let prefixes: [(&[u8], usize); 10] = [
+        (b"mac", 3),
+        (b"mc", 2),
+        (b"fitz", 4),
+        (b"von", 3),
+        (b"van", 3),
+        (b"de", 2),
+        (b"di", 2),
+        (b"du", 2),
+        (b"le", 2),
+        (b"la", 2),
+    ];
+    let mut word_start = 0usize;
+    loop {
+        if word_start > 0 && word_start < n {
+            cases[word_start] = Case::Either;
+        }
+        for (prefix, len) in prefixes {
+            let end = word_start + len;
+            if end < n && out[word_start..end].eq_ignore_ascii_case(prefix) {
+                cases[end] = Case::Either;
+            }
+        }
+        let Some(sep) = out[word_start.min(n)..]
+            .iter()
+            .position(|c| matches!(c, b' ' | b'-' | b'\''))
+        else {
+            break;
+        };
+        word_start += sep + 1;
+        if word_start >= n {
+            break;
+        }
+    }
+    let mut i = 0;
+    while i < n {
+        if !(out[i].is_ascii_alphabetic() || out[i] >= 0x80) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < n && (out[i].is_ascii_alphabetic() || out[i] >= 0x80) {
+            i += 1;
+        }
+        if out[start..i].iter().all(|c| matches!(c, b'I' | b'V' | b'X')) {
+            cases[start..i].fill(Case::Upper);
+        }
+    }
+    for (c, case) in out.iter_mut().zip(cases) {
+        match case {
+            Case::Upper => c.make_ascii_uppercase(),
+            Case::Lower => c.make_ascii_lowercase(),
+            Case::Either => {}
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[derive(Debug, Clone)]
@@ -168,13 +367,14 @@ impl CharacterGenBuilder {
         build: CharacterGenBuild,
     ) -> Result<CharacterCreateRequestData, Vec<CharacterGenValidationError>> {
         self.validate(&build)?;
+        let appearance = self.wire_appearance(&build);
 
         Ok(CharacterCreateRequestData {
             account_name: String::new(),
             unknown_constant: self.policy.unknown_constant,
             heritage: build.heritage,
             gender: build.gender,
-            appearance: build.appearance,
+            appearance,
             template_option: build.template_option,
             strength_ability: build.strength_ability,
             endurance_ability: build.endurance_ability,
@@ -190,6 +390,41 @@ impl CharacterGenBuilder {
             is_admin: build.is_admin,
             is_sentinel: build.is_sentinel,
         })
+    }
+
+    /// The appearance as it goes on the wire. The build carries every
+    /// choice as a list index, as retail `CharGenState` does;
+    /// `CharGenState::GetCharGenResult` (acclient.c:495612) then sends the
+    /// headgear / shirt / trousers / footwear colours as palette-template
+    /// keys (`shirtPaletteTemplateIDs[shirtColor]`, 0 when out of range)
+    /// and hair / eye colours as indices. The server looks the key up in
+    /// the gear's ClothingTable (`VerifyCharacterGenerationResult` →
+    /// `ClothingTable::GetCloPaletteTemplate`; ACE stamps it as the item's
+    /// PaletteTemplate and icon), so an index there is the wrong colour.
+    ///
+    /// The keys come from the gender's ClothingColorsList, which holds
+    /// every key retail's per-gear lists (StoreColorInformation) can
+    /// offer. Retail orders each gear's list by ClothingTable hash order
+    /// instead; the wizard picks clothing colours at random, so only the
+    /// key's validity matters here.
+    fn wire_appearance(&self, build: &CharacterGenBuild) -> CharacterCreateAppearanceData {
+        let mut appearance = build.appearance.clone();
+        let keys = self
+            .catalog
+            .heritage_group(build.heritage)
+            .and_then(|heritage| heritage.genders.get(&build.gender))
+            .map(|gender| gender.appearance.clothing_color_ids.as_slice())
+            .unwrap_or_default();
+        let key = |index: u32| keys.get(index as usize).copied().unwrap_or(0);
+        appearance.headgear_color = if appearance.headgear_style == u32::MAX {
+            0
+        } else {
+            key(appearance.headgear_color)
+        };
+        appearance.shirt_color = key(appearance.shirt_color);
+        appearance.pants_color = key(appearance.pants_color);
+        appearance.footwear_color = key(appearance.footwear_color);
+        appearance
     }
 
     pub fn randomize_appearance(
@@ -246,6 +481,13 @@ impl CharacterGenBuilder {
 
         if self.policy.require_nonempty_name && build.name.trim().is_empty() {
             errors.push(CharacterGenValidationError::EmptyName);
+        } else if !build.name.is_empty() {
+            // `VerifyCharacterGenerationResult` (acclient.c:499125) needs
+            // 1..32 characters already in FormatName form.
+            let formatted = format_character_name(&build.name);
+            if formatted != build.name {
+                errors.push(CharacterGenValidationError::NameNotFormatted { formatted });
+            }
         }
 
         if build.is_admin && !self.policy.allow_admin_flag {
@@ -334,17 +576,15 @@ impl CharacterGenBuilder {
             }
         }
 
+        // Unspent credits are allowed: retail `gmCharGenMainUI::DoFinish`
+        // (acclient.c:278604) only warns (ID_CharGen_CreditWarning) and
+        // sends on Yes, and `VerifyCharacterGenerationResult` checks only
+        // `total <= numAttributeCredits` (:499060), as ACE does.
         let total = build.attribute_total();
         if total > attribute_budget {
             errors.push(CharacterGenValidationError::AttributeBudgetExceeded {
                 total,
                 budget: attribute_budget,
-            });
-        } else if total < attribute_budget {
-            errors.push(CharacterGenValidationError::AttributeBudgetIncomplete {
-                total,
-                budget: attribute_budget,
-                remaining: attribute_budget - total,
             });
         }
     }
@@ -363,18 +603,30 @@ impl CharacterGenBuilder {
             return;
         }
 
+        // Retail `VerifyCharacterGenerationResult` (acclient.c:499087)
+        // requires exactly one non-Inactive class per SkillTable entry, and
+        // the skills page never lets a free skill drop below its floor
+        // (`gmCGSkillsPage::DecreaseSkillLevel`); see `reset_skill_levels`.
         let mut spent_credits = 0i64;
 
         for (skill_id, advancement) in build.skill_advancement_classes.iter().enumerate() {
-            if *advancement == SkillAdvancementClass::Inactive {
-                continue;
-            }
-
             let skill_id = skill_id as u32;
-            let Some(skill_definition) = self.catalog.skill_definition(skill_id) else {
-                errors.push(CharacterGenValidationError::UnknownSkill { skill_id });
+            let definition = self.catalog.skill_definition(skill_id);
+            let Some(skill_definition) = definition.filter(|d| is_creation_table_skill(d)) else {
+                if *advancement != SkillAdvancementClass::Inactive {
+                    errors.push(if definition.is_some() {
+                        CharacterGenValidationError::SkillNotInSkillTable { skill_id }
+                    } else {
+                        CharacterGenValidationError::UnknownSkill { skill_id }
+                    });
+                }
                 continue;
             };
+
+            if *advancement == SkillAdvancementClass::Inactive {
+                errors.push(CharacterGenValidationError::SkillInactive { skill_id });
+                continue;
+            }
 
             if !skill_definition.chargen_use && *advancement != SkillAdvancementClass::Untrained {
                 errors.push(
@@ -391,15 +643,15 @@ impl CharacterGenBuilder {
                 continue;
             };
 
-            match advancement {
-                SkillAdvancementClass::Trained => {
-                    spent_credits += i64::from(costs.trained_cost);
-                }
-                SkillAdvancementClass::Specialized => {
-                    spent_credits += i64::from(costs.trained_cost + costs.specialized_cost);
-                }
-                SkillAdvancementClass::Untrained | SkillAdvancementClass::Inactive => {}
+            let floor = skill_advancement_floor(costs);
+            if advancement_rank(*advancement) < advancement_rank(floor) {
+                errors.push(CharacterGenValidationError::SkillBelowFloor {
+                    skill_id,
+                    floor,
+                });
             }
+
+            spent_credits += skill_advancement_cost(costs, *advancement);
         }
 
         if spent_credits > i64::from(heritage.skill_credits) {
@@ -622,16 +874,21 @@ pub enum CharacterGenValidationError {
     },
     #[error("attribute total {total} exceeds budget {budget}")]
     AttributeBudgetExceeded { total: u32, budget: u32 },
-    #[error("attribute total {total} leaves {remaining} of {budget} points unallocated")]
-    AttributeBudgetIncomplete {
-        total: u32,
-        budget: u32,
-        remaining: u32,
-    },
+    #[error("character name is not in retail form (expected {formatted:?})")]
+    NameNotFormatted { formatted: String },
     #[error("expected {expected} skill slots but got {actual}")]
     SkillSlotCountMismatch { expected: usize, actual: usize },
     #[error("unknown skill {skill_id}")]
     UnknownSkill { skill_id: u32 },
+    #[error("skill {skill_id} is not in the skill table and must stay inactive")]
+    SkillNotInSkillTable { skill_id: u32 },
+    #[error("skill {skill_id} must be untrained, trained or specialized")]
+    SkillInactive { skill_id: u32 },
+    #[error("skill {skill_id} cannot go below {floor:?} (it is free at that tier)")]
+    SkillBelowFloor {
+        skill_id: u32,
+        floor: SkillAdvancementClass,
+    },
     #[error("skill {skill_id} is not available at character creation")]
     SkillUnavailableAtCharacterCreation { skill_id: u32 },
     #[error("skill credits spent {spent} exceed budget {budget}")]
@@ -788,6 +1045,7 @@ mod tests {
                         chargen_use: true,
                         trained_cost: 0,
                         specialized_cost: 0,
+                        retired: false,
                     },
                 ),
                 (
@@ -799,7 +1057,8 @@ mod tests {
                         description: "Axe".to_string(),
                         chargen_use: true,
                         trained_cost: 6,
-                        specialized_cost: 4,
+                        specialized_cost: 10,
+                        retired: false,
                     },
                 ),
                 (
@@ -812,6 +1071,7 @@ mod tests {
                         chargen_use: true,
                         trained_cost: 0,
                         specialized_cost: 4,
+                        retired: false,
                     },
                 ),
                 (
@@ -823,7 +1083,8 @@ mod tests {
                         description: "Crossbow".to_string(),
                         chargen_use: true,
                         trained_cost: 6,
-                        specialized_cost: 4,
+                        specialized_cost: 8,
+                        retired: false,
                     },
                 ),
                 (
@@ -835,11 +1096,25 @@ mod tests {
                         description: "Hidden".to_string(),
                         chargen_use: false,
                         trained_cost: 6,
-                        specialized_cost: 4,
+                        specialized_cost: 12,
+                        retired: false,
+                    },
+                ),
+                (
+                    5,
+                    CharacterGenSkillDefinition {
+                        skill_id: 5,
+                        skill_type: None,
+                        name: "Mace".to_string(),
+                        description: "Retired skill: Mace".to_string(),
+                        chargen_use: true,
+                        trained_cost: 0,
+                        specialized_cost: 0,
+                        retired: true,
                     },
                 ),
             ]),
-            expected_skill_slots: 5,
+            expected_skill_slots: 6,
         })
     }
 
@@ -877,11 +1152,14 @@ mod tests {
             focus_ability: 10,
             self_ability: 10,
             character_slot: 0,
+            // Slot 0 and the retired Mace stay Inactive; Bow is free to
+            // train, so Trained is its floor.
             skill_advancement_classes: vec![
                 SkillAdvancementClass::Inactive,
                 SkillAdvancementClass::Specialized,
+                SkillAdvancementClass::Trained,
                 SkillAdvancementClass::Untrained,
-                SkillAdvancementClass::Inactive,
+                SkillAdvancementClass::Untrained,
                 SkillAdvancementClass::Inactive,
             ],
             name: "Bestie".to_string(),
@@ -945,20 +1223,15 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unspent_attribute_budget() {
+    fn validate_allows_unspent_attribute_budget() {
+        // Retail DoFinish only warns about unspent credits; the server
+        // checks total <= budget.
         let builder = CharacterGenBuilder::new(test_catalog());
         let mut build = test_build();
-        build.self_ability = 5;
+        build.strength_ability = 95;
+        assert_eq!(build.attribute_total(), 325);
 
-        let errors = builder.validate(&build).expect_err("build should fail");
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            CharacterGenValidationError::AttributeBudgetIncomplete {
-                total: 325,
-                budget: 330,
-                remaining: 5,
-            }
-        )));
+        builder.validate(&build).expect("325 of 330 is a legal build");
     }
 
     #[test]
@@ -1001,83 +1274,178 @@ mod tests {
     }
 
     #[test]
-    fn minimum_skill_advancement_uses_template_lists_and_zero_cost_floor() {
+    fn minimum_skill_advancement_is_the_retail_cost_floor() {
+        // ResetSkillLevels / bUntrainable: costs decide, template lists do
+        // not. Axe has the heritage override (4, 6).
         let catalog = test_catalog();
+        let floor = |skill| minimum_skill_advancement_for_heritage(catalog.as_ref(), 6, skill);
+        assert_eq!(floor(0), SkillAdvancementClass::Inactive, "slot 0 is not a table skill");
+        assert_eq!(floor(1), SkillAdvancementClass::Untrained);
+        assert_eq!(floor(2), SkillAdvancementClass::Trained, "free to train");
+        assert_eq!(floor(3), SkillAdvancementClass::Untrained, "a template primary is no floor");
+        assert_eq!(floor(5), SkillAdvancementClass::Inactive, "a retired placeholder");
+        assert_eq!(floor(9), SkillAdvancementClass::Inactive, "unknown");
+    }
 
+    #[test]
+    fn skill_advancement_floor_follows_reset_skill_levels() {
+        let costs = |trained_cost, specialized_cost| CharacterGenSkillCosts {
+            trained_cost,
+            specialized_cost,
+        };
+        assert_eq!(skill_advancement_floor(costs(6, 10)), SkillAdvancementClass::Untrained);
+        assert_eq!(skill_advancement_floor(costs(0, 4)), SkillAdvancementClass::Trained);
+        assert_eq!(skill_advancement_floor(costs(0, 0)), SkillAdvancementClass::Specialized);
+        assert_eq!(skill_advancement_floor(costs(0, 999)), SkillAdvancementClass::Trained);
+        assert_eq!(skill_advancement_floor(costs(-1, 4)), SkillAdvancementClass::Inactive);
+    }
+
+    #[test]
+    fn reset_and_template_follow_retail_apply_template() {
+        let catalog = test_catalog();
+        use SkillAdvancementClass::{Inactive, Specialized, Trained, Untrained};
         assert_eq!(
-            minimum_skill_advancement_for_heritage(catalog.as_ref(), 6, 1),
-            SkillAdvancementClass::Trained
+            reset_skill_levels(catalog.as_ref(), 6),
+            vec![Inactive, Untrained, Trained, Untrained, Untrained, Inactive]
         );
+        let custom = &catalog.heritage_group(6).unwrap().templates[1];
+        // Axe trains for 4 of 10 credits; Crossbow's specialisation (8)
+        // no longer fits, so ApplyTemplate leaves it Untrained.
         assert_eq!(
-            minimum_skill_advancement_for_heritage(catalog.as_ref(), 6, 2),
-            SkillAdvancementClass::Trained
+            template_skill_levels(catalog.as_ref(), 6, custom),
+            vec![Inactive, Trained, Trained, Untrained, Untrained, Inactive]
         );
+        let mut roomy = (*catalog).clone();
+        roomy.heritage_groups.get_mut(&6).unwrap().skill_credits = 12;
         assert_eq!(
-            minimum_skill_advancement_for_heritage(catalog.as_ref(), 6, 3),
-            SkillAdvancementClass::Specialized
+            template_skill_levels(&roomy, 6, custom),
+            vec![Inactive, Trained, Trained, Specialized, Untrained, Inactive]
+        );
+    }
+
+    fn catalog_with_skill_credits(credits: u32) -> Arc<CharacterGenCatalog> {
+        let mut catalog = (*test_catalog()).clone();
+        catalog.heritage_groups.get_mut(&6).unwrap().skill_credits = credits;
+        Arc::new(catalog)
+    }
+
+    #[test]
+    fn validate_charges_a_specialised_skill_its_total_cost_only() {
+        // Axe Trained (4) + Crossbow Specialized (8) = 12. The old
+        // trained + specialized rule charged Crossbow 14.
+        let mut build = test_build();
+        build.skill_advancement_classes[1] = SkillAdvancementClass::Trained;
+        build.skill_advancement_classes[3] = SkillAdvancementClass::Specialized;
+
+        CharacterGenBuilder::new(catalog_with_skill_credits(12))
+            .validate(&build)
+            .expect("12 credits exactly");
+        let errors = CharacterGenBuilder::new(catalog_with_skill_credits(11))
+            .validate(&build)
+            .expect_err("one credit short");
+        assert!(errors.contains(&CharacterGenValidationError::SkillBudgetExceeded {
+            spent: 12,
+            budget: 11,
+        }));
+    }
+
+    #[test]
+    fn validate_requires_every_table_skill_and_only_those() {
+        let builder = CharacterGenBuilder::new(test_catalog());
+        let check = |slot: usize, class, expected: CharacterGenValidationError| {
+            let mut build = test_build();
+            build.skill_advancement_classes[slot] = class;
+            let errors = builder.validate(&build).expect_err("build should fail");
+            assert!(errors.contains(&expected), "{errors:?}");
+        };
+        check(
+            3,
+            SkillAdvancementClass::Inactive,
+            CharacterGenValidationError::SkillInactive { skill_id: 3 },
+        );
+        check(
+            2,
+            SkillAdvancementClass::Untrained,
+            CharacterGenValidationError::SkillBelowFloor {
+                skill_id: 2,
+                floor: SkillAdvancementClass::Trained,
+            },
+        );
+        check(
+            5,
+            SkillAdvancementClass::Trained,
+            CharacterGenValidationError::SkillNotInSkillTable { skill_id: 5 },
+        );
+        check(
+            0,
+            SkillAdvancementClass::Untrained,
+            CharacterGenValidationError::SkillNotInSkillTable { skill_id: 0 },
         );
     }
 
     #[test]
-    fn minimum_skill_advancement_for_template_prefers_primary_normal_and_zero_cost_floor() {
-        let template = CharacterGenTemplate {
-            template_option: 0,
-            name: "Custom".to_string(),
-            icon_image: 0,
-            title_id: 0,
-            strength: 0,
-            endurance: 0,
-            coordination: 0,
-            quickness: 0,
-            focus: 0,
-            self_stat: 0,
-            normal_skills: vec![1],
-            primary_skills: vec![2],
-        };
+    fn build_request_sends_clothing_colours_as_palette_template_keys() {
+        let mut catalog = (*test_catalog()).clone();
+        catalog
+            .heritage_groups
+            .get_mut(&6)
+            .unwrap()
+            .genders
+            .get_mut(&1)
+            .unwrap()
+            .appearance
+            .clothing_color_ids = vec![9, 6, 4];
+        let builder = CharacterGenBuilder::new(Arc::new(catalog));
+        let mut build = test_build();
+        build.appearance.shirt_color = 2;
+        build.appearance.pants_color = 1;
+        build.appearance.footwear_color = 0;
+        build.appearance.hair_color = 0;
 
-        assert_eq!(
-            minimum_skill_advancement_for_template(
-                &template,
-                Some(CharacterGenSkillCosts {
-                    trained_cost: 6,
-                    specialized_cost: 4,
-                }),
-                2,
-            ),
-            SkillAdvancementClass::Specialized
-        );
-        assert_eq!(
-            minimum_skill_advancement_for_template(
-                &template,
-                Some(CharacterGenSkillCosts {
-                    trained_cost: 6,
-                    specialized_cost: 4,
-                }),
-                1,
-            ),
-            SkillAdvancementClass::Trained
-        );
-        assert_eq!(
-            minimum_skill_advancement_for_template(
-                &template,
-                Some(CharacterGenSkillCosts {
-                    trained_cost: 0,
-                    specialized_cost: 4,
-                }),
-                3,
-            ),
-            SkillAdvancementClass::Trained
-        );
-        assert_eq!(
-            minimum_skill_advancement_for_template(
-                &template,
-                Some(CharacterGenSkillCosts {
-                    trained_cost: 6,
-                    specialized_cost: 4,
-                }),
-                4,
-            ),
-            SkillAdvancementClass::Untrained
-        );
+        let request = builder.build_request(build).expect("build should validate");
+        assert_eq!(request.appearance.shirt_color, 4);
+        assert_eq!(request.appearance.pants_color, 6);
+        assert_eq!(request.appearance.footwear_color, 9);
+        assert_eq!(request.appearance.headgear_color, 0, "no headgear");
+        assert_eq!(request.appearance.hair_color, 0, "hair colour stays an index");
+    }
+
+    #[test]
+    fn format_character_name_matches_retail_format_name() {
+        for (raw, formatted) in [
+            ("bob2", "Bob"),
+            ("BOB SMITH", "Bob Smith"),
+            ("bob smith", "Bob smith"),
+            ("MACDONALD", "MacDonald"),
+            ("mcdonald", "Mcdonald"),
+            ("jean-luc", "Jean-luc"),
+            ("o''neil", "O'neil"),
+            ("a--b", "A-b"),
+            ("Bob III", "Bob III"),
+            ("bob iii", "Bob iii"),
+            ("  x ", "X"),
+            ("DEAN", "DeAn"),
+            ("al", "Al"),
+            ("Bob  Smith", "Bob Smith"),
+            ("'Bob", "Bob"),
+            ("-Bob-", "Bob"),
+            ("a - b", "A  b"),
+        ] {
+            assert_eq!(format_character_name(raw), formatted, "{raw:?}");
+        }
+        assert_eq!(format_character_name(&"a".repeat(40)).len(), 32);
+    }
+
+    #[test]
+    fn validate_rejects_a_name_not_in_retail_form() {
+        let builder = CharacterGenBuilder::new(test_catalog());
+        let mut build = test_build();
+        build.name = "bob2".to_string();
+        let errors = builder.validate(&build).expect_err("build should fail");
+        assert!(errors.contains(&CharacterGenValidationError::NameNotFormatted {
+            formatted: "Bob".to_string(),
+        }));
+        build.name = "Al".to_string();
+        builder.validate(&build).expect("two letters are fine");
     }
 }

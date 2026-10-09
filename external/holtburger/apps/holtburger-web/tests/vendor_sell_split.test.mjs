@@ -168,6 +168,9 @@ const LOGIC_NAMES = [
   "vendorPurchasePrice", "vendorSaleCredit", "vendorAcceptability", "vendorRejectText",
   "VENDOR_ACCEPT", "countCurrency", "PYREAL_WCID", "fmtNumber", "fmtCompact",
   "sellStagingPlan", "planSellSplit", "resolveSellSplits", "SELL_SPLIT_FAILED_TEXT",
+  // Round 5 (2026-10-08): buy-side refusals, line cost, supply, filters.
+  "vendorLineCost", "vendorRemaining", "vendorBuySlotsNeeded", "vendorPlayerRoom", "vendorBuyRefusal",
+  "VENDOR_TYPE_FILTERS", "VENDOR_MAX_QUEUED", "VENDOR_TOO_MUCH_TEXT",
 ];
 const INERT = "() => undefined";
 const body = spliceModule(readFileSync(path.join(APP, "plugins", "vendor-ui.js"), "utf8"), {
@@ -195,6 +198,7 @@ const body = spliceModule(readFileSync(path.join(APP, "plugins", "vendor-ui.js")
     fillSlotIcon: INERT,
     wireDropTarget: INERT,
     inventoryRows: "() => globalThis.__rows()",
+    chatNotice: "() => {}",
     entityWorldPos: "() => null",
     localPlayerWorldPos: "() => null",
     devHex: "(g) => String(g >>> 0)",

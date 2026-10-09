@@ -692,8 +692,9 @@ pub enum GameActionOpcode {
     // --- Movement (Extra) ---
     /// C2S: Teleport to a PK-Lite arena.
     TeleToPklArena = 0x0026,
-    // /// C2S: Teleport to a PK arena.
-    // TeleToPkArena = 0x0027,
+    /// C2S: Teleport to a PK arena (retail `CM_Character::Event_TeleToPKArena`,
+    /// the `@pkarena` / `@pka` command).
+    TeleToPkArena = 0x0027,
     /// C2S: Teleport to the character's attuned Lifestone.
     TeleToLifestone = 0x0063,
     // /// C2S: Special advocate-only teleport command.

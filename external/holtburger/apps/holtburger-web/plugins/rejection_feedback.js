@@ -284,6 +284,17 @@ function _onInventoryActionFailed(evt) {
   if (payload.synthetic) return; // our own fallback re-emit; already rendered
   const itemGuid = (payload.u32Payload >>> 0) || 0;
   const code = (payload.u32Payload2 >>> 0) || 0;
+  // vendor-buy-2 (2026-10-08 round 5): ACE reports a refused buy / sale as
+  // this event naming the PLAYER (code 0). Retail shows nothing for a
+  // refused shop event (ServerSaysAttemptFailed has no IR_SHOP_EVENT case),
+  // so no "WeenieError 0x0000" toast and no flash. The paired transient line
+  // (an older pkg still sends one) is swallowed too.
+  let me = 0;
+  try { me = (window.getLocalPlayerGuid?.() >>> 0) || 0; } catch (_) { me = 0; }
+  if (itemGuid && me && itemGuid === me) {
+    _suppressTransientUntil = Date.now() + PAIRED_CHAT_SUPPRESS_MS;
+    return;
+  }
   // The server attributed this failure; don't let the fallback ring
   // attribute a later GUID-less kind:13 to the same action.
   if (itemGuid) _recent.delete(itemGuid);

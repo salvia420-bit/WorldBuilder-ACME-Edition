@@ -152,3 +152,73 @@ test("target-bar.js / radial-menu.js: the world Use goes through worldUseLeaf", 
   assert.match(rm, /label: pickup \? "Pick Up" : isCreature\(ent\) \? "Talk" : "Use",/);
   assert.match(rm, /worldUseLeaf\(guid, \{/);
 });
+
+// pk-2 (2026-10-08 round 5) — retail ItemHolder::UseObject (acclient.c:
+// 433481-433492): BF_PKSWITCH (0x400) / BF_NPKSWITCH (0x800) open
+// UsageConfirmation_PKAltar / _NPKAltar (:403300 / :403384) instead of the Use;
+// UsageCallback (:402872) sends it only on Yes. extcontainer-4: the line
+// retail prints after the Use of a locked container rides `notice`.
+test("pk-2: altarConfirmText — the PK bit first, retail's two texts, flag off = none", async () => {
+  const tc = await import("../scene3d/target_cycle.js");
+  assert.equal(tc.altarConfirmText(0x400, true), tc.PK_ALTAR_CONFIRM_TEXT);
+  assert.equal(tc.altarConfirmText(0x800, true), tc.NPK_ALTAR_CONFIRM_TEXT);
+  assert.equal(tc.altarConfirmText(0xc00, true), tc.PK_ALTAR_CONFIRM_TEXT, "BYTE1 & 4 is tested before & 8");
+  assert.equal(tc.altarConfirmText(0, true), null);
+  assert.equal(tc.altarConfirmText(0x400, false), null);
+  assert.equal(tc.PK_ALTAR_CONFIRM_TEXT,
+    "Using this altar will make you a player killer, able to attack or be attacked by other player killers. Are you sure you want to do this?");
+  assert.equal(tc.NPK_ALTAR_CONFIRM_TEXT,
+    "Using this altar will make you a non-player killer, unable to attack or be attacked by other player killers. Are you sure you want to do this?");
+  assert.equal(tc.pkAltarConfirmOn(""), true);
+  for (const v of ["off", "0", "false"]) assert.equal(tc.pkAltarConfirmOn(`?pkAltarConfirm=${v}`), false);
+});
+
+test("pk-2 / extcontainer-4: worldUseLeaf asks before an altar and adds the post-Use line", () => {
+  const log = [];
+  let yes = null;
+  const deps = (o = {}) => ({
+    throttleOk: () => true,
+    refusal: () => null,
+    reject: (m) => log.push(["reject", m]),
+    use: (g) => log.push(["use", g]),
+    confirmText: (g) => (g === 9 ? "Altar?" : null),
+    confirm: (text, onYes) => { log.push(["confirm", text]); yes = onYes; },
+    ...o,
+  });
+  assert.equal(worldUseLeaf(9, deps()), "confirm");
+  assert.deepEqual(log.splice(0), [["confirm", "Altar?"]], "nothing is sent before the answer");
+  yes();
+  assert.deepEqual(log.splice(0), [["use", 9]], "Yes sends the Use once");
+  assert.equal(worldUseLeaf(7, deps()), "used", "a plain object is used at once");
+  assert.deepEqual(log.splice(0), [["use", 7]]);
+  assert.equal(worldUseLeaf(9, deps({ throttleOk: () => false })), "throttled");
+  assert.equal(worldUseLeaf(9, deps({ refusal: () => "The Altar cannot be used" })), "refused");
+  assert.deepEqual(log.splice(0), [["reject", "The Altar cannot be used"]], "a refused altar never asks");
+  assert.equal(worldUseLeaf(9, deps({ confirm: undefined })), "used", "no confirm dep: today's Use");
+  assert.deepEqual(log.splice(0), [["use", 9]]);
+  // The locked line comes AFTER the Use (ACE still plays the lock sound).
+  assert.equal(worldUseLeaf(7, deps({ notice: () => "The Chest is locked" })), "used");
+  assert.deepEqual(log.splice(0), [["use", 7], ["reject", "The Chest is locked"]]);
+  assert.equal(worldUseLeaf(7, deps({ notice: () => null })), "used");
+  assert.deepEqual(log.splice(0), [["use", 7]]);
+});
+
+test("pk-2 wiring: the double-click, toolbar and radial Use all ask first", () => {
+  const p = src("scene3d/picking.js");
+  const branch = p.slice(p.indexOf("// use-2 (2026-10-08 round 2): on the completing click"));
+  const refuse = branch.indexOf("const refusal = worldUseRefusal(guid);");
+  const ask = branch.indexOf("const altar = pkAltarConfirmText(guid);");
+  const confirm = branch.indexOf("pkAltarConfirm(altar, sendUse);");
+  assert.ok(refuse > 0 && refuse < ask && ask < confirm, `order refusal < ask < confirm: ${[refuse, ask, confirm]}`);
+  assert.match(p, /window\.__pkAltarConfirmText = pkAltarConfirmText;/);
+  assert.match(p, /window\.__pkAltarConfirm = pkAltarConfirm;/);
+  // Never send without a Yes: the modal's onConfirm, or window.confirm true.
+  assert.match(p, /modal\(\{ message: text, dialogId: "pkAltar:use", onConfirm: onYes \}\);/);
+  assert.match(p, /if \(typeof window\.confirm === "function" && window\.confirm\(text\)\) onYes\(\);/);
+  for (const f of ["plugins/target-bar.js", "plugins/radial-menu.js"]) {
+    const s = src(f);
+    assert.match(s, /confirmText: window\.__pkAltarConfirmText,/, f);
+    assert.match(s, /confirm: window\.__pkAltarConfirm,/, f);
+    assert.match(s, /notice: window\.__worldUseNotice,/, f);
+  }
+});

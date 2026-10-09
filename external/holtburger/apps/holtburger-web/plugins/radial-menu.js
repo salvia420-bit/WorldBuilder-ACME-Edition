@@ -555,6 +555,12 @@ function buildItems(ctx) {
               isPickup: () => pickup,
               pickUp,
               use: (g) => handle.useObject(g),
+              // Round 5: PK / NPK altar question (pk-2), locked-container
+              // line after the Use (extcontainer-4).
+              reject: (message) => window.__pluginClient?.events?.emit?.("clientActionRejected", { message }),
+              confirmText: window.__pkAltarConfirmText,
+              confirm: window.__pkAltarConfirm,
+              notice: window.__worldUseNotice,
             });
           } catch (e) { console.warn("[ctx-menu] use failed:", e); }
         },

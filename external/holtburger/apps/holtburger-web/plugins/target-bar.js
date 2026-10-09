@@ -46,7 +46,7 @@ import { suggestedCombatModeFromInventory, activateOrUse, worldUseLeaf } from ".
 import { noteCombatModeRequest } from "../ui/ac_combat_mode_intent.js";
 import { refuseCombatModeInPortalSpace } from "../ui/portal_busy.js";
 import { DropItemFlags, isDropAccepted } from "./drop_item_flags.js";
-import { shouldQueryHealth, consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
+import { shouldQueryHealth, consumeWorldUseThrottle, readAttackMeta } from "../scene3d/target_cycle.js";
 import {
   COMBAT_MODE,
   combatModeForStance,
@@ -263,11 +263,12 @@ function selectionMeta(guid) {
     try {
       petOwner = (window.__sessionHandle?.objectInstanceIdProperty?.(guid >>> 0, PROP_IID_PET_OWNER) >>> 0) || 0;
     } catch (_) { petOwner = 0; }
-    return {
+    // pk-1: the live PK bits (a free-PK change flips the meter policy).
+    return readAttackMeta(window.__sessionHandle, guid >>> 0, {
       itemType: (meta.itemType >>> 0) || 0,
       objDescFlags: (meta.objDescFlags >>> 0) || 0,
       petOwner,
-    };
+    });
   } catch (_) { return null; }
 }
 export function wantsHealthMeter(guid) {
@@ -564,6 +565,11 @@ export function mountToolbarControls(field, opts = {}) {
             refusal: window.__worldUseRefusal,
             reject: (message) => window.__pluginClient?.events?.emit?.("clientActionRejected", { message }),
             use: (u) => handle.useObject(u),
+            // Round 5: PK / NPK altar question (pk-2), locked-container line
+            // after the Use (extcontainer-4).
+            confirmText: window.__pkAltarConfirmText,
+            confirm: window.__pkAltarConfirm,
+            notice: window.__worldUseNotice,
           });
         },
       });

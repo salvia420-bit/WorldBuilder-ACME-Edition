@@ -27659,6 +27659,8 @@ enum SessionCommand {
     BuyFromVendor {
         vendor_guid: u32,
         items: Vec<(u32, i32)>,
+        /// vendor-buy-6: retail's trailing trade currency (0 = pyreals).
+        alternate_currency_id: u32,
     },
     /// Vendor-UI: JS-side requested sale of one or more player items
     /// to `vendor_guid`. Each `(item_guid, amount)` pair becomes one
@@ -27919,6 +27921,16 @@ enum SessionCommand {
     /// to `ACE.Server/WorldObjects/Lifestone.cs:44` `ActOnUse` which
     /// sets `player.Sanctuary`.
     TeleToLifestone,
+    /// pk-4 (2026-10-08 round 5): `@pklite` / `@pkl` — retail
+    /// `ClientCommunicationSystem::DoPKLite` → `CM_Character::
+    /// Event_EnterPKLite` (0x028F, acclient.c:697856). No payload.
+    EnterPkLite,
+    /// pk-4: `@pkarena` / `@pka` — `DoPKArena` → `Event_TeleToPKArena`
+    /// (0x0027, :698364). No payload.
+    TeleToPkArena,
+    /// pk-4: `@pklarena` / `@pla` — `DoPKLArena` → `Event_TeleToPKLArena`
+    /// (0x0026, :698389). No payload.
+    TeleToPklArena,
     /// Allegiance: add `target_name` to the allegiance ban list. Maps
     /// to `GameAction::AddAllegianceBan` (sub-opcode 0x02A1). Single
     /// string16 payload; ACE owns monarch/officer permission checks.
@@ -29784,6 +29796,17 @@ struct VendorStateItem {
     stack_size: u32,
     item_type: u32,
     icon_id: u32,
+    /// vendor-buy-3 (2026-10-08 round 5): the stock entry's supply,
+    /// `ItemProfile.amount` (low 24 bits, sign-extended; retail
+    /// `ItemProfile::UnPack` acclient.c:509725). -1 = unlimited.
+    supply: i32,
+    /// `PublicWeenieDesc._maxStackSize` (0 when absent): a non-stackable
+    /// line is bought one object per unit (retail AdoptAsContents).
+    max_stack_size: u32,
+    /// vendor-buy-1: takes a container slot rather than an item slot —
+    /// BF_REQUIRES_PACKSLOT, or an items / containers capacity (the test
+    /// gmVendorUI::BuySingleItem uses, acclient.c:244716).
+    pack_slot: bool,
 }
 
 /// JS-facing snapshot of one vendor's trade state. Returned by
@@ -29839,6 +29862,9 @@ impl VendorStateJs {
                     stack_size: i.stack_size,
                     item_type: i.item_type,
                     icon_id: i.icon_id,
+                    supply: i.supply,
+                    max_stack_size: i.max_stack_size,
+                    pack_slot: i.pack_slot,
                 })
                 .collect(),
         }
@@ -29908,6 +29934,9 @@ pub struct VendorItemJs {
     stack_size: u32,
     item_type: u32,
     icon_id: u32,
+    supply: i32,
+    max_stack_size: u32,
+    pack_slot: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -29938,6 +29967,17 @@ impl VendorItemJs {
     /// icon rendering reuses the same atlas/lookup as the inventory panel.
     #[wasm_bindgen(getter, js_name = iconId)]
     pub fn icon_id(&self) -> u32 { self.icon_id }
+    /// vendor-buy-3: the entry's supply (-1 = unlimited). A finite entry
+    /// leaves the shop once the buying list holds all of it.
+    #[wasm_bindgen(getter)]
+    pub fn supply(&self) -> i32 { self.supply }
+    /// vendor-buy-3: `_maxStackSize` (0 when absent; 1 or less = not
+    /// stackable, so each unit is its own object and price).
+    #[wasm_bindgen(getter, js_name = maxStackSize)]
+    pub fn max_stack_size(&self) -> u32 { self.max_stack_size }
+    /// vendor-buy-1: a purchase needs a container slot (packs, quivers).
+    #[wasm_bindgen(getter, js_name = packSlot)]
+    pub fn pack_slot(&self) -> bool { self.pack_slot }
 }
 
 /// PR-JJ 2026-05-23 + Wave F.2 2026-05-27: Internal cache shape for
@@ -37380,6 +37420,29 @@ impl SessionHandle {
         self.with_entity(guid, |e| Some(e.flags.bits())).unwrap_or(0)
     }
 
+    /// extcontainer-2 (2026-10-08): `[radius, height]` of an object's
+    /// body (`CPartArray::GetRadius` / `GetHeight` of its Setup, times its
+    /// scale) for retail's use-radii range check
+    /// (`ACCWeenieObject::ObjectsInRange`). Empty when the guid is unknown
+    /// or its Setup is not resident yet (a 0 radius would turn the
+    /// cylinder distance into a centre distance).
+    #[wasm_bindgen(js_name = objectPartDims)]
+    pub fn object_part_dims(&self, guid: u32) -> Vec<f32> {
+        let Ok(world) = self.world.try_borrow() else {
+            return Vec::new();
+        };
+        let Some(w) = world.as_ref() else {
+            return Vec::new();
+        };
+        match w.entities.get(holtburger_common::Guid(guid)) {
+            Some(e) => {
+                let (radius, height) = w.entity_part_dims(e);
+                if radius > 0.0 { vec![radius, height] } else { Vec::new() }
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Tracked world position of any object as `[landblock_id, x, y, z]`
     /// (AC-native landblock-local coords, Z-up — the same frame as
     /// `getLocalPlayerPose`). Empty array when the GUID is unknown.
@@ -40823,12 +40886,17 @@ impl SessionHandle {
     /// Amounts ≤ 0 are clamped to 1. Fire-and-forget; ACE pushes a
     /// `GameMessageCreateObject` per item on success plus a
     /// `kind=11 InventoryUpdated` event.
+    ///
+    /// vendor-buy-6 (2026-10-08 round 5): the optional 4th argument is the
+    /// vendor's trade currency, written after the items as retail
+    /// `CM_Vendor::Event_Buy` does (`undefined` = 0, a pyreal vendor).
     #[wasm_bindgen(js_name = buyFromVendor)]
     pub fn buy_from_vendor(
         &self,
         vendor_guid: u32,
         item_guids: Vec<u32>,
         amounts: Vec<i32>,
+        alternate_currency_id: Option<u32>,
     ) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
         if item_guids.is_empty() || item_guids.len() != amounts.len() {
@@ -40845,7 +40913,11 @@ impl SessionHandle {
             .map(|(g, a)| (g, if a <= 0 { 1 } else { a }))
             .collect();
         self.cmd_tx
-            .unbounded_send(SessionCommand::BuyFromVendor { vendor_guid, items })
+            .unbounded_send(SessionCommand::BuyFromVendor {
+                vendor_guid,
+                items,
+                alternate_currency_id: alternate_currency_id.unwrap_or(0),
+            })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("buyFromVendor: cmd channel closed ({e})"))
             })
@@ -41332,6 +41404,42 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::RecallAllegianceHometown)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("recallAllegianceHometown: cmd channel closed ({e})"))
+            })
+    }
+
+    /// pk-4 (2026-10-08 round 5): `@pklite` — sends `GameAction::
+    /// EnterPkLite` (0x028F). The eligibility test (only a Non-Player
+    /// Killer) runs in app/slash_commands.js, as retail DoPKLite does
+    /// before it sends; ACE checks again.
+    #[wasm_bindgen(js_name = enterPkLite)]
+    pub fn enter_pk_lite(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::EnterPkLite)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("enterPkLite: cmd channel closed ({e})"))
+            })
+    }
+
+    /// pk-4: `@pkarena` — sends `GameAction::TeleToPkArena` (0x0027).
+    #[wasm_bindgen(js_name = teleToPkArena)]
+    pub fn tele_to_pk_arena(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TeleToPkArena)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("teleToPkArena: cmd channel closed ({e})"))
+            })
+    }
+
+    /// pk-4: `@pklarena` — sends `GameAction::TeleToPklArena` (0x0026).
+    #[wasm_bindgen(js_name = teleToPklArena)]
+    pub fn tele_to_pkl_arena(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TeleToPklArena)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("teleToPklArena: cmd channel closed ({e})"))
             })
     }
 
@@ -42271,8 +42379,10 @@ impl SessionHandle {
                     state.buy_multiplier,
                     if i.stack_size == 0 { 1 } else { i.stack_size as i32 },
                 );
-                // First-set bit of item_type — the canonical category for
-                // the dropdown (matches vendor-ui.js CATEGORY_TABLE).
+                // First-set bit of item_type — a category hint only;
+                // vendor-ui.js filters on `itemType & mask` with retail's
+                // VendorItemsUI filter masks (commerce_logic
+                // VENDOR_TYPE_FILTERS, some multi-bit).
                 let category_bit = if i.item_type == 0 {
                     0
                 } else {
@@ -42333,10 +42443,11 @@ impl SessionHandle {
 ///   (typically Holtburg for Aluvian).
 /// - attribute values = template defaults from
 ///   `template.attribute_values()`.
-/// - skill_advancement_classes = `Inactive` everywhere except the
-///   slots `catalog.skill_definitions` lists, which get
-///   `minimum_skill_advancement_for_heritage` (template's normal /
-///   primary skills set Trained / Specialized; otherwise Untrained).
+/// - skill_advancement_classes = retail `CharGenState::ApplyTemplate`
+///   for that template (`template_skill_levels`): every real SkillTable
+///   skill reset (free skills Trained, the rest Untrained; slot 0 and the
+///   retired placeholders Inactive), then the template's normal / primary
+///   skills Trained / Specialized where the credits allow.
 /// - appearance = `CharacterGenBuilder::randomize_appearance` (random
 ///   indices into the heritage's hair / eye / mouth / clothing
 ///   lists; random hue floats).
@@ -42355,9 +42466,8 @@ fn build_test_character_request(
     holtburger_protocol::messages::CharacterCreateRequestData,
     Vec<holtburger_core::CharacterGenValidationError>,
 > {
-    use holtburger_core::character_gen::minimum_skill_advancement_for_heritage;
+    use holtburger_core::character_gen::{format_character_name, template_skill_levels};
     use holtburger_core::{CharacterGenBuild, CharacterGenBuilder};
-    use holtburger_protocol::messages::SkillAdvancementClass;
 
     // Pick Aluvian if present (key=1 by AC convention); fall back to
     // the first heritage in the catalog.
@@ -42382,9 +42492,8 @@ fn build_test_character_request(
     // the user. Pre-spread templates (Bow Hunter, Soldier, etc.) are
     // already at the full budget so the build validates without
     // user-driven point spending. Falls back to the first template
-    // (and the validation would fail with AttributeBudgetIncomplete)
-    // if no pre-spread template exists — caller surfaces that as the
-    // CharacterGenValidationError it is.
+    // (unspent attribute credits are legal, as in retail) if no
+    // pre-spread template exists.
     let template = heritage
         .templates
         .iter()
@@ -42422,18 +42531,8 @@ fn build_test_character_request(
         .next()
         .unwrap_or(0);
 
-    let mut skill_advancement_classes =
-        vec![SkillAdvancementClass::Inactive; catalog.expected_skill_slots];
-    for definition in catalog.skill_definitions.values() {
-        let min = minimum_skill_advancement_for_heritage(
-            catalog.as_ref(),
-            heritage.heritage_id,
-            definition.skill_id,
-        );
-        if let Some(slot) = skill_advancement_classes.get_mut(definition.skill_id as usize) {
-            *slot = min;
-        }
-    }
+    let skill_advancement_classes =
+        template_skill_levels(catalog.as_ref(), heritage.heritage_id, &template);
 
     let character_slot = first_available_character_slot(occupied_slots);
 
@@ -42454,7 +42553,9 @@ fn build_test_character_request(
         self_ability: attribute_values[5].1,
         character_slot,
         skill_advancement_classes,
-        name,
+        // CharGenState::SetName stores names in FormatName form, and the
+        // server compares against it.
+        name: format_character_name(&name),
         start_area,
         is_admin: false,
         is_sentinel: false,
@@ -53284,7 +53385,7 @@ impl SessionHandle {
     /// Shape (all numeric ids as `Number`, names as `String`):
     /// ```json
     /// {
-    ///   "expectedSkillSlots": 56,
+    ///   "expectedSkillSlots": 55,
     ///   "starterAreas": [{ "startAreaId": 0, "name": "Holtburg" }, ...],
     ///   "heritages": [{
     ///     "heritageId": 1, "name": "Aluvian",
@@ -53303,9 +53404,9 @@ impl SessionHandle {
     ///                     "clothingColorCount": 16
     ///                   } }, ...]
     ///   }, ...],
-    ///   "skills": [{ "skillId": 1, "name": "Axe",
-    ///                "chargenUse": true, "trainedCost": 6,
-    ///                "specializedCost": 4 }, ...]
+    ///   "skills": [{ "skillId": 6, "name": "Melee Defense",
+    ///                "chargenUse": true, "trainedCost": 10,
+    ///                "specializedCost": 20, "retired": false }, ...]
     /// }
     /// ```
     ///
@@ -53410,6 +53511,9 @@ impl SessionHandle {
                     "chargenUse": s.chargen_use,
                     "trainedCost": s.trained_cost,
                     "specializedCost": s.specialized_cost,
+                    // A retired-skill placeholder (not in the real
+                    // SkillTable): the wizard leaves it Inactive.
+                    "retired": s.retired,
                 })
             })
             .collect();

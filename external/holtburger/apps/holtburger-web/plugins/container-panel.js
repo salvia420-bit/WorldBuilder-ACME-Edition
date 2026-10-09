@@ -34,6 +34,12 @@ import {
   uiEffectTintCss,
 } from "../scene3d/vfx/ui_effects_registry.js";
 import { takeInventorySnapshot } from "./inventory_helpers.js";
+import {
+  groundObjectGateEnabled,
+  groundObjectFacts,
+  isLandscapeGroundObject,
+  replacedGroundObject,
+} from "./ground_container_rules.js";
 
 const OVERLAY_ID = "hb-container-panel";
 const STYLE_ID = "hb-container-panel-style";
@@ -499,11 +505,35 @@ function hidePanel() {
   }
 }
 
+// extcontainer-1 (2026-10-08, `?groundObjectGate`): retail
+// ClientUISystem::OnViewContents (acclient.c:402688) stores every
+// ViewContents but opens the window only for the requested ground object —
+// a world object nothing contains or wields. ACE sends one per pack inside
+// an opened chest / corpse and for the player's own packs (pickup, vendor
+// purchase, login); those leave the window alone (the contents stay cached
+// in wasm). A new ground object replaces the open one, and the server hears
+// about the old one (SetGroundObject → Event_NoLongerViewingContents).
+// A handle without the getters (stale pkg / stub) keeps the old behaviour.
 function onContainerOpened(ev) {
   const detail = ev?.detail || {};
   const guid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
   if (!guid) return;
   const name = detail.stringPayload || "Container";
+  const h = window.__sessionHandle;
+  const facts = groundObjectGateEnabled() ? groundObjectFacts(h, guid) : null;
+  if (facts) {
+    if (!isLandscapeGroundObject(facts)) {
+      console.info(`[container-panel] contents of 0x${guid.toString(16)} cached (not a ground object, no window)`);
+      return;
+    }
+    const lootBar = window.__corpseLootBar;
+    const old = lootBar?.isOpen?.() ? replacedGroundObject(lootBar.current?.(), guid) : 0;
+    if (old) {
+      try { h.noLongerViewingContents?.(old); } catch (_) {}
+    }
+    // Retail SetGroundObject also closes an open vendor (vendor-ui listens).
+    try { window.__pluginClient?.events?.emit?.("groundObjectOpened", { guid }); } catch (_) {}
+  }
   openGround(guid, name);
 }
 

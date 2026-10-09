@@ -8,7 +8,8 @@ use holtburger_content::character_gen::{
 use holtburger_content::{CharacterGenCatalog, ContentRepository};
 use holtburger_core::character_gen::{
     CHARACTER_GEN_MAX_ATTRIBUTE, CHARACTER_GEN_MIN_ATTRIBUTE, custom_template_for_heritage,
-    is_unavailable_character_gen_skill_cost, minimum_skill_advancement_for_heritage,
+    format_character_name, is_unavailable_character_gen_skill_cost,
+    minimum_skill_advancement_for_heritage, skill_advancement_cost, template_skill_levels,
 };
 use holtburger_core::{CharacterGenBuild, CharacterGenBuilder, CharacterGenValidationError};
 use holtburger_dat::file_type::{CharGen, SkillTable};
@@ -617,7 +618,9 @@ impl CharacterCreationFormState {
             SkillAdvancementClass::Untrained | SkillAdvancementClass::Inactive
         ) && advancement_rank(next) > advancement_rank(minimum)
         {
-            self.set_feedback("That skill is already at its template minimum.", true);
+            // Retail bUntrainable / bUnspecializable: a tier that costs
+            // nothing cannot be given up. Template skills are no floor.
+            self.set_feedback("That skill is free at this tier and cannot be lowered.", true);
             return false;
         }
 
@@ -651,7 +654,13 @@ impl CharacterCreationFormState {
             self_ability: self.attribute_values[5],
             character_slot: first_available_slot(occupied_slots),
             skill_advancement_classes: self.skill_advancement_classes.clone(),
-            name: self.name_input.text().trim().to_string(),
+            // gmCharGenMainUI::DoFinish trims "[] ", CharGenState::SetName
+            // applies FormatName.
+            name: format_character_name(
+                self.name_input
+                    .text()
+                    .trim_matches(|c| matches!(c, '[' | ']' | ' ')),
+            ),
             start_area: self.start_area_id,
             is_admin: false,
             is_sentinel: false,
@@ -672,17 +681,17 @@ impl CharacterCreationFormState {
             .map(|template| std::array::from_fn(|index| template.attribute_values()[index].1))
             .unwrap_or([CHARACTER_GEN_MIN_ATTRIBUTE; 6]);
 
-        self.skill_advancement_classes =
-            vec![SkillAdvancementClass::Inactive; self.catalog.expected_skill_slots];
-        for definition in self.catalog.skill_definitions.values() {
-            let minimum_advancement = self.minimum_skill_advancement(definition.skill_id);
-            if let Some(slot) = self
-                .skill_advancement_classes
-                .get_mut(definition.skill_id as usize)
-            {
-                *slot = minimum_advancement;
+        // Retail CharGenState::ApplyTemplate: reset every table skill, then
+        // the template's trained / specialised skills where affordable.
+        self.skill_advancement_classes = match self.current_template() {
+            Some(template) => {
+                template_skill_levels(self.catalog.as_ref(), self.heritage_id, template)
             }
-        }
+            None => holtburger_core::character_gen::reset_skill_levels(
+                self.catalog.as_ref(),
+                self.heritage_id,
+            ),
+        };
 
         self.selected_skill_id = self.skill_ids_for_display().into_iter().next();
         self.selected_attribute_index = 0;
@@ -701,9 +710,7 @@ impl CharacterCreationFormState {
             return 0;
         };
 
-        let current_cost = advancement_cost(current, costs.trained_cost, costs.specialized_cost);
-        let next_cost = advancement_cost(next, costs.trained_cost, costs.specialized_cost);
-        next_cost - current_cost
+        skill_advancement_cost(costs, next) - skill_advancement_cost(costs, current)
     }
 
     fn minimum_skill_advancement(&self, skill_id: u32) -> SkillAdvancementClass {
@@ -728,18 +735,6 @@ fn advancement_rank(advancement: SkillAdvancementClass) -> u8 {
         SkillAdvancementClass::Trained => 1,
         SkillAdvancementClass::Untrained => 2,
         SkillAdvancementClass::Inactive => 3,
-    }
-}
-
-fn advancement_cost(
-    advancement: SkillAdvancementClass,
-    trained_cost: i32,
-    specialized_cost: i32,
-) -> i64 {
-    match advancement {
-        SkillAdvancementClass::Inactive | SkillAdvancementClass::Untrained => 0,
-        SkillAdvancementClass::Trained => i64::from(trained_cost),
-        SkillAdvancementClass::Specialized => i64::from(trained_cost + specialized_cost),
     }
 }
 
@@ -917,6 +912,7 @@ mod tests {
                         chargen_use: true,
                         trained_cost: 2,
                         specialized_cost: 4,
+                        retired: false,
                     },
                 ),
                 (
@@ -929,6 +925,7 @@ mod tests {
                         chargen_use: true,
                         trained_cost: 2,
                         specialized_cost: 4,
+                        retired: false,
                     },
                 ),
                 (
@@ -941,6 +938,7 @@ mod tests {
                         chargen_use: true,
                         trained_cost: 2,
                         specialized_cost: 4,
+                        retired: false,
                     },
                 ),
             ]),
@@ -1042,17 +1040,62 @@ mod tests {
     }
 
     #[test]
-    fn lower_selected_skill_is_blocked_at_template_minimum() {
+    fn lower_selected_skill_untrains_a_template_skill() {
+        // Retail templates are a starting point, not a floor.
         let mut form = CharacterCreationFormState::new(test_catalog());
         form.selected_skill_id = Some(SkillType::Run as u32);
+
+        assert!(form.lower_selected_skill());
+        assert_eq!(
+            form.skill_advancement_classes[SkillType::Run as usize],
+            SkillAdvancementClass::Untrained
+        );
+    }
+
+    #[test]
+    fn lower_selected_skill_is_blocked_at_its_free_floor() {
+        let mut catalog = (*test_catalog()).clone();
+        let run = catalog
+            .skill_definitions
+            .get_mut(&(SkillType::Run as u32))
+            .unwrap();
+        run.trained_cost = 0;
+        let mut form = CharacterCreationFormState::new(Arc::new(catalog));
+        form.selected_skill_id = Some(SkillType::Run as u32);
+        assert_eq!(
+            form.skill_advancement_classes[SkillType::Run as usize],
+            SkillAdvancementClass::Trained
+        );
 
         assert!(!form.lower_selected_skill());
         assert_eq!(
             form.feedback
                 .as_ref()
                 .map(|feedback| feedback.message.as_str()),
-            Some("That skill is already at its template minimum.")
+            Some("That skill is free at this tier and cannot be lowered.")
         );
+    }
+
+    #[test]
+    fn specialising_a_trained_skill_costs_the_difference() {
+        // Run: trained 2, specialized 4 (the total). Trained -> Specialized
+        // costs 2 more, as gmCGSkillsPage::IncreaseSkillLevel charges it.
+        let mut form = CharacterCreationFormState::new(test_catalog());
+        form.selected_skill_id = Some(SkillType::Run as u32);
+        assert_eq!(form.remaining_skill_points(), 6);
+
+        assert!(form.raise_selected_skill());
+        assert_eq!(form.remaining_skill_points(), 4);
+    }
+
+    #[test]
+    fn build_request_formats_the_name() {
+        let mut form = CharacterCreationFormState::new(test_catalog());
+        form.name_input.set_text("[sho2 GIRL] ");
+        form.attribute_values[5] += 6;
+
+        let request = form.build_request(std::iter::empty()).expect("valid");
+        assert_eq!(request.name, "Sho Girl");
     }
 
     #[test]
@@ -1082,6 +1125,7 @@ mod tests {
                 chargen_use: true,
                 trained_cost: 8,
                 specialized_cost: 999,
+                retired: false,
             },
         );
         catalog.expected_skill_slots = SkillType::Salvaging as usize + 1;

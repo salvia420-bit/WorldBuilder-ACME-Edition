@@ -758,6 +758,11 @@ const TIER5 = [
   { tier: 5, flag: "trainUnusable", file: "tests/train_unusable.test.mjs" },
   { tier: 5, flag: "retailSocialCmds", file: "tests/social_commands.test.mjs" },
   { tier: 5, flag: "retailCharErrors", file: "tests/login_retail_rules.test.mjs" },
+  // 2026-10-08 (round 5) — external containers: only the requested ground
+  // object opens the window, retail's 1 s range close, the locked-container
+  // line (extcontainer-1/2/4); the character panel's PK status (pk-5).
+  { tier: 5, flag: "groundObjectGate", file: "tests/ground_container_gate.test.mjs" },
+  { tier: 5, flag: "characterInfoPkStatus", file: "tests/character_info_pk_status.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

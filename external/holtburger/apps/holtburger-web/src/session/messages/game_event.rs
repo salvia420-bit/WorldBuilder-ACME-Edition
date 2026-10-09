@@ -646,6 +646,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                     stack_size: desc.stack_size.unwrap_or(1),
                                     item_type: desc.item_type,
                                     icon_id: desc.icon_id,
+                                    // vendor-buy-1/3 (round 5): supply,
+                                    // stackability, slot class.
+                                    supply: holtburger_world::hydration::decode_vendor_item_supply(
+                                        item.packed_stack_size,
+                                    )
+                                    .map(|n| n.min(i32::MAX as u32) as i32)
+                                    .unwrap_or(-1),
+                                    max_stack_size: desc.max_stack_size.unwrap_or(0),
+                                    pack_slot: desc.obj_desc_flags.contains(
+                                        holtburger_common::properties::ObjectDescriptionFlag::REQUIRES_PACK_SLOT,
+                                    ) || desc.items_capacity.unwrap_or(0) > 0
+                                        || desc.containers_capacity.unwrap_or(0) > 0,
                                 }
                             })
                             .collect();
@@ -739,24 +751,16 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     let item_count = data.items.len() as u32;
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_VENDOR_OPENED,
-                        string_payload: Some(vendor_name.clone()),
+                        string_payload: Some(vendor_name),
                         u32_payload: Some(vendor_guid),
                         u32_payload_2: Some(item_count),
                         f32_payload: None,
                     });
-                    // Also surface as a chat line so
-                    // the user sees something even
-                    // before the vendor-window UI
-                    // lands. Format mirrors the cli.
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(format!(
-                            "[Vendor] {vendor_name} has {item_count} items for sale."
-                        )),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_TRADE),
-                        f32_payload: None,
-                    });
+                    // vendor-buy-6 (round 5): no chat line. Retail
+                    // Handle_VendorInfo (acclient.c:402990) only opens
+                    // the window, and ACE re-sends this after every buy
+                    // and sale, so the old "[Vendor] … has N items for
+                    // sale." line repeated in the Trade category.
                 }
                 holtburger_protocol::messages::GameEvent::ViewContents(data) => {
                     // PR-HH 2026-05-23: non-vendor
@@ -821,10 +825,30 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     latest_container_contents
                         .borrow_mut()
                         .insert(container_guid_u32, item_guids);
-                    // rynth Phase 2: last-opened ground
-                    // container (GetGroundContainerId).
-                    *rynth_ground_container.borrow_mut() =
-                        container_guid_u32;
+                    // rynth Phase 2: the open ground container
+                    // (GetGroundContainerId). Retail
+                    // `ClientUISystem::OnViewContents`
+                    // (acclient.c:402688) stores every
+                    // ViewContents but makes only the requested
+                    // ground object the ground container: an
+                    // unowned, uncontained object in the world.
+                    // ACE also sends one per sub-pack of an opened
+                    // chest and for the player's own packs
+                    // (pickups, vendor buys, login); those must not
+                    // take its place (extcontainer-1, 2026-10-08).
+                    let landscape = world.borrow().as_ref().is_some_and(|w| {
+                        use holtburger_common::properties::WorldObjectExt as _;
+                        w.entities.get(data.container).is_some_and(|e| {
+                            use holtburger_common::Guid;
+                            e.position.landblock_id != Guid::NULL
+                                && e.container_id().is_none_or(|g| g == Guid::NULL)
+                                && e.wielder_id().is_none_or(|g| g == Guid::NULL)
+                        })
+                    });
+                    if landscape {
+                        *rynth_ground_container.borrow_mut() =
+                            container_guid_u32;
+                    }
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CONTAINER_OPENED,
                         string_payload: Some(container_name),
@@ -910,7 +934,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                         holtburger_core::errors::format_weenie_error(
                                             data.error, None,
                                         ),
-                                        CHAT_CATEGORY_SYSTEM,
+                                        failure_chat_category(data.error),
                                     ),
                                 },
                             ),
@@ -953,18 +977,29 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         u32_payload_2: Some(code),
                         f32_payload: None,
                     });
-                    let message = if code == 0 {
-                        "You can't wield that!".to_string()
-                    } else {
-                        format!("[Wield failed] {label}")
-                    };
-                    queued_events.borrow_mut().push(ClientEvent {
-                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
-                        string_payload: Some(message),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
-                        f32_payload: None,
-                    });
+                    // vendor-buy-2 (round 5): ACE reports every refused
+                    // buy / sale as this event naming the PLAYER with
+                    // code 0; retail adds no text for a refused shop
+                    // event (see chat_format::inventory_save_failed_chat_line).
+                    let player_guid = world
+                        .borrow()
+                        .as_ref()
+                        .map(|w| u32::from(w.player.guid))
+                        .unwrap_or(0);
+                    if let Some(message) = crate::chat_format::inventory_save_failed_chat_line(
+                        data.item_guid.0,
+                        player_guid,
+                        code,
+                        &label,
+                    ) {
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                            string_payload: Some(message),
+                            u32_payload: Some(0),
+                            u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                            f32_payload: None,
+                        });
+                    }
                 }
                 holtburger_protocol::messages::GameEvent::WeenieError(
                     data,
@@ -1026,7 +1061,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                             kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                             string_payload: Some(text),
                             u32_payload: Some(code),
-                            u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                            // pk-3: retail prints the PK / portal
+                            // refusals at text type 7 (Magic).
+                            u32_payload_2: Some(failure_chat_category(data.error)),
                             f32_payload: None,
                         });
                     }
@@ -1049,7 +1086,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                         string_payload: Some(label),
                         u32_payload: Some(code),
-                        u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                        u32_payload_2: Some(failure_chat_category(data.error)),
                         f32_payload: None,
                     });
                 }
@@ -1731,4 +1768,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
         _ => unreachable!("GameMessage routed to the wrong handler module"),
     }
     LoopFlow::Continue
+}
+
+/// pk-3 (2026-10-08 round 5): the chat category for a WeenieError line —
+/// Magic for the codes retail's HandleFailureEvent prints at text type 7
+/// (`holtburger_core::errors::retail_text_type`), System otherwise.
+fn failure_chat_category(error: holtburger_protocol::errors::WeenieError) -> u32 {
+    if holtburger_core::errors::retail_text_type(error) == Some(7) {
+        CHAT_CATEGORY_MAGIC
+    } else {
+        CHAT_CATEGORY_SYSTEM
+    }
 }

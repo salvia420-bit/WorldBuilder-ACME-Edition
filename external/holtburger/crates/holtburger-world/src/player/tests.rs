@@ -1808,6 +1808,7 @@ fn update_skill_records_sac_and_min_level() {
                 upper_bound: 0.0,
                 lower_bound: 0.0,
                 learn_mod: 0.0,
+                retired: false,
             },
         )]),
     };

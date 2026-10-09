@@ -95,12 +95,66 @@ export const TURBINE_CMDS = Object.freeze({
   olthoi: T_OLTHOI, o: T_OLTHOI,
 });
 
+// pk-4 (2026-10-08 round 5): retail's client-side PK commands
+// (InitializeCommands, acclient.c:428736-429784). ACE has no text command of
+// these names (it answers "Unknown command"); it implements only the
+// GameActions, which retail's DoPKLite / DoPKArena / DoPKLArena send after
+// their own checks (:420147 / :418546 / :418615).
+const PK_VERB_BASE = Object.freeze({
+  pklite: "pklite", pkl: "pklite",
+  pkarena: "pkarena", pka: "pkarena",
+  pklarena: "pklarena", pla: "pklarena",
+});
+export const PK_CLIENT_VERBS = Object.freeze(Object.keys(PK_VERB_BASE));
+const ODF_PK = 0x20;
+const ODF_PKLITE = 0x02000000;
+
+/** `?retailPkCmds` — DEFAULT-ON; off keeps the old server forward. */
+export function retailPkCmdsEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = new URLSearchParams(s).get("retailPkCmds");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+
+/**
+ * Retail DoPKLite / DoPKArena / DoPKLArena for the local player's LIVE
+ * ODF: arguments → the help line; @pklite only for a Non-Player Killer
+ * (IsPlayerKiller = PK or PK Lite → HandleFailureEvent 0x507);
+ * @pkarena only for a PK (0x55F); @pklarena only for a PK Lite (0x560).
+ * @returns {{send:"enterPkLite"|"teleToPkArena"|"teleToPklArena"} | {text:string} | null}
+ *          null = not a PK verb.
+ */
+export function pkCommandDecision(verb, rest, odf) {
+  const base = PK_VERB_BASE[String(verb ?? "").toLowerCase()];
+  if (!base) return null;
+  if (String(rest ?? "").trim()) {
+    return { text: `Please see @help ${base} for more information on how to use this command.` };
+  }
+  const f = (odf >>> 0) || 0;
+  if (base === "pklite") {
+    return (f & (ODF_PK | ODF_PKLITE)) !== 0
+      ? { text: "Only Non-Player Killers may enter PK Lite. Please see @help pklite for more details about this command." }
+      : { send: "enterPkLite" };
+  }
+  if (base === "pkarena") {
+    return (f & ODF_PK) === 0
+      ? { text: "Only Player Killer characters may use this command!" }
+      : { send: "teleToPkArena" };
+  }
+  return (f & ODF_PKLITE) === 0
+    ? { text: "Only Player Killer Lite characters may use this command!" }
+    : { send: "teleToPklArena" };
+}
+
 /** Verbs retail's client command table owns — the only `@` verbs rerouted. */
 export const RETAIL_CLIENT_VERBS = new Set([
   ...TELL_ALIASES, ...REPLY_ALIASES, ...RETELL_ALIASES, ...SAY_ALIASES, ...EMOTE_ALIASES,
   ...Object.keys(CHANNEL_MAP).filter((v) => !NON_RETAIL_CHANNEL_VERBS.has(v)),
   ...Object.keys(TURBINE_CMDS),
   ...SOCIAL_CLIENT_VERBS,
+  ...PK_CLIENT_VERBS,
 ]);
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -133,7 +187,9 @@ export function normalizeChatLine(message) {
   if (c === "@") {
     const verb = parseCommandLine(m).cmd;
     const social = SOCIAL_CLIENT_VERBS.includes(verb);
+    const pk = PK_CLIENT_VERBS.includes(verb);
     return RETAIL_CLIENT_VERBS.has(verb) && (!social || retailSocialCmdsEnabled())
+        && (!pk || retailPkCmdsEnabled())
       ? { kind: "command", line: `/${m.slice(1)}` }
       : { kind: "server", line: m };
   }
@@ -419,6 +475,28 @@ export function initSlashCommands() {
       const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
       if (append) for (const line of lines) append(line, CHAT_CATEGORY.SYSTEM);
       return { dispatched: true, echo: null, lines, category: CHAT_CATEGORY.SYSTEM };
+    }
+
+    // pk-4 (round 5, 2026-10-08): @pklite / @pkarena / @pklarena run
+    // retail's client checks on the LIVE PK bits, then send the GameAction.
+    // A pkg without the bindings keeps the old server forward below.
+    if (PK_CLIENT_VERBS.includes(cmd) && retailPkCmdsEnabled()) {
+      let odf = 0;
+      try {
+        const me = (window.getLocalPlayerGuid?.() ?? handle.playerGuid?.() ?? 0) >>> 0;
+        odf = me ? ((handle.objectDescFlags?.(me) ?? 0) >>> 0) : 0;
+      } catch (_) { odf = 0; }
+      const decision = pkCommandDecision(cmd, rest, odf);
+      if (decision?.text) {
+        const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
+        if (append) append(decision.text, CHAT_CATEGORY.SYSTEM);
+        return { dispatched: true, echo: null, lines: [decision.text], category: CHAT_CATEGORY.SYSTEM };
+      }
+      if (decision?.send && typeof handle[decision.send] === "function") {
+        try { handle[decision.send](); }
+        catch (e) { return { dispatched: true, echo: null, error: `/${cmd}: ${e?.message || e}` }; }
+        return { dispatched: true, echo: null };
+      }
     }
 
     // Wave 9 Phase 9.3 (2026-05-26) — soul emote slash commands

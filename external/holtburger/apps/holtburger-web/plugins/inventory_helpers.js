@@ -631,6 +631,13 @@ export function decideItemDrop(drag, target, ctx = {}) {
         // AttemptToTradeItem, acclient.c:433262, ahead of the creature give).
         if (ctx.dragOnPlayerOpensTrade && ent.isPlayer) return { op: "trade", guid, target: ent.guid >>> 0 };
         if (ent.isCreature) return { op: "give", guid, target: ent.guid >>> 0, amount };
+        // extcontainer-3: AttemptPlaceIn3D on a container that is not the
+        // open ground object (acclient.c:433277-433288) prints and stops —
+        // only non-containers reach the ground drop.
+        if (ctx.containerDropRule !== false && ent.isContainer) {
+          const cn = ent.name || "container";
+          return reject(ent.openable === false ? `The ${cn} is locked` : `You must open the ${cn} first`);
+        }
       }
       return { op: "drop", guid, amount };
     }
@@ -1492,13 +1499,25 @@ export function activateOrUse(guid, { activate, use } = {}) {
  * event. Callers wire scene3d/picking.js's `window.__worldUseIsPickup` /
  * `__worldUseRefusal` and target_cycle.js `consumeWorldUseThrottle`; every
  * dependency is optional.
+ *
+ * Round 5 (2026-10-08): a PK / NPK altar asks first (pk-2, `confirmText` →
+ * `confirm(text, onYes)`; the Use is sent only on Yes, as retail
+ * UsageConfirmation_PKAltar / UsageCallback do), and after a Use `notice`
+ * may name a line retail prints then (extcontainer-4: "The X is locked").
+ * Callers wire `window.__pkAltarConfirmText` / `__pkAltarConfirm` /
+ * `__worldUseNotice` from picking.js.
  * @param {number} guid
  * @param {{throttleOk?:() => boolean, isPickup?:(g:number) => boolean,
  *          pickUp?:(g:number) => any, refusal?:(g:number) => string|null,
- *          reject?:(message:string) => void, use?:(g:number) => void}} deps
- * @returns {"throttled"|"pickup"|"refused"|"used"|"none"}
+ *          reject?:(message:string) => void, use?:(g:number) => void,
+ *          confirmText?:(g:number) => string|null,
+ *          confirm?:(text:string, onYes:() => void) => void,
+ *          notice?:(g:number) => string|null}} deps
+ * @returns {"throttled"|"pickup"|"refused"|"confirm"|"used"|"none"}
  */
-export function worldUseLeaf(guid, { throttleOk, isPickup, pickUp, refusal, reject, use } = {}) {
+export function worldUseLeaf(guid, {
+  throttleOk, isPickup, pickUp, refusal, reject, use, confirmText, confirm, notice,
+} = {}) {
   const g = (guid >>> 0) || 0;
   if (!g) return "none";
   if (typeof throttleOk === "function" && throttleOk() === false) return "throttled";
@@ -1512,6 +1531,16 @@ export function worldUseLeaf(guid, { throttleOk, isPickup, pickUp, refusal, reje
     return "refused";
   }
   if (typeof use !== "function") return "none";
-  use(g);
+  const sendUse = () => {
+    use(g);
+    const line = typeof notice === "function" ? notice(g) : null;
+    if (line && typeof reject === "function") reject(line);
+  };
+  const ask = typeof confirmText === "function" && typeof confirm === "function" ? confirmText(g) : null;
+  if (ask) {
+    confirm(ask, sendUse);
+    return "confirm";
+  }
+  sendUse();
   return "used";
 }

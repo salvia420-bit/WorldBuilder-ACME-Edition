@@ -194,6 +194,12 @@ const STUBS = {
   localPlayerGuid: "() => 0x50000001",
   clearsGroundObjectOnFailure: "globalThis.__realWeenieErr.clearsGroundObjectOnFailure",
   moveFailCloseGroundEnabled: "globalThis.__realWeenieErr.moveFailCloseGroundEnabled",
+  // extcontainer-2 (round 5): the 1 s range check — the pacing tests never
+  // open the window through openFor, so the timer never runs.
+  groundContainerRangeEnabled: "() => false",
+  groundContainerRangeVerdict: "() => { throw new Error('range check must not run here'); }",
+  isLandscapeGroundObject: "() => { throw new Error('range check must not run here'); }",
+  landblockToWorld: "() => { throw new Error('range check must not run here'); }",
 };
 const src = readFileSync(path.join(APP, "plugins", "corpse-loot-bar.js"), "utf8");
 const body = spliceModule(src, { label: "corpse-loot-bar.js", provided: [], stubs: STUBS });

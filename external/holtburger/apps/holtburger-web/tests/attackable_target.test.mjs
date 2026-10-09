@@ -133,3 +133,67 @@ test("picking.js attacks the resolved target and uses retail's single refusal li
   assert.match(ent, /^  attackTargetFor\(guid\) \{/m);
   assert.match(ent, /return resolveAttackTarget\(\{/);
 });
+
+// pk-1 (2026-10-08 round 5) — retail ObjectIsAttackable reads the LIVE
+// weenie: a PlayerKillerStatus update (altar, @pklite, PK death and respite)
+// rewrites the PK bits (OnStatUpdated 0x86 → SetPlayerKillerStatus,
+// acclient.c:438785 / :470685-470702), and a pet is never a target
+// (pwd._pet_owner). target_cycle.js liveAttackMeta / readAttackMeta overlay
+// the wasm world's bits and PetOwner (IID 44) on the frozen spawn meta.
+test("pk-1: the live PK bits and pet owner decide, not the spawn meta", async () => {
+  const tc = await import("../scene3d/target_cycle.js");
+  const T = 0x50000002, ME = 0x50000001, PET = 0x80000077;
+  const sh = (live) => ({
+    objectDescFlags: (g) => live[g]?.odf ?? 0,
+    objectInstanceIdProperty: (g, stype) => (stype === 44 ? live[g]?.petOwner : undefined),
+  });
+  const pkTarget = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_PK };
+  const npkMe = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER };
+  // (a) I used the PK altar after spawning: live bits PK, meta still NPK.
+  const altar = sh({ [ME]: { odf: ODF_PLAYER | ODF_PK }, [T]: { odf: ODF_PLAYER | ODF_PK } });
+  assert.equal(objectIsAttackable(pkTarget, npkMe), false, "the spawn meta alone says no");
+  assert.equal(objectIsAttackable(tc.readAttackMeta(altar, T, pkTarget, true), tc.readAttackMeta(altar, ME, npkMe, true)), true);
+  // (b) temporary NPK after a PK death: meta PK, live NPK.
+  const respite = sh({ [ME]: { odf: ODF_PLAYER }, [T]: { odf: ODF_PLAYER | ODF_PK } });
+  const pkMe = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER | ODF_PK };
+  assert.equal(objectIsAttackable(tc.readAttackMeta(respite, T, pkTarget, true), tc.readAttackMeta(respite, ME, pkMe, true)), false);
+  // (c) both entered PK Lite.
+  const lite = sh({ [ME]: { odf: ODF_PLAYER | ODF_PKLITE }, [T]: { odf: ODF_PLAYER | ODF_PKLITE } });
+  const npkT = { itemType: IT_CREATURE, objDescFlags: ODF_PLAYER };
+  assert.equal(objectIsAttackable(tc.readAttackMeta(lite, T, npkT, true), tc.readAttackMeta(lite, ME, npkMe, true)), true);
+  // (d) unknown guid / stale pkg / throwing handle: the meta is kept.
+  assert.equal(tc.readAttackMeta(sh({}), T, pkTarget, true), pkTarget);
+  assert.equal(tc.readAttackMeta({}, T, pkTarget, true), pkTarget);
+  assert.equal(tc.readAttackMeta({ objectDescFlags() { throw new Error("x"); } }, T, pkTarget, true), pkTarget);
+  assert.equal(tc.readAttackMeta(null, T, pkTarget, true), pkTarget);
+  // (e) a summoned pet carries Attackable but has an owner: not a target,
+  //     unless one side is free-PK.
+  const wisp = { itemType: IT_CREATURE, objDescFlags: ODF_ATTACKABLE };
+  const pets = sh({ [PET]: { odf: ODF_ATTACKABLE, petOwner: 0x50000009 } });
+  assert.equal(objectIsAttackable(wisp, me), true, "the spawn meta has no owner");
+  assert.equal(objectIsAttackable(tc.readAttackMeta(pets, PET, wisp, true), me), false);
+  const freePet = sh({ [PET]: { odf: ODF_ATTACKABLE | ODF_FREE_PK, petOwner: 0x50000009 } });
+  assert.equal(objectIsAttackable(tc.readAttackMeta(freePet, PET, wisp, true), me), true);
+  // (f) only the PK bits are overlaid; the rest of the meta stays.
+  const mixed = tc.liveAttackMeta({ itemType: 0x10, objDescFlags: ODF_PLAYER | 0x4 | ODF_PK, name: "Bob" }, ODF_PLAYER | ODF_PKLITE);
+  assert.equal(mixed.objDescFlags, ODF_PLAYER | 0x4 | ODF_PKLITE);
+  assert.equal(mixed.name, "Bob");
+  assert.deepEqual(tc.liveAttackMeta(null, 0), null);
+  assert.deepEqual(tc.liveAttackMeta(null, ODF_PLAYER), { objDescFlags: ODF_PLAYER, petOwner: 0 });
+  // (g) ?attackLiveFlags=off keeps the meta.
+  assert.equal(tc.readAttackMeta(altar, T, npkT, false), npkT);
+  assert.equal(tc.attackLiveFlagsOn(""), true);
+  for (const v of ["off", "0", "false"]) assert.equal(tc.attackLiveFlagsOn(`?attackLiveFlags=${v}`), false);
+});
+
+test("pk-1 wiring: every attack decision reads the live meta", () => {
+  const picking = readFileSync(new URL("../scene3d/picking.js", import.meta.url), "utf8");
+  const ent = picking.slice(picking.indexOf("function entityIsAttackableTarget("));
+  assert.match(ent.slice(0, 900), /readAttackMeta\(sessionHandle, guid >>> 0, ent\.meta \|\| ent\)/);
+  const entities = readFileSync(new URL("../scene3d/entities.js", import.meta.url), "utf8");
+  assert.match(entities, /_localAttackMeta\(selfGuid\) \{[\s\S]{0,300}readAttackMeta\(sh, selfGuid >>> 0, m\)/);
+  assert.match(entities, /return objectIsAttackable\(readAttackMeta\(sh, g, inst\.meta\), this\._localAttackMeta\(me\)\);/);
+  assert.match(entities, /attackMeta: \(\) => readAttackMeta\(sh, g, inst\.meta\),/);
+  assert.match(readFileSync(new URL("../plugins/target-bar.js", import.meta.url), "utf8"),
+    /return readAttackMeta\(window\.__sessionHandle, guid >>> 0, \{/);
+});

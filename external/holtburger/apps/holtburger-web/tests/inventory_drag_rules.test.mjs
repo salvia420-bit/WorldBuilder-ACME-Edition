@@ -190,6 +190,27 @@ check("world: no entity → drop; creature → give whole stack; self → backpa
   const s = decideItemDrop({ ...inv(equipped, null, -1), sourceList: null }, { kind: T.WORLD, entity: { guid: ME, isSelf: true } }, baseCtx);
   assert.deepEqual([s.op, s.container], ["move", ME]);
 });
+// extcontainer-3 (2026-10-08 round 5) — ItemHolder::AttemptPlaceIn3D
+// (acclient.c:433277-433288): a container that is not the open ground object
+// refuses ("The %s is locked" / "You must open the %s first"); only
+// non-containers fall through to the ground drop.
+check("extcontainer-3: a 3D drop on a closed or locked container is refused", () => {
+  const chest = { guid: CHEST, isContainer: true, openable: true, isOpenContainer: false, name: "Chest" };
+  const closed = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: chest }, baseCtx);
+  assert.deepEqual([closed.op, closed.message], ["reject", "You must open the Chest first"]);
+  const locked = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: { ...chest, openable: false } }, baseCtx);
+  assert.deepEqual([locked.op, locked.message], ["reject", "The Chest is locked"]);
+  const open = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: { ...chest, isOpenContainer: true } }, baseCtx);
+  assert.deepEqual([open.op, open.container], ["move", CHEST]);
+  const statue = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: { guid: 0x7, name: "Statue" } }, baseCtx);
+  assert.equal(statue.op, "drop");
+  const npc = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: { guid: 0x8, isCreature: true, isContainer: true } }, baseCtx);
+  assert.equal(npc.op, "give", "the creature give comes first");
+  const off = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: chest }, { ...baseCtx, containerDropRule: false });
+  assert.equal(off.op, "drop", "?containerDropRule=off restores the ground drop");
+  const unnamed = decideItemDrop(inv(sword, MAIN, 0), { kind: T.WORLD, entity: { ...chest, name: "" } }, baseCtx);
+  assert.equal(unnamed.message, "You must open the container first");
+});
 // charopt-4 (2026-10-08 round 2) — PlayerModule::DragItemOnPlayerOpensSecureTrade
 // (character option 0x17): AttemptPlaceIn3D tries ClientTradeSystem::
 // AttemptToTradeItem on a player before the creature give (acclient.c:433262).

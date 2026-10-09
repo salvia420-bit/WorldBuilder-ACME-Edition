@@ -54,6 +54,12 @@ import { takeInventorySnapshot, decideItemDrop, DROP_TARGET } from "./inventory_
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
 import { clearsGroundObjectOnFailure, moveFailCloseGroundEnabled } from "./weenie_error_messages.js";
 import {
+  groundContainerRangeEnabled,
+  groundContainerRangeVerdict,
+  isLandscapeGroundObject,
+  landblockToWorld,
+} from "./ground_container_rules.js";
+import {
   beginItemDrag,
   registerDropZone,
   resolveDropAction,
@@ -100,6 +106,9 @@ let state = {
   items: [],
   selectedGuid: 0,
   despawnTimer: 0,
+  // extcontainer-2: the container has had a world position since it opened
+  // (a missing object then means it is gone, not "not arrived yet").
+  seen: false,
   // Bug 1: bounded re-poll while listed items are not created yet.
   resolveTimer: 0,
   resolveTries: 0,
@@ -756,8 +765,10 @@ function openFor(corpseGuid, corpseName) {
     };
     document.addEventListener("keydown", onKeyDownHandler, true);
   }
-  // Auto-close when the corpse despawns (TimeToRot delete → KIND_REMOVE
-  // empties the entity map entry). Poll — despawn has no bus event.
+  // Once a second (retail's interval): the range check below, or with
+  // `?groundContainerRange=off` the old despawn poll (TimeToRot delete →
+  // KIND_REMOVE empties the entity map entry).
+  state.seen = false;
   if (state.despawnTimer) clearInterval(state.despawnTimer);
   state.despawnTimer = setInterval(() => {
     if (overlayEl?.dataset.open !== "1") {
@@ -765,11 +776,70 @@ function openFor(corpseGuid, corpseName) {
       state.despawnTimer = 0;
       return;
     }
+    if (groundContainerRangeEnabled() && typeof window.__sessionHandle?.objectPosition === "function") {
+      checkGroundRange();
+      return;
+    }
     try {
       const em = window.liveScene3d?.entityManager;
       if (em?.entityMap && !em.entityMap.has(state.corpseGuid >>> 0)) closeBar();
     } catch (_) {}
   }, DESPAWN_POLL_MS);
+}
+
+// extcontainer-2 (2026-10-08, `?groundContainerRange`): retail
+// gmExternalContainerUI::SetGroundObject (acclient.c:253157) registers an
+// object range handler with the container's UseRadius (use radii, 3-D,
+// 1 s); out of range, or the object gone (ObjectsInRange :436730), closes
+// the window — walking off, a portal and a death teleport all end there.
+// Read from the wasm world (works before the 3D rig loads and under
+// nullRender). A container the player owns or that sits inside another
+// (opened through __openContainerFor) has no range rule.
+function checkGroundRange() {
+  const h = window.__sessionHandle;
+  const g = state.corpseGuid >>> 0;
+  if (!g) return;
+  let pos = [];
+  try { pos = Array.from(h.objectPosition(g) || []); } catch (_) { return; }
+  let containerPos = null;
+  if (pos.length) {
+    const iid = (stype) => {
+      try { return (h.objectInstanceIdProperty?.(g, stype) >>> 0) || 0; } catch (_) { return 0; }
+    };
+    const facts = { landblock: Number(pos[0]) >>> 0, containerId: iid(2), wielderId: iid(3) };
+    if (!isLandscapeGroundObject(facts)) return;
+    containerPos = landblockToWorld(pos);
+    if (containerPos) state.seen = true;
+  }
+  let playerPos = null;
+  try {
+    const pose = typeof h.getLocalPlayerPose === "function" ? h.getLocalPlayerPose() : null;
+    if (pose) {
+      playerPos = landblockToWorld([pose.landblockId, pose.x, pose.y, pose.z]);
+      try { pose.free?.(); } catch (_) {}
+    }
+  } catch (_) {}
+  const me = localPlayerGuid();
+  if (!playerPos && me) {
+    try { playerPos = landblockToWorld(h.objectPosition(me)); } catch (_) {}
+  }
+  const dims = (guid) => {
+    try { return Array.from(h.objectPartDims?.(guid) || []); } catch (_) { return []; }
+  };
+  let useRadius;
+  try { useRadius = h.objectFloatProperty?.(g, 54) ?? undefined; } catch (_) {}
+  const verdict = groundContainerRangeVerdict({
+    useRadius,
+    containerPos,
+    playerPos,
+    containerDims: dims(g),
+    playerDims: me ? dims(me) : [],
+    seen: state.seen,
+  });
+  if (verdict === "close") {
+    console.info(`[corpse-loot] 0x${g.toString(16)} out of range — closing`);
+    closeBar();
+  }
 }
 
 function closeBar() {
@@ -781,8 +851,10 @@ function closeBar() {
   state.corpseGuid = 0;
   state.selectedGuid = 0;
   if (state.resolveTimer) { clearTimeout(state.resolveTimer); state.resolveTimer = 0; }
-  // CM_Inventory::Event_NoLongerViewingContents — only if the wasm build
-  // exposes it (it does not yet; ACE then frees the chest on range exit).
+  // CM_Inventory::Event_NoLongerViewingContents. Retail closes with a
+  // toggle Use (CloseCurrentContainer → ItemHolder::UseObject); with ACE a
+  // late Use would re-open the chest, while this notice is idempotent
+  // (Player_Use.cs HandleActionNoLongerViewingContents).
   try { if (g) playerHandle()?.noLongerViewingContents?.(g); } catch (_) {}
   if (state.despawnTimer) {
     clearInterval(state.despawnTimer);
@@ -820,6 +892,25 @@ function onUseFailedClearGroundObject(ev) {
   if (overlayEl?.dataset.open === "1" && state.corpseGuid) closeBar();
 }
 
+// extcontainer-2: the cases the range check would only catch a second
+// later, or after the teleport. Retail Handle_VendorInfo calls
+// SetGroundObject(0, 1) (acclient.c:403011): opening a vendor closes the
+// ground container (and tells the server). A portal and the local death
+// leave the container's range.
+function closeIfOpenFor(why) {
+  if (!groundContainerRangeEnabled()) return;
+  if (overlayEl?.dataset.open !== "1" || !state.corpseGuid) return;
+  console.info(`[corpse-loot] ${why} — closing`);
+  closeBar();
+}
+function onVendorOpenedCloseGround() { closeIfOpenFor("vendor opened"); }
+function onPortalSpaceCloseGround() { closeIfOpenFor("portal space entered"); }
+function onDeathCloseGround(ev) {
+  const victim = (ev?.detail?.victimGuid ?? 0) >>> 0;
+  const local = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+  if (victim && local && victim === local) closeIfOpenFor("local player died");
+}
+
 // Subscribe at module-load (container-panel's poll-for-bus pattern). The
 // kind=21 routing itself lives in container-panel.js (it delegates every
 // ground container here via window.__corpseLootBar).
@@ -831,6 +922,10 @@ function trySubscribe() {
   client.events.on("containerClosed", onContainerClosed);
   client.events.on("kind:13", onLootAllWeenieError);
   client.events.on("kind:13", onUseFailedClearGroundObject);
+  client.events.on("vendorOpened", onVendorOpenedCloseGround);
+  client.events.on("kind:12", onVendorOpenedCloseGround);
+  client.events.on("portalSpaceEntered", onPortalSpaceCloseGround);
+  client.events.on("death", onDeathCloseGround);
   return true;
 }
 if (typeof window !== "undefined") {

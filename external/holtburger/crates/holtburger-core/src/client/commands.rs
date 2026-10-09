@@ -530,6 +530,9 @@ impl ClientRuntime {
                 self.send_game_action(GameAction::Buy(Box::new(BuyActionData {
                     vendor_guid: vendor,
                     items,
+                    // The CLI does not track the vendor's trade currency;
+                    // 0 is retail's value for a pyreal vendor.
+                    alternate_currency_id: 0,
                 })))
                 .await
             }

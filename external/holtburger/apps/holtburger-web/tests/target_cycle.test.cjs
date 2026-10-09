@@ -324,6 +324,22 @@ async function main() {
     assert.equal(ok(MOB, { attached: true }), false, 'wielded child');
     assert.equal(ok({ ...MOB, objDescFlags: ODF_ATTACK | ODF_CORPSE }), false, 'corpse');
   });
+  // pk-1 (2026-10-08 round 5): the gather passes `attackMeta`, a thunk for
+  // the candidate's LIVE PK bits / pet owner (target_cycle.js readAttackMeta).
+  check('pk-1: MONSTER / COMPASS_COMBAT test the live attack meta when given', () => {
+    const pkMe = { itemType: CREATURE, objDescFlags: ODF_PLAYER | 0x20 };
+    const spawnNpk = { itemType: CREATURE, objDescFlags: ODF_PLAYER };
+    const nowPk = () => ({ itemType: CREATURE, objDescFlags: ODF_PLAYER | 0x20 });
+    assert.equal(ok(spawnNpk, { playerMeta: pkMe }), false, 'the spawn meta: NPK');
+    assert.equal(ok(spawnNpk, { playerMeta: pkMe, attackMeta: nowPk }), true, 'now PK');
+    assert.equal(ok(spawnNpk, { playerMeta: pkMe, attackMeta: nowPk }, SELECTION_TYPE.COMPASS_COMBAT), true);
+    const pet = () => ({ ...MOB, petOwner: 0x50000009 });
+    assert.equal(ok(MOB, { attackMeta: pet }), false, 'a summoned pet');
+    assert.equal(ok(MOB, { attackMeta: () => null }), true, 'null keeps the meta');
+    let calls = 0;
+    ok(MOB, { dist2d: 80, attackMeta: () => { calls += 1; return MOB; } });
+    assert.equal(calls, 0, 'the thunk runs only after the cheap rules pass');
+  });
   check('MONSTER = ObjectIsAttackable: mutual-PK players in, pets out', () => {
     const pkMe = { itemType: CREATURE, objDescFlags: ODF_PLAYER | 0x20 };
     const pkThem = { itemType: CREATURE, objDescFlags: ODF_PLAYER | 0x20 };

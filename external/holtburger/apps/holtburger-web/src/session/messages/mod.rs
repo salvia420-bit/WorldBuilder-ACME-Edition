@@ -61,6 +61,7 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
         cached_player_description,
         cached_time_sync,
         js_spawned_guids,
+        rynth_ground_container,
         ..
     } = &mut *ctx;
     // PR-SS 2026-05-23: stamp the recv timestamp for the
@@ -660,6 +661,12 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 WorldEvent::ContainerClosed(container_guid) => {
                     inventory_changed = true;
                     let container_guid_u32 = u32::from(*container_guid);
+                    // Retail 0x52 handler: `SetGroundObject(0, 0)` when the
+                    // closed object is the ground container
+                    // (acclient.c:394878-394880).
+                    if *rynth_ground_container.borrow() == container_guid_u32 {
+                        *rynth_ground_container.borrow_mut() = 0;
+                    }
                     // `w` (the mutable borrow established
                     // on the outer `world.as_mut()` arm
                     // at :23286) is in scope. Borrow it

@@ -36,6 +36,11 @@ impl ProtocolPack for ItemProfileActionData {
 pub struct BuyActionData {
     pub vendor_guid: Guid,
     pub items: Vec<ItemProfileActionData>,
+    /// Retail `CM_Vendor::Event_Buy` (acclient.c:707124) ends the body with
+    /// the vendor's trade currency (`VendorProfile::VendorTradeCurrency`,
+    /// 0 for a pyreal vendor). ACE does not read it.
+    #[serde(default)]
+    pub alternate_currency_id: u32,
 }
 
 impl ProtocolUnpack for BuyActionData {
@@ -50,7 +55,19 @@ impl ProtocolUnpack for BuyActionData {
         for _ in 0..num_items {
             items.push(ItemProfileActionData::unpack(data, offset)?);
         }
-        Some(Self { vendor_guid, items })
+        // Optional: bodies captured before the field was written end here.
+        let alternate_currency_id = if *offset + 4 <= data.len() {
+            let v = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+            *offset += 4;
+            v
+        } else {
+            0
+        };
+        Some(Self {
+            vendor_guid,
+            items,
+            alternate_currency_id,
+        })
     }
 }
 
@@ -62,6 +79,8 @@ impl ProtocolPack for BuyActionData {
         for item in &self.items {
             item.pack(buf);
         }
+        buf.write_u32::<LittleEndian>(self.alternate_currency_id)
+            .unwrap();
     }
 }
 
@@ -296,9 +315,11 @@ mod tests {
 
     #[test]
     fn test_buy_action_roundtrip() {
+        // Retail body: vendor, the item list, then the trade currency (0 =
+        // pyreals).
         let fixture = [
             0x01, 0x00, 0x00, 0x50, 0x01, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x10, 0x00,
-            0x00, 0x50,
+            0x00, 0x50, 0x00, 0x00, 0x00, 0x00,
         ];
         let data = BuyActionData {
             vendor_guid: Guid::from(0x50000001),
@@ -306,8 +327,35 @@ mod tests {
                 amount: 100,
                 object_guid: Guid::from(0x50000010),
             }],
+            alternate_currency_id: 0,
         };
         assert_pack_unpack_parity(&fixture, &data);
+    }
+
+    #[test]
+    fn test_buy_action_alt_currency_roundtrip() {
+        let data = BuyActionData {
+            vendor_guid: Guid::from(0x50000001),
+            items: vec![],
+            alternate_currency_id: 0x0000_A2B4,
+        };
+        let mut buf = Vec::new();
+        data.pack(&mut buf);
+        assert_eq!(&buf[buf.len() - 4..], &[0xB4, 0xA2, 0x00, 0x00]);
+        let mut offset = 0;
+        assert_eq!(BuyActionData::unpack(&buf, &mut offset), Some(data));
+    }
+
+    #[test]
+    fn test_buy_action_legacy_body_unpacks() {
+        let legacy = [
+            0x01, 0x00, 0x00, 0x50, 0x01, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x10, 0x00,
+            0x00, 0x50,
+        ];
+        let mut offset = 0;
+        let data = BuyActionData::unpack(&legacy, &mut offset).expect("legacy body");
+        assert_eq!(data.alternate_currency_id, 0);
+        assert_eq!(offset, legacy.len());
     }
 
     #[test]

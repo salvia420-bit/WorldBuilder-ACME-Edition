@@ -6,7 +6,10 @@
 // tested under node (tests/commerce_logic.test.mjs) without a DOM. Each rule
 // cites the retail decomp function it mirrors.
 
-import { retailPluralName } from "./inventory_helpers.js";
+import {
+  retailPluralName, packCapacity, MAIN_PACK_KEY, PACKS_KEY,
+  DEFAULT_PLAYER_ITEMS_CAPACITY, DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+} from "./inventory_helpers.js";
 
 // ─── Vendor prices ─────────────────────────────────────────────────────
 //
@@ -72,6 +75,132 @@ export function vendorPurchasePrice(item, vendor, qty = 1) {
 export function vendorSaleCredit(item, vendor, qty = 1) {
   return shopBuyPrice(unitValueOf(item), item?.itemType >>> 0, vendor?.buyMultiplier ?? 1, Math.max(1, qty | 0));
 }
+
+// ─── Vendor BUY side (OpenAC comparison round 5, 2026-10-08) ──────────
+//
+// vendor-buy-1: gmVendorUI::BuySingleItem (acclient.c:244716) and Buy All
+// (HandleButtonClicks case 0x100000CA, :247055-247086) refuse in the client,
+// money first, then room in the MAIN pack (GetNumContainedItems /
+// GetNumContainedContainers count only the player's own lists), and keep the
+// buying list. ACE refuses an unaffordable purchase with no text at all.
+// vendor-buy-3: a non-stackable line is bought as `amount` objects, each
+// priced alone (AdoptAsContents :244979 + VendorBuyUI::UpdateTransactionValue
+// :245251); a finite stock entry is bounded by its supply; a buying-list
+// entry may not accumulate past 5000 (VendorItemsUI::AddToBuyList :245946).
+
+export const VENDOR_NO_MONEY_TEXT = "You don't have enough money";
+export const VENDOR_NO_ROOM_TEXT = "You must empty some slots in your backpack first";
+export const VENDOR_TOO_MUCH_TEXT =
+  "I can't possibly sell you that much! Please be a little more reasonable.";
+export const VENDOR_MAX_QUEUED = 5000;
+
+/** Does a shop item need a container slot? (BF_REQUIRES_PACKSLOT or a
+ *  capacity; the wasm `packSlot`, else the Container item type on a pkg
+ *  that predates it.) */
+export function vendorNeedsPackSlot(item) {
+  if (typeof item?.packSlot === "boolean") return item.packSlot;
+  return ((item?.itemType >>> 0) & 0x200) !== 0;
+}
+
+/** Is the shop item stackable? Unknown (stale pkg) = treat as stackable. */
+function vendorStackable(item) {
+  const ms = Number(item?.maxStackSize);
+  return !(Number.isFinite(ms) && ms <= 1);
+}
+
+/**
+ * gmVendorUI::InqListSlotCount (acclient.c:243174): a non-stackable line
+ * takes `amount` slots, a stackable line one; container-class items count
+ * as containers. `lines` = [{ item, amount }].
+ */
+export function vendorBuySlotsNeeded(lines) {
+  const need = { items: 0, containers: 0 };
+  for (const line of lines || []) {
+    const n = Math.max(1, line?.amount | 0);
+    const slots = vendorStackable(line?.item) ? 1 : n;
+    if (vendorNeedsPackSlot(line?.item)) need.containers += slots;
+    else need.items += slots;
+  }
+  return need;
+}
+
+/**
+ * The player's main-pack room from inventory rows (rows of
+ * inventory_helpers' row shape). A capacity of 0 (stats not in yet) uses the
+ * usual player capacities, so nothing is refused before they arrive.
+ */
+export function vendorPlayerRoom(rows, { itemsCap = 0, containersCap = 0 } = {}) {
+  const items = packCapacity(rows || [], MAIN_PACK_KEY, { mainCap: itemsCap });
+  const packs = packCapacity(rows || [], PACKS_KEY, { packsCap: containersCap });
+  return {
+    used: { items: items.used, containers: packs.used },
+    cap: {
+      items: (itemsCap >>> 0) || DEFAULT_PLAYER_ITEMS_CAPACITY,
+      containers: (containersCap >>> 0) || DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+    },
+  };
+}
+
+/**
+ * Retail's purchase refusal, or null: money first ("You don't have enough
+ * money"), then room ("You must empty some slots in your backpack first").
+ */
+export function vendorBuyRefusal({ cost = 0, balance = 0, need, used, cap } = {}) {
+  if (cost > balance) return VENDOR_NO_MONEY_TEXT;
+  if (need && used && cap) {
+    if (need.containers > cap.containers - used.containers) return VENDOR_NO_ROOM_TEXT;
+    if (need.items > cap.items - used.items) return VENDOR_NO_ROOM_TEXT;
+  }
+  return null;
+}
+
+/**
+ * The cost of a buying-list line. A non-stackable line is `amount` objects
+ * priced one at a time; a stackable line is one lump
+ * (VendorSellPrice(pwd, amount)) — today's price. Unknown stackability
+ * (stale pkg) keeps the lump.
+ */
+export function vendorLineCost(item, vendor, amount = 1) {
+  const n = Math.max(1, amount | 0);
+  if (!vendorStackable(item)) {
+    return n * shopSellPrice(unitValueOf(item), item?.itemType >>> 0, vendor?.sellMultiplier ?? 1, 1);
+  }
+  return vendorPurchasePrice(item, vendor, n);
+}
+
+/** How many more of a stock entry may be queued: supply minus what is
+ *  queued, or Infinity for an unlimited entry (supply -1; ACE's 0 is
+ *  unlimited too). */
+export function vendorRemaining(item, queued = 0) {
+  const supply = Number(item?.supply);
+  return Number.isFinite(supply) && supply > 0 ? supply - (queued | 0) : Infinity;
+}
+
+/**
+ * vendor-buy-5 — VendorItemsUI::OpenVendor's AddTypeFilter list (acclient.c:
+ * 243983-244136), in retail order; a filter shows only when the vendor stocks
+ * an item of that type (ListContainsType: `type & mask`).
+ */
+export const VENDOR_TYPE_FILTERS = Object.freeze([
+  { id: "armor", label: "Armor", mask: 0x2 },
+  { id: "books", label: "Books, Paper", mask: 0x2000 },
+  { id: "clothing", label: "Clothing", mask: 0x4 },
+  { id: "containers", label: "Containers", mask: 0x200 },
+  { id: "food", label: "Food", mask: 0x20 },
+  { id: "gems", label: "Gems", mask: 0x800 },
+  { id: "jewelry", label: "Jewelry", mask: 0x8 },
+  { id: "keys", label: "Keys, Tools", mask: 0x20004000 },
+  { id: "misc", label: "Miscellaneous", mask: 0x490 },
+  { id: "services", label: "Services", mask: 0x100000 },
+  { id: "components", label: "Spell Components", mask: 0x1000 },
+  { id: "tradenotes", label: "Trade Notes", mask: 0x40000 },
+  { id: "weapons", label: "Weapons", mask: 0x101 },
+  { id: "manastones", label: "Mana Stones", mask: 0x80000 },
+  { id: "magic", label: "Magic Items", mask: 0x8000 },
+  { id: "alchemy", label: "Alchemical Items", mask: 0x4800000 },
+  { id: "cooking", label: "Cooking Items", mask: 0x400000 },
+  { id: "fletching", label: "Fletching Items", mask: 0x9000000 },
+]);
 
 // VendorProfile::InqAcceptability (acclient.c:509817) result codes and the
 // exact strings VendorSellUI::DragItemAcceptable (acclient.c:244306) shows.

@@ -292,7 +292,11 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // → 348.
   // 2026-10-08 (follow-ups + round 3): + scene3d/remote_moveto_phase.js,
   // ui/portal_busy.js (generator --check: up to date, 362 modules) → 350.
-  const NON_APP_PRELOADS = 350;
+  // 2026-10-08 (resume, round 5): + plugins/ground_container_rules.js (the
+  // external-container rules; scene3d/picking.js imports it for the
+  // locked-container line, so it joins the static graph; generator --check:
+  // up to date, 365 modules) → 351.
+  const NON_APP_PRELOADS = 351;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)

@@ -361,11 +361,26 @@ export function creatureAttributeRows(cp, success = true, ints = {}) {
  *              the appraisal says otherwise)
  *   creature → creature type (BasicCreatureExamineUI m_creatureDisplayName)
  *              + level box ("???" when unknown — SetLevelValueText)
- *   player   → heritage + gender, title, Player Killer
+ *   player   → heritage + gender, title, PK status (pk-5: every player)
  *              (CharacterExam_Attributes Heritage/Profession/PlayerKiller)
  * @returns {{kind: string, lines: Array<{text: string, tone?: string}>, level: (string|null), levelLabel: (string|null)}}
  */
-export function examineHeaderModel({ kind, ints = {}, strings = {}, item = null, meta = null, isPK = false } = {}) {
+/**
+ * pk-5 (2026-10-08 round 5) — the PK status line retail shows for every
+ * character: CharExamineUI::SetAppraiseInfo (acclient.c:233645-233668) and
+ * gmStatManagementUI::UpdatePKStatus (:284375-284420) test IsPK (ODF 0x20),
+ * then IsPKLite (0x2000000), else Non-Player Killer — on the LIVE bits.
+ */
+export function pkStatusText(odf) {
+  const f = (odf >>> 0) || 0;
+  if ((f & 0x20) !== 0) return "Player Killer";
+  if ((f & 0x02000000) !== 0) return "Player Killer Lite";
+  return "Non-Player Killer";
+}
+
+export function examineHeaderModel({
+  kind, ints = {}, strings = {}, item = null, meta = null, isPK = false, pkStatus = null,
+} = {}) {
   const lines = [];
   let level = null;
   let levelLabel = null;
@@ -388,7 +403,8 @@ export function examineHeaderModel({ kind, ints = {}, strings = {}, item = null,
     if (hs) lines.push({ text: hs });
     const title = strings.Title || strings.CharacterTitle;
     if (title) lines.push({ text: String(title) });
-    if (isPK) lines.push({ text: "Player Killer", tone: "warn" });
+    const pk = pkStatus ?? (isPK ? "Player Killer" : null);
+    if (pk) lines.push(pk === "Player Killer" ? { text: pk, tone: "warn" } : { text: pk });
     const lvl = num(ints.Level) ?? num(meta?.level);
     level = lvl != null ? String(lvl) : "???";
     levelLabel = "Character Level";

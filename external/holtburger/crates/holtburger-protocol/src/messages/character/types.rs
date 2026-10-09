@@ -265,6 +265,41 @@ pub struct CharacterCreateRequestData {
     pub is_sentinel: bool,
 }
 
+impl CharacterCreateRequestData {
+    /// The trailing checksum retail `ACCharGenResult::CG_Pack`
+    /// (acclient.c:498309) writes after `isEnvoy`: the wrapping sum of
+    /// heritage, gender, the face strips, hair and eye colour, the four gear
+    /// styles, the template and the six attributes. Garment colours, shades,
+    /// slot, class, skills, name, start area and the flags are left out.
+    /// `CG_UnPack` recomputes it and refuses a mismatch (:498855).
+    pub fn retail_checksum(&self) -> u32 {
+        let a = &self.appearance;
+        [
+            self.heritage,
+            self.gender,
+            a.eyes,
+            a.nose,
+            a.mouth,
+            a.hair_color,
+            a.eye_color,
+            a.hair_style,
+            a.headgear_style,
+            a.shirt_style,
+            a.pants_style,
+            a.footwear_style,
+            self.template_option as u32,
+            self.strength_ability,
+            self.endurance_ability,
+            self.coordination_ability,
+            self.quickness_ability,
+            self.focus_ability,
+            self.self_ability,
+        ]
+        .into_iter()
+        .fold(0u32, u32::wrapping_add)
+    }
+}
+
 impl ProtocolUnpack for CharacterCreateRequestData {
     fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
         let account_name = read_string16(data, offset)?;
@@ -319,6 +354,11 @@ impl ProtocolUnpack for CharacterCreateRequestData {
         let is_admin = LittleEndian::read_u32(&data[*offset + 4..*offset + 8]) != 0;
         let is_sentinel = LittleEndian::read_u32(&data[*offset + 8..*offset + 12]) != 0;
         *offset += 12;
+        // Retail's trailing checksum (see `retail_checksum`). Optional so
+        // older captures without it still parse; pack recomputes it.
+        if *offset + 4 <= data.len() {
+            *offset += 4;
+        }
 
         Some(Self {
             account_name,
@@ -376,6 +416,7 @@ impl ProtocolPack for CharacterCreateRequestData {
             .unwrap();
         buf.write_u32::<LittleEndian>(u32::from(self.is_sentinel))
             .unwrap();
+        buf.write_u32::<LittleEndian>(self.retail_checksum()).unwrap();
     }
 }
 
@@ -607,6 +648,41 @@ mod tests {
         assert_eq!(payload.start_area, 2);
         assert_eq!(payload.skill_advancement_classes.len(), 55);
         assert_pack_unpack_parity(&data, &msg);
+    }
+
+    #[test]
+    fn character_create_appends_retail_checksum() {
+        let data = get_fixture("character_create.bin");
+        let mut offset = 0;
+        let GameMessage::CharacterCreate(payload) =
+            GameMessage::unpack(&data, &mut offset).expect("unpack")
+        else {
+            panic!("expected CharacterCreate");
+        };
+        // The fixture's 19 summed fields: headgear 0xFFFFFFFF wraps.
+        assert_eq!(payload.retail_checksum(), 334);
+        assert_eq!(&data[data.len() - 4..], &334u32.to_le_bytes());
+
+        let mut other = (*payload).clone();
+        other.appearance.shirt_color = 9;
+        other.appearance.pants_color = 9;
+        other.appearance.skin_hue = 0.25;
+        other.character_slot = 3;
+        other.class_id = 7;
+        assert_eq!(other.retail_checksum(), 334, "colours, hues, slot and class are not summed");
+        other.strength_ability = 99;
+        assert_eq!(other.retail_checksum(), 333);
+    }
+
+    #[test]
+    fn character_create_without_checksum_still_unpacks() {
+        // Captures from before the checksum was written end after isEnvoy.
+        let data = get_fixture("character_create.bin");
+        let legacy = &data[..data.len() - 4];
+        let mut offset = 0;
+        let msg = GameMessage::unpack(legacy, &mut offset).expect("legacy form unpacks");
+        assert!(matches!(msg, GameMessage::CharacterCreate(_)));
+        assert_eq!(offset, legacy.len());
     }
 
     #[test]

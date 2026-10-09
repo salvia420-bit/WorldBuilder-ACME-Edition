@@ -288,7 +288,7 @@ const handle = {
     ?? inv.find((i) => i.guid === (g >>> 0))?.name,
   getObjectIconId: () => 0,
   getObjectAppraisal: () => undefined,
-  buyFromVendor: (v, g, a) => calls.push(["buyFromVendor", v, Array.from(g), Array.from(a), g.constructor.name, a.constructor.name]),
+  buyFromVendor: (v, g, a, alt) => calls.push(["buyFromVendor", v, Array.from(g), Array.from(a), g.constructor.name, a.constructor.name, alt]),
   sellToVendor: (v, g, a) => calls.push(["sellToVendor", v, Array.from(g), Array.from(a), g.constructor.name, a.constructor.name]),
   getVendorState: () => null,
   playerTrade: () => trade,
@@ -380,6 +380,9 @@ await check("select + Buy sends buyFromVendor(vendor, Uint32Array[item], Int32Ar
   assert.match(text("hb-vendor-bar"), /Price/);
   findButton(byId("hb-vendor-bar"), "Buy").click();
   assert.deepEqual(calls[0].slice(0, 4), ["buyFromVendor", 0x70000001, [0x90000002], [1]]);
+  // vendor-buy-6 (round 5): retail Event_Buy's trailing trade currency, 0
+  // for a pyreal vendor.
+  assert.equal(calls[0][6], 0);
   assert.equal(calls[0][4], "Uint32Array");
   assert.equal(calls[0][5], "Int32Array");
 });

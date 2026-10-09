@@ -167,7 +167,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "[give] target=0x{target_guid:08X} item=0x{item_guid:08X} amount={amount}",
             ));
         }
-        SessionCommand::BuyFromVendor { vendor_guid, items } => {
+        SessionCommand::BuyFromVendor {
+            vendor_guid,
+            items,
+            alternate_currency_id,
+        } => {
             use holtburger_common::Guid;
             use holtburger_protocol::messages::{
                 BuyActionData, GameAction, ItemProfileActionData,
@@ -189,6 +193,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             let action = GameAction::Buy(Box::new(BuyActionData {
                 vendor_guid: Guid(vendor_guid),
                 items: profiles,
+                alternate_currency_id,
             }));
             send_or_disconnect!(
                 queued_events,

@@ -227,6 +227,69 @@ export function objectIsAttackable(target, player) {
   return (todf & ODF_ATTACKABLE) !== 0;
 }
 
+// pk-1 (2026-10-08 round 5) — retail ObjectIsAttackable reads the LIVE
+// weenie every call: a PlayerKillerStatus update rewrites the PK bits
+// (ACCWeenieObject::OnStatUpdated case 0x86 → PublicWeenieDesc::
+// SetPlayerKillerStatus, acclient.c:438785 / :470685-470702), and the pet
+// owner is `pwd._pet_owner`. The spawn meta is frozen at creation, so the
+// attack gate, Tab / auto-target, combat-mode entry and target tracking
+// overlay the wasm world's live bits and PetOwner (IID 44) on it.
+// `?attackLiveFlags=off` keeps the spawn meta.
+export const ODF_PK_BITS = (ODF_PLAYER_KILLER | ODF_FREE_PK_STATUS | ODF_PKLITE_STATUS) >>> 0;
+export const PROP_IID_PET_OWNER = 44;
+
+let _attackLiveFlags = null;
+/** `?attackLiveFlags` — DEFAULT-ON. Read once, lazily. */
+export function attackLiveFlagsOn(search) {
+  if (typeof search === "string") {
+    const v = new URLSearchParams(search).get("attackLiveFlags")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  }
+  if (_attackLiveFlags === null) {
+    try { _attackLiveFlags = attackLiveFlagsOn(globalThis.location?.search ?? ""); }
+    catch (_) { _attackLiveFlags = true; }
+  }
+  return _attackLiveFlags;
+}
+
+/**
+ * The meta with the live PK bits and pet owner laid over it. `liveOdf` 0 =
+ * unknown (keep the meta's bits); `petOwner` undefined = unknown. With no
+ * meta, a flags-only stand-in (or null when nothing is known).
+ */
+export function liveAttackMeta(meta, liveOdf, petOwner) {
+  const lo = (liveOdf >>> 0) || 0;
+  const po = petOwner == null ? undefined : (petOwner >>> 0) || 0;
+  if (!meta) return lo ? { objDescFlags: lo, petOwner: po ?? 0 } : null;
+  const base = (meta.objDescFlags >>> 0) || 0;
+  const odf = lo ? (((base & ~ODF_PK_BITS) | (lo & ODF_PK_BITS)) >>> 0) : base;
+  return { ...meta, objDescFlags: odf, petOwner: po ?? ((meta.petOwner >>> 0) || 0) };
+}
+
+/**
+ * `liveAttackMeta` fed from the session handle (`objectDescFlags`,
+ * `objectInstanceIdProperty(guid, 44)`). A missing handle, a stale pkg or a
+ * throwing read keeps the meta.
+ */
+export function readAttackMeta(sh, guid, meta, live = attackLiveFlagsOn()) {
+  if (!live || !sh) return meta;
+  const g = guid >>> 0;
+  let odf = 0;
+  try { odf = (sh.objectDescFlags?.(g) ?? 0) >>> 0; } catch (_) { odf = 0; }
+  let po;
+  try {
+    const v = sh.objectInstanceIdProperty?.(g, PROP_IID_PET_OWNER);
+    if (Number.isFinite(v)) po = v >>> 0;
+  } catch (_) { po = undefined; }
+  if (!odf && po === undefined) return meta;
+  return liveAttackMeta(meta, odf, po);
+}
+
+/** Test hook: re-read `?attackLiveFlags`. */
+export function _resetAttackLiveFlagsForTests() {
+  _attackLiveFlags = null;
+}
+
 /**
  * Bug 10 (2026-10-07) — does selecting `target` show (and query) a health
  * meter? Retail `gmToolbarUI::HandleSelectionChanged` (acclient.c:241923-
@@ -384,11 +447,18 @@ export function computeSelectNext(candidates, anchor, selfGuid, closer, extreme)
  * @param {{playerMeta?:object|null, isFellow?:boolean,
  *          showable?:boolean|(() => boolean), stateVisible?:boolean,
  *          attached?:boolean, dist2d:number, range:number,
- *          corpseOpened?:boolean}} ctx
+ *          corpseOpened?:boolean, attackMeta?:() => object|null}} ctx
+ *        `attackMeta` (pk-1) returns the candidate's live attack meta.
  *        `showable` may be a thunk so the caller's wasm lookup runs only for
  *        candidates that pass every cheaper rule.
  * @param {string} type — a SELECTION_TYPE value
  */
+// pk-1: `ctx.attackMeta` (a thunk) supplies the live attack meta; it runs
+// only for candidates that reach the attackable test.
+function attackMetaOf(meta, ctx) {
+  return (typeof ctx.attackMeta === "function" ? ctx.attackMeta() : null) ?? meta;
+}
+
 export function cycleCandidateOk(meta, ctx, type) {
   const odf = (meta?.objDescFlags >>> 0) || 0;
   if (ctx.attached) return false;
@@ -408,7 +478,7 @@ export function cycleCandidateOk(meta, ctx, type) {
       return (odf & ODF_ATTACKABLE) !== 0;
     case SELECTION_TYPE.COMPASS_COMBAT:
       return (
-        objectIsAttackable(meta, ctx.playerMeta ?? null) &&
+        objectIsAttackable(attackMetaOf(meta, ctx), ctx.playerMeta ?? null) &&
         !ctx.isFellow &&
         (odf & ODF_VENDOR) === 0 &&
         ((odf & (ODF_LIFESTONE | ODF_PORTAL | ODF_BINDSTONE)) !== 0 || showable())
@@ -416,7 +486,7 @@ export function cycleCandidateOk(meta, ctx, type) {
     case SELECTION_TYPE.MONSTER:
     default:
       return (
-        objectIsAttackable(meta, ctx.playerMeta ?? null) &&
+        objectIsAttackable(attackMetaOf(meta, ctx), ctx.playerMeta ?? null) &&
         (odf & ODF_VENDOR) === 0 &&
         !ctx.isFellow &&
         showable()
@@ -662,4 +732,44 @@ export function consumeWorldUseThrottle(nowMs) {
 export function _resetUseThrottleForTests() {
   lastUseAt = -Infinity;
   worldUseThrottleOn = null;
+}
+
+// pk-2 (2026-10-08 round 5) — retail ItemHolder::UseObject (acclient.c:
+// 433481-433492): a useable object with BF_PKSWITCH (0x400) or BF_NPKSWITCH
+// (0x800) is not Used straight away; ClientUISystem::UsageConfirmation_
+// PKAltar / _NPKAltar (:403300 / :403384) ask first and only Yes sends the
+// Use (UsageCallback :402872). The PK bit is tested first.
+export const ODF_PK_SWITCH = 0x00000400;
+export const ODF_NPK_SWITCH = 0x00000800;
+export const PK_ALTAR_CONFIRM_TEXT =
+  "Using this altar will make you a player killer, able to attack or be attacked by other player killers. Are you sure you want to do this?";
+export const NPK_ALTAR_CONFIRM_TEXT =
+  "Using this altar will make you a non-player killer, unable to attack or be attacked by other player killers. Are you sure you want to do this?";
+
+let _pkAltarConfirm = null;
+/** `?pkAltarConfirm` — DEFAULT-ON. Read once, lazily. */
+export function pkAltarConfirmOn(search) {
+  if (typeof search === "string") {
+    const v = new URLSearchParams(search).get("pkAltarConfirm")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  }
+  if (_pkAltarConfirm === null) {
+    try { _pkAltarConfirm = pkAltarConfirmOn(globalThis.location?.search ?? ""); }
+    catch (_) { _pkAltarConfirm = true; }
+  }
+  return _pkAltarConfirm;
+}
+
+/** The altar question for an object's ODF, or null (no altar / flag off). */
+export function altarConfirmText(odf, enabled = pkAltarConfirmOn()) {
+  if (!enabled) return null;
+  const f = (odf >>> 0) || 0;
+  if ((f & ODF_PK_SWITCH) !== 0) return PK_ALTAR_CONFIRM_TEXT;
+  if ((f & ODF_NPK_SWITCH) !== 0) return NPK_ALTAR_CONFIRM_TEXT;
+  return null;
+}
+
+/** Test hook: re-read `?pkAltarConfirm`. */
+export function _resetPkAltarConfirmForTests() {
+  _pkAltarConfirm = null;
 }

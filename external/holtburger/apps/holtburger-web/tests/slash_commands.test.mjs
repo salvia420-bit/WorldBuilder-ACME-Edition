@@ -223,3 +223,65 @@ test("chat-5: /reply retail strings", () => {
   window.__chatLastIncomingTellSender = "Bob";
   assert.deepEqual(route("/r hi").calls, [["sendTell", "Bob", "hi"]]);
 });
+
+// pk-4 (2026-10-08 round 5) — retail's client PK commands (InitializeCommands
+// pklite/pkl, pkarena/pka, pklarena/pla → DoPKLite :420147, DoPKArena
+// :418546, DoPKLArena :418615). ACE has no text command of these names
+// ("Unknown command"); retail checks the player's PK bits and sends the
+// GameAction (EnterPKLite 0x028F, TeleToPKArena 0x0027, TeleToPKLArena 0x0026).
+test("pk-4: pkCommandDecision follows DoPKLite / DoPKArena / DoPKLArena", async () => {
+  const { pkCommandDecision, retailPkCmdsEnabled, PK_CLIENT_VERBS } = await import("../app/slash_commands.js");
+  const NPK = 0x8, PK = 0x28, LITE = 0x02000008;
+  assert.deepEqual([...PK_CLIENT_VERBS].sort(), ["pka", "pkarena", "pkl", "pklarena", "pklite", "pla"]);
+  assert.deepEqual(pkCommandDecision("pklite", "", NPK), { send: "enterPkLite" });
+  assert.deepEqual(pkCommandDecision("pkl", "", NPK), { send: "enterPkLite" });
+  const only = "Only Non-Player Killers may enter PK Lite. Please see @help pklite for more details about this command.";
+  assert.deepEqual(pkCommandDecision("pklite", "", PK), { text: only });
+  assert.deepEqual(pkCommandDecision("pklite", "", LITE), { text: only });
+  assert.deepEqual(pkCommandDecision("pkarena", "", PK), { send: "teleToPkArena" });
+  assert.deepEqual(pkCommandDecision("pka", "", NPK), { text: "Only Player Killer characters may use this command!" });
+  assert.deepEqual(pkCommandDecision("pla", "", LITE), { send: "teleToPklArena" });
+  assert.deepEqual(pkCommandDecision("pklarena", "", PK), { text: "Only Player Killer Lite characters may use this command!" });
+  assert.deepEqual(pkCommandDecision("pklite", "foo", NPK),
+    { text: "Please see @help pklite for more information on how to use this command." });
+  assert.deepEqual(pkCommandDecision("pka", "x", PK),
+    { text: "Please see @help pkarena for more information on how to use this command." });
+  assert.equal(pkCommandDecision("tell", "", NPK), null);
+  assert.equal(retailPkCmdsEnabled(""), true);
+  for (const v of ["off", "0", "false"]) assert.equal(retailPkCmdsEnabled(`?retailPkCmds=${v}`), false);
+});
+
+test("pk-4: @pkl is a client command; the router sends the action, never the chat line", () => {
+  assert.equal(normalizeChatLine("@pkl").kind, "command");
+  assert.equal(normalizeChatLine("@PKLite").kind, "command", "verbs are case-insensitive");
+  const h = fakeHandle();
+  h.playerGuid = () => 0x50000001;
+  h.objectDescFlags = () => 0x8; // Non-Player Killer
+  h.enterPkLite = (...a) => h.calls.push(["enterPkLite", ...a]);
+  const r = routeSlashCommand(h, "@pklite");
+  assert.equal(r.dispatched, true);
+  assert.deepEqual(h.calls, [["enterPkLite"]]);
+  // A PK is refused locally (HandleFailureEvent 0x507), nothing sent.
+  const pk = fakeHandle();
+  pk.playerGuid = () => 0x50000001;
+  pk.objectDescFlags = () => 0x28;
+  pk.enterPkLite = (...a) => pk.calls.push(["enterPkLite", ...a]);
+  const refused = routeSlashCommand(pk, "/pkl");
+  assert.deepEqual(pk.calls, []);
+  assert.match(refused.lines[0], /^Only Non-Player Killers may enter PK Lite\./);
+});
+
+test("pk-4: a pkg without the bindings, or ?retailPkCmds=off, keeps the server forward", () => {
+  const stale = fakeHandle();
+  stale.playerGuid = () => 0x50000001;
+  stale.objectDescFlags = () => 0x8;
+  routeSlashCommand(stale, "@pklite");
+  assert.deepEqual(stale.calls, [["sendChat", "@pklite"]]);
+  const prev = globalThis.location;
+  globalThis.location = { search: "?retailPkCmds=off" };
+  try {
+    assert.equal(normalizeChatLine("@pklite").kind, "server");
+  } finally {
+    if (prev === undefined) delete globalThis.location; else globalThis.location = prev;
+  }
+});

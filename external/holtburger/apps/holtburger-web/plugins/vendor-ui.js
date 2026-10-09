@@ -57,40 +57,41 @@ import { vendorRangeVerdict, VENDOR_FALLBACK_RANGE_M } from "./vendor_range.js";
 import {
   createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, kitButton, fillSlotIcon,
   wireDropTarget, inventoryRows, entityWorldPos, localPlayerWorldPos, devHex,
+  chatNotice,
 } from "./commerce_window.js";
 import {
-  vendorPurchasePrice, vendorSaleCredit, sellStagingPlan,
+  vendorSaleCredit, sellStagingPlan,
   countCurrency, PYREAL_WCID, fmtNumber, fmtCompact,
   planSellSplit, resolveSellSplits, SELL_SPLIT_FAILED_TEXT,
+  vendorLineCost, vendorRemaining, vendorBuySlotsNeeded, vendorPlayerRoom, vendorBuyRefusal,
+  VENDOR_TYPE_FILTERS, VENDOR_MAX_QUEUED, VENDOR_TOO_MUCH_TEXT,
 } from "./commerce_logic.js";
 
 const OVERLAY_ID = "hb-vendor-bar";
 const STYLE_ID = "hb-vendor-bar-styles";
 
-// AC ItemType bit → category dropdown label. Order = retail VendorItemsUI
-// AddTypeFilter calls. Categories this vendor doesn't stock are hidden.
+// AC ItemType bit → category dropdown label. vendor-buy-5 (2026-10-08 round
+// 5): retail VendorItemsUI::OpenVendor's AddTypeFilter list, in retail order
+// (commerce_logic VENDOR_TYPE_FILTERS); categories this vendor doesn't stock
+// are hidden. "All Items" first is a holtburger convenience retail lacks.
 const CATEGORY_TABLE = [
-  { id: "all",       label: "All Items", mask: 0xFFFFFFFF },
-  { id: "melee",     label: "Melee",     mask: 0x000001 },
-  { id: "armor",     label: "Armor",     mask: 0x000002 },
-  { id: "clothing",  label: "Clothing",  mask: 0x000004 },
-  { id: "jewelry",   label: "Jewelry",   mask: 0x000008 },
-  { id: "missile",   label: "Missile",   mask: 0x000100 },
-  { id: "container", label: "Container", mask: 0x000200 },
-  { id: "money",     label: "Money",     mask: 0x000040 },
-  { id: "food",      label: "Food",      mask: 0x000020 },
-  { id: "misc",      label: "Misc",      mask: 0x000080 },
-  { id: "gem",       label: "Gem",       mask: 0x000800 },
-  { id: "component", label: "Component", mask: 0x001000 },
-  { id: "key",       label: "Key",       mask: 0x002000 },
-  { id: "reagent",   label: "Reagent",   mask: 0x004000 },
-  { id: "book",      label: "Book",      mask: 0x010000 },
-  { id: "writable",  label: "Writable",  mask: 0x020000 },
-  { id: "tradenote", label: "Trade Note",mask: 0x040000 },
-  { id: "manastone", label: "Mana Stone",mask: 0x080000 },
+  { id: "all", label: "All Items", mask: 0xFFFFFFFF },
+  ...VENDOR_TYPE_FILTERS,
 ];
 
-const MAX_QTY = 9999;
+// vendor-buy-3: retail VendorItemsUI::AddToBuyList caps an entry at 5000.
+const MAX_QTY = VENDOR_MAX_QUEUED;
+
+function flagOn(name) {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search ?? "").get(name);
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) { return true; }
+}
+/** `?vendorBuyCheck` — retail's money / main-pack refusal before a Buy. */
+export function vendorBuyCheckEnabled() { return flagOn("vendorBuyCheck"); }
+/** `?vendorStock` — finite stock entries are hidden / clamped by supply. */
+export function vendorStockEnabled() { return flagOn("vendorStock"); }
 
 function snapshotFromWasm(state) {
   return {
@@ -120,6 +121,11 @@ function snapshotFromWasm(state) {
       stackSize: i.stackSize,
       itemType: i.itemType,
       iconId: i.iconId,
+      // vendor-buy-1/3 (round 5): supply (-1 unlimited), max stack, slot
+      // class. Absent on a stale pkg/ → undefined (the old rules apply).
+      ...(typeof i.supply === "number" ? { supply: i.supply } : {}),
+      ...(typeof i.maxStackSize === "number" ? { maxStackSize: i.maxStackSize } : {}),
+      ...(typeof i.packSlot === "boolean" ? { packSlot: i.packSlot } : {}),
     })),
     // Wave F.4 (2026-05-27) typed-profile fields, filled by
     // enrichWithProfile(). Defaults = retail "no restriction" sentinels.
@@ -654,7 +660,38 @@ function render() {
 function filteredStock() {
   const vs = state.vendorState;
   const cat = CATEGORY_TABLE.find((c) => c.id === state.categoryFilter) ?? CATEGORY_TABLE[0];
-  return vs.items.filter((it) => state.categoryFilter === "all" || (it.itemType & cat.mask));
+  // vendor-buy-3: VendorItemsUI::UpdateItemsList skips a finite entry the
+  // buying list already holds all of.
+  const stock = vendorStockEnabled();
+  return vs.items.filter((it) =>
+    (state.categoryFilter === "all" || (it.itemType & cat.mask))
+    && (!stock || vendorRemaining(it, queuedAmount(it.itemGuid)) > 0));
+}
+
+/** How many of a stock entry the buying list holds. */
+function queuedAmount(guid) {
+  const q = state.buyQueue.find((x) => (x.itemGuid >>> 0) === (guid >>> 0));
+  return q ? (q.amount | 0) : 0;
+}
+
+/** The live stock entry behind a buying-list line. */
+function stockItemFor(q) {
+  return state.vendorState?.items?.find((i) => (i.itemGuid >>> 0) === (q.itemGuid >>> 0)) || null;
+}
+
+/** The most a buying-list line may hold: 5000, and a finite entry's supply. */
+function lineMax(q) {
+  const item = stockItemFor(q) || q;
+  const supply = vendorStockEnabled() ? vendorRemaining(item, 0) : Infinity;
+  return Math.max(1, Math.min(MAX_QTY, supply));
+}
+
+/** Stack badge: a finite stackable entry shows what is left of it. */
+function stockBadge(it) {
+  const rem = vendorStockEnabled() ? vendorRemaining(it, queuedAmount(it.itemGuid)) : Infinity;
+  const ms = Number(it.maxStackSize);
+  if (Number.isFinite(rem) && Number.isFinite(ms) && ms > 1) return Math.min(rem, ms);
+  return it.stackSize || 1;
 }
 
 /**
@@ -699,7 +736,8 @@ function renderItemsPane(cur) {
   // Grid — rebuilt only when the stock/filter/affordability changes, so
   // clicking around never resets the scroll position.
   const key = `${vs.vendorGuid}|${state.categoryFilter}|${cur.balance}|` +
-    items.map((i) => `${i.itemGuid}:${i.value}:${i.stackSize}`).join(",");
+    items.map((i) => `${i.itemGuid}:${i.value}:${i.stackSize}:${i.supply ?? ""}`).join(",") +
+    `|${state.buyQueue.map((q) => `${q.itemGuid}:${q.amount}`).join(",")}`;
   if (key !== state.gridKey || !r.list.querySelector(".hb-cw-grid")) {
     state.gridKey = key;
     r.list.replaceChildren();
@@ -727,15 +765,16 @@ function renderItemsPane(cur) {
 
 function buildStockCell(it, cur) {
   const vs = state.vendorState;
-  const price = vendorPurchasePrice(it, vs, 1);
+  const price = vendorLineCost(it, vs, 1);
   const cell = el("div", "hb-cw-cell hvb-cell");
   cell.dataset.itemGuid = String(it.itemGuid);
   if (price > cur.balance) cell.classList.add("is-unaffordable");
   const slot = el("div", "hbk-slot", cell);
   fillSlotIcon(slot, it.iconId, it.name);
-  if ((it.stackSize || 1) > 1) {
+  const badge = stockBadge(it);
+  if (badge > 1) {
     const st = el("span", "hbk-stack", slot);
-    st.textContent = String(it.stackSize);
+    st.textContent = String(badge);
   }
   const cap = el("div", "hb-cw-caption", cell);
   cap.textContent = fmtCompact(price);
@@ -777,7 +816,7 @@ function renderInfo(cur = currencyInfo()) {
   const name = el("div", "hvb-line hvb-name", r.info);
   if (sel) {
     setAcText(name, sel.name || "Unnamed item", { color: KIT_COLOR.gold, fit: true });
-    const price = vendorPurchasePrice(sel, vs, state.qty);
+    const price = vendorLineCost(sel, vs, state.qty);
     kv(r.info, state.qty > 1 ? `Price (${state.qty})` : "Price",
       `${fmtNumber(price)} ${cur.short}`, price > cur.balance ? KIT_COLOR.warn : KIT_COLOR.gold);
     kv(r.info, "You have", `${fmtNumber(cur.balance)} ${cur.short}`, KIT_COLOR.value);
@@ -806,7 +845,7 @@ function renderQueuePane(which, cur) {
   const buying = which === "buying";
   const queue = buying ? state.buyQueue : state.sellQueue;
   const linePrice = (q) => (buying
-    ? vendorPurchasePrice(q, vs, q.amount)
+    ? vendorLineCost(stockItemFor(q) || q, vs, q.amount)
     : vendorSaleCredit(q, vs, q.amount));
 
   state.gridKey = "";
@@ -830,14 +869,14 @@ function renderQueuePane(which, cur) {
         const qty = el("input", "hbk-input", row);
         qty.type = "number";
         qty.min = "1";
-        qty.max = String(MAX_QTY);
+        qty.max = String(lineMax(q));
         qty.value = String(q.amount);
         qty.title = "Quantity";
         // Reprice in place while typing — a full render() would destroy
         // the focused <input> and eat the next keystroke.
         qty.addEventListener("input", () => {
           const n = parseInt(qty.value, 10);
-          q.amount = Math.max(1, Math.min(MAX_QTY, Number.isFinite(n) ? n : 1));
+          q.amount = Math.max(1, Math.min(lineMax(q), Number.isFinite(n) ? n : 1));
           repaintTotals();
         });
         qty.addEventListener("change", () => render());
@@ -910,6 +949,46 @@ function findSelectedItem() {
   return vs.items.find((i) => i.itemGuid === state.selectedItemGuid) || null;
 }
 
+// vendor-buy-1 (2026-10-08 round 5, `?vendorBuyCheck`): retail refuses in
+// the client before it sends — money first, then room in the main pack
+// (gmVendorUI::BuySingleItem / HandleButtonClicks 0x100000CA) — and keeps the
+// buying list. ACE refuses an unaffordable purchase without a word.
+function buyRefusalFor(lines, cost) {
+  if (!vendorBuyCheckEnabled()) return null;
+  const h = window.__sessionHandle;
+  const num = (name) => {
+    try {
+      const v = h?.[name];
+      if (typeof v === "number") return v;
+      if (typeof v === "function") return Number(v.call(h)) || 0;
+    } catch (_) {}
+    return 0;
+  };
+  const room = vendorPlayerRoom(inventoryRows(), {
+    itemsCap: num("playerItemsCapacity"),
+    containersCap: num("playerContainersCapacity"),
+  });
+  return vendorBuyRefusal({
+    cost,
+    balance: currencyInfo().balance,
+    need: vendorBuySlotsNeeded(lines),
+    used: room.used,
+    cap: room.cap,
+  });
+}
+
+/** Retail prints the refusal (ECM_UI::SendNotice_DisplayStringInfo 0x1A). */
+function refuseBuy(text) {
+  chatNotice(text);
+  toast(text, "err");
+  uiError();
+}
+
+/** vendor-buy-6: retail Event_Buy's trailing trade currency (0 = pyreals). */
+function tradeCurrency(vs) {
+  return (vs?.alternateCurrencyWcid >>> 0) || 0;
+}
+
 function handleBuyInstant() {
   const handle = window.__sessionHandle;
   if (!handle?.buyFromVendor) return toast("Not connected", "err");
@@ -917,12 +996,20 @@ function handleBuyInstant() {
   if (!vs?.vendorGuid) return;
   const sel = findSelectedItem();
   if (!sel) return toast("Select an item first", "err");
-  const qty = clampQty(state.qty);
+  let qty = clampQty(state.qty);
+  if (vendorStockEnabled()) {
+    const left = vendorRemaining(sel, 0);
+    if (left <= 0) return;
+    qty = Math.min(qty, left);
+  }
+  const refusal = buyRefusalFor([{ item: sel, amount: qty }], vendorLineCost(sel, vs, qty));
+  if (refusal) return refuseBuy(refusal);
   try {
     handle.buyFromVendor(
       vs.vendorGuid >>> 0,
       new Uint32Array([sel.itemGuid >>> 0]),
       new Int32Array([qty]),
+      tradeCurrency(vs),
     );
     toast(`Buying ${qty > 1 ? `${qty} × ` : ""}${sel.name}…`);
   } catch (err) {
@@ -936,8 +1023,17 @@ function handleAddToBuying() {
   if (!sel) return;
   const qty = clampQty(state.qty);
   const existing = state.buyQueue.find((q) => q.itemGuid === sel.itemGuid);
+  // vendor-buy-3: VendorItemsUI::AddToBuyList refuses an entry growing past
+  // 5000 (and changes nothing); a finite entry adds no more than is left.
+  if (existing && existing.amount + qty > MAX_QTY) return refuseBuy(VENDOR_TOO_MUCH_TEXT);
+  let add = qty;
+  if (vendorStockEnabled()) {
+    const left = vendorRemaining(sel, existing ? existing.amount : 0);
+    if (left <= 0) return;
+    add = Math.min(add, left);
+  }
   if (existing) {
-    existing.amount = Math.min(existing.amount + qty, MAX_QTY);
+    existing.amount += add;
   } else {
     state.buyQueue.push({
       itemGuid: sel.itemGuid,
@@ -947,7 +1043,10 @@ function handleAddToBuying() {
       stackSize: sel.stackSize || 1,
       itemType: sel.itemType,
       iconId: sel.iconId,
-      amount: qty,
+      maxStackSize: sel.maxStackSize,
+      packSlot: sel.packSlot,
+      supply: sel.supply,
+      amount: add,
     });
   }
   toast(`Added ${sel.name} to your buying list`);
@@ -959,10 +1058,14 @@ function handleConfirmBuy() {
   if (!handle?.buyFromVendor) return toast("Not connected", "err");
   const vs = state.vendorState;
   if (!vs?.vendorGuid || state.buyQueue.length === 0) return;
+  const lines = state.buyQueue.map((q) => ({ item: stockItemFor(q) || q, amount: q.amount | 0 }));
+  const cost = lines.reduce((sum, l) => sum + vendorLineCost(l.item, vs, l.amount), 0);
+  const refusal = buyRefusalFor(lines, cost);
+  if (refusal) return refuseBuy(refusal);
   const guids = new Uint32Array(state.buyQueue.map((q) => q.itemGuid >>> 0));
   const amounts = new Int32Array(state.buyQueue.map((q) => q.amount | 0));
   try {
-    handle.buyFromVendor(vs.vendorGuid >>> 0, guids, amounts);
+    handle.buyFromVendor(vs.vendorGuid >>> 0, guids, amounts, tradeCurrency(vs));
     toast(`Buying ${state.buyQueue.length} item${state.buyQueue.length === 1 ? "" : "s"}…`);
     state.buyQueue = [];
     state.currentTab = "items";
@@ -1070,6 +1173,9 @@ export function mount(ctx) {
       hideOverlay();
     };
     const onPortalSpace = () => closeIfOpen("portal space entered (teleport)");
+    // extcontainer-2: retail ClientUISystem::SetGroundObject closes an open
+    // vendor when a ground container opens (acclient.c:401653-401656).
+    const onGroundObjectOpened = () => closeIfOpen("ground container opened");
     const onDeath = (ev) => {
       const victim = (ev.detail?.victimGuid ?? 0) >>> 0;
       const local = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
@@ -1087,6 +1193,7 @@ export function mount(ctx) {
     client.events.on("inventoryActionFailed", onActionFailed);
     client.events.on("portalSpaceEntered", onPortalSpace);
     client.events.on("death", onDeath);
+    client.events.on("groundObjectOpened", onGroundObjectOpened);
 
     unsubscribe = () => {
       client.events.off?.("vendorOpened", onVendorOpened);
@@ -1096,6 +1203,7 @@ export function mount(ctx) {
       client.events.off?.("inventoryActionFailed", onActionFailed);
       client.events.off?.("portalSpaceEntered", onPortalSpace);
       client.events.off?.("death", onDeath);
+      client.events.off?.("groundObjectOpened", onGroundObjectOpened);
     };
     return true;
   }
@@ -1113,6 +1221,27 @@ export function mount(ctx) {
       state.buyQueue = [];
       state.sellQueue = [];
       state.sellSplits = [];
+    } else {
+      // vendor-buy-4 (round 5): retail gmVendorUI::OpenVendor (updating,
+      // acclient.c:246660-246818) drops buying-list entries the vendor no
+      // longer lists (a unique sold or rotated out) — silently — and the
+      // survivors take the new stock's details.
+      const live = new Map(state.vendorState.items.map((i) => [i.itemGuid >>> 0, i]));
+      const before = state.buyQueue.length;
+      state.buyQueue = state.buyQueue
+        .filter((q) => live.has(q.itemGuid >>> 0))
+        .map((q) => {
+          const it = live.get(q.itemGuid >>> 0);
+          return {
+            ...q,
+            name: it.name, value: it.value, stackSize: it.stackSize || 1,
+            itemType: it.itemType, iconId: it.iconId, wcid: it.wcid,
+            maxStackSize: it.maxStackSize, packSlot: it.packSlot, supply: it.supply,
+          };
+        });
+      if (state.buyQueue.length !== before) {
+        console.info(`[vendor-ui] dropped ${before - state.buyQueue.length} buying-list item(s) the vendor no longer lists`);
+      }
     }
     // A fresh open (or a different vendor) starts on the Items tab; a
     // same-vendor refresh while open keeps the player's tab, selection

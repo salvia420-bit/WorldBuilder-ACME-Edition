@@ -54,6 +54,8 @@ setSearch("");
 
 const TS = await import(pathToFileURL(path.join(APP, "plugins", "train-skills.js")).href);
 globalThis.__TS = TS;
+// pk-5 (round 5): the header's PK status line (real helper).
+globalThis.__EF = await import(pathToFileURL(path.join(APP, "plugins", "examine_format.js")).href);
 
 const src = readFileSync(path.join(APP, "plugins", "character-info.js"), "utf8");
 function load() {
@@ -72,6 +74,7 @@ function load() {
       levelProgress: "globalThis.__TS.levelProgress",
       skillGroupFor: "globalThis.__TS.skillGroupFor",
       vitaeModifier: "globalThis.__TS.vitaeModifier",
+      pkStatusText: "globalThis.__EF.pkStatusText",
     },
   });
   // eslint-disable-next-line no-new-func

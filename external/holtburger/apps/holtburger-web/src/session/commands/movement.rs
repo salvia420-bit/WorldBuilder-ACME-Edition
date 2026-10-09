@@ -146,6 +146,46 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             );
             console_log_str("[lifestone/recall]");
         }
+        // pk-4 (2026-10-08 round 5): @pklite / @pkarena / @pklarena.
+        SessionCommand::EnterPkLite => {
+            use holtburger_protocol::messages::{EnterPkLiteActionData, GameAction};
+            let action = GameAction::EnterPkLite(Box::new(EnterPkLiteActionData));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(EnterPkLite): {e}",
+                "enter_pk_lite: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str("[pk/enter-pklite]");
+        }
+        SessionCommand::TeleToPkArena => {
+            use holtburger_protocol::messages::{GameAction, TeleToPkArenaActionData};
+            let action = GameAction::TeleToPkArena(Box::new(TeleToPkArenaActionData));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(TeleToPkArena): {e}",
+                "tele_to_pk_arena: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str("[pk/arena]");
+        }
+        SessionCommand::TeleToPklArena => {
+            use holtburger_protocol::messages::{GameAction, TeleToPklArenaActionData};
+            let action = GameAction::TeleToPklArena(Box::new(TeleToPklArenaActionData));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(TeleToPklArena): {e}",
+                "tele_to_pkl_arena: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str("[pk/pkl-arena]");
+        }
         SessionCommand::JumpChargeBegin => {
             // G-7 / F1-6 — set the standstill charge. JS already
             // verified no movement keys are held; re-check

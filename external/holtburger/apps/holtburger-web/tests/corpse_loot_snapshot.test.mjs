@@ -185,6 +185,11 @@ const CORPSE_STUBS = {
   // handler — never reached by refreshContents().
   clearsGroundObjectOnFailure: NOT_ON_SNAPSHOT_PATH("clearsGroundObjectOnFailure"),
   moveFailCloseGroundEnabled: NOT_ON_SNAPSHOT_PATH("moveFailCloseGroundEnabled"),
+  // extcontainer-2 (round 5): the 1 s range check / vendor-portal-death closes.
+  groundContainerRangeEnabled: NOT_ON_SNAPSHOT_PATH("groundContainerRangeEnabled"),
+  groundContainerRangeVerdict: NOT_ON_SNAPSHOT_PATH("groundContainerRangeVerdict"),
+  isLandscapeGroundObject: NOT_ON_SNAPSHOT_PATH("isLandscapeGroundObject"),
+  landblockToWorld: NOT_ON_SNAPSHOT_PATH("landblockToWorld"),
 };
 
 // container-panel additionally pulls the drop-flag / ui-effect helpers.
@@ -200,6 +205,11 @@ const CONTAINER_STUBS = {
   uiEffectBadgesEnabled: "() => false",
   uiEffectIconsFor: "() => []",
   uiEffectTintCss: "() => null",
+  // extcontainer-1 (round 5): the ViewContents gate (onContainerOpened only).
+  groundObjectGateEnabled: NOT_ON_SNAPSHOT_PATH("groundObjectGateEnabled"),
+  groundObjectFacts: NOT_ON_SNAPSHOT_PATH("groundObjectFacts"),
+  isLandscapeGroundObject: NOT_ON_SNAPSHOT_PATH("isLandscapeGroundObject"),
+  replacedGroundObject: NOT_ON_SNAPSHOT_PATH("replacedGroundObject"),
 };
 
 /* ── [A] corpse-loot-bar ──────────────────────────────────────────────── */

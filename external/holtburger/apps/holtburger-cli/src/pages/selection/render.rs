@@ -30,13 +30,20 @@ pub(crate) fn skill_raise_cost_label(
         return "--".to_string();
     };
 
-    let cost = match advancement {
+    // `specialized_cost` is the total cost of the tier, so raising a
+    // trained skill costs the difference (gmCGSkillsPage::IncreaseSkillLevel).
+    let (tier_cost, cost) = match advancement {
         SkillAdvancementClass::Specialized => return "MAX".to_string(),
-        SkillAdvancementClass::Trained => costs.specialized_cost,
-        SkillAdvancementClass::Untrained | SkillAdvancementClass::Inactive => costs.trained_cost,
+        SkillAdvancementClass::Trained => (
+            costs.specialized_cost,
+            costs.specialized_cost - costs.trained_cost,
+        ),
+        SkillAdvancementClass::Untrained | SkillAdvancementClass::Inactive => {
+            (costs.trained_cost, costs.trained_cost)
+        }
     };
 
-    if is_unavailable_character_gen_skill_cost(cost) {
+    if is_unavailable_character_gen_skill_cost(tier_cost) {
         return "N/A".to_string();
     }
 
@@ -80,7 +87,8 @@ mod tests {
         );
         assert_eq!(
             skill_raise_cost_label(SkillAdvancementClass::Trained, costs),
-            "4 SP"
+            "2 SP",
+            "the step from trained (2) to the specialised total (4)"
         );
         assert_eq!(
             skill_raise_cost_label(SkillAdvancementClass::Specialized, costs),

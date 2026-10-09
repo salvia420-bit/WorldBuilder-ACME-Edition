@@ -52,6 +52,7 @@ import {
   takeInventoryRows,
 } from "./inventory_helpers.js";
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
+import { containerDropRuleEnabled, containerOpenable, isContainerObject } from "./ground_container_rules.js";
 import { CHARACTER_OPTION, isCharacterOptionEnabled } from "../ui/ac_character_options.js";
 
 export const INV_MIME = "application/x-hb-inv-guid";
@@ -510,6 +511,17 @@ export function describeWorldEntity(guid) {
   } catch (_) { ground = 0; }
   let odf = 0;
   try { odf = ((meta.objDescFlags ?? h?.objectDescFlags?.(g)) >>> 0) || 0; } catch (_) { odf = 0; }
+  const intProp = (stype) => {
+    try { return (h?.objectIntProperty?.(g, stype) | 0) || 0; } catch (_) { return 0; }
+  };
+  let locked;
+  try { locked = h?.objectBoolProperty?.(g, 3); } catch (_) { locked = undefined; }
+  // The open ground container is the one the external-container window
+  // shows; the wasm id is the fallback when that plugin is absent.
+  const lootBar = window.__corpseLootBar;
+  const isOpenContainer = typeof lootBar?.isOpen === "function"
+    ? lootBar.isOpen() && ((lootBar.current?.() >>> 0) || 0) === g
+    : !!ground && ground === g;
   return {
     guid: g,
     isSelf: g === me,
@@ -518,7 +530,11 @@ export function describeWorldEntity(guid) {
     isCreature: (itemType & 0x10) !== 0 || meta.category === "creature",
     // ODF Player 0x8 — retail ACCWeenieObject::IsPlayer (acclient.c:437199).
     isPlayer: (odf & 0x8) !== 0,
-    isOpenContainer: !!ground && ground === g,
+    isOpenContainer,
+    // extcontainer-3: retail ACCWeenieObject::IsContainer (acclient.c:220515)
+    // and BF_OPENABLE with a live Locked update winning.
+    isContainer: isContainerObject({ odf, itemsCapacity: intProp(6), containersCapacity: intProp(7) }),
+    openable: containerOpenable(odf, locked),
     name: meta.name || "",
   };
 }
@@ -542,6 +558,9 @@ function defaultCtx() {
       try { return !!h.canUseWith(a >>> 0, b >>> 0); } catch (_) { return null; }
     },
     isCorpse: (g) => isCorpseGuid(g),
+    // extcontainer-3 (`?containerDropRule`): a 3D drop on a closed / locked
+    // container is refused instead of landing on the ground.
+    containerDropRule: containerDropRuleEnabled(),
     // charopt-4: the "Drag item onto player opens trade" character option.
     dragOnPlayerOpensTrade:
       isCharacterOptionEnabled(CHARACTER_OPTION.DragItemOnPlayerOpensSecureTrade, false) === true,

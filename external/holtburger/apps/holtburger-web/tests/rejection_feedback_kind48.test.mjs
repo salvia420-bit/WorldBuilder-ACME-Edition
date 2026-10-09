@@ -82,4 +82,19 @@ client.events.emit("attackDone", { error: "ActionCancelled" });
 client.events.emit("attackDone", { error: "None" });
 assert.equal(toasts.length, 0, "attackDone(ActionCancelled) after a kill renders no toast");
 
-console.log("rejection_feedback_kind48: 6/6 PASS");
+// 7. vendor-buy-2 (2026-10-08 round 5): ACE's refused buy / sale names the
+//    PLAYER with code 0. Retail shows nothing for a refused shop event, so no
+//    "WeenieError 0x0000" toast and no flash — and the paired transient line an
+//    older pkg still sends is swallowed.
+reset();
+window.getLocalPlayerGuid = () => 0x50000001;
+client.events.emit("kind:48", { u32Payload: 0x50000001, u32Payload2: 0 });
+assert.equal(toasts.length, 0, "a refused shop event is not toasted");
+assert.equal(flashed.length, 0);
+client.events.emit("kind:2", { stringPayload: "You can't wield that!", u32Payload2: 9 });
+assert.equal(toasts.length, 0, "the paired transient line is swallowed");
+client.events.emit("kind:48", { u32Payload: 0x12345678, u32Payload2: 0x001d });
+assert.equal(toasts.length, 1, "an item failure still toasts");
+delete window.getLocalPlayerGuid;
+
+console.log("rejection_feedback_kind48: 7/7 PASS");

@@ -5,10 +5,11 @@
 //
 //   [1] WizardState constants + transitionState matrix (4-page flow
 //       after Wave J4.B.2 added the Attributes page)
-//   [2] validateCharacterName (length + charset)
-//   [3] computeSkillBudget (heritage override math)
+//   [2] validateCharacterName + formatCharacterName (retail FormatName)
+//   [3] computeSkillBudget (heritage override math; spec = total cost)
 //   [4] buildCharGenPayload (dense skill array + camelCase shape)
-//   [5] seedSkillStatesFromTemplate (primary→3, normal→2)
+//   [5] resetSkillStates / applyTemplateSkills (retail ResetSkillLevels +
+//       ApplyTemplate, on the real skill table and templates)
 //   [6] pickDefaultTemplate + pickDefaultStartArea
 //   [7] randomizeAppearance (range clamping + headgear sentinel)
 //   [8] computeAttributeBudget (J4.B.2 — attribute spend math)
@@ -25,6 +26,7 @@
 //   node tests/character_creation.test.cjs
 
 const path = require("node:path");
+const fs = require("node:fs");
 const assert = require("node:assert/strict");
 const { pathToFileURL } = require("node:url");
 
@@ -69,9 +71,12 @@ function check(name, fn) {
   const mod = await import(PLUGIN_URL);
   const {
     WizardState, transitionState,
-    validateCharacterName,
+    validateCharacterName, formatCharacterName, trimNameDecorations,
+    NAME_REQUIRED_TEXT,
     computeSkillBudget, buildCharGenPayload,
-    seedSkillStatesFromTemplate,
+    resetSkillStates, applyTemplateSkills, templateSkillStates,
+    skillFloorClass, skillClassChoices, isCreationTableSkill,
+    ATTRIBUTE_CREDIT_WARNING_TEXT,
     pickDefaultTemplate, pickDefaultStartArea,
     randomizeAppearance,
     computeAttributeBudget, applyAttributeDelta,
@@ -139,62 +144,67 @@ function check(name, fn) {
     assert.equal(transitionState("bogus-state", "next"), null);
   });
 
-  // ─── [2] validateCharacterName ─────────────────────────────────────
-  console.log("\n[2] validateCharacterName (length + charset)");
+  // ─── [2] validateCharacterName + formatCharacterName ──────────────
+  console.log("\n[2] validateCharacterName + formatCharacterName (retail FormatName)");
 
-  check("validateCharacterName: rejects empty", () => {
+  check("validateCharacterName: rejects empty with the retail text", () => {
     assert.equal(validateCharacterName("").ok, false);
     assert.equal(validateCharacterName(null).ok, false);
     assert.equal(validateCharacterName(undefined).ok, false);
+    assert.equal(validateCharacterName("   ").reason, NAME_REQUIRED_TEXT);
+    assert.equal(validateCharacterName("[ ]").ok, false, "DoFinish trims [] and spaces");
+    assert.equal(validateCharacterName("1234").reason, NAME_REQUIRED_TEXT, "digits format away");
   });
 
-  check("validateCharacterName: rejects whitespace-only", () => {
-    assert.equal(validateCharacterName("   ").ok, false);
+  check("validateCharacterName: retail allows 1-2 letter names", () => {
+    assert.equal(validateCharacterName("X").ok, true);
+    assert.equal(validateCharacterName("Al").ok, true);
   });
 
-  check("validateCharacterName: rejects < 3 chars after trim", () => {
-    const r = validateCharacterName("ab");
-    assert.equal(r.ok, false);
-    assert.match(r.reason, /3 characters/);
-  });
-
-  check("validateCharacterName: rejects > 32 chars after trim", () => {
+  check("validateCharacterName: rejects > 32 chars", () => {
     const r = validateCharacterName("a".repeat(33));
     assert.equal(r.ok, false);
     assert.match(r.reason, /32 characters/);
-  });
-
-  check("validateCharacterName: accepts 3 alphanumeric", () => {
-    assert.equal(validateCharacterName("Foo").ok, true);
-  });
-
-  check("validateCharacterName: accepts 32 alphanumeric", () => {
     assert.equal(validateCharacterName("a".repeat(32)).ok, true);
   });
 
-  check("validateCharacterName: accepts apostrophes (Gharu'ndim convention)", () => {
-    assert.equal(validateCharacterName("Gharu'ndim").ok, true);
-    assert.equal(validateCharacterName("D'or").ok, true);
+  check("validateCharacterName: returns the FormatName form", () => {
+    assert.equal(validateCharacterName("bob2").formatted, "Bob");
+    assert.equal(validateCharacterName("Gharu'ndim").formatted, "Gharu'ndim");
+    assert.equal(validateCharacterName("Jean-Luc").formatted, "Jean-Luc", "hyphens are legal");
+    assert.equal(validateCharacterName("[Bob]").formatted, "Bob");
   });
 
-  check("validateCharacterName: accepts spaces (Asheron's-style two-word names)", () => {
-    assert.equal(validateCharacterName("Ash The Sword").ok, true);
+  check("validateCharacterName: refuses a name FormatName would change again", () => {
+    // 'a - b' formats to 'A  b', which formats to 'A b': the server's
+    // strcmp(FormatName(name), name) would reject it.
+    assert.equal(formatCharacterName("a - b"), "A  b");
+    assert.equal(validateCharacterName("a - b").ok, false);
   });
 
-  check("validateCharacterName: rejects punctuation other than space + apostrophe", () => {
-    assert.equal(validateCharacterName("Foo-Bar").ok, false);
-    assert.equal(validateCharacterName("Foo.Bar").ok, false);
-    assert.equal(validateCharacterName("Foo!").ok, false);
-    assert.equal(validateCharacterName("Foo<script>").ok, false);
+  check("formatCharacterName: vectors traced from ACCharGenData::FormatName", () => {
+    for (const [raw, out] of [
+      ["bob2", "Bob"], ["BOB SMITH", "Bob Smith"], ["bob smith", "Bob smith"],
+      ["MACDONALD", "MacDonald"], ["mcdonald", "Mcdonald"], ["jean-luc", "Jean-luc"],
+      ["o''neil", "O'neil"], ["a--b", "A-b"], ["Bob III", "Bob III"], ["bob iii", "Bob iii"],
+      ["  x ", "X"], ["DEAN", "DeAn"], ["al", "Al"], ["Bob  Smith", "Bob Smith"],
+      ["'Bob", "Bob"], ["-Bob-", "Bob"], ["Foo.Bar", "Foobar"], ["Foo<script>", "Fooscript"],
+      ["Ash The Sword", "Ash The Sword"], ["D'or", "D'or"],
+    ]) {
+      assert.equal(formatCharacterName(raw), out, JSON.stringify(raw));
+    }
+    assert.equal(formatCharacterName("a".repeat(40)).length, 32);
+    assert.equal(trimNameDecorations("[ Bob ]"), "Bob");
   });
 
   // ─── [3] computeSkillBudget ────────────────────────────────────────
   console.log("\n[3] computeSkillBudget (heritage override math)");
 
-  // Costs callback mirroring catalog.skillCostsFor(heritage, skill).
-  // Skill 1 = Axe (trained 6, spec 4); Skill 2 = Bow (trained 0, spec 4 — free trained).
+  // Costs callback mirroring catalog.skillCostsFor(heritage, skill). Each
+  // cost is the tier's TOTAL. Skill 1 = Axe (trained 6, spec 10);
+  // Skill 2 = Bow (trained 0, spec 4 — free trained).
   const baseCosts = (skillId) => {
-    if (skillId === 1) return { trainedCost: 6, specializedCost: 4 };
+    if (skillId === 1) return { trainedCost: 6, specializedCost: 10 };
     if (skillId === 2) return { trainedCost: 0, specializedCost: 4 };
     if (skillId === 3) return { trainedCost: 4, specializedCost: 6 }; // Sho-overridden bow
     return null;
@@ -218,10 +228,10 @@ function check(name, fn) {
     assert.equal(r.spent, 6, "Axe trained = 6");
   });
 
-  check("computeSkillBudget: Specialized sums trainedCost + specializedCost", () => {
-    // Mirror character_gen.rs:399 — Specialized = trained + spec.
+  check("computeSkillBudget: Specialized charges specializedCost alone (the total)", () => {
+    // Retail UpdateRemainingSkillCredits: GetSkillSpecializedCost only.
     const r = computeSkillBudget({ 1: { class: 3 } }, baseCosts, 50);
-    assert.equal(r.spent, 10, "Axe spec = 6 + 4 = 10");
+    assert.equal(r.spent, 10, "Axe spec = 10, not 6 + 10");
   });
 
   check("computeSkillBudget: Inactive (class=0) skipped", () => {
@@ -231,7 +241,7 @@ function check(name, fn) {
   });
 
   check("computeSkillBudget: mixed plan computes correctly", () => {
-    // Axe trained (6) + Bow specialized (0 + 4 = 4) + Crossbow trained (4) = 14.
+    // Axe trained (6) + Bow specialized (4) + Crossbow trained (4) = 14.
     const r = computeSkillBudget(
       { 1: { class: 2 }, 2: { class: 3 }, 3: { class: 2 } }, baseCosts, 50);
     assert.equal(r.spent, 14);
@@ -242,9 +252,9 @@ function check(name, fn) {
   check("computeSkillBudget: over-budget flips valid=false + reports negative remaining", () => {
     const r = computeSkillBudget(
       { 1: { class: 3 }, 3: { class: 3 } }, baseCosts, 15);
-    // Axe spec 10 + Crossbow spec (4 + 6 = 10) = 20.
-    assert.equal(r.spent, 20);
-    assert.equal(r.remaining, -5);
+    // Axe spec 10 + Crossbow spec 6 = 16.
+    assert.equal(r.spent, 16);
+    assert.equal(r.remaining, -1);
     assert.equal(r.valid, false);
   });
 
@@ -286,15 +296,16 @@ function check(name, fn) {
     assert.equal(p.appearance, sampleAppearance, "appearance object passed through");
   });
 
-  check("buildCharGenPayload: trims whitespace from name", () => {
-    const p = buildCharGenPayload({
+  check("buildCharGenPayload: sends the name in FormatName form", () => {
+    const build = (name) => buildCharGenPayload({
       heritage: 1, gender: 1, templateOption: 0,
       attributes: { strength: 10, endurance: 10, coordination: 10,
                     quickness: 10, focus: 10, self: 10 },
       appearance: sampleAppearance, skillStates: {},
-      name: "  Asheron  ", startArea: 0, expectedSkillSlots: 5,
+      name, startArea: 0, expectedSkillSlots: 5,
     });
-    assert.equal(p.name, "Asheron");
+    assert.equal(build("  Asheron  ").name, "Asheron");
+    assert.equal(build("[bob2 SMITH]").name, "Bob Smith");
   });
 
   check("buildCharGenPayload: skillAdvancementClasses dense to expectedSkillSlots", () => {
@@ -340,45 +351,110 @@ function check(name, fn) {
       "characterSlot must be absent so the wasm-side default kicks in");
   });
 
-  // ─── [5] seedSkillStatesFromTemplate ───────────────────────────────
-  console.log("\n[5] seedSkillStatesFromTemplate (primary→3, normal→2)");
+  // ─── [5] resetSkillStates / applyTemplateSkills ───────────────────
+  console.log("\n[5] resetSkillStates / applyTemplateSkills (retail reset + ApplyTemplate)");
 
-  check("seedSkillStatesFromTemplate: primary skills map to Specialized (3)", () => {
-    const out = seedSkillStatesFromTemplate({
-      primarySkills: [1, 7], normalSkills: [],
+  // The real SkillTable (0x0E000004) plus the one heritage override every
+  // heritage carries (Arcane Lore: trained 0, specialised 2).
+  const realSkills = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "..", "data", "skill-table.json"), "utf8")).skills
+    .map((s) => ({ skillId: s.skillIdInt, name: s.name, chargenUse: s.chargenUse,
+                   trainedCost: s.trainedCost, specializedCost: s.specializedCost,
+                   retired: false }));
+  const realCosts = (id) => {
+    if (id === 14) return { trainedCost: 0, specializedCost: 2 };
+    const s = realSkills.find((x) => x.skillId === id);
+    return s ? { trainedCost: s.trainedCost, specializedCost: s.specializedCost } : null;
+  };
+  // The six profession templates of every standard heritage (CharGen
+  // 0x0E000002), as [normal, primary].
+  const TEMPLATES = {
+    "Bow Hunter": [[32, 48], [47, 46, 14, 6]],
+    "Swashbuckler": [[32, 21], [14, 6, 44, 49]],
+    "Life Caster": [[34, 31, 16], [14, 33]],
+    "War Mage": [[33], [16, 34]],
+    "Wayfarer": [[6, 23, 21, 47, 32], [46, 52, 49]],
+    "Soldier": [[47, 21], [44, 48, 6, 52]],
+  };
+
+  check("resetSkillStates: free skills Trained, the other 32 Untrained", () => {
+    assert.equal(realSkills.length, 38);
+    const out = resetSkillStates(realSkills, realCosts);
+    assert.equal(Object.keys(out).length, 38);
+    const trained = Object.entries(out).filter(([, v]) => v.class === 2).map(([k]) => Number(k));
+    assert.deepEqual(trained.sort((a, b) => a - b), [14, 15, 22, 24, 36, 40],
+      "Arcane Lore, Magic Defense, Jump, Run, Loyalty, Salvaging");
+    assert.equal(Object.values(out).filter((v) => v.class === 1).length, 32);
+  });
+
+  check("resetSkillStates: slot 0 and retired placeholders stay out", () => {
+    const costs = () => ({ trainedCost: 0, specializedCost: 0 });
+    const out = resetSkillStates([
+      { skillId: 0, chargenUse: true },
+      { skillId: 1, retired: true },
+      { skillId: 2, description: "Retired skill: Bow" }, // pkg without `retired`
+      { skillId: 6, retired: false },
+    ], costs);
+    assert.deepEqual(out, { 6: { class: 3 } }, "both costs 0 → Specialized");
+    assert.equal(isCreationTableSkill({ skillId: 9, description: "Retired skill: Spear" }), false);
+  });
+
+  check("templates: each costs exactly 52 under the retail rule", () => {
+    for (const [name, [normal, primary]] of Object.entries(TEMPLATES)) {
+      const states = templateSkillStates(realSkills, { normalSkills: normal, primarySkills: primary }, realCosts, 52);
+      for (const id of normal) assert.equal(states[id].class, 2, `${name} trains ${id}`);
+      for (const id of primary) assert.equal(states[id].class, 3, `${name} specialises ${id}`);
+      const b = computeSkillBudget(states, realCosts, 52);
+      assert.equal(b.spent, 52, name);
+      assert.equal(b.valid, true, name);
+    }
+  });
+
+  check("templates: one credit short, ApplyTemplate skips what it cannot afford", () => {
+    const [normal, primary] = TEMPLATES["War Mage"];
+    const states = templateSkillStates(realSkills, { normalSkills: normal, primarySkills: primary }, realCosts, 51);
+    assert.equal(states[33].class, 2, "Life Magic trains (12)");
+    assert.equal(states[16].class, 3, "Mana Conversion specialises (12)");
+    assert.equal(states[34].class, 1, "War Magic (28) no longer fits");
+    assert.equal(computeSkillBudget(states, realCosts, 51).valid, true);
+  });
+
+  check("payload: a Bow Hunter sends exactly 38 classes, every other slot Inactive", () => {
+    const [normal, primary] = TEMPLATES["Bow Hunter"];
+    const states = templateSkillStates(realSkills, { normalSkills: normal, primarySkills: primary }, realCosts, 52);
+    const p = buildCharGenPayload({
+      heritage: 1, gender: 1, templateOption: 1,
+      attributes: { strength: 40, endurance: 30, coordination: 100, quickness: 100, focus: 50, self: 10 },
+      appearance: sampleAppearance, skillStates: states, name: "Bob", startArea: 0,
+      expectedSkillSlots: 55,
     });
-    assert.equal(out[1].class, 3);
-    assert.equal(out[7].class, 3);
+    assert.equal(p.skillAdvancementClasses.length, 55);
+    assert.equal(p.skillAdvancementClasses.filter((c) => c !== 0).length, 38,
+      "VerifyCharacterGenerationResult needs one class per SkillTable entry");
+    for (let id = 0; id < 55; id++) {
+      if (!realSkills.some((s) => s.skillId === id)) assert.equal(p.skillAdvancementClasses[id], 0, `slot ${id}`);
+    }
+    assert.equal(p.skillAdvancementClasses[24], 2, "Run arrives trained");
   });
 
-  check("seedSkillStatesFromTemplate: normal skills map to Trained (2)", () => {
-    const out = seedSkillStatesFromTemplate({
-      primarySkills: [], normalSkills: [3, 9],
-    });
-    assert.equal(out[3].class, 2);
-    assert.equal(out[9].class, 2);
+  check("skillClassChoices: free tiers can't be dropped; raises need the credits", () => {
+    const run = { trainedCost: 0, specializedCost: 4 };
+    assert.equal(skillFloorClass(run), 2);
+    const runChoices = skillClassChoices(run, 2, 10);
+    assert.deepEqual(runChoices.map((c) => c.enabled), [false, true, true]);
+    assert.deepEqual(skillClassChoices(run, 2, 3).map((c) => c.enabled), [false, true, false],
+      "specialising Run costs 4 more");
+    const salvaging = { trainedCost: 0, specializedCost: 999 };
+    assert.deepEqual(skillClassChoices(salvaging, 2, 52).map((c) => c.enabled), [false, true, false]);
+    const melee = { trainedCost: 10, specializedCost: 20 };
+    assert.deepEqual(skillClassChoices(melee, 1, 9).map((c) => c.enabled), [true, false, false]);
+    assert.deepEqual(skillClassChoices(melee, 2, 10).map((c) => c.enabled), [true, true, true],
+      "trained → specialised costs the difference (10)");
   });
 
-  check("seedSkillStatesFromTemplate: primary overrides normal when both list a skill", () => {
-    // Real-world templates wouldn't but defensively the primary loop
-    // overwrites normal (or v.v. — verify the contract). Plugin code
-    // runs primary first, then normal, so normal would win — verify.
-    const out = seedSkillStatesFromTemplate({
-      primarySkills: [5], normalSkills: [5],
-    });
-    // The plugin's loop assigns primary→3 first, then normal→2 — so
-    // skill 5 ends up Trained. Document the behaviour to match.
-    assert.equal(out[5].class, 2, "normal loop runs second; overrides to Trained=2");
-  });
-
-  check("seedSkillStatesFromTemplate: empty template → empty plan", () => {
-    const out = seedSkillStatesFromTemplate({ primarySkills: [], normalSkills: [] });
-    assert.deepEqual(out, {});
-  });
-
-  check("seedSkillStatesFromTemplate: null template is safe", () => {
-    const out = seedSkillStatesFromTemplate(null);
-    assert.deepEqual(out, {});
+  check("applyTemplateSkills: a template skill outside the reset table is ignored", () => {
+    const out = applyTemplateSkills({ 6: { class: 1 } }, { normalSkills: [99], primarySkills: [6] }, realCosts, 52);
+    assert.deepEqual(out, { 6: { class: 3 } });
   });
 
   // ─── [6] pickDefaultTemplate + pickDefaultStartArea ────────────────
@@ -527,14 +603,17 @@ function check(name, fn) {
     assert.equal(b.error, null);
   });
 
-  check("computeAttributeBudget: incomplete (sum < budget) flags valid=false + error message", () => {
+  check("computeAttributeBudget: unspent credits are legal (retail warns once at Finish)", () => {
     const b = computeAttributeBudget(balanced, 100);
     assert.equal(b.spent, 60);
     assert.equal(b.remaining, 40);
-    assert.equal(b.valid, false);
-    assert.equal(b.perAttrValid, true,
-      "each attribute is in [10,100] — only the sum is wrong");
-    assert.match(b.error, /unspent|below budget/i);
+    assert.equal(b.valid, true);
+    assert.equal(b.unspent, true);
+    assert.equal(b.perAttrValid, true);
+    assert.equal(b.error, null);
+    assert.equal(computeAttributeBudget(balanced, 60).unspent, false);
+    assert.equal(ATTRIBUTE_CREDIT_WARNING_TEXT,
+      "Warning!\n\nYou have not used up your entire available Attribute Credits.  If you do not use them now you will lose them.  Do you wish to continue?");
   });
 
   check("computeAttributeBudget: exceeded (sum > budget) flags valid=false + negative remaining", () => {

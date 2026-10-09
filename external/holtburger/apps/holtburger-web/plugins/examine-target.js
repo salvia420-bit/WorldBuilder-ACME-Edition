@@ -53,7 +53,7 @@ import { fetchIconDataUrl } from "../ui/ac_icon_cache.js";
 import {
   itemTypeLabel, equipSlotsLabel, skillName, damageTypeLabel,
   formatThousands, protectionText, weaponSpeedText, damageRangeText,
-  highlightState, healthModel, examineHeaderModel, creatureAttributeRows,
+  highlightState, healthModel, examineHeaderModel, creatureAttributeRows, pkStatusText,
 } from "./examine_format.js";
 
 const VIEW_ID_STYLE = "hb-examine-view-style";
@@ -696,7 +696,12 @@ function populateFromEntity(body, ctx, model) {
     womPlayer = !!wo && (wo.canonicalObjectClass === "Player" || wo.className === "Player");
   } catch (_) {}
   model.isPlayer = (objDescFlags & 0x08) !== 0 || womPlayer;
-  model.isPK = model.isPlayer && (objDescFlags & 0x20) !== 0;
+  // pk-5: the LIVE PK bits (a PlayerKillerStatus update after spawn).
+  let liveOdf = 0;
+  try { liveOdf = (window.__sessionHandle?.objectDescFlags?.(guid >>> 0) ?? 0) >>> 0; } catch (_) { liveOdf = 0; }
+  const pkOdf = liveOdf || objDescFlags;
+  model.isPK = model.isPlayer && (pkOdf & 0x20) !== 0;
+  model.pkStatus = model.isPlayer ? pkStatusText(pkOdf) : null;
   const itemType = (v("itemType") ?? 0) >>> 0;
   const isCreature = (itemType & 0x10) !== 0 || (!itemType && Number(v("type")) === 16);
   model.kind = model.isPlayer ? "player" : (isCreature ? "creature" : "item");
@@ -1035,6 +1040,7 @@ function renderHeader(refs, model, snapshot) {
   model.kind = kind;
   const head = examineHeaderModel({
     kind, ints, strings, item: model.item, meta: model.meta, isPK: model.isPK,
+    pkStatus: model.pkStatus,
   });
   refs.textEl.innerHTML = "";
   if (kind === "empty") {
@@ -1202,7 +1208,7 @@ export function mountExamineBody(parentEl, ctx, opts = {}) {
 
   const model = {
     kind: "item", name: resolveExamineName(ctx), titleShown: null,
-    item: null, meta: null, isPlayer: false, isPK: false,
+    item: null, meta: null, isPlayer: false, isPK: false, pkStatus: null,
     health: null, healthFraction: null, loading: false,
     fromInventory: !!ctx?.fromInventory,
   };

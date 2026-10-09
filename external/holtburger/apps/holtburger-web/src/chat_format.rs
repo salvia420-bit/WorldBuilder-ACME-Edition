@@ -262,6 +262,30 @@ pub(crate) fn textbox_visible(chat_type: u32, globals_mask: u32) -> bool {
     !(is_legal_squelch_channel(chat_type) && globals_mask & text_type_bit(chat_type) != 0)
 }
 
+/// vendor-buy-2 (2026-10-08 round 5): the transient line for an
+/// InventoryServerSaveFailed (0x00A0). Retail's dispatch blames the
+/// outstanding request's object and `ACCWeenieObject::ServerSaysAttemptFailed`
+/// (acclient.c:439317) builds the text from that request; a purchase or sale
+/// (IR_SHOP_EVENT) has no case and code 0 no suffix, so a refused shop event
+/// prints nothing. ACE sends exactly that refusal as the event naming the
+/// player (Player_Commerce.cs, `InventoryServerSaveFailed(Session, Guid.Full)`),
+/// so a player guid gives `None`. Item failures keep their old line.
+pub(crate) fn inventory_save_failed_chat_line(
+    item_guid: u32,
+    player_guid: u32,
+    code: u32,
+    label: &str,
+) -> Option<String> {
+    if item_guid != 0 && item_guid == player_guid {
+        return None;
+    }
+    Some(if code == 0 {
+        "You can't wield that!".to_string()
+    } else {
+        format!("[Wield failed] {label}")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +451,25 @@ mod tests {
         assert!(!can_hear(5, 12, None, 1 << 12));
         // Sender 0 always passes.
         assert!(can_hear(0, 12, Some((0xFFFF_FFFF, true)), 0xFFFF_FFFF));
+    }
+
+    #[test]
+    fn a_refused_shop_event_adds_no_line() {
+        const ME: u32 = 0x5000_0001;
+        assert_eq!(inventory_save_failed_chat_line(ME, ME, 0, "None"), None);
+        assert_eq!(
+            inventory_save_failed_chat_line(0x8000_0001, ME, 0, "None").as_deref(),
+            Some("You can't wield that!")
+        );
+        assert_eq!(
+            inventory_save_failed_chat_line(0x8000_0001, ME, 0x1D, "YoureTooBusy").as_deref(),
+            Some("[Wield failed] YoureTooBusy")
+        );
+        assert_eq!(
+            inventory_save_failed_chat_line(0, 0, 0, "None").as_deref(),
+            Some("You can't wield that!"),
+            "no player yet: keep the old line"
+        );
     }
 
     #[test]

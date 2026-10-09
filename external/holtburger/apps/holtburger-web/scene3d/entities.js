@@ -1282,6 +1282,7 @@ import {
   CHARACTER_OPTION_AUTO_TARGET,
   PROP_IID_CURRENT_ATTACKER,
   consumeWorldUseThrottle,
+  readAttackMeta,
 } from "./target_cycle.js";
 // A2-death (2026-10-08 round 2): the selection / corpse-claim rules around the
 // death hold (pure; scene3d/death_hold.js).
@@ -8824,6 +8825,9 @@ export class EntityManager {
       const p = inst.root.position;
       const ok = cycleCandidateOk(inst.meta, {
         playerMeta,
+        // pk-1: the live PK bits / pet owner, read only for candidates that
+        // reach the attackable test.
+        attackMeta: () => readAttackMeta(sh, g, inst.meta),
         isFellow: !!fellows?.has(g),
         showable: () => this._radarShowable(sh, g, inst.meta),
         stateVisible: inst._stateVisible !== false,
@@ -8865,17 +8869,18 @@ export class EntityManager {
   }
 
   /**
-   * The local player's spawn meta for `objectIsAttackable` (its PK bits), or
-   * a flags-only stand-in read from wasm when the player rig is not spawned.
+   * The local player's meta for `objectIsAttackable` with its LIVE PK bits
+   * (pk-1, `?attackLiveFlags`): a PlayerKillerStatus update after spawn
+   * (altar, @pklite, PK death and respite) changes what the player may
+   * attack. A flags-only stand-in when the player rig is not spawned.
    */
   _localAttackMeta(selfGuid) {
-    const m = this.entityMap.get(selfGuid >>> 0)?.meta;
-    if (m) return m;
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    const m = this.entityMap.get(selfGuid >>> 0)?.meta ?? null;
+    const live = readAttackMeta(sh, selfGuid >>> 0, m);
+    if (live) return live;
     let odf = 0;
-    try {
-      const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
-      odf = (sh?.objectDescFlags?.(selfGuid >>> 0) ?? 0) >>> 0;
-    } catch (_) { odf = 0; }
+    try { odf = (sh?.objectDescFlags?.(selfGuid >>> 0) ?? 0) >>> 0; } catch (_) { odf = 0; }
     return { objDescFlags: odf };
   }
 
@@ -9085,7 +9090,8 @@ export class EntityManager {
     if (me !== 0 && g === me) return false;
     const inst = this.entityMap.get(g);
     if (!inst) return false;
-    return objectIsAttackable(inst.meta, this._localAttackMeta(me));
+    const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    return objectIsAttackable(readAttackMeta(sh, g, inst.meta), this._localAttackMeta(me));
   }
 
   /**

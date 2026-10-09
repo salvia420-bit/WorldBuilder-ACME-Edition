@@ -23,6 +23,22 @@ pub fn retail_failure_text(error: WeenieError) -> Option<&'static str> {
     }
 }
 
+/// pk-3 (2026-10-08 round 5): the chat text type retail's
+/// `ClientCommunicationSystem::HandleFailureEvent` (acclient.c:413716)
+/// prints a code at, where the PK set differs from the default: 7 (Magic)
+/// for the spell / combat / portal refusals (0x4E-0x54 :416037-416062,
+/// 0x45C/0x45D :415614-415627, 0x4CC :415245, 0x4F3-0x4F9, 0x502/0x503),
+/// 0 for the PK status messages (0x4EC-0x4F2, 0x504, 0x507, 0x508,
+/// 0x55F, 0x560; :414486-414624). `None` = not part of that set.
+pub fn retail_text_type(error: WeenieError) -> Option<u32> {
+    let code = error as u32;
+    match code {
+        0x4E..=0x54 | 0x45C | 0x45D | 0x4CC | 0x4F3..=0x4F9 | 0x502 | 0x503 => Some(7),
+        0x4EC..=0x4F2 | 0x504 | 0x507 | 0x508 | 0x55F | 0x560 => Some(0),
+        _ => None,
+    }
+}
+
 /// use-3 (2026-10-08): failure codes retail never prints
 /// (`HandleFailureEvent` has no case for 0x3B / 0x3C, so they fall to its
 /// silent default branch).
@@ -62,17 +78,19 @@ pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> Strin
         WeenieError::YouFailToAffectTheyCannotBeHarmed => {
             Some("You fail to affect {} because they cannot be harmed!")
         }
+        // pk-3: retail names the target twice (sprintf with user_data
+        // twice, HandleFailureEvent :416037-416062).
         WeenieError::YouFailToAffectWithBeneficialSpells => {
-            Some("You fail to affect {} because beneficial spells do not affect them!")
+            Some("You fail to affect {} because beneficial spells do not affect {}!")
         }
         WeenieError::YouFailToAffectYouAreNotPk => {
             Some("You fail to affect {} because you are not a player killer!")
         }
         WeenieError::YouFailToAffectTheyAreNotPk => {
-            Some("You fail to affect {} because they are not a player killer!")
+            Some("You fail to affect {} because {} is not a player killer!")
         }
         WeenieError::YouFailToAffectNotSamePkType => Some(
-            "You fail to affect {} because you are not the same sort of player killer as them!",
+            "You fail to affect {} because you are not the same sort of player killer as {}!",
         ),
         WeenieError::YouFailToAffectAcrossHouseBoundary => {
             Some("You fail to affect {} because you are acting across a house boundary!")
@@ -152,13 +170,13 @@ pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> Strin
             Some("{} fails to affect you because you cannot be harmed!")
         }
         WeenieError::FailsToAffectYouTheyAreNotPk => {
-            Some("{} fails to affect you because they are not a player killer!")
+            Some("{} fails to affect you because {} is not a player killer!")
         }
         WeenieError::FailsToAffectYouYouAreNotPk => {
             Some("{} fails to affect you because you are not a player killer!")
         }
         WeenieError::FailsToAffectYouNotSamePkType => Some(
-            "{} fails to affect you because you are not the same sort of player killer as them!",
+            "{} fails to affect you because you are not the same sort of player killer as {}!",
         ),
         WeenieError::FailsToAffectYouAcrossHouseBoundary => {
             Some("{} fails to affect you across a house boundary!")
@@ -289,6 +307,63 @@ pub fn format_weenie_error(error: WeenieError, parameter: Option<&str>) -> Strin
             Some("You have restored allegiance chat privileges to {}.")
         }
         WeenieError::CowersFromYou => Some("{} cowers from you!"),
+
+        // pk-3 (2026-10-08 round 5): the PK status and refusal texts,
+        // verbatim from HandleFailureEvent (acclient.c:414486-414624,
+        // :414128-414153, :415245-415250, :415614-415627). Without them the
+        // PascalCase fallback printed "You are now p k lite."
+        WeenieError::PKsMayNotUsePortal => Some("Player killers may not interact with that portal!"),
+        WeenieError::NonPKsMayNotUsePortal => {
+            Some("Non-player killers may not interact with that portal!")
+        }
+        WeenieError::YouHaveBeenInPKBattleTooRecently => {
+            Some("You have been involved in a player killer battle too recently to do that!")
+        }
+        WeenieError::CannotChangePKStatusWhileRecovering => Some(
+            "You cannot modify your player killer status while you are recovering from a PK death.",
+        ),
+        WeenieError::AdvocatesCannotChangePKStatus => {
+            Some("Advocates may not change their player killer status!")
+        }
+        WeenieError::LevelTooLowToChangePKStatusWithObject => {
+            Some("Your level is too low to change your player killer status with this object.")
+        }
+        WeenieError::LevelTooHighToChangePKStatusWithObject => {
+            Some("Your level is too high to change your player killer status with this object.")
+        }
+        WeenieError::YouFeelAHarshDissonance => Some(
+            "You feel a harsh dissonance, and you sense that an act of killing you have committed recently is interfering with the conversion.",
+        ),
+        WeenieError::YouArePKAgain => Some(
+            "Bael'Zharon's power flows through you again. You are once more a player killer.",
+        ),
+        WeenieError::YouAreTemporarilyNoLongerPK => Some(
+            "Bael'Zharon has granted you respite after your moment of weakness. You are temporarily no longer a player killer.",
+        ),
+        WeenieError::PKLiteMayNotUsePortal => {
+            Some("Lite Player Killers may not interact with that portal!")
+        }
+        WeenieError::LifestoneMagicProtectsYou => {
+            Some("The Lifestone's magic protects you from the attack!")
+        }
+        WeenieError::PortalEnergyProtectsYou => {
+            Some("The portal's residual energy protects you from the attack!")
+        }
+        WeenieError::YouAreNonPKAgain => Some(
+            "You are enveloped in a feeling of warmth as you are brought back into the protection of the Light. You are once again a Non-Player Killer.",
+        ),
+        WeenieError::OnlyNonPKsMayEnterPKLite => Some(
+            "Only Non-Player Killers may enter PK Lite. Please see @help pklite for more details about this command.",
+        ),
+        WeenieError::YouAreNowPKLite => {
+            Some("A cold wind touches your heart. You are now a Player Killer Lite.")
+        }
+        WeenieError::OnlyPKsMayUseCommand => {
+            Some("Only Player Killer characters may use this command!")
+        }
+        WeenieError::OnlyPKLiteMayUseCommand => {
+            Some("Only Player Killer Lite characters may use this command!")
+        }
         _ => None,
     };
 
@@ -400,6 +475,64 @@ mod tests {
             format_weenie_error(WeenieError::YouKilledYourself, None),
             "Ack! You killed yourself!"
         );
+    }
+
+    #[test]
+    fn pk_texts_read_as_retail() {
+        use WeenieError as E;
+        for (error, text) in [
+            (E::YouAreNowPKLite, "A cold wind touches your heart. You are now a Player Killer Lite."),
+            (
+                E::YouAreTemporarilyNoLongerPK,
+                "Bael'Zharon has granted you respite after your moment of weakness. You are temporarily no longer a player killer.",
+            ),
+            (
+                E::YouArePKAgain,
+                "Bael'Zharon's power flows through you again. You are once more a player killer.",
+            ),
+            (
+                E::YouAreNonPKAgain,
+                "You are enveloped in a feeling of warmth as you are brought back into the protection of the Light. You are once again a Non-Player Killer.",
+            ),
+            (
+                E::OnlyNonPKsMayEnterPKLite,
+                "Only Non-Player Killers may enter PK Lite. Please see @help pklite for more details about this command.",
+            ),
+            (
+                E::YouHaveBeenInPKBattleTooRecently,
+                "You have been involved in a player killer battle too recently to do that!",
+            ),
+            (E::PKsMayNotUsePortal, "Player killers may not interact with that portal!"),
+            (E::PKLiteMayNotUsePortal, "Lite Player Killers may not interact with that portal!"),
+            (E::OnlyPKsMayUseCommand, "Only Player Killer characters may use this command!"),
+            (E::OnlyPKLiteMayUseCommand, "Only Player Killer Lite characters may use this command!"),
+        ] {
+            assert_eq!(format_weenie_error(error, None), text, "{error:?}");
+        }
+        // The named forms carry the name twice, as retail's sprintf does.
+        assert_eq!(
+            format_weenie_error(E::YouFailToAffectTheyAreNotPk, Some("Bob")),
+            "You fail to affect Bob because Bob is not a player killer!"
+        );
+        assert_eq!(
+            format_weenie_error(E::FailsToAffectYouNotSamePkType, Some("Bob")),
+            "Bob fails to affect you because you are not the same sort of player killer as Bob!"
+        );
+        assert_eq!(
+            format_weenie_error(E::YouFailToAffectYouAreNotPk, Some("Bob")),
+            "You fail to affect Bob because you are not a player killer!"
+        );
+    }
+
+    #[test]
+    fn pk_text_types_follow_handle_failure_event() {
+        assert_eq!(retail_text_type(WeenieError::PKLiteMayNotUsePortal), Some(7));
+        assert_eq!(retail_text_type(WeenieError::YouHaveBeenInPKBattleTooRecently), Some(7));
+        assert_eq!(retail_text_type(WeenieError::YouFailToAffectTheyAreNotPk), Some(7));
+        assert_eq!(retail_text_type(WeenieError::LifestoneMagicProtectsYou), Some(7));
+        assert_eq!(retail_text_type(WeenieError::YouAreNowPKLite), Some(0));
+        assert_eq!(retail_text_type(WeenieError::OnlyPKsMayUseCommand), Some(0));
+        assert_eq!(retail_text_type(WeenieError::YoureTooBusy), None);
     }
 
     #[test]

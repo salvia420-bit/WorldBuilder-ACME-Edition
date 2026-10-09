@@ -108,8 +108,10 @@ const tcycle = await import(pathToFileURL(path.join(APP, "scene3d", "target_cycl
 // use-3 remainder (2026-10-08 follow-ups): corpse-loot-bar's kind:13
 // move-failure handler helpers (the real ones).
 const weenieErr = await import(pathToFileURL(path.join(APP, "plugins", "weenie_error_messages.js")).href);
+// extcontainer-1/2 (2026-10-08 round 5): the window's range / gate rules (real).
+const groundRules = await import(pathToFileURL(path.join(APP, "plugins", "ground_container_rules.js")).href);
 globalThis.__T = {
-  ...helpers, ...drag, ...wpos, ...kit, consumeUseThrottle: tcycle.consumeUseThrottle,
+  ...helpers, ...drag, ...wpos, ...kit, ...groundRules, consumeUseThrottle: tcycle.consumeUseThrottle,
   clearsGroundObjectOnFailure: weenieErr.clearsGroundObjectOnFailure,
   moveFailCloseGroundEnabled: weenieErr.moveFailCloseGroundEnabled,
 };
@@ -164,6 +166,8 @@ const lootMod = load("plugins/corpse-loot-bar.js", ["openFor", "closeBar", "stat
     "planBackpackPlacement",
     "pendingOps", "showItemTooltip", "hideItemTooltip", "showItemToast", "localPlayerGuid",
     "clearsGroundObjectOnFailure", "moveFailCloseGroundEnabled",
+    "groundContainerRangeEnabled", "groundContainerRangeVerdict", "isLandscapeGroundObject",
+    "landblockToWorld",
   ]),
 });
 

@@ -23,6 +23,9 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         c @ (SessionCommand::PopulateTerrain { .. }
         | SessionCommand::RecallAllegianceHometown { .. }
         | SessionCommand::TeleToLifestone { .. }
+        | SessionCommand::EnterPkLite { .. }
+        | SessionCommand::TeleToPkArena { .. }
+        | SessionCommand::TeleToPklArena { .. }
         | SessionCommand::JumpChargeBegin { .. }
         | SessionCommand::JumpChargeCancel { .. }
         | SessionCommand::JumpChargeCommence { .. }

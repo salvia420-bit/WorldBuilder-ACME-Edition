@@ -48,6 +48,14 @@ pub struct SkillBase {
     pub upper_bound: f64,
     pub lower_bound: f64,
     pub learn_mod: f64,
+    /// True only for the retired-skill placeholders `parse_skill_hash_table`
+    /// injects (ACE AddRetiredSkills). They are not in the real SkillTable,
+    /// so retail character creation never sees them: `CharGenState::
+    /// ResetSkillLevels` (acclient.c:495832) leaves their slots Inactive and
+    /// `VerifyCharacterGenerationResult` counts only real table entries.
+    #[br(calc = false)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub retired: bool,
 }
 
 #[derive(BinRead, Debug, Clone, serde::Serialize)]
@@ -122,6 +130,7 @@ fn parse_skill_hash_table<R: Read + Seek>(
             upper_bound: 0.0,
             lower_bound: 0.0,
             learn_mod: 0.0,
+            retired: true,
         });
     }
 
@@ -190,5 +199,7 @@ mod tests {
         // Check retired (manual injection)
         // Let's check sword (11)
         assert!(table.skill_base_hash.contains_key(&11));
+        assert!(table.skill_base_hash[&11].retired, "injected placeholders are marked");
+        assert!(!skill.retired, "a parsed DAT skill is not");
     }
 }

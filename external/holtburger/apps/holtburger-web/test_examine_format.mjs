@@ -130,6 +130,24 @@ console.log("== examineHeaderModel ==");
   check("player: no hex / ids anywhere in the lines", m.lines.every((l) => !/0x|\d{3,}/.test(l.text)), JSON.stringify(m));
 }
 
+// pk-5 (2026-10-08 round 5): CharExamineUI::SetAppraiseInfo tests IsPK, then
+// IsPKLite, else Non-Player Killer — every examined character gets a line.
+is("pkStatusText: PK (0x20)", F.pkStatusText(0x20), "Player Killer");
+is("pkStatusText: PK Lite (0x2000000)", F.pkStatusText(0x2000000), "Player Killer Lite");
+is("pkStatusText: PK tested first", F.pkStatusText(0x2000020), "Player Killer");
+is("pkStatusText: NPK", F.pkStatusText(0x8), "Non-Player Killer");
+{
+  const npk = F.examineHeaderModel({ kind: "player", ints: { HeritageGroup: 1 }, pkStatus: "Non-Player Killer" });
+  check("player: an NPK gets the Non-Player Killer line (no warn tone)",
+    npk.lines.some((l) => l.text === "Non-Player Killer" && !l.tone), JSON.stringify(npk));
+  const lite = F.examineHeaderModel({ kind: "player", ints: { HeritageGroup: 1 }, pkStatus: "Player Killer Lite" });
+  check("player: PK Lite line", lite.lines.some((l) => l.text === "Player Killer Lite"), JSON.stringify(lite));
+  const pk = F.examineHeaderModel({ kind: "player", ints: { HeritageGroup: 1 }, pkStatus: "Player Killer" });
+  check("player: PK keeps the warn tone", pk.lines.some((l) => l.text === "Player Killer" && l.tone === "warn"), JSON.stringify(pk));
+  const creature = F.examineHeaderModel({ kind: "creature", pkStatus: "Non-Player Killer" });
+  check("creature: no PK line", !creature.lines.some((l) => /Killer/.test(l.text)), JSON.stringify(creature));
+}
+
 console.log("== creatureAttributeRows (enchstats-4: AttributeInfoRegion / Attribute2ndInfoRegion) ==");
 {
   const byLabel = (rows) => Object.fromEntries(rows.map((r) => [r.label, r]));

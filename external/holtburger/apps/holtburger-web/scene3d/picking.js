@@ -20,8 +20,11 @@ import { faceDeadzoneRad, faceTurnStep } from "./camera_math.js";
 import { serverTurnOwnsFacing } from "./server_turn.js";
 import {
   objectIsAttackable, itemIsUseable, isGroundItemType, worldUseIsPickup, worldUseRejection,
-  consumeWorldUseThrottle, ODF_PLAYER, ODF_CORPSE,
+  consumeWorldUseThrottle, ODF_PLAYER, ODF_CORPSE, readAttackMeta, altarConfirmText,
 } from "./target_cycle.js";
+import {
+  containerOpenable, groundContainerUseNotice, isContainerObject, lockedContainerNoticeEnabled,
+} from "../plugins/ground_container_rules.js";
 import { pickNearestSphereHit } from "./pick_math.js";
 
 const ATTACK_HEIGHT_MEDIUM = 2;
@@ -705,7 +708,11 @@ export function setupClickPicking({
       const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
       if (me !== 0 && (guid >>> 0) === me) return false; // never attack yourself
       const self = me !== 0 ? get(me) : null;
-      return objectIsAttackable(ent.meta || ent, self ? (self.meta || self) : null);
+      // pk-1: the live PK bits and pet owner, as retail reads them.
+      return objectIsAttackable(
+        readAttackMeta(sessionHandle, guid >>> 0, ent.meta || ent),
+        me !== 0 ? readAttackMeta(sessionHandle, me, self ? (self.meta || self) : null) : null,
+      );
     } catch (_) { return false; }
   }
 
@@ -748,6 +755,66 @@ export function setupClickPicking({
         name: name || "object",
       });
     } catch (_) { return null; }
+  }
+
+  // extcontainer-4 (2026-10-08 round 5, `?lockedContainerNotice`): the line
+  // retail prints after the Use of a container it cannot open
+  // (ItemHolder::AttemptSetGroundObject, acclient.c:432280); vanilla ACE
+  // only plays the lock sound. A live Locked update wins over the ODF bit.
+  function worldUseNotice(guid) {
+    if (!lockedContainerNoticeEnabled()) return null;
+    try {
+      const g = guid >>> 0;
+      const me = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      if (g === 0 || g === me) return null;
+      const em = liveScene3d?.entityManager;
+      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+      const meta = ent ? (ent.meta || ent) : {};
+      const odf = ((meta.objDescFlags ?? sessionHandle.objectDescFlags?.(g)) >>> 0) || 0;
+      const int = (stype) => {
+        try { return sessionHandle.objectIntProperty?.(g, stype); } catch (_) { return undefined; }
+      };
+      const iid = (stype) => {
+        try { return (sessionHandle.objectInstanceIdProperty?.(g, stype) >>> 0) || 0; } catch (_) { return 0; }
+      };
+      let locked;
+      try { locked = sessionHandle.objectBoolProperty?.(g, 3); } catch (_) { locked = undefined; }
+      const itemType = ((meta.itemType ?? int(1)) >>> 0) || 0;
+      let name = meta.name || "";
+      if (!name) { try { name = sessionHandle.objectStringProperty?.(g, 1) || ""; } catch (_) { name = ""; } }
+      return groundContainerUseNotice({
+        isContainer: isContainerObject({ odf, itemsCapacity: int(6) | 0, containersCapacity: int(7) | 0 }),
+        owned: me !== 0 && (iid(2) === me || iid(3) === me),
+        useable: int(16),
+        openable: containerOpenable(odf, locked),
+        isCreature: (itemType & 0x10) !== 0,
+        name,
+      });
+    } catch (_) { return null; }
+  }
+
+  // pk-2 (2026-10-08 round 5, `?pkAltarConfirm`): retail asks before a PK /
+  // NPK altar is used (target_cycle.js altarConfirmText). The switch bits
+  // are static, so the spawn meta is enough; the wasm ODF is the fallback.
+  function pkAltarConfirmText(guid) {
+    try {
+      const g = guid >>> 0;
+      const em = liveScene3d?.entityManager;
+      const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+      const meta = ent ? (ent.meta || ent) : {};
+      const odf = ((meta.objDescFlags ?? sessionHandle.objectDescFlags?.(g)) >>> 0) || 0;
+      return altarConfirmText(odf);
+    } catch (_) { return null; }
+  }
+  // The yes / no dialog (ClientUISystem::UsageCallback sends the Use only
+  // on Yes). Never sends without a Yes.
+  function pkAltarConfirm(text, onYes) {
+    const modal = window.__modalConfirmCallback;
+    if (typeof modal === "function") {
+      modal({ message: text, dialogId: "pkAltar:use", onConfirm: onYes });
+      return;
+    }
+    if (typeof window.confirm === "function" && window.confirm(text)) onYes();
   }
 
   // F17-2 double-click bookkeeping, shared by every use-class branch:
@@ -1346,12 +1413,22 @@ export function setupClickPicking({
             if (refusal) emitActionRejected(refusal);
             return;
           }
-          cancelClientMove();
-          console.info(
-            `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
-            `(attackable=${entityIsAttackableTarget(guid)} usable=${entityIsUsable(guid)})`,
-          );
-          sessionHandle.useObject(guid >>> 0);
+          const sendUse = () => {
+            cancelClientMove();
+            console.info(
+              `[use-or-attack] 0x${(guid >>> 0).toString(16)} use ` +
+              `(attackable=${entityIsAttackableTarget(guid)} usable=${entityIsUsable(guid)})`,
+            );
+            sessionHandle.useObject(guid >>> 0);
+            const notice = worldUseNotice(guid);
+            if (notice) emitActionRejected(notice);
+          };
+          const altar = pkAltarConfirmText(guid);
+          if (altar) {
+            pkAltarConfirm(altar, sendUse);
+            return;
+          }
+          sendUse();
         }
       }
     } catch (e) {
@@ -1847,6 +1924,11 @@ export function setupClickPicking({
     // object is refused with retail's line (use-2).
     window.__worldUseIsPickup = (guid) => RETAIL_USE_RESULT && entityIsGroundItem(guid);
     window.__worldUseRefusal = worldUseRefusal;
+    // Round 5 (2026-10-08): the post-Use locked line and the altar question
+    // for the toolbar / radial Use (inventory_helpers.worldUseLeaf deps).
+    window.__worldUseNotice = worldUseNotice;
+    window.__pkAltarConfirmText = pkAltarConfirmText;
+    window.__pkAltarConfirm = pkAltarConfirm;
   }
 
   // Phase I.1 follow-on (handoff Tier 1): manual-input override.

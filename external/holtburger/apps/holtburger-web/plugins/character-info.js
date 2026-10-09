@@ -65,6 +65,7 @@ import {
   TRAINING, decideTrainAction, statRaiseCost, skillSpentXp,
   estimateVitalRanks, levelProgress, skillGroupFor, vitaeModifier,
 } from "./train-skills.js";
+import { pkStatusText } from "./examine_format.js";
 
 const VIEW_STYLE_ID = "hb-charinfo-view-style";
 const SP = "./data/ui-sprites";
@@ -704,6 +705,8 @@ export const view = {
     const headMain = el("div", "hb-ci-head-main");
     const nameEl = el("div", "hb-ci-name"); nameEl.dataset.el = "0x10000231";
     const subEl = el("div", "hb-ci-sub"); subEl.dataset.el = "0x10000232";
+    // pk-5: PKStatus (gmStatManagementUI::UpdatePKStatus), from the live bits.
+    const pkEl = el("div", "hb-ci-sub"); pkEl.dataset.el = "0x10000233";
     const xpRow = el("div", "hb-ci-kv");
     const xpK = el("span"); const xpV = el("span");
     xpRow.append(xpK, xpV);
@@ -713,7 +716,7 @@ export const view = {
     const meterK = el("span"); const meterV = el("span");
     meterLabel.append(meterK, meterV);
     meter.append(meterFill, meterLabel);
-    headMain.append(nameEl, subEl, xpRow, meter);
+    headMain.append(nameEl, subEl, pkEl, xpRow, meter);
     const vdiv = el("div", "hb-ci-vdiv"); vdiv.dataset.el = "0x10000239";
     const levelBox = el("div", "hb-ci-level");
     const levelK = el("span"); levelK.dataset.el = "0x1000023A";
@@ -780,12 +783,29 @@ export const view = {
       return selectedKey ? model.find((m) => m.key === selectedKey) ?? null : null;
     }
 
+    // The local player's PK status from the live ODF; null before the
+    // player is known (the row then stays hidden).
+    let shownPk = null;
+    function livePkStatus() {
+      try {
+        const h = getHandle();
+        const me = (window.getLocalPlayerGuid?.() ?? h?.playerGuid?.() ?? 0) >>> 0;
+        if (!me) return null;
+        const odf = (h?.objectDescFlags?.(me) ?? 0) >>> 0;
+        return odf ? pkStatusText(odf) : null;
+      } catch (_) { return null; }
+    }
+
     function renderHeader() {
       const level = getLevel(stats);
       setAcText(nameEl, stats?.name || "—", { color: C_GOLD, fit: true });
       const tName = titleName(titles.currentId);
       subEl.dataset.empty = tName ? "0" : "1";
       if (tName) setAcText(subEl, tName, { color: C_DIM, fontId: COMPACT_FONT_ID, fit: true });
+      const pk = livePkStatus();
+      shownPk = pk;
+      pkEl.dataset.empty = pk ? "0" : "1";
+      if (pk) setAcText(pkEl, pk, { color: C_DIM, fontId: COMPACT_FONT_ID, fit: true });
       const total = getTotalXp(stats);
       setAcText(xpV, stats ? fmt(total) : "—", { color: C_VALUE, fontId: COMPACT_FONT_ID });
       const prog = (stats && xpTables?.levels) ? levelProgress(xpTables.levels, level, total) : null;
@@ -1042,6 +1062,11 @@ export const view = {
       };
       raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 16);
     };
+    // pk-5: a PlayerKillerStatus change emits neither event below; one cheap
+    // wasm read a second repaints when the status text changed.
+    const pkTimer = setInterval(() => {
+      if (root.isConnected && livePkStatus() !== shownPk) schedule();
+    }, 1000);
     const client = window.__pluginClient;
     let off = null;
     if (client?.events?.on) {
@@ -1058,6 +1083,7 @@ export const view = {
 
     return () => {
       if (off) off();
+      clearInterval(pkTimer);
       if (raf) { try { cancelAnimationFrame(raf); } catch (_) { clearTimeout(raf); } }
       clearTimeout(awaitTimer);
       if (activeInstance === instance) activeInstance = null;

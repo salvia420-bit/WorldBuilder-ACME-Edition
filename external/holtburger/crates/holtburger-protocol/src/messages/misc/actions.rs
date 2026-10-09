@@ -54,6 +54,21 @@ impl ProtocolPack for TeleToPklArenaActionData {
     fn pack(&self, _buf: &mut Vec<u8>) {}
 }
 
+/// `@pkarena` / `@pka` (retail `ClientCommunicationSystem::DoPKArena` →
+/// `CM_Character::Event_TeleToPKArena`, opcode 0x0027, acclient.c:698364).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TeleToPkArenaActionData;
+
+impl ProtocolUnpack for TeleToPkArenaActionData {
+    fn unpack(_data: &[u8], _offset: &mut usize) -> Option<Self> {
+        Some(Self)
+    }
+}
+
+impl ProtocolPack for TeleToPkArenaActionData {
+    fn pack(&self, _buf: &mut Vec<u8>) {}
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TeleToMarketPlaceActionData;
 
@@ -198,6 +213,17 @@ mod tests {
         };
 
         let fixture = hex::decode("2222222226000000").unwrap();
+        assert_pack_unpack_parity(&fixture, &action);
+    }
+
+    #[test]
+    fn test_tele_to_pk_arena_fixture() {
+        let action = GameActionMessage {
+            sequence: 0x22222222,
+            action: GameAction::TeleToPkArena(Box::new(TeleToPkArenaActionData)),
+        };
+
+        let fixture = hex::decode("2222222227000000").unwrap();
         assert_pack_unpack_parity(&fixture, &action);
     }
 

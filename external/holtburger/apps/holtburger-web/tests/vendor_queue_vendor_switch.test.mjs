@@ -118,6 +118,13 @@ globalThis.setInterval = () => 0;
 globalThis.clearInterval = () => {};
 globalThis.fetch = () => Promise.reject(new Error("no network in this suite"));
 
+// Round 5: the player's purse / pack (a 10,000 p stack) and the notices.
+const PYREAL_ROW = { guid: 0x7f000001, wcid: 273, name: "Pyreal", value: 10000, stackSize: 10000,
+  itemType: 0x40, equipMask: 0, containerId: 0 };
+let ROWS = [PYREAL_ROW];
+globalThis.__rows = () => ROWS;
+globalThis.__notices = [];
+
 /* ── load the plugin ──────────────────────────────────────────────────── */
 
 const INERT = "() => undefined";
@@ -132,6 +139,9 @@ const LOGIC_NAMES = [
   "sellStagingPlan",
   // items-1 step 2 (2026-10-08): split before sell.
   "planSellSplit", "resolveSellSplits", "SELL_SPLIT_FAILED_TEXT",
+  // Round 5 (2026-10-08): buy-side refusals, line cost, supply, filters.
+  "vendorLineCost", "vendorRemaining", "vendorBuySlotsNeeded", "vendorPlayerRoom", "vendorBuyRefusal",
+  "VENDOR_TYPE_FILTERS", "VENDOR_MAX_QUEUED", "VENDOR_TOO_MUCH_TEXT",
 ];
 const body = spliceModule(src, {
   label: "plugins/vendor-ui.js",
@@ -157,7 +167,9 @@ const body = spliceModule(src, {
     kitButton: "() => document.createElement('button')",
     fillSlotIcon: INERT,
     wireDropTarget: INERT,
-    inventoryRows: "() => []",
+    // Round 5: Buy checks the purse and the main pack (vendor-buy-1).
+    inventoryRows: "() => globalThis.__rows()",
+    chatNotice: "(t) => globalThis.__notices.push(String(t))",
     entityWorldPos: "() => null",
     localPlayerWorldPos: "() => null",
     devHex: "(g) => String(g >>> 0)",
@@ -170,7 +182,7 @@ const body = spliceModule(src, {
 // eslint-disable-next-line no-new-func
 const mod = new Function(
   ...LOGIC_NAMES,
-  body + "\nreturn { mount, state, handleConfirmBuy };\n",
+  body + "\nreturn { mount, state, handleConfirmBuy, handleAddToBuying };\n",
 )(...LOGIC_NAMES.map((n) => commerceLogic[n]));
 
 mod.mount({ client: null });
@@ -251,6 +263,108 @@ check("a queue built at the CURRENT vendor sends that vendor's guids", () => {
   assert.equal(buyCalls[0].vendorGuid, VENDOR_B);
   assert.deepEqual(buyCalls[0].guids, [B_ITEM]);
 });
+
+/* ── [4] vendor-buy-4: a same-vendor refresh drops unlisted entries ──── */
+
+const A2_ITEM = 0x80000012;
+function twoItemVendor(listed) {
+  const v = rawVendor(VENDOR_A, A_ITEM, "Vendor A");
+  if (listed.includes(A2_ITEM)) {
+    v.items.push({ itemGuid: A2_ITEM, wcid: 124, name: "A unique", value: 50, stackSize: 1,
+      itemType: 0x80, iconId: 0x06000002 });
+  }
+  if (!listed.includes(A_ITEM)) v.items = v.items.filter((i) => i.itemGuid !== A_ITEM);
+  return v;
+}
+dbg.openWith(twoItemVendor([A_ITEM, A2_ITEM]));
+mod.state.buyQueue = [
+  { itemGuid: A_ITEM, name: "A stock", value: 100, amount: 1 },
+  { itemGuid: A2_ITEM, name: "A unique", value: 50, amount: 1 },
+];
+dbg.openWith(twoItemVendor([A_ITEM, A2_ITEM]));
+check("[4] a refresh that still lists both keeps both", () => {
+  assert.deepEqual(mod.state.buyQueue.map((q) => q.itemGuid), [A_ITEM, A2_ITEM]);
+});
+dbg.openWith(twoItemVendor([A_ITEM]));
+check("[4] a refresh without the unique drops it (gmVendorUI::OpenVendor updating)", () => {
+  assert.deepEqual(mod.state.buyQueue.map((q) => q.itemGuid), [A_ITEM]);
+});
+buyCalls.length = 0;
+mod.handleConfirmBuy();
+check("[4] Buy All then sends only what is still for sale", () => {
+  assert.equal(buyCalls.length, 1);
+  assert.deepEqual(buyCalls[0].guids, [A_ITEM]);
+});
+
+/* ── [5] vendor-buy-1: retail refuses before sending, keeps the list ──── */
+
+// Vendor A sells at 0.6: one 100-value item costs 60 p.
+dbg.openWith(rawVendor(VENDOR_A, A_ITEM, "Vendor A"));
+mod.state.buyQueue = [{ itemGuid: A_ITEM, name: "A stock", value: 100, amount: 3 }];
+ROWS = [{ ...PYREAL_ROW, stackSize: 150 }];
+globalThis.__notices.length = 0;
+buyCalls.length = 0;
+mod.handleConfirmBuy();
+check("[5] Buy All the player can't afford sends nothing and keeps the list", () => {
+  assert.equal(buyCalls.length, 0);
+  assert.equal(mod.state.buyQueue.length, 1, "retail flushes the list only after a send");
+  assert.deepEqual(globalThis.__notices, ["You don't have enough money"]);
+});
+ROWS = [{ ...PYREAL_ROW, stackSize: 180 }];
+mod.handleConfirmBuy();
+check("[5] with 180 p the same list is bought (3 x 60 = 180)", () => {
+  assert.equal(buyCalls.length, 1);
+  assert.deepEqual(buyCalls[0].amounts, [3]);
+});
+// A full main pack (102 items) refuses with the room text.
+ROWS = [PYREAL_ROW, ...Array.from({ length: 101 }, (_, i) => ({
+  guid: 0x7f100000 + i, wcid: 9, name: "junk", value: 1, stackSize: 1, itemType: 0x80, equipMask: 0, containerId: 0,
+}))];
+mod.state.buyQueue = [{ itemGuid: A_ITEM, name: "A stock", value: 100, amount: 1 }];
+globalThis.__notices.length = 0;
+buyCalls.length = 0;
+mod.handleConfirmBuy();
+check("[5] a full main pack refuses with retail's room text", () => {
+  assert.equal(buyCalls.length, 0);
+  assert.deepEqual(globalThis.__notices, ["You must empty some slots in your backpack first"]);
+});
+ROWS = [PYREAL_ROW];
+
+/* ── [6] vendor-buy-3: supply, per-object price, the 5000 cap ─────────── */
+
+const UNIQUE = 0x80000033, ARROWS = 0x80000034;
+const stockVendor = rawVendor(VENDOR_A, A_ITEM, "Vendor A");
+stockVendor.items.push(
+  { itemGuid: UNIQUE, wcid: 125, name: "Unique sword", value: 5, stackSize: 1, itemType: 0x1,
+    iconId: 0x06000003, supply: 1, maxStackSize: 1, packSlot: false },
+  { itemGuid: ARROWS, wcid: 126, name: "Arrow", value: 1, stackSize: 1, itemType: 0x100,
+    iconId: 0x06000004, supply: -1, maxStackSize: 250, packSlot: false },
+);
+dbg.openWith(stockVendor);
+mod.state.buyQueue = [];
+mod.state.selectedItemGuid = UNIQUE;
+mod.state.qty = 3;
+mod.handleAddToBuying();
+check("[6] a supply-1 entry is queued once, whatever the quantity", () => {
+  assert.deepEqual(mod.state.buyQueue.map((q) => [q.itemGuid, q.amount]), [[UNIQUE, 1]]);
+});
+mod.handleAddToBuying();
+check("[6] nothing more is added once the list holds the whole supply", () => {
+  assert.deepEqual(mod.state.buyQueue.map((q) => [q.itemGuid, q.amount]), [[UNIQUE, 1]]);
+});
+mod.state.buyQueue = [];
+mod.state.selectedItemGuid = ARROWS;
+mod.state.qty = 4000;
+mod.handleAddToBuying();
+globalThis.__notices.length = 0;
+mod.state.qty = 2000;
+mod.handleAddToBuying();
+check("[6] an entry may not grow past 5000 (retail text, nothing changes)", () => {
+  assert.deepEqual(mod.state.buyQueue.map((q) => [q.itemGuid, q.amount]), [[ARROWS, 4000]]);
+  assert.deepEqual(globalThis.__notices,
+    ["I can't possibly sell you that much! Please be a little more reasonable."]);
+});
+mod.state.buyQueue = [];
 
 console.log(`\nSummary: ${passed} passed, ${failed} failed.`);
 process.exit(failed === 0 ? 0 : 1);

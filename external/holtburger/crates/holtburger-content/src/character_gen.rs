@@ -49,6 +49,7 @@ impl CharacterGenCatalog {
                         chargen_use: skill.chargen_use != 0,
                         trained_cost: skill.trained_cost,
                         specialized_cost: skill.specialized_cost,
+                        retired: skill.retired,
                     },
                 )
             })
@@ -225,8 +226,16 @@ pub struct CharacterGenSkillDefinition {
     pub chargen_use: bool,
     pub trained_cost: i32,
     pub specialized_cost: i32,
+    /// A retired-skill placeholder holtburger-dat injects (not in the real
+    /// SkillTable). Character creation leaves its slot Inactive.
+    pub retired: bool,
 }
 
+/// Heritage-adjusted creation costs of one skill. Each is the TOTAL cost of
+/// holding that tier, not an increment: retail charges a specialised skill
+/// `specialized_cost` alone (`CharGenState::UpdateRemainingSkillCredits`,
+/// acclient.c:495070; `ACCharGenData::GetSkillSpecializedCost` returns the
+/// heritage `SkillCG.primaryCost` or `SkillBase._specialized_cost`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CharacterGenSkillCosts {
     pub trained_cost: i32,

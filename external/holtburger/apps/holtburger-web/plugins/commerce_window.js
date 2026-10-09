@@ -371,6 +371,8 @@ export function inventoryRows() {
         value: i.value ?? 0, stackSize: i.stackSize ?? 1,
         itemType: i.itemType >>> 0, iconId: i.iconId >>> 0,
         equipMask: i.equipMask >>> 0, containerId: i.containerId >>> 0,
+        // vendor-buy-1: the pack-slot class for the room check.
+        ...(typeof i.requiresBackpackSlot === "boolean" ? { requiresBackpackSlot: i.requiresBackpackSlot } : {}),
       });
     } catch (_) {}
     try { i.free?.(); } catch (_) {}

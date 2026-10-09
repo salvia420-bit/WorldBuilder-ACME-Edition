@@ -244,5 +244,71 @@ check("clampPage keeps the index inside the book", () => {
   assert.equal(clampPage(2, 0), 0);
 });
 
+// Round 5 (2026-10-08): the vendor BUY side.
+const CL = await import("../plugins/commerce_logic.js");
+console.log("[9] vendor buy side (round 5)");
+check("vendor-buy-3: a non-stackable line is priced one object at a time", () => {
+  const sword = { value: 5, stackSize: 1, maxStackSize: 0, itemType: 0x80 };
+  assert.equal(CL.vendorLineCost(sword, { sellMultiplier: 1.5 }, 10), 80, "10 x ceil(7.5 - 0.1)");
+  assert.equal(CL.vendorPurchasePrice(sword, { sellMultiplier: 1.5 }, 10), 75, "negative control: the lump");
+  const arrows = { value: 1, stackSize: 1, maxStackSize: 250, itemType: 0x100 };
+  assert.equal(CL.vendorLineCost(arrows, { sellMultiplier: 1.5 }, 250),
+    CL.shopSellPrice(1, 0x100, 1.5, 250), "a stackable line is one lump (VendorSellPrice)");
+  const stale = { value: 5, stackSize: 1, itemType: 0x80 };
+  assert.equal(CL.vendorLineCost(stale, { sellMultiplier: 1.5 }, 10), 75, "stale pkg: the old lump");
+});
+check("vendor-buy-3: remaining supply (-1 / 0 unlimited)", () => {
+  assert.equal(CL.vendorRemaining({ supply: -1 }, 7), Infinity);
+  assert.equal(CL.vendorRemaining({ supply: 0 }), Infinity, "ACE's create-list 0");
+  assert.equal(CL.vendorRemaining({ supply: 1 }, 1), 0);
+  assert.equal(CL.vendorRemaining({ supply: 5 }, 2), 3);
+  assert.equal(CL.vendorRemaining({}), Infinity);
+  assert.equal(CL.VENDOR_MAX_QUEUED, 5000);
+});
+check("vendor-buy-1: InqListSlotCount — non-stackables take `amount` slots", () => {
+  const need = CL.vendorBuySlotsNeeded([
+    { item: { maxStackSize: 1 }, amount: 3 },
+    { item: { maxStackSize: 250 }, amount: 250 },
+    { item: { maxStackSize: 1, packSlot: true }, amount: 2 },
+    { item: { itemType: 0x200 }, amount: 1 },
+  ]);
+  assert.deepEqual(need, { items: 4, containers: 3 });
+});
+check("vendor-buy-1: money first, then the main pack", () => {
+  const room = CL.vendorPlayerRoom([
+    { guid: 1, containerId: 0, equipMask: 0, itemType: 0x80 },
+    { guid: 2, containerId: 0, equipMask: 0, itemType: 0x200, requiresBackpackSlot: true },
+    { guid: 3, containerId: 0x50000099, equipMask: 0, itemType: 0x80 },
+  ], { itemsCap: 0, containersCap: 0 });
+  assert.deepEqual(room, { used: { items: 1, containers: 1 }, cap: { items: 102, containers: 7 } },
+    "a side-pack item does not count; 0 capacities use the defaults");
+  const r = (o) => CL.vendorBuyRefusal({ need: { items: 1, containers: 0 }, used: room.used, cap: room.cap, ...o });
+  assert.equal(r({ cost: 151, balance: 150 }), "You don't have enough money");
+  assert.equal(r({ cost: 150, balance: 150 }), null);
+  assert.equal(r({ cost: 1, balance: 150, used: { items: 102, containers: 0 } }),
+    "You must empty some slots in your backpack first");
+  assert.equal(r({ cost: 999, balance: 1, used: { items: 102, containers: 0 } }),
+    "You don't have enough money", "money is tested first");
+  assert.equal(r({ cost: 1, balance: 9, need: { items: 0, containers: 7 } }),
+    "You must empty some slots in your backpack first", "one pack slot already used");
+});
+check("vendor-buy-5: the retail AddTypeFilter list, in order", () => {
+  assert.deepEqual(CL.VENDOR_TYPE_FILTERS.map((f) => [f.label, f.mask]), [
+    ["Armor", 0x2], ["Books, Paper", 0x2000], ["Clothing", 0x4], ["Containers", 0x200],
+    ["Food", 0x20], ["Gems", 0x800], ["Jewelry", 0x8], ["Keys, Tools", 0x20004000],
+    ["Miscellaneous", 0x490], ["Services", 0x100000], ["Spell Components", 0x1000],
+    ["Trade Notes", 0x40000], ["Weapons", 0x101], ["Mana Stones", 0x80000],
+    ["Magic Items", 0x8000], ["Alchemical Items", 0x4800000], ["Cooking Items", 0x400000],
+    ["Fletching Items", 0x9000000],
+  ]);
+  const match = (type) => CL.VENDOR_TYPE_FILTERS.filter((f) => type & f.mask).map((f) => f.label);
+  assert.deepEqual(match(0x2000), ["Books, Paper"], "a spell scroll");
+  assert.deepEqual(match(0x4000), ["Keys, Tools"], "a key");
+  assert.deepEqual(match(0x20000000), ["Keys, Tools"], "a tinkering tool");
+  assert.deepEqual(match(0x8000), ["Magic Items"], "a wand");
+  assert.deepEqual(match(0x100), ["Weapons"], "a bow");
+  assert.deepEqual(match(0x10), ["Miscellaneous"]);
+});
+
 console.log(`\nSummary: ${passed} passed, ${failed} failed.`);
 process.exit(failed === 0 ? 0 : 1);

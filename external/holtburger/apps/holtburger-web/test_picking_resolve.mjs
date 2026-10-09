@@ -101,7 +101,11 @@ function loadPicking() {
         .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\.\/ui\/[^"']+["'];?\s*$/gm, "")
         // WS05: strip the sibling `./spell_range.js` import too (its bindings
         // are stubbed below; the range-warn path isn't exercised here).
-        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/[^"']+["'];?\s*$/gm, "");
+        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/[^"']+["'];?\s*$/gm, "")
+        // Round 5 (2026-10-08): `../plugins/ground_container_rules.js` (the
+        // locked-container line after a Use) — only read inside function
+        // bodies the pick / destroy paths never run.
+        .replace(/^\s*import\s+\{[^}]*\}\s+from\s+["']\.\.\/plugins\/[^"']+["'];?\s*$/gms, "");
     return src;
 }
 
