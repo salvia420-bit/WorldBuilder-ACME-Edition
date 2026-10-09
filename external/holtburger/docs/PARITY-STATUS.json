@@ -676,6 +676,38 @@
       "unverified": [
         "All visible behaviour changes in handoff §6b eye-test additions — no 1070 session yet"
       ]
+    },
+    {
+      "id": 7,
+      "started": "2026-10-08",
+      "note": "Resume session (orchestrator-implemented; one workflow of read-only agents for round 5, one Haiku agent for the Discord archive). Housing barriers (landdefs-terrain-2) wired into the faithful transition; portal-tunnel busy gate corrected to retail (cursor only); book page-text fetch; csequence-5 closed by census; hookFrameExit census. Round 5: chargen, containers, vendor buy side, PK rules - 22 findings, 21 shipped, 1 deferred (extcontainer-5, HUD layout). Ledger: apps/holtburger-web/docs/openac-comparison-2026-10-08/FINDINGS-round5.md; handoff §6c.",
+      "agents": [
+        {
+          "facet": "movement_physics_collision",
+          "scope": "housing barriers (CObjCell::check_entry_restrictions) in the faithful transition"
+        },
+        {
+          "facet": "net_session_protocol",
+          "scope": "CharGenResult checksum, Buy trade currency, TeleToPkArena 0x0027, PK client commands, ground-container id rules, silent shop refusal"
+        },
+        {
+          "facet": "ui_hud_plugins",
+          "scope": "chargen retail rules (costs, reset/template, FormatName, unspent credits), external-container window gate/range/drop/locked line, vendor buy refusals/supply/cap/filters/refresh, PK live bits/altar confirm/texts/examine + character panel status, portal busy correction, book page fetch"
+        },
+        {
+          "facet": "animation_motion",
+          "scope": "csequence-5 / hookFrameExit censuses (no code change)"
+        }
+      ],
+      "merged": [
+        "13a0c172",
+        "1dd007f0"
+      ],
+      "gate": "JS 483/485 in the full capped gate (test_picking_resolve + harness/test_build_shell pinned the old import list / preload count; updated, 2/2 through the harness); lints + event-kinds (58) + modulepreload (365) clean; protocol 409 + opcode_parity 2 (generated_parity 66/71: 5 target-dir tests fail because target is a symlink - environmental), common 72, content 7, session 43, core 702, world 876, dat 703, holtburger-web 304, CLI 362+16, wsbridge 24; wasm32 check clean; release wasm 2026-10-08 23:00 (6.97 MB)",
+      "unverified": [
+        "All visible behaviour changes in handoff §6c.5 eye-test additions - no 1070 session yet",
+        "Character panel PKStatus row adds one 11 px header line (layout eye-check)"
+      ]
     }
   ],
   "verification": "No owner URL testing and no buildbox/T4. Logic is verified by tests and headless SwiftShader probes (console, shader compile, __diag). Visual/perf claims need the 1070 (off-screen, headless only) or stay marked unverified.",

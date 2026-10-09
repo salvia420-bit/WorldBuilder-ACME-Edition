@@ -1,9 +1,10 @@
-# HANDOFF — OpenAC / retail-decomp comparison: rounds 1–4 and follow-ups shipped (2026-10-08)
+# HANDOFF — OpenAC / retail-decomp comparison: rounds 1–5 and follow-ups shipped (2026-10-08)
 
 A code-only session. Parallel agents each took a piece of OpenAC (`external/OpenAC`, C#), compared it with the
 matching holtburger-web code and with the retail decomp (`~/ac-headers/acclient.c`, the authority), and
 proposed changes. A second agent then tried to refute every finding before anything was implemented.
-Code commits: `0680b84b` (round 1), `ac5a0e94` (round 2) and `2552cc25` (follow-ups + rounds 3–4).
+Code commits: `0680b84b` (round 1), `ac5a0e94` (round 2), `2552cc25` (follow-ups + rounds 3–4), `13a0c172` (resume:
+housing barriers, partials, censuses) and `1dd007f0` (round 5) (§6c).
 **There was no visual testing.** Every change that is visible in-game ships default-on with an `?flag=off`
 escape and is listed in §4 for a later 1070 eye-test.
 
@@ -14,7 +15,10 @@ escape and is listed in §4 for a later 1070 eye-test.
   - 9 deferred findings handled: 7 shipped, 1 partial, 1 skipped because the decomp contradicts it.
   - Rounds 3–4: 8 areas, 26 findings, 19 shipped + 3 partial. Ledgers `FINDINGS-round3.md` / `FINDINGS-round4.md`.
   - The CLI build, broken since 2026-07-27, is fixed.
-- Status ledger: `docs/PARITY-STATUS.json` waves 4, 5 and 6.
+- Resume session (§6c): housing barriers (landdefs-terrain-2) wired; the portal-tunnel busy gate corrected; the book page-text
+  fetch; two censuses closing csequence-5 and the hookFrameExit question; round 5 (chargen, containers, vendor buy side, PK
+  rules): 22 findings, 21 shipped. Ledger `FINDINGS-round5.md`; evidence `round5-findings.json`.
+- Status ledger: `docs/PARITY-STATUS.json` waves 4–7.
 - Each evidence file holds the decomp / OpenAC / holtburger citations, the proposed change, and the verifier's corrections and
   implementation notes.
 
@@ -323,6 +327,106 @@ social lists) are in `FINDINGS-round3.md` / `FINDINGS-round4.md`. Escapes are `?
 
 ---
 
+## 6c. Resume session (2026-10-08 evening): housing barriers, partials, censuses, round 5
+
+The owner's resume prompt was "read and continue, dont use agents unless its a workflow". Later they added that a Haiku agent may
+search the Discord archive. Agent use:
+- One Haiku agent searched the Discord archive.
+- Round 5 ran as one workflow: 4 compare agents and up to 4 verify agents, all read-only.
+- The orchestrator did everything else, including all implementation and all builds.
+
+Code commits: `13a0c172` (barriers, partials, censuses) and `1dd007f0` (round 5).
+
+### 6c.1 Housing barriers, partials, censuses
+
+| Item | Status | Escape | What changed |
+|---|---|---|---|
+| landdefs-terrain-2 (housing barriers) | shipped | `houseBarriers` (wasm) | Retail `CObjCell::check_entry_restrictions` now runs first in every faithful cell's `find_collisions` (`spatial/house_barrier.rs`).<br>Cell ids come from EnvCell `restriction_obj` and LandBlockInfo `restriction_tables`. They live in new scene tables that unload with their cells and buildings.<br>`TransitionEnv::house_barrier_overlay` builds an overlay per transition from WorldState: the player id, monarch, and Admin+ImmuneCellRestrictions bits; each house's owner and RestrictionDB.<br>Landcell refusals set retail's axis normal.<br>Checked on real data: the DAT ids are ACE house guids (`0x3B9C0100–0106`; yard `0x3B9C001D` → `0x73B9C04E`). |
+| streaming-teleport-5 remainder | closed + corrected | `portalBusy` | Retail does not gate drags in the tunnel. The busy count only drives the cursor (`UpdateCursorState` is the one reader of `m_cBusy`), and `SetCombatMode` is the one gameplay reader of `teleportInProgress`.<br>Round 3's drops of uses, casts and `window.__isBusy` are removed; ACE refuses those with YoureTooBusy. The combat-mode refusal stays. |
+| books-journal-2 remainder | shipped | `bookRetailPages` | A page that arrived without text is fetched with BookPageData 0x00AE (new `bookPageData` wasm export), once per open book. ACE includes the text whenever a page has any, so this rarely fires. |
+| Stale tests | fixed | — | `tests_substitution::resolve_static_placement_frame_orders` expects 0 for a missing placement (decomp `CPartArray::SetPlacementFrame` falls back to 0).<br>`terrain_subdiv::…triangle_corner_ring_matches_height_sampler` allows for f32 rounding on the cell diagonal. |
+
+**Censuses** (portal.dat, via `crates/holtburger-dat/examples/survey_cycle_segments.rs`):
+- **csequence-5 (closed, low value).** 4 of 18,451 cycles have more than one AnimData, in tables 0x0900019C and 0x09000230.
+  - Both 0x09000230 cycles end on a 0-fps freeze frame, so holtburger already looks like retail there.
+  - Only cycles 0x003C00D3 and 0x003D00D3 of table 0x0900019C differ.
+- **hookFrameExit (anim-hooks-1).** Retail never fires a hook on a segment's last frame: `update_internal` clamps to the segment end and fires frames [old, new), and `advance_to_next_animation` fires none. Of the 2,214 last-frame hooks the direction filter would pass:
+  - 1,498 sit on a frame where another segment of the same table starts. Retail fires them once there; the old code fired them twice.
+  - 716 don't (104 on cycles, 612 on links). Those never fire in retail either.
+
+### 6c.2 Round 5: chargen, containers, vendor buy side, PK rules
+
+Ledger: `FINDINGS-round5.md`; evidence: `round5-findings.json`.
+- 22 findings, all confirmed by the verifiers; 21 shipped, extcontainer-5 deferred.
+- The orchestrator re-read every load-bearing decomp citation before implementing.
+- Escapes are `?flag=off`; each has a row in `docs/url-flags.md` §"2026-10-08 (resume, round 5)".
+
+| Area | Escape(s) | What changed |
+|---|---|---|
+| Chargen | — (rules) | A specialised skill now costs its specialised total alone. Before, the wizard charged trained + specialised: every preset template came to 60–74 credits against a 52 budget, and the default flow could not pass the Skills page.<br>Retail reset + ApplyTemplate: free skills (Run, Jump, Magic Defense, Loyalty, Salvaging, Arcane Lore) arrive trained, and a free tier can't be given up.<br>The ten retired-skill placeholders holtburger-dat injects are now marked and stay Inactive, so exactly 38 classes go out, as retail's server count check requires.<br>Clothing colours go out as palette-template keys, not list indices.<br>The CG_Pack checksum is appended.<br>FormatName names, with JS and Rust ports identical on 3,000 fuzzed names. The validator requires the name in that form.<br>Unspent attribute credits are legal; retail's warning shows at Create. |
+| Containers | `groundObjectGate`, `groundContainerRange`, `containerDropRule`, `lockedContainerNotice` | Only the requested ground object opens the loot window. Sub-packs and the player's own packs used to take it over and close it a second later.<br>A replacement sends NoLongerViewingContents for the old container.<br>Retail's 1 s use-radius close, plus closes on vendor, portal and death; a vendor window closes when a ground container opens.<br>A 3D drop onto a closed or locked container is refused with retail's line.<br>"The X is locked" after using a locked chest.<br>New wasm getter `objectPartDims`. |
+| Vendor buy | `vendorBuyCheck`, `vendorStock` | Retail refuses in the client: "You don't have enough money", then "You must empty some slots in your backpack first" (main pack only). The buying list survives a refusal.<br>Per-object pricing for non-stackables; supply bounds, with sold-out unique entries hidden; the 5000 cap with retail's line.<br>A same-vendor refresh prunes unlisted entries, as retail does.<br>The 18 retail category filters.<br>No toast or "You can't wield that!" for ACE's shop refusal.<br>The Buy body ends with the trade currency.<br>No more "[Vendor] … has N items for sale." lines. |
+| PK | `attackLiveFlags`, `pkAltarConfirm`, `retailPkCmds` | The attack gate, Tab / auto-target, combat-mode entry and tracking read the LIVE PK bits and pet owner, so a status change applies at once. Before, it waited for a relog.<br>The PK and NPK altars ask before use.<br>Retail PK status and refusal texts, at the Magic category where retail uses text type 7.<br>`@pklite`/`@pkl`, `@pkarena`/`@pka`, `@pklarena`/`@pla`, with retail's client checks. New wasm bindings; protocol TeleToPkArena 0x0027.<br>The examine PK line now shows for every player (Player Killer / Player Killer Lite / Non-Player Killer).<br>The character panel gets its PKStatus row. |
+
+**Deferred from round 5:**
+- extcontainer-5: browsing nested packs inside the loot window. This is a new HUD layout and needs an eye-check.
+- Chargen per-gear colour order (retail StoreColorInformation hash order). This doesn't matter while colours are random.
+- 0xF643 CharGenVerificationResponse texts (not verified).
+- pk-3's 0x4F / 0x4F4: retail prints a literal `$s`, holtburger keeps "they". This is the owner's call.
+
+### 6c.3 Not done this session
+- login-1: an in-place return to character select needs an in-world teardown path (index.html "step 2b"). A reload already logs
+  the character off (`logOffOnUnload`).
+- camera-3 stage 2 (one viewer transit), outbound-5 (live soak), streaming-teleport-1/3/4, and the round-1/2 render items.
+
+### 6c.4 Gate for these commits
+- **JS:** 483 of 485 suites passed in the capped full gate. The 2 failures were tests pinned to the old picking.js import list
+  (`test_picking_resolve.mjs`) and the old modulepreload count (`harness/test_build_shell.mjs`). Both were updated and pass
+  (22/22, 58/58); they also pass through the harness (2/2).
+- **Lints:** `lint-url-flags` (3 pre-existing undocumented readers, none new), `audit-flag-defaults` (0 polarity mismatches),
+  event kinds (58), modulepreload (365, regenerated for `plugins/ground_container_rules.js`).
+- **Rust (capped, one at a time):**
+  - protocol 409 + opcode_parity 2; common 72; content 7; session 43; core 702 (+1 ignored); world 876; dat 703;
+    holtburger-web 304 (+4 ignored); CLI 362 + 16; wsbridge 24.
+  - `generated_parity`: 66/71. The 5 target-dir tests fail for the environmental reason in §7.
+  - The two red tests from rounds 3–4 are fixed (§6c.1).
+- **wasm32 check:** clean; the 17 warnings are the same as before.
+- **FormatName:** the JS and Rust ports agree on 3,000 fuzzed names.
+- **Release wasm:** built 2026-10-08 23:00 (6.97 MB). The new exports `enterPkLite`, `teleToPkArena`, `teleToPklArena`, `objectPartDims` and
+  `bookPageData` are present. The previous pkg is kept as `pkg-prev-20261008b`.
+
+### 6c.5 Eye-test additions
+- **Housing:** walk up to a closed cottage or villa yard as a stranger; you should stop at the yard landcell edge. Repeat as owner,
+  guest, the monarch's vassal, and at an open house; all of these walk in. Nobody stops anywhere outside housing.
+  A/B with `?houseBarriers=off`.
+- **Portal tunnel:** a hotbar potion gets ACE's "You're too busy!" instead of being dropped silently.
+- **Chargen:** create a Bow Hunter with the defaults.
+  - The Skills page shows 52/52 with Run, Jump, Magic Defense, Loyalty, Salvaging and Arcane Lore already trained.
+  - Untrained can't be chosen for them.
+  - The character arrives with those skills.
+  - Type "bob2 SMITH": it becomes "Bob Smith".
+  - Leave attribute credits unspent: Create asks once.
+- **Containers:**
+  - Open a chest holding a pack, and a corpse with a pack. The window stays open and shows the chest's items.
+  - Walk away: it closes within about a second.
+  - Portal, die, and open a vendor while a chest is open: each closes it.
+  - Drag onto a closed chest: "You must open the Chest first".
+  - Use a locked chest: "The Chest is locked".
+- **Vendor:**
+  - Buy All without the money: the retail line, and the list stays.
+  - Queue a unique twice: it disappears after one.
+  - Add 4000 then 2000 arrows: refused.
+  - A refused sale shows no "WeenieError 0x0000".
+  - Check the category list: Books, Paper / Keys, Tools / Magic Items.
+- **PK:**
+  - Turn PK at an altar (the question appears first) and attack a PK at once.
+  - `@pklite` as NPK and as PK.
+  - `@pka`.
+  - Examine an NPK player: "Non-Player Killer".
+  - The character panel shows its PK status row, one extra 11 px header line; check nothing clips.
+
+---
+
 ## 7. Laptop safety: what happened and the rules that follow
 
 - **`rustfmt --check apps/holtburger-web/src/lib.rs` reached 4.2 GB RSS** (lib.rs is about 47k lines). At 12:27 earlyoom
@@ -339,6 +443,21 @@ social lists) are in `FINDINGS-round3.md` / `FINDINGS-round4.md`. Escapes are `?
   agents are in-process and none ran heavy jobs.
 - **One near-miss:** I relaunched a persisted workflow script by its path with placeholder args, which re-ran round 1. I stopped it
   within seconds. The compare script now takes its areas from `args`.
+- **Resume session (§6c):**
+  - **`rg` with no path reads stdin under the Bash tool and blocks.** The command was moved to the background after 120 s.
+    Always give `rg` a path. Only add `< /dev/null` when no pipe feeds it, because with a pipe it stops reading the pipe and
+    sweeps the directory.
+  - **Stopping that hung rg with `pkill -f` killed the orchestrator's shell again (exit 144).** Stop a background task with
+    TaskStop, never `pkill -f`.
+  - **`cargo test -p holtburger-protocol --test generated_parity` fails 5 tests here** ("could not locate workspace target dir").
+    `target` is a symlink to `/mnt/wbterminal2/holtburger-scratch/target-main`, and `current_exe()` resolves it, so the walk-up
+    never sees a `target` component. This is pre-existing and environmental. `opcode_parity` alone passes. Run it with `--test`
+    so cargo doesn't stop at generated_parity.
+  - **Splicing new items into `lib.rs` before a `#[wasm_bindgen(...)]` attribute silently moves the old item's doc comment onto
+    the new item.** Insert above the doc comment. It happened twice and was caught both times.
+  - **Splice tests (`harness/lib/splice_module.mjs`) need an explicit stub for every new import.** This round:
+    corpse_loot_snapshot, corpse_loot_all_pacing, inventory_dnd_dom, character_info_tab_labels, train_unusable and the two
+    vendor splice tests. Run every test that splices a file you add an import to.
 
 ---
 
@@ -349,26 +468,24 @@ Resume the OpenAC / retail-decomp comparison for holtburger-web. Read
 external/holtburger/apps/holtburger-web/docs/HANDOFF-openac-comparison-2026-10-08.md first (it has my
 original goal verbatim in §1 — the same rules apply: code only, no visual testing, don't harm holtburger-web's
 visuals, every agent must respect the 8 GB laptop limits in ~/CLAUDE.md and the §7 lessons: no rustfmt on
-src/lib.rs, stop the TS language server before builds, agents never run cargo/wasm-pack/the full gate/browsers).
+src/lib.rs, stop the TS language server before builds, agents never run cargo/wasm-pack/the full gate/browsers,
+give rg a path, stop background tasks with TaskStop not pkill -f).
 
-Rounds 1–4 and the first follow-up batches are shipped (§3, §6, §6b). Remaining work, in order:
-1. Wire housing barriers (landdefs-terrain-2): the per-house RestrictionDB + IsAllowedIn now exist in
-   crates/holtburger-world/src/house.rs (round-4 housing-3); connect them to the faithful outdoor/indoor
-   SceneObjCell::restriction_obj + CObjCell::check_entry_restrictions (acclient.c:347102) behind an =off escape,
-   with tests that a non-owner bounces and owners/guests/open houses pass.
-2. Partials: login-1 (in-place return to character select + retail 3 s / 23 s PK log-off timer),
-   books-journal-2 (page-text fetch), streaming-teleport-5 (inventory drags in the tunnel), camera-3 (one retail
-   viewer transit), outbound-5 (omit style / 1.0 turn speed after a live soak).
-3. Large design items when the owner wants them: cmotiontable-2 + the cmotiontable-5 wasm style-chain planner
-   (signed/reversed links, style-default double hop), createobj-1 (in-place re-create), plifecycle-6 / audio-4
-   (owner ScriptManager for wire scripts), spellcast-5 (personalized formulas; capture golden vectors from ACE),
-   csequence-3 / csequence-5.
-4. Another comparison round on areas not yet covered (vitals/regen display, UI layout behaviour, chargen,
-   vendor buy side, containers/chests, PK/PKLite rules), compare → verify → implement.
-5. End with the full gate (capped JS gate, lints, core/common/protocol/world/session/dat --lib, CLI, wasm32
-   check), one release wasm build, an updated handoff + PARITY-STATUS wave, then commit and push to origin/master.
-Items needing the owner's 1070 eye-test before code changes: streaming-teleport-1 (LoginComplete timing),
-streaming-teleport-3/4, camera-1/6, held-1, daytime-2, charopt-5, and all createobj render items.
-Keep the §4/§6/§6b eye-test queues growing. Usage: the owner caps agents — ask how many helpers are allowed
-(today ended at two concurrent general-purpose helpers, no workflows) and say how many a step will use first.
+Rounds 1–5, the follow-ups and the resume batch are shipped (§3, §6, §6b, §6c). Remaining work, in order:
+1. Partials: login-1 (in-place return to character select: an in-world teardown path + the retail 3 s / 23 s
+   PK log-off timer), camera-3 stage 2 (one retail viewer transit), outbound-5 (omit style / 1.0 turn speed
+   after a live soak).
+2. Large design items when I want them: cmotiontable-2 + the cmotiontable-5 wasm style-chain planner,
+   createobj-1 (in-place re-create), plifecycle-6 / audio-4 (owner ScriptManager for wire scripts),
+   spellcast-5 (personalized formulas; golden vectors from ACE), csequence-3.
+3. Another comparison round on areas not yet covered (vitals/regen display, UI layout behaviour, allegiance
+   panel rules, spellbook / spell bar rules, fellowship panel, the 0xF643 chargen texts), compare → verify →
+   implement, as one workflow (read-only agents) with the orchestrator implementing.
+4. End with the full gate (capped JS gate, lints, common/protocol(+opcode_parity via --test)/core/world/
+   session/dat --lib, holtburger-web --lib, CLI, wsbridge, wasm32 check), one release wasm build, an updated
+   handoff + PARITY-STATUS wave, then commit and push to origin/master.
+Items needing my 1070 eye-test before code changes: streaming-teleport-1 (LoginComplete timing),
+streaming-teleport-3/4, camera-1/6, held-1, daytime-2, charopt-5, all createobj render items and
+extcontainer-5 (nested packs in the loot window). Keep the §4/§6/§6b/§6c eye-test queues growing. Agents:
+only through a workflow unless I say otherwise; say how many a step will use first.
 ```
