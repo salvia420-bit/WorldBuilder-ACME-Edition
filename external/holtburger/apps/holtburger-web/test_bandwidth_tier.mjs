@@ -24,6 +24,8 @@ import {
   BANDWIDTH_SETTING_KEY,
   bandwidthTier,
   lowBandwidth,
+  groundDrawn,
+  holdForGround,
   _resetBandwidthTierForTest,
 } from "./scene3d/bandwidth_tier.js";
 
@@ -138,6 +140,28 @@ console.log("\nPART 5 — memoised production entry");
   check("memoised: a later search change does not flip a live session", lowBandwidth() === true);
   _resetBandwidthTierForTest({ tier: "high" });
   check("test hook can force a tier", lowBandwidth() === false);
+  _resetBandwidthTierForTest();
+}
+
+// 2026-10-09 "ground first": optional downloads on a LOW session wait for the
+// first terrain mesh (terrain.js latches window.__groundDrawnAt); any other
+// session never waits.
+{
+  delete globalThis.window.__groundDrawnAt;
+  _resetBandwidthTierForTest({ tier: "high" });
+  check("not low: holdForGround resolves at once", (await holdForGround()) === "not-low");
+  _resetBandwidthTierForTest({ tier: "low" });
+  check("groundDrawn is false before the latch", groundDrawn() === false);
+  let settled = null;
+  const p = holdForGround({ pollMs: 10 }).then((v) => { settled = v; return v; });
+  await new Promise((r) => setTimeout(r, 60));
+  check("low: still holding while no terrain is drawn", settled === null);
+  globalThis.window.__groundDrawnAt = 4321;
+  check("low: released by the ground latch", (await p) === "ground" && groundDrawn() === true);
+  delete globalThis.window.__groundDrawnAt;
+  let t = 0;
+  check("low: the ceiling releases a session that never draws terrain (sealed dungeon)",
+    (await holdForGround({ maxMs: 100, pollMs: 5, now: () => (t += 50) })) === "timeout");
   _resetBandwidthTierForTest();
 }
 

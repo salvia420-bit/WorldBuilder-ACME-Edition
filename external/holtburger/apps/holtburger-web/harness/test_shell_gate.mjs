@@ -98,6 +98,56 @@ console.log("\nstaleness");
   g.dispose();
 }
 
+console.log("\na deleted input still gets its rebuild (2026-10-07 lifestone-popup.js regression)");
+{
+  writeBuild("v1");
+  builds.length = 0;
+  // Rebuilds record only the inputs that still exist, like build-shell.mjs.
+  const g = createShellGate({
+    appRoot: app, quietMs: 50, cacheMs: 0, now, log: () => {}, env: {},
+    runBuild: (o, done) => {
+      builds.push(o);
+      write("index-bundled.html", "<html>v-del</html>");
+      write("shell/app-vdel.js", "// v-del");
+      write("shell-manifest.json", JSON.stringify({
+        entries: { app: { file: "app-vdel.js" } },
+        inputs: { "index.html": sha(fs.readFileSync(path.join(app, "index.html"))) },
+      }));
+      done(true);
+    },
+  });
+  check("starts fresh", g.decide("/apps/holtburger-web/index.html").serveBundled === true);
+  fs.unlinkSync(path.join(app, "scene3d/a.js"));
+  const d = g.decide("/apps/holtburger-web/index.html");
+  check("deleted input ⇒ live page", d.serveBundled === false && d.reason === "changed: scene3d/a.js", JSON.stringify(d));
+  // The deletion is a finished change: it must not keep restarting the quiet
+  // period (each check used to stamp the missing file with now()).
+  for (let i = 0; i < 6; i++) { t += 40; await new Promise((r) => setTimeout(r, 70)); g.decide("/apps/holtburger-web/index.html"); }
+  check("one rebuild ran after the deletion", builds.length === 1, String(builds.length));
+  check("…and the rebuilt bundle is served", g.decide("/apps/holtburger-web/index.html").serveBundled === true);
+  write("scene3d/a.js", "export const a = 2; // edited");
+  g.dispose();
+}
+
+console.log("\na failing build backs off");
+{
+  writeBuild("v1");
+  let attempts = 0;
+  const g = createShellGate({
+    appRoot: app, quietMs: 20, cacheMs: 0, now, log: () => {}, env: {}, failBackoffMs: 5000,
+    runBuild: (_o, done) => { attempts++; done(false, "boom"); },
+  });
+  write("scene3d/a.js", "export const a = 3; // edited again");
+  t += 1000;
+  g.decide("/apps/holtburger-web/index.html");
+  await new Promise((r) => setTimeout(r, 80));
+  check("the first failing build ran", attempts === 1, String(attempts));
+  for (let i = 0; i < 5; i++) { g.decide("/apps/holtburger-web/index.html"); await new Promise((r) => setTimeout(r, 30)); }
+  check("no re-run on every request inside the backoff", attempts === 1, String(attempts));
+  g.dispose();
+  write("scene3d/a.js", "export const a = 2; // edited");
+}
+
 console.log("\nunusable builds");
 {
   const g = mk({ autoBuild: false });

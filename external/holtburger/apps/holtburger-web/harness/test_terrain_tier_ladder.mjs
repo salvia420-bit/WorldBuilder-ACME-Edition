@@ -819,6 +819,29 @@ console.log("\nPART 11 — the DEFAULT boot: static t128 tier, no pack controlle
   check("…into the SAME texture objects", atlas.atlasTexture.image.width === FULL_TILE);
   globalThis.window.__sceneReadyEverFired = false;
 
+  // 2026-10-09 `?interiorHold`: an indoor spawn (a new character's academy)
+  // holds the promotion while its interior builds — the 68 MB pair otherwise
+  // shares the six HTTP/1.1 connections with the interior's records.
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "high" });
+  setSearch("");
+  globalThis.window.__sceneReadyEverFired = true;
+  globalThis.window.__interiorBuildPending = true;
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  stubFetch(withStatic(fx));
+  await buildTerrainBc7Atlas({ anisotropy: 4 });
+  await new Promise((r) => setTimeout(r, 2600));
+  st = terrainBc7Stats();
+  check("interior pending: the ready latch does NOT promote (held at t128)",
+    st.ladder.tier === "t128" && st.ladder.promotions === 0 && st.ladder.interiorHeld === true);
+  globalThis.window.__interiorBuildPending = false;
+  await new Promise((r) => setTimeout(r, 600));
+  st = terrainBc7Stats();
+  check("…the interior built ⇒ promoted at once", st.ladder.tier === "t1024" && st.ladder.promotions === 1,
+    JSON.stringify({ tier: st.ladder.tier, e: st.ladder.lastError }));
+  globalThis.window.__sceneReadyEverFired = false;
+  delete globalThis.window.__interiorBuildPending;
+
   // A stale static tier (re-baked t1024, not re-derived) is refused, counted.
   resetAll();
   _resetBandwidthTierForTest({ tier: "high" });
@@ -854,6 +877,30 @@ console.log("\nPART 11 — the DEFAULT boot: static t128 tier, no pack controlle
   const low = await buildTerrainBc7Atlas({ anisotropy: 4 });
   check("low bandwidth: t128 first, promotion target t512 (not the 65 MB t1024)",
     !!low && low.tileSize === TERRAIN_T128_TILE && terrainBc7Stats().ladder.fullTier === "t512");
+
+  // 2026-10-09 "ground first": a LOW session promotes when the GROUND is drawn,
+  // not on `ready` (which fires once the sky is up — on the 666 kbps cold boot
+  // the ~10 MB promotion then shared the line with the ground's own records).
+  resetAll();
+  _resetBandwidthTierForTest({ tier: "low" });
+  setSearch("");
+  globalThis.window.__sceneReadyEverFired = true;
+  delete globalThis.window.__groundDrawnAt;
+  initTerrainTierLadder({ controller: inert, stageUpload: staging });
+  const bothG = withStatic(fx);
+  for (const [k, v] of fx512.map) bothG.set(k, v);
+  stubFetch(bothG);
+  await buildTerrainBc7Atlas({ anisotropy: 4 });
+  await new Promise((r) => setTimeout(r, 2600));
+  check("low: the sky being up (`ready`) does NOT start the promotion while no terrain is drawn",
+    terrainBc7Stats().ladder.tier === "t128" && terrainBc7Stats().ladder.promotions === 0);
+  globalThis.window.__groundDrawnAt = 1234;
+  await new Promise((r) => setTimeout(r, 2600));
+  st = terrainBc7Stats();
+  check("low: the first terrain mesh on screen ⇒ promoted to t512", st.ladder.tier === "t512" && st.ladder.promotions === 1,
+    JSON.stringify({ tier: st.ladder.tier, e: st.ladder.lastError }));
+  globalThis.window.__sceneReadyEverFired = false;
+  delete globalThis.window.__groundDrawnAt;
   resetAll();
   _resetBandwidthTierForTest();
 }

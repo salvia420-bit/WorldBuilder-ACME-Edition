@@ -27110,6 +27110,13 @@ enum SessionCommand {
     /// CharacterList. The page does not (yet) tear the world down to the
     /// character list; see the JS caller.
     LogOff,
+    /// 2026-10-09: `SessionHandle.disconnect()` — the retail quit teardown, a
+    /// cleartext header-only packet with `DISCONNECT` (0x8000)
+    /// (`holtburger_session::Session::send_disconnect`). ACE terminates the
+    /// session at once instead of holding it for its 60 s network timeout, so
+    /// the page can reload (/logout → character screen) and log straight back
+    /// in. The recv loop exits after sending.
+    Disconnect,
     /// `SessionHandle.send_chat(text)` — sends a `GameAction::Talk`
     /// over the wire. Used today by the JS-side "Teleport to
     /// Holtburg" button to dispatch `@telepoi Holtburg`. ACE's
@@ -36119,6 +36126,21 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::LogOff)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("logOffCharacter: cmd channel closed ({e})"))
+            })
+    }
+
+    /// 2026-10-09: end the session the retail way before the page goes away —
+    /// a `DISCONNECT` (0x8000) header-only packet — so ACE drops it at once and
+    /// a reload can log back in (without it ACE answered the reload's login
+    /// with "Account In Use" and dropped BOTH sessions). Fire-and-forget; the
+    /// recv loop sends it on its next turn and exits.
+    #[wasm_bindgen(js_name = disconnect)]
+    pub fn disconnect(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::Disconnect)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("disconnect: cmd channel closed ({e})"))
             })
     }
 
@@ -53427,10 +53449,22 @@ impl SessionHandle {
             .starter_areas
             .iter()
             .map(|a| {
+                // 2026-10-09: + the first location (the Training Academy cell
+                // ACE puts a new character in — PlayerFactory `Locations[0]`),
+                // so the character screen can start loading it before Enter.
+                let first = a.locations.first().map(|l| {
+                    serde_json::json!({
+                        "cell": l.obj_cell_id,
+                        "x": l.frame.origin.x,
+                        "y": l.frame.origin.y,
+                        "z": l.frame.origin.z,
+                    })
+                });
                 serde_json::json!({
                     "startAreaId": a.start_area_id,
                     "name": a.name,
                     "locationCount": a.locations.len(),
+                    "firstLocation": first,
                 })
             })
             .collect();

@@ -12,6 +12,8 @@
 // Uint8Array); the per-type DECODE lives in JS via a registry, so Phase-5 texture channels
 // add a decoder, not a fetch path. Tests inject `fetchImpl` instead of the wasm.
 
+import { holdForInterior } from "./bandwidth_tier.js";
+
 export const SUITE_BASE_URL = "../../dist/suite/";
 
 // Per-type decoders. P4.3 registers "windclip"; Phase-5 registers "texchan".
@@ -129,11 +131,16 @@ export class SuiteAssetSource {
 
   _beginFetchByKey(key, type, k) {
     this._inflight.add(k); this.fetchCount += 1;
-    const bytesP = this._fetchImpl
+    const fetchNow = () => (this._fetchImpl
       ? Promise.resolve(this._fetchImpl(key, type))
       : (this._wasm && typeof this._wasm.fetch_suite_artifact_by_key === "function"
           ? (ensureSuiteInit(this._wasm), Promise.resolve(this._wasm.fetch_suite_artifact_by_key(key, type)))
-          : Promise.resolve(null));
+          : Promise.resolve(null)));
+    // `?interiorHold` (2026-10-09): texchan sidecars (roughness/AO planes,
+    // applied after the material is built) wait while an indoor player's
+    // interior is still building — the Town Network pulled 290 of them (98 MB)
+    // alongside its ~1 MB of DAT records (1070).
+    const bytesP = type === "texchan" ? holdForInterior().then(fetchNow) : fetchNow();
     bytesP.then((bytes) => {
       if (!bytes || bytes.length === 0) { this._cache.set(k, null); this.absent += 1; return; }
       const dec = _decoders.get(type);

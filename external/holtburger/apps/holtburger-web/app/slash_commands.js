@@ -148,6 +148,9 @@ export function pkCommandDecision(verb, rest, odf) {
     : { send: "teleToPklArena" };
 }
 
+/** 2026-10-09 — back to the character screen (client-only, never sent to ACE). */
+export const LOGOUT_VERBS = new Set(["logout", "logoff"]);
+
 /** Verbs retail's client command table owns — the only `@` verbs rerouted. */
 export const RETAIL_CLIENT_VERBS = new Set([
   ...TELL_ALIASES, ...REPLY_ALIASES, ...RETELL_ALIASES, ...SAY_ALIASES, ...EMOTE_ALIASES,
@@ -475,6 +478,14 @@ export function initSlashCommands() {
       const append = typeof window.__appendChatLine === "function" ? window.__appendChatLine : null;
       if (append) for (const line of lines) append(line, CHAT_CATEGORY.SYSTEM);
       return { dispatched: true, echo: null, lines, category: CHAT_CATEGORY.SYSTEM };
+    }
+
+    // 2026-10-09 — `/logout` / `/logoff`: log the character off and return
+    // to the character screen (index.html window.__logOutToCharacterSelect,
+    // retail gmGamePlayUI::EndSession → CPlayerSystem::LogOffCharacter).
+    if (LOGOUT_VERBS.has(cmd) && typeof window.__logOutToCharacterSelect === "function") {
+      window.__logOutToCharacterSelect();
+      return { dispatched: true, echo: null };
     }
 
     // pk-4 (round 5, 2026-10-08): @pklite / @pkarena / @pklarena run

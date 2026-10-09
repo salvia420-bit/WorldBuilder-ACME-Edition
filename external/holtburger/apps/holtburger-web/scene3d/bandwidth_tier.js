@@ -285,6 +285,93 @@ export function lowBandwidth() {
   return bandwidthTier().tier === "low";
 }
 
+/** `holdForGround` ceiling: a sealed dungeon never draws terrain. */
+export const GROUND_HOLD_MAX_MS = 300000;
+
+/** True once the first terrain mesh is on screen (terrain.js latches it). */
+export function groundDrawn() {
+  try {
+    return typeof window !== "undefined" && window.__groundDrawnAt != null;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** `holdForInterior` ceiling: a failed or wedged interior build must not
+ *  strand the held downloads (they only wait, they are never dropped). */
+export const INTERIOR_HOLD_MAX_MS = 180000;
+
+/** `?interiorHold` — default ON; `off`/`0`/`false`/`no` disables the hold. */
+export function interiorHoldEnabled(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const v = new URLSearchParams(s).get("interiorHold");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * True while the local player stands in an EnvCell and a landblock it can see
+ * still has its interior to build (`tickPvsLoadExpansion` in cells.js
+ * publishes `window.__interiorBuildPending`).
+ *
+ * 2026-10-09 (`?interiorHold`): a new character spawns inside a Training
+ * Academy. On the 1070 (fresh profile, raw link, HTTP/1.1 = 6 connections)
+ * the t1024 terrain promotion (68 MB) and the macro maps (9 MB) started
+ * ~10 s after in-world and shared those connections with the academy's 2,037
+ * one-record requests (1.4 s each on average, 8.9 s worst), none of it
+ * visible from a sealed dungeon. Those downloads now wait for the interior.
+ */
+export function interiorBuildPending(search) {
+  if (!interiorHoldEnabled(search)) return false;
+  try {
+    return typeof window !== "undefined" && window.__interiorBuildPending === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Resolves once no interior is pending (`interiorBuildPending`) or after
+ * `maxMs`: "not-pending" (nothing to wait for at the call) | "built" |
+ * "timeout".
+ */
+export function holdForInterior({ maxMs = INTERIOR_HOLD_MAX_MS, pollMs = 500, now = Date.now } = {}) {
+  if (!interiorBuildPending()) return Promise.resolve("not-pending");
+  return new Promise((resolve) => {
+    const t0 = now();
+    const poll = () => {
+      if (!interiorBuildPending()) { resolve("built"); return; }
+      if (now() - t0 >= maxMs) { resolve("timeout"); return; }
+      setTimeout(poll, pollMs);
+    };
+    setTimeout(poll, pollMs);
+  });
+}
+
+/**
+ * "Ground first" (2026-10-09). On a LOW session, resolves once the first
+ * terrain mesh is on screen (or after `maxMs`); on any other session at once.
+ * Optional downloads (the moon textures) wait on it, so at 666 kbps they no
+ * longer share the line with the ground's own records — a cold boot's first
+ * terrain had slipped from ~3.4 to 7.6 min behind them. Resolves with
+ * "not-low" | "ground" | "timeout".
+ */
+export function holdForGround({ maxMs = GROUND_HOLD_MAX_MS, pollMs = 500, now = Date.now } = {}) {
+  if (!lowBandwidth()) return Promise.resolve("not-low");
+  return new Promise((resolve) => {
+    const t0 = now();
+    const poll = () => {
+      if (groundDrawn()) { resolve("ground"); return; }
+      if (now() - t0 >= maxMs) { resolve("timeout"); return; }
+      setTimeout(poll, pollMs);
+    };
+    poll();
+  });
+}
+
 /**
  * Should an optional detail download run? `flagValue` is the raw URL value of
  * the feature's OWN flag (null when absent): an explicit value always wins

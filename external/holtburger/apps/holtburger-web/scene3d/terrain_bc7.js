@@ -103,7 +103,7 @@ import { texWorkersEnabled, workerTerrainAssemble } from "./xu7_textures.js";
 // `?bandwidth` (2026-10-06): a LOW session promotes terrain to the retail-
 // native t512 tier (20 MB) instead of the upscaled t1024 (65 MB) and waits
 // longer before starting it.
-import { lowBandwidth } from "./bandwidth_tier.js";
+import { groundDrawn, interiorBuildPending, INTERIOR_HOLD_MAX_MS, lowBandwidth } from "./bandwidth_tier.js";
 
 export const TERRAIN_BC7_DEPTH = 33;
 const DEFAULT_BASE = "scene3d/assets/terrain_bc7";
@@ -379,6 +379,7 @@ function _freshLadderStats() {
     t128Ms: null,          // ms from ladder start to the t128 pair being built
     t128Bytes: 0,          // GPU bytes of the t128 pair (both arrays)
     promoteStartMs: null,
+    interiorHeld: false,   // the promotion waited for an indoor spawn's interior (`?interiorHold`)
     terrainT1024CompleteMs: null, // SPEC B4b's named stamp
     promotions: 0,
     demotions: 0,
@@ -866,8 +867,11 @@ export const TERRAIN_LADDER_DEFER_MAX_MS = 30000;
 
 /** `auto` on a `?bandwidth` LOW session: the ceiling before the (t512)
  *  promotion starts regardless. 20 MB at 666 kbps is ~4 min of link time;
- *  starting it before the ring's own records are in only delays both. */
-export const TERRAIN_LADDER_LOW_BW_MAX_MS = 120000;
+ *  starting it before the ring's own records are in only delays both. The
+ *  normal trigger is the ground being drawn (`groundDrawn`); this only
+ *  bounds a session that never draws terrain (a sealed dungeon). 2026-10-09:
+ *  was 120 s, which can land before a 666 kbps ground does. */
+export const TERRAIN_LADDER_LOW_BW_MAX_MS = 300000;
 
 /** The page-level "scene is up" latch index.html sets with the `ready` boot
  *  state (sticky — `__bootState` itself can be overwritten). On a boot with no
@@ -1549,8 +1553,9 @@ function _schedulePromotion(mode) {
   if (mode === "off") return;
   if (mode === "eager") { promoteTerrainT1024Now().catch(() => {}); return; }
   // `defer` and `auto` share the deferred rules; `auto` additionally takes
-  // the bandwidth tier's patience (a low session waits up to 120 s).
-  const maxMs = mode === "auto" && lowBandwidth() ? TERRAIN_LADDER_LOW_BW_MAX_MS : TERRAIN_LADDER_DEFER_MAX_MS;
+  // the bandwidth tier's patience (a low session waits for the ground).
+  const low = mode === "auto" && lowBandwidth();
+  const maxMs = low ? TERRAIN_LADDER_LOW_BW_MAX_MS : TERRAIN_LADDER_DEFER_MAX_MS;
   const t0 = _ladder.now();
   const poll = () => {
     if (_stats.ladder.tier !== "t128") return; // already promoted/demoted away
@@ -1563,10 +1568,22 @@ function _schedulePromotion(mode) {
     // waiting forever on a field that is null by construction. With NO armed
     // controller (the default boot) the page's sticky `ready` latch is the
     // proxy: the scene is up and its first-paint fetch wave has drained.
-    const signal = ms ? (ms.convergedMs ?? ms.previewCompleteMs) : (_sceneReadySignal() ? 0 : null);
+    // A LOW session waits for the ground instead (2026-10-09): since the
+    // 2026-10-06 boot work `ready` fires once the sky is up, before any
+    // terrain mesh, so the ~10 MB promotion started 2 s after t128 and shared
+    // the 666 kbps line with the ground's own records — first terrain 7.6 min.
+    const sceneUp = low ? groundDrawn() : _sceneReadySignal();
+    const signal = ms ? (ms.convergedMs ?? ms.previewCompleteMs) : (sceneUp ? 0 : null);
     const elapsed = _ladder.now() - t0;
-    if ((signal != null && elapsed >= TERRAIN_LADDER_DEFER_SETTLE_MS)
-        || elapsed >= maxMs) {
+    // `?interiorHold` (2026-10-09): a player spawned indoors (a new
+    // character's Training Academy) waits for its interior first — the 68 MB
+    // t1024 pair otherwise shares the six HTTP/1.1 connections with the
+    // interior's records. The hold outlasts `maxMs`, bounded by its own
+    // ceiling (bandwidth_tier.js INTERIOR_HOLD_MAX_MS).
+    const held = interiorBuildPending() && elapsed < INTERIOR_HOLD_MAX_MS;
+    if (held) _stats.ladder.interiorHeld = true;
+    if (!held && ((signal != null && elapsed >= TERRAIN_LADDER_DEFER_SETTLE_MS)
+        || elapsed >= maxMs)) {
       promoteTerrainT1024Now().catch(() => {});
       return;
     }

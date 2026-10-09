@@ -55,6 +55,7 @@
 //   ?farRadius=N      Chebyshev radius in LBs (default 8 = 1536 m)
 //   ?farTexels=N      composite texels per LB edge (default 128)
 //   ?farBakeBudget=N  patch bakes per frame (default 1; measured 1.2 ms GPU)
+//   ?farBakeCompileAsync=off  link the bake program on first use (legacy; 5 s freeze on the 1070)
 //   ?farDiag=off      drop the radius-policy assertions
 // ===========================================================================
 
@@ -74,6 +75,7 @@ import {
   farRadiusLb,
   farTexelsPerLb,
   farBakeBudgetPerFrame,
+  farBakeCompileAsync,
   farFetchInFlightMax,
   farDiagEnabled,
   terrainFogEnabled,
@@ -712,6 +714,56 @@ function ensureBakeRig(scene3d) {
   return st.bake;
 }
 
+/**
+ * `?farBakeCompileAsync` (2026-10-09): true once the bake program is linked.
+ * The first call issues `renderer.compile` with the patch's own render target
+ * bound and one of its landblock geometries on the rig mesh — the same program
+ * variant the bake renders with (a target's colour space keys the program, and
+ * so does `vertexNormals`: compiled over the rig's empty placeholder geometry
+ * the key differed in that one bit and the first bake linked a second program,
+ * 3.4 s, measured on the 1070) — and every later call polls
+ * three's `program.isReady()` (`COMPLETION_STATUS_KHR`, non-blocking), so the
+ * driver links off the main thread. On the 1070 (fresh profile, ANGLE/D3D11)
+ * the first bake's synchronous link froze the main thread for 4,963 ms ~15 s
+ * after in-world, stalling the spawn's own fetches. A backend without
+ * KHR_parallel_shader_compile reports ready at once (the old cost, once).
+ */
+function bakeProgramReady(renderer, rig, rt, geom) {
+  if (rig.programReady) return true;
+  if (!farBakeCompileAsync() || typeof renderer.compile !== "function") {
+    rig.programReady = true;
+    return true;
+  }
+  if (rig.compileStartMs == null) {
+    rig.compileStartMs = performance.now();
+    const prev = renderer.getRenderTarget();
+    try {
+      if (geom && rig.mesh) rig.mesh.geometry = geom;
+      renderer.setRenderTarget(rt);
+      renderer.compile(rig.scene, rig.cam);
+    } catch (_) {
+      rig.programReady = true; // fail-soft: the first bake links as before
+    } finally {
+      renderer.setRenderTarget(prev);
+    }
+    return rig.programReady === true;
+  }
+  let program = null;
+  try {
+    program = renderer.properties.get(rig.mat).currentProgram;
+  } catch (_) {
+    program = null;
+  }
+  if (!program || typeof program.isReady !== "function" || program.isReady()) {
+    rig.programReady = true;
+    if (_state?.stats) _state.stats.bakeCompileMs = Math.round(performance.now() - rig.compileStartMs);
+  }
+  return rig.programReady === true;
+}
+
+/** Test seam. */
+export const _bakeProgramReadyForTest = bakeProgramReady;
+
 /** Per-LB scratch data textures — two total, rewritten per bake, never pooled. */
 function ensureScratchTextures() {
   const st = _state;
@@ -798,6 +850,8 @@ function bakePatch(scene3d, renderer, patch) {
     patch.rt.texture.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy?.() ?? 1);
     patch.rt.texture.name = `far-composite-${patch.px}-${patch.py}`;
   }
+
+  if (!bakeProgramReady(renderer, rig, patch.rt, patch.lbData.values().next().value?.geom)) return false;
 
   const prevTarget = renderer.getRenderTarget();
   const prevAutoClear = renderer.autoClear;
@@ -1136,6 +1190,7 @@ export function initFarTerrain(scene3d, { parent, renderer } = {}) {
     stats: {
       patchBakes: 0, lbBakes: 0, fetches: 0, fetchedLbs: 0,
       fetchErrors: 0, patchesDisposed: 0,
+      bakeCompileMs: null, // `?farBakeCompileAsync`: async link wall time
     },
   };
   // eslint-disable-next-line no-console

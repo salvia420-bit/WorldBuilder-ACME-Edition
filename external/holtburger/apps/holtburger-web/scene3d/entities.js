@@ -2146,6 +2146,7 @@ import { rng as timeRng, currentTime, particleClockMode } from "./particles/time
 // single `destroyAllForOwner` teardown replacing `_particleEmittersForGuid`.
 // Off-path = the legacy per-guid map below, byte-identical.
 import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
+import { entityParticleRenderLayer } from "./particles/render_layer.js";
 // A11-S1 (unification survey 2026-06-11) — shared PhysicsScript executor.
 // `?scriptQueue` (DEFAULT-ON — `!== "off"` reader; `=off` restores the
 // legacy walker) routes the entity chain walker's hooks
@@ -14705,6 +14706,9 @@ export class EntityManager {
         // but only when the S0 parity flag asks for blocking semantics —
         // keep the two flags' contracts independent.)
         blocking: ((e.hookType | 0) === 26) && BLOCKING_PARTICLE_PARITY_ON,
+        // 2026-10-09: the entity's own layer, so the indoor depth split's cells
+        // pass does not paint over it (particles/render_layer.js).
+        renderLayer: entityParticleRenderLayer(),
       })
         .then((id) => {
           if (id !== 0) {
@@ -18197,6 +18201,7 @@ export class EntityManager {
         parentOffset,
         emitterId: emitterIdSeed,
         blocking,
+        renderLayer: entityParticleRenderLayer(), // the entity's layer (particles/render_layer.js)
       };
       spawnedId = particleOwnerOn()
         ? await ownerRegistry.addEmitter(inst.guid >>> 0, this._worldParticleManager, req)

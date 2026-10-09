@@ -221,3 +221,36 @@ test("wiring: the loot window polls the range, and closes on vendor / portal / d
   const send = picking.indexOf("sessionHandle.useObject(guid >>> 0);\n            const notice = worldUseNotice(guid);");
   assert.ok(send > 0, "worldUseNotice runs right after the Use is sent");
 });
+
+// extcontainer-5 (2026-10-09): retail gmExternalContainerUI's container row.
+test("externalContainerView: packs in the container row, the open container's items in the strip", () => {
+  const pack = { guid: SUBPACK, itemType: 0x200 };
+  const a = { guid: 0x80000021, itemType: 0x8 };
+  const b = { guid: 0x80000022, itemType: 0x800 };
+  const n1 = { guid: 0x80000031, itemType: 0x8 };
+  const rootItems = [pack, a, b];
+  const onRoot = R.externalContainerView({ root: CHEST, rootItems });
+  assert.deepEqual(onRoot.packs, [pack]);
+  assert.deepEqual(onRoot.items, [a, b], "packs are not in the item strip");
+  assert.equal(onRoot.open, CHEST);
+  const onPack = R.externalContainerView({ root: CHEST, openSub: SUBPACK, rootItems, subItems: [n1] });
+  assert.equal(onPack.open, SUBPACK);
+  assert.deepEqual(onPack.items, [n1]);
+  assert.deepEqual(onPack.packs, [pack], "the row keeps every pack");
+  // The open pack left the ground object: retail ItemList_OpenFirstContainer.
+  const gone = R.externalContainerView({ root: CHEST, openSub: SUBPACK, rootItems: [a, b], subItems: [n1] });
+  assert.equal(gone.open, CHEST);
+  assert.deepEqual(gone.items, [a, b]);
+  assert.deepEqual(R.externalContainerView({ root: CHEST, openSub: CHEST, rootItems }).open, CHEST);
+  assert.deepEqual(R.externalContainerView({ root: CHEST, openSub: SUBPACK, rootItems, subItems: null }).items, [],
+    "an open pack whose contents are not cached shows empty, not the chest");
+  assert.equal(R.isPackMeta({ itemType: 0x200 }), true);
+  assert.equal(R.isPackMeta({ itemType: 0x8 }), false);
+  assert.equal(R.isPackMeta(null), false);
+});
+
+test("extNestedPacksEnabled: default on, =off / 0 / false escapes", () => {
+  assert.equal(R.extNestedPacksEnabled(""), true);
+  assert.equal(R.extNestedPacksEnabled("?extNestedPacks=on"), true);
+  for (const v of ["off", "0", "false"]) assert.equal(R.extNestedPacksEnabled(`?extNestedPacks=${v}`), false);
+});

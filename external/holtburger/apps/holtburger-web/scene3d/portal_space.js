@@ -88,6 +88,22 @@ const NEAR_VDIST = 0.001;
 // ── our failsafes (retail has none; a lost packet must not strand us) ──
 const ARRIVAL_CELLS_WAIT_MAX = 6.0; // s after arrival before ignoring cell residency
 const TUNNEL_HOLD_MAX = 20.0; // s in TUNNEL before forcing the exit
+// `?portalHoldBuild` (2026-10-09, default on, `=off` escape): past the 6 s
+// cells wait, keep holding while the destination landblock's interior build is
+// still IN FLIGHT (a stalled or failed build leaves the in-flight set, so it
+// releases at once), up to this hard cap. The 6 s cap alone dropped the player
+// into a void for ~10 s on the way into the Town Network (1070, 2026-10-09:
+// arrival 1.1 s, cells 17.4 s) — portals, signs and paintings hanging in
+// mid-air in front of the outdoor mountains around landblock 0x0007.
+const ARRIVAL_BUILD_WAIT_MAX = 60.0;
+const PORTAL_HOLD_BUILD = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("portalHoldBuild");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
 const POSE_MOVE_M = 5.0; // stale-pkg arrival fallback threshold
 export const NOTICE_TEXT = "In Portal Space - Please Wait...";
 // Sound_UI_EnterPortal / Sound_UI_ExitPortal (acclient.h SoundType).
@@ -235,6 +251,18 @@ export function destinationCellsReady(scene3d, cellId) {
   }
   const t = scene3d?.terrainBakedLbs;
   return t && typeof t.has === "function" ? t.has((id & 0xffff0000) >>> 0) : true;
+}
+
+/**
+ * Is the destination's interior still being built? Indoor cell only: its
+ * landblock in `envCellBuildInFlight` (cells.js adds it before the build's
+ * first await and removes it on every exit — success, empty, evicted, error).
+ */
+export function destinationBuildInFlight(scene3d, cellId) {
+  const id = cellId >>> 0;
+  if (!id || (id & 0xffff) < 0x100) return false;
+  const s = scene3d?.envCellBuildInFlight;
+  return !!(s && typeof s.has === "function" && s.has((id & 0xffff0000) >>> 0));
 }
 
 // ── module state ───────────────────────────────────────────────────────
@@ -647,8 +675,14 @@ function computeWorldReady(scene3d) {
     _reason = "cells-ready";
     return true;
   }
-  if (_clock - _arrivedAt >= ARRIVAL_CELLS_WAIT_MAX) {
-    _reason = "failsafe(cells-wait)";
+  const waited = _clock - _arrivedAt;
+  if (waited >= ARRIVAL_CELLS_WAIT_MAX) {
+    if (PORTAL_HOLD_BUILD && waited < ARRIVAL_BUILD_WAIT_MAX
+        && destinationBuildInFlight(scene3d, _arrivalCell)) {
+      _reason = "building";
+      return false;
+    }
+    _reason = waited >= ARRIVAL_BUILD_WAIT_MAX ? "failsafe(build-wait)" : "failsafe(cells-wait)";
     return true;
   }
   return false;

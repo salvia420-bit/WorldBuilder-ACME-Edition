@@ -73,6 +73,7 @@ import * as THREE from "three";
 // bc7LevelBytes back from here); both sides bind functions, never eval-time
 // values, so the cycle is safe.
 import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats } from "./xu7_textures.js";
+import { holdForInterior } from "./bandwidth_tier.js";
 import {
   textureRehydrateStats,
   registerReleasedTexture,
@@ -1566,7 +1567,13 @@ export class Bc7RecordSource {
         .catch(() => null);
     };
     const bytesP = () => this._fetchHbc7Bytes(id);
-    const p = tryXu7()
+    // `?interiorHold` (2026-10-09): while an indoor player's interior is still
+    // building, the full-tier record (xu7, then tex-bc7) waits — the surface
+    // shows its retail albedo meanwhile, as it already does until the upgrade
+    // lands. Entering the Town Network fetched 151 xu7 records (200 MB, up to
+    // 4 MB each) alongside its ~1 MB of DAT records (1070, 2026-10-09).
+    const p = holdForInterior()
+      .then(() => tryXu7())
       .then((xu7Parsed) => {
         if (xu7Parsed) {
           this._put(this._cache, id, xu7Parsed);

@@ -213,6 +213,17 @@ impl LoopSession {
         }
     }
 
+    /// 2026-10-09 — the retail DISCONNECT (0x8000) teardown
+    /// (`Session::send_disconnect`). Direct mode sends it on this session's
+    /// socket; in proxy mode (`?netWorker=1`) the worker owns the transport,
+    /// so nothing is sent from here and ACE falls back to its timeout.
+    pub async fn send_disconnect(&mut self) -> Result<()> {
+        match self {
+            LoopSession::Direct(s) => s.send_disconnect().await,
+            LoopSession::Proxy(_) => Ok(()),
+        }
+    }
+
     /// The recv loop's keepalive arm reads this to decide whether to send a
     /// proactive ping. In proxy mode the *worker* owns keepalive, so we
     /// return "just sent" (now) → `elapsed()` is ~0 → the main arm's `> 5s`

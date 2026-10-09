@@ -36,6 +36,7 @@ function createShellGate(opts = {}) {
   const disabled = String(env.HB_SHELL || "").toLowerCase() === "off";
   const autoBuild = opts.autoBuild ?? String(env.HB_SHELL_AUTOBUILD ?? "1") !== "0";
   const quietMs = opts.quietMs ?? 10000;
+  const failBackoffMs = opts.failBackoffMs ?? 300000;
   const cacheMs = opts.cacheMs ?? 1500;
   const log = opts.log || ((m) => console.log(`[shell-gate] ${m}`));
   const now = opts.now || Date.now;
@@ -48,6 +49,7 @@ function createShellGate(opts = {}) {
   let cached = null; // { at, result }
   let building = false;
   let buildTimer = null;
+  let lastFailAt = null;
   const stats = { checks: 0, bundled: 0, unbundled: 0, builds: 0, buildFailures: 0, lastReason: null, lastBuildMs: null };
 
   function readManifest() {
@@ -92,7 +94,11 @@ function createShellGate(opts = {}) {
         const cur = fileSha(rel);
         if (cur.sha !== sha) {
           if (result.fresh) result = { fresh: false, reason: `changed: ${rel}`, newestChangeMs: 0 };
-          result.newestChangeMs = Math.max(result.newestChangeMs, cur.mtimeMs || t);
+          // A deleted input has no mtime and counts as a finished change (0), not
+          // as "changed now": with `|| t` every check restarted the quiet period,
+          // so the rebuild never ran — players got the unbundled page for two
+          // days after plugins/lifestone-popup.js was deleted (2026-10-07).
+          result.newestChangeMs = Math.max(result.newestChangeMs, cur.mtimeMs || 0);
         }
       }
     }
@@ -105,7 +111,10 @@ function createShellGate(opts = {}) {
     if (!autoBuild || building || buildTimer) return;
     // Clamped: a future-dated mtime (clock skew, restored backup) must not
     // park the rebuild for hours — at worst it waits six quiet periods.
-    const wait = Math.min(quietMs * 6, Math.max(0, (result.newestChangeMs || 0) + quietMs - now()));
+    // After a failed build, wait `failBackoffMs` before the next try, so a
+    // build that cannot succeed is not re-run on every index request.
+    const backoff = lastFailAt == null ? 0 : Math.max(0, lastFailAt + failBackoffMs - now());
+    const wait = Math.max(backoff, Math.min(quietMs * 6, Math.max(0, (result.newestChangeMs || 0) + quietMs - now())));
     buildTimer = setTimeout(() => {
       buildTimer = null;
       cached = null;
@@ -122,8 +131,8 @@ function createShellGate(opts = {}) {
         building = false;
         cached = null;
         stats.lastBuildMs = now() - t0;
-        if (ok) { stats.builds += 1; log(`shell bundle rebuilt in ${stats.lastBuildMs} ms`); }
-        else { stats.buildFailures += 1; log(`shell rebuild FAILED (serving unbundled): ${String(detail).slice(0, 300)}`); }
+        if (ok) { stats.builds += 1; lastFailAt = null; log(`shell bundle rebuilt in ${stats.lastBuildMs} ms`); }
+        else { stats.buildFailures += 1; lastFailAt = now(); log(`shell rebuild FAILED (serving unbundled): ${String(detail).slice(0, 300)}`); }
       });
     }, wait);
     if (typeof buildTimer.unref === "function") buildTimer.unref();

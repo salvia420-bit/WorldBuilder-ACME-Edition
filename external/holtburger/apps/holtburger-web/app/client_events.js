@@ -113,6 +113,10 @@ export function dispatchClientEvent(evt, D) {
     // `character_list` shared state — re-render so the UI
     // reflects the new roster.
     renderCharacterList();
+    // 2026-10-09 — also ACE's answer to a log-off (CharacterLogOff +
+    // CharacterList): /logout waits on this before returning to the
+    // character screen (index.html __logOutToCharacterSelect).
+    try { window.dispatchEvent(new CustomEvent("holtburger:charlist", { detail: { count: evt.u32Payload } })); } catch (_) {}
   } else if (evt.kind === ClientEventKind.CHAT_RECEIVED) {
     // ChatReceived (Phase 4 step 4). The recv loop
     // pre-formats every chat-bearing variant into a single

@@ -322,6 +322,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             );
             console_log_str("[logoff] CharacterLogOff sent");
         }
+        SessionCommand::Disconnect => {
+            // 2026-10-09: retail quit teardown — ACE terminates the session on
+            // a DISCONNECT (0x8000) packet (NetworkSession.ProcessPacket), so
+            // the next login (a page reload) is not "Account In Use".
+            if let Err(e) = session.send_disconnect().await {
+                console_log_str(&format!("[disconnect] send failed: {e}"));
+            } else {
+                console_log_str("[disconnect] Disconnect sent");
+            }
+            return LoopFlow::Exit;
+        }
         _ => unreachable!("SessionCommand routed to the wrong handler module"),
     }
     LoopFlow::Continue

@@ -300,6 +300,21 @@ const ODF_ATTACKABLE = 0x10;
 // which keep their own timeout literals for their own purposes.
 const CAST_TOKEN_TIMEOUT_MS = 2500;
 
+/**
+ * serde_wasm_bindgen's default serializer maps every JSON object to a JS
+ * `Map`; deep-convert those to plain objects (arrays kept, other values as
+ * they are). An already-plain value comes back unchanged.
+ */
+export function plainFromMaps(v) {
+  if (v instanceof Map) {
+    const o = {};
+    for (const [k, x] of v) o[k] = plainFromMaps(x);
+    return o;
+  }
+  if (Array.isArray(v)) return v.map(plainFromMaps);
+  return v;
+}
+
 export class RynthWebHost {
   constructor(sessionHandle, opts = {}) {
     if (!sessionHandle) throw new Error("RynthWebHost: sessionHandle required");
@@ -1304,14 +1319,20 @@ export class RynthWebHost {
   CreateTestCharacter(name) {
     return this._act("CreateTestCharacter", name);
   }
+  // The three char-gen getters serialize a serde_json value through
+  // serde_wasm_bindgen, whose default turns every JSON object into a JS
+  // `Map`; the wizard reads plain objects (`catalog.heritages`,
+  // `area.startAreaId`, …), so with real data `openWizard` saw no heritages
+  // and refused to open (2026-10-09, found on the 1070 from the new character
+  // screen). Plain objects here; an already-plain value passes through.
   TryGetCharacterGenCatalog() {
-    return this._live("GetCharacterGenCatalog") ?? null;
+    return plainFromMaps(this._live("GetCharacterGenCatalog")) ?? null;
   }
   TryGetSkillCostsForHeritage(heritageId, skillId) {
-    return this._live("GetSkillCostsForHeritage", heritageId, skillId) ?? null;
+    return plainFromMaps(this._live("GetSkillCostsForHeritage", heritageId, skillId)) ?? null;
   }
   TryGetCharacterGenAppearanceStrips(heritageId, genderId) {
-    return this._live("GetCharacterGenAppearanceStrips", heritageId, genderId) ?? null;
+    return plainFromMaps(this._live("GetCharacterGenAppearanceStrips", heritageId, genderId)) ?? null;
   }
   /** Rich char-gen submit. THROWS on wasm-side validation failure — the one
    *  deliberate exception to degrade-not-throw, because the validation

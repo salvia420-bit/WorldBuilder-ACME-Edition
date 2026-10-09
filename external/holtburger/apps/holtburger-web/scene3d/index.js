@@ -217,6 +217,7 @@ import { BakedAmbientSource } from "./audio/baked_ambient_source.js";
 import { LandblockLRU, lbKeyFromXY, isNearPlayerLb } from "./landblock_lru.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
 import { ACMoons } from "./ac_moons.js";
+import { holdForGround } from "./bandwidth_tier.js";
 import { installDiag } from "./diag.js";
 import { installWebglContextRecovery } from "./webgl_context_recovery.js";
 // Wave 15 — opt-in bulk icon preload (?preloadIcons=1). Default OFF.
@@ -4138,6 +4139,67 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
           this.loadTerrainForLandblock(lbX, lbY, pm),
       });
     },
+    // 2026-10-09 — character-select warm-up (app/spawn_preview.js): stream the
+    // world around where the selected character last stood BEFORE it enters,
+    // through the loaders the position stream uses (world_stream.js): the
+    // fixed-grid terrain ring and the 3×3's buildings + statics outdoors, the
+    // landblock's EnvCells indoors; and frame the spot with the camera. A
+    // player already in the world wins (nothing happens). Pre-spawn the LRU
+    // evicts nothing (tickEviction bails without a current landblock) and the
+    // terrain LOD re-centres on the first real landblock change, so a wrong
+    // guess only costs the download. Returns what it started (diag), or null.
+    previewSpawnArea(loc) {
+      const cell = (Number(loc?.cell) >>> 0) || 0;
+      if (!cell) return null;
+      try {
+        const pose = window.__sessionHandle?.getLocalPlayerPose?.();
+        if (pose) {
+          try { pose.free?.(); } catch (_) {}
+          return null;
+        }
+      } catch (_) {}
+      const lbId = ((cell >>> 16) << 16) >>> 0;
+      const cx = (lbId >>> 24) & 0xff;
+      const cy = (lbId >>> 16) & 0xff;
+      const indoor = (cell & 0xffff) >= 0x100;
+      const x = Number.isFinite(+loc.x) ? +loc.x : 96;
+      const y = Number.isFinite(+loc.y) ? +loc.y : 96;
+      const z = Number.isFinite(+loc.z) ? +loc.z : 80;
+      try { this.cameraSwitcher?.setPreviewTarget?.({ x: cx * 192 + x, y: cy * 192 + y, z }); } catch (_) {}
+      if (indoor) {
+        this.loadEnvCellsForLandblock?.(lbId);
+      } else {
+        this.loadTerrainRing?.(cx, cy);
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+            this.loadBuildingsForLandblock?.(nx, ny);
+            this.loadStaticsForLandblock?.(nx, ny);
+          }
+        }
+      }
+      this._spawnPreview = { cell, indoor, startedMs: performance.now() };
+      return this._spawnPreview;
+    },
+    /** Drop the preview camera target (the select screen closed). */
+    clearSpawnPreview() {
+      try { this.cameraSwitcher?.setPreviewTarget?.(null); } catch (_) {}
+    },
+    // 2026-10-09 — the location-independent half of the warm-up: the terrain
+    // setup chain every first outdoor landblock awaits (BC7 atlas, road tile,
+    // detail textures, alpha masks, …). Its fetches and atlases are memoised
+    // on the scene, so the real ring resolve later reuses them; the returned
+    // ring-opts bag is discarded (terrainOpts and the LOD centre are left to
+    // the real spawn). Once per session.
+    warmTerrainAssets() {
+      if (!this._terrainWarm) {
+        this._terrainWarm = resolveTerrainRingOpts(this, this.wasmExports, 0, 0, this)
+          .then(() => true, () => false);
+      }
+      return this._terrainWarm;
+    },
     loadBuildingsForLandblock(lbX, lbY) {
       const lbKeyForLru = lbKeyFromXY(lbX, lbY);
       // streamFix (2026-07-02): already-baked fast-path before the guard
@@ -5429,7 +5491,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     try {
       const acMoons = new ACMoons();
       liveScene3d.acMoons = acMoons;
-      acMoons.load().then(() => {
+      // 2026-10-09 — a low-bandwidth session fetches the two 1024² moon PNGs
+      // (3.5 MB) only once the ground is drawn (bandwidth_tier.holdForGround).
+      holdForGround().then(() => acMoons.load()).then(() => {
         acMoons.attachToSkyScene(skyDome.skyScene);
         // eslint-disable-next-line no-console
         console.log(

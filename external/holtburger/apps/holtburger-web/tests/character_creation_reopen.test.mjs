@@ -33,6 +33,8 @@
 //   [2] the release is IDENTITY-guarded: a stale instance transitioning to
 //       NotStarted must not evict a newer wizard that has since been opened.
 //   [3] closeWizard() still works and stays idempotent.
+//   [4] (2026-10-09) `ctx.onStartArea` gets the chosen start area on open and
+//       on each change, once per change.
 //
 // NEGATIVE CONTROL
 //   A bare `_wizard = null` in the NotStarted branch passes [1] and [3] but
@@ -245,6 +247,27 @@ check("and the wizard opens again afterwards", () => {
   assert.notEqual(w3, w2);
   mod.closeWizard();
 });
+
+/* ── [4] onStartArea (2026-10-09): the host warms the chosen academy ──── */
+// index.html hands `onStartArea` to the wizard so the character screen loads
+// that start area's Training Academy while the player is still in here.
+
+const areas = [];
+const w4 = mod.openWizard({ client, onStartArea: (id) => areas.push(id) });
+check("onStartArea: the default start area is reported when the wizard opens", () => {
+  assert.deepEqual(areas, [0]);
+});
+w4.transition("next");
+w4.transition("back");
+check("onStartArea: re-rendering the same area does not report it again", () => {
+  assert.deepEqual(areas, [0]);
+});
+w4._state.startArea = 2;
+w4.transition("next");
+check("onStartArea: a changed area is reported on the next render", () => {
+  assert.deepEqual(areas, [0, 2]);
+});
+mod.closeWizard();
 
 console.log(`\nSummary: ${passed} passed, ${failed} failed.`);
 process.exit(failed === 0 ? 0 : 1);

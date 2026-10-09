@@ -81,6 +81,29 @@ fn wrap(i: i32, n: i32) -> usize {
     (((i % n) + n) % n) as usize
 }
 
+// 2026-10-09 — the separable passes below read their windows from a
+// wrap-PADDED copy of the row (and a table of wrapped row indices) instead of
+// calling `wrap` — two integer `%` — per tap. Profiled on the 1070, the old
+// per-tap wrap made this module ~92% of a surface decode: ~1 µs per texel,
+// 10.5 s for the 299 surfaces of the Holtburg Training Academy, which a new
+// character waited through before the academy appeared. Every output element
+// still sees the same operands in the same order, so results are
+// bit-identical (pinned against the old loops in `tests::reference`).
+
+/// `out[k] = row[wrap(k - r, n)]` for `k in 0..n + 2r`: the row with `r`
+/// wrapped texels on each side, so tap `d` of texel `x` is `out[x + d + r]`.
+fn pad_wrapped(row: &[f32], r: usize, out: &mut Vec<f32>) {
+    let n = row.len();
+    out.clear();
+    out.extend((0..n + 2 * r).map(|k| row[wrap(k as i32 - r as i32, n as i32)]));
+}
+
+/// `rows[k] = wrap(k - r, h)` for `k in 0..h + 2r`: row `y + d`, wrapped, is
+/// `rows[y + d + r]`.
+fn wrapped_rows(h: usize, r: usize) -> Vec<usize> {
+    (0..h + 2 * r).map(|k| wrap(k as i32 - r as i32, h as i32)).collect()
+}
+
 /// Separable Gaussian blur with wrap boundary.
 fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     if sigma <= 0.0 || w == 0 || h == 0 {
@@ -94,25 +117,30 @@ fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     for v in &mut k {
         *v /= sum;
     }
-    let (wi, hi) = (w as i32, h as i32);
+    let ru = r as usize;
+    // Each element accumulates `k[j] * tap_j` for j = 0..=2r from 0.0, as before.
     let mut tmp = vec![0.0f32; src.len()];
-    for y in 0..hi {
-        for x in 0..wi {
-            let mut acc = 0.0;
-            for (j, kv) in k.iter().enumerate() {
-                acc += kv * src[y as usize * w + wrap(x + j as i32 - r, wi)];
+    let mut padded = Vec::with_capacity(w + 2 * ru);
+    for y in 0..h {
+        pad_wrapped(&src[y * w..(y + 1) * w], ru, &mut padded);
+        let out = &mut tmp[y * w..(y + 1) * w];
+        for (j, &kv) in k.iter().enumerate() {
+            let win = &padded[j..j + w];
+            for x in 0..w {
+                out[x] += kv * win[x];
             }
-            tmp[y as usize * w + x as usize] = acc;
         }
     }
+    let rows = wrapped_rows(h, ru);
     let mut out = vec![0.0f32; src.len()];
-    for y in 0..hi {
-        for x in 0..wi {
-            let mut acc = 0.0;
-            for (j, kv) in k.iter().enumerate() {
-                acc += kv * tmp[wrap(y + j as i32 - r, hi) * w + x as usize];
+    for y in 0..h {
+        let o = &mut out[y * w..(y + 1) * w];
+        for (j, &kv) in k.iter().enumerate() {
+            let sy = rows[y + j];
+            let s = &tmp[sy * w..(sy + 1) * w];
+            for x in 0..w {
+                o[x] += kv * s[x];
             }
-            out[y as usize * w + x as usize] = acc;
         }
     }
     out
@@ -121,26 +149,31 @@ fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
 /// Grey dilation (`max`) or erosion (`min`) over a `(2r+1)` square, wrapped.
 /// Separable, so cost is O(n·r) rather than O(n·r²).
 fn grey_morph(src: &[f32], w: usize, h: usize, r: i32, dilate: bool) -> Vec<f32> {
-    let (wi, hi) = (w as i32, h as i32);
+    let ru = r.max(0) as usize;
     let pick = |a: f32, b: f32| if dilate { a.max(b) } else { a.min(b) };
-    let mut tmp = vec![0.0f32; src.len()];
-    for y in 0..hi {
-        for x in 0..wi {
-            let mut acc = src[y as usize * w + x as usize];
-            for d in -r..=r {
-                acc = pick(acc, src[y as usize * w + wrap(x + d, wi)]);
+    // Each element starts at its own texel and folds taps d = -r..=r in order.
+    let mut tmp = src.to_vec();
+    let mut padded = Vec::with_capacity(w + 2 * ru);
+    for y in 0..h {
+        pad_wrapped(&src[y * w..(y + 1) * w], ru, &mut padded);
+        let t = &mut tmp[y * w..(y + 1) * w];
+        for d in 0..=2 * ru {
+            let win = &padded[d..d + w];
+            for x in 0..w {
+                t[x] = pick(t[x], win[x]);
             }
-            tmp[y as usize * w + x as usize] = acc;
         }
     }
-    let mut out = vec![0.0f32; src.len()];
-    for y in 0..hi {
-        for x in 0..wi {
-            let mut acc = tmp[y as usize * w + x as usize];
-            for d in -r..=r {
-                acc = pick(acc, tmp[wrap(y + d, hi) * w + x as usize]);
+    let rows = wrapped_rows(h, ru);
+    let mut out = tmp.clone();
+    for y in 0..h {
+        let o = &mut out[y * w..(y + 1) * w];
+        for d in 0..=2 * ru {
+            let sy = rows[y + d];
+            let s = &tmp[sy * w..(sy + 1) * w];
+            for x in 0..w {
+                o[x] = pick(o[x], s[x]);
             }
-            out[y as usize * w + x as usize] = acc;
         }
     }
     out
@@ -372,6 +405,45 @@ fn suppress_speckle(t: &mut [f32], w: usize, h: usize) {
     }
 }
 
+/// 3-4 chamfer distance transform, in place, with WRAPPED indexing (textures
+/// tile). One forward + one backward sweep is exact on a plane; the pair is
+/// run twice so distances propagate across the wrap seam — sufficient because
+/// the pillow radius is small (~3% of the tile). Neighbour indices come from
+/// radius-1 wrap tables (2026-10-09; the same sweep order and the same `min`
+/// sequence per texel as the per-neighbour `wrap` it replaced).
+fn chamfer_dt_wrapped(dist: &mut [f32], wu: usize, hu: usize) {
+    let (wi, hi) = (wu as i32, hu as i32);
+    // xs[x + 1 + dx] = wrap(x + dx, w), ys[y + 1 + dy] = wrap(y + dy, h).
+    let xs: Vec<usize> = (0..wu + 2).map(|k| wrap(k as i32 - 1, wi)).collect();
+    let ys: Vec<usize> = (0..hu + 2).map(|k| wrap(k as i32 - 1, hi) * wu).collect();
+    for _round in 0..2 {
+        // forward: left/up neighbourhood
+        for y in 0..hu {
+            for x in 0..wu {
+                let i = y * wu + x;
+                let mut d = dist[i];
+                d = d.min(dist[ys[y + 1] + xs[x]] + 1.0);
+                d = d.min(dist[ys[y] + xs[x + 1]] + 1.0);
+                d = d.min(dist[ys[y] + xs[x]] + 1.4);
+                d = d.min(dist[ys[y] + xs[x + 2]] + 1.4);
+                dist[i] = d;
+            }
+        }
+        // backward: right/down neighbourhood
+        for y in (0..hu).rev() {
+            for x in (0..wu).rev() {
+                let i = y * wu + x;
+                let mut d = dist[i];
+                d = d.min(dist[ys[y + 1] + xs[x + 2]] + 1.0);
+                d = d.min(dist[ys[y + 2] + xs[x + 1]] + 1.0);
+                d = d.min(dist[ys[y + 2] + xs[x + 2]] + 1.4);
+                d = d.min(dist[ys[y + 2] + xs[x]] + 1.4);
+                dist[i] = d;
+            }
+        }
+    }
+}
+
 /// Height field in `[0, 1]` with **per-region volume**: joints carve exactly
 /// like [`seam_height`], and every region BETWEEN joints rises with distance
 /// from its nearest joint into a rounded plateau — each stone reads as a
@@ -415,39 +487,7 @@ pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
         // anchor to, so degrade gracefully to the pure seam field.
         t.iter().map(|&ti| 1.0 - ti).collect()
     } else {
-        // 3-4 chamfer distance transform with WRAPPED indexing (textures
-        // tile). One forward + one backward sweep is exact on a plane; the
-        // pair is run twice so distances propagate across the wrap seam —
-        // sufficient because the pillow radius is small (~3% of the tile).
-        let (wi, hi) = (w as i32, h as i32);
-        for _round in 0..2 {
-            // forward: left/up neighbourhood
-            for y in 0..hi {
-                for x in 0..wi {
-                    let i = y as usize * wu + x as usize;
-                    let mut d = dist[i];
-                    let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
-                    d = d.min(nb(x - 1, y) + 1.0);
-                    d = d.min(nb(x, y - 1) + 1.0);
-                    d = d.min(nb(x - 1, y - 1) + 1.4);
-                    d = d.min(nb(x + 1, y - 1) + 1.4);
-                    dist[i] = d;
-                }
-            }
-            // backward: right/down neighbourhood
-            for y in (0..hi).rev() {
-                for x in (0..wi).rev() {
-                    let i = y as usize * wu + x as usize;
-                    let mut d = dist[i];
-                    let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
-                    d = d.min(nb(x + 1, y) + 1.0);
-                    d = d.min(nb(x, y + 1) + 1.0);
-                    d = d.min(nb(x + 1, y + 1) + 1.4);
-                    d = d.min(nb(x - 1, y + 1) + 1.4);
-                    dist[i] = d;
-                }
-            }
-        }
+        chamfer_dt_wrapped(&mut dist, wu, hu);
         let r = (PILLOW_FRAC * wu.min(hu) as f32).max(2.0);
         (0..n)
             .map(|i| {
@@ -547,18 +587,24 @@ fn hash01(seed: u32, x: u32, y: u32) -> f32 {
 /// tile (period == tile, so the result wraps like the texture does).
 fn value_noise(w: usize, h: usize, cx: u32, cy: u32, seed: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; w * h];
+    // The column terms depend on x only: (x0 % cx, (x0 + 1) % cx, tx), once
+    // per column instead of per texel (2026-10-09; same values).
+    let cols: Vec<(u32, u32, f32)> = (0..w)
+        .map(|x| {
+            let fx = x as f32 / w as f32 * cx as f32;
+            let x0 = fx as u32;
+            (x0 % cx, (x0 + 1) % cx, smoothstep01(fx - x0 as f32))
+        })
+        .collect();
     for y in 0..h {
         let fy = y as f32 / h as f32 * cy as f32;
         let y0 = fy as u32;
         let ty = smoothstep01(fy - y0 as f32);
-        for x in 0..w {
-            let fx = x as f32 / w as f32 * cx as f32;
-            let x0 = fx as u32;
-            let tx = smoothstep01(fx - x0 as f32);
-            let (x1, y1) = ((x0 + 1) % cx, (y0 + 1) % cy);
-            let a = hash01(seed, x0 % cx, y0 % cy);
-            let b = hash01(seed, x1, y0 % cy);
-            let c = hash01(seed, x0 % cx, y1);
+        let (y0m, y1) = (y0 % cy, (y0 + 1) % cy);
+        for (x, &(x0m, x1, tx)) in cols.iter().enumerate() {
+            let a = hash01(seed, x0m, y0m);
+            let b = hash01(seed, x1, y0m);
+            let c = hash01(seed, x0m, y1);
             let d = hash01(seed, x1, y1);
             out[y * w + x] = (a + (b - a) * tx) * (1.0 - ty) + (c + (d - c) * tx) * ty;
         }
@@ -789,20 +835,22 @@ pub fn seam_normal_rgb8(height: &[f32], w: u32, h: u32, strength: f32) -> Vec<u8
         return Vec::new();
     }
     let (wi, hi) = (w as i32, h as i32);
-    let at = |x: i32, y: i32| height[wrap(y, hi) * wu + wrap(x, wi)];
+    // Radius-1 wrap tables (2026-10-09): xs[x + 1 + d] / ys[y + 1 + d].
+    let xs: Vec<usize> = (0..wu + 2).map(|k| wrap(k as i32 - 1, wi)).collect();
+    let ys: Vec<usize> = (0..hu + 2).map(|k| wrap(k as i32 - 1, hi) * wu).collect();
     let mut out = vec![0u8; n * 3];
-    for y in 0..hi {
-        for x in 0..wi {
+    for y in 0..hu {
+        for x in 0..wu {
             // Central differences, wrapped — textures tile.
-            let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * strength;
-            let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * strength;
+            let dx = (height[ys[y + 1] + xs[x + 2]] - height[ys[y + 1] + xs[x]]) * 0.5 * strength;
+            let dy = (height[ys[y + 2] + xs[x + 1]] - height[ys[y] + xs[x + 1]]) * 0.5 * strength;
             // Height is in [0,1] over a texel grid; scale so a full-depth
             // groove over one texel reads as a steep wall rather than a ripple.
             let sx = -dx * (wu as f32).min(512.0) * 0.05;
             let sy = -dy * (hu as f32).min(512.0) * 0.05;
             let inv = 1.0 / (sx * sx + sy * sy + 1.0).sqrt();
             let (nx, ny, nz) = (sx * inv, sy * inv, inv);
-            let i = (y as usize * wu + x as usize) * 3;
+            let i = (y * wu + x) * 3;
             out[i] = ((nx * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
             out[i + 1] = ((ny * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
             out[i + 2] = ((nz * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
@@ -839,6 +887,233 @@ pub fn sample_height(field: &[f32], w: u32, h: u32, uv: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-2026-10-09 loops, verbatim (per-tap `wrap`). The rewritten
+    /// passes must reproduce them BIT-FOR-BIT — they only change how a window
+    /// is addressed, never which operands meet in which order.
+    mod reference {
+        use super::super::{hash01, smoothstep01, wrap};
+
+        pub fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+            if sigma <= 0.0 || w == 0 || h == 0 {
+                return src.to_vec();
+            }
+            let r = (sigma * 3.0).ceil().max(1.0) as i32;
+            let mut k: Vec<f32> = (-r..=r)
+                .map(|d| (-(d * d) as f32 / (2.0 * sigma * sigma)).exp())
+                .collect();
+            let sum: f32 = k.iter().sum();
+            for v in &mut k {
+                *v /= sum;
+            }
+            let (wi, hi) = (w as i32, h as i32);
+            let mut tmp = vec![0.0f32; src.len()];
+            for y in 0..hi {
+                for x in 0..wi {
+                    let mut acc = 0.0;
+                    for (j, kv) in k.iter().enumerate() {
+                        acc += kv * src[y as usize * w + wrap(x + j as i32 - r, wi)];
+                    }
+                    tmp[y as usize * w + x as usize] = acc;
+                }
+            }
+            let mut out = vec![0.0f32; src.len()];
+            for y in 0..hi {
+                for x in 0..wi {
+                    let mut acc = 0.0;
+                    for (j, kv) in k.iter().enumerate() {
+                        acc += kv * tmp[wrap(y + j as i32 - r, hi) * w + x as usize];
+                    }
+                    out[y as usize * w + x as usize] = acc;
+                }
+            }
+            out
+        }
+
+        pub fn grey_morph(src: &[f32], w: usize, h: usize, r: i32, dilate: bool) -> Vec<f32> {
+            let (wi, hi) = (w as i32, h as i32);
+            let pick = |a: f32, b: f32| if dilate { a.max(b) } else { a.min(b) };
+            let mut tmp = vec![0.0f32; src.len()];
+            for y in 0..hi {
+                for x in 0..wi {
+                    let mut acc = src[y as usize * w + x as usize];
+                    for d in -r..=r {
+                        acc = pick(acc, src[y as usize * w + wrap(x + d, wi)]);
+                    }
+                    tmp[y as usize * w + x as usize] = acc;
+                }
+            }
+            let mut out = vec![0.0f32; src.len()];
+            for y in 0..hi {
+                for x in 0..wi {
+                    let mut acc = tmp[y as usize * w + x as usize];
+                    for d in -r..=r {
+                        acc = pick(acc, tmp[wrap(y + d, hi) * w + x as usize]);
+                    }
+                    out[y as usize * w + x as usize] = acc;
+                }
+            }
+            out
+        }
+
+        pub fn chamfer_dt_wrapped(dist: &mut [f32], wu: usize, hu: usize) {
+            let (wi, hi) = (wu as i32, hu as i32);
+            for _round in 0..2 {
+                for y in 0..hi {
+                    for x in 0..wi {
+                        let i = y as usize * wu + x as usize;
+                        let mut d = dist[i];
+                        let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
+                        d = d.min(nb(x - 1, y) + 1.0);
+                        d = d.min(nb(x, y - 1) + 1.0);
+                        d = d.min(nb(x - 1, y - 1) + 1.4);
+                        d = d.min(nb(x + 1, y - 1) + 1.4);
+                        dist[i] = d;
+                    }
+                }
+                for y in (0..hi).rev() {
+                    for x in (0..wi).rev() {
+                        let i = y as usize * wu + x as usize;
+                        let mut d = dist[i];
+                        let nb = |xx: i32, yy: i32| dist[wrap(yy, hi) * wu + wrap(xx, wi)];
+                        d = d.min(nb(x + 1, y) + 1.0);
+                        d = d.min(nb(x, y + 1) + 1.0);
+                        d = d.min(nb(x + 1, y + 1) + 1.4);
+                        d = d.min(nb(x - 1, y + 1) + 1.4);
+                        dist[i] = d;
+                    }
+                }
+            }
+        }
+
+        pub fn value_noise(w: usize, h: usize, cx: u32, cy: u32, seed: u32) -> Vec<f32> {
+            let mut out = vec![0.0f32; w * h];
+            for y in 0..h {
+                let fy = y as f32 / h as f32 * cy as f32;
+                let y0 = fy as u32;
+                let ty = smoothstep01(fy - y0 as f32);
+                for x in 0..w {
+                    let fx = x as f32 / w as f32 * cx as f32;
+                    let x0 = fx as u32;
+                    let tx = smoothstep01(fx - x0 as f32);
+                    let (x1, y1) = ((x0 + 1) % cx, (y0 + 1) % cy);
+                    let a = hash01(seed, x0 % cx, y0 % cy);
+                    let b = hash01(seed, x1, y0 % cy);
+                    let c = hash01(seed, x0 % cx, y1);
+                    let d = hash01(seed, x1, y1);
+                    out[y * w + x] = (a + (b - a) * tx) * (1.0 - ty) + (c + (d - c) * tx) * ty;
+                }
+            }
+            out
+        }
+
+        pub fn seam_normal_rgb8(height: &[f32], w: u32, h: u32, strength: f32) -> Vec<u8> {
+            let (wu, hu) = (w as usize, h as usize);
+            let n = wu.saturating_mul(hu);
+            if n == 0 || height.len() < n {
+                return Vec::new();
+            }
+            let (wi, hi) = (w as i32, h as i32);
+            let at = |x: i32, y: i32| height[wrap(y, hi) * wu + wrap(x, wi)];
+            let mut out = vec![0u8; n * 3];
+            for y in 0..hi {
+                for x in 0..wi {
+                    let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * strength;
+                    let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * strength;
+                    let sx = -dx * (wu as f32).min(512.0) * 0.05;
+                    let sy = -dy * (hu as f32).min(512.0) * 0.05;
+                    let inv = 1.0 / (sx * sx + sy * sy + 1.0).sqrt();
+                    let (nx, ny, nz) = (sx * inv, sy * inv, inv);
+                    let i = (y as usize * wu + x as usize) * 3;
+                    out[i] = ((nx * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+                    out[i + 1] = ((ny * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+                    out[i + 2] = ((nz * 0.5 + 0.5) * 255.0).clamp(0.0, 255.0) as u8;
+                }
+            }
+            out
+        }
+    }
+
+    /// Deterministic [0, 1) field (xorshift) — no RNG crate in this one.
+    fn noise_field(n: usize, seed: u32) -> Vec<f32> {
+        let mut s = seed.max(1);
+        (0..n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s >> 8) as f32 / 16_777_216.0
+            })
+            .collect()
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    /// Sizes include windows wider than the texture (multi-wrap) and 1-texel
+    /// rows/columns.
+    const SIZES: [(usize, usize); 8] = [(1, 1), (1, 7), (5, 1), (3, 2), (7, 5), (16, 9), (33, 17), (64, 64)];
+
+    #[test]
+    fn padded_gaussian_blur_is_bit_identical_to_per_tap_wrap() {
+        for (i, &(w, h)) in SIZES.iter().enumerate() {
+            let src = noise_field(w * h, 0x9E37 + i as u32);
+            for sigma in [0.0f32, 0.6, 2.0, 4.1, 10.24] {
+                let a = gaussian_blur(&src, w, h, sigma);
+                let b = reference::gaussian_blur(&src, w, h, sigma);
+                assert_eq!(bits(&a), bits(&b), "{w}x{h} sigma {sigma}");
+            }
+        }
+    }
+
+    #[test]
+    fn padded_grey_morph_is_bit_identical_to_per_tap_wrap() {
+        for (i, &(w, h)) in SIZES.iter().enumerate() {
+            let src = noise_field(w * h, 0x51ED + i as u32);
+            for r in [0, 1, 2, 3, 6, 10, 21] {
+                for dilate in [true, false] {
+                    let a = grey_morph(&src, w, h, r, dilate);
+                    let b = reference::grey_morph(&src, w, h, r, dilate);
+                    assert_eq!(bits(&a), bits(&b), "{w}x{h} r {r} dilate {dilate}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tabled_chamfer_dt_is_bit_identical_to_per_neighbour_wrap() {
+        for (i, &(w, h)) in SIZES.iter().enumerate() {
+            // Sparse zero seeds in an INF field, like relief_height's.
+            let seeds = noise_field(w * h, 0xC0FF + i as u32);
+            let mut a: Vec<f32> = seeds.iter().map(|&v| if v > 0.93 { 0.0 } else { 1e9 }).collect();
+            let mut b = a.clone();
+            chamfer_dt_wrapped(&mut a, w, h);
+            reference::chamfer_dt_wrapped(&mut b, w, h);
+            assert_eq!(bits(&a), bits(&b), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn column_hoisted_value_noise_is_bit_identical() {
+        for &(w, h) in &SIZES {
+            for (cx, cy) in [(1, 1), (4, 48), (16, 16), (48, 4), (32, 32)] {
+                let a = value_noise(w, h, cx, cy, 0xABCD);
+                let b = reference::value_noise(w, h, cx, cy, 0xABCD);
+                assert_eq!(bits(&a), bits(&b), "{w}x{h} lattice {cx}x{cy}");
+            }
+        }
+    }
+
+    #[test]
+    fn tabled_seam_normal_is_bit_identical() {
+        for (i, &(w, h)) in SIZES.iter().enumerate() {
+            let hf = noise_field(w * h, 0x7777 + i as u32);
+            let a = seam_normal_rgb8(&hf, w as u32, h as u32, 1.0);
+            let b = reference::seam_normal_rgb8(&hf, w as u32, h as u32, 1.0);
+            assert_eq!(a, b, "{w}x{h}");
+        }
+    }
 
     /// Build an RGBA8 texture from a per-texel luminance closure.
     fn tex(w: u32, h: u32, f: impl Fn(u32, u32) -> f32) -> Vec<u8> {

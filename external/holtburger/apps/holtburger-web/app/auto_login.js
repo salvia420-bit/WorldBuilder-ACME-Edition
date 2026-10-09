@@ -29,6 +29,8 @@ export function initAutoLogin(D) {
   //   - `?autoSpawn=first`     — click Spawn on the first character
   //   - `?autoSpawn=Name`      — click Spawn on a named character
   //   - `?autoSpawn=0`         — skip Spawn (stop at char-list-ready)
+  //   - `?autoSpawn=select`    — stop at char-list-ready on the retail
+  //                              character screen (app/character_select.js)
   //   - `?maxRetries=N`        — opt-in stale-session retry (default 0)
   //
   // Defaults: autoSpawn=first, maxRetries=0.
@@ -403,8 +405,10 @@ export function initAutoLogin(D) {
           continue;
         }
 
-        // Char list arrived. Stop here if autoSpawn is disabled.
-        if (autoSpawn === "0" || autoSpawn === "" || autoSpawn === false) {
+        // Char list arrived. Stop here if autoSpawn is disabled — or
+        // `select` (2026-10-09): the retail character screen
+        // (app/character_select.js) takes over and the player chooses.
+        if (autoSpawn === "0" || autoSpawn === "" || autoSpawn === false || autoSpawn === "select") {
           return;
         }
 

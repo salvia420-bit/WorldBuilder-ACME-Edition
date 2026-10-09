@@ -133,6 +133,13 @@ const helpers = await import(
   pathToFileURL(path.join(APP, "plugins", "inventory_helpers.js")).href
 );
 globalThis.__realTakeInventorySnapshot = helpers.takeInventorySnapshot;
+// extcontainer-5 (2026-10-09): refreshContents splits the ground object's
+// packs from its loose items — the REAL pure view, so a pack in the corpse
+// is resolved through the same single snapshot.
+const groundRules = await import(
+  pathToFileURL(path.join(APP, "plugins", "ground_container_rules.js")).href
+);
+globalThis.__realGroundRules = groundRules;
 // Bug 1 (2026-10-07): the REAL contained-item resolver is threaded in too.
 const containedMeta = await import(
   pathToFileURL(path.join(APP, "plugins", "contained_item_meta.js")).href
@@ -190,6 +197,8 @@ const CORPSE_STUBS = {
   groundContainerRangeVerdict: NOT_ON_SNAPSHOT_PATH("groundContainerRangeVerdict"),
   isLandscapeGroundObject: NOT_ON_SNAPSHOT_PATH("isLandscapeGroundObject"),
   landblockToWorld: NOT_ON_SNAPSHOT_PATH("landblockToWorld"),
+  extNestedPacksEnabled: "() => globalThis.__realGroundRules.extNestedPacksEnabled('')",
+  externalContainerView: "globalThis.__realGroundRules.externalContainerView",
 };
 
 // container-panel additionally pulls the drop-flag / ui-effect helpers.

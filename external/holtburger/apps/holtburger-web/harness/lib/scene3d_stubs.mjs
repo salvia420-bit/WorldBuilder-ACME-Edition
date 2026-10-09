@@ -74,6 +74,10 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   // the default arm (fast link / no measurement), so the statics full-tier
   // upgrade veto never fires and every suite sees today's behaviour.
   lowBandwidth: "() => false",
+  // 2026-10-09 "ground first": no terrain drawn yet / not a low session, so a
+  // held download proceeds at once (the real holdForGround's non-low answer).
+  groundDrawn: "() => false",
+  holdForGround: "() => Promise.resolve('not-low')",
   // ./texture_release.js — `?texFreeCpu` CPU-side release arming. Returns
   // false = "not armed", which is also what the real function returns with the
   // flag off, so no suite's assertions change shape. The one call site is

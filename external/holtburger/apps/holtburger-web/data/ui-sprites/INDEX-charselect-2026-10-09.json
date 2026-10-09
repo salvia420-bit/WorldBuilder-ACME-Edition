@@ -1,0 +1,26 @@
+{
+ "generatedBy": "WorldBuilder.Terminal chorizite-extract-ui-textures (client_portal.dat); the 800x600 art field re-encoded as WebP q86 (Pillow) \u2014 2026-10-09",
+ "layout": "0x21000004 CharacterManagementField (client_local_English.dat) \u2014 app/character_select.js",
+ "records": [
+  {
+   "did": "0x06004D64",
+   "file": "0x06004D64.png",
+   "width": 193,
+   "height": 110,
+   "pixelFormat": "PFID_A8R8G8B8",
+   "sourcePngSha256": "c3e0c3b68e93b35b1159b74dc5e8d794b11546d2e4fdba9194fd85ee0ed54d53",
+   "fileSha256": "891aff2f4c93b3beb056912361b7814a0001090801962eaf3d5f65dd0ce49c84",
+   "bytes": 5030
+  },
+  {
+   "did": "0x06007576",
+   "file": "0x06007576.webp",
+   "width": 800,
+   "height": 600,
+   "pixelFormat": "PFID_CUSTOM_RAW_JPEG",
+   "sourcePngSha256": "877e49ec6d9d23f30ec1cf9acbefa77f64262b53770d2c6591e8c0475dc763c1",
+   "fileSha256": "c852a5bfb4b33ae01df0282aef13ef9f6abf12cd0ed3913ae09092b6dc26c0ce",
+   "bytes": 58730
+  }
+ ]
+}

@@ -56,6 +56,16 @@ const calls = [];
 const rec = (n) => (...a) => { calls.push([n, ...a]); };
 const lastCall = (n) => [...calls].reverse().find((c) => c[0] === n) || null;
 const chestContents = [LOOT1, LOOT2];
+// extcontainer-5: a second chest holding a sack (with two items) and a gem.
+const CHEST2 = 0x7A000002, SACK = 0x7D000001, GEM = 0x7D000002, N1 = 0x7D000003, N2 = 0x7D000004;
+const nestedContents = new Map([[CHEST2, [SACK, GEM]], [SACK, [N1, N2]]]);
+const worldObjs = new Map([
+  [CHEST2, { name: "Chest", itemType: 0x200, capacity: 120 }],
+  [SACK, { name: "Sack", itemType: 0x200, capacity: 24 }],
+  [GEM, { name: "Gem", itemType: 0x800 }],
+  [N1, { name: "Ring", itemType: 0x8 }],
+  [N2, { name: "Scroll", itemType: 0x2000 }],
+]);
 globalThis.__sessionHandle = {
   playerInventory: () => inv.map((r) => ({ ...r, free() {} })),
   playerItemsCapacity: 102,
@@ -63,7 +73,15 @@ globalThis.__sessionHandle = {
   playerBurden: 0.5,
   playerAetheriaBits: 0,
   canUseWith: () => false,
-  getContainerContents: (g) => Uint32Array.from(g === CHEST ? chestContents : []),
+  getContainerContents: (g) => Uint32Array.from(g === CHEST ? chestContents : (nestedContents.get(g) || [])),
+  // extcontainer-5: the wasm entity store for the nested-pack chest's items
+  // (contained_item_meta.js reads these); unknown guids stay unresolved.
+  objectName: (g) => worldObjs.get(g >>> 0)?.name ?? null,
+  objectIntProperty: (g, k) => {
+    const o = worldObjs.get(g >>> 0);
+    if (!o) return undefined;
+    return k === 1 ? o.itemType : k === 6 ? (o.capacity ?? 0) : undefined;
+  },
   getObjectIconId: () => 0,
   groundContainerId: () => CHEST,
   moveItem: rec("moveItem"),
@@ -168,6 +186,8 @@ const lootMod = load("plugins/corpse-loot-bar.js", ["openFor", "closeBar", "stat
     "clearsGroundObjectOnFailure", "moveFailCloseGroundEnabled",
     "groundContainerRangeEnabled", "groundContainerRangeVerdict", "isLandscapeGroundObject",
     "landblockToWorld",
+    // extcontainer-5 (2026-10-09): packs inside the ground object (real).
+    "extNestedPacksEnabled", "externalContainerView",
   ]),
 });
 
@@ -509,6 +529,68 @@ await check("drag an inventory item onto the chest strip → moveItem(item, ches
 await check("server CloseGroundContainer closes the window", () => {
   bus.emit("containerClosed", { u32Payload: CHEST });
   assert.equal(ext.dataset.open, "0");
+});
+
+console.log("\n[3b] a chest holding a pack (extcontainer-5, ?extNestedPacks)");
+lootMod.openFor(CHEST2, "Chest");
+await settle();
+const stripGuids = () => Array.from(ext.querySelectorAll(".hclb-strip .hb-islot")).map((el) => Number(el.dataset.guid));
+const bagOf = (g) => ext.querySelector(`.hclb-bag[data-guid="${g}"]`);
+const topBag = () => ext.querySelector(".hclb-packs > .hclb-bag");
+await check("the pack goes in the container row, the strip shows the chest's loose items", () => {
+  assert.equal(ext.dataset.packs, "1");
+  assert.deepEqual(stripGuids(), [GEM]);
+  assert.ok(bagOf(SACK), "the sack has a container-row cell");
+  assert.equal(Number(topBag().dataset.guid), CHEST2, "the first cell is the chest itself");
+  assert.ok(topBag().classList.contains("is-open"), "the chest is the open container");
+  assert.ok(!bagOf(SACK).classList.contains("is-open"));
+});
+await check("clicking the sack opens it in place: the strip shows its contents", async () => {
+  bagOf(SACK).dispatchEvent(new FakeEvent("click", { button: 0 }));
+  await settle();
+  assert.deepEqual(stripGuids(), [N1, N2]);
+  assert.ok(bagOf(SACK).classList.contains("is-open"));
+  assert.ok(!topBag().classList.contains("is-open"));
+  assert.equal(lootMod.state.openGuid >>> 0, SACK);
+  assert.match(ext.querySelector(".hclb-count").textContent, /^Sack: 2 items$/);
+});
+await check("double-click takes an item out of the open sack: moveItem(item, me, 0)", async () => {
+  extCell(N1).dispatchEvent(new FakeEvent("dblclick", { button: 0 }));
+  await settle();
+  assert.deepEqual(lastCall("moveItem"), ["moveItem", N1, ME, 0]);
+});
+await check("a drop on the strip while the sack is open goes into the sack", async () => {
+  await dragDrop(cellOf(B), ext.querySelector(".hclb-strip"));
+  const c = lastCall("moveItem");
+  assert.deepEqual([c[1], c[2]], [B, SACK]);
+});
+await check("a drop on the chest's own cell goes into the chest", async () => {
+  await dragDrop(cellOf(C), topBag());
+  const c = lastCall("moveItem");
+  assert.deepEqual([c[1], c[2]], [C, CHEST2]);
+});
+await check("the open sack leaving the chest reopens the chest (retail ItemList_OpenFirstContainer)", async () => {
+  nestedContents.set(CHEST2, [GEM]);
+  bus.emit("playerInventoryChanged", {});
+  await settle();
+  assert.deepEqual(stripGuids(), [GEM]);
+  assert.equal(lootMod.state.openGuid >>> 0, CHEST2);
+  assert.equal(ext.dataset.packs, "0", "no packs left: no container row");
+  nestedContents.set(CHEST2, [SACK, GEM]);
+});
+await check("?extNestedPacks=off: the old flat strip (the sack is an ordinary cell)", async () => {
+  const prevLoc = globalThis.location;
+  globalThis.location = { search: "?extNestedPacks=off" };
+  try {
+    lootMod.closeBar();
+    lootMod.openFor(CHEST2, "Chest");
+    await settle();
+    assert.deepEqual(stripGuids(), [SACK, GEM]);
+    assert.equal(ext.dataset.packs, "0");
+  } finally {
+    globalThis.location = prevLoc;
+  }
+  lootMod.closeBar();
 });
 
 // Bug 13 (2026-10-07): armour fills every slot its mask covers (retail

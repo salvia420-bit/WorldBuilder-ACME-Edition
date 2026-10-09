@@ -106,6 +106,7 @@ import { fetchPhysicsScriptTable } from "../ui/ac_physics_script_table.js";
 // parallel id registry. Off-path = the legacy group registry + per-guid map
 // cross-writes, byte-identical.
 import { ownerRegistry, particleOwnerOn } from "./particles/owner_registry.js";
+import { entityParticleRenderLayer } from "./particles/render_layer.js";
 // Combat-visuals Phase 1 (2026-08-02) — the 12-ID Splatter taxonomy
 // decode. Dependency-free + unit-tested under bare node; see
 // `scene3d/splatter_decode.js`. Imported unconditionally (it's a frozen
@@ -2758,6 +2759,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
         partIndex,
         parentOffset: offset,
         blocking: blockingHook,
+        renderLayer: entityParticleRenderLayer(), // the target entity's layer (particles/render_layer.js)
       };
       if (scopedHandle !== 0) req.emitterId = scopedHandle;
       // A11-S2: on-path, register under the TARGET entity's guid owner —

@@ -3225,7 +3225,21 @@ export class CameraSwitcher {
     // Pre-spawn neutral fallback (Holtburg no longer special). Only reached if
     // getPlayerWorldPos throws/returns nothing before the first Spawn lands; the
     // live player rig wins immediately after.
+    // 2026-10-09 — the character-select warm-up (app/spawn_preview.js) frames
+    // where the selected character last stood instead of the world origin.
+    if (this._previewTarget) return { ...this._previewTarget };
     return { x: 0, y: 0, z: 80 };
+  }
+
+  /**
+   * 2026-10-09 — character-select warm-up: the AC-world point (metres, Z up)
+   * the camera frames while no local player exists (`null` clears it). The
+   * first real player pose wins through `_safePlayerPos` above.
+   */
+  setPreviewTarget(p) {
+    this._previewTarget = p && Number.isFinite(p.x) && Number.isFinite(p.y)
+      ? { x: p.x, y: p.y, z: Number.isFinite(p.z) ? p.z : 80 }
+      : null;
   }
 
   // ---- teardown -----------------------------------------------------

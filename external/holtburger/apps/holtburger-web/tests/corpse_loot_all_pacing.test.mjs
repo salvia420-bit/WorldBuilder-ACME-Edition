@@ -152,6 +152,10 @@ globalThis.__realResolveContainedItemMeta = containedMeta.resolveContainedItemMe
 // runs on this suite's YoureTooBusy emits — thread the REAL helpers in.
 const weenieErr = await import(pathToFileURL(path.join(APP, "plugins", "weenie_error_messages.js")).href);
 globalThis.__realWeenieErr = weenieErr;
+// extcontainer-5 (2026-10-09): refreshContents splits packs from loose items
+// with the REAL pure view (no packs here, so the strip is unchanged).
+const groundRules = await import(pathToFileURL(path.join(APP, "plugins", "ground_container_rules.js")).href);
+globalThis.__realGroundRules = groundRules;
 // item_drag.planBackpackPlacement over the REAL pure planner (2026-10-08):
 // nothing here stacks, so every take is a move into the main pack.
 globalThis.__plan = (item) => helpers.planPlaceInBackpack(
@@ -200,6 +204,8 @@ const STUBS = {
   groundContainerRangeVerdict: "() => { throw new Error('range check must not run here'); }",
   isLandscapeGroundObject: "() => { throw new Error('range check must not run here'); }",
   landblockToWorld: "() => { throw new Error('range check must not run here'); }",
+  extNestedPacksEnabled: "() => globalThis.__realGroundRules.extNestedPacksEnabled('')",
+  externalContainerView: "globalThis.__realGroundRules.externalContainerView",
 };
 const src = readFileSync(path.join(APP, "plugins", "corpse-loot-bar.js"), "utf8");
 const body = spliceModule(src, { label: "corpse-loot-bar.js", provided: [], stubs: STUBS });

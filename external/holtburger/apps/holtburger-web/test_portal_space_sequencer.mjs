@@ -112,6 +112,30 @@ console.log("\n=== module wiring ===");
   for (let i = 0; i < 4 * 16; i++) ps.tickPortalSpace(scene3d, 0.25); // 16 s
   check("cells-wait failsafe ends the sequence", !ps.isPortalSpaceActive());
 
+  // `?portalHoldBuild` (2026-10-09): past the 6 s cells wait, hold while the
+  // destination's interior build is still in flight (Town Network: cells at
+  // 16 s after arrival), release when it finishes, hard cap 60 s.
+  {
+    const sc = { cellContainers3d: new Map(), terrainBakedLbs: new Set(), envCellBuildInFlight: new Set([0x00070000]) };
+    ps.startPortalSpace(sc, { enterDid: 0, exitDid: 0 });
+    ps.signalPortalArrived({ cellId: 0x00070143 });
+    for (let i = 0; i < 4 * 12; i++) ps.tickPortalSpace(sc, 0.25); // 12 s
+    check("build in flight past the 6 s wait -> still in the tunnel", ps.portalSpaceOwnsFrame());
+    check("…reason 'building'", ps.destinationBuildInFlight(sc, 0x00070143) === true);
+    sc.envCellBuildInFlight.delete(0x00070000);
+    sc.cellContainers3d.set(0x00070143, {});
+    for (let i = 0; i < 4 * 10; i++) ps.tickPortalSpace(sc, 0.25);
+    check("build done -> sequence completes", !ps.isPortalSpaceActive());
+    const stuck = { cellContainers3d: new Map(), terrainBakedLbs: new Set(), envCellBuildInFlight: new Set([0x00070000]) };
+    ps.startPortalSpace(stuck, { enterDid: 0, exitDid: 0 });
+    ps.signalPortalArrived({ cellId: 0x00070143 });
+    for (let i = 0; i < 4 * 59; i++) ps.tickPortalSpace(stuck, 0.25);
+    check("build still in flight at 59 s -> still holding", ps.portalSpaceOwnsFrame());
+    for (let i = 0; i < 4 * 10; i++) ps.tickPortalSpace(stuck, 0.25);
+    check("…60 s hard cap ends the sequence", !ps.isPortalSpaceActive());
+    check("outdoor destination is never 'building'", ps.destinationBuildInFlight(stuck, 0xa9b40012) === false);
+  }
+
   // re-teleport mid-continue re-opens the tunnel
   ps.startPortalSpace(scene3d, { enterDid: 0, exitDid: 0 });
   ps.signalPortalArrived({ cellId: 0 }); // unknown cell -> waits on the failsafe

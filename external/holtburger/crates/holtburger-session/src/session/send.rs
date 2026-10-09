@@ -381,6 +381,26 @@ impl Session {
         .await
     }
 
+    /// End the session the way a retail client does when it quits: a cleartext,
+    /// header-only packet with `DISCONNECT` (0x8000). ACE terminates the session
+    /// at once (`NetworkSession.ProcessPacket` → `PacketHeaderDisconnect`)
+    /// instead of holding it until its 60 s network timeout, so a page reload
+    /// can log straight back in — without it ACE saw the new login as "Account
+    /// In Use" and dropped BOTH sessions (2026-10-09).
+    pub async fn send_disconnect(&mut self) -> Result<()> {
+        self.send_cleartext_control_packet(
+            PacketHeader {
+                flags: packet_flags::DISCONNECT,
+                sequence: self.current_client_sequence(),
+                id: self.client_id,
+                ..Default::default()
+            },
+            &[],
+            self.server_addr,
+        )
+        .await
+    }
+
     pub(crate) fn queue_ack(&mut self, sequence: u32) -> Result<()> {
         let mut payload = vec![0u8; 4];
         LittleEndian::write_u32(&mut payload[0..4], sequence);

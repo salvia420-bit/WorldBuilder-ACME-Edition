@@ -735,8 +735,10 @@ let _wizard = null;
  * @param {object} ctx
  * @param {object} ctx.client — `window.__pluginClient` (api.js createClient)
  * @param {Function} [ctx.onSuccess] — fires on kind=5 CharacterCreated;
- *                                    receives `{ guid, name }`.
+ *                                    receives `{ guid, name, startArea }`.
  * @param {Function} [ctx.onCancel]  — fires on close button or X.
+ * @param {Function} [ctx.onStartArea] — the chosen start area id, on open and
+ *                                    whenever it changes.
  */
 export function openWizard(ctx) {
   if (_wizard) {
@@ -803,6 +805,10 @@ function createWizardInstance(client, catalog, ctx) {
 
   // ── DOM ──
   const overlay = document.createElement("div");
+  // 2026-10-09 — an `hb-` id: agent mode (`?autoLogin=1`) hides every body
+  // child that is not HUD by that naming rule (index.html), so the wizard
+  // never showed in an auto-login session (found from the character screen).
+  overlay.id = "hb-charcreate";
   overlay.className = "hb-cc-overlay";
   overlay.dataset.plugin = "character-creation";
 
@@ -868,7 +874,9 @@ function createWizardInstance(client, catalog, ctx) {
       if (state.wizard !== WizardState.Submitting) return;
       const detail = ev?.detail || {};
       transition("ok");
-      ctx?.onSuccess?.(detail);
+      // 2026-10-09: + the chosen start area (the character screen starts
+      // loading its Training Academy before Enter — app/character_select.js).
+      ctx?.onSuccess?.({ ...detail, startArea: state.startArea });
     };
     const onFailed = (ev) => {
       if (state.wizard !== WizardState.Submitting) return;
@@ -941,7 +949,19 @@ function createWizardInstance(client, catalog, ctx) {
     }
   }
 
+  // 2026-10-09 — tell the host which start area is chosen (on open, on a
+  // heritage change, from the select): the character screen loads that
+  // area's Training Academy while the player is still in here
+  // (app/spawn_preview.js `newCharacterSpot`).
+  let notifiedStartArea = null;
+  function noteStartArea() {
+    if (state.startArea == null || state.startArea === notifiedStartArea) return;
+    notifiedStartArea = state.startArea;
+    try { ctx?.onStartArea?.(state.startArea); } catch (_) { /* the host's warm-up is best effort */ }
+  }
+
   function render() {
+    noteStartArea();
     // Progress bar — highlight current.
     const steps = progress.querySelectorAll(".hb-cc-progress-step");
     const order = [
@@ -1095,6 +1115,7 @@ function createWizardInstance(client, catalog, ctx) {
       }
       areaSel.addEventListener("change", () => {
         state.startArea = Number(areaSel.value);
+        noteStartArea();
       });
       areaRow.appendChild(areaLabel);
       areaRow.appendChild(areaSel);

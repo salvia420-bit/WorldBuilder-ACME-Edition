@@ -54,6 +54,8 @@ import { takeInventorySnapshot, decideItemDrop, DROP_TARGET } from "./inventory_
 import { resolveContainedItemMeta } from "./contained_item_meta.js";
 import { clearsGroundObjectOnFailure, moveFailCloseGroundEnabled } from "./weenie_error_messages.js";
 import {
+  extNestedPacksEnabled,
+  externalContainerView,
   groundContainerRangeEnabled,
   groundContainerRangeVerdict,
   isLandscapeGroundObject,
@@ -103,7 +105,17 @@ let overlayEl = null;
 let state = {
   corpseGuid: 0,
   corpseName: "",
+  // The OPEN container's loose contents (the item strip). extcontainer-5
+  // (`?extNestedPacks`): `packs` = the packs inside the ground object (the
+  // container row), `openSub` = the pack the player opened (0 = the ground
+  // object), `openGuid` = the container the strip shows, `rootMeta` = the
+  // ground object's own meta (the row's first cell).
   items: [],
+  packs: [],
+  openSub: 0,
+  openGuid: 0,
+  rootMeta: null,
+  counts: new Map(),
   selectedGuid: 0,
   despawnTimer: 0,
   // extcontainer-2: the container has had a world position since it opened
@@ -223,6 +235,68 @@ function ensureStyles() {
       background: linear-gradient(180deg, #6b5426, #f3d27a 45%, #b08a3c 70%, #5a4520) padding-box;
     }
     #${OVERLAY_ID} .hclb-strip > .hbk-empty { flex: 1 1 auto; padding: 8px 10px; }
+    /* extcontainer-5 — retail m_topContainer (Container 0x10000064) and
+       m_containerList (ContainerList 0x10000067): the ground object, then
+       the packs inside it, as 36×36 ItemSlot_Backpack cells like the
+       inventory's pack column; the open container wears the retail open
+       frame. Shown only while the ground object holds a pack. */
+    #${OVERLAY_ID} .hclb-packs {
+      flex: 0 0 auto;
+      display: none;
+      flex-direction: row;
+      align-items: center;
+      min-width: 0;
+      padding: 5px 6px 0;
+    }
+    #${OVERLAY_ID}[data-packs="1"] .hclb-packs { display: flex; }
+    #${OVERLAY_ID} .hclb-packlist {
+      display: flex;
+      flex-direction: row;
+      gap: 2px;
+      min-width: 0;
+      margin-left: 5px;
+      padding-left: 5px;
+      border-left: 1px solid var(--hbk-gold-deep, #4e3f1f);
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    #${OVERLAY_ID} .hclb-bag {
+      position: relative;
+      flex: 0 0 36px;
+      width: 36px; height: 36px;
+      box-sizing: border-box;
+      background: url("./sprites/acsprites/icon-slot-bg.png") 2px 2px / 32px 32px no-repeat;
+      image-rendering: pixelated;
+      cursor: pointer;
+    }
+    #${OVERLAY_ID} .hclb-bag:hover { filter: brightness(1.2); }
+    #${OVERLAY_ID} .hclb-bag > .hb-islot-icon {
+      position: absolute; left: 2px; top: 2px; width: 32px; height: 32px;
+      background: transparent center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hclb-bag > .hclb-bag-cap {
+      position: absolute; left: 28px; top: 3px; width: 5px; height: 30px;
+      background: url("${SP}/0x06004D22.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hclb-bag > .hclb-bag-cap > i {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: var(--cap, 0%);
+      background: url("${SP}/0x06004D23.png") center bottom / 5px 30px no-repeat;
+    }
+    #${OVERLAY_ID} .hclb-bag.is-open::after {
+      content: ""; position: absolute; inset: 0; z-index: 3;
+      background: url("${SP}/0x06005D9C.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hclb-bag.is-pending::before {
+      content: ""; position: absolute; left: 2px; top: 2px; width: 32px; height: 32px; z-index: 2;
+      background: url("${SP}/0x0600109A.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
     #${OVERLAY_ID} .hbk-footer { justify-content: space-between; padding: 3px 6px; }
     #${OVERLAY_ID} .hclb-count { color: var(--hbk-text-dim, #a8a090); font-size: 11px; white-space: nowrap; }
     #${OVERLAY_ID} .hclb-actions { display: flex; gap: 6px; }
@@ -245,6 +319,25 @@ function buildOverlay() {
 
   const { bar, title } = makeTitlebar("Corpse", { onClose: () => closeBar() });
   overlay.appendChild(bar);
+
+  // extcontainer-5: the ground object's cell + its packs (see ensureStyles).
+  const packRow = document.createElement("div");
+  packRow.className = "hclb-packs";
+  const topCell = makeBagCell();
+  topCell.addEventListener("click", (ev) => { ev.stopPropagation(); openContainer(0); });
+  topCell.addEventListener("mouseenter", () => {
+    showItemTooltip(topCell, `${state.corpseName || "Container"}\n${bagCountText(state.corpseGuid >>> 0)}`);
+  });
+  topCell.addEventListener("mouseleave", hideItemTooltip);
+  const packList = document.createElement("div");
+  packList.className = "hclb-packlist";
+  packList.addEventListener("wheel", (ev) => {
+    if (Math.abs(ev.deltaY) <= Math.abs(ev.deltaX) || packList.scrollWidth <= packList.clientWidth) return;
+    packList.scrollLeft += ev.deltaY;
+    ev.preventDefault();
+  }, { passive: false });
+  packRow.append(topCell, packList);
+  overlay.appendChild(packRow);
 
   const strip = document.createElement("div");
   strip.className = "hclb-strip";
@@ -291,6 +384,9 @@ function buildOverlay() {
   overlay._takeBtn = takeBtn;
   overlay._allBtn = allBtn;
   overlay._cells = new Map();
+  overlay._topCell = topCell;
+  overlay._packListEl = packList;
+  overlay._bagCells = new Map();
   document.body.appendChild(overlay);
 
   windowCtl = attachWindowPosition(overlay, {
@@ -302,20 +398,28 @@ function buildOverlay() {
   registerDropZone(overlay, {
     resolve(ev, s) {
       const list = state.items.map((it) => it.guid >>> 0);
-      const cell = ev.target?.closest?.(".hb-islot");
+      // Drops go into the OPEN container (the ground object or the pack
+      // opened in place); a drop on a container-row cell goes into that one.
+      const openKey = (state.openGuid || state.corpseGuid) >>> 0;
+      const bag = ev.target?.closest?.(".hclb-bag");
+      const cell = bag ? null : ev.target?.closest?.(".hb-islot");
       let target;
-      if (cell && cell.dataset.guid) {
+      if (bag) {
+        const bg = (parseInt(bag.dataset.guid, 10) >>> 0) || (state.corpseGuid >>> 0);
+        const n = bg === openKey ? list.length : contentsCount(bg);
+        target = { kind: DROP_TARGET.EMPTY_CELL, listKey: bg, listKind: "ext", index: n, count: n };
+      } else if (cell && cell.dataset.guid) {
         const g = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
         const at = list.indexOf(g);
         target = {
-          kind: DROP_TARGET.ITEM_CELL, listKey: state.corpseGuid >>> 0, listKind: "ext",
+          kind: DROP_TARGET.ITEM_CELL, listKey: openKey, listKind: "ext",
           index: at >= 0 ? at : list.length, count: list.length,
           item: state.items.find((it) => (it.guid >>> 0) === g) || null,
         };
       } else {
-        target = { kind: DROP_TARGET.EMPTY_CELL, listKey: state.corpseGuid >>> 0, listKind: "ext", index: list.length, count: list.length };
+        target = { kind: DROP_TARGET.EMPTY_CELL, listKey: openKey, listKind: "ext", index: list.length, count: list.length };
       }
-      const el = cell || strip;
+      const el = bag || cell || strip;
       if (!s) return { el, ok: true, target };
       const action = decideItemDrop({ ...s, split: 0 }, target, { ...extCtx(), canUseWith: () => null });
       return { el, ok: action.op !== "reject", reason: action.message, target };
@@ -345,8 +449,43 @@ function buildOverlay() {
 function extCtx() {
   return {
     playerGuid: localPlayerGuid(),
-    containerName: () => state.corpseName || "container",
+    containerName: (key) => {
+      const k = (key >>> 0) || 0;
+      const pack = k && k !== (state.corpseGuid >>> 0) ? state.packs.find((p) => (p.guid >>> 0) === k) : null;
+      return pack?.name || state.corpseName || "container";
+    },
   };
+}
+
+// An item in the window: the open container's contents or one of the packs.
+function metaFor(guid) {
+  const g = guid >>> 0;
+  return state.items.find((it) => (it.guid >>> 0) === g) || state.packs.find((p) => (p.guid >>> 0) === g) || null;
+}
+
+/** Items inside a container in the window (counted at the last refresh, taken items excluded). */
+function contentsCount(guid) {
+  const g = guid >>> 0;
+  if (state.counts.has(g)) return state.counts.get(g);
+  try { return Array.from(window.__sessionHandle?.getContainerContents?.(g) || []).length; } catch (_) { return 0; }
+}
+function bagCapacity(guid) {
+  try { return (window.__sessionHandle?.objectIntProperty?.(guid >>> 0, 6) | 0) || 0; } catch (_) { return 0; }
+}
+function bagCountText(guid) {
+  const cap = bagCapacity(guid);
+  return `${contentsCount(guid)} / ${cap || "?"} items`;
+}
+
+// extcontainer-5: open the ground object (0) or one of its packs in place.
+function openContainer(packGuid) {
+  const g = (packGuid >>> 0) || 0;
+  if ((state.openSub >>> 0) === g) return;
+  state.openSub = g;
+  state.selectedGuid = 0;
+  stopLootAll();
+  if (overlayEl) overlayEl._stripEl.scrollLeft = 0;
+  refreshContents();
 }
 
 // Keep the window on screen: centred above the toolbar until the player
@@ -399,7 +538,7 @@ function takeItem(itemGuid) {
   const me = localPlayerGuid();
   const g = (itemGuid >>> 0) || 0;
   if (!me || !g || pendingOps.has(g)) return false;
-  const meta = state.items.find((it) => (it.guid >>> 0) === g);
+  const meta = metaFor(g);
   if (!meta) return false;
   const isPack = ((meta.itemType >>> 0) & 0x200) !== 0;
   const action = planBackpackPlacement({ ...meta, isPack });
@@ -425,6 +564,14 @@ function takeItem(itemGuid) {
   return true;
 }
 
+// What Loot all takes: the open container's items and — while the ground
+// object itself is open — its packs, whole, after the loose items (as before
+// extcontainer-5, when packs sat in the strip).
+function lootCandidates() {
+  const onRoot = !state.openGuid || (state.openGuid >>> 0) === (state.corpseGuid >>> 0);
+  return onRoot ? state.items.concat(state.packs) : state.items;
+}
+
 function startLootAll() {
   lootAll = { waitGuid: 0, timer: 0, tries: new Map(), skipped: new Set(), lastBusyMs: -Infinity };
   render();
@@ -445,24 +592,25 @@ function lootStep() {
   if (lootAll.timer) { clearTimeout(lootAll.timer); lootAll.timer = 0; }
   if (overlayEl?.dataset.open !== "1") { stopLootAll(); return; }
   const w = lootAll.waitGuid >>> 0;
+  const pool = lootCandidates();
   if (w) {
     // One take in flight, never two: while the server has not answered the
     // last one, only the watchdog is re-armed.
-    const listed = state.items.some((it) => (it.guid >>> 0) === w);
+    const listed = pool.some((it) => (it.guid >>> 0) === w);
     if (listed && pendingOps.has(w)) {
       scheduleLootStep(LOOT_ALL_WATCHDOG_MS);
       return;
     }
     lootAll.waitGuid = 0;
   }
-  const next = state.items.find((it) => {
+  const next = pool.find((it) => {
     const g = it.guid >>> 0;
     return !pendingOps.has(g) && !lootAll.skipped.has(g);
   });
   if (!next) {
     // Everything taken, skipped, or in flight from another take (a manual
     // double-click) — finish once nothing takeable is left.
-    if (!state.items.some((it) => !lootAll.skipped.has(it.guid >>> 0))) {
+    if (!pool.some((it) => !lootAll.skipped.has(it.guid >>> 0))) {
       const skipped = lootAll.skipped.size;
       stopLootAll();
       if (skipped > 0) {
@@ -569,7 +717,7 @@ function makeCell() {
       window.__openContextMenuFor({
         source: "container-panel",
         guid: g,
-        containerGuid: state.corpseGuid >>> 0,
+        containerGuid: (state.openGuid || state.corpseGuid) >>> 0,
         slotIndex: state.items.findIndex((it) => (it.guid >>> 0) === g),
         name: cell._name || "",
         clientX: ev.clientX,
@@ -586,12 +734,112 @@ function makeCell() {
       guid: g,
       item: { ...it, isPack: ((it.itemType >>> 0) & 0x200) !== 0 },
       owned: false,
-      sourceList: { key: state.corpseGuid >>> 0, kind: "ext" },
+      sourceList: { key: (state.openGuid || state.corpseGuid) >>> 0, kind: "ext" },
       sourceIndex: state.items.indexOf(it),
       sourceEl: cell,
     });
   });
   return cell;
+}
+
+// extcontainer-5 container-row cell (ItemSlot_Backpack: icon + capacity bar).
+function makeBagCell() {
+  const cell = document.createElement("div");
+  cell.className = "hclb-bag";
+  const icon = document.createElement("div");
+  icon.className = "hb-islot-icon";
+  const cap = document.createElement("div");
+  cap.className = "hclb-bag-cap";
+  cap.appendChild(document.createElement("i"));
+  cell.append(icon, cap);
+  cell._icon = icon;
+  cell._cap = cap;
+  cell._iconId = -1;
+  return cell;
+}
+function setBagCapacity(cell, used, cap) {
+  const frac = cap > 0 ? Math.max(0, Math.min(1, used / cap)) : 0;
+  cell._cap.style.display = cap > 0 ? "" : "none";
+  cell._cap.firstChild.style.setProperty("--cap", `${Math.round(frac * 100)}%`);
+}
+// A pack inside the ground object: click (or double-click) opens it in
+// place — retail never takes a container-list entry on a click; drag it out
+// or use the context menu's Take to take the whole pack.
+function makePackCell() {
+  const cell = makeBagCell();
+  cell.draggable = true;
+  const guidOf = () => (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+  cell.addEventListener("click", (ev) => { ev.stopPropagation(); openContainer(guidOf()); });
+  cell.addEventListener("dblclick", (ev) => { ev.stopPropagation(); ev.preventDefault(); });
+  cell.addEventListener("mouseenter", () => showItemTooltip(cell, `${cell._name || "Pack"}\n${bagCountText(guidOf())}`));
+  cell.addEventListener("mouseleave", hideItemTooltip);
+  cell.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const g = guidOf();
+    if (!g || typeof window.__openContextMenuFor !== "function") return;
+    try {
+      window.__openContextMenuFor({
+        source: "container-panel",
+        guid: g,
+        containerGuid: state.corpseGuid >>> 0,
+        slotIndex: state.packs.findIndex((p) => (p.guid >>> 0) === g),
+        name: cell._name || "",
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+      });
+    } catch (e) { console.warn("[corpse-loot-bar] context menu failed:", e); }
+  });
+  cell.addEventListener("dragstart", (ev) => {
+    const g = guidOf();
+    const p = state.packs.find((x) => (x.guid >>> 0) === g);
+    if (!p || pendingOps.has(g)) { ev.preventDefault(); return; }
+    hideItemTooltip();
+    beginItemDrag(ev, {
+      guid: g,
+      item: { ...p, isPack: true },
+      owned: false,
+      sourceList: { key: state.corpseGuid >>> 0, kind: "ext" },
+      sourceIndex: state.packs.indexOf(p),
+      sourceEl: cell,
+    });
+  });
+  return cell;
+}
+
+function renderPackRow() {
+  const root = state.corpseGuid >>> 0;
+  const open = (state.openGuid || root) >>> 0;
+  const top = overlayEl._topCell;
+  top.dataset.guid = String(root);
+  if (state.rootMeta) setCellIcon(top, state.rootMeta);
+  setBagCapacity(top, contentsCount(root), bagCapacity(root));
+  top.classList.toggle("is-open", open === root);
+  const list = overlayEl._packListEl;
+  const cache = overlayEl._bagCells;
+  const want = [];
+  const used = new Set();
+  for (const p of state.packs) {
+    const key = String(p.guid >>> 0);
+    let cell = cache.get(key);
+    if (!cell) { cell = makePackCell(); cache.set(key, cell); }
+    cell.dataset.guid = key;
+    cell._name = p.name;
+    setCellIcon(cell, p);
+    setBagCapacity(cell, contentsCount(p.guid), bagCapacity(p.guid));
+    cell.classList.toggle("is-open", open === (p.guid >>> 0));
+    cell.classList.toggle("is-pending", pendingOps.has(p.guid >>> 0));
+    want.push(cell);
+    used.add(key);
+  }
+  for (const [k, el] of cache) {
+    if (!used.has(k)) { el.remove(); cache.delete(k); }
+  }
+  let cur = list.firstChild;
+  for (const el of want) {
+    if (el === cur) { cur = cur.nextSibling; continue; }
+    list.insertBefore(el, cur);
+  }
 }
 
 function setCellEffects(cell, bits) {
@@ -625,9 +873,17 @@ function render() {
   const strip = overlayEl._stripEl;
   const cache = overlayEl._cells;
   const n = state.items.length;
-  overlayEl._countEl.textContent = n === 0 ? "Empty" : (n === 1 ? "1 item" : `${n} items`);
+  // extcontainer-5: the container row while the ground object holds packs;
+  // the count names the pack when one is open.
+  const nested = state.packs.length > 0;
+  overlayEl.dataset.packs = nested ? "1" : "0";
+  if (nested) renderPackRow();
+  const openPack = nested && (state.openGuid >>> 0) !== (state.corpseGuid >>> 0)
+    ? state.packs.find((p) => (p.guid >>> 0) === (state.openGuid >>> 0)) : null;
+  const countText = n === 0 ? "Empty" : (n === 1 ? "1 item" : `${n} items`);
+  overlayEl._countEl.textContent = openPack ? `${openPack.name}: ${countText}` : countText;
   overlayEl._takeBtn.disabled = !state.selectedGuid || pendingOps.has(state.selectedGuid);
-  overlayEl._allBtn.disabled = n === 0 && !lootAll;
+  overlayEl._allBtn.disabled = n === 0 && !lootAll && !(nested && !openPack);
   overlayEl._allBtn.textContent = lootAll ? "Stop" : "Loot all";
 
   let empty = strip.querySelector(":scope > .hbk-empty");
@@ -682,12 +938,15 @@ function refreshContents() {
   const handle = window.__sessionHandle;
   const g = state.corpseGuid >>> 0;
   if (!g || !handle?.getContainerContents) return;
-  let guids = [];
-  try {
-    guids = Array.from(handle.getContainerContents(g) || []);
-  } catch (e) {
-    console.warn("[corpse-loot-bar] getContainerContents failed", e);
-  }
+  const contentsOf = (c) => {
+    try {
+      return Array.from(handle.getContainerContents(c) || []);
+    } catch (e) {
+      console.warn("[corpse-loot-bar] getContainerContents failed", e);
+      return [];
+    }
+  };
+  let guids = contentsOf(g);
   // (2026-07-02) — the wasm ViewContents snapshot (`latest_container_contents`)
   // is NOT pruned when an item is picked up, so a just-taken item lingers in
   // the GUID list. An item in `playerInventory()` is owned (moved out of the
@@ -700,20 +959,52 @@ function refreshContents() {
   // releases the boxes.
   const listed = guids.length;
   const snap = takeInventorySnapshot(handle);
+  let unresolved = 0;
   try {
     const owned = new Set(snap.inv.map((it) => (it.guid >>> 0)));
-    if (owned.size) guids = guids.filter((x) => !owned.has(x >>> 0));
-    state.items = guids.map((x) => resolveItemMeta(x, snap.inv));
+    const notOwned = (list) => (owned.size ? list.filter((x) => !owned.has(x >>> 0)) : list);
+    guids = notOwned(guids);
+    const rootItems = guids.map((x) => resolveItemMeta(x, snap.inv));
+    unresolved = rootItems.filter((it) => it.unresolved).length;
+    state.counts = new Map([[g, guids.length]]);
+    if (extNestedPacksEnabled()) {
+      // extcontainer-5: the packs go in the container row; the strip shows
+      // the open container — the ground object, or the pack opened in place
+      // (its contents came with the chest's ViewContents).
+      const packs = externalContainerView({ root: g, rootItems }).packs;
+      for (const p of packs) state.counts.set(p.guid >>> 0, notOwned(contentsOf(p.guid >>> 0)).length);
+      const wantSub = (state.openSub >>> 0) || 0;
+      let subItems = null;
+      if (wantSub && packs.some((p) => (p.guid >>> 0) === wantSub)) {
+        subItems = notOwned(contentsOf(wantSub)).map((x) => resolveItemMeta(x, snap.inv));
+        unresolved += subItems.filter((it) => it.unresolved).length;
+      }
+      const view = externalContainerView({ root: g, openSub: wantSub, rootItems, subItems });
+      // The open pack left the ground object: back to the first container
+      // (retail ItemList_OpenFirstContainer), and it stays there.
+      if (view.open !== (wantSub || g)) state.openSub = 0;
+      state.items = view.items;
+      state.packs = view.packs;
+      state.openGuid = view.open;
+      state.rootMeta = view.packs.length ? resolveItemMeta(g, snap.inv) : null;
+    } else {
+      state.items = rootItems;
+      state.packs = [];
+      state.openGuid = g;
+      state.rootMeta = null;
+    }
   } finally {
     snap.free();
   }
-  if (!guids.some((x) => (x >>> 0) === (state.selectedGuid >>> 0))) {
+  // Everything the window shows: the open container's items and the packs.
+  const shown = state.items.concat(state.packs).map((it) => it.guid >>> 0);
+  if (!shown.includes(state.selectedGuid >>> 0)) {
     state.selectedGuid = 0;
   }
   // Bug 1: the items' CreateObjects follow the ViewContents, so some may
   // still be placeholders — re-poll a few times until every one resolves.
-  const unresolved = state.items.filter((it) => it.unresolved).length;
-  const line = `[corpse-loot] 0x${g.toString(16)} listed=${listed} shown=${state.items.length} unresolved=${unresolved}`;
+  const line = `[corpse-loot] 0x${g.toString(16)} listed=${listed} shown=${state.items.length}` +
+    `${state.packs.length ? ` packs=${state.packs.length} open=0x${(state.openGuid >>> 0).toString(16)}` : ""} unresolved=${unresolved}`;
   if (line !== state.lastLog) {
     state.lastLog = line;
     console.info(line);
@@ -727,7 +1018,7 @@ function refreshContents() {
     }, RESOLVE_POLL_MS);
   }
   render();
-  if (lootAll && lootAll.waitGuid && !guids.some((x) => (x >>> 0) === lootAll.waitGuid)) {
+  if (lootAll && lootAll.waitGuid && !shown.includes(lootAll.waitGuid >>> 0)) {
     // The awaited item left the container — the server has moved it and is
     // standing the player back up, which is exactly when ACE accepts (queues)
     // the next pickup. Take the next one promptly.
@@ -742,6 +1033,8 @@ function openFor(corpseGuid, corpseName) {
   if (state.corpseGuid !== g) {
     stopLootAll();
     overlayEl._stripEl.scrollLeft = 0;
+    // A new ground object opens on itself (retail SetGroundObject).
+    state.openSub = 0;
   }
   state.corpseGuid = g;
   state.corpseName = corpseName || "Container";
@@ -850,6 +1143,9 @@ function closeBar() {
   stopLootAll();
   state.corpseGuid = 0;
   state.selectedGuid = 0;
+  state.openSub = 0;
+  state.openGuid = 0;
+  state.packs = [];
   if (state.resolveTimer) { clearTimeout(state.resolveTimer); state.resolveTimer = 0; }
   // CM_Inventory::Event_NoLongerViewingContents. Retail closes with a
   // toggle Use (CloseCurrentContainer → ItemHolder::UseObject); with ACE a

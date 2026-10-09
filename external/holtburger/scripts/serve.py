@@ -600,6 +600,15 @@ class Handler(SimpleHTTPRequestHandler):
     # SimpleHTTPRequestHandler always sends Content-Length.
     protocol_version = "HTTP/1.1"
 
+    # 2026-10-09: TCP_NODELAY on every accepted socket. With keep-alive, a
+    # response goes out as separate small writes (headers, then body), and
+    # Nagle held the body until the client ACKed the headers — which Linux's
+    # delayed ACK holds for ~40 ms. Every request on a reused connection cost
+    # a flat ~42 ms however small (24 req/s on one connection, ~143 req/s on
+    # Chrome's six), so a new character's Training Academy (2,138 one-record
+    # requests) spent ~20 s fetching on the 1070 with a 2.4 ms RTT.
+    disable_nagle_algorithm = True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HOLT_ROOT), **kwargs)
 

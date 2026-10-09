@@ -136,6 +136,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::CreateCharacter { .. }
         | SessionCommand::DeleteCharacter { .. }
         | SessionCommand::RestoreCharacter { .. }
-        | SessionCommand::LogOff { .. }) => lifecycle::handle(ctx, c).await,
+        | SessionCommand::LogOff { .. }
+        | SessionCommand::Disconnect { .. }) => lifecycle::handle(ctx, c).await,
     }
 }

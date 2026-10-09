@@ -786,8 +786,28 @@ const GPU_LOW_RE = /Mali|Adreno [0-5]\d\d|PowerVR SGX|Intel\(R\) (HD|UHD|Iris Pl
 //
 // Browser-only. Guarded with a `typeof document` check so Node test
 // harnesses don't trip.
+//
+// Memoised per page (2026-10-09): `getQuality()` runs it on every call, and
+// every surface material calls `getQuality()` (materials.js POM patch), so a
+// cold academy spawn created ~290 throwaway WebGL contexts — 1.4 s of main
+// thread on the 1070 while the academy's records waited for it, and a
+// `[quality] gpu-probe` line per material. The renderer string cannot change
+// within a page, and one answer keeps every material on the scene's tier.
+let _gpuTierProbe;
+let _gpuTierLogged = false;
 export function detectGpuTier() {
     if (typeof document === "undefined") return null;
+    if (_gpuTierProbe === undefined) _gpuTierProbe = _probeGpuTier();
+    return _gpuTierProbe;
+}
+
+/** Test hook: forget the memoised probe. */
+export function _resetGpuTierProbeForTest() {
+    _gpuTierProbe = undefined;
+    _gpuTierLogged = false;
+}
+
+function _probeGpuTier() {
     let canvas = null;
     let gl = null;
     try {
@@ -919,20 +939,16 @@ export function getQuality(url, userAgent) {
         // renderer string isn't on the HIGH allowlist or LOW
         // deny-list. NEVER auto-promotes to ULTRA.
         const probe = detectGpuTier();
-        if (probe && probe.tier === "high") {
-            preset = "high";
+        if (probe && (probe.tier === "high" || probe.tier === "low")) {
+            preset = probe.tier;
             source = "gpu-probe";
-            // eslint-disable-next-line no-console
-            console.log(
-                `[quality] gpu-probe → high (renderer="${probe.renderer}")`,
-            );
-        } else if (probe && probe.tier === "low") {
-            preset = "low";
-            source = "gpu-probe";
-            // eslint-disable-next-line no-console
-            console.log(
-                `[quality] gpu-probe → low (renderer="${probe.renderer}")`,
-            );
+            if (!_gpuTierLogged) {
+                _gpuTierLogged = true;
+                // eslint-disable-next-line no-console
+                console.log(
+                    `[quality] gpu-probe → ${probe.tier} (renderer="${probe.renderer}")`,
+                );
+            }
         } else if (mobile) {
             preset = "low";
             source = "mobile-default";

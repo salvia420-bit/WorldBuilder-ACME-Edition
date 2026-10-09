@@ -33,7 +33,7 @@ import init, {
   net_worker_submit_outbound,
   net_worker_set_sink,
   hb_mem_census,
-} from "../pkg/holtburger_web.js?v=wasmrev-20261007f";
+} from "../pkg/holtburger_web.js?v=wasmrev-20261009b";
 
 // Must match the RX_KIND_* tags in net_worker.rs.
 const RX_KIND_MESSAGE = 0;
@@ -74,7 +74,7 @@ function postToMain(kind, bytes) {
   try {
     // STAMPED wasm URL — the glue's import.meta.url default drops ?v=.
     await init({
-      module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=wasmrev-20261007f", import.meta.url),
+      module_or_path: new URL("../pkg/holtburger_web_bg.wasm?v=wasmrev-20261009b", import.meta.url),
     });
     net_worker_set_sink(postToMain);
     ready = true;

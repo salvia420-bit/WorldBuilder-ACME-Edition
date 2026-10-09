@@ -72,6 +72,7 @@ import {
   MACRO_NOISE_AMP_DEFAULT,
 } from "./terrain_macro.js";
 import { applyWireVertexAOPatch, applyFillDepthBias } from "./materials.js";
+import { holdForInterior } from "./bandwidth_tier.js";
 // streamFix urgent lane (2026-07-02) — near-player bake detection.
 import { isNearPlayerLb } from "./landblock_lru.js";
 // FCULL (2026-06-08) — distance horizon for the OPT-IN per-LB terrain cull
@@ -4676,6 +4677,9 @@ export async function resolveTerrainRingOpts(
       scene3d.terrainMacroPromise = (async () => {
         let st = null;
         try {
+          // `?interiorHold` (2026-10-09): a player spawned indoors gets its
+          // interior's records before these 9 MB (bandwidth_tier.js).
+          await holdForInterior();
           st = await loadTerrainMacroArray();
           if (st) {
             // eslint-disable-next-line no-console
@@ -6748,6 +6752,14 @@ export async function bakeTerrainForLandblock(
   // here too and replaces the record. Fail-soft inside.
   noteVisualGroundBake(lbX, lbY, lbMesh.userData.heights, effectiveSubdiv,
     geom.getAttribute("aRoundZ")?.array ?? null, opts);
+  // 2026-10-09 — "ground first": the first terrain mesh on screen latches
+  // window.__groundDrawnAt (performance.now()). A low-bandwidth session holds
+  // its optional downloads (the t512 terrain promotion, the moon textures)
+  // until then: at 666 kbps they shared the line with the ground's own records
+  // and the first terrain landed at 7.6 min (cold boot, 1070, 2026-10-09).
+  if (typeof window !== "undefined" && window.__groundDrawnAt == null) {
+    try { window.__groundDrawnAt = performance.now(); } catch (_) {}
+  }
 
   // 2026-05-22 — wire-agent: pair the wireframe mesh with a second mesh
   // sharing the same BufferGeometry that draws the solid colour fill

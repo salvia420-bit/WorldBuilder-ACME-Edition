@@ -904,6 +904,26 @@ const ENVCELL_RING_MAX_IN_FLIGHT = 2;
 // every frame forever. Back off, then give up until the LB is evicted/re-entered.
 const ENVCELL_RING_RETRY_MS = 5000;
 const ENVCELL_RING_MAX_ATTEMPTS = 3;
+// `?envcellSkirtWait` — DEFAULT-ON, `=off` escape: no skirt interior bake
+// starts while a render-set LB's own interior is mid-build (see the ring).
+const ENVCELL_SKIRT_WAIT = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("envcellSkirtWait");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+// `?envcellStaticsOverlap` — DEFAULT-ON, `=off` escape: an interior build
+// starts Step C's static-mesh fetch before awaiting Step B (see the build).
+const ENVCELL_STATICS_OVERLAP = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("envcellStaticsOverlap");
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
 
 // Step 1b (2026-07-08) — sealed-dungeon outdoor cull. Default ON;
 // `?sealedCull=off` (or `0`/`false`) restores the Phase 5 unconditional
@@ -1452,6 +1472,22 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // surfaces) is `materialCache.getCached`-shared cross-LB.
   const lbDisposableGeometries = [];
 
+  // `?envcellStaticsOverlap` (2026-10-09): start Step C's static-mesh fetch
+  // now, so its sequential discovery rounds (Setup→GfxObj→Surface→…, one RTT
+  // each) stream while Step B decodes the cell surfaces in the bake worker.
+  // Back to back, the Training Academy (568 cells, 200 statics) spent ~4 s on
+  // that fetch AFTER the 232-surface decode (1070, fresh profile). The result
+  // is settled into a plain object so a failure cannot surface as an
+  // unhandled rejection while Step B is awaited; Step C rethrows it.
+  const staticIds =
+    uniqueStaticDids.size > 0 && typeof wasmExports.fetch_model_meshes === "function"
+      ? [...uniqueStaticDids]
+      : null;
+  const staticMeshesEarly =
+    ENVCELL_STATICS_OVERLAP && staticIds
+      ? mmFetch(new Uint32Array(staticIds)).then((v) => ({ v }), (e) => ({ e }))
+      : null;
+
   // ---- Step B: preload all referenced cell-mesh surface DIDs --------
   if (allCellSurfaceDids.size > 0) {
     try {
@@ -1479,11 +1515,17 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // geom-audit: every dropped stab DID with its reason — surfaced in the
   // per-build warn below + stamped for __diag.geometry.audit().
   const droppedStaticDids = [];
-  if (uniqueStaticDids.size > 0 && typeof wasmExports.fetch_model_meshes === "function") {
-    const ids = [...uniqueStaticDids];
+  if (staticIds) {
+    const ids = staticIds;
     let staticMeshes;
     try {
-      staticMeshes = await mmFetch(new Uint32Array(ids));
+      if (staticMeshesEarly) {
+        const r = await staticMeshesEarly;
+        if (r.e) throw r.e;
+        staticMeshes = r.v;
+      } else {
+        staticMeshes = await mmFetch(new Uint32Array(ids));
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[scene3d.cells] fetch_model_meshes (cell statics) failed:", e);
@@ -3667,7 +3709,48 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
       fireEnvCells(lbKey);
       if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
     }
-    if (envRadius > 0) {
+    // 2026-10-09 (`?envcellSkirtWait`) — the skirt waits while a render-set
+    // LB's own interior is still building. A new character spawns inside a
+    // Training Academy (568 cells), and until that build lands nothing knows
+    // the dungeon is sealed (`_sealedEvictLbKey` needs its cells), so the
+    // radius-1 indoor skirt started the west neighbour 0x8502 — another
+    // 568-cell academy — beside it: on the 1070 (fresh profile) both fetched
+    // together and the player's own academy appeared ~70 s after Enter. Own
+    // interior first; once built, a sealed dungeon collapses the skirt to 0.
+    // A failed own build leaves the in-flight set, so it never blocks for good.
+    let seenBuilding = false;
+    if (ENVCELL_SKIRT_WAIT && ecInFlight) {
+      for (const lbKey of seen) {
+        if (ecInFlight.has(lbKey)) { seenBuilding = true; break; }
+      }
+    }
+    // `?interiorHold` (2026-10-09) — publish "an indoor player's interior is
+    // still to build" for bandwidth_tier.js: the t1024 terrain promotion and
+    // the macro maps (68 + 9 MB nobody sees from a sealed dungeon) wait for
+    // it instead of sharing the six HTTP/1.1 connections with its records.
+    // Pending = indoors and a render-set LB neither built nor out of retries.
+    let interiorPending = false;
+    let indoorNow = false;
+    try {
+      indoorNow = typeof sessionHandle.isCurrentCellIndoor === "function"
+        && !!sessionHandle.isCurrentCellIndoor();
+    } catch (_) {
+      indoorNow = false;
+    }
+    if (indoorNow) {
+      for (const lbKey of seen) {
+        if (ecLoaded?.has(lbKey)) continue;
+        const prior = attempts.get(lbKey);
+        if (ecInFlight?.has(lbKey) || !prior || prior.n < ENVCELL_RING_MAX_ATTEMPTS) {
+          interiorPending = true;
+          break;
+        }
+      }
+    }
+    if (typeof window !== "undefined" && window.__interiorBuildPending !== interiorPending) {
+      window.__interiorBuildPending = interiorPending;
+    }
+    if (envRadius > 0 && !seenBuilding) {
       for (const lbKey of seen) {
         if (starts >= ENVCELL_RING_MAX_STARTS_PER_TICK) break;
         const eX = (lbKey >>> 24) & 0xff;

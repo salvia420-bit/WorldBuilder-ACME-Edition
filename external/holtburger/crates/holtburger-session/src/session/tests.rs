@@ -1672,3 +1672,34 @@ async fn test_server_echo_request_does_not_emit_packet_with_server_sequence() {
         2
     );
 }
+
+/// 2026-10-09 — `send_disconnect`: one cleartext, header-only packet with only
+/// `DISCONNECT` (0x8000) set and the plain header checksum, which ACE accepts
+/// and answers by terminating the session at once (`PacketHeaderDisconnect`)
+/// instead of keeping it until the 60 s timeout.
+#[tokio::test]
+async fn test_send_disconnect_is_a_cleartext_header_only_disconnect() {
+    let transport = ScriptedTransport::new(vec![], "127.0.0.1:9000".parse().unwrap());
+    let sent_handle = transport.clone();
+    let mut session = Session::new_test();
+    session.transport = Box::new(transport);
+    session.client_id = 0x1234;
+
+    session.send_disconnect().await.unwrap();
+
+    let sent = sent_handle.sent_entries().await;
+    assert_eq!(sent.len(), 1, "exactly one packet");
+    let (addr, bytes) = &sent[0];
+    assert_eq!(*addr, "127.0.0.1:9000".parse::<SocketAddr>().unwrap());
+    assert_eq!(bytes.len(), transport::HEADER_SIZE, "header only");
+    let header = unpack_header(bytes);
+    assert_eq!(header.flags, packet_flags::DISCONNECT, "no encrypted checksum, no other flag");
+    assert_eq!(header.size, 0);
+    assert_eq!(header.id, 0x1234);
+    // The same plain checksum the test packet builder (and ACE's VerifyCRC
+    // for a cleartext packet) computes: header hash + empty payload hash.
+    let mut expect = header.clone();
+    expect.checksum = 0;
+    let payload_hash = session.calculate_payload_hash(header.flags, &[]).unwrap();
+    assert_eq!(header.checksum, expect.calculate_checksum().wrapping_add(payload_hash));
+}

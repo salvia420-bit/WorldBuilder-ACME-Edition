@@ -349,6 +349,17 @@ export function farFetchBatchSize() {
   return Math.round(_num("farFetchBatch", 16, 1, 128));
 }
 
+/**
+ * `?farBakeCompileAsync` (default ON, 2026-10-09): link the bake program off
+ * the main thread (KHR_parallel_shader_compile) before the first patch bake.
+ * The bake material is its own variant of the 151-uniform terrain shader, and
+ * on the 1070 (fresh profile, ANGLE/D3D11) its synchronous first-use link
+ * froze the main thread for 4,963 ms. `off` = the legacy first-bake link.
+ */
+export function farBakeCompileAsync() {
+  return _boolOn("farBakeCompileAsync", true);
+}
+
 /** Concurrent far heightmap fetches. Hard-capped low — the near ring wins. */
 export function farFetchInFlightMax() {
   return Math.round(_num("farFetchInFlight", 2, 1, 8));

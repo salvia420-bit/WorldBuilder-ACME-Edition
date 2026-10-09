@@ -763,6 +763,18 @@ const TIER5 = [
   // line (extcontainer-1/2/4); the character panel's PK status (pk-5).
   { tier: 5, flag: "groundObjectGate", file: "tests/ground_container_gate.test.mjs" },
   { tier: 5, flag: "characterInfoPkStatus", file: "tests/character_info_pk_status.test.mjs" },
+  // 2026-10-09 — the retail character screen (gmCharacterManagementUI) and its
+  // pre-Enter warm-up of the selected character's last spot.
+  { tier: 5, flag: "charSelect", file: "tests/character_select.test.mjs" },
+  { tier: 5, flag: "spawnPreview", file: "tests/spawn_preview.test.mjs" },
+  // 2026-10-09 — the char-gen getters' serde Maps reach the wizard as objects.
+  { tier: 5, flag: "chargenCatalogPlain", file: "tests/chargen_catalog_plain.test.mjs" },
+  { tier: 5, flag: "envcellSkirtWait", file: "tests/envcell_skirt_wait.test.mjs" },
+  { tier: 5, flag: "interiorHold", file: "tests/interior_hold.test.mjs" },
+  { tier: 5, flag: "gpuTierProbeMemo", file: "tests/gpu_tier_probe_memo.test.mjs" },
+  { tier: 5, flag: "farBakeCompileAsync", file: "tests/far_bake_compile_async.test.mjs" },
+  { tier: 5, flag: "envcellStaticsOverlap", file: "tests/envcell_statics_overlap.test.mjs" },
+  { tier: 5, flag: "entityParticleLayer", file: "tests/entity_particle_layer.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

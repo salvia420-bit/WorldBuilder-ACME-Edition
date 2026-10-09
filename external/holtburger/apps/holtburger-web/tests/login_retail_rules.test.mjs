@@ -170,8 +170,11 @@ check("requestLogOff prints retail's line and sends 0xF653 via logOffCharacter",
 check("pagehide logs an in-world character off before freeing the handle", () => {
   const html = readFileSync(path.join(APP, "index.html"), "utf8");
   const i = html.indexOf('window.addEventListener("pagehide"');
-  const body = html.slice(i, i + 900);
-  assert.ok(i > 0);
+  // The whole handler (to its last statement), not a fixed window: the
+  // 2026-10-09 location flush + disconnect pushed free() past 900 chars.
+  const end = html.indexOf("window.__sessionHandle = null;", i);
+  const body = html.slice(i, end);
+  assert.ok(i > 0 && end > i);
   assert.ok(body.indexOf("requestLogOff(h") > 0 && body.indexOf("requestLogOff(h") < body.indexOf("h.free()"),
     "log-off is requested before free()");
   assert.match(body, /logOffOnUnloadEnabled\(\)/);

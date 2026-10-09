@@ -24,8 +24,21 @@
 //     after the Use is sent (`AttemptSetGroundObject` :432280); vanilla ACE
 //     sends only the OpenFailDueToLock sound.
 //
+//   * Packs inside it. `gmExternalContainerUI::PostInit` (:253275) binds
+//     `m_topContainer` (0x10000064, the ground object itself),
+//     `m_containerList` (0x10000067, the packs it holds) and `m_itemList`
+//     (0x1000006A), and makes the item list the child list of BOTH
+//     (`ItemList_SetChildList`): whichever container is open shows its
+//     contents there. `SetGroundObject` opens the ground object
+//     (`ItemList_OpenContainer(m_topContainer, ground, 1)`); clicking a
+//     pack opens that pack in place; when the open pack moves out,
+//     `RecvNotice_ServerSaysMoveItem` (:253110) reopens the first container
+//     (`ItemList_OpenFirstContainer`). ACE sends a ViewContents per pack
+//     with the chest's, so the contents are already cached.
+//
 // Flags (default ON, `=off` / `0` / `false` escapes): `groundObjectGate`,
-// `groundContainerRange`, `containerDropRule`, `lockedContainerNotice`.
+// `groundContainerRange`, `containerDropRule`, `lockedContainerNotice`,
+// `extNestedPacks`.
 
 /** ODF bits (acclient.h PublicWeenieDesc::BitfieldIndex). */
 export const ODF_OPENABLE = 0x00000001;
@@ -65,6 +78,36 @@ export const groundContainerRangeEnabled = (search) => flagOn("groundContainerRa
 export const containerDropRuleEnabled = (search) => flagOn("containerDropRule", search);
 /** `?lockedContainerNotice` — "The X is locked" after using a locked one. */
 export const lockedContainerNoticeEnabled = (search) => flagOn("lockedContainerNotice", search);
+/** `?extNestedPacks` — packs inside a chest / corpse are browsed in place. */
+export const extNestedPacksEnabled = (search) => flagOn("extNestedPacks", search);
+
+/** ItemType.Container — a pack (as item_drag / takeItem read `isPack`). */
+export const ITEM_TYPE_CONTAINER = 0x200;
+
+/** A pack-like item meta: ItemType Container. */
+export function isPackMeta(meta) {
+  return ((Number(meta?.itemType) >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+}
+
+/**
+ * extcontainer-5: what the external-container window shows. `packs` go in
+ * the container row (retail m_containerList), `items` in the item strip
+ * (m_itemList: the OPEN container's contents), `open` is that container.
+ * The ground object is open unless `openSub` names one of its packs; an
+ * open pack that is no longer in the ground object falls back to the
+ * ground object (retail ItemList_OpenFirstContainer).
+ * @param {{root:number, openSub?:number, rootItems?:object[], subItems?:object[]|null,
+ *          isPack?:(meta:object)=>boolean}} o  metas carry `guid`
+ * @returns {{packs:object[], items:object[], open:number}}
+ */
+export function externalContainerView({ root, openSub = 0, rootItems = [], subItems = null, isPack = isPackMeta } = {}) {
+  const r = (root >>> 0) || 0;
+  const packs = rootItems.filter((it) => isPack(it));
+  const sub = (openSub >>> 0) || 0;
+  const open = sub && sub !== r && packs.some((p) => (p.guid >>> 0) === sub) ? sub : r;
+  const items = open === r ? rootItems.filter((it) => !isPack(it)) : (subItems ?? []);
+  return { packs, items, open };
+}
 
 /**
  * Is this the kind of object retail makes the ground object: a world object
