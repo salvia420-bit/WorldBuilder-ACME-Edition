@@ -1754,11 +1754,14 @@ mod tests {
         acc
     }
 
+    /// Inside or ON the ring. The grid points on the cell diagonal (e.g.
+    /// (0.6, 0.4), where `0.6 + 0.4` rounds to just above 1.0 in f32) lie on
+    /// the shared edge, so the edge test allows f32 rounding.
     fn point_in_ring_2d(ring: [usize; 3], fx: f32, fy: f32) -> bool {
         (0..3).all(|k| {
             let (x0, y0) = CORNER_XY[ring[k]];
             let (x1, y1) = CORNER_XY[ring[(k + 1) % 3]];
-            (x1 - x0) * (fy - y0) - (y1 - y0) * (fx - x0) >= 0.0
+            (x1 - x0) * (fy - y0) - (y1 - y0) * (fx - x0) >= -1e-6
         })
     }
 

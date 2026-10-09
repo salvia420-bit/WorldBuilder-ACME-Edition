@@ -70,6 +70,7 @@ pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> Lo
         | SessionCommand::BookAddPage { .. }
         | SessionCommand::BookModifyPage { .. }
         | SessionCommand::BookDeletePage { .. }
+        | SessionCommand::BookPageData { .. }
         | SessionCommand::SetInscription { .. }
         | SessionCommand::WieldFromPack { .. }
         | SessionCommand::DropItem { .. }

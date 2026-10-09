@@ -630,6 +630,20 @@ fn parse_obj_collide_in_transition_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "objCollideInTransition=off")
 }
 
+/// landdefs-terrain-2 (2026-10-08): parse `?houseBarriers=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`). Housing barriers in the
+/// faithful transition: retail `CObjCell::check_entry_restrictions`
+/// (acclient.c:347103) refuses a player who may not enter a restricted
+/// house cell or yard (holtburger-world `spatial::house_barrier`). Needs a
+/// wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_house_barriers_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "houseBarriers=off" | "houseBarriers=0" | "houseBarriers=false")
+    })
+}
+
 /// COL-DIAG (2026-08-04): parse `?fu3Diag=on`. DEFAULT-OFF, strict `=on`
 /// opt-in — a pure console diagnostic for the FU-3 entity clamp (one `[fu3] …`
 /// line per ~second: collider count, how many took the precise BSP arm,
@@ -17687,6 +17701,7 @@ thread_local! {
             const { std::cell::RefCell::new(CellGraphPending {
                 aabbs: Vec::new(),
                 seen_outside: Vec::new(),
+                restrictions: Vec::new(),
                 portals: Vec::new(),
                 visible_edges: Vec::new(),
                 portal_polygons: Vec::new(),
@@ -17725,6 +17740,17 @@ thread_local! {
 
     static BUILDING_PORTALS_PENDING:
         std::cell::RefCell<Vec<(u32, Vec<(holtburger_common::Vector3, Vec<(u16, u16)>)>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+
+    /// landdefs-terrain-2: per-landblock `LandBlockInfo.restriction_tables`
+    /// (landcell id → house guid), queued by
+    /// `populateBuildingAabbsForLandblock` with the building portals and
+    /// drained on `TickMovement` into
+    /// `SpatialScene::set_landblock_restrictions` (retail
+    /// `CLandBlock::init_static_objs`, acclient.c:352870-352880). An empty
+    /// list clears the landblock.
+    static LANDBLOCK_RESTRICTIONS_PENDING:
+        std::cell::RefCell<Vec<(u32, Vec<(u32, u32)>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
     /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
@@ -18068,6 +18094,10 @@ struct CellGraphPending {
     /// alongside `aabbs` and drained into `scene.cell_seen_outside` on
     /// each TickMovement. See env_cell.rs:32 (the bit) + liveness.rs:137.
     seen_outside: Vec<(u32, bool)>,
+    /// landdefs-terrain-2: `(cell_id, restriction_obj)` for every EnvCell
+    /// whose DAT record carries one, drained into
+    /// `scene.insert_cell_restriction` (the housing barrier).
+    restrictions: Vec<(u32, u32)>,
     portals: Vec<(u32, u32)>,
     /// PORTAL-GRAPH-SPLIT (2026-08-11, batch-D C2): `(from, to)` edges
     /// sourced from `EnvCell.visible_cells[]` — the DAT-baked PVS — kept
@@ -18148,6 +18178,22 @@ pub(crate) fn drain_pending_building_portals_into(
         let count = buf.len();
         for (landblock_high, buildings) in buf.drain(..) {
             scene.set_landblock_building_portals(landblock_high, &buildings);
+        }
+        count
+    })
+}
+
+/// landdefs-terrain-2: drain `LANDBLOCK_RESTRICTIONS_PENDING` into the live
+/// scene. Returns the number of landblocks registered.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn drain_pending_landblock_restrictions_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    LANDBLOCK_RESTRICTIONS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, table) in buf.drain(..) {
+            scene.set_landblock_restrictions(landblock_high, &table);
         }
         count
     })
@@ -18543,6 +18589,10 @@ fn drain_pending_cell_graph_into(
         // map. Same TickMovement cadence; one entry per EnvCell loaded.
         for (cell_id, v) in buf.seen_outside.drain(..) {
             scene.insert_cell_seen_outside(cell_id, v);
+        }
+        // landdefs-terrain-2: EnvCell restriction ids (housing barriers).
+        for (cell_id, guid) in buf.restrictions.drain(..) {
+            scene.insert_cell_restriction(cell_id, guid);
         }
         // Phase 5 PView port: drain portal polygons alongside edges.
         for (cell_id, poly) in buf.portal_polygons.drain(..) {
@@ -18949,6 +18999,8 @@ async fn populate_building_aabbs_for_landblock_impl(
             // 0 rather than fail. Collision F1: still mark the
             // landblock's buildings known (none).
             BUILDING_PORTALS_PENDING.with(|p| p.borrow_mut().push((landblock_high, Vec::new())));
+            LANDBLOCK_RESTRICTIONS_PENDING
+                .with(|p| p.borrow_mut().push((landblock_high, Vec::new())));
             return Ok(0);
         }
     };
@@ -18976,6 +19028,17 @@ async fn populate_building_aabbs_for_landblock_impl(
                     )
                 })
                 .collect(),
+        ))
+    });
+    // landdefs-terrain-2: the landblock's restriction table (housing
+    // barriers on the yard landcells), same LandBlockInfo pass.
+    LANDBLOCK_RESTRICTIONS_PENDING.with(|p| {
+        p.borrow_mut().push((
+            landblock_high,
+            info.restriction_tables
+                .as_ref()
+                .map(|t| t.tables.iter().map(|(&cell, &guid)| (cell, guid)).collect())
+                .unwrap_or_default(),
         ))
     });
 
@@ -22655,6 +22718,10 @@ pub async fn fetch_env_cells_in_landblock(
                     & holtburger_dat::file_type::env_cell::ENVCELL_FLAG_SEEN_OUTSIDE)
                     != 0,
             ));
+            // landdefs-terrain-2: the cell's housing restriction object.
+            if let Some(guid) = envcell.restriction_obj.filter(|&g| g != 0) {
+                pending.restrictions.push((envcell.cell_id, guid));
+            }
             for &neighbour in &portal_cell_ids {
                 if neighbour == 0 || neighbour == envcell.cell_id {
                     continue;
@@ -27904,6 +27971,15 @@ enum SessionCommand {
     /// `object_guid`. Maps to `GameAction::BookDeletePage` (sub-opcode
     /// 0x00AD). ACE responds with `GameEvent::BookDeletePageResponse`.
     BookDeletePage {
+        object_guid: u32,
+        page_num: i32,
+    },
+    /// Book: fetch one page's text (books-journal-2). Maps to
+    /// `GameAction::BookPageData` (sub-opcode 0x00AE) — what retail
+    /// `gmBookUI::SetCurPage` (acclient.c:238407) sends for a page that
+    /// came without its text. ACE answers with `GameEvent::BookPageDataResponse`
+    /// (0x00B8), which the world dispatcher merges into `entity.book`.
+    BookPageData {
         object_guid: u32,
         page_num: i32,
     },
@@ -33271,6 +33347,19 @@ mod wire_state_packs_routing_tests {
         // DEFAULT-ON: absent flag reads enabled.
         assert!(parse_faithful_entity_collision_flag("?faithfulTransition=on"));
         assert!(parse_faithful_entity_collision_flag(""));
+    }
+
+    /// landdefs-terrain-2: `?houseBarriers=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn house_barriers_flag_defaults_on_off_escape() {
+        use super::parse_house_barriers_flag;
+        assert!(parse_house_barriers_flag(""));
+        assert!(parse_house_barriers_flag("?houseBarriers=on"));
+        assert!(parse_house_barriers_flag("?houseBarriers=1"));
+        assert!(!parse_house_barriers_flag("?houseBarriers=off"));
+        assert!(!parse_house_barriers_flag("?houseBarriers=0"));
+        assert!(!parse_house_barriers_flag("?houseBarriers=false"));
+        assert!(!parse_house_barriers_flag("?nosw=1&houseBarriers=off"));
     }
 
     /// Phase 3 Phase D: `?faithfulOutdoor=off` DEFAULT-ON off-escape shape.
@@ -41399,6 +41488,24 @@ impl SessionHandle {
             })
     }
 
+    /// Book — fetch the text of page `page_num` (0-based), books-journal-2.
+    /// Sends `GameAction::BookPageData` (sub-opcode 0x00AE), as retail
+    /// `gmBookUI::SetCurPage` does for a page that came without text. ACE
+    /// answers with `GameEvent::BookPageDataResponse`; the world folds it into
+    /// `entity.book` and the recv loop queues `kind=24 bookUpdated`.
+    #[wasm_bindgen(js_name = bookPageData)]
+    pub fn book_page_data(&self, object_guid: u32, page_num: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BookPageData {
+                object_guid,
+                page_num: page_num as i32,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("bookPageData: cmd channel closed ({e})"))
+            })
+    }
+
     /// Inscription — set inscription text on an item (notes, crafted
     /// items). Sends `GameAction::SetInscription` (sub-opcode 0x00BF).
     /// Empty string clears the inscription.
@@ -45822,6 +45929,11 @@ async fn recv_loop(
     holtburger_world::spatial::obj_collision::set_obj_collide_in_transition(
         parse_obj_collide_in_transition_flag(&flag_search()),
     );
+    // landdefs-terrain-2: `?houseBarriers=off` (default ON) — housing
+    // barriers in the faithful transition (see `parse_house_barriers_flag`).
+    holtburger_world::spatial::house_barrier::set_house_barriers(parse_house_barriers_flag(
+        &flag_search(),
+    ));
     // COL-DIAG (2026-08-04): `?fu3Diag=on` — console ground truth for the FU-3
     // entity clamp (see `parse_fu3_diag_flag`). Default OFF, zero cost when off.
     movement.set_fu3_diag(parse_fu3_diag_flag(&flag_search()));
@@ -48637,8 +48749,11 @@ mod tests_substitution {
         // Retail: wire wins; absent wire -> 0x65 Resting beats 0.
         assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(1), true)), 1);
         assert_eq!(key_of(resolve_static_placement_frame(&setup, None, true)), 0x65);
-        // Wire id the setup lacks -> falls to Resting.
-        assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(7), true)), 0x65);
+        // Wire id the setup lacks -> 0, not Resting: the wire path is
+        // `CPartArray::SetPlacementFrame` (acclient.c), whose miss falls back
+        // to placement 0 (FU-2 split chain; only the no-wire InitObjectEnd
+        // path tries 0x65 first).
+        assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(7), true)), 0);
         // Legacy order ignores wire + Resting: 0 first.
         assert_eq!(key_of(resolve_static_placement_frame(&setup, Some(1), false)), 0);
 

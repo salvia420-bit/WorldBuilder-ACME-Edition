@@ -353,6 +353,18 @@ pub trait TransitionEnv {
     ) -> Vec<super::obj_collision::ObjCollider> {
         Vec::new()
     }
+    /// Housing barriers (`super::house_barrier`, landdefs-terrain-2): the
+    /// mover and the house objects that cells near `pose` are restricted
+    /// to, as retail's `CObjCell::check_entry_restrictions` resolves them
+    /// through `CPhysicsObj::GetObjectA`. `None` skips the barrier pass.
+    /// Default: none (test envs).
+    fn house_barrier_overlay(
+        &self,
+        _pose: &WorldPosition,
+        _mover: Guid,
+    ) -> Option<super::house_barrier::BarrierOverlay> {
+        None
+    }
 }
 
 impl TransitionEnv for WorldState {
@@ -434,6 +446,47 @@ impl TransitionEnv for WorldState {
             .filter(|e| e.guid != exclude && !(skip_parented && e.physics_parent_id.is_some()))
             .filter_map(|e| obj_collider_for_entity(self, e, here, prefilter_dist))
             .collect()
+    }
+
+    /// The mover's weenie answers from its own entity (`pwd._bitfield` for
+    /// the Admin + ImmuneCellRestrictions bypass, PropertyInstanceId::Monarch
+    /// for allegiance access); each restriction guid near `pose` resolves to
+    /// the house entity's owner and RestrictionDB when the client knows it.
+    /// An unknown guid is left out, which the barrier treats as retail's
+    /// null `GetObjectA`: the cell refuses.
+    fn house_barrier_overlay(
+        &self,
+        pose: &WorldPosition,
+        mover: Guid,
+    ) -> Option<super::house_barrier::BarrierOverlay> {
+        use super::house_barrier::{BarrierMover, BarrierOverlay, HouseBarrier, house_barriers_enabled};
+        use holtburger_common::properties::WorldObjectExt as _;
+        if !house_barriers_enabled() || mover == Guid::NULL {
+            return None;
+        }
+        let guids = self.scene.restriction_guids_near(pose.landblock_id.0);
+        if guids.is_empty() {
+            return None;
+        }
+        let entity = self.entities.get(mover);
+        let mover = BarrierMover {
+            id: mover.0,
+            monarch: entity.and_then(|e| e.monarch_id()).map(u32::from).unwrap_or(0),
+            can_bypass: entity
+                .is_some_and(|e| crate::house::can_bypass_move_restrictions(e.flags)),
+        };
+        let houses = guids.into_iter().filter_map(|guid| {
+            self.entities.get(Guid(guid)).map(|house| {
+                (
+                    guid,
+                    HouseBarrier {
+                        owner: house.house_owner_iid(),
+                        db: house.house_restriction_db.clone(),
+                    },
+                )
+            })
+        });
+        Some(BarrierOverlay::new(mover, houses))
     }
 }
 

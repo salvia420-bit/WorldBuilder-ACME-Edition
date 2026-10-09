@@ -905,6 +905,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // JS-side `buildingMap` key.
             // Collision F1: building portal lists from the same pass.
             let _ = crate::drain_pending_building_portals_into(&mut w.scene);
+            // landdefs-terrain-2: the same pass's restriction tables.
+            let _ = crate::drain_pending_landblock_restrictions_into(&mut w.scene);
             let drained_origins =
                 drain_pending_building_origins_into(&mut w.scene);
             if drained_origins > 0 {

@@ -111,6 +111,23 @@ function localPlayerGuid() {
   try { return (window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch (_) { return 0; }
 }
 
+// books-journal-2 (2026-10-08 resume): gmBookUI::SetCurPage (acclient.c:238407)
+// sends Event_BookPageData (0x00AE) for a page that came without its text;
+// the BookPageDataResponse (0x00B8) folds into the book and re-renders through
+// kind 24. One request per page per open book. Retail also raises
+// requestPending, refusing page turns until the answer; we do not, so a
+// request ACE never answers (the book left reach) cannot lock the pages.
+const requestedPageText = new Set();
+
+/** Should page `index` of book `guid` be fetched now? Records the request. */
+export function claimPageTextRequest(page, guid, index, requested = requestedPageText) {
+  if (!page || page.textIncluded !== false) return false;
+  const key = `${guid >>> 0}:${index | 0}`;
+  if (requested.has(key)) return false;
+  requested.add(key);
+  return true;
+}
+
 const OVERLAY_ID = "hb-book-panel";
 const STYLE_ID = "hb-book-panel-style";
 const SP = "./data/ui-sprites";
@@ -567,6 +584,7 @@ function rerender() {
     jumpToCount = 0;
     addPendingUntil = 0;
     lastSnapshotGuid = snapGuid;
+    requestedPageText.clear();
   }
   const pages = pagesOf(snap);
   const total = pages.length;
@@ -577,6 +595,9 @@ function rerender() {
   }
   currentPageIndex = clampPage(currentPageIndex, total);
   const page = pages[currentPageIndex];
+  if (BOOK_RETAIL_PAGES && claimPageTextRequest(page, snapGuid, currentPageIndex)) {
+    try { window.__sessionHandle?.bookPageData?.(snapGuid, currentPageIndex); } catch (_) {}
+  }
 
   const bookName = BOOK_RETAIL_PAGES
     ? bookTitle(snap, objectDisplayName(snapGuid, "Book"))

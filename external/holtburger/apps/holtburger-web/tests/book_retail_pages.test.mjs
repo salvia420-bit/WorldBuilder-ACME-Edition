@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   isBlankBookText, isBookPageEditable, isOwnBookPage, bookFlushAction, bookTitle, bookCloseDistance,
+  claimPageTextRequest,
 } from "../plugins/book-panel.js";
 import {
   inscriptionEditable, examineInscribeEnabled, ODF_INSCRIBABLE, INSCRIBE_PLACEHOLDER,
@@ -90,4 +91,19 @@ test("wasm book snapshot carries authorId / ignoreAuthor / textIncluded / scribe
   }
   assert.match(lib, /scribe_id: bd\.author_id\.unwrap_or\(0\)/);
   assert.match(lib, /author_id: p\.author_id,\s*\n\s*ignore_author: p\.ignore_author,\s*\n\s*text_included: p\.text_included,/);
+});
+
+test("SetCurPage: a page sent without text is fetched once per open book (books-journal-2)", () => {
+  const seen = new Set();
+  const bare = { textIncluded: false };
+  assert.equal(claimPageTextRequest(bare, 0x7000_0001, 2, seen), true, "first look fetches");
+  assert.equal(claimPageTextRequest(bare, 0x7000_0001, 2, seen), false, "never twice");
+  assert.equal(claimPageTextRequest(bare, 0x7000_0001, 3, seen), true, "another page");
+  assert.equal(claimPageTextRequest({ textIncluded: true, text: "x" }, 0x7000_0001, 4, seen), false);
+  assert.equal(claimPageTextRequest(undefined, 0x7000_0001, 0, seen), false, "no page");
+  const panel = src("plugins/book-panel.js");
+  assert.match(panel, /claimPageTextRequest\(page, snapGuid, currentPageIndex\)/);
+  assert.match(panel, /bookPageData\?\.\(snapGuid, currentPageIndex\)/);
+  assert.match(panel, /requestedPageText\.clear\(\)/, "a different book starts over");
+  assert.match(src("src/lib.rs"), /js_name = bookPageData/);
 });

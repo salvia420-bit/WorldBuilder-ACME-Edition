@@ -14,9 +14,10 @@
 //!
 //! The decision retail's cell barrier asks
 //! (`CObjCell::check_entry_restrictions` → `ACCWeenieObject::CanMoveInto`,
-//! :438410) is [`can_move_into`] / [`RestrictionDb::is_allowed_in`]. It is
-//! deliberately NOT wired into collision here (landdefs-terrain-2 stays
-//! deferred) — this module only stores the data and answers the question.
+//! :438410) is [`can_move_into`] / [`RestrictionDb::is_allowed_in`]. This
+//! module stores the data and answers the question; the collision side
+//! (landdefs-terrain-2) is `crate::spatial::house_barrier`, fed by
+//! `TransitionEnv::house_barrier_overlay`.
 
 use crate::WorldState;
 use crate::entity::Entity;
@@ -380,6 +381,51 @@ mod tests {
         assert!(!state.apply_house_update_restrictions(&update(1, Guid::NULL, 1, &[])));
         assert!(!state.apply_house_update_restrictions(&update(1, Guid(0x7000_0009), 1, &[])));
         assert_eq!(state.house_allows(HOUSE, STRANGER, 0), Some(false));
+    }
+
+    /// landdefs-terrain-2: `WorldState`'s `TransitionEnv::house_barrier_overlay`
+    /// resolves the player (monarch, the Admin + ImmuneCellRestrictions
+    /// bypass) and every known house that a nearby cell is restricted to.
+    #[test]
+    fn the_world_builds_the_barrier_overlay_for_the_player() {
+        use crate::spatial::house_barrier::set_house_barriers;
+        use crate::spatial::transition::TransitionEnv;
+        use holtburger_dat::transition::objcell::ObjectManager;
+        let mut state =
+            world_with_house(OWNER, Some(pwd_restrictions(false, MONARCH, &[(GUEST, 0)])));
+        let pose = WorldPosition::default();
+        assert!(
+            state.house_barrier_overlay(&pose, PLAYER).is_none(),
+            "no restricted cell nearby ⇒ no overlay"
+        );
+        state
+            .scene
+            .set_landblock_restrictions(0, &[(0x0000_0001, HOUSE.0), (0x0000_0002, 0x7000_0009)]);
+        let ask = |state: &WorldState| {
+            let overlay = state.house_barrier_overlay(&pose, PLAYER).expect("overlay");
+            assert!(overlay.get_object_a(0x7000_0009).is_none(), "an unknown house stays unknown");
+            let house = overlay.get_object_a(HOUSE.0).expect("the house resolves");
+            let player = overlay.get_object_a(PLAYER.0).expect("the player resolves");
+            let player = player.weenie().expect("player weenie");
+            let house = house.weenie().expect("house weenie");
+            (player.can_bypass_move_restrictions(), house.can_move_into(player.as_ref()))
+        };
+        assert_eq!(ask(&state), (false, false), "a stranger");
+        state
+            .entities
+            .get_mut(PLAYER)
+            .unwrap()
+            .properties
+            .iids
+            .insert(PropertyInstanceId::Monarch, Guid(MONARCH));
+        assert_eq!(ask(&state), (false, true), "allegiance access from the player's Monarch");
+        state.entities.get_mut(PLAYER).unwrap().flags |=
+            ObjectDescriptionFlag::ADMIN | ObjectDescriptionFlag::IMMUNE_CELL_RESTRICTIONS;
+        assert!(ask(&state).0, "Admin + ImmuneCellRestrictions bypass");
+        set_house_barriers(false);
+        let off = state.house_barrier_overlay(&pose, PLAYER).is_none();
+        set_house_barriers(true);
+        assert!(off, "?houseBarriers=off ⇒ no overlay");
     }
 
     #[test]

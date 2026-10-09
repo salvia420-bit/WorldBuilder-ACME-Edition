@@ -1,6 +1,5 @@
 // C2 (2026-07-12) — retail target-cycling math, import-free so it loads
-// under plain node for unit tests (same pattern as camera_math.js). The one
-// import (ui/portal_busy.js, streaming-teleport-5) is itself import-free.
+// under plain node for unit tests (same pattern as camera_math.js).
 //
 // Mirrors CPlayerSystem::SelectNext (acclient.c:397944) and its helpers
 // GetWeightedZDistance / Get2DDistance / CPlayerSystem::Farther
@@ -26,7 +25,6 @@
 // (acclient.c:408728, filter :398090-398106), and UNOPENED_CORPSE (5, death-5
 // 2026-10-08 round 2): a corpse this client has not opened (:398069-398072),
 // the loot-cycle keys. The ITEM cycle is out of scope.
-import { portalSpaceBusy } from "../ui/portal_busy.js";
 
 export const SELECTION_TYPE = Object.freeze({
   MONSTER: "monster",
@@ -633,9 +631,10 @@ export const RETAIL_USE_THROTTLE_MS = 200;
 let lastUseAt = -Infinity;
 /** @returns {boolean} true = go ahead (the time is recorded), false = drop. */
 export function consumeUseThrottle(nowMs) {
-  // streaming-teleport-5: portal space is busy (retail SetTeleportInProgress
-  // → IncrementBusyCount); a use there is dropped like a throttled one.
-  if (portalSpaceBusy()) return false;
+  // No portal-space gate: retail's busy count only drives the cursor
+  // (ClientUISystem::UpdateCursorState is the one reader of m_cBusy,
+  // acclient.c:401743), so a use in the tunnel is sent and ACE answers
+  // YoureTooBusy (Player.VerifyBusy). streaming-teleport-5 correction.
   if (nowMs - lastUseAt < RETAIL_USE_THROTTLE_MS) return false;
   lastUseAt = nowMs;
   return true;

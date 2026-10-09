@@ -1302,6 +1302,18 @@ pub struct SpatialScene {
     /// outdoor→EnvCell pick once this landblock's buildings are known;
     /// before that it keeps the legacy entry test.
     building_portal_landblocks: Arc<HashSet<u32>>,
+    /// landdefs-terrain-2 (housing barriers): each EnvCell's
+    /// `restriction_obj`, the house object guid the cell is restricted to
+    /// (EnvCell pack-bitfield 0x8, `env_cell.rs`). Keyed landblock high word
+    /// → cell id → guid. Same lifetime as `cell_aabbs`: filled by the
+    /// `fetchEnvCellsInLandblock` drain, dropped on landblock unload.
+    cell_restrictions: Arc<HashMap<u32, HashMap<u32, u32>>>,
+    /// landdefs-terrain-2: the outdoor half. `CLandBlockInfo::restriction_table`
+    /// (landcell id → house guid), which `CLandBlock::init_static_objs`
+    /// stamps onto each landcell through `CLandBlockInfo::GetRestrictionIID`
+    /// (acclient.c:352870-352880, :351250). Keyed landblock high word →
+    /// landcell id → guid. Shares the LandBlockInfo building lifetime.
+    landcell_restrictions: Arc<HashMap<u32, HashMap<u32, u32>>>,
     /// Collision round 3 (F6): building physics BSPs by `Arc` address, see
     /// [`Self::insert_building_physics_bsp`] / [`Self::is_building_bsp`].
     building_bsps: Arc<HashMap<usize, std::sync::Weak<CellPhysicsBsp>>>,
@@ -1740,6 +1752,8 @@ impl SpatialScene {
             building_origins: Arc::new(HashMap::new()),
             building_transit_cells: Arc::new(HashMap::new()),
             building_portal_landblocks: Arc::new(HashSet::new()),
+            cell_restrictions: Arc::new(HashMap::new()),
+            landcell_restrictions: Arc::new(HashMap::new()),
             building_bsps: Arc::new(HashMap::new()),
             setup_collision_shapes: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
@@ -2184,6 +2198,8 @@ impl SpatialScene {
         // Collision F1: the building portal lists share the building
         // lifetime (same LandBlockInfo pass).
         self.clear_landblock_building_portals(landblock_id);
+        // landdefs-terrain-2: so does the outdoor restriction table.
+        self.set_landblock_restrictions(landblock_id, &[]);
         removed
     }
 
@@ -2273,6 +2289,99 @@ impl SpatialScene {
     pub fn building_portals_resident(&self, cell_id: u32) -> bool {
         self.building_portal_landblocks
             .contains(&(cell_id & 0xFFFF_0000))
+    }
+
+    /// landdefs-terrain-2: record an EnvCell's `restriction_obj` (0 = none,
+    /// which removes any earlier entry).
+    pub fn insert_cell_restriction(&mut self, cell_id: u32, restriction_obj: u32) {
+        let lb_high = cell_id & 0xFFFF_0000;
+        let table = Arc::make_mut(&mut self.cell_restrictions);
+        if restriction_obj == 0 {
+            let Some(cells) = table.get_mut(&lb_high) else {
+                return;
+            };
+            if cells.remove(&cell_id).is_none() {
+                return;
+            }
+            if cells.is_empty() {
+                table.remove(&lb_high);
+            }
+        } else {
+            table.entry(lb_high).or_default().insert(cell_id, restriction_obj);
+        }
+        self.bump_collision_rev();
+    }
+
+    /// landdefs-terrain-2: replace a landblock's outdoor restriction table
+    /// (`CLandBlockInfo::restriction_table`, landcell id → house guid).
+    /// Retail only looks the table up for the landblock's own 64 landcells
+    /// (`CLandBlock::init_static_objs`, acclient.c:352870-352880), so other
+    /// keys and zero guids are dropped. An empty table clears the landblock.
+    pub fn set_landblock_restrictions(&mut self, landblock_id: u32, table: &[(u32, u32)]) {
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let cells: HashMap<u32, u32> = table
+            .iter()
+            .copied()
+            .filter(|&(cell, guid)| {
+                let low = cell & 0xFFFF;
+                guid != 0 && cell & 0xFFFF_0000 == lb_high && (1..=64).contains(&low)
+            })
+            .collect();
+        let restrictions = Arc::make_mut(&mut self.landcell_restrictions);
+        if cells.is_empty() {
+            if restrictions.remove(&lb_high).is_none() {
+                return;
+            }
+        } else {
+            restrictions.insert(lb_high, cells);
+        }
+        self.bump_collision_rev();
+    }
+
+    /// landdefs-terrain-2: `CObjCell::restriction_obj` for `cell_id`, the
+    /// house object the cell is restricted to (0 = unrestricted). EnvCells
+    /// read their own field; landcells read the LandBlockInfo table.
+    pub fn cell_restriction(&self, cell_id: u32) -> u32 {
+        let table = if cell_id & 0xFFFF >= 0x100 {
+            &self.cell_restrictions
+        } else {
+            &self.landcell_restrictions
+        };
+        table
+            .get(&(cell_id & 0xFFFF_0000))
+            .and_then(|cells| cells.get(&cell_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// landdefs-terrain-2: the distinct house guids that cells in
+    /// `cell_id`'s landblock and its eight neighbours are restricted to,
+    /// sorted. A transition never reaches past the neighbouring landblocks,
+    /// so this covers every restricted cell it can touch.
+    pub fn restriction_guids_near(&self, cell_id: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        if self.cell_restrictions.is_empty() && self.landcell_restrictions.is_empty() {
+            return out;
+        }
+        let bx = (cell_id >> 24) as i32;
+        let by = ((cell_id >> 16) & 0xFF) as i32;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let (x, y) = (bx + dx, by + dy);
+                if !(0..=0xFF).contains(&x) || !(0..=0xFF).contains(&y) {
+                    continue;
+                }
+                let lb_high = ((x as u32) << 24) | ((y as u32) << 16);
+                for table in [&self.cell_restrictions, &self.landcell_restrictions] {
+                    if let Some(cells) = table.get(&lb_high) {
+                        out.extend(cells.values().copied());
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     pub fn building_aabb_count(&self) -> usize {
@@ -2615,6 +2724,11 @@ impl SpatialScene {
         // into `aabbs_removed` (per-cell flag counts aren't load-bearing).
         Arc::make_mut(&mut self.cell_seen_outside)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        // landdefs-terrain-2: EnvCell restriction ids share the EnvCell
+        // lifetime.
+        if self.cell_restrictions.contains_key(&lb_high) {
+            Arc::make_mut(&mut self.cell_restrictions).remove(&lb_high);
+        }
         // 2026-05-10 indoor collision: keep `cell_physics_index`
         // sympathetic with `cell_aabbs` — when a landblock unloads,
         // its triangles go too. Counts roll into `aabbs_removed` so
@@ -4730,6 +4844,14 @@ impl SpatialScene {
         Arc::make_mut(&mut self.cell_aabbs).retain(|cell_id, _| !in_set(*cell_id));
         let cell_aabbs_removed = aabbs_before - self.cell_aabbs.len();
         Arc::make_mut(&mut self.cell_seen_outside).retain(|cell_id, _| !in_set(*cell_id));
+        // landdefs-terrain-2: EnvCell restriction ids (cell lifetime) and
+        // the LandBlockInfo restriction tables (building lifetime).
+        if !self.cell_restrictions.is_empty() {
+            Arc::make_mut(&mut self.cell_restrictions).retain(|lb, _| !in_set(*lb));
+        }
+        if !self.landcell_restrictions.is_empty() {
+            Arc::make_mut(&mut self.landcell_restrictions).retain(|lb, _| !in_set(*lb));
+        }
         Arc::make_mut(&mut self.cell_physics_index).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));

@@ -8,8 +8,13 @@
 // "You can't enter combat mode while in portal space" (text type 0x1A,
 // :408840-408845).
 //
-// Pins ui/portal_busy.js, the use-throttle drop (scene3d/target_cycle.js) and
-// by source every gate site.
+// The busy count only picks the cursor (ClientUISystem::UpdateCursorState,
+// :401743, is its one reader), and SetCombatMode is the one gameplay reader
+// of teleportInProgress — so uses, casts and drags in the tunnel are NOT
+// dropped (2026-10-08 resume correction; ACE refuses them with YoureTooBusy).
+//
+// Pins ui/portal_busy.js, the absence of the old use / cast / __isBusy drops,
+// and by source every combat-mode gate site.
 //
 // Run: node tests/portal_busy.test.mjs   (from apps/holtburger-web/)
 
@@ -55,10 +60,10 @@ test("stance change refused in portal space with retail's line on the transient 
   }
 });
 
-test("a use in portal space is dropped like a throttled one (and does not spend the window)", () => {
+test("a use in portal space is sent, as retail does (only the 0.2 s throttle applies)", () => {
   _resetUseThrottleForTests();
-  inPortalSpace(true, () => assert.equal(consumeUseThrottle(1000), false));
-  assert.equal(consumeUseThrottle(1000), true, "after the tunnel the use goes through at once");
+  inPortalSpace(true, () => assert.equal(consumeUseThrottle(1000), true));
+  inPortalSpace(true, () => assert.equal(consumeUseThrottle(1100), false, "the throttle still holds"));
 });
 
 test("every gate site is wired", () => {
@@ -67,7 +72,8 @@ test("every gate site is wired", () => {
   assert.match(src("plugins/api.js"), /if \(refuseCombatModeInPortalSpace\(\)\) return;/);
   assert.match(src("plugins/combat-bar.js"), /if \(refuseCombatModeInPortalSpace\(\)\) return;/);
   assert.match(src("plugins/target-bar.js"), /if \(refuseCombatModeInPortalSpace\(\)\) return;/);
-  assert.match(src("ui/ac_cast_spell.js"), /if \(portalSpaceBusy\(\)\) return "refused";/);
-  assert.match(src("plugins/rejection_feedback.js"), /if \(portalSpaceBusy\(\)\) return true;/);
-  assert.match(src("scene3d/target_cycle.js"), /if \(portalSpaceBusy\(\)\) return false;/);
+  // No portal-space drop of casts, uses or the radial Drop / Give / Split.
+  for (const rel of ["ui/ac_cast_spell.js", "plugins/rejection_feedback.js", "scene3d/target_cycle.js"]) {
+    assert.doesNotMatch(src(rel), /portalSpaceBusy\(\)/, rel);
+  }
 });

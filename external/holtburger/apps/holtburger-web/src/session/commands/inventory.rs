@@ -474,6 +474,28 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "[book/delete-page] guid=0x{object_guid:08X} page={page_num}",
             ));
         }
+        SessionCommand::BookPageData {
+            object_guid,
+            page_num,
+        } => {
+            use holtburger_common::Guid;
+            use holtburger_protocol::messages::{BookPageDataActionData, GameAction};
+            let action = GameAction::BookPageData(Box::new(BookPageDataActionData {
+                guid: Guid(object_guid),
+                page_index: page_num,
+            }));
+            send_or_disconnect!(
+                queued_events,
+                e,
+                send_ordered!(movement, session, action),
+                "recv_loop: send_action(BookPageData): {e}",
+                "book_page_data: {e}",
+                LoopFlow::Exit
+            );
+            console_log_str(&format!(
+                "[book/page-data] guid=0x{object_guid:08X} page={page_num}",
+            ));
+        }
         SessionCommand::SetInscription {
             object_guid,
             inscription,

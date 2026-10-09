@@ -61,6 +61,18 @@ pub trait WeenieObjRef {
     /// `restriction_weenie->vfptr[17](other)` (check_entry_restrictions:347130)
     /// — `CWeenieObject::CanMoveInto(other)`.
     fn can_move_into(&self, other: &dyn WeenieObjRef) -> bool;
+    /// `mover->id` — what `ACCWeenieObject::CanMoveInto` compares with the
+    /// house owner and looks up in the RestrictionDB (acclient.c:438427).
+    /// Default 0 for weenies that are never a mover.
+    fn object_id(&self) -> u32 {
+        0
+    }
+    /// The mover's allegiance monarch, the `monarch` argument `CanMoveInto`
+    /// passes to `RestrictionDB::IsAllowedIn` (acclient.c:438436). Default 0
+    /// (no monarch).
+    fn monarch_id(&self) -> u32 {
+        0
+    }
 }
 
 /// Seam (A13 owns `CPhysicsObj`). A colliding physics object as the `CObjCell`

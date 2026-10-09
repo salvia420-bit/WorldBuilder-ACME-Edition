@@ -1,25 +1,26 @@
-// ui/portal_busy.js — streaming-teleport-5 (2026-10-08 round 3): portal
-// space counts as "busy".
+// ui/portal_busy.js — streaming-teleport-5 (2026-10-08 round 3): the
+// portal-space combat-mode refusal.
 //
 // RETAIL (acclient.c):
 //   CPlayerSystem::SetTeleportInProgress (:395704) raises the UI busy count
 //   (ClientUISystem::IncrementBusyCount) for the whole portal sequence —
 //   gmSmartBoxUI::UseTime sets it on TAS_TUNNEL (:262424) and clears it after
-//   the world fade-in (:262571).
-//   ClientCombatSystem::SetCombatMode (0x56BE30, :408787) refuses any
-//   player-requested stance change while teleportInProgress with
-//   "You can't enter combat mode while in portal space" (text type 0x1A,
-//   :408840-408845).
+//   the world fade-in (:262571). The busy count only picks the cursor:
+//   ClientUISystem::UpdateCursorState (:401743) is the one reader of m_cBusy.
+//   ClientCombatSystem::SetCombatMode (0x56BE30, :408787) is the one gameplay
+//   reader of teleportInProgress: it refuses any player-requested stance
+//   change with "You can't enter combat mode while in portal space" (text
+//   type 0x1A, :408840-408845).
 //
 // OURS: scene3d/portal_space.js publishes `globalThis.__isPortalSpaceActive`
 // (true from the tunnel through the world fade-in). This module turns it into
-// the refusals: the combat-mode toggle (index.html key, plugins/api.js,
-// combat-bar, target-bar), the shared use throttle (scene3d/target_cycle.js
-// consumeUseThrottle — inventory / world / radial / toolbar uses drop
-// silently, as a throttled use does), casts (ui/ac_cast_spell.js) and
-// window.__isBusy (radial Drop / Give / Split).
+// the combat-mode refusal (index.html key, plugins/api.js, combat-bar,
+// target-bar). Uses, casts and drags in the tunnel go to the server, as in
+// retail, and ACE refuses them with YoureTooBusy (2026-10-08 resume: the
+// round-3 drops of uses / casts / window.__isBusy were removed — retail has
+// no such gate).
 //
-// `?portalBusy=off` (or 0 / false) disables every gate here. No imports.
+// `?portalBusy=off` (or 0 / false) disables the refusal. No imports.
 
 export const PORTAL_COMBAT_REFUSAL = "You can't enter combat mode while in portal space";
 /** holtburger chat category for retail text type 0x1A (transient). */

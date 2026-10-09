@@ -275,6 +275,10 @@ pub struct SceneObjCell {
     /// open-sea wall in [`Self::find_terrain_collisions`]. `NotWater` for
     /// indoor cells, a landblock without resident codes, and `?openSeaWall=off`.
     block_water_type: WaterType,
+    /// landdefs-terrain-2: `this->restriction_obj`, the house object this
+    /// cell is restricted to (0 = none) — the EnvCell's own field or the
+    /// landcell's LandBlockInfo entry ([`SpatialScene::cell_restriction`]).
+    restriction_obj: u32,
 }
 
 impl SceneObjCell {
@@ -459,7 +463,29 @@ impl CObjCell for SceneObjCell {
     }
 
     fn restriction_obj(&self) -> u32 {
-        0
+        self.restriction_obj
+    }
+
+    /// `CLandCell::handle_move_restriction` (acclient.c:355063): a refused
+    /// mover gets an axis-aligned collision normal pointing from this
+    /// landcell's centre (`pos`, `(2i+1)·12` — `ConstructPolygons`
+    /// acclient.c:354095-354098) toward its current position. EnvCells keep
+    /// the base no-op (`CEnvCell::handle_move_restriction`, 347848).
+    fn handle_move_restriction(&self, transition: &mut CTransition) {
+        if self.cell_id & 0xFFFF >= 0x100 {
+            return;
+        }
+        let n = (self.cell_id & 0xFFFF).saturating_sub(1);
+        let centre_x = self.landblock_origin.x + (n / 8) as f32 * CELL_SIZE + CELL_SIZE * 0.5;
+        let centre_y = self.landblock_origin.y + (n % 8) as f32 * CELL_SIZE + CELL_SIZE * 0.5;
+        let curr = transition.sphere_path.curr_pos.frame.origin;
+        let (nx, ny) = super::house_barrier::landcell_restriction_normal(
+            curr.x - centre_x,
+            curr.y - centre_y,
+        );
+        transition
+            .collision_info
+            .set_collision_normal(Vector3::new(nx, ny, 0.0));
     }
 
     fn objects(&self) -> &[Rc<dyn PhysicsObjRef>] {
@@ -643,6 +669,20 @@ impl CObjCell for SceneObjCell {
     /// (decomp 347816-347818). A cell with no env BSP still runs its statics
     /// (an unbaked-environment cell can carry resident static objects).
     fn find_collisions(&self, transition: &mut CTransition) -> i32 {
+        // landdefs-terrain-2: `CEnvCell::find_env_collisions` (347829) and
+        // `CLandCell::find_env_collisions` (355015) open with
+        // `check_entry_restrictions` — the housing barrier. The overlay
+        // always resolves the mover, so only a restricted cell can refuse
+        // and an unrestricted one skips the lookup. No overlay (test envs,
+        // `?houseBarriers=off`, no restricted cell nearby) ⇒ no barrier.
+        if self.restriction_obj != 0 {
+            if let Some(objects) = super::house_barrier::installed_overlay() {
+                let r = self.check_entry_restrictions(transition, &*objects);
+                if r != TransitionState::OK as i32 {
+                    return r;
+                }
+            }
+        }
         let scale = if transition.object_info.scale != 0.0 {
             transition.object_info.scale
         } else {
@@ -873,6 +913,7 @@ impl<'a> SceneWorld<'a> {
             water_type: WaterType::NotWater,
             corner_is_water: [false; 4],
             block_water_type: WaterType::NotWater,
+            restriction_obj: self.scene.cell_restriction(cell_id),
         };
         Some(Rc::new(cell) as Rc<dyn CObjCell>)
     }
@@ -1333,6 +1374,7 @@ fn build_outdoor_cell(scene: &SpatialScene, cell_id: u32, gx: i32, gy: i32) -> O
         water_type,
         corner_is_water,
         block_water_type,
+        restriction_obj: scene.cell_restriction(cell_id),
     }) as ObjCellHandle
 }
 
@@ -1533,6 +1575,9 @@ pub fn faithful_find_transitional_position(
     let mut t = CTransition::new();
     t.object_info.scale = 1.0;
     t.object_info.state = input.object.state; // bit layout matches dat's
+    // `object_info.object` — the mover, which `check_entry_restrictions`
+    // resolves first (acclient.c:347114).
+    t.object_info.object_id = input.object.self_guid.0;
     t.object_info.step_up_height = input.object.step_up_height;
     t.object_info.step_down_height = input.object.step_down_height;
     t.object_info.ethereal = input.object.ethereal;
@@ -1807,6 +1852,8 @@ pub fn faithful_find_transitional_position(
         + input.object.height
         + 2.0;
     let _objects = install_obj_overlay(env, &world, &input.begin, reach, &input.object, input.gates.skip_parented_entities);
+    // Housing barriers inside the transition (`?houseBarriers`).
+    let _barriers = install_barrier_overlay(env, &input.begin, input.object.self_guid);
     // The player is gravity-affected (GRAVITY_PS). VERIFY(1070): thread the
     // real per-object gravity bit if non-player movers route here (only the
     // local player routes here today — always gravity-affected).
@@ -2148,6 +2195,21 @@ fn install_obj_overlay(
     Some(ObjOverlayGuard::install(Rc::new(build_obj_overlay(world, objects))))
 }
 
+/// Housing barriers (`super::house_barrier`): resolve the mover and the
+/// house objects the cells near `pose` are restricted to, and install them
+/// for the driver's cells until the returned guard drops. `None` (no
+/// barrier pass) when the env has no overlay to give: `?houseBarriers=off`,
+/// no restricted cell nearby, a NULL mover, or a test env.
+fn install_barrier_overlay(
+    env: &dyn TransitionEnv,
+    pose: &WorldPosition,
+    mover: holtburger_common::Guid,
+) -> Option<super::house_barrier::BarrierOverlayGuard> {
+    use super::house_barrier::BarrierOverlayGuard;
+    let overlay = env.house_barrier_overlay(pose, mover)?;
+    Some(BarrierOverlayGuard::install(Rc::new(overlay)))
+}
+
 // ─── Cell for a pose moved AFTER the transition ──────────────────────────────
 
 /// The cell retail's `CObjCell::find_cell_list` (acclient.c:346961-347060)
@@ -2366,6 +2428,7 @@ pub fn faithful_find_placement_position(
     // re-establish ground. Keep EDGE_SLIDE (from `AllowsEdgeSlide`).
     t.object_info.state =
         object.state & !(object_info_state::CONTACT | object_info_state::ON_WALKABLE);
+    t.object_info.object_id = object.self_guid.0;
     t.object_info.step_up_height = object.step_up_height;
     t.object_info.step_down_height = object.step_down_height;
     t.object_info.ethereal = object.ethereal;
@@ -2390,6 +2453,7 @@ pub fn faithful_find_placement_position(
     // placement inserts collide the same shadow lists (only the INITIAL
     // placement insert skips objects, acclient.c:347151).
     let _objects = install_obj_overlay(env, &world, pose, object.height + 4.0 + 2.0, object, gates.skip_parented_entities);
+    let _barriers = install_barrier_overlay(env, pose, object.self_guid);
     let mover = FaithfulMover { has_gravity: true };
     let found = t.find_valid_position(&world, &mover);
     if found == 0 {
@@ -7494,6 +7558,295 @@ mod drift {
             feet_on.x,
             feet_off.x
         );
+    }
+
+    // ── landdefs-terrain-2: housing barriers inside the transition ──
+    //
+    // Retail `CObjCell::check_entry_restrictions` (acclient.c:347103) opens
+    // both env-collision bodies (`CLandCell` 355015, `CEnvCell` 347829). The
+    // walks go through the public entry with an env that hands the bridge a
+    // barrier overlay the way `WorldState` does. On the old code no cell had
+    // a restriction (`restriction_obj` was hard-wired to 0), so every
+    // "stops" assertion here fails there.
+    mod house_barriers {
+        use super::*;
+        use crate::house::RestrictionDb;
+        use crate::spatial::house_barrier::{
+            BarrierMover, BarrierOverlay, BarrierOverlayGuard, HouseBarrier,
+        };
+        use holtburger_dat::transition::types::object_info_state as ois;
+        use holtburger_dat::transition::types::TransitionState as DatState;
+        use std::rc::Rc;
+
+        const MOVER: u32 = 0x5000_0001;
+        const OWNER: u32 = 0x5000_0002;
+        const GUEST: u32 = 0x5000_0003;
+        const HOUSE: u32 = 0x7020_3001;
+        const Z: f32 = 50.0;
+        /// The yard: landcell (5,4) of the outdoor test landblock.
+        const YARD: u32 = OLB | (5 * 8 + 4 + 1);
+        /// The yard's west edge (world x); the walk starts in cell (4,4).
+        const YARD_EDGE_X: f32 = OLB_OX + 5.0 * 24.0;
+
+        type Overlay = Option<(BarrierMover, Vec<(u32, HouseBarrier)>)>;
+
+        struct BarrierEnv {
+            scene: SpatialScene,
+            ground_z: f32,
+            overlay: Overlay,
+        }
+
+        impl TransitionEnv for BarrierEnv {
+            fn scene(&self) -> &SpatialScene {
+                &self.scene
+            }
+            fn terrain_height_at(&self, _x: f32, _y: f32) -> Option<f32> {
+                Some(self.ground_z)
+            }
+            fn terrain_normal_at(&self, _x: f32, _y: f32) -> Option<Vector3> {
+                Some(v(0.0, 0.0, 1.0))
+            }
+            fn water_depth_at(&self, _x: f32, _y: f32) -> f32 {
+                0.0
+            }
+            fn is_entirely_water_cell_at(&self, _x: f32, _y: f32) -> bool {
+                false
+            }
+            fn entity_colliders_near(
+                &self,
+                _pose: &WorldPosition,
+                _prefilter_dist: f32,
+                _exclude: Guid,
+                _skip_parented: bool,
+            ) -> Vec<EntityCollider> {
+                Vec::new()
+            }
+            fn house_barrier_overlay(
+                &self,
+                _pose: &WorldPosition,
+                mover: Guid,
+            ) -> Option<BarrierOverlay> {
+                let (m, houses) = self.overlay.clone()?;
+                assert_eq!(m.id, mover.0, "the bridge asks for the transition's mover");
+                Some(BarrierOverlay::new(m, houses))
+            }
+        }
+
+        fn house(owner: u32, open: bool) -> HouseBarrier {
+            HouseBarrier {
+                owner,
+                db: Some(RestrictionDb {
+                    version: 0x1000_0002,
+                    bitmask: u32::from(open),
+                    monarch_id: 0,
+                    table: [(GUEST, 0)].into_iter().collect(),
+                }),
+            }
+        }
+
+        fn mover(id: u32, can_bypass: bool) -> BarrierMover {
+            BarrierMover {
+                id,
+                monarch: 0,
+                can_bypass,
+            }
+        }
+
+        /// Flat terrain with the yard restricted to HOUSE through the
+        /// LandBlockInfo table (`set_landblock_restrictions`).
+        fn yard_scene() -> SpatialScene {
+            let mut scene = outdoor_scene([Z; 81]);
+            scene.set_landblock_restrictions(OLB, &[(YARD, HOUSE)]);
+            scene
+        }
+
+        /// Walk 20 m east from the centre of cell (4,4) into the yard;
+        /// returns the settled world x.
+        fn walk_east(overlay: Overlay, state_extra: u32) -> f32 {
+            let (sx, sy) = outdoor_cell_center(4, 4);
+            let mut input =
+                input_for(outdoor_pose(sx, sy, Z), outdoor_pose(sx + 20.0, sy, Z - 0.15));
+            input.object.self_guid = Guid(overlay.as_ref().map_or(MOVER, |(m, _)| m.id));
+            input.object.state |= state_extra;
+            let env = BarrierEnv {
+                scene: yard_scene(),
+                ground_z: Z,
+                overlay,
+            };
+            faithful_find_transitional_position(&env, &input, true, true)
+                .pose
+                .global_coords()
+                .x
+        }
+
+        fn stranger_at_private_house() -> Overlay {
+            Some((mover(MOVER, false), vec![(HOUSE, house(OWNER, false))]))
+        }
+
+        #[test]
+        fn a_stranger_stops_at_a_private_yard() {
+            let x = walk_east(stranger_at_private_house(), ois::IS_PLAYER);
+            assert!(x < YARD_EDGE_X, "walked into the private yard: x={x}");
+            assert!(
+                x > YARD_EDGE_X - radius() - 1.0,
+                "stopped well short of the yard edge: x={x}"
+            );
+        }
+
+        #[test]
+        fn the_owner_a_guest_an_open_or_unowned_house_and_an_immune_admin_pass() {
+            let through = |m: BarrierMover, h: HouseBarrier| {
+                walk_east(Some((m, vec![(HOUSE, h)])), ois::IS_PLAYER) > YARD_EDGE_X + 1.0
+            };
+            assert!(through(mover(OWNER, false), house(OWNER, false)), "the owner");
+            assert!(through(mover(GUEST, false), house(OWNER, false)), "a listed guest");
+            assert!(through(mover(MOVER, false), house(OWNER, true)), "an open house");
+            assert!(
+                through(mover(MOVER, false), HouseBarrier { owner: 0, db: None }),
+                "an unowned house"
+            );
+            assert!(
+                through(mover(MOVER, true), house(OWNER, false)),
+                "Admin + ImmuneCellRestrictions"
+            );
+        }
+
+        /// Retail: `GetObjectA(restriction_obj)` null ⇒ Collided
+        /// (acclient.c:347124-347126). No overlay (`?houseBarriers=off`, a
+        /// test env) ⇒ no barrier at all.
+        #[test]
+        fn an_unknown_house_object_bars_the_yard_and_no_overlay_never_does() {
+            let unknown = walk_east(Some((mover(MOVER, false), Vec::new())), ois::IS_PLAYER);
+            assert!(unknown < YARD_EDGE_X, "an unknown house object let the mover in: x={unknown}");
+            let off = walk_east(None, ois::IS_PLAYER);
+            assert!(off > YARD_EDGE_X + 1.0, "no overlay still barred the yard: x={off}");
+        }
+
+        /// `if (BYTE1(state) & 1)` — only IS_PLAYER movers are checked
+        /// (acclient.c:347120).
+        #[test]
+        fn a_non_player_mover_ignores_the_barrier() {
+            let x = walk_east(stranger_at_private_house(), 0);
+            assert!(x > YARD_EDGE_X + 1.0, "a non-player was barred: x={x}");
+        }
+
+        /// The refusing landcell runs `CLandCell::handle_move_restriction`
+        /// (acclient.c:355063): an axis normal from its centre toward the
+        /// mover, here −X for a mover west of the yard.
+        #[test]
+        fn a_refusing_landcell_is_collided_with_the_retail_axis_normal() {
+            use holtburger_dat::transition::objcell::CellWorld;
+            let scene = yard_scene();
+            let world = SceneWorld::new(&scene);
+            let yard = world.get_visible(YARD).expect("yard landcell");
+            assert_eq!(yard.restriction_obj(), HOUSE);
+            let (m, houses) = stranger_at_private_house().unwrap();
+            let _g = BarrierOverlayGuard::install(Rc::new(BarrierOverlay::new(m, houses)));
+            let r = player().radius;
+            let spheres = [
+                Sphere { center: v(0.0, 0.0, r), radius: r },
+                Sphere { center: v(0.0, 0.0, 1.35), radius: r },
+            ];
+            let (cx, cy) = outdoor_cell_center(5, 4);
+            let mut t = CTransition::new();
+            t.object_info.scale = 1.0;
+            t.object_info.object_id = MOVER;
+            t.object_info.state = ois::CONTACT | ois::IS_PLAYER;
+            t.init_sphere(2, &spheres, 1.0);
+            let mut curr = Frame::identity();
+            curr.origin = v(cx - 12.6, cy, Z);
+            let mut chk = Frame::identity();
+            chk.origin = v(cx - 11.9, cy, Z);
+            t.sphere_path.curr_pos = Position { objcell_id: OLB | (4 * 8 + 4 + 1), frame: curr };
+            t.sphere_path.check_pos = Position { objcell_id: YARD, frame: chk };
+            t.sphere_path.cache_global_sphere(None);
+            assert_eq!(yard.find_collisions(&mut t), DatState::Collided as i32);
+            assert_eq!(t.collision_info.collision_normal, Some(v(-1.0, 0.0, 0.0)));
+            // The same step by the owner is not refused by the barrier.
+            let _g2 = BarrierOverlayGuard::install(Rc::new(BarrierOverlay::new(
+                mover(OWNER, false),
+                vec![(HOUSE, house(OWNER, false))],
+            )));
+            t.object_info.object_id = OWNER;
+            t.collision_info.collision_normal = None;
+            yard.find_collisions(&mut t);
+            assert_ne!(
+                t.collision_info.collision_normal,
+                Some(v(-1.0, 0.0, 0.0)),
+                "the owner got the barrier normal"
+            );
+        }
+
+        /// The scene keeps both halves per landblock (filtered the way
+        /// `CLandBlock::init_static_objs` reads the table), serves them to
+        /// the cell builders, and drops each with its own lifetime.
+        #[test]
+        fn the_scene_keeps_restrictions_per_landblock_and_drops_them_on_unload() {
+            let mut scene = SpatialScene::new();
+            let k0 = scene.collision_cache_key();
+            scene.set_landblock_restrictions(
+                OLB,
+                &[
+                    (YARD, HOUSE),
+                    (0x0999_0001, 7),     // another landblock's cell
+                    (OLB | 0x0100, 8),    // an EnvCell id: not a landcell
+                    (OLB | 0x0002, 0),    // a zero guid
+                ],
+            );
+            assert_ne!(scene.collision_cache_key(), k0, "a table change rebuilds cached cells");
+            assert_eq!(scene.cell_restriction(YARD), HOUSE);
+            assert_eq!(scene.cell_restriction(OLB | 0x0100), 0, "EnvCells read their own field");
+            assert_eq!(scene.cell_restriction(OLB | 0x0002), 0);
+            scene.insert_cell_restriction(OLB | 0x0100, HOUSE + 1);
+            assert_eq!(scene.cell_restriction(OLB | 0x0100), HOUSE + 1);
+            assert_eq!(scene.restriction_guids_near(0x0303_0001), vec![HOUSE, HOUSE + 1]);
+            assert!(scene.restriction_guids_near(0x0403_0001).is_empty(), "two landblocks away");
+            scene.clear_cells_for_landblock(OLB);
+            assert_eq!(scene.cell_restriction(OLB | 0x0100), 0, "EnvCell ids unload with the cells");
+            assert_eq!(scene.cell_restriction(YARD), HOUSE, "the LandBlockInfo table stays");
+            scene.clear_building_aabbs_for_landblock(OLB);
+            assert_eq!(scene.cell_restriction(YARD), 0, "the table unloads with the buildings");
+            scene.set_landblock_restrictions(OLB, &[(YARD, HOUSE)]);
+            scene.insert_cell_restriction(OLB | 0x0100, HOUSE);
+            scene.clear_landblocks_collision(&[OLB]);
+            assert!(scene.restriction_guids_near(OLB).is_empty(), "the batched unload drops both");
+        }
+
+        /// Inside a restricted EnvCell a refused player cannot move at all:
+        /// every step re-checks the cell the mover stands in (retail has no
+        /// begin-cell exemption; ACE's server-side port adds one).
+        #[test]
+        fn a_stranger_inside_a_restricted_env_cell_cannot_move() {
+            let o = cell_origin();
+            let mut floor = HashMap::new();
+            floor.insert(1u16, floor_poly_local(-HE, HE, 0.0));
+            let mut scene = SpatialScene::new();
+            scene.insert_cell_physics_bsp(CELL_ID, bsp_from(floor));
+            seed_common(
+                &mut scene,
+                floor_tris_world(o.x - HE, o.x + HE, o.y - HE, o.y + HE, FLOOR_WZ),
+            );
+            scene.insert_cell_restriction(CELL_ID, HOUSE);
+            let walk = |m: BarrierMover| {
+                let mut input =
+                    input_for(pose_at(FCX, FCY, FLOOR_WZ), pose_at(FCX + 1.5, FCY, FLOOR_WZ));
+                input.object.self_guid = Guid(m.id);
+                input.object.state |= ois::IS_PLAYER;
+                let env = BarrierEnv {
+                    scene: scene.clone(),
+                    ground_z: FLOOR_WZ,
+                    overlay: Some((m, vec![(HOUSE, house(OWNER, false))])),
+                };
+                faithful_find_transitional_position(&env, &input, true, true)
+                    .pose
+                    .coords
+                    .x
+            };
+            let stuck = walk(mover(MOVER, false));
+            assert!((stuck - FCX).abs() < 1e-3, "a refused player moved inside the cell: x={stuck}");
+            let owner = walk(mover(OWNER, false));
+            assert!(owner > FCX + 1.0, "the owner could not move: x={owner}");
+        }
     }
 }
 

@@ -25,6 +25,10 @@ pub mod scenery;
 /// (retail `CObjCell::find_obj_collisions` → `CPhysicsObj::FindObjCollisions`),
 /// behind the default-off `?objCollideInTransition` switch.
 pub mod obj_collision;
+/// Housing barriers in the faithful transition (retail
+/// `CObjCell::check_entry_restrictions`), behind `?houseBarriers` (default
+/// ON, `=off` escape).
+pub mod house_barrier;
 mod types;
 
 pub use entity_collision::{
