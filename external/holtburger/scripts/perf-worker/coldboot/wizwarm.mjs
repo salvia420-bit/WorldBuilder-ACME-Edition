@@ -19,7 +19,10 @@ const sample = () => pg.evaluate(() => {
   return { open: document.getElementById("hb-charselect")?.dataset.open ?? null, wiz: !!document.getElementById("hb-charcreate"),
     preview: s?._spawnPreview ? (s._spawnPreview.cell >>> 0).toString(16) : null, kids: s?.cellsGroup?.children?.length ?? null,
     envIn: asArr(s?.envCellBuildInFlight), envLoaded: asArr(s?.envCellLoadedLbs), pf: s?.materialCache?.pendingFetches?.size ?? null,
-    terr: s?.terrainBakedLbs?.size ?? null, cell, st: window.__bootState };
+    terr: s?.terrainBakedLbs?.size ?? null, cell, st: window.__bootState,
+    // login portal space (2026-10-09): "state:reason[:login]" (null = never ran) + why it was skipped
+    ps: window.__portalSpace ? `${window.__portalSpace.state}:${window.__portalSpace.reason}${window.__portalSpace.login ? ":login" : ""}` : null,
+    psSkip: window.__portalSpace?.loginSkip ?? null };
 }).catch((e) => ({ err: String(e).slice(0, 80) }));
 const tl = [];
 const t0 = Date.now();
@@ -45,6 +48,9 @@ await row.click();
 await sleep(400);
 const atEnter = await sample();
 log("enter", atEnter);
+// Page clock at Enter: the portal-space stamps (__portalSpace.t, performance.now()) are
+// compared on the PAGE's clock, so no laptop↔1070 clock skew enters enterToTunnel*Ms.
+const pageEnter = await pg.evaluate(() => performance.now()).catch(() => null);
 const te = Date.now();
 await pg.locator("#hb-charselect .hcs-enter").click();
 let inWorld = null, firstCells = null, done = null;
@@ -56,7 +62,18 @@ while (Date.now() - te < 180000) {
   if (firstCells == null && s.kids > 0 && s.cell) { firstCells = t; log("cells-visible", s); }
   if (inWorld != null && firstCells != null) { done = t; break; }
 }
-const out = { label, dwellMs: DWELL, atEnter, enterToInWorldMs: inWorld, enterToCellsMs: firstCells };
+// Login portal space: if a login tunnel is still up, wait (≤15 s) for it to end so its
+// reveal is known; on the warm path __portalSpace.loginSkip says why none ran.
+for (let i = 0; i < 30; i++) {
+  const up = await pg.evaluate(() => !!window.__portalSpace?.login || !!window.__portalSpace?.loginPending).catch(() => false);
+  if (!up) break;
+  await sleep(500);
+}
+const ps = await pg.evaluate(() => (window.__portalSpace ? { ...window.__portalSpace } : null)).catch(() => null);
+const psMs = (x) => (ps && pageEnter != null && ps.t && ps.t[x] > pageEnter ? Math.round(ps.t[x] - pageEnter) : null);
+const out = { label, dwellMs: DWELL, atEnter, enterToInWorldMs: inWorld, enterToCellsMs: firstCells,
+  loginMode: ps?.loginMode ?? null, loginSkip: ps?.loginSkip ?? null, loginStarts: ps?.loginStarts ?? null,
+  enterToTunnelRevealMs: ps?.loginStarts ? psMs("reveal") : null, enterToTunnelDoneMs: ps?.loginStarts ? psMs("done") : null };
 writeFileSync(`wizwarm-${label}.json`, JSON.stringify({ ...out, tl }, null, 1));
 console.log("RESULT", JSON.stringify(out));
 process.exit(0);

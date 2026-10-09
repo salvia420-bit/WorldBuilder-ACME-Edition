@@ -70,6 +70,16 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   unregisterFullTierMirror: "() => false",
   // ./xu7_textures.js — ST5 lane-T transcode entry; unreachable flag-OFF.
   transcodeXu7WithNra: "async () => null",
+  // ./xu7_textures.js — `?texWorkerEager` (D3-b, 2026-10-09): the production
+  // cache warms the texture worker at construction. No Worker in the harness:
+  // the real function's answer there is "workers off" = false.
+  warmTextureWorker: "() => false",
+  // ./tex_upgrade_queue.js — `?texUpgradeQueue` (2026-10-09). The reader's
+  // real absent-flag answer is ON; the singleton is null outside a page (the
+  // real answer with no `window`), so no spliced cache arms the queue and
+  // every suite keeps today's direct asks.
+  texUpgradeQueueEnabled: "() => true",
+  getTexUpgradeQueue: "() => null",
   // ./bandwidth_tier.js — `?bandwidth` (2026-10-06). "Not a low session" is
   // the default arm (fast link / no measurement), so the statics full-tier
   // upgrade veto never fires and every suite sees today's behaviour.

@@ -925,6 +925,320 @@ const ENVCELL_STATICS_OVERLAP = (() => {
   }
 })();
 
+// `?interiorEarlyBake` (A1-lite, 2026-10-09) — DEFAULT-ON, `=off` escape
+// (off|0|false|no). Step B (the cells' surface decode) and Step C (the cell
+// statics' meshes, then their surfaces) used to start only after
+// `fetchEnvCellsInLandblock` resolved — i.e. after the Environments, every
+// stab's geometry walk and the whole per-cell loop. Their inputs are known as
+// soon as the EnvCell records land: the cells' surface tables and stab ids.
+// ON, for the PLAYER'S OWN landblock only (`isNearPlayerLb(…, 0)`; ring and
+// skirt builds keep today's order) and when the wasm has the export (a stale
+// pkg = no-op): `fetchEnvCellDepsInLandblock` runs beside the build — same
+// LandblockInfo/EnvCell keys on the same urgent lane in the same turn, so the
+// two calls share every request — and as soon as it resolves, Step B's
+// surface preload and Step C's mesh fetch (then its surface preload) go to the
+// bake worker on the build's own lane (`urgent`, lane 0). The build's Step B
+// joins through `materialCache.preload`'s in-flight/cached dedupe; its Step C
+// takes the early mesh promise instead of fetching again. Any failure — deps
+// rejected, early fetch failed, ids that do not cover the build's — falls
+// back to the normal path; a deps call still pending when the build reaches
+// Step B is abandoned, never awaited. Counters: `window.__interiorEarlyBake`.
+const INTERIOR_EARLY_BAKE = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("interiorEarlyBake");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+
+/** `?interiorEarlyBake` counters (also `window.__interiorEarlyBake`). */
+const _interiorEarlyBakeStats = {
+  kicked: 0, // builds that started the deps call
+  notPlayerLb: 0, // builds not on the player's own landblock (no kick)
+  posted: 0, // deps resolved before Step B → Step B + C started early
+  depsFailed: 0, // the deps call threw/rejected (build unaffected)
+  abandoned: 0, // deps still pending when the build reached Step B
+  staticsJoined: 0, // Step C used the early meshes as-is
+  staticsRemapped: 0, // Step C used them reordered (ids differed in order)
+  staticsRefetched: 0, // early meshes unusable (fetch failed / ids missing) → normal fetch
+  lastDepsMs: null, // ms from build start to deps for the last kick
+};
+try {
+  if (typeof window !== "undefined") window.__interiorEarlyBake = _interiorEarlyBakeStats;
+} catch (_) { /* fail-soft */ }
+
+function _earlyBakeNowMs() {
+  try {
+    return globalThis.performance?.now ? globalThis.performance.now() : Date.now();
+  } catch (_) {
+    return Date.now();
+  }
+}
+
+/** Step C's own surface set for a mesh batch: every surface of every mesh it
+ *  keeps (non-null, `triCount > 0`) — the same rule as Step C below. */
+function _earlyStaticSurfaceDids(meshes) {
+  const dids = new Set();
+  for (const m of meshes || []) {
+    if (!m || m.triCount === 0) continue;
+    const surfaces = m.surfaces;
+    if (!surfaces) continue;
+    for (const d of surfaces) dids.add(d >>> 0);
+  }
+  return [...dids];
+}
+
+/**
+ * `?interiorEarlyBake`: start the deps call beside the build's own
+ * `fetchEnvCellsInLandblock` and, when it resolves, post Step B + Step C early.
+ * Returns a kick handle (`state` pending|ready|failed|late) or null. Never
+ * throws; nothing it does can fail the build.
+ */
+function startInteriorEarlyBake(scene3d, lbKey, wasmExports, mmFetch, spFetch) {
+  if (!INTERIOR_EARLY_BAKE) return null;
+  if (!wasmExports || typeof wasmExports.fetchEnvCellDepsInLandblock !== "function") return null;
+  if (!isNearPlayerLb(scene3d, lbKey, 0)) {
+    _interiorEarlyBakeStats.notPlayerLb += 1;
+    return null;
+  }
+  const lbHex = `0x${(lbKey >>> 0).toString(16).padStart(8, "0")}`;
+  const t0 = _earlyBakeNowMs();
+  const kick = { state: "pending", ids: null, statics: null, consumed: false, released: false };
+  let depsPromise;
+  try {
+    depsPromise = Promise.resolve(wasmExports.fetchEnvCellDepsInLandblock(lbKey >>> 0));
+  } catch (e) {
+    _interiorEarlyBakeStats.depsFailed += 1;
+    // eslint-disable-next-line no-console
+    console.warn(`[interiorEarlyBake] envcells ${lbHex}: deps call failed (build unaffected):`, e);
+    return null;
+  }
+  _interiorEarlyBakeStats.kicked += 1;
+  const onFailed = (e) => {
+    if (kick.state === "pending") kick.state = "failed";
+    _interiorEarlyBakeStats.depsFailed += 1;
+    // eslint-disable-next-line no-console
+    console.warn(`[interiorEarlyBake] envcells ${lbHex}: deps failed (build unaffected):`, e);
+  };
+  depsPromise.then((json) => {
+    if (kick.released) {
+      // The build already passed Step B (or ended): post nothing.
+      kick.state = "late";
+      return;
+    }
+    let surfaceDids;
+    let stabIds;
+    let numCells = 0;
+    try {
+      const deps = typeof json === "string" ? JSON.parse(json) : json;
+      surfaceDids = Array.isArray(deps?.cellSurfaceDids) ? deps.cellSurfaceDids.map((d) => d >>> 0) : [];
+      stabIds = Array.isArray(deps?.stabIds) ? deps.stabIds.map((d) => d >>> 0) : [];
+      numCells = Number(deps?.numCells) || 0;
+    } catch (e) {
+      onFailed(e);
+      return;
+    }
+    kick.state = "ready";
+    // A landblock with no interior (open countryside: no LandblockInfo record
+    // or num_cells 0) resolves to empty lists: nothing to start early, so no
+    // `posted` count and no "started early" line (one per outdoor LB entered).
+    if (surfaceDids.length === 0 && stabIds.length === 0) return;
+    _interiorEarlyBakeStats.posted += 1;
+    _interiorEarlyBakeStats.lastDepsMs = Math.round(_earlyBakeNowMs() - t0);
+    // Step B, early: the build's later preload of its (subset) DIDs finds them
+    // cached or in flight (MaterialCache#preload dedupe) and only waits.
+    if (surfaceDids.length > 0) {
+      try {
+        Promise.resolve(scene3d.materialCache.preload(surfaceDids, spFetch)).catch((e) => {
+          // eslint-disable-next-line no-console
+          console.warn(`[interiorEarlyBake] envcells ${lbHex}: early cell-surface preload failed (Step B retries):`, e);
+        });
+      } catch (_) { /* Step B runs as before */ }
+    }
+    // Step C, early: the mesh fetch (settled, so it can never reject
+    // unhandled), then the meshes' own surfaces as soon as they land.
+    if (stabIds.length > 0 && typeof wasmExports.fetch_model_meshes === "function") {
+      try {
+        kick.ids = stabIds;
+        kick.statics = Promise.resolve(mmFetch(new Uint32Array(stabIds))).then(
+          (v) => ({ v }),
+          (e) => ({ e }),
+        );
+        kick.statics.then((r) => {
+          if (!r || !r.v || kick.released) return undefined;
+          const dids = _earlyStaticSurfaceDids(r.v);
+          if (dids.length === 0) return undefined;
+          return Promise.resolve(scene3d.materialCache.preload(dids, spFetch)).catch(() => {});
+        }).catch(() => {});
+      } catch (_) {
+        kick.ids = null;
+        kick.statics = null;
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[interiorEarlyBake] envcells ${lbHex}: deps after ${_interiorEarlyBakeStats.lastDepsMs} ms ` +
+        `(${numCells} cells, ${surfaceDids.length} surfaces, ${stabIds.length} statics) — Step B+C started early`,
+    );
+  }, onFailed).catch(() => {});
+  return kick;
+}
+
+/**
+ * Step C's join: the early mesh promise re-shaped to the build's own id list,
+ * settled as `{v}` / `{e}` like the build's own early fetch. Null when the kick
+ * cannot serve this build (not ready, no statics, an id it never fetched) —
+ * the build then fetches as before. An early fetch that FAILED is retried once
+ * the normal way rather than reported (the early path never fails the build).
+ */
+function joinEarlyInteriorStatics(kick, staticIds, mmFetch) {
+  if (!kick || kick.state !== "ready" || !kick.statics || !kick.ids || !staticIds) return null;
+  const early = kick.ids;
+  let index = null;
+  const same =
+    early.length === staticIds.length && early.every((d, i) => d === (staticIds[i] >>> 0));
+  if (!same) {
+    const pos = new Map();
+    early.forEach((d, i) => {
+      if (!pos.has(d)) pos.set(d, i);
+    });
+    index = [];
+    for (const d of staticIds) {
+      const i = pos.get(d >>> 0);
+      if (i === undefined) return null; // released (freed) by the build's finally
+      index.push(i);
+    }
+  }
+  kick.consumed = true;
+  const refetch = () => {
+    _interiorEarlyBakeStats.staticsRefetched += 1;
+    return Promise.resolve(mmFetch(new Uint32Array(staticIds))).then((v) => ({ v }), (e) => ({ e }));
+  };
+  return kick.statics.then((r) => {
+    try {
+      if (!r || r.e || !r.v || typeof r.v.length !== "number") return refetch();
+      if (!index) {
+        _interiorEarlyBakeStats.staticsJoined += 1;
+        return { v: r.v };
+      }
+      const used = new Set(index);
+      const out = index.map((i) => r.v[i]);
+      for (let i = 0; i < r.v.length; i += 1) {
+        if (used.has(i)) continue;
+        const m = r.v[i];
+        try { if (m && typeof m.free === "function") m.free(); } catch (_) { /* best effort */ }
+      }
+      _interiorEarlyBakeStats.staticsRemapped += 1;
+      return { v: out };
+    } catch (_) {
+      return refetch();
+    }
+  });
+}
+
+/** End of the build: post nothing more, free early meshes nobody took. */
+function releaseEarlyInteriorBake(kick) {
+  if (!kick || kick.released) return;
+  kick.released = true;
+  if (kick.statics && !kick.consumed) {
+    kick.statics.then((r) => {
+      if (!r || !r.v) return;
+      for (const m of r.v) {
+        try { if (m && typeof m.free === "function") m.free(); } catch (_) { /* best effort */ }
+      }
+    }).catch(() => {});
+  }
+}
+
+// `?interiorWallsFirst` (2026-10-09) — DEFAULT-ON, `=off` escape
+// (off|0|false|no). An interior build attached NOTHING until Step C (the cell
+// statics' meshes, then their surfaces) had finished, although the walls only
+// need Step B. Academy 0x8602 on the 1070 (run fin2A1): Step B's 41 cell
+// materials were cached by ~13.8 s, then the build waited on Step C — the
+// statics' fetch_model_meshes (5.6 s in the bake worker) and their 232
+// surfaces (one fetchSurfacesPixels call, 13.9 s) — and cellsGroup stayed
+// empty until 28.6 s. ON, for a build that has cell statics to fetch: Step C
+// runs in the background while Step D builds the walls/floors/ceilings (the
+// cell meshes with their Step B materials), prewarms them and attaches them
+// exactly as before (layer 1, frozen matrices, `cellContainers3d`), so the
+// visibility tick, PVS, the occlusion boxes and portal_space's
+// `destinationCellsReady` see them at once. When Step C settles, every cell's
+// statics are built as Step D builds them (animated peel, `?cellStaticMerge`,
+// scripted props), into a detached staging group, prewarmed, residency-checked
+// and moved into the live containers. Only THEN is the landblock built:
+// `envCellLoadedLbs`, the in-flight marker's release (`finally`), the build's
+// result (so `loadEnvCellsForLandblock` tracks the disposables and rescans
+// lights), the default-script / animated-scenery attach. Until then the
+// landblock stays in `envCellBuildInFlight`, so `__interiorBuildPending`, the
+// skirt wait, the texture-upgrade pause and the watchdog read "building" as
+// before. Evicted / parked / superseded between the walls and the statics
+// (the generation token no longer matches): the walls leave the scene, the
+// registry (only entries still pointing at them) and a park stash, every
+// geometry this build made is disposed, nothing more attaches, and the result
+// is `evictedDuringBuild` — today's end state. The NEXT build of that
+// landblock, at its own walls attach, detaches an older build's walls an
+// unpark re-registered and drops any still in the park stash (so a later
+// unpark cannot re-register them over its own). A Step C fetch failure keeps
+// the walls and reports the statics exactly as before (warned, counted
+// `skippedNoMesh`, LB marked built); an unexpected throw after the walls
+// attached removes them again and rethrows (today's "build failed, nothing
+// attached, retried" semantics). Builds without cell statics keep the
+// single-stage path. Counters: `window.__interiorWallsFirst`.
+const INTERIOR_WALLS_FIRST = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.location?.search || "").get("interiorWallsFirst");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+
+/** `?interiorWallsFirst` counters (also `window.__interiorWallsFirst`). */
+const _interiorWallsFirstStats = {
+  builds: 0, // builds that attached their walls before Step C settled
+  wallsAttached: 0, // cell containers attached that way (sum)
+  staticsAttached: 0, // of those builds, the ones whose statics then joined the walls
+  cancelled: 0, // evicted / parked / superseded between the walls and the statics
+  rolledBack: 0, // a throw after the walls attached: walls removed, error rethrown
+  stashDropped: 0, // walls-only containers taken back out of a park stash
+  staleStashDropped: 0, // an older build's walls taken out of a park stash at this build's walls attach
+  replaced: 0, // a stale container of the same cell detached at the walls attach
+  lastWallsMs: null, // build start → walls attached (last build)
+  lastStaticsMs: null, // build start → statics attached (last build)
+};
+try {
+  if (typeof window !== "undefined") window.__interiorWallsFirst = _interiorWallsFirstStats;
+} catch (_) { /* fail-soft */ }
+
+/**
+ * `?interiorWallsFirst` cancel: a park between the walls and the statics
+ * stashed this build's walls-only containers in the LRU's pool record
+ * (landblock_lru.js `park` ④, `p.cells` = [cellId, container] pairs). Take
+ * them back out so `unpark` cannot re-register containers whose geometry was
+ * disposed and whose landblock was never marked built (the rebuild on return
+ * would orphan them). Also called by a NEWER build at its walls attach to
+ * drop an older build's stashed walls (`drop` = "not mine"): an unpark after
+ * that attach would otherwise re-register them over the newer build's
+ * containers, and the older build's cancel would then delete those registry
+ * entries — the newer build's walls orphaned in cellsGroup, the landblock
+ * built with its cells unregistered. Removes the pairs whose container
+ * `drop(container)` accepts. Returns the number dropped.
+ */
+function _dropCellsFromParkStash(scene3d, lbKey, drop) {
+  try {
+    const pool = scene3d?.landblockLru?.parkPool;
+    const p = pool && typeof pool.get === "function" ? pool.get(lbKey >>> 0) : null;
+    if (!p || !Array.isArray(p.cells) || p.cells.length === 0) return 0;
+    const kept = p.cells.filter((pair) => !(Array.isArray(pair) && drop(pair[1])));
+    const n = p.cells.length - kept.length;
+    if (n > 0) p.cells = kept;
+    return n;
+  } catch (_) {
+    return 0;
+  }
+}
+
 // Step 1b (2026-07-08) — sealed-dungeon outdoor cull. Default ON;
 // `?sealedCull=off` (or `0`/`false`) restores the Phase 5 unconditional
 // "outdoor groups always visible indoors" behaviour. When ON,
@@ -1322,9 +1636,24 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // in-flight marker. A number that is never reissued cannot alias.
   const buildGen = ++_envCellBuildSeq;
   scene3d.envCellBuildGen.set(lbKey, buildGen);
+  // `?interiorWallsFirst` timing base (console + counters only).
+  const buildT0 = _earlyBakeNowMs();
+  // `?interiorEarlyBake` kick handle (null when off / not the player's LB /
+  // stale pkg); released in the `finally` so nothing posts after the build.
+  let earlyBake = null;
   try {
 
-  const placements = await wasmExports.fetchEnvCellsInLandblock(lbKey);
+  // `?interiorEarlyBake`: the deps call starts in the SAME turn as the build's
+  // fetch, so their LandblockInfo and EnvCell rounds share every request.
+  earlyBake = startInteriorEarlyBake(scene3d, lbKey, wasmExports, mmFetch, spFetch);
+  // `?interiorBuildShare` (registry from app/landblock_stream.js): join an
+  // in-flight build of this LB instead of running a second one. This build is
+  // the READER — Pass 1 drains + frees the handles; a joined observer never
+  // touches them. No registry (capture pages, unit tests) = the direct call.
+  const interiorShare = globalThis.__hbInteriorBuildShare;
+  const placements = await (typeof interiorShare?.fetch === "function"
+    ? interiorShare.fetch(lbKey, wasmExports.fetchEnvCellsInLandblock, { who: "cells", reads: true, thisArg: wasmExports })
+    : wasmExports.fetchEnvCellsInLandblock(lbKey));
   // geom-audit: one bounded breadcrumb per interior LB build so a
   // stalled/failed interior is diagnosable from the console (the
   // 2026-07-02 grocer bug ran for whole sessions with zero evidence).
@@ -1483,10 +1812,19 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     uniqueStaticDids.size > 0 && typeof wasmExports.fetch_model_meshes === "function"
       ? [...uniqueStaticDids]
       : null;
+  // `?interiorEarlyBake`: decide here, before Step B, whether this build joins
+  // the early work. Deps still pending (they share the build's first two
+  // rounds, so this should not happen) are abandoned, never awaited.
+  if (earlyBake && earlyBake.state === "pending") {
+    _interiorEarlyBakeStats.abandoned += 1;
+    releaseEarlyInteriorBake(earlyBake);
+  }
+  const staticsJoined = earlyBake ? joinEarlyInteriorStatics(earlyBake, staticIds, mmFetch) : null;
   const staticMeshesEarly =
-    ENVCELL_STATICS_OVERLAP && staticIds
+    staticsJoined ??
+    (ENVCELL_STATICS_OVERLAP && staticIds
       ? mmFetch(new Uint32Array(staticIds)).then((v) => ({ v }), (e) => ({ e }))
-      : null;
+      : null);
 
   // ---- Step B: preload all referenced cell-mesh surface DIDs --------
   if (allCellSurfaceDids.size > 0) {
@@ -1515,6 +1853,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // geom-audit: every dropped stab DID with its reason — surfaced in the
   // per-build warn below + stamped for __diag.geometry.audit().
   const droppedStaticDids = [];
+  // `?interiorWallsFirst`: Step C as one closure (body unchanged, indentation
+  // left as-is to keep the diff reviewable) so it can run beside Step D's
+  // walls. OFF, or no cell statics to fetch: awaited right here, as before.
+  const runStepC = async () => {
   if (staticIds) {
     const ids = staticIds;
     let staticMeshes;
@@ -1637,6 +1979,16 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           .join(" ")
     );
   }
+  };
+  // `?interiorWallsFirst`: only a build with statics to wait for splits.
+  // Settled into a plain object so a throw cannot surface as an unhandled
+  // rejection while the walls are built; stage 2 rethrows it.
+  const wallsFirst = INTERIOR_WALLS_FIRST && staticIds !== null;
+  const stepCSettled = wallsFirst
+    ? runStepC().then(() => ({ ok: true }), (e) => ({ ok: false, e }))
+    : null;
+  // OFF: awaited here, as before (with no statics Step C is a no-op: skipped).
+  if (!wallsFirst && staticIds) await runStepC();
 
   // ---- Step D: instantiate each cell from snapshots -----------------
   // ST9 (ENVCELL-POOL-SWAP) — RELEASE BEFORE RE-FEED. This LB may already own
@@ -1677,6 +2029,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // world-frame animated builder so banners/flags wave indoors too.
   const animatedInteriorStatics = [];
   const animSceneryOn = animSceneryEnabled();
+  // `?interiorWallsFirst`: one statics closure per cell, parallel to newCells.
+  const deferredCellStatics = [];
   let _chunkStart = performance.now();
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
@@ -1871,6 +2225,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     }
     cellContainer.add(meshGroup);
 
+    // `?interiorWallsFirst`: this cell's statics as one closure (body
+    // unchanged, indentation left as-is). `target` receives the prop meshes —
+    // the container itself (OFF: called right here, exactly as before), or
+    // a detached staging group the walls-first stage moves into the live
+    // container once Step C has settled. The geom-audit stamps and
+    // `mergedStatics` always land on the container's userData.
+    const addCellStatics = (target, cellsShadow) => {
     for (const so of snap.staticSnaps) {
       // Collect scripted interior props for the ambient particle chain
       // (independent of geometry — a script-only static still emits).
@@ -1935,7 +2296,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         modelId: so.did,
         isCellStatic: true,
       };
-      cellContainer.add(m);
+      target.add(m);
       staticObjectCount += 1;
     }
 
@@ -1944,7 +2305,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // working). The merged buffers are per-cell copies: dispose them with the landblock.
     if (cellStaticMergeEnabled()) {
       try {
-        const r = mergeCellStatics(THREE, cellContainer, { shadow: cellsShadow, canCastShadow: materialCanCastShadow });
+        const r = mergeCellStatics(THREE, target, { shadow: cellsShadow, canCastShadow: materialCanCastShadow });
         for (const g of r.geometries) lbDisposableGeometries.push(g);
         cellContainer.userData.mergedStatics = r.props;
         _cellStaticMergeStats.props += r.props;
@@ -1955,6 +2316,9 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         if (_cellStaticMergeStats.errors === 1) console.warn("[cellStaticMerge] merge failed (props stay unmerged):", e);
       }
     }
+    };
+    if (wallsFirst) deferredCellStatics.push(addCellStatics);
+    else addCellStatics(cellContainer, cellsShadow);
 
     // Cells default to hidden; the visibility tick flips `.visible`
     // once the player enters one. Keeping them hidden by default
@@ -2035,6 +2399,17 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // go with them — otherwise an LB that was evicted mid-build leaves interior
     // geometry in a pool that no container, and no later rebuild, accounts for.
     releasePooledCellsForLb(lbKey);
+    // `?interiorWallsFirst`: Step C may still be running (nothing attached
+    // yet). Whatever geometry it adds after this point goes the same way.
+    if (stepCSettled) {
+      const disposedUpTo = lbDisposableGeometries.length;
+      stepCSettled.then(() => {
+        for (let i = disposedUpTo; i < lbDisposableGeometries.length; i += 1) {
+          const g = lbDisposableGeometries[i];
+          try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
+        }
+      });
+    }
     return {
       landblockId: lbKey,
       cellCount: 0,
@@ -2049,6 +2424,18 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
 
   for (const { container, cellId } of newCells) {
     container.traverse((o) => o.layers.set(1));
+    // `?interiorWallsFirst`: a cell can still be registered to a stale
+    // container here — the walls of an earlier walls-first build that a park
+    // stashed and an unpark re-attached before that build noticed its cancel.
+    // Detach it so it cannot stay drawn outside the registry; its own build
+    // disposes its geometry when it sees the cancel.
+    if (wallsFirst) {
+      const prev = scene3d.cellContainers3d.get(cellId);
+      if (prev && prev !== container && prev.parent) {
+        prev.parent.remove(prev);
+        _interiorWallsFirstStats.replaced += 1;
+      }
+    }
     scene3d.cellsGroup.add(container);
     scene3d.cellContainers3d.set(cellId, container);
     // Step 1 perf (2026-07-08) — freeze the static interior's matrices. The
@@ -2063,6 +2450,125 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       container.updateWorldMatrix(true, true);
       container.matrixWorldAutoUpdate = false;
     }
+  }
+
+  // ---- `?interiorWallsFirst` stage 2: the statics join the live walls ----
+  // The walls are attached and registered; the landblock is NOT built yet
+  // (no `envCellLoadedLbs`, still in `envCellBuildInFlight`, no result).
+  if (wallsFirst) {
+    const ownWalls = new Set(newCells.map(({ container }) => container));
+    // This build holds the current generation token, so the landblock was not
+    // built when it started (a built one short-circuits to unpark) and any
+    // cells of it still in a park stash are an older build's walls-only
+    // containers (park cancelled that build). Drop them NOW: an unpark after
+    // this attach would re-register them over these walls, and the older
+    // build's cancel would then delete those registry entries — these walls
+    // orphaned in cellsGroup and the landblock built with its cells
+    // unregistered (an unpark BEFORE this attach is the `replaced` case above).
+    _interiorWallsFirstStats.staleStashDropped +=
+      _dropCellsFromParkStash(scene3d, lbKey, (c) => !ownWalls.has(c));
+    const lbHex = `0x${lbKey.toString(16).padStart(8, "0")}`;
+    const wallsMs = Math.round(_earlyBakeNowMs() - buildT0);
+    _interiorWallsFirstStats.builds += 1;
+    _interiorWallsFirstStats.wallsAttached += newCells.length;
+    _interiorWallsFirstStats.lastWallsMs = wallsMs;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[interiorWallsFirst] envcells ${lbHex}: ${newCells.length} cells attached after ${wallsMs} ms ` +
+        `— ${staticIds.length} static models still to come`
+    );
+    // Take THIS build's walls back out of everywhere they can be — the scene,
+    // the registry (only entries still pointing at them: a newer build's stay)
+    // and a park stash — and dispose every geometry this build made. Pools:
+    // a newer build released (and may have re-fed) this LB at its Step D.
+    const dropOwnWalls = () => {
+      for (const { container, cellId } of newCells) {
+        if (scene3d.cellContainers3d.get(cellId) === container) scene3d.cellContainers3d.delete(cellId);
+        if (container.parent) container.parent.remove(container);
+      }
+      _interiorWallsFirstStats.stashDropped +=
+        _dropCellsFromParkStash(scene3d, lbKey, (c) => ownWalls.has(c));
+      for (const g of lbDisposableGeometries) {
+        try { if (g && typeof g.dispose === "function") g.dispose(); } catch (_) {}
+      }
+      const gen = scene3d.envCellBuildGen.get(lbKey);
+      if (gen === undefined || gen === buildGen) releasePooledCellsForLb(lbKey);
+    };
+    // Evicted / parked / superseded since the walls attached: today's result.
+    const cancelled = () => {
+      dropOwnWalls();
+      _interiorWallsFirstStats.cancelled += 1;
+      // eslint-disable-next-line no-console
+      console.log(`[interiorWallsFirst] envcells ${lbHex}: evicted or parked before the statics landed — walls removed`);
+      return {
+        landblockId: lbKey,
+        cellCount: 0,
+        surfaceCount: allCellSurfaceDids.size,
+        staticObjectCount: 0,
+        skippedZeroTri,
+        skippedNoMesh,
+        evictedDuringBuild: true,
+        wallsFirst: true,
+        disposables: { geometries: [], materials: [], textures: [] },
+      };
+    };
+    try {
+      const sc = await stepCSettled;
+      if (!sc.ok) throw sc.e;
+      if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) return cancelled();
+      // Step D's statics half, per cell, into a detached staging group (same
+      // identity frame as the container: props are world-frame children).
+      const staged = [];
+      const shadowNow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
+      let _chunkStartStatics = performance.now();
+      for (let i = 0; i < newCells.length; i += 1) {
+        const { container, cellId } = newCells[i];
+        const staging = new THREE.Group();
+        staging.userData = { cellId };
+        deferredCellStatics[i](staging, shadowNow);
+        if (staging.children.length > 0) staged.push({ container, staging });
+        if (envcellTimeSlice && (performance.now() - _chunkStartStatics) > ENVCELL_BUILD_BUDGET_MS) {
+          await frameWorkW6Yield("cellsBuild", performance.now() - _chunkStartStatics);
+          _chunkStartStatics = performance.now();
+        }
+      }
+      // Prewarm the props before they reach a live (possibly visible) cell.
+      if (staged.length > 0 && renderer && camera && typeof renderer.compile === "function") {
+        const tempParent = new THREE.Group();
+        for (const { staging } of staged) tempParent.add(staging);
+        try {
+          await guardedCompileAsync(renderer, tempParent, camera, scene3d.scene);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("[envcell-compileAsync] statics failed (they will lazy-compile on first render):", e);
+        }
+      }
+      if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) return cancelled();
+      // Into the live containers, as the attach above would have left them:
+      // the container's current layer mask (1, or the `?portalStencil` cell
+      // layer) and, under FREEZE_STATIC_MATRIX, a one-shot world matrix from
+      // the container's frozen one.
+      for (const { container, staging } of staged) {
+        const mask = container.layers.mask;
+        for (const child of staging.children.slice()) {
+          child.traverse((o) => { o.layers.mask = mask; });
+          container.add(child);
+          if (FREEZE_STATIC_MATRIX) child.updateWorldMatrix(false, true);
+        }
+      }
+    } catch (e) {
+      dropOwnWalls();
+      _interiorWallsFirstStats.rolledBack += 1;
+      throw e;
+    }
+    const staticsMs = Math.round(_earlyBakeNowMs() - buildT0);
+    _interiorWallsFirstStats.staticsAttached += 1;
+    _interiorWallsFirstStats.lastStaticsMs = staticsMs;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[interiorWallsFirst] envcells ${lbHex}: ${staticObjectCount} statics attached after ${staticsMs} ms ` +
+        `(+${staticsMs - wallsMs} ms after the walls)`
+    );
   }
   // geom-audit: build reached attach — NOW the LB counts as loaded.
   scene3d.envCellLoadedLbs.add(lbKey);
@@ -2161,6 +2667,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     fusedEnabled: envcellFusion,
     fusedCellsWithTransparent: envcellFusion ? fusedCellsWithTransparent : 0,
     fusedCellsOpaqueOnly: envcellFusion ? fusedCellsOpaqueOnly : 0,
+    // `?interiorWallsFirst`: present (true) only when the walls went first.
+    ...(wallsFirst ? { wallsFirst: true } : null),
     // LRU wave H4 — per-LB owned BufferGeometries (cell surface meshes +
     // optional fused meshes + cell-static fused meshes). All materials and
     // textures stay shared via materialCache, so those arrays are empty.
@@ -2178,6 +2686,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // of wedging the LB. Gen-guarded: if an evict cleared the marker and a
   // NEWER build re-set it, this stale build must not clear the newer one's.
   } finally {
+    // `?interiorEarlyBake`: post nothing after the build; free unclaimed meshes.
+    releaseEarlyInteriorBake(earlyBake);
     if (scene3d.envCellBuildGen?.get(lbKey) === buildGen) {
       scene3d.envCellBuildInFlight.delete(lbKey);
     }

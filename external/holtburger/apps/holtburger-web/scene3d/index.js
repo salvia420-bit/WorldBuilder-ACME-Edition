@@ -114,7 +114,7 @@ if (texCensusEnabled()) {
   console.log("[texCensus] ?texCensus=on — tracing textures weakly from module import");
 }
 import { tickPerFrame, installSharedDrainHook, noteLocalPlayerLandblockForSpawnFlush } from "./loop.js";
-import { portalSpaceOwnsFrame, renderPortalSpaceFrame, renderPortalSpaceOverlay } from "./portal_space.js";
+import { portalSpaceOwnsFrame, renderPortalSpaceFrame, renderPortalSpaceOverlay, portalSpaceFrameIntervalMs } from "./portal_space.js";
 // ST8 stage A (?frameWork, SPEC §3 T21 / pass-08 D-08.2) — the post-render
 // stream slot (P4) + the ?framePhase census instrument. Flag OFF: every call
 // below is a guarded no-op and the legacy task placement is byte-identical.
@@ -2343,13 +2343,19 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // where the adaptive-res fence belongs (null unless the controller runs).
     adaptiveGpuProbe?.frameEnd();
     if (renderOnDemand) return;
-    if (_frameIntervalMs > 0) {
+    // ?portalSpaceFps (2026-10-09, default 30): while the portal tunnel owns
+    // the frame (login or teleport) the loop paces to max(?targetFps interval,
+    // 1000/N); tickPerFrame (net pump, cell visibility/PVS, interior builds)
+    // keeps running at that rate, the freed main thread goes to the loads.
+    // Returns _frameIntervalMs unchanged otherwise (and for `=off`).
+    const _ivl = portalSpaceFrameIntervalMs(_frameIntervalMs);
+    if (_ivl > 0) {
       const now = (typeof performance !== "undefined" && performance.now)
         ? performance.now() : Date.now();
       // F3: budget charged against THIS frame's start (`lastFrameTs`, stamped
       // at the top of tick), so period → _frameIntervalMs exactly. Charging it
       // against the previous scheduleNext double-counted the sleep.
-      const delay = pacerDelayMs(_frameIntervalMs, lastFrameTs, now);
+      const delay = pacerDelayMs(_ivl, lastFrameTs, now);
       if (delay > 0) {
         _schedTimeoutId = setTimeout(() => {
           _schedTimeoutId = null;

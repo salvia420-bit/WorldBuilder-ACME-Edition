@@ -38,7 +38,9 @@ every byte counted by a laptop-side relay.
 | `shot.mjs out.png [dom\|3d] [selector]` | DOM screenshot (HUD; element clip with a selector) or the 3D frame (`toDataURL` inside the render) |
 | `click.mjs 'selector' [dbl]` | real mouse click |
 | `academy.mjs --label X [--flags a=b] [--profile] [--linkmap]` | fresh-profile spawn of the account's first character (the academy one) with the EnvCell build polled every 2 s + page/bake-worker resource timing + console breadcrumbs → `acad-<label>.json`. `--profile`: main-thread CPU profile → `acad-<label>.cpuprofile`. `--linkmap`: time blocked per GL program (a synchronous driver link shows as the first query on it), named via `renderer.info.programs` → `sum.linkmap` (how the 4,963 ms `far-terrain-bake` link was found) |
-| `wizwarm.mjs <label> <dwellMs> [name]` | on the character screen: Create Character → dwell in the wizard (the academy loads behind it) → × → select → ENTER → time to the academy's cells |
+| `academy.mjs … --linkmap` (2026-10-09 additions) / `--progdump` / `--shots 5,10` | per program also `msInRender` / `msInCompile` (blocked inside `renderer.render` / `.compile`), the full `key` + `usedTimes`, and for every single query over 50 ms the draw in flight (scene, material, object, target, camera layer mask, material vs props version, the `?asyncLink` slow-path state) plus a 60-frame stack (`slow`); programs that blocked >100 ms in render get a sibling key diff decoded per three r184 axis (`sum.linkmapSiblings`, `LINKHOT` lines). `--progdump`: every live program [name, key, usedTimes] + `__asyncLink.stats`, `__texWorkerStats()`, `__xu7Stats()`, `__portalSpace` → `progdump`. `--shots`: 3D JPGs N s after in-world (not on timing arms: 20-60 ms each). Rows carry `ps` (portal space `state:reason[:login]`); the run ends 6 s after textures-done AND the login tunnel's end (15 s ceiling); summary adds `tunnelStart/Ready/Reveal/Done` (run clock, anchored on a page-now/laptop-now pair taken together, so no laptop↔1070 clock skew), `loginMode`, `loginSkip`, `loginStarts`, `wallsVisible` = max(texturesDone, tunnelReveal), and `pageClockSkewMs` (1070 wall clock − laptop, ± RTT/2: the skew that DOES apply to the timeOrigin-based `--fetchmap` / `--longtasks` / `ltattr.mjs` times) |
+| `ltattr.mjs acad-<label>.json [acad-<label>.cpuprofile] [--from S --to S --min MS]` | names the long tasks of an `academy.mjs --longtasks --profile` run: per task (run clock) the top self-time frames inside its window and the outermost app entry chain, then the self-time totals |
+| `wizwarm.mjs <label> <dwellMs> [name]` | on the character screen: Create Character → dwell in the wizard (the academy loads behind it) → × → select → ENTER → time to the academy's cells. Since 2026-10-09 also samples `__portalSpace` (`ps`, `psSkip`) and reports `loginSkip` (`resident` = the warm path ran no tunnel) and `enterToTunnelRevealMs` / `enterToTunnelDoneMs` (page clock) when a login tunnel ran |
 | `academy.mjs … --fetchmap` / `--longtasks` | per `/shards/` request: `fetch()` call time and body-in-JS time vs the network's `responseEnd` (the gap = main-thread delivery delay); every task over 50 ms. Both land in `acad-<label>.json` |
 | `townnet.mjs <label> [--from Holtburg] [--to TownNetwork] [--shots 5,15,30]` | on a live `sess.mjs` page: `@telepoi <from>`, wait until settled, `@telepoi <to>`, then per second: interior builds, cell meshes, pending surfaces, outdoor terrain/far ring, entities, particles, bake-worker queue, depth split, bytes; 3D JPGs at the `--shots`; downloads since the teleport by class (`NET` lines) → `townnet-<label>.json` |
 | `enterchar.mjs "<Name>"` | on the character screen (`sess.mjs boot --spawn select`): select that exact row ("+" admin prefix ignored), ENTER, wait for in-world. (`autoSpawn=<Name>` errors; `autoSpawn=first` takes the MOST RECENTLY PLAYED character) |
@@ -72,3 +74,14 @@ section to map `wasm-function[N]` to a symbol (how the height_seam hotspot was f
   for ACE's drop or use a build with `SessionHandle.disconnect()` (2026-10-09).
 - Every page logs 512 `glBlitFramebuffer: Depth/stencil buffer format combination not allowed for
   blit` WebGL errors (capped): pre-existing, all sessions.
+- Login portal space (`?loginPortalSpace`, default `quick`, 2026-10-09): a cold login now shows the
+  portal tunnel until the spawn cell is built, so "in-world" (and `sess.mjs`'s "in-world with
+  terrain") can come while the world is still hidden. Screenshot / fps / combat-mode scripts gate on
+  `window.__isPortalSpaceActive() === false` (`sess.mjs` prints it); `agent=1`, `bot=1`,
+  `nullRender=1`, `renderOnDemand=1`, `wireframe` and `?loginPortalSpace=off` skip the login tunnel.
+  The rig Chrome must stay muted: the tunnel plays the retail enter / exit whooshes.
+
+- Since `?interiorWallsFirst` (2026-10-09) an interior's walls attach before its landblock is marked built:
+  `townnet.mjs`'s `firstCells` now means "statics in"; the walls time is `wallsAttached` (the build's
+  `[interiorWallsFirst] … cells attached` console line). `academy.mjs` rows show walls as `kids > 0`; its
+  `texturesDone` now waits for the statics' surfaces too.

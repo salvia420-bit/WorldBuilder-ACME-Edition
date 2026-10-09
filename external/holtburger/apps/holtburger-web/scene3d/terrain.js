@@ -37,6 +37,7 @@ import {
   buildRoadCanvasFromTile,
   buildTerrainDetailArrayBytes,
   buildAlphaMaskArrayBytes,
+  buildAlphaMaskArrayBytesAsync,
   getAdapterMaxAnisotropy,
   loadPbrTerrainAtlasSet,
   applyPbrColorOverrides,
@@ -4603,7 +4604,15 @@ export async function resolveTerrainRingOpts(
       if (typeof bundle.free === "function") bundle.free();
       // [corner0..3, side0, road0..2] — matches alpha_index conventions.
       const ordered = [...corner, ...side, ...road];
-      const built = buildAlphaMaskArrayBytes(ordered);
+      // ?alphaMaskSlice (default on): one layer per task instead of one
+      // ~273 ms task (1070, inside the academy record walk). Byte-identical.
+      const sliceStats = { sliced: readAlphaMaskSliceFlag(), layersMs: [], wallMs: 0 };
+      const sliceT0 = performance.now();
+      const built = sliceStats.sliced
+        ? await buildAlphaMaskArrayBytesAsync(ordered, { onLayer: (i, ms) => { sliceStats.layersMs[i] = Math.round(ms * 10) / 10; } })
+        : buildAlphaMaskArrayBytes(ordered);
+      sliceStats.wallMs = Math.round(performance.now() - sliceT0);
+      try { globalThis.__alphaMaskSliceStats = sliceStats; } catch (_) {}
       const tex = new THREE.DataArrayTexture(
         built.alphaArrayBytes,
         built.tileSize,
@@ -5275,6 +5284,18 @@ function readRoadPaintLegacyFlag() {
     return typeof v === "string" && v.toLowerCase() === "legacy";
   } catch (_) {
     return false;
+  }
+}
+
+// `?alphaMaskSlice` (2026-10-09, default on, `off|0|false|no` escape): build
+// the TexMerge alpha-mask array one layer per task (adapter.js
+// buildAlphaMaskArrayBytesAsync). Diag `__alphaMaskSliceStats`.
+function readAlphaMaskSliceFlag() {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("alphaMaskSlice") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
   }
 }
 

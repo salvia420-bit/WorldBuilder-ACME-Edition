@@ -34,4 +34,7 @@ for (let i = 0; i < 180 && !ok; i++) {
   if (!ok) await sleep(1000);
 }
 console.log(ok ? (selectMode ? "character screen up" : "in-world with terrain") : "boot NOT ready", JSON.stringify(await pg.evaluate(() => (window.__bootStateHistory || []).map((h) => h.state)).catch(() => null)));
+// Login portal space (2026-10-09, default on): "in-world with terrain" can come while the login
+// tunnel still owns the screen — eye tests should gate on __isPortalSpaceActive() === false.
+console.log("portalSpace", JSON.stringify(await pg.evaluate(() => { const P = window.__portalSpace; return { active: !!window.__isPortalSpaceActive?.(), state: P?.state ?? null, reason: P?.reason ?? null, login: P?.login ?? null, loginSkip: P?.loginSkip ?? null }; }).catch(() => null)));
 process.exit(ok ? 0 : 1);

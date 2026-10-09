@@ -18,6 +18,10 @@
 // main thread's wasm instance, so worker-routed requests are SPLIT — alias
 // DIDs decode on the main-thread wasm, real DIDs in the worker — and the
 // results stitched back in input order (`?aliasSplit=0` reverts).
+//
+// `?bakeSurfaceCoalesce` (2026-10-09): queued `fetchSurfacesPixels` requests of
+// one lane and urgency ride in ONE worker message and the reply is split back
+// per caller (see the block above `laneForBakeMessage`; `=off` reverts).
 
 import {
   applySurfaceAudit,
@@ -380,6 +384,31 @@ export function applyDecodeAdmission(g = globalThis) {
   return cfg;
 }
 
+// `?packWorkerFetchShare` (2026-10-09, cold-load A2 (a)) — default ON;
+// `off`/`0`/`false`/`no` restores the plain D-03.10 split.
+//
+// When `?packSource` arms on an unauthored page, index.html (D-03.10) sets the
+// page total to 8 so the legacy per-record lane sits under the pack
+// controller's cap, and marks it with `__hbFetchConcurrencyPackCapped`. The
+// quarter share then left the bake worker 2 permits (8 without packs) and the
+// main thread 6 (24). But only the MAIN instance has the pack seam
+// (`pack_source_init`): the worker still fetches every record it decodes one
+// request at a time, and its normal-lane jobs (ring statics, buildings,
+// entity surfaces) ran their rounds through 2 permits while holding the bake
+// queue's slots — the Step B delay measured under packs (packA1, 1070). ON:
+// under that marker the worker keeps its no-packs share (a quarter of the
+// default 32 = 8); the main thread keeps D-03.10's 6. Inert without the marker
+// (packs off, a legacy dist, or an authored `__hbFetchConcurrency[Total]`) and
+// with the worker off.
+export function resolvePackWorkerFetchShare(search = "") {
+  try {
+    const v = new URLSearchParams(search || "").get("packWorkerFetchShare");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
 export function applyFetchConcurrencySplit(g = globalThis) {
   let total = DEFAULT_FETCH_CONCURRENCY;
   try {
@@ -395,14 +424,31 @@ export function applyFetchConcurrencySplit(g = globalThis) {
     workerActive = false;
   }
   // At least 1 for the worker when active, and never starve the main thread.
-  const worker = workerActive
+  let worker = workerActive
     ? Math.min(Math.max(1, Math.round(total * WORKER_FETCH_SHARE_FRACTION)), total - 1)
     : 0;
   const main = total - worker;
+  // `?packWorkerFetchShare` (A2 (a)): D-03.10's 8 is the MAIN instance's cap;
+  // the worker (no pack seam) keeps its no-packs share on top of it.
+  let packFloor = false;
+  let search = "";
+  try {
+    search = g.location?.search || "";
+  } catch (_) {
+    search = "";
+  }
+  if (workerActive && g.__hbFetchConcurrencyPackCapped === true && resolvePackWorkerFetchShare(search)) {
+    const noPacksShare = Math.round(DEFAULT_FETCH_CONCURRENCY * WORKER_FETCH_SHARE_FRACTION);
+    if (noPacksShare > worker) {
+      worker = noPacksShare;
+      total = main + worker;
+      packFloor = true;
+    }
+  }
   g.__hbFetchConcurrencyTotal = total;
   g.__hbFetchConcurrencyWorker = worker;
   g.__hbFetchConcurrency = main;
-  return { total, main, worker };
+  return { total, main, worker, packFloor };
 }
 
 // R-1 alias split (2026-07-09). `walk_setup_parts` (src/lib.rs) publishes
@@ -474,6 +520,70 @@ function queueCapFlag() {
     return Number.isFinite(v) && v >= 1 ? v : DEFAULT_BAKE_QUEUE_CAP;
   } catch (_) {
     return DEFAULT_BAKE_QUEUE_CAP;
+  }
+}
+
+// `?bakeUrgentReserve` (2026-10-09, cold-load A2 (b)) — one in-flight slot that
+// only lane 0 (init + urgent) may use, ON TOP of the cap.
+//
+// WHY. `_pump` posts lane 0 first, but only into a free slot: with the cap's
+// 4 slots held by long normal jobs, the player's own Step B/C (urgent, lane 0)
+// waited for one of them to finish. Measured under `?packSource` (packA1,
+// 1070): the worker's normal-lane jobs ran their per-record rounds through 2
+// fetch permits (D-03.10) while holding the 4 slots, and Step B started 16 s
+// after "placements fetched". The coalescing review (2026-10-09) flagged the
+// same wait on the default arm: a merged normal message (up to 64 DIDs) holds
+// its slot longer than a single-DID one did.
+//
+// WHAT. Normal lanes keep exactly today's rule (post while in flight < cap).
+// A lane-0 entry may also post while in flight >= cap as long as fewer than
+// `slots` lane-0 messages are in flight (default 1): the worker then runs at
+// most cap + slots messages, the extra ones urgent. A lane-0-only backlog
+// still runs at most max(cap, slots) at once, so urgent concurrency is never
+// above today's when nothing normal is in flight. With one slot, Step B (cell
+// surfaces) posts at once; Step C (statics' meshes, posted in the same turn
+// under `?interiorEarlyBake`) posts, ahead of every queued normal job, when
+// Step B's reply frees the reserve or in flight drops back below the cap
+// (two other replies), whichever comes first. The first normal reply alone
+// does not post it (in flight is back at the cap, the reserve is held — see
+// R3 in tests/bake_urgent_reserve.test.mjs); `2` gives each its own slot.
+//
+// SCOPE. Default `packs`: active only while the pack controller is armed
+// (`globalThis.__hbFetch.enabled`, i.e. `?packSource=on` against a dist with
+// a world index) — on the default arm the pump is today's, message for message
+// (pinned by tests/bake_urgent_reserve.test.mjs). `all` applies it on both arms
+// (for an A/B on the default arm; the coalescing interplay — an urgent request
+// posted alone into the reserve instead of merged with later urgent ones — is
+// why it is not the default there).
+//
+// Grammar: absent / `on` / anything unrecognised → `packs`, 1 slot; an
+// integer N ≥ 1 → `packs`, N slots; `all` / `all:N` → both arms, 1 / N slots;
+// `off`/`0`/`false`/`no` → off (today's pump).
+export const DEFAULT_BAKE_URGENT_RESERVE_SLOTS = 1;
+
+/** Parse one `?bakeUrgentReserve=` token into `{mode: "off"|"packs"|"all", slots}`. */
+export function parseBakeUrgentReserve(raw) {
+  const dflt = { mode: "packs", slots: DEFAULT_BAKE_URGENT_RESERVE_SLOTS };
+  if (raw === null || raw === undefined) return dflt;
+  const s = String(raw).trim().toLowerCase();
+  const all = /^all(?:[: ](\d+))?$/.exec(s);
+  if (all) {
+    const n = all[1] === undefined ? DEFAULT_BAKE_URGENT_RESERVE_SLOTS : Number(all[1]);
+    return { mode: "all", slots: n >= 1 ? n : DEFAULT_BAKE_URGENT_RESERVE_SLOTS };
+  }
+  if (/^\d+$/.test(s) && Number(s) >= 1) return { mode: "packs", slots: Number(s) };
+  // The off check sits last (disjoint from the two forms above; "0" fails
+  // the >= 1 test) so it stays within 10 lines of the `.get()` below.
+  if (s === "off" || s === "0" || s === "false" || s === "no") return { mode: "off", slots: 0 };
+  return dflt;
+}
+
+/** Resolve `?bakeUrgentReserve=` from a query string. Pure; touches no globals. */
+export function resolveBakeUrgentReserve(search = "") {
+  try {
+    return parseBakeUrgentReserve(new URLSearchParams(search || "").get("bakeUrgentReserve"));
+  } catch (_) {
+    return parseBakeUrgentReserve(null);
   }
 }
 
@@ -695,6 +805,125 @@ function concatEntitySurfaceBatches(parts) {
   return merged;
 }
 
+// `?bakeSurfaceCoalesce` (2026-10-09, cold-load structural pass) — merge QUEUED
+// `fetchSurfacesPixels` requests into one worker message.
+//
+// WHY. `MaterialCache.get(did)` (materials.js) asks for ONE surface per call,
+// and every caller of `surfacePixelsFetcher` became one worker message. On the
+// 1070 (Town Network first entry) ~113 of those single-DID messages sat in
+// lane 1 behind the in-flight cap of 4 and drained at ~30/s (3.2 → 9.4 s), each
+// running its own Surface → SurfaceTexture → RenderSurface → Palette discovery
+// rounds in the worker, while the interior's walls waited on them (an urgent
+// `materialCache.preload` awaits any DID another caller already has in flight).
+//
+// WHAT. When `_pump` dispatches a `fetchSurfacesPixels` and other
+// `fetchSurfacesPixels` requests are QUEUED (not yet posted) in the SAME lane
+// with the SAME urgency, it folds them into the one message it is about to post:
+// DIDs deduped in first-seen order, requests taken in FIFO order until the
+// next one would push the merged list past the DID cap (never skipping past
+// it; requests of other types in the lane are left where they are). The
+// reply is split back to each caller by index, so each `_request` promise
+// resolves with a reply shaped exactly like a single-request reply. Nothing
+// waits: the merge only looks at what is already queued when a slot frees, so
+// a request with nothing queued behind it is posted at once with its original
+// body (no timers, no added latency).
+//
+// Per-caller contract:
+//   - results: a DID asked for by two callers (or twice by one) is decoded once;
+//     its first asker gets the transferred payload, every other asker a DEEP
+//     copy (typed arrays sliced). Results are plain reconstructed objects (no
+//     `free()`), but `pixels` ends up in a `DataTexture` and may be transferred
+//     onwards, so two callers must never share a buffer.
+//   - `provenAbsent`: partitioned — each caller sees only its own DIDs.
+//   - `decodeMisses`: a CALL-level count of dependency keys that failed to load
+//     during the merged call's walk; the worker cannot attribute a failed key
+//     to the DID that needed it, so every caller inherits the merged total (an
+//     upper bound on its own). Over-reporting can only arm a retry; splitting it
+//     could hide a real miss. (No JS consumer reads it on `fetchSurfacesPixels`
+//     results today — the recovery ladders read the entity-surface calls,
+//     which are not merged.)
+//   - errors: a worker `error` reply, a malformed reply or a failed post
+//     rejects EVERY merged caller, so each takes its own main-thread fallback
+//     in `_fetchSurfacesPixelsOnce` (and `_noteMainThreadFallback` counts each
+//     caller, as it did when each had its own message).
+//
+// The cap is a DID count (default 64 = four of the wasm's 16-DID normal-lane
+// chunks): a merged message is one wasm call, whose `results` Vec holds every
+// decoded plane until it returns (the A16 rationale), and a backlog larger than
+// the cap still spreads over several messages the worker runs concurrently.
+// `?bakeBatchMax=N` lowers it to N. Only `fetchSurfacesPixels` merges:
+// `fetchEntitySurfacesPixels` carries per-call palette state (only identical
+// `(paletteId, subPalettes)` could merge, and no single-DID storm of them has
+// been measured), `fetchModelMeshes` callers already submit per-landblock
+// batches, and the entity batch is group-encoded.
+//
+// Grammar: absent / `on` / `1` → on with the default cap; `off`/`0`/`false`/`no`
+// → off (one message per request, as before); an integer ≥ 2 → on with that
+// DID cap. Inert under `?bakeQueue=off` (nothing queues) and `?bakeWorker=0`.
+const DEFAULT_SURFACE_COALESCE_MAX_DIDS = 64;
+
+/** Parse one `?bakeSurfaceCoalesce=` token into a DID cap (0 = off). */
+export function parseBakeSurfaceCoalesce(raw) {
+  if (raw === null || raw === undefined) return DEFAULT_SURFACE_COALESCE_MAX_DIDS;
+  const s = String(raw).trim().toLowerCase();
+  if (s === "off" || s === "0" || s === "false" || s === "no") return 0;
+  const n = Number(s);
+  if (s !== "" && Number.isFinite(n) && n >= 2) return Math.floor(n);
+  return DEFAULT_SURFACE_COALESCE_MAX_DIDS;
+}
+
+/** Resolve `?bakeSurfaceCoalesce=` from a query string. Pure; touches no globals. */
+export function resolveBakeSurfaceCoalesce(search = "") {
+  try {
+    const raw = new URLSearchParams(search || "").get("bakeSurfaceCoalesce");
+    return parseBakeSurfaceCoalesce(raw);
+  } catch (_) {
+    return DEFAULT_SURFACE_COALESCE_MAX_DIDS;
+  }
+}
+
+/** A queued entry `_pump` may merge: a plain `{dids, urgent}` surface request. */
+function isCoalescibleSurfaceEntry(e) {
+  if (!e || e.type !== "fetchSurfacesPixels" || !e.body || !Array.isArray(e.body.dids)) {
+    return false;
+  }
+  // A body with any other field would lose it in the merged message.
+  for (const k of Object.keys(e.body)) if (k !== "dids" && k !== "urgent") return false;
+  return true;
+}
+
+/**
+ * One caller's share of a merged call's decode audit (see the contract above):
+ * `provenAbsent` filtered to `dids`, `decodeMisses` the merged total. null in,
+ * null out (legacy wasm — the caller's result stays legacy-shaped, so
+ * materials.js never poisons from it). Exported for the unit suite.
+ */
+export function splitSurfaceAuditForCaller(audit, dids) {
+  if (!audit) return null;
+  const out = {};
+  if (typeof audit.decodeMisses === "number") out.decodeMisses = audit.decodeMisses;
+  if (Array.isArray(audit.provenAbsent)) {
+    const mine = new Set(Array.from(dids || [], (d) => d >>> 0));
+    out.provenAbsent = audit.provenAbsent.filter((s) => {
+      const v = typeof s === "string" ? parseInt(s, 16) : Number(s);
+      return Number.isFinite(v) && mine.has(v >>> 0);
+    });
+  }
+  return out.decodeMisses === undefined && out.provenAbsent === undefined ? null : out;
+}
+
+/** Deep copy of one `SurfacePixelsPayload` (fresh buffers) for a repeat asker. */
+function cloneSurfacePayload(p) {
+  if (!p || typeof p !== "object") return p;
+  const copy = (a) => (a && typeof a.slice === "function" ? a.slice() : a);
+  return {
+    ...p,
+    pixels: copy(p.pixels),
+    normalPixels: copy(p.normalPixels),
+    heightPixels: copy(p.heightPixels),
+  };
+}
+
 /** Dispatch lane for a worker message. Exported for the unit suite. */
 export function laneForBakeMessage(type, body) {
   if (type === "init") return 0;
@@ -744,6 +973,19 @@ export class BakeWorkerClient {
     this._queueCap = queueCapFlag();
     this._lanes = [[], [], []];
     this._inFlightPosted = 0;
+    // `?bakeUrgentReserve` (A2 (b)) — `{mode, slots}`; lane-0 messages in
+    // flight (ids posted from lane 0, merged posts by their head id).
+    this.urgentReserve = resolveBakeUrgentReserve(
+      (() => {
+        try {
+          return globalThis.location?.search || "";
+        } catch (_) {
+          return "";
+        }
+      })(),
+    );
+    this._inFlightLane0 = 0;
+    this._postedLane0 = new Set();
     // F1 (2026-08-03) — crash respawn backoff. `_failAll` used to drop a dead
     // worker with no cooldown, so a worker that fails at LOAD (the classic
     // stale-`pkg/` module-link error) was re-spawned once per bake — dozens of
@@ -755,13 +997,27 @@ export class BakeWorkerClient {
     this._workerRetryAtMs = 0;
     // A16 (2026-07-25) — `?bakeBatchMax=N`; 0 = uncapped (pre-A16 behaviour).
     this.batchMax = DEFAULT_BAKE_BATCH_MAX;
+    // `?bakeSurfaceCoalesce` — DID cap for merging queued surface requests
+    // (0 = off). Like `batchMax`, resolved by `configure()`: the production
+    // singleton is always configured (default ON), while a bare
+    // `new BakeWorkerClient()` keeps one message per request.
+    this.surfaceCoalesceMax = 0;
+    // Merged messages in flight: posted id (= the head request's id) →
+    // `{ members: [{id, dids}], dids }` (`dids` = the deduped list posted).
+    this._coalesced = new Map();
   }
 
   /**
-   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean, batchMax?:number}} [opts]
+   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean, batchMax?:number, surfaceCoalesce?:boolean|number}} [opts]
    */
   configure(opts = {}) {
     this.enabled = typeof opts.enabled === "boolean" ? opts.enabled : urlFlagEnabled();
+    this.surfaceCoalesceMax =
+      typeof opts.surfaceCoalesce === "boolean"
+        ? (opts.surfaceCoalesce ? DEFAULT_SURFACE_COALESCE_MAX_DIDS : 0)
+        : typeof opts.surfaceCoalesce === "number"
+          ? parseBakeSurfaceCoalesce(opts.surfaceCoalesce)
+          : resolveBakeSurfaceCoalesce(globalThis.location?.search || "");
     this.aliasSplit =
       typeof opts.aliasSplit === "boolean" ? opts.aliasSplit : aliasSplitFlagEnabled();
     this.batchMax =
@@ -914,9 +1170,7 @@ export class BakeWorkerClient {
     const done = (ok) => {
       try {
         const s = this._stats || (this._stats = { byType: {}, maxPending: 0 });
-        const b = s.byType[type] || (s.byType[type] = {
-          count: 0, failed: 0, totalMs: 0, maxMs: 0, totalDepth: 0, maxDepth: 0,
-        });
+        const b = this._typeStats(type);
         const dt = ((typeof performance !== "undefined") ? performance.now() : Date.now()) - t0;
         b.count += 1;
         if (!ok) b.failed += 1;
@@ -971,38 +1225,178 @@ export class BakeWorkerClient {
     });
   }
 
+  /** Per-type stats bucket (created on first use; shared by `done` and `_pump`). */
+  _typeStats(type) {
+    const s = this._stats || (this._stats = { byType: {}, maxPending: 0 });
+    return s.byType[type] || (s.byType[type] = {
+      count: 0, failed: 0, totalMs: 0, maxMs: 0, totalDepth: 0, maxDepth: 0, coalesced: 0,
+    });
+  }
+
+  /** `?bakeSurfaceCoalesce` DID cap in force (0 = off); `?bakeBatchMax` lowers it. */
+  _surfaceCoalesceCap() {
+    const cap = this.surfaceCoalesceMax > 0 ? this.surfaceCoalesceMax : 0;
+    if (cap > 0 && this.batchMax > 0) return Math.min(cap, this.batchMax);
+    return cap;
+  }
+
+  /**
+   * `?bakeSurfaceCoalesce`: take the `fetchSurfacesPixels` requests queued in
+   * `head`'s lane with `head`'s urgency, in FIFO order, until the next one would
+   * push the deduped DID list past the cap (stop there — never skip past a
+   * request that does not fit). Removes them from the lane and returns
+   * `[head, ...riders]`, or null when nothing merges (head posts unchanged).
+   */
+  _takeCoalescible(head) {
+    const cap = this._surfaceCoalesceCap();
+    if (!(cap > 0) || !isCoalescibleSurfaceEntry(head)) return null;
+    const lane = this._lanes[head.lane];
+    if (!lane || lane.length === 0) return null;
+    const seen = new Set();
+    for (const d of head.body.dids) seen.add(d >>> 0);
+    if (seen.size >= cap) return null;
+    const urgent = head.body.urgent === true;
+    const riders = [];
+    for (let i = 0; i < lane.length; ) {
+      const e = lane[i];
+      if (!isCoalescibleSurfaceEntry(e) || (e.body.urgent === true) !== urgent) {
+        i += 1;
+        continue;
+      }
+      const fresh = new Set();
+      for (const d of e.body.dids) {
+        const v = d >>> 0;
+        if (!seen.has(v)) fresh.add(v);
+      }
+      if (seen.size + fresh.size > cap) break;
+      for (const v of fresh) seen.add(v);
+      riders.push(e);
+      lane.splice(i, 1);
+    }
+    return riders.length ? [head, ...riders] : null;
+  }
+
+  /**
+   * `?bakeUrgentReserve`: may a lane-0 entry post although the cap is full?
+   * Open while fewer than `slots` lane-0 messages are in flight and the mode
+   * applies (`all`, or `packs` with the pack controller armed).
+   */
+  _urgentReserveOpen() {
+    const r = this.urgentReserve;
+    if (!r || !(r.slots > 0) || this._inFlightLane0 >= r.slots) return false;
+    if (r.mode === "all") return true;
+    if (r.mode !== "packs") return false;
+    try {
+      const f = globalThis.__hbFetch;
+      return !!(f && f.enabled === true);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** A posted message settled (reply, failed post): release its lane-0 count. */
+  _noteLane0Settled(id) {
+    if (this._postedLane0.delete(id)) {
+      this._inFlightLane0 = Math.max(0, this._inFlightLane0 - 1);
+    }
+  }
+
   /** Post queued messages urgent-lane-first while under the in-flight cap. */
   _pump() {
-    while (this._worker && this._inFlightPosted < this._queueCap) {
-      const entry =
-        this._lanes[0].shift() ?? this._lanes[1].shift() ?? this._lanes[2].shift();
+    while (this._worker) {
+      let entry;
+      let viaReserve = false;
+      if (this._inFlightPosted < this._queueCap) {
+        entry = this._lanes[0].shift() ?? this._lanes[1].shift() ?? this._lanes[2].shift();
+      } else if (this._lanes[0].length > 0 && this._urgentReserveOpen()) {
+        // `?bakeUrgentReserve`: the cap is full; lane 0 posts into its reserve.
+        entry = this._lanes[0].shift();
+        viaReserve = true;
+      }
       if (!entry) return;
       this._inFlightPosted += 1;
+      if (entry.lane === 0) {
+        this._inFlightLane0 += 1;
+        this._postedLane0.add(entry.id);
+      }
+      if (viaReserve) {
+        try {
+          const q = this._stats?.queue;
+          if (q) q.reservePosts = (q.reservePosts || 0) + 1;
+        } catch (_) { /* stats must never affect dispatch */ }
+      }
+      // `?bakeSurfaceCoalesce`: fold queued surface requests into this post.
+      const group = this._takeCoalescible(entry);
+      const members = group || [entry];
+      let msg;
+      if (group) {
+        const dids = [];
+        const seen = new Set();
+        let asked = 0;
+        for (const m of group) {
+          for (const d of m.body.dids) {
+            const v = d >>> 0;
+            asked += 1;
+            if (!seen.has(v)) {
+              seen.add(v);
+              dids.push(v);
+            }
+          }
+        }
+        // The merged message reuses the HEAD's id; `_onMessage` finds the
+        // group by it and settles every member's own `_pending` entry.
+        msg = { type: entry.type, id: entry.id, dids, urgent: entry.body.urgent === true };
+        this._coalesced.set(entry.id, {
+          members: group.map((m) => ({ id: m.id, dids: m.body.dids })),
+          dids,
+        });
+        try {
+          const q = this._stats?.queue;
+          if (q) {
+            q.coalesced = (q.coalesced || 0) + group.length - 1;
+            q.coalescedPosts = (q.coalescedPosts || 0) + 1;
+            q.coalescedDupDids = (q.coalescedDupDids || 0) + (asked - dids.length);
+            if (dids.length > (q.coalescedMaxDids || 0)) q.coalescedMaxDids = dids.length;
+          }
+          this._typeStats(entry.type).coalesced += group.length;
+        } catch (_) { /* stats must never affect dispatch */ }
+      } else {
+        msg = { type: entry.type, id: entry.id, ...entry.body };
+      }
       try {
         const q = this._stats?.queue;
         if (q) {
           const nowMs =
             (typeof performance !== "undefined") ? performance.now() : Date.now();
-          const qMs = nowMs - entry.tq;
-          const b = q.byLane[entry.lane];
+          // `posted` counts worker MESSAGES; `byLane` counts REQUESTS (each
+          // merged request's own queue wait is recorded).
           q.posted += 1;
-          b.count += 1;
-          b.totalQueueMs += qMs;
-          if (qMs > b.maxQueueMs) b.maxQueueMs = qMs;
+          for (const m of members) {
+            const qMs = nowMs - m.tq;
+            const b = q.byLane[m.lane];
+            b.count += 1;
+            b.totalQueueMs += qMs;
+            if (qMs > b.maxQueueMs) b.maxQueueMs = qMs;
+          }
         }
       } catch (_) { /* stats must never affect dispatch */ }
       try {
-        this._worker.postMessage({ type: entry.type, id: entry.id, ...entry.body });
+        this._worker.postMessage(msg);
       } catch (e) {
-        // F2: a dispatch failure settles THIS entry and keeps pumping. Letting
-        // it escape would land in whichever caller happened to drive the pump
-        // (`_request`'s executor, or `_onMessage`) and strand every other
-        // queued request — the same never-settles hazard by another route.
+        // F2: a dispatch failure settles THIS entry (every member of a merged
+        // post) and keeps pumping. Letting it escape would land in whichever
+        // caller happened to drive the pump (`_request`'s executor, or
+        // `_onMessage`) and strand every other queued request — the same
+        // never-settles hazard by another route.
         this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
-        const p = this._pending.get(entry.id);
-        if (p) {
-          this._pending.delete(entry.id);
-          p.reject(e);
+        this._noteLane0Settled(entry.id);
+        if (group) this._coalesced.delete(entry.id);
+        for (const m of members) {
+          const p = this._pending.get(m.id);
+          if (p) {
+            this._pending.delete(m.id);
+            p.reject(e);
+          }
         }
       }
     }
@@ -1015,18 +1409,92 @@ export class BakeWorkerClient {
         posted: 0,
         maxQueuedLen: 0,
         byLane: [0, 1, 2].map(() => ({ count: 0, totalQueueMs: 0, maxQueueMs: 0 })),
+        // `?bakeSurfaceCoalesce`: requests that rode in another request's
+        // message (= posts saved), merged posts, DIDs dropped as duplicates,
+        // and the largest merged DID list.
+        coalesced: 0,
+        coalescedPosts: 0,
+        coalescedDupDids: 0,
+        coalescedMaxDids: 0,
+        // `?bakeUrgentReserve`: lane-0 posts made while the cap was full.
+        reservePosts: 0,
       });
       const len = this._lanes[0].length + this._lanes[1].length + this._lanes[2].length;
       if (len > q.maxQueuedLen) q.maxQueuedLen = len;
     } catch (_) { /* stats must never affect dispatch */ }
   }
 
+  /**
+   * Settle every member of a merged `fetchSurfacesPixels` post from its one
+   * reply. A well-formed result is split by index into per-caller replies of
+   * the single-request shape (`payload` in the caller's DID order, its own
+   * `audit` share — see `splitSurfaceAuditForCaller`); a repeated DID is
+   * deep-copied so no two callers share a buffer. Anything else — an `error`
+   * reply, a payload whose length does not match the posted list, an unknown
+   * reply type — rejects every member, so each runs its own main-thread
+   * fallback exactly as it would have alone.
+   */
+  _settleCoalesced(group, msg) {
+    const n = group.dids.length;
+    if (msg.type === "result" && Array.isArray(msg.payload) && msg.payload.length === n) {
+      const index = new Map();
+      for (let i = 0; i < n; i += 1) index.set(group.dids[i], i);
+      const handedOut = new Uint8Array(n);
+      for (const m of group.members) {
+        const p = this._pending.get(m.id);
+        if (!p) continue;
+        this._pending.delete(m.id);
+        const payload = Array.from(m.dids, (d) => {
+          const i = index.get(d >>> 0);
+          const item = msg.payload[i];
+          if (handedOut[i]) return cloneSurfacePayload(item);
+          handedOut[i] = 1;
+          return item;
+        });
+        p.resolve({
+          type: "result",
+          id: m.id,
+          kind: msg.kind,
+          payload,
+          audit: splitSurfaceAuditForCaller(msg.audit, m.dids),
+          coalesced: group.members.length,
+        });
+      }
+      return;
+    }
+    const why =
+      msg.type === "error"
+        ? String(msg.message)
+        : msg.type === "result"
+          ? `bake worker: coalesced surface reply has ${Array.isArray(msg.payload) ? msg.payload.length : "no"} entries for ${n} DIDs`
+          : "bake worker: unknown reply " + msg.type;
+    for (const m of group.members) {
+      const p = this._pending.get(m.id);
+      if (!p) continue;
+      this._pending.delete(m.id);
+      p.reject(new Error(why));
+    }
+  }
+
   _onMessage(msg) {
+    // `?bakeSurfaceCoalesce`: a merged post answers every member at once.
+    const group = msg ? this._coalesced.get(msg.id) : undefined;
+    if (group) {
+      this._coalesced.delete(msg.id);
+      if (this._queueEnabled) {
+        this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
+        this._noteLane0Settled(msg.id);
+        this._pump();
+      }
+      this._settleCoalesced(group, msg);
+      return;
+    }
     const entry = this._pending.get(msg && msg.id);
     if (!entry) return;
     this._pending.delete(msg.id);
     if (this._queueEnabled) {
       this._inFlightPosted = Math.max(0, this._inFlightPosted - 1);
+      this._noteLane0Settled(msg.id);
       this._pump();
     }
     if (msg.type === "ready") {
@@ -1075,8 +1543,13 @@ export class BakeWorkerClient {
     this._pending.clear();
     // Queued-but-unposted entries were rejected via `_pending` above; drop
     // their lane records and the posted counter so a respawn starts clean.
+    // Merged posts' members are ordinary `_pending` entries (rejected above);
+    // forgetting the groups makes a late reply from the dead worker a no-op.
     this._lanes = [[], [], []];
     this._inFlightPosted = 0;
+    this._inFlightLane0 = 0;
+    this._postedLane0.clear();
+    this._coalesced.clear();
     // F1: TERMINATE the dead worker before dropping the reference. A worker
     // that threw is not necessarily gone — without this its thread, wasm
     // instance and shard/surface caches (up to `?surfaceBudgetMB`'s worker
@@ -1617,6 +2090,37 @@ export function getBakeWorkerClient() {
               avgQueueMs: b.count ? Math.round(b.totalQueueMs / b.count) : 0,
               maxQueueMs: Math.round(b.maxQueueMs),
             })),
+            // `?bakeSurfaceCoalesce`: `maxDids` = the DID cap in force (0 = off);
+            // `coalesced` = requests that rode in another request's message
+            // (posts saved), `posts` = merged messages, `dupDids` = DIDs the
+            // cross-request dedupe dropped, `maxMergedDids` = largest list posted.
+            // `posted` above counts MESSAGES, `byLane[].count` REQUESTS.
+            coalesce: {
+              maxDids: _singleton?._surfaceCoalesceCap?.() ?? 0,
+              coalesced: s?.queue?.coalesced ?? 0,
+              posts: s?.queue?.coalescedPosts ?? 0,
+              dupDids: s?.queue?.coalescedDupDids ?? 0,
+              maxMergedDids: s?.queue?.coalescedMaxDids ?? 0,
+            },
+            // `?bakeUrgentReserve`: mode/slots in force, whether the reserve
+            // applies right now (`all`, or `packs` with packs armed), lane-0
+            // messages in flight, and lane-0 posts made past a full cap.
+            urgentReserve: {
+              mode: _singleton?.urgentReserve?.mode ?? "off",
+              slots: _singleton?.urgentReserve?.slots ?? 0,
+              applies: (() => {
+                const r = _singleton?.urgentReserve;
+                if (!r || r.mode === "off") return false;
+                if (r.mode === "all") return true;
+                try {
+                  return globalThis.__hbFetch?.enabled === true;
+                } catch (_) {
+                  return false;
+                }
+              })(),
+              lane0InFlight: _singleton?._inFlightLane0 ?? 0,
+              posts: s?.queue?.reservePosts ?? 0,
+            },
           };
           const batchMax = _singleton?.batchMax ?? 0;
           // ORACLE open defect #3 — main-thread fallbacks, counted. `total > 0`
@@ -1641,6 +2145,9 @@ export function getBakeWorkerClient() {
               // can't be windowed; count-deltas + total-deltas can).
               totalMs: Math.round(b.totalMs),
               totalDepth: b.totalDepth,
+              // `?bakeSurfaceCoalesce`: requests of this type answered from a
+              // merged message (its head + riders). `count` stays per request.
+              coalesced: b.coalesced ?? 0,
             };
           }
           return { active: !!_singleton?.active, batchMax, pendingNow: _singleton?._pending?.size ?? 0, maxPending: s.maxPending, byType, queue, fallbacks };

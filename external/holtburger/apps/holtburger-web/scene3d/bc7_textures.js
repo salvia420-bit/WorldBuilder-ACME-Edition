@@ -72,7 +72,7 @@ import * as THREE from "three";
 // P2 — call-time-only cycle with xu7_textures.js (it imports bc7BlocksFor/
 // bc7LevelBytes back from here); both sides bind functions, never eval-time
 // values, so the cycle is safe.
-import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats } from "./xu7_textures.js";
+import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats, xu7TranscoderUp } from "./xu7_textures.js";
 import { holdForInterior } from "./bandwidth_tier.js";
 import {
   textureRehydrateStats,
@@ -1032,7 +1032,53 @@ const _stats = {
   mirrorReleaseDeferred: 0,  // eviction hit a not-yet-uploaded texture (kept)
   mirrorRestores: 0,         // rehydrator re-supplied a released mirror
   mirrorRestoreFailed: 0,    // rehydrator MISS (loud; must stay 0)
+  // ── ?texUpgradeQueue (2026-10-09) — queue-arm outcomes (0 on `=off`) ───
+  upgradesDropped: 0,        // full asks the queue dropped (no live waiter, no holder)
+  preDropped: 0,             // pre asks dropped or cancelled (full dispatched first)
+  twinsDropped: 0,           // CLIP twins dropped before their fetch
 };
+
+// --------------------------------------------------------------------------
+// ?texUpgradeQueue (2026-10-09) — the DROPPED verdict + the HD byte log
+// --------------------------------------------------------------------------
+
+/**
+ * What `getAsync` / `getPreAsync` / `hbc7Fallback` resolve when the upgrade
+ * queue (scene3d/tex_upgrade_queue.js, injected through `qctx`) dropped the
+ * ask: nobody holds the surface any more. NOT a verdict — nothing is cached
+ * (no `_put(null)`, no `_preCache` null, no `_hbc7Absent`), nothing is counted
+ * absent, and `upgradeMaterialToBc7` only clears `__bc7Pending` (no gate
+ * settle, no refeed). A material re-installed later asks again (eviction
+ * clears the MaterialCache ask-once set). Never produced without a queue.
+ */
+export const TEX_DROPPED = Object.freeze({ texDropped: true });
+
+// HD byte log — BOTH arms, diag only (`window.__texUpgradeQueue.report()`
+// reads it): every full-tier network byte this module counts into
+// `bytesFetched`, stamped with epoch ms, plus the per-rsId full-phase verdict
+// time (`_verdictAt`) for the "starting room first" order metric.
+const _HD_LOG_MAX = 8192;
+const _hdLog = [];
+const _verdictAt = new Map(); // rsId -> { at, outcome }
+function _hdNote(kind, rs, bytes) {
+  _hdLog.push({ kind, rs: rs >>> 0, bytes, at: Date.now() });
+  if (_hdLog.length > _HD_LOG_MAX) _hdLog.splice(0, _hdLog.length - _HD_LOG_MAX);
+}
+function _verdictNote(rs, outcome) {
+  const id = rs >>> 0;
+  _verdictAt.delete(id); // re-insert: Map order = verdict order
+  _verdictAt.set(id, { at: Date.now(), outcome });
+  if (_verdictAt.size > _HD_LOG_MAX) _verdictAt.delete(_verdictAt.keys().next().value);
+}
+
+/** Diag: `{ bytes: [{kind:"pre"|"xu7"|"hbc7"|"twin", rs, bytes, at}],
+ *  verdicts: [{rs, at, outcome:"swapped"|"absent"|"kept"|"failed"}] }`. */
+export function bc7HdLog() {
+  return {
+    bytes: _hdLog.slice(),
+    verdicts: Array.from(_verdictAt, ([rs, v]) => ({ rs, at: v.at, outcome: v.outcome })),
+  };
+}
 
 // CLIP-ALPHA guard tallies (2026-10-07) — read via `window.__bc7ClipGuard.stats()`.
 // Declared here, beside `_stats`, because `Bc7RecordSource.hbc7Fallback`
@@ -1311,19 +1357,34 @@ export class Bc7RecordSource {
    * reference. Resolves the parsed twin, or null (absent / malformed /
    * fetch failed — the caller keeps the albedo it has). Never rejects.
    */
-  hbc7Fallback(rsId) {
+  hbc7Fallback(rsId, qctx) {
     const id = rsId >>> 0;
     this._xu7Rejected.add(id);
     const cur = this._cache.get(id);
     if (cur && !_xu7Records.has(cur)) return Promise.resolve(cur); // already swapped
     if (this._hbc7Absent.has(id)) return Promise.resolve(null);
     const joined = this._hbc7InflightP.get(id);
-    if (joined) return joined;
+    if (joined) {
+      // ?texUpgradeQueue: the joiner's liveness keeps a queued twin alive (a
+      // dropped twin resolves TEX_DROPPED to EVERY joiner, and the ask-once
+      // set means a live joiner would never ask again).
+      if (qctx && qctx.queue) {
+        try { qctx.queue.addWaiter("twin", id, qctx.hint); } catch (_) { /* diag-grade */ }
+      }
+      return joined;
+    }
     _clipStats.hbc7Fallbacks += 1;
-    const p = this._fetchHbc7Bytes(id)
+    // ?texUpgradeQueue: the twin is admitted like its full job (same band, at
+    // the head) — on the already-cached leg too, since qctx is passed in.
+    const bytesP = qctx && qctx.queue
+      ? this._queuedFetch(qctx, "twin", id, () => this._fetchHbc7Bytes(id))
+      : this._fetchHbc7Bytes(id);
+    const p = bytesP
       .then((bytes) => {
+        if (bytes === TEX_DROPPED) return TEX_DROPPED;
         if (!bytes || bytes.length === 0) return null;
         _stats.bytesFetched += bytes.length;
+        _hdNote("twin", id, bytes.length);
         const parsed = parseHbc7(bytes);
         this._put(this._cache, id, parsed);
         return parsed;
@@ -1333,7 +1394,8 @@ export class Bc7RecordSource {
         return null;
       })
       .then((parsed) => {
-        if (!parsed) this._hbc7Absent.add(id);
+        if (parsed === TEX_DROPPED) _stats.twinsDropped += 1; // no negative verdict
+        else if (!parsed) this._hbc7Absent.add(id);
         this._hbc7InflightP.delete(id);
         return parsed;
       });
@@ -1412,6 +1474,14 @@ export class Bc7RecordSource {
     return this._inflight.has(rsId >>> 0);
   }
 
+  /** Diag (`?texUpgradeQueue` in-view tracker, both arms): the full-tier
+   *  upgrade is still outstanding — queued/held, fetching, transcoding, or
+   *  fetching its CLIP twin. */
+  upgradePending(rsId) {
+    const id = rsId >>> 0;
+    return this._inflight.has(id) || this._hbc7InflightP.has(id);
+  }
+
   /** True once we have a verdict (payload or proven-absent) for this id. */
   known(rsId) {
     return this._cache.has(rsId >>> 0);
@@ -1448,11 +1518,13 @@ export class Bc7RecordSource {
     return null;
   }
 
-  /** Async accessor: resolves to the parsed payload or null. */
-  getAsync(rsId) {
+  /** Async accessor: resolves to the parsed payload or null. With a `qctx`
+   *  (`{queue, hint}`, `?texUpgradeQueue`) the fetch is admitted by the
+   *  upgrade queue and may resolve `TEX_DROPPED`. */
+  getAsync(rsId, qctx) {
     const id = rsId >>> 0;
     if (this._cache.has(id)) { this._touch(this._cache, id); return Promise.resolve(this._cache.get(id)); }
-    return this._begin(id);
+    return this._begin(id, qctx);
   }
 
   /**
@@ -1461,7 +1533,7 @@ export class Bc7RecordSource {
    * wasm without the export). Never throws; never warns on absence — the pre
    * layer is optional by contract.
    */
-  getPreAsync(rsId) {
+  getPreAsync(rsId, qctx) {
     const id = rsId >>> 0;
     if (this._preCache.has(id)) { this._touch(this._preCache, id); return Promise.resolve(this._preCache.get(id)); }
     const impl = this._preFetchImpl
@@ -1478,11 +1550,26 @@ export class Bc7RecordSource {
     // hop". The store dedupes the HOP, not the parse or the caller's work, and
     // the block did nothing either way. Join the in-flight promise instead.
     const joined = this._preInflightP.get(id);
-    if (joined) return joined;
+    if (joined) {
+      if (qctx && qctx.queue) {
+        try { qctx.queue.addWaiter("pre", id, qctx.hint); } catch (_) { /* diag-grade */ }
+      }
+      return joined;
+    }
     this._preInflight.add(id);
     _stats.preFetches += 1;
-    const pre = Promise.resolve(impl(id))
+    // ?texUpgradeQueue: the pre record is admitted (held until the interior is
+    // built; dispatched only for an in-view surface beyond D_full; cancelled
+    // when the full record dispatches). Without a queue: today's direct fetch.
+    const bytesP = qctx && qctx.queue
+      ? this._queuedFetch(qctx, "pre", id, () => impl(id))
+      : Promise.resolve(impl(id));
+    const pre = bytesP
       .then((bytes) => {
+        if (bytes === TEX_DROPPED) {
+          _stats.preDropped += 1;
+          return TEX_DROPPED; // no `_preCache` entry: not a verdict
+        }
         if (!bytes || bytes.length === 0) {
           this._put(this._preCache, id, null);
           return null;
@@ -1500,6 +1587,7 @@ export class Bc7RecordSource {
           return null;
         }
         _stats.bytesFetched += bytes.length;
+        _hdNote("pre", id, bytes.length);
         _stats.preHits += 1;
         this._put(this._preCache, id, parsed);
         return parsed;
@@ -1516,10 +1604,17 @@ export class Bc7RecordSource {
     return pre;
   }
 
-  _begin(id) {
+  _begin(id, qctx) {
     // Join an ask already in flight (see `_inflightP` in the ctor).
     const joined = this._inflightP.get(id);
-    if (joined) return joined;
+    if (joined) {
+      // ?texUpgradeQueue: the joiner's liveness keeps a queued job alive.
+      if (qctx && qctx.queue) {
+        try { qctx.queue.addWaiter("full", id, qctx.hint); } catch (_) { /* diag-grade */ }
+      }
+      return joined;
+    }
+    if (qctx && qctx.queue) return this._beginQueued(id, qctx);
     this._inflight.add(id);
     _stats.fetches += 1;
     // P2 (2026-08-04): with `?texXu7=on`, try the XUBC7 namespace FIRST —
@@ -1551,11 +1646,14 @@ export class Bc7RecordSource {
       // pending promise. See `ensureXu7Transcoder`. Until it lands, records take
       // the hbc7 route: the same bytes the tier-off boot would have spent, and
       // no xu7 payload fetched only to be dropped into a stalled await.
-      if (!ensureXu7Transcoder()) return Promise.resolve(null);
+      // `?texWorkerEager` (D3-b): a ready or loading texture worker counts as
+      // up (`xu7TranscoderUp`); with that flag off this IS ensureXu7Transcoder.
+      if (!xu7TranscoderUp()) return Promise.resolve(null);
       return Promise.resolve(this._wasm.xu7_blocks(id))
         .then((b) => {
           if (!b || b.length === 0) return null;
           _stats.bytesFetched += b.length;
+          _hdNote("xu7", id, b.length);
           return transcodeXu7(b);
         })
         .then((parsed) => {
@@ -1591,6 +1689,7 @@ export class Bc7RecordSource {
           return null;
         }
         _stats.bytesFetched += bytes.length;
+        _hdNote("hbc7", id, bytes.length);
         let parsed;
         try {
           parsed = parseHbc7(bytes);
@@ -1624,6 +1723,151 @@ export class Bc7RecordSource {
     // callbacks are microtasks), so the `.finally` above never races this.
     this._inflightP.set(id, p);
     return p;
+  }
+
+  // ------------------------------------------------------------------------
+  // ?texUpgradeQueue (2026-10-09) — the queued twin of `_begin`. Same chain,
+  // same caches, same verdicts; the differences are WHEN each network leg
+  // starts (the queue's admission replaces `holdForInterior`) and the DROPPED
+  // outcome. Ticket protocol (scene3d/tex_upgrade_queue.js): `received(n)` as
+  // the bytes arrive (before the transcode), every second leg through
+  // `refetch("hbc7")`, `release()` when the chain ends.
+  // ------------------------------------------------------------------------
+
+  _beginQueued(id, qctx) {
+    const q = qctx.queue;
+    this._inflight.add(id);
+    _stats.fetches += 1;
+    // Will an xu7 leg be tried at all? (The transcoder gate is asked at
+    // dispatch time, inside `_queuedXu7`.)
+    const xu7Possible = texXu7Enabled() && !this._xu7Rejected.has(id) && (
+      !!this._xu7ParsedImpl ||
+      (!this._fetchImpl && !!this._wasm && typeof this._wasm.xu7_blocks === "function")
+    );
+    let ticket = null;
+    const hbc7Leg = (t) => {
+      ticket = t;
+      return this._fetchHbc7Bytes(id).then((bytes) => {
+        t.received(bytes ? bytes.length : 0);
+        return this._settleHbc7(id, bytes);
+      });
+    };
+    const p = Promise.resolve(q.admit("full", id, qctx.hint, { net: xu7Possible ? "xu7" : "hbc7" }))
+      .then((t) => {
+        if (!t) return TEX_DROPPED;
+        ticket = t;
+        if (!xu7Possible) return hbc7Leg(t);
+        return this._queuedXu7(id, t).then((xu7Parsed) => {
+          if (xu7Parsed) {
+            this._put(this._cache, id, xu7Parsed);
+            _stats.hits += 1;
+            return xu7Parsed;
+          }
+          // xu7 absent / transcoder not up / transcode failed: the tex-bc7
+          // leg is a NEW network leg, re-admitted at the head of its band.
+          return Promise.resolve(t.refetch("hbc7")).then((t2) => (t2 ? hbc7Leg(t2) : TEX_DROPPED));
+        });
+      })
+      .then((r) => {
+        if (r === TEX_DROPPED) _stats.upgradesDropped += 1; // no `_put(null)`, no `absent`
+        return r;
+      })
+      .catch((e) => {
+        _stats.errors += 1;
+        _stats.lastError = String(e && e.message ? e.message : e);
+        this._put(this._cache, id, null); // never re-hammer a broken endpoint
+        // eslint-disable-next-line no-console
+        console.warn(`[bc7] fetch failed 0x${id.toString(16).toUpperCase()}:`, e);
+        return null;
+      })
+      .finally(() => {
+        if (ticket) {
+          try { ticket.release(); } catch (_) { /* fail-soft */ }
+        }
+        this._inflight.delete(id);
+        this._inflightP.delete(id);
+      });
+    this._inflightP.set(id, p);
+    return p;
+  }
+
+  /** The xu7 leg under a ticket: `received` as soon as the payload is in
+   *  (the slot frees before the transcode). Resolves parsed or null. */
+  _queuedXu7(id, t) {
+    if (this._xu7ParsedImpl) {
+      return Promise.resolve(this._xu7ParsedImpl(id))
+        .then((parsed) => {
+          t.received(parsed ? _parsedBytes(parsed) : 0);
+          if (parsed) _xu7Records.add(parsed);
+          return parsed || null;
+        })
+        .catch(() => null);
+    }
+    // Same ask-don't-await gate as `_begin` (D3-b aware).
+    if (!xu7TranscoderUp()) return Promise.resolve(null);
+    return Promise.resolve(this._wasm.xu7_blocks(id))
+      .then((b) => {
+        t.received(b ? b.length : 0);
+        if (!b || b.length === 0) return null;
+        _stats.bytesFetched += b.length;
+        _hdNote("xu7", id, b.length);
+        return transcodeXu7(b);
+      })
+      .then((parsed) => {
+        if (parsed) _xu7Records.add(parsed);
+        return parsed || null;
+      })
+      .catch(() => null);
+  }
+
+  /** `_begin`'s hbc7 verdict step, verbatim, for the queued path. */
+  _settleHbc7(id, bytes) {
+    if (!bytes || bytes.length === 0) {
+      this._put(this._cache, id, null); // proven-absent OR namespace not shipped
+      _stats.absent += 1;
+      return null;
+    }
+    _stats.bytesFetched += bytes.length;
+    _hdNote("hbc7", id, bytes.length);
+    let parsed;
+    try {
+      parsed = parseHbc7(bytes);
+    } catch (e) {
+      _stats.parseErrors += 1;
+      _stats.lastError = String(e && e.message ? e.message : e);
+      // eslint-disable-next-line no-console
+      console.error(`[bc7] 0x${id.toString(16).toUpperCase()} malformed payload:`, e);
+      this._put(this._cache, id, null);
+      return null;
+    }
+    this._put(this._cache, id, parsed);
+    _stats.hits += 1;
+    return parsed;
+  }
+
+  /** One admitted fetch: resolves the bytes, or `TEX_DROPPED`. */
+  _queuedFetch(qctx, kind, id, fetchFn) {
+    return Promise.resolve(qctx.queue.admit(kind, id, qctx.hint)).then((t) => {
+      if (!t) return TEX_DROPPED;
+      let out;
+      try {
+        out = Promise.resolve(fetchFn());
+      } catch (e) {
+        t.release();
+        return Promise.reject(e);
+      }
+      return out.then(
+        (bytes) => {
+          t.received(bytes ? bytes.length : 0);
+          t.release();
+          return bytes;
+        },
+        (e) => {
+          t.release();
+          throw e;
+        },
+      );
+    });
   }
 }
 
@@ -1731,6 +1975,8 @@ export function _resetBc7ForTest() {
   _preFlag = undefined;
   _supported = null;
   _detectNote = "not probed";
+  _hdLog.length = 0;
+  _verdictAt.clear();
   _resetClipAlphaGuardForTest();
 }
 
@@ -1773,13 +2019,22 @@ export function _resetBc7ForTest() {
  *
  * @param {(res:{swapped:true,replaced:THREE.Texture|null})=>void} [onSwap]
  *   invoked after EACH swap (pre and/or full) with the texture it replaced.
+ * `?texUpgradeQueue` (2026-10-09): `opts.queue` (the TexUpgradeQueue) and
+ * `opts.hint` (`{did, rs, w, h, live}`) are passed down as `qctx` to the pre,
+ * full and twin fetches, which the queue admits in visibility order. A DROPPED
+ * ask (no live waiter, no holder) clears `__bc7Pending` only — no gate
+ * settle, no refeed, nothing cached. No queue = every line as before.
+ *
  * @param {{gate?:{admit:(parsed:object, phase:string)=>boolean,
- *          settle?:(outcome:string)=>void}}} [opts]
+ *          settle?:(outcome:string)=>void}, queue?:object, hint?:object}} [opts]
  * @returns {Promise<boolean|{swapped:true,replaced:*}>} final-phase result
  */
 export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
   const src = bc7Source();
   const gate = opts && opts.gate && typeof opts.gate.admit === "function" ? opts.gate : null;
+  const qctx = opts && opts.queue && typeof opts.queue.admit === "function"
+    ? { queue: opts.queue, hint: opts.hint || null }
+    : undefined;
   if (!src || !mat || !(rsId >>> 0)) return Promise.resolve(false);
   // Mark BEFORE the await so the atlas can see "verdict pending" on the very
   // first feed and defer instead of baking this surface in at 32 bpp.
@@ -1814,12 +2069,12 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
   // Pre phase: only worth kicking when the full verdict isn't already cached.
   if (texPreEnabled() && !already) {
     src
-      .getPreAsync(rsId)
+      .getPreAsync(rsId, qctx)
       .then((parsed) => {
         // Lost the race (or full already landed): the pre texture is never
         // built, so there is nothing to dispose. parsed stays in _preCache
-        // for any later asker.
-        if (!parsed || fullDone) return;
+        // for any later asker. (TEX_DROPPED: the queue cancelled the pre.)
+        if (!parsed || parsed === TEX_DROPPED || fullDone) return;
         if (mat.userData && mat.userData.__bc7) return; // full already swapped
         // CLIP-ALPHA: a pre record that cannot reproduce the cutout is never
         // swapped in; the full phase still decides the final texture.
@@ -1841,12 +2096,17 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
       });
   }
   return src
-    .getAsync(rsId)
-    .then((parsed) => (gate && parsed ? _gateFull(gate, src, rsId, parsed, mat) : parsed))
+    .getAsync(rsId, qctx)
+    .then((parsed) => (gate && parsed && parsed !== TEX_DROPPED ? _gateFull(gate, src, rsId, parsed, mat, qctx) : parsed))
     .then((parsed) => {
       fullDone = true;
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
+      if (parsed === TEX_DROPPED) {
+        // ?texUpgradeQueue: nobody holds this surface any more — not a
+        // verdict, so no gate settle and no refeed. A re-install asks again.
+        return false;
+      }
       if (parsed === _CLIP_VETOED) {
         // CLIP-ALPHA: a refused record is a SETTLED negative verdict, exactly
         // like an absent one — the material keeps the map it has for good,
@@ -1854,6 +2114,7 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
         ud.__bc7Vetoed = "clip-alpha";
         _clipStats.keptAlbedo += 1;
         _gateSettle(gate, "kept");
+        _verdictNote(rsId, "kept");
         _rsVerdictResolved(rsId);
         return false;
       }
@@ -1862,10 +2123,12 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
         // it has (RGBA8, or the pre texture) for good, so anything held out
         // on it is now admissible and must be re-offered.
         if (gate) _gateSettle(gate, "absent");
+        _verdictNote(rsId, "absent");
         _rsVerdictResolved(rsId);
         return false;
       }
       const res = buildAndSwap(parsed, "full");
+      _verdictNote(rsId, "swapped");
       if (gate) _gateSettle(gate, "swapped");
       ud.__bc7 = true;
       delete ud.__bc7Pre;
@@ -1900,6 +2163,7 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
     .catch(() => {
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
+      _verdictNote(rsId, "failed");
       _rsVerdictResolved(rsId);
       return false;
     });
@@ -1933,14 +2197,17 @@ function _gateSettle(gate, outcome) {
  * the already-cached leg the marker was never set, and without it the atlas
  * could commit this node to an RGBA8 bucket a moment before the twin swaps.
  */
-function _gateFull(gate, src, rsId, parsed, mat) {
+function _gateFull(gate, src, rsId, parsed, mat, qctx) {
   if (_gateAdmits(gate, parsed, "full")) return parsed;
   if (bc7RecordLane(parsed) !== "xu7" || typeof src.hbc7Fallback !== "function") {
     return _CLIP_VETOED;
   }
   const ud = (mat.userData = mat.userData || {});
   ud.__bc7Pending = true;
-  return src.hbc7Fallback(rsId).then((twin) => {
+  // `qctx` (?texUpgradeQueue) is passed explicitly, so the twin is admitted
+  // on the already-cached leg too (no `_begin` ran for it).
+  return src.hbc7Fallback(rsId, qctx).then((twin) => {
+    if (twin === TEX_DROPPED) return TEX_DROPPED;
     if (twin && _gateAdmits(gate, twin, "hbc7")) {
       _clipStats.hbc7Rescued += 1;
       return twin;

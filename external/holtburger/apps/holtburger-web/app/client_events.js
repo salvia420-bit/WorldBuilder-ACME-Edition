@@ -167,6 +167,11 @@ export function dispatchClientEvent(evt, D) {
       );
     }
   } else if (evt.kind === ClientEventKind.ENTERED_WORLD) {
+    // Login portal space (?loginPortalSpace, 2026-10-09): `enteredWorld` is
+    // per login scope and only ever flips to true (below), so reading it
+    // FIRST is an exact "first in-world of this login" edge — a death respawn
+    // (kind=7 again) never re-triggers the tunnel.
+    const isLoginEntry = !D.enteredWorld;
     // EnteredWorld — server has fully spawned the
     // player (PlayerDescription / StartGame fired). The
     // wasm bundle's chat / movement commands now take
@@ -219,6 +224,21 @@ export function dispatchClientEvent(evt, D) {
       chatPanel.hidden = false;
       chatInput.disabled = false;
       chatSendBtn.disabled = false;
+    }
+    // Login portal space (retail gmSmartBoxUI enters TAS_TUNNEL at login
+    // through the same teleport_in_progress edge, acclient.c:143092). The
+    // request only records intent: portal_space.js resolves the spawn cell
+    // itself on its first tick and skips the tunnel when that cell is already
+    // resident (char-screen warm path) or a skip flag applies — so nothing
+    // plays on the warm path. Its own try: a stub gap below must not lose it.
+    if (isLoginEntry) {
+      try {
+        import('../scene3d/portal_space.js')
+          .then((m) => m.requestLoginPortalSpace((typeof window !== 'undefined' ? window.liveScene3d : null) ?? null, {}))
+          .catch((e) => console.warn('[portalSpace] login request failed:', e));
+      } catch (e) {
+        console.warn('[portalSpace] login request failed:', e);
+      }
     }
     // rynth auto-boot (2026-07-17): ?bot=1 starts the grind bot
     // on the live session at first in-world — the client-side

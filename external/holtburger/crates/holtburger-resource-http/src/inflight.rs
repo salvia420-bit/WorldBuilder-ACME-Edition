@@ -58,14 +58,14 @@ use futures::future::Shared;
 // ---------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
-type InflightInnerFuture<E> =
-    futures::future::BoxFuture<'static, InflightResult<E>>;
+type InflightInnerFuture<E, T> =
+    futures::future::BoxFuture<'static, InflightResult<E, T>>;
 
 #[cfg(target_arch = "wasm32")]
-type InflightInnerFuture<E> =
-    futures::future::LocalBoxFuture<'static, InflightResult<E>>;
+type InflightInnerFuture<E, T> =
+    futures::future::LocalBoxFuture<'static, InflightResult<E, T>>;
 
-type InflightFuture<E> = Shared<InflightInnerFuture<E>>;
+type InflightFuture<E, T> = Shared<InflightInnerFuture<E, T>>;
 
 /// `Result` shape stored inside the dedup map. The `Arc<E>` wrap is
 /// required because `Shared` demands `Future::Output: Clone`, and
@@ -73,7 +73,14 @@ type InflightFuture<E> = Shared<InflightInnerFuture<E>>;
 /// derive `Clone`. Cloning the `Arc` is cheap; cloning a `Vec<u8>`
 /// is fine because the existing `shards` cache already clones on
 /// every `get_file_by_key` call.
-pub type InflightResult<E> = Result<Vec<u8>, Arc<E>>;
+///
+/// `T` (default `Vec<u8>`, the catalog / v1 maps) is what every waiter
+/// receives a clone of. Workstream B (`?shardFetchWorker`, 2026-10-09
+/// follow-up): the v2 SHARD map shares `shard_route::SharedShardBody` — the
+/// body plus the catalog hash the shard-fetch worker verified it against — so a
+/// caller that latched onto another caller's in-flight fetch sees the
+/// worker's verification too instead of re-hashing on the main thread.
+pub type InflightResult<E, T = Vec<u8>> = Result<T, Arc<E>>;
 
 /// Internal inner state. On native this is `Send + Sync` naturally
 /// (its only fields are `Mutex<HashMap<String, Shared<BoxFuture>>>`
@@ -83,11 +90,11 @@ pub type InflightResult<E> = Result<Vec<u8>, Arc<E>>;
 /// single-threaded so the contract isn't actually exercised in
 /// practice, the impl just satisfies static trait bounds inherited
 /// from `ResourceSource: Send + Sync`.
-struct InflightInner<E: 'static> {
-    map: Mutex<HashMap<String, InflightFuture<E>>>,
+struct InflightInner<E: 'static, T: 'static> {
+    map: Mutex<HashMap<String, InflightFuture<E, T>>>,
 }
 
-impl<E: 'static> InflightInner<E> {
+impl<E: 'static, T: 'static> InflightInner<E, T> {
     fn new() -> Self {
         Self {
             map: Mutex::new(HashMap::new()),
@@ -96,14 +103,15 @@ impl<E: 'static> InflightInner<E> {
 }
 
 /// Process-local URL → in-flight-future map. One per
-/// `ManifestResourceSource` instance.
+/// `ManifestResourceSource` instance (v2: one for catalogs, one for shards).
 ///
 /// Stores `BoxFuture` (native) / `LocalBoxFuture` (wasm32) because
 /// the underlying `fetch_bytes` future is not nameable (returned by
 /// `async fn`). `Shared` wraps it so multiple waiters can await the
-/// same single in-flight fetch.
-pub struct InflightMap<E: 'static> {
-    inner: InflightInner<E>,
+/// same single in-flight fetch. `T` is the shared success value (see
+/// [`InflightResult`]); it defaults to the raw body.
+pub struct InflightMap<E: 'static, T: 'static = Vec<u8>> {
+    inner: InflightInner<E, T>,
 }
 
 // SAFETY: OWNER-THREAD-CONFINED. The inner `JsFuture`/`Promise` types are
@@ -125,17 +133,17 @@ pub struct InflightMap<E: 'static> {
 // the last `Arc` to one off the owner thread (that would run this map's
 // destructor there). See `SCOPE-2.1-fetch-decode-boundary-2026-07-24.md` §1c.
 #[cfg(target_arch = "wasm32")]
-unsafe impl<E: 'static> Send for InflightInner<E> {}
+unsafe impl<E: 'static, T: 'static> Send for InflightInner<E, T> {}
 #[cfg(target_arch = "wasm32")]
-unsafe impl<E: 'static> Sync for InflightInner<E> {}
+unsafe impl<E: 'static, T: 'static> Sync for InflightInner<E, T> {}
 
-impl<E: 'static> Default for InflightMap<E> {
+impl<E: 'static, T: 'static> Default for InflightMap<E, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E: 'static> InflightMap<E> {
+impl<E: 'static, T: 'static> InflightMap<E, T> {
     pub fn new() -> Self {
         Self {
             inner: InflightInner::new(),
@@ -155,26 +163,27 @@ impl<E: 'static> InflightMap<E> {
     /// is the caller's job via `self.shards`).
     ///
     /// `factory` returns a future producing
-    /// `Result<Vec<u8>, E>`; the dedup layer maps `E` into
+    /// `Result<T, E>`; the dedup layer maps `E` into
     /// `Arc<E>` internally so multiple waiters can clone the error
-    /// arm without `E: Clone`. Each `Ok` `Vec<u8>` is cloned per
+    /// arm without `E: Clone`. Each `Ok` value is cloned per
     /// waiter — same semantics as the existing `shards` cache.
     #[cfg(not(target_arch = "wasm32"))]
-    pub async fn get_or_fetch<F, Fut>(&self, url: &str, factory: F) -> InflightResult<E>
+    pub async fn get_or_fetch<F, Fut>(&self, url: &str, factory: F) -> InflightResult<E, T>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Vec<u8>, E>> + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
         E: Send + Sync,
+        T: Clone + Send + Sync,
     {
         // Phase 1: latch-or-start. Briefly hold the mutex to look up
         // an existing future for this URL, or insert a new one.
-        let shared: InflightFuture<E> = {
+        let shared: InflightFuture<E, T> = {
             let mut guard = self.inner.map.lock().expect("inflight map mutex poisoned");
             if let Some(existing) = guard.get(url) {
                 existing.clone()
             } else {
                 let fut = factory();
-                let boxed: InflightInnerFuture<E> =
+                let boxed: InflightInnerFuture<E, T> =
                     Box::pin(async move { fut.await.map_err(Arc::new) });
                 let shared = boxed.shared();
                 guard.insert(url.to_owned(), shared.clone());
@@ -195,19 +204,20 @@ impl<E: 'static> InflightMap<E> {
     /// wasm32 variant — same algorithm, drops the `Send` bound on
     /// the factory future. See module-level docs for why.
     #[cfg(target_arch = "wasm32")]
-    pub async fn get_or_fetch<F, Fut>(&self, url: &str, factory: F) -> InflightResult<E>
+    pub async fn get_or_fetch<F, Fut>(&self, url: &str, factory: F) -> InflightResult<E, T>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Vec<u8>, E>> + 'static,
+        Fut: Future<Output = Result<T, E>> + 'static,
         E: 'static,
+        T: Clone,
     {
-        let shared: InflightFuture<E> = {
+        let shared: InflightFuture<E, T> = {
             let mut guard = self.inner.map.lock().expect("inflight map mutex poisoned");
             if let Some(existing) = guard.get(url) {
                 existing.clone()
             } else {
                 let fut = factory();
-                let boxed: InflightInnerFuture<E> =
+                let boxed: InflightInnerFuture<E, T> =
                     Box::pin(async move { fut.await.map_err(Arc::new) });
                 let shared = boxed.shared();
                 guard.insert(url.to_owned(), shared.clone());

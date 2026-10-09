@@ -90,7 +90,11 @@ import {
   registerFullTierMirror,
   unregisterFullTierMirror,
 } from "./bc7_textures.js";
-import { transcodeXu7WithNra } from "./xu7_textures.js";
+import { transcodeXu7WithNra, warmTextureWorker } from "./xu7_textures.js";
+// ?texUpgradeQueue (2026-10-09) — progressive HD textures: the full/pre/twin/
+// texchan fetches of the production cache are admitted by one visibility-
+// ordered queue (scene3d/tex_upgrade_queue.js), injected into the sources.
+import { texUpgradeQueueEnabled, getTexUpgradeQueue } from "./tex_upgrade_queue.js";
 // Task 4 (2026-08-05): release the CPU-side copy after upload. Default OFF —
 // see `texture_release.js` for the preconditions that gate the flag.
 import { armCpuRelease } from "./texture_release.js";
@@ -2977,8 +2981,27 @@ export class MaterialCache {
     this._texchanSource = null;
     this._texchanManifest = null;
     this._texchanInit = false;
-    /** Materials awaiting the manifest (built before it loaded): [mat, did]. */
+    /** Materials awaiting the manifest (built before it loaded): [mat, did, rs]. */
     this._pendingRough = [];
+    // ?texUpgradeQueue (2026-10-09, default ON). Only the PRODUCTION cache (the
+    // one built with `wasmExports`) arms it; an explicit `opts.texUpgradeQueue`
+    // overrides (tests). The singleton is created on both arms so
+    // `window.__texUpgradeQueue` (trackInView/report) exists for the `=off` A/B
+    // too; on `=off` nothing is routed through it. Every other construction
+    // (all node suites) keeps the direct asks.
+    /** @type {import("./tex_upgrade_queue.js").TexUpgradeQueue|null} */
+    this._texQueue = null;
+    if (opts.texUpgradeQueue !== undefined) {
+      this._texQueue = opts.texUpgradeQueue || null;
+    } else if (opts.wasmExports) {
+      const q = getTexUpgradeQueue();
+      if (q && texUpgradeQueueEnabled()) {
+        this._texQueue = q;
+        q.armed = true;
+      }
+      // ?texWorkerEager (D3-b): boot the texture worker with the scene.
+      warmTextureWorker();
+    }
     /**
      * 2026-08-03 — the texchan roughness/AO planes minted by `_applyRough`,
      * keyed by DID. They hang off the material only, so without this map
@@ -4407,17 +4430,17 @@ export class MaterialCache {
     if (this._texchanInit) return;
     this._texchanInit = true;
     if (!this._texchanWasm || typeof this._texchanWasm.fetch_suite_artifact_by_key !== "function") return;
-    this._texchanSource = new SuiteAssetSource({ wasmExports: this._texchanWasm });
+    this._texchanSource = new SuiteAssetSource({ wasmExports: this._texchanWasm, queue: this._texQueue });
     loadTexchanManifest()
       .then((m) => {
         this._texchanManifest = m;
         const pend = this._pendingRough;
         this._pendingRough = [];
-        for (const [mat, did] of pend) {
+        for (const [mat, did, rs] of pend) {
           // The DID can have been evicted + re-installed while the manifest
           // loaded; only the material still holding the entry may be upgraded.
           if (this.materials.get(did >>> 0) !== mat) continue;
-          this._resolveRough(mat, did);
+          this._resolveRough(mat, did, rs);
         }
       })
       .catch(() => {
@@ -4428,24 +4451,44 @@ export class MaterialCache {
 
   /** Attach the baked roughnessMap for `did` to `mat` (gated, fail-soft). Called
    *  at material-build time. If the manifest isn't loaded yet, defers until it is. */
-  _attachRoughnessMap(mat, did) {
+  _attachRoughnessMap(mat, did, rs = 0) {
     if (!this.materialBakeEnabled || !mat) return;
     this._ensureTexchanInit();
     if (!this._texchanSource) return;
-    if (!this._texchanManifest) { this._pendingRough.push([mat, did]); return; }
-    this._resolveRough(mat, did);
+    if (!this._texchanManifest) { this._pendingRough.push([mat, did, rs]); return; }
+    this._resolveRough(mat, did, rs);
   }
 
-  _resolveRough(mat, did) {
+  /**
+   * ?texUpgradeQueue — the admission hint for one surface's full-tier / texchan
+   * asks: the RenderSurface the visibility index keys on, the retail albedo
+   * dims (size estimate), and liveness. `live()` is false until the material is
+   * installed (texchan asks run before `_installCacheEntry`), which is why the
+   * queue evaluates it only in its async pump, after a grace period.
+   */
+  _texHint(mat, did, rs) {
+    const d = did >>> 0;
+    const img = mat && mat.map && mat.map.image;
+    return {
+      did: d,
+      rs: rs >>> 0,
+      w: (img && img.width) | 0,
+      h: (img && img.height) | 0,
+      live: () => this.materials.get(d) === mat,
+    };
+  }
+
+  _resolveRough(mat, did, rs = 0) {
     const key = did >>> 0;
     const stem = this._texchanManifest.get(key);
     if (!stem || !this._texchanSource) return;
-    const tc = this._texchanSource.getByKey(stem, "texchan"); // sync: decoded|null (kicks fetch)
+    const hint = this._texQueue ? this._texHint(mat, key, rs) : undefined;
+    const tc = this._texchanSource.getByKey(stem, "texchan", hint); // sync: decoded|null (kicks fetch)
     // The sync arm runs at BUILD time, before `_installCacheEntry` — no
     // identity guard is possible or needed there.
     if (tc) { this._applyRough(mat, tc, key); return; }
     // Cold: upgrade once the async fetch resolves, then re-seat clone variants.
-    this._texchanSource.getByKeyAsync(stem, "texchan").then((t) => {
+    this._texchanSource.getByKeyAsync(stem, "texchan", hint).then((t) => {
       if (!t) return;
       // 2026-08-03 identity guard (the sibling pattern at `_maybeUpgradeToBc7` /
       // `_maybeSetupSurfaceAnimation`): an evict+re-install across the fetch
@@ -5716,7 +5759,8 @@ export class MaterialCache {
     // should no longer throw — but roughness is a POLISH map and must never be
     // able to cost us a textured material again. Guard it for real this time.
     try {
-      this._attachRoughnessMap(mat, did);
+      // rsIdV: the ?texUpgradeQueue visibility key for this sidecar's admission.
+      this._attachRoughnessMap(mat, did, rsIdV);
     } catch (e) {
       if (!this._roughWarned) {
         this._roughWarned = true;
@@ -5835,7 +5879,11 @@ export class MaterialCache {
         // alone (the new material has its own ask).
         if (this.materials.get(d) !== mat) return;
         this._repointAlbedoForDid(d, mat, res.replaced || null);
-      }, gate ? { gate } : undefined)
+      }, this._texQueue
+        // ?texUpgradeQueue: the pre/full/twin fetches are admitted in visibility
+        // order (all five gates above have already run, unchanged).
+        ? { gate, queue: this._texQueue, hint: this._texHint(mat, d, rs) }
+        : gate ? { gate } : undefined)
       .catch(() => {
         /* fail-soft: the surface keeps its RGBA8 albedo */
       });
@@ -6012,7 +6060,7 @@ export class MaterialCache {
       hasPalette: undefined,
     };
     const mat = this._materialFromFlags(surfaceTypeFlags, map, category, null, overrides, null, surfaceFloats);
-    this._attachRoughnessMap(mat, d); // texchan sidecars untouched in v1 (D-05.5)
+    this._attachRoughnessMap(mat, d, rs); // texchan sidecars untouched in v1 (D-05.5)
     mat.name = `scene3d-surface-${d.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),

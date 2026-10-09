@@ -43,16 +43,44 @@
 //          world renders and renderPortalSpaceOverlay fades a black quad out
 //          (approximation of retail's view-distance grow-in — changing the main
 //          camera's far plane would ripple through CSM/log-depth/culling).
+//   LOGIN  (2026-10-09, `?loginPortalSpace`, default `quick`) retail enters the
+//          same TAS_TUNNEL at login (SmartBox::teleport_in_progress = player &&
+//          !position_update_complete, acclient.c:143092; position_update_complete
+//          stays 0 until the cell manager stops blocking, :146270-146283).
+//          client_events.js's FIRST ENTERED_WORLD of a login scope calls
+//          requestLoginPortalSpace; the first tickPortalSpace decides: spawn cell
+//          already resident (char-screen warm path) → no tunnel, no sound; else
+//          the tunnel holds with the teleport build-aware rule (6 s, then while
+//          the spawn interior is building / __interiorBuildPending, 60 s cap).
+//          `quick` fades out as soon as the cell is ready (no CONTINUE floor),
+//          `retail` keeps CONTINUE (2-5 s) — the owner picks. A death respawn
+//          never re-triggers (enteredWorld stays true for the login scope).
+//   PACE   `?portalSpaceFps` (default 30): scene3d/index.js scheduleNext paces
+//          the loop while the tunnel owns the frame (portalSpaceFrameIntervalMs);
+//          tickPerFrame (net pump, cell visibility/PVS, interior builds) keeps
+//          running at that rate — only the world submission is skipped.
+//   WARM   `?tunnelWorldWarm` (2026-10-09, default on): while the tunnel owns
+//          the frame, every ~1 s, the WORLD's programs start linking off the
+//          main thread with the target each draw binds (composer passes, the
+//          main scene into the composer buffer, the sky into a PMREM-class
+//          target) — the reveal frame no longer links them. The release waits
+//          ≤ 1.5 s for a still-linking program the async-link guard would not
+//          defer (`nohold`: never). See warmWorldPrograms.
 //   NOT PORTED: LoginComplete timing (the wasm still sends it on PlayerTeleport —
-//          see holtburger_core DEFER_LOGIN_COMPLETE_AFTER_TELEPORT), the login /
-//          logout tunnel entries, the tunnel animation's hooks.
+//          see holtburger_core DEFER_LOGIN_COMPLETE_AFTER_TELEPORT; at login it
+//          is sent before the tunnel ends, so ACE materialises the player while
+//          the client still shows the tunnel), the logout tunnel entry, the
+//          tunnel animation's hooks.
 //
-// `?portalSpace=off` disables the whole presentation (the world just stays up).
+// `?portalSpace=off` disables the whole presentation (the world just stays up),
+// the login entry included.
 
 import * as THREE from "three";
 import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
 import { withLogDepth } from "./shader_logdepth.js";
 import { playUiSound } from "./audio/retail_sound_rules.js";
+import { wireframeFlagOn } from "./wireframe_flag.js";
+import { getWarmTarget, compileWithTarget, programsOf, programPending, prunePending, warmSceneMaterials } from "./shader_prewarm.js";
 
 // ── retail constants ───────────────────────────────────────────────────
 export const PORTAL_SETUP_ENUM = 0x10000001; // portalspace_background
@@ -72,6 +100,12 @@ export const TAS = Object.freeze({
   WORLD_FADEIN: 6,
 });
 const FADE_TIME = 1.0;
+// 2026-10-09 (Phase 4, 1070): quick login mode's tunnel fade-out. The retail 1 s fade runs on the
+// sequencer's frame-dt clock, which a busy load stretches to 2.5-3.2 s of wall time between "walls
+// ready" and the first world pixel; quick mode exists to show the walls as soon as they are up, so it
+// fades the tunnel in 0.25 s (the world still fades in over the retail 1 s). Retail mode and
+// teleports keep FADE_TIME.
+const QUICK_FADE_OUT = 0.25;
 const MIN_CONTINUE = 2.0;
 const MAX_CONTINUE = 5.0;
 export const TUNNEL_FPS = 40.0;
@@ -105,6 +139,118 @@ const PORTAL_HOLD_BUILD = (() => {
   }
 })();
 const POSE_MOVE_M = 5.0; // stale-pkg arrival fallback threshold
+// Login entry: how long the first ticks may wait for the spawn cell to resolve
+// before deciding (the raw pose reads cell 0 right at EnteredWorld on a login
+// INTO a dungeon — client_events.js spawn-kick note), and the warm-path
+// backstop: cells ready this early after a silent start → end without fades.
+const LOGIN_CELL_WAIT_S = 0.5;
+const LOGIN_INSTANT_S = 0.3;
+
+/**
+ * `?loginPortalSpace` — `off|0|false|no` → "off" (today's login, no tunnel);
+ * `retail` → "retail" (CONTINUE 2-5 s + fades, acclient.c EndTeleportAnimation);
+ * absent / `quick` / anything else → "quick" (fade out as soon as the spawn
+ * cell is ready). Read per call so tests can pass `search`.
+ */
+export function loginPortalSpaceMode(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("loginPortalSpace") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+    return v === "retail" ? "retail" : "quick";
+  } catch (_) {
+    return "quick";
+  }
+}
+
+const _ON = new Set(["1", "on", "true", "yes"]);
+/**
+ * Why the login tunnel must not run on this page, or null. Agents and
+ * capture modes keep today's login: a frozen/hand-driven loop would capture
+ * the tunnel (renderOnDemand), nullRender draws nothing, a bot/agent must not
+ * have combat mode refused by ui/portal_busy.js, wireframe has no composer.
+ */
+export function loginPortalSpaceSkipReason(search) {
+  const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+  if (loginPortalSpaceMode(s) === "off") return "flag";
+  try {
+    const p = new URLSearchParams(s);
+    const ps = (p.get("portalSpace") || "").trim().toLowerCase();
+    if (ps === "off" || ps === "0" || ps === "false" || ps === "no") return "portalSpace";
+    if (_ON.has((p.get("nullRender") || "").trim().toLowerCase())) return "nullRender";
+    if (_ON.has((p.get("renderOnDemand") || "").trim().toLowerCase())) return "renderOnDemand";
+    if (_ON.has((p.get("bot") || "").trim().toLowerCase())) return "bot";
+    if (_ON.has((p.get("agent") || "").trim().toLowerCase())) return "agent";
+  } catch (_) { /* unparsable search: no URL-driven skip */ }
+  if (wireframeFlagOn(s)) return "wireframe";
+  return null;
+}
+
+/**
+ * `?portalSpaceFps` — the loop's frame interval while the tunnel owns the
+ * frame: absent → 30 fps; `off|0|false|no` → 0 (uncapped, today); a number N →
+ * clamped to [10, 120] fps. Pure (tests pass `search`); the runtime value is
+ * memoised below.
+ */
+export function portalSpaceFpsIntervalMs(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("portalSpaceFps") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return 0;
+    const n = v === "" ? 30 : Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 1000 / 30;
+    return 1000 / Math.min(120, Math.max(10, n));
+  } catch (_) {
+    return 1000 / 30;
+  }
+}
+const PACE_MS = portalSpaceFpsIntervalMs();
+
+// `?portalSpacePrecompile` (default on): link the tunnel's and the fade
+// overlay's ShaderMaterials off the main thread right after the tunnel scene is
+// built — renderer.compile with the CANVAS bound (their draws go to the canvas;
+// the HalfFloat warm target would key the other variant), then three's
+// non-blocking isReady() on every program each material owns (a transparent
+// DoubleSide part has a Back and a Front program). The tunnel draws black until
+// they are ready. Off: they link synchronously on the first tunnel frame (today).
+const PRECOMPILE = (() => {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("portalSpacePrecompile") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+const PRECOMPILE_WAIT_MAX_MS = 8000; // then draw anyway (a lost poll must not hide the tunnel)
+
+/**
+ * `?tunnelWorldWarm` (2026-10-09, D2) — `off|0|false|no` → "off" (today: the
+ * world's programs link in the reveal frame); `nohold` → warm, but never hold
+ * the release; absent / `on` / anything else → "on". Read per tunnel start
+ * (`_startTunnel`), so tests can pass `search`.
+ *
+ * Why: the tunnel skips the world submission, so the composer's first frame
+ * became the REVEAL frame — 1070 academy spawn (acad-diagF): EffectMaterial
+ * (the final EffectPass, drawn to the canvas) linked 512 ms at the reveal,
+ * plus its bloom / luminance / second EffectPass siblings (~160 ms); before
+ * the tunnel it linked at boot (253 ms).
+ */
+export function tunnelWorldWarmMode(search) {
+  try {
+    const s = typeof search === "string" ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("tunnelWorldWarm") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+    return v === "nohold" ? "nohold" : "on";
+  } catch (_) {
+    return "on";
+  }
+}
+/** Tunnel-clock seconds between warm passes while the tunnel owns the frame. */
+export const WARM_INTERVAL_S = 1.0;
+/** Most the release waits for a still-linking unguarded program (mode "on"). */
+export const WARM_HOLD_MAX_S = 1.5;
+/** Most NEW main-scene materials compiled per pass (the rest: next pass). */
+export const WARM_NEW_MAX = 256;
 export const NOTICE_TEXT = "In Portal Space - Please Wait...";
 // Sound_UI_EnterPortal / Sound_UI_ExitPortal (acclient.h SoundType).
 const SOUND_UI_ENTER_PORTAL = 0x6a;
@@ -157,6 +303,9 @@ export function createPortalSequencer(rng = Math.random) {
     rotDur: 0,
     rotT: 0,
     angle: 0, // camera roll, degrees
+    minC: MIN_CONTINUE, // this run's CONTINUE floor / cap (login quick mode: 0 / 0)
+    maxC: MAX_CONTINUE,
+    fadeOut: FADE_TIME, // this run's TUNNEL_FADEOUT length (login quick mode: QUICK_FADE_OUT)
   };
   const rand = (lo, hi) => lo + rng() * (hi - lo);
   return {
@@ -168,19 +317,29 @@ export function createPortalSequencer(rng = Math.random) {
     ownsFrame() {
       return s.state === TAS.TUNNEL || s.state === TAS.CONTINUE || s.state === TAS.TUNNEL_FADEOUT;
     },
-    /** BeginTeleportAnimation(TAS_TUNNEL): rotation reset, state 3. */
-    begin() {
+    /**
+     * BeginTeleportAnimation(TAS_TUNNEL): rotation reset, state 3.
+     * `opts.minContinue` / `opts.maxContinue` (seconds) override this run's
+     * CONTINUE floor and cap; omitted = retail 2 s / 5 s. `opts.fadeOut`
+     * (seconds, >= 0) overrides this run's tunnel fade-out; omitted = retail 1 s.
+     */
+    begin(opts) {
       s.state = TAS.TUNNEL;
       s.t = 0;
       s.rotStart = s.rotEnd = s.angle = 0;
       s.rotDur = 0;
       s.rotT = 0;
+      const mn = opts && Number.isFinite(opts.minContinue) ? Math.max(0, opts.minContinue) : MIN_CONTINUE;
+      const mx = opts && Number.isFinite(opts.maxContinue) ? Math.max(mn, opts.maxContinue) : MAX_CONTINUE;
+      s.minC = mn;
+      s.maxC = Math.max(mn, mx);
+      s.fadeOut = opts && Number.isFinite(opts.fadeOut) ? Math.max(0, opts.fadeOut) : FADE_TIME;
     },
     reset() { s.state = TAS.OFF; s.t = 0; },
     /** Tunnel far plane as a fraction of the game view distance. */
     tunnelFarFrac() {
       if (s.state !== TAS.TUNNEL_FADEOUT) return 1;
-      const lvl = retailAnimLevel(s.t / FADE_TIME) / 1024;
+      const lvl = retailAnimLevel(s.fadeOut > 0 ? s.t / s.fadeOut : 1) / 1024;
       return lvl * (NEAR_VDIST - 1) + 1;
     },
     /** Black-overlay alpha over the world (WORLD_FADEIN approximation). */
@@ -216,15 +375,15 @@ export function createPortalSequencer(rng = Math.random) {
           if (worldReady) { s.state = TAS.CONTINUE; s.t = 0; ev.push("continue"); }
           break;
         case TAS.CONTINUE:
-          if (s.t >= MIN_CONTINUE) {
+          if (s.t >= s.minC) {
             const remaining = (TUNNEL_END_FRAME - frame) / TUNNEL_FPS;
-            if (s.t >= MAX_CONTINUE || (remaining > EXIT_WINDOW_LOW && remaining < EXIT_WINDOW_HIGH)) {
+            if (s.t >= s.maxC || (remaining > EXIT_WINDOW_LOW && remaining < EXIT_WINDOW_HIGH)) {
               s.state = TAS.TUNNEL_FADEOUT; s.t = 0;
             }
           }
           break;
         case TAS.TUNNEL_FADEOUT:
-          if (s.t >= FADE_TIME) { s.state = TAS.WORLD_FADEIN; s.t = 0; ev.push("exitSound"); }
+          if (s.t >= s.fadeOut) { s.state = TAS.WORLD_FADEIN; s.t = 0; ev.push("exitSound"); }
           break;
         case TAS.WORLD_FADEIN:
           if (s.t >= FADE_TIME) { s.state = TAS.OFF; s.t = 0; ev.push("done"); }
@@ -290,6 +449,32 @@ let _setupDid = 0;
 let _animDid = 0;
 let _overlay = null; // { scene, cam, mat }
 let _noticeEl = null;
+// ?portalSpacePrecompile: programs to await before the tunnel / overlay draw.
+let _tunnelProgs = null; // null = not compiled (draw as today); [] = nothing to await
+let _tunnelProgsAt = 0;
+let _tunnelReady = true; // false while precompiled programs are still linking
+let _overlayProgs = null;
+// Login entry (?loginPortalSpace).
+let _loginPending = null; // { cellId, sc, waited } until the first tick decides
+let _loginMode = false; // the running tunnel is a login tunnel
+let _loginAnnounced = false; // enter whoosh + notice played (only once it really holds)
+let _loginRequestMode = ""; // "quick" | "retail" | "off" at the last request
+let _loginSkip = null; // why the last login request ran no tunnel (or null)
+let _loginStarts = 0;
+// performance.now() stamps of the current/last run (login AND teleport):
+// start = tunnel up, ready = "continue" (cells ready), reveal = "exitSound"
+// (first world frame), done = sequence over.
+let _t = { start: 0, ready: 0, reveal: 0, done: 0, cells: 0 };
+// ?tunnelWorldWarm (per run unless noted).
+let _warmMode = "off"; // read at each tunnel start
+let _warmLastAt = -Infinity; // tunnel clock of the last warm pass
+let _warmHoldFrom = -1; // tunnel clock the release hold began (-1 = not holding)
+let _warmHoldSpent = false; // one bounded hold per run
+const _warmHeld = new Set(); // unguarded programs still linking (the hold set)
+const _warmSeen = new WeakMap(); // material -> keys compiled (whole session)
+const _warmZero = () => ({ passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0, lastMs: 0, maxMs: 0, totalMs: 0, holdMs: 0, holdCapped: false, errors: 0 });
+let _warmStats = _warmZero();
+let _warmRuns = 0;
 
 function now() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -297,6 +482,18 @@ function now() {
 
 function sessionHandle() {
   try { return (typeof window !== "undefined" && window.__sessionHandle) || null; } catch (_) { return null; }
+}
+
+/** Login spawn cell: the pose's cell, else the cell-scene snapshot (server-truth
+ *  carried cell — the pose reads 0 at EnteredWorld on a login into a dungeon). */
+function resolveLoginCell() {
+  const p = readPose();
+  if (p && p.lb) return p.lb >>> 0;
+  const h = sessionHandle();
+  try {
+    if (h && typeof h.getCurrentCellId === "function") return (h.getCurrentCellId() >>> 0) || 0;
+  } catch (_) {}
+  return 0;
 }
 
 function readPose() {
@@ -492,6 +689,7 @@ async function ensureTunnel(scene3d) {
     scene.add(acRoot);
     _tunnelCam = new THREE.PerspectiveCamera(45, 1, 0.05, 4000);
     _tunnelScene = scene;
+    if (PRECOMPILE) _precompileTunnel(scene3d?.renderer);
     return true;
   })();
   try {
@@ -499,6 +697,85 @@ async function ensureTunnel(scene3d) {
   } finally {
     _building = null;
   }
+}
+
+// ── ?portalSpacePrecompile ─────────────────────────────────────────────
+// renderer.compile with the canvas bound (the tunnel and the overlay draw to
+// it), returning every program the compiled materials own — not just
+// currentProgram: three compiles a transparent DoubleSide material as a Back
+// and a Front program. Must run outside render() (compile resets three's
+// render state); ensureTunnel's continuation is.
+function _compileForCanvas(renderer, scene, cam) {
+  const out = [];
+  if (!renderer || typeof renderer.compile !== "function" || !scene || !cam) return out;
+  const prev = typeof renderer.getRenderTarget === "function" ? renderer.getRenderTarget() : null;
+  let mats = null;
+  try {
+    if (typeof renderer.setRenderTarget === "function") renderer.setRenderTarget(null);
+    mats = renderer.compile(scene, cam);
+  } catch (e) {
+    console.warn("[portalSpace] precompile failed (links at first draw):", e);
+    return out;
+  } finally {
+    try { if (typeof renderer.setRenderTarget === "function") renderer.setRenderTarget(prev); } catch (_) {}
+  }
+  if (!mats || typeof mats.forEach !== "function") return out;
+  mats.forEach((m) => {
+    let mp = null;
+    try { mp = renderer.properties?.get?.(m) ?? null; } catch (_) { mp = null; }
+    const progs = mp && mp.programs;
+    if (progs && typeof progs.forEach === "function") progs.forEach((p) => { if (p) out.push(p); });
+    else if (mp && mp.currentProgram) out.push(mp.currentProgram);
+  });
+  return out;
+}
+
+function _programsReady(progs) {
+  if (!progs) return true;
+  for (let i = 0; i < progs.length; i++) {
+    const p = progs[i];
+    try {
+      if (p && typeof p.isReady === "function" && p.isReady() !== true) return false;
+    } catch (_) { /* a destroyed program reads ready */ }
+  }
+  return true;
+}
+
+function _ensureOverlay() {
+  if (_overlay) return _overlay;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { alpha: { value: 1 } },
+    vertexShader: "void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }",
+    fragmentShader: "uniform float alpha; void main(){ gl_FragColor = vec4(0.0, 0.0, 0.0, alpha); }",
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  quad.frustumCulled = false;
+  const scene = new THREE.Scene();
+  scene.add(quad);
+  _overlay = { scene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), mat };
+  return _overlay;
+}
+
+function _precompileTunnel(renderer) {
+  if (!renderer || typeof renderer.compile !== "function" || !_tunnelScene || !_tunnelCam) return;
+  _ensureOverlay();
+  _tunnelProgs = _compileForCanvas(renderer, _tunnelScene, _tunnelCam);
+  _overlayProgs = _compileForCanvas(renderer, _overlay.scene, _overlay.cam);
+  _tunnelProgsAt = now();
+  _tunnelReady = _programsReady(_tunnelProgs);
+}
+
+/** Tunnel programs linked (or nothing to wait for, or the wait cap passed). */
+function _tunnelDrawable() {
+  if (_tunnelReady) return true;
+  if (_programsReady(_tunnelProgs) || now() - _tunnelProgsAt > PRECOMPILE_WAIT_MAX_MS) {
+    _tunnelReady = true;
+    return true;
+  }
+  return false;
 }
 
 // CSequence-style discrete playback: frames 1..N-1 (LowFrame=1, HighFrame=-1)
@@ -584,8 +861,240 @@ function publishDiag() {
       frame: _frame,
       angle: _seq.angle,
       clock: _clock,
+      // ?loginPortalSpace: the running tunnel is the login one / the mode at
+      // the last request / why the last request ran no tunnel / still waiting
+      // for the first tick to decide.
+      login: _loginMode,
+      loginMode: _loginRequestMode,
+      loginSkip: _loginSkip,
+      loginPending: _loginPending !== null,
+      loginStarts: _loginStarts,
+      tunnelReady: _tunnelReady,
+      // performance.now() ms; 0 = not reached in this run.
+      // cells = the destination first read ready (ready = the release: + the
+      // ?tunnelWorldWarm hold, if any).
+      t: { start: _t.start, ready: _t.ready, reveal: _t.reveal, done: _t.done, cells: _t.cells },
+      // ?tunnelWorldWarm, this run: passes run, materials compiled (+ deferred
+      // by the per-pass cap), unguarded programs still linking, sky programs
+      // still linking (IBL), last/max/total pass ms, release hold ms / capped.
+      warm: { mode: _warmMode, runs: _warmRuns, ..._warmStats },
     };
   } catch (_) {}
+}
+
+// ── ?tunnelWorldWarm ───────────────────────────────────────────────────
+// While the tunnel owns the frame the world is not drawn, so nothing links —
+// until the reveal frame links everything at once. Each pass (first owning
+// tick, then every WARM_INTERVAL_S) compiles, with the render target each draw
+// will bind (shader_prewarm.js: null vs non-null is the only key axis):
+//   - every composer pass: a scene pass (RenderPass world / sky, the sky
+//     capture) compiles its scene into the composer-class target (the world
+//     scene with its fog + lights, new / changed materials only, ≤ WARM_NEW_MAX
+//     per pass); a fullscreen pass compiles its material — to the CANVAS when
+//     it is the pass that renders to screen — and every material of the
+//     passes nested in it / its effects (bloom luminance + mipmap blur …)
+//     into the composer-class target;
+//   - the sky scene as the PMREM / cube camera draws it
+//     (IblEnvironment.warmPrograms; `?pmremPrecompile` adds the PMREM
+//     convolution programs).
+// Far-terrain patches are main-scene objects: compiled here when they exist
+// during the tunnel; one created after the reveal is the async-link guard's
+// (`?asyncLinkFar`). No composer yet (pre-bake window) → the main scene waits
+// for the next pass rather than compile the canvas variant.
+const _fsScene = new THREE.Scene();
+const _fsCam = new THREE.OrthographicCamera();
+const _fsGeom = new THREE.BufferGeometry();
+const _fsMeshes = new WeakMap(); // material -> proxy mesh
+const FS_CANVAS = 1;
+const FS_OFFSCREEN = 2;
+const FS_HOLD = 4; // from a pass enabled at warm time: the release may wait on it
+
+function _markFs(map, m, bit) {
+  if (!m || !m.isMaterial) return;
+  map.set(m, (map.get(m) || 0) | bit);
+}
+
+function _passLike(v) {
+  return !!v && typeof v === "object" && !v.isObject3D && !v.isMaterial && !v.isTexture &&
+    typeof v.render === "function" && ("fullscreenMaterial" in v || "needsSwap" in v);
+}
+
+// Materials a pass draws offscreen: its own material-valued fields, and those
+// of the passes it (or its `effects`) holds — bloom's LuminancePass /
+// MipmapBlurPass (downsampling + upsampling materials), clouds passes, …
+function _scanPassMaterials(obj, map, depth, visited, extra) {
+  if (!obj || typeof obj !== "object" || visited.has(obj)) return;
+  visited.add(obj);
+  let keys;
+  try { keys = Object.keys(obj); } catch (_) { return; }
+  for (const k of keys) {
+    // A pass's own fullscreen material is classed by the caller (canvas when
+    // it renders to screen) — never re-marked offscreen here.
+    if (k === "fullscreenMaterial") continue;
+    let v;
+    try { v = obj[k]; } catch (_) { continue; }
+    if (!v || typeof v !== "object") continue;
+    if (v.isMaterial) { _markFs(map, v, FS_OFFSCREEN | extra); continue; }
+    if (depth <= 0) continue;
+    if (_passLike(v)) {
+      let fm = null;
+      try { fm = v.fullscreenMaterial; } catch (_) { fm = null; }
+      _markFs(map, fm, FS_OFFSCREEN | extra);
+      _scanPassMaterials(v, map, depth - 1, visited, extra);
+    } else if (k === "effects" && Array.isArray(v)) {
+      for (const e of v) _scanPassMaterials(e, map, depth - 1, visited, extra);
+    }
+  }
+}
+
+function _compileFullscreen(renderer, map, offTarget, stats) {
+  const byClass = [[FS_CANVAS, null, []], [FS_OFFSCREEN, offTarget, []]];
+  for (const [m, bits] of map) {
+    for (const cls of byClass) {
+      if (!(bits & cls[0])) continue;
+      const key = `fs${cls[0]}|${m.version}`;
+      const s = _warmSeen.get(m);
+      if (s && s.has(key)) continue;
+      let mesh = _fsMeshes.get(m);
+      if (!mesh) {
+        mesh = new THREE.Mesh(_fsGeom, m);
+        mesh.frustumCulled = false;
+        _fsMeshes.set(m, mesh);
+      }
+      cls[2].push(mesh);
+    }
+  }
+  const out = [];
+  for (const [cls, target, meshes] of byClass) {
+    if (!meshes.length) continue;
+    const root = {
+      traverse(cb) { for (const o of meshes) cb(o); },
+      traverseVisible(cb) { for (const o of meshes) cb(o); },
+    };
+    // A fullscreen pass draws its quad in its own empty Scene: no fog, no
+    // environment, no lights — the same as this empty stand-in.
+    const set = compileWithTarget(renderer, root, _fsCam, _fsScene, target);
+    if (!set) continue;
+    set.forEach((m) => {
+      out.push(m);
+      let s = _warmSeen.get(m);
+      if (!s || s.size >= 8) { s = new Set(); _warmSeen.set(m, s); }
+      s.add(`fs${cls}|${m.version}`);
+    });
+    stats.fullscreen += set.size;
+  }
+  return out;
+}
+
+/**
+ * One warm pass over the world `sc` (the liveScene3d facade: renderer, scene,
+ * atmospherePipeline.composer, iblEnvironment). Starts links only — never
+ * reads LINK_STATUS. Unguarded programs still linking go to the release hold
+ * set (main-scene materials the async-link guard defers are left to it).
+ * Exported for the node test. Returns this pass's counters, or null.
+ */
+export function warmWorldPrograms(sc) {
+  const renderer = sc?.renderer;
+  if (!renderer || typeof renderer.compile !== "function") return null;
+  const t0 = now();
+  const res = { passes: 0, compiled: 0, deferred: 0, fullscreen: 0, held: 0, sky: 0 };
+  const guard = renderer.__hbAsyncLink;
+  const guarded = guard && typeof guard.guards === "function" ? guard.guards : null;
+  const hold = (mats, isMain) => {
+    if (!mats) return;
+    mats.forEach((m) => {
+      if (isMain && guarded && guarded(m)) return; // deferred by the guard instead
+      for (const p of programsOf(renderer, m)) if (programPending(p)) _warmHeld.add(p);
+    });
+  };
+  const off = getWarmTarget();
+  const comp = sc.atmospherePipeline?.composer ?? null;
+  const main = sc.scene ?? null;
+  if (comp && Array.isArray(comp.passes)) {
+    const scenes = new Set();
+    const fs = new Map();
+    const visited = new Set();
+    for (const pass of comp.passes) {
+      if (!pass || typeof pass !== "object") continue;
+      res.passes += 1;
+      let fsm = null;
+      try { fsm = pass.fullscreenMaterial ?? null; } catch (_) { fsm = null; }
+      if (!fsm && pass.scene && pass.scene.isScene && pass.camera) {
+        // Scene pass (RenderPass world / sky, SkyCapturePass).
+        if (!scenes.has(pass.scene)) {
+          scenes.add(pass.scene);
+          const isMain = pass.scene === main;
+          const r = warmSceneMaterials(renderer, pass.scene, pass.camera, pass.renderToScreen === true ? null : off,
+            { seen: _warmSeen, maxNew: isMain ? WARM_NEW_MAX : Infinity });
+          res.compiled += r.compiled;
+          res.deferred += r.deferred;
+          // A pass switched off right now (e.g. the sky pass indoors) is
+          // warmed for later but never holds the release.
+          if (pass.enabled !== false) hold(r.materials, isMain);
+        }
+      } else {
+        _markFs(fs, fsm, (pass.renderToScreen === true ? FS_CANVAS : FS_OFFSCREEN) | (pass.enabled !== false ? FS_HOLD : 0));
+      }
+      _scanPassMaterials(pass, fs, 3, visited, pass.enabled !== false ? FS_HOLD : 0);
+    }
+    if (fs.size) {
+      const mats = _compileFullscreen(renderer, fs, off, res);
+      res.compiled += mats.length;
+      hold(mats.filter((m) => (fs.get(m) & FS_HOLD) !== 0), false);
+    }
+  }
+  const ibl = sc.iblEnvironment;
+  if (ibl && typeof ibl.warmPrograms === "function") {
+    try { res.sky = ibl.warmPrograms().length; } catch (_) { res.sky = 0; }
+  }
+  res.held = prunePending(_warmHeld);
+  const ms = now() - t0;
+  const s = _warmStats;
+  s.passes += 1;
+  s.compiled += res.compiled;
+  s.deferred = res.deferred;
+  s.fullscreen += res.fullscreen;
+  s.held = res.held;
+  s.sky = res.sky;
+  s.lastMs = Math.round(ms * 10) / 10;
+  s.maxMs = Math.max(s.maxMs, s.lastMs);
+  s.totalMs = Math.round((s.totalMs + ms) * 10) / 10;
+  return res;
+}
+
+function _warmTick(sc) {
+  if (!sc || _clock - _warmLastAt < WARM_INTERVAL_S) return;
+  // The tunnel's own programs (?portalSpacePrecompile) link first — the world
+  // warm waits for them (bounded by that precompile's own 8 s cap).
+  if (_tunnelScene && !_tunnelDrawable()) return;
+  _warmLastAt = _clock;
+  try {
+    warmWorldPrograms(sc);
+  } catch (e) {
+    _warmStats.errors += 1;
+    if (_warmStats.errors === 1) console.warn("[portalSpace] tunnel world warm failed (links at the reveal):", e);
+  }
+}
+
+// Mode "on": hold the release while an unguarded warmed program is still
+// linking — once per run, at most WARM_HOLD_MAX_S of tunnel clock.
+function _warmHolds() {
+  if (_warmMode !== "on" || _warmHoldSpent) return false;
+  const pending = prunePending(_warmHeld);
+  _warmStats.held = pending;
+  if (pending === 0) {
+    if (_warmHoldFrom >= 0) { _warmStats.holdMs = Math.round((_clock - _warmHoldFrom) * 1000); _warmHoldSpent = true; }
+    return false;
+  }
+  if (_warmHoldFrom < 0) _warmHoldFrom = _clock;
+  if (_clock - _warmHoldFrom >= WARM_HOLD_MAX_S) {
+    _warmStats.holdMs = Math.round((_clock - _warmHoldFrom) * 1000);
+    _warmStats.holdCapped = true;
+    _warmHoldSpent = true;
+    return false;
+  }
+  _reason = "warming";
+  return true;
 }
 
 /**
@@ -597,7 +1106,19 @@ function publishDiag() {
  *   enterDid/exitDid: Wave DIDs (undefined = retail default, 0 = muted)
  */
 export function startPortalSpace(scene3d, opts = {}) {
+  _startTunnel(scene3d, opts, false);
+}
+
+// The shared start. `silent` (login entry): no enter whoosh and no notice yet —
+// they play once the tunnel really holds (tickPortalSpace), so a login whose
+// cells turn out ready at once ends without a sound (warm-path backstop).
+function _startTunnel(scene3d, opts, silent) {
   if (!scene3d) return;
+  // A teleport (kind=33) always wins over a login entry: it drops a pending
+  // request and switches a running login tunnel to teleport semantics.
+  _loginPending = null;
+  _loginMode = false;
+  _loginAnnounced = false;
   _scene3d = scene3d;
   _audio = scene3d.audioManager ?? null;
   _onExit = typeof opts.onExit === "function" ? opts.onExit : null;
@@ -610,8 +1131,17 @@ export function startPortalSpace(scene3d, opts = {}) {
   _arrivedAt = 0;
   _clock = 0;
   _reason = "tunnel";
+  _t = { start: now(), ready: 0, reveal: 0, done: 0, cells: 0 };
+  // ?tunnelWorldWarm: a fresh run (the material memo `_warmSeen` persists).
+  _warmMode = tunnelWorldWarmMode();
+  _warmLastAt = -Infinity;
+  _warmHoldFrom = -1;
+  _warmHoldSpent = false;
+  _warmHeld.clear();
+  _warmStats = _warmZero();
+  if (_warmMode !== "off") _warmRuns += 1;
   _startPose = readPose();
-  if (!wasOwning) playOneShot(scene3d, enterDid);
+  if (!wasOwning && !silent) playOneShot(scene3d, enterDid);
   const loopDid = opts.loopDid ? opts.loopDid >>> 0 : 0;
   if (loopDid && !_loop && _audio) {
     _audio
@@ -619,9 +1149,85 @@ export function startPortalSpace(scene3d, opts = {}) {
       .then((h) => { if (h && _seq.isActive()) _loop = h; else if (h) { _loop = h; stopLoop(); } })
       .catch(() => {});
   }
-  setNotice(true);
+  if (!silent) setNotice(true);
   ensureTunnel(scene3d).catch((e) => console.warn("[portalSpace] tunnel build failed:", e));
   publishDiag();
+}
+
+/**
+ * Login entry (client_events.js, FIRST ENTERED_WORLD of a login scope). Only
+ * records the request — the first tickPortalSpace decides (cell resolution,
+ * skip reasons, the resident check), so nothing plays on the warm path.
+ * `scene3d` may be null (init3D not finished); `opts.cellId` optional.
+ * Returns false when a skip reason applies (published as
+ * `__portalSpace.loginSkip`), true when the request is pending.
+ */
+export function requestLoginPortalSpace(scene3d, opts = {}) {
+  _loginRequestMode = loginPortalSpaceMode();
+  const why = loginPortalSpaceSkipReason();
+  if (why) {
+    _loginSkip = why;
+    _loginPending = null;
+    publishDiag();
+    return false;
+  }
+  _loginSkip = null;
+  _loginPending = { cellId: (opts && opts.cellId) >>> 0, sc: scene3d ?? null, waited: 0 };
+  publishDiag();
+  return true;
+}
+
+function _skipLogin(why) {
+  _loginSkip = why;
+  _loginPending = null;
+  publishDiag();
+}
+
+// First tick(s) after a login request: decide, then start (or not).
+function _consumeLoginPending(sc, dt) {
+  const p = _loginPending;
+  if (!sc) return; // no scene yet: keep waiting (init3D still running)
+  if (_seq.isActive()) { _skipLogin("busy"); return; } // a tunnel already runs: never restart it
+  const why = loginPortalSpaceSkipReason();
+  if (why) { _skipLogin(why); return; }
+  let cell = p.cellId >>> 0;
+  if (!cell) cell = resolveLoginCell();
+  if (!cell) {
+    p.waited += dt;
+    if (p.waited < LOGIN_CELL_WAIT_S) return; // the pose may still read 0
+  }
+  if (cell && destinationCellsReady(sc, cell)) { _skipLogin("resident"); return; }
+  _loginPending = null;
+  _beginLogin(sc, cell);
+}
+
+function _beginLogin(sc, cell) {
+  const mode = _loginRequestMode || loginPortalSpaceMode();
+  _startTunnel(sc, {}, true); // clears the login fields: set them after
+  if (mode === "quick") _seq.begin({ minContinue: 0, maxContinue: 0, fadeOut: QUICK_FADE_OUT });
+  _loginMode = true;
+  _loginAnnounced = false;
+  _arrived = true; // the login has no kind=66 edge: the position is the spawn
+  _arrivedAt = 0;
+  _arrivalCell = cell >>> 0;
+  _reason = "login";
+  _loginStarts += 1;
+  publishDiag();
+}
+
+/** True while a login request waits for the first tick to decide. */
+export function isLoginPortalSpacePending() {
+  return _loginPending !== null;
+}
+
+/**
+ * scene3d/index.js scheduleNext: the loop's frame interval this frame —
+ * `baseMs` (the ?targetFps pacing, 0 = rAF) unless the tunnel owns the frame
+ * and ?portalSpaceFps is on, then max(baseMs, 1000/N).
+ */
+export function portalSpaceFrameIntervalMs(baseMs) {
+  if (!(PACE_MS > 0) || !_seq.ownsFrame()) return baseMs;
+  return baseMs > PACE_MS ? baseMs : PACE_MS;
 }
 
 /**
@@ -651,7 +1257,33 @@ export function portalSpaceOwnsFrame() {
   return _seq.ownsFrame();
 }
 
+// Login tunnel: "cells loaded" for the spawn cell, with the teleport
+// build-aware hold (`?portalHoldBuild`). Indoors the hold also covers queued
+// builds and retry gaps that are not in flight (`__interiorBuildPending`).
+function computeLoginWorldReady(scene3d) {
+  if (!_arrivalCell) _arrivalCell = resolveLoginCell();
+  if (_arrivalCell && destinationCellsReady(scene3d, _arrivalCell)) {
+    _reason = "cells-ready";
+    return true;
+  }
+  const waited = _clock - _arrivedAt;
+  if (waited >= ARRIVAL_CELLS_WAIT_MAX) {
+    const indoor = (_arrivalCell & 0xffff) >= 0x100;
+    if (PORTAL_HOLD_BUILD && waited < ARRIVAL_BUILD_WAIT_MAX &&
+        (destinationBuildInFlight(scene3d, _arrivalCell) ||
+         (indoor && globalThis.__interiorBuildPending === true))) {
+      _reason = "login-building";
+      return false;
+    }
+    _reason = waited >= ARRIVAL_BUILD_WAIT_MAX ? "failsafe(build-wait)" : "failsafe(cells-wait)";
+    return true;
+  }
+  _reason = "login";
+  return false;
+}
+
 function computeWorldReady(scene3d) {
+  if (_loginMode) return computeLoginWorldReady(scene3d);
   if (!_arrived) {
     // Stale-pkg fallback (no kind=66): the local pose left the start pose.
     if (_clock > 0.25) {
@@ -690,19 +1322,50 @@ function computeWorldReady(scene3d) {
 
 /** Per-frame driver. Called from loop.js AFTER the camera tick. */
 export function tickPortalSpace(scene3d, dt) {
+  if (_loginPending !== null) {
+    _consumeLoginPending(scene3d ?? _loginPending.sc ?? null, Math.min(Math.max(+dt || 0, 0), 0.25));
+  }
   if (!_seq.isActive()) return;
   const d = Math.min(Math.max(+dt || 0, 0), 0.25);
   _clock += d;
   const frame = advanceAnim(d);
-  const worldReady = _seq.state === TAS.TUNNEL ? computeWorldReady(scene3d ?? _scene3d) : true;
+  // ?tunnelWorldWarm: the world's programs link while the tunnel hides it.
+  if (_warmMode !== "off" && _seq.ownsFrame()) _warmTick(scene3d ?? _scene3d);
+  const rawReady = _seq.state === TAS.TUNNEL ? computeWorldReady(scene3d ?? _scene3d) : true;
+  let worldReady = rawReady;
+  if (rawReady && _seq.state === TAS.TUNNEL && !_t.cells) _t.cells = now();
+  if (_loginMode && !_loginAnnounced) {
+    // Warm-path backstop: the spawn cell turned out resident right after a
+    // silent start — end now, no CONTINUE, no fades, no sound.
+    if (rawReady && _seq.state === TAS.TUNNEL && _clock < LOGIN_INSTANT_S) {
+      _loginSkip = "resident-late";
+      _t.ready = _t.reveal = _t.done = now();
+      endPortalSpace();
+      return;
+    }
+    if (!rawReady && _clock >= LOGIN_INSTANT_S) {
+      // It really holds: now the retail enter whoosh + notice.
+      _loginAnnounced = true;
+      playOneShot(scene3d ?? _scene3d, PORTAL_ENTER_WAVE);
+      setNotice(true);
+    }
+  }
+  // ?tunnelWorldWarm "on": the destination is ready, but a warmed program the
+  // async-link guard would not defer is still linking — hold the tunnel (once
+  // per run, ≤ WARM_HOLD_MAX_S) rather than link it in the reveal frame.
+  if (rawReady && _seq.state === TAS.TUNNEL && _warmHolds()) worldReady = false;
   // No animation -> no frame sync; let the 5 s cap / window logic run on a
   // synthetic frame that never lands in the exit window.
   const ev = _seq.tick(d, { worldReady, frame: _anim ? frame : 0 });
   for (const e of ev) {
-    if (e === "exitSound") {
-      playOneShot(scene3d ?? _scene3d, _exitDid);
+    if (e === "continue") {
+      _t.ready = now();
+    } else if (e === "exitSound") {
+      _t.reveal = now();
+      if (!_loginMode || _loginAnnounced) playOneShot(scene3d ?? _scene3d, _exitDid);
       setNotice(false);
     } else if (e === "done") {
+      _t.done = now();
       endPortalSpace();
       return;
     }
@@ -727,7 +1390,8 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000, 1);
     renderer.clear(true, true, true);
-    if (_tunnelScene && _tunnelCam) {
+    // ?portalSpacePrecompile: black until the tunnel's programs have linked.
+    if (_tunnelScene && _tunnelCam && _tunnelDrawable()) {
       const cam = _tunnelCam;
       const gameFar = mainCam?.far > 0 ? mainCam.far : 4000;
       cam.fov = mainCam?.fov > 0 ? mainCam.fov : 45;
@@ -758,28 +1422,25 @@ export function renderPortalSpaceFrame(renderer, mainCam) {
 export function renderPortalSpaceOverlay(renderer) {
   const alpha = _seq.worldOverlayAlpha();
   if (!(alpha > 0.002) || !renderer) return;
-  if (!_overlay) {
-    const mat = new THREE.ShaderMaterial({
-      uniforms: { alpha: { value: 1 } },
-      vertexShader: "void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }",
-      fragmentShader: "uniform float alpha; void main(){ gl_FragColor = vec4(0.0, 0.0, 0.0, alpha); }",
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    });
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
-    quad.frustumCulled = false;
-    const scene = new THREE.Scene();
-    scene.add(quad);
-    _overlay = { scene, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), mat };
-  }
+  _ensureOverlay();
   _overlay.mat.uniforms.alpha.value = alpha;
   const prevAutoClear = renderer.autoClear;
   const prevTarget = renderer.getRenderTarget?.() ?? null;
   try {
     renderer.setRenderTarget(null);
     renderer.autoClear = false;
-    renderer.render(_overlay.scene, _overlay.cam);
+    if (_overlayProgs && !_programsReady(_overlayProgs) && now() - _tunnelProgsAt < PRECOMPILE_WAIT_MAX_MS) {
+      // ?portalSpacePrecompile: the fade quad is still linking — keep the
+      // world black this frame instead of linking it inside the frame.
+      const c = new THREE.Color();
+      renderer.getClearColor?.(c);
+      const a = renderer.getClearAlpha?.() ?? 1;
+      renderer.setClearColor(0x000000, 1);
+      renderer.clear(true, false, false);
+      renderer.setClearColor(c, a);
+    } else {
+      renderer.render(_overlay.scene, _overlay.cam);
+    }
   } catch (_) {
   } finally {
     renderer.autoClear = prevAutoClear;
@@ -792,6 +1453,23 @@ export function endPortalSpace() {
   const wasActive = _seq.isActive();
   _seq.reset();
   _arrived = false;
+  _loginPending = null;
+  _loginMode = false;
+  _loginAnnounced = false;
+  if (wasActive && _warmMode !== "off" && _warmStats.passes > 0) {
+    // ?tunnelWorldWarm run summary (academy.mjs keeps `portalSpace` lines).
+    const w = _warmStats;
+    let ib = null;
+    try { ib = _scene3d?.iblEnvironment?.warmStats ?? null; } catch (_) { ib = null; }
+    console.info(
+      `[portalSpace] tunnel world warm (${_warmMode}): ${w.passes} passes, ${w.compiled} materials ` +
+      `(${w.fullscreen} fullscreen, ${w.deferred} deferred), ${w.totalMs} ms main thread (max ${w.maxMs}), ` +
+      `release hold ${w.holdMs} ms${w.holdCapped ? " (capped)" : ""}, ${prunePending(_warmHeld)} still linking` +
+      (ib ? `; ibl: first refresh waited ${ib.firstWaitMs} ms, waits ${ib.waitTicks}/${ib.waitCapped} capped, pmrem internals ${ib.pmremInternals}` : ""),
+    );
+  }
+  _warmHeld.clear(); // ?tunnelWorldWarm: nothing left to hold
+  _warmHoldFrom = -1;
   setNotice(false);
   stopLoop();
   _reason = "off";

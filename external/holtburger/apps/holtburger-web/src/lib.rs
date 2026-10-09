@@ -153,9 +153,33 @@ extern "C" {
 // `flag_search` while the extern imported `js_location_search` — a boot-time
 // "does not provide an export named" failure that `cargo check` CANNOT see,
 // because inline_js is just a string literal to the compiler.
-#[wasm_bindgen(inline_js = "export function js_location_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } }")]
+//
+// A0 hardening (`?interiorStabBatch`, 2026-10-09): the SAME snippet also
+// exports the interior build's cooperative-yield helpers. They are appended to
+// THIS inline_js (not a second `inline_js` attribute) on purpose: a second
+// attribute would emit a second `pkg/snippets/<crate-hash>/inline1.js`, and the
+// committed modulepreload block + the bundled-shell gate pin exactly ONE pkg
+// snippet (harness/test_build_shell.mjs "glue + snippet (2 requests)"). Same
+// rule as above — each JS export name must match its extern line below, and the
+// string is one JS line after the `\` continuations, so no `//` comments in it.
+//   * `js_yield_turn` — a Promise that resolves on the NEXT event-loop turn:
+//     a MessageChannel post (no 4 ms nested-setTimeout clamp, no hidden-tab
+//     timer throttling), else `setTimeout(0)`. NOT `scheduler.yield()`: its
+//     continuation is prioritised AHEAD of other queued tasks, which would hold
+//     back exactly what the build yields for (fetch-body delivery, bake-worker
+//     replies, frames). Works in a Window and in a Worker (globalThis).
+//   * `js_document_hidden` — `document.visibilityState === 'hidden'`; false
+//     where there is no document (Workers).
+//   * `js_perf_now` — monotonic `performance.now()` (falls back to Date.now).
+#[wasm_bindgen(inline_js = "export function js_location_search() { try { return (typeof window !== 'undefined' && window.location && typeof window.location.search === 'string') ? window.location.search : ''; } catch (_) { return ''; } } \
+export function js_yield_turn() { try { const g = globalThis; if (typeof g.MessageChannel === 'function') { return new Promise(function (resolve) { const ch = new g.MessageChannel(); ch.port1.onmessage = function () { ch.port1.onmessage = null; ch.port1.close(); resolve(); }; ch.port2.postMessage(0); }); } } catch (_) { } return new Promise(function (resolve) { setTimeout(resolve, 0); }); } \
+export function js_document_hidden() { try { const d = globalThis.document; return !!(d && d.visibilityState === 'hidden'); } catch (_) { return false; } } \
+export function js_perf_now() { try { const p = globalThis.performance; if (p && typeof p.now === 'function') { return p.now(); } } catch (_) { } return Date.now(); }")]
 extern "C" {
     fn js_location_search() -> String;
+    fn js_yield_turn() -> js_sys::Promise;
+    fn js_document_hidden() -> bool;
+    fn js_perf_now() -> f64;
 }
 
 /// §2.2c (2026-07-24) — seeded query string for URL flags off the main thread.
@@ -380,6 +404,41 @@ pub fn url_flag_diag() -> String {
         holtburger_resource_http::configured_fetch_concurrency(),
         holtburger_resource_http::shard_verify_enabled(),
     )
+}
+
+/// Workstream B (`?shardFetchWorker`, 2026-10-09): register (a function) or
+/// unregister (`null` / `undefined`) this instance's JS shard fetcher. While one
+/// is registered, the per-shard fetch of `ManifestResourceSource::prefetch_impl`
+/// (Step D — never the manifest, boot pack or catalog fetches) calls
+/// `f(url, "low" | "auto", expectedShaHex | null)` instead of `fetch()`; the
+/// contract is on `holtburger_resource_http::http::fetch_shard_bytes`. The page
+/// registers `scene3d/shard_fetch_client.js`'s worker-backed fetcher on the
+/// MAIN instance right after `init_resource_source` (index.html, through
+/// `__hbWasmNs` so a stale pkg without this export is a no-op), and passes
+/// `null` when that worker fails, which sends every later fetch direct again.
+/// The bake worker's instance never registers.
+///
+/// Returns `true` iff a fetcher is registered after the call: `false` for
+/// `null`/`undefined`, and for a non-function value (which also clears any
+/// previous registration).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn register_shard_fetcher(f: JsValue) -> bool {
+    use wasm_bindgen::JsCast;
+    if f.is_null() || f.is_undefined() {
+        holtburger_resource_http::set_shard_fetcher(None);
+        return false;
+    }
+    match f.dyn_into::<js_sys::Function>() {
+        Ok(func) => {
+            holtburger_resource_http::set_shard_fetcher(Some(func));
+            true
+        }
+        Err(_) => {
+            holtburger_resource_http::set_shard_fetcher(None);
+            false
+        }
+    }
 }
 
 /// The query string URL-flag parsing should use: the seed when present,
@@ -1072,6 +1131,128 @@ fn placement_id_flag() -> bool {
     }
 }
 
+/// A0 cold-load (2026-10-09): parse `?interiorStabBatch`. DEFAULT-ON,
+/// off-escape: `interiorStabBatch=off|0|false|no` disables (house rule: absent
+/// reads ON, only an explicit off-form is OFF).
+///
+/// ON: `fetch_env_cells_in_landblock` fetches every interior static's geometry
+/// records (stab tops, Setup parts + MotionTable, idle Animation) in ONE urgent
+/// keyed walk joined with the Environment prefetch, BEFORE the per-cell loop,
+/// and that loop yields to the event loop every 12 ms. OFF: the pre-A0
+/// sequence — a top-record batch, then one urgent walk (one network round) per
+/// first-seen Setup inside the loop (~70 serial bursts for the academy 0x8602).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_interior_stab_batch_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "interiorStabBatch=off"
+                | "interiorStabBatch=0"
+                | "interiorStabBatch=false"
+                | "interiorStabBatch=no"
+        )
+    })
+}
+
+/// A0: the `?interiorStabBatch` gate, parsed once per wasm instance via
+/// `flag_search()` (seeded in the bake worker; interiors are only built on the
+/// main instance today).
+#[cfg(target_arch = "wasm32")]
+fn interior_stab_batch_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_interior_stab_batch_flag(&flag_search()))
+}
+
+/// 2026-10-09 follow-up (`?interiorStabChunk`, default 40; only meaningful
+/// with `?interiorStabBatch` on): the stab batch walk runs as concurrent
+/// sub-walks of at most N stabs (`batch_walk::chunk_ids`), each PACED — one
+/// event-loop turn before every discovery round that follows a prefetch round
+/// (`prefetch::ensure_walk_prefetched_keyed_batch_paced`, main thread only) —
+/// so no single task runs the discovery over all ~200 academy statics, and
+/// sub-walk A's next round no longer waits for sub-walk B's slowest body.
+/// `None` (`off|0|false|no`) = the ONE unpaced walk under today's key. Grammar
+/// in `batch_walk::parse_interior_stab_chunk_flag`; parsed once per instance
+/// over the seeded `flag_search()`.
+#[cfg(target_arch = "wasm32")]
+fn interior_stab_chunk_flag() -> Option<usize> {
+    static FLAG: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| batch_walk::parse_interior_stab_chunk_flag(&flag_search()))
+}
+
+#[cfg(test)]
+mod tests_interior_stab_batch_flag {
+    use super::parse_interior_stab_batch_flag;
+
+    #[test]
+    fn interior_stab_batch_flag_defaults_on_with_off_0_false_no_escape() {
+        assert!(parse_interior_stab_batch_flag(""));
+        assert!(parse_interior_stab_batch_flag("?foo=bar"));
+        assert!(parse_interior_stab_batch_flag("?interiorStabBatch=on"));
+        assert!(parse_interior_stab_batch_flag("?interiorStabBatch=1"));
+        for off in ["off", "0", "false", "no"] {
+            assert!(!parse_interior_stab_batch_flag(&format!("?interiorStabBatch={off}")));
+            assert!(!parse_interior_stab_batch_flag(&format!(
+                "?a=b&interiorStabBatch={off}&c=d"
+            )));
+        }
+    }
+}
+
+/// A1-lite cold-load (2026-10-09): parse `?surfaceWalkLite`. DEFAULT-ON,
+/// off-escape: `surfaceWalkLite=off|0|false|no` disables (same grammar as
+/// `?interiorStabBatch`).
+///
+/// ON: `fetch_surfaces_pixels`' discovery rounds walk the surface RECORDS only
+/// ([`walk_surface_pixel_records`]: Surface → SurfaceTexture → Texture →
+/// Palette, exactly the reads `fetch_surface_pixels_impl` makes) and the
+/// pixels are decoded ONCE, after the walk. OFF: every discovery round runs the
+/// full `fetch_surface_pixels_cached` decode (DXT/JPEG/palette expansion, the
+/// Sobel normal + height planes) over every not-yet-complete DID — in the bake
+/// worker the 2026-10-09 academy baselines show the palette (0x04) round going
+/// out ~3 s after the texture (0x06) round because of that decode CPU.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_surface_walk_lite_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(
+            kv,
+            "surfaceWalkLite=off"
+                | "surfaceWalkLite=0"
+                | "surfaceWalkLite=false"
+                | "surfaceWalkLite=no"
+        )
+    })
+}
+
+/// A1-lite: the `?surfaceWalkLite` gate, parsed once per wasm instance via
+/// `flag_search()` — seeded in the bake worker (`seed_url_flag_search`), which
+/// is where most surface decodes run, so the worker honours `=off` too.
+#[cfg(target_arch = "wasm32")]
+fn surface_walk_lite_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| parse_surface_walk_lite_flag(&flag_search()))
+}
+
+#[cfg(test)]
+mod tests_surface_walk_lite_flag {
+    use super::parse_surface_walk_lite_flag;
+
+    #[test]
+    fn surface_walk_lite_flag_defaults_on_with_off_0_false_no_escape() {
+        assert!(parse_surface_walk_lite_flag(""));
+        assert!(parse_surface_walk_lite_flag("?foo=bar"));
+        assert!(parse_surface_walk_lite_flag("?surfaceWalkLite=on"));
+        assert!(parse_surface_walk_lite_flag("?surfaceWalkLite=1"));
+        for off in ["off", "0", "false", "no"] {
+            assert!(!parse_surface_walk_lite_flag(&format!("?surfaceWalkLite={off}")));
+            assert!(!parse_surface_walk_lite_flag(&format!(
+                "?a=b&surfaceWalkLite={off}&c=d"
+            )));
+        }
+    }
+}
+
 /// A4-Q4 (2026-06-12, unification survey): parse `?getLink=on` (or
 /// `&getLink=on`). Same shape as `parse_placement_id_flag`. When on,
 /// the link-clip lookup in `try_resolve_link_frames` uses the faithful
@@ -1658,6 +1839,14 @@ mod world_bootstrap_cache;
 // without standing up the full wasm-bindgen stack.
 #[cfg(any(target_arch = "wasm32", test))]
 mod walk_dedup;
+
+// A0 hardening (`?interiorStabBatch`, 2026-10-09): the batch-mode discovery
+// loop that excludes a round's failed keys and keeps discovering. Same
+// `wasm32 OR test` gate as `walk_dedup` so its round logic is unit-tested
+// natively (`cargo test -p holtburger-web --lib batch_walk`); the wasm binding
+// is `prefetch::ensure_walk_prefetched_keyed_batch`.
+#[cfg(any(target_arch = "wasm32", test))]
+mod batch_walk;
 
 // latency (2026-10-05): retail-style local combat-mode toggle bookkeeping
 // (the toggle reads the REQUESTED mode until the server's echo lands). Same
@@ -13312,6 +13501,265 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     }
 }
 
+/// A1-lite (`?surfaceWalkLite`, 2026-10-09): read EXACTLY the records
+/// [`fetch_surface_pixels_impl`] reads for `surface_did`, in the same order,
+/// and decode nothing. `fetch_surfaces_pixels` runs this in its discovery
+/// rounds (round N's misses are round N+1's fetch list) and decodes once after
+/// the walk, instead of running the full decode every round.
+///
+/// Mirror, step for step (keep in lock-step with the decode; pinned by
+/// `tests_surface_walk_lite::walk_reads_exactly_what_the_decode_reads`):
+/// 1. tex-swap alias → base Surface + overridden SurfaceTexture
+///    (`resolve_tex_swap_alias`); the decode's negative-cache short-circuit is
+///    skipped inside discovery walks, so it is not mirrored;
+/// 2. the Surface record; a solid-colour or non-textured Surface stops;
+/// 3. the SurfaceTexture (the alias override wins), its `highest_res()`;
+/// 4. the Texture (RenderSurface);
+/// 5. the Palette — only for a palette-indexed format (P8/Index16), only when
+///    `width * height` does not overflow (`to_rgba8_impl` checks that before
+///    the palette fetch), and it is the Surface's `orig_palette_id` when
+///    non-zero, else the Texture's `default_palette_id`
+///    (`to_rgba8_with_palette_override`). `texture_overrides::lookup_for`
+///    never applies to a paletted texture, so an installed pixel override can
+///    never skip this read — it is not consulted here (it counts lookups).
+///
+/// `holtburger_dat::walk::collect_surface_dependencies` is NOT a substitute:
+/// it never READS the palette (it only lists ids, so a `RecordingSource`
+/// records no palette miss and the loop would never fetch it — magenta
+/// paletted surfaces), it lists the orig palette even for non-paletted
+/// textures and the default palette even when the orig one overrides it, and
+/// it does not resolve tex-swap alias DIDs.
+#[cfg(any(target_arch = "wasm32", test))]
+fn walk_surface_pixel_records<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    surface_did: u32,
+) {
+    use holtburger_dat::file_type::{Surface, SurfaceTexture, Texture};
+    use holtburger_dat::ResourceKey;
+    let (surface_did, tex_override) = match resolve_tex_swap_alias(surface_did) {
+        Some((base, tex)) => (base, Some(tex)),
+        None => (surface_did, None),
+    };
+    let Ok(bytes) = source.get_file_shared(ResourceKey::new("eor/portal", surface_did)) else {
+        return;
+    };
+    let Ok(surface) = Surface::unpack(bytes.as_slice()) else {
+        return;
+    };
+    if surface.solid_color().is_some() {
+        return;
+    }
+    let Some((surf_tex_id, surf_pal_id)) = surface.textured() else {
+        return;
+    };
+    let surf_tex_id = tex_override.unwrap_or(surf_tex_id);
+    let Ok(stb) = source.get_file_shared(ResourceKey::new("eor/portal", surf_tex_id)) else {
+        return;
+    };
+    let Ok(surf_tex) = SurfaceTexture::unpack(stb.as_slice()) else {
+        return;
+    };
+    let Some(rs_id) = surf_tex.highest_res() else {
+        return;
+    };
+    let Ok(tb) = source.get_file_shared(ResourceKey::new("eor/portal", rs_id)) else {
+        return;
+    };
+    let Ok(tex) = Texture::unpack(tb.as_slice()) else {
+        return;
+    };
+    if !tex.format().needs_palette() {
+        return;
+    }
+    if (tex.width as usize).checked_mul(tex.height as usize).is_none() {
+        return;
+    }
+    let palette_override = (surf_pal_id != 0).then_some(surf_pal_id);
+    let Some(pal_id) = palette_override
+        .filter(|&p| p != 0)
+        .or(tex.default_palette_id)
+    else {
+        return;
+    };
+    let _ = source.get_file_shared(ResourceKey::new("eor/portal", pal_id));
+}
+
+/// `?surfaceWalkLite`: the records-only discovery walk must read EXACTLY what
+/// the decode reads — the same ids in the same order — for every shape of
+/// surface chain, complete or not, or the discovery loop would fetch too little
+/// (white/magenta surfaces) or too much (wasted requests).
+#[cfg(test)]
+mod tests_surface_walk_lite {
+    use super::{fetch_surface_pixels_impl, tex_swap_alias_for, walk_surface_pixel_records};
+    use holtburger_dat::{DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    const NS: &str = "eor/portal";
+
+    struct MockSource {
+        files: HashMap<u32, Vec<u8>>,
+    }
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files.get(&key.file_id).cloned().ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            namespace == NS
+        }
+    }
+
+    /// Logs every read, hits and misses alike (`get_file_shared`'s default
+    /// forwards to `get_file_by_key`, so shared reads are logged too).
+    struct ReadLog<'a> {
+        inner: &'a MockSource,
+        reads: Mutex<Vec<u32>>,
+    }
+    impl ResourceSource for ReadLog<'_> {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.reads.lock().unwrap().push(key.file_id);
+            self.inner.get_file_by_key(key)
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.inner.get_metadata_by_key(key)
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.inner.has_namespace(namespace)
+        }
+    }
+
+    // Wire-format packers (same layouts as tests_a10_m3a_has_palette's).
+    fn pack_palette(id: u32, colours: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&(colours.len() as i32).to_le_bytes());
+        for &c in colours {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_p8_texture_1x1(id: u32, pixel_idx: u8, default_pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&41u32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.push(pixel_idx);
+        buf.extend_from_slice(&default_pal_id.to_le_bytes());
+        buf
+    }
+    fn pack_rgb_texture_1x1(id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&1i32.to_le_bytes());
+        buf.extend_from_slice(&20u32.to_le_bytes());
+        buf.extend_from_slice(&3i32.to_le_bytes());
+        buf.extend_from_slice(&[0x10, 0x20, 0x30]);
+        buf
+    }
+    fn pack_surface_texture(id: u32, mip_chain: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.push(0u8);
+        buf.extend_from_slice(&(mip_chain.len() as i32).to_le_bytes());
+        for &t in mip_chain {
+            buf.extend_from_slice(&t.to_le_bytes());
+        }
+        buf
+    }
+    fn pack_textured_surface(surface_type: u32, tex_id: u32, pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&tex_id.to_le_bytes());
+        buf.extend_from_slice(&pal_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+    fn pack_solid_surface(surface_type: u32, argb: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&argb.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());
+        buf.extend_from_slice(&1.0f32.to_le_bytes());
+        buf
+    }
+
+    fn reads_of(src: &MockSource, did: u32, decode: bool) -> Vec<u32> {
+        let log = ReadLog { inner: src, reads: Mutex::new(Vec::new()) };
+        if decode {
+            let _ = fetch_surface_pixels_impl(&log, did);
+        } else {
+            walk_surface_pixel_records(&log, did);
+        }
+        log.reads.into_inner().unwrap()
+    }
+
+    #[test]
+    fn walk_reads_exactly_what_the_decode_reads() {
+        // Ids: 0x08 Surface, 0x05 SurfaceTexture, 0x06 Texture, 0x04 Palette.
+        let mut files: HashMap<u32, Vec<u8>> = HashMap::new();
+        // (a) P8, palette from the texture's default.
+        files.insert(0x0800_A001, pack_textured_surface(0x2, 0x0500_A001, 0));
+        files.insert(0x0500_A001, pack_surface_texture(0x0500_A001, &[0x0600_A001]));
+        files.insert(0x0600_A001, pack_p8_texture_1x1(0x0600_A001, 0, 0x0400_A001));
+        files.insert(0x0400_A001, pack_palette(0x0400_A001, &[0xFF11_2233]));
+        // (b) P8 whose Surface overrides the palette (orig_palette_id).
+        files.insert(0x0800_A002, pack_textured_surface(0x2, 0x0500_A001, 0x0400_A002));
+        files.insert(0x0400_A002, pack_palette(0x0400_A002, &[0xFF44_5566]));
+        // (c) a non-paletted texture: no palette read even with an orig palette.
+        files.insert(0x0800_A003, pack_textured_surface(0x2, 0x0500_A003, 0x0400_A002));
+        files.insert(0x0500_A003, pack_surface_texture(0x0500_A003, &[0x0600_A003]));
+        files.insert(0x0600_A003, pack_rgb_texture_1x1(0x0600_A003));
+        // (d) a solid-colour surface.
+        files.insert(0x0800_A004, pack_solid_surface(0x1, 0xFF80_8080));
+        // (e) missing SurfaceTexture.
+        files.insert(0x0800_A005, pack_textured_surface(0x2, 0x0500_A0FF, 0));
+        // (f) missing Palette (P8 whose default palette is not resident).
+        files.insert(0x0800_A006, pack_textured_surface(0x2, 0x0500_A006, 0));
+        files.insert(0x0500_A006, pack_surface_texture(0x0500_A006, &[0x0600_A006]));
+        files.insert(0x0600_A006, pack_p8_texture_1x1(0x0600_A006, 0, 0x0400_A0FF));
+        // (g) an empty mip chain (no highest_res).
+        files.insert(0x0800_A007, pack_textured_surface(0x2, 0x0500_A007, 0));
+        files.insert(0x0500_A007, pack_surface_texture(0x0500_A007, &[]));
+        // (h) missing Texture.
+        files.insert(0x0800_A008, pack_textured_surface(0x2, 0x0500_A008, 0));
+        files.insert(0x0500_A008, pack_surface_texture(0x0500_A008, &[0x0600_A0FF]));
+        let src = MockSource { files };
+        // (i) a tex-swap alias: base Surface (a) with SurfaceTexture (c)'s.
+        let alias = tex_swap_alias_for(0x0800_A001, 0x0500_A003);
+
+        let cases: Vec<(u32, Vec<u32>)> = vec![
+            (0x0800_A001, vec![0x0800_A001, 0x0500_A001, 0x0600_A001, 0x0400_A001]),
+            (0x0800_A002, vec![0x0800_A002, 0x0500_A001, 0x0600_A001, 0x0400_A002]),
+            (0x0800_A003, vec![0x0800_A003, 0x0500_A003, 0x0600_A003]),
+            (0x0800_A004, vec![0x0800_A004]),
+            (0x0800_A005, vec![0x0800_A005, 0x0500_A0FF]),
+            (0x0800_A006, vec![0x0800_A006, 0x0500_A006, 0x0600_A006, 0x0400_A0FF]),
+            (0x0800_A007, vec![0x0800_A007, 0x0500_A007]),
+            (0x0800_A008, vec![0x0800_A008, 0x0500_A008, 0x0600_A0FF]),
+            (0x0800_A0FF, vec![0x0800_A0FF]),
+            (alias, vec![0x0800_A001, 0x0500_A003, 0x0600_A003]),
+        ];
+        for (did, expected) in cases {
+            let decode = reads_of(&src, did, true);
+            let walk = reads_of(&src, did, false);
+            assert_eq!(walk, decode, "surface 0x{did:08X}: walk vs decode read sets");
+            assert_eq!(walk, expected, "surface 0x{did:08X}: expected chain");
+        }
+    }
+}
+
 // === Render-completeness audit (2026-05-29) — animated SurfaceTextures ===
 //
 // A SurfaceTexture (0x05) holds a LIST of RenderSurface (0x06) ids. The
@@ -13684,13 +14132,25 @@ pub async fn fetch_surfaces_pixels(
         })
         .with_u32_slice(&chunk_dids);
         let dids_for_walk = chunk_dids.clone();
+        // A1-lite (`?surfaceWalkLite`, default on): discovery rounds walk the
+        // records only (`walk_surface_pixel_records` — the decode's exact read
+        // set), so no round pays for a DXT/JPEG/palette expansion + Sobel
+        // normal/height pass; the loop below then decodes each DID ONCE (memo
+        // miss → full decode against resident records → memoised iff complete,
+        // the same bytes the terminating discovery round used to memoise).
+        // OFF: the full memo-through decode in every round, as before.
+        let walk_lite = surface_walk_lite_flag();
         let walk = move |s: &dyn holtburger_dat::ResourceSource| {
             for &id in &dids_for_walk {
                 // B1: skip DIDs a prior round completed; the terminating
                 // round's complete decode memoises (kills the walk's
                 // 2–8× re-decodes AND the final loop's +1).
                 if !surface_memo_contains(id) {
-                    let _ = fetch_surface_pixels_cached(s, id);
+                    if walk_lite {
+                        walk_surface_pixel_records(s, id);
+                    } else {
+                        let _ = fetch_surface_pixels_cached(s, id);
+                    }
                 }
             }
         };
@@ -22389,6 +22849,467 @@ fn collect_landblock_bake_lights<S: holtburger_dat::ResourceSource + ?Sized>(
     per_cell
 }
 
+/// A0 (`?interiorStabBatch`): the per-cell loop's cooperative-yield budget —
+/// about one frame. Once this many ms of `performance.now()` have passed since
+/// the last yield, the next cell iteration hands the event loop one turn first.
+/// (8 ms in the first A0 cut; 12 ms per review-AB.md — each yield also waits
+/// behind whatever the busy main thread queued, so fewer, larger slices.)
+#[cfg(target_arch = "wasm32")]
+const INTERIOR_BUILD_YIELD_MS: f64 = 12.0;
+
+/// A0 (`?interiorStabBatch`): hand the event loop one turn.
+///
+/// `js_yield_turn` (the inline snippet next to `js_location_search`): a
+/// MessageChannel post, else `setTimeout(0)` (not `scheduler.yield()`, whose
+/// continuation jumps the task queue). The first cut used `setTimeout(0)` (gloo-timers),
+/// which the browser clamps to ≥4 ms once nested five deep — and the
+/// wasm-bindgen-futures continuation makes every yield after the fifth a
+/// nested timer — and throttles to ~1 s (worse after minutes) in a hidden tab.
+/// A resolved Promise would NOT do: its continuation is a microtask, which runs
+/// before rendering and before fetch bodies are delivered. Works in a Window
+/// and in a Worker (`globalThis`).
+#[cfg(target_arch = "wasm32")]
+async fn yield_to_event_loop() {
+    let _ = wasm_bindgen_futures::JsFuture::from(js_yield_turn()).await;
+}
+
+/// A0 hardening (`?interiorStabBatch`): the interior build's yield
+/// bookkeeping — when the last turn was handed back, how many yields, and how
+/// long the build spent away (so the build log can split loop CPU from wall).
+#[cfg(target_arch = "wasm32")]
+struct InteriorBuildYield {
+    last_ms: f64,
+    yields: u32,
+    away_ms: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl InteriorBuildYield {
+    fn new() -> Self {
+        InteriorBuildYield {
+            last_ms: js_perf_now(),
+            yields: 0,
+            away_ms: 0.0,
+        }
+    }
+
+    /// Yield when `force` or once [`INTERIOR_BUILD_YIELD_MS`] are spent —
+    /// except while the document is hidden: no frames to protect then, and a
+    /// background tab is exactly where yielding costs most. (In a Worker there
+    /// is no document; it always yields.)
+    async fn maybe_yield(&mut self, force: bool) {
+        let now = js_perf_now();
+        if !force && now - self.last_ms < INTERIOR_BUILD_YIELD_MS {
+            return;
+        }
+        if js_document_hidden() {
+            self.last_ms = now;
+            return;
+        }
+        yield_to_event_loop().await;
+        let back = js_perf_now();
+        self.yields += 1;
+        self.away_ms += back - now;
+        self.last_ms = back;
+    }
+}
+
+/// A0 hardening (`?interiorStabBatch`): the per-placement products of a stab
+/// that depend only on its id, never on its placement transform — memoised
+/// per build in `fetch_env_cells_in_landblock` so a Setup placed 30× in a hall
+/// parses its Setup/MotionTable/Animation/part GfxObjs once, not ~3× per
+/// placement (review-AB.md, "Bonus fix…" + the 0x02 arm).
+#[cfg(target_arch = "wasm32")]
+struct InteriorStabMemo {
+    aabb_local: Vec<f32>,
+    default_script_id: u32,
+    default_animation_id: u32,
+    bsp: InteriorStabBsp,
+}
+
+/// The collision half of [`InteriorStabMemo`], in stab-local space; staged per
+/// placement by [`stage_interior_stab_bsps`] exactly as the per-placement arms
+/// stage it (the same `CellPhysicsBsp` field values, cloned instead of moved).
+#[cfg(target_arch = "wasm32")]
+enum InteriorStabBsp {
+    None,
+    /// 0x01 GfxObj: its own physics BSP + resolved polygons.
+    Gfx(
+        holtburger_dat::physics::BspNode,
+        std::collections::HashMap<u16, holtburger_dat::physics::ResolvedPolygon>,
+    ),
+    /// 0x02 Setup: one entry per physics-bearing part (part frame composed).
+    Parts(Vec<StaticPartBsp>),
+}
+
+/// Compute one [`InteriorStabMemo`] the same way, in the same order, as the
+/// per-placement code: AABB, default script and default animation first
+/// (before any fetch, as today), then the 0x01 top-record prefetch + BSP, or
+/// the 0x02 per-stab fallback walk + per-part BSP walk. The 0x02 fallback walk
+/// is the batch-mode keyed walk (same `…:static-bsp:0x02` key, its own dedup
+/// map); `rounds > 0` means it still had misses and bumps `per_stab_fallback`.
+#[cfg(target_arch = "wasm32")]
+async fn interior_stab_memo_entry(
+    source: &std::sync::Arc<holtburger_resource_http::ManifestResourceSource>,
+    stab_id: u32,
+    per_stab_fallback: &mut u32,
+) -> InteriorStabMemo {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let aabb_local = static_object_local_aabb(source.as_ref(), stab_id);
+    let default_script_id = static_object_default_script(source.as_ref(), stab_id);
+    let default_animation_id = static_object_default_animation(source.as_ref(), stab_id);
+    let bsp = match (stab_id >> 24) as u8 {
+        0x01 => {
+            source
+                .prefetch_urgent(&[ResourceKey::new("eor/portal", stab_id)])
+                .await
+                .ok();
+            let mut out = InteriorStabBsp::None;
+            if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", stab_id))
+                && let Ok(gfx) = holtburger_dat::file_type::GfxObj::unpack(
+                    &mut std::io::Cursor::new(&bytes),
+                )
+                && let Some(tree) = &gfx.physics_bsp
+                && !gfx.physics_polygons.is_empty()
+            {
+                let polys = holtburger_dat::physics::resolve_cell_physics_polygons(
+                    &gfx.physics_polygons,
+                    |vid| {
+                        gfx.vertex_array.vertices.get(&vid).map(|sw| {
+                            holtburger_common::Vector3::new(sw.origin.x, sw.origin.y, sw.origin.z)
+                        })
+                    },
+                );
+                if !polys.is_empty() {
+                    out = InteriorStabBsp::Gfx(tree.clone(), polys);
+                }
+            }
+            out
+        }
+        0x02 => {
+            let stats = prefetch::ensure_walk_prefetched_keyed_batch(
+                prefetch::WalkCacheKey::new("fetchEnvCellsInLandblock:static-bsp:0x02")
+                    .with_u32(stab_id),
+                source,
+                move |s| {
+                    let _ = walk_setup_parts_with_geom(s, stab_id);
+                },
+                true,
+            )
+            .await;
+            if stats.rounds > 0 {
+                *per_stab_fallback += 1;
+            }
+            match walk_setup_parts_with_geom_and_bsp(source.as_ref(), stab_id) {
+                Some(parts) => InteriorStabBsp::Parts(
+                    parts.into_iter().filter_map(|(_aabb, bsp)| bsp).collect(),
+                ),
+                None => InteriorStabBsp::None,
+            }
+        }
+        _ => InteriorStabBsp::None,
+    };
+    InteriorStabMemo {
+        aabb_local,
+        default_script_id,
+        default_animation_id,
+        bsp,
+    }
+}
+
+/// Stage a memoised stab's collision for ONE placement — the same
+/// `CELL_STATIC_BSP_PENDING` entries, in the same order and with the same
+/// field values, as the per-placement 0x01 / 0x02 arms of
+/// `fetch_env_cells_in_landblock`.
+#[cfg(target_arch = "wasm32")]
+fn stage_interior_stab_bsps(
+    bsp: &InteriorStabBsp,
+    cell_id: u32,
+    stab_world_origin: holtburger_common::Vector3,
+    stab_world_orientation: holtburger_common::Quaternion,
+) {
+    match bsp {
+        InteriorStabBsp::None => {}
+        InteriorStabBsp::Gfx(tree, polys) => {
+            CELL_STATIC_BSP_PENDING.with(|pile| {
+                pile.borrow_mut().push((
+                    cell_id,
+                    holtburger_world::CellPhysicsBsp {
+                        tree: tree.clone(),
+                        polys: polys.clone(),
+                        origin: stab_world_origin,
+                        orientation: stab_world_orientation,
+                        scale: 1.0, // E3.4: stab static (plumb real scenery scale when available)
+                    },
+                ));
+            });
+        }
+        InteriorStabBsp::Parts(parts) => {
+            for b in parts {
+                let pr = quat_rotate(stab_world_orientation, b.offset);
+                let wo = holtburger_common::Vector3::new(
+                    stab_world_origin.x + pr.x,
+                    stab_world_origin.y + pr.y,
+                    stab_world_origin.z + pr.z,
+                );
+                let wq = stab_world_orientation.multiply(b.rot);
+                CELL_STATIC_BSP_PENDING.with(|pile| {
+                    pile.borrow_mut().push((
+                        cell_id,
+                        holtburger_world::CellPhysicsBsp {
+                            tree: b.tree.clone(),
+                            polys: b.polys.clone(),
+                            origin: wo,
+                            orientation: wq,
+                            scale: 1.0, // E3.4: stab static (plumb real scenery scale when available)
+                        },
+                    ));
+                });
+            }
+        }
+    }
+}
+
+/// A1-lite (`?interiorEarlyBake`): what the bake worker's Step B / Step C need
+/// from a landblock's interior, read off the EnvCell records alone.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EnvCellDeps {
+    /// EnvCells that loaded and parsed (the build's `cells_raw.len()`).
+    num_cells: u32,
+    /// Every cell's surface table as Surface DIDs, first-seen order, deduped —
+    /// a superset of the cell meshes' surfaces (Step B's `allCellSurfaceDids`:
+    /// a cell mesh only uses the table entries its polygons index).
+    cell_surface_dids: Vec<u32>,
+    /// Every stab id, first-seen order (cell order, then stab order), deduped —
+    /// the exact order cells.js Pass 1 inserts `uniqueStaticDids` in, so Step
+    /// C's id list matches it element for element.
+    stab_ids: Vec<u32>,
+}
+
+/// Parse a landblock's EnvCells from `source` exactly as
+/// `fetch_env_cells_in_landblock` does (same keys, same skip-on-error) and
+/// collect [`EnvCellDeps`]. Pure over the source: no fetch.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_envcell_deps<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    landblock_high: u32,
+    num_cells: u32,
+) -> EnvCellDeps {
+    use holtburger_dat::file_type::EnvCell;
+    use holtburger_dat::file_type::env_cell::surface_did_for_envcell_index;
+    use holtburger_dat::ResourceKey;
+    let mut deps = EnvCellDeps::default();
+    let mut seen_surfaces: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut seen_stabs: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for i in 0..num_cells {
+        let cell_id = landblock_high | (0x0100 + i);
+        let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/cell", cell_id)) else {
+            continue;
+        };
+        let Ok(envcell) = EnvCell::unpack(&mut std::io::Cursor::new(&bytes)) else {
+            continue;
+        };
+        deps.num_cells += 1;
+        for &s in &envcell.surfaces {
+            let did = surface_did_for_envcell_index(s);
+            if seen_surfaces.insert(did) {
+                deps.cell_surface_dids.push(did);
+            }
+        }
+        for stab in &envcell.static_objects {
+            if seen_stabs.insert(stab.stab_id) {
+                deps.stab_ids.push(stab.stab_id);
+            }
+        }
+    }
+    deps
+}
+
+/// `{"lb":…,"numCells":…,"cellSurfaceDids":[…],"stabIds":[…]}` — numbers
+/// only, so it is built by hand (the `fetch_string_table` precedent).
+#[cfg(any(target_arch = "wasm32", test))]
+fn envcell_deps_json(landblock_high: u32, deps: &EnvCellDeps) -> String {
+    fn push_list(out: &mut String, ids: &[u32]) {
+        out.push('[');
+        for (i, id) in ids.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&id.to_string());
+        }
+        out.push(']');
+    }
+    let mut out = String::with_capacity(64 + 11 * (deps.cell_surface_dids.len() + deps.stab_ids.len()));
+    out.push_str("{\"lb\":");
+    out.push_str(&landblock_high.to_string());
+    out.push_str(",\"numCells\":");
+    out.push_str(&deps.num_cells.to_string());
+    out.push_str(",\"cellSurfaceDids\":");
+    push_list(&mut out, &deps.cell_surface_dids);
+    out.push_str(",\"stabIds\":");
+    push_list(&mut out, &deps.stab_ids);
+    out.push('}');
+    out
+}
+
+/// A1-lite (`?interiorEarlyBake`, 2026-10-09): the landblock's interior
+/// dependencies as soon as its EnvCell records land — so cells.js can start
+/// the bake worker's Step B (cell surfaces) and Step C (statics' meshes) while
+/// `fetchEnvCellsInLandblock` is still fetching Environments and stab
+/// geometry, instead of after it resolves.
+///
+/// Runs ONLY the build's first two stages — `prefetch_urgent` of the
+/// LandblockInfo, then of the EnvCells — with the SAME keys on the SAME lane.
+/// Called in the same JS turn as `fetchEnvCellsInLandblock`, both calls latch
+/// onto one in-flight request per URL: urgent fetches dedup under
+/// `urgent:{url}` in the source's `InflightMap` (`manifest_source.rs` step D),
+/// and whichever call reaches a round second either finds the records cached
+/// (step A) or joins the first call's in-flight fetches. (The map drops an
+/// entry when its fetch resolves, while the round's cache insert happens at
+/// round end — a call STARTED inside that window would re-request; two calls
+/// started together never are.) Then it parses the EnvCells (as the build
+/// does) and returns [`envcell_deps_json`]. Errors are the build's own error
+/// texts; JS treats any failure as "no early kick".
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEnvCellDepsInLandblock)]
+pub async fn fetch_env_cell_deps_in_landblock(landblock_id: u32) -> Result<String, JsValue> {
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let info_cell = landblock_high | 0x0000_FFFE;
+    let source = global_source::global_source();
+    source
+        .prefetch_urgent(&[ResourceKey::new("eor/cell", info_cell)])
+        .await
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchEnvCellDepsInLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
+            ))
+        })?;
+    let Ok(info_bytes) = source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) else {
+        return Ok(envcell_deps_json(landblock_high, &EnvCellDeps::default()));
+    };
+    let info = LandblockInfo::unpack(&info_bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchEnvCellDepsInLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
+        ))
+    })?;
+    if info.num_cells == 0 {
+        return Ok(envcell_deps_json(landblock_high, &EnvCellDeps::default()));
+    }
+    let cell_keys: Vec<ResourceKey<'_>> = (0..info.num_cells)
+        .map(|i| ResourceKey::new("eor/cell", landblock_high | (0x0100 + i)))
+        .collect();
+    source.prefetch_urgent(&cell_keys).await.map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchEnvCellDepsInLandblock: prefetch EnvCells for 0x{landblock_high:08X}: {e}"
+        ))
+    })?;
+    let deps = collect_envcell_deps(source.as_ref(), landblock_high, info.num_cells);
+    Ok(envcell_deps_json(landblock_high, &deps))
+}
+
+#[cfg(test)]
+mod tests_interior_early_bake_deps {
+    use super::{EnvCellDeps, collect_envcell_deps, envcell_deps_json};
+    use holtburger_common::{Quaternion, Vector3};
+    use holtburger_dat::file_type::EnvCell;
+    use holtburger_dat::file_type::env_cell::{ENVCELL_FLAG_HAS_STATIC_OBJS, Stab};
+    use holtburger_dat::graphics::Frame;
+    use holtburger_dat::{DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult};
+    use std::collections::HashMap;
+
+    struct MapSource {
+        files: HashMap<(String, u32), Vec<u8>>,
+    }
+    impl ResourceSource for MapSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+            None
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.keys().any(|(ns, _)| ns == namespace)
+        }
+    }
+
+    fn frame() -> Frame {
+        Frame {
+            origin: Vector3 { x: 0.0, y: 0.0, z: 0.0 },
+            orientation: Quaternion { w: 1.0, x: 0.0, y: 0.0, z: 0.0 },
+        }
+    }
+
+    fn envcell_bytes(cell_id: u32, surfaces: &[u16], stabs: &[u32]) -> Vec<u8> {
+        let cell = EnvCell {
+            id: cell_id,
+            flags: if stabs.is_empty() { 0 } else { ENVCELL_FLAG_HAS_STATIC_OBJS },
+            cell_id,
+            surfaces: surfaces.to_vec(),
+            environment_id: 0x0001,
+            cell_structure: 0,
+            position: frame(),
+            portals: Vec::new(),
+            visible_cells: Vec::new(),
+            static_objects: stabs
+                .iter()
+                .map(|&stab_id| Stab { stab_id, position: frame() })
+                .collect(),
+            restriction_obj: None,
+        };
+        let mut cur = std::io::Cursor::new(Vec::new());
+        cell.pack(&mut cur).expect("pack EnvCell");
+        cur.into_inner()
+    }
+
+    /// Cell order then stab order, deduped; a missing and an unparseable cell
+    /// are skipped exactly like the build skips them.
+    #[test]
+    fn deps_follow_the_builds_cell_order_and_skip_rules() {
+        let lb = 0x8602_0000u32;
+        let mut files = HashMap::new();
+        files.insert(
+            ("eor/cell".to_string(), lb | 0x0100),
+            envcell_bytes(lb | 0x0100, &[0x0010, 0x0011], &[0x0200_0005, 0x0100_0007, 0x0200_0005]),
+        );
+        // 0x0101 missing; 0x0102 garbage.
+        files.insert(("eor/cell".to_string(), lb | 0x0102), vec![1, 2, 3]);
+        files.insert(
+            ("eor/cell".to_string(), lb | 0x0103),
+            envcell_bytes(lb | 0x0103, &[0x0011, 0x0012], &[0x0200_0009, 0x0100_0007]),
+        );
+        let deps = collect_envcell_deps(&MapSource { files }, lb, 4);
+        assert_eq!(
+            deps,
+            EnvCellDeps {
+                num_cells: 2,
+                cell_surface_dids: vec![0x0800_0010, 0x0800_0011, 0x0800_0012],
+                stab_ids: vec![0x0200_0005, 0x0100_0007, 0x0200_0009],
+            }
+        );
+        assert_eq!(
+            envcell_deps_json(lb, &deps),
+            format!(
+                "{{\"lb\":{lb},\"numCells\":2,\"cellSurfaceDids\":[{},{},{}],\"stabIds\":[{},{},{}]}}",
+                0x0800_0010u32, 0x0800_0011u32, 0x0800_0012u32, 0x0200_0005u32, 0x0100_0007u32, 0x0200_0009u32
+            )
+        );
+    }
+
+    #[test]
+    fn empty_deps_json_is_well_formed() {
+        assert_eq!(
+            envcell_deps_json(0x0007_0000, &EnvCellDeps::default()),
+            "{\"lb\":458752,\"numCells\":0,\"cellSurfaceDids\":[],\"stabIds\":[]}"
+        );
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = fetchEnvCellsInLandblock)]
 pub async fn fetch_env_cells_in_landblock(
@@ -22476,38 +23397,196 @@ pub async fn fetch_env_cells_in_landblock(
         .iter()
         .map(|&id| ResourceKey::new("eor/portal", id))
         .collect();
-    if !env_keys.is_empty() {
-        source.prefetch_urgent(&env_keys).await.map_err(|e| {
-            JsValue::from_str(&format!(
-                "fetchEnvCellsInLandblock: prefetch Environments: {e}"
-            ))
-        })?;
-    }
 
-    // geom-audit (2026-07-02): batch-prefetch every stab's top record in
-    // ONE urgent round before the per-cell loop. The loop's per-stab
-    // prefetches (AABB/BSP/default-script resolution) then hit the shard
-    // cache instead of each paying a sequential await round-trip —
-    // ~24 stabs × ~123 cells of round-trips otherwise dominate the build.
-    {
-        let mut stab_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // A0 cold-load (2026-10-09, `?interiorStabBatch`, default on). Measured on
+    // the 1070 (academy 0x8602: 200 distinct stabs = 170 Setups + 30 GfxObjs,
+    // 215 distinct Setup parts): ~85% of the record-fetch phase was the
+    // per-stab keyed walk inside the per-cell loop below — each first-seen
+    // Setup paid its own network round for its parts, back to back (~70
+    // bursts, 10.0→23.9 s). ON: ONE urgent keyed walk over every 0x01/0x02
+    // stab (the same `walk_setup_parts_with_geom` the per-stab arm runs, the
+    // top record for 0x01) runs JOINED with the Environment prefetch, so the
+    // rounds become: stab tops → parts + MotionTables → idle Animations. It
+    // REPLACES the top-record batch (its first discovery round fetches the
+    // tops). The walk runs in BATCH MODE
+    // (`prefetch::ensure_walk_prefetched_keyed_batch`): a round's keys that
+    // still fail after 3 tries are excluded and discovery CONTINUES, so one bad
+    // record no longer stops discovery for every Setup in the landblock (the
+    // legacy loop broke out there and the whole build fell back to the slow
+    // per-stab path, silently). The per-stab walks in the loop stay as the
+    // fallback (batch mode too, so the log can count the ones that still had
+    // misses); after a settled batch they find every key cached and resolve on
+    // their first poll, so the loop no longer yields on the network — hence
+    // the cooperative yield (`InteriorBuildYield`: scheduler.yield /
+    // MessageChannel, 12 ms budget, none while the tab is hidden) once after
+    // this stage and at the top of each cell iteration. A settled batch also
+    // arms a per-build memo of each stab's placement-independent products
+    // (AABB, default script/animation, collision BSPs): `InteriorStabMemo`.
+    //
+    // Dedup: the batch keys on ("…:stab-batch", landblock_high). Two
+    // concurrent builds of the SAME landblock (landblock_stream.js + cells.js)
+    // latch on one Shared loop (one network walk, both await it); the per-stab
+    // walks key on ("…:static-bsp:0x02", setup id) — a different export string,
+    // so they never latch on the batch and cannot deadlock against it. Both
+    // live in the batch-mode dedup map, apart from the legacy `WALK_DEDUP`.
+    //
+    // OFF: the pre-A0 sequence below (Environment prefetch, then the stab
+    // top-record batch), unchanged.
+    let stab_batch_on = interior_stab_batch_flag();
+    // (distinct stabs, ms the joined Environment + stab-walk stage took, the
+    // batch walk's stats) — Some only when `stab_batch_on`.
+    let mut stab_batch_stats: Option<(usize, f64, batch_walk::BatchWalkStats)> = None;
+    if stab_batch_on {
+        let mut batch_ids: Vec<u32> = Vec::new();
         for envcell in &cells_raw {
             for stab in &envcell.static_objects {
                 if matches!((stab.stab_id >> 24) as u8, 0x01 | 0x02) {
-                    stab_ids.insert(stab.stab_id);
+                    batch_ids.push(stab.stab_id);
                 }
             }
         }
-        if !stab_ids.is_empty() {
-            let stab_keys: Vec<ResourceKey<'_>> = stab_ids
-                .iter()
-                .map(|&id| ResourceKey::new("eor/portal", id))
-                .collect();
-            // Best-effort: individual misses degrade per-stab exactly as
-            // before (the per-stab arms below still prefetch + soft-skip).
-            let _ = source.prefetch_urgent(&stab_keys).await;
+        batch_ids.sort_unstable();
+        batch_ids.dedup();
+        let batch_stab_count = batch_ids.len();
+        let stage_t0 = js_perf_now();
+        // (a) the Environment prefetch — the same call and the same fatal
+        // error as the OFF path.
+        let env_round = async {
+            if !env_keys.is_empty() {
+                source.prefetch_urgent(&env_keys).await.map_err(|e| {
+                    JsValue::from_str(&format!(
+                        "fetchEnvCellsInLandblock: prefetch Environments: {e}"
+                    ))
+                })?;
+            }
+            Ok::<(), JsValue>(())
+        };
+        // (b) the batched stab walk — batch mode, never fails, reports stats.
+        // No initial keys: the tops are the first discovery round's misses.
+        // The reads of one walk over `ids` (a Setup through its parts, a
+        // GfxObj by its top record) — shared by both arms below.
+        fn stab_batch_reads(s: &dyn holtburger_dat::ResourceSource, ids: &[u32]) {
+            for &id in ids {
+                if (id >> 24) == 0x02 {
+                    let _ = walk_setup_parts_with_geom(s, id);
+                } else {
+                    let _ = s.get_file_by_key(holtburger_dat::ResourceKey::new("eor/portal", id));
+                }
+            }
+        }
+        // 2026-10-09 follow-up (`?interiorStabChunk`, default 40): concurrent
+        // PACED sub-walks of at most N stabs (`interior_stab_chunk_flag`).
+        // Each sub-walk keys on ("…:stab-batch", LB, its ids) — two concurrent
+        // builds of one landblock compute identical chunks and share them;
+        // the per-stab key is a different export string, as before. Merged
+        // stats: rounds / fetched / failed summed, `settled()` only when every
+        // sub-walk settled (`BatchWalkStats::merge_all`), so the stab memo and
+        // the log line below keep their meaning. `=off`: the one unpaced walk
+        // under today's key.
+        let stab_chunk = interior_stab_chunk_flag();
+        let stab_walk = async {
+            match stab_chunk {
+                None => {
+                    prefetch::ensure_walk_prefetched_keyed_batch(
+                        prefetch::WalkCacheKey::new("fetchEnvCellsInLandblock:stab-batch")
+                            .with_u32(landblock_high),
+                        &source,
+                        move |s| stab_batch_reads(s, &batch_ids),
+                        true,
+                    )
+                    .await
+                }
+                Some(chunk_max) => {
+                    let mut sub_walks = Vec::new();
+                    for chunk in batch_walk::chunk_ids(&batch_ids, chunk_max) {
+                        let key = prefetch::WalkCacheKey::new("fetchEnvCellsInLandblock:stab-batch")
+                            .with_u32(landblock_high)
+                            .with_u32_slice(&chunk);
+                        sub_walks.push(prefetch::ensure_walk_prefetched_keyed_batch_paced(
+                            key,
+                            &source,
+                            move |s| stab_batch_reads(s, &chunk),
+                            true,
+                            true,
+                        ));
+                    }
+                    let parts = futures::future::join_all(sub_walks).await;
+                    batch_walk::BatchWalkStats::merge_all(&parts)
+                }
+            }
+        };
+        let (env_result, walk_stats) = futures::future::join(env_round, stab_walk).await;
+        env_result?;
+        if !walk_stats.settled() {
+            log::warn!(
+                "[interiorStabBatch] fetchEnvCellsInLandblock 0x{landblock_high:08X}: stab batch walk ended {:?} with {} failed key(s) — no stab memo this build; the per-stab walks fetch what is missing",
+                walk_stats.end,
+                walk_stats.failed
+            );
+        }
+        stab_batch_stats = Some((batch_stab_count, js_perf_now() - stage_t0, walk_stats));
+    } else {
+        if !env_keys.is_empty() {
+            source.prefetch_urgent(&env_keys).await.map_err(|e| {
+                JsValue::from_str(&format!(
+                    "fetchEnvCellsInLandblock: prefetch Environments: {e}"
+                ))
+            })?;
+        }
+
+        // geom-audit (2026-07-02): batch-prefetch every stab's top record in
+        // ONE urgent round before the per-cell loop. The loop's per-stab
+        // prefetches (AABB/BSP/default-script resolution) then hit the shard
+        // cache instead of each paying a sequential await round-trip —
+        // ~24 stabs × ~123 cells of round-trips otherwise dominate the build.
+        {
+            let mut stab_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            for envcell in &cells_raw {
+                for stab in &envcell.static_objects {
+                    if matches!((stab.stab_id >> 24) as u8, 0x01 | 0x02) {
+                        stab_ids.insert(stab.stab_id);
+                    }
+                }
+            }
+            if !stab_ids.is_empty() {
+                let stab_keys: Vec<ResourceKey<'_>> = stab_ids
+                    .iter()
+                    .map(|&id| ResourceKey::new("eor/portal", id))
+                    .collect();
+                // Best-effort: individual misses degrade per-stab exactly as
+                // before (the per-stab arms below still prefetch + soft-skip).
+                let _ = source.prefetch_urgent(&stab_keys).await;
+            }
         }
     }
+
+    // A0 hardening (`?interiorStabBatch`): the joined stage above ends with
+    // the batch's synchronous discovery walks (every Setup/MotionTable/
+    // Animation/part parse, at least twice), and `collect_landblock_bake_lights`
+    // + the first cell slice would otherwise run straight on in the SAME task.
+    // Hand the event loop one turn here (skipped while the tab is hidden), then
+    // keep the 12 ms budget through the loop. OFF: none of this exists.
+    let mut build_yield: Option<InteriorBuildYield> = None;
+    if stab_batch_on {
+        let mut y = InteriorBuildYield::new();
+        y.maybe_yield(true).await;
+        build_yield = Some(y);
+    }
+    // A0 hardening: the per-build stab memo (`InteriorStabMemo`), armed only
+    // when the batch walk SETTLED — nothing failed and it stopped because
+    // nothing was missing (or only manifest-absent keys were) — so every
+    // memoised product is exactly what a per-placement recomputation would
+    // read off the same resident records. An unsettled batch keeps the
+    // per-placement path (still through `interior_stab_memo_entry`, just not
+    // reused). `per_stab_fallback` counts per-stab walks that still had misses.
+    let stab_memo_on = matches!(&stab_batch_stats, Some((_, _, s)) if s.settled());
+    let mut stab_memo: std::collections::HashMap<u32, std::rc::Rc<InteriorStabMemo>> =
+        std::collections::HashMap::new();
+    let mut per_stab_fallback: u32 = 0;
+    // Post-fetch CPU window for the build log: light collection + the cell
+    // loop (the post-stage yield above is outside it).
+    let loop_t0 = if stab_batch_on { js_perf_now() } else { 0.0 };
+    let loop_away_t0 = build_yield.as_ref().map(|y| y.away_ms).unwrap_or(0.0);
 
     // G16 fix-1 (render audit, 2026-06-09): key the visual-mesh cache by
     // (env_did, cell_structure) — NOT env_did alone. An Environment record
@@ -22550,6 +23629,15 @@ pub async fn fetch_env_cells_in_landblock(
 
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
     for envcell in cells_raw {
+        // A0 (`?interiorStabBatch`): with every stab record cached up front,
+        // nothing below awaits the network any more, so a 568-cell academy
+        // would run as ONE main-thread task. Yield one turn once
+        // INTERIOR_BUILD_YIELD_MS have passed since the last yield (the first
+        // slice also covers the light collection above). OFF: `None`, never
+        // taken.
+        if let Some(y) = build_yield.as_mut() {
+            y.maybe_yield(false).await;
+        }
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
         let cell_structure = envcell.cell_structure;
         // EnvCell wire format stores surface table as u16 indices; OR
@@ -23034,6 +24122,47 @@ pub async fn fetch_env_cells_in_landblock(
             let world_z = stab.position.origin.z;
             let stab_q = stab.position.orientation;
             let (qw, qx, qy, qz) = (stab_q.w, stab_q.x, stab_q.y, stab_q.z);
+            // A0 hardening (`?interiorStabBatch`): the stab's placement-
+            // independent products come from `interior_stab_memo_entry` — the
+            // same calls in the same order as the arms below — computed once per
+            // stab id per build when the batch settled (`stab_memo_on`), else
+            // per placement as before. Only the transform is per placement.
+            if stab_batch_on {
+                let cached = stab_memo.get(&stab.stab_id).cloned();
+                let memo = match cached {
+                    Some(m) => m,
+                    None => {
+                        let m = std::rc::Rc::new(
+                            interior_stab_memo_entry(&source, stab.stab_id, &mut per_stab_fallback)
+                                .await,
+                        );
+                        if stab_memo_on {
+                            stab_memo.insert(stab.stab_id, m.clone());
+                        }
+                        m
+                    }
+                };
+                static_objects.push(StaticObjectPlacement {
+                    did: stab.stab_id,
+                    x: world_x,
+                    y: world_y,
+                    z: world_z,
+                    qw,
+                    qx,
+                    qy,
+                    qz,
+                    aabb_local: memo.aabb_local.clone(),
+                    default_script_id: memo.default_script_id,
+                    default_animation_id: memo.default_animation_id,
+                });
+                stage_interior_stab_bsps(
+                    &memo.bsp,
+                    envcell.cell_id,
+                    holtburger_common::Vector3::new(world_x, world_y, world_z),
+                    holtburger_common::Quaternion { w: qw, x: qx, y: qy, z: qz },
+                );
+                continue;
+            }
             let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
             let default_script_id =
                 static_object_default_script(source.as_ref(), stab.stab_id);
@@ -23187,6 +24316,25 @@ pub async fn fetch_env_cells_in_landblock(
         bake_lights_by_cell.len(),
         bake_capped_cells
     );
+    // A0 (`?interiorStabBatch`): one line per build. K = the joined
+    // Environment + stab-walk stage (the record fetch A0 changes); rounds /
+    // fetched / failed = the batch walk's prefetch rounds, keys that landed,
+    // keys excluded after 3 tries; perStabFallback = per-stab walks in the loop
+    // that still had misses; loop = light collection + per-cell loop, cpu =
+    // wall minus the time handed back to the event loop; yields = every yield
+    // of the build (the post-stage one included).
+    if let Some((stabs, stage_ms, walk)) = stab_batch_stats {
+        let loop_wall_ms = js_perf_now() - loop_t0;
+        let (yields, loop_away_ms) = build_yield
+            .as_ref()
+            .map(|y| (y.yields, y.away_ms - loop_away_t0))
+            .unwrap_or((0, 0.0));
+        let loop_cpu_ms = (loop_wall_ms - loop_away_ms).max(0.0);
+        console_log_str(&format!(
+            "[interiorStabBatch] 0x{landblock_high:08X}: {stabs} stabs, {stage_ms:.0} ms, rounds {}, fetched {}, failed {}, perStabFallback {per_stab_fallback}, loop cpu {loop_cpu_ms:.0} ms / wall {loop_wall_ms:.0} ms, {yields} yields",
+            walk.rounds, walk.fetched, walk.failed
+        ));
+    }
     Ok(out)
 }
 

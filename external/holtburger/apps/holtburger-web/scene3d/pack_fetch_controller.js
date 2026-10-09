@@ -33,7 +33,11 @@
 //     +1-tile directional lookahead per D-03.8);
 //   * diag surface `globalThis.__hbFetch` per the registry schema
 //     (harness/lib/diag_schema.mjs — the pass-10 S3 reserved shape, landed
-//     current at ST2).
+//     current at ST2);
+//   * `?packRingHold` (2026-10-09, cold-load A2 (c), default on): lane R
+//     waits while an indoor player's interior is still to build
+//     (`?interiorHold`'s predicate and 3-minute ceiling), except the packs
+//     that cover the building landblock itself (see `pumpHeldRing`).
 //
 // NOT yet routed through the controller (each recorded in the T12 report as
 // an explicit exception with its retirement stage): the per-LB scenery/
@@ -48,6 +52,10 @@
 // Node-testable by construction: `createPackFetchController(opts)` accepts
 // injected `fetchImpl` / `now` / `setTimeoutImpl` / `digestImpl` / `wasmNs`;
 // the browser singleton wiring at the bottom is a thin shell.
+
+// `?interiorHold`'s predicate + ceiling, reused as-is by `?packRingHold` (an
+// existing, side-effect-free module already in the boot graph).
+import { interiorBuildPending, INTERIOR_HOLD_MAX_MS } from "./bandwidth_tier.js";
 
 // ---------------------------------------------------------------------------
 // flag readers (house grammar: EXACT-MATCH opt-in, default OFF; audited by
@@ -93,6 +101,28 @@ export function packVerifyEnabled(search) {
     const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
     const v = new URLSearchParams(s).get("packVerify");
     return v !== "off";
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * `?packRingHold` — DEFAULT ON (2026-10-09, cold-load A2 (c)); `off`/`0`/
+ * `false`/`no` disables. Only meaningful while the controller is armed
+ * (`?packSource`). While `interiorBuildPending()` is true (bandwidth_tier.js,
+ * `?interiorHold`: an indoor player and a render-set landblock still to
+ * build), queued lane-R packs (ring tiles, ring interiors, regionals,
+ * lookahead) stay queued, at most `INTERIOR_HOLD_MAX_MS` each, except the packs
+ * covering the building landblock. Cause (packA1, 1070): the academy's ring
+ * — 23 tile packs + 47 neighbour interior packs (5.9 MB) + 2 regionals in the
+ * 2026-10-09 dist index — went out on lane R (12 in flight) during its
+ * interior build, on the same six HTTP/1.1 connections as its records.
+ */
+export function packRingHoldEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = new URLSearchParams(s).get("packRingHold");
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
     return true;
   }
@@ -234,6 +264,8 @@ const RETRY_DELAYS_MS = [0, 1000, 3000];
 const QUARANTINE_MS = 60_000;
 const URGENT_RESERVE = 4;
 const T_SUBCAP = 4;
+/** `?packRingHold` re-check cadence (= `holdForInterior`'s pollMs). */
+const RING_HOLD_POLL_MS = 500;
 
 function urlDirname(url) {
   const i = url.lastIndexOf("/");
@@ -266,6 +298,12 @@ export function createPackFetchController(opts = {}) {
   const search = opts.search;
   const cap = opts.fetchCap ?? fetchCapConfigured(search);
   const verifyOn = opts.verify ?? packVerifyEnabled(search);
+  // `?packRingHold` (A2 (c)): the flag, the predicate (injectable for tests;
+  // default = bandwidth_tier.js `interiorBuildPending`, which also honours
+  // `?interiorHold=off`) and the per-pack ceiling.
+  const ringHoldOn = opts.ringHold ?? packRingHoldEnabled(search);
+  const interiorPending = opts.interiorPending || (() => interiorBuildPending(search));
+  const ringHoldMaxMs = opts.ringHoldMaxMs ?? INTERIOR_HOLD_MAX_MS;
   // { pack_source_init, pack_source_insert, pack_source_stats } — may be
   // attached AFTER boot() via attachWasm() (the page arms the seam once
   // init_resource_source has resolved).
@@ -290,6 +328,15 @@ export function createPackFetchController(opts = {}) {
     wireWaitEvents: 0,
     packSource: null, // pack_source_stats() mirror (refreshed on insert)
     taint: [],
+    // `?packRingHold` (A2 (c)): `active` = the hold applied at the last pump;
+    // `held` = lane-R packs waiting now; `heldTotal` = packs ever held;
+    // `exempt` = lane-R packs started DURING a hold because they cover the
+    // building landblock; `releasedBuilt` / `releasedTimeout` = held packs
+    // started after the build / at the ceiling; `maxHeldMs` = longest wait.
+    ringHold: {
+      enabled: ringHoldOn, active: false, held: 0, heldTotal: 0, exempt: 0,
+      releasedBuilt: 0, releasedTimeout: 0, maxHeldMs: 0,
+    },
   };
   const comp = (name) => (diag.byComponent[name] ||= { requests: 0, bytes: 0 });
   for (const c of ["code", "manifestIndex", "core", "meta", "tiles", "interior", "pvw", "terrainTier", "texFull"]) comp(c);
@@ -382,17 +429,130 @@ export function createPackFetchController(opts = {}) {
   }
 
   function pump() {
+    const holdRing = ringHoldActive();
+    diag.ringHold.active = holdRing;
+    if (!holdRing) diag.ringHold.held = 0;
     for (const lane of LANES) {
       const q = queues[lane];
-      while (q.length && capacityFor(lane)) {
-        const entry = q.shift();
-        if (entry.state !== "queued") continue; // promoted away / dropped
-        startFetch(entry);
+      if (lane === "R" && holdRing) {
+        pumpHeldRing(q);
+      } else {
+        while (q.length && capacityFor(lane)) {
+          const entry = q.shift();
+          if (entry.state !== "queued") continue; // promoted away / dropped
+          if (entry.heldSinceMs != null) noteRingRelease(entry, now(), "built");
+          startFetch(entry);
+        }
       }
       // A full global cap still leaves the urgent reserve reachable only by
       // lane U, so do not break early on U.
       if (inflightTotal >= cap + URGENT_RESERVE) break;
     }
+  }
+
+  // ── `?packRingHold` (A2 (c)) ──────────────────────────────────────────────
+  // While an indoor player's interior is still to build (`interiorPending`,
+  // = `?interiorHold`'s predicate), lane R keeps its queued packs: the ring
+  // tiles, the neighbours' interiors (47 packs, 5.8 MB around the academy),
+  // the other regionals and the lookahead. Each held pack waits at
+  // most `ringHoldMaxMs` (the 3-minute interiorHold ceiling) from when it was
+  // first held, so a wedged build cannot strand the ring. In-flight packs are
+  // never cancelled; lanes U/B/T are untouched (T has its own pause).
+  //
+  // Never held: the packs that cover the BUILDING landblock. Pending is only
+  // true for an indoor player, whose own interior is the one building, so the
+  // building landblock is the player's (`lastLb`, which notePlayerLandblock
+  // updates before it enqueues): its tile pack, its interior pack (both
+  // already lane U from notePlayerLandblock) and its supergrid's META/ENV/PVW
+  // regionals — the same set a slot-grid tile pins (scene3d/index.js
+  // `tilePackOrds`), here for the one landblock.
+  let ringCoverKey = -1;
+  let ringCoverHashes = new Set();
+  function buildingCoverHashes() {
+    if (!index || !lastLb) return ringCoverHashes;
+    const key = (lastLb.lbx << 8) | lastLb.lby;
+    if (key === ringCoverKey) return ringCoverHashes;
+    ringCoverKey = key;
+    ringCoverHashes = new Set();
+    const tx = lastLb.lbx >> 1, ty = lastLb.lby >> 1;
+    const tOrd = tilePackOrd(index, tx, ty);
+    if (tOrd >= 0 && index.packs[tOrd]) ringCoverHashes.add(index.packs[tOrd].hash);
+    const iOrd = index.interiors.get(key);
+    if (iOrd !== undefined && index.packs[iOrd]) ringCoverHashes.add(index.packs[iOrd].hash);
+    const sg = ((tx * 2) >> 5) * 8 + ((ty * 2) >> 5); // notePlayerLandblock's formula
+    for (const s of index.shared) {
+      if (
+        s.ord === sg &&
+        (s.kind === SHARED_KIND.META_REGIONAL || s.kind === SHARED_KIND.ENV_REGIONAL || s.kind === SHARED_KIND.PVW_REGIONAL) &&
+        index.packs[s.packOrd]
+      ) {
+        ringCoverHashes.add(index.packs[s.packOrd].hash);
+      }
+    }
+    return ringCoverHashes;
+  }
+
+  function ringHoldActive() {
+    if (!ringHoldOn) return false;
+    try {
+      return interiorPending() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function noteRingRelease(entry, t, why) {
+    if (entry.heldSinceMs == null) return;
+    const waited = t - entry.heldSinceMs;
+    if (waited > diag.ringHold.maxHeldMs) diag.ringHold.maxHeldMs = waited;
+    if (why === "built") diag.ringHold.releasedBuilt += 1;
+    else if (why === "timeout") diag.ringHold.releasedTimeout += 1;
+    entry.heldSinceMs = null;
+  }
+
+  let ringRecheckArmed = false;
+  function scheduleRingRecheck() {
+    if (ringRecheckArmed) return;
+    ringRecheckArmed = true;
+    setTimeoutImpl(() => {
+      ringRecheckArmed = false;
+      pump();
+    }, RING_HOLD_POLL_MS);
+  }
+
+  /** Lane R under the hold: start only covering or expired packs, FIFO. */
+  function pumpHeldRing(q) {
+    const t = now();
+    const cover = buildingCoverHashes();
+    let held = 0;
+    for (let i = 0; i < q.length; ) {
+      const entry = q[i];
+      if (entry.state !== "queued") {
+        q.splice(i, 1); // promoted away / dropped
+        continue;
+      }
+      const exempt = !!entry.expectedHash && cover.has(entry.expectedHash);
+      if (!exempt && entry.heldSinceMs == null) {
+        entry.heldSinceMs = t;
+        diag.ringHold.heldTotal += 1;
+      }
+      const expired = !exempt && t - entry.heldSinceMs >= ringHoldMaxMs;
+      if ((exempt || expired) && capacityFor("R")) {
+        q.splice(i, 1);
+        if (exempt) {
+          diag.ringHold.exempt += 1;
+          noteRingRelease(entry, t, "exempt");
+        } else {
+          noteRingRelease(entry, t, "timeout");
+        }
+        startFetch(entry);
+        continue;
+      }
+      if (!exempt) held += 1;
+      i += 1;
+    }
+    diag.ringHold.held = held;
+    if (held > 0) scheduleRingRecheck();
   }
 
   function startFetch(entry) {
@@ -513,6 +673,8 @@ export function createPackFetchController(opts = {}) {
         const idx = from.indexOf(entry);
         if (idx >= 0) from.splice(idx, 1);
         entry.lane = lane;
+        // `?packRingHold`: a promoted pack leaves lane R and its hold.
+        entry.heldSinceMs = null;
         queues[lane].push(entry);
         pumpSoon();
       }

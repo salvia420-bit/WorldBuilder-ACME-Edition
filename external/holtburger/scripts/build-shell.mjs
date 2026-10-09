@@ -10,10 +10,11 @@
 // content-hashed files under apps/holtburger-web/shell/:
 //
 //   shell/app-<hash8>.js              main app (the inline module script's graph)
-//   shell/bake_worker-<hash8>.js      \
-//   shell/net_worker-<hash8>.js        | the 4 read-verified
-//   shell/texture_worker-<hash8>.js    | `new Worker(new URL(...))` entries
-//   shell/keepalive_worker-<hash8>.js /
+//   shell/bake_worker-<hash8>.js         \
+//   shell/net_worker-<hash8>.js           | the 5 read-verified
+//   shell/texture_worker-<hash8>.js       | `new Worker(new URL(...))` entries
+//   shell/keepalive_worker-<hash8>.js     |
+//   shell/shard_fetch_worker-<hash8>.js  /
 //   shell/*.js.map                    external source maps (not on the boot path)
 //
 // plus a loader page `index-bundled.html` (index.html with the inline module
@@ -47,7 +48,7 @@
 //      "./statics.js?v=phase7-par" as DISTINCT module instances (both exist on
 //      HEAD: statics.js, buildings.js, scene3d/index.js); the bundle collapses
 //      each pair to one instance, as any bundler must (see task-T11-report).
-//   2. the 4 worker `new URL("./x.js", import.meta.url)` sites become
+//   2. the 5 worker `new URL("./x.js", import.meta.url)` sites become
 //      placeholders substituted post-bundle with the hashed sibling filenames.
 //   3. remaining scene3d `new URL("./X", import.meta.url)` asset bases (e.g.
 //      "./assets/moons/", "./transcoder/") are re-based to "../scene3d/X" —
@@ -92,13 +93,17 @@ export const ESBUILD_DEFAULT = "/mnt/wbterminal2/reeng/T11/bin/esbuild";
 /** The verified worker-entry set (read-verified on HEAD, 2026-08-09):
  *  bake_worker_client.js:795, net_worker_client.js:136,
  *  keepalive_worker_client.js:66, xu7_textures.js:780 (T14).
- *  D-12.2 wrote "main + 4 workers" naming exactly these; the coverage scan
- *  below FAILS the build if the tree ever grows a 5th file-backed site. */
+ *  D-12.2 wrote "main + 4 workers" naming exactly these. 2026-10-09: + the
+ *  shard-fetch worker (Workstream B, `?shardFetchWorker`, default on;
+ *  shard_fetch_client.js `defaultCreateWorker`, import-free module worker).
+ *  The coverage scan below FAILS the build if the tree ever grows an unlisted
+ *  file-backed site. */
 export const WORKER_ENTRIES = Object.freeze({
   bake_worker: "scene3d/bake_worker.js",
   net_worker: "scene3d/net_worker.js",
   texture_worker: "scene3d/texture_worker.js",
   keepalive_worker: "scene3d/keepalive_worker.js",
+  shard_fetch_worker: "scene3d/shard_fetch_worker.js",
 });
 
 const BUNDLED_DIRS = ["scene3d", "plugins", "ui", "rynth", "app"];

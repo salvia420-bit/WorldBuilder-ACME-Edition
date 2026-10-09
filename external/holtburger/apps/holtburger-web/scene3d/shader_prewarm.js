@@ -250,3 +250,179 @@ export function installLinkProbe(renderer, opts = {}) {
   );
   return state;
 }
+
+// ============================================================================
+// Targeted warm helpers (2026-10-09, D2: `?tunnelWorldWarm` in portal_space.js,
+// `?pmremPrecompile` in ibl_environment.js). Used only by those two flags.
+// ============================================================================
+// three r184 keys a program on the target bound at compile time by null vs
+// non-null only (getParameters: outputColorSpace + toneMapping; no size/type),
+// so a warm binds the right CLASS of target per draw: null for a pass that
+// draws to the canvas, the shared 1×1 HalfFloat warm target for anything drawn
+// offscreen (composer buffers, PMREM cubeUV / ping-pong, the IBL cube RT).
+// A warm only STARTS the link (KHR_parallel_shader_compile links in the GPU
+// process); callers poll `programPending` — never getUniforms/LINK_STATUS —
+// so nothing here can block the main thread on a link.
+
+/** The shared non-null warm target (1×1 HalfFloat, never drawn into). */
+export function getWarmTarget() {
+  return _getWarmTarget();
+}
+
+/**
+ * renderer.compile(root, camera, targetScene) with `target` bound (null = the
+ * canvas), restoring the previous target / cube face / mip level on every
+ * path. Must run outside renderer.render() (compile resets three's render
+ * state). Returns the compiled material Set, or null (no usable renderer, or
+ * compile threw — the materials then link at first draw, as before).
+ */
+export function compileWithTarget(renderer, root, camera, targetScene, target) {
+  if (
+    !renderer || !root || !camera ||
+    typeof renderer.compile !== "function" ||
+    typeof renderer.setRenderTarget !== "function" ||
+    typeof renderer.getRenderTarget !== "function"
+  ) return null;
+  const prev = renderer.getRenderTarget();
+  let face = 0, mip = 0;
+  try {
+    face = typeof renderer.getActiveCubeFace === "function" ? renderer.getActiveCubeFace() : 0;
+    mip = typeof renderer.getActiveMipmapLevel === "function" ? renderer.getActiveMipmapLevel() : 0;
+  } catch (_) { /* defaults */ }
+  try {
+    renderer.setRenderTarget(target ?? null);
+    const set = renderer.compile(root, camera, targetScene ?? null);
+    return set && typeof set.forEach === "function" ? set : null;
+  } catch (_) {
+    return null;
+  } finally {
+    try { renderer.setRenderTarget(prev, face, mip); } catch (_) { /* best effort */ }
+  }
+}
+
+/** Every program `material` owns — three keeps one per cache key in
+ *  `properties.programs` (a transparent DoubleSide material compiles a Back and
+ *  a Front one), not just `currentProgram`. Appends to `out`. */
+export function programsOf(renderer, material, out = []) {
+  let mp = null;
+  try { mp = renderer?.properties?.get?.(material) ?? null; } catch (_) { mp = null; }
+  const progs = mp && mp.programs;
+  if (progs && typeof progs.forEach === "function") progs.forEach((p) => { if (p) out.push(p); });
+  else if (mp && mp.currentProgram) out.push(mp.currentProgram);
+  return out;
+}
+
+/** Still linking? Non-blocking: three's isReady() polls COMPLETION_STATUS_KHR
+ *  (and is `true` from the start without the extension). A program three has
+ *  released (usedTimes 0 — deleted) or whose poll throws / returns null (lost
+ *  context) counts as done, so a stale entry can never hold anything. */
+export function programPending(p) {
+  if (!p || typeof p.isReady !== "function") return false;
+  if (typeof p.usedTimes === "number" && p.usedTimes <= 0) return false;
+  try { return p.isReady() === false; } catch (_) { return false; }
+}
+
+/** Drop every program that is no longer pending from `set` (a Set); returns
+ *  how many are still linking. */
+export function prunePending(set) {
+  if (!set || typeof set.forEach !== "function") return 0;
+  for (const p of set) if (!programPending(p)) set.delete(p);
+  return set.size;
+}
+
+const _renderable = (o) => !!o && (o.isMesh || o.isPoints || o.isLine || o.isSprite) && !!o.material;
+const _kindBits = (o) => (o.isInstancedMesh ? 1 : 0) | (o.isBatchedMesh ? 2 : 0) | (o.isSkinnedMesh ? 4 : 0);
+const _standIns = new WeakMap(); // scene -> stand-in target scene
+
+/**
+ * Compile the materials of `scene` that are new or changed since this warm
+ * last compiled them, with `target` bound (see compileWithTarget), in ONE
+ * compile() call. One traversal collects the renderables (visible or not —
+ * a hidden patch still draws the moment it is shown) and the lights on the
+ * visible path; compile() then runs against a stand-in target scene carrying
+ * the real scene's fog / environment / environmentRotation and those lights,
+ * so the light-count and fog bits of every key match the real draw without a
+ * second walk of the world. `opts.seen` (WeakMap material → Set of keys) makes
+ * a re-run cheap: a material is compiled again only when its version, its
+ * object kind, the scene's light count, fog or environment class changed.
+ * `opts.skip(object)` prunes a subtree; `opts.maxNew` caps the materials
+ * compiled per call (the rest wait for the next call: `deferred`).
+ *
+ * @returns {{materials: Set|null, objects: number, compiled: number, deferred: number}}
+ */
+export function warmSceneMaterials(renderer, scene, camera, target, opts = {}) {
+  const out = { materials: null, objects: 0, compiled: 0, deferred: 0 };
+  if (!renderer || !scene || !camera) return out;
+  const seen = opts.seen instanceof WeakMap ? opts.seen : null;
+  const skip = typeof opts.skip === "function" ? opts.skip : null;
+  const maxNew = Number.isFinite(opts.maxNew) && opts.maxNew > 0 ? opts.maxNew : Infinity;
+  const lights = [];
+  const objs = [];
+  const picked = new Map(); // material -> its seen key, this call
+  const over = new Set(); // materials left for a later call (maxNew)
+  const env = scene.environment;
+  const fog = scene.fog;
+  // Iterative walk (deep worlds): [object, onVisiblePath].
+  const stack = [[scene, scene.visible !== false]];
+  const pending = [];
+  while (stack.length) {
+    const [o, vis] = stack.pop();
+    if (!o || (skip && o !== scene && skip(o))) continue;
+    out.objects += 1;
+    if (o.isLight) { if (vis) lights.push(o); }
+    else if (_renderable(o)) pending.push(o);
+    const ch = o.children;
+    if (ch && ch.length) for (let i = ch.length - 1; i >= 0; i--) stack.push([ch[i], vis && ch[i] && ch[i].visible !== false]);
+  }
+  const ctx = `${lights.length}|${env ? 1 : 0}:${env?.image?.height ?? 0}|${fog ? (fog.isFogExp2 ? 2 : 1) : 0}`;
+  for (const o of pending) {
+    const list = Array.isArray(o.material) ? o.material : [o.material];
+    let take = false;
+    for (const m of list) {
+      if (!m || !m.isMaterial || picked.has(m)) continue;
+      const key = `${_kindBits(o)}|${m.version}|${ctx}`;
+      const s = seen && seen.get(m);
+      if (s && s.has(key)) continue;
+      if (picked.size >= maxNew) { over.add(m); continue; }
+      picked.set(m, key);
+      take = true;
+    }
+    if (take) objs.push(o);
+  }
+  out.deferred = over.size;
+  if (objs.length === 0) return out;
+  let standIn = _standIns.get(scene);
+  if (!standIn) {
+    standIn = {
+      isScene: true,
+      __lights: [],
+      get fog() { return scene.fog; },
+      get environment() { return scene.environment; },
+      get environmentRotation() { return scene.environmentRotation; },
+      traverseVisible(cb) { for (const l of this.__lights) cb(l); },
+      traverse(cb) { for (const l of this.__lights) cb(l); },
+    };
+    _standIns.set(scene, standIn);
+  }
+  standIn.__lights = lights;
+  const root = {
+    traverse(cb) { for (const o of objs) cb(o); },
+    traverseVisible(cb) { for (const o of objs) cb(o); },
+  };
+  const mats = compileWithTarget(renderer, root, camera, standIn, target);
+  standIn.__lights = [];
+  if (!mats) return out;
+  out.materials = mats;
+  out.compiled = mats.size;
+  if (seen) {
+    // Key on the version AFTER compile: three's two-pass prepare of a
+    // transparent DoubleSide material bumps it (side Back/Front + needsUpdate).
+    for (const [m, key0] of picked) {
+      const key = key0.replace(/^(\d+)\|\d+\|/, `$1|${m.version}|`);
+      let s = seen.get(m);
+      if (!s || s.size >= 8) { s = new Set(); seen.set(m, s); }
+      s.add(key);
+    }
+  }
+  return out;
+}

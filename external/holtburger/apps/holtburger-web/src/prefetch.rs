@@ -84,10 +84,116 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use holtburger_dat::{ResourceKey, ResourceSource};
-use holtburger_resource_http::{ManifestResourceSource, RecordingSource};
+use holtburger_resource_http::{ManifestResourceSource, PrefetchError, RecordingSource};
 use wasm_bindgen::prelude::*;
 
+use crate::batch_walk::{BatchWalkStats, RoundFailure, run_batch_walk, run_batch_walk_paced};
 pub use crate::walk_dedup::WalkDedupMap;
+
+// ============================================================
+// Discovery pacing (2026-10-09 follow-up, Workstream B's walk-window long
+// tasks; `?walkPace` for the legacy loop, `?interiorStabChunk` for the stab
+// sub-walks)
+// ============================================================
+//
+// A discovery round is synchronous (a full re-parse of everything the walk
+// reaches). When a prefetch round completes, the walk runs its next discovery
+// in the SAME task that delivered the round's last body — and so does every
+// other walk woken by that delivery (one shard-fetch-worker results message
+// resolves up to 64 fetches; wasm-bindgen-futures drains its whole queue per
+// microtask checkpoint). On the 1070 academy profile (acad-diagF) that stacking
+// was every main-thread long task of the walk window (50-72 ms). Pacing hands
+// the event loop one turn (`crate::yield_to_event_loop`: a MessageChannel post,
+// the interior build's own yield) before each such discovery, so each walk's
+// discovery runs in its own task. Main thread only (a worker has no frames to
+// protect and its queue holds decode jobs a yield would wait behind), never
+// while the document is hidden (same rule as `InteriorBuildYield`).
+
+thread_local! {
+    /// (legacy-loop yields, stab sub-walk yields, ms spent away) — published
+    /// as `globalThis.__hbWalkPace` after every paced turn.
+    static WALK_PACE_STATS: Cell<(u32, u32, f64)> = const { Cell::new((0, 0, 0.0)) };
+}
+
+/// `?walkPace` (default on; `off|0|false|no` disables), parsed once per
+/// instance over the seeded `flag_search()`.
+fn walk_pace_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| crate::batch_walk::parse_walk_pace_flag(&crate::flag_search()))
+}
+
+/// True when this wasm instance runs where a `document` exists (the page's
+/// main thread). Not cached: one property read per paced round.
+fn pace_context_is_main_thread() -> bool {
+    js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("document"))
+        .map(|d| d.is_object())
+        .unwrap_or(false)
+}
+
+/// One paced turn (see the section comment). `sub_walk` only picks the
+/// counter.
+async fn discovery_pace_turn(sub_walk: bool) {
+    if crate::js_document_hidden() {
+        return;
+    }
+    let t0 = crate::js_perf_now();
+    crate::yield_to_event_loop().await;
+    let away = crate::js_perf_now() - t0;
+    let (legacy, sub, away_ms) = WALK_PACE_STATS.with(|s| {
+        let (mut legacy, mut sub, mut away_ms) = s.get();
+        if sub_walk {
+            sub += 1;
+        } else {
+            legacy += 1;
+        }
+        away_ms += away;
+        s.set((legacy, sub, away_ms));
+        (legacy, sub, away_ms)
+    });
+    let obj = js_sys::Object::new();
+    let set = |k: &str, v: f64| {
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str(k), &JsValue::from_f64(v));
+    };
+    set("legacyYields", legacy as f64);
+    set("stabSubWalkYields", sub as f64);
+    set("awayMs", away_ms);
+    let _ = js_sys::Reflect::set(&js_sys::global(), &JsValue::from_str("__hbWalkPace"), &obj);
+}
+
+/// `?walkPace` gate for [`run_walk_loop`]: yield one turn before a discovery
+/// round that follows a prefetch round that SUSPENDED (main thread, flag on,
+/// not hidden).
+async fn maybe_pace_legacy_discovery() {
+    if walk_pace_flag() && pace_context_is_main_thread() {
+        discovery_pace_turn(false).await;
+    }
+}
+
+/// Await `fut` and report whether it SUSPENDED (returned `Pending` at least
+/// once). A prefetch that completes on its first poll (every key already
+/// resident: `prefetch_impl` returns before its first await) leaves the walk
+/// in the caller's own turn — like a walk's first discovery, which is never
+/// paced — so pacing it would only add an event-loop turn to every warm call
+/// (the F.37 "sync-fast re-run", every cached `fetch_animation` /
+/// `fetch_physics_script` …). Only a prefetch that waited resumes inside
+/// whatever task delivered its wake-up, which is the stacking `?walkPace`
+/// splits.
+async fn await_noting_suspend<Fut>(fut: Fut) -> (Fut::Output, bool)
+where
+    Fut: std::future::Future,
+{
+    let mut fut = std::pin::pin!(fut);
+    let mut suspended = false;
+    let out = std::future::poll_fn(|cx| {
+        let polled = std::future::Future::poll(fut.as_mut(), cx);
+        if polled.is_pending() {
+            suspended = true;
+        }
+        polled
+    })
+    .await;
+    (out, suspended)
+}
 
 // ============================================================
 // Discovery-walk marker (2026-07-02 hardening)
@@ -360,19 +466,31 @@ where
             source.prefetch(&refs).await
         }
     };
+    // `?walkPace`: did the prefetch round just before the next discovery
+    // SUSPEND (see `await_noting_suspend`)? Never true for a walk's first
+    // discovery without initial keys, nor after a fully-resident prefetch.
+    let mut pace_next = false;
     if !initial_keys.is_empty() {
         let owned: Vec<(String, u32)> = initial_keys
             .iter()
             .map(|k| (k.namespace.to_string(), k.file_id))
             .collect();
-        do_prefetch(owned)
-            .await
-            .map_err(|e| JsValue::from_str(&format!("prefetch initial: {e}")))?;
+        let (initial, suspended) = await_noting_suspend(do_prefetch(owned)).await;
+        initial.map_err(|e| JsValue::from_str(&format!("prefetch initial: {e}")))?;
+        pace_next = suspended;
     }
     let inner: &ManifestResourceSource = source.as_ref();
     let inner_dyn: &dyn ResourceSource = inner;
     let mut prev_misses: Vec<(String, u32)> = Vec::new();
     for _round in 0..8 {
+        // `?walkPace` (default on, main thread only): a discovery that follows
+        // a prefetch round that SUSPENDED (the initial-keys prefetch or the
+        // previous round's) runs in its own task — see the pacing section
+        // above. A fully-resident (warm) prefetch completes on its first poll
+        // and is not paced. `walkPace=off`: no yield (the pre-follow-up loop).
+        if pace_next {
+            maybe_pace_legacy_discovery().await;
+        }
         // §2.1b: the poolable half. Runs in-place today; §2.1c replaces this
         // one line with a dispatch, and the driver below is unchanged.
         let misses = discovery_round(inner_dyn, &walk);
@@ -409,12 +527,14 @@ where
         // still correct for the permanent UnknownKey / not-in-manifest
         // class, which fails every attempt identically).
         let mut round_ok = false;
+        let mut round_suspended = false;
         for attempt in 1..=PREFETCH_ROUND_TRIES {
-            let round = if urgent {
-                source.prefetch_urgent(&keys).await
+            let (round, suspended) = if urgent {
+                await_noting_suspend(source.prefetch_urgent(&keys)).await
             } else {
-                source.prefetch(&keys).await
+                await_noting_suspend(source.prefetch(&keys)).await
             };
+            round_suspended |= suspended;
             match round {
                 Ok(()) => {
                     round_ok = true;
@@ -435,8 +555,154 @@ where
         if !round_ok {
             break;
         }
+        pace_next = round_suspended;
     }
     Ok(())
+}
+
+// ============================================================
+// A0 hardening (`?interiorStabBatch`, 2026-10-09) — batch-mode keyed walk
+// ============================================================
+
+thread_local! {
+    /// Dedup map for [`ensure_walk_prefetched_keyed_batch`]. Separate from
+    /// `WALK_DEDUP` because the shared output differs (stats, infallible), so
+    /// a batch-mode key can never latch onto a legacy loop or vice versa.
+    static BATCH_WALK_DEDUP: crate::walk_dedup::WalkDedupMapT<
+        WalkCacheKey,
+        BatchWalkStats,
+        std::convert::Infallible,
+    > = crate::walk_dedup::WalkDedupMapT::new();
+}
+
+/// Keyed walk in BATCH MODE (`crate::batch_walk::run_batch_walk`): like
+/// [`ensure_walk_prefetched_keyed_urgent`] / [`ensure_walk_prefetched_keyed`]
+/// (same `RecordingSource` discovery rounds, same 3 tries per round, same
+/// stall guard and 8-round cap, same F.37 sharing between concurrent callers
+/// passing the same `cache_key`), except that a round's keys that still fail
+/// after the last try are EXCLUDED and discovery continues instead of
+/// stopping. It never fails; it returns what it did.
+///
+/// No initial keys by design: the walk's top records are its first discovery
+/// round's misses, so they get the same retry/exclusion treatment as every
+/// other record.
+///
+/// Used by `fetch_env_cells_in_landblock` (`?interiorStabBatch` ON) for the
+/// landblock's stab batch when `?interiorStabChunk=off` AND its per-stab
+/// fallback walks (`rounds > 0` on a fallback = it still had misses — the build
+/// log's `perStabFallback`). Unpaced: exactly the pre-follow-up loop. Existing
+/// callers of the legacy loop are untouched.
+pub(crate) async fn ensure_walk_prefetched_keyed_batch<F>(
+    cache_key: WalkCacheKey,
+    source: &Arc<ManifestResourceSource>,
+    walk: F,
+    urgent: bool,
+) -> BatchWalkStats
+where
+    F: Fn(&dyn ResourceSource) + 'static,
+{
+    ensure_walk_prefetched_keyed_batch_paced(cache_key, source, walk, urgent, false).await
+}
+
+/// [`ensure_walk_prefetched_keyed_batch`] with discovery pacing:
+/// `pace = true` (the `?interiorStabChunk` sub-walks) hands the event loop one
+/// turn before every discovery round that follows a prefetch round — main
+/// thread only, not while the document is hidden (see the pacing section at
+/// the top of this file) — so each sub-walk's synchronous discovery runs in
+/// its own task. `pace = false` is the unpaced loop. Same dedup map, same keys:
+/// a caller latching onto an existing walk gets that walk's pacing.
+pub(crate) async fn ensure_walk_prefetched_keyed_batch_paced<F>(
+    cache_key: WalkCacheKey,
+    source: &Arc<ManifestResourceSource>,
+    walk: F,
+    urgent: bool,
+    pace: bool,
+) -> BatchWalkStats
+where
+    F: Fn(&dyn ResourceSource) + 'static,
+{
+    let label = cache_key.export();
+    // Phase 1: latch-or-start (borrow released before the await).
+    let shared = BATCH_WALK_DEDUP.with(|map| {
+        map.get_or_install(&cache_key, || {
+            let source = source.clone();
+            Box::pin(async move {
+                Ok::<BatchWalkStats, std::convert::Infallible>(
+                    run_batch_walk_loop(&source, walk, urgent, label, pace).await,
+                )
+            })
+        })
+    });
+    // Phase 2: await outside the thread-local borrow.
+    let result = shared.await;
+    // Phase 3: cleanup (a later caller re-runs the — then sync-fast — loop).
+    BATCH_WALK_DEDUP.with(|map| map.cleanup_resolved(&cache_key));
+    match result {
+        Ok(stats) => stats,
+        Err(never) => match never {},
+    }
+}
+
+/// The batch loop bound to the manifest source: discovery = one
+/// [`discovery_round`] (the same relocatable unit `run_walk_loop` uses);
+/// prefetch = one `prefetch[_urgent]` round, with `PrefetchError::PartialRound`
+/// naming exactly the keys that did not land and every other error failing the
+/// round as a whole. `pace`: see [`ensure_walk_prefetched_keyed_batch_paced`].
+async fn run_batch_walk_loop<F>(
+    source: &Arc<ManifestResourceSource>,
+    walk: F,
+    urgent: bool,
+    label: &'static str,
+    pace: bool,
+) -> BatchWalkStats
+where
+    F: Fn(&dyn ResourceSource),
+{
+    let inner: &ManifestResourceSource = source.as_ref();
+    let inner_dyn: &dyn ResourceSource = inner;
+    let discover = || discovery_round(inner_dyn, &walk);
+    let prefetch = move |keys: Vec<(String, u32)>| async move {
+        let refs: Vec<ResourceKey<'_>> = keys
+            .iter()
+            .map(|(ns, id)| ResourceKey::new(ns.as_str(), *id))
+            .collect();
+        let round = if urgent {
+            inner.prefetch_urgent(&refs).await
+        } else {
+            inner.prefetch(&refs).await
+        };
+        round.map_err(|e| match e {
+            PrefetchError::PartialRound { failed, detail } => RoundFailure {
+                failed: Some(failed),
+                detail,
+            },
+            other => RoundFailure {
+                failed: None,
+                detail: other.to_string(),
+            },
+        })
+    };
+    let warn = move |msg: String| {
+        log::warn!("[{label}] {msg}");
+    };
+    if pace {
+        // `?interiorStabChunk` sub-walks: one event-loop turn before each
+        // discovery that follows a round (main thread only, not while hidden).
+        run_batch_walk_paced(
+            Vec::new(),
+            discover,
+            prefetch,
+            || async {
+                if pace_context_is_main_thread() {
+                    discovery_pace_turn(true).await;
+                }
+            },
+            warn,
+        )
+        .await
+    } else {
+        run_batch_walk(Vec::new(), discover, prefetch, warn).await
+    }
 }
 
 // ============================================================

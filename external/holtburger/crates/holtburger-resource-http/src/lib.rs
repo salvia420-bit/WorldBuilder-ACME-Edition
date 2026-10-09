@@ -52,6 +52,12 @@ pub use recording::RecordingSource;
 // backend forks by target (same pattern as holtburger-dat/src/archive.rs).
 pub mod pack;
 pub use pack::{CompositeSource, PackSource};
+// Workstream B (`?shardFetchWorker`, 2026-10-09): the pure decisions of the
+// registered-shard-fetcher route (priority string, rejection status, when to
+// ask the fetcher to verify, when Step E may skip its re-hash). Target-agnostic
+// so `cargo test -p holtburger-resource-http shard_route` pins them natively;
+// the wasm glue is `http::fetch_shard_bytes` + `manifest_source` Step D/E.
+pub(crate) mod shard_route;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod http;
@@ -63,7 +69,9 @@ mod manifest_source_v1;
 mod source;
 
 #[cfg(target_arch = "wasm32")]
-pub use http::{HttpError, fetch_bytes, join_url};
+pub use http::{
+    HttpError, fetch_bytes, join_url, set_shard_fetcher, shard_fetcher_registered,
+};
 #[cfg(target_arch = "wasm32")]
 pub use manifest_source::{
     ManifestConnectError, ManifestResourceSource, PrefetchError,

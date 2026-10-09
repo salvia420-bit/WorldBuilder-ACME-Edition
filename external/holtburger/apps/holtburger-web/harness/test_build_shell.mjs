@@ -3,13 +3,14 @@
 //
 // WHAT IS UNDER TEST (SPEC §3 T11; pass-12 D-12.2):
 //   PART 1 — entry coverage: the file-backed `new Worker(new URL(...))` site
-//            scan finds EXACTLY the 4 verified workers (bake/net/texture/
-//            keepalive) + refuses drift; the flag-default premises of the
+//            scan finds EXACTLY the 5 verified workers (bake/net/texture/
+//            keepalive + shard_fetch, 2026-10-09) + refuses drift; the
+//            flag-default premises of the
 //            request arithmetic are pinned against the *Enabled() readers
 //            (MEMORY flag-default-footgun: trust readers, not comments).
 //   PART 2 — determinism: two builds into fresh out-roots are byte-identical
 //            (tree compare, every file), and building never edits index.html.
-//   PART 3 — output contract: 5 hashed entries + external maps; hashed names
+//   PART 3 — output contract: 6 hashed entries + external maps; hashed names
 //            match content (workers-first substitution => a worker change
 //            renames app); keepalive stays classic-worker-safe (no module
 //            syntax); worker bundles import nothing but ../pkg/*.
@@ -18,8 +19,9 @@
 //            importmap + SW registration semantics retained.
 //   PART 5 — request arithmetic (STATIC — the RAM-gated browser count is a
 //            separate, labeled measurement): cold shell enumerated from the
-//            artifacts = 7 bare / 8 login / 9 agent-login vs ~270 unbundled
-//            (D-12.2 "≈8 cold"); warm = 5 no-cache revalidations + 0
+//            artifacts = 8 bare / 9 login / 10 agent-login vs ~270 unbundled
+//            (D-12.2 "≈8 cold"; +1 since 2026-10-09: the default-on shard-fetch
+//            worker); warm = 5 no-cache revalidations + 0
 //            immutable re-fetches ("≈1" once pkg is deploy-hashed; the pkg
 //            residue is the T11 task's recorded external).
 //            Writes docs/RESULTS-shell-requests-2026-08-09.json via
@@ -79,11 +81,13 @@ console.log("PART 1 — entry coverage + arithmetic premises");
 {
   const sites = scanWorkerSites();
   const names = sites.map((s) => path.basename(s.specifier, ".js")).sort();
-  check(sites.length === 4, `worker-site count == 4 (got ${sites.length}: ${JSON.stringify(sites)})`);
+  // 2026-10-09: + shard_fetch_worker (Workstream B, `?shardFetchWorker`,
+  // scene3d/shard_fetch_client.js — an import-free module worker).
+  check(sites.length === 5, `worker-site count == 5 (got ${sites.length}: ${JSON.stringify(sites)})`);
   check(
     JSON.stringify(names) ===
-      JSON.stringify(["bake_worker", "keepalive_worker", "net_worker", "texture_worker"]),
-    `worker-site names == the D-12.2 four (got ${names})`,
+      JSON.stringify(["bake_worker", "keepalive_worker", "net_worker", "shard_fetch_worker", "texture_worker"]),
+    `worker-site names == the D-12.2 four + shard_fetch_worker (got ${names})`,
   );
   check(
     JSON.stringify(Object.keys(WORKER_ENTRIES).sort()) === JSON.stringify(names),
@@ -110,6 +114,12 @@ console.log("PART 1 — entry coverage + arithmetic premises");
   check(
     /if \(v == null\) return canWorker \? 1 : 0;/.test(xu7Src),
     "texWorkers absent => 1 worker (xu7_textures.js) — texture worker IS a cold-boot request (DEFAULT ON 2026-10-06; built lazily on the first xu7 job)",
+  );
+  const shardSrc = read(path.join(APP_ROOT, "scene3d", "shard_fetch_client.js"));
+  check(
+    /if \(v == null\) return true;/.test(shardSrc) &&
+      /return !\(t === "off" \|\| t === "0" \|\| t === "false" \|\| t === "no"\);/.test(shardSrc),
+    "shardFetchWorker reader is default-ON opt-OUT (shard_fetch_client.js) — shard-fetch worker IS a cold-boot request (built right after init_resource_source)",
   );
 }
 
@@ -154,8 +164,8 @@ const shellDir = path.join(A, "shell");
   const names = Object.keys(manifest.entries).sort();
   check(
     JSON.stringify(names) ===
-      JSON.stringify(["app", "bake_worker", "keepalive_worker", "net_worker", "texture_worker"]),
-    `manifest entries == main + 4 workers (got ${names})`,
+      JSON.stringify(["app", "bake_worker", "keepalive_worker", "net_worker", "shard_fetch_worker", "texture_worker"]),
+    `manifest entries == main + 5 workers (got ${names})`,
   );
   for (const [name, e] of Object.entries(manifest.entries)) {
     check(/^[a-z_]+-[0-9a-f]{8}\.js$/.test(e.file), `${name} filename is <name>-<hash8>.js (${e.file})`);
@@ -226,11 +236,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   cold.push("pkg/holtburger_web_bg.wasm"); // fetched by init(), stamped URL
   cold.push("service-worker.js"); // registration fetch (skipped only under ?nosw=1)
   cold.push(`shell/${manifest.entries.bake_worker.file}`); // default-ON (P1 premise)
-  const coldBare = cold.length; // 7
+  cold.push(`shell/${manifest.entries.shard_fetch_worker.file}`); // default-ON (P1 premise), after init_resource_source
+  const coldBare = cold.length; // 8
   const coldLogin = coldBare + 1; // + keepalive worker (starts at session start)
   const coldAgentLogin = coldLogin + 1; // + net worker (agent/bot forces ON — P1 premise)
-  check(coldBare === 7, `cold bare-default shell == 7 requests (got ${coldBare}: ${JSON.stringify(cold)})`);
-  check(coldAgentLogin === 9, "cold agent-login shell == 9 (bench-bot shape) — D-12.2 '≈8' holds (7..9)");
+  check(coldBare === 8, `cold bare-default shell == 8 requests (got ${coldBare}: ${JSON.stringify(cold)})`);
+  check(coldAgentLogin === 10, "cold agent-login shell == 10 (bench-bot shape) — D-12.2 '≈8' + the shard-fetch worker (8..10)");
 
   // Unbundled arm, same enumeration style, from the committed index.html:
   const indexHtml = read(path.join(APP_ROOT, "index.html"));
@@ -296,11 +307,18 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // external-container rules; scene3d/picking.js imports it for the
   // locked-container line, so it joins the static graph; generator --check:
   // up to date, 365 modules) → 351.
-  const NON_APP_PRELOADS = 351;
+  // 2026-10-09 (cold-load structural pass): + scene3d/tex_upgrade_queue.js (Workstream C,
+  // imported by materials.js) and scene3d/particles/render_layer.js (the 2026-10-09
+  // indoor-particle-layer fix, which had not been regenerated into the block; generator
+  // --check: up to date, 369 links) → 353.
+  // 2026-10-09 (Workstream B): + scene3d/shard_fetch_client.js (`?shardFetchWorker`,
+  // imported by index.html; generator --check: up to date, 370 modules) → 354.
+  const NON_APP_PRELOADS = 354;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
-  // html + 266 modules + wasm + SW + workers not in the preload list (bake; keepalive on login)
-  const coldUnbundledBare = 1 + mp.length + 1 + 1 + (workersInMp ? 0 : 1);
+  // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;
+  // keepalive on login)
+  const coldUnbundledBare = 1 + mp.length + 1 + 1 + (workersInMp ? 0 : 2);
   check(
     coldUnbundledBare >= 265,
     `unbundled cold shell ≈ 270 requests (enumerated ${coldUnbundledBare}; workers preloaded: ${workersInMp})`,
@@ -348,11 +366,11 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
     arm: "cold-unbundled-bare",
     verdict: "USABLE",
     metrics: { "requests@wire": coldUnbundledBare },
-    note: "derived from the committed index.html (266 modulepreload links [M] + html + wasm + SW + bake worker)",
+    note: "derived from the committed index.html (266 modulepreload links [M] + html + wasm + SW + bake + shard-fetch workers)",
   });
   report.setNotes(
     "T11 ST-SHELL static request arithmetic (SPEC §3 T11 / D-12.2). EXPLORATORY: B2/B5 absolutes bind at " +
-      "ST5 on the deployed artifact (SPEC §2.2); this file documents the shell component ≈8 cold (7..9) / " +
+      "ST5 on the deployed artifact (SPEC §2.2); this file documents the shell component ≈8 cold (8..10) / " +
       "≈1 warm-with-body (5 empty 304s on the dev server). Importmap externals (three CDN, vendor takram, " +
       "postprocessing) are identical on both arms and excluded from the shell count, as in D-12.2.",
   );

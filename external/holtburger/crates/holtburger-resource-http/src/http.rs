@@ -2,11 +2,15 @@
 //! (legacy single-HBA path) and `ManifestResourceSource` (Phase 5.0
 //! manifest+shards path).
 
+use std::cell::RefCell;
+
 use js_sys::{ArrayBuffer, Function, Promise, Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::JsValue;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::Response;
+
+use crate::shard_route;
 
 /// Failure modes for HTTP fetch + body read. Distinguishes the
 /// surfaces a caller might want to display differently (network vs.
@@ -121,6 +125,181 @@ pub async fn fetch_bytes_with_priority(
         .dyn_into()
         .map_err(|e| HttpError::Body(format!("not an ArrayBuffer: {}", jsval_string(&e))))?;
     Ok(Uint8Array::new(&array_buffer).to_vec())
+}
+
+// ---------------------------------------------------------------------------
+// Workstream B (`?shardFetchWorker`, 2026-10-09): a registered JS shard fetcher.
+//
+// `fetch_bytes_with_priority` costs two main-thread turns per record (the
+// `fetch()` promise, then `array_buffer()`), and on the 1070 academy load the
+// main thread is 90–97 % busy, so a body the network had finished waited a
+// median 0.09–0.32 s / p90 0.35–0.56 s before wasm saw it — longer than the
+// network itself took. When the page registers a fetcher
+// (`register_shard_fetcher` in apps/holtburger-web/src/lib.rs; the page side is
+// scene3d/shard_fetch_client.js → scene3d/shard_fetch_worker.js), Step D of
+// `ManifestResourceSource::prefetch_impl` calls it instead: the worker fetches
+// with the same priority hint, reads the body, sha256-verifies it against the
+// catalog hash off the main thread, and hands bodies back in batches as
+// transferred ArrayBuffers. Catalog / manifest / boot fetches never take this
+// route. Unregistered (the default until the page registers, `?shardFetchWorker
+// =off`, a stale page, the bake worker's instance) = exactly
+// `fetch_bytes_with_priority`.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The page-registered shard fetcher, if any. Read (cloned) at call time,
+    /// so an unregister mid-flight sends every LATER fetch direct while the
+    /// ones already handed to the fetcher settle through it.
+    static SHARD_FETCHER: RefCell<Option<Function>> = const { RefCell::new(None) };
+}
+
+/// Install (`Some`) or remove (`None`) the JS shard fetcher for this wasm
+/// instance. See the section comment above for the call contract.
+pub fn set_shard_fetcher(f: Option<Function>) {
+    SHARD_FETCHER.with(|slot| *slot.borrow_mut() = f);
+}
+
+/// True while a JS shard fetcher is registered in this instance.
+pub fn shard_fetcher_registered() -> bool {
+    SHARD_FETCHER.with(|slot| slot.borrow().is_some())
+}
+
+/// A shard body plus whether the registered fetcher verified it against the
+/// expected hash this request sent. `verified` is always `false` on the direct
+/// path and whenever no hash was sent.
+pub struct ShardBody {
+    pub bytes: Vec<u8>,
+    pub verified: bool,
+}
+
+/// Fetch one shard body: through the registered JS fetcher when there is one,
+/// else exactly [`fetch_bytes_with_priority`].
+///
+/// Fetcher contract: `f(url, "low" | "auto", expectedShaHex | null)` returns a
+/// Promise (a non-Promise return is wrapped with `Promise.resolve`) that
+/// resolves to a `Uint8Array` / `ArrayBuffer` (unverified) or
+/// `{ verified: true, bytes }`, and rejects with `{ status, statusText }`
+/// (→ [`HttpError::Http`], so `tolerate_404` keeps working) or anything else
+/// (→ [`HttpError::Network`]). A synchronous throw is a `Network` error too.
+/// `expected_sha_hex` is the catalog's truncated sha256 (32 lowercase hex);
+/// `None` asks for no verification.
+pub async fn fetch_shard_bytes(
+    url: &str,
+    priority: FetchPriority,
+    expected_sha_hex: Option<&str>,
+) -> Result<ShardBody, HttpError> {
+    // Clone the handle out of the slot BEFORE calling into JS, so a fetcher
+    // that (un)registers re-entrantly can never hit a RefCell borrow panic.
+    let fetcher: Option<Function> = SHARD_FETCHER.with(|slot| slot.borrow().clone());
+    let fetcher = match fetcher {
+        Some(f) => f,
+        None => {
+            let bytes = fetch_bytes_with_priority(url, priority).await?;
+            return Ok(ShardBody {
+                bytes,
+                verified: false,
+            });
+        }
+    };
+    let prio = shard_route::priority_hint(priority == FetchPriority::Low);
+    let sha_arg = match expected_sha_hex {
+        Some(h) => JsValue::from_str(h),
+        None => JsValue::NULL,
+    };
+    let returned = fetcher
+        .call3(
+            &JsValue::UNDEFINED,
+            &JsValue::from_str(url),
+            &JsValue::from_str(prio),
+            &sha_arg,
+        )
+        .map_err(|e| HttpError::Network(format!("shard fetcher threw: {}", js_error_text(&e))))?;
+    let promise: Promise = match returned.dyn_into::<Promise>() {
+        Ok(p) => p,
+        Err(v) => Promise::resolve(&v),
+    };
+    let value = JsFuture::from(promise)
+        .await
+        .map_err(|e| shard_fetcher_rejection(&e))?;
+    shard_body_from_js(&value, expected_sha_hex.is_some())
+}
+
+/// Map a fetcher rejection: `{ status, statusText }` with a real HTTP status →
+/// [`HttpError::Http`]; anything else (an `Error`, a string, `status: 0`) →
+/// [`HttpError::Network`].
+fn shard_fetcher_rejection(e: &JsValue) -> HttpError {
+    if e.is_object() {
+        let status = Reflect::get(e, &JsValue::from_str("status"))
+            .ok()
+            .and_then(|v| v.as_f64())
+            .and_then(shard_route::http_status_from_js_number);
+        if let Some(status) = status {
+            let status_text = Reflect::get(e, &JsValue::from_str("statusText"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            return HttpError::Http {
+                status,
+                status_text,
+            };
+        }
+    }
+    HttpError::Network(js_error_text(e))
+}
+
+/// A resolved fetcher value → body bytes + the verified flag (only honoured
+/// when this request sent an expected hash).
+fn shard_body_from_js(value: &JsValue, sha_requested: bool) -> Result<ShardBody, HttpError> {
+    if let Some(bytes) = js_bytes(value) {
+        return Ok(ShardBody {
+            bytes,
+            verified: false,
+        });
+    }
+    if value.is_object() {
+        let inner = Reflect::get(value, &JsValue::from_str("bytes"))
+            .map_err(|e| HttpError::Body(js_error_text(&e)))?;
+        if let Some(bytes) = js_bytes(&inner) {
+            let claimed = Reflect::get(value, &JsValue::from_str("verified"))
+                .ok()
+                .and_then(|v| v.as_bool());
+            return Ok(ShardBody {
+                bytes,
+                verified: shard_route::accept_verified_claim(sha_requested, claimed),
+            });
+        }
+    }
+    Err(HttpError::Body(format!(
+        "shard fetcher resolved without bytes: {}",
+        jsval_string(value)
+    )))
+}
+
+/// Copy a `Uint8Array` / `ArrayBuffer` into wasm memory; `None` for anything
+/// else.
+fn js_bytes(v: &JsValue) -> Option<Vec<u8>> {
+    if let Some(view) = v.dyn_ref::<Uint8Array>() {
+        return Some(view.to_vec());
+    }
+    if let Some(buf) = v.dyn_ref::<ArrayBuffer>() {
+        return Some(Uint8Array::new(buf).to_vec());
+    }
+    None
+}
+
+/// Best message for a JS error value: a string as-is, an object's string
+/// `message` (an `Error` JSON-stringifies to `{}`), else [`jsval_string`].
+fn js_error_text(v: &JsValue) -> String {
+    if let Some(s) = v.as_string() {
+        return s;
+    }
+    if v.is_object()
+        && let Ok(m) = Reflect::get(v, &JsValue::from_str("message"))
+        && let Some(s) = m.as_string()
+    {
+        return s;
+    }
+    jsval_string(v)
 }
 
 pub fn jsval_string(v: &JsValue) -> String {

@@ -17,10 +17,166 @@
 import { createWorldStreamer } from "../scene3d/world_stream.js";
 import { KIND as ENTITY_KIND, createEntityDispatcher } from "../scene3d/entity_dispatch.js";
 
+// `?interiorBuildShare` (2026-10-09, cold-load structural pass) — ONE in-flight
+// `fetchEnvCellsInLandblock` per landblock on the main wasm instance.
+//
+// WHY. Two callers build the same landblock's interior: this module's
+// `ensureCellContainersForLandblock` (collision / cell graph — the spawn kick,
+// the cell-residency watchdog) and scene3d/cells.js `buildEnvCellsForLandblock`
+// (the meshes). The spawn kick and the watchdog fire both in the same turn, and
+// their dedup sets are separate, so the academy (568 cells) ran the whole
+// wasm build twice at once — every record walk and the ~1.7 s per-cell loop on
+// the main thread, twice. The second build bought nothing: it re-reads the
+// same records and re-queues the same products (`CELL_GRAPH_PENDING`,
+// `CELL_PHYSICS_PENDING`, `CELL_BSP_PENDING`, `CELL_MEMBERSHIP_PENDING`,
+// `CELL_STATIC_BSP_PENDING`). Most drains are idempotent (map inserts,
+// `replace_cell_triangles`, de-duplicated portal edges); two APPEND —
+// `insert_cell_static_physics_bsp` and `insert_cell_portal_polygon` — so the
+// duplicate build doubled every cell static's collision BSP and every portal
+// polygon until the next eviction clear. One build per landblock is both enough
+// and more correct.
+//
+// HOW. A registry on `globalThis.__hbInteriorBuildShare`, installed by
+// `createLandblockStream` (index.html calls it at boot, before scene3d loads).
+// No new module: a static import from here into scene3d/ would add files to the
+// modulepreload block, and cells.js only needs to read the global (it falls back
+// to the direct call when the registry is absent — capture pages, unit tests).
+// `share.fetch(lbId, fn, {who, reads, thisArg})` returns the SAME promise to
+// every concurrent caller for that landblock and drops the entry when it
+// settles (resolve or reject — a rejection reaches every caller), so a later
+// call starts a fresh build. `fn` is called synchronously, so `?interiorEarlyBake`'s
+// same-turn request sharing is unchanged.
+//
+// OWNERSHIP of the returned `EnvCellPlacement` handles (wasm-bindgen objects
+// with destructive `take*` + `free()`): a build has at most ONE reader — the
+// caller that drains and frees them (cells.js, `reads: true`). A second reader
+// never joins: it starts its own build (a parked-then-rebuilt landblock can have
+// two cells.js builds in flight, and two drains of one array would be a
+// use-after-free). Observers (this module) never touch the elements of a shared
+// array; `share.consumersOf(placements)` tells an observer whether it was the
+// only caller, and only then does it free them. `forget(lb)` (eviction) makes
+// the next call start a fresh build, so a re-entry never joins a build whose
+// early products the eviction's collision clear may have already dropped.
+//
+// Escape: `?interiorBuildShare=off`/`0`/`false`/`no` → every call runs its own
+// build, exactly as before. Diag: `__hbInteriorBuildShare.stats` (builds,
+// joined, readerBypass, fnMismatch, rejected, forgotten) and one
+// `[interiorBuildShare]` console line per join.
+const INTERIOR_BUILD_SHARE_VERSION = 1;
+
+/** `?interiorBuildShare` reader: default ON; `off`/`0`/`false`/`no` disable. */
+export function interiorBuildShareEnabled(search = "") {
+  try {
+    const v = new URLSearchParams(search || "").get("interiorBuildShare");
+    if (v === null) return true;
+    const s = String(v).trim().toLowerCase();
+    return !(s === "off" || s === "0" || s === "false" || s === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * Install (once) and return the shared-build registry on `g`. Idempotent: a
+ * registry of the same version already on `g` is returned as-is. Exported for
+ * the unit suite (`tests/interior_build_share.test.mjs`).
+ */
+export function installInteriorBuildShare(g = globalThis) {
+  const prior = g.__hbInteriorBuildShare;
+  if (prior && prior.version === INTERIOR_BUILD_SHARE_VERSION) return prior;
+  let search = "";
+  try {
+    search = g.location?.search || "";
+  } catch (_) {
+    search = "";
+  }
+  const enabled = interiorBuildShareEnabled(search);
+  const inFlight = new Map(); // lbKey -> { fn, promise, consumers, readers, who, t0 }
+  const settled = new WeakMap(); // placements array -> its build's entry
+  const stats = { builds: 0, joined: 0, readerBypass: 0, fnMismatch: 0, rejected: 0, forgotten: 0 };
+  const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const hex = (k) => "0x" + k.toString(16).padStart(8, "0");
+  const share = {
+    version: INTERIOR_BUILD_SHARE_VERSION,
+    enabled,
+    inFlight,
+    stats,
+    /**
+     * `fn(lbId)` (called with `opts.thisArg`), shared with any build of the same
+     * landblock already in flight through the SAME `fn`. `opts.reads` marks the
+     * caller that drains + frees the handles (at most one per build).
+     */
+    fetch(lbId, fn, opts = {}) {
+      const who = opts.who || "?";
+      const reads = opts.reads === true;
+      if (!enabled) return fn.call(opts.thisArg, lbId);
+      const k = (lbId & 0xffff0000) >>> 0;
+      const cur = inFlight.get(k);
+      if (cur) {
+        if (cur.fn !== fn) {
+          // Another wasm instance / a stub: never hand its result across.
+          stats.fnMismatch += 1;
+          return fn.call(opts.thisArg, lbId);
+        }
+        if (!(reads && cur.readers > 0)) {
+          cur.consumers += 1;
+          if (reads) cur.readers += 1;
+          stats.joined += 1;
+          try {
+            console.log(
+              `[interiorBuildShare] envcells ${hex(k)}: ${who} joined the in-flight build ` +
+                `(${cur.who}, +${Math.round(nowMs() - cur.t0)} ms) — one wasm build instead of two`,
+            );
+          } catch (_) { /* logging must never affect the build */ }
+          return cur.promise;
+        }
+        // A second READER: its own build (see OWNERSHIP above), which becomes
+        // the one later observers join.
+        stats.readerBypass += 1;
+      }
+      let raw;
+      try {
+        raw = fn.call(opts.thisArg, lbId);
+      } catch (e) {
+        raw = Promise.reject(e);
+      }
+      const entry = { fn, promise: null, consumers: 1, readers: reads ? 1 : 0, who, t0: nowMs() };
+      entry.promise = Promise.resolve(raw).then(
+        (placements) => {
+          if (inFlight.get(k) === entry) inFlight.delete(k);
+          if (placements && typeof placements === "object") settled.set(placements, entry);
+          return placements;
+        },
+        (e) => {
+          if (inFlight.get(k) === entry) inFlight.delete(k);
+          stats.rejected += 1;
+          throw e;
+        },
+      );
+      inFlight.set(k, entry);
+      stats.builds += 1;
+      return entry.promise;
+    },
+    /** How many callers received this placements array (1 = a sole, unshared caller). */
+    consumersOf(placements) {
+      const e = placements && typeof placements === "object" ? settled.get(placements) : null;
+      return e ? e.consumers : 1;
+    },
+    /** Eviction: the next call for this landblock starts a fresh build. */
+    forget(lbId) {
+      if (inFlight.delete((lbId & 0xffff0000) >>> 0)) stats.forgotten += 1;
+    },
+  };
+  g.__hbInteriorBuildShare = share;
+  return share;
+}
+
 export function createLandblockStream(D) {
   const { fetch_landblock_heightmaps, populateBuildingAabbsForLandblock,
     populateStaticsAabbsForLandblock, fetchEnvCellsInLandblock, __hbWasmNs,
     METERS_PER_LANDBLOCK, applyConfirmedStance, entityMap, __UNIFIED_DISPATCH } = D;
+  // `?interiorBuildShare`: installed before scene3d loads, so cells.js finds it.
+  const envCellsShare = installInteriorBuildShare(globalThis);
   // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
   // ACE sends ObjectCreate for the local player as soon as the
   // spawn handshake completes (Player_Networking.cs:224 —
@@ -186,7 +342,11 @@ export function createLandblockStream(D) {
   // itself, so we touch only the collision + cell sets here. The wasm purge
   // makes the re-populate REPLACE rather than append.
   window.__onLandblockEvicted = (lbId) => {
-    const lb = (lbId >>> 0) & 0xffff0000;
+    // `>>> 0` AFTER the mask (2026-10-09): `&` yields a SIGNED int32, so for
+    // every landblock with an x byte >= 0x80 (e.g. the academy 0x8602) the key
+    // was negative and matched none of the unsigned keys the sets hold — the
+    // clears below were silent no-ops there and a revisit never re-populated.
+    const lb = ((lbId >>> 0) & 0xffff0000) >>> 0;
     buildingAabbsPopulatedLbs.delete(lb);
     buildingAabbsPopulateInFlight.delete(lb);
     cellContainersPopulatedLbs.delete(lb);
@@ -197,6 +357,9 @@ export function createLandblockStream(D) {
     // dedup entry MUST go too or the re-entry populate is skipped and
     // the LB comes back with no tree collision.
     sceneryCollidersPopulatedLbs.delete(lb);
+    // `?interiorBuildShare`: a re-entry must start a FRESH EnvCell build, not
+    // join one whose earlier products the collision clear above may drop.
+    envCellsShare.forget(lb);
   };
   async function ensureCellContainersForLandblock(centreLb) {
     // Phase 6 step C: lazy-fetch + bake the EnvCells in a single
@@ -217,13 +380,30 @@ export function createLandblockStream(D) {
     }
     cellContainersPopulateInFlight.add(lbId);
     try {
-      const placements = await fetchEnvCellsInLandblock(lbId);
+      // `?interiorBuildShare`: join cells.js's in-flight build of this LB (or
+      // let it join ours) — one wasm build, one set of queued cell products.
+      // This caller is an OBSERVER: it never reads the handles, and frees them
+      // only when no other caller received the same array (`soleOwner`); a
+      // joined reader (cells.js) drains + frees them itself.
+      const share = envCellsShare.enabled ? envCellsShare : null;
+      const placements = await (share
+        ? share.fetch(lbId, fetchEnvCellsInLandblock, { who: "landblock_stream" })
+        : fetchEnvCellsInLandblock(lbId));
+      const soleOwner = !share || share.consumersOf(placements) <= 1;
       if (!placements || placements.length === 0) {
         cellContainersPopulatedLbs.add(lbId);
         return;
       }
       const app = D.liveScene?.app;
       if (!app) {
+        // Nothing below reads the handles; with the share on, the sole owner
+        // releases them now instead of leaving them to the wasm-bindgen
+        // finalizer (flag off: unchanged — left to GC as before).
+        if (share && soleOwner) {
+          for (const placement of placements) {
+            try { placement?.free?.(); } catch (_) { /* best-effort */ }
+          }
+        }
         // liveScene is set asynchronously; if a position update
         // arrives before the initial render completes, defer by
         // re-clearing the in-flight bit so the next position
@@ -274,7 +454,8 @@ export function createLandblockStream(D) {
       // after the wasm-side fetchEnvCellsInLandblock queued the cell-graph +
       // physics data the 3D path consumes. Bookkeeping kept:
       cellContainersPopulatedLbs.add(lbId);
-      for (const placement of placements) placement.free();
+      // `?interiorBuildShare`: a shared array belongs to its reader.
+      if (soleOwner) for (const placement of placements) placement.free();
     } catch (e) {
       console.warn(
         `[phase6.C] fetchEnvCellsInLandblock(0x${lbId.toString(16)}) failed:`, e

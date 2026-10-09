@@ -44,6 +44,7 @@
 //! exercises the wasm bundle end-to-end against it.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use holtburger_dat::{
@@ -56,10 +57,13 @@ use holtburger_manifest::{
 };
 
 use crate::concurrency::{DEFAULT_FETCH_CONCURRENCY, Semaphore};
-use crate::http::{FetchPriority, HttpError, fetch_bytes, fetch_bytes_with_priority, join_url};
+use crate::http::{
+    FetchPriority, HttpError, fetch_bytes, fetch_shard_bytes, join_url, shard_fetcher_registered,
+};
 use crate::inflight::InflightMap;
 use crate::pack::PackSource;
 use crate::shard_cache::ShardCache;
+use crate::shard_route;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
 /// F1 tuning hook: a JS global `globalThis.__hbFetchConcurrency` (a positive
@@ -325,7 +329,24 @@ pub struct V2Source {
     /// `Arc<InflightMap>` so the underlying map outlives any single
     /// `prefetch` call (multiple concurrent `prefetch` invocations
     /// can be in flight simultaneously, each holding a reference).
+    ///
+    /// Catalog fetches only (Step B + `shard_cas_info`); shard bodies use
+    /// [`Self::shard_inflight`]. The two URL spaces never overlap, so the
+    /// split changes no dedup outcome.
     inflight: Arc<InflightMap<HttpError>>,
+    /// Workstream B follow-up (`?shardFetchWorker`, 2026-10-09): the Step D
+    /// shard-body dedup map. Same F.35 semantics and keys (`urgent:{url}`
+    /// included) as before the split; the shared value additionally carries the
+    /// catalog hash the registered fetcher verified the body against
+    /// (`shard_route::SharedShardBody`), so a caller that latched onto another
+    /// caller's fetch skips Step E's main-thread re-hash too.
+    shard_inflight: Arc<InflightMap<HttpError, shard_route::SharedShardBody>>,
+    /// Step E diag (published in `__hbShardCache`): bodies sha256-hashed on
+    /// THIS thread, their bytes, and bodies whose re-hash was skipped because
+    /// the fetcher verified them against the task's own hash.
+    step_e_hashed: AtomicUsize,
+    step_e_hashed_bytes: AtomicUsize,
+    step_e_hash_skipped: AtomicUsize,
     /// F1 (2026-06-01): global cap on concurrent shard `fetch_bytes`
     /// calls. Shared across all overlapping `prefetch()` invocations
     /// (one source instance per page), so the 8+ per-LB bakers can no
@@ -562,6 +583,10 @@ impl V2Source {
             shards: Arc::new(Mutex::new(ShardCache::new(configured_shard_budget_bytes()))),
             base_url,
             inflight: Arc::new(InflightMap::new()),
+            shard_inflight: Arc::new(InflightMap::new()),
+            step_e_hashed: AtomicUsize::new(0),
+            step_e_hashed_bytes: AtomicUsize::new(0),
+            step_e_hash_skipped: AtomicUsize::new(0),
             fetch_sem: Semaphore::new(configured_fetch_concurrency()),
             packs: Mutex::new(None),
         })
@@ -853,11 +878,40 @@ impl V2Source {
         // Step D: parallel shard fetch via the in-flight URL dedup
         // map (F.35). 404 maps to None for tolerate_404 tasks; other
         // errors propagate.
+        //
+        // Workstream B (`?shardFetchWorker`, 2026-10-09): the network call
+        // inside the dedup factory is `fetch_shard_bytes` — the page's
+        // registered JS fetcher (shard_fetch_worker.js) when there is one,
+        // else exactly `fetch_bytes_with_priority`. Everything around it is
+        // unchanged: the dedup key (incl. `urgent:{url}`), the permit held
+        // across the call, the priority, 404 tolerance, the per-key tolerant
+        // round below. With a fetcher AND verification on, a catalog task
+        // also sends its expected hash. The dedup map (`shard_inflight`) shares
+        // the body together with the hash the fetcher verified it against
+        // (`shard_route::SharedShardBody`), so EVERY waiter of the fetch —
+        // the one whose factory ran and every caller that latched onto it —
+        // skips Step E's main-thread re-hash when that hash is its own expected
+        // hash. A mismatch shares `None`: every waiter re-hashes and fails its
+        // key as before.
+        let fetcher_on = shard_fetcher_registered();
+        let verify_on = shard_verify_enabled();
         let fetches = shard_tasks.iter().map(|task| {
             let url = task.url.clone();
             let tolerate_404 = task.tolerate_404;
-            let inflight = self.inflight.clone();
+            let inflight = self.shard_inflight.clone();
             let fetch_sem = self.fetch_sem.clone();
+            // The hash THIS task's request sends when its factory is the one
+            // that runs (None = the fetcher is not asked to verify).
+            let sent_hash: Option<[u8; 16]> = if shard_route::ask_fetcher_to_verify(
+                fetcher_on,
+                verify_on,
+                task.expected_trunc.is_some(),
+            ) {
+                task.expected_trunc
+            } else {
+                None
+            };
+            let expected_hex: Option<String> = sent_hash.as_ref().map(hex_encode_16);
             async move {
                 let result = {
                     let url_for_fetch = url.clone();
@@ -901,13 +955,23 @@ impl V2Source {
                                 } else {
                                     FetchPriority::Low
                                 };
-                                fetch_bytes_with_priority(&u, prio).await
+                                fetch_shard_bytes(&u, prio, expected_hex.as_deref())
+                                    .await
+                                    .map(|body| shard_route::SharedShardBody {
+                                        verified_against: shard_route::verified_against(
+                                            body.verified,
+                                            sent_hash,
+                                        ),
+                                        bytes: body.bytes,
+                                    })
                             }
                         })
                         .await
                 };
                 match result {
-                    Ok(bytes) => Ok::<Option<Vec<u8>>, HttpError>(Some(bytes)),
+                    Ok(body) => {
+                        Ok::<Option<shard_route::SharedShardBody>, HttpError>(Some(body))
+                    }
                     Err(arc_err) => {
                         if matches!(arc_err.as_ref(), HttpError::Http { status: 404, .. })
                             && tolerate_404
@@ -946,8 +1010,8 @@ impl V2Source {
             // `end_round` below drops the protection and trims to budget.
             cache.begin_round();
             for (task, result) in shard_tasks.into_iter().zip(results) {
-                let bytes = match result {
-                    Ok(Some(bytes)) => bytes,
+                let body = match result {
+                    Ok(Some(body)) => body,
                     Ok(None) => continue,
                     Err(e) => {
                         if first_detail.is_none() {
@@ -957,8 +1021,24 @@ impl V2Source {
                         continue;
                     }
                 };
-                if verify {
+                // Workstream B: a body the registered fetcher already verified
+                // against this task's catalog hash is not hashed again here —
+                // whether this task's own factory fetched it or it latched onto
+                // another caller's fetch (unregistered / unverified / mismatch
+                // = today's verify).
+                let fetcher_verified = shard_route::verified_for_task(
+                    task.expected_trunc.as_ref(),
+                    body.verified_against.as_ref(),
+                );
+                let bytes = body.bytes;
+                if shard_route::needs_main_thread_verify(
+                    verify,
+                    task.expected_trunc.is_some(),
+                    fetcher_verified,
+                ) {
                     if let Some(expected_trunc) = task.expected_trunc {
+                        self.step_e_hashed.fetch_add(1, Ordering::Relaxed);
+                        self.step_e_hashed_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
                         let got_full = sha256_hex(&bytes);
                         let got_trunc = &got_full[..32];
                         let expected_str = hex_encode_16(&expected_trunc);
@@ -973,6 +1053,8 @@ impl V2Source {
                             continue;
                         }
                     }
+                } else if fetcher_verified {
+                    self.step_e_hash_skipped.fetch_add(1, Ordering::Relaxed);
                 }
                 cache.insert(task.key, Arc::new(bytes));
             }
@@ -1037,6 +1119,19 @@ impl V2Source {
         set(
             "shardCacheBudget",
             if budget == usize::MAX { -1.0 } else { budget as f64 },
+        );
+        // Workstream B follow-up: Step E main-thread sha256 work. With the
+        // shard-fetch worker on, `stepEHashed` should stay ~0 (only bodies the
+        // worker did not verify); `stepEHashSkipped` counts worker-verified
+        // bodies, latched waiters included.
+        set("stepEHashed", self.step_e_hashed.load(Ordering::Relaxed) as f64);
+        set(
+            "stepEHashedBytes",
+            self.step_e_hashed_bytes.load(Ordering::Relaxed) as f64,
+        );
+        set(
+            "stepEHashSkipped",
+            self.step_e_hash_skipped.load(Ordering::Relaxed) as f64,
         );
         let g = js_sys::global();
         let _ = js_sys::Reflect::set(

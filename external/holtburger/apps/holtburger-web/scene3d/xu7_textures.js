@@ -530,9 +530,31 @@ export function _xu7QueueDepthForTest() {
  */
 export async function transcodeXu7(bytes, baseUrl) {
   if (texWorkersEnabled()) {
+    // D3-b (`?texWorkerEager`): a LOADING worker is waited for, bounded to
+    // TEX_WORKER_UPGRADE_READY_MS after its load began — past that deadline
+    // this is today's ask-don't-await (the ensureXu7Transcoder lesson).
+    const eager = texWorkerEagerEnabled();
+    if (eager && _twState === "loading") {
+      const left = TEX_WORKER_UPGRADE_READY_MS - (_now() - _twLoadStartMs);
+      if (left > 0) {
+        const t0 = _now();
+        _twStats.eagerWaits += 1;
+        await _twReady(left);
+        _twStats.eagerWaitMs += _now() - t0;
+      }
+    }
     const routed = await _workerTranscodeXu7(bytes);
     if (routed !== _TW_UNROUTED) return routed;
     _twStats.fifoFallbacks += 1;
+    // The eager gate (`xu7TranscoderUp`) let this record through on the
+    // worker's account, so the main-thread module may never have been asked
+    // for: never AWAIT its 1.04 MB load here — kick it and take the hbc7 route
+    // (null), exactly as the not-ready gate would have.
+    if (eager && !_module) {
+      _twStats.eagerFifoSkips += 1;
+      ensureXu7Transcoder(baseUrl);
+      return null;
+    }
   }
   const module = await xu7Transcoder(baseUrl);
   if (!module || !bytes || bytes.length === 0) return null;
@@ -654,7 +676,64 @@ function _transcodeNow(module, bytes) {
  * Not memoized — same ESM-suite re-stub reason as `xu7BudgetEnabled`.
  */
 export function texWorkersEnabled(search) {
-  return _texWorkersRequested(search) >= 1;
+  const on = _texWorkersRequested(search) >= 1;
+  // `?texWorkerEager` (D3-b): the first page-context evaluation constructs the
+  // worker, so it boots with the page instead of on the first xu7 record.
+  if (on && search === undefined && _twState === "off" && typeof window !== "undefined" && texWorkerEagerEnabled()) {
+    _twStats.eagerStarts += 1;
+    _twEnsure();
+  }
+  return on;
+}
+
+/**
+ * `?texWorkerEager` (D3-b, 2026-10-09) — DEFAULT ON where Web Workers exist;
+ * `off`/`0`/`false`/`no` restores today's ask-don't-await client. When on:
+ * (1) the texture worker is constructed at the first page-context
+ * `texWorkersEnabled()` evaluation (the production MaterialCache makes one at
+ * construction, `warmTextureWorker`); (2) `transcodeXu7` waits for a LOADING
+ * worker, bounded to `TEX_WORKER_UPGRADE_READY_MS` after the load started,
+ * before falling back to the main-thread FIFO; (3) the record source's "is a
+ * transcoder up?" gate (`xu7TranscoderUp`) accepts a ready or loading worker,
+ * so the 1.04 MB main-thread transcoder is not loaded just to pass the gate.
+ * Like `?texWorkers`, the DEFAULT needs Web Workers (node suites read OFF
+ * unless they ask with an explicit `=on`). Not memoised.
+ */
+export function texWorkerEagerEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = new URLSearchParams(s).get("texWorkerEager");
+    if (v == null) return typeof Worker !== "undefined";
+    return !flagIsOff(v);
+  } catch (_) {
+    return typeof Worker !== "undefined";
+  }
+}
+
+/** D3-b — evaluate the worker flag once from the page (constructs the worker
+ *  when `?texWorkerEager` is on). Never throws. */
+export function warmTextureWorker() {
+  try {
+    return texWorkersEnabled();
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * D3-b — the record source's gate (`Bc7RecordSource`): true when an xu7
+ * payload fetched now can be transcoded without stalling. With
+ * `?texWorkerEager` on, a READY worker, or one still LOADING within its
+ * bounded wait, counts as up; otherwise (and with the flag off, byte for byte)
+ * this is `ensureXu7Transcoder()`: the main-thread module if it is up, kicking
+ * its load on the way past.
+ */
+export function xu7TranscoderUp() {
+  if (texWorkerEagerEnabled() && texWorkersEnabled()) {
+    if (_twState === "ready") return true;
+    if (_twState === "loading" && _now() - _twLoadStartMs < TEX_WORKER_UPGRADE_READY_MS) return true;
+  }
+  return !!ensureXu7Transcoder();
 }
 
 /** The requested worker count (0 = off). v1 constructs at most 1. */
@@ -704,6 +783,7 @@ let _twSeq = 0;
 let _twReadyPromise = null;
 let _twReadyResolve = null;
 let _twFactory = null; // test hook
+let _twLoadStartMs = 0; // D3-b: when the current load began (bounded eager wait)
 /** @type {Array<{msg:any, transfers:any[], resolve:(v:any)=>void}>} */
 const _twQueue = [];
 /** @type {Map<number, {msg:any, transfers:any[], resolve:(v:any)=>void}>} */
@@ -722,6 +802,11 @@ const _twStats = {
   msAssemble: 0, // OFF-THREAD worker assembly ms
   terrainFallbacks: 0, // terrain assembly rode the main thread while flag ON
   nraDerives: 0,
+  // D3-b (`?texWorkerEager`) — diag only.
+  eagerStarts: 0, // workers constructed by the eager first evaluation
+  eagerWaits: 0, // transcodes that waited for a LOADING worker
+  eagerWaitMs: 0, // ... total time spent waiting
+  eagerFifoSkips: 0, // routed off the worker with the main-thread module not up → hbc7 route
   lastError: null,
 };
 
@@ -785,6 +870,7 @@ function _twEnsure() {
   if (_twState === "ready") return true;
   if (_twState === "dead" || _twState === "loading") return false;
   _twState = "loading";
+  _twLoadStartMs = _now();
   _twReadyPromise = new Promise((res) => {
     _twReadyResolve = res;
   });
@@ -1085,6 +1171,7 @@ export function _resetTexWorkerForTest() {
   _twSeq = 0;
   _twReadyPromise = null;
   _twReadyResolve = null;
+  _twLoadStartMs = 0;
   while (_twQueue.length) {
     const j = _twQueue.shift();
     try {

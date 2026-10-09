@@ -664,6 +664,38 @@ const ALPHA_MASK_TILE_PX = 256;
  * Returns `{ alphaArrayBytes, tileSize: ALPHA_MASK_TILE_PX, depth }`.
  */
 export function buildAlphaMaskArrayBytes(orderedMasks) {
+  const b = _alphaMaskArrayBuilder(orderedMasks);
+  for (let i = 0; i < b.depth; i++) b.layer(i);
+  return b.result();
+}
+
+/**
+ * `?alphaMaskSlice` (2026-10-09, default on) — the same build, one layer per
+ * task: `await yieldFn()` (default a `setTimeout(0)` macrotask) between layers,
+ * so the session-once 273 ms task (1070, academy cold load, inside the record
+ * walk) becomes ~8 short ones. Byte-identical: the SAME per-layer code on the
+ * same scratch canvases (`_alphaMaskArrayBuilder`). `onLayer(i, ms)` reports
+ * each layer's main-thread time (diag). Rejects exactly where the sync build
+ * throws (bad input).
+ */
+export async function buildAlphaMaskArrayBytesAsync(orderedMasks, opts = {}) {
+  const b = _alphaMaskArrayBuilder(orderedMasks);
+  const yieldFn = typeof opts.yieldFn === "function"
+    ? opts.yieldFn
+    : () => new Promise((r) => setTimeout(r, 0));
+  const onLayer = typeof opts.onLayer === "function" ? opts.onLayer : null;
+  for (let i = 0; i < b.depth; i++) {
+    if (i > 0) await yieldFn();
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    b.layer(i);
+    if (onLayer) onLayer(i, (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0);
+  }
+  return b.result();
+}
+
+// Shared by the sync and the sliced build: validation, the output buffer, the
+// lazily created resize scratch canvases, and the per-layer body.
+function _alphaMaskArrayBuilder(orderedMasks) {
   if (!Array.isArray(orderedMasks) || orderedMasks.length === 0) {
     throw new Error(
       `buildAlphaMaskArrayBytes: orderedMasks must be a non-empty array (got ${typeof orderedMasks}, len ${orderedMasks?.length})`
@@ -687,7 +719,7 @@ export function buildAlphaMaskArrayBytes(orderedMasks) {
     lctx = layerCanvas.getContext("2d", { willReadFrequently: true });
   };
 
-  for (let i = 0; i < depth; i++) {
+  const layer = (i) => {
     const m = orderedMasks[i];
     const w = m.width;
     const h = m.height;
@@ -709,9 +741,13 @@ export function buildAlphaMaskArrayBytes(orderedMasks) {
       alphaArrayBytes.set(layerImg.data, dstOffset);
     }
     if (typeof m.free === "function") m.free();
-  }
+  };
 
-  return { alphaArrayBytes, tileSize: ALPHA_MASK_TILE_PX, depth };
+  return {
+    depth,
+    layer,
+    result: () => ({ alphaArrayBytes, tileSize: ALPHA_MASK_TILE_PX, depth }),
+  };
 }
 
 /**

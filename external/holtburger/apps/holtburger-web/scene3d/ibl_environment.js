@@ -38,6 +38,47 @@ import * as THREE from "three";
 // lights and emissive surfaces are absolute and stay exactly as authored, so
 // hearths and lit windows gain contrast instead of being crushed with the rest.
 import { nightFactorFromAuthoredPitch, nightEnvScale, nightRampEnabled } from "./night_ramp.js";
+import { getWarmTarget, compileWithTarget, programsOf, programPending, prunePending, warmSceneMaterials } from "./shader_prewarm.js";
+
+/**
+ * 2026-10-09 `?pmremPrecompile` (DEFAULT ON; `off|0|false|no` escape) — the
+ * IBL's programs link off the main thread instead of inside a refresh.
+ * Measured on the 1070 (academy cold spawn, acad-diagF): the FIRST refresh is a
+ * 1,095 ms long task inside tickPerFrame, 933 ms of it in getProgramParameter —
+ * PMREMGGXConvolution 761 ms, SkyMaterial 120, SphericalGaussianBlur 104,
+ * PMREM.Background 14 — and the second one (15 s later) another 427 ms for the
+ * sky members that arrived meanwhile (StarsMaterial 113 ms after the stars.bin
+ * fetch, the two AC moon billboards 314 ms after holdForGround).
+ *
+ * ON: the constructor pre-allocates the PMREM generator's targets (three r184
+ * builds its GGX / blur ShaderMaterials there) and `warmPrograms()` compiles
+ * them, a proxy of three's PMREM.Background box material, and every sky-scene
+ * member the PMREM / cube camera draws (clip-space overlays excluded) against
+ * the shared non-null warm target — the variant a cubeUV / cube render target
+ * keys. A refresh (and the clouds cube update) that comes due while any of
+ * those programs is still linking waits for it, polling three's non-blocking
+ * isReady(), at most PMREM_WAIT_MAX_MS; the sky is re-warmed
+ * PMREM_WARM_LEAD_MS before each refresh so new members are usually linked
+ * by then. Off: every refresh links what it meets synchronously (today).
+ */
+export function readPmremPrecompileFlag(search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(s || "").get("pmremPrecompile");
+    if (v == null) return true;
+    const t = String(v).toLowerCase();
+    return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+/** A refresh waits at most this long for still-linking sky / PMREM programs. */
+export const PMREM_WAIT_MAX_MS = 2000;
+/** The sky is re-warmed this long before a refresh is due (≤ 1 call/s). */
+export const PMREM_WARM_LEAD_MS = 2500;
+/** fromScene's default cube size (three r184) — the size the targets are pre-allocated for. */
+export const PMREM_SIZE = 256;
+const _isClipSpaceOverlay = (o) => o?.userData?.__clipSpaceOverlay === true;
 
 export function readIblFlag() {
   // DEFAULT ON as of 2026-07-28 (escape `?ibl=off`) after the off-screen
@@ -186,7 +227,131 @@ export class IblEnvironment {
     this._lastRefreshMs = -Infinity;
     this.refreshCount = 0;
 
+    // ?pmremPrecompile — see readPmremPrecompileFlag.
+    this.pmremPrecompile = readPmremPrecompileFlag();
+    this._warmSeen = new WeakMap(); // material -> keys compiled (shader_prewarm.warmSceneMaterials)
+    this._warmPending = new Set(); // programs still linking
+    this._warmCam = null;
+    this._warmFlat = null;
+    this._warmMeshes = null; // WeakMap material -> proxy mesh (PMREM internals)
+    this._bgProxy = null;
+    this._pmremWarmed = false;
+    this._lastWarmMs = -Infinity;
+    this._waitSince = -1;
+    this._firstDueMs = -1;
+    // Diag (liveScene3d.iblEnvironment.warmStats): calls, materials compiled,
+    // programs still linking, ticks a due refresh / cube update waited, waits
+    // cut by the cap, how long the FIRST refresh waited (ms), and whether the
+    // PMREM internals were reachable (three r184 private API).
+    this.warmStats = { calls: 0, compiled: 0, pending: 0, waitTicks: 0, waitCapped: 0, firstWaitMs: -1, pmremInternals: false };
+    if (this.pmremPrecompile) {
+      try { this.warmPrograms(); } catch (_) { /* fail-soft: the refresh links as before */ }
+    }
+
     if (this.atmosphereLights) this.atmosphereLights.iblOwnsDiffuse = true;
+  }
+
+  /**
+   * ?pmremPrecompile: start linking every program a refresh will use (see
+   * readPmremPrecompileFlag) and return the ones still linking. Cheap to call
+   * again: only new / changed sky members are compiled (version-keyed), the
+   * PMREM internals once. Also called by portal_space.js's tunnel warm
+   * (`?tunnelWorldWarm`), which always warms the sky; the PMREM internals only
+   * under this flag. Never blocks: no LINK_STATUS read, no getUniforms.
+   * @returns {Array} programs still linking
+   */
+  warmPrograms(nowMs) {
+    const r = this.renderer;
+    this.warmStats.calls += 1;
+    this._lastWarmMs = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (!r || typeof r.compile !== "function") return [];
+    const target = getWarmTarget();
+    const add = (mats) => {
+      if (!mats) return;
+      mats.forEach((m) => {
+        for (const p of programsOf(r, m)) if (programPending(p)) this._warmPending.add(p);
+      });
+    };
+    if (this.pmremPrecompile && !this._pmremWarmed) {
+      this._pmremWarmed = true;
+      add(this._warmPmremInternals(target));
+    }
+    if (!this._warmCam) this._warmCam = new THREE.PerspectiveCamera(90, 1, 0.1, 1e7);
+    const res = warmSceneMaterials(r, this.skyScene, this._warmCam, target, { seen: this._warmSeen, skip: _isClipSpaceOverlay });
+    this.warmStats.compiled += res.compiled;
+    add(res.materials);
+    this.warmStats.pending = prunePending(this._warmPending);
+    return [...this._warmPending];
+  }
+
+  // three r184 PMREMGenerator builds its GGX + blur materials (and the ping-pong
+  // target) lazily in `_allocateTargets()` on the first fromScene; do that now
+  // for fromScene's default size so the very materials the refresh will draw
+  // exist to be compiled, plus a key-identical proxy of the lazily built
+  // PMREM.Background box material (MeshBasic, BackSide, drawn as its own scene).
+  // Private API, feature-checked: absent → only the proxy and the sky warm.
+  _warmPmremInternals(target) {
+    const pm = this._pmrem;
+    try {
+      if (pm && pm._pingPongRenderTarget == null && typeof pm._setSize === "function" && typeof pm._allocateTargets === "function") {
+        pm._setSize(PMREM_SIZE);
+        const rt = pm._allocateTargets();
+        try { rt?.dispose?.(); } catch (_) { /* never allocated on the GPU */ }
+      }
+    } catch (_) { /* fall through: whatever exists is compiled */ }
+    const mats = [];
+    for (const m of [pm?._ggxMaterial, pm?._blurMaterial]) if (m && m.isMaterial) mats.push(m);
+    this.warmStats.pmremInternals = mats.length === 2;
+    if (!this._bgProxy) {
+      this._bgProxy = new THREE.MeshBasicMaterial({
+        name: "PMREM.Background",
+        side: THREE.BackSide,
+        depthWrite: false,
+        depthTest: false,
+      });
+    }
+    mats.push(this._bgProxy);
+    if (!this._warmFlat) this._warmFlat = new THREE.OrthographicCamera();
+    if (!this._warmMeshes) this._warmMeshes = new WeakMap();
+    const out = new Set();
+    for (const m of mats) {
+      let mesh = this._warmMeshes.get(m);
+      // Geometry ATTRIBUTES are key bits (r184 `vertexNormals: !!geometry.attributes.normal`):
+      // the GGX / blur lod planes carry position + uv + faceIndex (no normal →
+      // an empty geometry keys the same); three's PMREM.Background is a
+      // BoxGeometry (normal present), so its proxy must be one too.
+      if (!mesh) {
+        const g = m === this._bgProxy ? new THREE.BoxGeometry() : new THREE.BufferGeometry();
+        mesh = new THREE.Mesh(g, m);
+        this._warmMeshes.set(m, mesh);
+      }
+      // Drawn as `renderer.render(mesh, camera)` → three keys it on an empty
+      // scene; compiling the mesh as its own (non-Scene) target does the same.
+      const set = compileWithTarget(this.renderer, mesh, this._warmFlat, null, target);
+      if (set) set.forEach((x) => out.add(x));
+    }
+    this.warmStats.compiled += out.size;
+    return out;
+  }
+
+  /**
+   * ?pmremPrecompile: true while a due sky render (refresh / clouds cube) must
+   * wait for programs still linking — bounded by PMREM_WAIT_MAX_MS, then it
+   * renders anyway (and links what is left synchronously, as before).
+   */
+  _skyMustWait(nowMs) {
+    if (!this.pmremPrecompile) return false;
+    let pending = 0;
+    try { pending = this.warmPrograms(nowMs).length; } catch (_) { pending = 0; }
+    if (pending === 0) { this._waitSince = -1; return false; }
+    if (this._waitSince < 0) this._waitSince = nowMs;
+    if (nowMs - this._waitSince >= PMREM_WAIT_MAX_MS) {
+      this._waitSince = -1;
+      this.warmStats.waitCapped += 1;
+      return false;
+    }
+    this.warmStats.waitTicks += 1;
+    return true;
   }
 
   /**
@@ -372,12 +537,25 @@ export class IblEnvironment {
   }
 
   tick(nowMs, terrainMaterials) {
-    if (nowMs - this._lastRefreshMs >= this.refreshMs) this.refresh(nowMs);
-    else if (nowMs - this._lastCubeMs >= CLOUD_CUBE_REFRESH_MS && this._cloudsBuffer()) {
+    if (nowMs - this._lastRefreshMs >= this.refreshMs) {
+      // ?pmremPrecompile: a due refresh waits (bounded) for still-linking programs.
+      if (this._firstDueMs < 0 && this.refreshCount === 0) this._firstDueMs = nowMs;
+      if (!this._skyMustWait(nowMs)) {
+        if (this.refreshCount === 0 && this._firstDueMs >= 0) this.warmStats.firstWaitMs = Math.round(nowMs - this._firstDueMs);
+        this.refresh(nowMs);
+      }
+    } else if (nowMs - this._lastCubeMs >= CLOUD_CUBE_REFRESH_MS && this._cloudsBuffer()) {
       // Clouds drift; the terrain cube follows them at 1 Hz (the PMREM for
       // the standard materials keeps its refreshMs cadence).
-      this._updateViewPos();
-      this._renderTerrainCube(nowMs);
+      if (!this._skyMustWait(nowMs)) {
+        this._updateViewPos();
+        this._renderTerrainCube(nowMs);
+      }
+    } else if (this.pmremPrecompile && nowMs - this._lastRefreshMs >= this.refreshMs - PMREM_WARM_LEAD_MS &&
+               nowMs - this._lastWarmMs >= 1000) {
+      // Sky members that arrived since the last refresh (stars, moons) start
+      // linking ahead of the refresh that will first draw them.
+      try { this.warmPrograms(nowMs); } catch (_) { /* the gate above still bounds it */ }
     }
 
     // Diurnal intensity: reuse the exact retail ambient term the muted
@@ -409,5 +587,11 @@ export class IblEnvironment {
       this._cloudComposite.quad.geometry.dispose();
       this._cloudComposite = null;
     }
+    if (this._bgProxy) {
+      try { this._warmMeshes?.get(this._bgProxy)?.geometry?.dispose(); } catch (_) {}
+      this._bgProxy.dispose();
+      this._bgProxy = null;
+    }
+    this._warmPending.clear();
   }
 }

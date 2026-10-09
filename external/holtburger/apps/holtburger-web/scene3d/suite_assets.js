@@ -33,15 +33,59 @@ export function ensureSuiteInit(wasmExports) {
 }
 export function _resetSuiteInit() { _baseUrlInitialized = false; } // test hook
 
+/**
+ * `?texchanJoin` (2026-10-09) — DEFAULT ON; `off`/`0`/`false`/`no` restores the
+ * double fetch. `materials.js _resolveRough` calls `getByKey(stem)` (which
+ * kicks the fetch but parked no promise) and then `getByKeyAsync(stem)`, which
+ * found nothing in `_inflightByKey` and started a SECOND fetch of the same
+ * sidecar (stub run: 2 fetches for one stem) — the Town Network's 290 texchan
+ * requests (98 MB) were ~145 stems asked twice. ON: `getByKey` parks its
+ * promise where `getByKeyAsync` looks, so both entry points share one fetch.
+ * Its own flag so the `?texUpgradeQueue` A/B isolates the queue. Not memoised
+ * (read per SuiteAssetSource).
+ */
+export function texchanJoinEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = new URLSearchParams(s).get("texchanJoin");
+    if (v == null) return true;
+    const t = String(v).toLowerCase(); return !(t === "off" || t === "0" || t === "false" || t === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+// HD byte log — BOTH arms, diag only (`window.__texUpgradeQueue.report()`
+// reads it): every texchan sidecar body this module receives, epoch ms.
+const _HD_LOG_MAX = 8192;
+const _hdLog = [];
+function _noteSuiteBytes(type, key, n) {
+  if (type !== "texchan" || !(n > 0)) return;
+  _hdLog.push({ kind: "texchan", key: String(key), bytes: n, at: Date.now() });
+  if (_hdLog.length > _HD_LOG_MAX) _hdLog.splice(0, _hdLog.length - _HD_LOG_MAX);
+}
+/** Diag: `[{kind:"texchan", key, bytes, at}]`. */
+export function suiteHdLog() { return _hdLog.slice(); }
+export function _resetSuiteHdLogForTest() { _hdLog.length = 0; } // test hook
+
+// `?texUpgradeQueue`: what `_beginFetchByKey`'s byte promise resolves when the
+// queue dropped the ask (no live waiter, no holder) — never cached.
+const _SUITE_DROPPED = Object.freeze({ suiteDropped: true });
+
 export class SuiteAssetSource {
   /**
    * @param {object} [opts]
    * @param {object} [opts.wasmExports]  the wasm module (uses fetch_suite_artifact).
    * @param {(did:number,type:string)=>Promise<Uint8Array|null>} [opts.fetchImpl]  test stub.
+   * @param {object} [opts.queue]  `?texUpgradeQueue` — the TexUpgradeQueue that
+   *   admits texchan fetches (replacing `holdForInterior`). Absent = today's path.
+   * @param {boolean} [opts.join]  `?texchanJoin` override (default: the flag).
    */
   constructor(opts = {}) {
     this._wasm = opts.wasmExports || null;
     this._fetchImpl = opts.fetchImpl || null;
+    this._queue = opts.queue && typeof opts.queue.admit === "function" ? opts.queue : null;
+    this._join = opts.join !== undefined ? !!opts.join : texchanJoinEnabled();
     this._cache = new Map();   // "type:0xDID" -> decoded | null(absent)
     this._inflight = new Set();
     // Promise-per-key for `getByKeyAsync` (2026-08-12). Separate from
@@ -50,6 +94,8 @@ export class SuiteAssetSource {
     // same stem await one fetch instead of racing several.
     this._inflightByKey = new Map();
     this.fetchCount = 0; this.hits = 0; this.absent = 0; this.errors = 0; this.lastError = null;
+    this.bytes = 0; // diag (both arms): body bytes received
+    this.dropped = 0; // ?texUpgradeQueue: asks the queue dropped
   }
   _key(did, type) { return `${type}:0x${(did >>> 0).toString(16).toUpperCase().padStart(8, "0")}`; }
 
@@ -73,6 +119,7 @@ export class SuiteAssetSource {
           : Promise.resolve(null));
     bytesP.then((bytes) => {
       if (!bytes || bytes.length === 0) { this._cache.set(k, null); this.absent += 1; return; } // absent == off/default
+      this.bytes += bytes.length;
       const dec = _decoders.get(type);
       this._cache.set(k, dec ? dec(bytes, did) : bytes); this.hits += 1;
     }).catch((e) => {
@@ -90,10 +137,15 @@ export class SuiteAssetSource {
    * artifact or null while loading/absent; kicks the async fetch on the
    * first ask. The consumer (materials.js) retries next time it builds.
    */
-  getByKey(key, type) {
+  getByKey(key, type, hint) {
     const k = `${type}:${key}`;
     if (this._cache.has(k)) return this._cache.get(k);
-    if (!this._inflight.has(k)) this._beginFetchByKey(key, type, k);
+    if (!this._inflight.has(k)) {
+      const p = this._beginFetchByKey(key, type, k, hint);
+      // `?texchanJoin` (default on): park the promise where `getByKeyAsync`
+      // looks, so the async twin JOINS this fetch instead of starting another.
+      if (this._join) this._inflightByKey.set(k, p);
+    }
     return null;
   }
 
@@ -118,18 +170,21 @@ export class SuiteAssetSource {
    * the same promise. Never rejects: a failed fetch resolves `null`, matching
    * `getByKey`'s "never re-hammer a broken endpoint" contract.
    */
-  getByKeyAsync(key, type) {
+  getByKeyAsync(key, type, hint) {
     const k = `${type}:${key}`;
     if (this._cache.has(k)) return Promise.resolve(this._cache.get(k));
     let p = this._inflightByKey.get(k);
     if (!p) {
-      p = this._beginFetchByKey(key, type, k);
+      p = this._beginFetchByKey(key, type, k, hint);
       this._inflightByKey.set(k, p);
+    } else if (this._queue && type === "texchan") {
+      // ?texUpgradeQueue: the joiner's liveness keeps a queued job alive.
+      try { this._queue.addWaiter("texchan", key, hint); } catch (_) { /* diag-grade */ }
     }
     return p;
   }
 
-  _beginFetchByKey(key, type, k) {
+  _beginFetchByKey(key, type, k, hint) {
     this._inflight.add(k); this.fetchCount += 1;
     const fetchNow = () => (this._fetchImpl
       ? Promise.resolve(this._fetchImpl(key, type))
@@ -140,9 +195,18 @@ export class SuiteAssetSource {
     // applied after the material is built) wait while an indoor player's
     // interior is still building — the Town Network pulled 290 of them (98 MB)
     // alongside its ~1 MB of DAT records (1070).
-    const bytesP = type === "texchan" ? holdForInterior().then(fetchNow) : fetchNow();
+    // `?texUpgradeQueue` (2026-10-09): with a queue, the texchan fetch is
+    // ADMITTED instead (the queue's pause replaces the hold; then visibility
+    // order + in-flight cap). A dropped ask resolves `_SUITE_DROPPED`: no cache
+    // entry, so a later ask fetches.
+    const bytesP = this._queue && type === "texchan"
+      ? this._queuedFetchByKey(key, hint, fetchNow)
+      : type === "texchan" ? holdForInterior().then(fetchNow) : fetchNow();
     bytesP.then((bytes) => {
+      if (bytes === _SUITE_DROPPED) { this.dropped += 1; return; }
       if (!bytes || bytes.length === 0) { this._cache.set(k, null); this.absent += 1; return; }
+      this.bytes += bytes.length;
+      _noteSuiteBytes(type, key, bytes.length);
       const dec = _decoders.get(type);
       this._cache.set(k, dec ? dec(bytes, key) : bytes); this.hits += 1;
     }).catch((e) => {
@@ -161,6 +225,17 @@ export class SuiteAssetSource {
       .finally(() => { this._inflightByKey.delete(k); });
   }
 
+  /** `?texUpgradeQueue`: one admitted texchan fetch → bytes | `_SUITE_DROPPED`. */
+  _queuedFetchByKey(key, hint, fetchNow) {
+    return Promise.resolve(this._queue.admit("texchan", key, hint || null)).then((t) => {
+      if (!t) return _SUITE_DROPPED;
+      return Promise.resolve().then(fetchNow).then(
+        (bytes) => { t.received(bytes ? bytes.length : 0); t.release(); return bytes; },
+        (e) => { t.release(); throw e; },
+      );
+    });
+  }
+
   get cacheSize() { return this._cache.size; }
 
   /** Plain-scalar snapshot for the off-trace harness / capture scripts. */
@@ -169,6 +244,7 @@ export class SuiteAssetSource {
       baseUrl: SUITE_BASE_URL, cached: this._cache.size, inflight: this._inflight.size,
       fetchCount: this.fetchCount, hits: this.hits, absent: this.absent,
       errors: this.errors, lastError: this.lastError,
+      bytes: this.bytes, dropped: this.dropped, queued: !!this._queue, join: this._join,
     };
   }
 }

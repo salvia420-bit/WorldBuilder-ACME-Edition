@@ -775,6 +775,25 @@ const TIER5 = [
   { tier: 5, flag: "farBakeCompileAsync", file: "tests/far_bake_compile_async.test.mjs" },
   { tier: 5, flag: "envcellStaticsOverlap", file: "tests/envcell_statics_overlap.test.mjs" },
   { tier: 5, flag: "entityParticleLayer", file: "tests/entity_particle_layer.test.mjs" },
+  // 2026-10-09 cold-load structural pass (ultracode brief): A0/A1-lite interior record fetch,
+  // C progressive HD textures, D login portal space + load-time main thread.
+  { tier: 5, flag: "interiorStabBatch", file: "tests/interior_stab_batch.test.mjs" },
+  { tier: 5, flag: "interiorEarlyBake", file: "tests/interior_early_bake.test.mjs" },
+  { tier: 5, flag: "surfaceWalkLite", file: "tests/surface_walk_lite.test.mjs" },
+  { tier: 5, flag: "texUpgradeQueue", file: "tests/tex_upgrade_queue.test.mjs" },
+  { tier: 5, flag: "loginPortalSpace", file: "tests/login_portal_space.test.mjs" },
+  { tier: 5, flag: "asyncLinkKeySig", file: "tests/async_link_key_sig.test.mjs" },
+  { tier: 5, flag: "alphaMaskSlice", file: "tests/alpha_mask_slice.test.mjs" },
+  { tier: 5, flag: "bakeSurfaceCoalesce", file: "tests/bake_surface_coalesce.test.mjs" },
+  { tier: 5, flag: "interiorBuildShare", file: "tests/interior_build_share.test.mjs" },
+  { tier: 5, flag: "shardFetchWorker", file: "tests/shard_fetch_worker.test.mjs" },
+  { tier: 5, flag: "interiorWallsFirst", file: "tests/interior_walls_first.test.mjs" },
+  // 2026-10-09 round 2: D2 (programs warmed during the tunnel, PMREM precompile, far patches in the
+  // link guard) and A2 (pack path; effective under ?packSource only, except bakeUrgentReserve=all).
+  { tier: 5, flag: "tunnelWorldWarm", file: "tests/tunnel_world_warm.test.mjs" },
+  { tier: 5, flag: "packWorkerFetchShare", file: "tests/pack_worker_fetch_share.test.mjs" },
+  { tier: 5, flag: "bakeUrgentReserve", file: "tests/bake_urgent_reserve.test.mjs" },
+  { tier: 5, flag: "packRingHold", file: "tests/pack_ring_hold.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
