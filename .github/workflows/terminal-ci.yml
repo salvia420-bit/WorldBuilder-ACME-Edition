@@ -49,8 +49,12 @@ jobs:
           dotnet-version: "8.0.x"
       - name: Fetch Chorizite build dependencies
         run: scripts/fetch-chorizite.sh
+      # DisableGitVersionTask: the two Chorizite projects run GitVersion at build
+      # time, and on a CI server GitVersion refuses the shallow clones the fetch
+      # script makes ("Repository is a shallow clone"). Their assembly versions
+      # do not matter here.
       - name: Unit tests (builds the Terminal in Release)
-        run: dotnet test WorldBuilder.Tests/WorldBuilder.Tests.csproj -c Release
+        run: dotnet test WorldBuilder.Tests/WorldBuilder.Tests.csproj -c Release -p:DisableGitVersionTask=true
       - name: JSON protocol tests (no project needed)
         run: >
           python3 tests/test_agent_protocol.py
