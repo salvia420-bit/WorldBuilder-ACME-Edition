@@ -1,0 +1,291 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>weapon fx gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Per-weapon effects GPU smoke (driven by test_weapon_fx_gpu.cjs). One 64x128
+// WebGL2 canvas, logarithmic depth and the client composer's display transform
+// (Neutral at exposure 5; `?tone=agx` for the AgX curve), a 2 m "spear"
+// cylinder held at z 0.39, no game world:
+//   C. the patched programs compile (pole SET, rigid SET, + the CSM patch)
+//   I. inert: no glow / no shine / no bend draws the base material's pixels
+//   W. the bug: the OLD flat aura (itemAura, Slash tint) washes the blade white
+//   A. each element glow is COLOURED, not white (fire / frost / lightning /
+//      acid / nether / magic), brighter than the bare blade
+//   F. the bend moves the tip and leaves the grip in place
+//   P. two weapons in one frame keep their own glows; one program for both
+//   S. the shine sweep lights a band mid-blade and nothing past it
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0, notes: {} };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const mats = await import("/scene3d/materials.js");
+  const wfx = await import("/scene3d/vfx/weapon_fx.js");
+  const { WFX_KIND } = await import("/scene3d/vfx/weapon_fx_glsl.js");
+  const { itemAura } = await import("/scene3d/vfx/components/itemAura.js");
+
+  const W = 64, H = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (g, program, vs, fs) => {
+    R.errors.push(`shader error: ${g.getProgramInfoLog(program)} | VS: ${g.getShaderInfoLog(vs)} | FS: ${g.getShaderInfoLog(fs)}`);
+  };
+  // the composer's default display transform: Khronos PBR Neutral at exposure 5
+  // (scene3d/tone_curve.js, `?tone=neutral`); `?tone=agx` in this page's URL runs
+  // the old AgX curve instead (the runner does both).
+  const TONE = new URLSearchParams(location.search).get("tone") === "agx" ? "agx" : "neutral";
+  renderer.toneMapping = TONE === "agx" ? THREE.AgXToneMapping : THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 5; // the composer's calibrated default
+  R.tone = TONE;
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0, 0, 0);
+  const sun = new THREE.DirectionalLight(0xffffff, 0.35);
+  sun.position.set(3, -1, 2);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.12));
+  const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 50);
+  camera.up.set(0, 0, 1);
+  camera.position.set(2.6, 0, 0.4);
+  camera.lookAt(0, 0, 0.4);
+  camera.updateMatrixWorld(true);
+
+  const tex = new THREE.DataTexture(new Uint8Array(new Array(16).fill(0).flatMap(() => [140, 141, 146, 255])), 4, 4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  const baseMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, metalness: 0.0 });
+  baseMat.userData = { __cacheOwned: true };
+
+  function spearGeometry() {
+    const g = new THREE.CylinderGeometry(0.12, 0.12, 2.0, 24, 24);
+    g.rotateX(Math.PI / 2);   // along z, like an AC weapon
+    g.translate(0, 0, 0.4);   // z in [-0.6, 1.4]
+    return g;
+  }
+  // a minimal cache: makeOwnedVariant only reads wireframeMode + csmState
+  const mc = { wireframeMode: false, csmState: null, materials: new Map(), frontSideMaterials: new Map(), fallbackMaterial: null };
+  mc.makeOwnedVariant = mats.MaterialCache.prototype.makeOwnedVariant.bind(mc);
+
+  let guidSeq = 0x80000100;
+  function makeWeapon(name, uiEffects, archetype, cache = mc, base = baseMat) {
+    const geo = spearGeometry();
+    const inst = { guid: ++guidSeq, root: new THREE.Group(), parts: [new THREE.Group()], _attachedParentGuid: null };
+    inst.root.add(inst.parts[0]);
+    const st = wfx.weaponFxBegin({ inst, guid: inst.guid, name, uiEffects, archetype, partGroups: [{ groups: [{ geometry: geo }] }], materialCache: cache, nowMs: 0 });
+    const mat = wfx.weaponFxMaterial(st, 0x08000001, base);
+    const mesh = new THREE.Mesh(geo, mat);
+    inst.parts[0].add(mesh);
+    // the held frame (the tick builds it in the client; the node test covers that)
+    st.u.uWfxOrigin.value.set(0, 0, 0.39);
+    st.u.uWfxAxis.value.set(0, 0, 1);
+    st.u.uWfxLen.value.set(1.01, 0.99);
+    st.u.uWfxFrame.value = 1;
+    st.u.uWfxGrip.value = 1;
+    st.u.uWfxShine.value.set(-1e4, 0.5, 0, 0);
+    return { inst, st, mat, mesh, root: inst.root };
+  }
+  const setTime = (t) => { mats.VFX_GLOBALS.uTime.value = t; };
+
+  function shot(objects) {
+    for (const o of objects) scene.add(o);
+    renderer.render(scene, camera);
+    const b = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, b);
+    for (const o of objects) scene.remove(o);
+    return b;
+  }
+  const rowOfZ = (z, y = 0) => {
+    const v = new THREE.Vector3(0.12, y, z).project(camera);
+    return Math.round((v.y * 0.5 + 0.5) * H);
+  };
+  function stats(b, z0, z1, colFrom = 0, colTo = W) {
+    const r0 = Math.min(rowOfZ(z0), rowOfZ(z1)), r1 = Math.max(rowOfZ(z0), rowOfZ(z1));
+    let n = 0, R0 = 0, G0 = 0, B0 = 0, white = 0, maxL = 0, cx = 0;
+    for (let r = r0; r < r1; r++) {
+      for (let c = colFrom; c < colTo; c++) {
+        const i = (r * W + c) * 4;
+        const rr = b[i], gg = b[i + 1], bb = b[i + 2];
+        if (rr + gg + bb <= 12) continue; // background
+        n++; R0 += rr; G0 += gg; B0 += bb; cx += c;
+        if (Math.min(rr, gg, bb) > 235) white++;
+        maxL = Math.max(maxL, 0.2126 * rr + 0.7152 * gg + 0.0722 * bb);
+      }
+    }
+    if (!n) return { n: 0, r: 0, g: 0, b: 0, white: 0, maxL: 0, cx: NaN, spread: 0, lum: 0 };
+    const r = R0 / n, g = G0 / n, bl = B0 / n;
+    return { n, r, g, b: bl, white: white / n, maxL, cx: cx / n,
+      spread: Math.max(r, g, bl) - Math.min(r, g, bl), lum: 0.2126 * r + 0.7152 * g + 0.0722 * bl };
+  }
+  const fmt = (s) => `n=${s.n} rgb=(${s.r.toFixed(0)},${s.g.toFixed(0)},${s.b.toFixed(0)}) white=${(s.white * 100).toFixed(1)}% max=${s.maxL.toFixed(0)}`;
+  // the light an effect ADDS: (shot - bare blade) averaged over the blade rows
+  const delta = (s, r0) => ({ r: s.r - r0.r, g: s.g - r0.g, b: s.b - r0.b });
+  const fmtD = (d) => `added=(${d.r.toFixed(0)},${d.g.toFixed(0)},${d.b.toFixed(0)})`;
+  const maxDiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+
+  setTime(10.0);
+  // ---- reference: the bare base material --------------------------------------------
+  const refMesh = new THREE.Mesh(spearGeometry(), baseMat);
+  const ref = shot([refMesh]);
+  const refBlade = stats(ref, 0.8, 1.3);
+  R.notes.ref = fmt(refBlade);
+  check("R. the bare blade renders (a lit grey cylinder)", refBlade.n > 100 && refBlade.lum > 40 && refBlade.lum < 200, fmt(refBlade));
+
+  // ---- C + I: a pole (flex + aura) with nothing active is the base, pixel for pixel ----
+  const pole = makeWeapon("Atlan Spear", 0, "tip-flex");
+  check("C. a pole carries [weaponFlex, weaponAura]", pole.st.setKey === "deformation.weaponFlex+emissive.weaponAura", pole.st.setKey);
+  pole.st.u.uWfxCal.value = 1 / renderer.toneMappingExposure;
+  const inert = shot([pole.root]);
+  check("C. the pole SET compiles (no shader error)", R.errors.length === 0, R.errors.join(" / "));
+  check("I. no glow / no shine / no bend ⇒ the base's pixels (max diff <= 2)", maxDiff(inert, ref) <= 2, `maxDiff ${maxDiff(inert, ref)}`);
+  const rigid = makeWeapon("Long Sword", 0x400, "rigid-glint");
+  check("C. a Slashing sword carries only [weaponAura] (shine), no glow", rigid.st.setKey === "emissive.weaponAura" && rigid.st.u.uWfxAuraKind.value === 0, rigid.st.setKey);
+  const rigidShot = shot([rigid.root]);
+  check("C. the rigid SET compiles", R.errors.length === 0, R.errors.join(" / "));
+  check("★ I. a Slashing sword is NOT whitened: it draws like the bare blade", maxDiff(rigidShot, ref) <= 2, `maxDiff ${maxDiff(rigidShot, ref)}`);
+
+  // ---- W: the OLD path — itemAura's flat Slash tint * 0.5 — washes it out ------------
+  {
+    const legacy = baseMat.clone();
+    legacy.userData = { __vfxSetKey: "emissive.itemAura" };
+    mats.installVfxComponentPatch(legacy, itemAura, { glow: 0.5, tint: [0.85, 0.85, 0.90] }, mats.VFX_GLOBALS);
+    const lm = new THREE.Mesh(spearGeometry(), legacy);
+    const ls = stats(shot([lm]), 0.8, 1.3);
+    R.notes.legacySlash = fmt(ls);
+    check("★ W. the OLD Slash aura (flat 0.425 under exposure 5) washes the blade near-white",
+      ls.lum > refBlade.lum + 60 && ls.spread < 30 && ls.lum > 170, fmt(ls) + " vs ref " + fmt(refBlade));
+    const lmag = baseMat.clone();
+    lmag.userData = { __vfxSetKey: "emissive.itemAura" };
+    mats.installVfxComponentPatch(lmag, itemAura, { glow: 0.5, tint: [0.55, 0.45, 1.0] }, mats.VFX_GLOBALS);
+    const lms = stats(shot([new THREE.Mesh(spearGeometry(), lmag)]), 0.8, 1.3);
+    R.notes.legacyMagical = fmt(lms);
+  }
+
+  // ---- A: every element is coloured, not white ---------------------------------------
+  // The hue test reads the ADDED light (shot - bare blade), so the grey base does not
+  // dilute it; "not white" reads the final pixels.
+  const kinds = [
+    ["fire", 0x20, (d) => d.r > d.g * 1.5 && d.g >= d.b && d.r > 25],
+    ["frost", 0x80, (d) => d.b > d.r + 8 && d.g > d.r],
+    ["lightning", 0x40, (d) => d.b > d.r && d.b > 8],
+    ["acid", 0x100, (d) => d.g > d.r * 1.3 && d.g > d.b * 1.5 && d.g > 15],
+    ["nether", 0x1000, (d) => d.b > d.g + 4 && d.r > d.g],
+    ["magic", 0x1, (d) => d.b > d.g * 1.3 && d.b > 5],
+  ];
+  for (const [el, bit, hue] of kinds) {
+    const w = makeWeapon("Atlan Spear", bit, "tip-flex");
+    let best = null;
+    // a few clock values (lightning arcs come and go; fire flickers)
+    for (const t of [10.0, 10.37, 10.81, 11.42]) {
+      setTime(t);
+      const s = stats(shot([w.root]), 0.8, 1.3);
+      if (!best || s.lum > best.lum) best = s;
+    }
+    const d = delta(best, refBlade);
+    R.notes[el] = fmt(best) + " " + fmtD(d);
+    check(`A. ${el}: compiles, adds light in its own colour, not white (${fmtD(d)})`,
+      R.errors.length === 0 && hue(d) && best.white < 0.08,
+      fmt(best) + " " + fmtD(d));
+  }
+  setTime(10.0);
+
+  // ---- F: the bend moves the tip, not the grip ---------------------------------------
+  {
+    const straight = shot([pole.root]);
+    pole.st.u.uWfxBendPos.value.set(0.12, 0, 0);   // ~6.9 degrees about x
+    pole.st.u.uWfxBendNeg.value.set(0.12, 0, 0);
+    const bent = shot([pole.root]);
+    pole.st.u.uWfxBendPos.value.set(0, 0, 0);
+    pole.st.u.uWfxBendNeg.value.set(0, 0, 0);
+    const tipS = stats(straight, 1.15, 1.38), tipB = stats(bent, 1.15, 1.38);
+    const gripS = stats(straight, 0.36, 0.43), gripB = stats(bent, 0.36, 0.43);
+    const buttS = stats(straight, -0.55, -0.4), buttB = stats(bent, -0.55, -0.4);
+    check("★ F. a 7-degree bend swings the tip sideways (> 2 px)", Math.abs(tipB.cx - tipS.cx) > 2, `tip ${tipS.cx.toFixed(2)} → ${tipB.cx.toFixed(2)}`);
+    check("F. the grip stays put (< 0.6 px)", Math.abs(gripB.cx - gripS.cx) < 0.6, `grip ${gripS.cx.toFixed(2)} → ${gripB.cx.toFixed(2)}`);
+    check("F. the butt bends too (S under rotation)", Math.abs(buttB.cx - buttS.cx) > 1, `butt ${buttS.cx.toFixed(2)} → ${buttB.cx.toFixed(2)}`);
+    check("F. bending compiles + draws without error", R.errors.length === 0, R.errors.join(" / "));
+  }
+
+  // ---- P: two weapons, one frame, own glows, one program ------------------------------
+  {
+    const a = makeWeapon("Atlan Spear", 0x20, "tip-flex");
+    const b = makeWeapon("Atlan Spear", 0x80, "tip-flex");
+    a.root.position.y = -0.36;
+    b.root.position.y = 0.36;
+    const before = renderer.info.programs.length;
+    const both = shot([a.root, b.root]);
+    const after = renderer.info.programs.length;
+    const left = stats(both, 0.8, 1.3, 0, W / 2), right = stats(both, 0.8, 1.3, W / 2, W);
+    const redSide = left.r - left.b > right.r - right.b ? left : right;
+    const blueSide = redSide === left ? right : left;
+    check("★ P. fire and frost side by side keep their own glows", redSide.r > redSide.b + 8 && blueSide.b > blueSide.r + 8,
+      `red side ${fmt(redSide)} | blue side ${fmt(blueSide)}`);
+    check("★ P. two more weapons of a compiled SET add no program", after === before, `${before} → ${after}`);
+  }
+
+  // ---- S: the shine band ---------------------------------------------------------------
+  {
+    const s = makeWeapon("Long Sword", 0, "rigid-glint");
+    setTime(20.0);
+    s.st.u.uWfxShine.value.set(20.0 - 0.275, 0.55, 1.4, 0);   // mid-sweep: the band at s = 0.5 → z ≈ 0.895
+    const lit = shot([s.root]);
+    const band = stats(lit, 0.85, 0.94), past = stats(lit, 1.25, 1.36);
+    const refBand = stats(ref, 0.85, 0.94), refPast = stats(ref, 1.25, 1.36);
+    check("★ S. the sweep lights a band mid-blade", band.lum > refBand.lum + 20, `${band.lum.toFixed(1)} vs ${refBand.lum.toFixed(1)}`);
+    check("S. nothing past the band", Math.abs(past.lum - refPast.lum) < 4, `${past.lum.toFixed(1)} vs ${refPast.lum.toFixed(1)}`);
+    check("S. the band is warm white, not a colour cast", band.spread < 40, fmt(band));
+    s.st.u.uWfxShine.value.set(20.0 - 2.0, 0.55, 1.4, 0);       // the sweep is over
+    const done = shot([s.root]);
+    check("S. after the sweep, back to the bare blade", maxDiff(done, ref) <= 2, `maxDiff ${maxDiff(done, ref)}`);
+  }
+
+  // ---- C: with the CSM patch on the same material --------------------------------------
+  {
+    const m4 = () => ({ value: new THREE.Matrix4() });
+    // the CSM samplers are sampler2DShadow: bind real depth textures with a compare op
+    const depthRt = () => {
+      const rt = new THREE.WebGLRenderTarget(4, 4, { depthTexture: new THREE.DepthTexture(4, 4) });
+      rt.depthTexture.compareFunction = THREE.LessEqualCompare;
+      renderer.setRenderTarget(rt); renderer.clear(); renderer.setRenderTarget(null);
+      return { value: rt.depthTexture };
+    };
+    const csmState = { uniforms: {
+      uCsmShadowMap0: depthRt(), uCsmShadowMap1: depthRt(), uCsmShadowMap2: depthRt(),
+      uCsmMatrix0: m4(), uCsmMatrix1: m4(), uCsmMatrix2: m4(),
+      uCsmSplits: { value: new THREE.Vector2(10, 40) }, uCsmFar: { value: 120 }, uCsmBlend: { value: 0.1 },
+    } };
+    const mcCsm = Object.assign({}, mc, { csmState });
+    mcCsm.makeOwnedVariant = mats.MaterialCache.prototype.makeOwnedVariant.bind(mcCsm);
+    const csmBase = baseMat.clone();
+    csmBase.userData = { __cacheOwned: true, csmEnabled: true };
+    const w = makeWeapon("Atlan Spear", 0x20, "tip-flex", mcCsm, csmBase);
+    const s = stats(shot([w.root]), 0.8, 1.3);
+    check("C. CSM + bend + glow compile together", R.errors.length === 0 && w.mat.userData.csmEnabled === true && s.n > 100, R.errors.join(" / ") || fmt(s));
+  }
+
+  R.programs = renderer.info.programs.length;
+  R.ok = R.errors.length === 0 && R.checks.length > 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

@@ -14,9 +14,15 @@
 //                  growing and fades out over 0.25 s.
 //   swing trails   while a wielder plays an attack motion (entities.js stamps
 //                  `_fxSwingUntilMs` when an ATTACK command dispatches), each
-//                  ELEMENTAL weapon it holds (a child entity whose name carries
-//                  the element) sweeps a strip between a mid-blade point and its
-//                  tip over the last ~0.16 s.
+//                  weapon it holds sweeps a strip between a mid-blade point and
+//                  its tip over the last ~0.16 s. ELEMENTAL weapons (UiEffects
+//                  Fire / Frost / Acid / Lightning / Nether bit, else an element
+//                  word in the name, else the colour of the weapon's own light)
+//                  trail in the element's colour; under `?swingTrails=all` (the
+//                  default since 2026-10-10) Magical weapons trail a faint violet
+//                  and every other blade a faint steel streak.
+//                  `?swingTrails=elemental` = elemental only (the first tier-2
+//                  behaviour), `=off` = no swing trails.
 //
 // COLOUR. The element decides it: the projectile's name (`objectName`), else the
 // colour of its own Setup LightInfo light (PROJ-VIS attaches it through the light
@@ -36,6 +42,10 @@
 import * as THREE from "three";
 import { fxTier2Enabled } from "./fx_tier2.js";
 import { registerLateFxSource } from "../particles_over_clouds.js";
+// 2026-10-10: swing trails for every blade (?swingTrails, default "all") and the
+// element read from the item's UiEffects bits first (vfx/weapon_class.js).
+import { swingTrailsMode } from "../vfx_flags.js";
+import { weaponElement } from "./weapon_class.js";
 
 export const FX_RIBBON_MAX = 32;
 export const FX_RIBBON_POINTS = 16;
@@ -427,8 +437,48 @@ export function fxBladeLocal(inst) {
 // ---------------------------------------------------------------------------
 
 const _swingGuids = new Set();   // wielders mid-swing this frame (reused)
-// Swing trails are ELEMENTAL: a plain sword leaves none.
+// The elements that trail in their own colour.
 const SWING_ELEMENTS = new Set(["fire", "frost", "acid", "lightning", "nether"]);
+// `?swingTrails=all`: the faint trails of non-elemental blades (alpha and width
+// well under the elemental ones, which stay the show).
+export const FX_SWING_STEEL = Object.freeze({ element: "steel", color: [0.80, 0.86, 1.0], width: 0.22, alpha: 0.32, kind: 1, sure: true });
+export const FX_SWING_MAGIC = Object.freeze({ element: "magic", color: [0.72, 0.58, 1.0], width: 0.24, alpha: 0.45, kind: 1, sure: true });
+
+function _uiEffectsOf(guid) {
+  try {
+    const sh = globalThis.window?.__sessionHandle;
+    if (sh && typeof sh.entityUiEffects === "function") return sh.entityUiEffects(guid >>> 0) >>> 0;
+  } catch (_) { /* unknown */ }
+  return 0;
+}
+
+/**
+ * The trail look of a held weapon, or null for none (a shield, the mode is off,
+ * or a plain blade under `?swingTrails=elemental`). Element priority: the
+ * UiEffects bit, then the name, then the colour of the weapon's own light.
+ * Cached on the weapon once its name is known.
+ */
+export function fxSwingLook(weapon) {
+  const mode = swingTrailsMode();
+  if (mode === "off" || !weapon) return null;
+  const c = weapon._fxSwingLook;
+  if (c && c.mode === mode) return c.look;
+  const name = _nameOf(weapon.guid) || "";
+  let look = null;
+  if (!/shield|buckler|aegis/i.test(name)) {
+    const el = weaponElement(_uiEffectsOf(weapon.guid), name);
+    if (el && SWING_ELEMENTS.has(el)) {
+      const b = FX_ELEMENTS[el];
+      look = { element: el, color: b.color, width: b.width, alpha: b.alpha, kind: 1, sure: true };
+    } else {
+      const old = fxEntityElement(weapon);
+      if (old && old.sure && SWING_ELEMENTS.has(old.element)) look = old;
+      else if (mode === "all") look = el === "magic" ? FX_SWING_MAGIC : FX_SWING_STEEL;
+    }
+  }
+  if (name) weapon._fxSwingLook = { mode, look };
+  return look;
+}
 const _tipW = new THREE.Vector3();
 const _midW = new THREE.Vector3();
 
@@ -511,10 +561,8 @@ function _sampleBolt(inst, now, tSec) {
 }
 
 function _sampleSwing(weapon, now, tSec) {
-  const look = fxEntityElement(weapon);
-  if (!look || !look.sure || !SWING_ELEMENTS.has(look.element)) return;
-  const name = _nameOf(weapon.guid) || "";
-  if (/shield|buckler|aegis/i.test(name)) return;
+  const look = fxSwingLook(weapon);
+  if (!look) return;
   const blade = fxBladeLocal(weapon);
   if (!blade) return;
   try {

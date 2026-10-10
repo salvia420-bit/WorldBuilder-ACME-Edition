@@ -127,6 +127,7 @@ const TIER1 = [
   { flag: "vfxFragInstall(JS)", file: "test_vfx_frag_install.mjs" },
   { flag: "vfxVertexInstall(JS)", file: "test_vfx_vertex_install.mjs" }, // P2.1 MECH-B firewall
   { flag: "vfxTipFlex(JS)", file: "test_vfx_tipflex.mjs" },              // P2.2 deformation.tipFlex
+  { flag: "weaponFx(JS)", file: "test_weapon_fx.mjs" },                   // 2026-10-10 per-weapon effects (?weaponFx)
   { flag: "vfxFragAttach(JS)", file: "test_vfx_frag_attach.mjs" },
   { flag: "vfxGlint(JS)", file: "test_vfx_glint.mjs" },
   { flag: "vfxMagicGlow(JS)", file: "test_vfx_magicglow.mjs" },

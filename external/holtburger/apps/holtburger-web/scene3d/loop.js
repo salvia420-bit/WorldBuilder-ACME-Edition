@@ -69,6 +69,9 @@ import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
 import { tickFxLights, feedTerrainFxLights } from "./vfx/fx_lights.js";
 // Tier-2 particle upgrade (2026-10-10): projectile ribbons + elemental swing trails.
 import { tickFxRibbons } from "./vfx/fx_ribbons.js";
+// 2026-10-10 `?weaponFx` (scene3d/vfx/weapon_fx.js): per-weapon pole bend,
+// element glow, shine sweep and base-material sync.
+import { tickWeaponFx } from "./vfx/weapon_fx.js";
 // Tier-2: the portal / lifestone / level-up set pieces.
 import { tickFxShowcase } from "./vfx/fx_showcase.js";
 import { cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
@@ -3132,6 +3135,17 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
       if (!scene3d._fxRibbonsWarned) {
         scene3d._fxRibbonsWarned = true;
         console.warn("[fx-ribbons] tickFxRibbons threw:", e);
+      }
+    }
+    // `?weaponFx` — held poles bend with their swing, glows flare, the shine
+    // sweeps. Same placement as the ribbons: the rigs are posed for this frame.
+    try {
+      tickWeaponFx(scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._weaponFxWarned) {
+        scene3d._weaponFxWarned = true;
+        console.warn("[weapon-fx] tickWeaponFx threw:", e);
       }
     }
     // Tier-2 `?fxShowcase` (scene3d/vfx/fx_showcase.js) — portal space, the

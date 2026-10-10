@@ -43,7 +43,7 @@
 //       (including the batched one) and skips pre-Wave-2A materials.
 //   N12 FIREWALL + INVARIANTS over the module source (§5.2/§5.3/§5.4/§5.5).
 //   N13 FLAGS + TIERS: six strict ship-OFF opt-ins, keys on all four tiers, in
-//       the right coercion sets, and the DEFAULT-ON effect count is still 14.
+//       the right coercion sets, and the DEFAULT-ON effect count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
 //
 // Run from apps/holtburger-web/:  node test_terrain_snow.mjs
 

@@ -172,6 +172,56 @@ export function tipFlexEnabled() {
   return _tipFlex;
 }
 
+// ---------------------------------------------------------------------------
+// PER-WEAPON EFFECTS (2026-10-10, scene3d/vfx/weapon_fx.js). On ENTITIES (held
+// and dropped items) these replace the catalog tipFlex/glint/tarnish SET and
+// the itemFx aura with per-weapon materials: a motion-driven shaft bend on
+// poles, element glows calibrated to the composer exposure, and a blade-shine
+// sweep. `?weaponFx=off` restores the previous entity path exactly.
+// ---------------------------------------------------------------------------
+let _weaponFx, _weaponFlex, _weaponAura, _weaponShine, _swingTrails;
+/** `?weaponFx` — the per-weapon effects master. DEFAULT-ON via visualAllEffects();
+ *  `=off` gives the pre-2026-10-10 entity path (catalog SET + itemFx aura). */
+export function weaponFxEnabled() {
+  if (_weaponFx === undefined) _weaponFx = _boolFlag("weaponFx", visualAllEffects());
+  return _weaponFx;
+}
+/** `?weaponFlex` — the inertial shaft bend on held poles (spears, staffs,
+ *  polearms). Requires `?weaponFx`. DEFAULT-ON; `=off` keeps every shaft rigid. */
+export function weaponFlexEnabled() {
+  if (_weaponFlex === undefined) _weaponFlex = weaponFxEnabled() && _boolFlag("weaponFlex", true);
+  return _weaponFlex;
+}
+/** `?weaponAura` — the element glow (UiEffects Fire / Frost / Lightning / Acid /
+ *  Nether, the Magical rim pulse, poison and the vital boosts). Requires
+ *  `?weaponFx`. DEFAULT-ON; `=off` drops the glow (the shine stays). */
+export function weaponAuraEnabled() {
+  if (_weaponAura === undefined) _weaponAura = weaponFxEnabled() && _boolFlag("weaponAura", true);
+  return _weaponAura;
+}
+/** `?weaponShine` — the light sweep up a weapon's steel (every few seconds and on
+ *  every swing). Requires `?weaponFx`. DEFAULT-ON; `=off` drops it. */
+export function weaponShineEnabled() {
+  if (_weaponShine === undefined) _weaponShine = weaponFxEnabled() && _boolFlag("weaponShine", true);
+  return _weaponShine;
+}
+/** `?swingTrails=all|elemental|off` — which melee swings leave a ribbon trail
+ *  (vfx/fx_ribbons.js, itself under the tier-2 `?fxMotion` preset switch).
+ *  DEFAULT "all": elemental weapons trail in their element's colour, Magical
+ *  ones in a faint violet, every other blade a faint steel streak. "elemental"
+ *  is the 2026-10-10 tier-2 behaviour (elemental weapons only). Element from
+ *  UiEffects first, then the name. */
+export function swingTrailsMode() {
+  if (_swingTrails === undefined) {
+    const v = _strFlag("swingTrails");
+    const s = v == null ? "all" : String(v).toLowerCase();
+    _swingTrails = s === "elemental" ? "elemental"
+      : (s === "off" || s === "0" || s === "false" || s === "no" || s === "") ? "off"
+        : "all";
+  }
+  return _swingTrails;
+}
+
 let _gemSparkle;
 /** `?gemSparkle=on` — particle.gemSparkle synthesized additive twinkle on magic
  *  gems/crystals: the FIRST synthesized-emitter (MECH "particle") effect, the Phase-3
@@ -1410,6 +1460,10 @@ export function visualBudget() {
 // flameFlicker is a light-tick (not a frag component) but rides the same gate.
 export const VFX_EFFECT_FLAGS = Object.freeze({
   "deformation.tipFlex": tipFlexEnabled,
+  // Per-weapon effects (2026-10-10). DEFAULT-ON like the rest of the suite, so
+  // the DEFAULT-ON count is 16 (was 14).
+  "deformation.weaponFlex": weaponFlexEnabled,
+  "emissive.weaponAura": () => weaponAuraEnabled() || weaponShineEnabled(),
   "emissive.glint": glintEnabled,
   "emissive.magicGlow": magicGlowEnabled,
   "emissive.enchantShimmer": enchantShimmerEnabled,
@@ -1527,6 +1581,7 @@ export function vfxActiveEffectIds() {
 /** Reset memoized flag readers (tests only). */
 export function _resetVfxFlags() {
   _all = _glint = _magicGlow = _enchantShimmer = _tarnish = _wetness = _frost = _flameFlicker = _tipFlex = _gemSparkle = _brazier = _foliagePollen = _foliageFireflies = _foliageLeaves = _breathFog = _budget = undefined;
+  _weaponFx = _weaponFlex = _weaponAura = _weaponShine = _swingTrails = undefined;
   _terrainVfx = _terrainTrail = undefined;
   _terrainTrailWarned = _terrainTrailImpliedLogged = _terrainTrailSuppressedWarned = false;
   _terrainGrass = _terrainGrassStomp = undefined;

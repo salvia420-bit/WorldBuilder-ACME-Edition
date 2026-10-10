@@ -468,8 +468,8 @@ console.log("\n== L6  ship-OFF");
   setUrl("?visual=all");
   _resetVfxFlags();
   const lit = Object.keys(VFX_EFFECT_FLAGS).filter((id) => VFX_EFFECT_FLAGS[id]());
-  check("?visual=all lights exactly 14 effects — no swamp row among them",
-    lit.length === 14 && !lit.some((id) => id.startsWith("terrain.")), `${lit.length}: ${lit.join(",")}`);
+  check("?visual=all lights exactly 16 effects (14 + the 2026-10-10 per-weapon rows) — no swamp row among them",
+    lit.length === 16 && !lit.some((id) => id.startsWith("terrain.")), `${lit.length}: ${lit.join(",")}`);
   clearUrl();
   _resetVfxFlags();
 }

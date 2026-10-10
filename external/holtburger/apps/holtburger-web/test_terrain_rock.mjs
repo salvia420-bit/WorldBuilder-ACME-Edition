@@ -50,7 +50,7 @@
 //       `Math.random`, §5.7 `castShadow = false`).
 //   R11 FLAGS: three strict ship-OFF `=== "on"` opt-ins, keys on all four tiers
 //       in the right coercion sets, docs rows present, the router rows compose
-//       the family master, and the DEFAULT-ON effect count is still 14.
+//       the family master, and the DEFAULT-ON effect count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
 //   R12 BARE DEFAULT IS BYTE-IDENTICAL: `initTerrainRock` registers nothing and
 //       allocates nothing with no flags, and `?wireframe=1` is a hard no-op.
 //   R13 HEADLESS: both fields run with no THREE at all (the `?nullRender=1`
@@ -746,10 +746,10 @@ setUrl("?visual=off&terrainRock=on&terrainRockPebbles=on");
 check("?visual=off kills the family (the firewall composition rule)",
   vfxEffectEnabled("terrain.rockPebbles") === false);
 clearUrl();
-check("no flags: the rock rows are OFF, so the DEFAULT-ON count stays 14",
+check("no flags: the rock rows are OFF, so the DEFAULT-ON count stays 16 (14 + the 2026-10-10 per-weapon rows)",
   ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
     .every((id) => vfxEffectEnabled(id) === false)
-  && Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 14);
+  && Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 16);
 check("every rock row is under the `terrain.` ship-OFF prefix",
   ["terrain.rock", "terrain.rockPebbles", "terrain.rockGrit"]
     .every((id) => id.startsWith("terrain.")));

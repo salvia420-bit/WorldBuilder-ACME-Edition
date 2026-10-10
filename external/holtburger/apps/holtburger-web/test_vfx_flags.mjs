@@ -32,12 +32,17 @@ const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
 // 2026-06-24 DEFAULT-ON suite: every terrain-VFX flag is a STRICT exact-match
 // opt-in that ships OFF (plan §2.4/§5.9), so it never tracks visualAllEffects()
 // and `?visual=all` does not light it. The DEFAULT-ON count below is therefore
-// still 14 — that is the number every "N effects active" assertion means.
+// still the suite's own — 14 until 2026-10-10, 16 since the per-weapon effects
+// (deformation.weaponFlex, emissive.weaponAura) joined the suite DEFAULT-ON.
+// That is the number every "N effects active" assertion means.
+const DEFAULT_ON_COUNT = 16;
 const SHIP_OFF_IDS = ALL_IDS.filter((id) => id.startsWith("terrain."));
 const DEFAULT_ON_IDS = ALL_IDS.filter((id) => !id.startsWith("terrain."));
 
 // ---- the router map is complete ----
-check("VFX_EFFECT_FLAGS maps all 14 DEFAULT-ON effect ids", DEFAULT_ON_IDS.length === 14, DEFAULT_ON_IDS.join());
+check(`VFX_EFFECT_FLAGS maps all ${DEFAULT_ON_COUNT} DEFAULT-ON effect ids`, DEFAULT_ON_IDS.length === DEFAULT_ON_COUNT, DEFAULT_ON_IDS.join());
+check("the per-weapon rows are DEFAULT-ON suite ids",
+  DEFAULT_ON_IDS.includes("deformation.weaponFlex") && DEFAULT_ON_IDS.includes("emissive.weaponAura"));
 check("every mapped id has a function reader", ALL_IDS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"));
 check("the ship-OFF terrain rows are registered (so they don't fall through to visualAllEffects)",
   SHIP_OFF_IDS.length >= 1, SHIP_OFF_IDS.join());
@@ -55,7 +60,7 @@ check("no flags: visualEnabled() true (default-on)", visualEnabled() === true);
 check("no flags: visualAllEffects() true (default-on)", visualAllEffects() === true);
 check("no flags: every per-effect reader true", ALL_READERS.every((f) => f() === true));
 check("no flags: vfxEffectEnabled(all default-on ids) true", DEFAULT_ON_IDS.every((id) => vfxEffectEnabled(id) === true));
-check("no flags: all 14 effects active", vfxActiveEffectIds().length === 14);
+check(`no flags: all ${DEFAULT_ON_COUNT} effects active`, vfxActiveEffectIds().length === DEFAULT_ON_COUNT);
 check("no flags: visualBudget() === Infinity (uncapped)", visualBudget() === Infinity);
 
 // ---- ?visual=off → master kill-switch → nothing ----
@@ -87,11 +92,11 @@ setUrl("?glint=off");
 check("?glint=off: glintEnabled() false", glintEnabled() === false);
 check("?glint=off: vfxEffectEnabled(glint) false", vfxEffectEnabled("emissive.glint") === false);
 check("?glint=off: tarnish still active (default-on)", vfxEffectEnabled("weathering.tarnish") === true);
-check("?glint=off: 13 effects active", vfxActiveEffectIds().length === 13);
+check(`?glint=off: ${DEFAULT_ON_COUNT - 1} effects active`, vfxActiveEffectIds().length === DEFAULT_ON_COUNT - 1);
 
 // ---- ?visual=all still forces everything on (explicit) ----
 setUrl("?visual=all");
-check("?visual=all: all 14 effects active", vfxActiveEffectIds().length === 14);
+check(`?visual=all: all ${DEFAULT_ON_COUNT} effects active`, vfxActiveEffectIds().length === DEFAULT_ON_COUNT);
 check("?visual=all: unknown id falls back to ALL (true)", vfxEffectEnabled("emissive.future") === true);
 
 // ---- ?visualBudget governor stub (default-on: no ?visual needed) ----
@@ -108,7 +113,7 @@ check("?visualBudget garbage → Infinity (def)", visualBudget() === Infinity);
 // Every terrain-VFX flag is an EXACT-match opt-in (plan §2.4/§5.9): it never
 // tracks visualAllEffects(), `?visual=all` does not light it, and an
 // unrecognised value warns rather than half-enabling. The DEFAULT-ON count
-// above must stay 14.
+// above must stay DEFAULT_ON_COUNT.
 clearUrl();
 check("terrain.grass + terrain.grassStomp are registered ship-OFF rows",
   SHIP_OFF_IDS.includes("terrain.grass") && SHIP_OFF_IDS.includes("terrain.grassStomp"));
@@ -116,7 +121,7 @@ check("no flags: terrainGrassEnabled() false (ship-OFF)", terrainGrassEnabled() 
 check("no flags: terrainGrassStompEnabled() false", terrainGrassStompEnabled() === false);
 setUrl("?visual=all");
 check("?visual=all does NOT light grass (strict opt-in, not a suite effect)",
-  vfxEffectEnabled("terrain.grass") === false && vfxActiveEffectIds().length === 14);
+  vfxEffectEnabled("terrain.grass") === false && vfxActiveEffectIds().length === DEFAULT_ON_COUNT);
 setUrl("?terrainGrass=on");
 check("?terrainGrass=on: reader true", terrainGrassEnabled() === true);
 check("?terrainGrass=on: vfxEffectEnabled(terrain.grass) true", vfxEffectEnabled("terrain.grass") === true);
@@ -149,8 +154,8 @@ check("the SNOW/ICE rows are registered ship-OFF ids",
   ["terrain.snow", "terrain.snowSpindrift", "terrain.snowSparkle",
     "terrain.snowPrints", "terrain.ice", "terrain.iceRefraction"]
     .every((id) => SHIP_OFF_IDS.includes(id)), SHIP_OFF_IDS.join());
-check("the DEFAULT-ON count is STILL 14 after the wave-2A rows",
-  DEFAULT_ON_IDS.length === 14, DEFAULT_ON_IDS.join());
+check("the DEFAULT-ON count is unchanged by the wave-2A rows",
+  DEFAULT_ON_IDS.length === DEFAULT_ON_COUNT, DEFAULT_ON_IDS.join());
 check("no flags: every snow/ice reader is false (ship-OFF)",
   [terrainSnowEnabled, terrainSnowSpindriftEnabled, terrainSnowSparkleEnabled,
     terrainSnowPrintsEnabled, terrainIceEnabled, terrainIceRefractionEnabled]
@@ -158,7 +163,7 @@ check("no flags: every snow/ice reader is false (ship-OFF)",
 setUrl("?visual=all");
 check("?visual=all does NOT light snow or ice (strict opt-ins, not suite effects)",
   vfxEffectEnabled("terrain.snow") === false && vfxEffectEnabled("terrain.ice") === false
-  && vfxActiveEffectIds().length === 14);
+  && vfxActiveEffectIds().length === DEFAULT_ON_COUNT);
 setUrl("?terrainSnow=on");
 check("?terrainSnow=on: reader true", terrainSnowEnabled() === true);
 check("?terrainSnow=on: vfxEffectEnabled(terrain.snow) true",

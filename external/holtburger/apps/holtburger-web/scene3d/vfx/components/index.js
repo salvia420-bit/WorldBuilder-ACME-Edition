@@ -10,12 +10,14 @@
 export { windBend } from "./windBend.js";              // deformation (Phase 0, MECH-A keyframe peel)
 export { windSwayGpu } from "./windSwayGpu.js";        // deformation (2026-06-29, MECH-B vertex, default-on instanced tree sway)
 export { tipFlex } from "./tipFlex.js";                // deformation (Phase 2, MECH-B vertex)
+export { weaponFlex } from "./weaponFlex.js";          // deformation (2026-10-10, MECH-B vertex, per-weapon inertial bend)
 export { tarnish } from "./tarnish.js";                // weathering / frag
 export { wetness } from "./wetness.js";                // weathering / frag (channel precip)
 export { frost } from "./frost.js";                    // weathering / frag (channel precip)
 export { glint } from "./glint.js";                    // emissive / frag
 export { magicGlow } from "./magicGlow.js";            // emissive / frag
 export { itemAura } from "./itemAura.js";              // emissive / frag (#16 UiEffects aura)
+export { weaponAura } from "./weaponAura.js";          // emissive / frag (2026-10-10, per-weapon element glow + shine)
 export { enchantShimmer } from "./enchantShimmer.js";  // emissive / frag
 export { flameFlicker } from "./flameFlicker.js";      // light (intensity-only)
 export { gemSparkle } from "./gemSparkle.js";          // particle (Phase 3 / P3.3, synthesized additive emitter)
@@ -30,12 +32,14 @@ export const TIER1_COMPONENT_IDS = Object.freeze([
   "deformation.windBend",
   "deformation.windSwayGpu",
   "deformation.tipFlex",
+  "deformation.weaponFlex",
   "weathering.tarnish",
   "weathering.wetness",
   "weathering.frost",
   "emissive.glint",
   "emissive.magicGlow",
   "emissive.itemAura",
+  "emissive.weaponAura",
   "emissive.enchantShimmer",
   "light.flameFlicker",
   "particle.gemSparkle",

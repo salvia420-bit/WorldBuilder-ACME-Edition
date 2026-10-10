@@ -40,7 +40,7 @@
 //       ""`, and a gated-out env synthesizes NO emitter at all.
 //   F1  SHIP-OFF: with no URL flags every volcano flag reads false,
 //       `initTerrainVolcano` registers NOTHING and allocates NOTHING, and the
-//       DEFAULT-ON effect count is still 14.
+//       DEFAULT-ON effect count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
 //   F2  The quality ladder matches plan §3.6 (`low: null`), and the volcano
 //       code set is DERIVED from `terrain_families.js`, never hardcoded.
 //   O1  The crack-glow BREATHING OSCILLATOR rides the shared registry, is
@@ -185,8 +185,8 @@ check("all four volcano rows are registered in VFX_EFFECT_FLAGS",
   Object.keys(VFX_EFFECT_FLAGS).join());
 check("no flags: every volcano row resolves FALSE through vfxEffectEnabled",
   VOLCANO_ROWS.every((id) => vfxEffectEnabled(id) === false));
-check("the DEFAULT-ON effect count is unchanged at 14 (volcano ids are ship-OFF)",
-  Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 14);
+check("the DEFAULT-ON effect count is unchanged at 16 (volcano ids are ship-OFF; 14 + the 2026-10-10 per-weapon rows)",
+  Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 16);
 check("the ember DESCRIPTOR id is also its VFX_EFFECT_FLAGS row "
   + "(so vfxEffectEnabled(component.id) resolves)",
   VOLCANO_ROWS.includes(terrainVolcanoEmbers.id)

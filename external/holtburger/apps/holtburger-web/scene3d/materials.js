@@ -2875,6 +2875,19 @@ const _RESEAT_FIELDS = [
   "blending", "blendSrc", "blendDst", "blendEquation",
   "forceSinglePass", "fog",
 ];
+/** The surface-derived material fields (read-only view; vfx/weapon_fx.js mirrors
+ *  base-material changes onto its per-weapon clones with the same list). */
+export const MATERIAL_SURFACE_FIELDS = Object.freeze(_RESEAT_FIELDS.slice());
+// userData flags that name a patch living in the material's OWN onBeforeCompile
+// chain. three's `Material.copy()` copies userData but NOT onBeforeCompile, so a
+// `.clone()` keeps these flags while losing the patches they name — and
+// `_patchSetCacheKey` builds the program key from the flags. `makeOwnedVariant`
+// strips them and re-installs the ones it can (CSM, light clamp).
+const _CLONE_LOST_PATCH_FLAGS = [
+  "detailEnabled", "csmEnabled", "pomEnabled", "pomForced", "lightClampRetail",
+  "__lightClampPatched", "__aoPatched", "__depthBiased", "__floorBiased",
+  "__staticBiased", "__acBakedLight",
+];
 // Clone-local markers that must survive a re-seat: `_patchSetCacheKey` reads
 // them, so losing one collapses the clone onto the un-patched program.
 const _RESEAT_KEEP_USERDATA = [
@@ -3864,6 +3877,47 @@ export class MaterialCache {
         try { oldMat?.dispose?.(); } catch (_) {}
       }
     }
+    return v;
+  }
+
+  /**
+   * 2026-10-10 — an ENTITY-OWNED VFX variant (vfx/weapon_fx.js: one per held or
+   * dropped weapon, so each carries its own motion / glow uniforms). Clones
+   * `base` (a cache material, a FrontSide clone, a paletted material or a
+   * per-entity clone), tags it `__disposable` (never `__cacheOwned` — the entity
+   * dispose chain frees it), sets `__vfxSetKey` BEFORE `builder` installs the
+   * component patches, and returns it. NOT cached: the caller owns it.
+   *
+   * Unlike `getCachedVariant`, the clone's program key tells the truth about its
+   * patches. `Material.copy()` drops `onBeforeCompile` but keeps the userData
+   * flags that name the base's own patches (CSM, detail, POM, light clamp, depth
+   * biases), and `_patchSetCacheKey` keys programs on those flags — so a plain
+   * clone claims patches it does not carry. Here the flags are stripped, and the
+   * two patches that matter on an entity are re-installed from their installers
+   * when the base had them: CSM (its 0.45..1 shade multiplier applies to every
+   * patched material whether or not the mesh receives shadows — without it a
+   * clone stays fully lit in shade, up to 2.2x brighter than its own wielder)
+   * and the `?lightClamp=retail` light clamp.
+   *
+   * Returns null in wireframe mode or without a base (caller keeps the base).
+   * @param {object} base
+   * @param {string} setKey  component-SET key (drives the program cache key)
+   * @param {(m: object) => void} builder  installs the component patches
+   */
+  makeOwnedVariant(base, setKey, builder) {
+    if (!base || this.wireframeMode) return null;
+    const v = base.clone();
+    const ud = { ...(v.userData || {}) };
+    const hadCsm = !!(base.userData && base.userData.csmEnabled);
+    const hadClamp = !!(base.userData && base.userData.lightClampRetail);
+    for (const k of _CLONE_LOST_PATCH_FLAGS) delete ud[k];
+    delete ud.__cacheOwned;
+    v.userData = { ...ud, __disposable: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
+    _inheritHeightTex(base, v);
+    if (hadCsm && this.csmState) _installCsmShaderPatch(v, this.csmState);
+    if (hadClamp) _installLightClampShaderPatch(v);
+    try { builder?.(v); } catch (e) { console.warn(`[vfx] makeOwnedVariant builder failed for ${setKey}:`, e); }
+    v.needsUpdate = true;
     return v;
   }
 

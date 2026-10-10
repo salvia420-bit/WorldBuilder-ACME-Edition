@@ -1328,7 +1328,18 @@ import { itemFxPlanFor, itemFxEnabled } from "./vfx/item_fx.js";
 // itemAura). buildFragVariant + VFX_GLOBALS/installVfxComponentPatch are already
 // imported (the statics-mirrored entity frag seam).
 import { fragPlanForDid } from "./vfx/frag_attach.js";
-import { tipFlexEnabled, gemSparkleEnabled } from "./vfx_flags.js";
+import { tipFlexEnabled, gemSparkleEnabled, weaponFxEnabled } from "./vfx_flags.js";
+// 2026-10-10 (?weaponFx) — per-weapon effects: each held / dropped weapon-ish
+// item gets its OWN materials (a stable phase, a motion-driven pole bend, an
+// exposure-calibrated element glow, a shine sweep) instead of the shared
+// catalog SET + itemFx aura. See scene3d/vfx/weapon_fx.js for the why.
+import {
+  weaponFxBegin,
+  weaponFxMaterial,
+  weaponFxCommit,
+  weaponFxForget,
+  weaponFxOwnedMaterial,
+} from "./vfx/weapon_fx.js";
 // Phase 3 (P3.1) — shared emit helper: runs each particle component's emit(ctx)
 // for a descriptor and returns [{emitterInfo, partIndex, parentOffset}] specs.
 import { attachParticleEmitters } from "./vfx/particle_attach.js";
@@ -3627,6 +3638,11 @@ class EntityInstance {
     // re-decode can't touch a torn-down rig. R-8 (2026-07-09): ditto for the
     // recolored twin (_scheduleRecoloredSurfaceRefresh).
     this._disposed = true;
+    // ?weaponFx: leave the per-frame tick and free this weapon's own materials.
+    if (this._wfx) {
+      try { weaponFxForget(this._wfx); } catch (_) {}
+      this._wfx = null;
+    }
     if (this._surfaceRefreshTimer) {
       try { clearTimeout(this._surfaceRefreshTimer); } catch (_) {}
       this._surfaceRefreshTimer = null;
@@ -4938,10 +4954,45 @@ export class EntityManager {
     // ONE combined plan => ONE getCachedVariant / ONE __vfxSetKey when BOTH the
     // catalog SET and a live itemFx aura are present; passthrough otherwise.
     const _entityPlan = _mergeFragPlans(_catalogPlan, _itemFxPlan);
+    // 2026-10-10 (?weaponFx, DEFAULT-ON under ?visual) — per-weapon effects. A
+    // weapon-ish item (catalog weapon archetype, a weapon name, or a UiEffects
+    // glow bit) builds its OWN materials and drops `_entityPlan` (the shared
+    // catalog SET + itemFx aura) — that SET's per-object phase was hashed from
+    // the WORLD position, re-rolled every frame on a held weapon (the shaking),
+    // and its aura/glint were uncalibrated for the 5x composer exposure (the
+    // white). Projectiles are skipped. `?weaponFx=off` ⇒ null ⇒ the path above,
+    // byte-identical to before.
+    let _wfx = null;
+    if (visualEnabled() && weaponFxEnabled() && this.materialCache && !this.isProjectile(guid)) {
+      try {
+        const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
+        const ue = (sh && typeof sh.entityUiEffects === "function")
+          ? (sh.entityUiEffects(guid >>> 0) >>> 0) : 0;
+        await ensureVfxCatalog();
+        const desc = vfxDescriptorFor(lodOriginalSetup >>> 0);
+        _wfx = weaponFxBegin({
+          inst,
+          guid,
+          name: meta?.name,
+          uiEffects: ue,
+          archetype: desc ? desc.archetype : "",
+          partGroups,
+          materialCache: this.materialCache,
+        });
+      } catch (e) {
+        _wfx = null;
+        if (!EntityManager._wfxWarned) {
+          EntityManager._wfxWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[weapon-fx] spawn plan failed (base materials kept):", e);
+        }
+      }
+    }
     const resolveEntityMaterial = (g) => {
       const did = g.surfaceDid >>> 0;
       if (inst._entityMaterials && inst._entityMaterials.has(did)) {
         const pbase = inst._entityMaterials.get(did);
+        if (_wfx) return weaponFxMaterial(_wfx, did, pbase);
         // Recolored/paletted gear no longer skips the VFX plan: layer the same
         // _entityPlan (itemFx aura + catalog effects) onto a clone of the recolored
         // base. Keyed per recolor × effect-SET so colours stay correct and programs
@@ -4951,6 +5002,7 @@ export class EntityManager {
       if (this.materialCache) {
         // T2: g.doubleSided drives FrontSide vs DoubleSide (default true).
         const base = this.materialCache.getCached(did, g.doubleSided);
+        if (_wfx) return weaponFxMaterial(_wfx, did, base);
         return _entityPlan ? _entityFragMat(base, this.materialCache, did, _entityPlan) : base;
       }
       return this._fallbackMaterial();
@@ -5027,6 +5079,10 @@ export class EntityManager {
       parts.push(partGroup);
       root.add(partGroup);
     }
+    // ?weaponFx: the weapon's own materials now sit on its meshes. Hang the state
+    // on the instance (so any dispose — including the Step-E abort below — frees
+    // them); it joins the per-frame tick only once the spawn commits.
+    if (_wfx) inst._wfx = _wfx;
 
     // T4: per-part particle anchoring. CreateParticle hooks carry a
     // `part_index`; the particle runtime resolves a non-root index via
@@ -5242,6 +5298,8 @@ export class EntityManager {
       try { inst.dispose(); } catch (_) {}
       return null;
     }
+    // ?weaponFx: the spawn commits — start the weapon's per-frame tick.
+    if (inst._wfx) weaponFxCommit(inst._wfx);
     // Step E: parent under entitiesGroup + register.
     if (this.scene3d?.entitiesGroup) {
       this.scene3d.entitiesGroup.add(root);
@@ -7067,6 +7125,9 @@ export class EntityManager {
       // eslint-disable-next-line no-console
       console.warn("[attach] placement-frame re-pose failed:", e);
     }
+    // The parts just moved into the grip frame: the swing-trail sampler's cached
+    // root-space blade (vfx/fx_ribbons.js fxBladeLocal) is stale.
+    c._fxBlade = undefined;
   }
 
   /**
@@ -14033,6 +14094,14 @@ export class EntityManager {
   _getOrCloneEntityMaterial(inst, surfaceDid, opts = {}) {
     const did = surfaceDid >>> 0;
     if (!inst._entityMaterials) inst._entityMaterials = new Map();
+    // ?weaponFx: a weapon already OWNS a per-entity material for this surface
+    // (with its glow/bend patches). Hand that one out so a fade / ethereal /
+    // luminous hook mutates it, instead of cloning the plain base and dropping
+    // the effects off the mesh.
+    const wfxMat = weaponFxOwnedMaterial(inst, did);
+    if (wfxMat && inst._entityMaterials.get(did) !== wfxMat) {
+      inst._entityMaterials.set(did, wfxMat);
+    }
     let existing = inst._entityMaterials.get(did);
     // 2026-08-03 — INVARIANT: every mutation reached through this getter (ramp
     // tweens, ethereal, camera fade, texture velocity) is PER-ENTITY, so what we

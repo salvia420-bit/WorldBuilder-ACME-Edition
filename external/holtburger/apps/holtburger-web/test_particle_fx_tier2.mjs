@@ -339,10 +339,34 @@ async function run() {
   const bl = rib.fxBladeLocal(sword);
   check("7. the blade: its long axis, the tip at the far end from the grip",
     !!bl && Math.abs(bl.tip.y - 1.05) < 1e-3 && Math.abs(bl.mid.y - 1.05 * 0.35) < 1e-3, bl ? `tip ${bl.tip.toArray()}` : "none");
-  check("7. a swinging ELEMENTAL weapon trails (one swept ribbon); a plain one does not",
-    rib.fxRibbonStats().live === 1 && rib.fxRibbonStats().drawn === 1 && ribMesh.geometry.attributes.aCol.array[3] === 1);
+  // 2026-10-10: `?swingTrails` defaults to "all" — the elemental blade trails in
+  // its element's colour (first in the walk, slot 0) and the plain one leaves a
+  // faint steel streak; "elemental" restores the first tier-2 rule below.
+  check("7. a swinging ELEMENTAL weapon trails in its colour; by default (?swingTrails=all) a plain one leaves a faint steel streak",
+    rib.fxRibbonStats().live === 2 && rib.fxRibbonStats().drawn === 2 && ribMesh.geometry.attributes.aCol.array[3] === 1 &&
+    Math.abs(ribMesh.geometry.attributes.aCol.array[0] - rib.FX_ELEMENTS.fire.color[0]) < 1e-6 &&
+    Math.abs(ribMesh.geometry.attributes.aCol.array[4 * 32] - rib.FX_SWING_STEEL.color[0]) < 1e-6,
+    JSON.stringify(rib.fxRibbonStats()));
   rib.tickFxRibbons(s3dSwing, 9000 + rib.FX_SWING_WINDOW_MS + 600);
-  check("7. the window closes: the trail fades out", rib.fxRibbonStats().live === 0);
+  check("7. the window closes: the trails fade out", rib.fxRibbonStats().live === 0);
+  {
+    const vfxFlags = await import("./scene3d/vfx_flags.js");
+    window.location.search = "?swingTrails=elemental";
+    vfxFlags._resetVfxFlags();
+    delete sword._fxSwingLook; delete plain._fxSwingLook;
+    rib._resetFxRibbonsForTest();
+    rib.fxNoteSwing(wielder, 30000);
+    for (let i = 0; i < 6; i++) {
+      wielder.root.rotation.z = i * 0.35;
+      wielder.root.updateMatrixWorld(true);
+      rib.tickFxRibbons(s3dSwing, 30000 + i * 16);
+    }
+    check("7. ?swingTrails=elemental: only the ELEMENTAL weapon trails (the first tier-2 rule)",
+      rib.fxRibbonStats().live === 1 && rib.fxRibbonStats().drawn === 1, JSON.stringify(rib.fxRibbonStats()));
+    rib.tickFxRibbons(s3dSwing, 30000 + rib.FX_SWING_WINDOW_MS + 600);
+    window.location.search = "";
+    vfxFlags._resetVfxFlags();
+  }
   t2f.setFxTier2Flag("fxMotion", false);
   bolt._ballistic = true; bolt._projectileImpacted = false;
   rib.tickFxRibbons(s3d, 12000);

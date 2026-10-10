@@ -34,7 +34,7 @@
 //       placed only on FAM_DIRT through the shared scatter pool.
 //   D11 FLAGS + TIERS: five strict ship-OFF opt-ins, keys on all four tiers in
 //       the plan's shape, in the right coercion sets, and the DEFAULT-ON effect
-//       count is still 14.
+//       count is still the suite's own (16 since the 2026-10-10 per-weapon rows).
 //   D12 BARE DEFAULT IS BYTE-IDENTICAL: `initTerrainDirt` registers nothing,
 //       allocates nothing and installs no facade property with the flag absent.
 //
@@ -531,8 +531,8 @@ const DIRT_ROWS = ["terrain.dirt", "terrain.footfall", "terrain.mudPrints",
 const ALL_IDS = Object.keys(VFX_EFFECT_FLAGS);
 check("the five DIRT rows are in the VFX_EFFECT_FLAGS router",
   DIRT_ROWS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"), ALL_IDS.join());
-check("the DEFAULT-ON effect count is STILL 14 after the wave-3B rows",
-  ALL_IDS.filter((id) => !id.startsWith("terrain.")).length === 14);
+check("the DEFAULT-ON effect count is unchanged by the wave-3B rows (16 since the 2026-10-10 per-weapon rows)",
+  ALL_IDS.filter((id) => !id.startsWith("terrain.")).length === 16);
 clearUrl();
 check("no flags: every DIRT row is OFF (ship-OFF, plan §5.9)",
   DIRT_ROWS.every((id) => VFX_EFFECT_FLAGS[id]() === false));
