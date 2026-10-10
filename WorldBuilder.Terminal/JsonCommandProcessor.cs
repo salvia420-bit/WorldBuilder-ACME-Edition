@@ -53,6 +53,12 @@ public class JsonCommandProcessor {
     /// <summary>Exposes the transaction engine to the REPL/dispatch wiring of transact-diff.</summary>
     internal TransactionEngine Transactions => _transactionEngine;
 
+    /// <summary>Every command name the dispatcher accepts (aliases included).</summary>
+    internal IReadOnlyCollection<string> CommandNames => _commandHandlers.Keys;
+
+    /// <summary>True when <paramref name="commandName"/> has a JSON handler (case-insensitive).</summary>
+    internal bool HasCommand(string commandName) => _commandHandlers.ContainsKey(commandName);
+
     /// <summary>
     /// Pre-load a project through the same path the JSON `load` command uses, so the
     /// CLI `--project` flag exercises every auto-loader in <see cref="CommandEngine.Load"/>
@@ -67,22 +73,39 @@ public class JsonCommandProcessor {
     /// Exits on EOF (stdin closed) or the "quit"/"exit" command.
     /// </summary>
     public void RunStdinLoop() {
-        var version = typeof(JsonCommandProcessor).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-        WriteResponse(new { success = true, command = "ready", version, message = "WorldBuilder.Terminal JSON mode ready" });
+        // stdout carries protocol lines only. Anything else that writes to Console.Out while a
+        // command runs (Shared helpers such as DatExportFixer during export, third-party
+        // libraries) is diverted to stderr, where it cannot desynchronize a client that reads
+        // one JSON line per command.
+        _protocolOut = Console.Out;
+        Console.SetOut(Console.Error);
+        try {
+            var version = typeof(JsonCommandProcessor).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+            WriteResponse(new { success = true, command = "ready", version, message = "WorldBuilder.Terminal JSON mode ready" });
 
-        while (true) {
-            var line = Console.ReadLine();
-            if (line == null) break; // EOF
-            if (string.IsNullOrWhiteSpace(line)) continue;
+            while (true) {
+                var line = Console.ReadLine();
+                if (line == null) break; // EOF
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-            try {
-                var (result, isQuit) = ProcessCommandInternal(line);
-                Console.WriteLine(result);
-                if (isQuit) break;
-            } catch (Exception ex) {
-                WriteResponse(new { success = false, command = "unknown", error = ex.Message });
+                try {
+                    var (result, isQuit) = ProcessCommandInternal(line);
+                    WriteProtocolLine(result);
+                    if (isQuit) break;
+                } catch (Exception ex) {
+                    WriteResponse(new { success = false, command = "unknown", error = ex.Message });
+                }
             }
+        } finally {
+            Console.SetOut(_protocolOut);
         }
+    }
+
+    private TextWriter _protocolOut = Console.Out;
+
+    private void WriteProtocolLine(string line) {
+        _protocolOut.WriteLine(line);
+        _protocolOut.Flush();
     }
 
     /// <summary>
@@ -1941,7 +1964,9 @@ public class JsonCommandProcessor {
 
     private string CmdInfo() {
         var r = _engine.GetInfo();
-        if (!r.Loaded) return Serialize(new { success = false, command = "info", loaded = false });
+        // A status query that answers "nothing loaded" has succeeded; success:false is reserved
+        // for failures, which always carry an `error` (docs/agent_api_reference.md `info`).
+        if (!r.Loaded) return Serialize(new { success = true, command = "info", loaded = false });
         return Serialize(new { success = true, command = "info", loaded = true,
             projectName = r.ProjectName, projectFile = r.ProjectFile, projectDir = r.ProjectDir,
             datDirectory = r.DatDirectory, databasePath = r.DatabasePath, portalIteration = r.PortalIteration });
@@ -1955,15 +1980,18 @@ public class JsonCommandProcessor {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
         float strength = FloatInRange(node, "strength", 0f, 1f, 0.5f);
         var r = _engine.ApplyTerrainEdit(new SmoothEdit(x, y, radius, strength));
-        return Serialize(new { success = r.Success, command = "smooth",
+        return Serialize(new { success = r.Success, command = "smooth", error = BrushMissError(r),
             verticesModified = r.VerticesModified, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
+
+    private static string? BrushMissError(TerrainEditResult r) => r.Success ? null :
+        "The brush covers no terrain vertices (x and y are world units, 0..48960); nothing was edited.";
 
     private string CmdRaise(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
         int delta = OptionalInt(node, "delta", 5);
         var r = _engine.Raise(x, y, radius, delta);
-        return Serialize(new { success = r.Success, command = "raise",
+        return Serialize(new { success = r.Success, command = "raise", error = BrushMissError(r),
             verticesModified = r.VerticesModified, delta, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
@@ -1971,7 +1999,7 @@ public class JsonCommandProcessor {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
         int delta = OptionalInt(node, "delta", 5);
         var r = _engine.Lower(x, y, radius, delta);
-        return Serialize(new { success = r.Success, command = "lower",
+        return Serialize(new { success = r.Success, command = "lower", error = BrushMissError(r),
             verticesModified = r.VerticesModified, delta, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
@@ -1987,8 +2015,9 @@ public class JsonCommandProcessor {
             throw new ArgumentException($"'heightIndex' must be 0..255; got {rawInt}");
         byte heightIndex = (byte)rawInt;
         var r = _engine.ApplyTerrainEdit(new SetHeightEdit(x, y, radius, heightIndex));
-        return Serialize(new { success = r.Success, command = "set-height",
+        return Serialize(new { success = r.Success, command = "set-height", error = BrushMissError(r),
             verticesModified = r.VerticesModified, heightIndex,
+            targetHeight = heightIndex,   // documented name before heightIndex; kept for existing callers
             landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
@@ -1998,7 +2027,7 @@ public class JsonCommandProcessor {
         if (terrainType > 32)
             throw new ArgumentException($"'type' must be 0..32 (the region table's defined terrain types); got {terrainType}");
         var r = _engine.ApplyTerrainEdit(new PaintEdit(x, y, radius, terrainType));
-        return Serialize(new { success = r.Success, command = "paint",
+        return Serialize(new { success = r.Success, command = "paint", error = BrushMissError(r),
             verticesModified = r.VerticesModified, terrainType,
             landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
@@ -2017,6 +2046,7 @@ public class JsonCommandProcessor {
         byte newType = ByteInRange(node, "type");
         var r = _engine.Fill(x, y, newType);
         return Serialize(new { success = r.Success, command = "fill",
+            error = r.Success ? null : "There is no terrain at the seed point; nothing was filled.",
             verticesModified = r.VerticesModified, terrainType = newType,
             landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
@@ -2027,7 +2057,8 @@ public class JsonCommandProcessor {
         if (roadValue > 3)
             throw new ArgumentException($"'value' must be 0..3 (only 2 road bits survive DAT export); got {roadValue}");
         var r = _engine.DrawRoad(x1, y1, x2, y2, roadValue);
-        return Serialize(new { success = r.VerticesModified > 0, command = "road",
+        return Serialize(new { success = r.Success, command = "road",
+            error = r.Success ? null : "The road path crosses no terrain vertices (x and y are world units, 0..48960); nothing was drawn.",
             waypoints = r.Waypoints, verticesModified = r.VerticesModified,
             roadValue = r.RoadValue, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
@@ -2084,7 +2115,8 @@ public class JsonCommandProcessor {
     private string CmdListObjects(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
         var r = _engine.ListObjects(lbX, lbY);
-        return Serialize(new { success = r.Found, command = "list-objects", landblock = $"0x{r.LbKey:X4}", found = r.Found, count = r.Objects.Count,
+        // found:false = the landblock has no static objects; that is an answer, not a failure.
+        return Serialize(new { success = true, command = "list-objects", landblock = $"0x{r.LbKey:X4}", found = r.Found, count = r.Objects.Count,
             objects = r.Objects.Select((obj, i) => new {
                 index = i, modelId = $"0x{obj.Id:X8}", type = obj.IsSetup ? "Setup" : "GfxObj",
                 x = Math.Round(obj.Origin.X, 2), y = Math.Round(obj.Origin.Y, 2), z = Math.Round(obj.Origin.Z, 2),
@@ -3265,6 +3297,46 @@ public class JsonCommandProcessor {
             new { name = "environment-clone", args = "datPath, sourceIdHex, newIdHex, dryRun? | clones[{sourceIdHex,newIdHex}]", description = "Clone an Environment (0x0D) record to a FREE id in a portal-DAT COPY (the environment-variant lane): record copied verbatim (CellStructs/physics/portals/BSPs identical), so cells retargeted at the clone keep byte-identical collision. New id must be free (0x0D000000–0x0D00FFFF). Writes to ~/ac_base_dats refused" },
             new { name = "envcell-retarget", args = "datPath, retargets[{cellIdHex,environmentIdHex,cellStructure?}] | jsonlPath, portalPath?, dryRun?", description = "Batch-rewrite EnvCell.EnvironmentId (+optional CellStructure) in a CELL-dat COPY — points texture-cluster cells at their relief variant env. In-place u16 rewrite (record size unchanged; only the b-tree churns). environmentIdHex accepts u16 or full 0x0D00XXXX. jsonlPath = file of one retarget object per line (big batches). With portalPath, each target env+cellstruct is validated against that portal dat incl. PosSurface-vs-cell-surface-count bounds (catches a retarget at the wrong variant). Returns counts + first 100 failures. Writes to ~/ac_base_dats refused" },
             new { name = "surface-texture-collapse", args = "datPath, idHex, keepDid?, dryRun? | collapses[{idHex,keepDid?}]", description = "Rewrite a SurfaceTexture (0x05) texture list to a single entry (default keepDid = the LAST entry = the base-detail level that ships in client_portal.dat), so retail ImgTex::GetSurfaceDID takes the m_num==1 branch and cannot fall back to the client_highres.dat index-0 original. Same DAT-copy prep + ~/ac_base_dats refusal as render-surface-import" },
+            // Map / static-site emitters
+            new { name = "describe-floor",     args = "lbX, lbY, floor?",                      description = "Describe one floor (z band) of a landblock's dungeon cells: z range, cell count, cell-resident and loose objects, plus a verbal summary" },
+            new { name = "render-dungeon",     args = "lbX, lbY, floor?, resolution?, outputPath?, includePng?", description = "Render a top-down PNG of one dungeon floor of a landblock (resolution default 1024; includePng returns the image base64)" },
+            new { name = "extract-cell-footprints", args = "force?, lbFilter[]?",              description = "Extract dungeon cell footprints for the loaded project into the cell-footprint cache used by the map floor views; force rebuilds" },
+            new { name = "generate-object-sprites", args = "spritePx?, force?, throttleMs?, lodLevel?, nightMode?, lbFilter[]?", description = "Render object sprites into an atlas + manifest for map tiles (spritePx default 512; lodLevel > 0 renders degrade models into atlas_lodN; nightMode dims meshes and draws Setup lights into atlas_night)" },
+            new { name = "emit-tile-pyramid",  args = "outDir, maxZoom?, minZoom?, dirtyOnly?, emitObject?, emitFloor?, throttleMs?, lbFilter[]?", description = "Render the world-map tile pyramid (exterior, object and floor tiers; zoom 3-12 by default) for the loaded project; dirtyOnly re-renders changed tiles only; success = no landblock failed" },
+            new { name = "emit-static-site",   args = "projectSlug, outDir, maxZoom?, minZoom?, emitObject?, emitFloor?, throttleMs?, gallery?, tileFormat?, lbFilter[]?", description = "Emit a static Leaflet map site for the project (tile pyramid, per-landblock descriptions, overlays); gallery:true also bundles a render gallery; tileFormat png (default) or webp" },
+            // Chorizite oracle (DAT / enum / wire parity)
+            new { name = "chorizite-list-dat-types", args = "",                                description = "List the DBObj types Chorizite knows, with their DAT file and id range" },
+            new { name = "chorizite-list-dat-records", args = "datPath?, typeName?",           description = "List every record in a DAT (optionally one DBObj type, e.g. GfxObj) with id, type and size, plus the DAT's sha256; datPath defaults to the canonical DAT for the type" },
+            new { name = "chorizite-parse-dat-record", args = "idHex, datPath?, typeName?",    description = "Parse one DAT record (type auto-detected from the id) and return its field tree; a parse failure is returned as errorMessage with success:false" },
+            new { name = "chorizite-dump-enum-values", args = "enumName?",                     description = "Dump the name/value table of one curated Chorizite enum, or all of them" },
+            new { name = "chorizite-dump-opcodes", args = "sourceRoot?, outputPath?",          description = "Extract the Chorizite ACProtocol opcode enums from the vendored generated sources to JSON" },
+            new { name = "chorizite-dump-world-object-taxonomy", args = "sourceRoot?",          description = "Extract the ACPlugin WorldObject class hierarchy with its ItemType/ObjectClass tags (feeds plugins/world-objects)" },
+            new { name = "chorizite-dump-layout-tree", args = "layoutId?, outPath?, datPath?, resolveSymbols?", description = "Dump a UI LayoutDesc element tree with its image DIDs (layoutId default 0x21000000, the retail 800x600 root); resolveSymbols adds retail enum names" },
+            new { name = "chorizite-dump-skill-table", args = "skillTableId?, outPath?, datPath?", description = "Dump the SkillTable as JSON (default 0x0E000004, the only retail SkillTable)" },
+            new { name = "chorizite-extract-ui-textures", args = "dids[], outDir, datPath?",   description = "Decode UI RenderSurface DIDs (0x hex or decimal) to PNGs plus an index JSON with size, pixel format and sha256 per record" },
+            new { name = "chorizite-hash-string", args = "input",                              description = "Compute the AC string hash of input (port of StringHashExtensions.ComputeHash over Windows-1252 bytes)" },
+            new { name = "chorizite-classify", args = "itemType, objDescFlags, weenieFlags",   description = "Classify an object from its ItemType / ObjectDescriptionFlag / WeenieHeaderFlag bitfields (0x hex or decimal) with the C# port of ACPlugin WorldObject.cs; parity oracle for plugins/world-objects/canonical_classify.js" },
+            new { name = "chorizite-resolve-sound", args = "soundTableDid, sound, datPath?",    description = "Resolve a SoundTable DID + Sound (enum name or value) to its Wave DID the way retail SoundManager::GetSound does (deterministic, rand = 0); waveDid is null when the table has no mapping" },
+            new { name = "chorizite-wire-list-message-types", args = "",                       description = "List the Chorizite protocol message types with direction and opcode" },
+            new { name = "chorizite-wire-pack-message", args = "typeName, fields?, headerMode?", description = "Serialize a Chorizite protocol message from JSON fields to hex bytes (+ byte length and sha256); headerMode selects which header bytes are included (default payload)" },
+            new { name = "chorizite-wire-unpack-message", args = "hexBytes, typeName?, headerMode?", description = "Decode hex bytes into a Chorizite message (dispatched by opcode unless typeName is given) and verify that re-packing round-trips byte for byte" },
+            new { name = "chorizite-decode-surface-chunk", args = "startId, endId, datPath?, cacheRoot?, fastMode?, emitPng?", description = "Diagnostic: decode every Surface in [startId, endId) through Chorizite's DBObj chain into the sha-keyed cache (PNG + sha256 per record); success = no record failed" },
+            new { name = "chorizite-decode-texture-chain-chunk", args = "startId, endId, datPath?, cacheRoot?, fastMode?, emitPng?", description = "Diagnostic: the chorizite-decode-surface-chunk decode under a separate texchain_ progress sidecar (texture-chain parity lane)" },
+            new { name = "enum-parity-report", args = "sourceRoot?, rustCrateRoot?",          description = "Diagnostic: compare the curated Chorizite enums with the holtburger Rust enums member by member" },
+            new { name = "mesh-vs-obj-export-chunk", args = "startId, endId, datPath?, cacheRoot?, fastMode?, fastModeIds[]?", description = "Diagnostic: parse every GfxObj/Setup in the file-id range [startId, endId) via the Chorizite oracle and cache its mesh counts; success = no record failed" },
+            new { name = "env-cell-vs-setup-model-chunk", args = "startId, endId, datPath?, cacheRoot?, fastMode?, fastModeIds[]?", description = "Diagnostic: parse every EnvCell in [startId, endId) of the cell DAT via the Chorizite oracle and cache portal / surface / visible-cell counts (short 0xXXYY ids widen to 0xXXYY0000); success = no record failed" },
+            new { name = "cell-portal-graph-sweep", args = "lbIds[] | lbId, datPath?",         description = "Diagnostic: build the EnvCell portal graph for each landblock (0xXXYY or 0xXXYY0000) and report orphaned cells, asymmetric portals and unresolved targets; success = the sweep ran, clean = no findings" },
+            new { name = "bsp-build",          args = "gfxObjId (number)",                     description = "Rebuild the physics and drawing BSP trees of a GfxObj; the result is staged in the project's portal overrides so the next export persists it" },
+            // Motion parity
+            new { name = "motion-inventory",   args = "datPath?",                              description = "List every MotionTable with its cycle, link and modifier counts" },
+            new { name = "motion-classify-swing", args = "motionTableId, stance, attackHeight, datPath?", description = "Diagnostic: resolve the swing a MotionTable plays for a stance + attack height (link class, animation id, frame range, framerate)" },
+            new { name = "motion-table-anim-hooks", args = "motionTableId, datPath?",          description = "Dump every animation hook (sound, particle emitter, physics script...) reachable from a MotionTable's cycles, modifiers and links" },
+            // VFX classifier
+            new { name = "vfx-classify",       args = "did",                                   description = "Classify a Setup DID into a VFX archetype: components, confidence and the signals behind the decision" },
+            new { name = "vfx-emit-allowlist", args = "archetype",                             description = "List the Setup DIDs an archetype's rule matches (its allowlist seed)" },
+            new { name = "vfx-emit-catalog",   args = "outputPath (alias: out)",               description = "Classify every scanned Setup and write the visual_descriptors.jsonl catalog the web client loads" },
+            new { name = "vfx-gauge",          args = "ref?",                                  description = "Static VFX cost estimate for a reference area (default holtburg): unique models, draw calls, programs, VRAM, lights; success:false when a structural gate trips" },
+            new { name = "help",             args = "",                                      description = "List every command with its arguments (this output)" },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
@@ -3521,7 +3593,8 @@ public class JsonCommandProcessor {
         var r = _engine.ApplyPopulation(planPath, dryRun);
         return Serialize(new { success = r.Success, command = "apply-population",
             landblocksModified = r.LandblocksModified, objectsPlaced = r.ObjectsPlaced,
-            objectsSkipped = r.ObjectsSkipped, elapsedMs = Math.Round(r.ElapsedMs, 0),
+            objectsSkipped = r.ObjectsSkipped, objectsUnsnapped = r.ObjectsUnsnapped,
+            elapsedMs = Math.Round(r.ElapsedMs, 0),
             planPath = r.PlanPath, dryRun,
             error = r.Error });
     }
@@ -4287,6 +4360,7 @@ public class JsonCommandProcessor {
         var r = _engine.AnalyzeLandblockPatterns(minX, minY, maxX, maxY, outputPath);
         return Serialize(new { success = r.Success, command = "analyze-landblock-patterns",
             landblocksAnalyzed = r.LandblocksAnalyzed,
+            landblocksSkipped = r.LandblocksSkipped,
             totalObjectsAnalyzed = r.TotalObjectsAnalyzed,
             elapsedMs = r.ElapsedMs,
             slopeDistribution = new {
@@ -4319,6 +4393,7 @@ public class JsonCommandProcessor {
         return Serialize(new {
             success = r.Success, command = "extract-building-pairings",
             structuresScanned = r.StructuresScanned,
+            landblocksSkipped = r.LandblocksSkipped,
             pairsKept = r.PairsKept,
             groupCount = r.GroupCount,
             outputPath = r.OutputPath,
@@ -5104,21 +5179,20 @@ public class JsonCommandProcessor {
         HashSet<ushort>? lbFilter = null;
         if (node["lbs"] is System.Text.Json.Nodes.JsonArray lbArr && lbArr.Count > 0) {
             lbFilter = new HashSet<ushort>();
-            foreach (var item in lbArr.OfType<System.Text.Json.Nodes.JsonNode>()) {
-                if (item is not System.Text.Json.Nodes.JsonArray pair || pair.Count != 2) continue;
-                // GetValue<uint>() throws on non-numeric entries — skip malformed pairs
-                // rather than crashing the whole transact-diff response.
-                if (pair[0] == null || pair[1] == null) continue;
-                if (pair[0]!.GetValueKind() != JsonValueKind.Number ||
-                    pair[1]!.GetValueKind() != JsonValueKind.Number) continue;
-                uint lbX, lbY;
-                try {
-                    lbX = pair[0]!.GetValue<uint>();
-                    lbY = pair[1]!.GetValue<uint>();
-                } catch { continue; }
+            for (int i = 0; i < lbArr.Count; i++) {
+                // A malformed entry is a caller error: skipping it would silently narrow
+                // (or empty) the filter and return a diff of nothing.
+                var item = lbArr[i];
+                if (item is not System.Text.Json.Nodes.JsonArray pair || pair.Count != 2 ||
+                    pair[0]?.GetValueKind() != JsonValueKind.Number ||
+                    pair[1]?.GetValueKind() != JsonValueKind.Number ||
+                    !pair[0]!.AsValue().TryGetValue<uint>(out var lbX) ||
+                    !pair[1]!.AsValue().TryGetValue<uint>(out var lbY))
+                    throw new ArgumentException($"'lbs[{i}]' must be a [lbX, lbY] pair of non-negative integers");
                 // LB coords are 0..255 inclusive — out-of-range pairs would silently
                 // truncate into the wrong landblock, so reject them outright.
-                if (lbX > 0xFF || lbY > 0xFF) continue;
+                if (lbX > 0xFF || lbY > 0xFF)
+                    throw new ArgumentException($"'lbs[{i}]' = [{lbX}, {lbY}] is outside 0..255");
                 lbFilter.Add((ushort)((lbX << 8) | lbY));
             }
         }
@@ -5477,10 +5551,7 @@ public class JsonCommandProcessor {
 
     private static string Serialize(object obj) => JsonSerializer.Serialize(obj, JsonOpts);
 
-    private void WriteResponse(object obj) {
-        Console.WriteLine(Serialize(obj));
-        Console.Out.Flush();
-    }
+    private void WriteResponse(object obj) => WriteProtocolLine(Serialize(obj));
 
     // ─────────────────────────────────────────────────────────────────
     // Wave-5.A cell-portal-graph-sweep + pvs-visibility-snapshot

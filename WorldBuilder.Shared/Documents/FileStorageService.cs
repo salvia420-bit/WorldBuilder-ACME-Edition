@@ -12,8 +12,10 @@ namespace WorldBuilder.Shared.Documents {
         private readonly string _storageDirectory;
         private readonly ILogger<DocumentStorageService> _logger;
         private readonly object _fileLock = new object();
+        // '\\' is listed explicitly: on Linux it is a legal file-name character, but the same
+        // project opened on Windows would treat it as a separator, so ids must never contain it.
         private static readonly char[] InvalidDocumentIdChars =
-            Path.GetInvalidFileNameChars().Concat(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }).ToArray();
+            Path.GetInvalidFileNameChars().Concat(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\\' }).ToArray();
 
         public FileStorageService(string storageDirectory, ILogger<DocumentStorageService> logger) {
             _storageDirectory = storageDirectory ?? throw new ArgumentNullException(nameof(storageDirectory));

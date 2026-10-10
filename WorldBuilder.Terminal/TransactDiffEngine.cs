@@ -507,15 +507,22 @@ internal sealed class TransactDiffEngine {
             // re-queues the doc with post-state on the DocumentManager batch
             // channel, so a flusher that picked up an in-flight pre-state
             // write is overwritten by the canonical post-state on the next
-            // 2-second batch.
+            // 2-second batch. ForceSave runs only after a successful restore:
+            // saving a doc that still holds the swapped state would persist it.
+            var restoreErrors = new List<string>();
             if (liveLb != null && currentLiveLb != null) {
-                try { liveLb.LoadFromProjection(currentLiveLb); } catch { }
-                try { liveLb.ForceSave(); } catch { }
+                try { liveLb.LoadFromProjection(currentLiveLb); liveLb.ForceSave(); }
+                catch (Exception ex) { restoreErrors.Add($"{lbDocId}: {ex.Message}"); }
             }
             if (liveTerrain != null && currentLiveTerrain != null) {
-                try { liveTerrain.LoadFromProjection(currentLiveTerrain); } catch { }
-                try { liveTerrain.ForceSave(); } catch { }
+                try { liveTerrain.LoadFromProjection(currentLiveTerrain); liveTerrain.ForceSave(); }
+                catch (Exception ex) { restoreErrors.Add($"terrain: {ex.Message}"); }
             }
+            if (restoreErrors.Count > 0)
+                throw new InvalidOperationException(
+                    "transact-diff could not restore the live document after validating a swapped state (" +
+                    string.Join("; ", restoreErrors) + "). The in-memory document may still hold that state; " +
+                    "reload the project before exporting.");
         }
     }
 

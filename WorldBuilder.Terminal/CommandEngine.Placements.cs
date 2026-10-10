@@ -490,8 +490,14 @@ public partial class CommandEngine {
                         foreach (var rec in existing)
                             if (StaticGuidAllocator.IsInLandblockStaticRange(lb, rec.Guid))
                                 Used(lb).Add(rec.Guid);
-                    } catch {
-                        // Best-effort: a query failure (table absent / perms) must not block file emit.
+                    } catch (Exception ex) {
+                        // Fail closed: on apply the minted guids become DELETE+INSERT keys against the
+                        // live DB, so minting without knowing the guids it already uses could replace
+                        // an existing row. Nothing has been written to the DB at this point.
+                        throw new InvalidOperationException(
+                            $"Could not read the existing landblock_instance guids for landblock 0x{lb:X4} " +
+                            $"from the world DB ({ex.Message}); refusing to mint guids that could overwrite " +
+                            "existing rows. Fix DB access, or export without apply.", ex);
                     }
                 }
             }

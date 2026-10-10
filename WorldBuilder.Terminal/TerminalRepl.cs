@@ -69,7 +69,7 @@ public class TerminalRepl {
 
                 if (_commandHandlers.TryGetValue(command, out var handler)) {
                     handler(tokens);
-                } else {
+                } else if (!TryRunJsonCommand(tokens)) {
                     Console.WriteLine($"Unknown command: '{command}'. Type 'help' for available commands.");
                 }
             } catch (Exception ex) {
@@ -212,7 +212,7 @@ public class TerminalRepl {
             ["generate-atlas-tiles"] = HandleGenerateAtlasTiles,
             ["emit-render-gallery"] = HandleEmitRenderGallery,
             ["serve-render-gallery"] = HandleServeRenderGallery,
-            ["help"] = _ => PrintHelp(),
+            ["help"] = HandleHelp,
         };
 
     private void HandleRenderPreview(string[] tokens) {
@@ -2059,11 +2059,103 @@ public class TerminalRepl {
         Console.WriteLine("═══ General ═══");
         Console.ResetColor();
         Console.WriteLine("  help                           Show this help message");
+        Console.WriteLine("  help <command>                 Arguments and description of any command");
         Console.WriteLine("  quit / exit                    Exit the terminal");
         Console.WriteLine();
         Console.WriteLine("Paths with spaces should be wrapped in quotes:");
         Console.WriteLine("  load \"C:\\My Projects\\demo.wbproj\"");
         Console.WriteLine();
+        Console.WriteLine("Every JSON-protocol command not listed above also runs here, with key=value");
+        Console.WriteLine("arguments or one JSON object (values are parsed as JSON, otherwise taken as text):");
+        Console.WriteLine("  chorizite-parse-dat-record idHex=0x08000000 typeName=Surface");
+        Console.WriteLine("  cell-portal-graph-sweep {\"lbIds\":[\"0xA9B4\"]}");
+        Console.WriteLine();
+    }
+
+    private void HandleHelp(string[] tokens) {
+        if (tokens.Length < 2) {
+            PrintHelp();
+            return;
+        }
+        var name = tokens[1];
+        using var help = System.Text.Json.JsonDocument.Parse(_jsonProcessor.ProcessCommand("{\"command\":\"help\"}"));
+        foreach (var entry in help.RootElement.GetProperty("commands").EnumerateArray()) {
+            if (!string.Equals(entry.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase)) continue;
+            var args = entry.GetProperty("args").GetString();
+            Console.WriteLine($"  {name} {(string.IsNullOrEmpty(args) ? "(no arguments)" : args)}");
+            Console.WriteLine($"    {entry.GetProperty("description").GetString()}");
+            if (_commandHandlers.ContainsKey(name))
+                Console.WriteLine("    (the REPL form may take positional arguments; see 'help' for its usage line)");
+            return;
+        }
+        Console.WriteLine(_commandHandlers.ContainsKey(name)
+            ? $"  {name} is a REPL command; see 'help' for its usage line."
+            : $"Unknown command: '{name}'. Type 'help' for available commands.");
+    }
+
+    /// <summary>
+    /// Runs a command that only exists on the JSON protocol: <c>name key=value ...</c> or
+    /// <c>name {json}</c>. Returns false when no JSON handler has that name.
+    /// </summary>
+    private bool TryRunJsonCommand(string[] tokens) {
+        var request = BuildJsonRequest(tokens);
+        if (request == null) return false;
+
+        using var response = System.Text.Json.JsonDocument.Parse(_jsonProcessor.ProcessCommand(request));
+        var root = response.RootElement;
+        if (root.TryGetProperty("success", out var ok) && ok.ValueKind == System.Text.Json.JsonValueKind.False) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(root.TryGetProperty("error", out var err) && err.ValueKind == System.Text.Json.JsonValueKind.String
+                ? $"Error: {err.GetString()}"
+                : "Command reported success:false");
+            Console.ResetColor();
+        }
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(root, IndentedJson));
+        return true;
+    }
+
+    /// <summary>
+    /// The JSON request line for a REPL command that only exists on the JSON protocol, or null
+    /// when no JSON handler has that name.
+    /// </summary>
+    internal string? BuildJsonRequest(string[] tokens) {
+        var command = tokens[0];
+        if (!_jsonProcessor.HasCommand(command)) return null;
+
+        var request = new System.Text.Json.Nodes.JsonObject { ["command"] = command };
+        for (int i = 1; i < tokens.Length; i++) {
+            var token = tokens[i];
+            if (token.StartsWith('{')) {
+                if (System.Text.Json.Nodes.JsonNode.Parse(token) is not System.Text.Json.Nodes.JsonObject body)
+                    throw new ArgumentException($"'{token}' is not a JSON object");
+                foreach (var (key, value) in body.ToList()) {
+                    body.Remove(key);
+                    request[key] = value;
+                }
+                continue;
+            }
+            int eq = token.IndexOf('=');
+            if (eq <= 0)
+                throw new ArgumentException(
+                    $"'{command}' takes key=value arguments or one {{json}} object; got '{token}'. Try: help {command}");
+            request[token[..eq]] = ParseReplValue(token[(eq + 1)..]);
+        }
+        request["command"] = command;
+        return request.ToJsonString();
+    }
+
+    private static readonly System.Text.Json.JsonSerializerOptions IndentedJson = new() {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>A REPL argument value: a JSON literal when it parses as one, otherwise plain text.</summary>
+    internal static System.Text.Json.Nodes.JsonNode? ParseReplValue(string raw) {
+        try {
+            return System.Text.Json.Nodes.JsonNode.Parse(raw);
+        } catch (System.Text.Json.JsonException) {
+            return System.Text.Json.Nodes.JsonValue.Create(raw);
+        }
     }
 
     // ════════════════════════════════════════════════════
@@ -2508,6 +2600,8 @@ public class TerminalRepl {
         Console.WriteLine($"  Landblocks modified: {r.LandblocksModified}");
         Console.WriteLine($"  Objects placed:      {r.ObjectsPlaced}");
         Console.WriteLine($"  Objects skipped:     {r.ObjectsSkipped} (creatures need server-side spawns)");
+        if (r.ObjectsUnsnapped > 0)
+            Console.WriteLine($"  Not height-snapped:  {r.ObjectsUnsnapped} (terrain lookup failed; placed at z=0)");
         Console.WriteLine($"  Elapsed:             {r.ElapsedMs:F0} ms");
         Console.WriteLine();
         if (r.ObjectsSkipped > 0)

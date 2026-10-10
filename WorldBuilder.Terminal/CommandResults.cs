@@ -177,7 +177,16 @@ public record ProjectInfoResult(
 // effect without having to inspect the count themselves.
 public record TerrainEditResult(
     int VerticesModified, HashSet<ushort> ModifiedLandblocks) {
-    public bool Success => VerticesModified > 0;
+    /// <summary>
+    /// Terrain vertices the edit addressed (under the brush, or the flood-fill region), whether
+    /// or not they needed changing.
+    /// </summary>
+    public int VerticesInBrush { get; init; }
+    /// <summary>
+    /// The edit addressed terrain. One that changed nothing (already smooth, already at the
+    /// target height or type) is a successful no-op with VerticesModified = 0.
+    /// </summary>
+    public bool Success => VerticesInBrush > 0 || VerticesModified > 0;
 }
 
 // Discriminated union of brush-style terrain-edit operations consumed by
@@ -197,7 +206,12 @@ public sealed record PaintEdit(float X, float Y, float Radius, byte TerrainType)
 
 public record RoadResult(
     int Waypoints, int VerticesModified,
-    byte RoadValue, HashSet<ushort> ModifiedLandblocks);
+    byte RoadValue, HashSet<ushort> ModifiedLandblocks) {
+    /// <summary>Path vertices that lie on terrain, whether or not they needed changing.</summary>
+    public int VerticesOnTerrain { get; init; }
+    /// <summary>The path crossed terrain; a road that was already there is a successful no-op.</summary>
+    public bool Success => VerticesOnTerrain > 0 || VerticesModified > 0;
+}
 
 // ── Terrain Queries ────────────────────────────────────────
 public record HeightQueryResult(
@@ -647,7 +661,8 @@ public record ApplyPopulationResult(
     bool Success, int LandblocksModified, int ObjectsPlaced,
     int ObjectsSkipped, double ElapsedMs,
     string? PlanPath = null,
-    string? Error = null);
+    string? Error = null,
+    int ObjectsUnsnapped = 0);   // placed at z=0 because the terrain lookup failed there
 
 public record IngestSpawnMapsResult(
     bool Success, int TotalProcessed, int TotalWeenies, int TotalLinks,
@@ -734,7 +749,8 @@ public record AnalyzeLandblockPatternsResult(
     OrientationBias OrientationBias,
     double ElapsedMs,
     string? OutputPath = null,
-    string? Error = null);
+    string? Error = null,
+    int LandblocksSkipped = 0);   // landblock docs that failed to load (not analyzed)
 
 public record ExtractBuildingPairingsResult(
     bool Success,
@@ -743,7 +759,8 @@ public record ExtractBuildingPairingsResult(
     int GroupCount,
     string? OutputPath = null,
     long ElapsedMs = 0,
-    string? Error = null);
+    string? Error = null,
+    int LandblocksSkipped = 0);   // landblock docs that failed to load (not scanned)
 
 public record LoadBuildingPairingsResult(
     bool Success,

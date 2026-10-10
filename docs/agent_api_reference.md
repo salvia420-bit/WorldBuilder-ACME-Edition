@@ -94,7 +94,7 @@ Agent Process                       WorldBuilder.Terminal
 ### Message Format
 
 - **Input:** One JSON object per line on **stdin**. Must contain a `"command"` field.
-- **Output:** One JSON object per line on **stdout**.
+- **Output:** One JSON object per line on **stdout**, and nothing else: diagnostics and progress text (from any code path, including library helpers that print during `export`) go to **stderr**. Drain or discard stderr; it is not part of the protocol.
 - Blank lines on stdin are silently skipped.
 - EOF (stdin closed) terminates the process.
 
@@ -303,6 +303,8 @@ Returns metadata about the currently loaded project,  or `loaded: false` if none
 > **Prerequisite:** A project must be loaded (`load` command).
 >
 > **Coordinate system:** All coordinates are in **world space** (see [Coordinate System Reference](#coordinate-system-reference)). A landblock is 192×192 units. Each 24×24 cell has 9×9 = 81 height vertices.
+>
+> **Success semantics (`smooth`, `raise`, `lower`, `set-height`, `paint`, `fill`, `road`):** `success:true` means the edit reached terrain. If nothing needed changing (already smooth, already at the target height, type or road value) the edit is a no-op with `verticesModified: 0`, still `success:true`. A brush, fill seed or road path that reaches no terrain vertices returns `success:false` with an `error`.
 
 ### smooth
 
@@ -385,7 +387,7 @@ Sets all vertices within a radius to an exact height index.
 
 **Request:**
 ```json
-{"command":"set-height","x":1500.0,"y":2000.0,"radius":4.0,"height":128}
+{"command":"set-height","x":1500.0,"y":2000.0,"radius":4.0,"heightIndex":128}
 ```
 
 | Parameter | Type | Required | Description |
@@ -393,7 +395,7 @@ Sets all vertices within a radius to an exact height index.
 | `x` | float | ✅ | World X center |
 | `y` | float | ✅ | World Y center |
 | `radius` | float | ✅ | Brush units; effective world radius = `radius*12+1` (≈ `radius` half-cells). E.g. `radius:2.0` ≈ a 1-cell (24-unit) brush. |
-| `height` | byte | ✅ | Target height index (0–255) |
+| `heightIndex` | byte | ✅ | Target height index (0–255), an index into the LandHeightTable (~Z/2 m). `height` is a deprecated alias |
 
 **Response:**
 ```json
@@ -401,10 +403,13 @@ Sets all vertices within a radius to an exact height index.
   "success": true,
   "command": "set-height",
   "verticesModified": 81,
+  "heightIndex": 128,
   "targetHeight": 128,
   "landblocks": ["0x0708"]
 }
 ```
+
+`targetHeight` repeats `heightIndex` for callers written against the older response.
 
 ---
 
@@ -695,7 +700,7 @@ Returns complete vertex data for all 81 vertices in a landblock — height, terr
 
 ### list-objects
 
-Lists all static objects in a landblock.
+Lists all static objects in a landblock. A landblock with no static objects returns `success:true`, `found:false`, `count:0`.
 
 **Request:**
 ```json
@@ -708,6 +713,7 @@ Lists all static objects in a landblock.
   "success": true,
   "command": "list-objects",
   "landblock": "0x0708",
+  "found": true,
   "count": 3,
   "objects": [
     {
@@ -1788,6 +1794,12 @@ The process exits after sending this response.
 ---
 
 ## Validation Diagnostic Codes
+
+### Validator Diagnostics (VAL)
+
+| Code | Severity | Description |
+|------|----------|-------------|
+| `VAL001` | Error | An input a validator needs (terrain, landblock or dungeon document) failed to load, so those checks did not run; the message names the skipped checks |
 
 ### Dungeon Diagnostics (DNG)
 

@@ -487,7 +487,7 @@ public partial class CommandEngine {
         var (doc, tl, hl) = GetTerrainHelpers();
         var affected = _terrainService.GetAffectedVertices(new Vector3(op.X, op.Y, 0), op.Radius, hl);
 
-        return op switch {
+        var result = op switch {
             SmoothEdit s    => ApplyHeightEdit(doc, _terrainService.ComputeSmooth(affected, s.Strength, tl)),
             RaiseEdit r     => ApplyHeightEdit(doc, _terrainService.ComputeRaiseLower(affected,  r.Delta, tl)),
             LowerEdit l     => ApplyHeightEdit(doc, _terrainService.ComputeRaiseLower(affected, -l.Delta, tl)),
@@ -495,6 +495,7 @@ public partial class CommandEngine {
             PaintEdit p     => ApplyPaintEdit(doc, affected, p.TerrainType, tl),
             _ => throw new ArgumentOutOfRangeException(nameof(op), op.GetType().Name, "Unknown terrain edit op")
         };
+        return result with { VerticesInBrush = affected.Count };
     }
 
     private static void ValidateBrush(float x, float y, float radius) {
@@ -556,7 +557,11 @@ public partial class CommandEngine {
         uint cellY = Math.Min((uint)Math.Round(localY / 24f), 8);
 
         var fillResult = _terrainService.FloodFill(lbX, lbY, cellX, cellY, newType, tl);
-        if (fillResult.Count == 0) return new TerrainEditResult(0, new HashSet<ushort>());
+        if (fillResult.Count == 0) {
+            // Nothing to change: the seed is already newType (a no-op), or there is no terrain there.
+            bool seedHasTerrain = tl(LbKey(lbX, lbY)) != null;
+            return new TerrainEditResult(0, new HashSet<ushort>()) { VerticesInBrush = seedHasTerrain ? 1 : 0 };
+        }
 
         int estimatedLandblocks = Math.Min(fillResult.Count, 256);
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
@@ -577,7 +582,7 @@ public partial class CommandEngine {
         }
 
         doc.UpdateLandblocksBatchInternal(batchChanges, out var modifiedLbs);
-        return new TerrainEditResult(fillResult.Count, modifiedLbs);
+        return new TerrainEditResult(fillResult.Count, modifiedLbs) { VerticesInBrush = fillResult.Count };
     }
 
     public RoadResult DrawRoad(float x1, float y1, float x2, float y2, byte roadValue = 1) {
@@ -592,6 +597,7 @@ public partial class CommandEngine {
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
         var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         int changeCount = 0;
+        int verticesOnTerrain = 0;
 
         // Writes roadValue to a single (landblock, vertex) cell, batching the change.
         // Returns true if it actually changed the cell. Used both for the primary
@@ -602,6 +608,7 @@ public partial class CommandEngine {
                 terrainCache[lbId] = data;
             }
             if (data == null || vIndex < 0 || vIndex >= data.Length) return false;
+            verticesOnTerrain++;
             if (data[vIndex].Road == roadValue) return false;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>(16);
@@ -648,9 +655,10 @@ public partial class CommandEngine {
                 WriteRoad((ushort)(((lbX + 1) << 8) | (lbY + 1)), 0 * 9 + 0);
         }
 
-        if (changeCount == 0) return new RoadResult(path.Count, 0, roadValue, new HashSet<ushort>());
+        if (changeCount == 0)
+            return new RoadResult(path.Count, 0, roadValue, new HashSet<ushort>()) { VerticesOnTerrain = verticesOnTerrain };
         doc.UpdateLandblocksBatchInternal(batchChanges, out var modifiedLbs);
-        return new RoadResult(path.Count, changeCount, roadValue, modifiedLbs);
+        return new RoadResult(path.Count, changeCount, roadValue, modifiedLbs) { VerticesOnTerrain = verticesOnTerrain };
     }
 
     // ════════════════════════════════════════════════════
@@ -2022,10 +2030,42 @@ public partial class CommandEngine {
                 "landblock", $"landblock_{lbKey:X4}", "LBK001",
                 "Landblock has no static objects.");
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        var loadFailures = new List<ValidationDiagnostic>();
         Func<float, float, float>? heightLookup = null;
-        try { (_, _, heightLookup) = GetTerrainHelpers(); } catch { }
+        try { (_, _, heightLookup) = GetTerrainHelpers(); }
+        catch (Exception ex) {
+            loadFailures.Add(ValidatorInputFailed("terrain", $"terrain_{lbKey:X4}", "object height and footprint checks", ex));
+        }
         var ontoLookup = OntologyLookupOrNull();
-        return ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats, ontoLookup);
+        return WithLoadFailures(
+            ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats, ontoLookup), loadFailures);
+    }
+
+    /// <summary>
+    /// A validator whose input failed to load never ran. Report that as an Error so the
+    /// report cannot read as valid for checks that did not happen.
+    /// </summary>
+    private static ValidationDiagnostic ValidatorInputFailed(string what, string context, string skippedChecks, Exception ex) =>
+        new(ValidationSeverity.Error, "VAL001",
+            $"Could not load the {what}, so {skippedChecks} did not run: {ex.Message}", context);
+
+    /// <summary>
+    /// Prepends input-load failures to a report and recomputes its counts.
+    /// <paramref name="dropCode"/> removes a diagnostic that only holds when the input loaded.
+    /// </summary>
+    private static ValidationReport WithLoadFailures(ValidationReport report,
+        List<ValidationDiagnostic> failures, string? dropCode = null) {
+        if (failures.Count == 0) return report;
+        var diagnostics = new List<ValidationDiagnostic>(failures);
+        diagnostics.AddRange(report.Diagnostics.Where(d => dropCode == null || d.Code != dropCode));
+        int errors = diagnostics.Count(d => d.Severity == ValidationSeverity.Error);
+        return report with {
+            IsValid = errors == 0,
+            ErrorCount = errors,
+            WarningCount = diagnostics.Count(d => d.Severity == ValidationSeverity.Warning),
+            InfoCount = diagnostics.Count(d => d.Severity == ValidationSeverity.Info),
+            Diagnostics = diagnostics,
+        };
     }
 
     /// <summary>
@@ -2077,11 +2117,22 @@ public partial class CommandEngine {
         // never-touched LB doesn't plant phantom dungeon_/landblock_ rows in
         // storage (the lazy-create accessors persist on first fetch). A false
         // result leaves the doc null and the validator skips that family. (F225)
+        // A load that THROWS is different: those checks did not run, which is reported
+        // as VAL001 rather than skipped silently.
+        var loadFailures = new List<ValidationDiagnostic>();
+        bool dungeonLoadFailed = false;
         DungeonDocument? dungeonDoc = null;
-        try { TryGetDungeonDoc(lbKey, out dungeonDoc); } catch { }
+        try { TryGetDungeonDoc(lbKey, out dungeonDoc); }
+        catch (Exception ex) {
+            dungeonLoadFailed = true;
+            loadFailures.Add(ValidatorInputFailed("dungeon document", $"dungeon_{lbKey:X4}", "dungeon checks", ex));
+        }
 
         LandblockDocument? lbDoc = null;
-        try { TryGetLandblockDoc(lbKey, out lbDoc); } catch { }
+        try { TryGetLandblockDoc(lbKey, out lbDoc); }
+        catch (Exception ex) {
+            loadFailures.Add(ValidatorInputFailed("landblock document", $"landblock_{lbKey:X4}", "static-object checks", ex));
+        }
 
         TerrainDocument? terrainDoc = null;
         float[]? heightTable = null;
@@ -2091,11 +2142,15 @@ public partial class CommandEngine {
             terrainDoc = td;
             heightTable = GetHeightTable();
             heightLookup = hl;
-        } catch { }
+        } catch (Exception ex) {
+            loadFailures.Add(ValidatorInputFailed("terrain", $"terrain_{lbKey:X4}", "terrain and object-height checks", ex));
+        }
 
-        return ValidationEngine.ValidateAll(
+        var report = ValidationEngine.ValidateAll(
             lbKey, dungeonDoc, lbDoc, terrainDoc, heightTable, heightLookup, dats, cliffThreshold,
             OntologyLookupOrNull(), PairingsGroupKeyOrNull());
+        // DNG001 ("surface landblock — not a dungeon") is unknown when the dungeon doc failed to load.
+        return WithLoadFailures(report, loadFailures, dropCode: dungeonLoadFailed ? "DNG001" : null);
     }
 
     /// <summary>
@@ -3894,9 +3949,14 @@ public partial class CommandEngine {
             return new ApplyPopulationResult(false, 0, 0, 0, 0, planPath,
                 $"Plan file not found: {planPath}");
 
-        // Get terrain height lookup for Z-snapping (same function validators use)
-        Func<float, float, float>? heightLookup = null;
-        try { (_, _, heightLookup) = GetTerrainHelpers(); } catch { }
+        // Get terrain height lookup for Z-snapping (same function validators use). Without it
+        // every object would land at z=0, so fail instead of placing them blind.
+        Func<float, float, float> heightLookup;
+        try { (_, _, heightLookup) = GetTerrainHelpers(); }
+        catch (Exception ex) {
+            return new ApplyPopulationResult(false, 0, 0, 0, 0, planPath,
+                $"Terrain heights unavailable, so objects cannot be placed on the ground: {ex.Message}");
+        }
 
         try {
             var json = File.ReadAllText(planPath);
@@ -3909,6 +3969,7 @@ public partial class CommandEngine {
             int landblocksModified = 0;
             int objectsPlaced = 0;
             int objectsSkipped = 0;
+            int objectsUnsnapped = 0;
 
             foreach (var placement in placements.EnumerateArray()) {
                 int lbX = placement.GetProperty("lbX").GetInt32();
@@ -3971,13 +4032,12 @@ public partial class CommandEngine {
                     float worldX = worldOffsetX + localX;
                     float worldY = worldOffsetY + localY;
 
-                    // Height-snap: sample terrain at the world position.
-                    if (heightLookup != null) {
-                        try {
-                            localZ = heightLookup(worldX, worldY);
-                        } catch {
-                            // Height lookup can fail at edges or ocean — fall back to 0
-                        }
+                    // Height-snap: sample terrain at the world position. The lookup can fail at
+                    // edges or ocean; such objects keep z=0 and are counted in objectsUnsnapped.
+                    try {
+                        localZ = heightLookup(worldX, worldY);
+                    } catch {
+                        objectsUnsnapped++;
                     }
 
                     if (!dryRun) {
@@ -4008,7 +4068,8 @@ public partial class CommandEngine {
             sw.Stop();
 
             return new ApplyPopulationResult(true, landblocksModified, objectsPlaced,
-                objectsSkipped, sw.Elapsed.TotalMilliseconds, planPath);
+                objectsSkipped, sw.Elapsed.TotalMilliseconds, planPath,
+                ObjectsUnsnapped: objectsUnsnapped);
         } catch (Exception ex) {
             return new ApplyPopulationResult(false, 0, 0, 0, sw.Elapsed.TotalMilliseconds, planPath, ex.Message);
         }
@@ -5006,12 +5067,13 @@ public partial class CommandEngine {
         // Store as (lbKey, worldPos, objectId, orientation) tuples
         var allObjects = new List<(ushort LbKey, System.Numerics.Vector3 Pos, uint ObjectId, System.Numerics.Quaternion Orientation)>();
         int landblocksAnalyzed = 0;
+        int landblocksSkipped = 0;
 
         for (uint lbX = minX; lbX <= maxX; lbX++) {
             for (uint lbY = minY; lbY <= maxY; lbY++) {
                 ushort lbKey = LbKey(lbX, lbY);
                 LandblockDocument lbDoc;
-                try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
+                try { lbDoc = GetLandblockDoc(lbKey); } catch { landblocksSkipped++; continue; }
 
                 bool hasObjects = false;
                 foreach (var obj in lbDoc.GetStaticObjects()) {
@@ -5036,7 +5098,8 @@ public partial class CommandEngine {
                 new SlopeDistribution(0, 0, 0, 0),
                 new ClusterSummary(0, 0, 0),
                 new OrientationBias(0, 0, 0, 0, null),
-                Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath);
+                Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath,
+                LandblocksSkipped: landblocksSkipped);
         }
 
         // ─── 1. Object adjacency frequencies ───
@@ -5337,7 +5400,8 @@ public partial class CommandEngine {
             ClusterSummary: clusterSummary,
             OrientationBias: orientBias,
             ElapsedMs: elapsedMs,
-            OutputPath: outputPath);
+            OutputPath: outputPath,
+            LandblocksSkipped: landblocksSkipped);
     }
 
     /// <summary>
@@ -5359,11 +5423,12 @@ public partial class CommandEngine {
         var terrainDoc = GetTerrainDoc();
         // Collect Structure positions across the world.
         var structures = new List<(ushort lb, System.Numerics.Vector3 pos, uint id)>();
+        int landblocksSkipped = 0;
         for (uint lbX = 0; lbX <= 254; lbX++) {
             for (uint lbY = 0; lbY <= 254; lbY++) {
                 ushort lbKey = LbKey(lbX, lbY);
                 LandblockDocument lbDoc;
-                try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
+                try { lbDoc = GetLandblockDoc(lbKey); } catch { landblocksSkipped++; continue; }
                 foreach (var obj in lbDoc.GetStaticObjects()) {
                     var entry = _ontologyService.GetEntry(obj.Id);
                     if (entry?.Category == "Structure") {
@@ -5425,7 +5490,8 @@ public partial class CommandEngine {
             PairsKept: pairsKept,
             GroupCount: registry.GroupCount,
             OutputPath: outputPath,
-            ElapsedMs: sw.ElapsedMilliseconds);
+            ElapsedMs: sw.ElapsedMilliseconds,
+            LandblocksSkipped: landblocksSkipped);
     }
 
     /// <summary>
@@ -13174,11 +13240,16 @@ public partial class CommandEngine {
         int terrainTiles = 0, objectsGlyphTiles = 0, objectTiles = 0, floorTiles = 0, processed = 0;
         int skippedLbs = 0;
         var firstFailures = new List<(ushort, string)>();
+        // LBs whose every layer rendered; only these leave the dirty set (a failed LB must
+        // be retried by the next dirtyOnly emit, not forgotten).
+        var renderedLbs = new List<ushort>();
+        var lbErrors = new List<string>();
         SpriteAtlasLoader? atlas = emitObjectLayer ? GetOrLoadSpriteAtlas() : null;
 
         foreach (var lbKey in targetLbs) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
             uint lbY = (uint)(lbKey & 0xFF);
+            lbErrors.Clear();
 
             // Skip-tolerance: a few project landblock docs throw on load
             // (e.g. 0x2380, 0x2581 in RetailSmoke). Without this guard, one
@@ -13194,7 +13265,7 @@ public partial class CommandEngine {
 
             // Layer 1: terrain (terrain + roads, opaque background).
             var terrainPng = RenderLbForPyramid(lbX, lbY, lbPx,
-                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Terrain);
+                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Terrain, errors: lbErrors);
             if (terrainPng != null) {
                 using var bmp = SKBitmap.Decode(terrainPng);
                 if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
@@ -13206,7 +13277,7 @@ public partial class CommandEngine {
             // the frontend in floor mode so building footprints don't bleed
             // through over the dungeon floor plan.
             var glyphPng = RenderLbForPyramid(lbX, lbY, lbPx,
-                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Objects);
+                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Objects, errors: lbErrors);
             if (glyphPng != null) {
                 using var bmp = SKBitmap.Decode(glyphPng);
                 if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
@@ -13228,7 +13299,7 @@ public partial class CommandEngine {
                         int bucketLbPx = TilePyramidEmitter.TilePx * (1 << (bucket.TopZoom - 8));
                         var spritePng = RenderLbForPyramid(lbX, lbY, bucketLbPx,
                             useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects,
-                            lodLevel: bucket.Lod);
+                            lodLevel: bucket.Lod, errors: lbErrors);
                         if (spritePng == null) continue;
                         using var bmp = SKBitmap.Decode(spritePng);
                         if (bmp != null && bmp.Width == bucketLbPx && bmp.Height == bucketLbPx) {
@@ -13238,7 +13309,7 @@ public partial class CommandEngine {
                     }
                 } else {
                     var spritePng = RenderLbForPyramid(lbX, lbY, lbPx,
-                        useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects);
+                        useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects, errors: lbErrors);
                     if (spritePng != null) {
                         using var bmp = SKBitmap.Decode(spritePng);
                         if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
@@ -13259,15 +13330,26 @@ public partial class CommandEngine {
                         // wu footprint, so a tight-bounds dungeon render would
                         // visibly stretch and shift the cells off their actual
                         // world positions.
-                        var dungeonResult = RenderDungeon(lbX, lbY, f, lbPx,
-                            outputPath: null, useLbExtent: true);
-                        using var dbmp = SKBitmap.Decode(dungeonResult.PngBytes);
-                        if (dbmp != null) {
-                            TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom, fmt);
-                            floorTiles++;
+                        try {
+                            var dungeonResult = RenderDungeon(lbX, lbY, f, lbPx,
+                                outputPath: null, useLbExtent: true);
+                            using var dbmp = SKBitmap.Decode(dungeonResult.PngBytes);
+                            if (dbmp != null) {
+                                TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom, fmt);
+                                floorTiles++;
+                            }
+                        } catch (Exception ex) {
+                            lbErrors.Add($"floor {f}: {ex.Message}");
                         }
                     }
                 }
+            }
+            if (lbErrors.Count > 0) {
+                skippedLbs++;
+                if (firstFailures.Count < 5) firstFailures.Add((lbKey, "render: " + lbErrors[0]));
+                Console.Error.WriteLine($"[Emit] LB 0x{lbKey:X4}: {lbErrors.Count} layer render(s) failed: {lbErrors[0]}");
+            } else {
+                renderedLbs.Add(lbKey);
             }
             processed++;
             // Inter-LB throttle so the renderer yields the core back to a
@@ -13275,7 +13357,7 @@ public partial class CommandEngine {
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
         if (skippedLbs > 0) {
-            Console.Error.WriteLine($"[Emit] Skipped {skippedLbs} unloadable landblocks total");
+            Console.Error.WriteLine($"[Emit] {skippedLbs} landblock(s) failed to load or render");
         }
 
         int downsampled = TilePyramidEmitter.Downsample(terrainDir, maxZoom, minZoom, fmt);
@@ -13325,7 +13407,7 @@ public partial class CommandEngine {
         bool dirtyTrackingInitialized = _tileCache != null;
         int dirtyTilesRemaining = 0;
         if (dirtyOnly && _tileCache != null) {
-            _tileCache.ClearDirtyForLbs(targetLbs);
+            _tileCache.ClearDirtyForLbs(renderedLbs);
             dirtyTilesRemaining = _tileCache.DirtyLbCount;
         }
 
@@ -13336,9 +13418,13 @@ public partial class CommandEngine {
             skippedLbs, firstFailures, dirtyTrackingInitialized, dirtyTilesRemaining);
     }
 
+    /// <summary>
+    /// Renders one landblock layer for the pyramid; null when it fails, with the reason
+    /// appended to <paramref name="errors"/> so the caller can count the landblock as failed.
+    /// </summary>
     private byte[]? RenderLbForPyramid(uint lbX, uint lbY, int lbPx, bool useSprites,
             RenderPreviewRenderer.LayerMode layer = RenderPreviewRenderer.LayerMode.Combined,
-            int lodLevel = 0) {
+            int lodLevel = 0, List<string>? errors = null) {
         try {
             // RenderPreview consumes whichever atlas the cache currently
             // holds. For LOD-bucketed emit we pre-warm the cache for the
@@ -13348,7 +13434,8 @@ public partial class CommandEngine {
             var r = RenderPreview(lbX, lbY, radius: 0, resolution: lbPx, overlay: false,
                 outputPath: null, useSprites: useSprites, layer: layer);
             return r.PngBytes;
-        } catch {
+        } catch (Exception ex) {
+            errors?.Add($"{layer} layer: {ex.Message}");
             return null;
         }
     }
