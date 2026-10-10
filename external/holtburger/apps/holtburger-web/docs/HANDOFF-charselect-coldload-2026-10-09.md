@@ -537,7 +537,120 @@ so no relink): `coldload-1009/E/e-tn-{N,S}-{decision1,decision2,summary}.jpg` (T
 Options per decision (1A retail fixed white / 1B today / 1C retail + floor; 2a / 2b / 2r / 2c; W yes/no) are in
 `coldload-1009/notes/note-E.md`.
 
+## 5c. Evening pass (2026-10-09 evening): decode CPU, the early-bake race, the SSD serving copy
+
+Owner: "read the last commits and continue"; mid-session: "make sure to set up monitor on human usage on 1070",
+then "we could move the associated files to the C drive. obviously keep them off the repo" and "it should be a
+structural change so those files always go there so we can stop worrying about that for all this stuff. and they
+get managed appropriates as we do new builds etc". Picked §6 item 6 (the furnished time). The 1070 was driven under
+`watch1070.sh` (AWAY the whole time, idle 31 h) until it went offline at ~21:16 (tailscale "last seen"); our test
+Chrome had been closed at 20:58. Run JSONs: `/mnt/wbterminal1/tmp/claude-scratch/coldload-1009b/`.
+
+| run (academy, after in-world) | build | walls | furnished | notes |
+|---|---|---|---|---|
+| e1 / e2 | `…e` (baseline) | 6.2 / 8.7 s | 21.9 / 24.6 s | statics +15.8 / +15.9 s after the walls |
+| f1 | `…f` (4.28) | **19.5 s** | 25.0 s | `notPlayerLb 1`: the early bake never ran (4.29) |
+| f2 / f3p | `…f` + 4.29 | 7.2 / 7.1 s | 22.9 / 23.5 s | f3p: CPU profile + long tasks (2.65 s over 12–30 s) |
+| f4s / f5s / f6s | same, `--workerspy` | 8.6 / 7.9 / 8.2 s | 22.5 / 23.6 / 21.8 s | f6s: `/proc/diskstats` sampled beside it (4.31) |
+
+So the decode pass did not move the furnished time on this rig: the gap is the bake worker's record walk over a
+raw HTTP/1.1 link off a USB spinner (4.30, 4.31). The SSD copy went live at 21:37; the box was gone before it could
+be measured (§6 evening item 1).
+
+### 4.28 Surface decode: 2.8× less CPU, byte-identical (`crates/holtburger-dat/src/height_seam.rs`, `wasmrev-20261009f`)
+Node CPU profile of the deployed wasm decoding the academy's 238 static surfaces (`coldboot/surfbench.mjs` with a named
+`wasm-opt -O -g` build): `normal_and_height_pixels` 75% of the decode, `grey_morph` 47%, and `fminf` + `fmaxf` 22% —
+on wasm32 `f32::min` / `max` are out-of-line libcalls (their NaN rule has no single instruction), called once per
+morphology tap. Changes, all bit-identical: `min_nn` / `max_nn` (compare + select; every operand is finite, and they
+pick the operand `fminf` / `fmaxf` pick, equal operands included) in `grey_morph`, the chamfer DT and the seam
+strength; `grey_morph` as van Herk / Gil-Werman running extremes (≈3 picks per texel whatever the radius; the
+vertical pass runs the blocks on whole rows); `pad_wrapped` as three slice copies (no `%` per element) when the
+radius fits the row; `value_noise` hashes its ≤48×48 lattice once instead of four times per texel; `seam_normal_rgb8`
+hoists its two per-texel `fminf`s. Result over 313 interior surfaces of six landblocks (13.7 Mpx): decode-only
+**8,969 → 3,212 ms** (laptop, node), every plane and scalar field identical by hash (`surfbench.mjs` old vs new);
+`cargo test -p holtburger-dat --lib height_seam` 24/24 (the existing per-tap references cover radii up to 21 and
+multi-wrap sizes). Deployed: `pkg-prev-20261009f/` = `…e`, stamp `…f` (index.html ×6, bake_worker.js ×3,
+net_worker.js ×2, net_worker_client.js ×2; `test_wasm_preload_stamp.mjs` 7/7), shell rebuilt. On the 1070: the
+`fetchEntitySurfacesPixels` maximum fell from 12.5 s to 1.2–4.0 s; the statics' 232-surface decode is now one
+synchronous 2.5–5.9 s stretch in the worker.
+
+### 4.29 The early bake missed the academy once the rig was placed (`?interiorEarlyBake`)
+f1 logged no `deps after` line; `__interiorEarlyBake` read `notPlayerLb 1`. `isNearPlayerLb(…, 0)` reads the rig's
+landblock as `floor(position / 192 m)`, and the academy's cells lie south of 0x8602's footprint: a placed rig reads
+**0x8601** (probe on the live page: server stamp 0x86020000, rig 0x86010000). Before the rig is placed
+`getCurrentLbId` falls back to `initialCentreLbKey` = 0x8602, which is why every earlier run kicked; the server
+stamp it also honours had not landed yet. Fix (`scene3d/cells.js` `_earlyBakeOwnLb`): also accept the session's own
+cell (`getLocalPlayerPose().landblockId`, else `getCurrentCellId()` — portal_space's `resolveLoginCell` order); a
+build that starts before either source knows re-asks every 100 ms until its Step B (`waited` / `waitKicked` /
+`waitedOut`; `bySessionCell` counts kicks the session decided). Only this caller uses radius 0 — the 3×3 urgency
+callers still pass with 0x8601. `tests/interior_early_bake.test.mjs` 14 (E11–E14 new), url-flags row updated.
+
+### 4.30 Where the walls → furniture gap goes (breadcrumbs, `academy.mjs --workerspy`)
+The `[interiorWallsFirst] … statics attached` line now ends `Step C settled X ms, staged Y ms, prewarmed Z ms`
+(`window.__interiorWallsFirst.lastStepCMs` / `lastStagedMs` / `lastPrewarmedMs`). `--workerspy` (+ `wspy.py`)
+records inside the bake worker every message's arrival / reply and every event-loop block over 50 ms. f5s, walls at
+12.1 s page time, statics at 27.8 s:
+
+| phase | page time |
+|---|---|
+| the statics' meshes reply; their 232-surface request waits in the CLIENT queue (4 urgent entity jobs hold the in-flight cap of 4) | 9.55 → 10.93 s |
+| record walk: ~416 requests (Surface → SurfaceTexture → Texture → Palette) at ~40/s, nothing completing 14.0–15.5 s with 185 in flight | 10.93 → ~21 s |
+| decode, synchronous in the worker (907 + 2,532 ms blocks) | ~21 → 25.07 s |
+| 232 materials installed on the main thread | → 26.0 s |
+| statics staged, prewarmed (`guardedCompileAsync`; 1.8 s here, 5.0 s in f6s), attached | → 27.9 s |
+
+Network attribution for the walk window: the page and shard worker are nearly idle; the relay passed 16 KB at 12 s,
+28 KB at 14 s, 0 at 16 s while 252-byte records took 9 s. Warm, the same path from the 1070 page does **193 req/s**
+(1,500 records, 6 HTTP/1.1 connections, p50 28 ms) and `replay.mjs` through the proxy 2,146 req/s — so the in-run
+~40 req/s was the server's disk (4.31).
+
+### 4.31 Baked data served from the SSD (`scripts/dist_ssd.py`, `scripts/serve.py`)
+The served dist (`external/holtburger/dist` → `/mnt/wbterminal2/…`) was on a USB WD 8 TB spinner (`sdc`, BOT,
+queue depth 1). Before f6s, `fincore` found **1,449 of the academy's 2,989 shard files uncached** ten minutes after
+the previous load (8 GB laptop, 2.4 GB page cache, swap in use), and during f6s the drive ran up to ~86% busy (863 ms
+of IO per second, ~250 random reads/s) through the interior fetch. Players on the public front read the same disk.
+
+Now (structural, per the owner):
+- **Serving root** `~/hb-serve/dist/` on the internal SSD, outside the repo: `<name>/` per staged bake (layer symlinks
+  dereferenced), `<name>/.dist-ssd.json` provenance (source, fingerprint, staged_at), `current -> <name>`.
+  `serve.py`'s default root is `~/hb-serve/dist/current` (archive bake only when no copy exists); `dist` points there.
+- **`scripts/dist_ssd.py`**: `stage [SRC] [--name] [--activate] [--bulk] [--all-shards] [--min-free-gb 6]`,
+  `activate NAME`, `prune --keep N` (never `current`), `status`, `check` (exit 1 when `current` is stale). Files
+  unchanged since the active copy are hardlinked (`rsync --link-dest`), so a re-bake costs only what changed; a
+  re-stage works on a hardlinked clone and swaps it in; a space guard (apparent bytes + one 4 KiB block per new file)
+  refuses to go below the floor; `--bulk` pre-copies in inode order with 4 threads (rsync's name order seeks per
+  file on the spinner: 250 files/s; inode order 970–2,600 files/s).
+- **Only catalog-referenced shards are staged** (894,966 records, 6.1 GB, named by the 1,031 HBNS catalogs under
+  `manifest/`). The archive's `shards/` also holds 0.89 M convention-URL aliases (`shards/<namespace>/0x<id>.bin`,
+  symlinks to the same records), used only when a namespace has no catalog — none of the 3,250–3,500 shard requests
+  of e1/f5s/f6s. **`serve.py` reads any `/dist/` miss through to the copy's archive source** (logged
+  `[serve] read-through #N`), so nothing 404s that did before.
+- **Freshness**: `serve.py` prints at every start whether `current` matches its source (a cheap fingerprint: top-level
+  entries, manifest/ and index/ files, layer and bucket dir mtimes, layer sidecars — 1,583 entries in 0.65 s) and warns
+  loudly when it is stale or when the served root is on a rotational disk; `_health.json` carries a `serving` block.
+- **After any bake or stager writes to the archive**: `scripts/dist_ssd.py stage --activate` (a different bake:
+  `stage <root> --name <n> --activate [--bulk]`, then `prune --keep 1`). A tool that rewrites an existing per-LB file
+  in place without touching a dir or sidecar is not seen by the fingerprint — re-stage after it anyway.
+- First stage: 1.87 M files in ~20 min (`--bulk`), then the referenced-only re-stage (197 s): 1,305,520 files, ~14 GB
+  on disk; the SSD is at 87% (16.5 GB free; cargo's `target/` is already on the archive drive). 400 random files +
+  manifest.json + boot.hba byte-compared against the archive; hash / alias / 404 / manifest / index.html served
+  correctly through the proxy. `scripts/test_dist_ssd.py` (32 checks on throwaway trees).
+- `serve.py` was restarted on it at 21:37 (`setsid nohup python3 scripts/serve.py --bind 127.0.0.1`, log
+  `/mnt/wbterminal1/tmp/claude-scratch/serve-8765.log`). Offline validators and stagers still read / write the
+  archive paths directly — unchanged, the archive stays the bake of record.
+
 ## 6. Open items
+
+**From the 2026-10-09 evening pass (§5c):**
+1. **Measure the SSD copy on the 1070** (it went offline before any run): `academy.mjs --label X --workerspy` ×3 plus
+   `/proc/diskstats` sampling (expect no `sdc` reads), then Town Network. The question is how much of the ~15 s walls →
+   furniture gap was the disk (4.30's record walk).
+2. Step C's 232-surface request is ONE worker message: it waits behind the in-flight cap (4 urgent entity jobs) and then
+   decodes in one 2.5–5.9 s synchronous stretch during which no other bake message runs. Options: split the statics'
+   preload into chunks and attach progressively, give lane 0 more slots for interior builds, or a second decode worker
+   (the box has 4 cores).
+3. The statics' prewarm takes 1.8–5.0 s (`lastStagedMs` → `lastPrewarmedMs`).
+4. MEMORY.md's dist entries still describe `dist → /mnt/wbterminal2` (memory edits are user-directed).
 
 **From the 2026-10-09 afternoon structural pass (§5b) — owner decisions first:**
 1. `?loginPortalSpace`: default `quick` (fade as soon as the spawn walls are up); `retail` adds CONTINUE + fades
@@ -593,6 +706,12 @@ Options per decision (1A retail fixed white / 1B today / 1C retail + floor; 2a /
 > `townnet.mjs` measures Holtburg → Town Network; `academy.mjs` the new-character spawn (`autoSpawn=first`
 > = the most recently played character — log "Eyetest Halvar" in once first). Pick from §6. Run the
 > full gate under capped-build after any change. Do not push or commit unless the owner says so.
+
+> Evening pass (§5c): the served dist is now the SSD copy `~/hb-serve/dist/current` (`scripts/dist_ssd.py status`);
+> after ANY bake or stager run, `scripts/dist_ssd.py stage --activate` (serve.py warns at start when the copy is
+> stale). First job: §6 evening item 1 — re-measure the academy on the SSD copy with `academy.mjs --workerspy`
+> (+ `wspy.py`) under `watch1070.sh`, then pick from items 2–3. Decode changes: verify with `coldboot/surfbench.mjs`
+> old pkg vs new pkg (hashes must match) before deploying.
 
 > Afternoon pass (§5b): read §5b's table and §6 items 1–8 first. The run ledger, every agent's design note,
 > review and report, and the measurement drivers (`baseline.sh` — Tester must start OUTSIDE the Town Network, so

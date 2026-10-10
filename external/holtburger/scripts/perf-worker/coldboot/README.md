@@ -49,6 +49,8 @@ every byte counted by a laptop-side relay.
 | `replay.mjs <port> <conns> urls.txt` | server-side cost of a run's requests with no browser: replay the paths over N keep-alive connections, req/s + p50/p90 |
 | `hbns.py shards.json fromMs [toMs]` | which DAT records a run downloaded: decodes the HBNS catalogs (`dist/manifest/*.bin` + `regions/eor-cell/`) and sums bytes by namespace + type (how the Town Network's 200 MB of `tex-xu7` was found) |
 | `prof-decode.mjs` | CPU-profile one main-thread `fetch_surfaces_pixels` over the page's cached surfaces (writes `prof-dec.cpuprofile`) |
+| `surfbench.mjs <pkgDir> <out.json> [lbs]` | NO browser: decode every interior surface (cells + statics) of the four academies, the Town Network and 0x0125 with one pkg build in node against serve.py; decode-only ms + a hash of every plane, so two builds compare byte for byte. `WASM=<file>` swaps in a named build (wasm-bindgen + `wasm-opt -O -g`) and `node --cpu-prof` profiles it — how the 2026-10-09 evening decode pass was found and checked |
+| `academy.mjs … --workerspy` + `wspy.py acad-<label>.json [--min-dids N]` | inside the bake worker: each message's arrival and reply (type, id, DID count, urgent) and every event-loop block over 50 ms (a synchronous wasm stretch) — splits a slow `fetchSurfacesPixels` into client queue wait, record walk and decode |
 
 Release wasm has no names: re-run `wasm-bindgen --target web` on
 `target/wasm32-unknown-unknown/release/holtburger_web.wasm` and `wasm-opt -O -g` (cmp the `-O` output
@@ -72,6 +74,14 @@ section to map `wasm-function[N]` to a symbol (how the height_seam hotspot was f
 - Killing a Chrome that sat on the character screen leaves its ACE session alive (no character in
   the world, so no LOGOUT line): the next login meets it and ACE drops BOTH ("Account In Use"). Wait
   for ACE's drop or use a build with `SessionHandle.disconnect()` (2026-10-09).
+- The baked data was SERVED from a USB spinner (`/mnt/wbterminal2`, WD 8 TB) until 2026-10-09 evening.
+  Ten minutes after an academy load the 8 GB laptop's page cache had dropped 1,449 of its 2,989 shard
+  files, and the next cold load ran the drive ~86% busy through the interior fetch (run f6s,
+  `/proc/diskstats` for `sdc`); the bake worker's record walk got ~40 req/s where the same path does
+  193 req/s warm. `serve.py` now serves the SSD copy `~/hb-serve/dist/current`
+  (`scripts/dist_ssd.py stage --activate` after any bake/stager run) and warns at start when the copy
+  is stale or the root is rotational. To see disk stalls in a run: sample `/proc/diskstats` every
+  250 ms beside it and `fincore` the run's shard list before it.
 - Every page logs 512 `glBlitFramebuffer: Depth/stencil buffer format combination not allowed for
   blit` WebGL errors (capped): pre-existing, all sessions.
 - Login portal space (`?loginPortalSpace`, default `quick`, 2026-10-09): a cold login now shows the

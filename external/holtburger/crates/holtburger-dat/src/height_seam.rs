@@ -95,6 +95,14 @@ fn wrap(i: i32, n: i32) -> usize {
 fn pad_wrapped(row: &[f32], r: usize, out: &mut Vec<f32>) {
     let n = row.len();
     out.clear();
+    if r <= n {
+        // The usual case: tail, row, head — three copies, no `%` per element.
+        out.extend_from_slice(&row[n - r..]);
+        out.extend_from_slice(row);
+        out.extend_from_slice(&row[..r]);
+        return;
+    }
+    // A window wider than the row wraps more than once.
     out.extend((0..n + 2 * r).map(|k| row[wrap(k as i32 - r as i32, n as i32)]));
 }
 
@@ -146,34 +154,136 @@ fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     out
 }
 
+// 2026-10-09 (evening) — `min_nn` / `max_nn` replace `f32::min` / `f32::max`
+// in this module's per-texel loops. On wasm32 those two are out-of-line
+// `fminf` / `fmaxf` calls (their NaN rule has no single wasm instruction):
+// `fminf` + `fmaxf` alone were 22% of a surface decode and `grey_morph`, which
+// called them once per tap, another 26% (the academy's 238 static surfaces,
+// node CPU profile of the deployed wasm). Every operand here is finite — texels
+// / 255, blurs of them, distances, seam strengths — and for finite operands
+// these pick the same operand `fminf` / `fmaxf` pick, including which of two
+// equal operands comes back, so results are bit-identical.
+
+/// `a.min(b)` for operands that are never NaN: one compare and a select.
+#[inline(always)]
+fn min_nn(a: f32, b: f32) -> f32 {
+    if a < b { a } else { b }
+}
+
+/// `a.max(b)` for operands that are never NaN: one compare and a select.
+#[inline(always)]
+fn max_nn(a: f32, b: f32) -> f32 {
+    if a < b { b } else { a }
+}
+
+/// Running extreme of every `k`-wide window (van Herk / Gil-Werman):
+/// `out[x]` = `pick` folded over `p[x..x + k]`, for `p.len() == out.len() + k - 1`.
+/// Blocks of `k` get a prefix fold left to right (`pre`) and a suffix fold right
+/// to left (`suf`); a window starting at `x` is `suf[x]` (rest of its block)
+/// picked with `pre[x + k - 1]` (head of the next block, or the same whole block
+/// when `x` starts one). ~3 picks per element whatever `k` is, against `k` for
+/// folding each window. `min` / `max` are exact, so the fold order cannot change
+/// a result. `pre` / `suf` are scratch.
+#[inline(always)]
+fn window_extreme(
+    p: &[f32],
+    k: usize,
+    out: &mut [f32],
+    pre: &mut Vec<f32>,
+    suf: &mut Vec<f32>,
+    pick: impl Fn(f32, f32) -> f32,
+) {
+    let n = p.len();
+    debug_assert_eq!(n, out.len() + k - 1);
+    pre.clear();
+    pre.resize(n, 0.0);
+    suf.clear();
+    suf.resize(n, 0.0);
+    let mut start = 0;
+    while start < n {
+        let end = (start + k).min(n);
+        let mut acc = p[start];
+        pre[start] = acc;
+        for i in start + 1..end {
+            acc = pick(acc, p[i]);
+            pre[i] = acc;
+        }
+        let mut acc = p[end - 1];
+        suf[end - 1] = acc;
+        for i in (start..end - 1).rev() {
+            acc = pick(acc, p[i]);
+            suf[i] = acc;
+        }
+        start = end;
+    }
+    for (x, o) in out.iter_mut().enumerate() {
+        *o = pick(suf[x], pre[x + k - 1]);
+    }
+}
+
 /// Grey dilation (`max`) or erosion (`min`) over a `(2r+1)` square, wrapped.
-/// Separable, so cost is O(n·r) rather than O(n·r²).
+/// Separable, and each pass is a running window extreme ([`window_extreme`];
+/// the vertical pass runs the same block scheme on whole rows), so the cost no
+/// longer grows with `r`.
 fn grey_morph(src: &[f32], w: usize, h: usize, r: i32, dilate: bool) -> Vec<f32> {
+    if dilate {
+        grey_morph_with(src, w, h, r, max_nn)
+    } else {
+        grey_morph_with(src, w, h, r, min_nn)
+    }
+}
+
+#[inline(always)]
+fn grey_morph_with(src: &[f32], w: usize, h: usize, r: i32, pick: impl Fn(f32, f32) -> f32 + Copy) -> Vec<f32> {
     let ru = r.max(0) as usize;
-    let pick = |a: f32, b: f32| if dilate { a.max(b) } else { a.min(b) };
-    // Each element starts at its own texel and folds taps d = -r..=r in order.
-    let mut tmp = src.to_vec();
+    let k = 2 * ru + 1;
+    if w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    // Horizontal: the wrap-padded row's windows.
+    let mut tmp = vec![0.0f32; src.len()];
     let mut padded = Vec::with_capacity(w + 2 * ru);
+    let (mut pre, mut suf) = (Vec::new(), Vec::new());
     for y in 0..h {
         pad_wrapped(&src[y * w..(y + 1) * w], ru, &mut padded);
-        let t = &mut tmp[y * w..(y + 1) * w];
-        for d in 0..=2 * ru {
-            let win = &padded[d..d + w];
-            for x in 0..w {
-                t[x] = pick(t[x], win[x]);
+        window_extreme(&padded, k, &mut tmp[y * w..(y + 1) * w], &mut pre, &mut suf, pick);
+    }
+    // Vertical: the same blocks over the wrapped row sequence `rows`, one whole
+    // row per element (row `j` of the padded column is `tmp` row `rows[j]`).
+    let rows = wrapped_rows(h, ru);
+    let np = rows.len();
+    let row = |j: usize| &tmp[rows[j] * w..(rows[j] + 1) * w];
+    let mut pre_rows = vec![0.0f32; np * w];
+    let mut suf_rows = vec![0.0f32; np * w];
+    let mut start = 0;
+    while start < np {
+        let end = (start + k).min(np);
+        pre_rows[start * w..(start + 1) * w].copy_from_slice(row(start));
+        for j in start + 1..end {
+            let (done, cur) = pre_rows.split_at_mut(j * w);
+            let prev = &done[(j - 1) * w..];
+            let s = row(j);
+            for (x, c) in cur[..w].iter_mut().enumerate() {
+                *c = pick(prev[x], s[x]);
             }
         }
-    }
-    let rows = wrapped_rows(h, ru);
-    let mut out = tmp.clone();
-    for y in 0..h {
-        let o = &mut out[y * w..(y + 1) * w];
-        for d in 0..=2 * ru {
-            let sy = rows[y + d];
-            let s = &tmp[sy * w..(sy + 1) * w];
-            for x in 0..w {
-                o[x] = pick(o[x], s[x]);
+        suf_rows[(end - 1) * w..end * w].copy_from_slice(row(end - 1));
+        for j in (start..end - 1).rev() {
+            let (cur, done) = suf_rows.split_at_mut((j + 1) * w);
+            let next = &done[..w];
+            let s = row(j);
+            for (x, c) in cur[j * w..].iter_mut().enumerate() {
+                *c = pick(next[x], s[x]);
             }
+        }
+        start = end;
+    }
+    let mut out = vec![0.0f32; src.len()];
+    for y in 0..h {
+        let s = &suf_rows[y * w..(y + 1) * w];
+        let p = &pre_rows[(y + k - 1) * w..(y + k) * w];
+        for (x, o) in out[y * w..(y + 1) * w].iter_mut().enumerate() {
+            *o = pick(s[x], p[x]);
         }
     }
     out
@@ -232,7 +342,7 @@ fn seam_t(rgba: &[u8], w: u32, h: u32) -> Option<(Vec<f32>, Vec<f32>)> {
         for i in 0..n {
             let dark = closing[i] - pre[i];
             let bright = pre[i] - opening[i];
-            let s = wt * dark.max(SEAM_WHITE * bright);
+            let s = wt * max_nn(dark, SEAM_WHITE * bright);
             if s > strength[i] {
                 strength[i] = s;
             }
@@ -422,10 +532,10 @@ fn chamfer_dt_wrapped(dist: &mut [f32], wu: usize, hu: usize) {
             for x in 0..wu {
                 let i = y * wu + x;
                 let mut d = dist[i];
-                d = d.min(dist[ys[y + 1] + xs[x]] + 1.0);
-                d = d.min(dist[ys[y] + xs[x + 1]] + 1.0);
-                d = d.min(dist[ys[y] + xs[x]] + 1.4);
-                d = d.min(dist[ys[y] + xs[x + 2]] + 1.4);
+                d = min_nn(d, dist[ys[y + 1] + xs[x]] + 1.0);
+                d = min_nn(d, dist[ys[y] + xs[x + 1]] + 1.0);
+                d = min_nn(d, dist[ys[y] + xs[x]] + 1.4);
+                d = min_nn(d, dist[ys[y] + xs[x + 2]] + 1.4);
                 dist[i] = d;
             }
         }
@@ -434,10 +544,10 @@ fn chamfer_dt_wrapped(dist: &mut [f32], wu: usize, hu: usize) {
             for x in (0..wu).rev() {
                 let i = y * wu + x;
                 let mut d = dist[i];
-                d = d.min(dist[ys[y + 1] + xs[x + 2]] + 1.0);
-                d = d.min(dist[ys[y + 2] + xs[x + 1]] + 1.0);
-                d = d.min(dist[ys[y + 2] + xs[x + 2]] + 1.4);
-                d = d.min(dist[ys[y + 2] + xs[x]] + 1.4);
+                d = min_nn(d, dist[ys[y + 1] + xs[x + 2]] + 1.0);
+                d = min_nn(d, dist[ys[y + 2] + xs[x + 1]] + 1.0);
+                d = min_nn(d, dist[ys[y + 2] + xs[x + 2]] + 1.4);
+                d = min_nn(d, dist[ys[y + 2] + xs[x]] + 1.4);
                 dist[i] = d;
             }
         }
@@ -596,16 +706,23 @@ fn value_noise(w: usize, h: usize, cx: u32, cy: u32, seed: u32) -> Vec<f32> {
             (x0 % cx, (x0 + 1) % cx, smoothstep01(fx - x0 as f32))
         })
         .collect();
+    // Every corner is a lattice point: hash the `cx` x `cy` lattice once
+    // (≤ 48 x 48 here) instead of four times per texel (same values).
+    let lattice: Vec<f32> = (0..cy)
+        .flat_map(|ly| (0..cx).map(move |lx| hash01(seed, lx, ly)))
+        .collect();
+    let cxu = cx as usize;
     for y in 0..h {
         let fy = y as f32 / h as f32 * cy as f32;
         let y0 = fy as u32;
         let ty = smoothstep01(fy - y0 as f32);
         let (y0m, y1) = (y0 % cy, (y0 + 1) % cy);
+        let (row0, row1) = (&lattice[y0m as usize * cxu..][..cxu], &lattice[y1 as usize * cxu..][..cxu]);
         for (x, &(x0m, x1, tx)) in cols.iter().enumerate() {
-            let a = hash01(seed, x0m, y0m);
-            let b = hash01(seed, x1, y0m);
-            let c = hash01(seed, x0m, y1);
-            let d = hash01(seed, x1, y1);
+            let a = row0[x0m as usize];
+            let b = row0[x1 as usize];
+            let c = row1[x0m as usize];
+            let d = row1[x1 as usize];
             out[y * w + x] = (a + (b - a) * tx) * (1.0 - ty) + (c + (d - c) * tx) * ty;
         }
     }
@@ -839,15 +956,17 @@ pub fn seam_normal_rgb8(height: &[f32], w: u32, h: u32, strength: f32) -> Vec<u8
     let xs: Vec<usize> = (0..wu + 2).map(|k| wrap(k as i32 - 1, wi)).collect();
     let ys: Vec<usize> = (0..hu + 2).map(|k| wrap(k as i32 - 1, hi) * wu).collect();
     let mut out = vec![0u8; n * 3];
+    // Height is in [0,1] over a texel grid; scale so a full-depth groove over
+    // one texel reads as a steep wall rather than a ripple. (Hoisted: one
+    // `fminf` per surface instead of two per texel; same values.)
+    let (gx, gy) = ((wu as f32).min(512.0), (hu as f32).min(512.0));
     for y in 0..hu {
         for x in 0..wu {
             // Central differences, wrapped — textures tile.
             let dx = (height[ys[y + 1] + xs[x + 2]] - height[ys[y + 1] + xs[x]]) * 0.5 * strength;
             let dy = (height[ys[y + 2] + xs[x + 1]] - height[ys[y] + xs[x + 1]]) * 0.5 * strength;
-            // Height is in [0,1] over a texel grid; scale so a full-depth
-            // groove over one texel reads as a steep wall rather than a ripple.
-            let sx = -dx * (wu as f32).min(512.0) * 0.05;
-            let sy = -dy * (hu as f32).min(512.0) * 0.05;
+            let sx = -dx * gx * 0.05;
+            let sy = -dy * gy * 0.05;
             let inv = 1.0 / (sx * sx + sy * sy + 1.0).sqrt();
             let (nx, ny, nz) = (sx * inv, sy * inv, inv);
             let i = (y * wu + x) * 3;

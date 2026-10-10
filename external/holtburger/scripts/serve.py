@@ -36,8 +36,10 @@ USAGE
   scripts/serve.py --port 9000     # override port (default 8765, env PORT)
 
 ENV
-  HOLTBURGER_DIST   canonical baked-data root. Default /mnt/wbterminal2/holtburger-dist.
-                    (Honours the legacy HOLTBURGER_DIST_V2 as a fallback alias.)
+  HOLTBURGER_DIST   canonical baked-data root. Default: the SSD serving copy
+                    ~/hb-serve/dist/current (scripts/dist_ssd.py), else the archive
+                    bake ARCHIVE_ROOT below. (Honours the legacy HOLTBURGER_DIST_V2.)
+  HB_SERVE_ROOT     where dist_ssd.py keeps the SSD copies (default ~/hb-serve/dist).
   PORT              listen port (default 8765 — the proxy.cjs / perf-worker contract).
 """
 
@@ -85,7 +87,22 @@ DIST_LINK = HOLT_ROOT / "dist"
 # 2026-08-05 (2): -xu7t2 adds tranche 2 — 1,138 paletted RenderSurfaces
 # re-emitted at up to 4x/512-cap INDEX16 in eor/portal (t2quant constrained
 # re-quantization; injected portal provenance in bake-source.sha256).
-DEFAULT_ROOT = "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2"
+ARCHIVE_ROOT = "/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2"
+
+# 2026-10-09 evening — the SERVED copy lives on the internal SSD. The archive
+# drives are USB spinners: a cold Training Academy load reads ~3,000 small shard
+# files, the 8 GB laptop's page cache had dropped half of them ten minutes after
+# the previous load, and the drive ran ~86% busy through the interior fetch
+# (1070 run f6s). `scripts/dist_ssd.py stage --activate` copies a bake from the
+# archive to `~/hb-serve/dist/<name>` (hardlinking files unchanged since the
+# active copy) and points `~/hb-serve/dist/current` at it; that link is the
+# default root here. Bakes and stagers keep writing to the archive — re-stage
+# after them (this server warns at start when the copy is older than its
+# source). No staged copy yet = the archive, with a loud warning.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dist_ssd  # noqa: E402
+
+DEFAULT_ROOT = str(dist_ssd.CURRENT) if dist_ssd.CURRENT.exists() else ARCHIVE_ROOT
 
 # Layers the RENDERER needs — a missing/empty one is a hard failure (fail-loud).
 # `events` is consumed only by offline Node validators, never by the renderer, so
@@ -420,6 +437,50 @@ def build_health():
     return health, failures
 
 
+def is_rotational(path: Path) -> bool | None:
+    """Is `path` on a spinning disk? (sysfs queue/rotational of its block device;
+    None when it cannot tell, e.g. tmpfs or a network mount.)"""
+    try:
+        st = os.stat(path)
+        dev = os.path.realpath(f"/sys/dev/block/{os.major(st.st_dev)}:{os.minor(st.st_dev)}")
+        for d in (dev, os.path.dirname(dev)):  # a partition's queue/ is its disk's
+            q = os.path.join(d, "queue", "rotational")
+            if os.path.exists(q):
+                return open(q).read().strip() == "1"
+    except OSError:
+        pass
+    return None
+
+
+def serving_state(root: Path) -> dict:
+    """Where the served bytes come from, for the start banner and _health.json.
+    Never fails the start: a stale or spinning-disk root still serves."""
+    real = Path(os.path.realpath(root))
+    on_ssd_root = real.is_relative_to(Path(os.path.realpath(dist_ssd.SERVE_ROOT)))
+    info: dict = {"root": str(real), "ssdServingRoot": on_ssd_root, "rotational": is_rotational(real)}
+    if on_ssd_root and Path(os.path.realpath(dist_ssd.CURRENT)) == real:
+        state, msg = dist_ssd.staleness()
+        info.update(state=state, message=msg)
+    elif on_ssd_root:
+        info.update(state="not-current", message=f"{real} is a staged copy but not `current`")
+    else:
+        info.update(state="archive", message=(
+            f"serving {real} directly (not an SSD-staged copy) — stage it: "
+            f"scripts/dist_ssd.py stage {real} --activate"))
+    return info
+
+
+def print_serving_state(info: dict) -> None:
+    bar = "!" * 72
+    if info.get("state") == "stale" or info.get("rotational"):
+        why = info["message"] if info.get("state") == "stale" else (
+            f"the baked data at {info['root']} is on a ROTATIONAL disk — every cache miss is a seek "
+            f"(the 2026-10-09 cold-load stalls). {info['message']}")
+        print(f"\n{bar}\n[serve] WARNING: {why}\n{bar}\n", file=sys.stderr)
+    else:
+        print(f"[serve] serving copy: {info.get('state')} — {info.get('message')}", file=sys.stderr)
+
+
 def write_health(health: dict) -> None:
     out = DIST_LINK / "_health.json"
     try:
@@ -586,6 +647,14 @@ class _CompressCache:
 COMPRESS_CACHE = _CompressCache()  # re-created in main() when --compress-cache-mb is given
 
 
+# Read-through root for /dist/ misses (the SSD copy's archive source; None when
+# serving anything else). Set in main().
+READTHROUGH_ROOT: str | None = None
+READTHROUGH = {"hits": 0}
+_READTHROUGH_LOCK = threading.Lock()
+_DIST_PREFIX = str(DIST_LINK) + os.sep
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Serve the external/holtburger/ tree with dev no-cache headers (the reason
     the old /tmp/nocache-server.py existed — Firefox/Chrome ES-module + wasm
@@ -611,6 +680,24 @@ class Handler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(HOLT_ROOT), **kwargs)
+
+    def translate_path(self, path):
+        """The SSD copy stages only the shards its catalogs name (dist_ssd.py);
+        anything else under /dist/ that it lacks is read through from the copy's
+        archive source instead of 404ing — logged, so a gap shows up."""
+        fs = super().translate_path(path)
+        rt = READTHROUGH_ROOT
+        if rt is not None and fs.startswith(_DIST_PREFIX) and not os.path.exists(fs):
+            rel = fs[len(_DIST_PREFIX):]
+            alt = os.path.join(rt, rel)
+            if os.path.exists(alt):
+                with _READTHROUGH_LOCK:
+                    READTHROUGH["hits"] += 1
+                    n = READTHROUGH["hits"]
+                if n <= 20 or n % 500 == 0:
+                    print(f"[serve] read-through #{n} from the archive: {rel}", file=sys.stderr)
+                return alt
+        return fs
 
     # --- compression -------------------------------------------------------
 
@@ -843,7 +930,15 @@ def main() -> None:
     ensure_dist_symlink(root, args.allow_missing)
 
     health, failures = build_health()
+    serving = serving_state(root)
+    health["serving"] = serving
     write_health(health)
+    print_serving_state(serving)
+    global READTHROUGH_ROOT
+    meta = dist_ssd.read_meta(Path(serving["root"])) if serving.get("ssdServingRoot") else None
+    if meta and Path(meta["source"]).is_dir():
+        READTHROUGH_ROOT = meta["source"]
+        print(f"[serve] /dist/ misses read through to {READTHROUGH_ROOT}", file=sys.stderr)
 
     # One-line per-layer summary, always.
     summary = "  ".join(

@@ -931,8 +931,10 @@ const ENVCELL_STATICS_OVERLAP = (() => {
 // `fetchEnvCellsInLandblock` resolved — i.e. after the Environments, every
 // stab's geometry walk and the whole per-cell loop. Their inputs are known as
 // soon as the EnvCell records land: the cells' surface tables and stab ids.
-// ON, for the PLAYER'S OWN landblock only (`isNearPlayerLb(…, 0)`; ring and
-// skirt builds keep today's order) and when the wasm has the export (a stale
+// ON, for the PLAYER'S OWN landblock only (`isNearPlayerLb(…, 0)`, else the
+// session's own cell — `_earlyBakeOwnLb`; a build that starts before either
+// knows waits for them until its Step B; ring and skirt builds keep today's
+// order) and when the wasm has the export (a stale
 // pkg = no-op): `fetchEnvCellDepsInLandblock` runs beside the build — same
 // LandblockInfo/EnvCell keys on the same urgent lane in the same turn, so the
 // two calls share every request — and as soon as it resolves, Step B's
@@ -956,6 +958,10 @@ const INTERIOR_EARLY_BAKE = (() => {
 const _interiorEarlyBakeStats = {
   kicked: 0, // builds that started the deps call
   notPlayerLb: 0, // builds not on the player's own landblock (no kick)
+  bySessionCell: 0, // kicks the session's own cell decided (isNearPlayerLb said no)
+  waited: 0, // builds that started before the player's landblock was known
+  waitKicked: 0, // … and kicked once it was (theirs)
+  waitedOut: 0, // … still unknown when the build reached Step B (no kick)
   posted: 0, // deps resolved before Step B → Step B + C started early
   depsFailed: 0, // the deps call threw/rejected (build unaffected)
   abandoned: 0, // deps still pending when the build reached Step B
@@ -995,16 +1001,98 @@ function _earlyStaticSurfaceDids(meshes) {
  * Returns a kick handle (`state` pending|ready|failed|late) or null. Never
  * throws; nothing it does can fail the build.
  */
+/**
+ * The cell the SESSION puts the local player in (0 = not known yet): the pose's
+ * cell, else the cell-scene snapshot — portal_space.js `resolveLoginCell`'s
+ * order. Server truth, unlike the rig-derived landblock below.
+ */
+function _sessionPlayerCellId() {
+  const h = globalThis.__sessionHandle;
+  if (!h) return 0;
+  let p = null;
+  try {
+    if (typeof h.getLocalPlayerPose === "function") {
+      p = h.getLocalPlayerPose();
+      const c = p ? p.landblockId >>> 0 : 0;
+      if (c) return c;
+    }
+  } catch (_) { /* fall through */ } finally {
+    try { p?.free?.(); } catch (_) { /* best effort */ }
+  }
+  try {
+    if (typeof h.getCurrentCellId === "function") return (h.getCurrentCellId() >>> 0) || 0;
+  } catch (_) { /* unknown */ }
+  return 0;
+}
+
+/**
+ * Is `lbKey` the player's own landblock? 1 yes, 0 no, -1 not known yet.
+ *
+ * `isNearPlayerLb(…, 0)` alone missed the academy on the 1070 (run f1,
+ * 2026-10-09 evening: `notPlayerLb 1`, walls 19.5 s instead of ~8): its rig
+ * test is `floor(position / 192 m)`, and the academy's cells lie south of
+ * 0x8602's footprint, so a placed rig reads 0x8601 — before the rig is placed
+ * it falls back to the initial centre, which is why earlier runs kicked — and
+ * the server-position stamp it also honours had not landed yet. The session's
+ * own cell (`0x860201AD`) is the authoritative answer when the session has it.
+ */
+function _earlyBakeOwnLb(scene3d, lbKey) {
+  if (isNearPlayerLb(scene3d, lbKey, 0)) return 1;
+  const cell = _sessionPlayerCellId();
+  if (!cell) return -1;
+  return ((cell & 0xffff0000) >>> 0) === ((lbKey & 0xffff0000) >>> 0) ? 1 : 0;
+}
+
+/** Re-check interval / ceiling while the player's landblock is not known. */
+const EARLY_BAKE_WAIT_POLL_MS = 100;
+const EARLY_BAKE_WAIT_MAX_MS = 15000;
+
 function startInteriorEarlyBake(scene3d, lbKey, wasmExports, mmFetch, spFetch) {
   if (!INTERIOR_EARLY_BAKE) return null;
   if (!wasmExports || typeof wasmExports.fetchEnvCellDepsInLandblock !== "function") return null;
-  if (!isNearPlayerLb(scene3d, lbKey, 0)) {
+  const own = _earlyBakeOwnLb(scene3d, lbKey);
+  if (own === 0) {
     _interiorEarlyBakeStats.notPlayerLb += 1;
     return null;
   }
   const lbHex = `0x${(lbKey >>> 0).toString(16).padStart(8, "0")}`;
   const t0 = _earlyBakeNowMs();
-  const kick = { state: "pending", ids: null, statics: null, consumed: false, released: false };
+  if (own === 1) {
+    if (!isNearPlayerLb(scene3d, lbKey, 0)) _interiorEarlyBakeStats.bySessionCell += 1;
+    const kick = { state: "pending", ids: null, statics: null, consumed: false, released: false };
+    return _kickInteriorEarlyDeps(kick, scene3d, lbKey, lbHex, t0, wasmExports, mmFetch, spFetch) ? kick : null;
+  }
+  // Not known yet (a login: the build starts from the first position update,
+  // before the session's pose has a cell and before the rig is placed). Keep
+  // asking until the build reaches Step B, which releases the kick (counted as
+  // `waitedOut` there) — the deps call then finds its records already fetched.
+  _interiorEarlyBakeStats.waited += 1;
+  const kick = { state: "waiting", ids: null, statics: null, consumed: false, released: false };
+  const poll = () => {
+    if (kick.released || kick.state !== "waiting") return;
+    const o = _earlyBakeOwnLb(scene3d, lbKey);
+    if (o === -1 && _earlyBakeNowMs() - t0 < EARLY_BAKE_WAIT_MAX_MS) {
+      setTimeout(poll, EARLY_BAKE_WAIT_POLL_MS);
+      return;
+    }
+    if (o !== 1) {
+      kick.state = "skipped";
+      _interiorEarlyBakeStats.notPlayerLb += 1;
+      return;
+    }
+    kick.state = "pending";
+    _interiorEarlyBakeStats.waitKicked += 1;
+    if (!isNearPlayerLb(scene3d, lbKey, 0)) _interiorEarlyBakeStats.bySessionCell += 1;
+    if (!_kickInteriorEarlyDeps(kick, scene3d, lbKey, lbHex, t0, wasmExports, mmFetch, spFetch)) {
+      kick.state = "failed";
+    }
+  };
+  setTimeout(poll, EARLY_BAKE_WAIT_POLL_MS);
+  return kick;
+}
+
+/** The deps call and what follows it, for a kick that is `pending`. False when the call threw. */
+function _kickInteriorEarlyDeps(kick, scene3d, lbKey, lbHex, t0, wasmExports, mmFetch, spFetch) {
   let depsPromise;
   try {
     depsPromise = Promise.resolve(wasmExports.fetchEnvCellDepsInLandblock(lbKey >>> 0));
@@ -1012,7 +1100,7 @@ function startInteriorEarlyBake(scene3d, lbKey, wasmExports, mmFetch, spFetch) {
     _interiorEarlyBakeStats.depsFailed += 1;
     // eslint-disable-next-line no-console
     console.warn(`[interiorEarlyBake] envcells ${lbHex}: deps call failed (build unaffected):`, e);
-    return null;
+    return false;
   }
   _interiorEarlyBakeStats.kicked += 1;
   const onFailed = (e) => {
@@ -1082,7 +1170,7 @@ function startInteriorEarlyBake(scene3d, lbKey, wasmExports, mmFetch, spFetch) {
         `(${numCells} cells, ${surfaceDids.length} surfaces, ${stabIds.length} statics) — Step B+C started early`,
     );
   }, onFailed).catch(() => {});
-  return kick;
+  return true;
 }
 
 /**
@@ -1206,6 +1294,12 @@ const _interiorWallsFirstStats = {
   replaced: 0, // a stale container of the same cell detached at the walls attach
   lastWallsMs: null, // build start → walls attached (last build)
   lastStaticsMs: null, // build start → statics attached (last build)
+  // Where the gap between the walls and the statics goes (last build, ms from
+  // build start): Step C settled (meshes + their surfaces decoded and
+  // installed), statics built into staging, staging prewarmed.
+  lastStepCMs: null,
+  lastStagedMs: null,
+  lastPrewarmedMs: null,
 };
 try {
   if (typeof window !== "undefined") window.__interiorWallsFirst = _interiorWallsFirstStats;
@@ -1817,6 +1911,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // rounds, so this should not happen) are abandoned, never awaited.
   if (earlyBake && earlyBake.state === "pending") {
     _interiorEarlyBakeStats.abandoned += 1;
+    releaseEarlyInteriorBake(earlyBake);
+  } else if (earlyBake && earlyBake.state === "waiting") {
+    // Still no player landblock: the build goes on the normal way.
+    _interiorEarlyBakeStats.waitedOut += 1;
     releaseEarlyInteriorBake(earlyBake);
   }
   const staticsJoined = earlyBake ? joinEarlyInteriorStatics(earlyBake, staticIds, mmFetch) : null;
@@ -2514,6 +2612,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     };
     try {
       const sc = await stepCSettled;
+      _interiorWallsFirstStats.lastStepCMs = Math.round(_earlyBakeNowMs() - buildT0);
       if (!sc.ok) throw sc.e;
       if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) return cancelled();
       // Step D's statics half, per cell, into a detached staging group (same
@@ -2532,6 +2631,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           _chunkStartStatics = performance.now();
         }
       }
+      _interiorWallsFirstStats.lastStagedMs = Math.round(_earlyBakeNowMs() - buildT0);
       // Prewarm the props before they reach a live (possibly visible) cell.
       if (staged.length > 0 && renderer && camera && typeof renderer.compile === "function") {
         const tempParent = new THREE.Group();
@@ -2543,6 +2643,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
           console.warn("[envcell-compileAsync] statics failed (they will lazy-compile on first render):", e);
         }
       }
+      _interiorWallsFirstStats.lastPrewarmedMs = Math.round(_earlyBakeNowMs() - buildT0);
       if (scene3d.envCellBuildGen.get(lbKey) !== buildGen) return cancelled();
       // Into the live containers, as the attach above would have left them:
       // the container's current layer mask (1, or the `?portalStencil` cell
@@ -2567,7 +2668,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // eslint-disable-next-line no-console
     console.log(
       `[interiorWallsFirst] envcells ${lbHex}: ${staticObjectCount} statics attached after ${staticsMs} ms ` +
-        `(+${staticsMs - wallsMs} ms after the walls)`
+        `(+${staticsMs - wallsMs} ms after the walls; Step C settled ${_interiorWallsFirstStats.lastStepCMs} ms, ` +
+        `staged ${_interiorWallsFirstStats.lastStagedMs} ms, prewarmed ${_interiorWallsFirstStats.lastPrewarmedMs} ms)`
     );
   }
   // geom-audit: build reached attach — NOW the LB counts as loaded.

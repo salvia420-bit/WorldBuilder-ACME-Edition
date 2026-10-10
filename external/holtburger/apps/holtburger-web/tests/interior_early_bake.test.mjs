@@ -19,7 +19,11 @@
 //   E8  ON: deps still pending at Step B → abandoned, nothing posted later
 //   E9  ON: an early id list in another order → reordered, extras freed
 //   E10 contract: lib.rs export (same urgent LBI + EnvCell prefetch), cells.js
-//       gate (isNearPlayerLb radius 0), docs row
+//       gate (isNearPlayerLb radius 0, else the session's cell), docs row
+//   E11 ON: rig one landblock off (the academy), session cell here → kicks
+//   E12 ON: player's landblock unknown at the start → waits, kicks once known
+//   E13 ON: still unknown at Step B → identical to =off, nothing posted later
+//   E14 ON: the session puts the player elsewhere → no deps call
 //
 // Run: node tests/interior_early_bake.test.mjs   (needs `three` resolvable)
 
@@ -342,7 +346,9 @@ await t("E10 contract: lib.rs export + cells.js gate + docs row", async () => {
   assert.ok(/fn deps_follow_the_builds_cell_order_and_skip_rules\(\)/.test(lib), "native unit test");
   const cells = readFileSync(path.join(APP, "scene3d", "cells.js"), "utf8");
   assert.match(cells, /get\("interiorEarlyBake"\);\s*return !\(v === "off" \|\| v === "0" \|\| v === "false" \|\| v === "no"\);/, "default-on reader, off|0|false|no");
-  assert.match(cells, /if \(!isNearPlayerLb\(scene3d, lbKey, 0\)\)/, "player's own landblock only");
+  assert.match(cells, /function _earlyBakeOwnLb\(scene3d, lbKey\) \{\s*if \(isNearPlayerLb\(scene3d, lbKey, 0\)\) return 1;\s*const cell = _sessionPlayerCellId\(\);/,
+    "player's own landblock only: isNearPlayerLb radius 0, else the session's cell");
+  assert.match(cells, /const own = _earlyBakeOwnLb\(scene3d, lbKey\);\s*if \(own === 0\) \{\s*_interiorEarlyBakeStats\.notPlayerLb \+= 1;\s*return null;/, "a known other landblock never kicks");
   assert.match(cells, /typeof wasmExports\.fetchEnvCellDepsInLandblock !== "function"\) return null;/, "typeof-guarded (stale pkg = no-op)");
   const kick = cells.indexOf("earlyBake = startInteriorEarlyBake(");
   // `?interiorBuildShare` wraps the build's fetch (the same synchronous call; the direct one without the registry).
@@ -365,6 +371,87 @@ await t("E10 contract: lib.rs export + cells.js gate + docs row", async () => {
   assert.match(opts, /typeof __hbWasmNs\?\.fetchEnvCellDepsInLandblock === "function"\s*\?\s*\{ fetchEnvCellDepsInLandblock: __hbWasmNs\.fetchEnvCellDepsInLandblock \}/,
     "index.html threads fetchEnvCellDepsInLandblock into init3D opts (namespace import, stale-pkg safe)");
 });
+
+// E11–E14 (2026-10-09 evening, 1070 run f1): the rig-derived landblock of a
+// player standing in the academy reads 0x8601 (its cells lie south of 0x8602's
+// footprint), so isNearPlayerLb(…, 0) said "not the player's" and the walls
+// waited for the whole record fetch. The session's own cell decides then.
+const ACADEMY_CELL = 0x860201ad;
+const RIG_SOUTH = 0x86010000;
+function withSessionCell(getCell, fn) {
+  return async () => {
+    globalThis.__sessionHandle = {
+      getLocalPlayerPose: () => {
+        const c = getCell();
+        return c ? { landblockId: c, x: 0, y: 0, z: 0, free() {} } : undefined;
+      },
+      getCurrentCellId: () => 0,
+    };
+    try { return await fn(); } finally { delete globalThis.__sessionHandle; }
+  };
+}
+const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+
+await t("E11 ON: rig one landblock off, session cell in this landblock → kicks at once", quiet(withSessionCell(() => ACADEMY_CELL, async () => {
+  const r = rig({ playerLb: RIG_SOUTH });
+  const p = on.buildEnvCellsForLandblock(r.scene3d, LB, r.wasm);
+  await settle();
+  assert.equal(r.depsCalls(), 1, "the session's cell names this landblock");
+  assert.ok(!r.log.includes("fetchEnvCells:end"), "the build's fetch is still pending");
+  assert.ok(r.log.includes(`mm:${hex(STAB_A)},${hex(STAB_B)}:urgent`), "Step C posted early");
+  r.placementsGate.resolve();
+  const sum = await p;
+  assert.equal(sum.staticObjectCount, 2);
+  assert.equal(r.mmCalls(), 1, "Step C joined the early fetch");
+})));
+
+await t("E12 ON: player's landblock not known at the build's start → waits, kicks once it is", quiet(async () => {
+  let cell = 0;
+  await withSessionCell(() => cell, async () => {
+    const r = rig({ playerLb: RIG_SOUTH });
+    const p = on.buildEnvCellsForLandblock(r.scene3d, LB, r.wasm);
+    await settle();
+    assert.equal(r.depsCalls(), 0, "nothing known yet: no deps call");
+    cell = ACADEMY_CELL;
+    await wait(250);
+    await settle();
+    assert.equal(r.depsCalls(), 1, "kicked once the session had the cell");
+    assert.ok(!r.log.includes("fetchEnvCells:end"), "still before the build's own fetch resolved");
+    assert.ok(r.log.includes(`mm:${hex(STAB_A)},${hex(STAB_B)}:urgent`), "Step C posted early");
+    r.placementsGate.resolve();
+    const sum = await p;
+    assert.equal(sum.staticObjectCount, 2);
+    assert.equal(r.mmCalls(), 1, "Step C joined the early fetch");
+    assert.equal(r.spByDid.get(STATIC_SURF), 1, "static surface decoded once");
+  })();
+}));
+
+await t("E13 ON: still unknown when the build reaches Step B → the old sequence, nothing later", quiet(withSessionCell(() => 0, async () => {
+  const stats = globalThis.window?.__interiorEarlyBake;
+  const before = stats ? stats.waitedOut : 0;
+  const { r, sum } = await sequence(on, { playerLb: RIG_SOUTH });
+  assert.equal(sum.cellCount, 1);
+  assert.equal(r.depsCalls(), 0);
+  const b = await sequence(off, { playerLb: RIG_SOUTH });
+  assert.deepEqual(r.log, b.r.log, "identical to =off");
+  if (stats) assert.equal(stats.waitedOut, before + 1);
+  const n = r.log.length;
+  await wait(250);
+  assert.equal(r.depsCalls(), 0, "the released wait never kicks");
+  assert.equal(r.log.length, n);
+})));
+
+await t("E14 ON: the session puts the player in another landblock → no deps call, no wait", quiet(withSessionCell(() => 0x860301ad, async () => {
+  const r = rig({ playerLb: RIG_SOUTH });
+  const p = on.buildEnvCellsForLandblock(r.scene3d, LB, r.wasm);
+  await settle();
+  assert.equal(r.depsCalls(), 0);
+  r.placementsGate.resolve();
+  const sum = await p;
+  assert.equal(sum.cellCount, 1);
+  await wait(250);
+  assert.equal(r.depsCalls(), 0);
+})));
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);

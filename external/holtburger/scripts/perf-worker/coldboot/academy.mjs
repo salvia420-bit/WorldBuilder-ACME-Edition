@@ -20,6 +20,8 @@
 //   --fetchmap: per /shards/ request on the page, when fetch() was called and when its body reached
 //              JS (arrayBuffer resolved) → `fetchmap` in acad-<label>.json, to set against the
 //              network's own responseEnd (resource timing): the gap is main-thread delay
+//   --workerspy: in the bake worker, each message's arrival / reply (type, id, DID count, urgent) and every
+//              event-loop block over 50 ms → net.workers[].spy (`wspy.py acad-<label>.json` prints them)
 //   --longtasks: every main-thread task over 50 ms ([startMs, durationMs], page clock) → `longtasks`
 //              (with --profile, the profile records the page clock at its start: pageMsAtStart)
 import { createRequire } from "node:module";
@@ -126,7 +128,20 @@ if (a.includes("--linkmap")) await pg.addInitScript(() => {
 });
 const logs = [], workers = [];
 pg.on("console", (m) => { const tx = m.text(); if (/envcells|placements fetched|bake_worker|materialCache|fetchEnvCells|surface|interiorStabBatch|interiorClosure|interiorEarly|interiorWallsFirst|interiorBuildShare|shardFetch|texUpgrade|portalSpace|\[F1\]|packSource/i.test(tx)) logs.push({ t: Date.now() - t0, tx: tx.slice(0, 240) }); });
-pg.on("worker", (w) => { workers.push({ w, url: w.url(), t: Date.now() - t0 }); w.evaluate(() => { try { performance.setResourceTimingBufferSize(200000); } catch (_) {} }).catch(() => {}); });
+const WORKERSPY = a.includes("--workerspy");
+pg.on("worker", (w) => { workers.push({ w, url: w.url(), t: Date.now() - t0 }); w.evaluate(() => { try { performance.setResourceTimingBufferSize(200000); } catch (_) {} }).catch(() => {});
+  // --workerspy: inside the bake worker, every message in (type, id, DID count, urgent) and reply out,
+  // plus every event-loop block > 50 ms (a synchronous wasm stretch) → net.workers[].spy.
+  if (WORKERSPY && /bake_worker/.test(w.url())) w.evaluate(() => {
+    const spy = self.__spy = { origin: performance.timeOrigin, msgs: [], lag: [] };
+    const wrapOn = () => { const f = self.onmessage; if (typeof f === "function" && !f.__spied) { const g = function (ev) { const d = ev.data || {}; spy.msgs.push(["in", Math.round(performance.now()), d.type, d.id, (d.dids || d.ids || d.flatDids || []).length, d.urgent === true]); return f.call(this, ev); }; g.__spied = true; self.onmessage = g; } };
+    wrapOn(); setInterval(wrapOn, 5);
+    const pm = self.postMessage.bind(self);
+    self.postMessage = (m, t) => { spy.msgs.push(["out", Math.round(performance.now()), m && m.type, m && m.id, m && m.kind]); return pm(m, t); };
+    let last = performance.now();
+    setInterval(() => { const n = performance.now(); if (n - last > 50) spy.lag.push([Math.round(last), Math.round(n - last)]); last = n; }, 10);
+  }).catch(() => {});
+});
 const PROF = a.includes("--profile");
 let cdp = null, profPageMs = null;
 const t0 = Date.now();
@@ -295,7 +310,7 @@ if (linkHooked !== null) sum.linkmapHooked = linkHooked; // render/compile/draw 
 if (progdump && !progdump.err) sum.asyncLink = progdump.asyncLink;
 const res = async (ctx) => ctx.evaluate(() => ({ origin: performance.timeOrigin, now: performance.now(), e: performance.getEntriesByType("resource").map((x) => [x.name.replace(/^https?:\/\/[^/]+/, ""), Math.round(x.startTime), Math.round(x.responseEnd), x.transferSize, x.encodedBodySize, x.initiatorType]) })).catch((e) => ({ err: String(e).slice(0, 100) }));
 const net = { page: await res(pg), workers: [] };
-for (const w of workers) net.workers.push({ url: w.url, t: w.t, r: await res(w.w) });
+for (const w of workers) net.workers.push({ url: w.url, t: w.t, r: await res(w.w), spy: WORKERSPY && /bake_worker/.test(w.url) ? await w.w.evaluate(() => self.__spy || null).catch(() => null) : null });
 if (cdp) { const { profile } = await cdp.send("Profiler.stop"); profile.wallT0 = t0; profile.pageMsAtStart = profPageMs; writeFileSync(`acad-${LABEL}.cpuprofile`, JSON.stringify(profile)); }
 writeFileSync(`acad-${LABEL}.json`, JSON.stringify({ t0, sum, rows, logs, net, fetchmap, longtasks, progdump }, null, 0));
 console.log("SUMMARY", JSON.stringify(sum));
