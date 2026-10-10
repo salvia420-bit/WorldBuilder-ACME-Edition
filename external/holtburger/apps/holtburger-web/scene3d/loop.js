@@ -65,6 +65,8 @@ import { statBatchChunkEnabled, tickStatBatchXOptimize } from "./static_batch_x.
 import { terrainBatchEnabled, tickTerrainBatchOptimize } from "./terrain_batch.js";
 import { tickLightingForCellState } from "./lighting.js";
 import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
+// Tier-1 particle upgrade (2026-10-10) — FX light sources + terrain light feed.
+import { tickFxLights, feedTerrainFxLights } from "./vfx/fx_lights.js";
 import { cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
 import {
@@ -2765,6 +2767,18 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
   // is indoor/outdoor material state (not the deferrable SKY group) and is
   // NEVER budget-gated. Wraps in try/catch so a thrown isCurrentCellIndoor()
   // never kills the tick.
+  // Tier-1 `?fxLights` (scene3d/vfx/fx_lights.js) — envelopes, flicker and the
+  // activeLights membership of the FX light sources (emitter lights + PlayEffect
+  // flashes). BEFORE the lighting tick so the pool picks this frame's sources.
+  try {
+    tickFxLights(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._fxLightsTickWarned) {
+      scene3d._fxLightsTickWarned = true;
+      console.warn("[fx-lights] tickFxLights threw:", e);
+    }
+  }
   try {
     tickLightingForCellState(scene3d, sessionHandle);
   } catch (e) {
@@ -2787,6 +2801,19 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
     if (!scene3d._flameFlickerTickWarned) {
       scene3d._flameFlickerTickWarned = true;
       console.warn("[vfx] tickFlameFlicker threw:", e);
+    }
+  }
+  // Tier-1 `?terrainLights` — the nearest lit pool slots (after the feed and the
+  // flame flicker above) into the shared terrain uniforms, day/night scaled.
+  try {
+    const st = scene3d.skyLightingController?._lastState;
+    const night = st && Number.isFinite(st.dirPitch) ? nightFactorFromAuthoredPitch(st.dirPitch) : 0;
+    feedTerrainFxLights(scene3d, night, scene3d._poolSunIndoor === true);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._terrainFxLightsWarned) {
+      scene3d._terrainFxLightsWarned = true;
+      console.warn("[fx-lights] feedTerrainFxLights threw:", e);
     }
   }
   // Wave 1.E (2026-05-28) — player-tracked shadow-receive gate.

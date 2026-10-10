@@ -391,6 +391,9 @@ const TIER5 = [
   // the Additive bit) instead of three's mix toward fogColor (pale quads).
   { tier: 5, flag: "additiveFogBlack", file: "tests/additive_fog.test.mjs" },
   { tier: 5, flag: "particleFx", file: "test_particle_fx.mjs" },
+  // 2026-10-10 tier-1 particle upgrade: FX lights + terrain lights, glow,
+  // GPU children, distortion, smoke shading (scene3d/vfx/fx_tier1.js).
+  { tier: 5, flag: "particleFxTier1", file: "test_particle_fx_tier1.mjs" },
   { tier: 5, flag: "burstFx", file: "test_play_effect_burst_fx.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },

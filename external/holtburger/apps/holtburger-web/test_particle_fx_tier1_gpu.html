@@ -1,0 +1,268 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>particle fx tier-1 gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Tier-1 particle upgrade GPU smoke (driven by test_particle_fx_tier1_gpu.cjs).
+// A 64×64 WebGL2 canvas, logarithmic depth like the client, no game world:
+//   S. smoke variant (HB_FX_SMOKE + HB_FX_CSM, sampler2DShadow in the vertex
+//      stage): neutral row == the stock FX row; a smoke row draws finite,
+//      different pixels
+//   G. glow variant: draws where the particle is in front of the scene, is
+//      occluded by a wall in front of it, drops glow-less rows entirely
+//   K. children: a fire row's record draws embers; a row without children draws nothing
+//   T. terrain light loop: brighter under the light than away from it; gain 0 = nothing
+//   D. distortion effect in a pmndrs composer: a shockwave moves pixels
+//   L. glow effect in a pmndrs composer: the halo adds light around the particle
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0 };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const fx = await import("/scene3d/particles/particle_fx.js");
+  const pm = await import("/scene3d/particles/particle_manager.js");
+  const prof = await import("/scene3d/particles/particle_fx_profiles.js");
+  const kidsMod = await import("/scene3d/particles/particle_fx_kids.js");
+  const lights = await import("/scene3d/vfx/fx_lights.js");
+  const distort = await import("/scene3d/vfx/fx_distort.js");
+  const poc = await import("/scene3d/particles_over_clouds.js");
+  const { FxDistortEffect } = await import("/scene3d/vfx/fx_distort_effect.js");
+  const { FxGlowEffect } = await import("/scene3d/vfx/fx_glow_effect.js");
+  const PP = await import("postprocessing");
+  const t1f = await import("/scene3d/vfx/fx_tier1.js");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 64; canvas.height = 64;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    R.errors.push(`shader error: ${gl.getProgramInfoLog(program)} | VS: ${gl.getShaderInfoLog(vs)} | FS: ${gl.getShaderInfoLog(fs)}`);
+  };
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+
+  const N = 8, px = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4, dx = x - 3.5, dy = y - 3.5, r = Math.sqrt(dx * dx + dy * dy) / 5;
+    px[i] = 220; px[i + 1] = 160; px[i + 2] = 120; px[i + 3] = Math.max(0, 255 * (1 - r));
+  }
+  const tex = new THREE.DataTexture(px, N, N);
+  tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+  const instGeom = new THREE.PlaneGeometry(2, 2);
+  instGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(instGeom.attributes.position.count * 3).fill(1), 3));
+  const rt = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: true });
+  const read = (t = rt) => { const b = new Float32Array(t.width * t.height * 4); renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, b); return b; };
+  const maxDiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+  const allFinite = (a) => a.every(Number.isFinite);
+  const rgbSum = (a) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += a[i] + a[i + 1] + a[i + 2]; return s; };
+  const bucketMat = (additive) => {
+    const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    if (additive) { m.blending = THREE.AdditiveBlending; m.depthWrite = false; m.vertexColors = true; }
+    else pm._configureAlphaBucketMaterial(m);
+    m.forceSinglePass = true;
+    return m;
+  };
+  const mkIm = (mat, rgb, z = 0) => {
+    const im = new THREE.InstancedMesh(instGeom, mat, 1);
+    im.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, z));
+    im.setColorAt(0, new THREE.Color());
+    im.instanceColor.array.set(rgb);
+    im.instanceColor.needsUpdate = true;
+    im.frustumCulled = false;
+    return im;
+  };
+  const drawScene = (scene, target = rt) => {
+    renderer.setRenderTarget(target);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(null);
+    return read(target);
+  };
+  const drawIm = (mat, rgb, z = 0) => { const s = new THREE.Scene(); s.add(mkIm(mat, rgb, z)); return drawScene(s); };
+  const row = (did) => prof.FX_DID_ROWS.get(did >>> 0);
+  fx.particleFxFrame(1234.5);
+  const op = 0.8, age = 0.4, seed = 0.5;
+
+  // ---- S. smoke variant ----------------------------------------------------------------------
+  // a real shadow DEPTH texture so the sampler2DShadow taps run against a bound map
+  const shadowRT = new THREE.WebGLRenderTarget(16, 16, { depthBuffer: true, depthTexture: new THREE.DepthTexture(16, 16) });
+  shadowRT.depthTexture.compareFunction = THREE.LessEqualCompare;
+  const csmU = {
+    uCsmShadowMap0: { value: shadowRT.depthTexture }, uCsmShadowMap1: { value: shadowRT.depthTexture }, uCsmShadowMap2: { value: shadowRT.depthTexture },
+    uCsmMatrix0: { value: new THREE.Matrix4() }, uCsmMatrix1: { value: new THREE.Matrix4() }, uCsmMatrix2: { value: new THREE.Matrix4() },
+    uCsmSplits: { value: new THREE.Vector2(30, 100) }, uCsmFar: { value: 300 }, uCsmBlend: { value: 0.1 },
+  };
+  renderer.setRenderTarget(shadowRT); renderer.clear(); renderer.setRenderTarget(null);
+  fx._setParticleFxVariantForTest(false, null);
+  const plainA = bucketMat(false); fx.applyParticleFxMaterial(plainA, { additive: false });
+  fx._setParticleFxVariantForTest(true, csmU);
+  const smokeA = bucketMat(false); fx.applyParticleFxMaterial(smokeA, { additive: false });
+  check("S. smoke + CSM program key", smokeA.customProgramCacheKey() === `${fx.FX_KEY_ALPHA}sc`, smokeA.customProgramCacheKey());
+  const p0 = drawIm(plainA, [op, age, 0 + seed]);
+  const s0 = drawIm(smokeA, [op, age, 0 + seed]);
+  check("S. neutral row: smoke variant == the plain FX program", maxDiff(p0, s0) < 2e-3 && rgbSum(p0) > 1, `maxDiff ${maxDiff(p0, s0).toExponential(2)}`);
+  const smokeRow = row(0x320001B0);
+  const sr = drawIm(smokeA, [op, age, smokeRow + seed]);
+  const srPlain = drawIm(plainA, [op, age, smokeRow + seed]);
+  check("S. a smoke row (brazier smoke) draws finite pixels, shaded differently from the plain program",
+    allFinite(sr) && maxDiff(sr, srPlain) > 1e-3, `maxDiff ${maxDiff(sr, srPlain).toExponential(2)}`);
+  const smokeAdd = bucketMat(true); fx.applyParticleFxMaterial(smokeAdd, { additive: true });
+  const fr = drawIm(smokeAdd, [op, age, row(0x3200026E) + seed]);
+  check("S. additive smoke variant (flame: noise + curl flow) draws finite pixels", allFinite(fr) && rgbSum(fr) > 0.5);
+  fx._setParticleFxVariantForTest(null, null);
+
+  // ---- G. glow variant -------------------------------------------------------------------------
+  const depthTex = new THREE.DepthTexture(64, 64);
+  const dRT = new THREE.WebGLRenderTarget(64, 64, { depthBuffer: true, depthTexture: depthTex });
+  const wallScene = (z) => {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshBasicMaterial({ color: 0x404040 }));
+    wall.position.set(0, 0, z);
+    const ws = new THREE.Scene(); ws.add(wall);
+    renderer.setRenderTarget(dRT); renderer.setClearColor(0, 1); renderer.clear(); renderer.render(ws, cam); renderer.setRenderTarget(null);
+  };
+  const glowMat = fx.makeParticleFxGlowMaterial(bucketMat(true));
+  const glowRT = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: false });
+  const glowDraw = (r) => {
+    fx.setParticleFxGlowFrame({ depthTexture: depthTex, width: 64, height: 64, camera: cam, isLog: true, scale: 1 });
+    const s = new THREE.Scene(); s.add(mkIm(glowMat, [op, age, r + seed]));
+    return drawScene(s, glowRT);
+  };
+  const portalRow = row(0x320002CD);
+  wallScene(-7);                      // wall 10 m away, behind the particle
+  const gBehind = glowDraw(portalRow);
+  wallScene(2);                       // wall 1 m from the camera, in front of the particle
+  const gFront = glowDraw(portalRow);
+  wallScene(-7);
+  const gNone = glowDraw(0);
+  check("G. glow draws where the particle is in front of the scene", allFinite(gBehind) && rgbSum(gBehind) > 0.5, `sum ${rgbSum(gBehind).toFixed(2)}`);
+  check("G. glow is occluded by a wall in front of the particle", rgbSum(gFront) < rgbSum(gBehind) * 0.02, `${rgbSum(gFront).toFixed(3)} vs ${rgbSum(gBehind).toFixed(2)}`);
+  check("G. a glow-less row draws nothing (vertex stage drop)", rgbSum(gNone) === 0);
+
+  // ---- K. children ------------------------------------------------------------------------------
+  // close camera: a flame's embers are ~4 cm, sub-pixel at 3 m in a 64 px view
+  const ks = new THREE.Scene();
+  const kids = new kidsMod.ParticleFxKids(ks);
+  const layer = kids.layer(0);
+  const flameRow = row(0x3200026E);
+  fx.FX_UNIFORMS.uFxAddCal.value = 1;
+  const kCam = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
+  kCam.position.set(0, 0.2, 1.0); kCam.lookAt(0, 0.2, 0); kCam.updateMatrixWorld(true);
+  const drawK = () => {
+    renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear();
+    renderer.render(ks, kCam); renderer.setRenderTarget(null); return read(rt);
+  };
+  kids.begin();
+  for (let i = 0; i < 6; i++) layer.push(0, 0, 0, 0.3, 0, 0.5, 0, 1, flameRow, 0.1 + i * 0.13);
+  kids.finish();
+  const kOut = drawK();
+  check("K. a flame record draws its embers", allFinite(kOut) && rgbSum(kOut) > 0.05, `sum ${rgbSum(kOut).toFixed(3)}`);
+  kids.begin();
+  layer.push(0, 0, 0, 0.3, 0, 0.5, 0, 1, 0, 0.37);
+  kids.finish();
+  const kNone = drawK();
+  check("K. a row without children draws nothing", rgbSum(kNone) === 0);
+
+  // ---- T. terrain light loop --------------------------------------------------------------------
+  const tMat = new THREE.ShaderMaterial({
+    uniforms: { ...lights.TERRAIN_FX_LIGHT_UNIFORMS },
+    vertexShader: "varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }",
+    fragmentShader: `${lights.TERRAIN_FX_LIGHT_GLSL}\nvarying vec3 vW;\nvoid main(){ gl_FragColor = vec4(hbTerrainFxLights(vW, vec3(0.0, 1.0, 0.0), vec3(0.5)), 1.0); }`,
+  });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), tMat);
+  ground.rotation.x = -Math.PI / 2;
+  const tsScene = new THREE.Scene(); tsScene.add(ground);
+  const topCam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+  topCam.position.set(0, 12, 0); topCam.lookAt(0, 0, 0); topCam.updateMatrixWorld(true);
+  const U = lights.TERRAIN_FX_LIGHT_UNIFORMS;
+  U.uFxLightPos.value.fill(0);
+  U.uFxLightCol.value.fill(0);
+  U.uFxLightPos.value.set([0, 1.5, 0, 6], 0);
+  U.uFxLightCol.value.set([30, 12, 3, 0], 0);
+  U.uFxLightGain.value.set([0.75, 0.6]);
+  const trt = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType });
+  const tDraw = () => { renderer.setRenderTarget(trt); renderer.setClearColor(0, 1); renderer.clear(); renderer.render(tsScene, topCam); renderer.setRenderTarget(null); return read(trt); };
+  const tOut = tDraw();
+  const at = (b, x, y) => b[(y * 64 + x) * 4];
+  check("T. the ground under the light is lit, the corner (beyond range) is not",
+    allFinite(tOut) && at(tOut, 32, 32) > 0.05 && at(tOut, 2, 2) === 0, `centre ${at(tOut, 32, 32).toFixed(3)}, corner ${at(tOut, 2, 2)}`);
+  check("T. warm light stays warm (r > b) and soft-kneed (< 1 albedo-scaled unit)",
+    tOut[(32 * 64 + 32) * 4] > tOut[(32 * 64 + 32) * 4 + 2] && at(tOut, 32, 32) < 0.5 / 0.6 * 0.75 + 1e-3);
+  U.uFxLightGain.value.set([0, 0.6]);
+  const tOff = tDraw();
+  check("T. gain 0 ⇒ nothing", rgbSum(tOff) === 0);
+
+  // ---- D + L. composer effects -------------------------------------------------------------------
+  renderer.setRenderTarget(null);
+  const composer = new PP.EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, depthBuffer: true });
+  composer.setSize(64, 64);
+  const bg = new THREE.Scene();
+  const stripes = new Uint8Array(64 * 4 * 4);
+  for (let x = 0; x < 64; x++) for (let y = 0; y < 4; y++) { const i = (y * 64 + x) * 4; const v = (x >> 2) % 2 ? 255 : 0; stripes[i] = v; stripes[i + 1] = v; stripes[i + 2] = v; stripes[i + 3] = 255; }
+  const stripeTex = new THREE.DataTexture(stripes, 64, 4); stripeTex.needsUpdate = true;
+  const wallM = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshBasicMaterial({ map: stripeTex }));
+  wallM.position.set(0, 0, -7);
+  bg.add(wallM);
+  const distEffect = new FxDistortEffect({ camera: cam, cameraFar: cam.far });
+  const glowEffect = new FxGlowEffect({ camera: cam, depthSource: () => composer.depthTexture });
+  composer.addPass(new PP.RenderPass(bg, cam));
+  composer.addPass(new PP.EffectPass(cam, distEffect));
+  composer.addPass(new PP.EffectPass(cam, glowEffect));
+  // pmndrs renders the LAST pass to the canvas: read the default framebuffer
+  // right after the frame (same task, so the drawing buffer is still there).
+  const frame = () => {
+    composer.render(0.016);
+    renderer.setRenderTarget(null);
+    const b = new Uint8Array(64 * 64 * 4);
+    gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, b);
+    return Array.from(b, (v) => v / 255);
+  };
+  distort._resetFxDistortForTest();
+  const before = frame();
+  distort.spawnFxShockwave({ position: { x: 0, y: 0, z: -6 }, radius: 5, strength: 1, durationMs: 100000 });
+  const after = frame();
+  check("D. the distortion effect compiles in a composer and a shockwave moves pixels",
+    allFinite(after) && maxDiff(before, after) > 0.05, `maxDiff ${maxDiff(before, after).toFixed(3)}, sources ${distEffect.stats.sources}`);
+  distort._resetFxDistortForTest();
+  // glow: a provider with one hand-made additive FX bucket (the portal row)
+  const bMat = bucketMat(true); fx.applyParticleFxMaterial(bMat, { additive: true });
+  const bucket = mkIm(bMat, [op, age, portalRow + seed], 0);
+  bucket.userData = { particleFx: true, alpha: false };
+  const host = new THREE.Group(); host.add(bucket); bg.add(host);
+  t1f.setFxTier1Flag("fxGlow", true); // the glow is a high/ultra switch; this page boots at the mid default
+  const g0 = (() => { glowEffect.strength = 0; return frame(); })();
+  glowEffect.strength = 1;
+  const unreg = poc.registerFxGlowProvider({
+    collect(out) { out.push(bucket); },
+    materialFor() { return fx.makeParticleFxGlowMaterial(bMat); },
+    setFrame: fx.setParticleFxGlowFrame,
+  });
+  const g1 = frame();
+  unreg();
+  check("L. the glow effect compiles in a composer and adds light around the particle",
+    allFinite(g1) && rgbSum(g1) > rgbSum(g0) * 1.01, `with glow ${rgbSum(g1).toFixed(2)} vs without ${rgbSum(g0).toFixed(2)}; drawn ${glowEffect.stats.drawn}`);
+
+  R.programs = renderer.info.programs ? renderer.info.programs.length : -1;
+  check("no GL errors", gl.getError() === 0);
+  R.ok = R.errors.length === 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

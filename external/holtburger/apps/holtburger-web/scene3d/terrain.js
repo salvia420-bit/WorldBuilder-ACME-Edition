@@ -28,6 +28,20 @@ import { prewarmSubtree } from "./bake_prewarm.js";
 // far-patch shader (scene3d/far_terrain.js), so the near/far seam cannot drift
 // apart. See scene3d/terrain_shared_glsl.js for the full rationale.
 import { TERRAIN_SHARED_TAIL_GLSL } from "./terrain_shared_glsl.js";
+// Tier-1 particle upgrade (2026-10-10): the terrain takes the light pool's point
+// lights (`?terrainLights`, scene3d/vfx/fx_lights.js). The loop is compiled in
+// unless the URL says `terrainLights=off`; the preset / live switch drives the
+// shared `uFxLightGain` (0 ⇒ the helper returns before its loop).
+import { TERRAIN_FX_LIGHT_GLSL, TERRAIN_FX_LIGHT_UNIFORMS } from "./vfx/fx_lights.js";
+import { fxTier1UrlValue } from "./vfx/fx_tier1.js";
+const TERRAIN_FX_LIGHTS_ON = fxTier1UrlValue("terrainLights") !== false;
+// The call site, as a plain string: the fragment source must stay backtick-free
+// (no nested template literal inside it — terrain tests scan that span).
+const TERRAIN_FX_LIGHTS_CALL_GLSL = TERRAIN_FX_LIGHTS_ON
+  ? "  // Tier-1 terrainLights: torches, braziers, portals, bolts and spell flashes\n" +
+    "  // light the ground (three-world normal: ac(x,y,z) -> three(x,z,-y)).\n" +
+    "  terrainLit += hbTerrainFxLights(vWorldPos, vec3(geomN.x, geomN.z, -geomN.y), hbFxAlbedo);\n"
+  : "";
 import { terrainFogEnabled } from "./far_terrain_flags.js";
 import {
   landblockMeshToGeometry,
@@ -2017,7 +2031,7 @@ float csmShadowFactor(vec3 worldPos, float viewDepth) {
 #endif  // HB_TERRAIN_CSM
 
 ${TERRAIN_SHARED_TAIL_GLSL}
-
+${TERRAIN_FX_LIGHTS_ON ? TERRAIN_FX_LIGHT_GLSL : ""}
 // === FAR COMPOSITE RING — albedo bake gate (2026-08-02) ==================
 // 0.0 in every shipped frame. The Far Composite Ring clones this material once,
 // sets this to 1.0, and renders each far landblock through it with a top-down
@@ -3636,6 +3650,9 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // 2026-10-07 — the shading normal is hoisted into acShadeN so the step-4
   // micro-relief (?terrainMicro, scene3d/terrain_micro.js) perturbs exactly
   // the normal the bevel produced; it never touches the bevel itself.
+  // Tier-1 terrainLights: the unlit albedo the pool lights multiply (captured
+  // before the retail Gouraud term folds the sun + ambient into modulated).
+  vec3 hbFxAlbedo = modulated;
   if (acGouraud) {
     vec3 acShadeN = ${TERRAIN_ROUND_BEVEL_ON ? "terrainRoundBevel(vAcLightNormal)" : "vAcLightNormal"};${TERRAIN_MICRO.micro ? TERRAIN_MICRO_APPLY_GLSL : ""}
     modulated = terrainAcGouraud(modulated, acShadeN, uAcSunVec,
@@ -3934,7 +3951,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
                     + iblSpec + sandSparkle * cloudShadow * csmShadow;
   // Retail range fog. No-op (identity return, no uniforms declared) whenever
   // scene.fog is null — which is the shipped default before ?terrainFog.
-  fragColor = vec4(terrainApplyFog(terrainLit, vViewDepth), 1.0);
+${TERRAIN_FX_LIGHTS_CALL_GLSL}  fragColor = vec4(terrainApplyFog(terrainLit, vViewDepth), 1.0);
 }
 `;
 
@@ -6565,6 +6582,14 @@ export async function bakeTerrainForLandblock(
       // FAR COMPOSITE RING — 0.0 in every shipped frame. Only the far ring's
       // cloned scratch material ever sets this to 1.0 (see far_terrain.js).
       uBakeAlbedo: { value: 0.0 },
+      // Tier-1 terrainLights (scene3d/vfx/fx_lights.js) — shared BY IDENTITY
+      // across every terrain material; fx_lights.feedTerrainFxLights rewrites
+      // the values each frame from the light pool's nearest lit slots.
+      ...(TERRAIN_FX_LIGHTS_ON ? {
+        uFxLightPos: TERRAIN_FX_LIGHT_UNIFORMS.uFxLightPos,
+        uFxLightCol: TERRAIN_FX_LIGHT_UNIFORMS.uFxLightCol,
+        uFxLightGain: TERRAIN_FX_LIGHT_UNIFORMS.uFxLightGain,
+      } : {}),
       // S1 retail range fog. These are three's OWN injected fog uniform names:
       // WebGLRenderer.refreshFogUniforms() writes them every frame for any
       // material with `fog === true` whenever `scene.fog` is non-null, in the

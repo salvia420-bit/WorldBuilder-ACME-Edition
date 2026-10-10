@@ -14,6 +14,7 @@
 // loaded in isolation (Node test harness, devtools console).
 
 import { lowBandwidth } from "./bandwidth_tier.js";
+import { FX_TIER1_PRESETS } from "./vfx/fx_tier1.js";
 
 // ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
 //
@@ -158,6 +159,8 @@ export const PRESETS = {
         // contact darkening where walls meet the ground, eaves, recesses.
         // Half-res + depth-aware blur, ~0.5-1 ms on the 1070; high/ultra only.
         ssao: false,
+        // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): low preset.
+        ...FX_TIER1_PRESETS.low,
         // Terrain VFX (Wave 0B, docs/2026-07-31-terrain-vfx-plan.md §2.2/§5.8).
         // `terrainTrail` = the shared stomp/footprint render-target trail map.
         // SHIPS FALSE ON EVERY TIER (§5.9 "ship OFF, promote deliberately");
@@ -314,6 +317,8 @@ export const PRESETS = {
         lensFlare: false,
         lightShafts: false,
         ssao: false,
+        // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): mid preset.
+        ...FX_TIER1_PRESETS.mid,
         // Terrain VFX grass — see the `low` tier for the rationale. 24336 =
         // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
         terrainGrass: terrainMaster("grass", "mid"),
@@ -414,6 +419,8 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): high preset.
+        ...FX_TIER1_PRESETS.high,
         // Terrain VFX grass — see the `low` tier. 60025 = 245², the plan's
         // reference budget (240k tris, one draw call, <= 3.5 ms on an R9 290 —
         // a hypothesis, §8 risk 6: measure before fixing this number).
@@ -508,6 +515,8 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): ultra preset.
+        ...FX_TIER1_PRESETS.ultra,
         // Terrain VFX grass — see the `low` tier. 119716 = 346².
         terrainGrass: terrainMaster("grass", "ultra"),
         terrainGrassBlades: 119716,
@@ -610,6 +619,14 @@ const BOOL_FLAGS = new Set([
     "lensFlare",
     "lightShafts",
     "ssao",
+    // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js) — plain
+    // on/off switches, so parseBool's 1/true/yes widening is harmless.
+    "fxLights",
+    "terrainLights",
+    "fxKids",
+    "fxSmoke",
+    "fxDistort",
+    "fxGlow",
 ]);
 
 // Integer-typed flags.

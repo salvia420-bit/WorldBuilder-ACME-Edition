@@ -127,10 +127,12 @@ const composite =
   "\n// === particle_emitter_info.js ===\n" + stripped[2] +
   "\n// === particle_emitter.js ===\n" + stripped[3] +
   "\n// === sky_glow.js stub (tests/sky_glow.test.mjs covers the real one) ===\nfunction applySkyGlowMaterial() { return false; }\n" +
-  "\n// === particles_over_clouds.js stub (tests/particles_over_clouds.test.mjs covers the real one) ===\nfunction registerLateFxSource() { return () => {}; }\n" +
+  "\n// === particles_over_clouds.js stub (tests/particles_over_clouds.test.mjs covers the real one) ===\nfunction registerLateFxSource() { return () => {}; } function registerFxGlowProvider() { return () => {}; }\n" +
   // 2026-10-09 `?particleFx`: stubbed OFF so this suite keeps pinning the stock
   // bucket path; test_particle_fx.mjs covers the real particle_fx.js.
-  "\n// === particle_fx.js stub (test_particle_fx.mjs covers the real one) ===\nfunction particleFxEnabled() { return false; } function particleFxFrame() {} function particleFxRowFor() { return 0; } function applyParticleFxMaterial() { return false; } function particleFxAge() { return 0; } function particleFxPacked() { return 0; } function particleFxSeed() { return 0; }\n" +
+  "\n// === particle_fx.js stub (test_particle_fx.mjs covers the real one) ===\nfunction particleFxEnabled() { return false; } function particleFxFrame() {} function particleFxRowFor() { return 0; } function applyParticleFxMaterial() { return false; } function particleFxAge() { return 0; } function particleFxPacked() { return 0; } function particleFxSeed() { return 0; } function particleFxTier1() { return { kids: 0, light: 0, distort: 0 }; } function makeParticleFxGlowMaterial() { return null; } function setParticleFxGlowFrame() {}\n" +
+  // 2026-10-10 tier 1: stubbed OFF too (test_particle_fx_tier1.mjs covers the real modules).
+  "\n// === tier-1 stubs (particle_fx_kids.js, vfx/fx_tier1.js, vfx/fx_lights.js, vfx/fx_distort.js) ===\nclass ParticleFxKids {} function fxTier1Enabled() { return false; } function bindEmitterFxLight() { return null; } function releaseFxLight() {} function addFxDistortSource() { return null; } function releaseFxDistortSource() {}\n" +
   "\n// === additive_fog.js ===\n" + stripped[5] +
   "\n// === particle_manager.js ===\n" + stripped[4] +
   "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket, _resetInitialParticlesRetailForTests };";

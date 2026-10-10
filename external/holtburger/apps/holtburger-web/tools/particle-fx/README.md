@@ -21,6 +21,8 @@ python3 sheets.py      # labelled contact sheets of all 257 particle textures �
 python3 gen_profiles.py   # family recipe × behaviour × measured size/life/crowding × context
                           # + overrides/*.json (per key, files in name order) → work/profiles.json
 python3 build_catalog.py ../../data/particle-fx-catalog.json   # clamp/validate + synthesized rows
+python3 tier1.py       # tier 1 (2026-10-10): light / glow / children / distortion / smoke terms
+                       # per emitter → ../../data/particle-fx-tier1.json (+ tier1_overrides.json)
 cd ../.. && node scripts/gen-particle-fx-profiles.mjs          # → scene3d/particles/particle_fx_profiles.js
 node test_particle_fx.mjs                                      # includes the "module not stale" guard
 ```
@@ -52,6 +54,16 @@ does on screen, safe ranges, output schema).
 - `build_catalog.py` is the safety net: ranges clamped, spin zeroed on
   partial-UV quads, fades capped where retail already fades, misc/none/sky rows
   neutral.
+
+## Tier 1 (2026-10-10)
+
+`tier1.py` derives each emitter's tier-1 terms — FX light (intensity, range,
+colour), glow share, GPU children (kind, count, size, life, spread), distortion
+(kind, strength, radius), smoke shading (sunLit, noise, flow, shadow, rim) —
+from its catalog family + behaviour, the measured sprite size / lifespan / live
+count / texture colour, and context tags. The generator merges them into the
+same rows (10 texels). Runtime + switches: `docs/HANDOFF-particle-fx-tier1-2026-10-10.md`.
+Per-DID corrections: `tier1_overrides.json` (`{"emitters": {"0x…": {"light": 40, "kids": null}}}`).
 
 ## Editing one effect
 

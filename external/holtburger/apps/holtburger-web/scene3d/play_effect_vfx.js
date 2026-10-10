@@ -119,6 +119,9 @@ import { decodeSplatterId } from "./splatter_decode.js";
 import { noteSplatterHit } from "./kill_impulse.js";
 // 2026-10-07 `?particlesOverClouds` — dependency-free registry (no three).
 import { registerLateFxSource } from "./particles_over_clouds.js";
+// Tier 1 (2026-10-10): every cue lights the world around it (and the forceful
+// ones throw a shockwave) — scene3d/vfx/fx_cues.js.
+import { fireFxCue } from "./vfx/fx_cues.js";
 // 2026-10-09 `?burstFx` (DEFAULT ON) — per-family energy-form upgrade of the
 // placeholder bursts below (sphere shell / ring filament / crystal cube).
 import {
@@ -3587,6 +3590,10 @@ function _onPlayEffect(evt) {
  *   still traces against a sane origin.
  */
 function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLatNow(), silent = false) {
+  // Tier 1 (2026-10-10, `?fxLights` / `?fxDistort`): the world reacts to the cue
+  // — a light flash at the target and, for impacts / level-up / smites, a
+  // shockwave ring — whichever of the retail emitters or the placeholder draws.
+  _fireTier1Cue(targetGuid, scriptId);
   // Wave 17 / Phase 51: try the REAL retail VFX chain FIRST. If the
   // resolver completes (table → pick → physics-script → emitters),
   // skip the placeholder fallthrough for this event. On any miss the
@@ -3648,6 +3655,19 @@ function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLat
   _castLat("miss", _t0, "reason=noTable (placeholder is the only visual for this entity)");
   _runPlaceholderDispatch(targetGuid, scriptId);
   _castLat("placeholder", _t0, "shown (no-table arm)");
+}
+
+const _cueWorld = new THREE.Vector3();
+/** Tier 1: the cue's flash + shockwave at the target's root (THREE world). Never throws. */
+function _fireTier1Cue(targetGuid, scriptId) {
+  try {
+    const placement = _resolveTargetPlacement(targetGuid);
+    if (!placement || !placement.parent || !placement.position) return;
+    _cueWorld.copy(placement.position);
+    placement.parent.updateWorldMatrix?.(true, false);
+    placement.parent.localToWorld(_cueWorld);
+    fireFxCue(_burstLookFor(scriptId >>> 0), _cueWorld);
+  } catch (_) { /* a cue never breaks the dispatch */ }
 }
 
 /**

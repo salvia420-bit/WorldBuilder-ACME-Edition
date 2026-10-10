@@ -122,6 +122,27 @@ export function lateFxHookCount() {
   return _hooks.size;
 }
 
+// ── Tier-1 `?fxGlow` provider (2026-10-10) ───────────────────────────────────
+// The composer's glow effect (vfx/fx_glow_effect.js) draws every additive FX
+// bucket a second time, into its own half-res glow buffer. The composer must
+// not import the particles chunk, so particle_manager.js registers a provider:
+//   collect(out)      push the additive FX buckets that hold instances
+//   materialFor(im)   that bucket's glow-variant material (cached on the bucket)
+//   setFrame(opts)    per-frame glow uniforms (scene depth, size, decode, strength)
+let _glowProvider = null;
+
+/** Register the glow provider (one; the latest wins). Returns an unregister function. */
+export function registerFxGlowProvider(p) {
+  if (!p || typeof p.collect !== "function" || typeof p.materialFor !== "function") return () => {};
+  _glowProvider = p;
+  return () => { if (_glowProvider === p) _glowProvider = null; };
+}
+
+/** The registered glow provider, or null before the particles chunk loaded. */
+export function fxGlowProvider() {
+  return _glowProvider;
+}
+
 /**
  * three r184 `materialNeedsLights` (WebGLRenderer). Such a material in the
  * light-less late scene would render black, so it stays in the world pass.

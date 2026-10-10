@@ -1,29 +1,39 @@
 #!/usr/bin/env node
-// gen-particle-fx-profiles.mjs — data/particle-fx-catalog.json →
-// scene3d/particles/particle_fx_profiles.js (the compact runtime table read by
-// scene3d/particles/particle_fx.js, `?particleFx`).
+// gen-particle-fx-profiles.mjs — data/particle-fx-catalog.json (+ the tier-1
+// data/particle-fx-tier1.json) → scene3d/particles/particle_fx_profiles.js (the
+// compact runtime table read by scene3d/particles/particle_fx.js, `?particleFx`).
 //
 //   node scripts/gen-particle-fx-profiles.mjs            # write the module
 //   node scripts/gen-particle-fx-profiles.mjs --check    # exit 1 if it is stale
 //
 // Rows are deduplicated (emitters with identical params share a row); row 0 is
-// the neutral identity row (stock look). Retail emitters are keyed by their
-// 0x32 DID, synthesized emitters by their synth id (0xF0E000xx) and/or their
-// `fxProfile` name. Numbers keep 4 significant decimals.
+// the neutral identity row (stock look, no tier-1 terms). Retail emitters are
+// keyed by their 0x32 DID, synthesized emitters by their synth id (0xF0E000xx)
+// and/or their `fxProfile` name. Numbers keep 4 significant decimals.
+//
+// Tier 1 (2026-10-10) appends four texels per row (glow, GPU children, smoke
+// shading, light + distortion) and a CPU-side extra per row (light colour,
+// distortion radius) that never reaches the GPU table.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = join(HERE, "..");
 const CATALOG = join(APP, "data", "particle-fx-catalog.json");
+const TIER1 = join(APP, "data", "particle-fx-tier1.json");
 const OUT = join(APP, "scene3d", "particles", "particle_fx_profiles.js");
 
-export const TEXELS_PER_ROW = 6;
+export const TEXELS_PER_ROW = 10;
 
-/** Row (24 floats, texel-major) for a catalog params object. */
-export function rowOf(p) {
+const r4 = (x) => {
+  const v = Number(x);
+  return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : 0;
+};
+
+/** Row (40 floats, texel-major) for catalog params + tier-1 params. */
+export function rowOf(p, t = {}) {
   const t0 = p.tint0 || [1, 1, 1];
   const t1 = p.tint1 || [1, 1, 1];
   return [
@@ -33,36 +43,49 @@ export function rowOf(p) {
     p.erode ?? 0, p.flicker ?? 0, p.flickerHz ?? 8, p.twinkle ?? 0,
     p.spin ?? 0, p.wobble ?? 0, p.soft ?? 0, p.nearFade ?? 0,
     p.lit ?? 0, p.pulse ?? 0, p.pulseHz ?? 1, p.edgeSoft ?? 0,
-  ].map((x) => {
-    const v = Number(x);
-    return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : 0;
-  });
+    // tier 1
+    t.glow ?? 0, t.kids ?? 0, t.kidKind ?? 0, t.kidSize ?? 0,
+    t.kidLife ?? 0, t.kidSpread ?? 0, t.kidGain ?? 0, t.rim ?? 0,
+    t.sunLit ?? 0, t.noise ?? 0, t.flow ?? 0, t.shadow ?? 0,
+    t.light ?? 0, t.lightRange ?? 0, t.distort ?? 0, t.distortKind ?? 0,
+  ].map(r4);
+}
+
+/** CPU-only extras per row: light colour (max channel 1) + distortion radius (m). */
+export function extraOf(t = {}) {
+  const c = Array.isArray(t.lightColor) && t.lightColor.length === 3 ? t.lightColor : [1, 1, 1];
+  return [c[0], c[1], c[2], t.distortRadius ?? 0].map(r4);
 }
 
 export const NEUTRAL_ROW = rowOf({});
+export const NEUTRAL_EXTRA = extraOf({});
 
-export function buildTables(catalog) {
+export function buildTables(catalog, tier1 = { emitters: {}, synthesized: {} }) {
   const rows = [NEUTRAL_ROW];
-  const index = new Map([[JSON.stringify(NEUTRAL_ROW), 0]]);
-  const rowFor = (params) => {
-    const r = rowOf(params || {});
-    const k = JSON.stringify(r);
+  const extras = [NEUTRAL_EXTRA];
+  const index = new Map([[JSON.stringify([NEUTRAL_ROW, NEUTRAL_EXTRA]), 0]]);
+  const rowFor = (params, t1) => {
+    const r = rowOf(params || {}, t1 || {});
+    const x = extraOf(t1 || {});
+    const k = JSON.stringify([r, x]);
     let i = index.get(k);
-    if (i === undefined) { i = rows.length; rows.push(r); index.set(k, i); }
+    if (i === undefined) { i = rows.length; rows.push(r); extras.push(x); index.set(k, i); }
     return i;
   };
+  const t1e = tier1.emitters || {};
+  const t1s = tier1.synthesized || {};
   const didRows = [];
   for (const [did, e] of Object.entries(catalog.emitters || {})) {
-    didRows.push([parseInt(did, 16) >>> 0, rowFor(e.params)]);
+    didRows.push([parseInt(did, 16) >>> 0, rowFor(e.params, t1e[did])]);
   }
   const named = {};
   for (const [name, s] of Object.entries(catalog.synthesized || {})) {
-    const r = rowFor(s.params);
+    const r = rowFor(s.params, t1s[name]);
     named[name] = r;
     for (const id of s.ids || []) didRows.push([parseInt(id, 16) >>> 0, r]);
   }
   didRows.sort((a, b) => a[0] - b[0]);
-  return { rows, didRows, named };
+  return { rows, extras, didRows, named };
 }
 
 const fmt = (v) => {
@@ -71,19 +94,28 @@ const fmt = (v) => {
   return s.startsWith("0.") ? s.slice(1) : s.startsWith("-0.") ? `-${s.slice(2)}` : s;
 };
 
-export function renderModule(catalog) {
-  const { rows, didRows, named } = buildTables(catalog);
+export function renderModule(catalog, tier1) {
+  const { rows, extras, didRows, named } = buildTables(catalog, tier1);
+  const t1n = Object.keys(tier1?.emitters || {}).length;
   const lines = [];
-  lines.push("// GENERATED by scripts/gen-particle-fx-profiles.mjs from data/particle-fx-catalog.json — do not edit.");
-  lines.push("// Runtime table for scene3d/particles/particle_fx.js (`?particleFx`). Each row is 6 texels × 4 floats:");
+  lines.push("// GENERATED by scripts/gen-particle-fx-profiles.mjs from data/particle-fx-catalog.json and");
+  lines.push("// data/particle-fx-tier1.json — do not edit.");
+  lines.push(`// Runtime table for scene3d/particles/particle_fx.js (\`?particleFx\`). Each row is ${TEXELS_PER_ROW} texels × 4 floats:`);
   lines.push("//   [gain, core, sat, tintCurve | tint0.rgb, fadeIn | tint1.rgb, fadeOut | erode, flicker, flickerHz, twinkle |");
-  lines.push("//    spin, wobble, soft, nearFade | lit, pulse, pulseHz, edgeSoft]. Row 0 = neutral (the stock look).");
-  lines.push(`// ${Object.keys(catalog.emitters || {}).length} retail emitters + ${Object.keys(catalog.synthesized || {}).length} synthesized profiles → ${rows.length} distinct rows.`);
+  lines.push("//    spin, wobble, soft, nearFade | lit, pulse, pulseHz, edgeSoft |");
+  lines.push("//    glow, kids, kidKind, kidSize | kidLife, kidSpread, kidGain, rim | sunLit, noise, flow, shadow |");
+  lines.push("//    light, lightRange, distort, distortKind]. Row 0 = neutral (the stock look).");
+  lines.push("// FX_ROW_EXTRA[row] = [lightColor.rgb, distortRadius] (CPU only).");
+  lines.push(`// ${Object.keys(catalog.emitters || {}).length} retail emitters (${t1n} with tier-1 terms) + ${Object.keys(catalog.synthesized || {}).length} synthesized profiles → ${rows.length} distinct rows.`);
   lines.push("");
-  lines.push(`export const FX_PROFILE_VERSION = ${catalog.version | 0};`);
+  lines.push(`export const FX_PROFILE_VERSION = ${(catalog.version | 0) * 100 + (tier1?.version | 0)};`);
   lines.push(`export const FX_TEXELS_PER_ROW = ${TEXELS_PER_ROW};`);
   lines.push("export const FX_PROFILE_ROWS = [");
   for (const r of rows) lines.push(`[${r.map(fmt).join(",")}],`);
+  lines.push("];");
+  lines.push("/** row → [lightColor.r, lightColor.g, lightColor.b, distortRadius] */");
+  lines.push("export const FX_ROW_EXTRA = [");
+  for (const x of extras) lines.push(`[${x.map(fmt).join(",")}],`);
   lines.push("];");
   lines.push("/** emitter id (retail 0x32 DID or synthesized 0xF0E000xx) → row */");
   lines.push("export const FX_DID_ROWS = new Map([");
@@ -102,9 +134,14 @@ export function renderModule(catalog) {
   return lines.join("\n");
 }
 
+export function loadTier1() {
+  if (!existsSync(TIER1)) return { version: 0, emitters: {}, synthesized: {} };
+  return JSON.parse(readFileSync(TIER1, "utf8"));
+}
+
 function main() {
   const catalog = JSON.parse(readFileSync(CATALOG, "utf8"));
-  const text = renderModule(catalog);
+  const text = renderModule(catalog, loadTier1());
   if (process.argv.includes("--check")) {
     let cur = "";
     try { cur = readFileSync(OUT, "utf8"); } catch (_) { cur = ""; }

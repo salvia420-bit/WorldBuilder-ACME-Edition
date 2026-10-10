@@ -275,9 +275,12 @@ const A = build();
   const at = (re) => names.findIndex((n) => re.test(n));
   const iRestore = at(/^CameraLayerMask\(Restore\)$/);
   const iScrub = at(/NanScrub/);
-  const iAtmos = at(/^EffectPass\[CloudsEffect,AerialPerspectiveEffect\]$/);
+  // 2026-10-10 tier 1: `?fxDistort` (a UV warp) leads the atmosphere half and
+  // `?fxGlow` leads the post half when their presets have them on (the mid
+  // default here: distortion on, glow off). Section P8 pins the off lists.
+  const iAtmos = at(/^EffectPass\[(FxDistortEffect,)?CloudsEffect,AerialPerspectiveEffect\]$/);
   const iLate = at(/^ParticlesOverClouds$/);
-  const iPost = at(/^EffectPass\[BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/);
+  const iPost = at(/^EffectPass\[(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/);
   console.log("     " + names.slice(iRestore).join(" -> "));
   check("clouds adopted into the main pass (the bug's precondition)", p.cloudsMainPass === true);
   // 2026-10-07 (later): the late target is scrubbed again before bloom (1070:
@@ -417,7 +420,7 @@ for (const how of ["opts", "url"]) {
   // 2026-10-08 — unsplit chain: the post EffectPass also tone-maps, so the
   // ?layerHaze pass goes in front of it (after the scrub).
   check(`${how}: ONE post-chain EffectPass with clouds -> aerial -> bloom -> tone map -> dither`,
-    names[names.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
+    /^EffectPass\[(FxDistortEffect,)?CloudsEffect,AerialPerspectiveEffect,(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/.test(names[names.length - 1]) &&
     names[names.length - 2] === "LayeredHazePass" &&
     names[names.length - 3] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
   check(`${how}: no late pass, no post half`, !names.includes("ParticlesOverClouds") &&
@@ -427,6 +430,30 @@ for (const how of ["opts", "url"]) {
     lateCalls().length === 0 && lateObjects().every((o) => worldCalls()[0].visible.get(o) === true));
   check(`${how}: stats say why`, window.__particlesOverClouds.stats().why === "flag off");
   p.dispose();
+}
+
+console.log("\n-- P8 tier-1 effects: their slots, and the exact pre-tier-1 lists when off --");
+{
+  const on = build({ fxDistort: true, fxGlow: true }).p;
+  const onNames = on.composer.passes.map(describe);
+  check("tier 1 on: distortion leads the atmosphere half, glow leads the post half",
+    onNames.includes("EffectPass[FxDistortEffect,CloudsEffect,AerialPerspectiveEffect]") &&
+    onNames[onNames.length - 1] === "EffectPass[FxGlowEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]",
+    onNames.slice(-5).join(" | "));
+  check("tier 1 on: the pipeline returns both effects", !!on.fxDistort && !!on.fxGlow);
+  on.dispose();
+  const off = build({ fxDistort: false, fxGlow: false }).p;
+  const offNames = off.composer.passes.map(describe);
+  check("tier 1 off: the pre-tier-1 halves exactly",
+    offNames.includes("EffectPass[CloudsEffect,AerialPerspectiveEffect]") &&
+    offNames[offNames.length - 1] === "EffectPass[BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
+    off.fxDistort === null && off.fxGlow === null, offNames.slice(-5).join(" | "));
+  off.dispose();
+  const offSingle = build({ fxDistort: false, fxGlow: false, particlesOverClouds: false }).p;
+  const sNames = offSingle.composer.passes.map(describe);
+  check("tier 1 off, single chain: the pre-tier-1 list exactly",
+    sNames[sNames.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]");
+  offSingle.dispose();
 }
 
 // ---------------------------------------------------------------------------

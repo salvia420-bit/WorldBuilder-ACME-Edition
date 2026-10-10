@@ -101,8 +101,9 @@ console.log("\n-- L2 ?grade ---------------------------------------------------"
   const glsl = src("scene3d/color_grade.js");
   check("the tint multiplies AFTER the saturation mix", /mix\(vec3\(luma\), g, s\) \* uTint/.test(glsl));
   const pipe = src("scene3d/atmosphere_pipeline.js");
+  // 2026-10-10 tier 1: the particle glow (`?fxGlow`, null below high) leads the post half.
   check("split chain: [.., toneMapping, colorGrade, dithering]",
-    pipe.includes("[lensFlare, bloom, vignette, toneMapping, colorGrade, dithering]"));
+    pipe.includes("[fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering]"));
   check("legacy chain: [.., toneMapping, colorGrade, dithering]",
     pipe.includes("vignette, toneMapping, colorGrade, dithering].filter(Boolean)"));
 }
@@ -252,8 +253,9 @@ console.log("\n-- L10 ?ssao ---------------------------------------------------"
   check("composite restores the grass marker's alpha to 1", /mix\(inputColor\.a, 1\.0, grass\)/.test(ssaoSrc));
   check("log depth decoded as exp2(d * log2(far + 1)) - 1", /exp2\(d \* uLogFC\) - 1\.0/.test(ssaoSrc));
   const pipe = src("scene3d/atmosphere_pipeline.js");
-  check("composite is the first atmosphere effect after heat haze (before clouds + aerial)",
-    pipe.includes("[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve]"));
+  // 2026-10-10 tier 1: `?fxDistort` is a UV warp like the heat haze and rides right behind it.
+  check("composite is the first atmosphere effect after the UV warps (heat haze, fx distortion) — before clouds + aerial",
+    pipe.includes("[heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve]"));
   // 2026-10-08 — on the UNSPLIT chain the ?layerHaze pass also goes in front of
   // fxPass (it tone-maps there); AO still runs before it and before fxPass.
   check("the AO pass is added right before fxPass (only the unsplit-chain haze between)",

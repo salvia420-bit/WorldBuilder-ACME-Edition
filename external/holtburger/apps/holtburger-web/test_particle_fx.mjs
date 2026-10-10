@@ -76,7 +76,7 @@ async function run() {
   check("1. ?particleFx=on / garbage → on", fx.particleFxEnabled("?particleFx=on") && fx.particleFxEnabled("?particleFx=zz"));
 
   // ---- 2. catalog + generated module -------------------------------------------
-  const expected = gen.renderModule(catalog);
+  const expected = gen.renderModule(catalog, gen.loadTier1());
   const actual = readFileSync(new URL("./scene3d/particles/particle_fx_profiles.js", import.meta.url), "utf8");
   check("2. particle_fx_profiles.js is generated from the catalog (not stale)", expected === actual,
     expected === actual ? "" : "run: node scripts/gen-particle-fx-profiles.mjs");
@@ -94,9 +94,11 @@ async function run() {
   check("2. every retail DID resolves in FX_DID_ROWS", dids.every((d) => prof.FX_DID_ROWS.has(parseInt(d, 16) >>> 0)));
   const r0 = prof.FX_PROFILE_ROWS[0];
   check("2. row 0 is the neutral identity",
-    JSON.stringify(r0) === JSON.stringify([1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 0]), // [23] edgeSoft 0
+    JSON.stringify(r0) === JSON.stringify([1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 0, // [23] edgeSoft 0
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), // tier 1: no glow / kids / smoke / light / distortion
     JSON.stringify(r0));
-  check("2. every row has 24 finite floats", prof.FX_PROFILE_ROWS.every((r) => r.length === 24 && r.every(Number.isFinite)));
+  check("2. every row has 40 finite floats (10 texels, tier 1 included)",
+    prof.FX_PROFILE_ROWS.every((r) => r.length === 40 && r.every(Number.isFinite)) && prof.FX_TEXELS_PER_ROW === 10);
   // individuality: the upgrade is per emitter, not one blanket look
   const upgraded = dids.filter((d) => prof.FX_DID_ROWS.get(parseInt(d, 16) >>> 0) !== 0).length;
   check("2. retail emitters with a non-neutral upgrade (only misc/none/sky stay neutral)",
@@ -119,8 +121,8 @@ async function run() {
   };
   const ok = fx.patchParticleFxShader(shader);
   check("4. every r184 MeshBasicMaterial anchor matched", ok === true);
-  check("4. vertex stage fetches the profile row (texelFetch × 6) after <color_vertex>",
-    (shader.vertexShader.match(/texelFetch\( uFxTable/g) || []).length === 6 &&
+  check("4. vertex stage fetches the profile row (texelFetch × 6, + 2 smoke, + 1 glow under their defines) after <color_vertex>",
+    (shader.vertexShader.match(/texelFetch\( uFxTable/g) || []).length === 9 &&
     shader.vertexShader.indexOf("#include <color_vertex>") < shader.vertexShader.indexOf("texelFetch( uFxTable"));
   check("4. view depth written after <project_vertex>",
     shader.vertexShader.indexOf("vFxD.w = gl_Position.w") > shader.vertexShader.indexOf("#include <project_vertex>"));
@@ -136,15 +138,16 @@ async function run() {
   fx.applyParticleFxMaterial(mA, { additive: true });
   fx.applyParticleFxMaterial(mB, { additive: false });
   check("4. constant program keys (one additive, one alpha program)",
-    mA.customProgramCacheKey() === fx.FX_KEY_ADDITIVE && mB.customProgramCacheKey() === fx.FX_KEY_ALPHA &&
+    mA.customProgramCacheKey() === fx.particleFxProgramKey(true) && mB.customProgramCacheKey() === fx.particleFxProgramKey(false) &&
+    mA.customProgramCacheKey().startsWith(fx.FX_KEY_ADDITIVE) && mB.customProgramCacheKey().startsWith(fx.FX_KEY_ALPHA) &&
     "HB_FX_ADDITIVE" in mA.defines && !("HB_FX_ADDITIVE" in mB.defines));
   const wire = new THREE.MeshBasicMaterial({ wireframe: true });
   check("4. wireframe / non-basic materials are left alone",
     fx.applyParticleFxMaterial(wire, { additive: true }) === false &&
     fx.applyParticleFxMaterial(new THREE.MeshStandardMaterial(), { additive: true }) === false);
   const table = fx.particleFxTable();
-  check("4. profile DataTexture: 6 × rows RGBA float, nearest",
-    table.image.width === 6 && table.image.height === prof.FX_PROFILE_ROWS.length && table.type === THREE.FloatType &&
+  check("4. profile DataTexture: 10 × rows RGBA float, nearest",
+    table.image.width === 10 && table.image.height === prof.FX_PROFILE_ROWS.length && table.type === THREE.FloatType &&
     table.minFilter === THREE.NearestFilter);
 
   // ---- 5. packing + seeds -------------------------------------------------------------
@@ -299,7 +302,8 @@ async function run() {
     shA.fragmentShader.includes("smoothstep( 0.0, vFxE, min( fxEd.x, fxEd.y ) )"));
   check("7b. erosion window open at birth (threshold 0 ⇒ no early dimming)",
     shA.vertexShader.includes("p3.x > 0.0 ? ( p3.x + fxErW ) * pow( fxAge, 1.5 ) : 0.0") &&
-    shA.fragmentShader.includes("smoothstep( vFxB.z - vFxB.w, vFxB.z, fxEnergy )"));
+    shA.fragmentShader.includes("float fxThr = vFxB.z;") && shA.fragmentShader.includes("float fxThrW = vFxB.w;") &&
+    shA.fragmentShader.includes("smoothstep( fxThr - fxThrW, fxThr, fxEnergy )"));
   check("7b. additive K follows scene brightness: day 4, night 2, indoor 2, pinned K wins",
     fx.particleAddCalKFor(0, false, null) === fx.PARTICLE_ADD_CAL_DAY_K && fx.particleAddCalKFor(1, false, null) === fx.PARTICLE_ADD_CAL_DEFAULT_K &&
     fx.particleAddCalKFor(0, true, null) === fx.PARTICLE_ADD_CAL_DEFAULT_K && Math.abs(fx.particleAddCalKFor(0.5, false, null) - 3) < 1e-12 &&

@@ -38,7 +38,7 @@ import {
 // 2026-10-07 `?particlesOverClouds` (DEFAULT ON) — the composer draws these
 // objects AFTER the cloud + aerial composite. See particles_over_clouds.js and
 // `collectParticlesOverClouds` at the end of this file.
-import { registerLateFxSource } from "../particles_over_clouds.js";
+import { registerLateFxSource, registerFxGlowProvider } from "../particles_over_clouds.js";
 // 2026-10-09 `?particleFx` (DEFAULT ON) — the per-emitter visual upgrade on the
 // instanced bucket path. See particle_fx.js.
 import {
@@ -49,7 +49,16 @@ import {
   particleFxPacked,
   particleFxRowFor,
   particleFxSeed,
+  particleFxTier1,
+  makeParticleFxGlowMaterial,
+  setParticleFxGlowFrame,
 } from "./particle_fx.js";
+// 2026-10-10 tier 1 (scene3d/vfx/fx_tier1.js): GPU children, emitter lights,
+// distortion sources — all driven by the emitter's own profile row.
+import { ParticleFxKids } from "./particle_fx_kids.js";
+import { fxTier1Enabled } from "../vfx/fx_tier1.js";
+import { bindEmitterFxLight, releaseFxLight } from "../vfx/fx_lights.js";
+import { addFxDistortSource, releaseFxDistortSource } from "../vfx/fx_distort.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -1331,6 +1340,54 @@ export class ParticleManager {
     /** @type {Map<string, import('three').Material[]>} */
     this._materialPool = new Map();
     this._MATERIAL_POOL_MAX_PER_KEY = 512;
+    // Tier 1 `?fxKids` — this manager's GPU children (created on first use) and
+    // the per-tick switch (read once per tick, not per emitter).
+    /** @type {ParticleFxKids|null} */
+    this._kids = null;
+    this._kidsOn = false;
+  }
+
+  /**
+   * Tier 1: bind the emitter's own light (`?fxLights`) and distortion source
+   * (`?fxDistort`) from its profile row. Positions resolve live from the
+   * emitter origin (`_scene`-local) through `_scene` to THREE world space.
+   * @private
+   */
+  _bindTier1(emitter) {
+    const row = emitter._fxRow | 0;
+    if (!row || !this._scene || !particleFxEnabled()) return;
+    const t1 = particleFxTier1(row);
+    if (!(t1.light > 0) && !(t1.distort > 0)) return;
+    const scene = this._scene;
+    const info = emitter.info;
+    const finite = !!info && ((info.totalParticles | 0) > 0 || (info.totalSeconds || 0) > 0);
+    const resolve = (out) => {
+      try {
+        emitter._emitterOrigin(out);
+        scene.localToWorld(out);
+      } catch (_) { return false; }
+      return Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z);
+    };
+    if (t1.light > 0 && fxTier1Enabled("fxLights")) {
+      emitter._fxLight = bindEmitterFxLight({
+        emitter, resolvePosition: resolve, intensity: t1.light, range: t1.lightRange, color: t1.lightColor,
+        flicker: t1.flicker, flickerHz: t1.flickerHz, pulse: t1.pulse, pulseHz: t1.pulseHz, transient: finite,
+        // layer 0 = an outdoor static chain (entities and interiors ride layer 1)
+        outdoor: (emitter.renderLayer | 0) === 0,
+      });
+    }
+    if (t1.distort > 0 && fxTier1Enabled("fxDistort")) {
+      emitter._fxDistort = addFxDistortSource({
+        emitter, resolvePosition: resolve, kind: t1.distortKind, strength: t1.distort, radius: t1.distortRadius,
+      });
+    }
+  }
+
+  /** Tier 1: drop the emitter's light + distortion source. @private */
+  _releaseTier1(emitter) {
+    if (!emitter) return;
+    if (emitter._fxLight) { releaseFxLight(emitter._fxLight); emitter._fxLight = null; }
+    if (emitter._fxDistort) { releaseFxDistortSource(emitter._fxDistort); emitter._fxDistort = null; }
   }
 
   /**
@@ -1791,6 +1848,9 @@ export class ParticleManager {
     const id = (emitterId !== 0) ? emitterId : this.nextEmitterId++;
     emitter.id = id;
     this.particleTable.set(id, emitter);
+    // Tier 1 (2026-10-10): the emitter's light + distortion source. Never on the
+    // sky chain (owner rule: the sky's gaseous sheets stay as authored).
+    if (!skyGlow) this._bindTier1(emitter);
 
     // Retail deg_mode facing (2026-07-28) — stamp the DAT-authored billboard
     // mode (2-5, from the hw GfxObj's 0x11 degrade chain) onto DAT-replay
@@ -1881,6 +1941,9 @@ export class ParticleManager {
     if (this._instBuckets.size > 0) {
       for (const b of this._instBuckets.values()) b.n = 0;
     }
+    // Tier 1 `?fxKids`: children are rebuilt with the buckets, from scratch.
+    this._kidsOn = this._instancing && particleFxEnabled() && fxTier1Enabled("fxKids");
+    if (this._kids) this._kids.begin();
     this._instSortCam = null;
     this._instSortCamWorld = null;
     if (bbCamera && this._scene && (this._instBuckets.size > 0 || sharedAlphaBuckets.buckets.size > 0)) {
@@ -2070,6 +2133,7 @@ export class ParticleManager {
           this._reclaimSlotMaterial(slotMesh.material);
         }
       }
+      this._releaseTier1(e);
       this.particleTable.delete(id);
       // PLIFECYCLE-3: tell the owner registry this emitter finished (see the
       // ctor note on `onEmitterRemoved`). Never let a listener break the tick.
@@ -2135,6 +2199,11 @@ export class ParticleManager {
     const col = fx ? im.instanceColor.array : null;
     const row = emitter._fxRow | 0;
     const particles = emitter.particles;
+    // Tier 1 `?fxKids`: this emitter's children ride the same walk.
+    const kids = fx && this._kidsOn && row > 0 && particleFxTier1(row).kids > 0
+      ? (this._kids || (this._kids = new ParticleFxKids(this._scene)))
+      : null;
+    const nowSec = kids ? currentTime() : 0;
     for (let i = 0; i < parts.length && n < cap; i++) {
       const m = parts[i];
       if (!m || m.visible === false) continue;
@@ -2146,9 +2215,12 @@ export class ParticleManager {
       if (fx) {
         const p = particles ? particles[i] : null;
         const o = n * 3;
+        const age = particleFxAge(p);
+        const seed = particleFxSeed(emitter, i, p ? p.lifetime : 0);
         col[o] = op;
-        col[o + 1] = particleFxAge(p);
-        col[o + 2] = particleFxPacked(row, particleFxSeed(emitter, i, p ? p.lifetime : 0));
+        col[o + 1] = age;
+        col[o + 2] = particleFxPacked(row, seed);
+        if (kids) kids.pushParticle(emitter, i, m.matrix.elements, age, op, row, seed, nowSec);
       } else {
         _instColor.setRGB(op, op, op);
         im.setColorAt(n, _instColor);
@@ -2170,6 +2242,8 @@ export class ParticleManager {
       const im = b.im;
       if (im && im.count > 0 && im.userData?.skyChain !== true) out.push(im);
     }
+    // Tier 1 `?fxKids`: the children draw with their parents (after the clouds).
+    if (this._kids) this._kids.collect(out);
     for (const e of this.particleTable.values()) {
       // Instanced emitters keep their slot meshes off the graph (_NOOP seams).
       if (e.skyGlow === true || e._onMeshActive === _NOOP) continue;
@@ -2301,6 +2375,7 @@ export class ParticleManager {
       for (const b of this._instBuckets.values()) {
         try { b.im.parent?.remove(b.im); } catch (_) {}
         try { b.im.material?.dispose?.(); } catch (_) {}
+        try { b.im.userData?.__fxGlowMat?.dispose?.(); } catch (_) {}
         try { b.im.dispose?.(); } catch (_) {}
       }
       this._instBuckets.clear();
@@ -2324,6 +2399,8 @@ export class ParticleManager {
 
   /** Publish this tick's instance counts + buffer uploads. */
   _finalizeInstBuckets() {
+    // Tier 1 `?fxKids`: publish this tick's children (and reap idle layers).
+    if (this._kids) this._kids.finish();
     // ?particleSharedAlpha: every manager republishes the shared buckets (protocol note above).
     if (sharedAlphaBuckets.buckets.size > 0) {
       sharedAlphaBuckets.finalize(_sharedFrameId(), this._instSortCamWorld, _sortBucketBackToFront);
@@ -2346,6 +2423,7 @@ export class ParticleManager {
           // The bucket material is OUR clone (_appendInstances); the geometry
           // is the shared `_instGeomCache` clone and is NOT disposed here.
           try { im.material?.dispose?.(); } catch (_) {}
+          try { im.userData?.__fxGlowMat?.dispose?.(); } catch (_) {}
           try { im.dispose?.(); } catch (_) {}
           this._instBuckets.delete(key);
         }
@@ -2406,6 +2484,7 @@ export class ParticleManager {
         this._reclaimSlotMaterial(slotMesh.material);
       }
     }
+    this._releaseTier1(e);
     return this.particleTable.delete(emitterId);
   }
 }
@@ -2423,3 +2502,26 @@ export function collectParticlesOverClouds(out) {
   }
 }
 registerLateFxSource(collectParticlesOverClouds);
+
+/**
+ * Tier 1 `?fxGlow` (2026-10-10): the composer's glow effect draws every
+ * additive FX bucket again, into its glow buffer, through this provider (see
+ * particles_over_clouds.js `registerFxGlowProvider`). Alpha buckets are matter,
+ * not light, and the sky chain stays as authored.
+ */
+registerFxGlowProvider({
+  collect(out) {
+    for (const m of _allManagers) {
+      for (const b of m._instBuckets.values()) {
+        const im = b.im;
+        if (im && im.count > 0 && !b.alpha && im.userData?.particleFx === true && im.userData?.skyChain !== true) out.push(im);
+      }
+    }
+  },
+  materialFor(im) {
+    const ud = im.userData || (im.userData = {});
+    if (ud.__fxGlowMat === undefined) ud.__fxGlowMat = makeParticleFxGlowMaterial(im.material) || null;
+    return ud.__fxGlowMat;
+  },
+  setFrame: setParticleFxGlowFrame,
+});

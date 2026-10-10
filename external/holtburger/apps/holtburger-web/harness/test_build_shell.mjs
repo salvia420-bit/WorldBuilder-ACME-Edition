@@ -315,7 +315,11 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // imported by index.html; generator --check: up to date, 370 modules) → 354.
   // 2026-10-09 (`?burstFx`): + scene3d/play_effect_burst_fx.js (imported by
   // play_effect_vfx.js; generator --check: up to date, 371 modules) → 355.
-  const NON_APP_PRELOADS = 355;
+  // 2026-10-10 (tier-1 particle upgrade): + scene3d/vfx/fx_tier1.js (quality.js),
+  // fx_lights.js (terrain.js / loop.js), fx_cues.js + fx_distort.js
+  // (play_effect_vfx.js), fx_distort_effect.js + fx_glow_effect.js
+  // (atmosphere_pipeline.js) (generator --check: up to date, 377 modules) → 361.
+  const NON_APP_PRELOADS = 361;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

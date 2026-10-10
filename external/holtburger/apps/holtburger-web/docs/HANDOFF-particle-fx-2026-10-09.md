@@ -1,5 +1,11 @@
 # Handoff — every particle effect, individually upgraded (2026-10-09)
 
+> **Follow-up (2026-10-10):** tier 1 — effects light the world (and the
+> terrain), a particle glow buffer, GPU child particles, screen-space
+> distortion, volumetric smoke shading — plus the tier-2 design:
+> `docs/HANDOFF-particle-fx-tier1-2026-10-10.md`. It also fixes the display
+> calibration below on the default boot (it only ran inside the late pass).
+
 Owner goal: "upgrade all particle effects in holtburger-web in an individualized
 way … the particle effect should be well understood … whatever is done will have
 to appear well" — with no GPU box for eye tests. This doc is what shipped, how it

@@ -64,6 +64,10 @@ import {
   SealDepthRestorePass,
 } from "./portal_punch.js";
 import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_effect.js";
+// Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): screen-space
+// distortion from the effects in view, and the particle glow buffer.
+import { createFxDistortEffect, installFxDistortHandle } from "./vfx/fx_distort_effect.js";
+import { createFxGlowEffect, installFxGlowHandle } from "./vfx/fx_glow_effect.js";
 import { particlesOverCloudsEnabled, collectLateFx, runLateFxBefore, runLateFxAfter } from "./particles_over_clouds.js";
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
@@ -1472,6 +1476,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     ...(typeof opts?.terrainHaze === "boolean" ? { enabled: opts.terrainHaze } : {}),
   });
 
+  // Tier-1 `?fxDistort` (2026-10-10) — heat over fires, swirl over portals,
+  // shockwaves on impacts (vfx/fx_distort_effect.js). A `mainUv` + DEPTH effect
+  // like the heat haze, in the same pass right after it. null when off ⇒ the
+  // slot is dropped by filter(Boolean). `opts.fxDistort` forces it for tests.
+  const fxDistort = createFxDistortEffect({
+    camera,
+    cameraFar: camera.far,
+    ...(typeof opts?.fxDistort === "boolean" ? { enabled: opts.fxDistort } : {}),
+  });
+  // Tier-1 `?fxGlow` (2026-10-10) — the particle glow buffer
+  // (vfx/fx_glow_effect.js): each additive FX bucket's own `glow` share, drawn
+  // half-res, mip-blurred and ADDED ahead of lens flare / bloom / tone mapping.
+  // It occludes against the composer's scene depth (sampled, never attached).
+  const fxGlow = createFxGlowEffect({
+    camera,
+    depthSource: () => composer.depthTexture,
+    ...(typeof opts?.fxGlow === "boolean" ? { enabled: opts.fxGlow } : {}),
+  });
+
   // Clouds in the main pass (`?cloudsMainPass=on`). The CloudOverlay is built
   // by index.js before this pipeline (its `?clouds=on` block runs first);
   // `opts.cloudOverlay` wins, else the live scene handle. null → the slot is
@@ -1546,8 +1569,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // composite: HeatHaze → Clouds → AerialPerspective → [HorizonDissolve]
     // | particles | LensFlare → Bloom → Vignette → ToneMapping → ColorGrade
     // → Dithering.
-    const atmosEffects = [heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
-    const postEffects = [lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
+    const atmosEffects = [heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
+    const postEffects = [fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
     if (nanScrubOn) {
       lateScrubPass = new PostChainSourcePass(camera, particlesOverCloudsPass, makeNanScrub());
@@ -1577,7 +1600,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // before AerialPerspective's update() reads the overlay map it produces
       // (pmndrs updates effects in list order; all three carry DEPTH so the
       // stable attribute sort keeps this order).
-      ...[heatHaze, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
+      // Tier 1: fxDistort rides right behind the heat haze (both mainUv), fxGlow
+      // is added after the atmosphere and before lens flare / bloom.
+      ...[heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
     );
   }
   if (nanScrubOn) {
@@ -1619,6 +1644,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // `__heatHaze.strength = 0.012`, `.freq`, `.speed`, and `.state` for a
   // snapshot of what the terrain provider is publishing. No-op when off.
   installHeatHazeHandle(heatHaze);
+  installFxDistortHandle(fxDistort);
+  installFxGlowHandle(fxGlow);
   installColorGradeHandle(colorGrade);
   installSsaoHandle(ssaoPass);
   installLayerHazeHandle(layeredHaze);
@@ -1750,6 +1777,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     horizonDissolve,
     // null unless ?terrainVolcano=on&terrainHaze=on (wave 2B, plan §3.6).
     heatHaze,
+    // Tier 1 (2026-10-10): null when `?fxDistort` / `?fxGlow` are off for the
+    // session; live handles `window.__fxDistort` / `window.__fxGlow`.
+    fxDistort,
+    fxGlow,
     skyCapturePass,
     lensFlare,
     bloom,
@@ -2185,6 +2216,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       bloom?.dispose?.();
       vignette?.dispose?.();
       heatHaze?.dispose?.();
+      fxDistort?.dispose?.();
+      fxGlow?.dispose?.();
       toneMapping.dispose?.();
       colorGrade?.dispose?.();
       if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;

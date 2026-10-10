@@ -391,13 +391,15 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   for (let i = 0; i < 4; i += 1) { t += 0.016; mgr3.tick(); }
   const fxAdd = g3.children.find((o) => o.isInstancedMesh && o.name === `particle-inst-0x${GFX_ADD.toString(16)}`);
   const fxAlpha = g3.children.find((o) => o.isInstancedMesh && o.name === `particle-inst-0x${GFX_ALPHA.toString(16)}-a`);
+  // 2026-10-10 tier 1: the FX key carries the session's smoke / CSM variant
+  // suffix (`particleFxProgramKey`), still one constant key per blend.
   check("fx: additive bucket unfogged (retail) AND upgraded",
-    fxAdd?.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.FX_KEY_ADDITIVE);
+    fxAdd?.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.particleFxProgramKey(true));
   check("fx: alpha bucket keeps fog AND is upgraded",
-    fxAlpha?.material.fog === true && fxAlpha.material.customProgramCacheKey() === FX.FX_KEY_ALPHA);
+    fxAlpha?.material.fog === true && fxAlpha.material.customProgramCacheKey() === FX.particleFxProgramKey(false));
   window.__additiveFogBlack("fade");
   check("fx + fade: key keeps the FX program in front of the fade key",
-    fxAdd.material.customProgramCacheKey() === `${FX.FX_KEY_ADDITIVE}|${F.ADDITIVE_FOG_FADE_KEY}`, fxAdd.material.customProgramCacheKey());
+    fxAdd.material.customProgramCacheKey() === `${FX.particleFxProgramKey(true)}|${F.ADDITIVE_FOG_FADE_KEY}`, fxAdd.material.customProgramCacheKey());
   const sh = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader,
     uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.basic.uniforms) };
   fxAdd.material.onBeforeCompile(sh);
@@ -405,7 +407,7 @@ console.log("-- F5 real ParticleManager ----------------------------------------
     sh.fragmentShader.includes("fxC *= vColor.r") && sh.fragmentShader.includes(F.ADDITIVE_FOG_FADE_LINE));
   window.__additiveFogBlack("retail");
   check("fx + retail again: FX hook and key restored, unfogged",
-    fxAdd.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.FX_KEY_ADDITIVE);
+    fxAdd.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.particleFxProgramKey(true));
   FX.setParticleFxFlag(null);
 
   setCurrentTime(null);

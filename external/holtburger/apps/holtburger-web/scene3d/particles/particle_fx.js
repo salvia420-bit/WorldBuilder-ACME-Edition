@@ -59,13 +59,32 @@
 // view depth (log-depth aware: w = 2^(d·log2(far+1)) − 1), `after` switches the
 // soft term off again, so any particle drawn outside the late pass (indoor
 // split frames, `?particlesOverClouds=off`) simply gets no soft fade.
+//
+// TIER 1 (2026-10-10, scene3d/vfx/fx_tier1.js). Rows grow from 6 to 10 texels
+// (data/particle-fx-tier1.json, tools/particle-fx/tier1.py): glow, GPU
+// children, smoke shading, light + distortion. In THIS file:
+//   `?fxSmoke`  compiled in as HB_FX_SMOKE (program keys gain an "s"; "c" when
+//               the CSM is live): sun shading from a pseudo-normal (the screen
+//               gradient of the sprite's own alpha), one CSM sun-shadow tap per
+//               particle (vertex stage), noise erosion + breakup and curl flow
+//               off a procedural tileable noise texture, a back-lit rim.
+//   `?fxGlow`   the glow VARIANT (HB_FX_GLOW): the same row, drawn by
+//               vfx/fx_glow_effect.js into its half-res glow buffer, carrying
+//               `glow` x the calibrated colour, occluded by the scene depth.
+//   children / lights / distortion read the row on the CPU (`particleFxTier1`)
+//               — particle_fx_kids.js, vfx/fx_lights.js, vfx/fx_distort.js.
+// DISPLAY CALIBRATION now follows the renderer exposure on EVERY path (the
+// light tick below), not only inside the late pass: the single post-chain
+// composer (no `?clouds=on`, i.e. the default boot) applies the same x5
+// exposure, and there the 2026-10-09 calibration never ran.
 
 import * as THREE from "three";
 
-import { FX_PROFILE_ROWS, FX_DID_ROWS, FX_NAMED_ROWS, FX_TEXELS_PER_ROW, FX_PROFILE_VERSION } from "./particle_fx_profiles.js";
+import { FX_PROFILE_ROWS, FX_ROW_EXTRA, FX_DID_ROWS, FX_NAMED_ROWS, FX_TEXELS_PER_ROW, FX_PROFILE_VERSION } from "./particle_fx_profiles.js";
 import { registerLateFxHooks } from "../particles_over_clouds.js";
 import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
 import { viewerIndoorOr } from "../viewer_cell.js";
+import { fxTier1Enabled } from "../vfx/fx_tier1.js";
 
 const OFF_FORMS = new Set(["off", "0", "false", "no"]);
 
@@ -230,7 +249,16 @@ export const FX_PARAM_LAYOUT = Object.freeze([
   "erode", "flicker", "flickerHz", "twinkle",
   "spin", "wobble", "soft", "nearFade",
   "lit", "pulse", "pulseHz", "edgeSoft",
+  // tier 1 (2026-10-10)
+  "glow", "kids", "kidKind", "kidSize",
+  "kidLife", "kidSpread", "kidGain", "rim",
+  "sunLit", "noise", "flow", "shadow",
+  "light", "lightRange", "distort", "distortKind",
 ]);
+
+/** Tier-1 child kinds (kidKind) and distortion kinds (distortKind). */
+export const FX_KID_KIND = Object.freeze({ ember: 1, glitter: 2, spark: 3, drip: 4, inflow: 5, crackle: 6 });
+export const FX_DISTORT_KIND = Object.freeze({ heat: 1, swirl: 2, ring: 3, ripple: 4 });
 
 let _table = null;
 function _buildTable() {
@@ -284,6 +312,38 @@ export function particleFxRowParams(row) {
   return out;
 }
 
+const _TIER1_BASE = 24;
+const _tier1Cache = new Map();
+/**
+ * The CPU-side tier-1 terms of a row (cached, frozen): light (DAT intensity
+ * units) + range + colour, distortion strength / kind / radius, children,
+ * glow, smoke terms. Row 0 and an unknown row are all-zero.
+ * @param {number} row
+ */
+export function particleFxTier1(row) {
+  const r = row | 0;
+  let hit = _tier1Cache.get(r);
+  if (hit) return hit;
+  const src = FX_PROFILE_ROWS[r] || FX_PROFILE_ROWS[0];
+  const ex = FX_ROW_EXTRA[r] || FX_ROW_EXTRA[0] || [1, 1, 1, 0];
+  const v = (i) => +src[_TIER1_BASE + i] || 0;
+  hit = Object.freeze({
+    glow: v(0), kids: v(1) | 0, kidKind: v(2) | 0, kidSize: v(3),
+    kidLife: v(4), kidSpread: v(5), kidGain: v(6), rim: v(7),
+    sunLit: v(8), noise: v(9), flow: v(10), shadow: v(11),
+    light: v(12), lightRange: v(13), distort: v(14), distortKind: v(15) | 0,
+    lightColor: Object.freeze([+ex[0] || 0, +ex[1] || 0, +ex[2] || 0]),
+    distortRadius: +ex[3] || 0,
+    // the base terms the CPU-side consumers echo (light flicker / pulse)
+    flicker: +src[13] || 0, flickerHz: +src[14] || 0, pulse: +src[21] || 0, pulseHz: +src[22] || 0,
+    tint0: Object.freeze([+src[4] || 0, +src[5] || 0, +src[6] || 0]),
+    tint1: Object.freeze([+src[8] || 0, +src[9] || 0, +src[10] || 0]),
+    gain: +src[0] || 0,
+  });
+  _tier1Cache.set(r, hit);
+  return hit;
+}
+
 // ---------------------------------------------------------------------------
 // Shared uniforms (one object per uniform, shared by every FX material)
 // ---------------------------------------------------------------------------
@@ -305,7 +365,89 @@ export const FX_UNIFORMS = {
   uFxSoftOn: { value: 0 },
   uFxSceneW: { value: _softDummy },
   uFxInvRes: { value: new THREE.Vector2(1, 1) },
+  // tier 1 — `?fxSmoke`
+  uFxNoise: { value: null },
+  uFxSunWorld: { value: new THREE.Vector3(0.3, 0.8, 0.5).normalize() },
+  uFxSunAmt: { value: 1 },
+  // tier 1 — `?fxGlow` (set per frame by vfx/fx_glow_effect.js through the provider)
+  uFxGlowDepth: { value: null },
+  uFxGlowRes: { value: new THREE.Vector2(1, 1) },
+  uFxGlowLogFar: { value: 1 },
+  uFxGlowIsLog: { value: 1 },
+  uFxGlowNearFar: { value: new THREE.Vector2(0.1, 1000) },
+  uFxGlowScale: { value: 1 },
 };
+
+// ---------------------------------------------------------------------------
+// Tier-1 noise texture (`?fxSmoke`): 128² tileable, RGBA8, built once.
+//   r, g  two value-noise fBm fields (4 octaves, different lattices)
+//   b, a  the 2-D curl of a third fBm field, remapped to [0, 1]
+// Deterministic (a fixed xorshift seed): the same frame on every load.
+// ---------------------------------------------------------------------------
+export const FX_NOISE_SIZE = 128;
+let _noiseTex = null;
+/** Pure: the noise texel data (exported for tests). */
+export function buildParticleFxNoiseData(size = FX_NOISE_SIZE) {
+  let s = 0x2545f491;
+  const rnd = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return ((s >>> 0) % 100000) / 100000; };
+  const lattices = [0, 1, 2].map(() => Float32Array.from({ length: 64 * 64 }, rnd));
+  const vnoise = (lat, x, y, period) => {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const fx = x - xi, fy = y - yi;
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const at = (i, j) => lat[(((j % period) + period) % period) * 64 + (((i % period) + period) % period)];
+    const a = at(xi, yi), b = at(xi + 1, yi), c = at(xi, yi + 1), d = at(xi + 1, yi + 1);
+    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+  };
+  const fbm = (lat, u, v) => {
+    let sum = 0, amp = 0.5, norm = 0;
+    for (let o = 0; o < 4; o++) {
+      const period = 4 << o; // 4, 8, 16, 32 cells per tile: tileable at every octave
+      sum += amp * vnoise(lat, u * period, v * period, period);
+      norm += amp;
+      amp *= 0.5;
+    }
+    return sum / norm;
+  };
+  const data = new Uint8Array(size * size * 4);
+  const h = 1 / size;
+  for (let j = 0; j < size; j++) {
+    for (let i = 0; i < size; i++) {
+      const u = i / size, v = j / size;
+      const n0 = fbm(lattices[0], u, v);
+      const n1 = fbm(lattices[1], u, v);
+      // curl of psi = fbm2: (dpsi/dy, -dpsi/dx), central differences (wrapping)
+      const dx = (fbm(lattices[2], (u + h) % 1, v) - fbm(lattices[2], (u - h + 1) % 1, v)) / (2 * h);
+      const dy = (fbm(lattices[2], u, (v + h) % 1) - fbm(lattices[2], u, (v - h + 1) % 1)) / (2 * h);
+      let cx = dy, cy = -dx;
+      const m = Math.max(1e-6, Math.hypot(cx, cy));
+      const k = Math.min(1, m / 6) / m; // unit direction, magnitude saturating
+      cx *= k; cy *= k;
+      const o = (j * size + i) * 4;
+      data[o] = Math.round(Math.min(1, Math.max(0, (n0 - 0.2) / 0.6)) * 255);
+      data[o + 1] = Math.round(Math.min(1, Math.max(0, (n1 - 0.2) / 0.6)) * 255);
+      data[o + 2] = Math.round((cx * 0.5 + 0.5) * 255);
+      data[o + 3] = Math.round((cy * 0.5 + 0.5) * 255);
+    }
+  }
+  return data;
+}
+/** The shared noise texture (built on first use). */
+export function particleFxNoiseTexture() {
+  if (_noiseTex) return _noiseTex;
+  const t = new THREE.DataTexture(buildParticleFxNoiseData(FX_NOISE_SIZE), FX_NOISE_SIZE, FX_NOISE_SIZE,
+    THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.name = "particle-fx-noise";
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
+  _noiseTex = t;
+  return t;
+}
 
 // Light the `lit` param follows: day white → moonlit night → indoor torch-dim.
 const LIGHT_DAY = [1.0, 1.0, 1.0];
@@ -339,14 +481,37 @@ export function particleFxFrame(nowMs) {
   _lightCountdown = 30;
   let night = 0;
   let indoor = false;
+  let st = null;
   try {
-    const st = globalThis.window?.liveScene3d?.skyLightingController?._lastState;
+    st = globalThis.window?.liveScene3d?.skyLightingController?._lastState ?? null;
     if (st && Number.isFinite(st.dirPitch)) night = nightFactorFromAuthoredPitch(st.dirPitch);
   } catch (_) { night = 0; }
   try { indoor = viewerIndoorOr(false); } catch (_) { indoor = false; }
   setParticleFxEnvironment(night, indoor);
   particleFxLightFor(night, indoor, _lightScratch);
   FX_UNIFORMS.uFxLight.value.set(_lightScratch[0], _lightScratch[1], _lightScratch[2]);
+  // Tier 1 `?fxSmoke`: the sun the smoke is shaded by, in THREE world space
+  // (AC heading/pitch → AC (x, y, z) → three (x, z, -y), as loop.js
+  // tickTerrainSunDir derives the terrain's sun), fading out at night and
+  // indoors (the flat `lit` tint above carries those).
+  if (st && Number.isFinite(st.dirHeading) && Number.isFinite(st.dirPitch)) {
+    const D = Math.PI / 180;
+    const cp = Math.cos(st.dirPitch * D);
+    const ax = cp * Math.sin(st.dirHeading * D), ay = cp * Math.cos(st.dirHeading * D), az = Math.sin(st.dirPitch * D);
+    FX_UNIFORMS.uFxSunWorld.value.set(ax, az, -ay).normalize();
+  }
+  FX_UNIFORMS.uFxSunAmt.value = indoor ? 0 : 1 - _env.night;
+  // Display calibration on EVERY render path (see the tier-1 header note): the
+  // renderer carries the composer exposure (index.js sets it with the
+  // atmosphere composer; without one it stays 1 ⇒ factor 1). The late hook
+  // keeps writing the same values each frame where it runs.
+  try {
+    const r = globalThis.window?.liveScene3d?.renderer;
+    if (r && Number.isFinite(r.toneMappingExposure) && _live) {
+      FX_UNIFORMS.uFxAlphaCal.value = particleAlphaCalEnabled() ? particleAlphaCalFor(r.toneMappingExposure) : 1;
+      FX_UNIFORMS.uFxAddCal.value = particleAddCalFor(r.toneMappingExposure, _liveAddK());
+    }
+  } catch (_) { /* keep the last values */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +530,35 @@ varying vec4 vFxB;
 varying vec4 vFxC;
 varying vec4 vFxD;
 varying float vFxE;
+#ifdef HB_FX_SMOKE
+varying vec4 vFxF;   // sunLit, noise, flow, sun visibility (CSM tap mixed by the shadow amount)
+varying vec4 vFxG;   // rim, age, 0, 0
+#endif
+#ifdef HB_FX_GLOW
+varying float vFxGlow;
+#endif
+#ifdef HB_FX_CSM
+uniform highp sampler2DShadow uFxCsm0;
+uniform highp sampler2DShadow uFxCsm1;
+uniform highp sampler2DShadow uFxCsm2;
+uniform mat4 uFxCsmM0;
+uniform mat4 uFxCsmM1;
+uniform mat4 uFxCsmM2;
+uniform vec2 uFxCsmSplits;
+uniform float uFxCsmFar;
+float hbFxCsmTap( highp sampler2DShadow sm, mat4 m, vec3 wp ) {
+	vec4 sc = m * vec4( wp, 1.0 );
+	sc.xyz /= max( sc.w, 1e-6 );
+	if ( sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0 ) return 1.0;
+	return texture( sm, vec3( sc.xy, sc.z - 0.0015 ) );
+}
+float hbFxCsm( vec3 wp, float viewDepth ) {
+	if ( viewDepth > uFxCsmFar ) return 1.0;
+	if ( viewDepth < uFxCsmSplits.x ) return hbFxCsmTap( uFxCsm0, uFxCsmM0, wp );
+	if ( viewDepth < uFxCsmSplits.y ) return hbFxCsmTap( uFxCsm1, uFxCsmM1, wp );
+	return hbFxCsmTap( uFxCsm2, uFxCsmM2, wp );
+}
+#endif
 float hbFxHash( float p ) {
 	p = fract( p * 0.1031 );
 	p *= p + 33.33;
@@ -419,6 +613,15 @@ const VERT_BODY = /* glsl */`
 		vFxC = vec4( cos( fxAng ), sin( fxAng ), p4.y, fxSeed );
 		vFxD = vec4( p4.z, p4.w, fxSpinOn, 0.0 );
 		vFxE = p5.w;
+	#ifdef HB_FX_SMOKE
+		vec4 p7 = texelFetch( uFxTable, ivec2( 7, fxRow ), 0 ); // kidLife, kidSpread, kidGain, rim
+		vec4 p8 = texelFetch( uFxTable, ivec2( 8, fxRow ), 0 ); // sunLit, noise, flow, shadow
+		vFxF = p8;   // .w = shadow AMOUNT here; becomes the visibility after <project_vertex>
+		vFxG = vec4( p7.w, fxAge, 0.0, 0.0 );
+	#endif
+	#ifdef HB_FX_GLOW
+		vFxGlow = texelFetch( uFxTable, ivec2( 6, fxRow ), 0 ).x; // glow, kids, kidKind, kidSize
+	#endif
 	}
 #else
 	vFxA = vec4( 1.0 );
@@ -426,12 +629,37 @@ const VERT_BODY = /* glsl */`
 	vFxC = vec4( 1.0, 0.0, 0.0, 0.0 );
 	vFxD = vec4( 0.0 );
 	vFxE = 0.0;
+	#ifdef HB_FX_SMOKE
+	vFxF = vec4( 0.0 );
+	vFxG = vec4( 0.0 );
+	#endif
+	#ifdef HB_FX_GLOW
+	vFxGlow = 0.0;
+	#endif
 #endif
 `;
 
-// After <project_vertex>: view depth for the soft / near terms.
+// After <project_vertex>: view depth for the soft / near terms; the per-particle
+// sun-shadow tap (`?fxSmoke` + CSM); the glow variant drops glow-less rows.
 const VERT_DEPTH = /* glsl */`
 	vFxD.w = gl_Position.w;
+#ifdef HB_FX_SMOKE
+	{
+		float fxShAmt = clamp( vFxF.w, 0.0, 1.0 );
+		float fxVis = 1.0;
+	#if defined( HB_FX_CSM ) && defined( USE_INSTANCING )
+		if ( fxShAmt > 0.0 ) {
+			vec4 fxCw = modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+			vec4 fxCv = viewMatrix * fxCw;
+			fxVis = hbFxCsm( fxCw.xyz, -fxCv.z );
+		}
+	#endif
+		vFxF.w = mix( 1.0, fxVis, fxShAmt );
+	}
+#endif
+#ifdef HB_FX_GLOW
+	if ( vFxGlow <= 0.0 ) gl_Position = vec4( 0.0, 0.0, 2.0, 1.0 );
+#endif
 `;
 
 const FRAG_PARS = /* glsl */`
@@ -446,9 +674,26 @@ varying vec4 vFxB;
 varying vec4 vFxC;
 varying vec4 vFxD;
 varying float vFxE;
+#ifdef HB_FX_SMOKE
+uniform highp sampler2D uFxNoise;
+uniform vec3 uFxSunWorld;
+uniform float uFxSunAmt;
+varying vec4 vFxF;
+varying vec4 vFxG;
+#endif
+#ifdef HB_FX_GLOW
+uniform highp sampler2D uFxGlowDepth;
+uniform vec2 uFxGlowRes;
+uniform float uFxGlowLogFar;
+uniform float uFxGlowIsLog;
+uniform vec2 uFxGlowNearFar;
+uniform float uFxGlowScale;
+varying float vFxGlow;
+#endif
 `;
 
-// Replaces <map_fragment>: spin (masked to the texture square) + wobble.
+// Replaces <map_fragment>: spin (masked to the texture square) + wobble
+// (+ the `?fxSmoke` curl flow).
 const FRAG_MAP = /* glsl */`
 #ifdef USE_MAP
 	vec2 fxUv = vMapUv;
@@ -462,6 +707,14 @@ const FRAG_MAP = /* glsl */`
 			sin( fxUv.y * 11.0 + uFxTime * 4.3 + vFxC.w * 31.0 ),
 			cos( fxUv.x * 9.0 + uFxTime * 3.7 + vFxC.w * 17.0 ) );
 	}
+	#ifdef HB_FX_SMOKE
+	if ( vFxF.z > 0.0 ) {
+		// curl flow: advect the lookup along a divergence-free field that
+		// scrolls with time (licking flames, roiling smoke)
+		vec2 fxFl = texture2D( uFxNoise, vMapUv * 0.55 + vec2( vFxC.w * 5.17, vFxC.w * 2.31 - uFxTime * 0.045 ) ).ba * 2.0 - 1.0;
+		fxUv += fxFl * vFxF.z;
+	}
+	#endif
 	if ( vFxD.z > 0.5 ) {
 		vec2 fxE = step( vec2( 0.0 ), fxUv ) * step( fxUv, vec2( 1.0 ) );
 		fxInside = fxE.x * fxE.y;
@@ -478,7 +731,8 @@ const FRAG_MAP = /* glsl */`
 #endif
 `;
 
-// Replaces <color_fragment>: colour, erosion, soft + near fades, opacity.
+// Replaces <color_fragment>: colour, erosion, soft + near fades, opacity
+// (+ the `?fxSmoke` noise / sun / shadow / rim terms, + the glow output).
 const FRAG_COLOR = /* glsl */`
 	{
 		vec3 fxTex = diffuseColor.rgb;
@@ -496,11 +750,49 @@ const FRAG_COLOR = /* glsl */`
 		fxC *= 1.0 + vFxB.x * smoothstep( 0.45, 1.0, fxMxP );
 		fxC *= vFxA.rgb;
 		float fxA = diffuseColor.a * vFxA.a;
-		if ( vFxB.z > 0.0 ) fxA *= smoothstep( vFxB.z - vFxB.w, vFxB.z, fxEnergy );
+		float fxThr = vFxB.z;
+		float fxThrW = vFxB.w;
+	#ifdef HB_FX_SMOKE
+		if ( vFxF.y > 0.0 ) {
+			// noise breakup + erosion: the sprite dissolves into wisps, not
+			// as a shrinking blob (two octaves of the shared tileable noise,
+			// a per-particle offset, drifting over life)
+			vec2 fxNuv = vMapUv * 0.85 + vec2( vFxC.w * 7.13, vFxC.w * 3.71 + vFxG.y * 0.35 );
+			float fxN = texture2D( uFxNoise, fxNuv ).r * 0.65 + texture2D( uFxNoise, fxNuv * 2.3 + 0.37 ).g * 0.35;
+			fxEnergy *= mix( 1.0, 0.25 + 1.5 * fxN, vFxF.y );
+			fxA *= mix( 1.0, 0.55 + 0.9 * fxN, vFxF.y * 0.6 );
+			float fxThrN = vFxF.y * 0.3 * pow( vFxG.y, 1.4 );
+			if ( fxThrN > fxThr ) { fxThr = fxThrN; fxThrW = 0.12; }
+		}
+		if ( vFxF.x > 0.0 || vFxG.x > 0.0 || vFxF.w < 1.0 ) {
+			vec3 fxSunV = normalize( ( viewMatrix * vec4( uFxSunWorld, 0.0 ) ).xyz );
+			float fxSh = 1.0;
+			if ( vFxF.x > 0.0 ) {
+				// pseudo-normal: the screen gradient of the sprite's own density
+				// (alpha), per sprite-UV unit; +z faces the camera
+				float fxAl = diffuseColor.a;
+				vec2 fxG = vec2( dFdx( fxAl ), dFdy( fxAl ) ) / max( length( fwidth( vMapUv ) ), 1e-5 );
+				vec3 fxN3 = normalize( vec3( -fxG * 0.35, 1.0 ) );
+				float fxW = clamp( dot( fxN3, fxSunV ) * 0.5 + 0.5, 0.0, 1.0 );
+				fxSh = mix( 1.0, 0.45 + 0.9 * fxW, vFxF.x * uFxSunAmt );
+			}
+			// sun shadow (vFxF.w = 1 lit .. 0 shadowed, already scaled by the amount)
+			fxSh *= mix( 1.0, 0.5 + 0.5 * vFxF.w, uFxSunAmt );
+			fxC *= fxSh;
+			if ( vFxG.x > 0.0 ) {
+				// forward scatter: thin, back-lit edges glow when looking toward the sun
+				float fxFs = pow( clamp( -fxSunV.z, 0.0, 1.0 ), 4.0 ) * ( 1.0 - clamp( fxA, 0.0, 1.0 ) );
+				fxC *= 1.0 + 1.6 * vFxG.x * fxFs * uFxSunAmt * vFxF.w;
+			}
+		}
+	#endif
+		if ( fxThr > 0.0 ) fxA *= smoothstep( fxThr - fxThrW, fxThr, fxEnergy );
+	#ifndef HB_FX_GLOW
 		if ( vFxD.x > 0.0 && uFxSoftOn > 0.5 ) {
 			float fxSceneW = texture2D( uFxSceneW, gl_FragCoord.xy * uFxInvRes ).r;
 			fxA *= clamp( ( fxSceneW - vFxD.w ) / vFxD.x, 0.0, 1.0 );
 		}
+	#endif
 		if ( vFxD.y > 0.0 ) fxA *= smoothstep( 0.35 * vFxD.y, vFxD.y, vFxD.w );
 	#if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
 		#ifdef HB_FX_ADDITIVE
@@ -509,6 +801,21 @@ const FRAG_COLOR = /* glsl */`
 		fxA *= vColor.r;
 		fxC *= uFxAlphaCal;
 		#endif
+	#endif
+	#ifdef HB_FX_GLOW
+		{
+			// the glow buffer has no depth attachment: occlude against the
+			// scene depth by hand (a 0.5 m soft edge)
+			float fxGd = texture2D( uFxGlowDepth, gl_FragCoord.xy / uFxGlowRes ).x;
+			float fxGw;
+			if ( fxGd >= 0.999999 ) fxGw = 1e7;
+			else if ( uFxGlowIsLog > 0.5 ) fxGw = exp2( fxGd * uFxGlowLogFar ) - 1.0;
+			else {
+				float fxZ = fxGd * 2.0 - 1.0;
+				fxGw = ( 2.0 * uFxGlowNearFar.x * uFxGlowNearFar.y ) / ( uFxGlowNearFar.y + uFxGlowNearFar.x - fxZ * ( uFxGlowNearFar.y - uFxGlowNearFar.x ) );
+			}
+			fxC *= vFxGlow * uFxGlowScale * clamp( 1.0 - ( vFxD.w - fxGw ) * 2.0, 0.0, 1.0 );
+		}
 	#endif
 		diffuseColor = vec4( fxC, fxA );
 	}
@@ -540,7 +847,61 @@ export function patchParticleFxShader(shader) {
   shader.uniforms.uFxAddCal = FX_UNIFORMS.uFxAddCal;
   shader.uniforms.uFxSceneW = FX_UNIFORMS.uFxSceneW;
   shader.uniforms.uFxInvRes = FX_UNIFORMS.uFxInvRes;
+  // tier 1 (bound always; three uploads only what the program declares)
+  shader.uniforms.uFxNoise = FX_UNIFORMS.uFxNoise;
+  shader.uniforms.uFxSunWorld = FX_UNIFORMS.uFxSunWorld;
+  shader.uniforms.uFxSunAmt = FX_UNIFORMS.uFxSunAmt;
+  shader.uniforms.uFxGlowDepth = FX_UNIFORMS.uFxGlowDepth;
+  shader.uniforms.uFxGlowRes = FX_UNIFORMS.uFxGlowRes;
+  shader.uniforms.uFxGlowLogFar = FX_UNIFORMS.uFxGlowLogFar;
+  shader.uniforms.uFxGlowIsLog = FX_UNIFORMS.uFxGlowIsLog;
+  shader.uniforms.uFxGlowNearFar = FX_UNIFORMS.uFxGlowNearFar;
+  shader.uniforms.uFxGlowScale = FX_UNIFORMS.uFxGlowScale;
+  // the CSM's own shared uniform set (csm.js `csmState.uniforms`), BY IDENTITY:
+  // refreshCsmUniforms rewrites it every frame
+  const cu = _csmUniforms;
+  if (cu) {
+    shader.uniforms.uFxCsm0 = cu.uCsmShadowMap0;
+    shader.uniforms.uFxCsm1 = cu.uCsmShadowMap1;
+    shader.uniforms.uFxCsm2 = cu.uCsmShadowMap2;
+    shader.uniforms.uFxCsmM0 = cu.uCsmMatrix0;
+    shader.uniforms.uFxCsmM1 = cu.uCsmMatrix1;
+    shader.uniforms.uFxCsmM2 = cu.uCsmMatrix2;
+    shader.uniforms.uFxCsmSplits = cu.uCsmSplits;
+    shader.uniforms.uFxCsmFar = cu.uCsmFar;
+  }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Tier-1 compile-time variants (decided ONCE, at the first FX material: a
+// bucket built later must not create a second program family)
+// ---------------------------------------------------------------------------
+let _smokeOn = null;
+let _csmUniforms = null;
+function _tier1Variant() {
+  if (_smokeOn === null) {
+    _smokeOn = fxTier1Enabled("fxSmoke");
+    if (_smokeOn) {
+      try {
+        const u = globalThis.window?.liveScene3d?.csmState?.uniforms ?? null;
+        _csmUniforms = u && u.uCsmShadowMap0 && u.uCsmMatrix0 && u.uCsmSplits && u.uCsmFar ? u : null;
+      } catch (_) { _csmUniforms = null; }
+      if (!FX_UNIFORMS.uFxNoise.value) FX_UNIFORMS.uFxNoise.value = particleFxNoiseTexture();
+    }
+  }
+  return { smoke: _smokeOn, csm: _smokeOn && !!_csmUniforms };
+}
+/** Test seam: forget the latched variant (`smoke`/`csmUniforms` force it). */
+export function _setParticleFxVariantForTest(smoke = null, csmUniforms = null) {
+  _smokeOn = smoke;
+  _csmUniforms = csmUniforms;
+  if (smoke && !FX_UNIFORMS.uFxNoise.value) FX_UNIFORMS.uFxNoise.value = particleFxNoiseTexture();
+}
+/** The program cache key a bucket material gets (constant per session and blend). */
+export function particleFxProgramKey(additive) {
+  const v = _tier1Variant();
+  return (additive ? FX_KEY_ADDITIVE : FX_KEY_ALPHA) + (v.smoke ? "s" : "") + (v.csm ? "c" : "");
 }
 
 let _patchWarned = false;
@@ -558,7 +919,13 @@ export function applyParticleFxMaterial(mat, { additive }) {
   mat.defines = { ...(mat.defines || {}) };
   if (additive) mat.defines.HB_FX_ADDITIVE = "";
   else delete mat.defines.HB_FX_ADDITIVE;
-  const key = additive ? FX_KEY_ADDITIVE : FX_KEY_ALPHA;
+  // tier 1 `?fxSmoke` (+ the CSM sun-shadow tap when the cascades are live)
+  const variant = _tier1Variant();
+  if (variant.smoke) mat.defines.HB_FX_SMOKE = "";
+  else delete mat.defines.HB_FX_SMOKE;
+  if (variant.csm) mat.defines.HB_FX_CSM = "";
+  else delete mat.defines.HB_FX_CSM;
+  const key = particleFxProgramKey(additive);
   mat.onBeforeCompile = function hbParticleFx(shader) {
     if (!patchParticleFxShader(shader) && !_patchWarned) {
       _patchWarned = true;
@@ -570,6 +937,59 @@ export function applyParticleFxMaterial(mat, { additive }) {
   mat.userData.__particleFx = additive ? "add" : "alpha";
   mat.needsUpdate = true;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1 `?fxGlow` — the glow variant
+// ---------------------------------------------------------------------------
+
+export const FX_KEY_GLOW = "hbParticleFxGlow1";
+
+/**
+ * The glow-variant material for an additive FX bucket: same texture, same
+ * profile row, same calibration — draws `glow` x the particle's colour into
+ * the half-res glow buffer (vfx/fx_glow_effect.js), occluded by hand against
+ * the scene depth (no depth attachment there). One constant program.
+ * @returns {THREE.MeshBasicMaterial|null}
+ */
+export function makeParticleFxGlowMaterial(bucketMat) {
+  if (!bucketMat || bucketMat.isMeshBasicMaterial !== true) return null;
+  if (!FX_UNIFORMS.uFxTable.value) FX_UNIFORMS.uFxTable.value = particleFxTable();
+  const m = new THREE.MeshBasicMaterial({
+    map: bucketMat.map ?? null,
+    color: bucketMat.color ? bucketMat.color.clone() : new THREE.Color(1, 1, 1),
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+    side: bucketMat.side,
+    vertexColors: true,
+    fog: false,
+    toneMapped: false,
+  });
+  m.forceSinglePass = true;
+  m.defines = { HB_FX_ADDITIVE: "", HB_FX_GLOW: "" };
+  m.onBeforeCompile = function hbParticleFxGlow(shader) { patchParticleFxShader(shader); };
+  m.customProgramCacheKey = () => FX_KEY_GLOW;
+  m.name = "particle-fx-glow";
+  m.userData = { __particleFxGlow: true };
+  return m;
+}
+
+/**
+ * Per-frame glow inputs (the glow effect calls this through the provider
+ * before it draws): scene depth, glow-target size, depth decode, strength.
+ */
+export function setParticleFxGlowFrame({ depthTexture, width, height, camera, isLog, scale }) {
+  const U = FX_UNIFORMS;
+  U.uFxGlowDepth.value = depthTexture || null;
+  U.uFxGlowRes.value.set(Math.max(1, width | 0), Math.max(1, height | 0));
+  const far = Number.isFinite(camera?.far) && camera.far > 0 ? camera.far : 1000;
+  const near = Number.isFinite(camera?.near) && camera.near > 0 ? camera.near : 0.1;
+  U.uFxGlowLogFar.value = Math.log2(far + 1);
+  U.uFxGlowIsLog.value = isLog === false ? 0 : 1;
+  U.uFxGlowNearFar.value.set(near, far);
+  if (Number.isFinite(scale)) U.uFxGlowScale.value = Math.max(0, scale);
 }
 
 // ---------------------------------------------------------------------------

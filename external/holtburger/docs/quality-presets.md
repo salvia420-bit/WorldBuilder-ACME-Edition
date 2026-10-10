@@ -99,8 +99,24 @@ they accept the perf cost.
 | `terrainTrailRes` | 128 | 128 | 256 | 512 | Terrain VFX Wave 0B |
 | `terrainTrailRadius` | 32 | 48 | 48 | 64 | Terrain VFX Wave 0B |
 | `terrainTrailFade` | 4 | 4 | 4 | 4 | Terrain VFX Wave 0B |
+| `fxLights` | off | on | on | on | Particle tier 1 (2026-10-10) |
+| `terrainLights` | off | on | on | on | Particle tier 1 (2026-10-10) |
+| `fxKids` | off | on | on | on | Particle tier 1 (2026-10-10) |
+| `fxSmoke` | off | on | on | on | Particle tier 1 (2026-10-10) |
+| `fxDistort` | off | on | on | on | Particle tier 1 (2026-10-10) |
+| `fxGlow` | off | off | on | on | Particle tier 1 (2026-10-10) |
 
 ### Flag glossary
+
+- **Particle tier 1 (`fxLights`, `terrainLights`, `fxKids`, `fxSmoke`,
+  `fxDistort`, `fxGlow`)** — 2026-10-10. Effects light the world (FX light
+  sources through the fixed pool + the terrain taking pool lights), GPU child
+  particles, volumetric smoke shading, screen-space distortion, and the
+  particle glow buffer. Defaults live in `scene3d/vfx/fx_tier1.js`
+  (`FX_TIER1_PRESETS`, spread into PRESETS); plain on/off BOOL_FLAGS. Full
+  description, costs and the queued 1070 checks:
+  `apps/holtburger-web/docs/HANDOFF-particle-fx-tier1-2026-10-10.md`; rows in
+  `apps/holtburger-web/docs/url-flags.md`.
 
 - **`antialias`** — FPS plan A1 (2026-05-18). Passed to
   `WebGLRenderer({ antialias })` at construction. Off at `low`
