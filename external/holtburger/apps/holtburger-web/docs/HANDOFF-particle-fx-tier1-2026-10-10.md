@@ -8,7 +8,9 @@ follow-up plan:
   (including the terrain), particle glow is separated from particle colour, GPU
   child particles, screen-space distortion, and smoke that reads as volume.
 - **Tier 2 (five items + showcase compositions) is designed here**, against
-  the code as it now stands, ready to pick up.
+  the code as it now stands. **Built the same day:**
+  `docs/HANDOFF-particle-fx-tier2-2026-10-10.md` (what shipped and where the
+  build departs from this design, and why).
 
 Read `HANDOFF-particle-fx-2026-10-09.md` first for the per-emitter catalog, the
 profile table and the display calibration this builds on.
@@ -427,7 +429,14 @@ etc.).
   derived from the retail light law and the terrain's light scale, not from an
   eye test. They are tunable live.
 
-## Tier 2 — designed, not built
+## Tier 2 — the design (built 2026-10-10)
+
+> **Built:** `docs/HANDOFF-particle-fx-tier2-2026-10-10.md`. The design below is
+> kept as written; the tier-2 handoff lists each departure (the velocity rides
+> the instance matrix's bottom row instead of an `instancePrev` attribute; the
+> ground marks are a post-chain effect on both chains instead of a late-pass
+> draw; the ribbons take the projectile's element; the fields find woodland by
+> terrain code).
 
 Each item fits the structures tier 1 put in place. None changes the light
 count or adds per-instance program keys.

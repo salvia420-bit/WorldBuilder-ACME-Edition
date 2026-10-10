@@ -121,7 +121,11 @@ import { noteSplatterHit } from "./kill_impulse.js";
 import { registerLateFxSource } from "./particles_over_clouds.js";
 // Tier 1 (2026-10-10): every cue lights the world around it (and the forceful
 // ones throw a shockwave) — scene3d/vfx/fx_cues.js.
-import { fireFxCue } from "./vfx/fx_cues.js";
+import { fireFxCue, fxCueDecalAhead, FX_CUES } from "./vfx/fx_cues.js";
+// Tier 2 (2026-10-10): the projectile's element picks an impact's ground mark.
+import { fxProjectileElement } from "./vfx/fx_ribbons.js";
+// Tier 2: the level-up's light column and lens flare.
+import { fireFxShowcaseCue } from "./vfx/fx_showcase.js";
 // 2026-10-09 `?burstFx` (DEFAULT ON) — per-family energy-form upgrade of the
 // placeholder bursts below (sphere shell / ring filament / crystal cube).
 import {
@@ -3658,7 +3662,15 @@ function _dispatchResolvedPlayEffect(targetGuid, scriptId, speed, _t0 = _castLat
 }
 
 const _cueWorld = new THREE.Vector3();
-/** Tier 1: the cue's flash + shockwave at the target's root (THREE world). Never throws. */
+const _cueGround = new THREE.Vector3();
+const _cueFwd = new THREE.Vector3();
+/**
+ * Tier 1: the cue's flash + shockwave at the target's root (THREE world).
+ * Tier 2: its ground mark — under the target (outdoors on the terrain the
+ * session reports when that is within 3 m of the root, else at the root: a
+ * creature's feet; a projectile's impact point drops 1 m), or `ahead` metres in
+ * front of it for the breath weapons. Never throws.
+ */
 function _fireTier1Cue(targetGuid, scriptId) {
   try {
     const placement = _resolveTargetPlacement(targetGuid);
@@ -3666,8 +3678,36 @@ function _fireTier1Cue(targetGuid, scriptId) {
     _cueWorld.copy(placement.position);
     placement.parent.updateWorldMatrix?.(true, false);
     placement.parent.localToWorld(_cueWorld);
-    fireFxCue(_burstLookFor(scriptId >>> 0), _cueWorld);
+    const look = _burstLookFor(scriptId >>> 0);
+    let opts = null;
+    if (FX_CUES[look]?.decal) opts = _tier2CueOpts(targetGuid, placement, look);
+    fireFxCue(look, _cueWorld, opts);
+    fireFxShowcaseCue(look, _cueWorld);
   } catch (_) { /* a cue never breaks the dispatch */ }
+}
+
+/** Tier 2: where a cue's ground mark goes (THREE world) + the projectile's element. */
+function _tier2CueOpts(targetGuid, placement, look) {
+  const p = placement.position;   // AC frame (entitiesGroup-local), +Z up
+  let x = p.x, y = p.y;
+  const ahead = fxCueDecalAhead(look);
+  const inst = window.liveScene3d?.entityManager?.entityMap?.get(targetGuid >>> 0) || null;
+  if (ahead > 0 && inst && inst.root) {
+    // AC-forward of the rig is its local +Y (entities.js meleeFaceTarget note)
+    _cueFwd.set(0, 1, 0).applyQuaternion(inst.root.quaternion);
+    const l = Math.hypot(_cueFwd.x, _cueFwd.y);
+    if (l > 1e-4) { x += (_cueFwd.x / l) * ahead; y += (_cueFwd.y / l) * ahead; }
+  }
+  const projectile = !!(inst && inst._isProjectile);
+  let z = projectile ? p.z - 1.0 : p.z;
+  try {
+    const sh = window.__sessionHandle;
+    const gz = sh && typeof sh.terrainHeightAt === "function" ? sh.terrainHeightAt(x, y) : null;
+    if (typeof gz === "number" && Number.isFinite(gz) && Math.abs(gz - p.z) < 3) z = gz;
+  } catch (_) { /* no terrain answer: keep the root height */ }
+  _cueGround.set(x, y, z);
+  placement.parent.localToWorld(_cueGround);
+  return { decalWorld: _cueGround, element: projectile ? fxProjectileElement(targetGuid) : null };
 }
 
 /**

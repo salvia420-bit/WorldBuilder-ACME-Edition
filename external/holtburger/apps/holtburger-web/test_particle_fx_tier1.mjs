@@ -71,6 +71,9 @@ async function run() {
   const t1f = await import("./scene3d/vfx/fx_tier1.js");
   const quality = await import("./scene3d/quality.js");
   const fx = await import("./scene3d/particles/particle_fx.js");
+  // Tier 1 is checked on its own: the tier-2 variant (test_particle_fx_tier2.mjs)
+  // adds m / a / p to every program key, so latch it OFF here.
+  fx._setParticleFxTier2VariantForTest({ motion: false, shapes: false, clamp: false });
   const prof = await import("./scene3d/particles/particle_fx_profiles.js");
   const lights = await import("./scene3d/vfx/fx_lights.js");
   const lighting = await import("./scene3d/lighting.js");

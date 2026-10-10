@@ -76,7 +76,7 @@ async function run() {
   check("1. ?particleFx=on / garbage → on", fx.particleFxEnabled("?particleFx=on") && fx.particleFxEnabled("?particleFx=zz"));
 
   // ---- 2. catalog + generated module -------------------------------------------
-  const expected = gen.renderModule(catalog, gen.loadTier1());
+  const expected = gen.renderModule(catalog, gen.loadTier1(), gen.loadTier2());
   const actual = readFileSync(new URL("./scene3d/particles/particle_fx_profiles.js", import.meta.url), "utf8");
   check("2. particle_fx_profiles.js is generated from the catalog (not stale)", expected === actual,
     expected === actual ? "" : "run: node scripts/gen-particle-fx-profiles.mjs");
@@ -95,10 +95,11 @@ async function run() {
   const r0 = prof.FX_PROFILE_ROWS[0];
   check("2. row 0 is the neutral identity",
     JSON.stringify(r0) === JSON.stringify([1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 0, // [23] edgeSoft 0
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), // tier 1: no glow / kids / smoke / light / distortion
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // tier 1: no glow / kids / smoke / light / distortion
+      0, 0, 0, 0, 0, 0, 0, 0]), // tier 2: no stretch / shape / bounce, no sprite colour
     JSON.stringify(r0));
-  check("2. every row has 40 finite floats (10 texels, tier 1 included)",
-    prof.FX_PROFILE_ROWS.every((r) => r.length === 40 && r.every(Number.isFinite)) && prof.FX_TEXELS_PER_ROW === 10);
+  check("2. every row has 48 finite floats (12 texels, tiers 1 + 2 included)",
+    prof.FX_PROFILE_ROWS.every((r) => r.length === 48 && r.every(Number.isFinite)) && prof.FX_TEXELS_PER_ROW === 12);
   // individuality: the upgrade is per emitter, not one blanket look
   const upgraded = dids.filter((d) => prof.FX_DID_ROWS.get(parseInt(d, 16) >>> 0) !== 0).length;
   check("2. retail emitters with a non-neutral upgrade (only misc/none/sky stay neutral)",
@@ -121,8 +122,8 @@ async function run() {
   };
   const ok = fx.patchParticleFxShader(shader);
   check("4. every r184 MeshBasicMaterial anchor matched", ok === true);
-  check("4. vertex stage fetches the profile row (texelFetch × 6, + 2 smoke, + 1 glow under their defines) after <color_vertex>",
-    (shader.vertexShader.match(/texelFetch\( uFxTable/g) || []).length === 9 &&
+  check("4. vertex stage fetches the profile row (texelFetch × 6, + 2 smoke, + 1 glow, + 2 tier-2 under their defines) after <color_vertex>",
+    (shader.vertexShader.match(/texelFetch\( uFxTable/g) || []).length === 11 &&
     shader.vertexShader.indexOf("#include <color_vertex>") < shader.vertexShader.indexOf("texelFetch( uFxTable"));
   check("4. view depth written after <project_vertex>",
     shader.vertexShader.indexOf("vFxD.w = gl_Position.w") > shader.vertexShader.indexOf("#include <project_vertex>"));
@@ -146,8 +147,8 @@ async function run() {
     fx.applyParticleFxMaterial(wire, { additive: true }) === false &&
     fx.applyParticleFxMaterial(new THREE.MeshStandardMaterial(), { additive: true }) === false);
   const table = fx.particleFxTable();
-  check("4. profile DataTexture: 10 × rows RGBA float, nearest",
-    table.image.width === 10 && table.image.height === prof.FX_PROFILE_ROWS.length && table.type === THREE.FloatType &&
+  check("4. profile DataTexture: 12 × rows RGBA float, nearest",
+    table.image.width === 12 && table.image.height === prof.FX_PROFILE_ROWS.length && table.type === THREE.FloatType &&
     table.minFilter === THREE.NearestFilter);
 
   // ---- 5. packing + seeds -------------------------------------------------------------

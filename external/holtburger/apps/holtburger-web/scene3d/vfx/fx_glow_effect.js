@@ -29,7 +29,7 @@
 
 import * as THREE from "three";
 import { BlendFunction, Effect, MipmapBlurPass } from "postprocessing";
-import { fxGlowProvider } from "../particles_over_clouds.js";
+import { fxGlowProvider, fxGlowExtraSources } from "../particles_over_clouds.js";
 import { fxTier1Enabled } from "./fx_tier1.js";
 
 // No backticks in the GLSL (template literal).
@@ -83,6 +83,10 @@ export class FxGlowEffect extends Effect {
     this._twins = new Map();
     this._list = [];
     this._seen = new Set();
+    // tier 2: glow extras (fireflies, the level-up flare) — object → twin Mesh
+    this._extraTwins = new Map();
+    this._extraList = [];
+    this._extraSeen = new Set();
     this._clearColor = new THREE.Color();
     this._dirty = true;
     this.stats = { frames: 0, buckets: 0, drawn: 0, cpuMs: 0 };
@@ -153,8 +157,45 @@ export class FxGlowEffect extends Effect {
         this._twins.delete(b);
       }
     }
+    // Tier 2: the glow extras (their own materials; twins share the geometry)
+    const xl = this._extraList;
+    xl.length = 0;
+    const xs = this._extraSeen;
+    xs.clear();
+    const extraSources = cam && fxTier1Enabled("fxGlow") ? fxGlowExtraSources() : null;
+    if (extraSources && extraSources.size) {
+      for (const src of extraSources) {
+        try { src.collect(xl); } catch (_) { /* a source never breaks the frame */ }
+      }
+      for (let i = 0; i < xl.length; i++) {
+        const e = xl[i];
+        const o = e && e.object;
+        if (!o || !e.material || !o.geometry || !o.parent || o.visible === false || !_ancestorsVisible(o)) continue;
+        let t = this._extraTwins.get(o);
+        if (t && (t.material !== e.material || t.geometry !== o.geometry)) { this.glowScene.remove(t); t = null; }
+        if (!t) {
+          t = new THREE.Mesh(o.geometry, e.material);
+          t.frustumCulled = false;
+          t.matrixAutoUpdate = false;
+          t.layers.mask = ALL_LAYERS;
+          t.name = `${o.name || "extra"}-glow`;
+          this._extraTwins.set(o, t);
+          this.glowScene.add(t);
+        }
+        t.matrixWorld.copy(o.matrixWorld);
+        xs.add(o);
+        drawn++;
+      }
+    }
+    for (const [o, t] of this._extraTwins) {
+      if (!xs.has(o)) {
+        this.glowScene.remove(t);
+        this._extraTwins.delete(o);
+      }
+    }
     this.stats.buckets = list.length;
     this.stats.drawn = drawn;
+    this.stats.extras = xs.size;
     const prevTarget = renderer.getRenderTarget();
     const prevAuto = renderer.autoClear;
     renderer.getClearColor(this._clearColor);
@@ -172,14 +213,20 @@ export class FxGlowEffect extends Effect {
         }
       } else {
         renderer.clear(true, false, false);
-        prov.setFrame?.({
+        const frame = {
           depthTexture: this._depthSource(),
           width: this.glowTarget.width,
           height: this.glowTarget.height,
           camera: cam,
           isLog: renderer.capabilities?.logarithmicDepthBuffer === true,
           scale: this.strength,
-        });
+        };
+        prov?.setFrame?.(frame);
+        if (xs.size && extraSources) {
+          for (const src of extraSources) {
+            try { src.setFrame?.(frame); } catch (_) { /* never break the frame */ }
+          }
+        }
         renderer.render(this.glowScene, cam);
         this.blurPass.render(renderer, this.glowTarget);
         this._dirty = true;
@@ -208,6 +255,8 @@ export class FxGlowEffect extends Effect {
   dispose() {
     for (const t of this._twins.values()) this.glowScene.remove(t);
     this._twins.clear();
+    for (const t of this._extraTwins.values()) this.glowScene.remove(t);
+    this._extraTwins.clear();
     this.glowTarget.dispose();
     this.blurPass.dispose();
     super.dispose();

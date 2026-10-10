@@ -394,6 +394,10 @@ const TIER5 = [
   // 2026-10-10 tier-1 particle upgrade: FX lights + terrain lights, glow,
   // GPU children, distortion, smoke shading (scene3d/vfx/fx_tier1.js).
   { tier: 5, flag: "particleFxTier1", file: "test_particle_fx_tier1.mjs" },
+  // 2026-10-10 tier-2 particle upgrade: velocity stretch + ribbons + swing
+  // trails, analytic sprites, ground marks, ambient fields, sub-pixel clamp,
+  // showcase set pieces (scene3d/vfx/fx_tier2.js).
+  { tier: 5, flag: "particleFxTier2", file: "test_particle_fx_tier2.mjs" },
   { tier: 5, flag: "burstFx", file: "test_play_effect_burst_fx.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },

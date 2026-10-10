@@ -1,0 +1,404 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>particle fx tier-2 gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Tier-2 particle upgrade GPU smoke (driven by test_particle_fx_tier2_gpu.cjs).
+// 64×64 WebGL2 canvases, logarithmic depth like the client, no game world:
+//   M. motion: the velocity row is stripped (a neutral row with a velocity draws
+//      the stock pixels), a stretch row at rest draws the tier-1 pixels, a fast
+//      one lengthens toward its tail with its light roughly conserved
+//   A. analytic sprites: a row without a shape draws the texture exactly; star /
+//      orb / ring rows draw finite, different, symmetric pixels; the ring is a ring
+//   P. sub-pixel clamp: a 0.1 px particle swept across a pixel keeps a steady
+//      energy with the clamp and pops without it
+//   K. spark bounce: with the late pass's linear depth copy of a floor, the spark
+//      children stay above it
+//   D. ground marks in a composer: a scorch darkens the floor under it and
+//      nothing outside its box; a ring adds its colour
+//   R / F / S. ribbons, ambient fields, showcase billboards: compile, draw, and
+//      their glow variants compile in the glow pass
+//   G. the FX glow variant with the tier-2 defines draws
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0 };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const fx = await import("/scene3d/particles/particle_fx.js");
+  const pm = await import("/scene3d/particles/particle_manager.js");
+  const prof = await import("/scene3d/particles/particle_fx_profiles.js");
+  const kidsMod = await import("/scene3d/particles/particle_fx_kids.js");
+  const dec = await import("/scene3d/vfx/fx_decals.js");
+  const rib = await import("/scene3d/vfx/fx_ribbons.js");
+  const fields = await import("/scene3d/vfx/fx_fields.js");
+  const show = await import("/scene3d/vfx/fx_showcase.js");
+  const poc = await import("/scene3d/particles_over_clouds.js");
+  const { FxDecalEffect } = await import("/scene3d/vfx/fx_decal_effect.js");
+  const { FxGlowEffect, installFxGlowHandle } = await import("/scene3d/vfx/fx_glow_effect.js");
+  const t1f = await import("/scene3d/vfx/fx_tier1.js");
+  const PP = await import("postprocessing");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 64; canvas.height = 64;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    R.errors.push(`shader error: ${gl.getProgramInfoLog(program)} | VS: ${gl.getShaderInfoLog(vs)} | FS: ${gl.getShaderInfoLog(fs)}`);
+  };
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+  R.logDepth = renderer.capabilities.logarithmicDepthBuffer === true;
+
+  const N = 8, px = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4, dx = x - 3.5, dy = y - 3.5, r = Math.sqrt(dx * dx + dy * dy) / 5;
+    px[i] = 220; px[i + 1] = 160; px[i + 2] = 120; px[i + 3] = Math.max(0, 255 * (1 - r));
+  }
+  const tex = new THREE.DataTexture(px, N, N);
+  tex.magFilter = THREE.LinearFilter; tex.needsUpdate = true;
+
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+  const instGeom = new THREE.PlaneGeometry(2, 2);
+  instGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(instGeom.attributes.position.count * 3).fill(1), 3));
+  const rt = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: true });
+  const read = (t = rt) => { const b = new Float32Array(t.width * t.height * 4); renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, b); return b; };
+  const maxDiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+  const allFinite = (a) => a.every(Number.isFinite);
+  const rgbSum = (a) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += a[i] + a[i + 1] + a[i + 2]; return s; };
+  const litCols = (a, w = 64, thr = 1e-3) => {
+    let lo = w, hi = -1;
+    for (let y = 0; y < a.length / 4 / w; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (a[i] + a[i + 1] + a[i + 2] > thr) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
+    }
+    return [lo, hi];
+  };
+  const bucketMat = (additive) => {
+    const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    if (additive) { m.blending = THREE.AdditiveBlending; m.depthWrite = false; m.vertexColors = true; }
+    else pm._configureAlphaBucketMaterial(m);
+    m.forceSinglePass = true;
+    return m;
+  };
+  const fxMat = (variant, additive = true) => {
+    fx._setParticleFxTier2VariantForTest(variant);
+    const m = bucketMat(additive);
+    fx.applyParticleFxMaterial(m, { additive });
+    return m;
+  };
+  const mkIm = (mat, rgb, { x = 0, y = 0, z = 0, s = 1, vel = null } = {}) => {
+    const im = new THREE.InstancedMesh(instGeom, mat, 1);
+    const m4 = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(s, s, s));
+    im.setMatrixAt(0, m4);
+    if (vel) { const a = im.instanceMatrix.array; a[3] = vel[0]; a[7] = vel[1]; a[11] = vel[2]; }
+    im.setColorAt(0, new THREE.Color());
+    im.instanceColor.array.set(rgb);
+    im.instanceColor.needsUpdate = true;
+    im.frustumCulled = false;
+    return im;
+  };
+  const drawScene = (scene, target = rt, camera = cam) => {
+    renderer.setRenderTarget(target);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    return read(target);
+  };
+  const drawIm = (mat, rgb, o) => { const s = new THREE.Scene(); s.add(mkIm(mat, rgb, o)); return drawScene(s); };
+  const row = (did) => prof.FX_DID_ROWS.get(did >>> 0);
+  fx._setParticleFxVariantForTest(false, null);
+  fx.particleFxFrame(1234.5);
+  fx.FX_UNIFORMS.uFxAddCal.value = 1;
+  fx.FX_UNIFORMS.uFxViewH.value = 64;
+  const op = 0.8, age = 0.4, seed = 0.5;
+  const OFF = { motion: false, shapes: false, clamp: false };
+
+  // ---- M. motion -------------------------------------------------------------------------------
+  const plain = fxMat(OFF);
+  const motion = fxMat({ motion: true, shapes: false, clamp: false });
+  check("M. motion program key", motion.customProgramCacheKey() === `${fx.FX_KEY_ADDITIVE}m`, motion.customProgramCacheKey());
+  const n0 = drawIm(plain, [op, age, 0 + seed], { s: 0.5 });
+  const n1 = drawIm(motion, [op, age, 0 + seed], { s: 0.5, vel: [6, 2, 0] });
+  check("M. the velocity row is stripped: a neutral row WITH a velocity draws the stock pixels",
+    maxDiff(n0, n1) < 2e-3 && rgbSum(n0) > 1, `maxDiff ${maxDiff(n0, n1).toExponential(2)}`);
+  const specks = row(0x3200000B);
+  const r0 = drawIm(plain, [op, age, specks + seed], { s: 0.5 });
+  const r1 = drawIm(motion, [op, age, specks + seed], { s: 0.5, vel: [0, 0, 0] });
+  check("M. a stretch row at rest draws the tier-1 pixels", maxDiff(r0, r1) < 2e-3, `maxDiff ${maxDiff(r0, r1).toExponential(2)}`);
+  const r2 = drawIm(motion, [op, age, specks + seed], { s: 0.5, vel: [20, 0, 0] });
+  const [lo0, hi0] = litCols(r0), [lo2, hi2] = litCols(r2);
+  check("M. a fast particle stretches toward its tail (left for +x), its head stays put",
+    allFinite(r2) && lo2 < lo0 - 3 && Math.abs(hi2 - hi0) <= 2, `cols stock [${lo0},${hi0}] moving [${lo2},${hi2}]`);
+  const ratio = rgbSum(r2) / Math.max(1e-9, rgbSum(r0));
+  check("M. its light is roughly conserved over the longer streak", ratio > 0.6 && ratio < 1.8, `ratio ${ratio.toFixed(2)}`);
+
+  // ---- A. analytic sprites ------------------------------------------------------------------------
+  const shp = fxMat({ motion: false, shapes: true, clamp: false });
+  check("A. shapes program key", shp.customProgramCacheKey() === `${fx.FX_KEY_ADDITIVE}a`);
+  const flame = row(0x3200026E);
+  const f0 = drawIm(plain, [op, age, flame + seed]);
+  const f1 = drawIm(shp, [op, age, flame + seed]);
+  check("A. a row without a shape draws the texture exactly", maxDiff(f0, f1) < 2e-3, `maxDiff ${maxDiff(f0, f1).toExponential(2)}`);
+  const kinds = [["star", 0x3200005D], ["orb", 0x3200003C], ["ring", 0x320002D6]];
+  const imgs = {};
+  for (const [k, did] of kinds) {
+    const a0 = drawIm(plain, [op, age, row(did) + seed]);
+    const a1 = drawIm(shp, [op, age, row(did) + seed]);
+    imgs[k] = a1;
+    check(`A. the ${k} row draws finite analytic pixels, different from the texture`,
+      allFinite(a1) && rgbSum(a1) > 0.5 && maxDiff(a0, a1) > 1e-2, `sum ${rgbSum(a1).toFixed(2)} vs tex ${rgbSum(a0).toFixed(2)}`);
+  }
+  const half = (a, left) => { let s = 0; for (let y = 0; y < 64; y++) for (let x = left ? 0 : 32; x < (left ? 32 : 64); x++) { const i = (y * 64 + x) * 4; s += a[i] + a[i + 1] + a[i + 2]; } return s; };
+  const lr = half(imgs.orb, true) / Math.max(1e-9, half(imgs.orb, false));
+  check("A. the orb is symmetric", Math.abs(lr - 1) < 0.08, `left/right ${lr.toFixed(3)}`);
+  // the quad spans [-1, 1] world at 3 m: its centre pixel vs a pixel on the ring radius (0.74)
+  const pxAt = (a, wx, wy) => {
+    const v = new THREE.Vector3(wx, wy, 0).project(cam);
+    const x = Math.round((v.x * 0.5 + 0.5) * 63), y = Math.round((v.y * 0.5 + 0.5) * 63);
+    const i = (y * 64 + x) * 4; return a[i] + a[i + 1] + a[i + 2];
+  };
+  const ringCentre = pxAt(imgs.ring, 0, 0), ringBand = Math.max(pxAt(imgs.ring, 0.74, 0), pxAt(imgs.ring, -0.74, 0), pxAt(imgs.ring, 0, 0.74));
+  check("A. the ring is a ring: its band outshines its centre", ringBand > ringCentre * 3, `band ${ringBand.toFixed(3)} centre ${ringCentre.toFixed(3)}`);
+
+  // ---- P. sub-pixel clamp -------------------------------------------------------------------------
+  const clampM = fxMat({ motion: false, shapes: false, clamp: true });
+  check("P. clamp program key", clampM.customProgramCacheKey() === `${fx.FX_KEY_ADDITIVE}p`);
+  const pxW = (2 * 3 * Math.tan((50 * Math.PI) / 360)) / 64;   // metres per pixel at 3 m
+  const sums = (mat) => {
+    const out = [];
+    for (let i = 0; i < 8; i++) out.push(rgbSum(drawIm(mat, [1, 0.3, 0 + seed], { x: i * pxW / 8 + pxW * 0.3, y: pxW * 0.37, s: 0.004 })));
+    return out;
+  };
+  const sc = sums(clampM), sp = sums(plain);
+  const spread = (a) => { const m = a.reduce((x, y) => x + y, 0) / a.length; return m > 0 ? (Math.max(...a) - Math.min(...a)) / m : Infinity; };
+  check("P. with the clamp a 0.1 px particle draws every frame with a steady energy",
+    Math.min(...sc) > 0 && spread(sc) < 0.5, `clamp sums ${sc.map((v) => v.toExponential(1)).join(",")}`);
+  check("P. without it the same particle pops (zero frames or a wilder swing)",
+    Math.min(...sp) === 0 || spread(sp) > spread(sc) * 1.5, `plain sums ${sp.map((v) => v.toExponential(1)).join(",")}`);
+
+  // ---- G. FX glow variant with the tier-2 defines -----------------------------------------------
+  const allOn = fxMat({ motion: true, shapes: true, clamp: true });
+  const glowMat = fx.makeParticleFxGlowMaterial(allOn);
+  check("G. glow variant key carries the tier-2 suffix", glowMat.customProgramCacheKey() === `${fx.FX_KEY_GLOW}map`);
+  const depthTex = new THREE.DepthTexture(64, 64);
+  const dRT = new THREE.WebGLRenderTarget(64, 64, { depthBuffer: true, depthTexture: depthTex });
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshBasicMaterial({ color: 0x404040 }));
+  wall.position.set(0, 0, -7);
+  const ws = new THREE.Scene(); ws.add(wall);
+  renderer.setRenderTarget(dRT); renderer.setClearColor(0, 1); renderer.clear(); renderer.render(ws, cam); renderer.setRenderTarget(null);
+  fx.setParticleFxGlowFrame({ depthTexture: depthTex, width: 64, height: 64, camera: cam, isLog: true, scale: 1 });
+  const glowRT = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: false });
+  const gImg = (() => { const s = new THREE.Scene(); s.add(mkIm(glowMat, [op, age, row(0x320002CD) + seed], { vel: [3, 0, 0] })); return drawScene(s, glowRT); })();
+  check("G. the glow twin draws through the tier-2 program (velocity row stripped)", allFinite(gImg) && rgbSum(gImg) > 0.3, `sum ${rgbSum(gImg).toFixed(2)}`);
+
+  // ---- K. spark bounce --------------------------------------------------------------------------
+  fx._setParticleFxTier2VariantForTest({ motion: true, shapes: true, clamp: true });
+  const kCam = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
+  // a ground-level impact (the case the bounce exists for: sparks born at the
+  // ground sink straight into it), seen from above and back so they stay in view
+  kCam.position.set(0, 3, 6); kCam.lookAt(0, 0, 0); kCam.updateMatrixWorld(true);
+  const floorDepth = new THREE.DepthTexture(64, 64);
+  const fRT = new THREE.WebGLRenderTarget(64, 64, { depthBuffer: true, depthTexture: floorDepth });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0x808080 }));
+  floor.rotation.x = -Math.PI / 2;
+  const fs = new THREE.Scene(); fs.add(floor); fs.updateMatrixWorld(true);
+  renderer.setRenderTarget(fRT); renderer.setClearColor(0, 1); renderer.clear(); renderer.render(fs, kCam); renderer.setRenderTarget(null);
+  const ks = new THREE.Scene();
+  const kids = new kidsMod.ParticleFxKids(ks);
+  const sparkRow = row(0x320002B8);   // a tight spark burst (kidSpread 0.33) with bounce
+  const kRT = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: true });
+  const drawK = () => { renderer.setRenderTarget(kRT); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(ks, kCam); renderer.setRenderTarget(null); return read(kRT); };
+  const fill = () => {
+    kids.begin();
+    const layer = kids.layer(0);
+    for (let i = 0; i < 8; i++) layer.push(0, 0.02, 0, 0.3, 0, 0, 0, 1, sparkRow, 0.07 + i * 0.11);
+    kids.finish();
+  };
+  const centroidY = (a) => { let s = 0, w = 0; for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) { const i = (y * 64 + x) * 4, v = a[i] + a[i + 1] + a[i + 2]; s += v * y; w += v; } return w > 0 ? s / w : -1; };
+  let kSumNo = 0, kSumYes = 0, cyNo = 0, cyYes = 0, diffs = 0;
+  for (let k = 0; k < 6; k++) {
+    fx.particleFxFrame(5000 + k * 137.7);
+    fill();
+    fx.FX_UNIFORMS.uFxSoftOn.value = 0;
+    const no = drawK();
+    fx.particleFxBeforeLate(renderer, floorDepth, kCam, 64, 64);
+    const yes = drawK();
+    fx.particleFxAfterLate();
+    kSumNo += rgbSum(no); kSumYes += rgbSum(yes);
+    cyNo += centroidY(no); cyYes += centroidY(yes);
+    if (maxDiff(no, yes) > 1e-3) diffs++;
+    if (!allFinite(yes)) R.errors.push("non-finite bounce pixels");
+  }
+  check("K. the bounce program compiles (HB_FX_BOUNCE + HB_FX_CLAMP) and draws sparks", kSumNo > 0.01 && kSumYes > 0.01, `sums ${kSumNo.toFixed(3)} / ${kSumYes.toFixed(3)}`);
+  check("K. with the floor's depth copy the sparks bounce: other pixels, and they sit higher on screen",
+    diffs >= 3 && cyYes > cyNo, `differing frames ${diffs}/6, centroid y ${(cyNo / 6).toFixed(1)} → ${(cyYes / 6).toFixed(1)}`);
+
+  // ---- D. ground marks --------------------------------------------------------------------------
+  renderer.setRenderTarget(null);
+  const composer = new PP.EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, depthBuffer: true });
+  composer.setSize(64, 64);
+  const dCam = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
+  dCam.position.set(0, 6, 0.01); dCam.lookAt(0, 0, 0); dCam.updateMatrixWorld(true);
+  const ground = new THREE.Scene();
+  const gPlane = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshBasicMaterial({ color: 0xb0b0b0 }));
+  gPlane.rotation.x = -Math.PI / 2;
+  ground.add(gPlane);
+  const decalFx = new FxDecalEffect({ camera: dCam, depthSource: () => composer.depthTexture });
+  composer.addPass(new PP.RenderPass(ground, dCam));
+  composer.addPass(new PP.EffectPass(dCam, decalFx));
+  const frame = () => {
+    composer.render(0.016);
+    renderer.setRenderTarget(null);
+    const b = new Uint8Array(64 * 64 * 4);
+    gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, b);
+    return Array.from(b, (v) => v / 255);
+  };
+  dec._resetFxDecalsForTest();
+  const base = frame();
+  const at = (a, x, y) => { const i = (y * 64 + x) * 4; return a[i] + a[i + 1] + a[i + 2]; };
+  dec.spawnFxDecal({ position: { x: 0, y: 0, z: 0 }, kind: "scorch", radius: 1.6, nowMs: performance.now() - 5000 });
+  const scorched = frame();
+  check("D. a scorch darkens the floor under it", at(scorched, 32, 32) < at(base, 32, 32) * 0.8 && decalFx.stats.drawn === 1,
+    `centre ${at(base, 32, 32).toFixed(2)} → ${at(scorched, 32, 32).toFixed(2)}, drawn ${decalFx.stats.drawn}`);
+  check("D. nothing outside its box changes", Math.abs(at(scorched, 2, 2) - at(base, 2, 2)) < 0.02 && Math.abs(at(scorched, 61, 61) - at(base, 61, 61)) < 0.02);
+  dec._resetFxDecalsForTest();
+  const ringD = dec.addFxDecal({ position: { x: 0, y: 0, z: 0 }, kind: "ring", radius: 2.0, color: [0, 1, 0], intensity: 1 });
+  const ringed = frame();
+  const gSum = (a) => { let s = 0; for (let i = 1; i < a.length; i += 4) s += a[i]; return s; };
+  check("D. a ring adds its colour on the ground", !!ringD && gSum(ringed) > gSum(base) * 1.01, `green ${gSum(base).toFixed(1)} → ${gSum(ringed).toFixed(1)}`);
+  dec._resetFxDecalsForTest();
+  const cleared = frame();
+  check("D. with no marks the composite is the scene again", maxDiff(cleared, base) < 0.02);
+
+  // ---- R. ribbons ---------------------------------------------------------------------------------
+  rib._resetFxRibbonsForTest();
+  const rScene = new THREE.Scene();
+  const bolt = { guid: 0x80000001, _isProjectile: true, _ballistic: true, root: new THREE.Group() };
+  rScene.add(bolt.root);
+  window.__sessionHandle = { objectName: () => "Lightning Bolt" };
+  const s3d = { entityManager: { entityMap: new Map([[bolt.guid, bolt]]) }, scene: rScene, renderer };
+  for (let i = 0; i < 10; i++) { bolt.root.position.set(-1.2 + i * 0.25, 0, 0); rib.tickFxRibbons(s3d, 7000 + i * 16); }
+  const rCam = cam.clone(); rCam.layers.enableAll(); rCam.updateMatrixWorld(true);
+  const rImg = drawScene(rScene, rt, rCam);
+  check("R. a lightning bolt's ribbon draws (one call, jagged program compiles)", allFinite(rImg) && rgbSum(rImg) > 0.05, `sum ${rgbSum(rImg).toFixed(3)}`);
+  rib._resetFxRibbonsForTest();
+
+  // ---- F. fields ----------------------------------------------------------------------------------
+  fields._resetFxFieldsForTest();
+  const fScene = new THREE.Scene();
+  const worldRoot = new THREE.Group();
+  fScene.add(worldRoot);
+  const terrainGroup = new THREE.Group();
+  worldRoot.add(terrainGroup);
+  fScene.updateMatrixWorld(true);
+  const fCam = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+  fCam.position.set(0, 0, 1.2); fCam.lookAt(0, 6, 1.0); fCam.up.set(0, 0, 1); fCam.lookAt(0, 6, 1.0); fCam.updateMatrixWorld(true);
+  const prov = fields.createFxFieldsProvider();
+  const oracle = { sample: (_x, _y, o) => { o.code = 1; o.hasHeight = true; o.height = 0; return o; } };
+  const fctx = { camera: fCam, oracle, scene3d: { terrainGroup, renderer, skyLightingController: { _lastState: { dirPitch: 0.9 } } } };
+  for (let i = 0; i < 40; i++) { fctx.tSec = 50 + i * 0.25; prov.update(0.25, fctx); }
+  fScene.updateMatrixWorld(true);
+  const fImg = drawScene(fScene, rt, fCam);
+  check("F. the fireflies field draws at night over grass (vertex-stage placement, one program)",
+    allFinite(fImg) && rgbSum(fImg) > 0.01 && fields.fxFieldsStats().live.some((s) => s.startsWith("fireflies")), `sum ${rgbSum(fImg).toFixed(3)} live ${fields.fxFieldsStats().live.join(" ")}`);
+  const extras = [];
+  for (const src of poc.fxGlowExtraSources()) { src.collect(extras); src.setFrame?.({ depthTexture: depthTex, width: 64, height: 64, camera: fCam, isLog: true, scale: 1 }); }
+  const ffx = extras.find((e) => e.object.userData?.field === "fireflies");
+  if (ffx) {
+    const twinS = new THREE.Scene();
+    const tw = new THREE.Mesh(ffx.object.geometry, ffx.material);
+    tw.frustumCulled = false; tw.matrixAutoUpdate = false; tw.matrixWorld.copy(ffx.object.matrixWorld);
+    twinS.add(tw);
+    const gF = drawScene(twinS, glowRT, fCam);
+    check("F. the fireflies' glow variant compiles and draws into a glow target", allFinite(gF), `sum ${rgbSum(gF).toFixed(3)}`);
+  } else check("F. the fireflies' glow variant compiles and draws into a glow target", false, "no glow extra");
+  prov.dispose();
+  fields._resetFxFieldsForTest();
+
+  // ---- S. showcase --------------------------------------------------------------------------------
+  show._resetFxShowcaseForTest();
+  const sScene = new THREE.Scene();
+  const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL } };
+  const stone = { guid: 0x70000002, root: new THREE.Group(), meta: { objDescFlags: show.ODF_LIFESTONE } };
+  portal.root.position.set(-0.8, -1.4, -2); stone.root.position.set(0.9, -1.4, -2);
+  sScene.add(portal.root, stone.root);
+  sScene.updateMatrixWorld(true);
+  const sCam = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+  sCam.position.set(0, 0, 3); sCam.lookAt(0, 0, -2); sCam.layers.enableAll(); sCam.updateMatrixWorld(true);
+  const s3dS = { entityManager: { entityMap: new Map([[portal.guid, portal], [stone.guid, stone]]) }, scene: sScene, camera: sCam, renderer };
+  show.fireFxShowcaseCue("levelUp", { x: 0, y: -1.4, z: -1 }, 30000);
+  const nS = show.tickFxShowcase(s3dS, 30500);
+  const sImg = drawScene(sScene, rt, sCam);
+  check("S. the portal disc, the lifestone shaft, the level-up column (+ flare) draw in one call",
+    nS >= 3 && allFinite(sImg) && rgbSum(sImg) > 0.05, `instances ${nS}, sum ${rgbSum(sImg).toFixed(3)}`);
+  const sx = [];
+  for (const src of poc.fxGlowExtraSources()) { src.collect(sx); src.setFrame?.({ depthTexture: depthTex, width: 64, height: 64, camera: sCam, isLog: true, scale: 1 }); }
+  const flareX = sx.find((e) => e.object.userData?.isFxShowcase);
+  if (flareX) {
+    const twinS = new THREE.Scene();
+    const tw = new THREE.Mesh(flareX.object.geometry, flareX.material);
+    tw.frustumCulled = false; tw.matrixAutoUpdate = false; tw.matrixWorld.copy(flareX.object.matrixWorld);
+    twinS.add(tw);
+    const gS = drawScene(twinS, glowRT, sCam);
+    check("S. the flare's glow variant compiles and draws", allFinite(gS), `sum ${rgbSum(gS).toFixed(3)}`);
+  } else check("S. the flare's glow variant compiles and draws", true, "fxGlow off at the mid default: the flare stays in the scene");
+  // S2. the glow pass draws the flare as a glow EXTRA, end to end
+  {
+    show._resetFxShowcaseForTest();
+    t1f.setFxTier1Flag("fxGlow", true);
+    const c2 = new PP.EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, depthBuffer: true });
+    c2.setSize(64, 64);
+    const bgS = new THREE.Scene();
+    const wallG = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0x202020 }));
+    wallG.position.set(0, 0, -12);
+    bgS.add(wallG);
+    const ge = new FxGlowEffect({ camera: sCam, depthSource: () => c2.depthTexture });
+    installFxGlowHandle(ge);
+    c2.addPass(new PP.RenderPass(bgS, sCam));
+    c2.addPass(new PP.EffectPass(sCam, ge));
+    const frame2 = () => {
+      c2.render(0.016);
+      renderer.setRenderTarget(null);
+      const b = new Uint8Array(64 * 64 * 4);
+      gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, b);
+      return Array.from(b, (v) => v / 255);
+    };
+    const s3dG = { entityManager: { entityMap: new Map() }, scene: bgS, camera: sCam, renderer };
+    show.tickFxShowcase(s3dG, 40000);
+    const g0 = frame2();
+    show.fireFxShowcaseCue("levelUp", { x: 0, y: -1.2, z: -2 }, 40000);
+    show.tickFxShowcase(s3dG, 40100);
+    const flareOut = show.fxShowcaseStats().flares;
+    const g1 = frame2();
+    check("S2. the glow pass draws the level-up flare as a glow extra (and the scene copy stands down)",
+      flareOut === 1 && ge.stats.extras >= 1 && rgbSum(g1) > rgbSum(g0) * 1.02,
+      `extras ${ge.stats.extras}, with ${rgbSum(g1).toFixed(2)} vs without ${rgbSum(g0).toFixed(2)}`);
+    t1f.setFxTier1Flag("fxGlow", null);
+    delete window.__fxGlow;
+  }
+  show._resetFxShowcaseForTest();
+  dec._resetFxDecalsForTest();
+
+  R.programs = renderer.info.programs ? renderer.info.programs.length : -1;
+  check("no GL errors", gl.getError() === 0);
+  R.ok = R.errors.length === 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

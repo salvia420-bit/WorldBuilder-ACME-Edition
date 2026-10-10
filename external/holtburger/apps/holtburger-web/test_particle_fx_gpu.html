@@ -25,6 +25,9 @@ window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
 try {
   window.location.search; // particle_fx reads location.search (default ON)
   const fx = await import("/scene3d/particles/particle_fx.js");
+  // Tier 2 (test_particle_fx_tier2_gpu.html) adds m / a / p to every FX program;
+  // this page pins the earlier contract, so latch the tier-2 variant OFF.
+  fx._setParticleFxTier2VariantForTest({ motion: false, shapes: false, clamp: false });
   const pm = await import("/scene3d/particles/particle_manager.js");
   const prof = await import("/scene3d/particles/particle_fx_profiles.js");
 

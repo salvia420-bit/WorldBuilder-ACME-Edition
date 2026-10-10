@@ -319,7 +319,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // fx_lights.js (terrain.js / loop.js), fx_cues.js + fx_distort.js
   // (play_effect_vfx.js), fx_distort_effect.js + fx_glow_effect.js
   // (atmosphere_pipeline.js) (generator --check: up to date, 377 modules) → 361.
-  const NON_APP_PRELOADS = 361;
+  // 2026-10-10 (tier-2 particle upgrade): + scene3d/vfx/fx_tier2.js (quality.js),
+  // fx_ribbons.js + fx_showcase.js (loop.js / play_effect_vfx.js / entities.js),
+  // fx_decals.js (fx_cues.js / fx_showcase.js), fx_decal_effect.js
+  // (atmosphere_pipeline.js), fx_fields.js (index.js) (generator --check: up to
+  // date, 383 modules) → 367.
+  const NON_APP_PRELOADS = 367;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

@@ -13,9 +13,17 @@
 // envelope times in ms (attack, hold, decay). `shock` = {radius m, strength
 // 0..1, ms}. Matter cues (blood splatter, dirty fighting) and the darkness
 // cues draw no light.
+//
+// Tier 2 (2026-10-10, `?fxDecals`): `decal` = {kind, radius m, ahead m} — the
+// cue leaves a ground mark (vfx/fx_decals.js) under its target, or `ahead`
+// metres in front of it (the breath weapons). kind "element" takes the mark of
+// the projectile's own element (vfx/fx_ribbons.js `fxProjectileElement`): a
+// flame bolt scorches, a frost bolt rimes, an acid stream stains, lightning and
+// nether scorch with their own rim colour. Blood is `?blood`'s (blood_decals.js).
 
 import { spawnFxFlash } from "./fx_lights.js";
 import { spawnFxShockwave } from "./fx_distort.js";
+import { spawnFxDecal } from "./fx_decals.js";
 
 const C = (r, g, b, I, range, attack, hold, decay, extra = {}) =>
   Object.freeze({ color: [r, g, b], intensity: I, range, attackMs: attack, holdMs: hold, decayMs: decay, ...extra });
@@ -23,8 +31,10 @@ const C = (r, g, b, I, range, attack, hold, decay, extra = {}) =>
 export const FX_CUES = Object.freeze({
   // cast / projectile
   launch: C(0.45, 0.75, 1.0, 30, 6, 30, 40, 300),
-  explode: C(1.0, 0.55, 0.2, 60, 9, 20, 60, 550, { flicker: 0.2, flickerHz: 18, shock: { radius: 3.5, strength: 0.75, ms: 600 } }),
-  projectileCollision: C(1.0, 0.6, 0.3, 45, 7, 20, 40, 450, { shock: { radius: 2.5, strength: 0.55, ms: 500 } }),
+  explode: C(1.0, 0.55, 0.2, 60, 9, 20, 60, 550, { flicker: 0.2, flickerHz: 18, shock: { radius: 3.5, strength: 0.75, ms: 600 },
+    decal: { kind: "scorch", radius: 1.8 } }),
+  projectileCollision: C(1.0, 0.6, 0.3, 45, 7, 20, 40, 450, { shock: { radius: 2.5, strength: 0.55, ms: 500 },
+    decal: { kind: "element", radius: 1.3 } }),
   fizzle: C(0.7, 0.7, 0.75, 8, 3, 20, 20, 300),
   // combat
   spark: C(1.0, 0.95, 0.85, 20, 3, 10, 10, 120, { flicker: 0.5, flickerHz: 30 }),
@@ -54,10 +64,14 @@ export const FX_CUES = Object.freeze({
   camping: C(1.0, 0.7, 0.4, 10, 4, 60, 100, 700),
   layingOfHands: C(0.9, 1.0, 1.0, 16, 5, 80, 200, 900),
   // breath weapons
-  breatheFlame: C(1.0, 0.5, 0.2, 50, 9, 30, 300, 700, { flicker: 0.3, flickerHz: 14 }),
-  breatheFrost: C(0.6, 0.85, 1.0, 35, 8, 30, 300, 700, { flicker: 0.1, flickerHz: 8 }),
-  breatheAcid: C(0.6, 1.0, 0.35, 35, 8, 30, 300, 700, { flicker: 0.15, flickerHz: 10 }),
-  breatheLightning: C(0.75, 0.85, 1.0, 70, 10, 5, 30, 250, { flicker: 0.7, flickerHz: 30 }),
+  breatheFlame: C(1.0, 0.5, 0.2, 50, 9, 30, 300, 700, { flicker: 0.3, flickerHz: 14,
+    decal: { kind: "scorch", radius: 2.2, ahead: 3.0 } }),
+  breatheFrost: C(0.6, 0.85, 1.0, 35, 8, 30, 300, 700, { flicker: 0.1, flickerHz: 8,
+    decal: { kind: "frost", radius: 2.4, ahead: 3.0 } }),
+  breatheAcid: C(0.6, 1.0, 0.35, 35, 8, 30, 300, 700, { flicker: 0.15, flickerHz: 10,
+    decal: { kind: "acid", radius: 2.2, ahead: 3.0 } }),
+  breatheLightning: C(0.75, 0.85, 1.0, 70, 10, 5, 30, 250, { flicker: 0.7, flickerHz: 30,
+    decal: { kind: "scorch", radius: 1.8, ahead: 3.0 } }),
   // status / events
   specialState: C(1.0, 1.0, 1.0, 12, 4, 40, 80, 600),
   levelUp: C(1.0, 0.9, 0.55, 45, 9, 120, 300, 1400, { shock: { radius: 4.0, strength: 0.5, ms: 900 } }),
@@ -65,23 +79,28 @@ export const FX_CUES = Object.freeze({
   aetheria: C(0.55, 1.0, 0.85, 30, 7, 80, 200, 1000, { shock: { radius: 3.0, strength: 0.4, ms: 800 } }),
   restriction: C(0.8, 0.8, 1.0, 12, 4, 40, 80, 600),
   wedding: C(1.0, 0.8, 0.9, 25, 7, 150, 400, 1200),
-  bunnySmite: C(1.0, 1.0, 1.0, 70, 12, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 } }),
-  baelZharonSmite: C(0.8, 0.3, 0.4, 70, 12, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 } }),
-  blackMadness: C(0.7, 0.4, 0.9, 60, 11, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 } }),
+  bunnySmite: C(1.0, 1.0, 1.0, 70, 12, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 },
+    decal: { kind: "scorch", radius: 3.0 } }),
+  baelZharonSmite: C(0.8, 0.3, 0.4, 70, 12, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 },
+    decal: { kind: "scorch", radius: 3.0 } }),
+  blackMadness: C(0.7, 0.4, 0.9, 60, 11, 20, 120, 900, { shock: { radius: 5.0, strength: 0.8, ms: 900 },
+    decal: { kind: "scorch", radius: 3.0 } }),
 });
 
 // Height of the cue above the target's root (three world, metres): chest height.
 const CUE_HEIGHT_M = 1.0;
 
 /**
- * Fire a cue's light flash + shockwave at a THREE-world root position.
+ * Fire a cue's light flash + shockwave at a THREE-world root position, and
+ * (tier 2) its ground mark at `opts.decalWorld`.
  * Returns what fired (diagnostics / tests). Never throws.
  * @param {string} look burst look name (play_effect_vfx.js `_burstLookFor`)
  * @param {{x:number,y:number,z:number}} rootWorld
+ * @param {{decalWorld?: {x:number,y:number,z:number}, element?: {decal: string|null, color: number[]}|null}} [opts]
  */
-export function fireFxCue(look, rootWorld) {
+export function fireFxCue(look, rootWorld, opts = null) {
   const cue = FX_CUES[look];
-  if (!cue || !rootWorld) return { light: null, shock: null };
+  if (!cue || !rootWorld) return { light: null, shock: null, decal: null };
   const p = { x: rootWorld.x, y: rootWorld.y + CUE_HEIGHT_M, z: rootWorld.z };
   let light = null;
   let shock = null;
@@ -97,5 +116,24 @@ export function fireFxCue(look, rootWorld) {
       shock = spawnFxShockwave({ position: p, radius: cue.shock.radius, strength: cue.shock.strength, durationMs: cue.shock.ms });
     } catch (_) { shock = null; }
   }
-  return { light, shock };
+  let decal = null;
+  if (cue.decal && opts && opts.decalWorld) {
+    try {
+      let kind = cue.decal.kind;
+      let color = kind === "scorch" ? cue.color : undefined;
+      if (kind === "element") {
+        const el = opts.element || null;
+        kind = el && el.decal ? el.decal : null;
+        color = el && kind === "scorch" ? el.color : undefined;
+      }
+      if (kind) decal = spawnFxDecal({ position: opts.decalWorld, kind, radius: cue.decal.radius, color });
+    } catch (_) { decal = null; }
+  }
+  return { light, shock, decal };
+}
+
+/** Tier 2: how far in front of its target a cue's mark lands (the breaths), metres. */
+export function fxCueDecalAhead(look) {
+  const d = FX_CUES[look]?.decal;
+  return d && Number.isFinite(d.ahead) ? d.ahead : 0;
 }

@@ -283,6 +283,9 @@ import { wireframeFlagOn } from "./wireframe_flag.js";
 // initTerrainGrass registers nothing, so a bare-default boot is byte-identical
 // (it does not even trigger the spine's on-demand terrain-oracle import).
 import { initTerrainGrass } from "./terrain_grass.js";
+// Tier-2 particle upgrade (2026-10-10): the ambient GPU fields (a camera-scope
+// terrain-VFX provider; registers nothing unless `?fxFields` is on — high / ultra).
+import { initFxFields } from "./vfx/fx_fields.js";
 // Terrain SAND family (Wave 1B, plan §3.2) — streamers + dust devils. Same
 // injected-THREE contract as the spine above; the grain sparkle is a terrain
 // fragment-shader term and needs no import here. `initTerrainSand` returns null
@@ -4438,6 +4441,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainGrass] initTerrainGrass threw (grass disabled):", e);
+  }
+  // ── Tier-2 `?fxFields` (2026-10-10): fireflies, dungeon dust, pollen, leaves,
+  // snow, ash, embers — wrapped round the camera, placed in the vertex stage.
+  // Readback: `window.__fxFields`.
+  try {
+    initFxFields();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[fxFields] initFxFields threw (fields disabled):", e);
   }
   // ── Terrain SAND family (Wave 1B, plan §3.2) ──────────────────────────
   // Registers the two providers (camera-scoped streamers, landblock-scoped

@@ -441,8 +441,11 @@ check("promotion is ONE line: terrainMaster follows the gate for every tier",
   terrainMaster("ice", "high") === true       // promoted 2026-08-01
   && ["low", "mid", "high", "ultra"].every((t) =>
     terrainMaster("ice", t) === (TERRAIN_VFX_PROMOTED.ice && TERRAIN_VFX_TIERS[t])));
-check("each master line in quality.js is a terrainMaster() call, 4 tiers × 9",
-  (QUALITY_SRC.match(/terrainMaster\("/g) || []).length === 36);
+// 2026-10-10: + the tier-2 `fxFields` key (vfx/fx_fields.js), which rides the
+// same ladder through its own `fields` gate — 4 tiers × (9 masters + 1).
+check("each master line in quality.js is a terrainMaster() call, 4 tiers × 9 (+ the tier-2 fxFields key)",
+  (QUALITY_SRC.match(/terrainMaster\("/g) || []).length === 40
+  && (QUALITY_SRC.match(/fxFields: terrainMaster\("fields", "/g) || []).length === 4);
 
 // The ice-refraction reachability that started this.
 check("ultra still STATES the refraction intent (it is no longer dead config)",

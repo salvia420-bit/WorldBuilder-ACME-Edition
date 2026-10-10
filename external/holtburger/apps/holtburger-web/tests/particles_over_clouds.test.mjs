@@ -278,7 +278,9 @@ const A = build();
   // 2026-10-10 tier 1: `?fxDistort` (a UV warp) leads the atmosphere half and
   // `?fxGlow` leads the post half when their presets have them on (the mid
   // default here: distortion on, glow off). Section P8 pins the off lists.
-  const iAtmos = at(/^EffectPass\[(FxDistortEffect,)?CloudsEffect,AerialPerspectiveEffect\]$/);
+  // Tier 2: `?fxDecals` (the ground marks) follows them, before the clouds
+  // (the mid default: on). Section P9 pins its slot.
+  const iAtmos = at(/^EffectPass\[(FxDistortEffect,)?(FxDecalEffect,)?CloudsEffect,AerialPerspectiveEffect\]$/);
   const iLate = at(/^ParticlesOverClouds$/);
   const iPost = at(/^EffectPass\[(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/);
   console.log("     " + names.slice(iRestore).join(" -> "));
@@ -420,7 +422,7 @@ for (const how of ["opts", "url"]) {
   // 2026-10-08 — unsplit chain: the post EffectPass also tone-maps, so the
   // ?layerHaze pass goes in front of it (after the scrub).
   check(`${how}: ONE post-chain EffectPass with clouds -> aerial -> bloom -> tone map -> dither`,
-    /^EffectPass\[(FxDistortEffect,)?CloudsEffect,AerialPerspectiveEffect,(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/.test(names[names.length - 1]) &&
+    /^EffectPass\[(FxDistortEffect,)?(FxDecalEffect,)?CloudsEffect,AerialPerspectiveEffect,(FxGlowEffect,)?BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect\]$/.test(names[names.length - 1]) &&
     names[names.length - 2] === "LayeredHazePass" &&
     names[names.length - 3] === "EffectPass[NanScrub]", names.slice(-3).join(" | "));
   check(`${how}: no late pass, no post half`, !names.includes("ParticlesOverClouds") &&
@@ -434,7 +436,8 @@ for (const how of ["opts", "url"]) {
 
 console.log("\n-- P8 tier-1 effects: their slots, and the exact pre-tier-1 lists when off --");
 {
-  const on = build({ fxDistort: true, fxGlow: true }).p;
+  // (tier 2's `fxDecals` held off: this section pins the tier-1 slots alone)
+  const on = build({ fxDistort: true, fxGlow: true, fxDecals: false }).p;
   const onNames = on.composer.passes.map(describe);
   check("tier 1 on: distortion leads the atmosphere half, glow leads the post half",
     onNames.includes("EffectPass[FxDistortEffect,CloudsEffect,AerialPerspectiveEffect]") &&
@@ -442,18 +445,39 @@ console.log("\n-- P8 tier-1 effects: their slots, and the exact pre-tier-1 lists
     onNames.slice(-5).join(" | "));
   check("tier 1 on: the pipeline returns both effects", !!on.fxDistort && !!on.fxGlow);
   on.dispose();
-  const off = build({ fxDistort: false, fxGlow: false }).p;
+  const off = build({ fxDistort: false, fxGlow: false, fxDecals: false }).p;
   const offNames = off.composer.passes.map(describe);
   check("tier 1 off: the pre-tier-1 halves exactly",
     offNames.includes("EffectPass[CloudsEffect,AerialPerspectiveEffect]") &&
     offNames[offNames.length - 1] === "EffectPass[BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
     off.fxDistort === null && off.fxGlow === null, offNames.slice(-5).join(" | "));
   off.dispose();
-  const offSingle = build({ fxDistort: false, fxGlow: false, particlesOverClouds: false }).p;
+  const offSingle = build({ fxDistort: false, fxGlow: false, fxDecals: false, particlesOverClouds: false }).p;
   const sNames = offSingle.composer.passes.map(describe);
   check("tier 1 off, single chain: the pre-tier-1 list exactly",
     sNames[sNames.length - 1] === "EffectPass[CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]");
   offSingle.dispose();
+}
+
+console.log("\n-- P9 tier-2 ground marks: their slot on both chains --");
+{
+  const on = build({ fxDistort: true, fxGlow: true, fxDecals: true }).p;
+  const onNames = on.composer.passes.map(describe);
+  check("tier 2 on: the marks sit after the distortion, before the clouds / aerial (split chain)",
+    onNames.includes("EffectPass[FxDistortEffect,FxDecalEffect,CloudsEffect,AerialPerspectiveEffect]") &&
+    onNames[onNames.length - 1] === "EffectPass[FxGlowEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]" &&
+    !!on.fxDecals, onNames.slice(-5).join(" | "));
+  on.dispose();
+  const single = build({ fxDistort: false, fxGlow: false, fxDecals: true, particlesOverClouds: false }).p;
+  const sNames = single.composer.passes.map(describe);
+  check("tier 2 on, single chain: the marks lead the one post EffectPass",
+    sNames[sNames.length - 1] === "EffectPass[FxDecalEffect,CloudsEffect,AerialPerspectiveEffect,BloomEffect,ToneMappingEffect,ColorGradeEffect,DitheringEffect]",
+    sNames[sNames.length - 1]);
+  single.dispose();
+  const off = build({ fxDistort: false, fxGlow: false, fxDecals: false }).p;
+  check("tier 2 off: no marks effect, the handle is null", off.fxDecals === null &&
+    off.composer.passes.map(describe).includes("EffectPass[CloudsEffect,AerialPerspectiveEffect]"));
+  off.dispose();
 }
 
 // ---------------------------------------------------------------------------

@@ -50,6 +50,9 @@ import {
   particleFxRowFor,
   particleFxSeed,
   particleFxTier1,
+  particleFxTier2,
+  particleFxMotionOn,
+  particleFxSlotVelocity,
   makeParticleFxGlowMaterial,
   setParticleFxGlowFrame,
 } from "./particle_fx.js";
@@ -368,6 +371,8 @@ function _instGeometryFor(geometry) {
 }
 
 const _instColor = new THREE.Color();
+// Tier 2 `?fxMotion`: per-particle velocity scratch (particleFxSlotVelocity).
+const _fxVelOut = [0, 0, 0];
 
 // Shared seam noops — identity-comparable, so a runtime toggle can tell "we
 // installed these" from "the caller supplied their own onMeshActive".
@@ -2203,7 +2208,11 @@ export class ParticleManager {
     const kids = fx && this._kidsOn && row > 0 && particleFxTier1(row).kids > 0
       ? (this._kids || (this._kids = new ParticleFxKids(this._scene)))
       : null;
-    const nowSec = kids ? currentTime() : 0;
+    // Tier 2 `?fxMotion`: a stretch row's velocity rides the instance matrix's
+    // bottom row (the FX programs compiled with HB_FX_MOTION strip it again).
+    const motion = fx && row > 0 && particleFxMotionOn() && particleFxTier2(row).stretch > 0;
+    const mArr = motion ? im.instanceMatrix.array : null;
+    const nowSec = (kids || motion) ? currentTime() : 0;
     for (let i = 0; i < parts.length && n < cap; i++) {
       const m = parts[i];
       if (!m || m.visible === false) continue;
@@ -2221,6 +2230,11 @@ export class ParticleManager {
         col[o + 1] = age;
         col[o + 2] = particleFxPacked(row, seed);
         if (kids) kids.pushParticle(emitter, i, m.matrix.elements, age, op, row, seed, nowSec);
+        if (mArr) {
+          const v = particleFxSlotVelocity(emitter, i, m.matrix.elements, seed, nowSec, _fxVelOut);
+          const o16 = n * 16;
+          mArr[o16 + 3] = v[0]; mArr[o16 + 7] = v[1]; mArr[o16 + 11] = v[2];
+        }
       } else {
         _instColor.setRGB(op, op, op);
         im.setColorAt(n, _instColor);

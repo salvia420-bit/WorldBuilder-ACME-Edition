@@ -67,6 +67,10 @@ import { tickLightingForCellState } from "./lighting.js";
 import { tickFlameFlicker } from "./vfx/components/flameFlicker.js";
 // Tier-1 particle upgrade (2026-10-10) — FX light sources + terrain light feed.
 import { tickFxLights, feedTerrainFxLights } from "./vfx/fx_lights.js";
+// Tier-2 particle upgrade (2026-10-10): projectile ribbons + elemental swing trails.
+import { tickFxRibbons } from "./vfx/fx_ribbons.js";
+// Tier-2: the portal / lifestone / level-up set pieces.
+import { tickFxShowcase } from "./vfx/fx_showcase.js";
 import { cullTerrainGroup } from "./terrain.js?v=phase-d-batch";
 import { SHADOW_RECEIVE_RANGE_SQ_M as BUILDINGS_SHADOW_RANGE_SQ_M } from "./buildings.js";
 import {
@@ -3115,6 +3119,31 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
       if (scene3d._a11s3Diag) scene3d._a11s3Diag.managerTicks += 1;
       try { scene3d.entityManager?.tickParticlesAndScripts(); } catch (_) {}
       try { tickStaticParticles(scene3d); } catch (_) {}
+    }
+  }
+  // Tier-2 `?fxMotion` (scene3d/vfx/fx_ribbons.js) — ribbon trails behind the
+  // projectiles and off swinging elemental weapons. After the entity tick and
+  // the particle phase, so the bolts and the rigs sit where this frame draws them.
+  if (scene3d) {
+    try {
+      tickFxRibbons(scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._fxRibbonsWarned) {
+        scene3d._fxRibbonsWarned = true;
+        console.warn("[fx-ribbons] tickFxRibbons threw:", e);
+      }
+    }
+    // Tier-2 `?fxShowcase` (scene3d/vfx/fx_showcase.js) — portal space, the
+    // lifestone shaft, the level-up column and flare, their ground rings.
+    try {
+      tickFxShowcase(scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._fxShowcaseWarned) {
+        scene3d._fxShowcaseWarned = true;
+        console.warn("[fx-showcase] tickFxShowcase threw:", e);
+      }
     }
   }
   // #14 — LOD band hit/miss telemetry. Armed by `?lodBandDiag=on`

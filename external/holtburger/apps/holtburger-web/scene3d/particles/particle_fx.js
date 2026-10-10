@@ -77,6 +77,24 @@
 // light tick below), not only inside the late pass: the single post-chain
 // composer (no `?clouds=on`, i.e. the default boot) applies the same x5
 // exposure, and there the 2026-10-09 calibration never ran.
+//
+// TIER 2 (2026-10-10, scene3d/vfx/fx_tier2.js). Rows grow from 10 to 12 texels
+// (data/particle-fx-tier2.json, tools/particle-fx/tier2.py). Three more
+// compile-time variants, latched with the tier-1 one (keys gain m / a / p):
+//   `?fxMotion` HB_FX_MOTION — the instance matrix's unused bottom row carries
+//               each particle's velocity (particle_manager.js writes it, the
+//               vertex stage strips it before any chunk multiplies a position
+//               by the matrix): rows with `stretch` are lengthened along their
+//               screen-plane velocity, head at the particle, tail behind.
+//   `?fxShapes` HB_FX_SHAPES — rows with `shape` draw an analytic star / orb /
+//               ring computed in the fragment stage instead of the texture: a
+//               crisp anti-aliased core, a halo, diffraction spikes with a
+//               slight chromatic split (stars), swirling arms (the portal rim),
+//               in the texture's own energy-matched colour (`sprite`).
+//   `?fxClamp`  HB_FX_CLAMP — a particle whose projected radius is under
+//               uFxMinPx (1.5 px) is drawn at 1.5 px with its opacity cut by the
+//               area ratio: distant glints and specks shimmer steadily instead
+//               of popping in and out.
 
 import * as THREE from "three";
 
@@ -85,6 +103,7 @@ import { registerLateFxHooks } from "../particles_over_clouds.js";
 import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
 import { viewerIndoorOr } from "../viewer_cell.js";
 import { fxTier1Enabled } from "../vfx/fx_tier1.js";
+import { fxTier2Enabled } from "../vfx/fx_tier2.js";
 
 const OFF_FORMS = new Set(["off", "0", "false", "no"]);
 
@@ -254,11 +273,16 @@ export const FX_PARAM_LAYOUT = Object.freeze([
   "kidLife", "kidSpread", "kidGain", "rim",
   "sunLit", "noise", "flow", "shadow",
   "light", "lightRange", "distort", "distortKind",
+  // tier 2 (2026-10-10)
+  "stretch", "shape", "spikes", "bounce",
+  "spriteR", "spriteG", "spriteB", "halo",
 ]);
 
 /** Tier-1 child kinds (kidKind) and distortion kinds (distortKind). */
 export const FX_KID_KIND = Object.freeze({ ember: 1, glitter: 2, spark: 3, drip: 4, inflow: 5, crackle: 6 });
 export const FX_DISTORT_KIND = Object.freeze({ heat: 1, swirl: 2, ring: 3, ripple: 4 });
+/** Tier-2 analytic sprite shapes (`shape`). */
+export const FX_SHAPE = Object.freeze({ star: 1, orb: 2, ring: 3 });
 
 let _table = null;
 function _buildTable() {
@@ -344,6 +368,28 @@ export function particleFxTier1(row) {
   return hit;
 }
 
+const _TIER2_BASE = 40;
+const _tier2Cache = new Map();
+/**
+ * The tier-2 terms of a row (cached, frozen): velocity stretch, analytic shape
+ * + spikes + halo + energy-matched sprite colour, spark bounce. Row 0 and an
+ * unknown row are all-zero.
+ * @param {number} row
+ */
+export function particleFxTier2(row) {
+  const r = row | 0;
+  let hit = _tier2Cache.get(r);
+  if (hit) return hit;
+  const src = FX_PROFILE_ROWS[r] || FX_PROFILE_ROWS[0];
+  const v = (i) => +src[_TIER2_BASE + i] || 0;
+  hit = Object.freeze({
+    stretch: v(0), shape: v(1) | 0, spikes: v(2) | 0, bounce: v(3),
+    sprite: Object.freeze([v(4), v(5), v(6)]), halo: v(7),
+  });
+  _tier2Cache.set(r, hit);
+  return hit;
+}
+
 // ---------------------------------------------------------------------------
 // Shared uniforms (one object per uniform, shared by every FX material)
 // ---------------------------------------------------------------------------
@@ -376,6 +422,11 @@ export const FX_UNIFORMS = {
   uFxGlowIsLog: { value: 1 },
   uFxGlowNearFar: { value: new THREE.Vector2(0.1, 1000) },
   uFxGlowScale: { value: 1 },
+  // tier 2 — `?fxMotion` (shutter seconds the velocity stretch spans) and
+  // `?fxClamp` (the drawing-buffer height in px; the minimum projected radius)
+  uFxStretchT: { value: 0.04 },
+  uFxViewH: { value: 1080 },
+  uFxMinPx: { value: 1.5 },
 };
 
 // ---------------------------------------------------------------------------
@@ -465,6 +516,7 @@ export function particleFxLightFor(night, indoor, out = [0, 0, 0]) {
 let _lastFrameStamp = -1;
 let _lightCountdown = 0;
 const _lightScratch = [1, 1, 1];
+const _bufSize = new THREE.Vector2();
 /**
  * Per-frame uniform update (time; light every ~30 calls). Called from every
  * ParticleManager tick — idempotent within one timestamp.
@@ -511,6 +563,12 @@ export function particleFxFrame(nowMs) {
       FX_UNIFORMS.uFxAlphaCal.value = particleAlphaCalEnabled() ? particleAlphaCalFor(r.toneMappingExposure) : 1;
       FX_UNIFORMS.uFxAddCal.value = particleAddCalFor(r.toneMappingExposure, _liveAddK());
     }
+    // Tier 2 `?fxClamp`: the pixel height a projected radius is measured in
+    // (the late pass refines it to its own target before drawing).
+    if (r && typeof r.getDrawingBufferSize === "function") {
+      r.getDrawingBufferSize(_bufSize);
+      if (_bufSize.y > 0) FX_UNIFORMS.uFxViewH.value = _bufSize.y;
+    }
   } catch (_) { /* keep the last values */ }
 }
 
@@ -536,6 +594,15 @@ varying vec4 vFxG;   // rim, age, 0, 0
 #endif
 #ifdef HB_FX_GLOW
 varying float vFxGlow;
+#endif
+#if defined( HB_FX_MOTION ) || defined( HB_FX_CLAMP )
+uniform float uFxStretchT;
+uniform float uFxViewH;
+uniform float uFxMinPx;
+#endif
+#ifdef HB_FX_SHAPES
+varying vec4 vFxSh;  // shape, spikes, halo, spin direction
+varying vec3 vFxSC;  // the analytic sprite's energy-matched colour
 #endif
 #ifdef HB_FX_CSM
 uniform highp sampler2DShadow uFxCsm0;
@@ -569,6 +636,20 @@ float hbFxHash( float p ) {
 
 // Runs right after <color_vertex>: everything constant per particle.
 const VERT_BODY = /* glsl */`
+#if ( defined( HB_FX_MOTION ) || defined( HB_FX_CLAMP ) ) && defined( USE_INSTANCING )
+	// tier 2: the instance matrix's bottom row carries the particle's velocity
+	// (particle_manager.js _appendInstances, _scene-local m/s). Strip it before
+	// any chunk multiplies a position by the matrix — every later use of
+	// instanceMatrix (project_vertex, worldpos_vertex, the depth stage) reads
+	// the stripped copy through the macro.
+	mat4 hbFxIm = instanceMatrix;
+	vec3 hbFxVel = vec3( hbFxIm[ 0 ][ 3 ], hbFxIm[ 1 ][ 3 ], hbFxIm[ 2 ][ 3 ] );
+	hbFxIm[ 0 ][ 3 ] = 0.0;
+	hbFxIm[ 1 ][ 3 ] = 0.0;
+	hbFxIm[ 2 ][ 3 ] = 0.0;
+	float hbFxStretchK = 0.0;
+	#define instanceMatrix hbFxIm
+#endif
 #ifdef USE_INSTANCING_COLOR
 	{
 		float fxB = instanceColor.b;
@@ -622,6 +703,17 @@ const VERT_BODY = /* glsl */`
 	#ifdef HB_FX_GLOW
 		vFxGlow = texelFetch( uFxTable, ivec2( 6, fxRow ), 0 ).x; // glow, kids, kidKind, kidSize
 	#endif
+	#if defined( HB_FX_MOTION ) || defined( HB_FX_SHAPES )
+		vec4 p10 = texelFetch( uFxTable, ivec2( 10, fxRow ), 0 ); // stretch, shape, spikes, bounce
+	#endif
+	#if defined( HB_FX_MOTION ) && defined( USE_INSTANCING )
+		hbFxStretchK = p10.x;
+	#endif
+	#ifdef HB_FX_SHAPES
+		vec4 p11 = texelFetch( uFxTable, ivec2( 11, fxRow ), 0 ); // sprite.rgb, halo
+		vFxSh = vec4( p10.y, p10.z, p11.w, fxDir );
+		vFxSC = p11.rgb;
+	#endif
 	}
 #else
 	vFxA = vec4( 1.0 );
@@ -636,12 +728,67 @@ const VERT_BODY = /* glsl */`
 	#ifdef HB_FX_GLOW
 	vFxGlow = 0.0;
 	#endif
+	#ifdef HB_FX_SHAPES
+	vFxSh = vec4( 0.0 );
+	vFxSC = vec3( 0.0 );
+	#endif
 #endif
 `;
 
-// After <project_vertex>: view depth for the soft / near terms; the per-particle
-// sun-shadow tap (`?fxSmoke` + CSM); the glow variant drops glow-less rows.
+// After <project_vertex>: the tier-2 sub-pixel clamp and velocity stretch
+// (they move the vertex, so they run first); view depth for the soft / near
+// terms; the per-particle sun-shadow tap (`?fxSmoke` + CSM); the glow variant
+// drops glow-less rows.
 const VERT_DEPTH = /* glsl */`
+#if ( defined( HB_FX_MOTION ) || defined( HB_FX_CLAMP ) ) && defined( USE_INSTANCING )
+	{
+		// work on the vertex's offset from the particle centre, in view space
+		vec4 hbC = modelViewMatrix * ( hbFxIm * vec4( 0.0, 0.0, 0.0, 1.0 ) );
+		vec3 hbOff = mvPosition.xyz - hbC.xyz;
+		float hbR = length( hbOff ) * 0.70710678; // a centred quad's half-size (its corners)
+		float hbE = 1.0;
+		bool hbMod = false;
+	#ifdef HB_FX_CLAMP
+		{
+			// sub-pixel clamp: at least uFxMinPx projected radius, the opacity
+			// cut by the area ratio (the same light, no popping)
+			float hbW = isPerspectiveMatrix( projectionMatrix ) ? max( -hbC.z, 1e-4 ) : 1.0;
+			float hbPx = hbR * projectionMatrix[ 1 ][ 1 ] / hbW * 0.5 * uFxViewH;
+			if ( hbPx > 1e-6 && hbPx < uFxMinPx ) {
+				float hbK = uFxMinPx / hbPx;
+				hbOff *= hbK;
+				hbR *= hbK;
+				hbE /= hbK * hbK;
+				hbMod = true;
+			}
+		}
+	#endif
+	#ifdef HB_FX_MOTION
+		if ( hbFxStretchK > 0.0 && hbR > 1e-5 ) {
+			// velocity stretch: lengthen the quad along its screen-plane velocity
+			// by |v| x uFxStretchT x stretch — head at the particle, tail behind;
+			// the opacity is partly conserved over the longer streak
+			vec3 hbV = ( modelViewMatrix * vec4( hbFxVel, 0.0 ) ).xyz;
+			vec3 hbN = normalize( hbC.xyz );
+			vec3 hbVp = hbV - hbN * dot( hbV, hbN );
+			float hbSp = length( hbVp );
+			if ( hbSp > 1e-3 ) {
+				vec3 hbDir = hbVp / hbSp;
+				float hbL = min( hbSp * uFxStretchT * hbFxStretchK, hbR * 14.0 );
+				float hbS = 1.0 + hbL / ( 2.0 * hbR );
+				hbOff += hbDir * ( dot( hbOff, hbDir ) * ( hbS - 1.0 ) - 0.5 * hbL );
+				hbE /= mix( 1.0, hbS, 0.5 );
+				hbMod = true;
+			}
+		}
+	#endif
+		if ( hbMod ) {
+			mvPosition = vec4( hbC.xyz + hbOff, 1.0 );
+			gl_Position = projectionMatrix * mvPosition;
+			vFxA.a *= hbE;
+		}
+	}
+#endif
 	vFxD.w = gl_Position.w;
 #ifdef HB_FX_SMOKE
 	{
@@ -690,6 +837,57 @@ uniform vec2 uFxGlowNearFar;
 uniform float uFxGlowScale;
 varying float vFxGlow;
 #endif
+#ifdef HB_FX_SHAPES
+varying vec4 vFxSh;
+varying vec3 vFxSC;
+// Tier-2 analytic sprites. MIRRORED by tools/particle-fx/tier2.py (the energy
+// match): change a constant here, change it there.
+vec4 hbFxAnalytic( vec2 uv ) {
+	vec2 p = uv * 2.0 - 1.0;
+	float r = length( p );
+	float fw = max( fwidth( r ), 1e-4 );
+	float edge = 1.0 - smoothstep( 0.80, 1.0, r );
+	float H = vFxSh.z;
+	vec3 I;
+	if ( vFxSh.x < 1.5 ) {
+		// star: a crisp core, an exponential halo, diffraction spikes turning
+		// slowly with the seed, a slight chromatic split along them
+		float core = 1.0 - smoothstep( 0.07 - fw, 0.07 + fw, r );
+		float m = max( 1.0, floor( vFxSh.y * 0.5 + 0.5 ) );
+		float ang = vFxC.w * 6.2831853 + uFxTime * 0.25 * vFxSh.w * ( 0.5 + vFxC.w );
+		vec3 S = vec3( 0.0 );
+		for ( int i = 0; i < 3; i++ ) {
+			if ( float( i ) >= m ) break;
+			float a = ang + float( i ) * 3.14159265 / m;
+			vec2 ax = vec2( cos( a ), sin( a ) );
+			float al = abs( dot( p, ax ) );
+			float ac = abs( dot( p, vec2( -ax.y, ax.x ) ) );
+			vec3 ws = ( 0.028 + 0.035 * al ) * vec3( 1.08, 1.0, 0.9 );
+			float fall = max( 1.0 - al, 0.0 );
+			S = max( S, exp( -( ac * ac ) / ( ws * ws ) ) * fall * fall );
+		}
+		I = vec3( 1.6 * core + 0.75 * exp( -r * H ) ) + 0.85 * S;
+	} else if ( vFxSh.x < 2.5 ) {
+		// orb: a crisp core in a gaussian halo
+		float core = 1.0 - smoothstep( 0.16 - fw, 0.16 + fw, r );
+		I = vec3( core + 0.85 * exp( -r * r * H ) );
+	} else {
+		// ring (the portal rim): a crisp glowing ring with swirling arms
+		float d = abs( r - 0.74 );
+		float ring = 1.0 - smoothstep( 0.03 - fw, 0.03 + fw, d );
+		float th = r > 1e-4 ? atan( p.y, p.x ) : 0.0;
+		float arms = 0.62 + 0.38 * sin( 5.0 * th + 6.0 * log( r + 0.06 ) - uFxTime * 1.6 + vFxC.w * 6.2831853 );
+		float inner = 0.10 * ( 1.0 - smoothstep( 0.64, 0.74, r ) ) * ( 0.6 + 0.4 * arms );
+		I = vec3( 1.35 * ring + 0.7 * exp( -d * H ) * arms + inner );
+	}
+	I *= edge;
+	#ifdef HB_FX_ADDITIVE
+	return vec4( vFxSC * I, 1.0 );
+	#else
+	return vec4( vFxSC, clamp( max( max( I.r, I.g ), I.b ), 0.0, 1.0 ) );
+	#endif
+}
+#endif
 `;
 
 // Replaces <map_fragment>: spin (masked to the texture square) + wobble
@@ -719,7 +917,15 @@ const FRAG_MAP = /* glsl */`
 		vec2 fxE = step( vec2( 0.0 ), fxUv ) * step( fxUv, vec2( 1.0 ) );
 		fxInside = fxE.x * fxE.y;
 	}
+	#ifdef HB_FX_SHAPES
+	// tier 2: an analytic star / orb / ring instead of the texture (rows with
+	// a shape; the condition is constant per particle)
+	vec4 sampledDiffuseColor;
+	if ( vFxSh.x > 0.5 ) sampledDiffuseColor = hbFxAnalytic( fxUv );
+	else sampledDiffuseColor = texture2D( map, fxUv );
+	#else
 	vec4 sampledDiffuseColor = texture2D( map, fxUv );
+	#endif
 	diffuseColor *= sampledDiffuseColor;
 	diffuseColor.a *= fxInside;
 	// edgeSoft: fade toward the quad border (full-UV sprites whose texture
@@ -857,6 +1063,10 @@ export function patchParticleFxShader(shader) {
   shader.uniforms.uFxGlowIsLog = FX_UNIFORMS.uFxGlowIsLog;
   shader.uniforms.uFxGlowNearFar = FX_UNIFORMS.uFxGlowNearFar;
   shader.uniforms.uFxGlowScale = FX_UNIFORMS.uFxGlowScale;
+  // tier 2 (bound always; three uploads only what the program declares)
+  shader.uniforms.uFxStretchT = FX_UNIFORMS.uFxStretchT;
+  shader.uniforms.uFxViewH = FX_UNIFORMS.uFxViewH;
+  shader.uniforms.uFxMinPx = FX_UNIFORMS.uFxMinPx;
   // the CSM's own shared uniform set (csm.js `csmState.uniforms`), BY IDENTITY:
   // refreshCsmUniforms rewrites it every frame
   const cu = _csmUniforms;
@@ -898,10 +1108,51 @@ export function _setParticleFxVariantForTest(smoke = null, csmUniforms = null) {
   _csmUniforms = csmUniforms;
   if (smoke && !FX_UNIFORMS.uFxNoise.value) FX_UNIFORMS.uFxNoise.value = particleFxNoiseTexture();
 }
+
+// Tier 2 (`?fxMotion` / `?fxShapes` / `?fxClamp`): latched with the same rule —
+// at the first FX material of the session, so no bucket built later can start
+// a second program family.
+let _tier2 = null;
+function _tier2Variant() {
+  if (_tier2 === null) {
+    _tier2 = Object.freeze({
+      motion: fxTier2Enabled("fxMotion"),
+      shapes: fxTier2Enabled("fxShapes"),
+      clamp: fxTier2Enabled("fxClamp"),
+    });
+  }
+  return _tier2;
+}
+/** Test seam: force (`{motion, shapes, clamp}`) or forget (`null`) the latched tier-2 variant. */
+export function _setParticleFxTier2VariantForTest(v = null) {
+  _tier2 = v ? Object.freeze({ motion: !!v.motion, shapes: !!v.shapes, clamp: !!v.clamp }) : null;
+}
+/** The latched tier-2 variant (latches it when no FX material exists yet). */
+export function particleFxTier2Variant() { return _tier2Variant(); }
+/**
+ * True when the FX programs carry HB_FX_MOTION, i.e. the manager must write
+ * each stretch row's velocity into the instance matrix's bottom row (and the
+ * programs strip it). Never write it otherwise: a program WITHOUT the variant
+ * would read the row as projective w.
+ */
+export function particleFxMotionOn() { return _tier2Variant().motion; }
+
+function _tier2Suffix() {
+  const t = _tier2Variant();
+  return (t.motion ? "m" : "") + (t.shapes ? "a" : "") + (t.clamp ? "p" : "");
+}
+function _applyTier2Defines(defines) {
+  const t = _tier2Variant();
+  if (t.motion) defines.HB_FX_MOTION = ""; else delete defines.HB_FX_MOTION;
+  if (t.shapes) defines.HB_FX_SHAPES = ""; else delete defines.HB_FX_SHAPES;
+  if (t.clamp) defines.HB_FX_CLAMP = ""; else delete defines.HB_FX_CLAMP;
+  return defines;
+}
+
 /** The program cache key a bucket material gets (constant per session and blend). */
 export function particleFxProgramKey(additive) {
   const v = _tier1Variant();
-  return (additive ? FX_KEY_ADDITIVE : FX_KEY_ALPHA) + (v.smoke ? "s" : "") + (v.csm ? "c" : "");
+  return (additive ? FX_KEY_ADDITIVE : FX_KEY_ALPHA) + (v.smoke ? "s" : "") + (v.csm ? "c" : "") + _tier2Suffix();
 }
 
 let _patchWarned = false;
@@ -925,6 +1176,8 @@ export function applyParticleFxMaterial(mat, { additive }) {
   else delete mat.defines.HB_FX_SMOKE;
   if (variant.csm) mat.defines.HB_FX_CSM = "";
   else delete mat.defines.HB_FX_CSM;
+  // tier 2 `?fxMotion` / `?fxShapes` / `?fxClamp`
+  _applyTier2Defines(mat.defines);
   const key = particleFxProgramKey(additive);
   mat.onBeforeCompile = function hbParticleFx(shader) {
     if (!patchParticleFxShader(shader) && !_patchWarned) {
@@ -968,9 +1221,13 @@ export function makeParticleFxGlowMaterial(bucketMat) {
     toneMapped: false,
   });
   m.forceSinglePass = true;
-  m.defines = { HB_FX_ADDITIVE: "", HB_FX_GLOW: "" };
+  // The tier-2 variant rides along: the twin shares the bucket's instance
+  // matrices, whose bottom row carries velocity under HB_FX_MOTION — a glow
+  // program without the variant would read it as projective w.
+  m.defines = _applyTier2Defines({ HB_FX_ADDITIVE: "", HB_FX_GLOW: "" });
   m.onBeforeCompile = function hbParticleFxGlow(shader) { patchParticleFxShader(shader); };
-  m.customProgramCacheKey = () => FX_KEY_GLOW;
+  const glowKey = FX_KEY_GLOW + _tier2Suffix();
+  m.customProgramCacheKey = () => glowKey;
   m.name = "particle-fx-glow";
   m.userData = { __particleFxGlow: true };
   return m;
@@ -1026,6 +1283,47 @@ export function particleFxSeed(emitter, slot, lifetime) {
   if (seeds[slot] < 0 || lt + 1e-6 < lives[slot]) seeds[slot] = _nextSeed();
   lives[slot] = lt;
   return seeds[slot];
+}
+
+/**
+ * Tier 2 `?fxMotion`: a slot's velocity (`_scene`-local m/s) from its position
+ * history, lightly smoothed. A changed seed (the slot respawned) or a jump over
+ * 60 m/s (a respawn the seed missed, a teleport) restarts it at rest; a second
+ * call in the same tick returns the last value. `e` = the slot mesh's local
+ * matrix elements. Writes `out[0..2]`, returns `out`.
+ */
+export function particleFxSlotVelocity(emitter, slot, e, seed, nowSec, out) {
+  const n = emitter.parts ? emitter.parts.length : 0;
+  let c = emitter._fxVel;
+  if (!c || c.length < n * 8) {
+    const nc = new Float32Array(Math.max(n, 1) * 8).fill(NaN);
+    if (c) nc.set(c.subarray(0, Math.min(c.length, nc.length)));
+    emitter._fxVel = c = nc;
+  }
+  const o = slot * 8;
+  const x = e[12], y = e[13], z = e[14];
+  let vx = 0, vy = 0, vz = 0;
+  if (c[o + 4] === seed && Number.isFinite(c[o + 3])) {
+    const dt = nowSec - c[o + 3];
+    if (!(dt > 1e-4)) {
+      out[0] = c[o + 5] || 0; out[1] = c[o + 6] || 0; out[2] = c[o + 7] || 0;
+      return out;
+    }
+    if (dt < 0.5) {
+      let rx = (x - c[o]) / dt, ry = (y - c[o + 1]) / dt, rz = (z - c[o + 2]) / dt;
+      if (rx * rx + ry * ry + rz * rz > 3600) { rx = 0; ry = 0; rz = 0; }
+      const px = c[o + 5], py = c[o + 6], pz = c[o + 7];
+      if (Number.isFinite(px) && (px !== 0 || py !== 0 || pz !== 0)) {
+        vx = 0.5 * (px + rx); vy = 0.5 * (py + ry); vz = 0.5 * (pz + rz);
+      } else {
+        vx = rx; vy = ry; vz = rz;
+      }
+    }
+  }
+  c[o] = x; c[o + 1] = y; c[o + 2] = z; c[o + 3] = nowSec; c[o + 4] = seed;
+  c[o + 5] = vx; c[o + 6] = vy; c[o + 7] = vz;
+  out[0] = vx; out[1] = vy; out[2] = vz;
+  return out;
 }
 
 /** Age in [0, 1] of a particle record. */
@@ -1165,6 +1463,8 @@ export function particleFxBeforeLate(renderer, depthTexture, camera, width, heig
     FX_UNIFORMS.uFxSceneW.value = s.target.texture;
     FX_UNIFORMS.uFxInvRes.value.set(1 / w, 1 / h);
     FX_UNIFORMS.uFxSoftOn.value = 1;
+    // tier 2 `?fxClamp`: measure projected sizes in THIS target's pixels
+    FX_UNIFORMS.uFxViewH.value = h;
     s.stats.copies++;
     return true;
   } catch (_) {
@@ -1194,8 +1494,21 @@ if (typeof window !== "undefined") {
         light: FX_UNIFORMS.uFxLight.value.toArray(),
         alphaCal: FX_UNIFORMS.uFxAlphaCal.value,
         addCal: FX_UNIFORMS.uFxAddCal.value,
+        tier2: _tier2 ? { ..._tier2 } : null,
+        stretchT: FX_UNIFORMS.uFxStretchT.value,
+        minPx: FX_UNIFORMS.uFxMinPx.value,
+        viewH: FX_UNIFORMS.uFxViewH.value,
       };
     }
     return setParticleFxLive(!!on);
+  };
+  // Tier 2 live tuning: the velocity stretch's shutter (s) and the sub-pixel
+  // clamp's minimum projected radius (px) — shared uniforms, no recompile.
+  window.__fxTier2 = {
+    get stretchT() { return FX_UNIFORMS.uFxStretchT.value; },
+    set stretchT(v) { if (Number.isFinite(+v)) FX_UNIFORMS.uFxStretchT.value = Math.max(0, Math.min(0.5, +v)); },
+    get minPx() { return FX_UNIFORMS.uFxMinPx.value; },
+    set minPx(v) { if (Number.isFinite(+v)) FX_UNIFORMS.uFxMinPx.value = Math.max(0, Math.min(8, +v)); },
+    variant: () => (_tier2 ? { ..._tier2 } : null),
   };
 }

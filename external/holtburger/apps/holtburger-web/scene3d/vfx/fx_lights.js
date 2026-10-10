@@ -193,6 +193,28 @@ export function fxFlashEnvelope(t, attackMs, holdMs, decayMs) {
 }
 
 /**
+ * Tier 2 (vfx/fx_showcase.js): the strongest live EMITTER light within
+ * `maxDist` m of a THREE-world point — a portal's or lifestone's own glow
+ * colour. Positions are resolved on demand. Null when none.
+ */
+export function fxEmitterLightNear(pos, maxDist = 4) {
+  if (!pos) return null;
+  let best = null;
+  let bestScore = -Infinity;
+  const md2 = maxDist * maxDist;
+  for (const s of _emitterLights) {
+    if (s.released || typeof s.resolvePosition !== "function") continue;
+    if (!s.resolvePosition(_nearTmp)) continue;
+    const d2 = _nearTmp.distanceToSquared(pos);
+    if (d2 > md2) continue;
+    const score = (s.baseIntensity || 0) - d2;
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  return best;
+}
+const _nearTmp = new THREE.Vector3();
+
+/**
  * Spawn a transient flash light (a spell landing, an impact, a level-up).
  * @param {{position:{x:number,y:number,z:number}, color?:number|number[]|THREE.Color,
  *   intensity?:number, range?:number, attackMs?:number, holdMs?:number, decayMs?:number,

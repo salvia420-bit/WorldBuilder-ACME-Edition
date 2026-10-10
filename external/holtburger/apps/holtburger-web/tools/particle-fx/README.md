@@ -65,6 +65,26 @@ count / texture colour, and context tags. The generator merges them into the
 same rows (10 texels). Runtime + switches: `docs/HANDOFF-particle-fx-tier1-2026-10-10.md`.
 Per-DID corrections: `tier1_overrides.json` (`{"emitters": {"0x…": {"light": 40, "kids": null}}}`).
 
+## Tier 2 (2026-10-10)
+
+`tier2.py` derives each emitter's tier-2 terms — velocity `stretch` (hit
+sparks, specks, blood droplets, debris, water spray / streaks), the analytic
+`shape` (1 star, 2 orb, 3 ring) with its `spikes` (4 warm / 6 cool), `halo`
+(from the texture's measured cover) and `sprite` colour, and the spark
+children's `bounce`. The sprite colour is ENERGY-MATCHED: the texture's mean
+linear rgb·a over the quad (from `$PFX_WORK/thumbs/<surface>.png`) divided by
+the analytic profile's mean, so the crisp sprite carries the retail sprite's
+light. The analytic profiles in `tier2.py` MIRROR `particle_fx.js`
+`hbFxAnalytic` (the node test checks the constants agree). The generator merges
+the terms into the same rows (12 texels). Runtime + switches:
+`docs/HANDOFF-particle-fx-tier2-2026-10-10.md`. Per-DID corrections:
+`tier2_overrides.json` (`{"emitters": {"0x…": {"stretch": 0.6, "shape": null}}}`).
+
+```sh
+PFX_WORK=<work> python3 tier2.py      # -> ../../data/particle-fx-tier2.json
+cd ../.. && node scripts/gen-particle-fx-profiles.mjs
+```
+
 ## Editing one effect
 
 Add or edit an entry in an override file (`{"emitters": {"0x3200026E": {"note": …,

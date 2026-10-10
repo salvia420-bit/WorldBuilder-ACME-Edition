@@ -169,6 +169,32 @@ export function collectFxDistortSources(camera, out, nowMs) {
   return out;
 }
 
+/**
+ * Tier 2 (vfx/fx_showcase.js): the nearest live SWIRL source within `maxDist`
+ * m (horizontally) of a THREE-world point — a portal's swirl centre and
+ * radius. `out` receives {x, y, z, radius, emitter}; null when none.
+ */
+export function fxDistortSwirlNear(pos, maxDist, out = {}) {
+  if (!pos) return null;
+  let best = null;
+  let bestD = Infinity;
+  for (const s of _sources) {
+    if (s.released || s.kind !== FX_DISTORT_KINDS.swirl) continue;
+    if (!s.resolvePosition(_swirlTmp)) continue;
+    const dx = _swirlTmp.x - pos.x, dz = _swirlTmp.z - pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > maxDist || d >= bestD) continue;
+    bestD = d;
+    best = s;
+    out.x = _swirlTmp.x; out.y = _swirlTmp.y; out.z = _swirlTmp.z;
+  }
+  if (!best) return null;
+  out.radius = best.radius;
+  out.emitter = best.emitter;
+  return out;
+}
+const _swirlTmp = new THREE.Vector3();
+
 /** Diagnostics. */
 export function fxDistortStats() {
   return { ..._stats, sources: _sources.size };

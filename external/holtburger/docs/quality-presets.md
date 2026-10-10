@@ -105,6 +105,12 @@ they accept the perf cost.
 | `fxSmoke` | off | on | on | on | Particle tier 1 (2026-10-10) |
 | `fxDistort` | off | on | on | on | Particle tier 1 (2026-10-10) |
 | `fxGlow` | off | off | on | on | Particle tier 1 (2026-10-10) |
+| `fxMotion` | off | on | on | on | Particle tier 2 (2026-10-10) |
+| `fxShapes` | off | on | on | on | Particle tier 2 (2026-10-10) |
+| `fxDecals` | off | on | on | on | Particle tier 2 (2026-10-10) |
+| `fxClamp` | off | on | on | on | Particle tier 2 (2026-10-10) |
+| `fxShowcase` | off | on | on | on | Particle tier 2 (2026-10-10) |
+| `fxFields` | off | off | on | on | Particle tier 2 (2026-10-10) — terrain-VFX ladder (`TERRAIN_VFX_PROMOTED.fields`) |
 
 ### Flag glossary
 
@@ -116,6 +122,18 @@ they accept the perf cost.
   (`FX_TIER1_PRESETS`, spread into PRESETS); plain on/off BOOL_FLAGS. Full
   description, costs and the queued 1070 checks:
   `apps/holtburger-web/docs/HANDOFF-particle-fx-tier1-2026-10-10.md`; rows in
+  `apps/holtburger-web/docs/url-flags.md`.
+
+- **Particle tier 2 (`fxMotion`, `fxShapes`, `fxDecals`, `fxClamp`,
+  `fxShowcase`, `fxFields`)** — 2026-10-10. Velocity-stretched sparks, ribbon
+  trails behind projectiles and elemental swing trails; analytic star / orb /
+  ring sprites; ground marks (scorch, frost, acid, light rings); the sub-pixel
+  clamp; the portal / lifestone / level-up set pieces; ambient GPU fields
+  (fireflies, dungeon dust, pollen, leaves, snow, ash, embers). Defaults live in
+  `scene3d/vfx/fx_tier2.js` (`FX_TIER2_PRESETS`); `fxFields` takes its per-tier
+  value from the terrain-VFX ladder (`terrainMaster("fields", tier)`, high /
+  ultra) like grass. Plain on/off BOOL_FLAGS. Full description:
+  `apps/holtburger-web/docs/HANDOFF-particle-fx-tier2-2026-10-10.md`; rows in
   `apps/holtburger-web/docs/url-flags.md`.
 
 - **`antialias`** — FPS plan A1 (2026-05-18). Passed to

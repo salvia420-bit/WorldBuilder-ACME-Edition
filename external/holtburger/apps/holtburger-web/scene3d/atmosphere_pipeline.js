@@ -68,6 +68,8 @@ import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_eff
 // distortion from the effects in view, and the particle glow buffer.
 import { createFxDistortEffect, installFxDistortHandle } from "./vfx/fx_distort_effect.js";
 import { createFxGlowEffect, installFxGlowHandle } from "./vfx/fx_glow_effect.js";
+import { createFxDecalEffect, installFxDecalHandle } from "./vfx/fx_decal_effect.js";
+import { fxDecalStats } from "./vfx/fx_decals.js";
 import { particlesOverCloudsEnabled, collectLateFx, runLateFxBefore, runLateFxAfter } from "./particles_over_clouds.js";
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
@@ -1494,6 +1496,17 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     depthSource: () => composer.depthTexture,
     ...(typeof opts?.fxGlow === "boolean" ? { enabled: opts.fxGlow } : {}),
   });
+  // Tier-2 `?fxDecals` (2026-10-10) — ground marks (scorch, frost, acid, the
+  // portal / lifestone light rings) projected onto the scene from its depth
+  // (vfx/fx_decal_effect.js). In the atmosphere pass after the AO composite and
+  // before the clouds / aerial perspective (its DEPTH attribute keeps the slot),
+  // so a mark is hazed with the ground under it; on both chains. null when off.
+  const fxDecals = createFxDecalEffect({
+    camera,
+    depthSource: () => composer.depthTexture,
+    fog: () => (scene && scene.fog) || null,
+    ...(typeof opts?.fxDecals === "boolean" ? { enabled: opts.fxDecals } : {}),
+  });
 
   // Clouds in the main pass (`?cloudsMainPass=on`). The CloudOverlay is built
   // by index.js before this pipeline (its `?clouds=on` block runs first);
@@ -1569,7 +1582,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // composite: HeatHaze → Clouds → AerialPerspective → [HorizonDissolve]
     // | particles | LensFlare → Bloom → Vignette → ToneMapping → ColorGrade
     // → Dithering.
-    const atmosEffects = [heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
+    const atmosEffects = [heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve].filter(Boolean);
     const postEffects = [fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean);
     fxPass = new PostChainTargetPass(camera, particlesOverCloudsPass, ...atmosEffects);
     if (nanScrubOn) {
@@ -1601,8 +1614,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // (pmndrs updates effects in list order; all three carry DEPTH so the
       // stable attribute sort keeps this order).
       // Tier 1: fxDistort rides right behind the heat haze (both mainUv), fxGlow
-      // is added after the atmosphere and before lens flare / bloom.
-      ...[heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
+      // is added after the atmosphere and before lens flare / bloom. Tier 2:
+      // fxDecals sits after the AO composite, before the clouds / aerial.
+      ...[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering].filter(Boolean),
     );
   }
   if (nanScrubOn) {
@@ -1646,6 +1660,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   installHeatHazeHandle(heatHaze);
   installFxDistortHandle(fxDistort);
   installFxGlowHandle(fxGlow);
+  installFxDecalHandle(fxDecals, { stats: fxDecalStats });
   installColorGradeHandle(colorGrade);
   installSsaoHandle(ssaoPass);
   installLayerHazeHandle(layeredHaze);
@@ -1781,6 +1796,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     // session; live handles `window.__fxDistort` / `window.__fxGlow`.
     fxDistort,
     fxGlow,
+    // Tier 2 (2026-10-10): null when `?fxDecals` is off; `window.__fxDecals`.
+    fxDecals,
     skyCapturePass,
     lensFlare,
     bloom,
@@ -2218,6 +2235,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       heatHaze?.dispose?.();
       fxDistort?.dispose?.();
       fxGlow?.dispose?.();
+      fxDecals?.dispose?.();
       toneMapping.dispose?.();
       colorGrade?.dispose?.();
       if (ssaoComposite) SSAO_GRASS_MARKER.value = 0;

@@ -254,8 +254,9 @@ console.log("\n-- L10 ?ssao ---------------------------------------------------"
   check("log depth decoded as exp2(d * log2(far + 1)) - 1", /exp2\(d \* uLogFC\) - 1\.0/.test(ssaoSrc));
   const pipe = src("scene3d/atmosphere_pipeline.js");
   // 2026-10-10 tier 1: `?fxDistort` is a UV warp like the heat haze and rides right behind it.
+  // Tier 2: `?fxDecals` (ground marks) sits right after the composite, before clouds + aerial.
   check("composite is the first atmosphere effect after the UV warps (heat haze, fx distortion) — before clouds + aerial",
-    pipe.includes("[heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve]"));
+    pipe.includes("[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve]"));
   // 2026-10-08 — on the UNSPLIT chain the ?layerHaze pass also goes in front of
   // fxPass (it tone-maps there); AO still runs before it and before fxPass.
   check("the AO pass is added right before fxPass (only the unsplit-chain haze between)",

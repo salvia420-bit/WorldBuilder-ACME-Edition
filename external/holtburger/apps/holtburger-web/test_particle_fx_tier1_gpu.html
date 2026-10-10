@@ -40,6 +40,9 @@ try {
   const { FxGlowEffect } = await import("/scene3d/vfx/fx_glow_effect.js");
   const PP = await import("postprocessing");
   const t1f = await import("/scene3d/vfx/fx_tier1.js");
+  // Tier 2 (test_particle_fx_tier2_gpu.html) adds m / a / p to every FX program;
+  // this page pins the earlier contract, so latch the tier-2 variant OFF.
+  fx._setParticleFxTier2VariantForTest({ motion: false, shapes: false, clamp: false });
 
   const canvas = document.createElement("canvas");
   canvas.width = 64; canvas.height = 64;

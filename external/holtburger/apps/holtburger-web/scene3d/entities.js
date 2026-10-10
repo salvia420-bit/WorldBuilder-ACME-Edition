@@ -1334,6 +1334,8 @@ import { tipFlexEnabled, gemSparkleEnabled } from "./vfx_flags.js";
 import { attachParticleEmitters } from "./vfx/particle_attach.js";
 import { readParticleEnv } from "./vfx/particle_env.js"; // P3.7 derived day/weather/season for ctx.env
 import { FAMILY_ORDER } from "./vfx/registry.js";
+// Tier 2 `?fxMotion` (2026-10-10): elemental swing trails (vfx/fx_ribbons.js).
+import { fxNoteSwing } from "./vfx/fx_ribbons.js";
 import "./vfx/components/index.js";
 const VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
 let _entityVfxFragDeps = null;
@@ -2661,6 +2663,17 @@ const EXTENDED_ATTACK_COMMANDS = new Set([
   // WoahDuplicate2
   0x019B,
 ]);
+
+// Tier 2 `?fxMotion` (2026-10-10): the melee swings and thrusts that let a
+// wielder's held ELEMENTAL weapons leave a trail (vfx/fx_ribbons.js) —
+// ATTACK_COMMANDS minus the missile shots and the jump pair, plus the double /
+// triple and offhand swings of EXTENDED_ATTACK_COMMANDS.
+const _FX_SWING_NOT = new Set([0x0061, 0x00D0, 0x00D1, 0x00D2, 0x003B, 0x001D]);
+function _fxIsMeleeSwing(cmd) {
+  const low = cmd & 0xffff;
+  if (ATTACK_COMMANDS.has(low)) return !_FX_SWING_NOT.has(low);
+  return (low >= 0x011F && low <= 0x012A) || (low >= 0x0173 && low <= 0x018E);
+}
 
 // Wave 8 / Phase 8.2 (2026-05-26) — specialized held / cycle commands
 // not covered by STATIONARY_COMMANDS or the explicit Ready/Walk path.
@@ -11498,6 +11511,8 @@ export class EntityManager {
     if ((cls === "attack" || cls === "cast") && !castGestureSubstate) {
       // (swing/cast vibe-pose tween clears removed — setSwingPose/setCastPose
       // retired, WS-B teardown 2026-06-18; nothing assigns the tweens now.)
+      // Tier 2 `?fxMotion`: a melee swing lets the held elemental weapons trail.
+      if (cls === "attack" && _fxIsMeleeSwing(cmd)) fxNoteSwing(inst);
       // F3-6 (?meleeFaceTarget=on): orient a swinging mob toward its melee
       // victim before the swing renders. The server only broadcasts the attack
       // when the attacker is already facing (IsFacing ~5°→20°), but our remote

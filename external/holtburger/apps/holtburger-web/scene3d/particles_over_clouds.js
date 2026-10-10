@@ -143,6 +143,28 @@ export function fxGlowProvider() {
   return _glowProvider;
 }
 
+// ── Tier-2 glow extras (2026-10-10) ──────────────────────────────────────────
+// Non-bucket objects that also send light to the glow buffer: the ambient
+// fireflies (vfx/fx_fields.js) and the level-up lens flare (vfx/fx_showcase.js).
+// A source is `{ collect(out), setFrame?(opts) }`; `collect` pushes
+// `{ object, material }` pairs — the glow effect draws a twin of `object`
+// (same geometry, same matrixWorld) with `material`, after calling the
+// source's `setFrame` with the glow pass's frame inputs (scene depth, size,
+// depth decode, strength), exactly what the bucket provider gets.
+const _glowExtras = new Set();
+
+/** Register a glow-extras source. Idempotent. Returns an unregister function. */
+export function registerFxGlowExtras(src) {
+  if (!src || typeof src.collect !== "function") return () => {};
+  _glowExtras.add(src);
+  return () => _glowExtras.delete(src);
+}
+
+/** The registered glow-extras sources (the glow effect iterates them). */
+export function fxGlowExtraSources() {
+  return _glowExtras;
+}
+
 /**
  * three r184 `materialNeedsLights` (WebGLRenderer). Such a material in the
  * light-less late scene would render black, so it stays in the world pass.

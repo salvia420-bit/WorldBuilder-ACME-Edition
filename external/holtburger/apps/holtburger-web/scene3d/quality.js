@@ -15,6 +15,7 @@
 
 import { lowBandwidth } from "./bandwidth_tier.js";
 import { FX_TIER1_PRESETS } from "./vfx/fx_tier1.js";
+import { FX_TIER2_PRESETS } from "./vfx/fx_tier2.js";
 
 // ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
 //
@@ -52,6 +53,13 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     swamp: false,
     dirt: false,
     rock: false,
+    // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_fields.js): the
+    // ambient GPU fields round the camera (fireflies, dungeon dust motes,
+    // leaves and pollen, snow, volcanic ash and embers). Promoted with the rest
+    // of tier 2 under the owner's "new behaviour ships on" policy (2026-10-05)
+    // and the owner's 2026-10-10 "implement tier 2 to completion" directive;
+    // the ladder below keeps it to high / ultra. `?fxFields=off` escapes.
+    fields: true,
 });
 
 // The per-family ladder, from each flag's docs/url-flags.md promotion target
@@ -161,6 +169,10 @@ export const PRESETS = {
         ssao: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): low preset.
         ...FX_TIER1_PRESETS.low,
+        // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): low preset;
+        // `fxFields` rides the terrain-VFX ladder like grass.
+        ...FX_TIER2_PRESETS.low,
+        fxFields: terrainMaster("fields", "low"),
         // Terrain VFX (Wave 0B, docs/2026-07-31-terrain-vfx-plan.md §2.2/§5.8).
         // `terrainTrail` = the shared stomp/footprint render-target trail map.
         // SHIPS FALSE ON EVERY TIER (§5.9 "ship OFF, promote deliberately");
@@ -319,6 +331,10 @@ export const PRESETS = {
         ssao: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): mid preset.
         ...FX_TIER1_PRESETS.mid,
+        // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): mid preset;
+        // `fxFields` rides the terrain-VFX ladder like grass.
+        ...FX_TIER2_PRESETS.mid,
+        fxFields: terrainMaster("fields", "mid"),
         // Terrain VFX grass — see the `low` tier for the rationale. 24336 =
         // 156²; stomp off at mid (the trail RT is a high/ultra promotion).
         terrainGrass: terrainMaster("grass", "mid"),
@@ -421,6 +437,10 @@ export const PRESETS = {
         ssao: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): high preset.
         ...FX_TIER1_PRESETS.high,
+        // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): high preset;
+        // `fxFields` rides the terrain-VFX ladder like grass.
+        ...FX_TIER2_PRESETS.high,
+        fxFields: terrainMaster("fields", "high"),
         // Terrain VFX grass — see the `low` tier. 60025 = 245², the plan's
         // reference budget (240k tris, one draw call, <= 3.5 ms on an R9 290 —
         // a hypothesis, §8 risk 6: measure before fixing this number).
@@ -517,6 +537,10 @@ export const PRESETS = {
         ssao: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): ultra preset.
         ...FX_TIER1_PRESETS.ultra,
+        // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): ultra preset;
+        // `fxFields` rides the terrain-VFX ladder like grass.
+        ...FX_TIER2_PRESETS.ultra,
+        fxFields: terrainMaster("fields", "ultra"),
         // Terrain VFX grass — see the `low` tier. 119716 = 346².
         terrainGrass: terrainMaster("grass", "ultra"),
         terrainGrassBlades: 119716,
@@ -627,6 +651,18 @@ const BOOL_FLAGS = new Set([
     "fxSmoke",
     "fxDistort",
     "fxGlow",
+    // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js) — plain
+    // on/off switches like tier 1. `fxFields` is the one terrain-ladder key in
+    // here: its preset value comes from the terrain ladder (the `fields` gate), but
+    // it is a particle-family switch with no exact-`on` reader to protect, so
+    // the 1/true/yes widening is harmless (and lets `?fxFields=on` reach the
+    // resolved flags).
+    "fxMotion",
+    "fxShapes",
+    "fxDecals",
+    "fxClamp",
+    "fxShowcase",
+    "fxFields",
 ]);
 
 // Integer-typed flags.

@@ -65,9 +65,10 @@ console.log("-- C1 pipeline source ---------------------------------------------
 const PIPE = readFileSync(path.join(APP, "scene3d", "atmosphere_pipeline.js"), "utf8");
 check("cloudsMainPassEnabled is default-on with an =off escape",
   /export function cloudsMainPassEnabled\(\)[\s\S]{0,200}get\("cloudsMainPass"\) !== "off"/.test(PIPE));
-// 2026-10-10 tier 1: fxDistort (UV warp, behind the heat haze) and fxGlow (ahead of lens flare / bloom).
-check("fxPass list: heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, ... fxGlow, ... toneMapping, colorGrade, dithering",
-  /\.\.\.\[heatHaze, fxDistort, ssaoComposite, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/.test(PIPE));
+// 2026-10-10 tier 1: fxDistort (UV warp, behind the heat haze) and fxGlow (ahead of lens flare / bloom);
+// tier 2: fxDecals (ground marks, after the AO composite, before the clouds).
+check("fxPass list: heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, ... fxGlow, ... toneMapping, colorGrade, dithering",
+  /\.\.\.\[heatHaze, fxDistort, ssaoComposite, fxDecals, cloudsMain, aerialPerspective, horizonDissolve, fxGlow, lensFlare, bloom, vignette, toneMapping, colorGrade, dithering\]\.filter\(Boolean\)/.test(PIPE));
 check("cloudsMain is null unless the flag is on",
   /const cloudOverlayForMain = cloudsMainPassEnabled\(\)\s*\?/.test(PIPE));
 const addAt = PIPE.indexOf("composer.addPass(fxPass);");

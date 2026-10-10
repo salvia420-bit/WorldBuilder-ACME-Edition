@@ -28,10 +28,21 @@
 //
 // VFX invariant: reads parent state + profile row + clock, writes only its own
 // render attributes; one constant program; no light.
+//
+// TIER 2 (2026-10-10, scene3d/vfx/fx_tier2.js), compiled in with the FX
+// buckets' latched variant (particle_fx.js `particleFxTier2Variant`):
+//   HB_FX_BOUNCE (`?fxMotion`) — a spark of a row with `bounce` > 0 marches its
+//     arc against the scene surface (the late pass's linear depth copy,
+//     `uFxSceneW`), bisects where it first passes behind it and, if that is a
+//     CONTACT (the surface lies where the spark is, not a creature in front of
+//     it), bounces off a level floor with that restitution, then rests on it:
+//     the war-spell impact's sparks skitter instead of sinking through the
+//     ground. Only in the late particle pass (the copy exists there).
+//   HB_FX_CLAMP (`?fxClamp`) — the same sub-pixel clamp as the buckets.
 
 import * as THREE from "three";
 
-import { FX_UNIFORMS, particleFxTable, particleFxTier1 } from "./particle_fx.js";
+import { FX_UNIFORMS, particleFxTable, particleFxTier1, particleFxTier2Variant } from "./particle_fx.js";
 
 export const KIDS_PER_RECORD = 8;
 const MIN_CAP = 64;
@@ -43,6 +54,27 @@ uniform highp sampler2D uFxTable;
 uniform float uFxTime;
 uniform float uFxAddCal;
 uniform vec3 uKidUp;
+#ifdef HB_FX_BOUNCE
+uniform float uFxSoftOn;
+uniform highp sampler2D uFxSceneW;
+// Is the point behind the visible surface (by 4 cm)? gap = how far behind.
+// Off screen / in front ⇒ false.
+bool hbKidBehind( vec3 c, out float gap ) {
+	gap = 0.0;
+	vec4 cv = modelViewMatrix * vec4( c, 1.0 );
+	vec4 cc = projectionMatrix * cv;
+	if ( cc.w <= 1e-4 ) return false;
+	vec2 suv = cc.xy / cc.w * 0.5 + 0.5;
+	if ( suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0 ) return false;
+	float sw = textureLod( uFxSceneW, suv, 0.0 ).r;
+	gap = -cv.z - sw;
+	return gap > 0.04;
+}
+#endif
+#ifdef HB_FX_CLAMP
+uniform float uFxViewH;
+uniform float uFxMinPx;
+#endif
 attribute vec4 aKidPos;   // parent position (local), parent age
 attribute vec4 aKidVel;   // parent velocity (local, m/s), parent opacity
 attribute vec2 aKidRow;   // profile row, seed
@@ -121,6 +153,41 @@ void main() {
 		alpha = 1.0 - smoothstep( 0.4, 1.0, ph );
 		hot = 1.0 - ph * 0.7;
 		stretchK = 1.0;
+	#ifdef HB_FX_BOUNCE
+		float bounce = texelFetch( uFxTable, ivec2( 10, row ), 0 ).w; // stretch, shape, spikes, bounce
+		if ( bounce > 0.0 && uFxSoftOn > 0.5 && t > 0.0 ) {
+			// march the arc for the first point behind the scene surface,
+			// bisect the crossing, and bounce off a level floor there — but
+			// only on CONTACT (the surface is where the spark is): passing
+			// behind a creature in front of it is no floor
+			float gap = 0.0;
+			float lo = 0.0;
+			float hi = -1.0;
+			for ( int s = 1; s <= 4; s++ ) {
+				float ts = t * float( s ) * 0.25;
+				if ( hbKidBehind( P + v0 * ts + 0.5 * g * ts * ts, gap ) ) { hi = ts; break; }
+				lo = ts;
+			}
+			if ( hi > 0.0 ) {
+				for ( int s = 0; s < 5; s++ ) {
+					float mid = 0.5 * ( lo + hi );
+					if ( hbKidBehind( P + v0 * mid + 0.5 * g * mid * mid, gap ) ) hi = mid; else lo = mid;
+				}
+				vec3 ch = P + v0 * hi + 0.5 * g * hi * hi;
+				hbKidBehind( ch, gap );
+				if ( gap < 0.6 ) {
+					vec3 vh = v0 + g * hi;
+					vec3 vr = ( vh - 2.0 * dot( vh, up ) * up ) * bounce;
+					float tt = t - hi;
+					c = ch + vr * tt + 0.5 * g * tt * tt;
+					float below = dot( c - ch, up );
+					if ( below < 0.0 ) c -= up * below; // no second fall: it rests on the floor
+					vel = vr + g * tt;
+					alpha *= 0.75;
+				}
+			}
+		}
+	#endif
 	} else if ( kind < 4.5 ) {
 		// drip: falls off the parent
 		float t = ph * life;
@@ -160,6 +227,18 @@ void main() {
 	vKidCol = col * max( t7.z, 0.0 ) * uFxAddCal;
 	vKidA = alpha;
 	vec4 mv = modelViewMatrix * vec4( c, 1.0 );
+	#ifdef HB_FX_CLAMP
+	{
+		// the bucket's sub-pixel clamp: at least uFxMinPx projected radius, the
+		// alpha cut by the area ratio
+		float kPx = 0.5 * size * projectionMatrix[ 1 ][ 1 ] / max( -mv.z, 1e-4 ) * 0.5 * uFxViewH;
+		if ( kPx > 1e-6 && kPx < uFxMinPx ) {
+			float kk = uFxMinPx / kPx;
+			size *= kk;
+			vKidA /= kk * kk;
+		}
+	}
+	#endif
 	vec3 vv = ( modelViewMatrix * vec4( vel, 0.0 ) ).xyz;
 	float sp = length( vv.xy );
 	vec2 dir = sp > 1e-4 ? vv.xy / sp : vec2( 0.0, 1.0 );
@@ -201,13 +280,23 @@ const _kidUp = { value: new THREE.Vector3(0, 0, 1) };
 export function particleFxKidsMaterial() {
   if (_material) return _material;
   if (!FX_UNIFORMS.uFxTable.value) FX_UNIFORMS.uFxTable.value = particleFxTable();
+  // Tier 2: the FX buckets' latched variant (one program either way).
+  const t2 = particleFxTier2Variant();
+  const defines = {};
+  if (t2.motion) defines.HB_FX_BOUNCE = "";
+  if (t2.clamp) defines.HB_FX_CLAMP = "";
   _material = new THREE.ShaderMaterial({
     name: "particle-fx-kids",
+    defines,
     uniforms: {
       uFxTable: FX_UNIFORMS.uFxTable,
       uFxTime: FX_UNIFORMS.uFxTime,
       uFxAddCal: FX_UNIFORMS.uFxAddCal,
       uKidUp: _kidUp,
+      uFxSoftOn: FX_UNIFORMS.uFxSoftOn,
+      uFxSceneW: FX_UNIFORMS.uFxSceneW,
+      uFxViewH: FX_UNIFORMS.uFxViewH,
+      uFxMinPx: FX_UNIFORMS.uFxMinPx,
     },
     vertexShader: VERT,
     fragmentShader: FRAG,
