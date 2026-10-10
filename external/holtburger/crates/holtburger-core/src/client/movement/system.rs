@@ -1253,8 +1253,21 @@ const USE_CAST_HOLD_RECLAIM: bool = true;
 /// strafing are untouched (slidecast). Release edges of a held-back press are
 /// swallowed with it; a key pressed BEFORE the cast releases normally.
 ///
-/// `true` (DEFAULT): hold back. `false` / `?castMoveLock=off`: pass through.
-const USE_CAST_MOVE_LOCK: bool = true;
+/// DEFAULT FLIPPED OFF 2026-10-10 (user ruling: "we should be able to press w
+/// to try and run forward while we cast a spell" — PvP fastcasting). Retail
+/// and OpenAC send the press: `HandleKeyboardCommand` takes control back from
+/// the server and the MoveToState goes out at once (acclient.c:717298 /
+/// :717320; OpenAC `PlayerMovementController.Update` →
+/// `TakeControlFromServer`). Under ACE's PK physics that forward command
+/// interrupts the cast gesture on the server's body, its MotionDone fires
+/// early and the spell launches (Player_Magic.cs `HandleMotionDone_Magic`,
+/// the `/castmeter` "cast efficiency") — the lock made that impossible. The
+/// anim-break that used to make W look like a cancel stays off
+/// (`?castAnimBreak`), and `?castHoldReclaim` still keeps a HELD W from
+/// re-driving between gestures without a fresh press.
+///
+/// `false` (DEFAULT): pass through. `true` / `?castMoveLock=on`: hold back.
+const USE_CAST_MOVE_LOCK: bool = false;
 
 /// Input actions the cast move lock holds back: MovementForward (0x29) and
 /// MovementBackup (0x2A) — the forward-slot axis (`HandleKeyboardCommand`
@@ -2067,7 +2080,7 @@ pub(crate) struct MovementSystem {
     /// [`USE_CAST_MOVE_LOCK`] — forward/backward presses held back while a
     /// cast is in flight, replayed (in press order) when it resolves.
     cast_lock_deferred_keys: Vec<u32>,
-    /// `?castMoveLock=off` runtime carrier ([`USE_CAST_MOVE_LOCK`]).
+    /// `?castMoveLock=on` runtime carrier ([`USE_CAST_MOVE_LOCK`]).
     cast_move_lock_runtime: Option<bool>,
 
     /// `?slideCast=off` runtime carrier ([`USE_SLIDE_CAST`]) —
@@ -2862,7 +2875,7 @@ impl MovementSystem {
         self.local_cast_window_active = active;
     }
 
-    /// `?castMoveLock=off` runtime carrier install ([`USE_CAST_MOVE_LOCK`]).
+    /// `?castMoveLock=on` runtime carrier install ([`USE_CAST_MOVE_LOCK`]).
     pub(crate) fn set_cast_move_lock(&mut self, on: bool) {
         self.cast_move_lock_runtime = Some(on);
     }

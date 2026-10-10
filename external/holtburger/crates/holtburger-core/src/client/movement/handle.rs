@@ -432,8 +432,8 @@ impl MovementSystemHandle {
         self.inner.note_local_cast_window(active);
     }
 
-    /// (2026-10-07): install the `?castMoveLock=off` runtime carrier.
-    /// Forwards to `MovementSystem::set_cast_move_lock`.
+    /// (2026-10-07): install the `?castMoveLock` runtime carrier (opt-in
+    /// `=on` since 2026-10-10). Forwards to `MovementSystem::set_cast_move_lock`.
     pub fn set_cast_move_lock(&mut self, on: bool) {
         self.inner.set_cast_move_lock(on);
     }

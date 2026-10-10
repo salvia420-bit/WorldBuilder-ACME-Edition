@@ -11428,9 +11428,10 @@ async fn server_turn_publishes_the_turn_cycle_for_the_local_rig() {
 }
 
 // =====================================================================
-// 2026-10-07 — `?castMoveLock`: W never breaks a cast. A forward/backward
-// press made while one of our cast requests is outstanding is held back
-// until the server's UseDone, then replayed; strafe/turn pass through.
+// 2026-10-07 — `?castMoveLock`: a forward/backward press made while one of
+// our cast requests is outstanding is held back until the server's UseDone,
+// then replayed; strafe/turn pass through. OPT-IN since 2026-10-10 (W goes
+// through mid-cast by default — fastcasting), so these tests turn it on.
 // =====================================================================
 
 fn queued_key_edges(movement: &MovementSystem) -> Vec<(u32, bool)> {
@@ -11447,6 +11448,7 @@ fn queued_key_edges(movement: &MovementSystem) -> Vec<(u32, bool)> {
 #[test]
 fn cast_move_lock_holds_back_w_until_use_done_then_replays_it() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     let t0 = Instant::now();
     movement.note_cast_request_sent(t0);
     assert!(movement.cast_request_in_flight());
@@ -11473,6 +11475,7 @@ fn cast_move_lock_holds_back_w_until_use_done_then_replays_it() {
 #[test]
 fn cast_move_lock_swallows_the_release_of_a_held_back_press() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     movement.note_cast_request_sent(Instant::now());
     movement.enqueue_key_action(0x2A, true); // S tapped mid-cast…
     movement.enqueue_key_action(0x2A, false); // …and released before UseDone
@@ -11484,6 +11487,7 @@ fn cast_move_lock_swallows_the_release_of_a_held_back_press() {
 #[test]
 fn cast_move_lock_passes_the_release_of_a_key_held_before_the_cast() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     movement.enqueue_key_action(0x29, true); // running before the cast
     movement.note_cast_request_sent(Instant::now());
     movement.enqueue_key_action(0x29, false); // let go mid-cast
@@ -11497,6 +11501,7 @@ fn cast_move_lock_passes_the_release_of_a_key_held_before_the_cast() {
 #[test]
 fn cast_move_lock_needs_every_outstanding_cast_answered() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     let t0 = Instant::now();
     movement.note_cast_request_sent(t0);
     movement.note_cast_request_sent(t0); // a second cast queued behind it
@@ -11515,6 +11520,7 @@ fn cast_move_lock_needs_every_outstanding_cast_answered() {
 #[test]
 fn cast_move_lock_watchdog_releases_a_lost_use_done() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     let t0 = Instant::now();
     movement.note_cast_request_sent(t0);
     movement.enqueue_key_action(0x29, true);
@@ -11526,13 +11532,28 @@ fn cast_move_lock_watchdog_releases_a_lost_use_done() {
     assert_eq!(queued_key_edges(&movement), vec![(0x29, true)]);
 }
 
+/// 2026-10-10 — shipped default: no lock. A W pressed mid-cast reaches the
+/// interpreter at once (its release too), as retail's HandleKeyboardCommand
+/// and OpenAC's input edge do.
 #[test]
-fn cast_move_lock_escape_passes_w_through() {
+fn cast_move_lock_ships_default_off_so_w_reaches_the_interpreter() {
     let mut movement = MovementSystem::new();
-    movement.set_cast_move_lock(false);
+    assert!(!movement.cast_move_lock_enabled(), "?castMoveLock is opt-in");
     movement.note_cast_request_sent(Instant::now());
     movement.enqueue_key_action(0x29, true);
-    assert_eq!(queued_key_edges(&movement), vec![(0x29, true)], "?castMoveLock=off");
+    movement.enqueue_key_action(0x29, false);
+    assert_eq!(
+        queued_key_edges(&movement),
+        vec![(0x29, true), (0x29, false)],
+        "the mid-cast tap passes straight through"
+    );
+    assert!(!movement.cast_move_lock_holding());
+
+    let mut explicit = MovementSystem::new();
+    explicit.set_cast_move_lock(false); // ?castMoveLock=off
+    explicit.note_cast_request_sent(Instant::now());
+    explicit.enqueue_key_action(0x29, true);
+    assert_eq!(queued_key_edges(&explicit), vec![(0x29, true)]);
 }
 
 /// The published lock state (camera.js keeps the local rig off the run
@@ -11541,6 +11562,7 @@ fn cast_move_lock_escape_passes_w_through() {
 #[test]
 fn cast_move_lock_holding_tracks_the_in_flight_cast() {
     let mut movement = MovementSystem::new();
+    movement.set_cast_move_lock(true); // ?castMoveLock=on
     assert!(!movement.cast_move_lock_holding());
     movement.note_cast_request_sent(Instant::now());
     assert!(movement.cast_move_lock_holding());
@@ -11550,6 +11572,103 @@ fn cast_move_lock_holding_tracks_the_in_flight_cast() {
     movement.set_cast_move_lock(false);
     movement.note_cast_request_sent(Instant::now());
     assert!(!movement.cast_move_lock_holding(), "?castMoveLock=off holds nothing");
+}
+
+/// 2026-10-10 — fastcasting (user ruling: "we should be able to press w to
+/// try and run forward while we cast a spell"). With the shipped flags, a W
+/// pressed while our cast is in flight — the server's cast gesture owning the
+/// forward slot — reaches the wire at once as a MoveToState carrying the
+/// forward command: retail `HandleKeyboardCommand` (TakeControlFromServer →
+/// MovePlayer → SendMovementEvent, acclient.c:717298/:717320), OpenAC
+/// `PlayerMovementController.Update` (`TakeControlFromServer` on the edge).
+/// ACE's PK physics applies it to the caster's body, which cuts the cast
+/// gesture and launches the spell early (Player_Magic.cs
+/// `HandleMotionDone_Magic`). `?castMoveLock=on` keeps the press off the
+/// wire until the UseDone and replays it then.
+#[tokio::test]
+async fn w_pressed_mid_cast_reaches_the_wire_unless_cast_move_lock_on() {
+    use holtburger_protocol::messages::CastUntargetedSpellActionData;
+    use holtburger_world::WorldEvent;
+
+    let forward_sent = |sink: &RecordingSink| {
+        sink.sent.iter().any(|action| {
+            matches!(
+                action,
+                GameAction::MoveToState(data)
+                    if data.raw_motion_state.forward_command == Some(WALK_FORWARD_MOTION_COMMAND)
+            )
+        })
+    };
+
+    for lock_on in [false, true] {
+        let guid = Guid(0x5000_0141);
+        let mut world = WorldState::synthetic();
+        world.seed_local_player_entity(
+            guid,
+            "Player",
+            WorldPosition {
+                landblock_id: Guid(0x1234_0000),
+                ..Default::default()
+            },
+        );
+        world.player.guid = guid;
+        let mut movement = MovementSystem::new();
+        let mut sink = RecordingSink::default();
+        let now = Instant::now();
+        movement.set_cmd_interp(true);
+        if lock_on {
+            movement.set_cast_move_lock(true);
+        }
+        movement.tick(now, &mut world, &mut sink).await.expect("tick");
+
+        // The cast: retail MaybeStopCompletely, then the request.
+        let cast = GameAction::CastUntargetedSpell(Box::new(CastUntargetedSpellActionData {
+            spell_id: 27,
+        }));
+        assert!(movement.enqueue_stop_then_action(cast).is_none());
+        movement.note_cast_request_sent(now);
+        movement.tick(now, &mut world, &mut sink).await.expect("tick");
+        assert!(
+            sink.sent.iter().any(|a| matches!(a, GameAction::CastUntargetedSpell(_))),
+            "the cast went out: {:?}",
+            sink.sent
+        );
+
+        // The server's cast gesture for us (non-autonomous General motion).
+        movement.note_server_authored_motion(false);
+        movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+            data: Box::new(cast_gesture_event_for(guid)),
+            target_exists: false,
+            object_radius: 0.0,
+            object_height: 0.0,
+        }]);
+        let t1 = now + Duration::from_millis(100);
+        movement.tick(t1, &mut world, &mut sink).await.expect("tick");
+        sink.sent.clear();
+
+        // W, mid-gesture.
+        movement.enqueue_key_action(0x29, true);
+        let t2 = t1 + Duration::from_millis(50);
+        movement.tick(t2, &mut world, &mut sink).await.expect("tick");
+        assert_eq!(
+            forward_sent(&sink),
+            !lock_on,
+            "lock_on={lock_on}: the mid-cast W {} the wire: {:?}",
+            if lock_on { "must not reach" } else { "must reach" },
+            sink.sent
+        );
+
+        // The server's UseDone ends the cast; a held-back press replays.
+        sink.sent.clear();
+        movement.note_use_done();
+        movement
+            .tick(t2 + Duration::from_millis(50), &mut world, &mut sink)
+            .await
+            .expect("tick");
+        if lock_on {
+            assert!(forward_sent(&sink), "the held W replays at UseDone: {:?}", sink.sent);
+        }
+    }
 }
 
 #[test]

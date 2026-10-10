@@ -8,6 +8,10 @@
 // the ~50-200ms gap between client cast intent and ACE's authoritative
 // `ObjectCreate` for the actual projectile entity.
 //
+// **Default off** (2026-10-10): both overlays this module draws — the
+// shape preview (`?spellShapePreview=on`) and the armed-spell reach ring
+// (`?castRangeRing=on`) — are opt-in. Retail had neither.
+//
 // **Scope.** Predictive overlay ONLY. The server's projectile entities
 // (rendered by `entities.js` once `ObjectCreate` arrives) remain
 // authoritative for collision, damage, and visuals. This module never
@@ -65,6 +69,23 @@ const PROJECTILE_ARC_ON = (() => {
     if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search).get("projectileArc")?.toLowerCase() !== "off"
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+// `?spellShapePreview=on` — the 500 ms projectile path preview (line / fan /
+// arc / torus from caster to target) on every cast. DEFAULT-OFF since
+// 2026-10-10 (user ruling: turn the ring and path indicator off): retail drew
+// nothing between the cast request and the server's projectile, and neither
+// does OpenAC. Gates the shape overlay only — the opt-in cast-stability ring
+// (graphics setting) still anchors on the same event.
+const SPELL_SHAPE_PREVIEW_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    return (
+      new URLSearchParams(window.location.search).get("spellShapePreview")?.toLowerCase() === "on"
     );
   } catch (_) {
     return false;
@@ -576,6 +597,7 @@ function _onSpellCastInitiated(evt) {
       ? (window.getLocalPlayerGuid() >>> 0) : 0;
     if (lg && (detail.attackerGuid >>> 0) === lg) _noteCastStability(detail.spellId >>> 0);
   } catch (_) { /* a stability-ring fault never affects the shape preview */ }
+  if (!SPELL_SHAPE_PREVIEW_ON) return;
   const shape = detail.shape;
   if (!shape) {
     // Classifier returned null/undefined — no shape, no overlay. Logged
@@ -708,17 +730,16 @@ function _tryBind() {
 // TARGETED spell is armed in Magic stance, draw a flat ground torus at the
 // caster's feet sized to the spell's cast range (retail
 // SpellExamineUI::DetermineSpellRange, scene3d/spell_range.js; cap 75m),
-// school-coloured. Purely a visual reach hint — no gating. DEFAULT-ON
-// (`!== "off"` reader; `?castRangeRing=off` disables) — 1070 eye-test still
-// owed (a large 75m torus
-// raises z-fighting / legibility questions on terrain). Self / untargeted
+// school-coloured. Purely a visual reach hint — no gating. DEFAULT-OFF since
+// 2026-10-10 (`?castRangeRing=on` opt-in; user ruling: turn the ring and path
+// indicator off — retail and OpenAC draw no reach ring). Self / untargeted
 // spells (range 0) draw nothing. Runs its OWN rAF loop (only when the flag
 // is on) so it tracks the running player; the ring geometry is rebuilt only
 // when the armed spell or its range changes.
 const CAST_RANGE_RING_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
-    return new URLSearchParams(window.location.search).get("castRangeRing")?.toLowerCase() !== "off";
+    return new URLSearchParams(window.location.search).get("castRangeRing")?.toLowerCase() === "on";
   } catch (_) {
     return false;
   }
@@ -1091,6 +1112,8 @@ export const __test = Object.freeze({
   shapeBuilders: _SHAPE_BUILDERS,
   SCHOOL_COLOR,
   PREVIEW_TIMEOUT_MS,
+  SPELL_SHAPE_PREVIEW_ON,
+  CAST_RANGE_RING_ON,
   // Wave R3.C — surfaced for the arch eye-test / future visual-tuning.
   PROJECTILE_ARC_ON,
   ARC_APEX_FRACTION,

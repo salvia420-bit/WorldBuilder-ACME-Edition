@@ -1000,16 +1000,16 @@ fn parse_cast_hold_reclaim_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "castHoldReclaim=off")
 }
 
-/// (2026-10-07): parse `?castMoveLock=off`. DEFAULT-ON: returns `true`
-/// UNLESS `castMoveLock=off` is present. When on, a FRESH forward/backward
-/// press made while one of our casts is in flight (sent → UseDone) is held
-/// back and replayed when the cast resolves, so W never breaks a cast.
-/// Native carrier: `USE_CAST_MOVE_LOCK` (movement/system.rs). Needs a wasm
-/// rebuild; NO manifest bump.
+/// (2026-10-07): parse `?castMoveLock=on`. DEFAULT-OFF since 2026-10-10 (user
+/// ruling: W must work mid-cast — PvP fastcasting): returns `true` ONLY when
+/// `castMoveLock=on` is present. When on, a FRESH forward/backward press made
+/// while one of our casts is in flight (sent → UseDone) is held back and
+/// replayed when the cast resolves. Native carrier: `USE_CAST_MOVE_LOCK`
+/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_cast_move_lock_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    !trimmed.split('&').any(|kv| kv == "castMoveLock=off")
+    trimmed.split('&').any(|kv| kv == "castMoveLock=on")
 }
 
 /// (2026-07-03): parse `?slideCast`. ADJ-8 (2026-07-04): DEFAULT
@@ -34378,19 +34378,28 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
 
-    /// (2026-10-07): `?castHoldReclaim` / `?castMoveLock` — DEFAULT-ON (W
-    /// never breaks a cast); only an explicit `=off` disables.
+    /// (2026-10-07): `?castHoldReclaim` — DEFAULT-ON (a held W stays dead
+    /// across the cast); only an explicit `=off` disables.
     #[test]
-    fn cast_hold_reclaim_and_cast_move_lock_flags_default_on_unless_off() {
-        use super::{parse_cast_hold_reclaim_flag, parse_cast_move_lock_flag};
+    fn cast_hold_reclaim_flag_defaults_on_unless_off() {
+        use super::parse_cast_hold_reclaim_flag;
         assert!(parse_cast_hold_reclaim_flag(""));
         assert!(parse_cast_hold_reclaim_flag("?castHoldReclaim=on"));
         assert!(!parse_cast_hold_reclaim_flag("?castHoldReclaim=off"));
         assert!(!parse_cast_hold_reclaim_flag("?nosw=1&castHoldReclaim=off"));
-        assert!(parse_cast_move_lock_flag(""));
-        assert!(parse_cast_move_lock_flag("?castMoveLock=on"));
+    }
+
+    /// (2026-10-10): `?castMoveLock` — DEFAULT-OFF (W reaches the server
+    /// mid-cast, as in retail and OpenAC — fastcasting); only `=on` holds
+    /// W/S back.
+    #[test]
+    fn cast_move_lock_flag_defaults_off_unless_on() {
+        use super::parse_cast_move_lock_flag;
+        assert!(!parse_cast_move_lock_flag(""));
         assert!(!parse_cast_move_lock_flag("?castMoveLock=off"));
         assert!(!parse_cast_move_lock_flag("?nosw=1&castMoveLock=off"));
+        assert!(parse_cast_move_lock_flag("?castMoveLock=on"));
+        assert!(parse_cast_move_lock_flag("?nosw=1&castMoveLock=on"));
     }
 
     /// death-1 (R2 2026-10-08): `?deadInputGate` — DEFAULT-ON; `=off`, `=0`
@@ -47277,8 +47286,9 @@ async fn recv_loop(
     // dead across a whole cast (default ON since 2026-10-07; `=off`
     // escape). See `parse_cast_hold_reclaim_flag`.
     movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&flag_search()));
-    // (2026-10-07): `?castMoveLock=off` — a fresh W/S press during one of our
-    // casts is held back until the server's UseDone (default ON); see
+    // (2026-10-07): `?castMoveLock=on` — a fresh W/S press during one of our
+    // casts is held back until the server's UseDone (default OFF since
+    // 2026-10-10: W goes through mid-cast, for fastcasting); see
     // `parse_cast_move_lock_flag`.
     movement.set_cast_move_lock(parse_cast_move_lock_flag(&flag_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through

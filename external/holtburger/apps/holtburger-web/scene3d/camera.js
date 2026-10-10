@@ -2932,7 +2932,7 @@ export class CameraSwitcher {
     const localGuid = typeof lpgFn === "function" ? lpgFn() : null;
     if (localGuid == null) return;
     const g = localGuid >>> 0;
-    // 2026-10-07 — `?castMoveLock` (default on, interpreter lane) holds W/S
+    // 2026-10-07 — `?castMoveLock` (opt-in `=on` since 2026-10-10, interpreter lane) holds W/S
     // back while one of our casts is in flight and replays the press when
     // the server's UseDone lands (the kind-61 DriveApplied consumer animates
     // that). Animating the raw key meanwhile ran the rig in place. A change
