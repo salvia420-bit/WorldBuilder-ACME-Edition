@@ -635,6 +635,11 @@ Now (structural, per the owner):
   on disk; the SSD is at 87% (16.5 GB free; cargo's `target/` is already on the archive drive). 400 random files +
   manifest.json + boot.hba byte-compared against the archive; hash / alias / 404 / manifest / index.html served
   correctly through the proxy. `scripts/test_dist_ssd.py` (32 checks on throwaway trees).
+- Cold-cache check (22:00, laptop, `echo 3 > /proc/sys/vm/drop_caches` before each cold pass): the academy's 2,989
+  shard files in f5s request order, 6 parallel readers (`coldload-1009b/coldread.py`) — USB archive **135 files/s**
+  (22.1 s for the set, p50 33 ms per file), SSD copy **1,904 files/s** (1.6 s, p50 2.1 ms), both ~18,000 files/s
+  warm; end to end through proxy + serve.py from the SSD, cold: 1,216 req/s. So a cold academy load needed ≥ 22 s of
+  disk time from the spinner alone, and the server now outruns the rig link (193 req/s warm from the 1070 page).
 - `serve.py` was restarted on it at 21:37 (`setsid nohup python3 scripts/serve.py --bind 127.0.0.1`, log
   `/mnt/wbterminal1/tmp/claude-scratch/serve-8765.log`). Offline validators and stagers still read / write the
   archive paths directly — unchanged, the archive stays the bake of record.
