@@ -459,9 +459,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    //â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    //════════════════════════════════════════════════════
     //  Project management
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     // ═════════════════════════════════════════════════════════
     //  Render Gallery — wirerender wave (2026-05-XX)
@@ -618,16 +618,16 @@ public class TerminalRepl {
         Console.WriteLine($"Exporting to: {dir}");
 
         if (reposition) {
-            Console.WriteLine("  â†’ Reposition mode: will update DB instances after export");
+            Console.WriteLine("  → Reposition mode: will update DB instances after export");
             var r = _engine.ExportWithRepositionAsync(dir, iteration).GetAwaiter().GetResult();
             Console.WriteLine();
             if (r.ExportSuccess) {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine("  âœ“ DAT export completed successfully.");
+                Console.WriteLine("  ✓ DAT export completed successfully.");
                 Console.ResetColor();
             } else {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("  âœ— DAT export failed.");
+                Console.WriteLine("  ✗ DAT export failed.");
                 Console.ResetColor();
                 Console.WriteLine();
                 return;
@@ -636,16 +636,16 @@ public class TerminalRepl {
             if (r.RepositionAttempted) {
                 if (r.RepositionSuccess) {
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"  âœ“ Reposition: {r.InstancesUpdated}/{r.InstancesChecked} instances updated across {r.LandblocksProcessed} landblocks");
+                    Console.WriteLine($"  ✓ Reposition: {r.InstancesUpdated}/{r.InstancesChecked} instances updated across {r.LandblocksProcessed} landblocks");
                     Console.ResetColor();
                 } else {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"  âš  Reposition note: {r.RepositionError}");
+                    Console.WriteLine($"  ⚠ Reposition note: {r.RepositionError}");
                     Console.ResetColor();
                 }
             } else {
                 Console.ForegroundColor = ConsoleColor.DarkGray;
-                Console.WriteLine($"  â„¹ Reposition skipped: {r.RepositionError}");
+                Console.WriteLine($"  ℹ Reposition skipped: {r.RepositionError}");
                 Console.ResetColor();
             }
         } else {
@@ -668,15 +668,15 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain editing
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleSmooth(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 4) {
             Console.WriteLine("Usage: smooth <x> <y> <radius> [strength]");
-            Console.WriteLine("  strength â€” blend strength 0.0-1.0 (default: 0.5)");
+            Console.WriteLine("  strength — blend strength 0.0-1.0 (default: 0.5)");
             Console.WriteLine("  Example: smooth 12000 12000 5 0.7");
             return;
         }
@@ -695,7 +695,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 4) {
             Console.WriteLine("Usage: raise <x> <y> <radius> [delta]");
-            Console.WriteLine("  delta â€” height units to raise by (default: 5)");
+            Console.WriteLine("  delta — height units to raise by (default: 5)");
             Console.WriteLine("  Example: raise 12000 12000 3 10");
             return;
         }
@@ -714,7 +714,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 4) {
             Console.WriteLine("Usage: lower <x> <y> <radius> [delta]");
-            Console.WriteLine("  delta â€” height units to lower by (default: 5)");
+            Console.WriteLine("  delta — height units to lower by (default: 5)");
             Console.WriteLine("  Example: lower 12000 12000 3 10");
             return;
         }
@@ -733,7 +733,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 5) {
             Console.WriteLine("Usage: set-height <x> <y> <radius> <height>");
-            Console.WriteLine("  height â€” target height index 0-255");
+            Console.WriteLine("  height — target height index 0-255");
             Console.WriteLine("  Example: set-height 12000 12000 5 128");
             return;
         }
@@ -751,7 +751,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 5) {
             Console.WriteLine("Usage: paint <x> <y> <radius> <terrain-type>");
-            Console.WriteLine("  terrain-type â€” numeric terrain type index (0-31)");
+            Console.WriteLine("  terrain-type — numeric terrain type index (0-31)");
             Console.WriteLine("  Example: paint 12000 12000 3 4");
             Console.WriteLine();
             Console.WriteLine("  Common types: 0=Road, 1=Grass, 2=Rock, 3=Dirt, ...");
@@ -788,7 +788,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 5) {
             Console.WriteLine("Usage: road <x1> <y1> <x2> <y2> [road-value]");
-            Console.WriteLine("  road-value â€” road byte value 1-255 (default: 1). 0 = erase road.");
+            Console.WriteLine("  road-value — road byte value 1-255 (default: 1). 0 = erase road.");
             Console.WriteLine("  Example: road 12000 12000 12200 12100");
             return;
         }
@@ -805,9 +805,9 @@ public class TerminalRepl {
         Console.WriteLine($"  Modified {r.ModifiedLandblocks.Count} landblock(s)");
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain queries
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleGetHeight(string[] tokens) {
         if (!CheckProject()) return;
@@ -866,17 +866,17 @@ public class TerminalRepl {
         var r = _engine.GetHeightmap(lbX, lbY);
         if (!r.Found) { Console.WriteLine($"  No terrain data for landblock 0x{r.LbKey:X4}"); return; }
         Console.WriteLine();
-        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) â€” 9Ã—9 heightmap:");
+        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) — 9×9 heightmap:");
         Console.WriteLine($"  World origin: ({lbX * 192}, {lbY * 192})");
         Console.WriteLine();
         Console.Write("       ");
         for (int y = 0; y < 9; y++) Console.Write($"Y{y,-7}");
         Console.WriteLine();
         Console.Write("       ");
-        for (int y = 0; y < 9; y++) Console.Write("â”€â”€â”€â”€â”€â”€  ");
+        for (int y = 0; y < 9; y++) Console.Write("──────  ");
         Console.WriteLine();
         for (int x = 0; x < 9; x++) {
-            Console.Write($"  X{x}  â”‚ ");
+            Console.Write($"  X{x}  │ ");
             for (int y = 0; y < 9; y++) Console.Write($"{r.HeightsWorld![x][y],6:F1}  ");
             Console.WriteLine();
         }
@@ -895,7 +895,7 @@ public class TerminalRepl {
         var r = _engine.GetTerrainData(lbX, lbY);
         if (!r.Found) { Console.WriteLine($"  No terrain data for landblock 0x{r.LbKey:X4}"); return; }
         Console.WriteLine();
-        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) â€” {r.Vertices!.Count} vertices:");
+        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) — {r.Vertices!.Count} vertices:");
         Console.WriteLine($"  World origin: ({lbX * 192}, {lbY * 192})");
         Console.WriteLine();
         Console.WriteLine($"  {"Idx",-5} {"GX",-4} {"GY",-4} {"HIdx",-5} {"Height",-9} {"Type",-6} {"Road",-6} {"Scenery"}");
@@ -906,9 +906,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Object management
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleDescribeLandblock(string[] tokens) {
         if (!CheckProject()) return;
@@ -959,7 +959,7 @@ public class TerminalRepl {
         var r = _engine.ListObjects(lbX, lbY);
         if (r.Objects.Count == 0) { Console.WriteLine($"  No static objects in landblock 0x{r.LbKey:X4}"); return; }
         Console.WriteLine();
-        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) â€” {r.Objects.Count} object(s):");
+        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} ({lbX}, {lbY}) — {r.Objects.Count} object(s):");
         Console.WriteLine($"  {"Idx",-5} {"Model ID",-12} {"Type",-7} {"X",-10} {"Y",-10} {"Z",-10} {"Scale"}");
         Console.WriteLine($"  {new string('-', 65)}");
         for (int i = 0; i < r.Objects.Count; i++) {
@@ -973,7 +973,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 7) {
             Console.WriteLine("Usage: add-object <lbX> <lbY> <modelId> <x> <y> <z>");
-            Console.WriteLine("  modelId â€” hex model/setup ID (e.g., 02001234)");
+            Console.WriteLine("  modelId — hex model/setup ID (e.g., 02001234)");
             Console.WriteLine("  Example: add-object 63 63 02001234 12096.5 12096.5 10.0");
             return;
         }
@@ -1070,12 +1070,12 @@ public class TerminalRepl {
 
         if (clearAll) {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("  âš  Clearing ALL objects from the entire world...");
+            Console.WriteLine("  ⚠ Clearing ALL objects from the entire world...");
             Console.ResetColor();
             var r = _engine.ClearAllObjects();
             Console.WriteLine();
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Cleared {r.ObjectsRemoved:N0} objects from {r.AffectedLandblocks.Count:N0} landblocks");
+            Console.WriteLine($"  ✓ Cleared {r.ObjectsRemoved:N0} objects from {r.AffectedLandblocks.Count:N0} landblocks");
             Console.WriteLine($"    ({r.LandblocksProcessed:N0} landblocks scanned)");
             Console.ResetColor();
         } else {
@@ -1084,19 +1084,19 @@ public class TerminalRepl {
             var r = _engine.ClearObjects(lbX, lbY);
             ushort lbKey = (ushort)((lbX << 8) | lbY);
             if (r.ObjectsRemoved == 0) {
-                Console.WriteLine($"  No objects in landblock 0x{lbKey:X4} â€” nothing to clear.");
+                Console.WriteLine($"  No objects in landblock 0x{lbKey:X4} — nothing to clear.");
             } else {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"  âœ“ Cleared {r.ObjectsRemoved} objects from landblock 0x{lbKey:X4}");
+                Console.WriteLine($"  ✓ Cleared {r.ObjectsRemoved} objects from landblock 0x{lbKey:X4}");
                 Console.ResetColor();
             }
         }
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Spatial queries
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleQueryRadius(string[] tokens) {
         if (!CheckProject()) return;
@@ -1111,7 +1111,7 @@ public class TerminalRepl {
         var r = _engine.QueryRadius(cx, cy, radius);
         Console.WriteLine();
         Console.WriteLine($"  Objects within {radius} units of ({cx}, {cy}): {r.Objects.Count} found");
-        Console.WriteLine($"  Density: {(radius > 0 ? r.Objects.Count / (MathF.PI * radius * radius) : 0):F4} objects/unitÂ²");
+        Console.WriteLine($"  Density: {(radius > 0 ? r.Objects.Count / (MathF.PI * radius * radius) : 0):F4} objects/unit²");
         Console.WriteLine();
         if (r.Objects.Count > 0) {
             Console.WriteLine($"  {"Dist",-8} {"LB",-8} {"Idx",-5} {"Model ID",-12} {"Type",-7} {"X",-10} {"Y",-10} {"Z",-10}");
@@ -1124,9 +1124,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Dungeon tools
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleAnalyzeDungeons(string[] tokens) {
         if (!CheckProject()) return;
@@ -1152,14 +1152,14 @@ public class TerminalRepl {
         var r = _engine.GetDungeonInfo(lbX, lbY);
         if (!r.HasDungeon) { Console.WriteLine($"  No dungeon cells in landblock 0x{r.LbKey:X4}"); return; }
         Console.WriteLine();
-        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} â€” {r.CellCount} dungeon cell(s):");
+        Console.WriteLine($"  Landblock 0x{r.LbKey:X4} — {r.CellCount} dungeon cell(s):");
         Console.WriteLine();
         foreach (var cell in r.Document!.Cells) {
             Console.WriteLine($"  Cell 0x{cell.CellNumber:X4}  Env: 0x{cell.EnvironmentId:X4}  Struct: {cell.CellStructure}");
             Console.WriteLine($"    Origin: ({cell.Origin.X:F1}, {cell.Origin.Y:F1}, {cell.Origin.Z:F1})");
             Console.WriteLine($"    Portals: {cell.CellPortals.Count}  Objects: {cell.StaticObjects.Count}");
             foreach (var portal in cell.CellPortals) {
-                Console.WriteLine($"      â†’ Cell 0x{portal.OtherCellId:X4} (poly {portal.PolygonId})");
+                Console.WriteLine($"      → Cell 0x{portal.OtherCellId:X4} (poly {portal.PolygonId})");
             }
         }
         Console.WriteLine();
@@ -1221,9 +1221,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Validation
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleValidateDungeon(string[] tokens) {
         if (!CheckProject()) return;
@@ -1277,9 +1277,9 @@ public class TerminalRepl {
         PrintValidationReport(_engine.ValidateAll(lbX, lbY, threshold));
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  World observation
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleListLandblocks(string[] tokens) {
         if (!CheckProject()) return;
@@ -1306,10 +1306,10 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         var r = _engine.GetWorldInfo();
         Console.WriteLine();
-        Console.WriteLine("  â•â•â• World Information â•â•â•");
+        Console.WriteLine("  ═══ World Information ═══");
         Console.WriteLine($"  Project        : {r.ProjectName}");
-        Console.WriteLine($"  Map size       : 255 Ã— 255 landblocks");
-        Console.WriteLine($"  Landblock size : 192 Ã— 192 world units (9Ã—9 vertex grid, 24u cells)");
+        Console.WriteLine($"  Map size       : 255 × 255 landblocks");
+        Console.WriteLine($"  Landblock size : 192 × 192 world units (9×9 vertex grid, 24u cells)");
         Console.WriteLine($"  Modified LBs   : {r.ModifiedLandblocks}");
         Console.WriteLine($"  Height table   : {r.HeightTableSize} entries");
         Console.WriteLine($"  Height range   : {r.HeightMin:F1} to {r.HeightMax:F1} world units");
@@ -1370,9 +1370,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Ontology
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleScanOntology(string[] tokens) {
         if (!CheckProject()) return;
@@ -1384,7 +1384,7 @@ public class TerminalRepl {
         var r = _engine.ScanOntology(scanGfxObjs);
         var rpt = r.Report;
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Ontology Scan Complete â•â•â•");
+        Console.WriteLine($"  ═══ Ontology Scan Complete ═══");
         Console.WriteLine($"  Setups scanned  : {rpt.TotalSetups}");
         Console.WriteLine($"  GfxObjs scanned : {rpt.TotalGfxObjs}");
         Console.WriteLine($"  Total entries   : {rpt.TotalEntries}");
@@ -1447,7 +1447,7 @@ public class TerminalRepl {
         try {
             var r = _engine.GetOntologyStats();
             Console.WriteLine();
-            Console.WriteLine($"  â•â•â• Ontology Statistics â•â•â•");
+            Console.WriteLine($"  ═══ Ontology Statistics ═══");
             Console.WriteLine($"  Total entries: {r.TotalEntries}");
             Console.WriteLine();
             Console.WriteLine("  Categories:");
@@ -1479,17 +1479,17 @@ public class TerminalRepl {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Stamp & Portal
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandlePasteStamp(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 7) {
             Console.WriteLine("Usage: paste-stamp <srcMinX> <srcMinY> <srcMaxX> <srcMaxY> <destX> <destY> [blend] [zOffset]");
             Console.WriteLine("  Captures terrain from source bounding box and pastes at destination.");
-            Console.WriteLine("  blend   â€” blend edges: true/false (default: true)");
-            Console.WriteLine("  zOffset â€” height offset in world units (default: 0)");
+            Console.WriteLine("  blend   — blend edges: true/false (default: true)");
+            Console.WriteLine("  zOffset — height offset in world units (default: 0)");
             Console.WriteLine("  Example: paste-stamp 1344 3072 1536 3264 2000 2000");
             return;
         }
@@ -1521,10 +1521,10 @@ public class TerminalRepl {
         if (tokens.Length < 7) {
             Console.WriteLine("Usage: snap-portal <lbX> <lbY> <targetCellNum> <targetPortalPolyId> <sourceEnvId> <sourceCellStruct>");
             Console.WriteLine("  Adds a new dungeon cell snapped to the target cell's portal.");
-            Console.WriteLine("  targetCellNum      â€” hex cell number in the dungeon (e.g. 0100)");
-            Console.WriteLine("  targetPortalPolyId â€” hex polygon ID of the target portal");
-            Console.WriteLine("  sourceEnvId        â€” hex Environment ID for the new cell");
-            Console.WriteLine("  sourceCellStruct   â€” CellStruct index within the Environment");
+            Console.WriteLine("  targetCellNum      — hex cell number in the dungeon (e.g. 0100)");
+            Console.WriteLine("  targetPortalPolyId — hex polygon ID of the target portal");
+            Console.WriteLine("  sourceEnvId        — hex Environment ID for the new cell");
+            Console.WriteLine("  sourceCellStruct   — CellStruct index within the Environment");
             Console.WriteLine("  Example: snap-portal 1 217 0100 0010 0D00 0");
             return;
         }
@@ -1560,9 +1560,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Bulk & detail queries
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleGetBulkHeightmap(string[] tokens) {
         if (!CheckProject()) return;
@@ -1581,12 +1581,12 @@ public class TerminalRepl {
         Console.WriteLine($"  Bulk heightmap: {r.FoundLandblocks} found of {r.TotalLandblocks} requested");
         Console.WriteLine();
         foreach (var h in r.Heightmaps) {
-            Console.WriteLine($"  â”€â”€ Landblock 0x{h.LbKey:X4} ({h.LbX}, {h.LbY}) â”€â”€");
+            Console.WriteLine($"  ── Landblock 0x{h.LbKey:X4} ({h.LbX}, {h.LbY}) ──");
             Console.Write("       ");
             for (int y = 0; y < 9; y++) Console.Write($"Y{y,-7}");
             Console.WriteLine();
             for (int x = 0; x < 9; x++) {
-                Console.Write($"  X{x}  â”‚ ");
+                Console.Write($"  X{x}  │ ");
                 for (int y = 0; y < 9; y++) Console.Write($"{h.HeightsWorld![x][y],6:F1}  ");
                 Console.WriteLine();
             }
@@ -1610,7 +1610,7 @@ public class TerminalRepl {
             Console.WriteLine();
             return;
         }
-        Console.WriteLine($"  â•â•â• Object Detail: {r.ObjectIdHex} â•â•â•");
+        Console.WriteLine($"  ═══ Object Detail: {r.ObjectIdHex} ═══");
         Console.WriteLine($"  DAT type       : {r.DatType}");
         Console.WriteLine($"  Parts          : {r.PartCount}");
         Console.WriteLine($"  Polygons       : {r.PolyCount}");
@@ -1645,10 +1645,10 @@ public class TerminalRepl {
         var r = _engine.DiffTerrain(lbX, lbY);
         if (!r.Found) { Console.WriteLine($"  No terrain data for landblock 0x{r.LbKey:X4}"); return; }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Terrain Diff: 0x{r.LbKey:X4} ({lbX}, {lbY}) â•â•â•");
+        Console.WriteLine($"  ═══ Terrain Diff: 0x{r.LbKey:X4} ({lbX}, {lbY}) ═══");
         if (!r.HasChanges) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("  No changes â€” terrain matches base DAT data.");
+            Console.WriteLine("  No changes — terrain matches base DAT data.");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -1684,9 +1684,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Input parsing helpers (culture-invariant, user-friendly errors)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private static bool TryParseFloat(string input, string paramName, out float value) {
         if (float.TryParse(input, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value))
@@ -1725,9 +1725,9 @@ public class TerminalRepl {
         return false;
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Display helpers
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private bool CheckProject() {
         if (!_engine.HasProject) {
@@ -1744,12 +1744,12 @@ public class TerminalRepl {
     private static void PrintValidationReport(ValidationReport report) {
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine($"  â•â•â• Validation: {report.CheckType} â€” {report.Target} â•â•â•");
+        Console.WriteLine($"  ═══ Validation: {report.CheckType} — {report.Target} ═══");
         Console.ResetColor();
 
         if (report.IsValid && report.WarningCount == 0 && report.InfoCount == 0) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("  âœ“ All checks passed â€” no issues found.");
+            Console.WriteLine("  ✓ All checks passed — no issues found.");
             Console.ResetColor();
             Console.WriteLine();
             return;
@@ -1778,17 +1778,17 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Help / Banner
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private static void PrintBanner() {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine(@"
-  â•¦ â•¦â”Œâ”€â”â”¬â”€â”â”¬  â”Œâ”¬â”â•”â•— â”¬ â”¬â”¬â”¬  â”Œâ”¬â”â”Œâ”€â”â”¬â”€â” â•”â•¦â•—â”Œâ”€â”â”¬â”€â”â”Œâ”¬â”â”¬â”Œâ”â”Œâ”Œâ”€â”â”¬  
-  â•‘â•‘â•‘â”‚ â”‚â”œâ”¬â”˜â”‚   â”‚â”‚â• â•©â•—â”‚ â”‚â”‚â”‚   â”‚â”‚â”œâ”¤ â”œâ”¬â”˜  â•‘ â”œâ”¤ â”œâ”¬â”˜â”‚â”‚â”‚â”‚â”‚â”‚â”‚â”œâ”€â”¤â”‚  
-  â•šâ•©â•â””â”€â”˜â”´â””â”€â”´â”€â”˜â”€â”´â”˜â•šâ•â•â””â”€â”˜â”´â”´â”€â”˜â”€â”´â”˜â””â”€â”˜â”´â””â”€  â•© â””â”€â”˜â”´â””â”€â”´ â”´â”´â”˜â””â”˜â”´ â”´â”´â”€â”˜
-           Headless DAT Export Tool â€” ACME Edition
+  ╦ ╦┌─┐┬─┐┬  ┌┬┐╔╗ ┬ ┬┬┬  ┌┬┐┌─┐┬─┐ ╔╦╗┌─┐┬─┐┌┬┐┬┌┐┌┌─┐┬  
+  ║║║│ │├┬┘│   ││╠╩╗│ │││   ││├┤ ├┬┘  ║ ├┤ ├┬┘│││││││├─┤│  
+  ╚╩╝└─┘┴└─┴─┘─┴┘╚═╝└─┘┴┴─┘─┴┘└─┘┴└─  ╩ └─┘┴└─┴ ┴┴┘└┘┴ ┴┴─┘
+           Headless DAT Export Tool — ACME Edition
 ");
         Console.ResetColor();
     }
@@ -1796,7 +1796,7 @@ public class TerminalRepl {
     private static void PrintHelp() {
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Project Management â•â•â•");
+        Console.WriteLine("═══ Project Management ═══");
         Console.ResetColor();
         Console.WriteLine("  load <path>                    Load a .wbproj project file");
         Console.WriteLine("  export <directory> [iter] [--reposition]  Export DATs (optionally reposition DB instances)");
@@ -1804,7 +1804,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Terrain Editing â•â•â•");
+        Console.WriteLine("═══ Terrain Editing ═══");
         Console.ResetColor();
         Console.WriteLine("  smooth <x> <y> <radius> [str]  Smooth terrain (str: 0.0-1.0, default 0.5)");
         Console.WriteLine("  raise <x> <y> <radius> [delta] Raise terrain height (default delta: 5)");
@@ -1816,17 +1816,17 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Terrain Queries â•â•â•");
+        Console.WriteLine("═══ Terrain Queries ═══");
         Console.ResetColor();
         Console.WriteLine("  get-height <x> <y>             Query terrain height at position");
         Console.WriteLine("  terrain-info <lbX> <lbY>       Show landblock terrain statistics");
-        Console.WriteLine("  get-heightmap <lbX> <lbY>      Full 9Ã—9 heightmap grid");
+        Console.WriteLine("  get-heightmap <lbX> <lbY>      Full 9×9 heightmap grid");
         Console.WriteLine("  get-terrain-data <lbX> <lbY>   All vertex data (height, type, road, scenery)");
         Console.WriteLine("  terrain sample-height <wX> <wY>  AC-accurate triangle-interpolated height");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Object Management â•â•â•");
+        Console.WriteLine("═══ Object Management ═══");
         Console.ResetColor();
         Console.WriteLine("  list-objects <lbX> <lbY>                  List objects (with quaternion)");
         Console.WriteLine("  add-object <lbX> <lbY> <id> <x> <y> <z>  Place a static object");
@@ -1834,18 +1834,18 @@ public class TerminalRepl {
         Console.WriteLine("  clear-objects <lbX> <lbY>                 Remove ALL objects from a landblock");
         Console.WriteLine("  clear-objects --all                       Remove ALL objects from entire world");
         Console.WriteLine("  move-object <lbX> <lbY> <idx> <x> <y> <z> Move object to new position");
-        Console.WriteLine("  rotate-object <lbX> <lbY> <idx> <yawÂ°>    Set orientation (absolute, not incremental)");
+        Console.WriteLine("  rotate-object <lbX> <lbY> <idx> <yaw°>    Set orientation (absolute, not incremental)");
         Console.WriteLine("     alt: rotate-object <lbX> <lbY> <idx> <qw> <qx> <qy> <qz>");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Spatial Queries â•â•â•");
+        Console.WriteLine("═══ Spatial Queries ═══");
         Console.ResetColor();
         Console.WriteLine("  query-radius <x> <y> <radius>             Find objects within radius");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Dungeon Tools â•â•â•");
+        Console.WriteLine("═══ Dungeon Tools ═══");
         Console.ResetColor();
         Console.WriteLine("  analyze-dungeons [output-path]              Scan DAT for room types & usage");
         Console.WriteLine("  analyze-dungeon-catalog [output-path.json]  Extract full room catalog (bounds, portals, dims)");
@@ -1854,7 +1854,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Validation â•â•â•");
+        Console.WriteLine("═══ Validation ═══");
         Console.ResetColor();
         Console.WriteLine("  validate-dungeon <lbX> <lbY>           Validate dungeon structure/portals");
         Console.WriteLine("  validate-landblock <lbX> <lbY>         Validate landblock objects (LBK010 footprint flush check when ontology is scanned)");
@@ -1865,7 +1865,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• World Observation â•â•â•");
+        Console.WriteLine("═══ World Observation ═══");
         Console.ResetColor();
         Console.WriteLine("  list-landblocks [minX minY maxX maxY]  List landblocks with terrain data");
         Console.WriteLine("  get-world-info                         World metadata and dimensions");
@@ -1873,7 +1873,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Ontology â•â•â•");
+        Console.WriteLine("═══ Ontology ═══");
         Console.ResetColor();
         Console.WriteLine("  scan-ontology [setups-only]             Scan DAT to classify all models");
         Console.WriteLine("  query-ontology [cat] [scale] [kw] [n]   Search the ontology index");
@@ -1882,14 +1882,14 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Stamp & Portal â•â•â•");
+        Console.WriteLine("═══ Stamp & Portal ═══");
         Console.ResetColor();
         Console.WriteLine("  paste-stamp <sX1> <sY1> <sX2> <sY2> <dX> <dY>  Copy & paste terrain");
         Console.WriteLine("  snap-portal <lbX> <lbY> <cell> <poly> <env> <struct>  Snap dungeon cell to portal");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Bulk & Detail Queries â•â•â•");
+        Console.WriteLine("═══ Bulk & Detail Queries ═══");
         Console.ResetColor();
         Console.WriteLine("  get-bulk-heightmap <minX> <minY> <maxX> <maxY>  Multi-landblock heightmaps");
         Console.WriteLine("  get-object-detail <objectId>                   DAT model geometry info");
@@ -1897,13 +1897,13 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Terrain Layers â•â•â•");
+        Console.WriteLine("═══ Terrain Layers ═══");
         Console.ResetColor();
         Console.WriteLine("  get-terrain-layers <lbX> <lbY>                 Terrain type distribution");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• DAT Extensions â•â•â•");
+        Console.WriteLine("═══ DAT Extensions ═══");
         Console.ResetColor();
         Console.WriteLine("  export-textures <outputDir> [minId] [maxId]    Export textures to PNG");
         Console.WriteLine("  import-texture <textureId> <imagePath>         Replace texture from file (immediate, permanent in-place write to base client_portal.dat)");
@@ -1925,7 +1925,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Ontology Export & Enrichment â•â•â•");
+        Console.WriteLine("═══ Ontology Export & Enrichment ═══");
         Console.ResetColor();
         Console.WriteLine("  export-ontology <outputPath>                   Export ontology to CSV");
         Console.WriteLine("  export-setup-parts <outputPath>                Export Setup -> Parts (GfxObj) JSONL");
@@ -1938,7 +1938,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• LSD Data Ingestion â•â•â•");
+        Console.WriteLine("═══ LSD Data Ingestion ═══");
         Console.ResetColor();
         Console.WriteLine("  ingest-weenies <lsd-path> [output]             Batch-extract weenie data to summary");
         Console.WriteLine("  enrich-weenies <summary-path>                  Merge weenie data into live ontology");
@@ -1955,7 +1955,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Benchmark & Bulk Operations â•â•â•");
+        Console.WriteLine("═══ Benchmark & Bulk Operations ═══");
         Console.ResetColor();
         Console.WriteLine("  benchmark                                        Run speed test suite");
         Console.WriteLine("  set-landblock-heightmap <lbX> <lbY> <h1,h2,...>   Set all 81 heights at once");
@@ -1966,7 +1966,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Procedural Generation â•â•â•");
+        Console.WriteLine("═══ Procedural Generation ═══");
         Console.ResetColor();
         Console.WriteLine("  generate-terrain <seed> [oct] [lac] [per] [amp]  Generate full-world heightmap + auto-paint");
         Console.WriteLine("     coastline via JSON:  generate-terrain 42 6 2 0.5 128 \"[[x,y],[x,y],...]\"");
@@ -1980,7 +1980,7 @@ public class TerminalRepl {
         Console.WriteLine("  export-raw-world-facts [minX minY maxX maxY] [output] [--ace-db] [--links]  Export raw DAT/SQL/spawn facts");
         Console.WriteLine("  export-envcell-components [minX minY maxX maxY] [output]  Export linked surface-anchor and EnvCell components");
         Console.WriteLine("  generate-settlement <template> <cx> <cy> [seed]  Place settlement from constraint templates");
-        Console.WriteLine("  extract-retail-heightmaps [output.jsonl]           Dump all 255Ã—255 landblock heightmaps");
+        Console.WriteLine("  extract-retail-heightmaps [output.jsonl]           Dump all 255×255 landblock heightmaps");
         Console.WriteLine("  compute-vanilla-baseline [output.json]             Compute retail quality baseline metrics");
         Console.WriteLine("  render-preview <lbX> <lbY> [r] [res] [--no-overlay] [--out path]   Top-down PNG of an N×N region (terrain + objects + cliff overlay)");
         Console.WriteLine();
@@ -2006,15 +2006,15 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Image-Driven Terrain â•â•â•");
+        Console.WriteLine("═══ Image-Driven Terrain ═══");
         Console.ResetColor();
-        Console.WriteLine("  analyze-map-image <image.png> [output.json]         Classify world map into 255Ã—255 biome grid");
-        Console.WriteLine("  calibrate-world-map [output.json]                   Build colorâ†’terrain codebook from retail DATs");
+        Console.WriteLine("  analyze-map-image <image.png> [output.json]         Classify world map into 255×255 biome grid");
+        Console.WriteLine("  calibrate-world-map [output.json]                   Build color→terrain codebook from retail DATs");
         Console.WriteLine("  quick-world <codebook.json> <map.png> [seed]                    Reverse-engineer world from image");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Building Remap â•â•â•");
+        Console.WriteLine("═══ Building Remap ═══");
         Console.ResetColor();
         Console.WriteLine("  remap-buildings <lb_remap.json> <out_dir> [--apply]  Move buildings + SQL");
         Console.WriteLine("  remap-buildings-v2 <lb_remap.json> [--flatten-radius=N] [--flatten-strength=S] [--no-validate] [--preserve-retail-z]  Footprint-aware flush placement; doors ride buildings");
@@ -2022,7 +2022,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• ACE Database â•â•â•");
+        Console.WriteLine("═══ ACE Database ═══");
         Console.ResetColor();
         Console.WriteLine("  ace-db connect <host> <port> <db> <user> <pass>   Test + save DB connection");
         Console.WriteLine("  ace-db status                                      Show settings + test connectivity");
@@ -2034,7 +2034,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• Dungeon Document Operations â•â•â•");
+        Console.WriteLine("═══ Dungeon Document Operations ═══");
         Console.ResetColor();
         Console.WriteLine("  dungeon add-cell <lbX> <lbY> <envId> <csId> <x> <y> <z>  Add cell to dungeon");
         Console.WriteLine("  dungeon remove-cell <lbX> <lbY> <cellNum>                Remove cell (hex)");
@@ -2056,7 +2056,7 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("â•â•â• General â•â•â•");
+        Console.WriteLine("═══ General ═══");
         Console.ResetColor();
         Console.WriteLine("  help                           Show this help message");
         Console.WriteLine("  quit / exit                    Exit the terminal");
@@ -2066,9 +2066,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Tokenizer (handles quoted strings)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Splits a command line into tokens, respecting double-quoted strings
@@ -2123,9 +2123,9 @@ public class TerminalRepl {
         return tokens.ToArray();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  New command handlers
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleGetTerrainLayers(string[] tokens) {
         if (tokens.Length < 3) { Console.WriteLine("Usage: get-terrain-layers <lbX> <lbY>"); return; }
@@ -2164,7 +2164,7 @@ public class TerminalRepl {
     private void HandleCloneDat(string[] tokens) {
         if (tokens.Length < 2) { Console.WriteLine("Usage: clone-dat <outputPath>"); return; }
         var r = _engine.CloneDat(tokens[1]);
-        if (r.Success) Console.WriteLine($"Cloned {r.SourcePath} â†’ {r.DestPath}");
+        if (r.Success) Console.WriteLine($"Cloned {r.SourcePath} → {r.DestPath}");
         else Console.WriteLine($"Failed: {r.Error}");
     }
 
@@ -2172,7 +2172,7 @@ public class TerminalRepl {
         if (tokens.Length < 3) { Console.WriteLine("Usage: defragment-dat <portal|cell|local> <outputPath>"); return; }
         Console.WriteLine("Defragmenting... this may take a while.");
         var r = _engine.DefragmentDat(tokens[1], tokens[2]);
-        if (r.Success) Console.WriteLine($"Defragmented {r.DatType} â†’ {r.OutputPath} ({r.BytesFreed:N0} bytes freed)");
+        if (r.Success) Console.WriteLine($"Defragmented {r.DatType} → {r.OutputPath} ({r.BytesFreed:N0} bytes freed)");
         else Console.WriteLine($"Failed: {r.Error}");
     }
 
@@ -2218,7 +2218,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• StringTable Mining Results â•â•â•");
+        Console.WriteLine($"  ═══ StringTable Mining Results ═══");
         Console.WriteLine($"  Tables scanned  : {r.TablesScanned}");
         Console.WriteLine($"  Strings found   : {r.TotalStrings}");
         if (!string.IsNullOrEmpty(r.OutputPath))
@@ -2247,7 +2247,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Ontology Enrichment Complete â•â•â•");
+        Console.WriteLine($"  ═══ Ontology Enrichment Complete ═══");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine();
@@ -2270,7 +2270,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Catalog Import Complete â•â•â•");
+        Console.WriteLine($"  ═══ Catalog Import Complete ═══");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine($"  Index path       : {r.IndexPath}");
@@ -2288,7 +2288,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Ontology Classification Complete â•â•â•");
+        Console.WriteLine($"  ═══ Ontology Classification Complete ═══");
         Console.WriteLine($"  Strings used     : {r.StringsUsed}");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
@@ -2305,15 +2305,15 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Material Enrichment Complete â•â•â•");
+        Console.WriteLine($"  ═══ Material Enrichment Complete ═══");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  LSD Data Ingestion Pipeline
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleIngestWeenies(string[] tokens) {
         if (tokens.Length < 2) {
@@ -2332,7 +2332,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Weenie Ingestion Complete â•â•â•");
+        Console.WriteLine($"  ═══ Weenie Ingestion Complete ═══");
         Console.WriteLine($"  Total processed  : {r.TotalProcessed}");
         Console.WriteLine($"  Creatures        : {r.CreatureCount}");
         Console.WriteLine($"  NPCs             : {r.NpcCount}");
@@ -2359,7 +2359,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Weenie Enrichment Complete â•â•â•");
+        Console.WriteLine($"  ═══ Weenie Enrichment Complete ═══");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine();
@@ -2442,7 +2442,7 @@ public class TerminalRepl {
     private void HandleScanBuildingPlacements(string[] tokens) {
         string? outputPath = tokens.Length >= 2 ? tokens[1] : null;
         Console.WriteLine("Scanning all retail landblocks for building placements...");
-        Console.WriteLine("(This scans 255Ã—255 landblocks for BuildingInfo records)");
+        Console.WriteLine("(This scans 255×255 landblocks for BuildingInfo records)");
         var r = _engine.ScanBuildingPlacements(outputPath);
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
@@ -2533,7 +2533,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Spawn Map Ingestion Complete â•â•â•");
+        Console.WriteLine($"  ═══ Spawn Map Ingestion Complete ═══");
         Console.WriteLine($"  Total processed  : {r.TotalProcessed}");
         Console.WriteLine($"  Total weenies    : {r.TotalWeenies}");
         Console.WriteLine($"  Total links      : {r.TotalLinks}");
@@ -2559,7 +2559,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Spell Ingestion Complete â•â•â•");
+        Console.WriteLine($"  ═══ Spell Ingestion Complete ═══");
         Console.WriteLine($"  Total processed  : {r.TotalProcessed}");
         Console.WriteLine($"  Schools:");
         foreach (var kv in r.SchoolCounts.OrderByDescending(kv => kv.Value))
@@ -2585,7 +2585,7 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine();
-        Console.WriteLine($"  â•â•â• Recipe Ingestion Complete â•â•â•");
+        Console.WriteLine($"  ═══ Recipe Ingestion Complete ═══");
         Console.WriteLine($"  Total processed  : {r.TotalProcessed}");
         Console.WriteLine($"  With precursors  : {r.WithPrecursors}");
         Console.WriteLine($"  Unique sources   : {r.UniqueSourceWcids} WCIDs (tools+targets)");
@@ -2597,17 +2597,17 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Benchmark & Bulk Operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleBenchmark() {
         if (!CheckProject()) return;
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• WorldBuilder Benchmark Suite â•â•â•");
+        Console.WriteLine("  ═══ WorldBuilder Benchmark Suite ═══");
         Console.ResetColor();
-        Console.WriteLine("  Running 2000Ã— set-height, 2000Ã— add-object, 50Ã— validate-all, 500Ã— bulk heightmap...");
+        Console.WriteLine("  Running 2000× set-height, 2000× add-object, 50× validate-all, 500× bulk heightmap...");
         Console.WriteLine();
 
         var r = _engine.RunBenchmark();
@@ -2619,14 +2619,14 @@ public class TerminalRepl {
         Console.WriteLine($"  {new string('-', 100)}");
         foreach (var t in r.Tests) {
             Console.Write($"  {t.Name,-35} {t.Operations,-8} {t.ElapsedMs,-12:F1} {t.OpsPerSec,-12:F1}");
-            Console.Write(t.FirstSegmentOpsPerSec.HasValue ? $" {t.FirstSegmentOpsPerSec,-12:F1}" : $" {"â€”",-12}");
-            Console.Write(t.LastSegmentOpsPerSec.HasValue ? $" {t.LastSegmentOpsPerSec,-12:F1}" : $" {"â€”",-12}");
+            Console.Write(t.FirstSegmentOpsPerSec.HasValue ? $" {t.FirstSegmentOpsPerSec,-12:F1}" : $" {"—",-12}");
+            Console.Write(t.LastSegmentOpsPerSec.HasValue ? $" {t.LastSegmentOpsPerSec,-12:F1}" : $" {"—",-12}");
             if (t.DegradationPercent.HasValue) {
                 Console.ForegroundColor = Math.Abs(t.DegradationPercent.Value) > 20 ? ConsoleColor.Red : ConsoleColor.Green;
                 Console.Write($" {t.DegradationPercent:F1}%");
                 Console.ResetColor();
             } else {
-                Console.Write(" â€”");
+                Console.Write(" —");
             }
             Console.WriteLine();
         }
@@ -3411,20 +3411,20 @@ public class TerminalRepl {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════
     //  Procedural Generation
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════
 
     private void HandleGenerateTerrain(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 2) {
             Console.WriteLine("Usage: generate-terrain <seed> [octaves] [lacunarity] [persistence] [amplitude] [coastline-json]");
-            Console.WriteLine("  seed        â€” integer seed for deterministic noise");
-            Console.WriteLine("  octaves     â€” fBm octave count (default: 6)");
-            Console.WriteLine("  lacunarity  â€” frequency multiplier per octave (default: 2.0)");
-            Console.WriteLine("  persistence â€” amplitude multiplier per octave (default: 0.5)");
-            Console.WriteLine("  amplitude   â€” max height 0-255 (default: 128)");
-            Console.WriteLine("  coastline   â€” optional JSON polygon: \"[[x1,y1],[x2,y2],...]\"");
+            Console.WriteLine("  seed        — integer seed for deterministic noise");
+            Console.WriteLine("  octaves     — fBm octave count (default: 6)");
+            Console.WriteLine("  lacunarity  — frequency multiplier per octave (default: 2.0)");
+            Console.WriteLine("  persistence — amplitude multiplier per octave (default: 0.5)");
+            Console.WriteLine("  amplitude   — max height 0-255 (default: 128)");
+            Console.WriteLine("  coastline   — optional JSON polygon: \"[[x1,y1],[x2,y2],...]\"");
             Console.WriteLine();
             Console.WriteLine("  Example: generate-terrain 42");
             Console.WriteLine("  Example: generate-terrain 42 6 2.0 0.5 128");
@@ -3457,17 +3457,17 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Procedural Terrain Generation â•â•â•");
+        Console.WriteLine("  ═══ Procedural Terrain Generation ═══");
         Console.ResetColor();
         Console.WriteLine($"  Seed: {seed}  Octaves: {octaves}  Lacunarity: {lacunarity}  Persistence: {persistence}  Amplitude: {amplitude}");
         if (coastline != null) Console.WriteLine($"  Coastline polygon: {coastline.Count} vertices");
-        Console.WriteLine("  Generating 255Ã—255 = 65,025 landblocks (5,267,025 vertices)...");
+        Console.WriteLine("  Generating 255×255 = 65,025 landblocks (5,267,025 vertices)...");
         Console.WriteLine();
 
         var r = _engine.GenerateTerrain(seed, octaves, lacunarity, persistence, amplitude, coastline);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Generation complete!" : "  âœ— Generation failed!");
+        Console.WriteLine(r.Success ? "  ✓ Generation complete!" : "  ✗ Generation failed!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks written : {r.LandblocksWritten:N0}");
         Console.WriteLine($"  Vertices written   : {r.VerticesWritten:N0}");
@@ -3484,17 +3484,17 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Auto-Paint Terrain â•â•â•");
+        Console.WriteLine("  ═══ Auto-Paint Terrain ═══");
         Console.ResetColor();
         Console.WriteLine("  Painting terrain types based on height bands and slope...");
-        Console.WriteLine("  Height < 10 â†’ Water  |  < 25 â†’ Sand  |  < 80 â†’ Grass  |  < 180 â†’ Rock  |  >= 180 â†’ Snow");
-        Console.WriteLine("  Steep slope (Î” > 3) â†’ Rocky/Cliff override");
+        Console.WriteLine("  Height < 10 → Water  |  < 25 → Sand  |  < 80 → Grass  |  < 180 → Rock  |  >= 180 → Snow");
+        Console.WriteLine("  Steep slope (Δ > 3) → Rocky/Cliff override");
         Console.WriteLine();
 
         var r = _engine.AutoPaintTerrain();
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Auto-paint complete!" : "  âœ— Auto-paint failed!");
+        Console.WriteLine(r.Success ? "  ✓ Auto-paint complete!" : "  ✗ Auto-paint failed!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks painted : {r.LandblocksWritten:N0}");
         Console.WriteLine($"  Vertices painted   : {r.VerticesPainted:N0}");
@@ -3514,13 +3514,13 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 3) {
             Console.WriteLine("Usage: generate-dungeon <lbX> <lbY> [depth] [branching] [seed] [minRooms] [maxRooms] [theme]");
-            Console.WriteLine("  lbX, lbY       â€” landblock coordinates for the dungeon");
-            Console.WriteLine("  depth          â€” target depth from entrance to boss (default: 8)");
-            Console.WriteLine("  branching      â€” branching factor / avg exits per room (default: 2.0)");
-            Console.WriteLine("  seed           â€” random seed, 0 = non-deterministic (default: 0)");
-            Console.WriteLine("  minRooms       â€” minimum rooms (default: 5)");
-            Console.WriteLine("  maxRooms       â€” maximum rooms (default: 40)");
-            Console.WriteLine("  theme          â€” room theme tag (default: \"default\")");
+            Console.WriteLine("  lbX, lbY       — landblock coordinates for the dungeon");
+            Console.WriteLine("  depth          — target depth from entrance to boss (default: 8)");
+            Console.WriteLine("  branching      — branching factor / avg exits per room (default: 2.0)");
+            Console.WriteLine("  seed           — random seed, 0 = non-deterministic (default: 0)");
+            Console.WriteLine("  minRooms       — minimum rooms (default: 5)");
+            Console.WriteLine("  maxRooms       — maximum rooms (default: 40)");
+            Console.WriteLine("  theme          — room theme tag (default: \"default\")");
             Console.WriteLine();
             Console.WriteLine("  Example: generate-dungeon 1 217");
             Console.WriteLine("  Example: generate-dungeon 1 217 8 2.0 42");
@@ -3546,16 +3546,16 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Procedural Dungeon Generation â•â•â•");
+        Console.WriteLine("  ═══ Procedural Dungeon Generation ═══");
         Console.ResetColor();
         Console.WriteLine($"  Landblock: ({lbX}, {lbY})  Depth: {depth}  Branching: {branching:F1}  Seed: {seed}");
-        Console.WriteLine($"  Rooms: {minRooms}â€“{maxRooms}  Theme: {theme}");
+        Console.WriteLine($"  Rooms: {minRooms}–{maxRooms}  Theme: {theme}");
         Console.WriteLine();
 
         var r = _engine.GenerateDungeon(lbX, lbY, depth, branching, minRooms, maxRooms, theme, seed);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Dungeon generated!" : "  âœ— Generation failed!");
+        Console.WriteLine(r.Success ? "  ✓ Dungeon generated!" : "  ✗ Generation failed!");
         Console.ResetColor();
 
         if (!string.IsNullOrEmpty(r.Error)) {
@@ -3577,7 +3577,7 @@ public class TerminalRepl {
             Console.WriteLine($"  Warnings ({r.Warnings.Count}):");
             Console.ResetColor();
             foreach (var w in r.Warnings.Take(20))
-                Console.WriteLine($"    âš  {w}");
+                Console.WriteLine($"    ⚠ {w}");
             if (r.Warnings.Count > 20)
                 Console.WriteLine($"    ... and {r.Warnings.Count - 20} more");
             Console.WriteLine();
@@ -3612,7 +3612,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Landblock Pattern Analysis â•â•â•");
+        Console.WriteLine("  ═══ Landblock Pattern Analysis ═══");
         Console.ResetColor();
         Console.WriteLine($"  Range: ({minX},{minY}) to ({maxX},{maxY})");
         Console.WriteLine("  Analyzing object adjacency, slope, orientation, clustering...");
@@ -3621,7 +3621,7 @@ public class TerminalRepl {
         var r = _engine.AnalyzeLandblockPatterns(minX, minY, maxX, maxY, outputPath);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Analysis complete!" : "  âœ— Analysis failed!");
+        Console.WriteLine(r.Success ? "  ✓ Analysis complete!" : "  ✗ Analysis failed!");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -3631,23 +3631,23 @@ public class TerminalRepl {
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("  â”€â”€ Slope Distribution â”€â”€");
+        Console.WriteLine("  ── Slope Distribution ──");
         Console.ResetColor();
-        Console.WriteLine($"    Flat (0-5Â°)      : {r.SlopeDistribution.Flat}");
-        Console.WriteLine($"    Gentle (5-15Â°)   : {r.SlopeDistribution.Gentle}");
-        Console.WriteLine($"    Moderate (15-30Â°): {r.SlopeDistribution.Moderate}");
-        Console.WriteLine($"    Steep (30Â°+)     : {r.SlopeDistribution.Steep}");
+        Console.WriteLine($"    Flat (0-5°)      : {r.SlopeDistribution.Flat}");
+        Console.WriteLine($"    Gentle (5-15°)   : {r.SlopeDistribution.Gentle}");
+        Console.WriteLine($"    Moderate (15-30°): {r.SlopeDistribution.Moderate}");
+        Console.WriteLine($"    Steep (30°+)     : {r.SlopeDistribution.Steep}");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("  â”€â”€ Orientation Bias â”€â”€");
+        Console.WriteLine("  ── Orientation Bias ──");
         Console.ResetColor();
         Console.WriteLine($"    North: {r.OrientationBias.North}  East: {r.OrientationBias.East}  South: {r.OrientationBias.South}  West: {r.OrientationBias.West}");
         Console.WriteLine($"    Dominant: {r.OrientationBias.DominantDirection ?? "none"}");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("  â”€â”€ Clustering â”€â”€");
+        Console.WriteLine("  ── Clustering ──");
         Console.ResetColor();
         Console.WriteLine($"    Total clusters   : {r.ClusterSummary.TotalClusters}");
         Console.WriteLine($"    Avg cluster size : {r.ClusterSummary.AvgClusterSize:F1}");
@@ -3656,13 +3656,13 @@ public class TerminalRepl {
 
         if (r.TopAdjacencyPairs.Count > 0) {
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine("  â”€â”€ Top Adjacency Pairs (within 25 units) â”€â”€");
+            Console.WriteLine("  ── Top Adjacency Pairs (within 25 units) ──");
             Console.ResetColor();
-            Console.WriteLine($"  {"Object A",-35} {"Object B",-35} {"â‰¤5",-5} {"â‰¤10",-5} {"â‰¤25",-5} {"AvgDist"}");
+            Console.WriteLine($"  {"Object A",-35} {"Object B",-35} {"≤5",-5} {"≤10",-5} {"≤25",-5} {"AvgDist"}");
             Console.WriteLine($"  {new string('-', 95)}");
             foreach (var pair in r.TopAdjacencyPairs.Take(20)) {
-                string a = pair.ObjectA.Length > 33 ? pair.ObjectA[..33] + "â€¦" : pair.ObjectA;
-                string b = pair.ObjectB.Length > 33 ? pair.ObjectB[..33] + "â€¦" : pair.ObjectB;
+                string a = pair.ObjectA.Length > 33 ? pair.ObjectA[..33] + "…" : pair.ObjectA;
+                string b = pair.ObjectB.Length > 33 ? pair.ObjectB[..33] + "…" : pair.ObjectB;
                 Console.WriteLine($"  {a,-35} {b,-35} {pair.Count5,-5} {pair.Count10,-5} {pair.Count25,-5} {pair.AvgDistance:F1}");
             }
             if (r.TopAdjacencyPairs.Count > 20)
@@ -3731,7 +3731,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Export Training Data â•â•â•");
+        Console.WriteLine("  ═══ Export Training Data ═══");
         Console.ResetColor();
         Console.WriteLine($"  Range: ({minX},{minY}) to ({maxX},{maxY})");
         Console.WriteLine($"  Nearby limit: {nearbyLimit}");
@@ -3742,7 +3742,7 @@ public class TerminalRepl {
         var r = _engine.ExportTrainingData(minX, minY, maxX, maxY, outputPath, nearbyLimit);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Export complete!" : $"  âœ— Export failed: {r.Error}");
+        Console.WriteLine(r.Success ? "  ✓ Export complete!" : $"  ✗ Export failed: {r.Error}");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -3864,9 +3864,9 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 4) {
             Console.WriteLine("Usage: generate-settlement <template> <centerX> <centerY> [seed]");
-            Console.WriteLine("  template  â€” settlement template name");
-            Console.WriteLine("  centerX/Y â€” world-space center position for the settlement");
-            Console.WriteLine("  seed      â€” random seed, 0 = non-deterministic (default: 0)");
+            Console.WriteLine("  template  — settlement template name");
+            Console.WriteLine("  centerX/Y — world-space center position for the settlement");
+            Console.WriteLine("  seed      — random seed, 0 = non-deterministic (default: 0)");
             Console.WriteLine();
             Console.WriteLine("  Available templates:");
             foreach (var name in _engine.GetSettlementTemplateNames())
@@ -3884,7 +3884,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Constraint-Based Settlement Generator â•â•â•");
+        Console.WriteLine("  ═══ Constraint-Based Settlement Generator ═══");
         Console.ResetColor();
         Console.WriteLine($"  Template: {template}   Center: ({cx}, {cy})   Seed: {seed}");
         Console.WriteLine();
@@ -3892,7 +3892,7 @@ public class TerminalRepl {
         var r = _engine.GenerateSettlement(template, cx, cy, seed);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Settlement generated!" : "  âœ— Generation failed!");
+        Console.WriteLine(r.Success ? "  ✓ Settlement generated!" : "  ✗ Generation failed!");
         Console.ResetColor();
 
         if (!string.IsNullOrEmpty(r.Error)) {
@@ -3912,7 +3912,7 @@ public class TerminalRepl {
             Console.WriteLine($"  Warnings ({r.Warnings.Count}):");
             Console.ResetColor();
             foreach (var w in r.Warnings.Take(20))
-                Console.WriteLine($"    âš  {w}");
+                Console.WriteLine($"    ⚠ {w}");
             if (r.Warnings.Count > 20)
                 Console.WriteLine($"    ... and {r.Warnings.Count - 20} more");
             Console.WriteLine();
@@ -3920,12 +3920,12 @@ public class TerminalRepl {
 
         if (r.PlacedObjects.Count > 0) {
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine("  â”€â”€ Placed Objects â”€â”€");
+            Console.WriteLine("  ── Placed Objects ──");
             Console.ResetColor();
-            Console.WriteLine($"  {"Model ID",-14} {"Category",-12} {"X",-10} {"Y",-10} {"Z",-10} {"YawÂ°",-8} {"Name"}");
+            Console.WriteLine($"  {"Model ID",-14} {"Category",-12} {"X",-10} {"Y",-10} {"Z",-10} {"Yaw°",-8} {"Name"}");
             Console.WriteLine($"  {new string('-', 80)}");
             foreach (var po in r.PlacedObjects.Take(50)) {
-                string nm = po.Name != null && po.Name.Length > 25 ? po.Name[..25] + "â€¦" : po.Name ?? "";
+                string nm = po.Name != null && po.Name.Length > 25 ? po.Name[..25] + "…" : po.Name ?? "";
                 Console.WriteLine($"  {po.ModelIdHex,-14} {po.Category,-12} {po.X,-10:F1} {po.Y,-10:F1} {po.Z,-10:F1} {po.YawDegrees,-8:F1} {nm}");
             }
             if (r.PlacedObjects.Count > 50)
@@ -3940,16 +3940,16 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Extract Retail Heightmaps â•â•â•");
+        Console.WriteLine("  ═══ Extract Retail Heightmaps ═══");
         Console.ResetColor();
         Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/heightmaps/retail_heightmaps.jsonl"}");
-        Console.WriteLine("  Scanning all 255Ã—255 landblocks for terrain vertex data...");
+        Console.WriteLine("  Scanning all 255×255 landblocks for terrain vertex data...");
         Console.WriteLine();
 
         var r = _engine.ExtractRetailHeightmaps(outputPath ?? "pipeline_data/heightmaps/retail_heightmaps.jsonl");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Export complete!" : $"  âœ— Export failed: {r.Error}");
+        Console.WriteLine(r.Success ? "  ✓ Export complete!" : $"  ✗ Export failed: {r.Error}");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -3967,7 +3967,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Compute Vanilla Baseline â•â•â•");
+        Console.WriteLine("  ═══ Compute Vanilla Baseline ═══");
         Console.ResetColor();
         Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/enrichment/retail_baseline.json"}");
         Console.WriteLine("  Computing quality metrics from retail data...");
@@ -3976,7 +3976,7 @@ public class TerminalRepl {
         var r = _engine.ComputeVanillaBaseline(outputPath ?? "pipeline_data/enrichment/retail_baseline.json");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Baseline computed!" : $"  âœ— Computation failed: {r.Error}");
+        Console.WriteLine(r.Success ? "  ✓ Baseline computed!" : $"  ✗ Computation failed: {r.Error}");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -3989,9 +3989,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Image-Driven Terrain Commands
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleAnalyzeMapImage(string[] tokens) {
         if (tokens.Length < 2) {
@@ -4006,7 +4006,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Analyze Map Image â•â•â•");
+        Console.WriteLine("  ═══ Analyze Map Image ═══");
         Console.ResetColor();
         Console.WriteLine($"  Image:  {imagePath}");
         Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/enrichment/biome_map.json"}");
@@ -4016,11 +4016,11 @@ public class TerminalRepl {
         var r = _engine.AnalyzeMapImage(imagePath, outputPath ?? "pipeline_data/enrichment/biome_map.json");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Analysis complete!" : $"  âœ— Analysis failed: {r.Error}");
+        Console.WriteLine(r.Success ? "  ✓ Analysis complete!" : $"  ✗ Analysis failed: {r.Error}");
         Console.ResetColor();
         Console.WriteLine();
 
-        Console.WriteLine($"  Image size           : {r.ImageWidth}Ã—{r.ImageHeight}");
+        Console.WriteLine($"  Image size           : {r.ImageWidth}×{r.ImageHeight}");
         Console.WriteLine($"  Land cells           : {r.LandCells}");
         Console.WriteLine($"  Ocean cells          : {r.OceanCells}");
         Console.WriteLine($"  Elapsed              : {r.ElapsedMs:F0} ms");
@@ -4042,9 +4042,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Calibrate World Map â€” Build Colorâ†’Terrain Codebook
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Calibrate World Map — Build Color→Terrain Codebook
+    // ════════════════════════════════════════════════════
 
     private void HandleCalibrateWorldMap(string[] tokens) {
         if (!CheckProject()) return;
@@ -4052,17 +4052,17 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Calibrate World Map â•â•â•");
+        Console.WriteLine("  ═══ Calibrate World Map ═══");
         Console.ResetColor();
         Console.WriteLine("  Extracts terrain base colors from DAT textures and builds");
-        Console.WriteLine("  per-terrain-type brightnessâ†’height lookup tables.");
+        Console.WriteLine("  per-terrain-type brightness→height lookup tables.");
         Console.WriteLine($"  Output: {outputPath}");
         Console.WriteLine();
 
         var r = _engine.CalibrateWorldMap(outputPath);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ Calibration complete!" : "  âœ— Calibration failed!");
+        Console.WriteLine(r.Success ? "  ✓ Calibration complete!" : "  ✗ Calibration failed!");
         Console.ResetColor();
 
         if (!string.IsNullOrEmpty(r.Error)) {
@@ -4082,9 +4082,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Quick World â€” Reverse-Engineer World from Map Image
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Quick World — Reverse-Engineer World from Map Image
+    // ════════════════════════════════════════════════════
 
     private void HandleQuickWorld(string[] tokens) {
         if (!CheckProject()) return;
@@ -4093,9 +4093,9 @@ public class TerminalRepl {
             Console.WriteLine("  Reverse-engineers terrain from a world map image using a calibrated codebook.");
             Console.WriteLine("  Per-vertex terrain type matching + height estimation from brightness.");
             Console.WriteLine();
-            Console.WriteLine("  codebook.json   â€” output of calibrate-world-map (required)");
-            Console.WriteLine("  world_map.png   â€” source image (2041Ã—2041 for exact, or any size) (required)");
-            Console.WriteLine("  seed            â€” deterministic seed (any int incl. 0); omit for non-deterministic");
+            Console.WriteLine("  codebook.json   — output of calibrate-world-map (required)");
+            Console.WriteLine("  world_map.png   — source image (2041×2041 for exact, or any size) (required)");
+            Console.WriteLine("  seed            — deterministic seed (any int incl. 0); omit for non-deterministic");
             Console.WriteLine();
             Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png");
             Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png 42");
@@ -4112,7 +4112,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Quick World â€” Reverse-Engineer from Image â•â•â•");
+        Console.WriteLine("  ═══ Quick World — Reverse-Engineer from Image ═══");
         Console.ResetColor();
         Console.WriteLine($"  Codebook:   {codebookPath}");
         Console.WriteLine($"  World map:  {worldMapPath}");
@@ -4122,7 +4122,7 @@ public class TerminalRepl {
         var r = _engine.QuickWorld(codebookPath, worldMapPath, seed);
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine(r.Success ? "  âœ“ World generated!" : "  âœ— Generation failed!");
+        Console.WriteLine(r.Success ? "  ✓ World generated!" : "  ✗ Generation failed!");
         Console.ResetColor();
 
         if (!string.IsNullOrEmpty(r.Error)) {
@@ -4154,9 +4154,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Building Remap
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleRemapBuildings(string[] tokens) {
         if (!CheckProject()) return;
@@ -4179,7 +4179,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Building Remap â•â•â•");
+        Console.WriteLine("  ═══ Building Remap ═══");
         Console.ResetColor();
         Console.WriteLine($"  Remap file : {remapPath}");
         Console.WriteLine($"  Output dir : {outputDir}");
@@ -4191,14 +4191,14 @@ public class TerminalRepl {
 
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  âœ“ Building remap complete!");
+        Console.WriteLine("  ✓ Building remap complete!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks with buildings    : {r.LandblocksWithBuildings}");
         Console.WriteLine($"  Buildings moved              : {r.BuildingsMoved}");
@@ -4213,7 +4213,7 @@ public class TerminalRepl {
             Console.WriteLine($"\n  Warnings ({r.Warnings.Count}):");
             Console.ResetColor();
             foreach (var w in r.Warnings.Take(20))
-                Console.WriteLine($"    âš  {w}");
+                Console.WriteLine($"    ⚠ {w}");
             if (r.Warnings.Count > 20)
                 Console.WriteLine($"    ... and {r.Warnings.Count - 20} more");
         }
@@ -4222,23 +4222,23 @@ public class TerminalRepl {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("  Next steps:");
         Console.ResetColor();
-        Console.WriteLine("    1. export <dir>               â€” Write modified DATs with remapped buildings");
-        Console.WriteLine("    2. ace-db reposition          â€” Reposition all outdoor instances to new Z heights");
+        Console.WriteLine("    1. export <dir>               — Write modified DATs with remapped buildings");
+        Console.WriteLine("    2. ace-db reposition          — Reposition all outdoor instances to new Z heights");
         if (!apply && r.InteriorInstancesRemapped > 0)
-            Console.WriteLine("    3. Apply building_remap.sql   â€” Run the SQL to remap interior instance cell IDs");
+            Console.WriteLine("    3. Apply building_remap.sql   — Run the SQL to remap interior instance cell IDs");
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Building Remap V2 (layer-based pipeline)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleRemapBuildingsV2(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 2) {
             Console.WriteLine("Usage: remap-buildings-v2 <lb_remap.json> [--no-flatten] [--flatten-radius=30] [--flatten-strength=0.85] [--no-validate] [--preserve-retail-z]");
             Console.WriteLine("  Adds retail buildings as StaticObjects into destination LandblockDocuments.");
-            Console.WriteLine("  Uses the proven SaveToDatsInternal â†’ InstantiateBlueprint pipeline.");
+            Console.WriteLine("  Uses the proven SaveToDatsInternal → InstantiateBlueprint pipeline.");
             Console.WriteLine("  Requires 'export' afterwards to write the DATs.");
             Console.WriteLine();
             Console.WriteLine("  Options:");
@@ -4301,27 +4301,27 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Building Remap V2 (Layer Pipeline) â•â•â•");
+        Console.WriteLine("  ═══ Building Remap V2 (Layer Pipeline) ═══");
         Console.ResetColor();
         Console.WriteLine($"  Remap file        : {remapPath}");
         Console.WriteLine($"  Flatten terrain   : {(flatten ? $"yes (radius={flattenRadius}, strength={flattenStrength:0.##})" : "no")}");
         Console.WriteLine($"  Validators        : {(runValidators ? "enabled" : "disabled")}");
         Console.WriteLine($"  Z profile         : {(preserveRetailZ ? "retail-preserved" : "terrain-integrated (default)")}");
-        Console.WriteLine("  Pipeline          : StaticObject â†’ export â†’ SaveToDatsInternal â†’ InstantiateBlueprint");
+        Console.WriteLine("  Pipeline          : StaticObject → export → SaveToDatsInternal → InstantiateBlueprint");
         Console.WriteLine();
 
         var r = _engine.RemapBuildingsV2(remapPath, flatten, flattenRadius, flattenStrength, runValidators, preserveRetailZ);
 
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  âœ“ Buildings added to destination LandblockDocuments!");
+        Console.WriteLine("  ✓ Buildings added to destination LandblockDocuments!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks scanned         : {r.LandblocksScanned}");
         Console.WriteLine($"  Landblocks with buildings  : {r.LandblocksWithBuildings}");
@@ -4337,7 +4337,7 @@ public class TerminalRepl {
             Console.WriteLine($"\n  Warnings ({r.Warnings.Count}):");
             Console.ResetColor();
             foreach (var w in r.Warnings.Take(20))
-                Console.WriteLine($"    âš  {w}");
+                Console.WriteLine($"    ⚠ {w}");
             if (r.Warnings.Count > 20)
                 Console.WriteLine($"    ... and {r.Warnings.Count - 20} more");
         }
@@ -4346,9 +4346,9 @@ public class TerminalRepl {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("  Next steps:");
         Console.ResetColor();
-        Console.WriteLine("    1. export <dir>                    â€” Write DATs (triggers InstantiateBlueprint)");
-        Console.WriteLine("    2. remap-buildings-sql <json> <dir> <sql> [--apply]  â€” Generate/apply cell ID SQL");
-        Console.WriteLine("    3. ace-db reposition               â€” Reposition outdoor instances");
+        Console.WriteLine("    1. export <dir>                    — Write DATs (triggers InstantiateBlueprint)");
+        Console.WriteLine("    2. remap-buildings-sql <json> <dir> <sql> [--apply]  — Generate/apply cell ID SQL");
+        Console.WriteLine("    3. ace-db reposition               — Reposition outdoor instances");
         Console.WriteLine();
     }
 
@@ -4372,7 +4372,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Building Remap SQL (Post-Export) â•â•â•");
+        Console.WriteLine("  ═══ Building Remap SQL (Post-Export) ═══");
         Console.ResetColor();
         Console.WriteLine($"  Remap file   : {remapPath}");
         Console.WriteLine($"  Exported DATs: {datDir}");
@@ -4384,14 +4384,14 @@ public class TerminalRepl {
 
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  âœ“ Cell ID remap SQL generated!");
+        Console.WriteLine("  ✓ Cell ID remap SQL generated!");
         Console.ResetColor();
         Console.WriteLine($"  Buildings matched  : {r.BuildingsMatched}");
         Console.WriteLine($"  Cell ID remaps     : {r.CellIdRemaps}");
@@ -4400,7 +4400,7 @@ public class TerminalRepl {
             Console.WriteLine($"  SQL file           : {r.SqlFilePath}");
         if (r.Applied) {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("  âš¡ SQL applied to database.");
+            Console.WriteLine("  ⚡ SQL applied to database.");
             Console.ResetColor();
         }
 
@@ -4409,7 +4409,7 @@ public class TerminalRepl {
             Console.WriteLine($"\n  Warnings ({r.Warnings.Count}):");
             Console.ResetColor();
             foreach (var w in r.Warnings.Take(20))
-                Console.WriteLine($"    âš  {w}");
+                Console.WriteLine($"    ⚠ {w}");
             if (r.Warnings.Count > 20)
                 Console.WriteLine($"    ... and {r.Warnings.Count - 20} more");
         }
@@ -4417,9 +4417,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  ACE Database Commands
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleAceDb(string[] tokens) {
         if (tokens.Length < 2) {
@@ -4564,7 +4564,7 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("  âœ“ Connection successful!");
+            Console.WriteLine("  ✓ Connection successful!");
             Console.ResetColor();
             Console.WriteLine($"  Host     : {r.Host}:{r.Port}");
             Console.WriteLine($"  Database : {r.Database}");
@@ -4575,12 +4575,12 @@ public class TerminalRepl {
                 Console.ResetColor();
             } else {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("  No project loaded â€” settings not saved.");
+                Console.WriteLine("  No project loaded — settings not saved.");
                 Console.ResetColor();
             }
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Connection failed: {r.Error}");
+            Console.WriteLine($"  ✗ Connection failed: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -4679,7 +4679,7 @@ public class TerminalRepl {
         }
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("  â•â•â• ACE Database Status â•â•â•");
+        Console.WriteLine("  ═══ ACE Database Status ═══");
         Console.ResetColor();
         Console.WriteLine($"  Host     : {r.Host}:{r.Port}");
         Console.WriteLine($"  Database : {r.Database}");
@@ -4687,11 +4687,11 @@ public class TerminalRepl {
 
         if (r.ConnectionOk == true) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine("  Status   : âœ“ Connected");
+            Console.WriteLine("  Status   : ✓ Connected");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  Status   : âœ— {r.Error ?? "Connection failed"}");
+            Console.WriteLine($"  Status   : ✗ {r.Error ?? "Connection failed"}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -4700,7 +4700,7 @@ public class TerminalRepl {
     private void HandleAceDbQueryInstances(string[] tokens) {
         if (tokens.Length < 3) {
             Console.WriteLine("Usage: ace-db query-instances <landblockId>");
-            Console.WriteLine("  landblockId â€” hex landblock ID (e.g., 7D64 or 0x7D64)");
+            Console.WriteLine("  landblockId — hex landblock ID (e.g., 7D64 or 0x7D64)");
             Console.WriteLine("  Example: ace-db query-instances 7D64");
             return;
         }
@@ -4715,7 +4715,7 @@ public class TerminalRepl {
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
@@ -4728,7 +4728,7 @@ public class TerminalRepl {
         }
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine($"  â•â•â• Landblock 0x{r.LandblockId:X4} â€” {r.InstanceCount} instance(s) â•â•â•");
+        Console.WriteLine($"  ═══ Landblock 0x{r.LandblockId:X4} — {r.InstanceCount} instance(s) ═══");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -4755,7 +4755,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• ACE DB Instance Reposition â•â•â•");
+        Console.WriteLine("  ═══ ACE DB Instance Reposition ═══");
         Console.ResetColor();
         Console.WriteLine("  Comparing current terrain edits vs base DAT heights...");
         Console.WriteLine("  This will UPDATE the database directly.");
@@ -4765,14 +4765,14 @@ public class TerminalRepl {
 
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  âœ“ Reposition complete!");
+        Console.WriteLine("  ✓ Reposition complete!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks processed : {r.LandblocksProcessed}");
         Console.WriteLine($"  Instances checked    : {r.InstancesChecked}");
@@ -4781,7 +4781,7 @@ public class TerminalRepl {
             Console.WriteLine($"  SQL file             : {r.SqlFilePath}");
         if (r.AppliedDirectly) {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("  âš¡ Changes applied directly to database.");
+            Console.WriteLine("  ⚡ Changes applied directly to database.");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -4799,7 +4799,7 @@ public class TerminalRepl {
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  â•â•â• Export Reposition SQL â•â•â•");
+        Console.WriteLine("  ═══ Export Reposition SQL ═══");
         Console.ResetColor();
         Console.WriteLine($"  Output: {outputPath}");
         Console.WriteLine("  Comparing current terrain edits vs base DAT heights...");
@@ -4809,14 +4809,14 @@ public class TerminalRepl {
 
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  âœ“ SQL exported!");
+        Console.WriteLine("  ✓ SQL exported!");
         Console.ResetColor();
         Console.WriteLine($"  Landblocks processed : {r.LandblocksProcessed}");
         Console.WriteLine($"  Instances checked    : {r.InstancesChecked}");
@@ -4832,14 +4832,14 @@ public class TerminalRepl {
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("  â•â•â• ACE Database Statistics â•â•â•");
+        Console.WriteLine("  ═══ ACE Database Statistics ═══");
         Console.ResetColor();
         Console.WriteLine($"  Total instances      : {r.TotalInstances:N0}");
         Console.WriteLine($"  Landblocks with data : {r.TotalLandblocks:N0}");
@@ -4861,7 +4861,7 @@ public class TerminalRepl {
 
     private void HandleAceDbClearInstances() {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("  âš  This will DELETE all landblock_instance and landblock_instance_link records!");
+        Console.WriteLine("  ⚠ This will DELETE all landblock_instance and landblock_instance_link records!");
         Console.ResetColor();
         Console.Write("  Are you sure? (y/N): ");
         var confirm = Console.ReadLine()?.Trim().ToLowerInvariant();
@@ -4875,19 +4875,19 @@ public class TerminalRepl {
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Deleted {r.InstancesDeleted:N0} instances and {r.LinksDeleted:N0} links");
+            Console.WriteLine($"  ✓ Deleted {r.InstancesDeleted:N0} instances and {r.LinksDeleted:N0} links");
             Console.ResetColor();
         }
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Dungeon Document Operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleDungeon(string[] tokens) {
         if (tokens.Length < 2) {
@@ -4942,7 +4942,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 9) {
             Console.WriteLine("Usage: dungeon add-cell <lbX> <lbY> <envId> <csId> <x> <y> <z>");
-            Console.WriteLine("  envId, csId â€” hex environment / cell-structure IDs");
+            Console.WriteLine("  envId, csId — hex environment / cell-structure IDs");
             Console.WriteLine("  Example: dungeon add-cell 1 217 0x0001 0 0 0 0");
             return;
         }
@@ -4959,7 +4959,7 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Cell 0x{r.CellNumber:X4} added to landblock 0x{r.LbKey:X4}");
+            Console.WriteLine($"  ✓ Cell 0x{r.CellNumber:X4} added to landblock 0x{r.LbKey:X4}");
             Console.ResetColor();
             Console.WriteLine($"  Environment : 0x{r.EnvironmentId:X4}");
             Console.WriteLine($"  Structure   : {r.CellStructure}");
@@ -4967,7 +4967,7 @@ public class TerminalRepl {
             Console.WriteLine($"  Total cells : {r.TotalCells}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -4977,7 +4977,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 5) {
             Console.WriteLine("Usage: dungeon remove-cell <lbX> <lbY> <cellNumber>");
-            Console.WriteLine("  cellNumber â€” hex cell ID (e.g., 0x0100)");
+            Console.WriteLine("  cellNumber — hex cell ID (e.g., 0x0100)");
             return;
         }
         if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
@@ -4989,12 +4989,12 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Cell 0x{r.CellNumber:X4} removed from landblock 0x{r.LbKey:X4}");
+            Console.WriteLine($"  ✓ Cell 0x{r.CellNumber:X4} removed from landblock 0x{r.LbKey:X4}");
             Console.ResetColor();
             Console.WriteLine($"  Remaining cells: {r.TotalCells}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5020,11 +5020,11 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Connected 0x{r.CellA:X4} (poly 0x{r.PolyA:X4}) âŸ· 0x{r.CellB:X4} (poly 0x{r.PolyB:X4})");
+            Console.WriteLine($"  ✓ Connected 0x{r.CellA:X4} (poly 0x{r.PolyA:X4}) ⟷ 0x{r.CellB:X4} (poly 0x{r.PolyB:X4})");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5034,7 +5034,7 @@ public class TerminalRepl {
         if (!CheckProject()) return;
         if (tokens.Length < 6) {
             Console.WriteLine("Usage: dungeon disconnect <lbX> <lbY> <cellA> <cellB>");
-            Console.WriteLine("  cellA, cellB â€” hex cell numbers");
+            Console.WriteLine("  cellA, cellB — hex cell numbers");
             return;
         }
         if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
@@ -5047,12 +5047,12 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Disconnected 0x{r.CellA:X4} âŸ· 0x{r.CellB:X4}");
+            Console.WriteLine($"  ✓ Disconnected 0x{r.CellA:X4} ⟷ 0x{r.CellB:X4}");
             Console.ResetColor();
             Console.WriteLine($"  Portals removed: {r.PortalsRemoved}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5080,7 +5080,7 @@ public class TerminalRepl {
         }
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine($"  â•â•â• Dungeon Validation â€” 0x{lbKey:X4} ({r.CellCount} cells) â•â•â•");
+        Console.WriteLine($"  ═══ Dungeon Validation — 0x{lbKey:X4} ({r.CellCount} cells) ═══");
         Console.ResetColor();
         Console.WriteLine();
 
@@ -5091,9 +5091,9 @@ public class TerminalRepl {
                 _ => ConsoleColor.DarkGray
             };
             var icon = issue.Severity switch {
-                "Error" => "âœ—",
-                "Warning" => "âš ",
-                _ => "â„¹"
+                "Error" => "✗",
+                "Warning" => "⚠",
+                _ => "ℹ"
             };
             Console.ForegroundColor = color;
             Console.Write($"  {icon} [{issue.Severity}]");
@@ -5121,15 +5121,15 @@ public class TerminalRepl {
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         } else if (r.FixesApplied == 0) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ No issues found in 0x{lbKey:X4} â€” all portals are bidirectional.");
+            Console.WriteLine($"  ✓ No issues found in 0x{lbKey:X4} — all portals are bidirectional.");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"  âœ“ Auto-fixed {r.FixesApplied} one-way portal(s) in 0x{lbKey:X4}");
+            Console.WriteLine($"  ✓ Auto-fixed {r.FixesApplied} one-way portal(s) in 0x{lbKey:X4}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5150,11 +5150,11 @@ public class TerminalRepl {
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Recomputed 0x{lbKey:X4}:");
+            Console.WriteLine($"  ✓ Recomputed 0x{lbKey:X4}:");
             Console.ResetColor();
             Console.WriteLine($"  VisibleCells updated : {r.VisibleCellsUpdated}");
             Console.WriteLine($"  Portal flags updated : {r.PortalFlagsUpdated}");
@@ -5177,11 +5177,11 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"  âœ“ Reloaded dungeon 0x{lbKey:X4} from DAT â€” {r.CellCount} cell(s)");
+            Console.WriteLine($"  ✓ Reloaded dungeon 0x{lbKey:X4} from DAT — {r.CellCount} cell(s)");
             Console.ResetColor();
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5207,12 +5207,12 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Success) {
             Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  âœ“ Copied dungeon from 0x{srcKey:X4} â†’ 0x{destKey:X4}");
+            Console.WriteLine($"  ✓ Copied dungeon from 0x{srcKey:X4} → 0x{destKey:X4}");
             Console.ResetColor();
             Console.WriteLine($"  Cells copied: {r.CellsCopied}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— Error: {r.Error}");
+            Console.WriteLine($"  ✗ Error: {r.Error}");
             Console.ResetColor();
         }
         Console.WriteLine();
@@ -5427,9 +5427,9 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain Sub-commands
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     private void HandleTerrain(string[] tokens) {
         if (tokens.Length < 2) {
@@ -5465,14 +5465,14 @@ public class TerminalRepl {
         Console.WriteLine();
         if (r.Error != null) {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"  âœ— {r.Error}");
+            Console.WriteLine($"  ✗ {r.Error}");
             Console.ResetColor();
             Console.WriteLine();
             return;
         }
 
         Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine($"  â•â•â• Terrain Sample at ({r.WorldX:F1}, {r.WorldY:F1}) â•â•â•");
+        Console.WriteLine($"  ═══ Terrain Sample at ({r.WorldX:F1}, {r.WorldY:F1}) ═══");
         Console.ResetColor();
         Console.WriteLine();
         Console.WriteLine($"  Landblock        : 0x{r.LandblockId:X4}");

@@ -406,7 +406,7 @@ namespace WorldBuilder.Shared.Models {
             }
 
             // Export static object changes from LandblockDocuments, dungeon data, and portal table edits.
-            // Process LandblockDocuments separately with memory management â€” each building instantiation
+            // Process LandblockDocuments separately with memory management — each building instantiation
             // creates EnvCells that consume significant memory. Release each doc after saving.
             var lbDocIds = DocumentManager.ActiveDocs
                 .Where(kv => kv.Value is LandblockDocument)
@@ -475,12 +475,12 @@ namespace WorldBuilder.Shared.Models {
                     $"[Export] Loaded {donorHintsLoaded} donor placement hints and preloaded {donorBlueprintsPreloaded} donor blueprints.");
             }
 
-            // â”€â”€ Pre-extract all building blueprints from BASE DATs â”€â”€
+            // ── Pre-extract all building blueprints from BASE DATs ──
             // During export, SaveToDatsInternal processes landblocks in arbitrary order.
             // Source landblocks (whose buildings were cleared) may be processed BEFORE
             // destination landblocks, deleting donor buildings from the export DAT.
             // When the destination landblock then tries to instantiate the building,
-            // BuildingBlueprintCache.GetBlueprint() scans the export DAT for a donor â€”
+            // BuildingBlueprintCache.GetBlueprint() scans the export DAT for a donor —
             // but the donor was already deleted! This pre-extraction step caches all
             // needed blueprints from the read-only base DATs where donors always exist.
             {

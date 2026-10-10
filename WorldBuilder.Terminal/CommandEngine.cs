@@ -23,7 +23,7 @@ namespace WorldBuilder.Terminal;
 /// Shared command engine that contains all WorldBuilder business logic.
 /// Both <see cref="TerminalRepl"/> and <see cref="JsonCommandProcessor"/>
 /// delegate to this class. The engine operates on parsed parameters and
-/// returns structured result records â€” it never touches Console or JSON directly.
+/// returns structured result records — it never touches Console or JSON directly.
 /// </summary>
 public partial class CommandEngine {
     /// <summary>
@@ -117,9 +117,9 @@ public partial class CommandEngine {
     internal HeadlessProjectManager ProjectManager => _projectManager;
     internal float[] GetHeightTableForDiff() => GetHeightTable();
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Project management
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public LoadResult Load(string projectPath) {
         _projectManager.LoadProject(projectPath);
@@ -446,9 +446,9 @@ public partial class CommandEngine {
             p.BaseDatDirectory, p.DatabasePath, portalIter);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain editing
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public TerrainEditResult Smooth(float x, float y, float radius, float strength = 0.5f) =>
         ApplyTerrainEdit(new SmoothEdit(x, y, radius, strength));
@@ -653,9 +653,9 @@ public partial class CommandEngine {
         return new RoadResult(path.Count, changeCount, roadValue, modifiedLbs);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain queries
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public HeightQueryResult GetHeight(float x, float y) {
         RequireProject();
@@ -893,9 +893,9 @@ public partial class CommandEngine {
     }
 
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Object management
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ListObjectsResult ListObjects(uint lbX, uint lbY) {
         RequireProject();
@@ -1465,7 +1465,7 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Clears all static objects from every landblock in the world (255Ã—255 grid).
+    /// Clears all static objects from every landblock in the world (255×255 grid).
     /// Only processes landblocks that have a LandBlockInfo in the DAT.
     /// </summary>
     public ClearObjectsResult ClearAllObjects() {
@@ -1516,9 +1516,9 @@ public partial class CommandEngine {
         return new ClearObjectsResult(true, totalRemoved, landblocksProcessed, affected);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Spatial queries
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public QueryRadiusResult QueryRadius(float cx, float cy, float radius,
         float cz = 0, bool? includeZ = null) {
@@ -1564,9 +1564,9 @@ public partial class CommandEngine {
         return new QueryRadiusResult(cx, cy, cz, radius, useZ, found, modelCounts);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Dungeon tools
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public (DungeonRoomAnalyzer.AnalysisReport Report, string? SavedTo) AnalyzeDungeons(string? outputPath = null) {
         RequireProject();
@@ -1660,10 +1660,10 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Generates a complete dungeon from graph grammar â†’ portal snap placement.
+    /// Generates a complete dungeon from graph grammar → portal snap placement.
     /// 1. Generate abstract graph via DungeonGrammar.Generate()
     /// 2. Validate the graph
-    /// 3. Extract room catalog and map GrammarNodeType â†’ Classification
+    /// 3. Extract room catalog and map GrammarNodeType → Classification
     /// 4. Walk graph in BFS order, placing cells via snap-portal logic
     /// 5. Return summary
     /// </summary>
@@ -1683,7 +1683,7 @@ public partial class CommandEngine {
         var warnings = new List<string>();
 
         try {
-            // â”€â”€ Step 1: Generate abstract graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Step 1: Generate abstract graph ──────────────
             var grammarParams = new GrammarParams(targetDepth, branchingFactor, minRooms, maxRooms, theme, seed);
             var graph = DungeonGrammar.Generate(grammarParams);
             var graphWarnings = DungeonGrammar.Validate(graph);
@@ -1691,7 +1691,7 @@ public partial class CommandEngine {
 
             string graphSummary = DungeonGrammar.FormatSummary(graph);
 
-            // â”€â”€ Step 2: Extract room catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Step 2: Extract room catalog ─────────────────
             Console.Error.WriteLine("[GenerateDungeon] Extracting room catalog...");
             var catalog = DungeonRoomAnalyzer.ExtractCatalog(dats);
 
@@ -1701,19 +1701,19 @@ public partial class CommandEngine {
                     graphSummary, "No room templates found in DAT catalog");
             }
 
-            // â”€â”€ Step 3: Build lookup tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-            // Map GrammarNodeType â†’ preferred catalog classifications + portal count preference
+            // ── Step 3: Build lookup tables ──────────────────
+            // Map GrammarNodeType → preferred catalog classifications + portal count preference
             var rng = new Random(graph.Seed);
 
             // Build adjacency: for each node, how many children does it have?
             var childCounts = new Dictionary<int, int>();
-            var parentOf = new Dictionary<int, int>();  // child â†’ parent
+            var parentOf = new Dictionary<int, int>();  // child → parent
             foreach (var edge in graph.Edges) {
                 childCounts[edge.FromId] = childCounts.GetValueOrDefault(edge.FromId) + 1;
                 parentOf[edge.ToId] = edge.FromId;
             }
 
-            // â”€â”€ Step 4: Get or create dungeon document â”€â”€â”€â”€â”€â”€â”€
+            // ── Step 4: Get or create dungeon document ───────
             var dungeonDoc = GetDungeonDoc(lbKey)
                 ?? throw new InvalidOperationException($"Could not create dungeon document for landblock 0x{lbKey:X4}");
 
@@ -1725,14 +1725,14 @@ public partial class CommandEngine {
                 dungeonDoc.Cells.Clear();
             }
 
-            // Track placed cells: nodeId â†’ (cellNumber, envId, cellStructIdx, CellStruct from DAT)
+            // Track placed cells: nodeId → (cellNumber, envId, cellStructIdx, CellStruct from DAT)
             var placedCells = new Dictionary<int, (ushort cellNum, ushort envId, ushort cellStructIdx)>();
-            // Track consumed portals per cell: cellNumber â†’ set of consumed portal polygon IDs
+            // Track consumed portals per cell: cellNumber → set of consumed portal polygon IDs
             var consumedPortals = new Dictionary<ushort, HashSet<ushort>>();
 
             int cellsPlaced = 0;
 
-            // â”€â”€ Step 5: BFS walk â€” place cells â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Step 5: BFS walk — place cells ───────────────
             var entrance = graph.Nodes.FirstOrDefault(n => n.Type == GrammarNodeType.Entrance);
             if (entrance == null) {
                 return new GenerateDungeonResult(false, lbKey, graph.Nodes.Count, graph.Edges.Count,
@@ -1745,7 +1745,7 @@ public partial class CommandEngine {
             int entrancePortalsNeeded = entranceChildCount + 1;  // +1 for potential external entry
             var entranceTemplate = PickTemplate(catalog.Templates, entrance.Type, entrancePortalsNeeded, rng);
             if (entranceTemplate == null) {
-                warnings.Add("No suitable template for Entrance â€” using first available");
+                warnings.Add("No suitable template for Entrance — using first available");
                 entranceTemplate = catalog.Templates[0];
             }
 
@@ -1761,7 +1761,7 @@ public partial class CommandEngine {
             bfsQueue.Enqueue(entrance.Id);
             var visited = new HashSet<int> { entrance.Id };
 
-            // Build edge lookup: parent â†’ list of children
+            // Build edge lookup: parent → list of children
             var childEdges = new Dictionary<int, List<int>>();
             foreach (var edge in graph.Edges) {
                 if (!childEdges.ContainsKey(edge.FromId))
@@ -1837,7 +1837,7 @@ public partial class CommandEngine {
                     int childPortalsNeeded = childChildCount + 1;  // +1 for connection to parent
                     var childTemplate = PickTemplate(catalog.Templates, childNode.Type, childPortalsNeeded, rng);
                     if (childTemplate == null) {
-                        warnings.Add($"No suitable template for node #{childNodeId} ({childNode.Type}) â€” skipping{OrphanSuffix(childNodeId)}");
+                        warnings.Add($"No suitable template for node #{childNodeId} ({childNode.Type}) — skipping{OrphanSuffix(childNodeId)}");
                         continue;
                     }
 
@@ -1908,7 +1908,7 @@ public partial class CommandEngine {
                 }
             }
 
-            // â”€â”€ Step 6: Optionally validate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Step 6: Optionally validate ──────────────────
             if (validate && cellsPlaced > 0) {
                 try {
                     var valReport = ValidationEngine.ValidateDungeon(dungeonDoc, dats);
@@ -1936,7 +1936,7 @@ public partial class CommandEngine {
 
     /// <summary>
     /// Pick a room template from the catalog that matches the grammar node type.
-    /// Maps GrammarNodeType â†’ preferred Classification(s) and portal count.
+    /// Maps GrammarNodeType → preferred Classification(s) and portal count.
     /// </summary>
     private static DungeonRoomAnalyzer.RoomTemplate? PickTemplate(
         List<DungeonRoomAnalyzer.RoomTemplate> templates,
@@ -1970,7 +1970,7 @@ public partial class CommandEngine {
         if (candidates.Count > 0)
             return candidates[rng.Next(candidates.Count)];
 
-        // Second pass: relax portal count â€” just match classification with enough portals
+        // Second pass: relax portal count — just match classification with enough portals
         candidates = templates
             .Where(t => preferredClassifications.Contains(t.Classification)
                      && t.PortalCount >= minPortals)
@@ -1992,9 +1992,9 @@ public partial class CommandEngine {
     }
 
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Validation
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ValidationReport ValidateDungeon(uint lbX, uint lbY) {
         RequireProject();
@@ -2117,9 +2117,9 @@ public partial class CommandEngine {
         return id => _buildingPairings.GroupKey(id);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  World observation
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ListLandblocksResult ListLandblocks(
         uint minX = 0, uint minY = 0, uint maxX = 254, uint maxY = 254, int limit = 500) {
@@ -2171,9 +2171,9 @@ public partial class CommandEngine {
             activeDocs);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Ontology
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public OntologyScanResult ScanOntology(bool scanGfxObjs = true) {
         RequireProject();
@@ -2234,9 +2234,9 @@ public partial class CommandEngine {
             WeenieTypeCounts: weenieTypeCounts.Count > 0 ? weenieTypeCounts : null);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Stamp operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public PasteStampResult PasteStamp(
         float srcMinX, float srcMinY, float srcMaxX, float srcMaxY,
@@ -2326,9 +2326,9 @@ public partial class CommandEngine {
             objectsSkipped, skipMessages.Count > 0 ? skipMessages : null);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Portal snap operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public SnapPortalResult SnapPortal(
         uint lbX, uint lbY, ushort targetCellNumber, ushort targetPortalPolyId,
@@ -2415,9 +2415,9 @@ public partial class CommandEngine {
             newOrigin, newOrientation, totalPortals, surfaces.Count, warning);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Bulk query
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public BulkHeightmapResult GetBulkHeightmap(
         uint minX, uint minY, uint maxX, uint maxY) {
@@ -2434,9 +2434,9 @@ public partial class CommandEngine {
         return new BulkHeightmapResult(total, results.Count, results);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Object detail (DAT model inspection)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ObjectDetailResult GetObjectDetail(uint objectId) {
         RequireProject();
@@ -2554,9 +2554,9 @@ public partial class CommandEngine {
             ontCat, ontScale, ontTags);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain diff (change detection)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public TerrainDiffResult DiffTerrain(uint lbX, uint lbY) {
         RequireProject();
@@ -2749,9 +2749,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Terrain layers (texture distribution per landblock)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public TerrainLayersResult GetTerrainLayers(uint lbX, uint lbY) {
         RequireProject();
@@ -2793,9 +2793,9 @@ public partial class CommandEngine {
         return new TerrainLayersResult(lbKey, lbX, lbY, true, data.Length, layers);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  DAT extension commands (via DatReaderWriter.Extensions)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ExportTexturesResult ExportTextures(string outputDirectory, uint? minId = null, uint? maxId = null) {
         RequireProject();
@@ -2964,9 +2964,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Ontology export (CSV)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ExportOntologyResult ExportOntology(string outputPath) {
         if (!_ontologyService.IsScanned)
@@ -3199,9 +3199,9 @@ public partial class CommandEngine {
             SetupsFailed: failed, FailedSample: failedSample);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  StringTable mining (DAT string extraction)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public MineStringsResult MineStrings(string? outputPath = null, string? tableFilter = null) {
         RequireProject();
@@ -3284,9 +3284,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Ontology enrichment (LSD creature families)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public EnrichOntologyResult EnrichOntology() {
         if (!_ontologyService.IsScanned)
@@ -3477,9 +3477,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Catalog import (Ontology â† Catalog index.json)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Catalog import (Ontology ← Catalog index.json)
+    // ════════════════════════════════════════════════════
 
     public ImportCatalogResult ImportCatalog(string indexJsonPath) {
         if (!_ontologyService.IsScanned)
@@ -3495,9 +3495,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  LLM Classification (string-table auto-tagging)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public ClassifyOntologyResult ClassifyOntology() {
         if (!_ontologyService.IsScanned)
@@ -3527,9 +3527,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Texture-driven material enrichment
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public EnrichMaterialsResult EnrichMaterials() {
         if (!_ontologyService.IsScanned)
@@ -3548,9 +3548,9 @@ public partial class CommandEngine {
     }
 
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  LSD Data Ingestion Pipeline
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Batch-processes all weenie JSON files from the LSD dataset directory,
@@ -3595,7 +3595,7 @@ public partial class CommandEngine {
                     int weenieType = root.TryGetProperty("weenieType", out var wtEl) ? wtEl.GetInt32() : 0;
 
                     // Extract from top-level stat arrays (actual LSD format uses
-                    // didStats, intStats, stringStats at root â€” NOT nested under "properties")
+                    // didStats, intStats, stringStats at root — NOT nested under "properties")
                     uint? setupDid = null;
                     int? level = null;
                     int? creatureType = null;
@@ -3603,7 +3603,7 @@ public partial class CommandEngine {
                     int? weaponType = null;    // PropertyInt.WeaponType (353) — Sword/Axe/Mace/Spear/Staff…
                     int? materialType = null;  // PropertyInt.MaterialType (131) — Iron/Steel/Silver…
 
-                    // didStats â†’ key 1 = SetupDID
+                    // didStats → key 1 = SetupDID
                     if (root.TryGetProperty("didStats", out var didStats)) {
                         foreach (var dp in didStats.EnumerateArray()) {
                             int key = dp.TryGetProperty("key", out var kEl) ? kEl.GetInt32() : -1;
@@ -3614,7 +3614,7 @@ public partial class CommandEngine {
                         }
                     }
 
-                    // intStats â†’ key 1 = ItemType, key 2 = CreatureType, key 25 = Level
+                    // intStats → key 1 = ItemType, key 2 = CreatureType, key 25 = Level
                     if (root.TryGetProperty("intStats", out var intStats)) {
                         foreach (var ip in intStats.EnumerateArray()) {
                             int key = ip.TryGetProperty("key", out var kEl) ? kEl.GetInt32() : -1;
@@ -3697,7 +3697,7 @@ public partial class CommandEngine {
 
     /// <summary>
     /// Takes the JSON-lines output from ingest-weenies and merges it into the live ontology.
-    /// Maps setupDid â†’ OntologyEntry, populating Name, WeenieClassId, WeenieType, Level, etc.
+    /// Maps setupDid → OntologyEntry, populating Name, WeenieClassId, WeenieType, Level, etc.
     /// </summary>
     public EnrichWeeniesResult EnrichWeenies(string weenieSummaryPath) {
         if (!_ontologyService.IsScanned)
@@ -3750,7 +3750,7 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Scans all 255Ã—255 retail landblocks from the DAT and extracts every building's
+    /// Scans all 255×255 retail landblocks from the DAT and extracts every building's
     /// Setup ID + world XY position. Writes building_placements.jsonl for the Python
     /// geocoder (scan_building_cultures.py) to map models to cultural architectures.
     /// </summary>
@@ -3881,7 +3881,7 @@ public partial class CommandEngine {
     /// <summary>
     /// Applies a population plan (produced by build_population_plan.py) to the current world.
     /// Places static objects (scenery, structures) into landblock documents.
-    /// Creatures are logged but not placed as static objects â€” they need server-side
+    /// Creatures are logged but not placed as static objects — they need server-side
     /// weenie spawn entries (a separate step).
     /// </summary>
     public ApplyPopulationResult ApplyPopulation(string planPath, bool dryRun = false) {
@@ -3934,7 +3934,7 @@ public partial class CommandEngine {
                     var category = obj.TryGetProperty("category", out var catEl)
                         ? catEl.GetString() ?? "" : "";
 
-                    // Skip creatures â€” they need server-side weenie spawns, not static DAT objects
+                    // Skip creatures — they need server-side weenie spawns, not static DAT objects
                     if (category == "Creature") {
                         objectsSkipped++;
                         continue;
@@ -3976,7 +3976,7 @@ public partial class CommandEngine {
                         try {
                             localZ = heightLookup(worldX, worldY);
                         } catch {
-                            // Height lookup can fail at edges or ocean â€” fall back to 0
+                            // Height lookup can fail at edges or ocean — fall back to 0
                         }
                     }
 
@@ -4327,7 +4327,7 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Generates procedural terrain for all 255Ã—255 landblocks using Simplex fBm noise.
+    /// Generates procedural terrain for all 255×255 landblocks using Simplex fBm noise.
     /// Optionally applies coastline masking and auto-painting.
     /// </summary>
     public GenerateTerrainResult GenerateTerrain(
@@ -4342,7 +4342,7 @@ public partial class CommandEngine {
         if (coastlinePolygon != null && coastlinePolygon.Count >= 3)
             coastline = new CoastlineMask(coastlinePolygon);
 
-        // Base frequency scaled so the noise looks natural across the 255Ã—255 world
+        // Base frequency scaled so the noise looks natural across the 255×255 world
         // World is 255*192 = 48960 units wide. A frequency of ~0.0003 gives continent-scale features.
         float baseFrequency = 1f / 1024f;
 
@@ -4557,9 +4557,9 @@ public partial class CommandEngine {
             CliffOverrides: cliffOverrides);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Benchmark
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public BenchmarkResult RunBenchmark() {
         RequireProject();
@@ -4598,7 +4598,7 @@ public partial class CommandEngine {
         if (populatedLbs.Count == 0)
             throw new InvalidOperationException("No populated landblocks found to benchmark against.");
 
-        // â”€â”€â”€ Snapshot the touched landblocks so the benchmark is non-destructive â”€â”€â”€
+        // ─── Snapshot the touched landblocks so the benchmark is non-destructive ───
         // The benchmark mutates terrain heights/types and appends static objects to
         // every populated landblock it touches. Snapshot that state here and restore
         // it in the finally so the speed test leaves the project unchanged.
@@ -4611,7 +4611,7 @@ public partial class CommandEngine {
             staticObjSnapshots[lb.key] = lbDoc.GetStaticObjects().ToList();
         }
 
-        // â”€â”€â”€ Test 1: Terrain edit throughput (2000 set-height calls) â”€â”€â”€
+        // ─── Test 1: Terrain edit throughput (2000 set-height calls) ───
         const int TERRAIN_OPS = 2000;
         const int SEGMENT_SIZE = 500;
         var segmentTimes = new List<double>();
@@ -4655,7 +4655,7 @@ public partial class CommandEngine {
 
         memory.Add(new BenchmarkMemorySnapshot("After terrain edits", GC.GetTotalMemory(false)));
 
-        // â”€â”€â”€ Test 2: Object placement throughput (2000 add-object calls) â”€â”€â”€
+        // ─── Test 2: Object placement throughput (2000 add-object calls) ───
         const int OBJECT_OPS = 2000;
         int objFailures = 0;
         segmentTimes.Clear();
@@ -4700,7 +4700,7 @@ public partial class CommandEngine {
 
         memory.Add(new BenchmarkMemorySnapshot("After object placement", GC.GetTotalMemory(false)));
 
-        // â”€â”€â”€ Test 3: Validation throughput (50 validate-all calls) â”€â”€â”€
+        // ─── Test 3: Validation throughput (50 validate-all calls) ───
         const int VALIDATE_OPS = 50;
         var valLb = populatedLbs[0];
 
@@ -4717,7 +4717,7 @@ public partial class CommandEngine {
 
         memory.Add(new BenchmarkMemorySnapshot("After validation", GC.GetTotalMemory(false)));
 
-        // â”€â”€â”€ Test 4: Bulk heightmap throughput (500 set-landblock-heightmap calls) â”€â”€â”€
+        // ─── Test 4: Bulk heightmap throughput (500 set-landblock-heightmap calls) ───
         // Segment size is smaller than the per-op tests so first/last comparisons
         // remain meaningful at this lower op count.
         const int BULK_OPS = 500;
@@ -4767,9 +4767,9 @@ public partial class CommandEngine {
         var gcAfter = new BenchmarkGcCounts("After",
             GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
 
-        // â”€â”€â”€ Extrapolation â”€â”€â”€
-        const long TOTAL_LANDBLOCKS = 65025;  // 255 Ã— 255
-        const long TOTAL_VERTEX_WRITES = 5267025; // 65025 Ã— 81
+        // ─── Extrapolation ───
+        const long TOTAL_LANDBLOCKS = 65025;  // 255 × 255
+        const long TOTAL_VERTEX_WRITES = 5267025; // 65025 × 81
         const long TOTAL_OBJECT_PLACEMENTS = 500000;
 
         double estTerrainSec = TOTAL_VERTEX_WRITES / terrainOpsPerSec;
@@ -4780,11 +4780,11 @@ public partial class CommandEngine {
         double effectiveTerrainSec = estBulkSec ?? estTerrainSec;
         string feasibility;
         if (effectiveTerrainSec < 7200 && estObjectSec < 7200 && (degradation ?? 0) < 20)
-            feasibility = "GREEN â€” Full-scale generation is feasible on commodity hardware";
+            feasibility = "GREEN — Full-scale generation is feasible on commodity hardware";
         else if (effectiveTerrainSec < 86400 && estObjectSec < 86400)
-            feasibility = "YELLOW â€” Full-scale feasible but slow; optimization recommended";
+            feasibility = "YELLOW — Full-scale feasible but slow; optimization recommended";
         else
-            feasibility = "RED â€” Full-scale has fundamental bottlenecks; pivot to smaller scale or architectural changes needed";
+            feasibility = "RED — Full-scale has fundamental bottlenecks; pivot to smaller scale or architectural changes needed";
 
         var extrapolation = new BenchmarkExtrapolation(
             Math.Round(terrainOpsPerSec, 1),
@@ -4801,7 +4801,7 @@ public partial class CommandEngine {
             FormatDuration(estObjectSec),
             feasibility);
 
-        // â”€â”€â”€ Restore the touched landblocks so the benchmark is non-destructive â”€â”€â”€
+        // ─── Restore the touched landblocks so the benchmark is non-destructive ───
         restored = RestoreBenchmarkSnapshots(terrainDoc, terrainSnapshots, staticObjSnapshots);
 
         return new BenchmarkResult(tests, memory, gcBefore, gcAfter, extrapolation,
@@ -4847,9 +4847,9 @@ public partial class CommandEngine {
         return $"{seconds / 3600:F1} hours";
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Bulk operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public SetLandblockHeightmapResult SetLandblockHeightmap(uint lbX, uint lbY, byte[] heights) {
         RequireProject();
@@ -4982,9 +4982,9 @@ public partial class CommandEngine {
             errorMsgs.Count > 0 ? errorMsgs : null);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Phase 10 â€” Landblock Pattern Analysis
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Phase 10 — Landblock Pattern Analysis
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Analyzes spatial design patterns from populated vanilla landblocks.
@@ -5002,7 +5002,7 @@ public partial class CommandEngine {
         var terrainDoc = GetTerrainDoc();
         var ht = GetHeightTable();
 
-        // â”€â”€â”€ Collect all static objects across requested landblocks â”€â”€â”€
+        // ─── Collect all static objects across requested landblocks ───
         // Store as (lbKey, worldPos, objectId, orientation) tuples
         var allObjects = new List<(ushort LbKey, System.Numerics.Vector3 Pos, uint ObjectId, System.Numerics.Quaternion Orientation)>();
         int landblocksAnalyzed = 0;
@@ -5039,12 +5039,12 @@ public partial class CommandEngine {
                 Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath);
         }
 
-        // â”€â”€â”€ 1. Object adjacency frequencies â”€â”€â”€
+        // ─── 1. Object adjacency frequencies ───
         Console.Error.WriteLine("[AnalyzeLandblockPatterns] Computing adjacency frequencies...");
         // Key: (min(idA,idB), max(idA,idB))  Value: (count5, count10, count25, totalDist, totalCount)
         var adjacency = new Dictionary<(uint, uint), (int c5, int c10, int c25, double totalDist, int totalCount)>();
 
-        // Use spatial bucketing to avoid O(NÂ²) for the full set
+        // Use spatial bucketing to avoid O(N²) for the full set
         // Bucket size = 25 units (max radius)
         const float BUCKET_SIZE = 25f;
         var buckets = new Dictionary<(int, int), List<int>>();
@@ -5119,7 +5119,7 @@ public partial class CommandEngine {
 
         Console.Error.WriteLine($"[AnalyzeLandblockPatterns] Found {adjacency.Count} unique adjacency pairs");
 
-        // â”€â”€â”€ 2. Terrain slope under each object â”€â”€â”€
+        // ─── 2. Terrain slope under each object ───
         Console.Error.WriteLine("[AnalyzeLandblockPatterns] Computing terrain slope distribution...");
         int slopeFlat = 0, slopeGentle = 0, slopeModerate = 0, slopeSteep = 0;
 
@@ -5162,7 +5162,7 @@ public partial class CommandEngine {
         var slopeDist = new SlopeDistribution(slopeFlat, slopeGentle, slopeModerate, slopeSteep);
         Console.Error.WriteLine($"[AnalyzeLandblockPatterns] Slope: flat={slopeFlat} gentle={slopeGentle} moderate={slopeModerate} steep={slopeSteep}");
 
-        // â”€â”€â”€ 3. Building orientation conventions â”€â”€â”€
+        // ─── 3. Building orientation conventions ───
         Console.Error.WriteLine("[AnalyzeLandblockPatterns] Analyzing building orientations...");
         int orientN = 0, orientE = 0, orientS = 0, orientW = 0;
 
@@ -5171,7 +5171,7 @@ public partial class CommandEngine {
             if ((objId & 0xFF000000) != 0x02000000) continue;
 
             // Extract yaw angle from quaternion
-            // Yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qyÂ² + qzÂ²))
+            // Yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy² + qz²))
             float yaw = MathF.Atan2(
                 2f * (orient.W * orient.Z + orient.X * orient.Y),
                 1f - 2f * (orient.Y * orient.Y + orient.Z * orient.Z));
@@ -5200,7 +5200,7 @@ public partial class CommandEngine {
         var orientBias = new OrientationBias(orientN, orientE, orientS, orientW, dominantDir);
         Console.Error.WriteLine($"[AnalyzeLandblockPatterns] Orientation: N={orientN} E={orientE} S={orientS} W={orientW} dominant={dominantDir ?? "none"}");
 
-        // â”€â”€â”€ 4. Object clustering analysis â”€â”€â”€
+        // ─── 4. Object clustering analysis ───
         Console.Error.WriteLine("[AnalyzeLandblockPatterns] Computing object clusters...");
         const float CLUSTER_RADIUS = 50f;
 
@@ -5272,7 +5272,7 @@ public partial class CommandEngine {
         var clusterSummary = new ClusterSummary(totalClusters, Math.Round(avgClusterSize, 2), largestCluster);
         Console.Error.WriteLine($"[AnalyzeLandblockPatterns] Clusters: {totalClusters} total, avg size={avgClusterSize:F1}, largest={largestCluster}");
 
-        // â”€â”€â”€ 5. Ontology cross-reference (if scanned) â”€â”€â”€
+        // ─── 5. Ontology cross-reference (if scanned) ───
         // This enriches the adjacency pairs with ontology data (already done in step 1)
         // Additionally, compute per-category cluster statistics
         Dictionary<string, int>? categoryCounts = null;
@@ -5290,7 +5290,7 @@ public partial class CommandEngine {
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
         Console.Error.WriteLine($"[AnalyzeLandblockPatterns] Complete in {elapsedMs}ms");
 
-        // â”€â”€â”€ Write JSON output if path specified â”€â”€â”€
+        // ─── Write JSON output if path specified ───
         if (!string.IsNullOrEmpty(outputPath)) {
             try {
                 var outputData = new {
@@ -5447,9 +5447,9 @@ public partial class CommandEngine {
             _buildingPairings.EdgeCount, _buildingPairings.GroupCount);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Phase 10 â€” Export Training Data
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Phase 10 — Export Training Data
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Exports placement examples as JSON-lines, one per line,
@@ -5472,7 +5472,7 @@ public partial class CommandEngine {
         var ht = GetHeightTable();
         bool ontologyScanned = _ontologyService.IsScanned;
 
-        // â”€â”€â”€ Pass 1: Collect all static objects across requested landblocks â”€â”€â”€
+        // ─── Pass 1: Collect all static objects across requested landblocks ───
         var allObjects = new List<(ushort LbKey, System.Numerics.Vector3 Pos, uint ObjectId,
             System.Numerics.Quaternion Orientation, System.Numerics.Vector3 Scale)>();
         int landblocksProcessed = 0;
@@ -5505,7 +5505,7 @@ public partial class CommandEngine {
                 Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath);
         }
 
-        // â”€â”€â”€ Build spatial buckets for fast nearby-object lookup (reuse pattern from AnalyzeLandblockPatterns) â”€â”€â”€
+        // ─── Build spatial buckets for fast nearby-object lookup (reuse pattern from AnalyzeLandblockPatterns) ───
         const float BUCKET_SIZE = 25f;
         var buckets = new Dictionary<(int, int), List<int>>();
         for (int i = 0; i < allObjects.Count; i++) {
@@ -5519,7 +5519,7 @@ public partial class CommandEngine {
             list.Add(i);
         }
 
-        // â”€â”€â”€ Pass 2: Write one JSON line per object â”€â”€â”€
+        // ─── Pass 2: Write one JSON line per object ───
         int exported = 0;
         int withOntology = 0;
         var categoryCache = ontologyScanned ? new Dictionary<uint, string?>() : null;
@@ -5531,7 +5531,7 @@ public partial class CommandEngine {
                 var (lbKey, pos, objectId, orientation, scale) = allObjects[idx];
 
                 try {
-                    // â”€â”€ Object identity â”€â”€
+                    // ── Object identity ──
                     string objectIdHex = $"0x{objectId:X8}";
                     string? name = null;
                     string? category = null;
@@ -5562,7 +5562,7 @@ public partial class CommandEngine {
                         }
                     }
 
-                    // â”€â”€ Terrain context â”€â”€
+                    // ── Terrain context ──
                     int? terrainTypeIdx = null;
                     int? heightIndex = null;
                     int? road = null;
@@ -5596,14 +5596,14 @@ public partial class CommandEngine {
                         }
                     } catch { /* terrain lookup failure is non-fatal */ }
 
-                    // â”€â”€ Orientation â”€â”€
+                    // ── Orientation ──
                     float yaw = MathF.Atan2(
                         2f * (orientation.W * orientation.Z + orientation.X * orientation.Y),
                         1f - 2f * (orientation.Y * orientation.Y + orientation.Z * orientation.Z));
                     float yawDeg = yaw * (180f / MathF.PI);
                     if (yawDeg < 0) yawDeg += 360f;
 
-                    // â”€â”€ Nearby objects (within 25 units) â”€â”€
+                    // ── Nearby objects (within 25 units) ──
                     int bxCenter = (int)MathF.Floor(pos.X / BUCKET_SIZE);
                     int byCenter = (int)MathF.Floor(pos.Y / BUCKET_SIZE);
 
@@ -5646,7 +5646,7 @@ public partial class CommandEngine {
                         })
                         .ToArray();
 
-                    // â”€â”€ Build JSON line â”€â”€
+                    // ── Build JSON line ──
                     var line = new {
                         objectId = objectIdHex,
                         name,
@@ -5691,7 +5691,7 @@ public partial class CommandEngine {
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-        Console.Error.WriteLine($"[ExportTrainingData] Complete: {exported} examples exported in {elapsedMs}ms â†’ {outputPath}");
+        Console.Error.WriteLine($"[ExportTrainingData] Complete: {exported} examples exported in {elapsedMs}ms → {outputPath}");
 
         return new ExportTrainingDataResult(true, exported, landblocksProcessed, withOntology,
             elapsedMs, outputPath);
@@ -6834,9 +6834,9 @@ public partial class CommandEngine {
             Error: aceError);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Phase 10 â€” Constraint-Based Settlement Generator
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Phase 10 — Constraint-Based Settlement Generator
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Internal settlement template definition, referencing the 9 constraint presets
@@ -6864,7 +6864,7 @@ public partial class CommandEngine {
     }
 
     private static readonly SettlementTemplate[] SettlementTemplates = {
-        // Template 1: Aluvian Village â€” based on Aluvian_Village preset
+        // Template 1: Aluvian Village — based on Aluvian_Village preset
         new SettlementTemplate {
             Name = "Aluvian_Village",
             Description = "Medium-sized temperate farming village with Aluvian architecture",
@@ -6880,7 +6880,7 @@ public partial class CommandEngine {
                 new() { Category = "Prop", CountMin = 1, CountMax = 3, FaceCenter = false, PreferredTag = "sign" },
             }
         },
-        // Template 2: Sho Outpost â€” based on Sho_Settlement preset
+        // Template 2: Sho Outpost — based on Sho_Settlement preset
         new SettlementTemplate {
             Name = "Sho_Outpost",
             Description = "Sho-style settlement with pagodas and paper lanterns",
@@ -6895,7 +6895,7 @@ public partial class CommandEngine {
                 new() { Category = "Furniture", CountMin = 1, CountMax = 3, FaceCenter = false, PreferredTag = "light" },
             }
         },
-        // Template 3: Gharu'ndim Camp â€” based on Desert_Outpost preset
+        // Template 3: Gharu'ndim Camp — based on Desert_Outpost preset
         new SettlementTemplate {
             Name = "Gharundim_Camp",
             Description = "Small desert settlement with Gharu'ndim architecture",
@@ -6910,7 +6910,7 @@ public partial class CommandEngine {
                 new() { Category = "Scenery", CountMin = 1, CountMax = 3, FaceCenter = false, PreferredTag = "rock" },
             }
         },
-        // Template 4: Wilderness Camp â€” based on Monster_Camp + Banderling_Camp presets
+        // Template 4: Wilderness Camp — based on Monster_Camp + Banderling_Camp presets
         new SettlementTemplate {
             Name = "Wilderness_Camp",
             Description = "Creature spawn camp with campfire and ambient decoration",
@@ -6925,7 +6925,7 @@ public partial class CommandEngine {
                 new() { Category = "Prop", CountMin = 0, CountMax = 2, FaceCenter = false, PreferredTag = "crate" },
             }
         },
-        // Template 5: Fortress Outpost â€” based on Dungeon_Entrance + Starter_Zone presets
+        // Template 5: Fortress Outpost — based on Dungeon_Entrance + Starter_Zone presets
         new SettlementTemplate {
             Name = "Fortress_Outpost",
             Description = "Fortified outpost with walls, towers, and defensive structures",
@@ -6960,7 +6960,7 @@ public partial class CommandEngine {
         var placedObjects = new List<PlacedSettlementObject>();
         int constraintViolations = 0;
 
-        // â”€â”€â”€ 1. Resolve template â”€â”€â”€
+        // ─── 1. Resolve template ───
         var template = SettlementTemplates.FirstOrDefault(
             t => t.Name.Equals(templateName, StringComparison.OrdinalIgnoreCase));
         if (template == null) {
@@ -6983,7 +6983,7 @@ public partial class CommandEngine {
                 $"Center ({centerX:F1}, {centerY:F1}) is outside the world [0..{WorldEdge:F0}).");
         }
 
-        Console.Error.WriteLine($"[GenerateSettlement] Template: {template.Name} â€” {template.Description}");
+        Console.Error.WriteLine($"[GenerateSettlement] Template: {template.Name} — {template.Description}");
         Console.Error.WriteLine($"[GenerateSettlement] Center: ({centerX}, {centerY})  Layout: {template.LayoutPattern}");
 
         // Derive an effective seed when 0 so the run is reproducible (mirror
@@ -6992,12 +6992,12 @@ public partial class CommandEngine {
         var rng = new Random(effectiveSeed);
         Console.Error.WriteLine($"[GenerateSettlement] Effective seed: {effectiveSeed}");
 
-        // â”€â”€â”€ 2. Determine landblock for center position â”€â”€â”€
+        // ─── 2. Determine landblock for center position ───
         uint lbX = (uint)(centerX / 192f);
         uint lbY = (uint)(centerY / 192f);
         ushort lbKey = LbKey(lbX, lbY);
 
-        // â”€â”€â”€ 3. Validate biome constraints via terrain type at center â”€â”€â”€
+        // ─── 3. Validate biome constraints via terrain type at center ───
         int? terrainTypeAtCenter = null;
         try {
             var vi = _terrainService.WorldToVertex(centerX, centerY);
@@ -7047,7 +7047,7 @@ public partial class CommandEngine {
                 }
             }
 
-            // Check allowed biomes (soft constraint â€” warn but don't fail)
+            // Check allowed biomes (soft constraint — warn but don't fail)
             if (template.AllowedBiomeTags.Length > 0) {
                 bool biomeMatch = template.AllowedBiomeTags.Any(
                     t => inferredBiome.Contains(t, StringComparison.OrdinalIgnoreCase));
@@ -7061,10 +7061,10 @@ public partial class CommandEngine {
             warnings.Add("Could not determine terrain type at center position");
         }
 
-        // â”€â”€â”€ 4. Query ontology for candidate objects per slot â”€â”€â”€
+        // ─── 4. Query ontology for candidate objects per slot ───
         bool ontologyAvailable = _ontologyService.IsScanned;
         if (!ontologyAvailable) {
-            warnings.Add("Ontology not scanned â€” using fallback object selection.");
+            warnings.Add("Ontology not scanned — using fallback object selection.");
         }
 
         var slotObjectLists = new List<List<(uint objectId, string category, string? name)>>();
@@ -7122,13 +7122,13 @@ public partial class CommandEngine {
 
             if (candidates.Count == 0) {
                 warnings.Add($"No ontology candidates for slot '{slot.Category}' " +
-                             $"(tag: {slot.PreferredTag ?? "none"}) â€” slot will be skipped");
+                             $"(tag: {slot.PreferredTag ?? "none"}) — slot will be skipped");
             }
 
             slotObjectLists.Add(candidates);
         }
 
-        // â”€â”€â”€ 5. Compute layout positions â”€â”€â”€
+        // ─── 5. Compute layout positions ───
         Console.Error.WriteLine($"[GenerateSettlement] Computing {template.LayoutPattern} layout positions...");
 
         // First determine total object count
@@ -7148,7 +7148,7 @@ public partial class CommandEngine {
             sw.Stop();
             return new GenerateSettlementResult(false, template.Name, 0, constraintViolations,
                 warnings, placedObjects, Math.Round(sw.Elapsed.TotalMilliseconds, 1),
-                "No objects could be selected for any slot â€” check ontology or template constraints");
+                "No objects could be selected for any slot — check ontology or template constraints");
         }
 
         // Generate positions based on layout pattern
@@ -7217,7 +7217,7 @@ public partial class CommandEngine {
             }
         }
 
-        // â”€â”€â”€ 6. Place objects with collision detection + Z-snap â”€â”€â”€
+        // ─── 6. Place objects with collision detection + Z-snap ───
         Console.Error.WriteLine($"[GenerateSettlement] Placing {totalToPlace} objects...");
 
         // Check for existing objects in the area using QueryRadius
@@ -7241,7 +7241,7 @@ public partial class CommandEngine {
             for (int i = 0; i < count && posIdx < positions.Count; i++) {
                 var (px, py) = positions[posIdx++];
 
-                // â”€â”€ Collision detection: ensure minimum spacing from all placed objects â”€â”€
+                // ── Collision detection: ensure minimum spacing from all placed objects ──
                 float minCollisionDist = template.SpacingMin * 0.5f;
                 bool collision = false;
                 int attempts = 0;
@@ -7264,10 +7264,10 @@ public partial class CommandEngine {
 
                 if (collision) {
                     constraintViolations++;
-                    warnings.Add($"Collision at ({px:F1}, {py:F1}) after 5 tries â€” placing anyway");
+                    warnings.Add($"Collision at ({px:F1}, {py:F1}) after 5 tries — placing anyway");
                 }
 
-                // â”€â”€ Snap Z to terrain height â”€â”€
+                // ── Snap Z to terrain height ──
                 float pz = 0f;
                 try {
                     pz = heightLookup(px, py);
@@ -7275,7 +7275,7 @@ public partial class CommandEngine {
                     warnings.Add($"Could not snap Z to terrain at ({px:F1}, {py:F1})");
                 }
 
-                // â”€â”€ Compute orientation â”€â”€
+                // ── Compute orientation ──
                 float yawDeg;
                 if (slot.FaceCenter) {
                     // Face toward settlement center
@@ -7289,10 +7289,10 @@ public partial class CommandEngine {
                 var orientation = Quaternion.CreateFromAxisAngle(
                     Vector3.UnitZ, yawDeg * MathF.PI / 180f);
 
-                // â”€â”€ Select random object from candidates â”€â”€
+                // ── Select random object from candidates ──
                 var (objectId, category, name) = candidates[rng.Next(candidates.Count)];
 
-                // â”€â”€ Determine which landblock this goes into â”€â”€
+                // ── Determine which landblock this goes into ──
                 uint objLbX = (uint)(px / 192f);
                 uint objLbY = (uint)(py / 192f);
 
@@ -7300,11 +7300,11 @@ public partial class CommandEngine {
                 // nudge pushed them past the edge) so AddObject can't wrap the LbKey.
                 if (objLbX > 254 || objLbY > 254) {
                     constraintViolations++;
-                    warnings.Add($"Skipped object at ({px:F1}, {py:F1}) â€” outside the world grid.");
+                    warnings.Add($"Skipped object at ({px:F1}, {py:F1}) — outside the world grid.");
                     continue;
                 }
 
-                // â”€â”€ Place the object â”€â”€
+                // ── Place the object ──
                 try {
                     var r = AddObject(objLbX, objLbY, objectId, px, py, pz,
                         orientation, Vector3.One, false);
@@ -7323,7 +7323,7 @@ public partial class CommandEngine {
             }
         }
 
-        // â”€â”€â”€ 7. Validate terrain slope at placement points â”€â”€â”€
+        // ─── 7. Validate terrain slope at placement points ───
         var ht = GetHeightTable();
         int steepPlacements = 0;
         foreach (var po in placedObjects) {
@@ -7349,7 +7349,7 @@ public partial class CommandEngine {
 
         if (steepPlacements > 0) {
             constraintViolations += steepPlacements;
-            warnings.Add($"{steepPlacements} object(s) placed on steep terrain (slope > 25Â°)");
+            warnings.Add($"{steepPlacements} object(s) placed on steep terrain (slope > 25°)");
         }
 
         sw.Stop();
@@ -7373,12 +7373,12 @@ public partial class CommandEngine {
     public string[] GetSettlementTemplateNames() =>
         SettlementTemplates.Select(t => t.Name).ToArray();
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Phase 10.5a â€” Extract Retail Heightmaps
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Phase 10.5a — Extract Retail Heightmaps
+    // ════════════════════════════════════════════════════
 
     /// <summary>
-    /// Dumps all landblock heightmaps (9Ã—9 vertex grid) as JSONL for GPU terrain model training.
+    /// Dumps all landblock heightmaps (9×9 vertex grid) as JSONL for GPU terrain model training.
     /// Each line contains height indices, world heights, terrain types, and road flags.
     /// </summary>
     public ExtractHeightmapsResult ExtractRetailHeightmaps(string outputPath) {
@@ -7446,18 +7446,18 @@ public partial class CommandEngine {
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
-        Console.Error.WriteLine($"[ExtractRetailHeightmaps] Complete: {populated} landblocks exported in {elapsedMs}ms â†’ {outputPath}");
+        Console.Error.WriteLine($"[ExtractRetailHeightmaps] Complete: {populated} landblocks exported in {elapsedMs}ms → {outputPath}");
 
         return new ExtractHeightmapsResult(true, totalScanned, populated, elapsedMs, outputPath);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Phase 10.5a â€” Compute Vanilla Baseline
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Phase 10.5a — Compute Vanilla Baseline
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Computes reference quality metrics from the retail data for use as quality gates
-    /// during procedural generation. Scans all 255Ã—255 landblocks for object density,
+    /// during procedural generation. Scans all 255×255 landblocks for object density,
     /// category breakdown, macro-region statistics, terrain distribution, height histogram,
     /// and road coverage.
     /// </summary>
@@ -7473,7 +7473,7 @@ public partial class CommandEngine {
         var ht = GetHeightTable();
         bool ontologyScanned = _ontologyService.IsScanned;
 
-        // â”€â”€â”€ Accumulators â”€â”€â”€
+        // ─── Accumulators ───
         var objectCounts = new List<int>();           // per-landblock object count (populated only)
         var categoryCounts = new Dictionary<string, int> {
             ["Scenery"] = 0, ["Prop"] = 0, ["Structure"] = 0,
@@ -7481,7 +7481,7 @@ public partial class CommandEngine {
             ["Unknown"] = 0
         };
 
-        // Macro-region accumulators (8Ã—8 grid, each ~32Ã—32 landblocks)
+        // Macro-region accumulators (8×8 grid, each ~32×32 landblocks)
         int macroGridSize = 8;
         int regionLbSize = 32; // ~255 / 8
         var regionObjectTotals = new int[macroGridSize, macroGridSize];
@@ -7503,7 +7503,7 @@ public partial class CommandEngine {
                 totalScanned++;
                 ushort lbKey = LbKey(lbX, lbY);
 
-                // â”€â”€ Terrain metrics â”€â”€
+                // ── Terrain metrics ──
                 var data = terrainDoc.GetLandblockInternal(lbKey);
                 if (data != null) {
                     for (int i = 0; i < 81; i++) {
@@ -7521,7 +7521,7 @@ public partial class CommandEngine {
                     }
                 }
 
-                // â”€â”€ Object metrics â”€â”€
+                // ── Object metrics ──
                 int objectCount = 0;
                 try {
                     var lbDoc = GetLandblockDoc(lbKey);
@@ -7558,7 +7558,7 @@ public partial class CommandEngine {
                 Console.Error.WriteLine($"[ComputeVanillaBaseline] ...row {lbX}/254, {populatedLandblocks} populated, {totalObjects} objects");
         }
 
-        // â”€â”€â”€ Compute statistics â”€â”€â”€
+        // ─── Compute statistics ───
         double mean = 0, median = 0, stddev = 0;
         int minCount = 0, maxCount = 0;
 
@@ -7614,7 +7614,7 @@ public partial class CommandEngine {
 
         double roadCoverage = totalVertices > 0 ? Math.Round(100.0 * roadVertices / totalVertices, 4) : 0;
 
-        // â”€â”€â”€ Build final JSON output â”€â”€â”€
+        // ─── Build final JSON output ───
         var baseline = new {
             metadata = new {
                 generatedAt = DateTime.UtcNow.ToString("o"),
@@ -7667,20 +7667,20 @@ public partial class CommandEngine {
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
         Console.Error.WriteLine($"[ComputeVanillaBaseline] Complete: {populatedLandblocks} populated landblocks, " +
-                          $"{totalObjects} objects, {elapsedMs}ms â†’ {outputPath}");
+                          $"{totalObjects} objects, {elapsedMs}ms → {outputPath}");
 
         return new VanillaBaselineResult(true, totalScanned, populatedLandblocks, totalObjects,
             elapsedMs, outputPath);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Calibrate World Map â€” Build Colorâ†’Terrain Codebook
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Calibrate World Map — Build Color→Terrain Codebook
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Builds a calibration codebook by reading terrain base colors from the DAT
     /// textures (replicating Mapper.cs GetMapColors logic) and scanning all retail
-    /// terrain data to build per-terrain-type brightnessâ†’height lookup tables.
+    /// terrain data to build per-terrain-type brightness→height lookup tables.
     ///
     /// The codebook encodes the deterministic relationship between the world map
     /// renderer's pixel colors and the underlying terrain data, enabling reverse
@@ -7696,7 +7696,7 @@ public partial class CommandEngine {
 
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
 
-        // â”€â”€â”€ 1. Extract terrain base colors from DAT textures â”€â”€â”€
+        // ─── 1. Extract terrain base colors from DAT textures ───
         // This replicates ACViewer Mapper.cs GetMapColors() using DatReaderWriter
         Console.WriteLine("[CalibrateWorldMap] Extracting terrain base colors from DAT textures...");
 
@@ -7751,12 +7751,12 @@ public partial class CommandEngine {
 
             for (int p = 0; p < pixelCount; p++) {
                 int offset = p * 4;
-                // BGRA layout in SourceData â€” note: Mapper.cs has a documented
+                // BGRA layout in SourceData — note: Mapper.cs has a documented
                 // R/B swap quirk. We replicate the same swap so our colors match
                 // the rendered world_map.png pixels exactly.
-                totalR += srcData[offset + 0]; // B channel â†’ treated as R by Mapper
+                totalR += srcData[offset + 0]; // B channel → treated as R by Mapper
                 totalG += srcData[offset + 1]; // G
-                totalB += srcData[offset + 2]; // R channel â†’ treated as B by Mapper
+                totalB += srcData[offset + 2]; // R channel → treated as B by Mapper
             }
 
             int avgR = (int)(totalR / pixelCount);
@@ -7764,12 +7764,12 @@ public partial class CommandEngine {
             int avgB = (int)(totalB / pixelCount);
 
             baseColors[typeIndex] = (avgR, avgG, avgB, typeName);
-            Console.WriteLine($"[CalibrateWorldMap]   Type {typeIndex,2} {typeName,-24} â†’ RGB({avgR,3},{avgG,3},{avgB,3})");
+            Console.WriteLine($"[CalibrateWorldMap]   Type {typeIndex,2} {typeName,-24} → RGB({avgR,3},{avgG,3},{avgB,3})");
         }
 
         Console.WriteLine($"[CalibrateWorldMap] Extracted {baseColors.Count} terrain base colors");
 
-        // â”€â”€â”€ 2. Scan retail terrain data: build brightnessâ†’height lookup per type â”€â”€â”€
+        // ─── 2. Scan retail terrain data: build brightness→height lookup per type ───
         Console.WriteLine("[CalibrateWorldMap] Scanning retail terrain data for height calibration...");
 
         var terrainDoc = GetTerrainDoc();
@@ -7807,8 +7807,8 @@ public partial class CommandEngine {
                 Console.WriteLine($"[CalibrateWorldMap]   ...row {lbX}/254, {landblocksProcessed} landblocks, {verticesCalibrated} vertices");
         }
 
-        // â”€â”€â”€ 3. Build brightnessâ†’height mapping per terrain type â”€â”€â”€
-        Console.WriteLine("[CalibrateWorldMap] Building brightnessâ†’height mappings...");
+        // ─── 3. Build brightness→height mapping per terrain type ───
+        Console.WriteLine("[CalibrateWorldMap] Building brightness→height mappings...");
 
         var brightnessToHeight = new Dictionary<int, object>();
         foreach (var (typeIdx, heights) in heightsByType) {
@@ -7838,7 +7838,7 @@ public partial class CommandEngine {
             };
         }
 
-        // â”€â”€â”€ 4. Also record the Mapper.cs lighting constants for documentation â”€â”€â”€
+        // ─── 4. Also record the Mapper.cs lighting constants for documentation ───
         var lightingConstants = new {
             colorCorrection = 0.7,
             lightCorrection = 2.25,
@@ -7847,7 +7847,7 @@ public partial class CommandEngine {
             note = "These are the constants used by ACViewer Mapper.cs to shade the world map"
         };
 
-        // â”€â”€â”€ 5. Write codebook JSON â”€â”€â”€
+        // ─── 5. Write codebook JSON ───
         Console.WriteLine($"[CalibrateWorldMap] Writing codebook to {outputPath}...");
 
         try {
@@ -7864,7 +7864,7 @@ public partial class CommandEngine {
             var codebook = new {
                 metadata = new {
                     generatedAt = DateTime.UtcNow.ToString("o"),
-                    description = "Terrain colorâ†’height codebook for reverse-engineering world map images",
+                    description = "Terrain color→height codebook for reverse-engineering world map images",
                     terrainTypesFound = baseColors.Count,
                     verticesCalibrated,
                     landblocksProcessed
@@ -7893,15 +7893,15 @@ public partial class CommandEngine {
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
         Console.WriteLine($"[CalibrateWorldMap] Complete: {baseColors.Count} types, {verticesCalibrated} vertices " +
-                          $"in {elapsedMs}ms â†’ {outputPath}");
+                          $"in {elapsedMs}ms → {outputPath}");
 
         return new CalibrateWorldMapResult(true, baseColors.Count, verticesCalibrated,
             landblocksProcessed, elapsedMs, outputPath);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Quick World â€” Reverse-Engineer World from Map Image
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Quick World — Reverse-Engineer World from Map Image
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Fallback scenery table used when the loaded codebook does not declare a
@@ -7928,9 +7928,9 @@ public partial class CommandEngine {
     ///      codebook's base terrain colors (nearest Euclidean distance in RGB).
     ///   2. Estimates height by comparing the pixel's brightness to the terrain
     ///      type's height distribution from the calibration data.
-    ///   3. Writes 81 TerrainEntry values per landblock (9Ã—9 vertex grid).
+    ///   3. Writes 81 TerrainEntry values per landblock (9×9 vertex grid).
     ///
-    /// If the image is 2041Ã—2041, resolution is 1 pixel per vertex (exact).
+    /// If the image is 2041×2041, resolution is 1 pixel per vertex (exact).
     /// Other sizes are bilinearly scaled to match the vertex grid.
     /// </summary>
     public QuickWorldResult QuickWorld(string biomeMapPath, string worldMapImagePath,
@@ -7950,7 +7950,7 @@ public partial class CommandEngine {
         // internally consistent — every vertex and every LB sees the same noise key.
         int noiseSeed = seed ?? new Random().Next();
 
-        // â”€â”€â”€ 1. Load codebook (terrain_codebook.json) â”€â”€â”€
+        // ─── 1. Load codebook (terrain_codebook.json) ───
         Console.WriteLine($"[QuickWorld] Loading codebook: {biomeMapPath}");
         if (!File.Exists(biomeMapPath)) {
             sw.Stop();
@@ -7981,7 +7981,7 @@ public partial class CommandEngine {
         Console.WriteLine($"[QuickWorld] Codebook: {codebook.Colors.Count} terrain types, " +
                           $"{codebook.HeightPercentiles.Count} height distributions");
 
-        // â”€â”€â”€ 2. Load world map image â”€â”€â”€
+        // ─── 2. Load world map image ───
         Console.WriteLine($"[QuickWorld] Loading world map image: {worldMapImagePath}");
         if (!File.Exists(worldMapImagePath)) {
             sw.Stop();
@@ -8009,16 +8009,16 @@ public partial class CommandEngine {
                 $"Failed to load image: {ex.Message}");
         }
 
-        // The AC world map is 2041 pixels (255*8+1) â€” one pixel per terrain vertex.
+        // The AC world map is 2041 pixels (255*8+1) — one pixel per terrain vertex.
         // Scale factor for non-standard image sizes (VERTEX_GRID is declared at the top of the method):
         double scaleX = (double)imgW / VERTEX_GRID;
         double scaleY = (double)imgH / VERTEX_GRID;
         bool isExact = (imgW == VERTEX_GRID && imgH == VERTEX_GRID);
 
-        Console.WriteLine($"[QuickWorld] Image: {imgW}Ã—{imgH}, scale: {scaleX:F3}Ã—{scaleY:F3}" +
+        Console.WriteLine($"[QuickWorld] Image: {imgW}×{imgH}, scale: {scaleX:F3}×{scaleY:F3}" +
                           (isExact ? " (exact vertex resolution)" : " (scaled)"));
 
-        // â”€â”€â”€ 3. Stamp each landblock (parallel in-memory pass) â”€â”€â”€
+        // ─── 3. Stamp each landblock (parallel in-memory pass) ───
         var terrainDoc = GetTerrainDoc();
         int stamped = 0;
         int skipped = 0;
@@ -8168,7 +8168,7 @@ public partial class CommandEngine {
 
         Console.WriteLine($"[QuickWorld] Phase 1 complete: {allChanges.Count} landblocks with changes computed in memory.");
 
-        // â”€â”€â”€ 4. Bulk-write all terrain changes at once â”€â”€â”€
+        // ─── 4. Bulk-write all terrain changes at once ───
         Console.WriteLine($"[QuickWorld] Phase 2: Writing {allChanges.Count} landblocks to terrain document (single batch)...");
         // UpdateLandblocksBatchInternal expects a plain Dictionary, so flatten the ConcurrentDictionary at the boundary.
         var allChangesPlain = new Dictionary<ushort, Dictionary<byte, uint>>(allChanges.Count);
@@ -8176,7 +8176,7 @@ public partial class CommandEngine {
         terrainDoc.UpdateLandblocksBatchInternal(allChangesPlain, out _);
         Console.WriteLine($"[QuickWorld] Phase 2 complete: terrain written.");
 
-        // â”€â”€â”€ 5. Scatter scenery objects â”€â”€â”€
+        // ─── 5. Scatter scenery objects ───
         // Scenery models come from the codebook's optional `scenery` block when present
         // (see QuickWorldHelpers.ParseCodebook); the legacy hardcoded retail-ID table is the
         // fallback so older terrain_codebook.json files still produce sensible scenery.
@@ -8255,7 +8255,7 @@ public partial class CommandEngine {
 
                             // ox-worldMinX is in [SCENERY_EDGE_MARGIN, LANDBLOCK_SIZE - SCENERY_EDGE_MARGIN);
                             // dividing by CELL_SIZE gives [1, 7) so the resulting vertex index is always
-                            // valid â€” the clamp is purely defensive against floating-point rounding at the edges.
+                            // valid — the clamp is purely defensive against floating-point rounding at the edges.
                             int gx = Math.Clamp((int)((ox - worldMinX) / CELL_SIZE), 0, 8);
                             int gy = Math.Clamp((int)((oy - worldMinY) / CELL_SIZE), 0, 8);
                             int vi = gx * 9 + gy;
@@ -8310,18 +8310,18 @@ public partial class CommandEngine {
             approximateMatches, sceneryFailures, terrainTypesCounted, elapsedMs);
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Image-Driven Terrain â€” Analyze Map Image
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
+    //  Image-Driven Terrain — Analyze Map Image
+    // ════════════════════════════════════════════════════
 
 
 
 
 
     /// <summary>
-    /// Analyzes a world map PNG image to produce a 255Ã—255 biome classification grid.
-    /// The image (rendered by ACViewer --map) is 2041Ã—2041 pixels where each landblock
-    /// occupies an 8Ã—8 pixel region. Each block's average color is classified into
+    /// Analyzes a world map PNG image to produce a 255×255 biome classification grid.
+    /// The image (rendered by ACViewer --map) is 2041×2041 pixels where each landblock
+    /// occupies an 8×8 pixel region. Each block's average color is classified into
     /// a biome category (ocean, grassland, forest, snow, desert, etc.).
     /// Output: biome_map.json with the full grid, per-cell data, and summary statistics.
     /// </summary>
@@ -8332,7 +8332,7 @@ public partial class CommandEngine {
         if (string.IsNullOrEmpty(outputPath))
             outputPath = "pipeline_data/enrichment/biome_map.json";
 
-        // â”€â”€â”€ 1. Load the image via SkiaSharp â”€â”€â”€
+        // ─── 1. Load the image via SkiaSharp ───
         if (!File.Exists(imagePath)) {
             sw.Stop();
             return new AnalyzeMapImageResult(false, 0, 0, 0, 0,
@@ -8359,16 +8359,16 @@ public partial class CommandEngine {
                 outputPath, $"Failed to load image: {ex.Message}");
         }
 
-        Console.WriteLine($"[AnalyzeMapImage] Loaded image: {imgW}Ã—{imgH}");
+        Console.WriteLine($"[AnalyzeMapImage] Loaded image: {imgW}×{imgH}");
 
         // The Mapper creates images at LANDSIZE = 255*8+1 = 2041 pixels.
         // But the screenshot may be at a different resolution (e.g., 1280x720 with auto-scaling).
         // We need to handle arbitrary image sizes by scaling pixel coordinates.
 
-        // â”€â”€â”€ 2. Sample each landblock's 8Ã—8 pixel region â”€â”€â”€
+        // ─── 2. Sample each landblock's 8×8 pixel region ───
         // The map image coordinate system:
-        //   - X axis = landblock X direction (left â†’ right), pixel (startX..startX+7)
-        //   - Y axis = INVERTED (top = high lbY, bottom = low lbY) â€” the Mapper draws lbY=254 at top
+        //   - X axis = landblock X direction (left → right), pixel (startX..startX+7)
+        //   - Y axis = INVERTED (top = high lbY, bottom = low lbY) — the Mapper draws lbY=254 at top
         // Pixel coordinate for landblock (lbX, lbY):
         //   startX = lbX * 8  (but scaled to image size)
         //   startY = (254 - lbY) * 8  (inverted Y)
@@ -8378,7 +8378,7 @@ public partial class CommandEngine {
         var biomeCounts = new Dictionary<string, int>();
         int landCells = 0, oceanCells = 0;
 
-        // Scale factors to handle images not exactly 2041Ã—2041
+        // Scale factors to handle images not exactly 2041×2041
         double scaleX = (double)imgW / 2041.0;
         double scaleY = (double)imgH / 2041.0;
 
@@ -8386,7 +8386,7 @@ public partial class CommandEngine {
 
         for (int lbX = 0; lbX < GRID; lbX++) {
             for (int lbY = 0; lbY < GRID; lbY++) {
-                // Compute the 8Ã—8 pixel region for this landblock
+                // Compute the 8×8 pixel region for this landblock
                 int pixStartX = (int)Math.Round(lbX * 8 * scaleX);
                 int pixStartY = (int)Math.Round((254 - lbY) * 8 * scaleY);
 
@@ -8419,12 +8419,12 @@ public partial class CommandEngine {
                 int avgB = totalB / sampleCount;
                 double brightness = (avgR + avgG + avgB) / (3.0 * 255.0);
 
-                // â”€â”€â”€ 3. Classify color â†’ biome â”€â”€â”€
+                // ─── 3. Classify color → biome ───
                 string biome = ClassifyBiome(avgR, avgG, avgB, brightness);
-                // Both ocean and impassable_water are non-land â€” cannot be modified
+                // Both ocean and impassable_water are non-land — cannot be modified
                 bool isLand = biome != "ocean" && biome != "impassable_water";
 
-                // â”€â”€â”€ 4. Map biome â†’ DAT terrain type â”€â”€â”€
+                // ─── 4. Map biome → DAT terrain type ───
                 var (terrainId, terrainName) = BiomeToTerrainType(biome);
 
                 cells.Add(new BiomeCellInfo(lbX, lbY, biome, isLand,
@@ -8440,7 +8440,7 @@ public partial class CommandEngine {
                 Console.WriteLine($"[AnalyzeMapImage] ...column {lbX}/254, {landCells} land, {oceanCells} ocean");
         }
 
-        // â”€â”€â”€ 4. Write output JSON â”€â”€â”€
+        // ─── 4. Write output JSON ───
         Console.WriteLine($"[AnalyzeMapImage] Classification complete. Building output...");
 
         try {
@@ -8473,26 +8473,26 @@ public partial class CommandEngine {
                             percent = Math.Round(100.0 * kv.Value / (GRID * GRID), 2) })
                         .ToArray()
                 },
-                // â”€â”€ Biome â†’ DAT terrain type mapping (for compose-world) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ── Biome → DAT terrain type mapping (for compose-world) ──────────────
                 // Grounded in retail_baseline.json (65,025 landblocks scanned):
                 //   Type 1 = Grassland   (24.7% of all vertices)
-                //   Type 2 = Ice         (74.5% of all vertices) â€” base Dereth terrain
-                //   Type 3 = LushGrass   (0.09% â€” rare meadow pockets)
-                //   Type 8 = PatchyDirt  (0.70% â€” paths, barren ground)
-                // Ocean / impassable_water are skipped â€” cells are excluded from output.
+                //   Type 2 = Ice         (74.5% of all vertices) — base Dereth terrain
+                //   Type 3 = LushGrass   (0.09% — rare meadow pockets)
+                //   Type 8 = PatchyDirt  (0.70% — paths, barren ground)
+                // Ocean / impassable_water are skipped — cells are excluded from output.
                 terrainTypeMapping = new[] {
                     new { biome = "forest",           terrainTypeId = 0x03, terrainTypeName = "LushGrass",        notes = "Dense teal ACViewer terrain; LushGrass is the rendered surface" },
-                    new { biome = "grassland",         terrainTypeId = 0x01, terrainTypeName = "Grassland",        notes = "Lighter green ACViewer areas â†’ Grassland" },
-                    new { biome = "snow",              terrainTypeId = 0x0F, terrainTypeName = "Snow",             notes = "White/bright high-latitude terrain â†’ Snow" },
-                    new { biome = "swamp",             terrainTypeId = 0x04, terrainTypeName = "MarshSparseSwamp", notes = "Blackmire dark blue terrain (LB 192,95) â†’ MarshSparseSwamp" },
-                    new { biome = "water",             terrainTypeId = 0x10, terrainTypeName = "WaterRunning",     notes = "Modifiable river/lake pixels â†’ WaterRunning" },
-                    new { biome = "desert",            terrainTypeId = 0x0A, terrainTypeName = "SandYellow",       notes = "Sandy/warm desert areas â†’ SandYellow" },
-                    new { biome = "barren",            terrainTypeId = 0x0D, terrainTypeName = "SedimentaryRock",  notes = "Grey/rocky barren ground â†’ SedimentaryRock" },
-                    new { biome = "obsidian",          terrainTypeId = 0x06, terrainTypeName = "ObsidianPlain",    notes = "SW volcanic dark terrain â†’ ObsidianPlain" },
-                    new { biome = "mountain",          terrainTypeId = 0x0E, terrainTypeName = "SemiBarrenRock",   notes = "High bright peaks â†’ SemiBarrenRock" },
-                    new { biome = "road",              terrainTypeId = 0x07, terrainTypeName = "PackedDirt",       notes = "Road surface base â†’ PackedDirt" },
-                    new { biome = "ocean",             terrainTypeId = 0xFF, terrainTypeName = "(skip)",           notes = "Impassable ocean void â€” excluded from compose-world" },
-                    new { biome = "impassable_water",  terrainTypeId = 0xFF, terrainTypeName = "(skip)",           notes = "Impassable inland water â€” excluded from compose-world" },
+                    new { biome = "grassland",         terrainTypeId = 0x01, terrainTypeName = "Grassland",        notes = "Lighter green ACViewer areas → Grassland" },
+                    new { biome = "snow",              terrainTypeId = 0x0F, terrainTypeName = "Snow",             notes = "White/bright high-latitude terrain → Snow" },
+                    new { biome = "swamp",             terrainTypeId = 0x04, terrainTypeName = "MarshSparseSwamp", notes = "Blackmire dark blue terrain (LB 192,95) → MarshSparseSwamp" },
+                    new { biome = "water",             terrainTypeId = 0x10, terrainTypeName = "WaterRunning",     notes = "Modifiable river/lake pixels → WaterRunning" },
+                    new { biome = "desert",            terrainTypeId = 0x0A, terrainTypeName = "SandYellow",       notes = "Sandy/warm desert areas → SandYellow" },
+                    new { biome = "barren",            terrainTypeId = 0x0D, terrainTypeName = "SedimentaryRock",  notes = "Grey/rocky barren ground → SedimentaryRock" },
+                    new { biome = "obsidian",          terrainTypeId = 0x06, terrainTypeName = "ObsidianPlain",    notes = "SW volcanic dark terrain → ObsidianPlain" },
+                    new { biome = "mountain",          terrainTypeId = 0x0E, terrainTypeName = "SemiBarrenRock",   notes = "High bright peaks → SemiBarrenRock" },
+                    new { biome = "road",              terrainTypeId = 0x07, terrainTypeName = "PackedDirt",       notes = "Road surface base → PackedDirt" },
+                    new { biome = "ocean",             terrainTypeId = 0xFF, terrainTypeName = "(skip)",           notes = "Impassable ocean void — excluded from compose-world" },
+                    new { biome = "impassable_water",  terrainTypeId = 0xFF, terrainTypeName = "(skip)",           notes = "Impassable inland water — excluded from compose-world" },
                 },
                 biomeGrid,
                 cells = cells.Where(c => c.IsLand).Select(c => new {
@@ -8522,7 +8522,7 @@ public partial class CommandEngine {
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
         Console.WriteLine($"[AnalyzeMapImage] Complete: {landCells} land, {oceanCells} ocean, " +
-                          $"{biomeCounts.Count} biomes in {elapsedMs}ms â†’ {outputPath}");
+                          $"{biomeCounts.Count} biomes in {elapsedMs}ms → {outputPath}");
 
         return new AnalyzeMapImageResult(true, imgW, imgH, landCells, oceanCells,
             biomeCounts, elapsedMs, outputPath);
@@ -8544,24 +8544,24 @@ public partial class CommandEngine {
     ///   0x07 PackedDirt          0x0F Snow
     ///
     /// retail_baseline.json (65,025 lb scan): type 1=24.7%, type 2=74.5%, type 3=0.09%, type 8=0.70%.
-    /// NOTE: "Ice" (type 2) is the engine name for the generic base Dereth terrain â€” it renders as
+    /// NOTE: "Ice" (type 2) is the engine name for the generic base Dereth terrain — it renders as
     /// teal/forest in ACViewer because its texture IS the forest surface, not literal ice.
     /// </summary>
     private static (byte TypeId, string TypeName) BiomeToTerrainType(string biome) => biome switch {
-        // â”€â”€ Passable land biomes â†’ semantically matched ACE terrain types â”€â”€â”€â”€â”€â”€â”€â”€
-        "forest"           => (0x03, "LushGrass"),          // Dense teal terrain â†’ LushGrass
-        "grassland"        => (0x01, "Grassland"),          // Open lighter green â†’ Grassland
-        "snow"             => (0x0F, "Snow"),               // White/bright regions â†’ Snow
-        "swamp"            => (0x04, "MarshSparseSwamp"),   // Blackmire dark terrain â†’ MarshSparseSwamp
-        "water"            => (0x10, "WaterRunning"),       // Modifiable rivers â†’ WaterRunning
-        "desert"           => (0x0A, "SandYellow"),         // Sandy/warm areas â†’ SandYellow
-        "barren"           => (0x0D, "SedimentaryRock"),    // Grey rocky barren â†’ SedimentaryRock
-        "obsidian"         => (0x06, "ObsidianPlain"),      // SW volcanic dark â†’ ObsidianPlain
-        "mountain"         => (0x0E, "SemiBarrenRock"),     // High peaks â†’ SemiBarrenRock
-        "road"             => (0x07, "PackedDirt"),         // Road surface base â†’ PackedDirt
-        // â”€â”€ Impassable (excluded from compose-world output) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        "ocean"            => (0xFF, "(skip)"),             // Impassable void â€” not written
-        "impassable_water" => (0xFF, "(skip)"),             // Impassable inland water â€” not written
+        // ── Passable land biomes → semantically matched ACE terrain types ────────
+        "forest"           => (0x03, "LushGrass"),          // Dense teal terrain → LushGrass
+        "grassland"        => (0x01, "Grassland"),          // Open lighter green → Grassland
+        "snow"             => (0x0F, "Snow"),               // White/bright regions → Snow
+        "swamp"            => (0x04, "MarshSparseSwamp"),   // Blackmire dark terrain → MarshSparseSwamp
+        "water"            => (0x10, "WaterRunning"),       // Modifiable rivers → WaterRunning
+        "desert"           => (0x0A, "SandYellow"),         // Sandy/warm areas → SandYellow
+        "barren"           => (0x0D, "SedimentaryRock"),    // Grey rocky barren → SedimentaryRock
+        "obsidian"         => (0x06, "ObsidianPlain"),      // SW volcanic dark → ObsidianPlain
+        "mountain"         => (0x0E, "SemiBarrenRock"),     // High peaks → SemiBarrenRock
+        "road"             => (0x07, "PackedDirt"),         // Road surface base → PackedDirt
+        // ── Impassable (excluded from compose-world output) ──────────────────────
+        "ocean"            => (0xFF, "(skip)"),             // Impassable void — not written
+        "impassable_water" => (0xFF, "(skip)"),             // Impassable inland water — not written
         _                  => (0x03, "LushGrass"),          // Safe default: base terrain
     };
 
@@ -8570,27 +8570,27 @@ public partial class CommandEngine {
     /// Classifies an average RGB color into a biome category.
     ///
     /// IMPASSABLE CELLS (returned as non-land, cannot be modified):
-    ///   "ocean"            â€” #3B211D (R=59,G=33,B=29, H=8Â°)  exterior + interior ocean voids
-    ///   "impassable_water" â€” #363C1D (R=54,G=60,B=29, H=72Â°) standing lakes/inland impassable water
+    ///   "ocean"            — #3B211D (R=59,G=33,B=29, H=8°)  exterior + interior ocean voids
+    ///   "impassable_water" — #363C1D (R=54,G=60,B=29, H=72°) standing lakes/inland impassable water
     ///
     /// PASSABLE LAND BIOMES:
-    ///   "swamp"   â€” #132D40 (R=19,G=45,B=64, H=205Â°, S=0.70) dark blue swamp terrain (Blackmire area)
-    ///   "water"   â€” #6395CE / #82C4FF rivers and modifiable inland water
+    ///   "swamp"   — #132D40 (R=19,G=45,B=64, H=205°, S=0.70) dark blue swamp terrain (Blackmire area)
+    ///   "water"   — #6395CE / #82C4FF rivers and modifiable inland water
     ///   "forest", "grassland", "desert", "snow", "barren", "mountain", "obsidian", "road"
     ///
     /// Ocean and impassable_water are both flagged IsLand=false in the output.
     /// All impassable checks are done first via exact RGB match before HSB logic.
     /// </summary>
     private static string ClassifyBiome(int r, int g, int b, double brightness) {
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        // STEP 1: Exact impassable color matches â€” before ANY HSB logic.
+        // ══════════════════════════════════════════════════════════════════
+        // STEP 1: Exact impassable color matches — before ANY HSB logic.
         //
         // These colors are unique renderer artifacts that map 1:1 to
-        // impassable tile types. Matched with tight Â±8 tolerance to absorb
+        // impassable tile types. Matched with tight ±8 tolerance to absorb
         // PNG compression at block boundaries.
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ══════════════════════════════════════════════════════════════════
 
-        // â”€â”€ Impassable ocean void: R=59 G=33 B=29 (#3B211D, Hâ‰ˆ8Â°)
+        // ── Impassable ocean void: R=59 G=33 B=29 (#3B211D, H≈8°)
         //    Exterior ocean and interior ocean bays. Confirmed dominant color
         //    comprising ~83% of all pixels in the world_map.png.
         const int OCEAN_R = 59, OCEAN_G = 33, OCEAN_B = 29, OCEAN_TOL = 8;
@@ -8599,10 +8599,10 @@ public partial class CommandEngine {
             Math.Abs(b - OCEAN_B) <= OCEAN_TOL)
             return "ocean";
 
-        // â”€â”€ Impassable inland water: R=54 G=60 B=29 (#363C1D, Hâ‰ˆ72Â°)
+        // ── Impassable inland water: R=54 G=60 B=29 (#363C1D, H≈72°)
         //    Olive-dark-green: standing lakes and inland impassable water bodies.
-        //    Confirmed at pixel (1550,840) â€” LB(194,149) and surrounding area.
-        //    CANNOT be modified â€” must be preserved exactly like ocean.
+        //    Confirmed at pixel (1550,840) — LB(194,149) and surrounding area.
+        //    CANNOT be modified — must be preserved exactly like ocean.
         const int IW_R = 54, IW_G = 60, IW_B = 29, IW_TOL = 10;
         if (Math.Abs(r - IW_R) <= IW_TOL &&
             Math.Abs(g - IW_G) <= IW_TOL &&
@@ -8612,56 +8612,56 @@ public partial class CommandEngine {
         // Also catch pure black void pixels at image padding edges
         if (r < 20 && g < 20 && b < 20) return "ocean";
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ══════════════════════════════════════════════════════════════════
         // STEP 2: HSB classification for all passable land biomes.
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ══════════════════════════════════════════════════════════════════
         float hue, sat, bri;
         RgbToHsb(r, g, b, out hue, out sat, out bri);
 
-        // â”€â”€ Snow/Ice: Very bright, low saturation (white/light gray)
+        // ── Snow/Ice: Very bright, low saturation (white/light gray)
         if (bri > 0.80 && sat < 0.15) return "snow";
         if (bri > 0.72 && sat < 0.25) return "snow";
         if (bri > 0.65 && sat < 0.15) return "snow";
 
-        // â”€â”€ Roads: Orange/gold lines â€” high saturation, warm hue (15-55Â°)
+        // ── Roads: Orange/gold lines — high saturation, warm hue (15-55°)
         if (hue >= 15 && hue <= 55 && sat > 0.5 && bri > 0.4) return "road";
 
-        // â”€â”€ Ocean coastal boundary grey: desaturated blue pixels at ocean/land edges
-        //    (#455562 H=207Â° S=0.30 B=0.38, #667C8E H=207Â° S=0.28 B=0.56,
-        //     #537491 H=208Â° S=0.43 B=0.57)
+        // ── Ocean coastal boundary grey: desaturated blue pixels at ocean/land edges
+        //    (#455562 H=207° S=0.30 B=0.38, #667C8E H=207° S=0.28 B=0.56,
+        //     #537491 H=208° S=0.43 B=0.57)
         //    Low saturation (< 0.45) distinguishes these from true rivers.
         if (hue >= 170 && hue <= 250 && sat < 0.45 && bri < 0.75) return "ocean";
 
-        // â”€â”€ Swamp (passable land): dark blue-tinted terrain â€” Blackmire/swamp region
-        //    Confirmed at pixel (1540,1275) â€” LB(192,95). Color #132D40.
-        //    Hâ‰ˆ205Â°, Sâ‰ˆ0.70, Bâ‰ˆ0.25. High saturation distinguishes it from ocean
-        //    coastal grey (S<0.45). It IS land â€” modifiable terrain.
+        // ── Swamp (passable land): dark blue-tinted terrain — Blackmire/swamp region
+        //    Confirmed at pixel (1540,1275) — LB(192,95). Color #132D40.
+        //    H≈205°, S≈0.70, B≈0.25. High saturation distinguishes it from ocean
+        //    coastal grey (S<0.45). It IS land — modifiable terrain.
         if (hue >= 185 && hue <= 225 && sat > 0.55 && bri < 0.35) return "swamp";
 
-        // â”€â”€ River/Lake water (passable/modifiable): bright blue river pixels
-        //    #6395CE (H=212Â° S=0.52 B=0.81), #82C4FF (H=208Â° S=0.49 B=1.00)
+        // ── River/Lake water (passable/modifiable): bright blue river pixels
+        //    #6395CE (H=212° S=0.52 B=0.81), #82C4FF (H=208° S=0.49 B=1.00)
         //    High saturation AND high brightness distinguishes from all above.
         if (hue >= 170 && hue <= 250 && sat > 0.45 && bri > 0.75) return "water";
 
-        // â”€â”€ Desert/Sand: Warm olive/sandy tones
+        // ── Desert/Sand: Warm olive/sandy tones
         if (hue >= 25 && hue <= 70 && sat > 0.15 && bri > 0.35 && bri < 0.7) return "desert";
 
-        // â”€â”€ Obsidian/Volcanic: Very dark with slight tint (SW volcanic region)
+        // ── Obsidian/Volcanic: Very dark with slight tint (SW volcanic region)
         if (bri < 0.25 && sat < 0.35 && bri > 0.10) return "obsidian";
 
-        // â”€â”€ Forest: Teal/dark green â€” dominant land color in Dereth
+        // ── Forest: Teal/dark green — dominant land color in Dereth
         if (hue >= 130 && hue <= 210 && sat > 0.12 && bri > 0.20 && bri <= 0.60) return "forest";
 
-        // â”€â”€ Grassland: Lighter greens and brighter teal areas
+        // ── Grassland: Lighter greens and brighter teal areas
         if (hue >= 100 && hue <= 210 && sat > 0.08 && bri > 0.45) return "grassland";
 
-        // â”€â”€ Barren/Rock: Low saturation, mid-brightness (gray, rocky terrain)
+        // ── Barren/Rock: Low saturation, mid-brightness (gray, rocky terrain)
         if (sat < 0.18 && bri > 0.28 && bri < 0.70) return "barren";
 
-        // â”€â”€ Mountain: High elevation â€” bright but desaturated (not quite snow)
+        // ── Mountain: High elevation — bright but desaturated (not quite snow)
         if (bri > 0.55 && sat < 0.30) return "mountain";
 
-        // â”€â”€ Fallbacks
+        // ── Fallbacks
         if (bri > 0.50) return "grassland";
         if (bri > 0.25) return "forest";
         return "barren";
@@ -8693,9 +8693,9 @@ public partial class CommandEngine {
         if (hue < 0) hue += 360f;
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  ACE Database Commands
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Tests connection to an ACE MariaDB database and saves the settings to the project JSON.
@@ -8970,7 +8970,7 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Exports reposition SQL without applying it â€” for review or manual execution.
+    /// Exports reposition SQL without applying it — for review or manual execution.
     /// </summary>
     public async Task<AceDbExportSqlResult> AceDbExportSqlAsync(string outputPath) {
         RequireProject();
@@ -9156,9 +9156,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Building Remap (cluster shuffle)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// Reads a landblock remap JSON (from cluster_shuffle_populate.py) and moves
@@ -9169,19 +9169,19 @@ public partial class CommandEngine {
     /// </summary>
     public RemapBuildingsResult RemapBuildings(string remapJsonPath, string outputDir,
         bool apply = false, bool inPlace = false) {
-        // V1 is deprecated â€” use RemapBuildingsV2 instead
+        // V1 is deprecated — use RemapBuildingsV2 instead
         return new RemapBuildingsResult(false, 0, 0, 0, 0, 0, 0,
             Error: "V1 RemapBuildings is deprecated. Use remap-buildings-v2 instead.");
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Building Remap V2 (layer-based pipeline)
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     /// <summary>
     /// V2: Remap buildings through the LandblockDocument layer system.
     /// Instead of directly writing to DATs, this adds buildings as StaticObjects
-    /// to destination LandblockDocuments, then relies on export â†’ SaveToDatsInternal()
+    /// to destination LandblockDocuments, then relies on export → SaveToDatsInternal()
     /// to create proper EnvCells via InstantiateBlueprint.
     /// Also optionally flattens terrain under building footprints.
     /// </summary>
@@ -9996,7 +9996,7 @@ public partial class CommandEngine {
     }
 
     /// <summary>
-    /// Post-export: compares retail base DATs with exported DATs to find oldâ†’new
+    /// Post-export: compares retail base DATs with exported DATs to find old→new
     /// cell ID mappings, then generates (and optionally applies) SQL to update
     /// interior instance obj_Cell_Id values.
     /// </summary>
@@ -10008,7 +10008,7 @@ public partial class CommandEngine {
         var warnings = new List<string>();
 
         try {
-            // â”€â”€ 1. Load lb_remap.json â”€â”€
+            // ── 1. Load lb_remap.json ──
             if (!File.Exists(remapJsonPath))
                 return new RemapBuildingsSqlResult(false, 0, 0, 0,
                     Error: $"Remap file not found: {remapJsonPath}");
@@ -10031,7 +10031,7 @@ public partial class CommandEngine {
                 lbRemap[oldKey] = newKey;
             }
 
-            // â”€â”€ 2. Open both sets of DATs â”€â”€
+            // ── 2. Open both sets of DATs ──
             var project = _projectManager.CurrentProject!;
             var retailDats = project.DocumentManager.Dats; // base DATs (read-only)
 
@@ -10066,7 +10066,7 @@ public partial class CommandEngine {
 
             using var exportedDats = new DefaultDatReaderWriter(exportedDatDir, DatAccessType.Read);
 
-            // â”€â”€ 3. For each remap, match old cells to new cells â”€â”€
+            // ── 3. For each remap, match old cells to new cells ──
             var cellIdRemap = new Dictionary<uint, (
                 uint newCellId,
                 bool applyFrameAdjust,
@@ -10389,17 +10389,17 @@ public partial class CommandEngine {
 
             Console.WriteLine($"  Matched {buildingsMatched} buildings, {cellIdRemap.Count} cell ID remaps");
 
-            // â”€â”€ 4. Generate SQL â”€â”€
+            // ── 4. Generate SQL ──
             string? sqlFilePath = null;
             if (cellIdRemap.Count > 0) {
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine("-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•");
-                sb.AppendLine("-- Vanquish World â€” Interior Instance Remap V2 (Layer Pipeline)");
+                sb.AppendLine("-- ═══════════════════════════════════════════════════════════════════");
+                sb.AppendLine("-- Vanquish World — Interior Instance Remap V2 (Layer Pipeline)");
                 sb.AppendLine($"-- Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
                 sb.AppendLine($"-- Buildings matched: {buildingsMatched}");
                 sb.AppendLine($"-- Cell ID remaps: {cellIdRemap.Count}");
                 sb.AppendLine("-- NOTE: Adjusts origin_X/Y/Z + angles_W/X/Y/Z only for confident cell matches");
-                sb.AppendLine("-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•");
+                sb.AppendLine("-- ═══════════════════════════════════════════════════════════════════");
                 sb.AppendLine();
                 sb.AppendLine("USE `ace_world`;");
                 sb.AppendLine();
@@ -10418,7 +10418,7 @@ public partial class CommandEngine {
                     ushort newCellIdx = (ushort)(newFullCellId & 0xFFFF);
 
                     sb.AppendLine(
-                        $"-- LB({oldLbXc},{oldLbYc}) cell 0x{oldCellIdx:X4} â†’ LB({newLbXc},{newLbYc}) cell 0x{newCellIdx:X4}");
+                        $"-- LB({oldLbXc},{oldLbYc}) cell 0x{oldCellIdx:X4} → LB({newLbXc},{newLbYc}) cell 0x{newCellIdx:X4}");
                     if (applyFrameAdjust) {
                         sb.AppendLine("UPDATE `landblock_instance` li");
                         sb.AppendLine($"JOIN `landblock_instance` src ON src.`guid` = li.`guid` AND li.`obj_Cell_Id` = {oldFullCellId}");
@@ -10443,7 +10443,7 @@ public partial class CommandEngine {
 
                 sqlFilePath = outputSqlPath;
                 File.WriteAllText(sqlFilePath, sb.ToString(), new System.Text.UTF8Encoding(false));
-                Console.WriteLine($"  Generated SQL â†’ {sqlFilePath}");
+                Console.WriteLine($"  Generated SQL → {sqlFilePath}");
 
                 // Apply if requested
                 if (apply && project.AceDb != null) {
@@ -10566,9 +10566,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Dungeon Document Operations
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public DungeonAddCellResult DungeonAddCell(uint lbX, uint lbY,
         ushort environmentId, ushort cellStructure,
@@ -10921,9 +10921,9 @@ public partial class CommandEngine {
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
     //  Internal helpers
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════════
 
     public void RequireProject() {
         if (_projectManager.CurrentProject == null)

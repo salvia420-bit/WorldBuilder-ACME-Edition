@@ -11,7 +11,7 @@ namespace WorldBuilder.Terminal;
 ///
 /// Coordinate convention: world +X is east (right), world +Y is north (up).
 /// Pixel space follows screen +Y down, so the renderer flips Y when sampling.
-/// Each landblock is 192Ã—192 world units = 8Ã—8 cells = 9Ã—9 vertices on a 24-unit grid.
+/// Each landblock is 192×192 world units = 8×8 cells = 9×9 vertices on a 24-unit grid.
 /// </summary>
 public static class RenderPreviewRenderer {
 
@@ -63,7 +63,7 @@ public static class RenderPreviewRenderer {
         public bool Overlay;
         public required Dictionary<(int col, int row), TerrainEntry[]?> Terrain;
         public required Dictionary<(int col, int row), List<StaticObject>> Objects;
-        public required float[] HeightTable;     // 256 entries, byte â†’ world Z
+        public required float[] HeightTable;     // 256 entries, byte → world Z
         public Func<uint, OntologyEntry?>? Ontology;
         public Func<uint, uint>? PairingsGroupKey;
         public float CliffThreshold = 12f;
@@ -144,10 +144,10 @@ public static class RenderPreviewRenderer {
         public int GlyphCount;
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    //  Terrain palette â€” one RGB per TerrainTextureType (0â€“32). RoadType=32 is
+    // ════════════════════════════════════════════════
+    //  Terrain palette — one RGB per TerrainTextureType (0–32). RoadType=32 is
     //  applied separately via the per-vertex Road bit, not the terrainType byte.
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ════════════════════════════════════════════════
 
     private static readonly (byte R, byte G, byte B)[] TerrainPalette = {
         ( 0x6B, 0x6B, 0x65 ),  //  0 BarrenRock
@@ -336,7 +336,7 @@ public static class RenderPreviewRenderer {
         int H = input.FinalRes;
 
         // Build a unified vertex grid spanning the whole region. Edges between
-        // adjacent landblocks share a vertex line, so we tile each LB's 9Ã—9
+        // adjacent landblocks share a vertex line, so we tile each LB's 9×9
         // grid with a 1-vertex overlap at the seams (overwrite is fine because
         // adjacent LBs store identical seam values).
         int gridSize = input.GridSize;
@@ -369,9 +369,9 @@ public static class RenderPreviewRenderer {
             }
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
         //  Phase 1: per-pixel raster (terrain color + hillshade).
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
 
         var info = new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var bitmap = new SKBitmap(info);
@@ -382,8 +382,8 @@ public static class RenderPreviewRenderer {
         bool drawTerrain = input.Layer != LayerMode.Objects;
         bool drawObjects = input.Layer != LayerMode.Terrain;
 
-        // Lambert hillshade with light from north-west, ~45Â° elevation.
-        // World convention: +X east, +Y north. light_dir = normalize(âˆ’1, +1, +1).
+        // Lambert hillshade with light from north-west, ~45° elevation.
+        // World convention: +X east, +Y north. light_dir = normalize(−1, +1, +1).
         var lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
 
         // World extent (terrain side). Used to convert pixel→world for AC
@@ -518,9 +518,9 @@ public static class RenderPreviewRenderer {
 
         using var canvas = new SKCanvas(bitmap);
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        //  Phase 2: roads â€” connect adjacent road=1 vertices. Terrain-only.
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
+        //  Phase 2: roads — connect adjacent road=1 vertices. Terrain-only.
+        // ════════════════════════════════════════════════
 
         if (drawTerrain) {
         // When AC terrain textures are loaded, paint the road stroke with
@@ -666,9 +666,9 @@ public static class RenderPreviewRenderer {
             }
         }
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        //  Phase 3: object glyphs (category â†’ shape, scale â†’ size). Objects-side.
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
+        //  Phase 3: object glyphs (category → shape, scale → size). Objects-side.
+        // ════════════════════════════════════════════════
 
         if (drawObjects) {
         using var fillPaint    = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
@@ -942,9 +942,9 @@ public static class RenderPreviewRenderer {
         }
         }   // end if (drawObjects) — phase 3 glyphs
 
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
         //  Phase 4: cliff overlay (only when overlay enabled, terrain layer).
-        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        // ════════════════════════════════════════════════
 
         if (input.Overlay && drawTerrain) {
             using var cliffPaint = new SKPaint {
