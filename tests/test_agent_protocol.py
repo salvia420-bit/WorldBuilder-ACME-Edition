@@ -41,7 +41,11 @@ from typing import Any, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 TERMINAL_PROJECT = REPO_ROOT / "WorldBuilder.Terminal"
-TEST_PROJECT = REPO_ROOT / "projects" / "TestProject" / "TestProject.wbproj"
+# Project-requiring suites run against this .wbproj. They edit it, so point
+# WORLDBUILDER_TEST_PROJECT at a scratch copy, never at a project you care about.
+TEST_PROJECT = Path(os.environ.get(
+    "WORLDBUILDER_TEST_PROJECT",
+    REPO_ROOT / "projects" / "TestProject" / "TestProject.wbproj"))
 
 # Allow overriding the binary path via env var or CLI arg
 BINARY_PATH = os.environ.get("WORLDBUILDER_BINARY", None)

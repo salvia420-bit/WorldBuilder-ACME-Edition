@@ -1,0 +1,58 @@
+# WorldBuilder.Terminal test gate (2026-10-10).
+#
+# Builds the Terminal on Linux and runs everything that needs no DAT files:
+#   - WorldBuilder.Tests (xUnit). Tests that read ~/ac_base_dats return early
+#     when it is absent, so here they pass without checking anything; run
+#     them on a machine that has the DATs.
+#   - the JSON-protocol suites that need no project (tests/test_agent_protocol.py).
+# external/ is gitignored; scripts/fetch-chorizite.sh fetches the two Chorizite
+# repos the Terminal has ProjectReferences into, at pinned commits.
+name: terminal-ci
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "WorldBuilder.Terminal/**"
+      - "WorldBuilder.Shared/**"
+      - "WorldBuilder.Tests/**"
+      - "DatReaderWriter.Extensions/**"
+      - "Directory.Build.props"
+      - "tests/test_agent_protocol.py"
+      - "scripts/fetch-chorizite.sh"
+      - ".github/workflows/terminal-ci.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "WorldBuilder.Terminal/**"
+      - "WorldBuilder.Shared/**"
+      - "WorldBuilder.Tests/**"
+      - "DatReaderWriter.Extensions/**"
+      - "Directory.Build.props"
+      - "tests/test_agent_protocol.py"
+      - "scripts/fetch-chorizite.sh"
+      - ".github/workflows/terminal-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: terminal-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Fetch Chorizite build dependencies
+        run: scripts/fetch-chorizite.sh
+      - name: Unit tests (builds the Terminal in Release)
+        run: dotnet test WorldBuilder.Tests/WorldBuilder.Tests.csproj -c Release
+      - name: JSON protocol tests (no project needed)
+        run: >
+          python3 tests/test_agent_protocol.py
+          --binary WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal
+          TestProtocol TestSerializationContract

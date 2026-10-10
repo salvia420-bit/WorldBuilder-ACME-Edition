@@ -159,7 +159,7 @@ Full protocol — every command, parameter, response schema, coordinate conventi
 
 ### Command Catalog
 
-The agent JSON protocol exposes **63 documented commands**; the REPL surface is wider — **~150 commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, dungeon document editing, and the Wave-1-through-5 diagnostic-toolset bricks. Sample categories:
+The agent JSON protocol exposes **223 commands**, every one listed with its arguments by `help`. The REPL has friendlier positional forms for about 130 of them, plus a few REPL-only commands (`quick-world`, `calibrate-world-map`, `remap-buildings*`); any other JSON command also runs in the REPL as `name key=value …` or `name {json}`, and `help <command>` shows its arguments. Sample categories:
 
 | Category | Commands |
 |---|---|
@@ -763,6 +763,10 @@ All settings are configurable in the Settings panel and persist between sessions
 Requires **.NET 8.0 SDK** or later.
 
 ```bash
+# Fresh clone only: fetch the two Chorizite repos the Terminal builds against
+# (external/ is gitignored; see external/chorizite/VENDORED.md)
+scripts/fetch-chorizite.sh
+
 # Build
 dotnet build WorldBuilder.slnx
 
@@ -777,6 +781,11 @@ dotnet run --project WorldBuilder.Terminal -- --project MyWorld.wbproj --export 
 
 # Terminal — agent mode (stdin/stdout JSON)
 dotnet run --project WorldBuilder.Terminal -- --stdin --project MyWorld.wbproj
+
+# Tests: unit tests, then the JSON-protocol suites that need no project
+# (CI runs both: .github/workflows/terminal-ci.yml)
+dotnet test WorldBuilder.Tests -c Release
+python3 tests/test_agent_protocol.py --binary WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal TestProtocol TestSerializationContract
 ```
 
 Platform-specific projects: `WorldBuilder.Windows` (recommended), `WorldBuilder.Mac`, `WorldBuilder.Linux`, plus an experimental `WorldBuilder.Browser` WASM target.

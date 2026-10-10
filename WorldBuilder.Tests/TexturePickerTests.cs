@@ -469,11 +469,10 @@ public class TexturePickerTests {
     /// configured/mounted (a fresh checkout, CI) it self-skips rather than failing for an
     /// unrelated reason.
     /// </summary>
-    [Fact]
+    [TexturePickerDataFact]
     public void RealRecommendationsFile_ParsesWithTheFullContract() {
         var path = Path.Combine(TexturePickerSession.DefaultPickerDirectory,
                                 TexturePickerSession.RecommendationsFileName);
-        if (!File.Exists(path)) return;   // picker data volume not mounted
 
         var recs = PickerRecommendations.Load(path);
         Assert.NotNull(recs);

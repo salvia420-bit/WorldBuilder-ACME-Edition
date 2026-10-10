@@ -11,17 +11,10 @@ namespace WorldBuilder.Tests {
     /// skips when ~/ac_base_dats is absent.
     /// </summary>
     public class SceneCommandsTests {
-        private static string? BaseDatPath() {
-            var p = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "ac_base_dats", "client_portal.dat");
-            return File.Exists(p) ? p : null;
-        }
 
-        [Fact]
+        [BaseDatFact]
         public void SceneToJsonDoc_PreservesEveryObjectDescField() {
-            var datPath = BaseDatPath();
-            if (datPath == null) return; // skip: real base DAT not present on this box
+            var datPath = TestData.BaseDatPath();
 
             using var dat = new DatDatabase(o => {
                 o.FilePath = datPath;

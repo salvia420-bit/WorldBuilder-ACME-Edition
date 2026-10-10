@@ -362,12 +362,9 @@ public class DatBakeCommandsTests {
 
     // ── the shared ~/ac_base_dats guard ──────────────────────────────
 
-    [Fact]
+    [BaseDatFact]
     public void BothCommands_RefuseBaseDatsPaths() {
-        var basePath = Path.Combine(
-            System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile),
-            "ac_base_dats", "client_portal.dat");
-        if (!File.Exists(basePath)) return;      // guard is path-shaped; skip if absent
+        var basePath = TestData.BaseDatPath();
 
         var engine = NewEngine();
         Assert.Throws<InvalidOperationException>(() => engine.RenderSurfaceImport(

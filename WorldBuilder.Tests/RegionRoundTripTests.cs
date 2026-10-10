@@ -17,21 +17,6 @@ namespace WorldBuilder.Tests {
     public class RegionRoundTripTests {
         private const uint RegionFileId = 0x13000000;
 
-        // xUnit 2.5.3 dynamic-skip token: throwing an exception whose message
-        // starts with this string is reported as SKIPPED (not passed) by the
-        // runner, so missing coverage is visible in CI.
-        private const string DynamicSkipToken = "$XunitDynamicSkip$";
-
-        private static string RequireBaseDat() {
-            var p = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "ac_base_dats", "client_portal.dat");
-            if (!File.Exists(p))
-                throw new InvalidOperationException(
-                    DynamicSkipToken + "real base DAT (~/ac_base_dats/client_portal.dat) not present on this box");
-            return p;
-        }
-
         private static RegionObj LoadRetailRegion(string datPath) {
             using var dat = new DatDatabase(o => {
                 o.FilePath = datPath;
@@ -57,9 +42,9 @@ namespace WorldBuilder.Tests {
             return raw!;
         }
 
-        [Fact]
+        [BaseDatFact]
         public void JsonRoundTrip_PacksByteIdentical_ToDirectLoad() {
-            var datPath = RequireBaseDat();
+            var datPath = TestData.BaseDatPath();
 
             var region = LoadRetailRegion(datPath);
             // Ground truth: the RAW DAT record bytes, not DRW's own Pack() output.
@@ -81,9 +66,9 @@ namespace WorldBuilder.Tests {
                 "JSON round-trip bytes differ from the raw DAT record — mapper is lossy.");
         }
 
-        [Fact]
+        [BaseDatFact]
         public void PackedBytes_MatchRawDatRecord_AfterUnpackRepack() {
-            var datPath = RequireBaseDat();
+            var datPath = TestData.BaseDatPath();
 
             // The re-packed Region must match the RAW DAT record bytes — this
             // catches a DRW Pack bug, which a Pack()-vs-Pack() compare cannot.
@@ -104,9 +89,9 @@ namespace WorldBuilder.Tests {
                 "unpack → pack of the raw DAT record changed the bytes.");
         }
 
-        [Fact]
+        [BaseDatFact]
         public void ExportedDoc_CoversAllRetailParts() {
-            var datPath = RequireBaseDat();
+            var datPath = TestData.BaseDatPath();
 
             var doc = CommandEngine.RegionToJsonDoc(LoadRetailRegion(datPath));
 
@@ -127,9 +112,9 @@ namespace WorldBuilder.Tests {
             Assert.NotNull(doc.RegionMisc);
         }
 
-        [Fact]
+        [BaseDatFact]
         public void Validation_CatchesPartsMaskInconsistency() {
-            var datPath = RequireBaseDat();
+            var datPath = TestData.BaseDatPath();
 
             var doc = CommandEngine.RegionToJsonDoc(LoadRetailRegion(datPath));
             doc.SkyInfo = null; // mask still claims HasSkyInfo
