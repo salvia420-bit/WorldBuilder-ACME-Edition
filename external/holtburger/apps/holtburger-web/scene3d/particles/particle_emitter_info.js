@@ -116,6 +116,10 @@ export class ParticleEmitterInfo {
     // themselves "billboard" emitters).
     this.billboard = !!wasmInfo.billboard;
 
+    // `?particleFx` (2026-10-09): synthesized emitters name their upgrade
+    // profile (e.g. "particle.gemSparkle"); DAT emitters are looked up by `id`.
+    this.fxProfile = typeof wasmInfo.fxProfile === "string" ? wasmInfo.fxProfile : null;
+
     // SortingSphere: bounded by max(maxOffset, maxA * lifespan). Used by
     // the renderer for frustum-culling the emitter as a whole.
     this.sortingSphere = { center: new THREE.Vector3(0, 0, 0), radius: 0 };

@@ -313,7 +313,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // --check: up to date, 369 links) → 353.
   // 2026-10-09 (Workstream B): + scene3d/shard_fetch_client.js (`?shardFetchWorker`,
   // imported by index.html; generator --check: up to date, 370 modules) → 354.
-  const NON_APP_PRELOADS = 354;
+  // 2026-10-09 (`?burstFx`): + scene3d/play_effect_burst_fx.js (imported by
+  // play_effect_vfx.js; generator --check: up to date, 371 modules) → 355.
+  const NON_APP_PRELOADS = 355;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

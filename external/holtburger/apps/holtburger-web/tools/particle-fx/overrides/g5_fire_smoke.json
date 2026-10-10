@@ -1,0 +1,2325 @@
+{
+ "group": "g5_fire_smoke",
+ "familyNotes": {
+  "0x08000041": "Dim orange-brown fireball puff (additive, alpha 1 everywhere; brightest texels only ~(0.37,0.15,0.03) linear, half the texels under 0.1). Used for nearly all retail fire: flaming-weapon flames, fire arrows, Flame Bolt / Ball of Fire bodies and impacts, breath fire, campfires, braziers, bonfires, fire elementals, eruptions. Erosion is OFF on every emitter: its 0.4-wide smoothstep window cut ~45% of this dim texture from birth and up to 95% by end-of-life (weapon flames would have been ~1/3 as visible). 'core' is a no-op here (no texel reaches 0.45), so heat comes from gain + tint0. The gen ramp (warm-white birth -> deep red death) is kept for normal fading puffs; trans 1->0 'condensing' emitters get their own ramps (projectile bodies heat up into the core, weapon/brazier tongues stay orange).",
+  "0x08000072": "Grey additive smoke puff (neutral, brightest ~0.32 linear, p95 0.27, edge 0.2 so never spun): frost-weapon and frost-spell vapour (Frost weapons, BreatheFrost, Frost Bolt, Ice Golem, Chill/Flake/Frost elementals), scenery steam (geyser, steam vents, pools, mug), fog banks and the steam eruption. Erosion OFF everywhere (it removed ~64% of this dim texture at birth). Frost contexts get a subtle icy-blue tint and lit 0.45 (still reads at night); scenery steam/fog keep lit 0.75 and get real fade-ins on the huge billows.",
+  "0x080000E6": "Dark grey alpha smoke puff (rgb ~0.19, alpha up to 0.98): fire smoke for weapons, arrows, braziers, forges, explosions, breath, plus shadow-creature auras and void-mage wisps. Alpha is high so generated erosion is safe (keeps ~90%); fixes are pop-ins on huge billows, a violet-dark tint for shadow/void auras, crisp dark drips, tiny-wisp soft/near values.",
+  "0x08000326": "PURE BLACK dappled disc (rgb 0, alpha <=0.62, speckled) - re-filed smoke_light -> smoke_dark: black smoke/darkness puffs for Void Lord/Tenebrous/Penumbral auras, Shadow Bolt/Vortex/Eddy, SkillDownBlack, black-flame scenery and Branith's Staff, LevelUp dark motes, Nether Staff halo. Tint/gain/sat/lit are no-ops on black; only fades, erosion, spin, soft and nearFade matter. Steady respawning blobs get no fades/erosion; constant-opacity billows get real fades.",
+  "0x08000143": "Orange candle/torch flame tongue (32x64, additive, very bright base): stationary wall torches, sconces, lamps, braziers, Mhoire castle fires. Orientation matters (never spun); gen flicker 14 Hz + wobble 0.03 + warm cooling ramp are right; only the tiny Holiday Hearth candles needed smaller soft/near values.",
+  "0x080004B8": "VERY faint black radial disc (rgb 0, alpha <=0.23) - re-filed smoke_light -> smoke_dark: steady dark 'anti-glow' halos on static scenery (single particle respawned every 0.03-1 s), the BlackMadness cloud and sinking dark motes. Erosion OFF everywhere (it removed ~70% at birth); steady halos get no fades/spin or they strobe at the respawn rate.",
+  "0x08000108": "Blue magical flame tongue (32x64 additive): blue torches/braziers in dungeons. Gen gave it the ORANGE fire cooling ramp (tint1 0.7/0.55 on G/B), which would turn the tips muddy grey-violet; now whitens slightly at birth and deepens to blue.",
+  "0x080001A8": "The grey smoke puff used through the BOTTOM half of its UVs on a 0.9x5 m strip (sibling of the coloured light-shaft strips 0x080001A9-AC): a pale white vertical light shaft made of 5-9 staggered strips - re-filed beam, lit 0, no erosion.",
+  "0x08000067": "Orange-brown additive mist puff (max ~0.54 linear): warm lava-lit fume haze scenery. No erosion (it halved the texture).",
+  "0x08000256": "Green magical flame tongue (32x64 additive): green torches. Hue-preserving ramp instead of the orange cooling ramp.",
+  "0x08000F9D": "Bright yellow spiky flame-burst sprite (additive, alpha-shaped): magma blobs jumping out of the Flaming Elemental / Magma Pool. Bright, light erosion kept.",
+  "0x08000FC9": "Hard-edged molten yellow-orange glob (alpha cutout, additive): faint lava spatter specks. Crisp sprite: no erosion, no wobble.",
+  "0x080016B0": "Purple magical flame tongue (32x64 additive): purple torch scenery. Hue-preserving ramp instead of the orange cooling ramp."
+ },
+ "emitters": {
+  "0x3200001A": {
+   "note": "fire-projectile Launch script (Mysterious Hatch / Trap Door fire traps, Bretself the Translator): fireball body layer - per-metre puffs riding with the bolt (parent-local, 6 m/s along its axis), 1.65 m invisible haze condensing to an 11 cm opaque core in 0.3 s; erosion off (it ate the core exactly when it turns opaque), ramp inverted to heat red haze -> yellow-white core, gen 25% end fade hides the core pop",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x3200001B": {
+   "note": "same fire-projectile Launch script (Mysterious Hatch / Trap Door fire traps, Bretself the Translator): largest body layer, 3.3 m haze condensing to an 11 cm core in 0.5 s; no erosion, heats into a yellow-white core, soft 0.77 m",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x32000024": {
+   "note": "fire arrows / quarrels / Burning Sands bolts / Flaming Tungi default script (also Pyre-skeleton and Mhoire brazier fires): small flame licks 0.33 m -> 0, lifting 0.5-1.5 m/s2, 1 s, 5/s; erosion off so the licks keep their glow",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000027": {
+   "note": "Flaming Spear / Budiaq / Partizan / Corsesca: per-metre flames at six points along the shaft (z -0.5..1.25), 0.44 -> 0.11 m in 0.5 s with a swirl - a flame trail when swung; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200002D": {
+   "note": "Fiery Shield: per-metre flames lifting 2 m/s2 off the moving shield, 0.22 m -> 0 in 1 s, with smoke 0x3200002E; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000174": {
+   "note": "fire impact explosion (Explode on Flame Bolt / Elemental Fury / fire traps, tables 0x3400007c / 0x340000bd): outer layer, 15 puffs flung 0.4-0.8 m/s, growing 0.22 -> 1.3 m over up to 1.2 s; erosion off, fade-in cut to 3% so the blast hits instantly, white-hot birth cooling to red",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000175": {
+   "note": "same fire impact explosion (Explode on Flame Bolt / Elemental Fury / fire traps, tables 0x3400007c / 0x340000bd): middle layer, 40 puffs flung 0.7-1.4 m/s growing 0.22 -> 1.65 m in 0.6 s (crowd 9 -> blooms); erosion off, instant hit",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000176": {
+   "note": "fire burst core: same impact Explode layer 3 AND the Create/Destroy burst of fire creatures and rifts (table 0x340000bf: Harvest Reaper, Incendiary Guardian, Mount Esper Firestorm, Rift of Rage...) - 40 puffs 0.44 -> 2 m in 0.7 s with dark smoke 0x32000179; erosion off, instant hit",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320001AF": {
+   "note": "tall brazier / fire-pit scenery 0x02000346 / 34b / 34c (fire at 1.8 m, dark smoke 0x320001B0 above): slow part-local fire body 0.11 -> 2.75 m over 4 s, 18 overlapping; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320001F0": {
+   "note": "generic BreatheFlame breath core (tables 0x3400006d / 0x34000099: gromnies, carenzi, remorans, bunnies, chickens, eaters...): 10 + 20/s puffs for 0.75 s jetted forward 1-3 m/s, growing 0.22 -> 1.1 m in 0.5 s, with dark smoke 0x320001F1; erosion off, near-instant fade-in so the jet starts hot",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.04
+   }
+  },
+  "0x320001F9": {
+   "note": "Red Bull of Sanamar BreatheFlame: forward-and-down fire jet, 10 + 20/s puffs 0.11 -> 0.66 m in 0.5 s, with smoke 0x320001FA; erosion off, shorter fade-in",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.06
+   }
+  },
+  "0x3200020C": {
+   "note": "campfire flames (scenery 0x02000344 / 34d / 485 / 15fc with crackle sound): 34 flames 0.88 -> 0.22 m shrinking as they rise 0.11-0.33 m/s; born at 60% opacity at full size, so fade-in raised to 12%; erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.12
+   }
+  },
+  "0x3200021F": {
+   "note": "no-context 10 s burning-ground flare (spawned 0.1 m below the origin): puffs 0.44 -> 0.22 m lifting 0.5-1.5 m/s2, born at 50+-25% opacity at full size; fade-in 10%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1
+   }
+  },
+  "0x32000220": {
+   "note": "twin of 0x3200021F spawned at the origin: 10 s burning flare, rising shrinking puffs born at half opacity; fade-in 10%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1
+   }
+  },
+  "0x3200026E": {
+   "note": "Flaming weapons' main flame (109 scripts: Flaming Club/Axe/Tachi/Dagger..., 1-7 emitters stacked along the blade; also Flaming Club BreatheFlame): GlobalVel licks rising 0.45 m/s, born invisible at 0.33 m and condensing to an opaque 0.11 m tip in 1 s; erosion off (it erased ~2/3 of the flame at its peak), ramp kept orange instead of deep red since only the late tip is visible, gain 1.4 for a hot read, 20% end fade softens the tip pop, 12 Hz flicker",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.15,
+     1.05,
+     0.85
+    ],
+    "tint1": [
+     1.05,
+     0.82,
+     0.62
+    ],
+    "gain": 1.4,
+    "fadeOut": 0.2
+   }
+  },
+  "0x320002B8": {
+   "note": "fire-creature hit splatter (Splatter* scripts, table 0x340000bf: Magma Golem, Scold, Harvest Reaper, K'nath, Strife Proctor...): 3 small ember puffs 0.33 -> 0.11 m drifting up 0.1-0.3 m/s for 0.6 s, paired with dark smoke 0x320002B9; erosion off, instant hit kept",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320002BB": {
+   "note": "same fire-creature hit splatter: 4-5 ember puffs (0.33 m shrinking) rising from the hit point, paired with smoke 0x320002BA; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320002BD": {
+   "note": "same fire-creature hit splatter: 5-6 slightly bigger ember puffs (0.39 m shrinking), paired with smoke 0x320002BC; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320002BE": {
+   "note": "same fire-creature hit splatter: 5-6 ember puffs flung sideways and dropping (falls with 1 m/s2), paired with smoke 0x320002BF; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320002C1": {
+   "note": "same fire-creature hit splatter: heaviest variant, 8-10 ember puffs flung sideways and dropping, paired with smoke 0x320002C0; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000387": {
+   "note": "Smoldering Brazier (0x02001025 / 0x020005ae): ring of flames 0.11 -> 0.88 m rising 0.15-0.45 m/s over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000388": {
+   "note": "Smoldering Brazier slow glowing fire body 0.11 -> 2.2 m over 4 s (also the Inflamed Ursuin burning bear); erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200038B": {
+   "note": "same fire Launch script and the Flaming Skull projectile's default script: 2.5 m haze condensing to an 11 cm core in 0.4 s around the flying skull; no erosion, heats into the core",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x3200038D": {
+   "note": "WeddingBliss emote (tables 0x34000076 / b4 / cb): 150 huge 4.4 -> 11 m warm-orange haze billows swirling up around the couple from 60% opacity - a celebratory warm glow; gain 1.05 (crowd 11.5), calm 0.06 @ 3 Hz flicker, fade-in 8%, erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.05,
+    "flicker": 0.06,
+    "flickerHz": 3.0,
+    "fadeIn": 0.08,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000396": {
+   "note": "big bonfire scenery (0x02000285-287 / 0x02000625, Black Totem Gateway fires): rising flames 0.11 -> 1.43 m at 0.56-1.2 m/s over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000397": {
+   "note": "same big bonfire: slow fire body 0.11 -> 3.85 m over 4 s, 19 overlapping (crowd 6 -> blooms); erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003DA": {
+   "note": "brazier scenery 0x02000624 (with warm halo 0x3200039A): slow glowing fire body 0.11 -> 0.88 m over 4 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003DB": {
+   "note": "same brazier 0x02000624: flame tongues rising 0.55-0.9 m/s, born invisible at 0.44 m and condensing to opaque 0.11 m tips in 1 s; no erosion, orange tip ramp",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.15,
+     1.05,
+     0.85
+    ],
+    "tint1": [
+     1.05,
+     0.82,
+     0.62
+    ]
+   }
+  },
+  "0x3200040B": {
+   "note": "fire-elemental body flames (Flamma/Flare/Inferno, Theral/Sirrocco, Scoriscant, Strife, Incendiary Knight, Child of Fire, Fire Zenith...): part-local flame creeping up 0.06-0.12 m/s, 0.11 -> 0.77 m over 2 s, 5 per part; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200040C": {
+   "note": "same fire-elemental body flames (Flamma/Flare/Inferno, Theral/Sirrocco, Scoriscant, Strife, Incendiary Knight, Child of Fire, Fire Zenith...): part-local flame 0.11 -> 0.44 m rising 0.18-0.36 m/s in 1 s, 3 per part; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200040D": {
+   "note": "same fire-elemental body set: smallest part-local flame 0.11 -> 0.33 m, 1 s (also on the multi-element spectral aura); erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200040E": {
+   "note": "same fire-elemental body set: biggest part-local flame 0.22 -> 1.1 m over 2 s, 4 per part (also Lord Cynreft Mhoire, Iron Blade Overseer); erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200040F": {
+   "note": "same fire-elemental body set: slow part-local flame 0.11 -> 0.5 m rising 0.07-0.14 m/s over 1.5 s, 8 overlapping; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000410": {
+   "note": "same fire-elemental body set: motionless (Still) flame glow growing 0.11 -> 0.44 m on the part in 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000412": {
+   "note": "same fire-elemental body set: world-space flame 0.44 m rising 0.18-0.36 m/s - left behind as the creature moves; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000413": {
+   "note": "same fire-elemental body set: world-space slow flame 0.11 -> 0.5 m, 1 s, 5 alive - trails the moving creature; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000414": {
+   "note": "same fire-elemental body set: world-space big flame 0.22 -> 1.1 m over 1.5 s, trailing; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000415": {
+   "note": "same fire-elemental body set: world-space small flame 0.11 -> 0.33 m, 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000416": {
+   "note": "same fire-elemental body set: world-space flame 0.11 -> 0.77 m creeping up 0.06-0.12 m/s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000417": {
+   "note": "fire-geyser vent scenery 0x020006a4-a9 (sound + CallPES re-trigger): fountain of 60 fireballs launched 4-4.8 m/s up, arcing down under 3 m/s2, growing 0.11 -> 2.75 m over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200043B": {
+   "note": "fire-line scenery 0x020006f9 / 0x02000bd9: flames spread along a 5 m line, rising 0.25-0.75 m/s, 0.11 -> 3.3 m over 4 s - a burning strip/field; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200047A": {
+   "note": "Behemoth of Tenkarrdun / Fiery Defender / Magma Golem Exarch: per-metre walking flame trail spawned up to 1 m behind, 0.11 -> 1.65 m rising 0.15-0.45 m/s over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200048D": {
+   "note": "same Magma Golem body fire (with trail 0x3200047A): part-local flames 0.11 -> 1.1 m creeping up 0.05-0.15 m/s over 2 s, 11 alive; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320004BA": {
+   "note": "slow fire bloom scenery 0x02000840: part-local puffs 0.11 -> 2.75 m drifting up over 4 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320004BB": {
+   "note": "Launch, table 0x3400007c (generic fire-projectile table): biggest fireball-body layer, 5.5 m haze riding the bolt and condensing to an 11 cm core in 0.5 s; no erosion, heats into the core, nearFade 3 so the huge haze cannot fill the screen at the caster",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ],
+    "nearFade": 3.0
+   }
+  },
+  "0x320004BC": {
+   "note": "Flame Bolt body (default script of the Flame Bolt model + Launch table 0x34000079): ParabLVLALR streak with a 4.8 m quad - 14.5 m faint orange glow condensing to the 0.5 m bolt head in 0.4 s; erosion off (it would have deleted the big retail glow), heats into the head, nearFade 3 m (bolt starts at the caster)",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ],
+    "nearFade": 3.0
+   }
+  },
+  "0x320004D2": {
+   "note": "same 10 s fire-eruption event scenery 0x020008ce: swirling billows 4.4 -> 11 m born at 60% opacity; fade-in 8% (no huge pop), erosion off, 3.5 Hz flicker, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 3.5,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.08
+   }
+  },
+  "0x320004D3": {
+   "note": "10 s fire-eruption event scenery 0x020008ce: 100 + 15/s fireballs flung 12-40 m/s skyward under 3 m/s2 gravity, 5.5 -> 11 m over 5 s (450 total); erosion off, slow 3.5 Hz flicker for the huge masses, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 3.5,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320004D4": {
+   "note": "same 10 s fire-eruption event scenery 0x020008ce: roaring column puffs rising 7-12 m/s, 0.55 -> 11 m over 2 s; erosion off, 4 Hz flicker, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 4.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004D6": {
+   "note": "Fire Wisp / Incalescent Crystalline Wisp core: ~20 overlapping puffs (packet n=1 under-counts) born at 1.4 m and shrinking to 0.1 m while lifting 1 m/s2 - a stacked hot core; gain trimmed to 1.15 so it blooms white-hot without blowing out, fade-in 10% hides the full-size births, erosion off",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.15,
+    "fadeIn": 0.1
+   }
+  },
+  "0x32000534": {
+   "note": "Pyre Skeleton / Burning Bones / Lord Trimere / Pyre Champion / Mhoire braziers: per-metre flames lifting 2 m/s2 off the moving body, 0.44 m -> 0 in 1 s, burns out after 100 particles; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000536": {
+   "note": "same Pyre-skeleton / Mhoire set plus Pumpkin Kin / Pet Pumpkin: unlimited per-metre flames lifting off the moving body, 0.44 m -> 0 in 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320005E1": {
+   "note": "Mattekar Claw: per-metre tiny flame licks (0.33 m -> 0, lifting 1 m/s2) trailing the claw when swung; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000613": {
+   "note": "Captured Keep Banner Field / scenery 0x02000b22: ring of fire puffs orbiting 2-4 m out at ground level, 3.3 -> 0.55 m over 6 s; born full-size, so fade-in 6% (0.36 s); erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000627": {
+   "note": "large bonfire scenery 0x02000b34 / 0x02000bcd: big puffs 1.1 -> 4.4 m roaring up 1.5-4.5 m/s in 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000628": {
+   "note": "same large bonfire: 0.77 -> 4.4 m puffs rising 0.5-1.5 m/s with random 0-6 s lives; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200062B": {
+   "note": "same large bonfire: swirling puffs born at 4.4 m and 75% opacity collapsing to 0.22 m at 50%; fade-in 15% / fade-out 20% remove the big pop-in and the half-opacity pop-out, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000661": {
+   "note": "small hearth/oven fire scenery 0x02000bc8: part-local flames 0.11 -> 1.1 m creeping up 0.1 m/s over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000664": {
+   "note": "fireplace fire scenery 0x02000bde: tilted part-local flames 0.11 -> 2.6 m over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000682": {
+   "note": "forge/coal fire: Hot Coal, Salvaging Forge, Smelting Vat, Alchemy Forge, Cooking Vat (+ red halo 0x32000681): small flames rising 0.45 m/s over the coals, 0.33 -> 0.11 m, half -> 10% opacity; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006BD": {
+   "note": "Gaerlan (default script): Still per-metre fire left where he walks - 1.65 m faint haze condensing into an 11 cm opaque ember in 0.3 s; no erosion, heats into the ember, gen end fade hides the ember pop",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x320006C2": {
+   "note": "Elemental Fury Launch: per-metre fire puffs 1.1 -> 0.11 m thrown forward-up 2 m/s behind the projectile, paired with grey vapour 0x320006C8; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006D1": {
+   "note": "static 0x02000d63 (fire-elemental statue, hosts the elemental body set): sideways fire jet streaming 0.8-1.6 m/s, 0.33 -> 0.11 m over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006DF": {
+   "note": "burning-area scenery 0x02000d7f (with dark smoke 0x320006DE): slow fire billows 2.2 -> 11 m swirling over 6 s; erosion off, 2.5 Hz flicker for the big mass, fade-in 5%, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 2.5,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.05
+   }
+  },
+  "0x320006E6": {
+   "note": "burning-area scenery 0x02000d7d (with dark smoke 0x320006E8): 11 m fire glow billows at 50% opacity over 8 s; fade-in 8% (an 11 m pop was visible), erosion off, 2.5 Hz flicker, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 2.5,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.08
+   }
+  },
+  "0x320006FA": {
+   "note": "static 0x02000e61 per-metre fire trail (emits only while the object moves; steam twin 0x320006F8 on 0x02000e60): puffs 0.22 -> 1.1 m born at 75% opacity; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200073F": {
+   "note": "Branith's Staff fire (paired with black flame 0x32000740): flaming-weapon style licks rising 0.45 m/s, condensing 0.33 -> 0.11 m to half opacity; no erosion, orange tip ramp",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.15,
+     1.05,
+     0.85
+    ],
+    "tint1": [
+     1.05,
+     0.82,
+     0.62
+    ]
+   }
+  },
+  "0x320007D1": {
+   "note": "Well of Blood: part-local haze 0.11 -> 5.5 m rising slowly over 4 s from 70% opacity - a blood-red glow welling up; tints shifted crimson, flicker calmed to 0.08 @ 4 Hz (glow, not flames), erosion off",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     1.05,
+     0.8,
+     0.75
+    ],
+    "tint1": [
+     1.0,
+     0.55,
+     0.5
+    ],
+    "flicker": 0.08,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000813": {
+   "note": "brazier scenery 0x020012d0 / d1 (smoke 0x32000814): flame tongues rising 1.05 m/s, born invisible at 0.88 m and condensing to 0.11 m tips in 1 s; no erosion, orange tip ramp",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.15,
+     1.05,
+     0.85
+    ],
+    "tint1": [
+     1.05,
+     0.82,
+     0.62
+    ]
+   }
+  },
+  "0x320008AF": {
+   "note": "Pillar of Fire / Fire Energy: 15 giant 9-13 m fire puffs swirling up 3-5 m/s at a constant 90% opacity (pop in and out in retail); fade-in 12% / fade-out 30%, erosion off, slow 3.5 Hz flicker, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.12,
+    "flickerHz": 3.5,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.12,
+    "fadeOut": 0.3
+   }
+  },
+  "0x320008B3": {
+   "note": "static spell-projectile model 0x020015e8 / 0x0200160a / 0x02001617 (Scale + sound script): same Flame-Bolt-style streak body, 14.5 m glow condensing to a 0.5 m head in 0.4 s; no erosion, heats into the head, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ],
+    "nearFade": 3.0
+   }
+  },
+  "0x320008BD": {
+   "note": "static spell-projectile model 0x020015f6: half-size Flame-Bolt-style streak body, 7.3 m glow condensing to a 0.5 m head in 0.4 s; no erosion, heats into the head, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ],
+    "nearFade": 3.0
+   }
+  },
+  "0x320008E0": {
+   "note": "Pack Scold body flames (with trail 0x320008E1): part-local flames 0.11 -> 0.33 m, 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008E1": {
+   "note": "Pack Scold per-metre flame trail: 0.33 -> 0.66 m puffs rising 0.2-0.5 m/s behind the running wolf; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008F4": {
+   "note": "Holiday Hearth main fire: tilted flames 0.11 -> 0.88 m (+-0.33) rising 0.1-0.32 m/s over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008F6": {
+   "note": "Holiday Hearth left flame lick: puff born at 1 m and 70% opacity drifting up-left, shrinking to 0.33 m; fade-in 12% hides the full-size birth, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.12
+   }
+  },
+  "0x320008F7": {
+   "note": "Holiday Hearth right flame lick (mirror of 0x320008F6): born at 1 m and 70% opacity drifting up-right; fade-in 12%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.12
+   }
+  },
+  "0x320008FA": {
+   "note": "bonfire scenery 0x02001681: slow fire body 0.11 -> 3.85 m over 4 s, 19 overlapping; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008FB": {
+   "note": "same bonfire 0x02001681 and the fire-ring scenery 0x02001b27: rising flames 0.11 -> 1.43 m at 0.7-1.5 m/s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000925": {
+   "note": "multi-element creature aura (Spectral Nanjou/Samurai/Minions, Rynthid minions & spirits, Ghosts of Dylaeral, Bound Light Falatacot, Ranger Lord Grymar Mhoire): tiny 3 cm ember sparks lifting off the hands; erosion/spin off, soft 0.03 / nearFade 0.1 for a 3 cm sprite",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x3200093D": {
+   "note": "Master Arbitrator / Arena One Statue: small brazier flame 0.11 -> 0.33 m creeping up over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000949": {
+   "note": "Keh Fire / Corrupted Pyre Oak / colour-pillar pyre 0x02001872: roaring column puffs 2.75 -> 1.65 m swirling up 3.6-6.6 m/s in 0.8 s, born at 60% opacity; fade-in 15%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.15
+   }
+  },
+  "0x3200094C": {
+   "note": "Burnja's Board with Nails (with spark star 0x32000944): bigger flaming-weapon lick, 0.44 -> 0.22 m condensing while rising 0.45 m/s; no erosion, orange tip ramp, 20% end fade",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.15,
+     1.05,
+     0.85
+    ],
+    "tint1": [
+     1.05,
+     0.82,
+     0.62
+    ],
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200094D": {
+   "note": "Ball of Fire Launch (with orange glow orb 0x3200094E): body layer 1, 3.3 m haze condensing to an 11 cm core in 0.3 s; no erosion, heats into the core",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x3200094F": {
+   "note": "Ball of Fire Launch: body layer 2, 2.5 m haze condensing to an 11 cm core in 0.4 s; no erosion, heats into the core",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x32000950": {
+   "note": "Ball of Fire Launch: body layer 3, 3.3 m haze condensing to an 11 cm core in 0.5 s (longest-lived, forms the comet tail); no erosion, heats into the core",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     0.8,
+     0.65
+    ],
+    "tint1": [
+     1.15,
+     1.0,
+     0.8
+    ]
+   }
+  },
+  "0x32000951": {
+   "note": "Ball of Fire Explode: outer shell, 15 puffs growing 1.1 -> 6.6 m (life up to 1.2 s); erosion off, instant hit, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000952": {
+   "note": "Ball of Fire Explode: dense middle, 40 puffs 0.9 -> 3.3 m in 0.6 s (crowd 13, low gen gain keeps it below blow-out); erosion off, instant hit",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000953": {
+   "note": "Ball of Fire Explode: 40 puffs 0.33 -> 6.6 m born at half opacity, 0.7 s - the big fading fireball cloud; erosion off, instant hit, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200095A": {
+   "note": "Wall of Fire (with glow orb 0x3200095B): implode puffs born at 5 m full opacity along a 1 m line, collapsing to 2.2 m and 20% opacity in 2 s; fade-in 12% (5 m pop-in), erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.12,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000965": {
+   "note": "Aegis of the Golden Flame shield: flame licks rising 0.25 m/s, condensing 0.33 -> 0.11 m from 25% to full opacity; no erosion, tints pushed golden (green channel up) so the 'golden flame' reads gold rather than red",
+   "params": {
+    "erode": 0.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.1,
+     1.25,
+     1.0
+    ],
+    "tint1": [
+     1.15,
+     1.35,
+     0.9
+    ]
+   }
+  },
+  "0x3200099C": {
+   "note": "medium bonfire scenery 0x020017ca / cb / cf: slow fire body 0.11 -> 1.65 m over 4 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200099D": {
+   "note": "same medium bonfire 0x020017ca / cb / cf: rising flames 0.11 -> 0.66 m at 0.7-1.5 m/s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200099E": {
+   "note": "bonfire scenery 0x020017cc: slow fire body 0.11 -> 2.6 m over 4 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200099F": {
+   "note": "same bonfire 0x020017cc: rising flames 0.11 -> 1.1 m at 0.7-1.5 m/s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320009A5": {
+   "note": "scenery 0x020017df: swirling fire puffs born at 2 m and shrinking to 0.1 m over 2.3 s, 10/s; fade-in 8% hides the full-size births, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.08
+   }
+  },
+  "0x320009AB": {
+   "note": "fire-vortex scenery 0x02001806: roaring updraft puffs 7.7 -> 2.2 m rising 3.6-6.6 m/s in 0.7 s, born at 30% opacity; fade-in 15%, erosion off, 5 Hz flicker, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.15,
+    "flickerHz": 5.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009AC": {
+   "note": "same fire vortex 0x02001806: puffs imploding from a 4-6 m ring, 5.5 -> 1.1 m, fading IN to 70% (gen 21% end fade covers the pop-out); erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009B8": {
+   "note": "Corrupted Pyre Oak (+ scenery 0x02001c08): part-local pyre flames 1.1 -> 5.5 m over 2 s; erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009B9": {
+   "note": "Corrupted Pyre Oak: world-space pyre flames 1.1 -> 5.5 m over 1.5 s; erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009BA": {
+   "note": "Corrupted Pyre Oak: part-local mid flames 0.55 -> 2.75 m over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320009BB": {
+   "note": "Corrupted Pyre Oak: world-space mid flames 0.55 -> 2.75 m over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A27": {
+   "note": "scenery 0x02001b27 orbiting fire ring (under dark smoke 0x32000A26 and flames 0x320008FB): puffs circling 2-3 m out, 2.2 -> 0.55 m over 6 s; fade-in 6%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000A41": {
+   "note": "Rynthid of Rage / Rynthid Berserker / Aspect of Rage / Raging Rynthid Sorcerer: per-metre swirling flame bits 0.44 -> 0.11 m trailing the body as it moves (with rage tendrils/stars); erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A46": {
+   "note": "Olthoi Hive Warrior / Paradox-touched Olthoi BreatheFlame: fire jet shot forward-down 2-5 m/s, 0.22 -> 1.1 m in 0.5 s; erosion off, near-instant fade-in",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.04
+   }
+  },
+  "0x32000011": {
+   "note": "geyser scenery 0x020003cb: steam jet shooting 7-11 m/s straight up (2.5 m/s2 drag-down), puffs 1 -> 4.35 m over 2 s; erosion off (ate ~60% of this dim texture), near-instant fade-in, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.04,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000012": {
+   "note": "same geyser 0x020003cb: low steam cloud drifting out 1-1.4 m/s, born at 2.9 m and half opacity, shrinking over 4 s; fade-in 6%, erosion off",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000138": {
+   "note": "fog-bank scenery 0x020003ff: 12 drifting 8-10 m mist sheets (life 3-13 s), starting at 20% opacity; fade-in 10% instead of a pop, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200013A": {
+   "note": "fog-bank scenery 0x02000401: 25 slow-swirling 8-10 m mist sheets (life 5-15 s) from 25% opacity; fade-in 10%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200013C": {
+   "note": "fog-bank scenery 0x02000404: 13 drifting 8-10 m mist sheets from 25% opacity; fade-in 10%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200013D": {
+   "note": "fog-bank scenery 0x02000402: 40 drifting 8.7-11.6 m mist sheets from 30% opacity, 10 s; fade-in 10%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200013F": {
+   "note": "fog-bank scenery 0x020003fd: 35 drifting 8.7-11.6 m mist sheets from 40% opacity, 10 s; fade-in 10%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.1,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320001AE": {
+   "note": "marsh/steam scenery 0x0200028f / 0x02000ab4 (with alpha gas 0x320001AD): rising vapour billows 0.7 -> 8.7 m over 8 s from 25% opacity; erosion off, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000202": {
+   "note": "Launch (table 0x3400002c): per-metre pale vapour trail left hanging in the air behind the projectile, puffs 0.7 -> 1.45 m over 3 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000204": {
+   "note": "scenery 0x0200038a: tiny pale drips 15 -> 2 cm falling under 2 m/s2 for 1.5 s (~30 alive); erosion off, soft/near shrunk for the tiny sprite",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000271": {
+   "note": "same marsh scenery: 4 huge mist sheets sinking slowly while spreading 0.4 -> 14.5 m over 10 s; erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000273": {
+   "note": "frost weapons' vapour (112 scripts: Frost axes, daggers, clubs, frost arrows/quarrels; also BreatheFrost on Flaming Club) with snow 0x32000272: faint wisps 0.15 -> 0.22 m lifting 0.75 m/s2 from 35% opacity; erosion off (left ~1/3), subtle icy-blue tint, lit 0.45 so it still reads at night",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200027B": {
+   "note": "frost arrows / quarrels / Frost hand axes: per-metre frost-vapour trail, wisps 0.15 -> 0.7 m lifting slowly from 25% opacity over 1-3 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200027D": {
+   "note": "Frost Bolt Launch (table 0x340000be) with snow 0x3200017C/1A1: per-metre cold-vapour trail, puffs 1.45 -> 2.9 m drifting back over 2 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200029B": {
+   "note": "generic BreatheFrost breath (tables 0x3400006d / 0x34000099, with snow 0x320001F2): faint frosty breath wisps 0.15 -> 0.44 m from 35% opacity, one per second for 1 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x320003EC": {
+   "note": "steam-vent scenery 0x02000684 / 0x020008d3 (large): part-local steam blowing sideways 0.7 m/s and lifting 1.5 m/s2, 2 cm -> 1.56 m over 1.5 s, 30 alive; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003ED": {
+   "note": "steam-vent scenery 0x02000685 / 0x020008d4 (medium): same bending steam plume, 2 cm -> 0.98 m; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003EE": {
+   "note": "steam-vent scenery 0x02000688 / 0x020008d7 (small): same bending steam plume, 2 cm -> 0.59 m over 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200043E": {
+   "note": "Lag Beast: grey haze cloud of 50 puffs 0.15 -> 2.9 m swirling around it (part-local) over 2 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000441": {
+   "note": "salvage bags / summoning gems (117 items) default script: per-metre pale motes 0.15 -> 0.29 m falling under 2.2 m/s2 while the item moves, for its first 10 s; erosion off, soft/near shrunk",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.08,
+    "nearFade": 0.2
+   }
+  },
+  "0x32000442": {
+   "note": "no-context one-shot: 25 faint puffs 0.15 -> 1 m flung 0.6-1.6 m/s from 25% opacity, 0.6 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000454": {
+   "note": "no-context per-metre trail (3 s): tiny falling motes 0.44 -> 0.15 m, 0.4 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000458": {
+   "note": "no-context flash: 7 tiny puffs 0.15 -> 0.29 m drifting back and up from half opacity, 0.7 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000481": {
+   "note": "Ice Golem / Chilled Defender / Frigid Ice Golem: per-metre frost mist swirling behind the walking golem, 0.15 -> 1.7 m in 0.5 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x320004B3": {
+   "note": "hot-pool scenery 0x0200086b: steam puffs popping up across a 1.5 m patch, lifting 0.2-0.5 m/s and settling (0.5 m/s2 down), 0.15 -> 0.7 m over 3 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320004CE": {
+   "note": "Frost Bolt body (ParabLVLALR streak, 4.8 m quad): 14.5 m frosty haze condensing to the 0.5 m bolt head in 0.4 s; erosion off (it erased the condensing head), icy tint, lit 0.45, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004F5": {
+   "note": "10 s steam/ash eruption event scenery 0x020008c2 (grey twin of the fire eruption): 100 + 15/s steam masses flung 12-40 m/s skyward, 7.3 -> 14.5 m over 5 s; erosion off, near-instant fade-in, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.03,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004F6": {
+   "note": "same 10 s steam/ash eruption event scenery 0x020008c2 (grey twin of the fire eruption): steam column puffs rising 7-12 m/s, 0.7 -> 14.5 m over 2 s; erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004F7": {
+   "note": "same 10 s steam/ash eruption event scenery 0x020008c2 (grey twin of the fire eruption): swirling billows 5.8 -> 14.5 m born at 60% opacity; fade-in 8%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.08,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004F9": {
+   "note": "Vapor Golem / Tenuous Nephol Golem / Freezing Mist Golem: 3 faint body-mist clouds 1.6 -> 4.9 m from 20% opacity; erosion off, fade-in 5%, faint cool tint",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.05,
+    "tint0": [
+     0.95,
+     0.99,
+     1.06
+    ],
+    "tint1": [
+     0.92,
+     0.97,
+     1.08
+    ]
+   }
+  },
+  "0x320004FB": {
+   "note": "Charged Defender / Plasma Golem / Voltaic Golem: faint body haze 1.6 -> 4.9 m from 20% opacity; erosion off, fade-in 5%, faint electric-violet tint, lit 0.5 (charged air)",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.05,
+    "tint0": [
+     0.95,
+     0.95,
+     1.08
+    ],
+    "tint1": [
+     0.95,
+     0.92,
+     1.1
+    ],
+    "lit": 0.5
+   }
+  },
+  "0x3200052E": {
+   "note": "scenery 0x0200091b: steam wisps rising 0.75-1.25 m/s (+0.8 m/s2), 0.7 -> 0.15 m in 1 s, 1.6/s - a kettle/cauldron steam thread; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000676": {
+   "note": "Frost Zenith: cold mist sinking 0.4 m/s around the body, 0.15 -> 2.2 m over 2 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200067A": {
+   "note": "Chill / Flake / Frost elementals, Blizzard, Avalanche, Stasis, Theral/Sirrocco: cold body mist sinking 0.4 m/s, 0.15 -> 1.3 m over 1.8 s, 9 alive; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200067B": {
+   "note": "same frost-elemental set (2nd layer, 4 alive): cold mist sinking 0.4 m/s, 0.15 -> 1.3 m over 2 s; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x3200067C": {
+   "note": "cold-mist scenery 0x02000bf6: mist spread along a 5 m line, sinking 0.2-0.5 m/s while spreading 0.15 -> 4.35 m over 4 s; erosion off, faint cool tint",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.94,
+     0.98,
+     1.07
+    ],
+    "tint1": [
+     0.9,
+     0.96,
+     1.1
+    ]
+   }
+  },
+  "0x320006C0": {
+   "note": "Gaerlan (with fire trail 0x320006BD): small faint puffs 0.44 -> 0.15 m lifting off him from 75% opacity over 1.5 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006C8": {
+   "note": "Elemental Fury Launch: per-metre grey vapour puffs 1.45 -> 0.15 m thrown forward-up 2 m/s with the fire puffs 0x320006C2; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006D2": {
+   "note": "frost-statue scenery 0x02000d64 (with frost mist 0x3200067B): cold mist swirl drifting 0.7 m/s, 0.15 -> 3.3 m over 2 s; erosion off, faint cool tint",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.94,
+     0.98,
+     1.07
+    ],
+    "tint1": [
+     0.9,
+     0.96,
+     1.1
+    ]
+   }
+  },
+  "0x320006DC": {
+   "note": "smoke-cloud scenery 0x02000d80: swirling pale clouds 2.9 -> 14.5 m from half opacity over 6 s; fade-in 5%, erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "fadeIn": 0.05,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320006DD": {
+   "note": "same smoke-cloud scenery 0x02000d80: 20 billows 0.15 -> 14.5 m rising 0.6-0.9 m/s over 10 s; erosion off, soft 2.5 / nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320006F4": {
+   "note": "Frost Quarter Staff / Frost Nabut / Frost Jo / Soulless Staff / Frost Stick: cold vapour dripping off the staff (falls under 1.5 m/s2), 0.15 -> 0.44 m from 75% opacity; erosion off, icy tint, lit 0.45",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45
+   }
+  },
+  "0x320006F8": {
+   "note": "scenery 0x02000e60 per-metre steam trail (emits only while it moves; fire twin 0x320006FA): rising vapour 0.15 -> 1.45 m in 1 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200071E": {
+   "note": "scenery 0x02000ec9: tiny pale droplets (0.145 m) dropping under 1.5 m/s2 for 0.25 s - a drip; erosion off, soft/near shrunk",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.05,
+    "nearFade": 0.12
+   }
+  },
+  "0x32000772": {
+   "note": "Flaming Elemental Pool / Magma Pool (with magma blobs 0x32000771): tiny ash/steam specks hopping 1.2-1.8 m/s up and dropping back, fading to half; erosion off, warm lava-lit tint, lit 0.5 (lit by the lava)",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     1.12,
+     0.95,
+     0.8
+    ],
+    "tint1": [
+     1.05,
+     0.9,
+     0.82
+    ],
+    "lit": 0.5
+   }
+  },
+  "0x32000797": {
+   "note": "scenery 0x02000ffb: faint steam wisps 0.15 -> 0.7 m lifting 2 m/s2 from 20% opacity, 16/s - a cooking-pot steam thread; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320007AD": {
+   "note": "Hammer of Frore: per-metre faint frost-vapour wisps (0.145 m -> 0) trailing the swung hammer from 20% opacity; erosion off, icy tint, lit 0.45, soft/near shrunk",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "soft": 0.05,
+    "nearFade": 0.12
+   }
+  },
+  "0x320007E1": {
+   "note": "no-context one-shot: 50 + 50 faint puffs 0.15 -> 1.45 m rising 0.5-2 m/s from 30% opacity, 1 s each; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008B5": {
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setups 0x020015ea / 0x0200160e / 0x02001619: 14.5 m pale haze condensing to the 0.5 m head in 0.4 s; erosion off, icy tint, lit 0.45, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "nearFade": 3.0
+   }
+  },
+  "0x320008B8": {
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setups 0x020015ee / 0x02001607 / 0x02001616 (Scale + sound script): 14.5 m pale haze condensing to the head; erosion off, icy tint, lit 0.45, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "nearFade": 3.0
+   }
+  },
+  "0x320008BE": {
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setup 0x020015f8: half-size 7.3 m haze condensing to the head; erosion off, icy tint, lit 0.45, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "nearFade": 3.0
+   }
+  },
+  "0x320008C0": {
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setup 0x020015f9: half-size 7.3 m haze condensing to the head; erosion off, icy tint, lit 0.45, nearFade 3",
+   "params": {
+    "erode": 0.0,
+    "tint0": [
+     0.9,
+     0.97,
+     1.12
+    ],
+    "tint1": [
+     0.85,
+     0.94,
+     1.14
+    ],
+    "lit": 0.45,
+    "nearFade": 3.0
+   }
+  },
+  "0x320008DD": {
+   "note": "Mystical Mug (with bubbles 0x320008DE/DF and glow 0x320008DC): 5 steam/fizz puffs 0.15 -> 0.29 m popping up and over the rim (1.3 m/s2 fall), 0.8 s; erosion off",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200001C": {
+   "note": "Flame Bolt / Mana Bolt / fire-trap Launch: per-metre dark smoke billowing behind the bolt, 0.15 -> 3.3 m in 0.4 s from 75% opacity; generated sooty-brown -> pale-grey ramp and wispy erosion kept"
+  },
+  "0x32000025": {
+   "note": "fire arrows / quarrels / Flaming Tungi (with flame 0x32000024): lingering dark smoke wisps 0.29 -> 1.45 m drifting up over 6 s, 8 alive; gen kept (light spin, lit 0.85)"
+  },
+  "0x32000026": {
+   "note": "fire arrows, flaming hand axes, Fire Atlatl Darts, Fire Spikes: per-metre dark smoke trail left while moving, 0.29 -> 1.45 m over 4 s; gen kept"
+  },
+  "0x3200002E": {
+   "note": "Fiery Shield smoke (with flames 0x3200002D): per-metre dark wisps lifting 2 m/s2, 0.15 -> 0.73 m from half opacity; gen kept"
+  },
+  "0x32000177": {
+   "note": "fire impact explosion smoke (Explode on Flame Bolt / Mana Bolt / Elemental Fury / traps): 6 dark puffs 0.29 -> 1.3 m flung out and up from half opacity; gen kept"
+  },
+  "0x32000178": {
+   "note": "same impact explosion smoke: 13 puffs 0.29 -> 1.74 m from 40% opacity; gen kept"
+  },
+  "0x32000179": {
+   "note": "fire burst smoke (impact Explode and fire-creature/rift Create, table 0x340000bf, with fire 0x32000176): 20-25 dark puffs 0.44 -> 1.9 m rising 0.4-1.2 m/s2; gen kept"
+  },
+  "0x3200019D": {
+   "note": "fire-bolt Launch (table 0x3400007c, Flame/Mana Bolt): short per-metre dark smoke layer 0.15 -> 2.2 m in 0.3 s; gen kept"
+  },
+  "0x3200019E": {
+   "note": "same Launch: big per-metre dark smoke layer 0.15 -> 4.35 m in 0.5 s; gen kept"
+  },
+  "0x320001B0": {
+   "note": "brazier / fire-pit / forge smoke (scenery 0x02000229 / 242 / 273 / 346 / 34b / 34c, Salvaging Forge, Smelting Vat, Alchemy Forge, Cooking Vat): column 2.4 m up, puffs 0.15 -> 1.45 m rising 0.2-0.6 m/s + 2 m/s2; gen kept"
+  },
+  "0x320001F1": {
+   "note": "generic BreatheFlame smoke (with fire jet 0x320001F0): dark puffs 0.44 -> 0.87 m pushed forward 1-3 m/s from half opacity; gen kept"
+  },
+  "0x320001F6": {
+   "note": "Flaming Skull Fizzle: burst of 25 dark smoke puffs 0.73 -> 1.74 m from half opacity when the spell fizzles; gen kept (sat 0.52)"
+  },
+  "0x320001FA": {
+   "note": "Red Bull of Sanamar BreatheFlame smoke (with fire 0x320001F9): dark puffs pushed forward-down; gen kept"
+  },
+  "0x3200020D": {
+   "note": "Cooking Forge / scenery 0x0200043b chimney smoke: 12 puffs 0.87 -> 2.2 m rising 0.3 m/s + 1.5 m/s2 over 8 s; gen kept (spin 0.4, sooty -> pale ramp)"
+  },
+  "0x32000270": {
+   "note": "flaming weapons' smoke (79 scripts, with flame 0x3200026E): small dark puffs 0.22 -> 0.73 m lifting 2 m/s2 off the blade from 80% opacity; gen kept"
+  },
+  "0x320002B9": {
+   "note": "fire-creature hit splatter smoke (with embers 0x320002B8): 5 dark puffs 0.44 -> 0.15 m flung out and up; gen kept"
+  },
+  "0x320002BA": {
+   "note": "same hit splatter smoke (with embers 0x320002BB): puffs 0.73 -> 0.15 m; gen kept"
+  },
+  "0x320002BC": {
+   "note": "same hit splatter smoke (with embers 0x320002BD): puffs 0.87 -> 0.15 m; gen kept"
+  },
+  "0x320002BF": {
+   "note": "same hit splatter smoke (with embers 0x320002BE): puffs 0.87 -> 0.15 m, gentler lift; gen kept"
+  },
+  "0x320002C0": {
+   "note": "same hit splatter smoke (with embers 0x320002C1): heaviest, 7-9 puffs 0.87 -> 0.15 m; gen kept"
+  },
+  "0x32000386": {
+   "note": "Smoldering Brazier / Ruschk Fire smoke: faint puffs 0.15 -> 2.2 m rising 0.6 m/s from 30% opacity over 4 s; gen kept"
+  },
+  "0x32000461": {
+   "note": "shadow creatures (Black Ferah, Shadow Wraith/Proctor, Ler Rhan, Pandemonium Shadow, Bonecrunch, Shadow Kresovus, Drudge Protector): dark wisps dipping then lifting, condensing 0.87 -> 0.15 m while fading IN to opaque; violet-dark shadow tint instead of the sooty -> pale fire-smoke ramp, gen end fade + erosion kept",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ]
+   }
+  },
+  "0x3200046C": {
+   "note": "dark corruption drips (vampiric / Paradox-touched Olthoi weapons, Hamud's Pyreal Katar, Vampire's Kiss, scenery): 0.29 -> 0.15 m blobs falling under 1.5 m/s2; read as crisp drips - spin off, erosion 0.08, neutral dark tint (no lightening ramp), soft 0.08",
+   "params": {
+    "spin": 0.0,
+    "erode": 0.08,
+    "tint0": [
+     0.92,
+     0.9,
+     0.9
+    ],
+    "tint1": [
+     0.95,
+     0.93,
+     0.93
+    ],
+    "soft": 0.08,
+    "nearFade": 0.3
+   }
+  },
+  "0x32000497": {
+   "note": "scenery 0x020007f0: dark smoke pouring downward (1.2 m/s + 2 m/s2) while shrinking 5.8 -> 0.15 m over 4.4 s, born at 75% opacity; fade-in 8% removes the 5.8 m pop-in",
+   "params": {
+    "fadeIn": 0.08
+   }
+  },
+  "0x3200052C": {
+   "note": "Imp Clouds / The Black Breath / Shadow's Breath / Paradox-touched Olthoi Queen: dark cloud billows born invisible at 11.6 m, swirling up and condensing to 0.15 m at 75% opacity over 4 s; shadow tint, nearFade 3",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ],
+    "nearFade": 3.0
+   }
+  },
+  "0x3200052D": {
+   "note": "scenery 0x020010b1 / 0x020012d3: smaller dark cloud billows 5.8 -> 0.15 m condensing to 75% opacity; shadow tint",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ]
+   }
+  },
+  "0x32000551": {
+   "note": "no-context one-shot: 100 dark smoke puffs 2.9 -> 0.15 m flung out (crowd 24 -> a solid black cloud); gen kept (instant hit)"
+  },
+  "0x32000563": {
+   "note": "smoke-cloud scenery 0x02000999 / 0x020010b0 / 0x0200147e: 20 billows 2.9 -> 11.6 m swirling up over 10 s from half opacity; fade-in 5%, nearFade 3",
+   "params": {
+    "fadeIn": 0.05,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000564": {
+   "note": "same smoke-cloud scenery: 22 billows 5.8 -> 14.5 m over 11 s from half opacity; fade-in 5% (no 5.8 m pop), nearFade 3",
+   "params": {
+    "fadeIn": 0.05,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200061F": {
+   "note": "smoke-column scenery 0x02000b32: faint puffs 0.73 -> 4.35 m rising 1 m/s over 6 s, 30% -> 20% opacity (popped out at 20%); fade-out raised to 30%, fade-in 5%",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.3
+   }
+  },
+  "0x32000620": {
+   "note": "wind-leaning smoke scenery 0x02000b33: puffs 1.45 -> 5.8 m rising 0.7-2.1 m/s and drifting sideways from 30% opacity; fade-in 5%",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x32000621": {
+   "note": "same leaning smoke 0x02000b33: bigger puffs 2.2 -> 6.5 m; fade-in 5%, nearFade 3",
+   "params": {
+    "fadeIn": 0.05,
+    "nearFade": 3.0
+   }
+  },
+  "0x320006DE": {
+   "note": "burning-area scenery 0x02000d7f smoke (over fire billows 0x320006DF): 20 billows 0.15 -> 14.5 m rising over 10 s; nearFade 3",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x320006E8": {
+   "note": "burning-area scenery 0x02000d7d smoke (over fire glow 0x320006E6): 14.5 m billows at half opacity over 8 s; fade-in 8% (a 14.5 m pop was visible), nearFade 3",
+   "params": {
+    "fadeIn": 0.08,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200072D": {
+   "note": "scenery 0x02000ef2: tiny 0.145 m dark wisps lifting 0.9 m/s2 from half opacity; soft/near shrunk for the tiny sprite",
+   "params": {
+    "soft": 0.06,
+    "nearFade": 0.15
+   }
+  },
+  "0x3200072E": {
+   "note": "Banished Orb / scenery 0x02000ee9: tiny dark wisps rising off the orb from 60% opacity; soft/near shrunk",
+   "params": {
+    "soft": 0.06,
+    "nearFade": 0.15
+   }
+  },
+  "0x32000799": {
+   "note": "shadow auras (Yaja the Shepherd, Penumbral Horror/Terror, Shadow Knight Hand, Depraved Shadow, Mukkir Ward Guardian, Shadowy Statue of the Hopeslayer, Paradox-touched Olthoi): dark billows swirling up, born invisible at 2.3 m and condensing to 0.15 m at 75% opacity; violet-dark shadow tint",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ]
+   }
+  },
+  "0x3200080D": {
+   "note": "no-context one-shot: 100 dark smoke puffs 1.45 -> 0.15 m flung out (crowd 10); gen kept"
+  },
+  "0x32000814": {
+   "note": "brazier smoke (scenery 0x020012d0 / d1, over flames 0x32000813): puffs 0.15 -> 1.16 m lifting 2 m/s2 from half opacity; gen kept"
+  },
+  "0x32000816": {
+   "note": "scenery 0x020012d2 (with black wisp 0x320004D7): dark smoke orbiting 2-4 m out, 2.9 -> 0.58 m over 10 s from half opacity; fade-in 4% hides the full-size births",
+   "params": {
+    "fadeIn": 0.04
+   }
+  },
+  "0x320008E2": {
+   "note": "Doll House / Amelia's Doll House chimney: tiny smoke puffs 0.15 -> 0.44 m rising 0.2 m/s; soft/near scaled to the toy size",
+   "params": {
+    "soft": 0.1,
+    "nearFade": 0.3
+   }
+  },
+  "0x32000948": {
+   "note": "Keh Fire / Corrupted Pyre Oak / scenery 0x02001c08 smoke: puffs 2.2 -> 4.35 m shooting up 3 m/s + 3 m/s2 from 20% opacity; fade-in 6%",
+   "params": {
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000962": {
+   "note": "Kirienne Palacost: dark wisps dipping then lifting, condensing 0.5 -> 0.15 m while fading in to opaque (shadow-creature pattern); violet-dark shadow tint",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ]
+   }
+  },
+  "0x32000970": {
+   "note": "Pillar of Lightning / Lightning Energy / Lightning Cloud: 6 giant 8.7 -> 21.8 m storm-cloud billows at a constant 90% opacity (popped in/out); fade-in 15% / fade-out 30%, erosion 0.3, slate storm tint lightening as it rises, soft 2.5 / nearFade 3",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.3,
+    "erode": 0.3,
+    "tint0": [
+     0.85,
+     0.87,
+     0.95
+    ],
+    "tint1": [
+     0.95,
+     0.98,
+     1.08
+    ],
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009CE": {
+   "note": "Void-magic scriveners (Varinia, Scrivener of Void Magic, Dark Reshan, Morathe, Umbral Guard...): tiny 6 cm dark motes lifting off the hands, shrinking to nothing in 1 s; shadow tint, soft 0.03 / nearFade 0.1",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ],
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x320009CF": {
+   "note": "same void-scrivener hands (2nd layer, 10/s): tiny dark motes; shadow tint, soft 0.03 / nearFade 0.1",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ],
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x320009D0": {
+   "note": "void scriveners' body smoke (Grularr Wa'ydo, Hanamoto Aki'ko, Umbral Guard, Geilla + scenery): part-local wisps 0.65 -> 1.1 m dipping then lifting from half opacity; shadow tint",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ]
+   }
+  },
+  "0x32000A26": {
+   "note": "fire-ring scenery 0x02001b27: faint dark smoke rising 0.9-1.8 m/s over the orbiting fire, 4.35 -> 2.9 m from 25% opacity over 5 s; fade-in 6%, nearFade 3",
+   "params": {
+    "fadeIn": 0.06,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000A33": {
+   "note": "Spectral Nanjou / Emerald Assassin / Spectral Voidmage auras: faint dark wisps swirling up, 2.9 -> 0.15 m from 25% opacity; shadow tint, fade-in 6%",
+   "params": {
+    "tintCurve": 1.0,
+    "tint0": [
+     0.88,
+     0.85,
+     0.98
+    ],
+    "tint1": [
+     0.84,
+     0.8,
+     0.96
+    ],
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000A34": {
+   "note": "First Lieutenant / Spectral Bloodmage / Ronin Hirachi: small dark wisps 0.44 m -> 0 lifting off from 70% opacity over 1 s; soft shrunk to 0.1",
+   "params": {
+    "soft": 0.1
+   }
+  },
+  "0x3200041E": {
+   "note": "Void Lord / Shonossoar / Parfarrail / Tenebrous Guard & Knight body darkness: black puffs 0.03 -> 0.44 m rising 0.18-0.36 m/s in 1 s; re-filed smoke_dark (texture is pure black), gen fades/erosion kept",
+   "family": "smoke_dark"
+  },
+  "0x3200041F": {
+   "note": "same Void Lord / Shonossoar / Parfarrail / Tenebrous Guard & Knight / Count Dardante darkness (with dark bursts/vortex): black puffs 0.06 -> 1 m creeping up over 2 s, 12 alive; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x32000420": {
+   "note": "Yaja / Nightmarish Marionettes / Void Lord / Tenebrous / Marionette Knight of Torment: motionless black puff swelling 0.03 -> 0.5 m and fading in 1 s; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x32000421": {
+   "note": "same Void Lord / Shonossoar / Parfarrail / Tenebrous Guard & Knight / Count Dardante: black puffs sinking 0.1-0.2 m/s while swelling to 0.5 m over 1.5 s, 24 alive; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x32000422": {
+   "note": "same Void Lord / Shonossoar / Parfarrail / Tenebrous Guard & Knight: black puffs 0.03 -> 0.44 m rising from the part origin; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x32000423": {
+   "note": "Void Lord / Tenebrous / Penumbral Horror / Yaja / Mukkir orbs: black puffs 0.03 -> 0.8 m creeping up over 2 s, 17 alive; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x3200048A": {
+   "note": "LevelUp (88 contexts): 40 black motes born invisible at 1.2 m at chest height, rising 0.25-1 m/s and condensing into 3 cm opaque specks over 3 s - dark contrast motes inside the level-up glow; re-filed smoke_dark, gen end fade + erosion keep the specks from popping at full black",
+   "family": "smoke_dark"
+  },
+  "0x320004D7": {
+   "note": "Affliction / Entropy / Nightmare Wisp core (+ scenery 0x020012d2): ~20 black puffs born at 1.47 m full opacity, shrinking to 3 cm while sinking 2 m/s2; fade-in 10% hides the full-size births; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.1
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000653": {
+   "note": "black-flame candles/braziers scenery 0x02000b8f-b93 (with dark halo 0x32000658): black flame tongues rising 0.45 m/s, born invisible at 0.44 m and condensing to opaque 3 cm tips in 1 s; erosion cut 0.38 -> 0.2 so the dark tongue keeps its body, 25% end fade kept; re-filed smoke_dark",
+   "params": {
+    "erode": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000654": {
+   "note": "black-flame scenery 0x02000b96 / 97 / 9a / 9d / 9f (with dark halo 0x32000657): smaller black tongues 0.29 m -> 3 cm; erosion 0.2; re-filed smoke_dark",
+   "params": {
+    "erode": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000655": {
+   "note": "black-flame scenery 0x02000b98 / 99 / 9b / 9c / 9e (with dark halo 0x32000656): bigger black tongues 0.59 m -> 3 cm; erosion 0.2; re-filed smoke_dark",
+   "params": {
+    "erode": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000740": {
+   "note": "Branith's Staff black flame (paired with fire licks 0x3200073F): black tongues 0.44 m -> 3 cm condensing to 90% opacity while rising 0.45 m/s; erosion 0.2; re-filed smoke_dark",
+   "params": {
+    "erode": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x3200079A": {
+   "note": "cursed dolls (Cosseted, Soiled, Befouled, Nightmarish, Desecrated Doll): dark aura puffs 0.03 -> 2 m creeping up over 2 s, spawned below; re-filed smoke_dark, gen kept",
+   "family": "smoke_dark"
+  },
+  "0x3200079D": {
+   "note": "rift creatures (Ebon Rift, Schism, Umbral Rift, Tenebrous Rift, Suppression Rift): black smoke swirling up 0.9-1.8 m/s, 0.03 -> 1.5 m from 80% opacity; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x3200079E": {
+   "note": "rift creatures (Schism, Suppression Rift, Rift of Torment / Consuming Torment): black smoke swirling DOWN 0.9-1.8 m/s, 0.03 -> 1.5 m; re-filed smoke_dark",
+   "family": "smoke_dark"
+  },
+  "0x32000847": {
+   "note": "no-context one-shot: 10 black puffs bursting out in a swirl, 0.03 -> 0.6 m in ~1 s; fade-in cut to 4% (a burst), re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.04
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000848": {
+   "note": "no-context one-shot (bigger twin of 0x32000847): 10 black puffs 0.03 -> 0.9 m; fade-in 4%, re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.04
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000859": {
+   "note": "Pursuit Orb / Shadow Coconut / Black Ball / Coruscating Olthoi Scent Gland / Aerbax's Defeat: steady black halo on the orb (one Still particle swelling 0.24 -> 0.29 m each second, respawned) - fades/erosion/spin zeroed or it blinked at 1 Hz; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000865": {
+   "note": "no-context: black puffs born at 0.35 m full opacity shrinking to 3 cm while sinking 0.4 m/s2, 20/s; re-filed smoke_dark, gen kept",
+   "family": "smoke_dark"
+  },
+  "0x3200087C": {
+   "note": "SkillDownBlack debuff: 50 black motes swirling and sinking 1.3-1.7 m/s around the target, shrinking 0.37 m -> 0 over 2 s; re-filed smoke_dark, gen kept",
+   "family": "smoke_dark"
+  },
+  "0x3200088D": {
+   "note": "Shadow Bolt: per-metre black smoke trail, puffs 0.03 -> 1.18 m expanding behind the bolt over 1 s; re-filed smoke_dark, gen kept",
+   "family": "smoke_dark"
+  },
+  "0x32000890": {
+   "note": "Shadow Vortex / scenery 0x020015dc: black puffs born at 2.9 m full opacity collapsing to 0.9 m while sinking 2 m/s2, 10/s; fade-in 15% (a 2.9 m black pop-in every 0.1 s); re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.15
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000891": {
+   "note": "Shadow Vortex billows: 35 black clouds 3.5 -> 8.8 m swirling up for 10 s at a constant 90% opacity; fade-in 8% / fade-out 15% replace the pops, erosion 0.25, soft 2.5 / nearFade 3; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.15,
+    "erode": 0.25,
+    "soft": 2.5,
+    "nearFade": 3.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x320008AA": {
+   "note": "scenery 0x020015de (with red halo 0x320008AD): tiny 3-9 cm black motes imploding into the centre at 99% opacity over 2 s; erosion/spin off (would speckle them away), fade-in 10% / fade-out 20%, soft 0.03 / nearFade 0.08; re-filed smoke_dark",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "fadeIn": 0.1,
+    "fadeOut": 0.2,
+    "soft": 0.03,
+    "nearFade": 0.08
+   },
+   "family": "smoke_dark"
+  },
+  "0x320008CE": {
+   "note": "Shadow Eddy swirl: black clouds 1.2 -> 0.6 m drifting up 0.9-1.8 m/s, ending at 70% opacity; fade-in 8%, fade-out raised to 20% for the pop-out; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x320008CF": {
+   "note": "Shadow Eddy drop puffs: 0.88 m black puffs falling under 0.6-2.4 m/s2 for 3 s, ending at half opacity; fade-in 8%, fade-out 25%; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.25
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000968": {
+   "note": "Harbinger (with tendrils): black clouds 1.2 -> 0.12 m drifting up, ending at half opacity; fade-in 8%, fade-out 20%; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.2
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000979": {
+   "note": "Virindi Protector / Claude the Dark Archmage / Moarsman Blight-caller / Afessa Sclavus Guardian: small black motes 0.15 -> 0.06 m streaming up 2.5 m/s in 1 s; soft 0.06 / nearFade 0.15; re-filed smoke_dark",
+   "params": {
+    "soft": 0.06,
+    "nearFade": 0.15
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000997": {
+   "note": "Aerbax Harm Hotspot: small black motes 0.18 -> 0.06 m rising 1.3 m/s through a 10 m column; soft 0.06 / nearFade 0.15; re-filed smoke_dark",
+   "params": {
+    "soft": 0.06,
+    "nearFade": 0.15
+   },
+   "family": "smoke_dark"
+  },
+  "0x320009FD": {
+   "note": "Nether Staff / Nether Sceptre / Experimental Bloodstone Fragment: steady 0.59 m black halo at the staff head (one particle at 70% opacity respawned every 30 ms) - fades/erosion/spin zeroed or it strobed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x3200002F": {
+   "note": "wall torches / sconces (25 static setups, with glow point 0x32000141 and warm halos): stationary flame tongues growing 1.5 cm -> 0.44 m and fading over 2 s, 10 overlapping (blooming base); gen 14 Hz flicker + lick wobble kept"
+  },
+  "0x3200038F": {
+   "note": "lamp scenery 0x020005af: motionless part-local flame tongue 1.5 cm -> 0.42 m (+-0.07) in 0.6 s, 10 overlapping - a quick candle flame; gen kept"
+  },
+  "0x3200060D": {
+   "note": "big brazier flame scenery 0x02000aa0: stationary tongues 1.5 cm -> 1.1 m in 0.7 s, 7 overlapping; gen kept"
+  },
+  "0x32000640": {
+   "note": "torch scenery 0x02000ab9: stationary tongues 1.5 cm -> 0.44 m over 2 s, one per 0.5 s (4 alive) - a sparser, calmer flame; gen kept"
+  },
+  "0x32000652": {
+   "note": "candle scenery 0x02000b8d: small stationary tongue 1.5 cm -> 0.29 m in 1 s, 4 alive; gen kept"
+  },
+  "0x32000665": {
+   "note": "torch scenery 0x02000be9: stationary tongues 1.5 cm -> 0.44 m with random 0.8-3.2 s lives, 10 overlapping; gen kept"
+  },
+  "0x320006EA": {
+   "note": "lamp scenery 0x02000db4-db8 (+3): part-local tongue 7 cm -> 0.44 m in 0.6 s, 3 alive; gen kept"
+  },
+  "0x320008F8": {
+   "note": "Holiday Hearth mantel candles: tiny tongues 1.5 -> 4.4 cm over 2 s; soft 0.02 / nearFade 0.06 sized for the tiny flame",
+   "params": {
+    "soft": 0.02,
+    "nearFade": 0.06
+   }
+  },
+  "0x320009E2": {
+   "note": "Mhoire castle braziers/torches and Master Mhoire (with fire 0x32000534/536 and licks 0x32000024): part-local tongues 1.5 cm -> 0.29 m over 2 s, 10 overlapping; gen kept"
+  },
+  "0x32000462": {
+   "note": "dark-zone scenery 0x02000718: one steady 14.5 m faint black disc (respawned each second at constant opacity) - a darkness pool; fades/erosion/spin zeroed (it blinked every second and erosion erased ~70%), soft 2.5 / nearFade 3; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000463": {
+   "note": "dark-zone scenery 0x02000717: one steady 11.6 m faint black disc; fades/erosion/spin zeroed, soft 2.5 / nearFade 3; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x3200046F": {
+   "note": "dark-halo scenery (25 static setups 0x0200074e, 0x02000755...): steady 0.87 m faint dark halo 0.16-0.66 m up the object (one particle respawned every 30 ms); fades/erosion/spin zeroed or it strobed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000656": {
+   "note": "black-flame scenery 0x02000b98 / 99 / 9b / 9c / 9e: steady 1.16 m dark halo around the black flames 0x32000655; fades/erosion/spin zeroed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000657": {
+   "note": "black-flame scenery 0x02000b96 / 97 / 9a / 9d / 9f: steady 0.58 m dark halo around the black flames 0x32000654; fades/erosion/spin zeroed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000658": {
+   "note": "dark-halo scenery 0x0200075c and black-flame 0x02000b91 / 99 / 9a: steady 0.58 m dark halo (2 overlapping 60 ms particles); fades/erosion/spin zeroed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x320007E6": {
+   "note": "dark-halo scenery 0x0200116a / 0x02001170: steady 1.45 m faint dark disc respawned each second; fades/erosion/spin zeroed; re-filed smoke_dark",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "erode": 0.0,
+    "spin": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x3200087D": {
+   "note": "BlackMadness (debuff/emote): 100 faint black discs 2.9 m -> 0 swirling and sinking 1.5-2 m/s around the target over 2 s - a darkening cloud; erosion off (it removed ~70% of this faint disc), gen fades kept; re-filed smoke_dark",
+   "params": {
+    "erode": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000885": {
+   "note": "scenery 0x020015aa: faint dark motes 0.7 -> 1.45 m swirling and sinking at constant opacity, 2.5 s; erosion off (erased them by mid-life), gen 7%/18% fades kept; re-filed smoke_dark",
+   "params": {
+    "erode": 0.0
+   },
+   "family": "smoke_dark"
+  },
+  "0x320003AB": {
+   "note": "blue-flame torch scenery 0x02000372, 0x020005c1 / c2, 0x020011f8 / f9 (+3): stationary blue tongues 1.5 cm -> 0.44 m over 2 s, 10 overlapping; orange cooling ramp replaced by a hue-keeping blue ramp (it turned the tips muddy grey-violet), flicker/wobble kept",
+   "params": {
+    "tint0": [
+     1.05,
+     1.05,
+     1.08
+    ],
+    "tint1": [
+     0.8,
+     0.9,
+     1.15
+    ]
+   }
+  },
+  "0x32000569": {
+   "note": "big blue-flame brazier scenery 0x020009a3: stationary blue tongues 4 cm -> 0.78 m over 2 s; blue-keeping ramp",
+   "params": {
+    "tint0": [
+     1.05,
+     1.05,
+     1.08
+    ],
+    "tint1": [
+     0.8,
+     0.9,
+     1.15
+    ]
+   }
+  },
+  "0x320008A8": {
+   "note": "blue-flame scenery 0x020015dd (with blue magic mist 0x320008A9): small stationary blue tongues 1.5 cm -> 0.26 m, 9-12 overlapping; blue-keeping ramp",
+   "params": {
+    "tint0": [
+     1.05,
+     1.05,
+     1.08
+    ],
+    "tint1": [
+     0.8,
+     0.9,
+     1.15
+    ]
+   }
+  },
+  "0x32000429": {
+   "note": "white light shaft, static 0x020006bc (grey sibling of the coloured shafts 0x020006b3-ba): five staggered 0.9 x 5 m strips using the bottom half of the puff, growing 1 -> 1.6x while tipping on a random axis each 1 s life - pale rays fanning from the base; re-filed beam: erosion off, lit 0, neutral tint, 15%/35% fades, soft 2.5 / nearFade 3",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "fadeIn": 0.15,
+    "fadeOut": 0.35,
+    "erode": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "lit": 0.0
+   },
+   "family": "beam"
+  },
+  "0x3200042D": {
+   "note": "white light shaft, static 0x020006bb: nine overlapping 5 m strips tipping only slightly - a steadier upright pale shaft; re-filed beam: erosion off, lit 0, 15%/35% fades, soft 2.5 / nearFade 3",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tintCurve": 1.0,
+    "tint0": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "fadeIn": 0.15,
+    "fadeOut": 0.35,
+    "erode": 0.0,
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "lit": 0.0
+   },
+   "family": "beam"
+  },
+  "0x320002A2": {
+   "note": "lava-fume scenery 0x02000586: warm orange-brown haze puffs 0.15 -> 2.9 m drifting randomly from half opacity over 3 s; erosion off (it halved the texture), gen slow 4.5 Hz glow flicker kept",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003AA": {
+   "note": "green-flame torch scenery 0x020005c0 / 0x020005c3: stationary green tongues 1.5 cm -> 0.44 m over 2 s, 10 overlapping; orange cooling ramp replaced by a green-keeping ramp",
+   "params": {
+    "tint0": [
+     1.05,
+     1.07,
+     1.04
+    ],
+    "tint1": [
+     0.75,
+     1.1,
+     0.85
+    ]
+   }
+  },
+  "0x32000771": {
+   "note": "Flaming Elemental Pool / Magma Pool: spiky molten blobs hopping 3-3.3 m/s out of the pool and falling back, 0.15 -> 0.44 m fading IN to opaque over 1.4 s; gen 21% end fade covers the pop, erosion trimmed 0.34 -> 0.2",
+   "params": {
+    "erode": 0.2
+   }
+  },
+  "0x320007AE": {
+   "note": "lava-spatter scenery 0x0200102f: 20 + 30/s tiny 0.145 m molten globs hopping 1.2-1.8 m/s and falling back at only 10% opacity; crisp glob - erosion and wobble off, gain 1.4 so the faint glints read",
+   "params": {
+    "erode": 0.0,
+    "wobble": 0.0,
+    "gain": 1.4
+   }
+  },
+  "0x32000A09": {
+   "note": "purple-flame torch scenery 0x02001a7d: stationary violet tongues 1.5 cm -> 0.44 m over 2 s, 10 overlapping; orange cooling ramp replaced by a violet-keeping ramp",
+   "params": {
+    "tint0": [
+     1.07,
+     1.03,
+     1.08
+    ],
+    "tint1": [
+     1.05,
+     0.75,
+     1.15
+    ]
+   }
+  }
+ }
+}

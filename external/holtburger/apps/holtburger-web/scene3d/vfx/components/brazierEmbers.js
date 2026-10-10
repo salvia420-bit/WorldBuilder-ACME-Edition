@@ -68,6 +68,8 @@ export function buildEmberInfo(cfg) {
   const rise = _clamp(c.emberRiseSpeed, 0.05, 4);
   return {
     id: 0,
+    // `?particleFx` upgrade row (particle_fx.js); the volcano vents pass their own.
+    fxProfile: typeof c.fxProfileEmber === "string" ? c.fxProfileEmber : "particle.brazierEmbers.ember",
     emitterType: EMITTER_TYPE_BIRTHRATE_PER_SEC,
     particleType: PARTICLE_TYPE_LOCAL_VELOCITY,
     gfxObjId: 0,
@@ -110,6 +112,7 @@ export function buildSmokeInfo(cfg) {
   const rise = _clamp(c.smokeRiseSpeed, 0.02, 3);
   return {
     id: 0,
+    fxProfile: typeof c.fxProfileSmoke === "string" ? c.fxProfileSmoke : "particle.brazierEmbers.smoke",
     emitterType: EMITTER_TYPE_BIRTHRATE_PER_SEC,
     particleType: PARTICLE_TYPE_LOCAL_VELOCITY,
     gfxObjId: 0,
@@ -182,6 +185,9 @@ export const brazierEmbers = {
     smokeFinalScale: 0.34,
     smokeScaleRand: 0.03,
     smokeTransRand: 0.0,
+    // `?particleFx` profile rows (particle_fx_profiles.js named rows).
+    fxProfileEmber: "particle.brazierEmbers.ember",
+    fxProfileSmoke: "particle.brazierEmbers.smoke",
   },
 
   /**

@@ -64,7 +64,7 @@ import {
   SealDepthRestorePass,
 } from "./portal_punch.js";
 import { createHeatHazeEffect, installHeatHazeHandle } from "./vfx/heat_haze_effect.js";
-import { particlesOverCloudsEnabled, collectLateFx } from "./particles_over_clouds.js";
+import { particlesOverCloudsEnabled, collectLateFx, runLateFxBefore, runLateFxAfter } from "./particles_over_clouds.js";
 import { toneCurveName, toneMappingModeFor } from "./tone_curve.js";
 import { createColorGradeEffect, installColorGradeHandle } from "./color_grade.js";
 import { SsaoPass, SsaoCompositeEffect, installSsaoHandle } from "./ssao.js";
@@ -631,10 +631,15 @@ class ParticlesOverCloudsPass extends Pass {
     const prevTarget = renderer.getRenderTarget();
     cam.layers.mask = this._mask;
     try {
+      // `?particleFx` soft particles: the hooks copy the scene depth (attached
+      // to T, so not sampleable during the draw) into a linear-depth texture
+      // BEFORE T is bound, and switch the soft term off again after.
+      runLateFxBefore(renderer, this._depthSource(), cam, this.renderTarget.width, this.renderTarget.height);
       renderer.setRenderTarget(this.renderTarget);
       renderer.render(scene, cam);
       this.stats.drawnFrames++;
     } finally {
+      runLateFxAfter();
       scene.children = this._noChildren;
       cam.layers.mask = prevMask;
       renderer.setRenderTarget(prevTarget);

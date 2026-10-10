@@ -1,0 +1,219 @@
+{
+ "group": "zz_visual_qa",
+ "familyNotes": {},
+ "emitters": {
+  "0x32000529": {
+   "params": {
+    "edgeSoft": 0.15
+   },
+   "note": "Dark Vapor swirl (Forsaken/Treacherous Tunnels/Caul portals, Aerbax's Holding): 4 dark-blue vapour sheets drift and turn, shrinking 4.3->1.45 m while thickening to opaque; strong erosion + fade-out dissolve the opaque end, quad border feathered so the sheet edges never show as rectangles; never spun"
+  },
+  "0x320007EE": {
+   "params": {
+    "gain": 1.5,
+    "sat": 1.25
+   },
+   "note": "Mana Cloud (and Hollow/Coral Hollow) Launch trail: blue blotchy gas puffs shrinking behind the projectile — re-filed gas_alpha (a cloud, not a sparkle field): twinkle off, erode 0.25 so it wisps away, lit 0.4 (magical mana)"
+  },
+  "0x32000274": {
+   "params": {
+    "gain": 1.5,
+    "sat": 1.2
+   },
+   "note": "Acid weapon fumes (Acid War/Battle Axe, Ono, Quarrels, +115; also Flaming Club BreatheAcid): faint green wisps rise from the blade, 0.29->0.15 m; upgrade: soft/near-fade sized to the wisp"
+  },
+  "0x3200003C": {
+   "params": {
+    "gain": 1.4,
+    "core": 0.65
+   },
+   "note": "AttribUpGreen buff, mid-power variant: 60 green orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints"
+  },
+  "0x3200039F": {
+   "params": {
+    "gain": 1.55
+   },
+   "note": "blue magic plume (Oubliette / Mhoire portal plume at 1.5 m, static braziers 0x020005b6 / 0x02000626 (+8), also Flaming Skull Fizzle): rising core puffs 0.7-1.5 m/s swelling to 1.4 m over 1.5 s; erosion removed (it ate ~75% of this dark-blue texture), lifted to 1.3, saturation back to as-authored (the fizzle dulling also hit the portal/scenery uses), portal breathing kept"
+  },
+  "0x32000273": {
+   "params": {
+    "gain": 1,
+    "lit": 0.25
+   },
+   "note": "frost weapons' vapour (112 scripts: Frost axes, daggers, clubs, frost arrows/quarrels; also BreatheFrost on Flaming Club) with snow 0x32000272: faint wisps 0.15 -> 0.22 m lifting 0.75 m/s2 from 35% opacity; erosion off (left ~1/3), subtle icy-blue tint, lit 0.45 so it still reads at night"
+  },
+  "0x32000A0B": {
+   "params": {
+    "gain": 1.4,
+    "sat": 1.15
+   },
+   "note": "Void creature body: a 1.7 m purple-nebula sphere shell rotating slowly at 30% opacity, lives 1 h (generator filed it sky only for the life); refiled vortex_dark, slow 0.5 Hz breathing pulse, nothing UV-based (sphere mesh)"
+  },
+  "0x320004CA": {
+   "params": {
+    "edgeSoft": 0.2
+   },
+   "note": "Acid Stream launch variant (table 0x34000094, 5 s run): 0.6 m green blobs every 0.5 m of flight, falling and shrinking; erosion removed"
+  },
+  "0x32000157": {
+   "params": {
+    "gain": 1.8
+   },
+   "note": "Force Bolt / Thorn Bolt impact (PlayScript Explode, mid-power variant, 30 particles): tiny white ring sparks burst out and fall under -2 m/s² while fading; spell energy, so lit 0, alpha gain 1.8 keeps the ring line crisp white after the 1/5 calibration; retail fade kept"
+  },
+  "0x3200017C": {
+   "params": {
+    "gain": 1.7,
+    "lit": 0.2
+   },
+   "note": "Frost Bolt Launch trail (tier 3, 2x flakes; also reused by static frost prop 0x02001601 with grey mist): per-metre icy flakes shed behind the bolt; alpha gain 1.7 keeps them white after calibration, mostly unlit (spell frost), glint twinkle, tumble"
+  },
+  "0x32000275": {
+   "params": {
+    "gain": 1.7,
+    "sat": 1.2
+   },
+   "note": "Acid weapon drip (Acid axes/quarrels/ono, ~113 setups; Flaming Club BreatheAcid): green drops falling off the blade, retail starts 50% opaque, so the fade-in hides the pop; alpha gain 1.7 + sat 1.2 keep the acid green readable by day; lit 0.5"
+  },
+  "0x32000164": {
+   "params": {
+    "gain": 1.7,
+    "sat": 1.2
+   },
+   "note": "Acid Stream impact (top tier), also the Infectious/Blood Curse Rat Create/Destroy poof: 50-drop acid splash; instant, alpha gain 1.7 + sat 1.2 for a vivid acid green after calibration, lit 0.5"
+  },
+  "0x32000544": {
+   "params": {
+    "gain": 0.65,
+    "core": 0
+   },
+   "note": "BunnySmite blast, white core flash: 100 radial spark stars (2.9 m shrinking to 0.15 m) burst out slowly, massively overlapping (crowd 24); gain at the floor and no core boost because the stack alone saturates white and floods bloom; calmer crackle"
+  },
+  "0x3200059F": {
+   "params": {
+    "gain": 1.6,
+    "sat": 1.1
+   },
+   "note": "Arcane star-vortex scenery (0x020009d0/0x02000f11): up to 12 still sun discs at 1 m with random opacity, swelling to random large sizes over ~7 s; alpha gain 1.6 keeps them glowing orange after calibration; near fade 1 m for the big ones"
+  },
+  "0x320005C8": {
+   "params": {
+    "gain": 1.6,
+    "sat": 1.25
+   },
+   "note": "Tusker/Olthoi Experiment Orb & logs: outer 0.7->0.8 m purple orb glow at 25% opacity, one parent-local particle respawned every 1 s; fades zeroed (would blink every second); alpha gain 1.6 + sat 1.25 keep it violet after calibration"
+  },
+  "0x3200017E": {
+   "params": {
+    "gain": 1.8
+   },
+   "note": "Force Bolt cast Launch ring (scripts 0x33000121-123 with 4 star flares): one 1.25 m white ring outline left at the launch point, shrinking 1->0.1x and fading over 0.3 s; magic muzzle ring, so lit 0, alpha gain 1.8 keeps the line white after calibration"
+  },
+  "0x320009E1": {
+   "params": {
+    "sat": 1.25
+   },
+   "note": "Blood-mist field (static 0x02001a1c, 10 hooks): dark-red mist puffs rising 0.25-0.5 m/s from a 1-2 m ring, swelling 0.2->1 over 2 s; softer fade-in, wisp dissolve, slow roll, sat 1.25 keeps it reading red over ground, soft 0.35 m, lit 0.7"
+  },
+  "0x32000424": {
+   "params": {
+    "gain": 1.616,
+    "core": 0.3
+   },
+   "note": "blue light shaft: static 0x020006b3 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips (bottom half of the glow, bright at the base, fading upward) fanning out from the base; seams hidden by the 15%/35% fades, gain 2.0 so the shaft still glows after the additive calibration, soft 2.5 m at the floor"
+  },
+  "0x32000426": {
+   "params": {
+    "gain": 1.616,
+    "core": 0.3
+   },
+   "note": "red light shaft: static 0x020006b6 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor"
+  },
+  "0x32000427": {
+   "params": {
+    "gain": 1.616,
+    "core": 0.3
+   },
+   "note": "green light shaft: static 0x020006b4 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor"
+  },
+  "0x3200026E": {
+   "params": {
+    "gain": 1.75,
+    "core": 0.8
+   },
+   "note": "Flaming weapons' main flame (109 scripts: Flaming Club/Axe/Tachi/Dagger..., 1-7 emitters stacked along the blade; also Flaming Club BreatheFlame): GlobalVel licks rising 0.45 m/s, born invisible at 0.33 m and condensing to an opaque 0.11 m tip in 1 s; erosion off (it erased ~2/3 of the flame at its peak), ramp kept orange instead of deep red since only the late tip is visible, gain 1.4 for a hot read, 20% end fade softens the tip pop, 12 Hz flicker"
+  },
+  "0x32000829": {
+   "params": {
+    "gain": 1.686,
+    "core": 0.25
+   },
+   "note": "torch/candle props 0x020005d8 / 0x020005d9 / 0x0200071a (+5; under a flame tongue or the fire-cluster brazier 0x330010EA): 1.45 m warm firelight glow; steady (fades blinked it every second), generated 7 Hz flicker kept"
+  },
+  "0x32000470": {
+   "params": {
+    "gain": 1.85
+   },
+   "note": "Acid weapons green glow (static weapon setups 0x02000750..., ~38, with acid gas + slime drips; also the Green Anniversary Sparkler): steady 0.87 m halo; fades removed (0.03 s respawn strobed), lifted, soft 0.2 vs the wielder"
+  },
+  "0x32000472": {
+   "params": {
+    "gain": 1.85
+   },
+   "note": "Lightning weapons purple glow (static weapon setups 0x02000752..., ~37, with lightning arcs and stars; also Thunder Chicken/Turkey and sparkler scripts): steady 0.87 m halo; fades removed (0.03 s respawn strobe), lifted, soft 0.2 vs the wielder"
+  },
+  "0x32000473": {
+   "params": {
+    "gain": 1.85
+   },
+   "note": "Flaming weapons red glow (static weapon setups 0x02000753..., ~37, beside flame puffs; also the red halo in blood/dark-burst/sparkler scripts): 0.87 m halo respawned every 0.03 s; fades removed (on a 0.03 s particle they strobed at frame rate), lifted to read on the blade, soft 0.2 so the wielder's body behind does not eat it"
+  },
+  "0x320006F4": {
+   "params": {
+    "gain": 1.075,
+    "lit": 0.3
+   },
+   "note": "Frost Quarter Staff / Frost Nabut / Frost Jo / Soulless Staff / Frost Stick: cold vapour dripping off the staff (falls under 1.5 m/s2), 0.15 -> 0.44 m from 75% opacity; erosion off, icy tint, lit 0.45"
+  },
+  "0x320004B2": {
+   "params": {
+    "gain": 1.35
+   },
+   "note": "Bubbling hot pool (static 0x0200086b, with grey steam): pale bubble clusters churning and spinning in place, 0.1->0.8 over 1.5 s; glint twinkle, soft, lit 0.55 (as generated)"
+  },
+  "0x32000A5E": {
+   "params": {
+    "gain": 1.35,
+    "sat": 1.15,
+    "fadeIn": 0.04
+   },
+   "note": "Thorn Bolt Launch trail: autumn leaves shed per metre, thrown back and falling from 50% opacity over 1 s. Lifted and richer orange so they read by day; short fade-in, tumble, lit 0.85."
+  },
+  "0x32000929": {
+   "params": {
+    "gain": 1.188,
+    "core": 0.4,
+    "lit": 0
+   },
+   "note": "Greatsword of Flame and Light: faint white holy wisps rising 0.45 m/s off the blade (10->25% opacity), shrinking 0.9->0.2 with the arcs. Gentle white-hot core, rounded pop-out, dissolve, unlit (emits light)."
+  },
+  "0x32000272": {
+   "params": {
+    "gain": 1.3
+   },
+   "note": "Frost weapon drip (frost axes/arrows/quarrels, Flaming Club BreatheFrost): frost crystals falling off the blade, 1.5->0.3 shrink, retail fades 75%->0. Lifted to stay icy pale-blue; glint twinkle, slow tumble, lit 0.45."
+  },
+  "0x320002A2": {
+   "params": {
+    "edgeSoft": 0.2
+   },
+   "note": "Lava-fume scenery 0x02000586: warm orange-brown haze puffs 0.15 -> 2.9 m drifting from half opacity over 3 s. Stronger edge softening so the puffs read round, not as cards; slow 4.5 Hz glow flicker kept."
+  },
+  "0x3200013E": {
+   "params": {
+    "edgeSoft": 0.15
+   },
+   "note": "Rolling fog clouds (static 0x02000403): 2-3 drifting 10-11 m white clouds born at 25% opacity, fading over ~6 s. Fade-in removes the pop-in; the border is softened so no quad frame or straight cut shows; soft 2 m, near fade 3 m, lit 0.6."
+  }
+ }
+}

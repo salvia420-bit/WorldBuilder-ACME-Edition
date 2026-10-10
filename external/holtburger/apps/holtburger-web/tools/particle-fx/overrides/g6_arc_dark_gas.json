@@ -1,0 +1,1397 @@
+{
+ "group": "g6_arc_dark_gas",
+ "familyNotes": {
+  "0x0800030B": "Black 4-point void star (alpha, pure-black RGB): dark sparks of the Black/Void debuffs (Vision/Trans/Vitae DownBlack, Health/Regen/Skill DownVoid, BlackMadness) and shadow items. Gain/tint/lit cannot change black, so only alpha shaping matters: crisp (no erode), gentle tumble, eased ends.",
+  "0x08000154": "Blue-violet branching lightning arc (128x64) on the 8-vert crossed-plane bolt mesh (Lightning Bolt / Electric Discharge, BreatheLightning, storm scenery) and on 1 m billboards (electric elementals, thunder creatures). Directional: never spun; snaps on, 14-21 Hz crackle, white-hot core blooms.",
+  "0x080012E1": "Black spiky soot/void puff (alpha, black RGB): shadow smoke of Shadow Blade / Black Spear, shadow creatures, Nether bolt/ring and the shadow-vortex scenery. Only alpha matters: rims erode away, slow roll, soft vs ground, near-fade for the giant storm quads.",
+  "0x0800007E": "Green acid/poison gas cloud (alpha): acid-weapon fumes, BreatheAcid, Corrosive Bolt, toxic vents and poison fog fields. Unlit-matter gas: dims with night/indoor light, dissolves from the edges, slow roll, soft vs ground.",
+  "0x08000163": "Purple 8-arm energy tendril burst (additive): WeddingBliss, BunnySmite, Marionette/Doll energy splatter and crackle, ritual eruption columns, beacon pillar. Crackling flicker, core bloom, arms erode away.",
+  "0x08001325": "Red forked lightning arc (128x64): red/shadow-era Lightning Bolt variant (crossed-plane bolt), red arc-band projectiles, Rynthid torment body arcs, red spinning-bolt scenery bursts.",
+  "0x08000150": "Blue tendril burst (additive): Vibrant Virindi Energy Cluster / Containment Doll crackle, blue door ward, blue ritual funnels/eruptions, Harbinger blue sigil, Lothus/Clandestine torment motes.",
+  "0x08000161": "Red tendril burst (additive): Cosseted/Soiled/Defiled Doll crackle, red door ward, red ritual funnels/eruptions, Harbinger red sigil, Rynthid torment motes, red beacon layer.",
+  "0x08000992": "Dim violet arc on a single triangle (64x32, partial UVs): lightning-weapon crackle that flicks round the weapon, and BreatheLightning arcs of Virindi/Doll/Rynthid/Olthoi creatures. Must snap on (no fade-in).",
+  "0x0800067E": "Green tendril burst (additive): Faint Virindi Energy Cluster crackle, green ward/ritual statue set, Harbinger green sigil, green beacon layer.",
+  "0x08000D77": "Crimson arc (128x64) on vertical crossed planes: one-frame swing-trail arcs of Silifi of Crimson Stars/Night, Shadow Blade, Shield of Isin Dule, Aerbax; red lightning of the Shadow Vortex scenery.",
+  "0x0800192E": "Amber/yellow forked arc: amber Lightning Bolt variant (table 0x340000d7) and its arc-band scenery projectiles.",
+  "0x08000990": "Violet arc on vertical crossed planes (partial UVs): one-frame swing-trail flickers of lightning swords/daggers/staves, Voltaic/Plasma Golem body arcs, Pillar of Lightning bolts.",
+  "0x08000C42": "White-violet radial spark star (128x128, very radial): melee hit sparks (Spark{Low}{Left/Right}{Front/Back} scripts on armoured/construct targets). Not an arc - re-filed to star: hot core, short glints, fast crackle.",
+  "0x08000E39": "Violet tendril burst (additive): Private Chamber ward, shadow/Virindi/Kirienne torment motes, Harbinger purple sigil.",
+  "0x08000156": "Orange tendril burst (additive): Blinding Virindi Energy Cluster crackle, orange ward/ritual statue set.",
+  "0x0800015D": "White tendril burst (additive): Lab Door ward, white ritual set, Spectral/Soul Bound weapon wisps, widest beacon layer.",
+  "0x0800015F": "Yellow tendril burst (additive): Dim Virindi Energy Cluster crackle, yellow ward/ritual statue set.",
+  "0x0800188B": "Saturated blue forked arc: blue Lightning Bolt variant (setup 0x02001b70) and its arc-band scenery projectile.",
+  "0x08000482": "Blue-grey vapour blob with swirl detail (alpha; edge 0.26 so never spun): Forsaken Portal 'Dark Vapor', BunnySmite vapour, storm-cloud scenery. Vapour: lit, eroding rims, big soft/near fade.",
+  "0x080007A4": "White-violet radial spark flash (same art as 0x08000C42) on a 10-vert star mesh: BunnySmite blast core, Lightning Cloud sheet flashes, Galvanic Pool sparks. Electric flash: snaps on, crackle, held below blow-out when dense.",
+  "0x08000081": "Green-white tendril burst (additive): WeddingBliss blossoms and a shrine aura column (scenery 0x02000585).",
+  "0x0800193D": "Amber arc on vertical crossed planes: one-frame motion-trail arcs of scenery/weapon models 0x02001c42-47.",
+  "0x0800193C": "Amber arc triangle crackle: flicking arcs on (weenie-less) setups 0x02001c3e-44.",
+  "0x0800006A": "Pink-white tendril burst (additive): shrine aura column on scenery 0x02000584.",
+  "0x08000068": "Orange tendril burst (additive): shrine aura column on scenery 0x02000586.",
+  "0x08000D78": "Red-white squiggle streak (64x32, triangle mesh): Silifi of Crimson Stars/Night tip crackle; electric, snaps on.",
+  "0x08000B90": "Yellow-grey sulphurous fume (alpha): bent vent plume on scenery 0x02000840. Lit vapour that billows and must not pop at 50%.",
+  "0x08000481": "Dark blue vapour that fills its frame (alpha, edge 0.48 so never spun): Forsaken Portal 'Dark Vapor' swirl. Erodes so the opaque end dissolves instead of popping.",
+  "0x08001900": "Crimson arc triangle (64x32): BreatheLightning of Discorporate Rynthids / Dread Figment."
+ },
+ "emitters": {
+  "0x320000CF": {
+   "note": "VisionDownBlack debuff, low tier: 9 black void stars converge on the target from 0.2 m, shrinking 0.6->0.03 m as they turn opaque in 0.75 s; upgrade: they twirl ~0.25 turn as they are sucked in and fade at the end instead of popping",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320000D0": {
+   "note": "VisionDownBlack debuff, mid tier: 25 black void stars converge on the target from 0.2 m, shrinking 0.6->0.03 m as they turn opaque in 0.75 s; upgrade: they twirl ~0.25 turn as they are sucked in and fade at the end instead of popping",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320000D1": {
+   "note": "VisionDownBlack debuff, high tier: 50 black void stars converge on the target from 0.2 m, shrinking 0.6->0.03 m as they turn opaque in 0.75 s; upgrade: they twirl ~0.25 turn as they are sucked in and fade at the end instead of popping",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320000FB": {
+   "note": "TransDownBlack debuff, low tier: 10 black stars burst out of the chest at 0.6-1.6 m/s, materialising from invisible and shrinking 0.29->0.03 m over 1.5 s; upgrade: tumbling roll (~0.3 turn), tail fades instead of popping",
+   "params": {
+    "spin": 0.3
+   }
+  },
+  "0x320000FC": {
+   "note": "TransDownBlack debuff, mid tier: 25 black stars burst outward, appearing from nothing and shrinking 0.29->0.03 m over 1.5 s; upgrade: tumbling roll, faded tail",
+   "params": {
+    "spin": 0.3
+   }
+  },
+  "0x320000FD": {
+   "note": "TransDownBlack debuff, high tier: 60 larger black stars (0.5 m) burst outward and shrink to dots over 1.5 s (dense, crowd 0.44); upgrade: tumbling roll, faded tail",
+   "params": {
+    "spin": 0.3
+   }
+  },
+  "0x32000101": {
+   "note": "VitaeDownBlack debuff, low tier: 20 opaque black stars swarm round the body, sinking ~0.5 m/s and fading to 25% over 3 s; upgrade: slow roll and a softened end (alpha-only: black RGB ignores gain/light)"
+  },
+  "0x32000102": {
+   "note": "VitaeDownBlack debuff, mid tier: 50 opaque black stars swarm and sink round the body for 3.5 s, fading to 25% while shrinking to dots; upgrade: slow roll, softened end"
+  },
+  "0x32000103": {
+   "note": "VitaeDownBlack debuff, high tier: 100 black stars on a wider 1 m orbit sink and fade out completely, shrinking only to half size; upgrade: slow roll, eased start"
+  },
+  "0x320001DE": {
+   "note": "Sacrificial Edge impact (Explode), small spray: 13 tiny (0.15 m) black stars flung out at ~3 m/s, arcing down under gravity while fading over 1.5 s; upgrade: tumbling spin",
+   "params": {
+    "spin": 0.3
+   }
+  },
+  "0x320001E0": {
+   "note": "Sacrificial Edge impact (Explode), main spray: 50 black stars 0.6 m shrinking to 0.03 m, flung out ~3 m/s and falling as they fade; upgrade: tumbling spin, soft vs ground",
+   "params": {
+    "spin": 0.3
+   }
+  },
+  "0x320001EE": {
+   "note": "Sacrificial Edge in flight (Launch): one black star per metre shed along the path, drifting out and sinking while it fades over 1.5 s; upgrade: gentle tumble",
+   "params": {
+    "spin": 0.2
+   }
+  },
+  "0x32000225": {
+   "note": "EnchantDownBlue item-debuff burst, the dark counter-sparks: 30 black stars blast out at ~2 m/s, shrinking and fading over 1 s; upgrade: tumbling roll",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x32000288": {
+   "note": "Corrupted / T'thuun / Iron Blade Aegis, The Shadows, Bloodstones: persistent cloud of ~60 half-transparent black motes orbiting the item for 4 s each; upgrade: each mote eases in and out (retail pops them at 50%), slow roll",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.1
+   }
+  },
+  "0x3200086F": {
+   "note": "Shadow Blade steady black glint: a single dark star re-spawned every 30 ms at the blade, reading as one static star; upgrade: generated fades and spin removed so it does not strobe at ~34 Hz",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000871": {
+   "note": "Shield of Isin Dule, Hopeslayer statues / Idol of Black Crystal, Rift Orbs: persistent dark glints blooming on the surface (5 alive, 0.06->0.15 m, fading over 1 s); upgrade: softer bloom-in, slow roll",
+   "params": {
+    "fadeIn": 0.12,
+    "spin": 0.2
+   }
+  },
+  "0x3200087B": {
+   "note": "BlackMadness curse swarm: 10 black stars circle wide round the victim, sinking and shrinking to nothing over 2.5 s; upgrade: slow roll, no pop-in"
+  },
+  "0x3200087E": {
+   "note": "BlackMadness curse drip: for a minute, one opaque black star every 2.5 s drops from 0.5-2 m above at 4 m/s, swelling slightly; upgrade: eased in, slow roll, short fade before it dies"
+  },
+  "0x32000884": {
+   "note": "Shadow scenery 0x020015aa (beside the swelling void blot 0x32000886): persistent BlackMadness-style swarm of ~8 black stars circling and sinking; upgrade: slow roll, no pop-in"
+  },
+  "0x32000980": {
+   "note": "Sword of Soroku blade glint: a black star blooms 0.03->0.18 m on the blade every 0.5 s and fades in ~0.3 s; upgrade: near-instant onset (generated 30% fade-in blunted it), slight twist",
+   "params": {
+    "fadeIn": 0.05,
+    "spin": 0.1
+   }
+  },
+  "0x320009C3": {
+   "note": "Destroyed portals (Holtburg, Rithwic, Mayoi, +36), Mysterious Portal, The Shadows: steady stream (~14 alive) of big 1.5 m black stars rising off the dead portal, shrinking to nothing as they fade over 2 s; upgrade: eased in instead of popping at full size, slow roll, softer against the ground",
+   "params": {
+    "fadeIn": 0.08,
+    "spin": 0.3,
+    "soft": 0.4,
+    "nearFade": 0.9
+   }
+  },
+  "0x320009E4": {
+   "note": "HealthDownVoid debuff, low tier: 15 black stars blast out of the chest at ~3-8 m/s, shrinking 0.44->0.03 m and fading over ~1 s; upgrade: tumbling roll",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320009E5": {
+   "note": "HealthDownVoid debuff, mid tier: 50 black stars blast out of the chest at ~3-8 m/s, shrinking 0.44->0.03 m and fading over ~1 s; upgrade: tumbling roll",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320009E6": {
+   "note": "HealthDownVoid debuff, high tier: 100 black stars blast out of the chest at ~3-8 m/s, shrinking 0.44->0.03 m and fading over ~1 s; upgrade: tumbling roll",
+   "params": {
+    "spin": 0.25
+   }
+  },
+  "0x320009E7": {
+   "note": "RegenDownVoid debuff, low tier: 8 black stars trickle in 1 m above the target and drift in a slow chaotic orbit for 5 s, shrinking and fading; upgrade: slow roll (~0.4 turn), eased ends"
+  },
+  "0x320009E8": {
+   "note": "RegenDownVoid debuff, mid tier: 20 black stars trickle in 1 m above the target and drift in a slow chaotic orbit for 5 s, shrinking and fading; upgrade: slow roll (~0.4 turn), eased ends"
+  },
+  "0x320009E9": {
+   "note": "RegenDownVoid debuff, high tier: 50 black stars trickle in 1 m above the target and drift in a slow chaotic orbit for 5 s, shrinking and fading; upgrade: slow roll (~0.4 turn), eased ends"
+  },
+  "0x320009F9": {
+   "note": "SkillDownVoid debuff, low tier: 10 black stars in a wide swarm, sinking and shrinking to nothing over 2.5 s; upgrade: slow roll, no pop"
+  },
+  "0x320009FA": {
+   "note": "SkillDownVoid debuff, mid tier: 50 black stars in a wide sinking swarm, shrinking to nothing over 2 s; upgrade: slow roll, no pop"
+  },
+  "0x320009FB": {
+   "note": "SkillDownVoid debuff, high tier: 100 larger (0.6 m) black stars in a wide sinking swarm, shrinking to nothing over 2 s; upgrade: slow roll, no pop"
+  },
+  "0x320009FC": {
+   "note": "Nether Staff / Nether Sceptre, Heart of Darkest Flame, Bloodstone Fragment: tiny (9 cm) near-opaque black stars hovering at the head, 5 alive for 1 s each; upgrade: each eases in and out instead of popping, slow roll",
+   "params": {
+    "fadeIn": 0.15
+   }
+  },
+  "0x32000A24": {
+   "note": "Shadow Flyer wake, left swarm: black stars swell 0.03->0.9 m and fade over ~1.5 s, flung by a chaotic local swarm round the creature; upgrade: tumbling roll, softer vs ground",
+   "params": {
+    "spin": 0.25,
+    "soft": 0.15
+   }
+  },
+  "0x32000A25": {
+   "note": "Shadow Flyer wake, mirrored right swarm: black stars swell 0.03->0.9 m and fade over ~1.5 s; upgrade: tumbling roll, softer vs ground",
+   "params": {
+    "spin": 0.25,
+    "soft": 0.15
+   }
+  },
+  "0x3200012D": {
+   "note": "Lightning Bolt / Electric Discharge projectile body: per-metre crossed-plane arcs riding with the bolt, growing 0.2->4.3 m while spinning on the flight axis and fading over 1 s; upgrade: fast 15 Hz crackle, blooming white-hot core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000193": {
+   "note": "Lightning Bolt launch flash: world-space arcs left along the first metres of flight, growing 1.1->7 m in 0.3 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000194": {
+   "note": "Lightning Bolt launch trail, layer A: arcs left along the path grow 0.2->8.3 m and fade over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000195": {
+   "note": "Lightning Bolt launch trail, layer B (twin of 0x32000194 for density): arcs grow 0.2->8.3 m along the path and fade over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320001F4": {
+   "note": "BreatheLightning (Grievver/Gromnie statues, Carenzi, Chickens, +20): 4 arcs spat 3.6-9.6 m/s from the mouth over 0.4 s, spinning, 1.3->0.2 m; upgrade: hard 16 Hz crackle, hot blooming core"
+  },
+  "0x320001FD": {
+   "note": "BreatheLightning of the Red Bull of Sanamar (model faces +Y): 4 arcs spat from the mouth over 0.4 s, spinning, 1.3->0.2 m; upgrade: hard 16 Hz crackle, hot blooming core"
+  },
+  "0x32000418": {
+   "note": "Electric elemental body crackle (Static, Voltarc, Galvanic Knight/Guard, Hand of Artifice, Elemental Protector): small billboard arcs flare 0.1->0.5 m at the core, 8 alive; upgrade: snaps on, 21 Hz crackle, core bloom",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x32000419": {
+   "note": "Elemental crackle, wild layer (also Maelstrom/Tsuric, Blizzard, Avalanche): 3 arcs grow 0.1->0.7 m spinning at up to 3 rad/s; upgrade: snaps on (was a 6% fade-in), 19 Hz crackle",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x3200041A": {
+   "note": "Elemental crackle, upper-body layer: 8 dense arcs grow 0.2->1 m over 2 s (crowd 2.5); upgrade: 17 Hz crackle, moderate core so the stack blooms without blowing out"
+  },
+  "0x3200041B": {
+   "note": "Elemental crackle, small fast layer: 3 arcs 0.1->0.6 m living 1 s; upgrade: snaps on (was a 6% fade-in), 20 Hz crackle",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x3200041C": {
+   "note": "Elemental crackle, mid layer: 6 arcs 0.1->0.7 m over 2 s; upgrade: 19 Hz crackle, core bloom"
+  },
+  "0x3200041D": {
+   "note": "Elemental crackle, largest layer: 8 arcs 0.2->1.4 m drifting up off the body; upgrade: 16 Hz crackle, core bloom"
+  },
+  "0x32000474": {
+   "note": "Scenery 0x020007c5 one-shot arc fountain: 20 bolts shot straight up at 6-7 m/s, tumbling chaotically and ending half-opaque; upgrade: crackle, fade-out removes the end pop"
+  },
+  "0x320004C3": {
+   "note": "Lightning Bolt (2nd variant) launch flash: arcs grow 1.1->7 m along the path in 0.2 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320004C8": {
+   "note": "Lightning Bolt (2nd variant) launch trail: arcs grow 0.2->8.3 m along the path over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320004CC": {
+   "note": "Lightning Bolt arc-band projectile (setup 0x02000884, 4.8 m curved band mesh): bands shed per metre start huge and invisible and contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity",
+   "params": {
+    "flickerHz": 14.0,
+    "nearFade": 1.5
+   }
+  },
+  "0x32000532": {
+   "note": "Scenery 0x0200092f one-shot arc burst: 20 bolts in sequence at one point (max 3 alive), spinning on their axis and growing 1->4.8 m; upgrade: crackle, core bloom"
+  },
+  "0x32000546": {
+   "note": "Crackling aura of thunder creatures (Thunder Chicken/Turkey/Poult, Harraag, Baby Bunny Booty orb / Rabbit): 10 arcs 0.2->1 m flicker round the body; upgrade: 17 Hz crackle, moderate core for the dense stack"
+  },
+  "0x32000560": {
+   "note": "Storm-cloud scenery (0x02000995/996, 0x02000bce) lightning flash: once a second a 0.1 s arc flares 0.1->1.5 m somewhere 1-2.5 m inside the dark vapour; upgrade: strikes instantly (generated 30% fade-in removed) with a short 30% tail",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.3
+   }
+  },
+  "0x320005A2": {
+   "note": "Scenery 0x020009d4 one-shot horizontal arc jet: 20 bolts fired along +X at up to 13 m/s (~8 m reach), ending half-opaque; upgrade: crackle, fade-out removes the end pop"
+  },
+  "0x32000648": {
+   "note": "Scenery 0x02000b6f crackling arc cluster (tesla-like): bolts grow 0.2->4.3 m spinning on their axis, 10 alive, 0.5 s each; upgrade: snaps on (was a 12% fade-in), crackle, core bloom",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x3200067E": {
+   "note": "Scenery 0x02000bf8 giant electric field: 10 billboard arcs swell 0.2->10 m over 0-3.5 s; upgrade: crackle; near-fade 3 m and soft 1 m so walking into it does not white-out the screen",
+   "params": {
+    "nearFade": 3.0,
+    "soft": 1.0
+   }
+  },
+  "0x320006AD": {
+   "note": "Scenery 0x02000c35 / 0x020010b3 arc storm: bolts born on a 1.3 m shell grow to 8.7 m, spinning, 10 alive; upgrade: snaps on (was a 12% fade-in), near-fade 2 m",
+   "params": {
+    "fadeIn": 0.03,
+    "nearFade": 2.0
+   }
+  },
+  "0x320006D3": {
+   "note": "Scenery 0x02000d65 electric pylon (with the elemental crackle set): billboard arcs drift sideways 0.7-1.4 m/s, growing 0.1->4 m over 1.5 s; upgrade: crackle, core bloom"
+  },
+  "0x320006E2": {
+   "note": "Lightning Cloud strikes (also scenery 0x02000d81): 0.2 s bolts born 2.5-5.5 m out grow 1->22 m; upgrade: instant strike (generated 30% fade-in removed), bloom; near-fade 3 m and soft 1 m for the giant bolts",
+   "params": {
+    "fadeIn": 0.02,
+    "nearFade": 3.0,
+    "soft": 1.0
+   }
+  },
+  "0x32000775": {
+   "note": "Electric Elemental Pool / Galvanic Pool leaping arcs: 0.2 s bolts jump up off the pool at 1-3.6 m/s, 0.2->2.8 m; upgrade: instant snap (generated 30% fade-in removed), crackle",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x32000777": {
+   "note": "Galvanic Pool spark fountain: 28 arc sprites thrown up at 3 m/s and falling back over 1.4 s, ending fully opaque; upgrade: crackle, short fade-out removes the end pop"
+  },
+  "0x3200093A": {
+   "note": "Shield of Perfect Light edge crackle: one-frame (25 ms) arcs re-oriented randomly per metre of movement; upgrade: fade-out cut to 8% so the single-frame flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000943": {
+   "note": "Thunder Chicken / Thunder Turkey big aura arcs: 10 arcs swell 0.8->4 m round the bird (dense); upgrade: crackle, core bloom, near-fade 2 m",
+   "params": {
+    "nearFade": 2.0
+   }
+  },
+  "0x32000994": {
+   "note": "Scenery 0x0200179b-9e spinning-bolt burst, large layer: bolts whirl in place for 2.2 s (1.3->0.9 m), ending 60% opaque; upgrade: crackle, fade-out removes the end pop"
+  },
+  "0x32000995": {
+   "note": "Scenery 0x0200179b-9e spinning-bolt burst, small layer: 40 small bolts (0.65->0.2 m) whirl for 3 s (crowd 6.4); upgrade: crackle with a restrained core for the dense stack"
+  },
+  "0x32000864": {
+   "note": "Black Spear / Shard of the Black Spear / Harraag's Crystalline Dagger swing wisps: faint (25%) black soot puffs shed per metre, shrinking 0.44->0.11 m in 0.5 s; upgrade: spiky rims erode, slow roll"
+  },
+  "0x3200086E": {
+   "note": "Shadow Blade swing wisps: faint (30%) soot flecks shed per metre, 0.28->0.11 m in 0.25 s; upgrade: rims erode, slight roll"
+  },
+  "0x3200087A": {
+   "note": "Shadow scenery 0x0200159d one-shot: 12 black clouds swell 0.1->2.2 m while swirling slowly upward for 5 s; upgrade: rims erode, slow roll, soft vs ground"
+  },
+  "0x32000880": {
+   "note": "Shadow-touched creatures (Shadow Aspect of Grael, Shambling Undead Ruschk, Harraag, Shadow Kresovus, Moarsman Priests of T'thuun): dark smoke rising off the body (6 alive, 0.2->0.8 m, 40%->0); upgrade: wispier rim erosion, slow roll",
+   "params": {
+    "erode": 0.24
+   }
+  },
+  "0x32000881": {
+   "note": "Spire's Head: huge black clouds (7 m) condense into the spire head, shrinking to 0.15 m as they darken to 60%; upgrade: dissolving rims, soft and near fade for the giant quads"
+  },
+  "0x32000886": {
+   "note": "Shadow scenery 0x020015aa void blot: once a second a black cloud swells 0.15->4.3 m from a point and fades over 3 s; upgrade: rim erosion, slow roll, big soft edge"
+  },
+  "0x3200088B": {
+   "note": "Shadow Vortex / Shadow Eddy core: giant black clouds (22 m) condense to 4 m while darkening to 60%; upgrade: rims erode, soft 2 m, near-fade 3 m",
+   "params": {
+    "soft": 2.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000894": {
+   "note": "Scenery 0x020015b1 shadow whirlwind: 12 black clouds spiral up and inward, condensing 8.8->0.1 m over 4 s while darkening; upgrade: rims erode, roll, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x32000895": {
+   "note": "Dark ooze drips (Hellion/Biaka Mukkir, Dark Bobo, scenery 0x020014be/1700/171d): black blobs fall under gravity, shrinking 1.1->0.1 m over 1 s; upgrade: rims erode, slight roll"
+  },
+  "0x32000896": {
+   "note": "Scenery 0x020015b2 / 0x02001612 one-shot: 28 black clouds billow 1.1->6.6 m in a swirling swarm; upgrade: rims erode, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x32000898": {
+   "note": "Shadow storm scenery 0x020015b3 (with the vortex 0x3200088B and red lightning 0x32000899): 24 colossal black clouds (11->44 m) orbit 4-9 m out for 6 s; upgrade: eased in (retail pops them in fully opaque), soft 2.5 m, near-fade 3 m",
+   "params": {
+    "fadeIn": 0.12,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320008C1": {
+   "note": "BaelZharonSmite: for 2 s black soot puffs stream in from 1-2 m out and are sucked into the victim, ending 40% opaque; upgrade: rims erode, fade-out hides the end pop"
+  },
+  "0x320008C9": {
+   "note": "Count Dardante shadow drip: small black wisps sink off him, 0.3 m -> nothing in 0.8 s; upgrade: rims erode, eased start"
+  },
+  "0x320008CB": {
+   "note": "Void fog field scenery 0x02001603: 25 black soot clouds scattered within 5 m swell 0.15->4.3 m while drifting and fading over 5 s (dark twin of the 0x02000994 poison fog); upgrade: rims erode, slow roll, big soft edge, near-fade"
+  },
+  "0x3200095E": {
+   "note": "Pack Aerbax / scenery 0x02001700 shadow drip: small black wisps sink off the body, 0.3 m -> nothing in 0.8 s; upgrade: rims erode, eased start"
+  },
+  "0x32000960": {
+   "note": "Unreferenced 10 s void dissipation (no script in the DAT): 50 faint black motes drift out slowly over 5 s, shrinking to nothing; upgrade: rims erode, slow roll"
+  },
+  "0x32000977": {
+   "note": "Shadow-touched Virindi (Paradox, Quidiox, Artificer), Claude the Dark Archmage, Quiddity Seeds: dark droplets fall and swell 0.1->0.66 m, darkening to opaque; upgrade: they dissolve (erode) and fade instead of popping at full opacity"
+  },
+  "0x3200099A": {
+   "note": "Formless Shadow body: black blobs bubble up at ~1.2 m/s and fall back, shrinking 1.65->0.2 m over 0.8 s; upgrade: rims erode, slight roll, soft vs ground"
+  },
+  "0x320009CB": {
+   "note": "Isin Dule / Spectral Voidmage / void scenery 0x02001a6e-71: tiny (6 cm -> 3 mm) black motes rising, 8 alive; upgrade: erosion and spin dropped, soft/near-fade sized for a speck",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.02,
+    "nearFade": 0.05
+   }
+  },
+  "0x320009CC": {
+   "note": "Isin Dule / Spectral Voidmage / void scenery, denser twin: 10 tiny (6 cm -> 3 mm) black motes rising; upgrade: erosion and spin dropped, soft/near-fade sized for a speck",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.02,
+    "nearFade": 0.05
+   }
+  },
+  "0x320009CD": {
+   "note": "Isin Dule / Tormented Shadow / Enraged Shadow drip: black soot blobs drop under gravity and spread 0.55->1.65 m while fading; upgrade: rims erode, slight roll"
+  },
+  "0x320009EA": {
+   "note": "Nether Streak/Bolt/Arc launch trail, inner layer: dark vapour streams along the bolt, contracting 1.65->0.1 m while thickening to opaque in 0.5 s; upgrade: erosion eased to 0.3 so the knot reads before it dissolves, fade-out hides the pop",
+   "params": {
+    "erode": 0.3
+   }
+  },
+  "0x320009EB": {
+   "note": "Nether Streak/Bolt/Arc launch trail, middle layer: vapour contracts 2.75->0.1 m while thickening in 0.7 s; upgrade: erosion eased to 0.3, fade-out hides the pop",
+   "params": {
+    "erode": 0.3
+   }
+  },
+  "0x320009EC": {
+   "note": "Nether Streak/Bolt/Arc launch trail, outer layer: vapour contracts 3.85->0.1 m while thickening in 0.9 s; upgrade: erosion eased to 0.3, fade-out hides the pop",
+   "params": {
+    "erode": 0.3
+   }
+  },
+  "0x320009ED": {
+   "note": "Nether bolt impact, small blast: 15 black puffs blossom 0.2->1.3 m and fade in ~0.5 s; upgrade: instant onset (burst), stronger rim erosion so it wisps away",
+   "params": {
+    "fadeIn": 0.02,
+    "erode": 0.26
+   }
+  },
+  "0x320009EE": {
+   "note": "Nether bolt impact, main blast: 40 black puffs blossom 0.2->1.65 m and fade in 0.6 s (crowd 9); upgrade: instant onset, stronger rim erosion",
+   "params": {
+    "fadeIn": 0.02,
+    "erode": 0.26
+   }
+  },
+  "0x320009EF": {
+   "note": "Nether bolt impact, outer blast: 40 black puffs blossom 0.44->2 m and fade in 0.7 s; upgrade: instant onset, stronger rim erosion",
+   "params": {
+    "fadeIn": 0.02,
+    "erode": 0.26
+   }
+  },
+  "0x320009F6": {
+   "note": "Nether Ring band (4.8 m curved arc mesh): dark bands shed per metre contract 14->0.5 m while thickening over 0.4 s; upgrade: erosion eased to 0.3, fade-out hides the pop",
+   "params": {
+    "erode": 0.3
+   }
+  },
+  "0x320009FF": {
+   "note": "Nether Baton / Experimental and Master Bloodstone: thin black smoke curling up from the head (9 alive, 0.33->0.11 m); upgrade: rims erode, slight roll"
+  },
+  "0x32000A0C": {
+   "note": "Heart of Darkest Flame / scenery 0x02001c0c: black 'dark flame' smoke rising from the heart (9 alive, 0.33->0.11 m); upgrade: rims erode, slight roll"
+  },
+  "0x32000010": {
+   "note": "Poison-mist scenery 0x020003c6: green gas puffs appear 1-6 m up and rise slowly (0.5 m/s), swelling 0.15->2.2 m over 6 s; upgrade: edges erode, slow roll, dims at night"
+  },
+  "0x3200002B": {
+   "note": "Acid Axe swing droplets: 3.6 cm green acid flecks shed per metre, shrinking to nothing in 1 s; upgrade: erosion and spin removed, soft/near-fade sized for a speck",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x320001AB": {
+   "note": "Toxic vent scenery 0x0200028d / 0x02000ab3: heavy green gas spills sideways from a spout and sinks, swelling 0.4->1.45 m over 3 s; upgrade: edges erode, slow roll, lit"
+  },
+  "0x320001AC": {
+   "note": "Toxic vent miasma (0x0200028d / 0x02000ab3 / 0x02000f42): up to 22 faint (15%) green clouds swirl, swelling 0.7->8.7 m over ~8 s; upgrade: edges erode, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x320001AD": {
+   "note": "Toxic pool scenery 0x0200028f / 0x02000ab4: green gas bubbles up and wanders, 0.15->2.9 m, 50%->0; upgrade: edges erode, slow roll, soft vs the pool"
+  },
+  "0x3200020E": {
+   "note": "Unreferenced green acid dribble (no script): 7 small puffs drip forward and fall, 0.15->0.36 m in 0.7 s; upgrade: edges erode, soft/near-fade sized to the puff",
+   "params": {
+    "soft": 0.12,
+    "nearFade": 0.3
+   }
+  },
+  "0x32000274": {
+   "note": "Acid weapon fumes (Acid War/Battle Axe, Ono, Quarrels, +115; also Flaming Club BreatheAcid): faint green wisps rise from the blade, 0.29->0.15 m; upgrade: soft/near-fade sized to the wisp",
+   "params": {
+    "soft": 0.1,
+    "nearFade": 0.25
+   }
+  },
+  "0x3200027C": {
+   "note": "Acid Quarrel / Acid Javelin missile fume trail: faint green puffs shed per metre, rising and swelling 0.3->0.6 m over ~2 s; upgrade: edges erode, slow roll"
+  },
+  "0x32000298": {
+   "note": "BreatheAcid lingering fumes (generic breath table: Carenzi, Chickens, statues, +25): 3 faint puffs drift up from the mouth for 1 s; upgrade: edges erode, soft/near-fade sized to the puff",
+   "params": {
+    "soft": 0.12,
+    "nearFade": 0.3
+   }
+  },
+  "0x3200055A": {
+   "note": "Poison fog field scenery 0x02000994: 25 green clouds scattered within 5 m, swelling 0.15->5.8 m and drifting over 5 s; upgrade: edges erode, slow roll, near-fade 2.8 m",
+   "params": {
+    "nearFade": 2.8
+   }
+  },
+  "0x320005B4": {
+   "note": "Acid vat / puddle scenery 0x020009e4: 12 faint green wisps rising, 0.29->0.15 m; upgrade: soft/near-fade sized to the wisp",
+   "params": {
+    "soft": 0.1,
+    "nearFade": 0.25
+   }
+  },
+  "0x3200063D": {
+   "note": "Olthoi Queen / Hive Queen / Brood Matron BreatheAcid cloud: 3 faint puffs swell 0.4->5.8 m round the mouth for 1 s; upgrade: edges erode, big soft edge"
+  },
+  "0x320006BE": {
+   "note": "Gaerlan's acid fume trail: faint green puffs shed per metre, rising and swelling 0.3->0.6 m; upgrade: edges erode, slow roll"
+  },
+  "0x320006F9": {
+   "note": "Corrosive Bolt projectile trail: green acid vapour puffs shed per metre swell 0.3->1.45 m behind the bolt, 50%->0; upgrade: edges erode, soft, lit"
+  },
+  "0x3200074B": {
+   "note": "Toxic vent scenery 0x02000f42, spout A: heavy green gas spills sideways and sinks, swelling 0.4->1.45 m; upgrade: edges erode, slow roll"
+  },
+  "0x3200074C": {
+   "note": "Toxic vent scenery 0x02000f42, spout B (opposite side): heavy green gas spills and sinks, 0.4->1.45 m; upgrade: edges erode, slow roll"
+  },
+  "0x3200074F": {
+   "note": "Unreferenced giant acid breath cloud (no script): 3 faint puffs swell 4.3->7.3 m for 1 s; upgrade: edges erode, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x3200075D": {
+   "note": "Olthoi Lacerator / Hive Piercer BreatheAcid fumes: puffs thrown forward-down then rising (0.4->0.15 m); upgrade: edges erode, soft/near-fade sized to the puff",
+   "params": {
+    "soft": 0.12,
+    "nearFade": 0.3
+   }
+  },
+  "0x32000760": {
+   "note": "Poison fog scenery 0x02000f97: 25 green clouds packed within 2 m swell to 5.8 m at <=40% (dense); upgrade: edges erode, near-fade 2.8 m",
+   "params": {
+    "nearFade": 2.8
+   }
+  },
+  "0x320007E3": {
+   "note": "Unreferenced acid breath bloom (no script): 5 faint puffs balloon 0.4->7.3 m with chaotic drift for 1 s; upgrade: edges erode, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x320007E4": {
+   "note": "Unreferenced acid gust (no script): 14 green clouds over 0.7 s drift sideways ~1 m/s, swelling 0.15->4.3 m; upgrade: edges erode, eased start, big soft edge"
+  },
+  "0x3200081D": {
+   "note": "Unreferenced faint acid wisps (no script) drifting along -Y, 0.4->0.15 m; upgrade: edges erode, soft/near-fade sized to the wisp",
+   "params": {
+    "soft": 0.12,
+    "nearFade": 0.3
+   }
+  },
+  "0x320008B0": {
+   "note": "Mukkir Aspect of Grael BreatheAcid spray: puffs shot forward-down at ~3 m/s, swelling 0.3->1.45 m; upgrade: edges erode, soft, lit"
+  },
+  "0x320002D4": {
+   "note": "Ritual statue scenery 0x02000591 energy funnel (purple): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000363": {
+   "note": "Ritual altar scenery 0x02000593 eruption (purple): bright bursts shoot up 6.5-10 m/s and balloon 0.17->17 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 3 m",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x3200038E": {
+   "note": "WeddingBliss celebration, purple tower: 150 tendril blooms rocket up at ~10 m/s from up to 5 m out and swell 0.9->17 m while fading (80 alive, crowd 6); upgrade: crackle, arms erode; near-fade 3 m so the blooms round the couple do not fill the camera",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x32000545": {
+   "note": "BunnySmite blast, purple shell: 100 tendril bursts explode outward at 4-10 m/s, shrinking 1.45->0.15 m and fading in ~1 s; upgrade: instant hit, crackle, hot core, arms erode"
+  },
+  "0x32000598": {
+   "note": "Faint glyph scenery 0x02001096: three faint (10%) purple tendrils shrink 0.7->0.17 m in place, overlapping into a shimmer; upgrade: each eases in/out (retail pops them at a constant 10%)",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000599": {
+   "note": "Faint glyph scenery 0x020009cf: three faint (10%) purple tendrils grow 0.17->0.7 m in place; upgrade: each eases in/out (retail pops them at a constant 10%)",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x320005B5": {
+   "note": "Aetherium crackle (Large Shattered Aetherium Core, Atamarr's Aetherium Aegis, Aerbax's Defeat, scenery 0x020009e5): small purple sparks 0.17->0.35 m flicker at a point, 4 alive; upgrade: crackle, core bloom"
+  },
+  "0x320005D6": {
+   "note": "Energy hit-splatter of puppet/construct creatures (Marionettes, Shopkeeper, Gear Hunter, Yaja the Shepherd), 25-spark tier: purple tendril sparks spray at ~1 m/s, dropping and fading in 0.6 s; upgrade: instant onset (burst), crackle, arms erode",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005D8": {
+   "note": "Energy hit-splatter of puppet/construct creatures (Marionettes, Shopkeeper, Gear Hunter, Yaja the Shepherd), 10-spark tier: purple tendril sparks spray at ~1 m/s, dropping and fading in 0.6 s; upgrade: instant onset (burst), crackle, arms erode",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005D9": {
+   "note": "Energy hit-splatter of puppet/construct creatures (Marionettes, Shopkeeper, Gear Hunter, Yaja the Shepherd), 15-spark tier: purple tendril sparks spray at ~1 m/s, dropping and fading in 0.6 s; upgrade: instant onset (burst), crackle, arms erode",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005DA": {
+   "note": "Energy hit-splatter of puppet/construct creatures (Marionettes, Shopkeeper, Gear Hunter, Yaja the Shepherd), 20-spark tier: purple tendril sparks spray at ~1 m/s, dropping and fading in 0.6 s; upgrade: instant onset (burst), crackle, arms erode",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005DB": {
+   "note": "Singular / Innocent / Battered Doll discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode",
+   "params": {
+    "fadeIn": 0.04
+   }
+  },
+  "0x320005DC": {
+   "note": "Singular Doll / Pure One / Innocent Doll crackle: 5 small tendril sparks (0.15->0.44 m) pop round the body for 0.5 s each at 50%->0; upgrade: livelier electric flicker",
+   "params": {
+    "flicker": 0.25
+   }
+  },
+  "0x32000643": {
+   "note": "Unreferenced purple rising puffs (no script): for 3 s faint (30%) tendrils drift up 0.1-1 m/s and grow 0.17->1.7 m; upgrade: arms erode, crackle, slow roll"
+  },
+  "0x32000666": {
+   "note": "Unreferenced purple upward burst (no script): for 0.5 s tendrils shoot up ~2 m/s and balloon 0.17->3.5 m while fading; upgrade: crackle, core bloom, arms erode"
+  },
+  "0x320006B8": {
+   "note": "Dojiro Sangi / scenery 0x02000d41 motion trail: faint (30%) purple sparks shed per metre, 0.35->0.17 m in 0.5 s; upgrade: crackle, arms erode"
+  },
+  "0x320009A3": {
+   "note": "Beacon pillar scenery 0x020017d8, purple layer (2.9 m): constant-size tendrils rise 6.5-10 m/s to ~20 m, brightening to opaque at the top over 2.5 s; upgrade: steadier flicker, fade-out at the top instead of a pop",
+   "params": {
+    "flicker": 0.1
+   }
+  },
+  "0x320008B1": {
+   "note": "Red arc-band projectile (scenery 0x020015ef, 16-vert curved band): bands shed per metre contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x320008B6": {
+   "note": "Red arc-band projectile (scenery 0x020015e4/15ec/161a/161c): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x320008BF": {
+   "note": "Red arc-band projectile, half-size (scenery 0x020015fb): bands contract 7->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x320008C2": {
+   "note": "Red Lightning Bolt variant body (setup 0x020015fd): per-metre crossed-plane arcs grow 0.2->4.3 m spinning on the flight axis over 1 s; upgrade: 15 Hz crackle, blooming red-white core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320008C5": {
+   "note": "Red Lightning Bolt launch flash: arcs grow 1.1->7 m along the first metres of flight in 0.3 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320008C6": {
+   "note": "Red Lightning Bolt launch trail, layer A: arcs grow 0.2->8.3 m along the path over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x320008C7": {
+   "note": "Red Lightning Bolt launch trail, layer B (twin of 0x320008C6): arcs grow 0.2->8.3 m along the path over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000992": {
+   "note": "Scenery 0x0200179f-a2 red spinning-bolt burst, small layer: 40 small red bolts whirl in place for 3 s (crowd 6.4), ending half-opaque; upgrade: crackle, fade-out removes the pop, restrained core for the stack"
+  },
+  "0x32000993": {
+   "note": "Scenery 0x0200179f-a2 red spinning-bolt burst, large layer: bolts whirl in place for 2.2 s (1.3->0.9 m), ending 60% opaque; upgrade: crackle, fade-out removes the end pop"
+  },
+  "0x32000A40": {
+   "note": "Rynthid torment body arcs (Discorporate Rynthids, Corrupt/Rynthid Slayer, Spirit Rager, Rynthid Sorcerer, +): one-frame (25 ms) red arcs re-oriented randomly per metre moved; upgrade: fade-out cut to 8% so the single-frame flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000A49": {
+   "note": "Aspect of Torment body arcs: one-frame (25 ms) red arcs, twice the Rynthid size, re-oriented per metre moved; upgrade: fade-out cut to 8% so the flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000684": {
+   "note": "Door / Sealed Door (setup 0x02000c09) magic ward (blue): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x3200068E": {
+   "note": "Vibrant Virindi Energy Cluster / Containment Doll (vibrant tier) crackle: 5 small tendril sparks (0.15->0.44 m) pop round the body for 0.5 s each at 50%->0; upgrade: livelier electric flicker, gain 1.65 to match the name",
+   "params": {
+    "flicker": 0.25,
+    "gain": 1.65
+   }
+  },
+  "0x32000692": {
+   "note": "Vibrant Virindi Energy Cluster / Containment Doll (vibrant tier) discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode, gain 1.75 to match the name",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 1.75
+   }
+  },
+  "0x320006A0": {
+   "note": "Empyrean Blooded Ritual Statue / scenery 0x02000c26 ritual energy funnel (blue): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320006A4": {
+   "note": "Ritual altar scenery 0x02000c2c ritual eruption (blue): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x32000907": {
+   "note": "Scenery 0x02001694 sideways energy jet A (blue): 60 tendrils fired along +X at ~2-5 m/s, condensing 7.3->0.7 m while brightening to 90% over 2 s (dense, crowd 4); upgrade: crackle, rims erode, fade-out removes the pop"
+  },
+  "0x32000908": {
+   "note": "Scenery 0x02001694 sideways energy jet B (blue, opposite direction, world-space): 60 tendrils condense 7.3->0.7 m while brightening over 2 s; upgrade: crackle, rims erode, fade-out removes the pop"
+  },
+  "0x3200096B": {
+   "note": "Harbinger blue sigil: tendril sigils appear huge (5.8 m) and condense to nothing as they rise and turn opaque over 1.6 s (about 2 alive); upgrade: crackle, rims erode, fade-out removes the end pop"
+  },
+  "0x320009A1": {
+   "note": "Beacon pillar scenery 0x020017d8, blue layer (4.35 m): constant-size tendrils rise 6.5-10 m/s to ~20 m, brightening to opaque at the top over 2.5 s; upgrade: steadier flicker, fade-out at the top instead of a pop",
+   "params": {
+    "flicker": 0.1
+   }
+  },
+  "0x32000A12": {
+   "note": "Lothus Guardians, Vision of Horror, Virindi Clandestine / Rhys / Wido, Curator of Torment torment motes (blue): faint (20%) small tendrils drift round the body for 2 s, shrinking 0.36->0.15 m, 20 alive; upgrade: eased in/out (retail pops them at constant 20%), crackle",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000687": {
+   "note": "Door / Sealed Door (setup 0x02000c0c) magic ward (red): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x320006A3": {
+   "note": "Ritual statue scenery 0x02000c22 ritual energy funnel (red): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320006A7": {
+   "note": "Ritual Statue of Entrapment / scenery 0x02000c28 ritual eruption (red): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x3200079B": {
+   "note": "Cosseted / Soiled / Befouled / Nightmarish / Desecrated Doll discharge: red tendril bursts expand 0.15->1.3 m and fade in 1.1 s (2 alive); upgrade: eased but quick onset, crackle, arms erode"
+  },
+  "0x3200079C": {
+   "note": "Cosseted / Soiled / Defiled Doll crackle swarm: ~14 small red tendril sparks (0.15->0.44 m) buzz round the doll for 1.9 s at 50%->0; upgrade: livelier electric flicker",
+   "params": {
+    "flicker": 0.25
+   }
+  },
+  "0x32000817": {
+   "note": "Unreferenced red energy burst (no script): for 3 s, 29 red tendril sparks crackle round a point (0.15->0.7 m, 50%->0, crowd 6.6); upgrade: crackle with restrained gain for the dense stack, arms erode"
+  },
+  "0x32000967": {
+   "note": "Harbinger red sigil: tendril sigils appear huge (5.8 m) and condense to nothing as they rise and turn opaque over 1.6 s (about 2 alive); upgrade: crackle, rims erode, fade-out removes the end pop"
+  },
+  "0x320009A4": {
+   "note": "Beacon pillar scenery 0x020017d8 / Captured Keep Banner Field, red layer (1.45 m): constant-size tendrils rise 6.5-10 m/s to ~20 m, brightening to opaque at the top over 2.5 s; upgrade: steadier flicker, fade-out at the top instead of a pop",
+   "params": {
+    "flicker": 0.1
+   }
+  },
+  "0x32000A3E": {
+   "note": "Rynthid Minion, Discorporate Rynthids, Corrupt Slayer, Rynthid Sorcerer, +11 torment motes (red): faint (20%) small tendrils drift round the body for 2 s, shrinking 0.36->0.15 m, 20 alive; upgrade: eased in/out (retail pops them at constant 20%), crackle",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000A42": {
+   "note": "Discorporate Rynthid of Torment (red) discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode",
+   "params": {
+    "fadeIn": 0.04
+   }
+  },
+  "0x32000276": {
+   "note": "Lightning blunt/fist weapon crackle (Lightning Mace, Tofun, Katar, Morning Star, Dabus, Nekode, Cestus, +): arcs flick round the head at random angles, ~20/s, living 0-0.2 s; upgrade: snaps on (generated 30% fade-in removed), 18 Hz crackle, hot core",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x32000395": {
+   "note": "Lightning axe/hammer/quarrel crackle (Lightning Hammer, Hand Axe, Ono, Quarrels, +31; Flaming Club BreatheLightning): 0.1->0.9 m arcs flick round the weapon for ~0.2 s; upgrade: snaps on (fade-in removed), 18 Hz crackle",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x320003AC": {
+   "note": "Lightning blade crackle (Lightning Ken, Dagger, Jambiya, Tachi, Khanjar, Jitte, +55): small 0.1->0.35 m arcs flick round the blade, 5/s; upgrade: snaps on (fade-in removed), 23 Hz crackle",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x320005DF": {
+   "note": "BreatheLightning of Virindi Energy Clusters, Dolls, Rynthids, Lothus Guardians, Mattekars (+): 4 arcs spat forward 3.6-9.6 m/s, growing 0.46->2.3 m while fading over 0.75 s; upgrade: crackle, hot blooming core"
+  },
+  "0x320006BF": {
+   "note": "Gaerlan body crackle: violet arcs flick at random angles per metre he moves, 0.1->0.9 m in ~0.2 s; upgrade: crackle, hot core"
+  },
+  "0x320006C4": {
+   "note": "Elemental Fury launch arcs: per-metre arcs flare 0.1->11 m along the first metres of flight in 0.2 s; upgrade: 15 Hz crackle, core bloom, near-fade 2.5 m near the caster",
+   "params": {
+    "flickerHz": 15.0,
+    "nearFade": 2.5
+   }
+  },
+  "0x320006FB": {
+   "note": "Scenery 0x02000e5f moving-part crackle: violet arcs flick per metre of motion, 0.1->0.9 m in 0.3 s; upgrade: crackle, hot core"
+  },
+  "0x32000A48": {
+   "note": "BreatheLightning of Olthoi Hive Warriors / Paradox-touched Ward Guardians and Sentinels: 4 arcs spat forward, growing 0.46->2.3 m while fading over 0.75 s; upgrade: crackle, hot blooming core"
+  },
+  "0x32000685": {
+   "note": "Sealed door scenery 0x02000c0d magic ward (green): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x3200068F": {
+   "note": "Faint Virindi Energy Cluster (faint tier) crackle: 5 small tendril sparks (0.15->0.44 m) pop round the body for 0.5 s each at 50%->0; upgrade: livelier electric flicker, gain 1.3 to match the name",
+   "params": {
+    "flicker": 0.25,
+    "gain": 1.3
+   }
+  },
+  "0x32000693": {
+   "note": "Faint Virindi Energy Cluster (faint tier) discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode, gain 1.35 to match the name",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 1.35
+   }
+  },
+  "0x320006A1": {
+   "note": "Ritual statue scenery 0x02000c25 ritual energy funnel (green): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320006A5": {
+   "note": "Ritual altar scenery 0x02000c2b ritual eruption (green): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x32000969": {
+   "note": "Harbinger green sigil: tendril sigils appear huge (5.8 m) and condense to nothing as they rise and turn opaque over 1.6 s (about 2 alive); upgrade: crackle, rims erode, fade-out removes the end pop"
+  },
+  "0x320009A2": {
+   "note": "Beacon pillar scenery 0x020017d8, green layer (5.8 m): constant-size tendrils rise 6.5-10 m/s to ~20 m, brightening to opaque at the top over 2.5 s; upgrade: steadier flicker, fade-out at the top instead of a pop",
+   "params": {
+    "flicker": 0.1
+   }
+  },
+  "0x320004A0": {
+   "note": "Silifi of Crimson Stars / Crimson Night, Aerbax (Mask Shard Gen / Shadow) swing trail: one-frame crimson arcs 1.1->1.3 m re-oriented per metre swung; upgrade: fade-out cut to 8% so the single-frame flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000876": {
+   "note": "Shadow Blade / Shield of Isin Dule swing trail: one-frame small (0.2-0.3 m) crimson arcs per metre swung; upgrade: fade-out cut to 8% so the flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000878": {
+   "note": "Shield of Isin Dule rim arcs (horizontal plane mesh): one-frame small crimson arcs per metre moved; upgrade: fade-out cut to 8%",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x3200088E": {
+   "note": "Shadow Vortex / Shadow Eddy / scenery 0x020015dc red lightning: one opaque 2.2 m crimson bolt a second rockets up 6.5-10 m/s through the vortex; upgrade: crackle, hot core, short fades so it does not pop in and out"
+  },
+  "0x32000899": {
+   "note": "Shadow storm scenery 0x020015b3 red lightning: 0.4 s crimson bolts flicker 2.5-8.5 m out inside the giant black cloud swarm, 2.2->4.3 m; upgrade: snaps on (was a 15% fade-in), crackle, bloom",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x3200097C": {
+   "note": "Aerbax swing trail: one-frame crimson arcs (0.4-0.6 m) per metre swung; upgrade: fade-out cut to 8% so the flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000A69": {
+   "note": "Amber Lightning Bolt variant body (scenery 0x02001c24): per-metre crossed-plane arcs grow 0.2->4.3 m spinning on the flight axis over 1 s; upgrade: 15 Hz crackle, blooming gold-white core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A6B": {
+   "note": "Amber Lightning Bolt launch flash (table 0x340000d7): arcs grow 1.1->7 m along the first metres of flight in 0.3 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A6C": {
+   "note": "Amber Lightning Bolt launch trail, layer A (table 0x340000d7): arcs grow 0.2->8.3 m along the path over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A6D": {
+   "note": "Amber Lightning Bolt launch trail, layer B (twin of 0x32000A6C): arcs grow 0.2->8.3 m over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A7D": {
+   "note": "Amber arc-band projectile (scenery 0x02001c3c, 12-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x32000A7E": {
+   "note": "Amber arc-band projectile (scenery 0x02001c3d, 16-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x3200002C": {
+   "note": "Lightning sword/staff swing trail (Lightning Ken, Tachi, Jo, Simi, Silifi, Shamshir, Scimitar, +40): one-frame violet arcs 1.1->1.3 m re-oriented per metre swung; upgrade: fade-out cut to 8% so the single-frame flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x320003A9": {
+   "note": "Lightning dagger swing trail (Lightning Dagger, Jambiya, Khanjar, Jitte, Knife, Short Sword, +12): one-frame violet arcs 0.4-0.6 m per metre swung; upgrade: fade-out cut to 8%",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x320004FA": {
+   "note": "Charged Defender / Plasma Golem / Voltaic Golem walking arcs: faint (25%) one-frame violet arcs 1.1->2.2 m flicker anywhere within 0.7 m of the body per metre moved; upgrade: crackle, hot core lifts the faint flash"
+  },
+  "0x32000939": {
+   "note": "Shield of Perfect Light / Pack Aerbax small motion arcs: one-frame 0.2-0.3 m violet arcs per metre moved; upgrade: fade-out cut to 8% so the flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x3200096F": {
+   "note": "Pillar of Lightning / Lightning Energy / Lightning Cloud (+ scenery 0x02001c13): every 0.5 s an opaque 6.5->4.3 m vertical bolt shoots up from a 3 m ring at 6.5-40 m/s; upgrade: instant strike (was a 15% fade-in), shorter tail, near-fade 2.5 m",
+   "params": {
+    "fadeIn": 0.02,
+    "fadeOut": 0.35,
+    "nearFade": 2.5
+   }
+  },
+  "0x3200023C": {
+   "note": "Melee hit sparks (SparkLow/Left/Right/Front/Back on armoured and construct targets), 5-spark tier: tiny 0.15->0.07 m white-violet spark stars spray ~1 m/s and drop under gravity in ~0.6 s; re-filed lightning->star (radial spark, not an arc); upgrade: hot core, brief glints, gentler crackle, natural white-violet (no extra saturation)",
+   "params": {
+    "sat": 1.0,
+    "flicker": 0.2,
+    "flickerHz": 20.0,
+    "twinkle": 0.2
+   },
+   "family": "star"
+  },
+  "0x3200023D": {
+   "note": "Melee hit sparks (SparkLow/Left/Right/Front/Back on armoured and construct targets), 10-spark tier: tiny 0.15->0.07 m white-violet spark stars spray ~1 m/s and drop under gravity in ~0.6 s; re-filed lightning->star (radial spark, not an arc); upgrade: hot core, brief glints, gentler crackle, natural white-violet (no extra saturation)",
+   "params": {
+    "sat": 1.0,
+    "flicker": 0.2,
+    "flickerHz": 20.0,
+    "twinkle": 0.2
+   },
+   "family": "star"
+  },
+  "0x3200023E": {
+   "note": "Melee hit sparks (SparkLow/Left/Right/Front/Back on armoured and construct targets), 15-spark tier: tiny 0.15->0.07 m white-violet spark stars spray ~1 m/s and drop under gravity in ~0.6 s; re-filed lightning->star (radial spark, not an arc); upgrade: hot core, brief glints, gentler crackle, natural white-violet (no extra saturation)",
+   "params": {
+    "sat": 1.0,
+    "flicker": 0.2,
+    "flickerHz": 20.0,
+    "twinkle": 0.2
+   },
+   "family": "star"
+  },
+  "0x3200023F": {
+   "note": "Melee hit sparks (SparkLow/Left/Right/Front/Back on armoured and construct targets), 20-spark tier: tiny 0.15->0.07 m white-violet spark stars spray ~1 m/s and drop under gravity in ~0.6 s; re-filed lightning->star (radial spark, not an arc); upgrade: hot core, brief glints, gentler crackle, natural white-violet (no extra saturation)",
+   "params": {
+    "sat": 1.0,
+    "flicker": 0.2,
+    "flickerHz": 20.0,
+    "twinkle": 0.2
+   },
+   "family": "star"
+  },
+  "0x32000240": {
+   "note": "Melee hit sparks (SparkLow/Left/Right/Front/Back on armoured and construct targets), 25-spark tier: tiny 0.15->0.07 m white-violet spark stars spray ~1 m/s and drop under gravity in ~0.6 s; re-filed lightning->star (radial spark, not an arc); upgrade: hot core, brief glints, gentler crackle, natural white-violet (no extra saturation)",
+   "params": {
+    "sat": 1.0,
+    "flicker": 0.2,
+    "flickerHz": 20.0,
+    "twinkle": 0.2
+   },
+   "family": "star"
+  },
+  "0x32000683": {
+   "note": "Private Chamber / Restricted door magic ward (violet): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000753": {
+   "note": "Pandemonium / Paroxysm / Maelstrom Shadow, Bonecrunch, Shadow Kresovus, Drudge Protectors torment motes (violet): faint (20%) tendrils drift round the body for 2 s, shrinking 0.58->0.15 m, 20 alive; upgrade: eased in/out (retail pops them at constant 20%), crackle",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200095D": {
+   "note": "Virindi Protector, Claude the (Dark) Archmage, Quiddity Seeds, Pack Aerbax, Apostate Nexus guardians torment motes (violet): faint (20%) small tendrils drift round the body for 2 s, shrinking 0.36->0.15 m, 20 alive; upgrade: eased in/out (retail pops them at constant 20%), crackle",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000961": {
+   "note": "Kirienne Palacost torment motes (violet): faint (20%) small tendrils drift round her for 2 s, shrinking 0.29 m -> nothing, 20 alive; upgrade: eased in/out (retail pops them at constant 20%), crackle",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200096A": {
+   "note": "Harbinger violet sigil: tendril sigils appear huge (5.8 m) and condense to nothing as they rise and turn opaque over 1.6 s (about 2 alive); upgrade: crackle, rims erode, fade-out removes the end pop"
+  },
+  "0x32000686": {
+   "note": "Sealed door scenery 0x02000c08 magic ward (orange): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000690": {
+   "note": "Blinding Virindi Energy Cluster (blinding tier) crackle: 5 small tendril sparks (0.15->0.44 m) pop round the body for 0.5 s each at 50%->0; upgrade: livelier electric flicker, gain 1.8 to match the name",
+   "params": {
+    "flicker": 0.25,
+    "gain": 1.8,
+    "core": 0.9
+   }
+  },
+  "0x32000694": {
+   "note": "Blinding Virindi Energy Cluster (blinding tier) discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode, gain 1.9 to match the name",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 1.9,
+    "core": 1.0
+   }
+  },
+  "0x320006A2": {
+   "note": "Ritual statue scenery 0x02000c23 ritual energy funnel (orange): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320006A6": {
+   "note": "Ritual altar scenery 0x02000c29 ritual eruption (orange): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x32000688": {
+   "note": "Lab Door magic ward (white): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x320006A8": {
+   "note": "Ritual altar scenery 0x02000c27 ritual eruption (white): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x320006AA": {
+   "note": "Ritual statue scenery 0x02000c21 ritual energy funnel (white): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320009A0": {
+   "note": "Beacon pillar scenery 0x020017d8, white (outermost) layer (7.25 m): constant-size tendrils rise 6.5-10 m/s to ~20 m, brightening to opaque at the top over 2.5 s; upgrade: steadier flicker, fade-out at the top instead of a pop, near-fade 2.5 m for the widest layer",
+   "params": {
+    "flicker": 0.1,
+    "nearFade": 2.5
+   }
+  },
+  "0x320009A9": {
+   "note": "Spectral / Soul Bound weapon wisps (axe, claw, dagger, mace, spear, staff, +): faint (30%) white tendrils bloom 0.01->0.5 m and drift up off the weapon for 1 s; upgrade: ghostly gentle flicker instead of electric, arms erode",
+   "params": {
+    "flicker": 0.1
+   }
+  },
+  "0x32000689": {
+   "note": "Sealed door scenery 0x02000c0a magic ward (yellow): a 3.5->2.5 m tendril sigil turning slowly on the door, 6 alive at 40%->0; upgrade: steady breathing pulse instead of fire-like flicker, soft cut to 0.15 m so the sigil hugging the door is not faded away",
+   "params": {
+    "soft": 0.15,
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000691": {
+   "note": "Dim Virindi Energy Cluster (dim tier) crackle: 5 small tendril sparks (0.15->0.44 m) pop round the body for 0.5 s each at 50%->0; upgrade: livelier electric flicker, gain 1.35 to match the name",
+   "params": {
+    "flicker": 0.25,
+    "gain": 1.35
+   }
+  },
+  "0x32000695": {
+   "note": "Dim Virindi Energy Cluster (dim tier) discharge: tendril bursts expand 0.15->1.2 m from the body and fade in 0.4 s; upgrade: near-instant onset (was a 15% fade-in), arms erode, gain 1.4 to match the name",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 1.4
+   }
+  },
+  "0x320006A9": {
+   "note": "Ritual altar scenery 0x02000c2a ritual eruption (yellow): small bright bursts shoot up 6.5-10 m/s and balloon 0.15->14.5 m while fading over 2.5 s; upgrade: arms erode, crackle, near-fade 2.5 m for the giant top quads",
+   "params": {
+    "nearFade": 2.5
+   }
+  },
+  "0x320006AB": {
+   "note": "Ritual statue scenery 0x02000c24 ritual energy funnel (yellow): huge 11.6 m tendril sigils appear from nothing and condense to 1.45 m while rising 1-3 m/s, ending half-opaque; upgrade: calmer flicker, longer fade-out so they do not pop at 50%",
+   "params": {
+    "flicker": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000A2B": {
+   "note": "Blue arc-band projectile (scenery 0x02001b6f, 16-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity",
+   "params": {
+    "flickerHz": 14.0
+   }
+  },
+  "0x32000A2C": {
+   "note": "Blue Lightning Bolt variant body (setup 0x02001b70): per-metre crossed-plane arcs grow 0.2->4.3 m spinning on the flight axis over 1 s; upgrade: 15 Hz crackle, blooming blue-white core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A2E": {
+   "note": "Blue Lightning Bolt variant launch flash: arcs grow 1.1->7 m along the first metres of flight in 0.3 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A2F": {
+   "note": "Blue Lightning Bolt variant launch trail, layer A: arcs grow 0.2->8.3 m along the path over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000A30": {
+   "note": "Blue Lightning Bolt variant launch trail, layer B (twin of 0x32000A2F): arcs grow 0.2->8.3 m over 1 s; upgrade: 15 Hz crackle, blooming core",
+   "params": {
+    "flickerHz": 15.0
+   }
+  },
+  "0x3200052A": {
+   "note": "Dark Vapor (Forsaken Portal, Treacherous Tunnels Portal, Gearknight Lord's Tower, Caul asylum portals, Aerbax's Holding): huge 7 m blue-grey vapour clouds drift in and condense to 0.15 m while thickening to 60%; upgrade: dissolving rims, soft 1.8 m, lit like real vapour"
+  },
+  "0x32000543": {
+   "note": "BunnySmite vapour blast: 100 blue-grey clouds (4.3 m shrinking to 0.15 m) burst slowly outward, very dense (crowd 32); upgrade: rims erode, lit like real vapour, near-fade so the camera is not swallowed"
+  },
+  "0x3200055F": {
+   "note": "Storm-cloud scenery 0x02000995 / 0x02000996: 36 blue-grey vapour clouds orbit slowly for 15 s, shrinking 2.9->0.7 m (lightning flashes 0x32000560 fire inside); upgrade: rims erode, eased start, lit, big soft edge"
+  },
+  "0x32000561": {
+   "note": "Storm-cloud scenery 0x02000996, counter-rotating outer ring: 36 vapour clouds orbit the other way for 18 s, shrinking 2.9->0.7 m; upgrade: rims erode, eased start, lit, big soft edge"
+  },
+  "0x32000544": {
+   "note": "BunnySmite blast, white core flash: 100 radial spark stars (2.9 m shrinking to 0.15 m) burst out slowly, massively overlapping (crowd 24); upgrade: gain held below 1 and core trimmed because the stack already saturates white, calmer crackle so 100 sprites do not strobe the screen",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "flicker": 0.3
+   }
+  },
+  "0x320006E3": {
+   "note": "Lightning Cloud sheet flashes (also scenery 0x02000d7d / 0x02000d81): 0.4 s white-violet flashes born 2.5-8.5 m out swell 0.7->14.5 m; upgrade: instant flash (was a 15% fade-in), crackle, near-fade 3 m and soft 1 m for the giant quads",
+   "params": {
+    "fadeIn": 0.02,
+    "nearFade": 3.0,
+    "soft": 1.0
+   }
+  },
+  "0x32000763": {
+   "note": "Electric shrine scenery 0x02000fa3: 8 faint (40%) spark stars drift up to 1 m/s while slowly turning, 0.58 m, for 1.9 s; upgrade: crackle, hot core"
+  },
+  "0x32000774": {
+   "note": "Electric Elemental Pool / Galvanic Pool surface flashes: 0.4 s spark stars burst 0.15->2.75 m within 1 m above the pool; upgrade: instant flash (was a 15% fade-in), crackle, core bloom",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x320002D2": {
+   "note": "Shrine aura column, green (scenery 0x02000585): faint (30%) tendril rings rise ~1 m/s and swell 0.15->7.3 m over 4 s, 14 alive; upgrade: slow breathing pulse instead of fire-like flicker, arms erode, near-fade 2.5 m",
+   "params": {
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 0.8,
+    "nearFade": 2.5
+   }
+  },
+  "0x3200038C": {
+   "note": "WeddingBliss celebration, green-white blossoms: 130 faint tendril blooms from up to 3 m out swell 0.15->13 m over 2 s (80 alive, crowd 12.7); upgrade: crackle, arms erode; near-fade 3 m so the blooms round the couple do not fill the camera",
+   "params": {
+    "nearFade": 3.0
+   }
+  },
+  "0x32000A7F": {
+   "note": "Amber motion-trail arcs on scenery 0x02001c45-47: one-frame vertical arcs 1.1->1.3 m at 50%->25% shed per metre of motion; upgrade: fade-out cut to 8% so the single-frame flash keeps its punch",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000A83": {
+   "note": "Amber motion-trail arcs on scenery 0x02001c42-44: one-frame small (0.4-0.6 m) vertical arcs at 50%->25% per metre of motion; upgrade: fade-out cut to 8%",
+   "params": {
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000A80": {
+   "note": "Amber crackle on weenie-less setups 0x02001c3e-44 (likely amber-lightning weapon models): small 0.1->0.35 m arcs flick at random angles, 5/s, ~0.2 s each; upgrade: snaps on (generated 30% fade-in removed), 23 Hz crackle, hot core",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x32000A81": {
+   "note": "Amber crackle on setup 0x02001c3f: arcs flick at random angles ~20/s, living 0-0.2 s, 0.1->0.7 m; upgrade: snaps on (fade-in removed), 19 Hz crackle, hot core",
+   "params": {
+    "fadeIn": 0.02
+   }
+  },
+  "0x320002D0": {
+   "note": "Shrine aura column, pink-white (scenery 0x02000584): faint (30%) tendril rings rise ~1 m/s, turning slowly, swelling 0.15->7.3 m over 4 s; upgrade: slow breathing pulse instead of fire-like flicker, arms erode, near-fade 2.5 m",
+   "params": {
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 0.8,
+    "nearFade": 2.5
+   }
+  },
+  "0x320002D1": {
+   "note": "Shrine aura column, orange (scenery 0x02000586): faint (30%) tendril rings rise ~1 m/s and swell 0.15->7.3 m over 4 s; upgrade: slow breathing pulse instead of fire-like flicker, arms erode, near-fade 2.5 m",
+   "params": {
+    "flicker": 0.08,
+    "pulse": 0.06,
+    "pulseHz": 0.8,
+    "nearFade": 2.5
+   }
+  },
+  "0x320004A1": {
+   "note": "Silifi of Crimson Stars / Crimson Night tip crackle: a jagged red-white squiggle arc flicks at random angles beside the blade every ~0.2 s (re-filed streak->lightning by g2); upgrade: no fade-in so the crackle hits, 17 Hz flicker, hot white core"
+  },
+  "0x320004B9": {
+   "note": "Sulphur vent plume (scenery 0x02000840): 30 yellow-grey fume clouds rise ~1 m/s and are bent sideways, ballooning 0.4->7.3 m over 3 s and still 50% opaque when they die; upgrade: fade-out stretched to 30% so the 7 m clouds dissolve instead of popping, near-fade 3 m, more light response",
+   "params": {
+    "fadeOut": 0.3,
+    "nearFade": 3.0,
+    "lit": 0.75
+   }
+  },
+  "0x32000529": {
+   "note": "Dark Vapor swirl (Forsaken Portal, Treacherous Tunnels Portal, Gearknight Lord's Tower, Caul asylum portals, Aerbax's Holding): 4 dark-blue vapour sheets drift and turn, shrinking 4.3->1.45 m while thickening to fully opaque; upgrade: strong erosion and fade-out dissolve the opaque end instead of a pop; never spun (art fills the frame)"
+  },
+  "0x32000A4A": {
+   "note": "BreatheLightning of Discorporate Rynthids / Dread Figment (re-filed streak->lightning by g2): 4 crimson arcs spat forward 3.6-9.6 m/s, spinning and growing 0.46->2.3 m while fading over 0.75 s; upgrade: 16 Hz crackle, hot red-white core"
+  }
+ }
+}

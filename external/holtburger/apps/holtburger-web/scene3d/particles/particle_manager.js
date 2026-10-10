@@ -39,6 +39,17 @@ import {
 // objects AFTER the cloud + aerial composite. See particles_over_clouds.js and
 // `collectParticlesOverClouds` at the end of this file.
 import { registerLateFxSource } from "../particles_over_clouds.js";
+// 2026-10-09 `?particleFx` (DEFAULT ON) — the per-emitter visual upgrade on the
+// instanced bucket path. See particle_fx.js.
+import {
+  applyParticleFxMaterial,
+  particleFxAge,
+  particleFxEnabled,
+  particleFxFrame,
+  particleFxPacked,
+  particleFxRowFor,
+  particleFxSeed,
+} from "./particle_fx.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -1741,6 +1752,9 @@ export class ParticleManager {
     });
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
+    // `?particleFx`: this emitter's profile row (synthesized `fxProfile` name,
+    // else the retail 0x32 DID, else the neutral row 0). Resolved once.
+    emitter._fxRow = particleFxRowFor(info);
     // 2026-10-07 `?skyGlow`: keys its own instanced bucket (see _appendInstances).
     emitter.skyGlow = skyGlow === true;
 
@@ -1841,6 +1855,8 @@ export class ParticleManager {
 
   _tickLatched() {
     const removeIds = [];
+    // `?particleFx`: shared time + scene-light uniforms (idempotent per frame).
+    if (this._instancing) particleFxFrame();
 
     // RP6 (2026-06-08) — re-evaluate the off-screen cull set every
     // `_RP6.recheckInterval` ticks. `recheck === false` means "reuse
@@ -2114,6 +2130,11 @@ export class ParticleManager {
     const im = bucket.im;
     const cap = im.instanceMatrix.count;
     let n = bucket.n;
+    // `?particleFx` buckets read (opacity, age, row + seed) — see particle_fx.js.
+    const fx = im.userData?.particleFx === true && im.instanceColor;
+    const col = fx ? im.instanceColor.array : null;
+    const row = emitter._fxRow | 0;
+    const particles = emitter.particles;
     for (let i = 0; i < parts.length && n < cap; i++) {
       const m = parts[i];
       if (!m || m.visible === false) continue;
@@ -2122,8 +2143,16 @@ export class ParticleManager {
       // Per-particle opacity rides the instance color: folded into rgb for
       // additive (exact), read back as ALPHA by the alpha bucket's shader.
       const op = m.material?.opacity ?? 1;
-      _instColor.setRGB(op, op, op);
-      im.setColorAt(n, _instColor);
+      if (fx) {
+        const p = particles ? particles[i] : null;
+        const o = n * 3;
+        col[o] = op;
+        col[o + 1] = particleFxAge(p);
+        col[o + 2] = particleFxPacked(row, particleFxSeed(emitter, i, p ? p.lifetime : 0));
+      } else {
+        _instColor.setRGB(op, op, op);
+        im.setColorAt(n, _instColor);
+      }
       n += 1;
     }
     bucket.n = n;
@@ -2173,6 +2202,12 @@ export class ParticleManager {
     mat.forceSinglePass = true;
     mat.userData.__cacheOwned = false;
     mat.userData.__disposable = true;
+    // 2026-10-09 `?particleFx` — the per-emitter upgrade shader, on every bucket
+    // except the sky chain (owner rule: the sky's gaseous sheets stay subtle).
+    // After the blend config (it keeps blending/alphaTest/depthWrite), before
+    // the additive fog (whose `fade` mode chains onto this hook).
+    const fxMat = emitter.skyGlow !== true && particleFxEnabled() &&
+      applyParticleFxMaterial(mat, { additive: !alpha });
     // 2026-10-07 `?skyGlow` — after the blend config above (it keeps it).
     const sky = emitter.skyGlow === true && applySkyGlowMaterial(mat);
     // 2026-10-07 `?additiveFogBlack` — the additive bucket (the path that draws
@@ -2191,7 +2226,7 @@ export class ParticleManager {
     // lightning box keeps `skyGlow: false`) — `?particlesOverClouds` leaves the
     // whole sky chain behind the clouds.
     im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha, skyGlow: !!sky,
-      skyChain: emitter.skyGlow === true };
+      skyChain: emitter.skyGlow === true, particleFx: fxMat === true };
     // Same emission-time layer the singleton slot meshes get (meshFactory).
     if (layer > 0) im.layers.set(layer);
     im.setColorAt(0, _instColor.setRGB(1, 1, 1));

@@ -1,0 +1,2029 @@
+{
+ "group": "g2_glow",
+ "familyNotes": {
+  "0x080002E9": "Soft blue radial glow orb (32 px, light-blue centre): the workhorse of AttribBlue swirls, level-up rings, dispels, weapon/fixture glows and house barriers; bloomy additive orb, hue deepens at end of life.",
+  "0x080002EE": "Soft violet/magenta glow orb: AttribPurple, portal motes, Hollow/chorizite and cage glows; same recipe as the blue orb (low luminance hue, so it rarely blooms).",
+  "0x08000031": "Dim red glow orb (lum95 0.41): AttribRed, fire/ember sparks, red rifts and red eyes; gets extra gain because red contributes little luminance.",
+  "0x080002EC": "Orange glow orb: AttribOrange, orange bolt projectile trails and impact bursts (fire-like: hot birth, cooling to red-orange), fire-aura motes.",
+  "0x080002F2": "Bright yellow glow orb (lum95 0.85): AttribYellow, LevelUp middle ring, gold house barrier, firefly-like ambient motes; blooms easily, so dense uses get trimmed.",
+  "0x080002EA": "Bright green glow orb: AttribGreen, acid weapon glow, green rifts/portals/house barrier, green eyes.",
+  "0x08000221": "Tiny white-hot star point with faint diffraction cross (64 px, mostly black): sparkles, trails, star-point eyes and giant light-pillar sprites; glints suit it, except on 10 m+ sprites.",
+  "0x0800031F": "Pure white glow orb (lum95 1.0): white dispel ring, Blunt weapon glow, K'nath Core white step, Mystical Mug orb; white-hot, needs little extra gain.",
+  "0x08000C34": "Pale sky-blue glow orb: Empyrean glowing eyes, frost aura motes, unreferenced expanding puffs.",
+  "0x08000C40": "Saturated magenta-violet orb (dim): Hidden/vanish shimmer, Jungle Lily pollen, Aerbax hotspot.",
+  "0x08000C38": "Pink-white hot point (64 px): spark trails (Rolling Death); same look as the 0x08000221 point without the cross.",
+  "0x08000C5A": "Desaturated pale-blue orb: frost-coloured impact burst, pale portal motes, frost auras.",
+  "0x08000A64": "Warm white hot point with a wide faint halo: steady halos around flaming arrows and orange bolt projectiles (re-spawned every frame, so they must stay steady).",
+  "0x08000AA6": "Icy-blue soft orb (slightly off-centre): beacon swirl, Frozen Wight eyes, frost auras.",
+  "0x080001D2": "Warm gold point with a soft halo: permanent torch/brazier flame halos and a giant beacon glow; firelight breathing, never glints.",
+  "0x08000D35": "Magenta wisp halo with a small glassy eye-sphere: Crystalline/Cursed/Shadow Wisp body, Raven Aegis glow.",
+  "0x080009EE": "Deep blue wisp halo with eye-sphere: Crystalline / Water Wisp body.",
+  "0x08000D29": "Bright cyan wisp halo with eye-sphere (lum95 0.79): Ethereal/Spirit Wisp; stacking at the head blows out fastest, so gain is cut most.",
+  "0x08000D33": "Green wisp halo with eye-sphere: Ghost Wisp body.",
+  "0x080009F0": "Red wisp halo with eye-sphere: Dark Wisp / 'an evil presence' body.",
+  "0x08000D78": "Jagged red-white electric arc (64x32): Silifi of Crimson Stars crackle. Really lightning, not a motion streak; re-filed.",
+  "0x080018EB": "Violet wisp halo with eye-sphere: Wisp (setup 0x02001BC7) body.",
+  "0x08001900": "Red jagged branching arcs (64x32): Rynthid BreatheLightning. Really lightning, re-filed."
+ },
+ "emitters": {
+  "0x32000032": {
+   "note": "AttribDownBlue debuff, low-power variant: 20 blue orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.749,
+     0.818,
+     0.865
+    ]
+   }
+  },
+  "0x32000033": {
+   "note": "AttribDownBlue debuff, mid-power variant: 50 blue orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.749,
+     0.818,
+     0.865
+    ]
+   }
+  },
+  "0x32000034": {
+   "note": "AttribDownBlue debuff, high-power variant: 100 blue orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.749,
+     0.818,
+     0.865
+    ]
+   }
+  },
+  "0x32000036": {
+   "note": "AttribUpBlue buff, mid-power variant: 60 blue orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000037": {
+   "note": "AttribUpBlue buff, high-power variant: 100 blue orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200008D": {
+   "note": "AttribUpBlue buff, low-power variant: 20 blue orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000286": {
+   "note": "Unreferenced blue spark spray (5 s): sparks dip down then rise (initial -1.5 m/s, +1.5 m/s^2), 0.29 m->pinpoint; generated hot-spark look kept"
+  },
+  "0x32000287": {
+   "note": "Unreferenced blue spark fountain (10 s, mirror of 0x32000286): sparks rise then fall back, 0.29 m->pinpoint; generated look kept"
+  },
+  "0x32000289": {
+   "note": "Orbiting blue motes (60 x 0.18 m at 50%) around the Sanguinary Aegis and a static multi-colour portal (with pale-blue + green swarms); upgrade: portal breathing pulse, ~3 glints/s, soft fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320003B0": {
+   "note": "LevelUp / AetheriaLevelUp / AugmentationUse ring (blue, foot level): 40 orbs on a 0.8 m ring rise 0.25-1 m/s, 1.16 m halos condensing into bright points over 3 s; upgrade: whiter-hot condensing cores with bloom, richer blue, ~3 glints/s",
+   "params": {
+    "core": 0.95,
+    "sat": 1.15,
+    "flickerHz": 4.5
+   }
+  },
+  "0x320004FD": {
+   "note": "Hollow weapon / Chorizite Staff blade glow (blue half, interleaved opposite the violet motes): buzzing 0.03->0.15 m motes along the blade, trailing on swings; upgrade: hot cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000502": {
+   "note": "DispelAll (medium variant) blue strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the violet strand (same spin, opposite side), 1.16 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000505": {
+   "note": "DispelAll (large variant) blue strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the violet strand (same spin, opposite side), 2.3 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000508": {
+   "note": "DispelAll (small variant) blue strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the violet strand (same spin, opposite side), 0.58 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000531": {
+   "note": "Static zap fixture: three opaque 0.87 m blue balls shoot sideways 1 m in 0.5 s with a lightning arc, repeating every ~10 s; upgrade: shorter fade-in, 0.15 s fade-out so the bolt stays solid until the end",
+   "params": {
+    "fadeIn": 0.08,
+    "fadeOut": 0.3
+   }
+  },
+  "0x3200054D": {
+   "note": "Static field of blue lights shooting up at 6 m/s from a 1-10 m disc 2 m below the object, random opacity per mote; upgrade: fade in/out instead of popping at random opacity, ~3 glints/s",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.2,
+    "flickerHz": 4.0,
+    "twinkle": 0.2
+   }
+  },
+  "0x320005E2": {
+   "note": "Static scenery ring: 60 big 0.88 m blue orbs at 50% orbit on a 1.5-2.6 m radius (part 17); upgrade: gain/core trimmed because ~4 orbs overlap along the ring and would blow out, slow breathing pulse, rare glints",
+   "params": {
+    "gain": 1.15,
+    "core": 0.4,
+    "twinkle": 0.12,
+    "pulse": 0.06,
+    "pulseHz": 0.8,
+    "flickerHz": 3.0,
+    "fadeIn": 0.05
+   }
+  },
+  "0x320005EC": {
+   "note": "RestrictionEffectBlue (house access-barrier flash), largest of 5 layers: 25 blue orbs start at 2.3 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its blue hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 0.92,
+    "core": 0.15
+   }
+  },
+  "0x320005ED": {
+   "note": "RestrictionEffectBlue (house access-barrier flash), 4th of 5 layers: 25 blue orbs start at 1.16 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its blue hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.08,
+    "core": 0.3
+   }
+  },
+  "0x320005EE": {
+   "note": "RestrictionEffectBlue (house access-barrier flash), middle of 5 layers: 25 blue orbs start at 0.87 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its blue hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.2,
+    "core": 0.42
+   }
+  },
+  "0x320005EF": {
+   "note": "RestrictionEffectBlue (house access-barrier flash), 2nd of 5 layers: 25 blue orbs start at 0.58 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its blue hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.32,
+    "core": 0.55
+   }
+  },
+  "0x320005F0": {
+   "note": "RestrictionEffectBlue (house access-barrier flash), smallest of 5 layers: 25 blue orbs start at 0.29 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life), keeps the generated spark brightness",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000601": {
+   "note": "Rift rising base vortex (blue) of Ethereal Rift / Apostate Rift Aggressor / Quiddity Rift (paired with red top): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000605": {
+   "note": "Rift descending top vortex (blue) of Narrow / Contained Rift (paired with yellow base): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000646": {
+   "note": "Unreferenced rising spiral (blue, paired with orange 0x3200064A + faint glow): 100 orbs climb a 1 m spiral from 1 m out, growing 0.03->0.29 m and fading; upgrade: lighter glints at ~4/s",
+   "params": {
+    "twinkle": 0.15,
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200064F": {
+   "note": "Chorizite Pillar crackle (blue; heights 2.5 m and 3.5 m, alternating with violet): quick 0.3 s flashes swell to 0.58 m around the pillar; upgrade: instant flash",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x3200065F": {
+   "note": "Unreferenced blue nova: 50 orbs blast out at 3-8 m/s, 0.87 m->pinpoint over 2.5 s; generated instant bloomy burst kept"
+  },
+  "0x320006B6": {
+   "note": "Augmented / Paradox-touched Olthoi and Bonecrunch body haze (blue, interleaved opposite the violet): soft 0.58 m glows at 25%; upgrade: smooth fade in/out, slow energy pulse in place of glitter",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.08,
+    "pulseHz": 1.5,
+    "fadeIn": 0.15,
+    "fadeOut": 0.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320006F6": {
+   "note": "Chorizite Arrow / Quarrel / Atlatl Dart flight trail (blue, paired with violet): per-metre buzzing motes fading behind the missile; upgrade: sparkle glints on the trail",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000755": {
+   "note": "Large Empyrean Tome glow (blue strand): orbs spiral up from the book, condensing to 40% points, intertwined with the red strand; upgrade: bloomy cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000762": {
+   "note": "Static crackling object: 60 tiny blue motes (0.09 m at 40%) orbit with a lightning arc and star sparkle; upgrade: faint pulse, ~4 glints/s",
+   "params": {
+    "pulse": 0.05,
+    "flickerHz": 6.0,
+    "fadeIn": 0.05
+   }
+  },
+  "0x3200078E": {
+   "note": "Unreferenced slow aura build-up (blue): 40 orbs spiral up over 12 s, swelling 0.03->2.9 m while fading, so they overlap heavily; upgrade: gain/core cut so the cloud does not blow out, slow breathing pulse instead of glints",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "twinkle": 0.0,
+    "pulse": 0.05,
+    "pulseHz": 0.5
+   }
+  },
+  "0x32000796": {
+   "note": "Static magical fixture glow (blue): steady 1.0->0.4 m halo at 50-30% under additive mist, or paired with a tendril, re-spawned every ~2 frames; upgrade: steady (no fades/glints)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x320007CA": {
+   "note": "Unreferenced blue spark burst (with faint glow, script 0x33000E1E): 50 orbs blast out at 1.8-4.8 m/s and fall, 0.29 m->pinpoint; generated look kept"
+  },
+  "0x320007E2": {
+   "note": "Lady Aerfalle aura: blue motes (0.12 m) rise at 2 m/s from a 1.5 m disc, random opacity; upgrade: fade in instead of popping, ~3.5 glints/s",
+   "params": {
+    "fadeIn": 0.1,
+    "flickerHz": 5.0
+   }
+  },
+  "0x320007F4": {
+   "note": "Sawato Bandit's Ledger glow: tiny blue motes (0.06 m) drift up off the book with faint glows, random opacity; upgrade: fade in/out instead of popping, ~3 glints/s",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.15,
+    "twinkle": 0.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320007FB": {
+   "note": "Elemental weapon glow (blue) on Frost Bow/Longbow/Sceptre/Crossbow/Atlatl/Staff, Ice Wand, Wooden Top: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200080A": {
+   "note": "Regal weapon swing trail (blue): per-2.5 cm pinpoint glints (0.03-0.06 m) left along the blade path for 2 s; upgrade: sparkle glints",
+   "params": {
+    "twinkle": 0.3,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000821": {
+   "note": "AugmentationUseResistances hand burst (blue): 50 orbs spray radially from one hand at 3-8 m/s, shrinking and fading over 0-1.9 s, alongside the level-up rings; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000822": {
+   "note": "AugmentationUseResistances hand implosion (blue): 50 orbs start 0.5-1.3 m out on a sphere and collapse through the hand (cosine swing), counterpart to the burst; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x3200092A": {
+   "note": "Rising blue aura motes (frost auras of Lady Tairla Mhoire, Liam of Gelid, Lothus Guardians, Daimyo, Curator of Torment and casting bursts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000982": {
+   "note": "Pet Miniature Hollow Minion hand glow (blue, paired with violet): tiny buzzing motes at the hands; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320009B0": {
+   "note": "K'nath creature glow (blue; N'da, R'ajed, B'orret, C'ire, Y'nda, T'soct...): every 0.33 s a 0.87 m halo at 50% contracts to 0.06 m over 1 s; upgrade: 0.15 s fade-in so each contraction swells in rather than popping",
+   "params": {
+    "fadeIn": 0.15
+   }
+  },
+  "0x320009B4": {
+   "note": "K'nath Core colour-cycle pulse, blue step: swells to 1.0 m and fades over 1 s before the white step; upgrade: hot core, faded tail",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000044": {
+   "note": "AttribDownPurple debuff, low-power variant: 20 violet orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.844,
+     0.735,
+     0.865
+    ]
+   }
+  },
+  "0x32000045": {
+   "note": "AttribDownPurple debuff, mid-power variant: 50 violet orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.844,
+     0.735,
+     0.865
+    ]
+   }
+  },
+  "0x32000046": {
+   "note": "AttribDownPurple debuff, high-power variant: 100 violet orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.844,
+     0.735,
+     0.865
+    ]
+   }
+  },
+  "0x32000048": {
+   "note": "AttribUpPurple buff, mid-power variant: 60 violet orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000049": {
+   "note": "AttribUpPurple buff, high-power variant: 100 violet orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000090": {
+   "note": "AttribUpPurple buff, low-power variant: 20 violet orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200027E": {
+   "note": "Orbiting violet motes (60 x 0.12 m at 50%, 0.5-0.9 m orbit, slow bob) around classic purple portal swirls: Catacombs exits ('Surface'), Master Statue transports, Sanguinary / Iron Blade / Gold Gear aegis devices, Bloodstones; upgrade: portal breathing pulse, ~3 glints/s sparkle, 0.2 s fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x3200048B": {
+   "note": "AetheriaLevelUp / AugmentationUse ring (violet, waist or head level, paired with red ring + white smoke): 40 orbs on a 0.8 m ring rise and condense into bright points; upgrade: hot condensing cores with bloom, richer violet, ~3 glints/s",
+   "params": {
+    "core": 0.95,
+    "sat": 1.15,
+    "flickerHz": 4.5
+   }
+  },
+  "0x320004FC": {
+   "note": "Hollow weapon / Chorizite Staff blade glow (violet half; also on Hollow Minion and creature auras): ~30 tiny motes buzz in a 0.1 m orbit at points along the blade, growing 0.03->0.15 m and fading, left behind in world space when it swings; upgrade: hot cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000501": {
+   "note": "DispelAll (medium variant) violet strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the blue strand (same spin, opposite side), 1.16 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000504": {
+   "note": "DispelAll (large variant) violet strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the blue strand (same spin, opposite side), 2.3 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000507": {
+   "note": "DispelAll (small variant) violet strand: 20 orbs whirl at 4-7 rad/s in a 0.5 m spiral rising 1-1.5 m/s, forming a double helix with the blue strand (same spin, opposite side), 0.58 m invisible halos condensing into points; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320005A3": {
+   "note": "Unreferenced violet expanding light-puff (0.58 m size variant): 10 orbs jitter at a point and swell from a pinpoint to 0.58 m while fading; upgrade: no glints (a swelling soft puff, not a sparkle)",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x320005A4": {
+   "note": "Unreferenced violet expanding light-puff (0.87 m size variant): 10 orbs jitter at a point and swell from a pinpoint to 0.87 m while fading; upgrade: no glints (a swelling soft puff, not a sparkle)",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x320005A5": {
+   "note": "Unreferenced violet expanding light-puff (1.16 m size variant): 10 orbs jitter at a point and swell from a pinpoint to 1.16 m while fading; upgrade: no glints (a swelling soft puff, not a sparkle)",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x320005A6": {
+   "note": "Unreferenced violet expanding light-puff (1.45 m size variant): 10 orbs jitter at a point and swell from a pinpoint to 1.45 m while fading; upgrade: no glints (a swelling soft puff, not a sparkle)",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x320005A7": {
+   "note": "Unreferenced violet expanding light-puff (1.6 m size variant): 10 orbs jitter at a point and swell from a pinpoint to 1.6 m while fading; upgrade: no glints (a swelling soft puff, not a sparkle)",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000603": {
+   "note": "Rift rising base vortex (violet) of Shallow Rift (paired with yellow top): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000608": {
+   "note": "Rift descending top vortex (violet) of Quiddity / Umbral Rift (paired with red base): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x3200064E": {
+   "note": "Chorizite Pillar crackle (violet; heights 2.0 m and 3.0 m): quick 0.3 s flashes swell 0.03->0.58 m on a 0.5-1 m ring around the pillar; upgrade: flash hits instantly (fade-in cut to 3%)",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000660": {
+   "note": "Unreferenced violet nova: 50 orbs blast out at 3-8 m/s, 0.87 m->pinpoint over 1 s; generated instant bloomy burst kept"
+  },
+  "0x320006B5": {
+   "note": "Augmented / Paradox-touched Olthoi and Bonecrunch body haze (violet): ~9 soft 0.58 m glows at 25% jitter around a body part; upgrade: smooth 0.2 s fade in/out instead of popping at 25%, slow energy pulse in place of glitter",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.08,
+    "pulseHz": 1.5,
+    "fadeIn": 0.15,
+    "fadeOut": 0.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320006F5": {
+   "note": "Chorizite Arrow / Quarrel / Atlatl Dart flight trail (violet): per-metre motes buzzing in a tight orbit, growing 0.06->0.23 m and fading behind the missile; upgrade: sparkle glints on the trail",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320007FF": {
+   "note": "Elemental weapon glow (violet) on Electric Bow/Lightning Longbow/Sceptre/Crossbow/Atlatl/Staff: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000827": {
+   "note": "AugmentationUseOther hand burst (violet): 50 orbs spray radially from one hand at 3-8 m/s, shrinking and fading over 0-1.9 s, alongside the level-up rings; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000828": {
+   "note": "AugmentationUseOther hand implosion (violet): 50 orbs start 0.5-1.3 m out on a sphere and collapse through the hand (cosine swing), counterpart to the burst; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000858": {
+   "note": "Pursuit Orb / Shadow Coconut / Black Ball / Coruscating Olthoi Scent Gland / Aerbax's Defeat aura: violet glow 0.35->0.23 m brightening 20->40% each 1.7 s then snapping back (with smoke); upgrade: turns the snap into a smooth throb (fade in/out)",
+   "params": {
+    "fadeIn": 0.15,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200092D": {
+   "note": "Rising violet aura motes (lightning/void auras (Kirienne Palacost, Virindi Protector, Claude the Archmage, Dojiro Sangi...) and summon bursts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000956": {
+   "note": "Energy Cage field: two big violet glows (2.3->1.45 m at 40-30%) restarting every 3 s; upgrade: smooth 3 s throb instead of a size/opacity snap, gentle pulse, soft vs floor",
+   "params": {
+    "fadeIn": 0.2,
+    "fadeOut": 0.25,
+    "pulse": 0.05,
+    "pulseHz": 1.2
+   }
+  },
+  "0x32000981": {
+   "note": "Pet Miniature Hollow Minion hand glow (violet): tiny 0.03-0.06 m motes buzz around both hands; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000987": {
+   "note": "Virindi Cage / Wall field: two huge violet glows (4.6->2.9 m at 40-30%) restarting every 3 s; upgrade: smooth throb, gentle pulse, soft vs floor, fades when the camera is inside the cage",
+   "params": {
+    "fadeIn": 0.2,
+    "fadeOut": 0.25,
+    "pulse": 0.05,
+    "pulseHz": 1.2,
+    "nearFade": 2.5
+   }
+  },
+  "0x32000998": {
+   "note": "Aerbax Harm Hotspot danger zone (violet): motes rise 0.5 m/s from a 10 m disc, 0.17->0.03 m; upgrade: occasional glints so the zone reads on the ground",
+   "params": {
+    "twinkle": 0.15,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320009C7": {
+   "note": "Aetherium Ore / Stockpile drifting violet motes (45 over a 12 m disc, ~40 s life) beside star sparkle and a faint glow; upgrade: slow glints (~1.7/s), gentle pulse, 0.8 s fade-in",
+   "params": {
+    "flickerHz": 2.5,
+    "twinkle": 0.3,
+    "fadeIn": 0.02,
+    "pulse": 0.06,
+    "pulseHz": 0.7
+   }
+  },
+  "0x3200004A": {
+   "note": "AttribDownRed debuff, low-power variant: 20 red orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.756,
+     0.73
+    ]
+   }
+  },
+  "0x3200004B": {
+   "note": "AttribDownRed debuff, mid-power variant: 50 red orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.756,
+     0.73
+    ]
+   }
+  },
+  "0x3200004C": {
+   "note": "AttribDownRed debuff, high-power variant: 100 red orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.756,
+     0.73
+    ]
+   }
+  },
+  "0x3200004E": {
+   "note": "AttribUpRed buff, mid-power variant: 60 red orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200004F": {
+   "note": "AttribUpRed buff, high-power variant: 100 red orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000091": {
+   "note": "AttribUpRed buff, low-power variant: 20 red orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000223": {
+   "note": "Drifting red embers around the Corrupted Pyre Oak, Bloodstone Crystal Stockpile, Iron Blade Overseer and burning static scenes (45 motes over a 12 m disc, ~40 s life); upgrade: ember flicker, occasional glints, dims to deep red with age",
+   "params": {
+    "flicker": 0.15,
+    "flickerHz": 4.0,
+    "twinkle": 0.15,
+    "fadeIn": 0.02,
+    "tint1": [
+     1.0,
+     0.7,
+     0.6
+    ]
+   }
+  },
+  "0x3200027F": {
+   "note": "Orbiting red motes (60 x 0.12 m at 50%, 0.5-0.9 m orbit, slow bob) around red portal swirls (Blessed Cave, pyramid entrance, Private Chambers...), Sanguinary and T'thuun aegis, Hosh fortress spirit effect; upgrade: portal breathing pulse, ~3 glints/s sparkle, 0.2 s fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x3200028A": {
+   "note": "Unreferenced red drip: orbs sink slowly from a point (0.29 m->pinpoint over 2 s); generated look kept"
+  },
+  "0x320003AF": {
+   "note": "LevelUp / AetheriaLevelUp / AugmentationUse ring (red, usually the top ring at 1.5 m): 40 orbs on a 0.8 m ring rise and condense into bright points; upgrade: hot condensing cores, richer red, ~3 glints/s",
+   "params": {
+    "core": 0.95,
+    "sat": 1.15,
+    "flickerHz": 4.5
+   }
+  },
+  "0x3200059E": {
+   "note": "Static magical orb/vortex shrine aura (red): up to 12 still glows with random size (0.03-2.9 m) and random opacity ramps over ~7 s (with solid ball, discs, stars or vortex + smoke); upgrade: ~1 s fade in/out instead of large glows popping at random opacity",
+   "params": {
+    "fadeIn": 0.12,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320005FE": {
+   "note": "Rift descending top vortex (red) of Ethereal Rift / Apostate Rift Aggressor (paired with blue base): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000600": {
+   "note": "Rift descending top vortex (red) of Unstable Rift, Quiddity Rift, Rift of (Blind) Rage: orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000604": {
+   "note": "Rift rising base vortex (red) of Quiddity Rift, Rift of Rage / Blind Rage (with fire): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000610": {
+   "note": "Static rising energy column (red): a tight 0.35 m spiral of orbs climbing 0.3-1.1 m/s, 0.5 m halos condensing into points over 1 s; upgrade: bloomy condensing cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320006C9": {
+   "note": "Static rising energy column (red, large): 1.3 m halos spiral up and condense into points; upgrade: bloomy cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000730": {
+   "note": "Banished Orb / Star of Gharu'n / static orb glow (red): steady 1.0->0.4 m halo at 50-30% with star sparkle and dark smoke, re-spawned every ~2 frames; upgrade: steady, no strobing fades",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000731": {
+   "note": "Static red orb glow (same as Banished Orb look: star + dark smoke): steady 1.0->0.4 m halo at 50-30%, 2-frame life; upgrade: steady, no strobing fades",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200073C": {
+   "note": "Branith's Staff head glow (red) under its flame, star and smoke: 1.25->0.64 m halo flickering 40%->0 within its 0.03 s life; upgrade: steady (fades would hide it)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000754": {
+   "note": "Large Empyrean Tome glow (red strand): orbs spiral up a 0.35 m column from the book, condensing to 40% points, intertwined with the blue strand and a star; upgrade: bloomy cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200078F": {
+   "note": "Unreferenced slow aura build-up (red, 10 orbs over 10 s), swelling to 2.9 m while fading; upgrade: gain/core trimmed, slow pulse instead of glints",
+   "params": {
+    "gain": 1.35,
+    "core": 0.55,
+    "twinkle": 0.0,
+    "pulse": 0.05,
+    "pulseHz": 0.5
+   }
+  },
+  "0x320007F8": {
+   "note": "Elemental weapon glow (red) on Fire Bow/Longbow/Sceptre/Crossbow/Atlatl/Staff, Wretched Crossbow: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000823": {
+   "note": "AugmentationUseAttribute hand burst (red): 50 orbs spray radially from one hand at 3-8 m/s, shrinking and fading over 0-1.9 s, alongside the level-up rings; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000824": {
+   "note": "AugmentationUseAttribute hand implosion (red): 50 orbs start 0.5-1.3 m out on a sphere and collapse through the hand (cosine swing), counterpart to the burst; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320008DA": {
+   "note": "Unreferenced slow aura build-up (red, 40 orbs over 12 s), swelling to 2.9 m while fading; upgrade: gain/core cut for the heavy overlap, slow pulse instead of glints",
+   "params": {
+    "gain": 1.15,
+    "core": 0.35,
+    "twinkle": 0.0,
+    "pulse": 0.05,
+    "pulseHz": 0.5
+   }
+  },
+  "0x320008F5": {
+   "note": "Holiday Hearth embers: sparse 0.03-0.12 m red sparks rise 0.9-2.1 m/s from a 0.8 m disc over the fire, 0.3 s life; upgrade: yellow-hot birth cooling to deep red, ember flicker + glints, no pop at 80%",
+   "params": {
+    "tint0": [
+     1.2,
+     1.15,
+     1.0
+    ],
+    "tint1": [
+     0.9,
+     0.6,
+     0.5
+    ],
+    "flicker": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200092E": {
+   "note": "Rising red aura motes (fire auras (Lord Cynreft Mhoire, Kirienne Palacost, Dojiro Sangi, Bronze Gauntlet / Copper Cog society leaders, Afessa guardian...) and fire casts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200094E": {
+   "note": "Ball of Fire launch spark spray: per-metre red sparks fly out sideways at 3-9 m/s and shrink over 0.5 s; upgrade: instant sparks, flicker, cool to deep red",
+   "params": {
+    "fadeIn": 0.03,
+    "flicker": 0.15,
+    "flickerHz": 12.0,
+    "tint1": [
+     0.95,
+     0.65,
+     0.5
+    ],
+    "twinkle": 0.15
+   }
+  },
+  "0x3200095B": {
+   "note": "Wall of Fire embers: opaque 0.09 m red sparks shoot up from a 1 m ring, accelerating 2.5-7.5 m/s^2, 1 s life; upgrade: ember flicker + glints, cool to deep red early, fade before popping high up",
+   "params": {
+    "flicker": 0.15,
+    "flickerHz": 12.0,
+    "tint1": [
+     0.9,
+     0.6,
+     0.5
+    ],
+    "tintCurve": 0.8,
+    "twinkle": 0.15
+   }
+  },
+  "0x320009B1": {
+   "note": "K'nath Mother glow (red, alongside the blue): 0.58 m halo contracting to 0.06 m while brightening 50%->opaque; upgrade: fade-in so each heartbeat swells in, hot core as it contracts",
+   "params": {
+    "fadeIn": 0.15
+   }
+  },
+  "0x320009B2": {
+   "note": "K'nath Core colour-cycle pulse, red step: one glow swells 0.03->1.0 m and fades to 10% over 1 s, then chains to green; upgrade: hot core, faded tail instead of a pop",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000A74": {
+   "note": "Glowing red eyes (pair at the head) of the Carenzi Trophy and leafy static figures: 0.06 m at 40%, 2-frame life; upgrade: steady, hotter core so the eyes bloom",
+   "params": {
+    "gain": 1.8,
+    "core": 1.0,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200003E": {
+   "note": "AttribDownOrange debuff, low-power variant: 20 orange orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.81,
+     0.735
+    ]
+   }
+  },
+  "0x3200003F": {
+   "note": "AttribDownOrange debuff, mid-power variant: 50 orange orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.81,
+     0.735
+    ]
+   }
+  },
+  "0x32000040": {
+   "note": "AttribDownOrange debuff, high-power variant: 100 orange orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.865,
+     0.81,
+     0.735
+    ]
+   }
+  },
+  "0x32000042": {
+   "note": "AttribUpOrange buff, mid-power variant: 60 orange orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000043": {
+   "note": "AttribUpOrange buff, high-power variant: 100 orange orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200008F": {
+   "note": "AttribUpOrange buff, low-power variant: 20 orange orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000131": {
+   "note": "Orange bolt projectile trail (Launch, table 0x3400000A; 2/5/10+ copies by spell scale): per-0.5 m embers drift off at 0.6-1.6 m/s and sink, 0.29 m->pinpoint, with the warm halo; upgrade: ember flicker, hot at birth, cools toward red-orange",
+   "params": {
+    "flicker": 0.1,
+    "flickerHz": 10.0,
+    "tint0": [
+     1.1,
+     1.05,
+     0.95
+    ],
+    "tint1": [
+     1.0,
+     0.78,
+     0.6
+    ]
+   }
+  },
+  "0x32000168": {
+   "note": "Orange bolt impact (Explode, table 0x3400000A) 0.1 m layer: 13 orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot white-orange flash cooling to red-orange, light ember flicker",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 10.0,
+    "tint0": [
+     1.1,
+     1.05,
+     0.95
+    ],
+    "tint1": [
+     1.0,
+     0.78,
+     0.6
+    ]
+   }
+  },
+  "0x32000169": {
+   "note": "Orange bolt impact (Explode, table 0x3400000A) 0.29 m layer: 30 orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot white-orange flash cooling to red-orange, light ember flicker",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 10.0,
+    "tint0": [
+     1.1,
+     1.05,
+     0.95
+    ],
+    "tint1": [
+     1.0,
+     0.78,
+     0.6
+    ]
+   }
+  },
+  "0x3200016A": {
+   "note": "Orange bolt impact (Explode, table 0x3400000A) 0.87 m layer: 50 orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot white-orange flash cooling to red-orange, light ember flicker, big layer trimmed slightly so the centre keeps its hue",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 10.0,
+    "tint0": [
+     1.1,
+     1.05,
+     0.95
+    ],
+    "tint1": [
+     1.0,
+     0.78,
+     0.6
+    ],
+    "gain": 1.4,
+    "core": 0.65
+   }
+  },
+  "0x320001B5": {
+   "note": "Health Ring Bolt / Missile impact (table 0x340000D0; also with blood): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001BB": {
+   "note": "Missile impact (one missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001C1": {
+   "note": "Missile impact (second missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001C7": {
+   "note": "Missile impact (third missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001CD": {
+   "note": "Missile impact (fourth missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001D3": {
+   "note": "Missile impact (fifth missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001D9": {
+   "note": "Missile impact (sixth missile setup): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001DF": {
+   "note": "Sacrificial Edge strike impact: 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001E5": {
+   "note": "Projectile impact (table 0x34000014): 30 orange 0.29 m orbs blast out at 1.8-4.8 m/s with gravity, shrinking and fading over 1.5 s; upgrade: hot spark centres cooling to deeper orange; instant",
+   "params": {
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x320001E8": {
+   "note": "Missile / Rolling Death flight trail (Launch, scaled 2/5/10 copies): an ember per metre drifts off and sinks, 0.29 m->pinpoint; upgrade: light ember flicker, cools toward deeper orange",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 10.0,
+    "tint1": [
+     1.0,
+     0.85,
+     0.7
+    ]
+   }
+  },
+  "0x32000280": {
+   "note": "Orbiting orange motes (60 x 0.12 m at 50%, 0.5-0.9 m orbit, slow bob) around orange portal swirl (Eastern Catacombs) and a static portal object; upgrade: portal breathing pulse, ~3 glints/s sparkle, 0.2 s fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320005FC": {
+   "note": "Rift rising base vortex (orange) of Quiddity Rift and a static rift object (paired with green top): orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x3200064A": {
+   "note": "Unreferenced rising spiral (with blue swirl + faint glow in script 0x33000BD8): 100 orange orbs climb a 1 m spiral, growing 0.03->0.29 m and fading; upgrade: bloomy cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320007F3": {
+   "note": "Burun Slaying weapon swing trail (orange): per-2.5 cm pinpoint glints (0.03-0.06 m) left along the blade path, hanging 2 s; upgrade: sparkle glints on the trail",
+   "params": {
+    "twinkle": 0.3,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000803": {
+   "note": "Elemental weapon glow (orange) on Slashing / Steady / True Strike Bows, Slashing Sceptre: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200092C": {
+   "note": "Fire-aura rising motes (orange) of Lord Cynreft Mhoire, the Bronze Gauntlet / Copper Cog / Silver Scope / Iron Blade leaders, Atamarr, Kaytin: ~2 motes/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m; upgrade: hot cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000050": {
+   "note": "AttribDownYellow debuff, low-power variant: 20 yellow orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.857,
+     0.865,
+     0.735
+    ]
+   }
+  },
+  "0x32000051": {
+   "note": "AttribDownYellow debuff, mid-power variant: 50 yellow orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.857,
+     0.865,
+     0.735
+    ]
+   }
+  },
+  "0x32000052": {
+   "note": "AttribDownYellow debuff, high-power variant: 100 yellow orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.857,
+     0.865,
+     0.735
+    ]
+   }
+  },
+  "0x32000054": {
+   "note": "AttribUpYellow buff, mid-power variant: 60 yellow orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000055": {
+   "note": "AttribUpYellow buff, high-power variant: 100 yellow orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000092": {
+   "note": "AttribUpYellow buff, low-power variant: 20 yellow orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000222": {
+   "note": "Ambient drifting yellow motes over a static area (12 m disc, 3 m up), 45 alive for ~40 s each, firefly-like; upgrade: slow firefly glints (~1.4/s), 0.8 s fade-in",
+   "params": {
+    "flickerHz": 2.0,
+    "twinkle": 0.35,
+    "fadeIn": 0.02
+   }
+  },
+  "0x32000281": {
+   "note": "Orbiting yellow motes (60 x 0.12 m at 50%, 0.5-0.9 m orbit, slow bob) around yellow portal swirls (Northern Catacombs, Swamp Cavern), Gold Gear / Atamarr's aegis; upgrade: portal breathing pulse, ~3 glints/s sparkle, 0.2 s fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320003AE": {
+   "note": "Character LevelUp ring (yellow, middle ring at 0.75 m between blue and red): 40 orbs rise and condense from 1.16 m halos into golden points; upgrade: white-gold hot cores with bloom, ~3 glints/s",
+   "params": {
+    "core": 0.95,
+    "sat": 1.15,
+    "flickerHz": 4.5
+   }
+  },
+  "0x320005F1": {
+   "note": "RestrictionEffectGold (house access-barrier flash), smallest of 5 layers: 25 gold orbs start at 0.29 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life), keeps the generated spark brightness",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005F2": {
+   "note": "RestrictionEffectGold (house access-barrier flash), 2nd of 5 layers: 25 gold orbs start at 0.58 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its gold hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.28,
+    "core": 0.55
+   }
+  },
+  "0x320005F3": {
+   "note": "RestrictionEffectGold (house access-barrier flash), middle of 5 layers: 25 gold orbs start at 0.87 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its gold hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.164,
+    "core": 0.42
+   }
+  },
+  "0x320005F4": {
+   "note": "RestrictionEffectGold (house access-barrier flash), 4th of 5 layers: 25 gold orbs start at 1.16 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its gold hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.048,
+    "core": 0.3
+   }
+  },
+  "0x320005F5": {
+   "note": "RestrictionEffectGold (house access-barrier flash), largest of 5 layers: 25 gold orbs start at 2.3 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its gold hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 0.892,
+    "core": 0.15
+   }
+  },
+  "0x32000602": {
+   "note": "Rift rising base vortex (yellow) of Narrow / Contained Rift, Quiddity Rift: orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000607": {
+   "note": "Rift descending top vortex (yellow) of Shallow Rift, Ebon Rift: orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000800": {
+   "note": "Elemental weapon glow (yellow) on Piercing Bow/Sceptre/Crossbow/Atlatl: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000825": {
+   "note": "AugmentationUseSkill hand burst (yellow): 50 orbs spray radially from one hand at 3-8 m/s, shrinking and fading over 0-1.9 s, alongside the level-up rings; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000826": {
+   "note": "AugmentationUseSkill hand implosion (yellow): 50 orbs start 0.5-1.3 m out on a sphere and collapse through the hand (cosine swing), counterpart to the burst; upgrade: instant hit (fade-in cut to 3% of life), bloomy cores, quick glints",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000931": {
+   "note": "Rising yellow aura motes (fire auras (Lord Cynreft Mhoire, Bronze Gauntlet / Copper Cog / Silver Scope / Iron Blade leaders, Atamarr, Kaytin) layered with red + orange): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000A7C": {
+   "note": "Static rising curtain: 40 yellow motes rise 6-9 m/s from 20 m below ground across a 12 m sheet, fading in as they climb; upgrade: 0.7 s fade-out instead of popping at full opacity high up, ~3 glints/s",
+   "params": {
+    "fadeOut": 0.12,
+    "twinkle": 0.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000038": {
+   "note": "AttribDownGreen debuff, low-power variant: 20 green orbs (0.29 m) appear opaque 3 m above the head and spiral down (0.6-0.75 m radius), shrinking and dimming to 25%; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.745,
+     0.865,
+     0.737
+    ]
+   }
+  },
+  "0x32000039": {
+   "note": "AttribDownGreen debuff, mid-power variant: 50 green orbs spiral down from 3 m, starting as 0.5 m invisible halos and condensing into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.745,
+     0.865,
+     0.737
+    ]
+   }
+  },
+  "0x3200003A": {
+   "note": "AttribDownGreen debuff, high-power variant: 100 green orbs on a 1 m spiral sinking from 3 m, condensing from 0.87 m halos into opaque pinpoints; upgrade: fewer, slower glints (debuff reads heavier) and the hue deepens and dulls ~15% as it sinks; soft vs ground",
+   "params": {
+    "twinkle": 0.12,
+    "flickerHz": 5.0,
+    "tint1": [
+     0.745,
+     0.865,
+     0.737
+    ]
+   }
+  },
+  "0x3200003C": {
+   "note": "AttribUpGreen buff, mid-power variant: 60 green orbs rise in a 0.75 m spiral from the feet, starting as 0.5 m invisible halos and condensing into bright pinpoints; upgrade: hot cores bloom as they condense, slower ~3.5/s glints",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200003D": {
+   "note": "AttribUpGreen buff, high-power variant: 100 green orbs rise in a 1 m spiral, 0.87 m halos condensing to bright pinpoints over 2.5 s; upgrade: bloomy condensing cores, ~3.5/s glints, soft vs ground",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200008E": {
+   "note": "AttribUpGreen buff, low-power variant: 20 green orbs pop in at the feet and spiral up (0.6-0.75 m radius, 0.25-1 m/s), shrinking 0.29 m -> pinpoint and fading out; upgrade: bloomy core, ~3.5 glints/s sparkle",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000282": {
+   "note": "Orbiting green motes (60 x 0.12 m at 50%, 0.5-0.9 m orbit, slow bob) around green portal swirls (Exit, Surface, Xi Ru's Chapel), Sanguinary aegis; upgrade: portal breathing pulse, ~3 glints/s sparkle, 0.2 s fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320005F6": {
+   "note": "RestrictionEffectGreen (house access-barrier flash), smallest of 5 layers: 25 green orbs start at 0.29 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life), keeps the generated spark brightness",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005F7": {
+   "note": "RestrictionEffectGreen (house access-barrier flash), 2nd of 5 layers: 25 green orbs start at 0.58 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its green hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.28,
+    "core": 0.55
+   }
+  },
+  "0x320005F8": {
+   "note": "RestrictionEffectGreen (house access-barrier flash), middle of 5 layers: 25 green orbs start at 0.87 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its green hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.164,
+    "core": 0.42
+   }
+  },
+  "0x320005F9": {
+   "note": "RestrictionEffectGreen (house access-barrier flash), 4th of 5 layers: 25 green orbs start at 1.16 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its green hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 1.048,
+    "core": 0.3
+   }
+  },
+  "0x320005FA": {
+   "note": "RestrictionEffectGreen (house access-barrier flash), largest of 5 layers: 25 green orbs start at 2.3 m on a 0.2-0.9 m sheet and shrink as they fly off, life 0-0.5 s; upgrade: hits instantly (fade-in 3% of life); gain/core trimmed because 125 overlapping additive orbs would tone-map to flat white, so the flash keeps its green hue with a bloom halo",
+   "params": {
+    "fadeIn": 0.03,
+    "gain": 0.892,
+    "core": 0.15
+   }
+  },
+  "0x320005FF": {
+   "note": "Rift rising base vortex (green) of Unstable Rift, Quiddity Rift: orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000606": {
+   "note": "Rift descending top vortex (green) of Tenebrous Rift and a static rift object: orbs whirl at 6-12 rad/s in a tight 0.1-0.4 m spiral, swelling from a pinpoint to 1.45 m while fading; upgrade: soft energy shimmer (gentle pulse, rare glints instead of glitter on swelling halos)",
+   "params": {
+    "twinkle": 0.08,
+    "pulse": 0.07,
+    "pulseHz": 1.2,
+    "flickerHz": 4.0
+   }
+  },
+  "0x320007FC": {
+   "note": "Elemental weapon glow (green) on Acid Bow/Longbow/Sceptre/Crossbow/Atlatl/Staff: a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200082C": {
+   "note": "Static field of green lights shooting up at 6 m/s from a 1-10 m disc (green twin of 0x3200054D); upgrade: fade in/out instead of popping at random opacity, ~3 glints/s",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.2,
+    "flickerHz": 4.0,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200092B": {
+   "note": "Rising green aura motes (acid auras (Moarsman Blight-caller, Maiden / Apparition of Envy, static scenes)): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320009B3": {
+   "note": "K'nath Core colour-cycle pulse, green step (red -> green -> blue -> white): swells to 1.0 m and fades; upgrade: hot core, faded tail",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000A51": {
+   "note": "Glowing green eyes (pair at the head) of leafy static figures: 0.06 m at 40%, 2-frame life; upgrade: steady, hotter core so the eyes bloom",
+   "params": {
+    "gain": 1.8,
+    "core": 1.0,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000017": {
+   "note": "AugmentationUse white star-point spiral: 20 cross-flare points (0.22 m) rise in a 0.75 m spiral over 4 s around the player, fading; upgrade: celebratory glints at ~3.5/s",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200002A": {
+   "note": "Sword of Lost Light / Prismatic missile / static sparkle trail (white star-points): per-2.5 cm glints (0.15 m) left along the swing path; upgrade: stronger sparkle glints",
+   "params": {
+    "twinkle": 0.3,
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200021E": {
+   "note": "Unreferenced white star-point implosion: 30 cross-flare points swing in from a 0.1-3 m ring through the centre and out the far side, brightening; generated look kept"
+  },
+  "0x32000221": {
+   "note": "Unreferenced white star-point fountain (5 s): points spray out at 3.2 m/s, 0.58->0.15 m; generated look kept"
+  },
+  "0x3200044E": {
+   "note": "Unreferenced white star flare burst (13 points, 1.8 m up): 1.45 m flares blast out at 1.8-4.8 m/s with gravity, shrinking; generated look kept"
+  },
+  "0x3200044F": {
+   "note": "Unreferenced white star flare burst (50 points, 1.8 m up / 0.5 m variant script): dense 1.45 m flares blast out with gravity; generated look kept"
+  },
+  "0x32000583": {
+   "note": "Unreferenced slow white star nova (50 points, 2.9 m flares drifting out over 5 s, 1.8 m up); generated look kept"
+  },
+  "0x320005B0": {
+   "note": "Ambient star-point sparkles drifting over a 24 m static area (3 m up, 25 alive, 40 s life), shrinking 2.2->0.3 m while brightening; upgrade: slow star glints (~1.7/s)",
+   "params": {
+    "flickerHz": 2.5,
+    "twinkle": 0.3
+   }
+  },
+  "0x320005B1": {
+   "note": "Ambient star-point sparkles over a 24 m static area (twin of 0x320005B0), growing 0.3->2.2 m while fading; upgrade: slow star glints, 0.8 s fade-in",
+   "params": {
+    "flickerHz": 2.5,
+    "twinkle": 0.3,
+    "fadeIn": 0.02
+   }
+  },
+  "0x3200081C": {
+   "note": "Static light pillar (with sound): 70 huge white star-points (14.5->7 m at 40%) shoot up 20-24 m/s into a column; upgrade: gain/core trimmed for the dense column, no glints on 10 m sprites, very soft vs ground, fades when the camera is inside",
+   "params": {
+    "gain": 1.5,
+    "core": 0.6,
+    "twinkle": 0.0,
+    "soft": 2.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200081E": {
+   "note": "Unreferenced light-pillar variant (falling-arc version, 5 s burst) of the white star-point column; upgrade: gain/core trimmed, no glints on 10 m sprites, very soft vs ground, near fade",
+   "params": {
+    "gain": 1.5,
+    "core": 0.6,
+    "twinkle": 0.0,
+    "soft": 2.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x32000938": {
+   "note": "Rising white star-point motes (0.5 m cross-flare sprites) of Hovoros the Shadowed, Lord Rytheran, Nalicana, Spirits of Rhia'ni / Khira'thi and their cast bursts: rise 2.5 m/s from a 1.5 m disc; upgrade: star glints (~3.5/s)",
+   "params": {
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200097F": {
+   "note": "Aura object glow: big white star-points (14.5->7 m at 40%) pop up 0.7 m and fall back every 0.33 s; upgrade: gain/core trimmed, smooth breathing pulse instead of glints, very soft, near fade",
+   "params": {
+    "gain": 1.5,
+    "core": 0.6,
+    "twinkle": 0.0,
+    "pulse": 0.05,
+    "pulseHz": 0.8,
+    "soft": 2.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320009F7": {
+   "note": "Nalicana's glowing star-point eyes (pair at the head, 0.36 m cross-flare sprite, opaque, 2-frame life); upgrade: steady, no strobing fades/glints",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x32000A11": {
+   "note": "Prismatic Arrow / Quarrel / Atlatl Dart star glow riding the missile (0.44 m cross-flare at 90%, 2-frame life) ahead of its sparkle trail; upgrade: steady, no strobing fades/glints",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x32000A39": {
+   "note": "Summoned Wisp body: a white star-point re-emitted every 0.05 s, rising and shrinking 0.73->0.15 m over 1 s above its sparkle trail; upgrade: star glints ~3.5/s",
+   "params": {
+    "twinkle": 0.25,
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000503": {
+   "note": "DispelAll (medium variant) white ring: 20 white orbs spin the opposite way in a flat 0.5 m ring ~1 m up (no rise) while the violet/blue helix climbs, 1.16 m halos condensing to white-hot points; upgrade: hot white cores bloom, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000506": {
+   "note": "DispelAll (large variant) white ring: 20 white orbs spin the opposite way in a flat 0.5 m ring ~1 m up (no rise) while the violet/blue helix climbs, 2.3 m halos condensing to white-hot points; upgrade: hot white cores bloom, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000509": {
+   "note": "DispelAll (small variant) white ring: 20 white orbs spin the opposite way in a flat 0.5 m ring ~1 m up (no rise) while the violet/blue helix climbs, 0.58 m halos condensing to white-hot points; upgrade: hot white cores bloom, ~4 glints/s",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200071F": {
+   "note": "Static faint white glow (10-20%) under an additive mist plume: 1.0->0.4 m halo, 2-frame life; upgrade: steady (no fades/glints)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320007DF": {
+   "note": "Unreferenced faint white spiral (20% fading out) climbing with mist + star (script 0x33000E4A); upgrade: gentler glints",
+   "params": {
+    "twinkle": 0.2,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000804": {
+   "note": "Elemental weapon glow (white) on Blunt Bow/Sceptre/Crossbow/Atlatl (with white motes): a steady 0.58 m halo at 30% next to a star sparkle, re-spawned every ~2 frames (L 0.03 s); upgrade: steady (no fades/glints/tint ramp, which would turn into strobe or invisibility at this lifespan), soft vs the weapon",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000805": {
+   "note": "Blunt weapon and rune-stone motes (white): 5 faint (30%) 0.09 m motes hover in a 0.1-0.2 m ring and sink slowly; upgrade: fade in instead of popping at 30%, gentle glints",
+   "params": {
+    "fadeIn": 0.1,
+    "twinkle": 0.2,
+    "flickerHz": 5.0
+   }
+  },
+  "0x320008DC": {
+   "note": "Mystical Mug hovering orb: steady opaque white 0.38 m glow (with solid balls + mist), re-spawned every 10 s; upgrade: no fade dip at respawn, gentle breathing pulse, white-hot bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.05,
+    "pulseHz": 0.8
+   }
+  },
+  "0x3200092F": {
+   "note": "Rising white aura motes (Rynthid / Aspect of Avarice / Aspect of Rage aura): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320009B5": {
+   "note": "K'nath Core colour-cycle pulse, final white step: swells to 1.16 m over 1.6 s and fades out; upgrade: white-hot core with bloom",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200011E": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (0.58 m variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000120": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (0.87 m variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000121": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (1.16 m, 2 s variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000122": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (1.16 m variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000123": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (1.45 m, 2 s variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000124": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (1.45 m variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000125": {
+   "note": "Unreferenced pale sky-blue expanding light-puff (1.6 m, 2 s variant): 10 orbs swell from a pinpoint while fading; upgrade: no glints on the swelling soft puff",
+   "params": {
+    "twinkle": 0.0
+   }
+  },
+  "0x32000930": {
+   "note": "Rising pale sky-blue aura motes (static frost scenes and casting bursts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320009E3": {
+   "note": "Glowing pale-blue eyes (pair at the head) of Empyreans (Keminub, Lady Daenerah, Morgethais, Sir Learth...): opaque 0.06 m, 2-frame life; upgrade: steady, white-hot core blooms",
+   "params": {
+    "gain": 1.75,
+    "core": 1.0,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x3200028B": {
+   "note": "Hidden (vanish) effect, root strand: magenta motes rise 0.6-1.6 m/s from the body centre while the creature fades out over 0.75 s; upgrade: sparkle glints, lighter flicker",
+   "params": {
+    "flicker": 0.08,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200028C": {
+   "note": "Hidden (vanish) effect, limb strands: magenta motes stream off every body part (0.29 m->pinpoint, 0.5 s) as the creature turns transparent; upgrade: sparkle glints, lighter flicker",
+   "params": {
+    "flicker": 0.08,
+    "twinkle": 0.2
+   }
+  },
+  "0x32000856": {
+   "note": "Black Ball in a Stein / Aerbax Mask Shard aura: faint magenta 0.46->0.38 m glow at 20-10% (with debris bits), 10 s life; upgrade: soft 0.3 s fade at respawn, slow pulse",
+   "params": {
+    "fadeIn": 0.03,
+    "fadeOut": 0.03,
+    "pulse": 0.05,
+    "pulseHz": 0.6
+   }
+  },
+  "0x32000935": {
+   "note": "Rising magenta aura motes (a static scene aura): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000936": {
+   "note": "Rising magenta aura motes (void auras (Kirienne Palacost, Dojiro Sangi, Isin Dule, Maiden / Apparition of Spite, Prototype Bloodstone) and summon bursts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200095C": {
+   "note": "Jungle Orchid / Glowing Jungle Lily pollen: every ~20 s a 4 s puff of tiny magenta motes (0.06->0.03 m) drifts out slowly; upgrade: pollen glints (~2/s), gentle fade-in",
+   "params": {
+    "twinkle": 0.25,
+    "flickerHz": 3.0,
+    "fadeIn": 0.05
+   }
+  },
+  "0x3200095F": {
+   "note": "Unreferenced magenta slow nova (script 0x33001158, 1.8 m up): 50 orbs drift out at 1.2-3.2 m/s, 0.29 m->pinpoint over 5 s; generated look kept"
+  },
+  "0x32000999": {
+   "note": "Aerbax Harm Hotspot danger zone (magenta, with white smoke): motes rise 1.3 m/s from a 10 m disc; upgrade: occasional glints",
+   "params": {
+    "twinkle": 0.15,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000004": {
+   "note": "Unreferenced pink-white spark trail: per-metre sparks (0.73->0.15 m) drift and fall with gravity; generated look kept"
+  },
+  "0x32000029": {
+   "note": "Unreferenced pink-white rising sparkles (5 s): points drift up 0.2-0.4 m/s, 0.36->0.15 m; generated look kept"
+  },
+  "0x32000443": {
+   "note": "Rolling Death trail: per-metre pink-white sparks (0.73->0.15 m) drift slightly up with snow, 0-2 s life; generated hot-spark look kept"
+  },
+  "0x320008D0": {
+   "note": "Unreferenced small pink-white spark trail: per-metre sparks (0.22->0.15 m) fall with gravity; generated look kept"
+  },
+  "0x32000201": {
+   "note": "Pale-blue impact burst (Explode, table 0x3400002C; frost-coloured): 10 orbs blast out at 1.2-3.2 m/s with gravity, 0.4 m->pinpoint over 0.75 s; upgrade: instant hit (fade-in 3% of life)",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000203": {
+   "note": "Unreferenced pale-blue falling puffs (1.25 s): 0.87 m glows drop 1.2-3.2 m/s from a small ring, shrinking and fading; generated look kept"
+  },
+  "0x320002C4": {
+   "note": "Orbiting pale-blue motes (60 x 0.12 m at 50%) of static portal-like objects (with blue + green swarms); upgrade: portal breathing pulse, ~3 glints/s, soft fade-in",
+   "params": {
+    "fadeIn": 0.05,
+    "pulse": 0.07,
+    "pulseHz": 0.9,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000934": {
+   "note": "Rising pale blue aura motes (frost auras (Lady Tairla Mhoire, Liam of Gelid, Lothus Guardians)): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000228": {
+   "note": "Warm halo (1.45 m at 50%) around flaming arrows/quarrels (with flame + smoke) and the small orange-bolt launch; re-spawned every frame (L 0.01 s); upgrade: steady (fades would make it vanish at this lifespan), hot core blooms",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x32000229": {
+   "note": "Warm halo (2.9 m at 50%) of the mid-size orange-bolt launch (table 0x3400000A); every-frame respawn; upgrade: steady, core trimmed for the bigger sprite, softer vs ground/walls",
+   "params": {
+    "gain": 1.55,
+    "core": 0.65,
+    "soft": 0.6,
+    "nearFade": 1.5,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x3200022A": {
+   "note": "Huge warm halo (8.7 m at 50%) of the large orange-bolt launch; every-frame respawn; upgrade: steady, gain/core trimmed so the giant quad glows without washing out the scene, very soft vs ground, fades when it passes the camera",
+   "params": {
+    "gain": 1.3,
+    "core": 0.45,
+    "soft": 1.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x32000547": {
+   "note": "Orb of the Baby Bunny Booty / Rabbit glow: warm 1.45 m halo at 50% with a lightning zap, every-frame respawn; upgrade: steady, no strobing fades",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0
+   }
+  },
+  "0x320003E5": {
+   "note": "Static beacon swirl (icy blue): 30 orbs spiral up around the beacon top, 2.9 m halos shrinking to points over 4 s; upgrade: gain/core trimmed for the overlapping big halos, glints only as they condense (~3/s)",
+   "params": {
+    "gain": 1.35,
+    "core": 0.55,
+    "twinkle": 0.15,
+    "flickerHz": 4.0
+   }
+  },
+  "0x32000933": {
+   "note": "Rising icy blue aura motes (frost auras (Lady Tairla Mhoire, Liam of Gelid, Lothus Guardians) and cast bursts): ~2/s rise 2.5 m/s from a 1.5 m disc, 0.15->0.06 m, fading; upgrade: hot pinpoint cores, ~4 glints/s",
+   "params": {
+    "flickerHz": 6.0
+   }
+  },
+  "0x320009F8": {
+   "note": "Glowing icy-blue eyes (pair at the head) of Frozen Wights and Liam of Gelid: opaque 0.06 m, 2-frame life; upgrade: steady, white-hot core blooms",
+   "params": {
+    "gain": 1.75,
+    "core": 1.0,
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "tint1": [
+     1.0,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "0x32000141": {
+   "note": "Torch / brazier / candle flame halo: one permanent warm-gold 3.3 m glow at 35% behind the flame (re-spawned every 100 s); upgrade: firelight breathing flicker, no 3 s fade-to-black at each respawn, softer where it meets walls, fades near the camera",
+   "params": {
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "flicker": 0.07,
+    "flickerHz": 5.0,
+    "soft": 1.0,
+    "nearFade": 1.5
+   }
+  },
+  "0x320003E7": {
+   "note": "Giant 14.5 m warm-gold beacon halo at 8.5 m height on a static landmark (with icy swirl + star sparkle); upgrade: gain/core trimmed for the huge quad, slow breathing pulse, very soft vs the structure, near fade",
+   "params": {
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "gain": 1.45,
+    "core": 0.5,
+    "soft": 2.0,
+    "nearFade": 3.0,
+    "pulse": 0.04,
+    "pulseHz": 0.5
+   }
+  },
+  "0x32000368": {
+   "note": "Crystalline / Cursed / Shadow Wisp body (magenta): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its magenta hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.45,
+    "core": 0.5,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x32000831": {
+   "note": "Raven Hand Aegis / Raven Aegis wisp glow (magenta): a small halo-with-eye (0.55->0.16 m, 50%) re-emitted every 0.05 s and dripping down; upgrade: hot core, gentle shimmer",
+   "params": {
+    "pulse": 0.05,
+    "pulseHz": 1.3
+   }
+  },
+  "0x32000366": {
+   "note": "Crystalline Wisp / Wisp / Water Wisp body (blue): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its blue hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.45,
+    "core": 0.5,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x32000367": {
+   "note": "Ethereal Wisp / Spirit Wisp body (cyan): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its cyan hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.15,
+    "core": 0.35,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x32000369": {
+   "note": "Wisp / Ghost Wisp body (green): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its green hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.2,
+    "core": 0.4,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x3200036A": {
+   "note": "Dark Wisp / \"an evil presence\" body (red): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its red hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.45,
+    "core": 0.5,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x320004A1": {
+   "note": "Silifi of Crimson Stars / Crimson Night tip crackle: a jagged red-white electric arc (triangle sprite, partial UVs) re-spawned every 0.2 s with random on/off opacity beside a lightning bolt; re-filed streak->lightning; upgrade: electric flicker, no fade-in (the crackle must hit), hot white core",
+   "params": {
+    "gain": 2.0,
+    "core": 1.0,
+    "sat": 1.12,
+    "fadeIn": 0.0,
+    "fadeOut": 0.15,
+    "flicker": 0.42,
+    "flickerHz": 17.0
+   },
+   "family": "lightning"
+  },
+  "0x32000A3D": {
+   "note": "Wisp (setup 0x02001BC7) body (violet): a new 1.17 m halo-with-eye sprite every 0.05 s, ~5 stacked at the head, the older ones accelerating downward into a shrinking, fading tail; upgrade: gain/core cut for the stacking so the head keeps its violet hue instead of flat white, gentle living shimmer",
+   "params": {
+    "gain": 1.45,
+    "core": 0.5,
+    "pulse": 0.06,
+    "pulseHz": 1.3
+   }
+  },
+  "0x32000A4A": {
+   "note": "BreatheLightning of Discorporate Rynthids / Dread Figment: red jagged arcs shoot out at 3.6-9.6 m/s, spinning and growing 0.46->2.3 m while fading over 0.75 s; re-filed streak->lightning; upgrade: electric flicker, hot white-red core",
+   "params": {
+    "gain": 1.95,
+    "core": 0.9,
+    "sat": 1.12,
+    "flicker": 0.4,
+    "flickerHz": 16.0
+   },
+   "family": "lightning"
+  }
+ }
+}

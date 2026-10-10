@@ -234,6 +234,8 @@ export function gemSparkleEmitterInfo(cfg, ctx) {
     // faces these at the camera each frame (particle_manager.js _billboardEmitter).
     // Engine default is false (retail-faithful for DAT replay); synthesized
     // sprite emitters opt in. Honours ?particleBillboard=off for A/B eye-test.
+    // `?particleFx` upgrade row (particle_fx.js named rows).
+    fxProfile: "particle.gemSparkle",
     billboard: true,
   };
 }

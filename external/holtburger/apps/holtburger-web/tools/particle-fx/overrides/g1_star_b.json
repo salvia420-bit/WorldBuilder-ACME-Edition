@@ -1,0 +1,1820 @@
+{
+ "group": "g1_star_b",
+ "familyNotes": {
+  "0x08000459": "Blue 8-ray star flare (64 px) with a white core: Singularity weapon motes, orrery star, rift/eye/lever glows. Star look: core blooms, blue rays stay crisp; 30 ms-respawn glows get no time effects.",
+  "0x080002B2": "Cyan-blue 8-ray star (32 px): frost wisp body, Quiddity ripple auras, crystal drips, frost weapon sparks, portal fountain, lightning-bolt trail, festive lights.",
+  "0x08000304": "Red 8-ray star (32 px): strife wisp body, Assault ripple auras, fire weapon sparks, Aun Tanua burst, Rynthid lightning breath, festive lights.",
+  "0x080005BD": "Magenta-violet 8-ray star (64 px): Bound Singularity motes, Umbral rift core, portal node lamps, Quiddity Seed / Coercion auras.",
+  "0x0800030E": "Violet 8-ray star (32 px): lightning wisp body, Chimeric Quiddity ripples, electric weapon sparks, portal fountains, sky flares.",
+  "0x0800054B": "Bright green 8-ray star (64 px, lum95 0.88): Ultimate Singularity motes, Tenebrous rift core, portal nodes. Brightest of the set, so gains run lower.",
+  "0x08000420": "Red 8-ray star (64 px): orrery star, Schism rift core, doll/statue eyes, Virindi/Rynthid throb glows, red mega-bursts.",
+  "0x080002F0": "White 4-point cross glint (the gem-sparkle sprite): gem/treasure/Virindi glints, crystal-creature hit sparks, festive crosses. Keep it crisp: no erosion, small spin.",
+  "0x080002FF": "Green 8-ray star (32 px): acid wisp body, acid weapon sparks and tears, sparkler, festive lights.",
+  "0x080006DB": "Red 4-point cross glint: fire EMBERS for bonfires/Keh Fire (cool warm-white to orange-red with crackle flicker), Virindi/Rynthid hand glints, Schism rift sparks.",
+  "0x08000315": "Yellow 8-ray star: lightning projectile impacts and electric sparks (crackle flicker), Catacombs portal nodes, tree topper, Encapsulated Spirit throb.",
+  "0x080002F4": "Soft, dim blue 4-point plus star (lum95 0.31): long-lived floating ambient motes and mote vortices. Slow twinkle, slow roll, gentle fades.",
+  "0x08000309": "Orange 8-ray star: Ebon rift core, Eastern Catacombs portal nodes, slashing weapon sparks, festive lights.",
+  "0x08000AA7": "Blue 4-point cross glint: Suppression rift sparks, festive and holiday crosses, Wooden Top glints.",
+  "0x080002E7": "Pale yellow 8-ray star: piercing weapon sparks, lightning projectile flight sparks, festive lights, sparkler.",
+  "0x08000303": "Soft white/grey 8-ray star: festive lights, white sparkler, Snowmaker sparkles, the poof spray.",
+  "0x08000C3E": "Yellow 4-point cross glint: Corroding wisp body, Ebon rift sparks, festive crosses.",
+  "0x08000D51": "Orange 4-point cross glint: festive crosses and scenery glints.",
+  "0x08000C36": "Violet 4-point cross glint: Umbral rift sparks and festive crosses.",
+  "0x08000CB3": "Green 4-point cross glint: Tenebrous rift sparks and scenery glints.",
+  "0x080009B8": "Pale ice-blue 8-ray star: the Obsidian Spines contrail of swelling, fading stars.",
+  "0x080002FC": "Soft gold 4-point plus star (blocky): an ambient gold mote cloud, the gold twin of the 0x080002F4 cloud."
+ },
+ "emitters": {
+  "0x3200059B": {
+   "note": "Orrery-style scenery (0x020009D0/0x02000F11, with solid-ball planets + glow orb): big 1.45 m blue star orbiting ~1.8 m out, random ~7 s life at 50%: 0.3 s fade in/out instead of popping, slow 2 Hz twinkle, slow roll kept",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.06,
+    "twinkle": 0.12,
+    "flickerHz": 3.0,
+    "core": 0.6
+   }
+  },
+  "0x320005B7": {
+   "note": "Singularity Sword/Greatsword blade swirl: 16 blue motes spiralling tightly up off the blade (0.43->0.15 m, 2 s, 100->50%); the spiral column overlaps so gain 1.4 + core keeps hot pinpoint cores with crisp rays; twinkle + slow roll kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320005BA": {
+   "note": "Singularity Axe head swirl: tight rising spiral of 16 blue motes (0.58->0.15 m) off the axe head; gain 1.4 + core against the stacked column, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320005BB": {
+   "note": "Singularity Mace head swirl: tight rising spiral of 16 blue motes off the mace head; gain 1.4 + core against the stacked column, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320005BC": {
+   "note": "Singularity Spear swirl: blue motes spiralling up faster (0.65 m/s) from the spear head; gain 1.4 + core against the stacked column, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320005BD": {
+   "note": "Scenery 0x020009EF floating blue light: 14 shrinking blue stars (0.58->0.15 m, 50->0%) drifting slowly up from one point - stacks ~3.5 deep, so gain 0.95/core 0.25 keeps a white heart without blow-out; twinkle kept",
+   "params": {
+    "gain": 0.95,
+    "core": 0.25
+   }
+  },
+  "0x32000642": {
+   "note": "Imbued Asteliary Orb halo: 2.2 m blue star at 50% re-spawned every 30 ms (a steady glow) - no fades/twinkle/spin (they would strobe on each respawn); gain 1.55 + core for a hot centre",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.55,
+    "core": 0.8
+   }
+  },
+  "0x320006AC": {
+   "note": "Lever glow (part 1): 1.74 m opaque blue star re-spawned every 30 ms = steady lamp; time effects off to avoid strobing, gain trimmed to 1.45 so only the core blooms",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.45,
+    "core": 0.7
+   }
+  },
+  "0x320006AE": {
+   "note": "Singularity Crossbow prod-tip swirl (one limb, local space): 10 small blue motes spiralling and drifting sideways off the tip; gain 1.5 + core, twinkle kept",
+   "params": {
+    "gain": 1.5,
+    "core": 0.5
+   }
+  },
+  "0x320006AF": {
+   "note": "Singularity Bow inner-limb swirl: 10 blue motes spiralling off the limb toward the grip; gain 1.4 + core against overlap, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320006B0": {
+   "note": "Singularity Dagger / Singularity Scepters of War & Life Magic: rising blue mote spiral off the blade/head; gain 1.4 + core, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320006B1": {
+   "note": "Singularity Katar: blue motes spiralling DOWN off the katar blade (A -z); gain 1.4 + core, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320006B2": {
+   "note": "Singularity Staff head swirl: 16 blue motes spiralling up fast (0.5 m/s) from the staff head; gain 1.4 + core against the stacked column",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320006B3": {
+   "note": "Singularity Crossbow other prod tip (world space - motes trail behind as the bow moves); gain 1.5 + core, twinkle kept",
+   "params": {
+    "gain": 1.5,
+    "core": 0.5
+   }
+  },
+  "0x320006B4": {
+   "note": "Singularity Bow upper-tip swirl: blue motes spiralling outward along the limb tip; gain 1.4 + core against overlap, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x3200071C": {
+   "note": "Singularity Atlatl swirl: 16 blue motes spiralling up for 2.3 s; gain 1.4 + core against the stacked column, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x3200073A": {
+   "note": "Crescent Moons blade shimmer: 0.87->0.15 m blue star that shrinks and fades every 30 ms (retail strobe-shimmer glow); respawn-rate, so no added fades/twinkle/spin - just a hotter core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.6,
+    "core": 0.9
+   }
+  },
+  "0x3200075A": {
+   "note": "Tall scenery (0x02000F8A-C) blue star heads at 4.6 m (three per structure): 4.8->1.45 m star at 40% re-spawned every 30 ms - static treatment, gain 1.5, larger soft/nearFade for the huge quad",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.5,
+    "core": 0.7,
+    "soft": 0.6,
+    "nearFade": 1.5
+   }
+  },
+  "0x320007C0": {
+   "note": "Uncontexted per-metre trail (script 0x33000E18 on parts 1/6/7/8 - limbs of a moving creature/object): blue stars dropped along the path, shrinking 0.43->0 and fading over 2 s; generator values kept (retail already fades out)"
+  },
+  "0x320007C9": {
+   "note": "Scenery 0x02001099 Singularity-style blue swirl (world space display piece): same tight rising spiral column as the weapons; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x32000855": {
+   "note": "Pulsing head/eye glow - Spectral/Skeleton Samurai, Bushi, Daimyo (part 9 head), Winter Orb, Little Pine Tree ornaments: one blue star shrinking 0.36 m->0 each second at 90% - 1 Hz beat kept with soft re-entry, twinkle cut to 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000918": {
+   "note": "Uncontexted script 0x33001106 blue starburst: 50 big stars (1.45->0.58 m) blasted out at 5-13 m/s, gone in 0.8 s; all 50 overlap on frame 1 -> gain 1.05/core 0.3 so it blooms as a flash, not a white-out; twinkle 0.15",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200091C": {
+   "note": "Uncontexted script 0x3300110C implosion: 120 opaque 1.45 m blue stars converge from a 4-7 m ring onto the centre over 2 s; they pile up at the end -> gain 1.35/core 0.5, end fade kept",
+   "params": {
+    "gain": 1.35,
+    "core": 0.5
+   }
+  },
+  "0x32000920": {
+   "note": "Small static blue light (0.19 m at 80%): Little Pine Tree ornament / scenery 0x020016A9 head gem (part 16); re-spawned every 30 ms, so steady (no fades/twinkle/spin)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320009B7": {
+   "note": "Summoning Stone activation (PlayScript Explode): 40 blue stars implode from 4-7 m onto the stone in 2 s ahead of its big flash (0x320009AD at 1 s); gain 1.5/core 0.7, fade at arrival kept",
+   "params": {
+    "gain": 1.5,
+    "core": 0.7
+   }
+  },
+  "0x32000A13": {
+   "note": "Lothus Guardian / Virindi Clandestine, Rhys, Wido (+23) chest glow: two staggered emitters of blue stars shrinking 0.43->0.15 m each second at 50->25% - throbbing heart light; 0.12 fade-in removes the 50% pop, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A1A": {
+   "note": "Glowing blue eyes of the Marionette Knight of Torment / Containment Doll (two 0.15 m points re-spawned every 30 ms): steady, hot core blooms slightly; no time effects",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000A1C": {
+   "note": "Suppression Rift core: 1.45 m opaque blue star on part 9 re-spawned every 30 ms (steady body glow); static, hot core blooms, blue rays stay crisp",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320005E9": {
+   "note": "Blue wisp body (Frost / Empowered Sorrow Wisp, Essence of Enchantment; also one layer of Aggregate/Spectral/Bound Wisp): 20 concentric stars born 1.35 m shrinking/fading at the centre - ~10 deep, so gain 0.75/core 0 (white heart stays, no blow-out), sat 1.15, 80 ms fade-in",
+   "params": {
+    "gain": 0.75,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.04,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200060B": {
+   "note": "Quiddity weapons (Axe/Dagger/Blade/Stave/Lance/Fist/Mace/Bow/Balister/Atlatl of the Quiddity): blue star glows at the hook points growing 0.03->0.8 m and fading each second, 10 overlapping - a breathing ripple aura; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200060C": {
+   "note": "Eye of the Quiddity: blue ripple aura - stars swell 0.03->1.08 m and fade each second, 10 concentric; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200060E": {
+   "note": "Crystal / Crystal Formation sparkle drip (+scenery 0x02000AA3/0x02001027): small blue stars tossed +y off the crystal and falling under gravity for 0.7 s, opaque at death -> generator fade-out kept; glints twinkle"
+  },
+  "0x3200060F": {
+   "note": "Crystal / Crystal Formation sparkle drip, opposite side (-y): small blue stars falling off the crystal for 0.7 s; generator fade-out + twinkle kept"
+  },
+  "0x3200064B": {
+   "note": "Scenery 0x02000B7E (with big standing blue star 0x3200058F): blue ripples swelling 0.03->0.54 m and fading each second around the orb, 10 concentric; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200070A": {
+   "note": "Festival light display (setup 0x02000E8D, 11 colours): blue star popping up at a random spot within 2 m, growing 0.05->0.54 m for ~1 s, then dark 0.25 s; generator 60 ms in / 250 ms out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000742": {
+   "note": "Frozen Fury sword/dagger & Mouryou blades: tiny 3 cm blue sparks scattered 0.1-0.2 m around the blade, fading over 1 s; continuous, so 80 ms fade-in; gain 1.9 + core so each glint blooms enough to read",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000756": {
+   "note": "Large Empyrean Tome: faint (40->20%) tiny blue sparks drifting off the tome; 60 ms fade-in, gain 2.1 keeps them visible",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 2.1,
+    "core": 1.1,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200075B": {
+   "note": "Scenery 0x02000F8A-C base motes: faint (30->20%) blue stars rising 1.5 s from within 2 m of the base under the tall star heads; 0.09 s fade-in instead of the pop",
+   "params": {
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000766": {
+   "note": "Khopesh / Vaikiakvi / Radiant Blood Blade / Red Rune Silveran weapons (+40 setups): tiny blue sparks around the blade; 80 ms fade-in, gain 1.9 + core so they bloom into glints",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000782": {
+   "note": "Frozen Weeping Dagger tears (upper hook): tiny blue sparkles dripping off the blade under gravity, 50%->0 over 1 s; generator values fine"
+  },
+  "0x32000783": {
+   "note": "Frozen Weeping Dagger tears (lower hook): tiny blue sparkles dripping off the blade, 50%->0 over 1 s; generator values fine"
+  },
+  "0x32000786": {
+   "note": "Frozen Weeping Axe/Staff/Spear/Mace/Claw, Cyphis Suldow's Half Moon Spear: blue sparkle tears dripping off the head; generator values fine"
+  },
+  "0x3200078A": {
+   "note": "Frozen Weeping Sword: blue sparkle tears dripping from three points along the blade; generator values fine"
+  },
+  "0x320007FA": {
+   "note": "Frost bows/crossbow/atlatl/sceptre, Ice Wand, Frost Staff: five faint (30%) blue sparks hovering around the weapon head; 60 ms fade-in replaces the pop, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x32000809": {
+   "note": "Dungeon portal fountain (Exit/Surface/Xi Ru's Chapel, Catacombs exits, Deep Guruk Caverns, Temple of the Font): 20 blue stars born 1.35 m at the portal centre (part 6) rising + shrinking over 2 s - portal look: gain 1.1/core 0.35 for the stacked base, slow 0.9 Hz breathing, twinkle, faster roll",
+   "params": {
+    "gain": 1.1,
+    "core": 0.35,
+    "sat": 1.12,
+    "fadeIn": 0.04,
+    "twinkle": 0.3,
+    "spin": 0.27,
+    "pulse": 0.06,
+    "pulseHz": 0.9
+   }
+  },
+  "0x320008A5": {
+   "note": "Scenery 0x020015D7 sparkle field: blue stars popping up anywhere in a 4 m disc, drifting ~1 m/s and fading (15 live); generator values kept"
+  },
+  "0x320008D2": {
+   "note": "Blue Anniversary Sparkler: tiny sparks spat 0.3 m from the tip, dying in 0.2 s; near-instant 8 ms in, 18 Hz crackle flicker, gain 2 so each spark blooms",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E3": {
+   "note": "Holiday Lights blue bulb (chase sequence via CallPES): one star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38 so the bulb dims rather than vanishing at full size, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x3200093B": {
+   "note": "Shield of Perfect Light: ring of 20 opaque blue stars (0.54->0.03 m) on a 0.2 m radius around the shield - heavy overlap, so gain 1.2/core 0.5 keeps a bright halo without white-out",
+   "params": {
+    "gain": 1.2,
+    "core": 0.5
+   }
+  },
+  "0x32000957": {
+   "note": "Energy Cage: 5 blue stars orbiting at ~1 m radius, rising slowly for 5 s while shrinking 0.32->0.08 m; 0.25 s fade-in replaces the full-opacity pop",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x32000988": {
+   "note": "Virindi Cage / Wall: larger (0.68->0.16 m) blue stars orbiting the cage for 5 s; 0.25 s fade-in replaces the pop",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x3200098B": {
+   "note": "Empyrean Spherule ring 1: tiny (2 cm) blue motes circling in a tight 9 cm ring (with 0x3200098C/D forms a sparkle sphere); core 0.8 adds a bloom pinpoint, generator fade-out removes the opaque pop",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x3200098C": {
+   "note": "Empyrean Spherule ring 2 (lower tilt): tiny blue motes on a 7 cm ring; core 0.8 for a bloom pinpoint",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x3200098D": {
+   "note": "Empyrean Spherule ring 3 (upper tilt): tiny blue motes on a 7 cm ring; core 0.8 for a bloom pinpoint",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x320009BE": {
+   "note": "Shadowfire Sword of Lost Light: tiny blue sparks rising slowly off three points on the blade (80->20%); 80 ms fade-in, gain 1.9 + core",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000A2D": {
+   "note": "Lightning Bolt projectile (PlayScript Launch / setup 0x02001B70): blue sparks shed every 7 cm of flight, scattering 2-6 m/s and falling over 4 s - electric crackle flicker 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0
+   }
+  },
+  "0x320005AD": {
+   "note": "Red beacon star (scenery 0x020009DA; 6 m up on smoking 0x020012D2): 30 concentric red stars born 1.35 m sinking/shrinking over 1.5 s - ~15 deep, so gain 0.75/core 0/sat 1.15 to keep red colour, no white-out",
+   "params": {
+    "gain": 0.75,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005AE": {
+   "note": "Red wisp body (Strife / Incalescent Crystalline Wisp, Essence of Strife; red layer of the Aggregate Wisp): 20 concentric stars born 1.35 m at the centre - ~10 deep, gain 0.75/core 0, sat 1.15, 80 ms fade-in",
+   "params": {
+    "gain": 0.75,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.04,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000618": {
+   "note": "Assault Orb (+scenery 0x02000AD9): red ripple aura - stars swell 0.03->1.08 m and fade each second, 10 concentric; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x32000619": {
+   "note": "Assault weapons (Axe/Mace/Spear/Staff/Atlatl/Bow/Cestus...): red star ripples swelling 0.03->0.8 m at the hook points; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x32000680": {
+   "note": "Spirit of Aun Tanua death explosion (PlayScript Explode): 50 red stars born 2.7 m blasting out at 3-8 m/s, shrinking over 2 s - frame-1 overlap is a huge flash; gain 1.05/core 0.3 keeps a bloomed burst not a white screen, twinkle 0.15",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200070E": {
+   "note": "Festival light display (0x02000E8D): red star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000732": {
+   "note": "Banished Orb / Star of Gharu'n / scenery 0x02000EE9: faint (40->20%) tiny red sparks around the orb; 60 ms fade-in, gain 2.1 keeps them visible",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 2.1,
+    "core": 1.1,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000733": {
+   "note": "Scenery 0x02000EF2: faint (40->20%) tiny red sparks; 60 ms fade-in, gain 2.1",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 2.1,
+    "core": 1.1,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200073D": {
+   "note": "Branith's Staff: 15 faint (40->20%) tiny red sparks at the staff head; 60 ms fade-in, gain 2.1",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 2.1,
+    "core": 1.1,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200077F": {
+   "note": "Flaming Weeping Dagger tears (upper hook): tiny red sparkles dripping off the blade, 50%->0; generator values fine"
+  },
+  "0x32000780": {
+   "note": "Flaming Weeping Dagger tears (lower hook): tiny red sparkles dripping off the blade; generator values fine"
+  },
+  "0x32000785": {
+   "note": "Flaming Weeping Claw/Mace/Spear/Axe/Staff: red sparkle tears dripping off the head; generator values fine"
+  },
+  "0x32000788": {
+   "note": "Flaming Weeping Sword: red sparkle tears from three points along the blade; generator values fine"
+  },
+  "0x320007F9": {
+   "note": "Fire bows/crossbow/atlatl/sceptre/staff, Wretched Crossbow: five faint (30%) red sparks hovering at the weapon head; 60 ms fade-in replaces the pop, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x32000887": {
+   "note": "Scenery 0x020015AA (with dark stars, light smoke, dark burst): 6 red stars spiralling up a 1 m-radius vortex at 1.5-2 m/s for 2 s; 0.1 s fade-in",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x320008C3": {
+   "note": "Lightning Bolt projectile, red variant (Launch / setup 0x020015FD): red sparks shed every 7 cm of flight, scattering and falling over 4 s - crackle flicker 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0
+   }
+  },
+  "0x320008D6": {
+   "note": "Red Anniversary Sparkler: tiny sparks spat 0.3 m from the tip, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2 so sparks bloom",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E6": {
+   "note": "Holiday Lights red bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38 so it dims instead of vanishing at full size, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000917": {
+   "note": "Eastern Catacombs portal fountain: 20 red stars born 1.35 m at the centre (part 6) rising + shrinking over 2 s - portal look: gain 1.1/core 0.35, 0.9 Hz breathing, twinkle, faster roll",
+   "params": {
+    "gain": 1.1,
+    "core": 0.35,
+    "sat": 1.12,
+    "fadeIn": 0.04,
+    "twinkle": 0.3,
+    "spin": 0.27,
+    "pulse": 0.06,
+    "pulseHz": 0.9
+   }
+  },
+  "0x32000944": {
+   "note": "BloodScorch (+Replica/Great), Burnja's Board with Nails, Skeletonbane Sword of Lost Light, Greatsword of Iron Flame: tiny red sparks rising slowly off the weapon (80->20%); 80 ms fade-in, gain 1.9 + core",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200098F": {
+   "note": "Aerbax's Defeat ring 1: tiny (2 cm) red motes circling in tight 9 cm rings at two heights (sphere of sparks); core 0.8 adds a bloom pinpoint",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x32000990": {
+   "note": "Aerbax's Defeat ring 2 (lower tilt): tiny red motes on a 7 cm ring; core 0.8 for a bloom pinpoint",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x32000991": {
+   "note": "Aerbax's Defeat ring 3 (upper tilt): tiny red motes on a 7 cm ring; core 0.8 for a bloom pinpoint",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x320009C4": {
+   "note": "Shadow-portal scenery 0x020018C0 (with dark stars/vortex): 10 red stars born 1.35 m rising + shrinking from the centre (part 6) - portal look: gain 1.1/core 0.35, breathing, twinkle",
+   "params": {
+    "gain": 1.1,
+    "core": 0.35,
+    "sat": 1.12,
+    "fadeIn": 0.04,
+    "twinkle": 0.3,
+    "spin": 0.27,
+    "pulse": 0.06,
+    "pulseHz": 0.9
+   }
+  },
+  "0x32000A4B": {
+   "note": "Rynthid BreatheLightning (Discorporate Rynthid of Torment/Rage, Dread Figment): red spark spray thrown forward 1-3 m/s and falling in 0.5 s - crackle flicker 0.3 @16 Hz, quick 15 ms in, twinkle 0.2",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0,
+    "fadeIn": 0.03,
+    "twinkle": 0.2
+   }
+  },
+  "0x3200059D": {
+   "note": "Orrery-style scenery (0x020009D0/0x02000F11): big 1.45 m purple star orbiting with the blue/red ones, random ~7 s life at 50%: 0.3 s fade in/out, slow 2 Hz twinkle, slow roll",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.06,
+    "twinkle": 0.12,
+    "flickerHz": 3.0,
+    "core": 0.6
+   }
+  },
+  "0x32000651": {
+   "note": "Quiddity Seed (+scenery 0x02000B85): throbbing purple seed glow - 4 overlapping stars shrinking 1.45->0.15 m each 0.5 s at 50->0%; generator values fine"
+  },
+  "0x3200078D": {
+   "note": "Staff of Coercion (+scenery 0x02000FE4): purple stars swelling 0.43->1.45 m and fading each second at three hooks - expanding aura rings; generator values fine"
+  },
+  "0x320007A2": {
+   "note": "Umbral Rift / Rift Orb core: 1.45 m opaque purple star on part 9 re-spawned every 30 ms (steady body glow); static, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320007D3": {
+   "note": "Bound Singularity Atlatl swirl: 16 purple motes spiralling up for 2.3 s; gain 1.4 + core against the stacked column, twinkle kept",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D4": {
+   "note": "Bound Singularity Axe head swirl: tight rising spiral of purple motes; gain 1.4 + core against the stacked column",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D5": {
+   "note": "Bound Singularity Bow upper-tip swirl: purple motes spiralling out along the limb tip; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D6": {
+   "note": "Bound Singularity Bow inner-limb swirl: purple motes spiralling toward the grip; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D7": {
+   "note": "Bound Singularity Dagger / Bound Singularity Scepters: rising purple mote spiral off the blade/head; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D8": {
+   "note": "Bound Singularity Katar: purple motes spiralling DOWN off the blade; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007D9": {
+   "note": "Bound Singularity Mace head swirl: 16 purple motes spiralling up; gain 1.4 + core against the stacked column",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007DA": {
+   "note": "Bound Singularity Staff head swirl: purple motes spiralling up fast (0.5 m/s); gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007DB": {
+   "note": "Bound Singularity Spear swirl: purple motes spiralling up fast (0.65 m/s) off the spear head; gain 1.4 + core",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007DC": {
+   "note": "Bound Singularity Sword/Greatsword blade swirl: 16 purple motes spiralling up off the blade; gain 1.4 + core against the stacked column",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320007DD": {
+   "note": "Bound Singularity Crossbow prod tip (world space - motes trail as the bow moves): small purple spiral; gain 1.5 + core",
+   "params": {
+    "gain": 1.5,
+    "core": 0.5
+   }
+  },
+  "0x320007DE": {
+   "note": "Bound Singularity Crossbow other prod tip (local space): small purple spiral drifting sideways; gain 1.5 + core",
+   "params": {
+    "gain": 1.5,
+    "core": 0.5
+   }
+  },
+  "0x32000812": {
+   "note": "Wedding Fireworks Launcher: purple sparks rising from three heights, invisible at birth and solidifying as they shrink (retail trans 1->0) - generator fade-out 0.25 rounds the end-of-life pop, twinkle kept"
+  },
+  "0x32000901": {
+   "note": "Magical Orb / Aetherium Ore stockpiles: 2.75 m purple star shrinking to a point each second (staggered pair) at 50% - 0.12 fade-in softens the big 50% pop-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200090C": {
+   "note": "Portal node lamps (Surface / Northern & Southern Catacombs Exit portals on parts 0-4; shadow-portal scenery 0x020018C0): 0.73 m purple star re-spawned every 30 ms - steady, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000A38": {
+   "note": "Skeleton Minion / Spectral Samurai, Bushi, Daimyo purple head pulse (part 9): star shrinking 0.36 m->0 each second at 90%; 1 Hz beat kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x320005BE": {
+   "note": "Lightning wisp body (Electricity, Progenitor of Lightning, Guardian Wisp; violet layer of the Aggregate Wisp): 20 concentric stars born 1.35 m at the centre - ~10 deep, gain 0.75/core 0, sat 1.15, 80 ms fade-in",
+   "params": {
+    "gain": 0.75,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.04,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200060A": {
+   "note": "Scenery 0x02000A64 sky flares: giant (21 m->0.2 m) faint (25->0%) violet stars born 38-47 m overhead at four corners, falling slowly over 4 s - slower roll and 1.75 Hz twinkle so a 20 m flare does not strobe; max soft/nearFade for the huge quad",
+   "params": {
+    "twinkle": 0.1,
+    "flickerHz": 2.5,
+    "spin": 0.2,
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200070D": {
+   "note": "Festival light display (0x02000E8D): violet star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000721": {
+   "note": "Spine Axe: tiny 3 cm violet sparks scattered around the head, fading over 1 s; 80 ms fade-in, gain 1.9 + core",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000738": {
+   "note": "Scepter of Thunderous Might: 10 opaque small violet sparks (0.11->0.05 m) hovering at the head - electric flicker 0.2 @15 Hz, generator fade-out kept",
+   "params": {
+    "flicker": 0.2,
+    "flickerHz": 15.0
+   }
+  },
+  "0x32000765": {
+   "note": "Scenery 0x02000FAA (with big standing violet star 0x32000590): violet ripples swelling 0.03->0.54 m and fading each second; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x32000779": {
+   "note": "Electric Weeping Dagger tears (lower hook): tiny violet sparkles dripping off the blade; generator values fine"
+  },
+  "0x3200077A": {
+   "note": "Electric Weeping Dagger tears (upper hook): tiny violet sparkles dripping off the blade; generator values fine"
+  },
+  "0x32000784": {
+   "note": "Electric Weeping Sword: violet sparkle tears from three points along the blade; generator values fine"
+  },
+  "0x32000787": {
+   "note": "Electric Weeping Staff/Spear/Mace/Claw/Axe: violet sparkle tears dripping off the head; generator values fine"
+  },
+  "0x320007AB": {
+   "note": "Quintessence Sickle: tiny violet sparks around the blade, fading over 1 s; 80 ms fade-in, gain 1.9 + core",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x320007F1": {
+   "note": "Chimeric Quiddity weapons (Fist/Lance/Mace/Blade/Axe/Atlatl/Balister/Bow/Stave/Dagger): violet ripples swelling 0.03->0.8 m at the hook points; gain 0.9/core 0.2 against the stack",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x320007F2": {
+   "note": "Chimeric Eye of the Quiddity: violet ripple aura swelling 0.03->1.08 m each second, 10 concentric; gain 0.9/core 0.2",
+   "params": {
+    "gain": 0.9,
+    "core": 0.2,
+    "sat": 1.12,
+    "twinkle": 0.2
+   }
+  },
+  "0x320007FE": {
+   "note": "Electric bows/crossbow/atlatl/sceptre/staff, Aetherium power cores, Aegis shields: five faint (30%) violet sparks hovering around the item; 60 ms fade-in, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x320008A4": {
+   "note": "Scenery 0x020015D6 light beacon: rising column of 1 m violet stars accelerating upward for 4 s (to ~16 m), fading out; larger soft (0.3) and nearFade (1.0) for the big quads",
+   "params": {
+    "soft": 0.3,
+    "nearFade": 1.0
+   }
+  },
+  "0x320008D5": {
+   "note": "Purple Anniversary Sparkler: tiny sparks spat 0.3 m from the tip, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E5": {
+   "note": "Holiday Lights violet bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x3200090B": {
+   "note": "Dungeon portal fountain (Blessed Cave, Entrance to the pyramid, Private Chambers +10; Northern Catacombs, Swamp Cavern; The Shadows): 20 violet stars born 1.35 m rising from the centre - portal look: gain 1.1/core 0.35, 0.9 Hz breathing, twinkle, faster roll",
+   "params": {
+    "gain": 1.1,
+    "core": 0.35,
+    "sat": 1.12,
+    "fadeIn": 0.04,
+    "twinkle": 0.3,
+    "spin": 0.27,
+    "pulse": 0.06,
+    "pulseHz": 0.9
+   }
+  },
+  "0x32000954": {
+   "note": "Energy Cage violet layer: 15 stars orbiting ~1 m out, rising slowly for 5 s while shrinking 0.32->0.08 m; 0.25 s fade-in replaces the pop",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x32000985": {
+   "note": "Virindi Cage / Wall violet layer: 15 large (0.68->0.16 m) stars orbiting the cage; 0.25 s fade-in",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x3200062C": {
+   "note": "Ultimate Singularity Dagger / Scepters: rising green mote spiral; brightest texture of the set, so gain 1.25 + core keeps the column from blooming flat",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x3200062D": {
+   "note": "Ultimate Singularity Katar: green motes spiralling DOWN off the blade; gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x3200062E": {
+   "note": "Ultimate Singularity Mace head swirl: 16 green motes spiralling up; gain 1.25 + core against the stacked column",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x3200062F": {
+   "note": "Ultimate Singularity Staff head swirl: green motes spiralling up fast (0.5 m/s); gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000630": {
+   "note": "Ultimate Singularity Sword/Greatsword blade swirl: 16 green motes spiralling up; gain 1.25 + core against the stacked column",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000631": {
+   "note": "Ultimate Singularity Bow upper-tip swirl: green motes spiralling out along the limb tip; gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000632": {
+   "note": "Ultimate Singularity Bow inner-limb swirl: green motes spiralling toward the grip; gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000633": {
+   "note": "Ultimate Singularity Crossbow prod tip (local space): small green spiral; gain 1.3 + core",
+   "params": {
+    "gain": 1.3,
+    "core": 0.45
+   }
+  },
+  "0x32000634": {
+   "note": "Ultimate Singularity Crossbow other prod tip (world space, trails as it moves): small green spiral; gain 1.3 + core",
+   "params": {
+    "gain": 1.3,
+    "core": 0.45
+   }
+  },
+  "0x32000635": {
+   "note": "Ultimate Singularity Spear swirl: green motes spiralling up fast (0.65 m/s); gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000636": {
+   "note": "Ultimate Singularity Axe head swirl: 16 green motes spiralling up; gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x3200071D": {
+   "note": "Ultimate Singularity Atlatl swirl: green motes spiralling up for 2.3 s; gain 1.25 + core",
+   "params": {
+    "gain": 1.25,
+    "core": 0.45
+   }
+  },
+  "0x32000746": {
+   "note": "Assassin's Dagger / Oswald's Dirk: twin 0.15 m green eye-points on the pommel at 60%, re-spawned every 30 ms - steady, no time effects",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000748": {
+   "note": "Faint (15%) 1.45 m green halo - Assassin's Dagger, Elysa's Wondrous Orb, scenery 0x0200116B/C, 0x02001171/2; re-spawned every 30 ms, steady (no fades/twinkle)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320007A3": {
+   "note": "Tenebrous Rift / Rift Orb core: 1.45 m opaque green star on part 9 re-spawned every 30 ms - steady; gain 1.4 (bright texture) so only the core blooms",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.4
+   }
+  },
+  "0x32000806": {
+   "note": "Portal node lamps (Exit/Surface/Xi Ru's Chapel; Deep Guruk Caverns, Temple of the Font) on parts 0-4: 0.73 m green star re-spawned every 30 ms - steady, gain 1.4 for the bright texture",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.4
+   }
+  },
+  "0x32000921": {
+   "note": "Small static green light (0.19 m at 80%): Little Pine Tree ornament / scenery 0x020016AA head gem; re-spawned every 30 ms, steady; gain 1.45 for the bright texture",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.45
+   }
+  },
+  "0x3200098A": {
+   "note": "Green pulse - Little Pine Tree ornaments, Vicar Archer, Spectral Bushi/Minion head (part 9): star shrinking 0.36 m->0 each second at 90%; 1 Hz beat kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x3200059C": {
+   "note": "Orrery-style scenery (0x020009D0/0x02000F11): big 1.45 m red star orbiting with the blue/purple ones, random ~7 s life at 50%: 0.3 s fade in/out, slow 2 Hz twinkle, slow roll",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.06,
+    "twinkle": 0.12,
+    "flickerHz": 3.0,
+    "core": 0.6
+   }
+  },
+  "0x32000798": {
+   "note": "Glowing red eyes (two 0.15 m points) of creepy dolls/marionettes - Yaja the Shepherd, Nightmarish Marionette, Cosseted/Soiled/Befouled Dolls, also Void Lord, Shadow Knight Hand, Count Dardante; re-spawned every 30 ms, steady, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320007A0": {
+   "note": "Schism / Fallen Rift / Rift of (Consuming) Torment core: 1.45 m opaque red star on part 9 re-spawned every 30 ms - steady body glow, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x320007BD": {
+   "note": "Uncontexted script 0x33000E13 (with red solid-ball splatter): red star flashes swelling 0.15->1.45 m and fading in 0.4 s, 10 over 1 s just in front of the body - impact flash; generator values kept"
+  },
+  "0x320007C1": {
+   "note": "Sacrificial Edge: 1.16 m opaque red star halo at the blade, re-spawned every 30 ms - steady; gain 1.5/core 0.75 so only the centre blooms",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x32000815": {
+   "note": "Fire-statue scenery 0x020012D0/D1 (with fire plume + dark smoke): twin red eyes at 2.7 m shimmering 0.58->0.15 m every 30 ms - steady treatment, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000909": {
+   "note": "Portal node lamps (Blessed Cave, Entrance to the pyramid, Private Chambers +10) on parts 0-4: 0.73 m red star re-spawned every 30 ms - steady, hot core",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x3200091A": {
+   "note": "Uncontexted script 0x33001108 red mega-burst, slow layer: 70 stars born 2.2 m flung out at 3-9 m/s, shrinking over 2 s to 20%; frame-1 stack -> gain 1.0/core 0.3, twinkle 0.15",
+   "params": {
+    "gain": 1.0,
+    "core": 0.3,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200091E": {
+   "note": "Uncontexted script 0x33001108 red mega-burst, fast layer: 70 stars born 2.2 m flung out at 8-22 m/s in 1 s; frame-1 stack -> gain 1.0/core 0.3, twinkle 0.15",
+   "params": {
+    "gain": 1.0,
+    "core": 0.3,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000922": {
+   "note": "Small static red light (0.19 m at 80%): Ka'hiri head gem (part 16) / Little Pine Tree ornament; re-spawned every 30 ms, steady",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0
+   }
+  },
+  "0x32000974": {
+   "note": "Wisp of Corrupted Shard of Rage/Torments, Wisp of Corrupted Emotion: 1.45 m red star shrinking to a point each second (staggered pair) at 50%; 0.12 fade-in softens the pop, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000975": {
+   "note": "Shadow-touched Virindi Paradox, Virindi Artificer/Cleaner/Quidiox, Claude the Archmage: red throb in front of the chest (stars 0.43->0.15 m each second at 50->25%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200097B": {
+   "note": "Virindi Protector, Claude the Dark Archmage, Aspect of Rage/Torment: larger red throb (1.16->0.15 m each second at 50->25%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A08": {
+   "note": "Bloodstone Crystal Stockpile: 2.75 m red star shrinking to a point each second (staggered pair, two hooks) at 50%; 0.12 fade-in softens the big pop, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A36": {
+   "note": "Red pulse - Spectral Minion/Archer/Samurai, Daimyo (part 9 head), Wisp of Corrupted Shard: star shrinking 0.36 m->0 each second at 90%; 1 Hz beat kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A3F": {
+   "note": "Rynthid creatures (Minion, Slayer, Sorcerer, Rager, Berserker, Discorporate Rynthid...): red chest throb on part 20 (stars 0.43->0.15 m each second at 50->25%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A50": {
+   "note": "Tormented / Enraged Shadow: 60 faint (15%) red motes orbiting ~0.7 m around the shadow for 4 s; ~0.25 s fade-in / 0.3 s fade-out instead of pops (retail is constant 15%, not a fade)",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08
+   }
+  },
+  "0x320005C1": {
+   "note": "Gem glint - Virindi (Disobedience, Martinate Inquisitor, Ulgrim +22), Fake Niffis Pearl, Drudge Scrying Orb, Celestial Hand Blade, Apostate Nexus, Lothus Guardian: white cross flashing 0.03->0.17 m in 0.3 s every 0.5 s; generator fast in / retail fade-out kept"
+  },
+  "0x320005C5": {
+   "note": "Gem/treasure glint - same Virindi/Lothus set plus Monty's & Gan-Zo's Golden Chests, Exquisite Casino Chest: white cross flashing to 0.2 m in 0.3 s; generator values kept"
+  },
+  "0x320005FD": {
+   "note": "Ethereal / Unstable / Shallow / Quiddity / Narrow Rift sparks: 4 white crosses growing 0.03->0.29 m within 0.5 m of the rift (parts 12/15), pop-out at 50% softened by the generator fade-out"
+  },
+  "0x3200064C": {
+   "note": "Apostate Aetherium Deposit crystal glints at 2-3 m: white crosses swelling 0.03->0.58 m in 0.3 s and fading; generator values kept"
+  },
+  "0x32000650": {
+   "note": "Apostate Aetherium Deposit crystal glints at 2.5-3.5 m (second set): white crosses swelling to 0.58 m in 0.3 s; generator values kept"
+  },
+  "0x320006D4": {
+   "note": "Crystal creature hit spark, lightest tier (SplatterLow/Mid/Up on Conveying/Dazzling Crystal, Pillar of Lightning): 25 white crosses born 0.58 m bursting ~1 m/s; frame-1 stack -> gain 1.05/core 0.3, instant 20 ms in, glints twinkle",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320006D5": {
+   "note": "Crystal creature hit spark, heaviest tier: 25 white crosses born 1.13 m bursting 2-5 m/s with gravity; frame-1 stack -> gain 1.05/core 0.3, instant in, glints twinkle",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320006D6": {
+   "note": "Crystal creature hit spark, light-mid tier: 25 white crosses born 0.73 m bursting 1-2.7 m/s; gain 1.05/core 0.3, instant in",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320006D7": {
+   "note": "Crystal creature hit spark, mid tier: 25 white crosses born 0.87 m bursting 1.3-3.5 m/s; gain 1.05/core 0.3, instant in",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "fadeIn": 0.03
+   }
+  },
+  "0x320006D8": {
+   "note": "Crystal creature hit spark, heavy tier: 25 white crosses born 1.0 m bursting 1.7-4.5 m/s; gain 1.05/core 0.3, instant in",
+   "params": {
+    "gain": 1.05,
+    "core": 0.3,
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000714": {
+   "note": "Festival light display (0x02000E8D): white cross glint appearing within 2 m at 0.35 m and shrinking to a point over ~1 s; fade-out 0.15 is enough (it ends tiny), twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000764": {
+   "note": "Scenery 0x02000FA3 (lightning-plume device): 60 faint (20%) white glints orbiting ~0.7 m around it; ~0.25 s fade-in / 0.3 s fade-out instead of pops",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08
+   }
+  },
+  "0x32000794": {
+   "note": "Snow Flake Charm glints: white crosses flashing 0.03->0.17 m in 0.3 s within 1 m of the charm; generator values kept"
+  },
+  "0x320008ED": {
+   "note": "Holiday Lights white cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2 (it ends tiny), light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x3200093C": {
+   "note": "Pack Tower Guardian / Amelia's Golem Doll: small white glints (0.03->0.09 m) flicking within 0.3 m of the body; generator values kept"
+  },
+  "0x32000958": {
+   "note": "Vulnerability phials (Iron/Mana/Copper Phial of ... Vulnerability, 78 items): tiny white glints dribbling out of the neck and falling for 0.75 s; generator values kept"
+  },
+  "0x32000A7B": {
+   "note": "Wooden Top: small white glints flicking off the spinning top (0.03->0.09 m, 90->50%); generator values kept"
+  },
+  "0x320005FB": {
+   "note": "Acid wisp body (Progenitor of Acid, Essence of Verdancy, Despair Wisp; green layer of the Aggregate Wisp): 20 concentric stars born 1.35 m - ~10 deep, gain 0.75/core 0, sat 1.15, 80 ms fade-in",
+   "params": {
+    "gain": 0.75,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.04,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200070C": {
+   "note": "Festival light display (0x02000E8D): green star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000747": {
+   "note": "Assassin's Dagger / Oswald's Dirk: faint (30->20%) tiny green sparks rising off the blade; 60 ms fade-in, gain 2.1",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 2.1,
+    "core": 1.1,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200077C": {
+   "note": "Acidic Weeping Dagger tears (lower hook): tiny green sparkles dripping off the blade; generator values fine"
+  },
+  "0x3200077D": {
+   "note": "Acidic Weeping Dagger tears (upper hook): tiny green sparkles dripping off the blade; generator values fine"
+  },
+  "0x32000789": {
+   "note": "Acidic Weeping Sword: green sparkle tears from three points along the blade; generator values fine"
+  },
+  "0x3200078C": {
+   "note": "Acidic Weeping Axe/Staff/Spear/Mace/Claw: green sparkle tears dripping off the head; generator values fine"
+  },
+  "0x320007FD": {
+   "note": "Acid bows/crossbow/atlatl/sceptre/staff: five faint (30%) green sparks hovering at the weapon head; 60 ms fade-in, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x320008D3": {
+   "note": "Green Anniversary Sparkler (+scenery 0x02001C3B/0x02001C49): tiny sparks spat 0.3 m, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E4": {
+   "note": "Holiday Lights green bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000900": {
+   "note": "Scenery 0x02001684 sparkle patch: small green stars appearing within 2 m and drifting ~1 m/s while fading over 0.5 s; generator values kept"
+  },
+  "0x320009BF": {
+   "note": "Olthoibane Sword of Lost Light: tiny green sparks rising slowly off three points on the blade (80->20%); 80 ms fade-in, gain 1.9 + core",
+   "params": {
+    "fadeIn": 0.08,
+    "gain": 1.9,
+    "core": 1.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000622": {
+   "note": "Bonfire scenery 0x02000B33 (with dark smoke plumes, warm glows) ember: a red spark popped out in an arc every ~5 s, falling for 3 s while shrinking - ember look: warm-white->deep orange-red cooling, 11 Hz crackle flicker",
+   "params": {
+    "tint0": [
+     1.1,
+     1.0,
+     0.85
+    ],
+    "tint1": [
+     1.0,
+     0.6,
+     0.4
+    ],
+    "tintCurve": 0.8,
+    "flicker": 0.2,
+    "flickerHz": 11.0,
+    "twinkle": 0.15,
+    "spin": 0.08,
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000623": {
+   "note": "Bonfire scenery 0x02000B33 ember, second spitter: red spark arcing out sideways every ~10 s and falling - cools warm-white->orange-red, crackle flicker",
+   "params": {
+    "tint0": [
+     1.1,
+     1.0,
+     0.85
+    ],
+    "tint1": [
+     1.0,
+     0.6,
+     0.4
+    ],
+    "tintCurve": 0.8,
+    "flicker": 0.2,
+    "flickerHz": 11.0,
+    "twinkle": 0.15,
+    "spin": 0.08,
+    "fadeIn": 0.03
+   }
+  },
+  "0x3200062A": {
+   "note": "Fire scenery embers (0x02000B34 / 0x02000BCD / 0x020015FC, with fire plumes): red sparks shooting up a 0.6 m spiral at 1-6 m/s for 0-4 s - cool warm-white->orange-red, crackle flicker",
+   "params": {
+    "tint0": [
+     1.1,
+     1.0,
+     0.85
+    ],
+    "tint1": [
+     1.0,
+     0.6,
+     0.4
+    ],
+    "tintCurve": 0.8,
+    "flicker": 0.2,
+    "flickerHz": 11.0,
+    "twinkle": 0.15,
+    "spin": 0.08
+   }
+  },
+  "0x32000712": {
+   "note": "Festival light display (0x02000E8D): red cross glint appearing within 2 m at 0.35 m and shrinking to a point over ~1 s; fade-out 0.15, twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000751": {
+   "note": "Virindi (Watcher in the Warren, Consul, Profane +19; Shadow-touched; Claude the Archmage), Quiddity Seed: red cross glints flashing 0.03->0.2 m at the hands (parts 10/11); generator values kept"
+  },
+  "0x32000752": {
+   "note": "Virindi head glint (part 9) - Watcher in the Warren, Consul, Profane, Shadow-touched Paradox/Quidiox, Claude: red cross flashing to 0.17 m in 0.3 s; generator values kept"
+  },
+  "0x3200079F": {
+   "note": "Schism / Fallen Rift / Rift of Rage, Blind Rage, Torment: red cross sparks growing 0.03->0.29 m around the rift (parts 12/15); generator values kept"
+  },
+  "0x320008EB": {
+   "note": "Holiday Lights red cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2, light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x3200094A": {
+   "note": "Keh Fire / Corrupted Pyre Oak / fire scenery embers (clockwise swirl): red sparks shooting up 3-5 m/s in a swirl for 1.2 s - ember look: warm-white->orange-red, crackle flicker, 0.07 s fade-in for the 90% pop",
+   "params": {
+    "tint0": [
+     1.1,
+     1.0,
+     0.85
+    ],
+    "tint1": [
+     1.0,
+     0.6,
+     0.4
+    ],
+    "tintCurve": 0.8,
+    "flicker": 0.2,
+    "flickerHz": 11.0,
+    "twinkle": 0.15,
+    "spin": 0.08,
+    "fadeIn": 0.06
+   }
+  },
+  "0x3200094B": {
+   "note": "Keh Fire / Corrupted Pyre Oak embers (counter-clockwise swirl, from below the fire base): rising red sparks; warm-white->orange-red cooling, crackle flicker, soft fade-in",
+   "params": {
+    "tint0": [
+     1.1,
+     1.0,
+     0.85
+    ],
+    "tint1": [
+     1.0,
+     0.6,
+     0.4
+    ],
+    "tintCurve": 0.8,
+    "flicker": 0.2,
+    "flickerHz": 11.0,
+    "twinkle": 0.15,
+    "spin": 0.08,
+    "fadeIn": 0.06
+   }
+  },
+  "0x32000A07": {
+   "note": "Sturdy/Delicate Bloodstone Wands, Bloodstone/Attunement Shards: five faint (30%) red cross sparks hovering at the tip; 60 ms fade-in, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x32000A43": {
+   "note": "Rynthid creatures (Minion, Slayer, Sorcerer, Ravager, Berserker, Aspects of Rage/Torment): red cross glints flashing at the hands (parts 10/11); generator values kept"
+  },
+  "0x3200090E": {
+   "note": "Portal node lamps (Northern Catacombs, Swamp Cavern portals) on parts 0-4: 0.54 m yellow star re-spawned every 30 ms - steady; gain 1.4 for the bright texture",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.4
+   }
+  },
+  "0x32000989": {
+   "note": "Little Pine Tree topper: 0.27 m yellow star at 70% on the tree top (z 1.85 m), re-spawned every 30 ms - steady; a touch more core so the topper glows",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "core": 1.0
+   }
+  },
+  "0x32000A3A": {
+   "note": "Encapsulated Spirit: yellow star throb (0.38 m->0 each second, staggered pair at 50%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A3B": {
+   "note": "Scenery 0x02001BC5: yellow star throb (0.27 m->0 each second at 50%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A3C": {
+   "note": "Scenery 0x02001BC6: larger yellow star throb (0.49 m->0 each second at 50%); 0.12 fade-in, twinkle 0.15",
+   "params": {
+    "fadeIn": 0.12,
+    "twinkle": 0.15
+   }
+  },
+  "0x32000A6E": {
+   "note": "Lightning projectile impact, low tier (table 0x340000D7 Explode): 13 yellow stars born 0.32 m sprayed 2-5 m/s, falling 1.5 s - electric crackle 0.3 @16 Hz, gain 1.5/core 0.8",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0,
+    "gain": 1.5,
+    "core": 0.8
+   }
+  },
+  "0x32000A6F": {
+   "note": "Lightning projectile impact, mid tier: 30 yellow stars born 0.81 m sprayed 2-5 m/s; frame-1 stack -> gain 1.2/core 0.5, crackle 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0,
+    "gain": 1.2,
+    "core": 0.5
+   }
+  },
+  "0x32000A70": {
+   "note": "Lightning projectile impact, high tier: 50 yellow stars born 1.35 m sprayed 2-5 m/s; heavy frame-1 stack -> gain 1.0/core 0.3, crackle 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0,
+    "gain": 1.0,
+    "core": 0.3
+   }
+  },
+  "0x32000A82": {
+   "note": "Electric-device scenery (0x02001C3E-4B, with standing lightning arc): yellow sparks sprayed 1-3 m/s and dropping in 0.5 s - crackle flicker 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0
+   }
+  },
+  "0x320005AF": {
+   "note": "Scenery 0x020009DE fairy-light field: 45 small blue motes (0.1->0.24 m) drifting over a 24 m-wide disc 3 m up for ~40 s, 50->0%; 1.2 s fade-in so they appear gently, twinkle + slow roll kept",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x320005B2": {
+   "note": "Scenery 0x020009DD mote vortex (inner): 20 soft blue stars swelling 0.4->1.6 m while orbiting 1.5-4 m out and rising ~8 m over 10 s at 50->0%; 0.4 s fade-in, slow twinkle, larger soft/nearFade for the growing quads",
+   "params": {
+    "fadeIn": 0.04,
+    "twinkle": 0.15,
+    "flickerHz": 3.5,
+    "soft": 0.35,
+    "nearFade": 1.5
+   }
+  },
+  "0x320005B3": {
+   "note": "Scenery 0x020009DD mote vortex (outer): 22 soft blue stars swelling 0.8->2 m while orbiting 4-9 m out and rising; 0.4 s fade-in, slow twinkle, soft 0.5 / nearFade 2",
+   "params": {
+    "fadeIn": 0.04,
+    "twinkle": 0.15,
+    "flickerHz": 3.5,
+    "soft": 0.5,
+    "nearFade": 2.0
+   }
+  },
+  "0x32000795": {
+   "note": "Scenery 0x02000FF3 (inside a 6 m faint glow): 15 blue stars orbiting ~1-2 m out, growing 0.02->0.2 m over 5 s and opaque at death - fade-out raised to 0.12 so the full-size star does not pop",
+   "params": {
+    "fadeOut": 0.12
+   }
+  },
+  "0x320009DF": {
+   "note": "Scenery 0x02001A01 blue mote cloud: 20 soft stars swelling 0.4->1.6 m, slowly sinking/swirling within ~4 m for 10 s at 50->0%; slow twinkle, soft 0.5 where they sink through the ground, nearFade 1.5",
+   "params": {
+    "twinkle": 0.15,
+    "flickerHz": 3.5,
+    "soft": 0.5,
+    "nearFade": 1.5
+   }
+  },
+  "0x32000A22": {
+   "note": "Recording Device swirl (with faint glow 0x32000525): blue soft stars swelling 0.02->0.6 m while whirling 0.5-1 m out, fading in 1.5 s; generator values kept"
+  },
+  "0x32000A23": {
+   "note": "Recording Device swirl, counter-rotating layer: blue soft stars swelling to 0.6 m and fading in 1.5 s; generator values kept"
+  },
+  "0x320007A5": {
+   "note": "Ebon Rift core: 0.82 m opaque orange star on part 9 re-spawned every 30 ms - steady; gain 1.5 so only the core blooms",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000802": {
+   "note": "Slashing bows/crossbows/atlatl/sceptre, compound bows, slingshots, batons, Princely Runed Flamberge: five faint (30%) orange sparks at the weapon head; 60 ms fade-in, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x32000849": {
+   "note": "Festival Lights (0x020014C7) orange star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x320008D4": {
+   "note": "Orange Anniversary Sparkler: tiny sparks spat 0.3 m, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008EF": {
+   "note": "Holiday Lights orange bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000913": {
+   "note": "Eastern Catacombs portal node lamps (parts 0-4): 0.54 m orange star re-spawned every 30 ms - steady; gain 1.45",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.45
+   }
+  },
+  "0x3200065C": {
+   "note": "Scenery 0x02000BC1 (tri-colour glint display, blue tier at 1 m): blue crosses growing 0.03->0.29 m within 1.2 m and fading; generator values kept"
+  },
+  "0x3200070B": {
+   "note": "Festival light display (0x02000E8D): blue cross glint appearing within 2 m at 0.35 m and shrinking to a point over ~1 s; fade-out 0.15, twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x320008E9": {
+   "note": "Holiday Lights blue cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2, light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000A1B": {
+   "note": "Suppression Rift sparks: 4 blue crosses growing 0.03->0.29 m around the rift (parts 12/15); generator values kept"
+  },
+  "0x32000A7A": {
+   "note": "Wooden Top: small blue cross glints (0.03->0.09 m, 90->50%) flicking off the spinning top; generator values kept"
+  },
+  "0x3200070F": {
+   "note": "Festival light display (0x02000E8D and Festival Lights): pale yellow star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x32000801": {
+   "note": "Piercing bows/crossbows/atlatl/sceptre, slingshot, baton, Princely Runed Partizan/Arbalest/War Bow: five faint (30%) yellow sparks at the weapon head; 60 ms fade-in, gain 1.9",
+   "params": {
+    "fadeIn": 0.06,
+    "gain": 1.9
+   }
+  },
+  "0x320008D8": {
+   "note": "Yellow Anniversary Sparkler: tiny sparks spat 0.3 m, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E7": {
+   "note": "Holiday Lights yellow bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000A6A": {
+   "note": "Lightning projectile flight sparks (table 0x340000D7 Launch, beside the lightning arc trail; scenery 0x02001C24): yellow sparks shed every 7 cm, scattering and falling over 4 s - crackle 0.3 @16 Hz",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0
+   }
+  },
+  "0x32000710": {
+   "note": "Festival light display (0x02000E8D): white star popping up within 2 m, growing to 0.54 m for ~1 s; generator soft in/out kept, twinkle 0.15",
+   "params": {
+    "twinkle": 0.15
+   }
+  },
+  "0x320007E0": {
+   "note": "Uncontexted 'poof' script 0x33000E4A (with additive smoke puff + glow-orb swarm): ~30 white stars sprayed out at 3-9 m/s over 1.5 s, fading in 0.5 s; generator values kept"
+  },
+  "0x320008D7": {
+   "note": "White Anniversary Sparkler: tiny sparks spat 0.3 m, dying in 0.2 s; near-instant in, 18 Hz crackle, gain 2",
+   "params": {
+    "fadeIn": 0.04,
+    "gain": 2.0,
+    "core": 1.0,
+    "flicker": 0.25,
+    "flickerHz": 18.0,
+    "twinkle": 0.3
+   }
+  },
+  "0x320008E8": {
+   "note": "Holiday Lights white bulb (chase via CallPES): star flash growing 0.05->0.54 m in 0.5 s; fade-out 0.38, light twinkle",
+   "params": {
+    "fadeOut": 0.38,
+    "twinkle": 0.12
+   }
+  },
+  "0x320008F1": {
+   "note": "Snowmaker: white sparkles rising from three heights, invisible at birth and solidifying as they shrink (retail trans 1->0) - generator fade-out 0.25 rounds the end-of-life pop, twinkle kept"
+  },
+  "0x32000713": {
+   "note": "Festival light display (0x02000E8D and Festival Lights): yellow cross glint appearing within 2 m at 0.35 m and shrinking to a point; fade-out 0.15, twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x320007A6": {
+   "note": "Ebon Rift sparks: 4 yellow crosses growing 0.03->0.29 m around the rift (parts 12/15); generator values kept"
+  },
+  "0x320008EC": {
+   "note": "Holiday Lights yellow cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2, light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x320009D6": {
+   "note": "Intense Corroding Crystalline Wisp body: 20 concentric yellow crosses born 1.45 m shrinking at the centre - ~10 deep, gain 0.8/core 0, sat 1.15, 80 ms fade-in",
+   "params": {
+    "gain": 0.8,
+    "core": 0.0,
+    "sat": 1.15,
+    "fadeIn": 0.04,
+    "twinkle": 0.15
+   }
+  },
+  "0x3200065D": {
+   "note": "Scenery 0x02000BC1 (tri-colour glint display, orange tier at 2.5 m): orange crosses growing 0.03->0.29 m within 1.2 m and fading; generator values kept"
+  },
+  "0x3200084A": {
+   "note": "Festival Lights (0x020014C7) orange cross glint appearing within 2 m at 0.35 m and shrinking to a point; fade-out 0.15, twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x320008F0": {
+   "note": "Holiday Lights orange cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2, light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x32000711": {
+   "note": "Festival light display (0x02000E8D): violet cross glint appearing within 2 m at 0.35 m and shrinking to a point; fade-out 0.15, twinkle 0.15",
+   "params": {
+    "fadeOut": 0.15,
+    "twinkle": 0.15
+   }
+  },
+  "0x320007A1": {
+   "note": "Umbral Rift / Rift Orb sparks: 4 violet crosses growing 0.03->0.29 m around the rift; generator values kept"
+  },
+  "0x320008EA": {
+   "note": "Holiday Lights violet cross bulb (chase via CallPES): 0.35 m glint shrinking to a point in 0.5 s; fade-out 0.2, light twinkle",
+   "params": {
+    "fadeOut": 0.2,
+    "twinkle": 0.12
+   }
+  },
+  "0x3200065E": {
+   "note": "Scenery 0x02000BC1 (tri-colour glint display, green tier at 1.7 m): green crosses growing 0.03->0.29 m within 1.2 m and fading; generator values kept"
+  },
+  "0x320007A4": {
+   "note": "Tenebrous Rift / Rift Orb sparks: 4 green crosses growing 0.03->0.29 m around the rift; generator values kept"
+  },
+  "0x320006FC": {
+   "note": "Obsidian Spines (setup 0x02000E5E) contrail: pale ice-blue stars dropped every 11 cm of travel, swelling 0.03->1.08 m and fading in 1 s where they were left; generator gain 1.53/core 0.73 for the overlap kept"
+  },
+  "0x320009E0": {
+   "note": "Scenery 0x02001A02 gold mote cloud (gold twin of 0x320009DF): 20 soft gold stars swelling 0.4->1.6 m, slowly sinking/swirling within ~4 m for 10 s at 50->0%; slow twinkle, soft 0.5, nearFade 1.5",
+   "params": {
+    "twinkle": 0.15,
+    "flickerHz": 3.5,
+    "soft": 0.5,
+    "nearFade": 1.5
+   }
+  }
+ }
+}

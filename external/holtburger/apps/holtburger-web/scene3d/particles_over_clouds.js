@@ -84,6 +84,44 @@ export function lateFxSourceCount() {
   return _sources.size;
 }
 
+// ── Late-pass hooks (2026-10-09, `?particleFx` soft particles) ───────────────
+// `{ before(renderer, depthTexture, camera), after() }` pairs the late pass
+// calls around its particle draw. particle_fx.js registers one to copy the
+// scene depth (attached to the late target, so not sampleable during the draw)
+// into a linear-depth texture for soft particles. Kept here so the composer
+// never imports the particles chunk.
+const _hooks = new Set();
+
+/** Register a late-pass hook pair. Idempotent per object. Returns an unregister function. */
+export function registerLateFxHooks(h) {
+  if (!h || (typeof h.before !== "function" && typeof h.after !== "function")) return () => {};
+  _hooks.add(h);
+  return () => _hooks.delete(h);
+}
+
+/**
+ * Before the late draw (target not yet bound). `width`/`height` are the late
+ * target's pixel size (what gl_FragCoord addresses during the draw). Never throws.
+ */
+export function runLateFxBefore(renderer, depthTexture, camera, width, height) {
+  for (const h of _hooks) {
+    if (typeof h.before !== "function") continue;
+    try { h.before(renderer, depthTexture, camera, width, height); } catch (_) { /* a hook never breaks the frame */ }
+  }
+}
+
+/** After the late draw, always (also when it was skipped). Never throws. */
+export function runLateFxAfter() {
+  for (const h of _hooks) {
+    if (typeof h.after !== "function") continue;
+    try { h.after(); } catch (_) { /* a hook never breaks the frame */ }
+  }
+}
+
+export function lateFxHookCount() {
+  return _hooks.size;
+}
+
 /**
  * three r184 `materialNeedsLights` (WebGLRenderer). Such a material in the
  * light-less late scene would render black, so it stays in the world pass.

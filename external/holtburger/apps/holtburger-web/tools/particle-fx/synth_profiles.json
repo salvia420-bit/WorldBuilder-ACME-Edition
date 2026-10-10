@@ -1,0 +1,378 @@
+{
+  "particle.gemSparkle": {
+    "ids": [],
+    "family": "star",
+    "sprite": "sparkleStar 0x010010F9 (white 4-point star, additive), 2-4 standing dots, 1.3 s, born opaque, shrink 0.45->0.15",
+    "note": "magic gem/crystal twinkle: white-hot glinting star that slowly turns and cools to blue-white as it shrinks; blooms on the glint",
+    "params": {
+      "gain": 1.9,
+      "core": 1.1,
+      "sat": 1.0,
+      "tint0": [
+        1.1,
+        1.07,
+        1.0
+      ],
+      "tint1": [
+        0.86,
+        0.95,
+        1.18
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.04,
+      "twinkle": 0.42,
+      "flickerHz": 7.0,
+      "spin": 0.18,
+      "soft": 0.03,
+      "nearFade": 0.15
+    }
+  },
+  "particle.brazierEmbers.ember": {
+    "ids": [],
+    "family": "fire",
+    "sprite": "flameCore 0x01000FF4 (orange fire puff, additive, 1.1 m quad) at 0.07->0.015 scale: tiny rising sparks, 1.1 s",
+    "note": "flame-bowl brazier embers: hot yellow-white sparks crackling as they rise, cooling to deep red before they wink out",
+    "params": {
+      "gain": 1.6,
+      "core": 0.95,
+      "sat": 1.1,
+      "tint0": [
+        1.18,
+        1.02,
+        0.74
+      ],
+      "tint1": [
+        1.0,
+        0.45,
+        0.26
+      ],
+      "tintCurve": 0.9,
+      "fadeIn": 0.05,
+      "flicker": 0.3,
+      "flickerHz": 14.0,
+      "twinkle": 0.15,
+      "spin": 0.3,
+      "soft": 0.02,
+      "nearFade": 0.1
+    }
+  },
+  "particle.brazierEmbers.smoke": {
+    "ids": [],
+    "family": "smoke_dark",
+    "sprite": "smokeDark 0x01000FBF (dark soot puff, alpha, 1.45 m quad) at 0.08->0.34, rising 0.4 m/s, 3 s, born opaque",
+    "note": "brazier soot plume: brown-black near the bowl, greying as it climbs, dissolving from its edges; follows day/night light",
+    "params": {
+      "gain": 1.0,
+      "sat": 0.6,
+      "tint0": [
+        0.84,
+        0.79,
+        0.74
+      ],
+      "tint1": [
+        1.1,
+        1.1,
+        1.12
+      ],
+      "tintCurve": 0.7,
+      "fadeIn": 0.15,
+      "erode": 0.25,
+      "spin": 0.08,
+      "soft": 0.15,
+      "nearFade": 0.4,
+      "lit": 0.85
+    }
+  },
+  "terrain.volcanoEmbers.ember": {
+    "ids": [],
+    "family": "fire",
+    "sprite": "flameCore 0x01000FF4 at 0.22->0.04: volcanic vent embers rising 1.6 m/s, 2.4 s",
+    "note": "lava-vent embers: bigger, hotter sparks than a brazier, strong crackle, cooling from white-gold to ember red",
+    "params": {
+      "gain": 1.75,
+      "core": 1.0,
+      "sat": 1.1,
+      "tint0": [
+        1.2,
+        1.0,
+        0.7
+      ],
+      "tint1": [
+        0.95,
+        0.36,
+        0.2
+      ],
+      "tintCurve": 0.85,
+      "fadeIn": 0.04,
+      "flicker": 0.35,
+      "flickerHz": 12.0,
+      "twinkle": 0.2,
+      "spin": 0.25,
+      "soft": 0.05,
+      "nearFade": 0.3
+    }
+  },
+  "terrain.volcanoEmbers.smoke": {
+    "ids": [],
+    "family": "smoke_dark",
+    "sprite": "smokeDark 0x01000FBF at 0.4->2.2: ash plume rising 0.7 m/s, 5 s",
+    "note": "volcanic ash plume: lava-lit warm brown at the vent, cooling to grey ash, dissolving; dark ash goes dark at night like any smoke",
+    "params": {
+      "gain": 1.0,
+      "sat": 0.55,
+      "tint0": [
+        0.92,
+        0.66,
+        0.48
+      ],
+      "tint1": [
+        1.05,
+        1.03,
+        1.02
+      ],
+      "tintCurve": 0.6,
+      "fadeIn": 0.12,
+      "erode": 0.35,
+      "spin": 0.06,
+      "soft": 0.6,
+      "nearFade": 1.5,
+      "lit": 0.6
+    }
+  },
+  "particle.foliagePollen": {
+    "ids": [
+      "0xF0E00001"
+    ],
+    "family": "specks",
+    "sprite": "softGlowDot 0x01001062 (blue-white radial glow, additive) at 0.5->0.32, 8 s drift",
+    "note": "daytime pollen motes under trees: the blue glow dot is desaturated and warmed to sunlit gold, gentle glints, never blooms",
+    "params": {
+      "gain": 0.9,
+      "sat": 0.25,
+      "tint0": [
+        1.35,
+        1.12,
+        0.55
+      ],
+      "tint1": [
+        1.3,
+        1.1,
+        0.6
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.12,
+      "twinkle": 0.14,
+      "flickerHz": 3.0,
+      "nearFade": 0.3,
+      "lit": 0.5
+    }
+  },
+  "particle.foliageFireflies": {
+    "ids": [
+      "0xF0E00002"
+    ],
+    "family": "glow_point",
+    "sprite": "ember 0x0100168C (purple tendril-burst texture 0x08000163, 1.7x2.4 m quad) at 0.22, swarm hover, 4.5 s",
+    "note": "dusk fireflies: the purple tendril sprite is greyed and tinted firefly yellow-green, glows into bloom and blinks slowly",
+    "params": {
+      "gain": 1.6,
+      "core": 0.8,
+      "sat": 0.0,
+      "tint0": [
+        1.05,
+        1.3,
+        0.42
+      ],
+      "tint1": [
+        1.0,
+        1.25,
+        0.4
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.15,
+      "pulse": 0.55,
+      "pulseHz": 0.6,
+      "nearFade": 0.2
+    }
+  },
+  "particle.foliageLeaves": {
+    "ids": [
+      "0xF0E00003"
+    ],
+    "family": "leaves",
+    "sprite": "leafMote 0x010014D7 (green blob, alpha clipmap, tiled UVs, 3-vertex) falling 6 s",
+    "note": "canopy falling leaves: follow scene light, no pop-in, keep their authored fade before the ground (no spin: tiled-UV triangle)",
+    "params": {
+      "gain": 1.0,
+      "sat": 1.05,
+      "fadeIn": 0.1,
+      "nearFade": 0.3,
+      "lit": 0.85
+    }
+  },
+  "particle.breathFog": {
+    "ids": [
+      "0xF0E00004"
+    ],
+    "family": "mist_white",
+    "sprite": "softGlowDot 0x01001062 (soft radial glow, additive; was smokePuff whose texture is pure black) at 0.35->1.3, 1.6 s",
+    "note": "cold-weather creature breath: the soft radial dot is greyed and tinted frosty blue-white, wisps away, dims at night; fades near the camera so first-person breath never fills the screen",
+    "params": {
+      "gain": 0.75,
+      "sat": 0.0,
+      "tint0": [
+        1.05,
+        1.08,
+        1.15
+      ],
+      "tint1": [
+        1.1,
+        1.12,
+        1.18
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.12,
+      "erode": 0.3,
+      "spin": 0.1,
+      "soft": 0.1,
+      "nearFade": 0.6,
+      "lit": 0.7
+    }
+  },
+  "terrain.sandDevils": {
+    "ids": [
+      "0xF0E00010"
+    ],
+    "family": "dust",
+    "sprite": "softGlowDot 0x01001062 (was smokePuff, pure-black texture) at 0.6->1.9, swarm column, 5 s",
+    "note": "desert dust devil: soft radial puffs greyed and tinted warm sand, lightening as they climb, swirling and dissolving; dims at night",
+    "params": {
+      "gain": 1.0,
+      "sat": 0.0,
+      "tint0": [
+        1.0,
+        0.84,
+        0.6
+      ],
+      "tint1": [
+        1.12,
+        1.0,
+        0.82
+      ],
+      "tintCurve": 0.8,
+      "fadeIn": 0.1,
+      "erode": 0.3,
+      "spin": 0.2,
+      "soft": 0.5,
+      "nearFade": 1.2,
+      "lit": 0.9
+    }
+  },
+  "terrain.swampFireflies": {
+    "ids": [
+      "0xF0E00020"
+    ],
+    "family": "glow_orb",
+    "sprite": "moonStarGreen 0x01001A62 (green soft glow, additive)",
+    "note": "swamp fireflies: green marsh-lights that glow into bloom and blink slowly",
+    "params": {
+      "gain": 1.5,
+      "core": 0.6,
+      "sat": 1.1,
+      "fadeIn": 0.15,
+      "pulse": 0.5,
+      "pulseHz": 0.5,
+      "twinkle": 0.1,
+      "flickerHz": 4.0,
+      "nearFade": 0.2
+    }
+  },
+  "terrain.swampMidges": {
+    "ids": [
+      "0xF0E00021"
+    ],
+    "family": "smoke_dark",
+    "sprite": "smokeDark 0x01000FBF (dark puff, alpha) holding station",
+    "note": "swamp midge clouds: murky green-grey swirl that slowly turns and thins at its edges; follows scene light",
+    "params": {
+      "gain": 1.0,
+      "sat": 0.5,
+      "tint0": [
+        0.8,
+        0.84,
+        0.74
+      ],
+      "tint1": [
+        0.9,
+        0.94,
+        0.86
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.15,
+      "erode": 0.2,
+      "spin": 0.3,
+      "soft": 0.2,
+      "nearFade": 0.6,
+      "lit": 0.8
+    }
+  },
+  "terrain.marshGas.bubble": {
+    "ids": [
+      "0xF0E00022"
+    ],
+    "family": "mist_magic",
+    "sprite": "softGlowDot 0x01001062 (was smokePuff, pure-black texture) at 0.16->0.5, rising 0.55 m/s, 3.6 s",
+    "note": "marsh-gas bubbles: soft radial puffs greyed and tinted sickly yellow-green, rising off the water and thinning; dim at night",
+    "params": {
+      "gain": 0.95,
+      "sat": 0.0,
+      "tint0": [
+        0.85,
+        1.0,
+        0.55
+      ],
+      "tint1": [
+        0.9,
+        1.0,
+        0.72
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.1,
+      "erode": 0.25,
+      "spin": 0.1,
+      "soft": 0.2,
+      "nearFade": 0.4,
+      "lit": 0.75
+    }
+  },
+  "terrain.marshGas.wisp": {
+    "ids": [
+      "0xF0E00023"
+    ],
+    "family": "mist_magic",
+    "sprite": "glowPlume 0x010011BF (white wispy smoke texture, additive) swelling 0.35->1.5, 1.5 s",
+    "note": "will-o'-wisp marsh flare: a ghostly green glow that swells, breathes and dissolves",
+    "params": {
+      "gain": 1.3,
+      "core": 0.4,
+      "sat": 0.0,
+      "tint0": [
+        0.7,
+        1.25,
+        0.8
+      ],
+      "tint1": [
+        0.55,
+        1.1,
+        0.75
+      ],
+      "tintCurve": 1.0,
+      "fadeIn": 0.08,
+      "erode": 0.3,
+      "pulse": 0.12,
+      "pulseHz": 1.6,
+      "soft": 0.4,
+      "nearFade": 0.8
+    }
+  }
+}

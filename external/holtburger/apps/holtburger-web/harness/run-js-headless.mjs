@@ -390,6 +390,8 @@ const TIER5 = [
   // 2026-10-07 additive particles unfogged like retail (D3DRS_FOGENABLE off for
   // the Additive bit) instead of three's mix toward fogColor (pale quads).
   { tier: 5, flag: "additiveFogBlack", file: "tests/additive_fog.test.mjs" },
+  { tier: 5, flag: "particleFx", file: "test_particle_fx.mjs" },
+  { tier: 5, flag: "burstFx", file: "test_play_effect_burst_fx.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },
   { tier: 5, flag: "diag_combat_giveup", file: "test_diag_combat_giveup.mjs" },

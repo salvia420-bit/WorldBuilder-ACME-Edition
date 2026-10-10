@@ -1,0 +1,388 @@
+{
+ "group": "zz_consistency",
+ "familyNotes": {},
+ "emitters": {
+  "0x3200001A": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "fire-projectile Launch script (Mysterious Hatch / Trap Door fire traps, Bretself the Translator): fireball body layer - per-metre puffs riding with the bolt (parent-local, 6 m/s along its axis), 1.65 m invisible haze condensing to an 11 cm opaque core in 0.3 s; erosion off (it ate the core exactly when it turns opaque), ramp inverted to heat red haze -> yellow-white core; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x3200001B": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "same fire-projectile Launch script (Mysterious Hatch / Trap Door fire traps, Bretself the Translator): largest body layer, 3.3 m haze condensing to an 11 cm core in 0.5 s; no erosion, heats into a yellow-white core, soft 0.77 m; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x3200012E": {
+   "params": {
+    "core": 0.85,
+    "flicker": 0.28,
+    "flickerHz": 16.0,
+    "twinkle": 0.3
+   },
+   "note": "Lightning Bolt / Electric Discharge spark shedding (cyan; per-metre trail on the bolt and its Launch, also Galvanic Knight/Elemental Create/Destroy): 8-ray sparks shed every 7 cm, scattering 2-6 m/s and arcing down over 4 s; crackle 0.28 @16 Hz, glints 0.3, core 0.85 - one look for all four colour variants (consistency pass)"
+  },
+  "0x3200016E": {
+   "params": {
+    "gain": 1.6,
+    "core": 0.82,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.04
+   },
+   "note": "Lightning Bolt / Electric Discharge impact, low tier: 13 sparks burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.6 / core 0.82 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.04 m vs ground"
+  },
+  "0x3200016F": {
+   "params": {
+    "gain": 1.4,
+    "core": 0.6,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.15
+   },
+   "note": "Lightning Bolt / Electric Discharge impact, mid tier: 30 sparks born 3x (0.8 m) burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.4 / core 0.6 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.15 m vs ground"
+  },
+  "0x32000170": {
+   "params": {
+    "gain": 1.25,
+    "core": 0.42,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.25
+   },
+   "note": "Lightning Bolt / Electric Discharge impact, high tier: 50 sparks born 5x (1.4 m) burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.25 / core 0.42 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.25 m vs ground"
+  },
+  "0x3200036E": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; the sparkle part of the spinning blue shield column): a 1.5 s spray of big blue 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x3200036F": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; the sparkle part of the spinning green shield column): a 1.5 s spray of big green 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000370": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; the sparkle part of the spinning grey shield column): a 1.5 s spray of big grey 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000371": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; the sparkle part of the spinning orange shield column): a 1.5 s spray of big orange 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000372": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; the sparkle part of the spinning purple shield column): a 1.5 s spray of big purple 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000373": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; the sparkle part of the spinning red shield column): a 1.5 s spray of big red 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000375": {
+   "note": "ShieldDownYellow (Blade Vulnerability curse; the sparkle part of the spinning yellow shield column): a 1.5 s spray of big yellow 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die"
+  },
+  "0x32000377": {
+   "note": "ShieldUpBlue (Cold Protection buff; the sparkle part of the spinning blue shield column): blue 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x32000378": {
+   "note": "ShieldUpGreen (Acid Protection buff; the sparkle part of the spinning green shield column): green 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x32000379": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; the sparkle part of the spinning grey shield column): grey 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x3200037A": {
+   "note": "ShieldUpOrange (Piercing Protection buff; the sparkle part of the spinning orange shield column): orange 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x3200037B": {
+   "note": "ShieldUpPurple (Lightning Protection buff; the sparkle part of the spinning purple shield column): purple 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x3200037C": {
+   "note": "ShieldUpRed (Fire Protection buff; the sparkle part of the spinning red shield column): red 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x3200037E": {
+   "note": "ShieldUpYellow (Blade Protection buff; the sparkle part of the spinning yellow shield column): yellow 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly"
+  },
+  "0x3200038B": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "same fire Launch script and the Flaming Skull projectile's default script: 2.5 m haze condensing to an 11 cm core in 0.4 s around the flying skull; no erosion, heats into the core; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x3200048B": {
+   "note": "AetheriaLevelUp / AugmentationUse ring (violet, waist or head level; in the LevelUp script 0x3300088D it plays beside the red ring 0x320003AF and the BLACK condensing motes 0x3200048A, not white smoke): 40 orbs on a 0.8 m ring rise and condense into bright points; upgrade: hot condensing cores with bloom, richer violet, ~3 glints/s"
+  },
+  "0x320004BA": {
+   "params": {
+    "gain": 1.22,
+    "core": 0.44
+   },
+   "note": "slow fire bloom scenery 0x02000840: part-local puffs 0.11 -> 2.75 m drifting up over 4 s; erosion off; consistency pass: ~18 puffs alive (generator counted 3) -> gain/core re-derived with the real crowd so the overlapping bloom keeps its colour"
+  },
+  "0x320004BC": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Flame Bolt body (default script of the Flame Bolt model + Launch table 0x34000079): ParabLVLALR streak with a 4.8 m quad - 14.5 m faint orange glow condensing to the 0.5 m bolt head in 0.4 s; erosion off (it would have deleted the big retail glow), heats into the head, nearFade 3 m (bolt starts at the caster); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320004CC": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Lightning Bolt arc-band projectile (setup 0x02000884, 4.8 m curved band mesh): bands shed per metre start huge and invisible and contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320004CE": {
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.0
+   },
+   "note": "Frost Bolt body (ParabLVLALR streak, 4.8 m quad): 14.5 m frosty haze condensing to the 0.5 m bolt head in 0.4 s; erosion off (it erased the condensing head), icy tint, nearFade 3; lit 0 like the other war-bolt bodies (the body is the bolt's light; its snow/vapour trail keeps lit 0.4-0.45); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320004CF": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Whirling Blade (slashing war bolt) projectile body, setup 0x02000886: white/silver swirl cones converge on the spinning blade — texture already peaks at 1.0, so gain trimmed 1.24->1.1 (core 0.25) to bloom as steel glint not a white blob; faint cool steel tint; no pulse; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320004D0": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Force Bolt (piercing war bolt) projectile body, default script of setup 0x02000887: per-metre stack of yellow swirl cones shrinking 3->0.1x onto the bolt head while turning opaque — gain 1.2 / core 0.35 for a glowing corkscrew head (stack already blooms), pulse removed (0.4 s life); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320005E3": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Flame Bolt projectile body (Launch, per-metre, parent-local, with its dark smoke trail): inner layer - faint 1.65 m magenta-pink puffs collapse to bright points in 0.3 s at the bolt head; erosion removed (it erased the late opaque phase); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320005E4": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Flame Bolt projectile body: mid layer - 2.5 m puffs collapsing to points in 0.4 s; erosion removed; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320005E5": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Flame Bolt projectile body: outer layer - widest 3.3 m faint halo collapsing over 0.5 s; erosion removed; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320006ED": {
+   "note": "Poltergeist whirl (static 0x02000e19): banded wooden keg meshes orbiting and tumbling up 0.15-0.6 m/s for 6 s; refiled debris (was misc, whose params build_catalog drops) (it draws - palettised texture), fade-in/out instead of popping, lit 0.85",
+   "family": "debris"
+  },
+  "0x320006EE": {
+   "note": "Poltergeist whirl: blue gold-banded book meshes circling and tumbling for ~6 s; refiled debris (was misc, whose params build_catalog drops), fade-in/out, lit 0.85",
+   "family": "debris"
+  },
+  "0x320006EF": {
+   "note": "Poltergeist whirl: 1.1 m wooden plank/board mesh circling the other way and tumbling, 6.5 s; refiled debris (was misc, whose params build_catalog drops), fade-in/out, lit 0.85",
+   "family": "debris"
+  },
+  "0x320006F0": {
+   "note": "Poltergeist whirl: silver metal pot/tankard meshes circling and tumbling, 4 s; refiled debris (was misc, whose params build_catalog drops), fade-in/out, lit 0.85",
+   "family": "debris"
+  },
+  "0x320006F1": {
+   "note": "Poltergeist whirl: thin grey stone tablet meshes circling and tumbling, 6 s; refiled debris (was misc, whose params build_catalog drops), fade-in/out, lit 0.85",
+   "family": "debris"
+  },
+  "0x320007E7": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Mana Bolt projectile body (Launch script, per-metre, parent-local, with its dark smoke trail): mid glow layer - faint 2.5 m cyan puffs collapse to bright 0.1 m points in 0.4 s, building the comet head; erosion removed (it erased the late, most-opaque phase that this layer is made of), end fade trimmed to 12%; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320007E8": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Mana Bolt projectile body: inner layer - 1.65 m puffs collapsing to points in 0.3 s right at the bolt; erosion removed; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320007EC": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Mana Bolt projectile body: outer layer - widest 3.3 m faint halo collapsing over 0.5 s; erosion removed; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x3200084D": {
+   "note": "Festival Lights (Halloween): a pumpkin mesh appears every ~5 s somewhere within 2 m, growing from nothing to 0.34 m over 3 s at 65-90% opacity, then popped; refiled debris (was misc, whose params build_catalog drops), 0.6 s fade-out replaces the pop, lit 0.6",
+   "family": "debris"
+  },
+  "0x3200084E": {
+   "note": "Festival Lights (Halloween): a bone/skull mesh appears every ~5 s, growing 0.2->1.4 over 3 s at 50-70% opacity; refiled debris (was misc, whose params build_catalog drops), fade-out replaces the pop, lit 0.6",
+   "family": "debris"
+  },
+  "0x32000892": {
+   "note": "Dread Figment: up to 20 pairs of glowing red eyes floating in the dark within 12 m, 8 s each, retail fade-out; 0.8 s fade-in so eyes open instead of popping, slow 0.6 Hz menace pulse, kept unlit; filed glow_point (not misc) so the fade-in and pulse actually ship - misc rows are forced neutral",
+   "family": "glow_point"
+  },
+  "0x320008B1": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Red arc-band projectile (scenery 0x020015ef, 16-vert curved band): bands shed per metre contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008B3": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "static spell-projectile model 0x020015e8 / 0x0200160a / 0x02001617 (Scale + sound script): same Flame-Bolt-style streak body, 14.5 m glow condensing to a 0.5 m head in 0.4 s; no erosion, heats into the head, nearFade 3; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008B5": {
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.0
+   },
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setups 0x020015ea / 0x0200160e / 0x02001619: 14.5 m pale haze condensing to the 0.5 m head in 0.4 s; erosion off, icy tint, nearFade 3; lit 0 like the other war-bolt bodies (the body is the bolt's light; its snow/vapour trail keeps lit 0.4-0.45); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008B6": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Red arc-band projectile (scenery 0x020015e4/15ec/161a/161c): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008B8": {
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.0
+   },
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setups 0x020015ee / 0x02001607 / 0x02001616 (Scale + sound script): 14.5 m pale haze condensing to the head; erosion off, icy tint, nearFade 3; lit 0 like the other war-bolt bodies (the body is the bolt's light; its snow/vapour trail keeps lit 0.4-0.45); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008BD": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "static spell-projectile model 0x020015f6: half-size Flame-Bolt-style streak body, 7.3 m glow condensing to a 0.5 m head in 0.4 s; no erosion, heats into the head, nearFade 3; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008BE": {
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.0
+   },
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setup 0x020015f8: half-size 7.3 m haze condensing to the head; erosion off, icy tint, nearFade 3; lit 0 like the other war-bolt bodies (the body is the bolt's light; its snow/vapour trail keeps lit 0.4-0.45); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008BF": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Red arc-band projectile, half-size (scenery 0x020015fb): bands contract 7->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008C0": {
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.0
+   },
+   "note": "static spell-projectile streak model (frost-style grey twin of the fire streaks 0x320008B3 / 0x320008BD), setup 0x020015f9: half-size 7.3 m haze condensing to the head; erosion off, icy tint, nearFade 3; lit 0 like the other war-bolt bodies (the body is the bolt's light; its snow/vapour trail keeps lit 0.4-0.45); consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x320008C3": {
+   "params": {
+    "core": 0.85,
+    "flicker": 0.28,
+    "flickerHz": 16.0,
+    "twinkle": 0.3
+   },
+   "note": "Lightning Bolt projectile, red variant (Launch / setup 0x020015FD): 8-ray sparks shed every 7 cm, scattering 2-6 m/s and arcing down over 4 s; crackle 0.28 @16 Hz, glints 0.3, core 0.85 - one look for all four colour variants (consistency pass)"
+  },
+  "0x3200094F": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Ball of Fire Launch: body layer 2, 2.5 m haze condensing to an 11 cm core in 0.4 s; no erosion, heats into the core; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x32000950": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Ball of Fire Launch: body layer 3, 3.3 m haze condensing to an 11 cm core in 0.5 s (longest-lived, forms the comet tail); no erosion, heats into the core; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x3200095A": {
+   "params": {
+    "gain": 1.22,
+    "core": 0.45
+   },
+   "note": "Wall of Fire (with glow orb 0x3200095B): implode puffs born at 5 m full opacity along a 1 m line, collapsing to 2.2 m and 20% opacity in 2 s; fade-in 12% (5 m pop-in), erosion off, nearFade 3; consistency pass: ~32 puffs alive (generator counted 3) -> gain/core re-derived with the real crowd"
+  },
+  "0x320009F6": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Nether Ring band (4.8 m curved arc mesh): dark bands shed per metre contract 14->0.5 m while thickening over 0.4 s; upgrade: erosion eased to 0.3, fade-out hides the pop; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x32000A2B": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Blue arc-band projectile (scenery 0x02001b6f, 16-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x32000A2D": {
+   "params": {
+    "core": 0.85,
+    "flicker": 0.28,
+    "flickerHz": 16.0,
+    "twinkle": 0.3
+   },
+   "note": "Lightning Bolt projectile, blue variant (Launch / setup 0x02001B70): 8-ray sparks shed every 7 cm, scattering 2-6 m/s and arcing down over 4 s; crackle 0.28 @16 Hz, glints 0.3, core 0.85 - one look for all four colour variants (consistency pass)"
+  },
+  "0x32000A39": {
+   "params": {
+    "gain": 0.8,
+    "core": 0.1,
+    "twinkle": 0.08
+   },
+   "note": "Summoned Wisp body: a white star-point re-emitted every 0.05 s at one spot, rising slowly and shrinking 0.73->0.15 m over 1 s - ~10 sprites stack at the head; consistency pass: gain 0.8 / core 0.1 / faint glints like the other stacked wisp bodies (g1_star_b 0x320005E9..., g2 0x32000366...), so the head glows instead of flaring white"
+  },
+  "0x32000A4C": {
+   "note": "Mysterious Portal (0x02001be3) apparition: every 5 s a red swirl with a demon (Rynthid-like) face and glowing eyes flashes 5.6->2.8 m for 0.8 s - picture sprite, filed vortex (misc rows are forced neutral and would drop these params): spin 0 (the face must stay upright), lit 0, no pulse, core 0.35 lights the eyes, fadeIn 0.18 lets the face materialise",
+   "family": "vortex"
+  },
+  "0x32000A6A": {
+   "params": {
+    "core": 0.85,
+    "flicker": 0.28,
+    "flickerHz": 16.0,
+    "twinkle": 0.3
+   },
+   "note": "Lightning projectile flight sparks, yellow variant (table 0x340000D7 Launch; scenery 0x02001C24): 8-ray sparks shed every 7 cm, scattering 2-6 m/s and arcing down over 4 s; crackle 0.28 @16 Hz, glints 0.3, core 0.85 - one look for all four colour variants (consistency pass)"
+  },
+  "0x32000A6E": {
+   "params": {
+    "gain": 1.6,
+    "core": 0.82,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.04
+   },
+   "note": "Lightning projectile impact, yellow variant (table 0x340000D7 Explode), low tier: 13 sparks burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.6 / core 0.82 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.04 m vs ground"
+  },
+  "0x32000A6F": {
+   "params": {
+    "gain": 1.4,
+    "core": 0.6,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.15
+   },
+   "note": "Lightning projectile impact, yellow variant (table 0x340000D7 Explode), mid tier: 30 sparks born 3x (0.8 m) burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.4 / core 0.6 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.15 m vs ground"
+  },
+  "0x32000A70": {
+   "params": {
+    "gain": 1.25,
+    "core": 0.42,
+    "flicker": 0.25,
+    "flickerHz": 15.0,
+    "soft": 0.25
+   },
+   "note": "Lightning projectile impact, yellow variant (table 0x340000D7 Explode), high tier: 50 sparks born 5x (1.4 m) burst 2-5 m/s and fall/shrink in 1.5 s; electric crackle 0.25 @15 Hz, gain 1.25 / core 0.42 shared by every colour variant of this tier (consistency pass: g1_star_a and g1_star_b had diverged), soft 0.25 m vs ground"
+  },
+  "0x32000A79": {
+   "note": "Wooden Top toy: the rune-carved spinning-top mesh itself, whirling about its axis (one particle respawned each second); no fades (would blink), lit 0.85 so the wooden toy takes scene light like retail; filed debris (not misc) so its lit/fade params actually ship - misc rows are forced neutral",
+   "family": "debris"
+  },
+  "0x32000A7D": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Amber arc-band projectile (scenery 0x02001c3c, 12-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop at full opacity; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  },
+  "0x32000A7E": {
+   "params": {
+    "fadeOut": 0.15
+   },
+   "note": "Amber arc-band projectile (scenery 0x02001c3d, 16-vert band): bands contract 14->0.5 m while brightening over 0.4 s; upgrade: 14 Hz crackle, fade-out removes the pop; consistency pass: 15% end fade shared by every war-bolt body twin (rounds the death pop, keeps the condensed head)"
+  }
+ }
+}

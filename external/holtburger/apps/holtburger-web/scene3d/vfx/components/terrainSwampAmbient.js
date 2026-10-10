@@ -285,7 +285,7 @@ export const terrainMarshGas = {
   lightCountDelta: 0,
   enabled() { return terrainSwampEnabled() && terrainMarshGasEnabled(); },
   gateFn: marshGasGate,
-  spriteName: "smokePuff",
+  spriteName: "softGlowDot",
   reads: ["geometry", "weather", "clock"],
   writes: ["emitter"],
   defaults: {
@@ -293,7 +293,9 @@ export const terrainMarshGas = {
     liftM: SWAMP_ANCHOR_LIFT_M.gas,
     // --- bubbles -----------------------------------------------------------
     bubbleSynthId: 0xF0E00022,
-    bubbleGfxObjId: PARTICLE_SPRITES.smokePuff,   // alpha puff (NOT additive)
+    // 2026-10-10: was smokePuff (pure-black DAT texture 0x08000326 → dark
+    // dots); softGlowDot is tinted sickly yellow-green by its `?particleFx` profile.
+    bubbleGfxObjId: PARTICLE_SPRITES.softGlowDot,
     bubblePeriodSec: 1.7,          // sluggish: this is a marsh, not a kettle
     bubbleMaxParticles: 10,
     bubbleInitial: 2,

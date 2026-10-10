@@ -409,6 +409,9 @@ export async function attachParticleEmitters(scene3d, placements, wasmExports, o
         // chain calls addEmitter directly with a wasm ParticleEmitterJs that has no
         // `billboard` field ⇒ false ⇒ retail-faithful). `?particleBillboard=off` A/B.
         if (info.billboard === undefined) info.billboard = true;
+        // `?particleFx`: an anonymous (id 0) synthesized emitter without its own
+        // profile name takes its component's row (particle_fx.js).
+        if (info.fxProfile == null && !(info.id >>> 0)) info.fxProfile = comp.id;
         const req = {
           emitterInfo: info,
           parent,

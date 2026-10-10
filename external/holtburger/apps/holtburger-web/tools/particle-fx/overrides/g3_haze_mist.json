@@ -1,0 +1,1772 @@
+{
+ "group": "g3_haze_mist",
+ "familyNotes": {
+  "0x08000D7C": "Cyan-blue cloudy puff (additive, max texel ~0.43 linear): body-aura spirit wisps of Hellfire/Enchantment creatures, cyan 'energy blood' hit splatter, Mana Bolt body + impact, Winter Flame weapon flames, ghost motes, Oubliette portal base mist. Erosion off for sparse wisps (its 0.4-wide edge eats ~45% of this dim texture from birth); kept only on dense bursts.",
+  "0x080000BE": "Very dim soft red radial halo (max ~0.05 linear): red light-halo scenery (sizes 4-20), flaming/weeping weapon glows, red fog clouds, mushrooms, idols. Mostly ONE particle respawned every 0.01-3 s, so per-particle fades must be 0 or the halo blinks/strobes; seed resets each respawn so no pulse.",
+  "0x0800013F": "Very dim pale warm-gold radial halo: firelight halos (hearths, braziers, torches, shrine lamps), warm light-halo scenery, frost-weapon/idol/pictograph glows, Harbinger inhale glow, bonfire billows. Steady respawning halos get no fades; fire-paired ones a slow faint flicker.",
+  "0x08000120": "Very dim soft green radial halo: green light-halo scenery, acid-weapon glow, green fog/aura clouds, acid pools, poison swamp, Glowing Pustule, mushrooms. Same steady-respawn rule (no fades).",
+  "0x08000106": "Very dim soft blue radial halo: blue light-halo scenery and dungeon portals, frost/spectral weapon glows, Chemical Reaction gas, freezing pools, devices (Galvanic Chest, Summoning Stone), keys and mushrooms. Steady-respawn rule; the Summoning Stone shockwave gets a lift.",
+  "0x08000080": "Bright green crescent-shaped mist wisp (max ~0.83 linear, edge 0.2 so never spun): Acid Stream spray droplets, generic elemental body aura (acid/lightning/fire elementals), acid fog, toxic storm clouds, Pillar of Acid, blight wisps. Bright enough to keep light erosion on wisps; droplets stay crisp.",
+  "0x080001A7": "Very dim soft magenta-purple halo: purple light-halo scenery and catacomb-exit portals, lightning-weapon glow, crystal-fragment ripple halos, Electric pool haze, Thunder Chicken storm halo, experiment items, dolls. Steady-respawn rule for single halos.",
+  "0x080007A3": "Magenta-pink cloudy puff (max ~0.43 linear): Flame Bolt and Nether Streak/Bolt/Arc projectile bodies + impacts, Portal Energy swirl, Lightning Cloud storm, magenta magic plume, void motes. Erosion off except on the dense 40-puff impacts.",
+  "0x08000C75": "Bright pale cyan-white cloudy puff (max ~0.76 linear): Mount Esper Firestorm storm-flame body aura, Moar/generic BreatheFlame breath, white magic column, chill aura wisps, Pillar of Frost. Bright, so light erosion is kept for a wispy dissolve.",
+  "0x0800003F": "Dark deep-blue cloudy puff (max ~0.22 linear): blue magic plumes (portals, braziers, Flaming Skull fizzle), Hidden-script sparkle fountain, portal energy swirls/storm, blue bonfire haze. Too dark for erosion (it removed ~75% of the energy); lifted instead.",
+  "0x08000190": "Very dim soft orange radial halo: orange light-halo scenery and Eastern Catacombs portal, crystal ripple halos, Jack o' Lantern, bonfire billows, Blinding Virindi cluster, orange weapon glow. Steady-respawn rule.",
+  "0x08000040": "Dark green cloudy puff (max ~0.22 linear): Abyssal Totem Gateway / green magic plumes, Acid Stream streak body, green energy swirl, green bonfire haze, acid-pool motes, spectral specks. No erosion; lifted.",
+  "0x08000E55": "Dark red cloudy puff (max ~0.27 linear): Lightning Bolt streak body, red magic plumes/fire column, rat disease breath, faint red body wisps, arena statue motes. No erosion.",
+  "0x08000069": "Red crescent-shaped mist wisp (max ~0.54 linear): red energy-well mist scenery and the Spirit of Aun Tanua trailing veil. No erosion (it halved the texture).",
+  "0x080001A9": "Dim blue radial glow used through the BOTTOM half of its UVs on a 5 m-tall strip: a soft vertical light shaft (beam), five-nine staggered strips per emitter.",
+  "0x080001AC": "Dim red radial glow on a 5 m-tall half-UV strip: red vertical light shaft (beam).",
+  "0x080001AA": "Dim green radial glow on a 5 m-tall half-UV strip: green vertical light shaft (beam).",
+  "0x080001AB": "Dim purple radial glow on a 5 m-tall half-UV strip: purple vertical light shaft (beam).",
+  "0x08001324": "Bright golden cloudy puff (max ~0.89 linear): golden streak body of spell-projectile models. Bright, so a little erosion keeps a wispy edge."
+ },
+ "emitters": {
+  "0x320004D8": {
+   "note": "Flame Guardian / Mount Lethe Hellfire / Fiery Remains / Child of Enchantment body aura (script 0x330008D6 on ~17 body parts): slow broad cyan-blue spirit wisp riding the part, 0.1->0.7 scale (0.8 m) over 2 s, rising 0.06-0.12 m/s; erosion dropped (ate ~45% of this dim texture from birth), gentle 6 Hz spirit-flame flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004D9": {
+   "note": "same Hellfire/Enchantment body aura: the biggest riding wisp, 0.2->1.0 scale (1.1 m) over 2 s, 3 per part; no erosion, 6 Hz flutter, soft 0.33 m against the body",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004DA": {
+   "note": "same Hellfire/Enchantment body aura: motionless flare blooming on the part (Still, 0.1->0.4 scale, 1 s) - the glint under the rising wisps; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004DB": {
+   "note": "same Hellfire/Enchantment body aura (also in static effect 0x02001743 with a star and steam): medium wisp rising 0.07-0.14 m/s, 0.1->0.45 scale over 1.5 s, 6 per part; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004DC": {
+   "note": "same Hellfire/Enchantment body aura: quick small lick shooting up 0.2-0.35 m/s, 0.1->0.3 scale in 1 s; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004DD": {
+   "note": "same Hellfire/Enchantment body aura: quick lick from the part centre, 0.1->0.4 scale in 1 s at 0.2-0.35 m/s; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004E4": {
+   "note": "same Hellfire/Enchantment body aura, world-space copy (not parent-local): big 1.1 m wisp left hanging behind the moving creature, 1.5 s; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004E6": {
+   "note": "same Hellfire/Enchantment body aura, world-space: medium wisps (0.1->0.45, 1 s, 5 per part) shed as the creature walks; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004E7": {
+   "note": "same Hellfire/Enchantment body aura, world-space: fast small lick (0.2-0.35 m/s up, 0.1->0.3) shed behind a moving creature; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004E8": {
+   "note": "same Hellfire/Enchantment body aura, world-space: fast lick 0.1->0.4 scale shed behind; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004EE": {
+   "note": "same Hellfire/Enchantment body aura, world-space: two 0.1->0.7 wisps per part drifting off the body over 1 s; no erosion, flutter",
+   "params": {
+    "erode": 0.0,
+    "flicker": 0.06,
+    "flickerHz": 6.0
+   }
+  },
+  "0x320004F0": {
+   "note": "Cyan 'energy blood' hit splatter (SplatterLow/Mid/High scripts on Strife Proctor, Mount Esper Firestorm, Child, +18 elemental/proctor creatures, paired with a dark smoke puff), lowest damage tier: 3 flecks pop up 0.1-0.3 m/s from the hit and shrink 0.33->0.11 m in 0.6 s (75%->0 opacity); instant hit (no fade-in), lifted so the hit reads, no erosion on the small flecks",
+   "params": {
+    "gain": 1.4,
+    "fadeIn": 0.0,
+    "erode": 0.0
+   }
+  },
+  "0x320004F1": {
+   "note": "Cyan 'energy blood' hit splatter (SplatterLow/Mid/High scripts on Strife Proctor, Mount Esper Firestorm, Child, +18 elemental/proctor creatures, paired with a dark smoke puff), tier 2: 4-5 flecks rising off the hit, shrinking in 0.6 s; instant, lifted, no erosion",
+   "params": {
+    "gain": 1.4,
+    "fadeIn": 0.0,
+    "erode": 0.0
+   }
+  },
+  "0x320004F2": {
+   "note": "Cyan 'energy blood' hit splatter (SplatterLow/Mid/High scripts on Strife Proctor, Mount Esper Firestorm, Child, +18 elemental/proctor creatures, paired with a dark smoke puff), tier 3: 5-6 slightly larger flecks (0.39 m start) rising off the hit; instant, lifted, no erosion",
+   "params": {
+    "gain": 1.4,
+    "fadeIn": 0.0,
+    "erode": 0.0
+   }
+  },
+  "0x320004F3": {
+   "note": "Cyan 'energy blood' hit splatter (SplatterLow/Mid/High scripts on Strife Proctor, Mount Esper Firestorm, Child, +18 elemental/proctor creatures, paired with a dark smoke puff), tier 4: 5-6 flecks that drift out a little, rise briefly and fall back under ~1 m/s^2 gravity in 0.6 s; instant, lifted, no erosion",
+   "params": {
+    "gain": 1.4,
+    "fadeIn": 0.0,
+    "erode": 0.0
+   }
+  },
+  "0x320004F4": {
+   "note": "Cyan 'energy blood' hit splatter (SplatterLow/Mid/High scripts on Strife Proctor, Mount Esper Firestorm, Child, +18 elemental/proctor creatures, paired with a dark smoke puff), top tier: 8-10 flecks drifting out, rising briefly and arcing back down; instant, no erosion, lift slightly lower (1.3) for the denser spray",
+   "params": {
+    "gain": 1.3,
+    "fadeIn": 0.0,
+    "erode": 0.0
+   }
+  },
+  "0x320007E7": {
+   "note": "Mana Bolt projectile body (Launch script, per-metre, parent-local, with its dark smoke trail): mid glow layer - faint 2.5 m cyan puffs collapse to bright 0.1 m points in 0.4 s, building the comet head; erosion removed (it erased the late, most-opaque phase that this layer is made of), end fade trimmed to 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320007E8": {
+   "note": "Mana Bolt projectile body: inner layer - 1.65 m puffs collapsing to points in 0.3 s right at the bolt; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320007E9": {
+   "note": "Mana Bolt impact (Explode script with dark smoke): outer cloud - 40 cyan puffs blast out 1-2 m/s and swell 0.4->1.8 scale in 0.7 s; ~7x overlap blooms by itself, so the generated deepen-to-blue afterglow, light erosion (dissolving wisps) and slow roll are kept"
+  },
+  "0x320007EA": {
+   "note": "Mana Bolt impact: mid cloud - 40 puffs swelling 0.2->1.5 scale while flying out ~1 m/s, 0.6 s; dense, generated afterglow/erosion/roll kept"
+  },
+  "0x320007EB": {
+   "note": "Mana Bolt impact: inner core - 15 puffs drifting out 0.4-0.8 m/s with a slight sink, 0.2->1.2 scale in ~0.5 s; generated kept"
+  },
+  "0x320007EC": {
+   "note": "Mana Bolt projectile body: outer layer - widest 3.3 m faint halo collapsing over 0.5 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x3200084F": {
+   "note": "Spear/Axe/Mace of Winter Flame weapon flames (default script, up to six points along the shaft, emitted per 3 cm of swing): cyan cold-flame tongues rising 1 m/s and shrinking 0.44->0.11 m in 0.5 s, leaving a flame trail when swung; fade-in halved so the tongue reads at birth, no erosion, 9 Hz flame flicker",
+   "params": {
+    "fadeIn": 0.12,
+    "erode": 0.0,
+    "flicker": 0.1,
+    "flickerHz": 9.0
+   }
+  },
+  "0x32000851": {
+   "note": "Shadowfire Isparian Dagger + frozen-weapon/static set (with blue weapon halo 0x32000781): 12 cyan motes per point drift up 0.45 m/s, invisible at birth and condensing 0.33->0.11 m into bright points before dying; erosion removed (it hid the late opaque phase), end fade 15% instead of 25%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320008A0": {
+   "note": "Flaming Skull Fizzle (with dark smoke + CallPES): 40-puff cyan cloud blooms out ~1.5 m/s and swells to 2 m in 0.6 s; kept dull and desaturated (it is a failed cast); light erosion lets the dense cloud dissolve - generated kept"
+  },
+  "0x320008A6": {
+   "note": "static prop 0x020015d8/0x020015d9: continuous cascade (~20/s) of faint 25%-opaque 3.3 m cyan veils falling under -2 m/s^2 and shrinking to points in 1.5 s - a magical mist-fall; erosion removed (it would erase the faint veils), slow roll kept",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008A9": {
+   "note": "static prop 0x020015dd (cold flame tongue 0x320008A8 above it): very faint (10% opaque) cyan core glow slowly imploding 0.33 m->nothing over 5 s at the flame's base; lifted to 1.4 so it registers, no erosion, slow roll",
+   "params": {
+    "gain": 1.4,
+    "erode": 0.0
+   }
+  },
+  "0x32000924": {
+   "note": "ghost creatures (Bound Light Falatacot, Ghosts of Dylaeral/Galaeral, Lady Tairla Mhoire, Spirit of Rhia'ni, +; hand/part points beside the ghost fire and orbs): 40%-opaque cyan motes sinking 0.3 m/s off the hands, 0.26->0.02 m in 0.8 s; lifted so the ghostly shedding shows, no erosion",
+   "params": {
+    "gain": 1.45,
+    "erode": 0.0
+   }
+  },
+  "0x32000926": {
+   "note": "same ghost creatures, other parts: slightly larger (0.33 m start) sinking cyan motes, 0.8 s; lifted, no erosion",
+   "params": {
+    "gain": 1.45,
+    "erode": 0.0
+   }
+  },
+  "0x32000945": {
+   "note": "Lady Tairla Mhoire / Spectral Minion & Samurai ghosts (+ static 0x02001b8e): 3 cm cyan specks accelerating upward (+0.25-0.4 m/s^2) from a point for 0.8 s - pin-point spirit sparks; refiled specks: no erosion/roll, lifted, faint glint, tiny soft/near distances, shorter fade-in",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1,
+    "gain": 1.7,
+    "twinkle": 0.2,
+    "flickerHz": 8.0,
+    "fadeIn": 0.08
+   },
+   "family": "specks"
+  },
+  "0x32000947": {
+   "note": "script 0x33001133 (no setup context; four copies stacked at 0/5/10/15 m): 20 m pillar of huge ~10 m cyan clouds churning (fast 0.4-2 m orbits) as they surge up 3-5 m/s at 90% opacity, for a 5 s event; retail pops each 10 m sprite in/out at full opacity, so fade-in 12% / fade-out 30%, erosion eased to 0.12, soft 2.5 m / near-fade 3 m for a camera inside the column",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.12,
+    "fadeOut": 0.3,
+    "erode": 0.12
+   }
+  },
+  "0x320009C6": {
+   "note": "dungeon portals (Deeper into the Oubliette, Up to the Previous Level, Mhoire Castle tower portals, +8; six points round the base with the blue plume, halo and vortex): continuous ~20/s cyan puffs rising under +1 m/s^2 and shrinking 0.8->0.1 m in 1 s - portal base mist; no erosion, lifted to 1.3, portal breathing kept",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.3
+   }
+  },
+  "0x320003EB": {
+   "note": "static 0x0200067e (red member of the coloured glow-gas set 0x0200067b-0x02000691, cf. Chemical Reaction): ~26 red glow clouds swarm upward, each growing 0.1->5.7 scale (to 8 m) over 10 s while fading - slow billowing red gas; generated lift/soft/near-fade kept"
+  },
+  "0x320003EF": {
+   "note": "Portalspace Rift (red rift 0x02000686): fountain of red glows flung sideways ~1.4 m/s and lifted by +4 m/s^2, each swelling to 2 m in 1 s while fading - the rift's rising red flare; generated kept"
+  },
+  "0x320003F3": {
+   "note": "static red rift companion 0x02000687: smaller rift-flare fountain (0.8 s, to 1.4 m); generated kept"
+  },
+  "0x32000402": {
+   "note": "red glow fog: static 0x02000696 and creature auras (Kirienne Palacost with tendrils/orbs, Iron Blade Overseer, +5): 25 red haze blobs scattered within 5 m, each swelling to 12 m over 5 s while fading - ambient red aura cloud; near-fade 3 m / soft 2.5 m keep it off the camera; generated kept"
+  },
+  "0x32000407": {
+   "note": "static red light-halo scenery, size 8 (11.6 m, 0x020006a2): one steady particle respawned every second; generated fades removed - with a single particle they blinked the halo dark once a second",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000408": {
+   "note": "red light halo size 4 (5.8 m): static 0x020006a0 and the red portal glow of Blessed Cave / Entrance to the pyramid / Private Chambers (+10) portals (two copies at 1.2 m with vortex + stars); steady - fades removed (single respawning particle would blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000409": {
+   "note": "static red light halo size 6 (8.7 m, 0x020006a1): single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200040A": {
+   "note": "static red light halo size 10 (14.5 m, 0x0200069f): single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000473": {
+   "note": "Flaming weapons red glow (static weapon setups 0x02000753..., ~37, beside flame puffs; also the red halo in blood/dark-burst/sparkler scripts): 0.87 m halo respawned every 0.03 s; fades removed (on a 0.03 s particle they strobed at frame rate), lifted to read on the blade, soft 0.2 so the wielder's body behind does not eat it",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x32000566": {
+   "note": "Rare Pink/Red Pack Idol: two steady 0.43 m red halos on the idol (0.03 s respawn); fades removed (frame-rate strobe), lifted for the small item",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x3200056C": {
+   "note": "Weeping weapons (Weeping Atlatl, Axe, +18) and blood-drip props: red halo that snaps to 1.3 m and shrinks to 0.15 m every second - the weapon's 'weeping' heartbeat over its blood drips; 6% fade-in softens the snap, 15% end fade, lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320005C3": {
+   "note": "static props 0x020009f9/0x020009fc/0x020009ff (+3; red of a three-colour set with green 0x320005C2 / purple 0x320005C4, one with a white star): steady 0.43 m red pin-point halo (0.03 s respawn); fades removed (strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005E0": {
+   "note": "Mattekar Claw: steady half-opacity 0.73 m red glow at the claw beside its flame (0.01 s respawn); fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000681": {
+   "note": "Hot Coal (+ static coal/brazier props with flame and smoke): steady 0.87 m red ember glow, 0.03 s respawn; fades AND flicker removed - on a 0.03 s particle both became frame-rate strobe/noise (the seed resets each respawn); the paired flame supplies the flicker",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.0
+   }
+  },
+  "0x32000768": {
+   "note": "Apparition of the Book of Eibhil / Tome of Blood and Bone (+ static book 0x02000fab, with its red orb): outer 1.45 m red aura of the book; steady - fades removed, slight lift",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.45
+   }
+  },
+  "0x32000769": {
+   "note": "same tomes: inner 0.73 m red glow at the book centre; steady - fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000773": {
+   "note": "Flaming Elemental Pool / Magma Pool: 25 red heat-haze blobs (60%->0 opacity) swelling to 12 m over the pool around its flames and smoke; generated kept"
+  },
+  "0x3200077E": {
+   "note": "Flaming Weeping weapons (Dagger, Claw, Sword, +8; with red sparkle stars): red halo snapping to 1.3 m and shrinking every second - weeping pulse; 6% fade-in on the snap, 15% end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320007C2": {
+   "note": "Sacrificial Edge (with its star): red weeping-pulse halo at the blade, 1.3->0.15 m every second; soft snap, end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320008AD": {
+   "note": "static 0x020015de (under a grey smoke wisp): steady 60%-opaque 0.73 m red ember glow; fades removed (single respawning particle)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320008C4": {
+   "note": "static 0x020015df (with a dark burst): 0.87 m red glow on a per-metre emitter (only emits while the prop moves), 0.01 s life; fades removed so it is not strobed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320008CC": {
+   "note": "static 0x020015fe (with blood drips): small steady 0.29 m red glow (0.03 s respawn); fades removed (strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000903": {
+   "note": "Red Glow Mushroom: steady 0.43 m red cap glow (0.03 s respawn); fades removed, lifted for the small prop",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000906": {
+   "note": "Red Burning Mushroom: steady 0.87 m red glow (0.03 s respawn); fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000996": {
+   "note": "East / West / North Gate Stone: steady 2.9 m red halo over the stone (3 s respawn); fades removed - they dimmed it to black every 3 s",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320009BC": {
+   "note": "static 0x0200186c: huge size-20 red light halo (~28 m quad), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000385": {
+   "note": "Keh Fire / Smoldering Brazier / Corrupted Pyre Oak (+ colour-pillar pyre 0x02001872): 11.6 m warm firelight halo around the flames, smoke and sparks; steady (fades removed - they blinked it every second) with a slower 5.5 Hz firelight flicker at 0.07",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.07,
+    "flickerHz": 5.5
+   }
+  },
+  "0x32000390": {
+   "note": "static 0x020005af (flame tongue 0x3200038F): 8.7 m warm glow at 35% opacity around the flame, respawned every 0.02 s; fades removed (frame-rate strobe); no flicker - a 0.02 s particle cannot carry a smooth one",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000398": {
+   "note": "static warm light-halo scenery size 10 (14.5 m, 0x020005b4), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000399": {
+   "note": "static warm light halo size 8 (11.6 m, 0x020005b1), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200039A": {
+   "note": "warm light halo size 6 (8.7 m): static 0x020005b2 and brazier 0x02000624 (two flame puffs); steady (fades removed) with a faint 5 Hz firelight flicker",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.04,
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200039B": {
+   "note": "warm light halo size 4 (5.8 m): torch/brazier props 0x020001f6-0x020001f8 (+3) under a flame tongue; steady (fades removed), faint 5 Hz firelight flicker",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.04,
+    "flickerHz": 5.0
+   }
+  },
+  "0x320003E8": {
+   "note": "static 0x0200067d: warm-white member of the coloured glow-gas set - 26 pale-gold glow clouds swarming up, each growing to 8 m over 10 s; generated kept"
+  },
+  "0x320003F5": {
+   "note": "static 0x0200068a / 0x020008d9: warm-white rift-flare fountain (glows flung sideways, lifted +4 m/s^2, to 1.4 m in 0.8 s); generated kept"
+  },
+  "0x320003F7": {
+   "note": "Portalspace Rift (warm-white rift 0x02000689) + static 0x020008d8: rift-flare fountain, 22 glows swelling to 2 m in 1 s; generated kept"
+  },
+  "0x3200046D": {
+   "note": "Frost weapons pale glow (static weapon setups 0x02000754..., ~23, with snowflakes and frost steam; also the White Anniversary Sparkler): steady 0.87 m pale halo, 0.03 s respawn; fades removed (strobe), lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x32000567": {
+   "note": "Dread Idol / Idol: steady 0.43 m pale-gold idol glow (0.03 s respawn); fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x3200056B": {
+   "note": "Pictographs / Hieroglyphs of skill mastery (71 items): steady 1.16 m pale-gold glow on the item, 0.03 s respawn; fades removed (strobe), slight lift",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.45
+   }
+  },
+  "0x320005AC": {
+   "note": "static 0x020009d9 (under the white-cyan magic column 0x320005AA/AB): 14.5 m warm light halo; steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005B6": {
+   "note": "static 0x020009e5 / 0x02001c4e (with an energy tendril, lightning and stars): steady 0.43 m pale point glow at the tendril root (0.03 s respawn); fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000624": {
+   "note": "static bonfire 0x02000b33 (dark smoke columns + sparks, paired with orange 0x32000625): pale-gold firelight billows rising 0-0.1 m/s and swelling 2->7 m over 2 s, ~7 overlapping; added a 5 Hz firelight flicker",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 5.0
+   }
+  },
+  "0x32000659": {
+   "note": "static 0x02000ba5 / 0x02000c9c: 14.5 m warm light halo respawned every 0.1 s; fades removed (they strobed it at 10 Hz)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200068D": {
+   "note": "Dim Virindi Energy Cluster (two crackling tendrils + hum): 1.6 m pale glow shrinking 1.2->1.0 every 75 ms - the cluster's energy jitter; fades removed (13 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320006EB": {
+   "note": "Gaerlan's Phylacteric Prison: three staggered 2.9 m pale halos (1 s each) holding a steady prison glow; fades removed (they would dip it three times a second)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320006EC": {
+   "note": "Harbinger / Reflection of the Harbinger: every 1.5 s a 14 m warm glow converges to 1.4 m while brightening from invisible - the boss's gathering-power inhale; the generated 23% end fade keeps the bright 1.4 m core from popping off - kept"
+  },
+  "0x32000829": {
+   "note": "torch/candle props 0x020005d8 / 0x020005d9 / 0x0200071a (+5; under a flame tongue or the fire-cluster brazier 0x330010EA): 1.45 m warm firelight glow; steady (fades blinked it every second), generated 7 Hz flicker kept",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200082A": {
+   "note": "Tanada Shrine Light (+ setup 0x02000706): 4.35 m warm shrine-lamp glow under its flame tongue; steady (fades removed), faint 6 Hz flame flicker",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.04,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000872": {
+   "note": "Pack Harbinger: smaller inhale glow (3.9->0.4 m, invisible->opaque every 1.5 s); generated end fade keeps the core from popping - kept"
+  },
+  "0x32000879": {
+   "note": "Finger of the Harbinger: tiny inhale glow (1.4->0.07 m) converging every 1.5 s; generated end fade kept"
+  },
+  "0x32000910": {
+   "note": "Northern Catacombs / Swamp Cavern portals (with vortex, stars and orb): 5.8 m warm portal halo; steady - fades removed (a single 1 s particle would blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A1": {
+   "note": "static green light-halo scenery size 10 (14.5 m, 0x020005b9), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A2": {
+   "note": "static green light halo size 8 (11.6 m, 0x020005be), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A3": {
+   "note": "green light halo size 6 (8.7 m): static 0x020005bc and poison-swamp prop 0x02000f97 (with green fog 0x3200075F, gas and the throbbing halo 0x32000761); steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A4": {
+   "note": "green light halo size 4 (5.8 m): static props, the green-flame torch (script 0x330006F2) and a green portal (0x33000E8F, with vortex + stars); steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003EA": {
+   "note": "static 0x0200067c: green member of the coloured glow-gas set - 26 green glow clouds swarming up, growing to 8 m over 10 s; generated kept"
+  },
+  "0x320003F1": {
+   "note": "Portalspace Rift (green rift 0x02000682): green flare fountain flung sideways and lifted, 22 glows to 2 m in 1 s; generated kept"
+  },
+  "0x320003F2": {
+   "note": "static green rift companion 0x02000683: smaller rift flare (0.8 s, to 1.4 m); generated kept"
+  },
+  "0x32000404": {
+   "note": "green glow fog: static 0x02000693, spectral samurai creatures (Vicar Archer, Spectral Bushi / Minion, +7, with green specks and a star) and prop 0x02001c27 (with green wisps 0x32000A77/A78): 25 green haze blobs swelling to 12 m - ghostly green aura cloud; generated kept"
+  },
+  "0x32000470": {
+   "note": "Acid weapons green glow (static weapon setups 0x02000750..., ~38, with acid gas + slime drips; also the Green Anniversary Sparkler): steady 0.87 m halo; fades removed (0.03 s respawn strobed), lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320005C2": {
+   "note": "static props 0x020009f7 / 0x020009fa / 0x020009fd (+2; green of the three-colour set): steady 0.43 m green pin-point halo (0.03 s respawn); fades removed (strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200068B": {
+   "note": "Faint Virindi Energy Cluster (green tendrils + hum): 1.6 m green glow jittering 1.2->1.0 every 75 ms; fades removed (13 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200074A": {
+   "note": "static 0x02000f42 (poison gas vent with three gas puffs): steady 2.9 m green glow under the gas (0.03 s respawn); fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200074D": {
+   "note": "Glowing Pustule: once a second a 5 m green glow condenses into a bright 0.14 m point (20%->100% opacity) - the pustule's throb, over its green fog 0x3200074E; generated end fade keeps the bright point from popping - kept"
+  },
+  "0x3200074E": {
+   "note": "Glowing Pustule: 25 green haze blobs swelling to 5.6 m over 5 s around the pustule; generated kept"
+  },
+  "0x3200075F": {
+   "note": "static poison swamp 0x02000f97: 25 green haze blobs within 4 m swelling to 6.8 m over 5 s (with the gas cloud and halos); generated kept"
+  },
+  "0x32000761": {
+   "note": "same swamp prop 0x02000f97: 8.7 m green halo that shrinks to half size every second (throb), single particle; fades removed so the throb is not a blink to black",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200076E": {
+   "note": "Acid Pool / Acidic Elemental Pool: 25 green haze blobs (60%->0 opacity) swelling to 12 m with the rising specks and acid motes; generated kept"
+  },
+  "0x3200077B": {
+   "note": "Acidic Weeping weapons (Dagger, Axe, Sword, +5; with green stars): green weeping-pulse halo 1.3->0.15 m every second; 6% fade-in on the snap, 15% end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320007F7": {
+   "note": "static 0x020011ce: huge size-20 green light halo (~28 m quad), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320008DB": {
+   "note": "static 0x0200164e: 14.5 m green glow on a HORIZONTAL quad (gfx flat in X-Y, so it may lie on the ground as a glow pool), 2 s respawn; fades removed, soft cut 2.5->0.3 m because a 2.5 m soft fade would erase a ground-hugging quad",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "soft": 0.3
+   }
+  },
+  "0x32000904": {
+   "note": "Green Glow Mushroom: steady 0.43 m cap glow (0.03 s respawn); fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000A57": {
+   "note": "static 0x02001c1a / 0x02001c1b (with green liquid drips): 26 faint (40%) green glow clouds swarming up over the liquid, 10 s each; generated kept"
+  },
+  "0x32000A59": {
+   "note": "static 0x02001c1c: steady 4.35 m outer green halo (0.03 s respawn); fades removed (strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000A5A": {
+   "note": "same prop 0x02001c1c: inner 1.8 m green core glow (0.03 s respawn); fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A5": {
+   "note": "blue light halo size 4 (5.8 m): static props, blue-flame torches (scripts 0x330006F4 / 0x33000A51) and the Oubliette / Mhoire dungeon portals (two at 1.5 m with plume + vortex); steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A6": {
+   "note": "static blue light halo size 6 (8.7 m, 0x020005bb), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A7": {
+   "note": "static blue light halo size 8 (11.6 m, 0x020005bd), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003A8": {
+   "note": "static blue light halo size 10 (14.5 m, 0x020005ba), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003E9": {
+   "note": "Chemical Reaction (0x0200067b): 26 blue glow clouds swarming up and swelling to 8 m over 10 s - the reaction's billowing gas; generated kept"
+  },
+  "0x320003F0": {
+   "note": "Portalspace Rift (blue rift 0x02000680): blue flare fountain flung sideways and lifted, 22 glows to 2 m in 1 s; generated kept"
+  },
+  "0x320003F4": {
+   "note": "static blue rift companion 0x02000681: smaller rift flare (0.8 s, 1.4 m); generated kept"
+  },
+  "0x32000403": {
+   "note": "blue glow fog: static 0x02000692 / 0x02000ef7, Empyrean Blooded Ritual Statue, ghost creatures (Lady Tairla Mhoire set), snow and bubble-fountain props: 25 blue haze blobs swelling to 12 m - cold ghostly aura cloud; generated kept"
+  },
+  "0x3200046E": {
+   "note": "Frost / Spectral weapons blue glow (static weapon setups 0x0200074f..., ~45, with snowflakes/steam or the Soul Bound / Spectral tendrils, star sparklers): steady 0.87 m halo; fades removed (0.03 s respawn strobe), lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320005DE": {
+   "note": "Galvanic Chest / Strange Device / Rynthid Cache (+1; with hum + periodic CallPES): steady 2.9 m blue device glow (0.2 s respawn); fades removed (5 Hz blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000647": {
+   "note": "scripts 0x33000BD8 / 0x33000E1E (no setup context; with blue/indigo glow orbs): one-shot cloud of 50 very faint (20%) 2.2 m blue glows whirling within ~1 m and dying out over 0-4 s; generated kept"
+  },
+  "0x3200068A": {
+   "note": "Vibrant Virindi Energy Cluster (blue tendrils + hum): 1.6 m blue glow jittering 1.2->1.0 every 75 ms; fades removed (13 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000758": {
+   "note": "Enchanted Seedling: inner 1.8 m blue glow, single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000759": {
+   "note": "Enchanted Seedling: outer 4.35 m blue halo, single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200076D": {
+   "note": "Freezing Pool / Freezing Elemental Pool (+ static 0x02000ff3 with blue stars): 25 blue haze blobs swelling to 12 m over the pool with its rising bubble-motes; generated kept"
+  },
+  "0x32000781": {
+   "note": "Frozen Weeping weapons (Axe, Sword, Staff, +16; with blue stars) and the Shadowfire/frozen rising-mote set (with 0x32000851): blue weeping-pulse halo 1.3->0.15 m every second; 6% fade-in on the snap, 15% end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320007F5": {
+   "note": "Sawato Bandit's Ledger (with its orb): outer 1.45 m blue quest-item glow; steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320007F6": {
+   "note": "Sawato Bandit's Ledger: inner 0.73 m blue glow; steady - fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x3200082B": {
+   "note": "blue-flame torch props 0x02000719 / 0x02001238 / 0x02001239 (under blue flame tongue 0x320003AB): 1.45 m blue firelight glow; steady (fades removed), faint 6 Hz flicker",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.04,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000902": {
+   "note": "Blue Glow Mushroom / Chilling Ebony Staff / Door Key / Armory Keys: steady 0.43 m blue glow (0.03 s respawn); fades removed (strobe), lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x32000905": {
+   "note": "Blue Burning Mushroom: steady 0.87 m blue glow (0.03 s respawn); fades removed, lifted",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5
+   }
+  },
+  "0x320009AA": {
+   "note": "Soul Bound / Spectral Claw, Summoning Stone, Mu-miyah Device (+5): two staggered 0.06 s particles holding a steady 0.58 m blue glow; fades removed (17 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320009AD": {
+   "note": "Summoning Stone activation (Explode script with a star burst + sound): three blue glow spheres expanding 0.4->14 m over 2 s while fading - the summoning shockwave; lifted to 1.7 so the faint wave reads",
+   "params": {
+    "gain": 1.7
+   }
+  },
+  "0x320009B6": {
+   "note": "Summoning Stone / Mu-miyah Device idle: 0.14->1.4 m blue ping that expands and fades every 1.5 s; generated kept"
+  },
+  "0x3200018D": {
+   "note": "Acid Stream (war spell) launch spray, finest layer: one green acid droplet per metre of flight thrown out ~2 m/s and falling under -4 m/s^2, shrinking 0.2->0.02 m over 1.5 s at full opacity; erosion removed (crisp drops), end fade shortened 34%->15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x3200018E": {
+   "note": "Acid Stream spray, mid layer: 1.3 droplets/m, 0.3->0.1 m at constant opacity, falling; erosion removed, end fade 25% so the 0.1 m drop does not pop",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.25
+   }
+  },
+  "0x3200018F": {
+   "note": "Acid Stream spray, large layer: 0.6 m glowing blobs every 0.5 m of flight, shrinking to 0.02 m and fading as they fall; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320002A0": {
+   "note": "static 0x02000585 (with green energy tendril 0x320002D2): eight half-opaque green mist clouds drifting slowly and swelling to 2.8 m over 3 s - green energy well; generated kept (bright texture, light erosion only makes it wispy)"
+  },
+  "0x320004CA": {
+   "note": "Acid Stream launch variant (table 0x34000094, 5 s run): 0.6 m green blobs every 0.5 m of flight, falling and shrinking; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200056A": {
+   "note": "Slithis Spine (thrown spine): dotted trail of tiny 0.14 m green motes dropped every 0.1 m of flight for up to 20 s, each fading over ~1 s; refiled specks: no erosion, short fade-in, lifted, tiny soft/near distances",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.15,
+    "fadeIn": 0.05,
+    "gain": 1.35
+   },
+   "family": "specks"
+  },
+  "0x32000669": {
+   "note": "elemental creatures' body aura (Elemental, Caustic, Virulence, Corrosion, Hand of Verdancy, +; also the Maelstrom/Tsuric, Scoriscant, Strife/Corrupt Conflagration sets): broad half-opaque green wisp rising slowly from a part, 0.1->0.9 scale over 2 s; generated kept"
+  },
+  "0x3200066A": {
+   "note": "same elemental aura: biggest wisp (0.2->1.2 scale, 2 s), on every set incl. Maelstrom/Tsuric (lightning arcs) and Scoriscant (flames); generated kept"
+  },
+  "0x3200066B": {
+   "note": "same elemental aura: motionless green flare blooming on the part (Still, 0.1->0.6, 1 s), also in an acid-gas script; generated kept"
+  },
+  "0x3200066C": {
+   "note": "same elemental aura: medium rising wisp (8 per part, 0.1->0.65, 1.5 s); generated kept"
+  },
+  "0x3200066D": {
+   "note": "same elemental aura: quick small lick rising 0.2-0.35 m/s (0.1->0.5, 1 s); generated kept"
+  },
+  "0x3200066E": {
+   "note": "same elemental aura: quick lick (0.1->0.6, 1 s), on every set; generated kept"
+  },
+  "0x3200067D": {
+   "note": "static 0x02000bf7: 32 green acid-fog clouds scattered up to 5 m out, sinking 0.2-0.5 m/s and swelling to 4.2 m over 4 s - settling acid haze; generated kept"
+  },
+  "0x320006C3": {
+   "note": "script 0x33000DB2 (no setup context; with acid gas, slime drips and specks): green wisps left every 0.67 m of travel, rising and swelling to 1.4 m over 1.5 s - acid-slime trail; generated kept"
+  },
+  "0x320006C6": {
+   "note": "Elemental Fury launch (with flame, lightning and steam layers): green acid wisp shed every 0.6 m, flung forward-up and shrinking 1.4->0.14 m in 1.5 s; generated kept"
+  },
+  "0x320006D0": {
+   "note": "static 0x02000d62 elemental prop (with the 0x3200066x aura set): half-opaque green wisps streaming sideways 1.3 m/s while swelling to 1.5 m; generated kept"
+  },
+  "0x320006DA": {
+   "note": "static 0x02000d7e toxic cloud: 18 half-opaque green clouds whirling (3-6 rad/s) on 4-6 m orbits, swelling 2.8->14 m over 6 s; soft raised to 2.5 m and near-fade to 3 m for the 14 m sprites",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320006DB": {
+   "note": "same toxic cloud 0x02000d7e: 20 green clouds swelling from nothing to 14 m over 10 s, whirling on 1.5-6 m orbits; soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x320006E7": {
+   "note": "static storm 0x02000d7d (with fire, lightning and dark smoke): 24 constant 14 m green clouds circling slowly (0.5-1 rad/s) on 4-9 m orbits - toxic storm mass; soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0
+   }
+  },
+  "0x3200096C": {
+   "note": "Pillar of Acid / Acid Energy (+ static 0x02001c11): six ~13 m green clouds churning on fast 0.4-2 m orbits while surging up 3-5 m/s at 90% opacity for 3 s - towering acid column; retail pops each 13 m sprite in/out, so fade-in 10% / fade-out 30%, erosion 0.2, soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.1,
+    "fadeOut": 0.3,
+    "erode": 0.2
+   }
+  },
+  "0x320009BD": {
+   "note": "Moarsman Blight-caller (+ static 0x02001876): faint (40%) green blight wisps rising 0.2-0.35 m/s from the caster, 0.3->1 m over 1.7 s; generated kept"
+  },
+  "0x32000A77": {
+   "note": "static 0x02001c27 (with green ghost fog 0x32000404): half-opaque green wisps 0.7->2.2 m rising slowly over 2 s; generated kept"
+  },
+  "0x32000A78": {
+   "note": "same prop 0x02001c27: smaller full-opacity green wisps (0.35->1.4 m, 1.5 s) at the centre; generated kept"
+  },
+  "0x320003F8": {
+   "note": "static 0x02000690: purple member of the coloured glow-gas set - 26 purple glow clouds swarming up, to 8 m over 10 s; generated kept"
+  },
+  "0x320003FA": {
+   "note": "static purple light-halo scenery size 10 (14.5 m, 0x02000697), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003FE": {
+   "note": "static purple light halo size 6 (8.7 m, 0x0200069a), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003FF": {
+   "note": "static purple light halo size 8 (11.6 m, 0x0200069b), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000400": {
+   "note": "purple light halo size 4 (5.8 m): static 0x02000699, catacomb-exit portals (Surface, Northern/Southern Catacombs Exit, +5, with vortex + stars) and purple flame torches; steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000406": {
+   "note": "purple glow fog: static 0x02000695, Large/Huge/Giant Imprisoned Monouga, Aetherium Ore stockpiles, Spectral Voidmage sets (+): 25 purple haze blobs swelling to 12 m; generated kept"
+  },
+  "0x32000472": {
+   "note": "Lightning weapons purple glow (static weapon setups 0x02000752..., ~37, with lightning arcs and stars; also Thunder Chicken/Turkey and sparkler scripts): steady 0.87 m halo; fades removed (0.03 s respawn strobe), lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x32000523": {
+   "note": "Dual Fragment / Sparkling Dual Fragment / Shadow Flyer: a 0.14 m purple glow born every second swells to 6.2 m over 5 s while fading - five overlapping expanding ripples of crystal light, with violet stars; generated kept"
+  },
+  "0x32000524": {
+   "note": "Crystal of the Dark Isle / Fallen Crystal Shard / Crystal Array (+6), Obsidian Sentient Fragment: four overlapping purple ripples swelling to 8.4 m in 2 s (one every 0.5 s); generated kept"
+  },
+  "0x32000525": {
+   "note": "Caulnalain Satellite Fragment / Fragment / Prism Shard / Recording Device: purple ripples to 4.2 m over 5 s, one per second; generated kept"
+  },
+  "0x320005C4": {
+   "note": "static props 0x020009f8 / 0x020009fb / 0x020009fe (+1; purple of the three-colour set): steady 0.43 m purple pin-point halo (0.03 s respawn); fades removed (strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005CA": {
+   "note": "Tusker Experiment Orb / Olthoi Experiment Log / Execution Log of Strathelar Modification (+1; with two discs): steady 60%-opaque 1.1 m purple glow (1 s respawn, 0.8->0.7 scale); fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005CB": {
+   "note": "same experiment items: steady inner 0.43 m purple core (1 s respawn); fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005DD": {
+   "note": "Singular Doll / Pure One / Innocent Doll (+8) and Battered / Beaten / Broken Dolls (with tendrils + sound): 1.6 m purple glow jittering 1.2->1.0 every 75 ms; fades removed (13 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320006B9": {
+   "note": "static 0x02000d41 and Dojiro Sangi (with purple tendril): purple afterimage glows dropped every 0.2 m of movement, half-opaque, shrinking 0.9->0.15 m and fading over 1.5 s; generated kept"
+  },
+  "0x32000776": {
+   "note": "Electric Elemental Pool / Galvanic Pool (with lightning arcs): 25 purple haze blobs (60%->0) swelling to 12 m over the pool; generated kept"
+  },
+  "0x32000778": {
+   "note": "Electric Weeping weapons (Sword, Staff, Spear, +12; with violet stars) and many void/bloodstone props: purple weeping-pulse halo 1.3->0.15 m every second; 6% fade-in on the snap, 15% end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x32000942": {
+   "note": "Thunder Chicken / Thunder Turkey (with lightning arcs): steady half-opaque 5.8 m purple storm halo around the bird (0.01 s respawn); fades removed (frame-rate strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000A45": {
+   "note": "Experimental Bloodstone Fragment / Experimental & Master Bloodstone (with blood, smoke and dark stars): purple weeping-pulse halo 1.3->0.15 m every second; soft snap, 15% end fade, lifted, soft 0.2",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.15,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x320005E3": {
+   "note": "Flame Bolt projectile body (Launch, per-metre, parent-local, with its dark smoke trail): inner layer - faint 1.65 m magenta-pink puffs collapse to bright points in 0.3 s at the bolt head; erosion removed (it erased the late opaque phase), end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320005E4": {
+   "note": "Flame Bolt projectile body: mid layer - 2.5 m puffs collapsing to points in 0.4 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320005E5": {
+   "note": "Flame Bolt projectile body: outer layer - widest 3.3 m faint halo collapsing over 0.5 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x32000645": {
+   "note": "Portal Energy (0x02000b6c): 36 magenta energy motes orbiting fast (2.4-4.2 rad/s) on a 1.5 m circle and shrinking 3.3->0.55 m over 6 s while fading - the portal's swirl; erosion removed (it dimmed it ~45%), lifted to 1.35, portal breathing and roll kept",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.35
+   }
+  },
+  "0x320006BB": {
+   "note": "Flame Bolt (projectile setup 0x02000d51): streaking body - elongated 4.8x1.7 m sprite emitted every 6 cm for 1.5 s, invisible at 3x size and collapsing to a bright 0.5 m streak in 0.4 s; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320006E0": {
+   "note": "static 0x02000d81 / Lightning Cloud (with lightning arcs): 18 half-opaque magenta storm clouds whirling (3-6.5 rad/s) on 4-6 m orbits, swelling 2.2->11 m over 6 s; erosion removed (would halve this dim texture), soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "erode": 0.0
+   }
+  },
+  "0x320008B7": {
+   "note": "spell-projectile models 0x020015ed / 0x02001613 / 0x0200161b (Scale + sound launch scripts, no weenie): magenta streak like the Flame Bolt body - 4.8x1.7 m quads collapsing in 0.4 s, 1.5 s run; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320008FC": {
+   "note": "static 0x02001682 / 0x02001a7e magenta magic plume (CallPES every 2 s): broad base - 19 overlapping nearly-still puffs swelling to 3.9 m over 4 s; erosion removed (dim texture), slow roll kept",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008FD": {
+   "note": "same magenta plume: rising core - puffs shooting up 0.7-1.5 m/s and swelling to 1.4 m over 1.5 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000941": {
+   "note": "Arena Five Statue: magenta team-colour motes - 11 small glows rising slowly and swelling 0.1->0.33 m over 2 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320009F0": {
+   "note": "Nether Streak / Bolt / Arc projectile body (Launch, with its dark-burst trail): inner layer - 0.8 m magenta puffs collapsing to points in 0.3 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320009F1": {
+   "note": "Nether Streak / Bolt / Arc projectile body: mid layer - 1.4 m puffs collapsing in 0.4 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320009F2": {
+   "note": "Nether Streak / Bolt / Arc projectile body: outer layer - 1.9 m halo collapsing in 0.5 s; erosion removed, end fade 12%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.12
+   }
+  },
+  "0x320009F3": {
+   "note": "Nether Streak / Bolt / Arc impact (with dark burst): inner core - 15 magenta puffs swelling 0.2->1.2 scale in ~0.5 s with a slight sink; dense, so generated afterglow/erosion/roll kept"
+  },
+  "0x320009F4": {
+   "note": "Nether impact: mid cloud - 40 puffs flying out ~1 m/s and swelling to 1.65 m in 0.6 s; dense, generated kept"
+  },
+  "0x320009F5": {
+   "note": "Nether impact: outer cloud - 40 puffs blasting out 1-2 m/s, swelling 0.4->1.8 scale in 0.7 s; dense, generated kept"
+  },
+  "0x320009FE": {
+   "note": "Nether Baton / Shadownether Isparian Wand / Experimental & Master Bloodstone (with dark burst): tiny magenta void motes (0.16->0.01 m) rising 0.45 m/s, 12 at a time, fading over 0.5 s; refiled specks: fade-in cut 24%->8% so each mote shows at its brightest (birth), no erosion/roll, lifted",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.12,
+    "fadeIn": 0.08,
+    "gain": 1.4
+   },
+   "family": "specks"
+  },
+  "0x32000A0F": {
+   "note": "Heart of Darkest Flame (+ static 0x02001c0c, with dark burst): the same rising magenta void motes, parent-local; refiled specks: short fade-in, no erosion/roll, lifted",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.12,
+    "fadeIn": 0.08,
+    "gain": 1.4
+   },
+   "family": "specks"
+  },
+  "0x32000A37": {
+   "note": "Skeleton Minion / Spectral Samurai / Bushi / Voidmage / Samurai Daimyo: 3 cm magenta void specks rising from a point for 0.8 s; refiled specks: no erosion/roll, lifted, faint glint",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1,
+    "gain": 1.6,
+    "twinkle": 0.2,
+    "flickerHz": 8.0,
+    "fadeIn": 0.08
+   },
+   "family": "specks"
+  },
+  "0x320004DE": {
+   "note": "Mount Esper Firestorm / Firestorm body aura (script 0x330008D7 on ~17 parts): broad white-cyan storm-flame wisp riding the part, 0.1->0.7 scale over 2 s; erosion eased to 0.1, 7 Hz flame flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004DF": {
+   "note": "same Firestorm body aura: biggest riding wisp, 0.2->1.0 scale (1.1 m) over 2 s; erosion 0.1, 7 Hz flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004E0": {
+   "note": "same Firestorm body aura: motionless flare blooming on the part (Still, 0.1->0.4, 1 s); erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004E1": {
+   "note": "same Firestorm body aura: medium wisp rising 0.07-0.14 m/s, 0.1->0.45 over 1.5 s, 6 per part; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004E2": {
+   "note": "same Firestorm body aura: quick small lick shooting up 0.2-0.35 m/s, 0.1->0.3 in 1 s; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004E3": {
+   "note": "same Firestorm body aura: quick lick 0.1->0.4 from the part centre, 1 s; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004E9": {
+   "note": "same Firestorm body aura, world-space copy: big 1.1 m wisp left hanging behind the moving creature, 1.5 s; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004EB": {
+   "note": "same Firestorm body aura, world-space: medium wisps (0.1->0.45, 1 s, 5 per part) shed as it moves; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004EC": {
+   "note": "same Firestorm body aura, world-space: fast small lick 0.1->0.3 shed behind; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004ED": {
+   "note": "same Firestorm body aura, world-space: fast lick 0.1->0.4 shed behind; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004EF": {
+   "note": "same Firestorm body aura, world-space: two 0.1->0.7 wisps per part drifting off the body over 1 s; erosion 0.1, flutter",
+   "params": {
+    "erode": 0.1,
+    "flicker": 0.08,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000562": {
+   "note": "Moar / Raging Moar / Blessed Moar (+6) BreatheFlame breath (with dark smoke): a burst of 10 pale-cyan puffs then a stream for 0.75 s, blown 1-3 m/s out of the mouth and swelling 0.2->1.1 m in 0.5 s; generated kept (near-instant start, light erosion, deepen-to-cyan)"
+  },
+  "0x32000568": {
+   "note": "generic BreatheFlame breath used by 43 weenies (Apparition of the Book of Eibhil, Radiant Blood Banner of the Spire, Ruschk Totem, ...): pale-cyan breath puffs streaming forward 1-3 m/s and swelling to 1.8 m over 1 s; generated kept"
+  },
+  "0x320005AA": {
+   "note": "static 0x020009d9 white-cyan magic column (over the 14.5 m warm halo 0x320005AC): rising core - puffs shooting up 1.2-3.5 m/s and swelling to 3.2 m in 1.5 s; generated kept"
+  },
+  "0x320005AB": {
+   "note": "same white-cyan column: broad base - 19 nearly-still puffs swelling to 5 m over 4 s with heavy overlap; generated kept"
+  },
+  "0x32000810": {
+   "note": "Vaeshok, Sodden Ruschk Chieftain / Sodden Undead Ruschk, Bragara, The Chosen One (+ static 0x020012a6): very faint (20%) pale-cyan wisps rising 0.2-0.35 m/s off the body, 0.2->0.77 m over 1.7 s - chill aura; generated kept"
+  },
+  "0x3200096D": {
+   "note": "Pillar of Frost / Frost Energy (+ static 0x02001c12, with snowflakes): six ~11 m pale-cyan clouds churning on fast 0.4-1 m orbits while surging up 3-5 m/s at 90% opacity for 3 s - frost column; fade-in 10% / fade-out 30% instead of popping, erosion 0.2, soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "fadeIn": 0.1,
+    "fadeOut": 0.3,
+    "erode": 0.2
+   }
+  },
+  "0x3200000B": {
+   "note": "PlayScript Hidden (creatures going hidden - Void Knight, Black Ferah, Margul, Mukkir, +100; one with a Transparent hook) and bubble-fountain props (Spectral Fountain, Crystal Formations): 20 tiny 0.11 m deep-blue motes spray up 1.2-1.8 m/s and fall back under -1 m/s^2 over 1.4 s; refiled specks: no erosion/roll, lifted, sparkle glints",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.15,
+    "gain": 1.55,
+    "twinkle": 0.25,
+    "flickerHz": 8.0
+   },
+   "family": "specks"
+  },
+  "0x3200039F": {
+   "note": "blue magic plume (Oubliette / Mhoire portal plume at 1.5 m, static braziers 0x020005b6 / 0x02000626 (+8), also Flaming Skull Fizzle): rising core puffs 0.7-1.5 m/s swelling to 1.4 m over 1.5 s; erosion removed (it ate ~75% of this dark-blue texture), lifted to 1.3, saturation back to as-authored (the fizzle dulling also hit the portal/scenery uses), portal breathing kept",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.3,
+    "sat": 1.0
+   }
+  },
+  "0x320003A0": {
+   "note": "same blue magic plume: broad base - 19 overlapping puffs swelling to 3.9 m over 4 s; erosion removed, lifted to 1.25, saturation as authored",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.25,
+    "sat": 1.0
+   }
+  },
+  "0x3200055E": {
+   "note": "static energy props 0x02000995-0x02000997 (+1; with gas, lightning and a tendril/orb cluster, 9.25 s CallPES): 36 deep-blue motes orbiting fast (2.4-4.2 rad/s) on a 1.5 m circle and shrinking 3.3->0.55 m over 6 s - swirling portal-style energy; erosion removed, lifted, slow 0.8 Hz breathing added",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.35,
+    "pulse": 0.06,
+    "pulseHz": 0.8
+   }
+  },
+  "0x32000626": {
+   "note": "static bonfire 0x02000b34 (with flame puffs and a spark star): four slow blue billows rising 0.25 m/s, swelling 1.1->4.4 m and fading to half over 4 s - blue magical firelight haze; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320006B7": {
+   "note": "Portal Energy (0x02000d40): up to 50 constant-opacity 3.3->11 m deep-blue clouds whirling fast (4-7 rad/s) on 1.6-5.6 m orbits over 6 s - the big portal storm; erosion removed (at 0.3 it erased this dim texture after mid-life), fade-in 8% / fade-out 20% so the huge sprites do not pop, soft 2.5 / near-fade 3 m",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "erode": 0.0,
+    "fadeIn": 0.08,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200076C": {
+   "note": "Freezing Pool / Freezing Elemental Pool (with bubbles + blue haze): 20 tiny deep-blue motes spraying up and falling back over the pool, 1.4 s; refiled specks: no erosion/roll, lifted, glints",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.15,
+    "gain": 1.55,
+    "twinkle": 0.25,
+    "flickerHz": 8.0
+   },
+   "family": "specks"
+  },
+  "0x3200082D": {
+   "note": "static 0x020013f2 / 0x02001504 big blue plume (with the 0x3200039F/03A0 plume): 27 puffs launched up 1.4-3.4 m/s, swelling to 3.9 m over 2-6 s; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.3
+   }
+  },
+  "0x3200082E": {
+   "note": "same big blue plume: rapid broad billows - 32 puffs (1.8->5.5 m) rising 1.3-2.7 m/s in ~1.5 s, heavy overlap; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200089C": {
+   "note": "script without setup context (10 s run): blue plume base - 16 puffs swelling to 3.9 m over 4 s; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.25
+   }
+  },
+  "0x3200089D": {
+   "note": "same 10 s blue plume: rising core puffs (to 1.4 m in 1.5 s); erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200089E": {
+   "note": "Flaming Skull Fizzle (6 s run, CallPES): fizzle smoke base - 19 blue puffs swelling to 5.5 m; kept dull (fizzle), erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200089F": {
+   "note": "Flaming Skull Fizzle: rising puffs (to 2.2 m in 1.5 s); kept dull, erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320008CA": {
+   "note": "static 0x02001602: 36 deep-blue energy motes orbiting fast on a 1.5 m circle and shrinking 3.3->0.55 m over 6 s - portal-style swirl; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.35
+   }
+  },
+  "0x3200093E": {
+   "note": "Arena Two Statue: blue team-colour motes - 11 small glows rising slowly and swelling to 0.33 m over 2 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320003F9": {
+   "note": "static 0x02000691: orange member of the coloured glow-gas set - 26 orange glow clouds swarming up, to 8 m over 10 s; generated kept"
+  },
+  "0x320003FB": {
+   "note": "static orange light-halo scenery size 10 (14.5 m, 0x02000698), single steady particle; fades removed (blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003FC": {
+   "note": "static orange light halo size 8 (11.6 m, 0x0200069e), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320003FD": {
+   "note": "static orange light halo size 6 (8.7 m, 0x0200069d), single steady particle; fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000401": {
+   "note": "orange light halo size 4 (5.8 m): static 0x0200069c and the Eastern Catacombs portal (with vortex + stars); steady - fades removed",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000405": {
+   "note": "orange glow fog: static 0x02000694 and fire prop 0x0200102f (with flames): 25 orange haze blobs swelling to 12 m - firelit haze; generated kept"
+  },
+  "0x32000445": {
+   "note": "Creeping Blight Banner / Radiant Blood Crystal Array / Eldrytch Web Crystal Array (+5; with stars, hum, CallPES 1.6 s): four overlapping orange ripples swelling to 8.4 m in 2 s; generated kept"
+  },
+  "0x32000466": {
+   "note": "Crystal Spur: orange ripples to 4.2 m over 5 s, one per second (with stars); generated kept"
+  },
+  "0x32000469": {
+   "note": "Blazing Crystal / Dual Fragment / Crystal Moiety (+5): orange ripples to 6.2 m over 5 s, one per second; generated kept"
+  },
+  "0x32000471": {
+   "note": "orange elemental weapon glow (static weapon setups 0x02000751..., ~12; also the Yellow Anniversary Sparkler): steady 0.87 m halo; fades removed (0.03 s respawn strobe), lifted, soft 0.2 vs the wielder",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "gain": 1.5,
+    "soft": 0.2
+   }
+  },
+  "0x32000535": {
+   "note": "Casting Jack o' Lantern (+ static lantern 0x0200094c, with candle flames): steady 1.16 m orange pumpkin glow; fades removed and flicker dropped (on a 0.03 s respawn both turn into frame-rate noise; the flame puffs flicker)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "flicker": 0.0
+   }
+  },
+  "0x320005A1": {
+   "note": "Uninscription Stone: 0.87 m orange glow respawned every 0.3 s with a small random size (retail shimmer); fades removed (3 Hz blink)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x32000625": {
+   "note": "static bonfire 0x02000b33 (paired with pale-gold 0x32000624, smoke and sparks): orange firelight billows swelling 2->7 m over 2 s; added a 5 Hz firelight flicker",
+   "params": {
+    "flicker": 0.08,
+    "flickerHz": 5.0
+   }
+  },
+  "0x3200068C": {
+   "note": "Blinding Virindi Energy Cluster (tendrils + hum): 1.6 m orange glow jittering every 75 ms; fades removed (13 Hz strobe)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200039D": {
+   "note": "green magic plume (Abyssal Totem Gateway, static 0x020005b5 / 0x0200062a (+2), CallPES 2 s): rising core puffs 0.7-1.5 m/s swelling to 1.4 m; erosion removed (it ate ~75% of this dark-green texture), lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.3
+   }
+  },
+  "0x3200039E": {
+   "note": "same green gateway plume: broad base - 19 overlapping puffs swelling to 3.9 m over 4 s; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.25
+   }
+  },
+  "0x320004CB": {
+   "note": "Acid Stream (projectile setup 0x02000882) + static 0x0200171e: streaking green body - 4.8x1.7 m sprites collapsing to a bright streak in 0.4 s, 1.5 s run; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000612": {
+   "note": "static 0x02000b21 / 0x02000bce (one variant with slime and lightning, 9.25 s CallPES): 36 green energy motes orbiting fast on a 1.5 m circle and shrinking 3.3->0.55 m over 6 s; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.35
+   }
+  },
+  "0x32000662": {
+   "note": "static green bonfire 0x02000bcd (same flame/star set as blue 0x32000626): four slow green billows swelling to 4.4 m and fading to half over 4 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200076F": {
+   "note": "Acid Pool / Acidic Elemental Pool (with green haze + specks): 20 tiny green motes spraying up and falling back, 1.4 s; refiled specks: no erosion/roll, lifted, glints",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.04,
+    "nearFade": 0.15,
+    "gain": 1.55,
+    "twinkle": 0.25,
+    "flickerHz": 8.0
+   },
+   "family": "specks"
+  },
+  "0x320008B2": {
+   "note": "spell-projectile models 0x020015e7 / 0x02001605 / 0x02001615 (Scale + sound launch scripts): green streak collapsing in 0.4 s; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320008BC": {
+   "note": "spell-projectile model 0x020015f5: thinner green streak (1.5x start, shallow quad) collapsing in 0.4 s; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000940": {
+   "note": "Arena Four Statue: green team-colour motes rising slowly over 2 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A1D": {
+   "note": "static 0x02001a95 small green plume (CallPES 2 s): base puffs swelling to 2 m over 4 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A1E": {
+   "note": "same small green plume: rising core puffs to 1 m in 1.5 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A35": {
+   "note": "Vicar Archer / Spectral Bushi & Minion (+7), Maiden / Apparition of Envy: 3 cm green specks rising from a point for 0.8 s; refiled specks: no erosion/roll, lifted, faint glint",
+   "params": {
+    "erode": 0.0,
+    "spin": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1,
+    "gain": 1.6,
+    "twinkle": 0.2,
+    "flickerHz": 8.0,
+    "fadeIn": 0.08
+   },
+   "family": "specks"
+  },
+  "0x320006BC": {
+   "note": "Lightning Bolt (projectile setup 0x02000d52) + static 0x020015eb / 0x02001610: streaking red body - 4.8x1.7 m sprites collapsing to a bright streak in 0.4 s; erosion removed (dark-red texture), end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320008FE": {
+   "note": "static 0x02001683 / 0x02001b7e red magic plume (CallPES 2 s): broad base - 19 overlapping puffs swelling to 3.9 m over 4 s; erosion removed (it ate ~70% of this dark-red texture), lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.25
+   }
+  },
+  "0x320008FF": {
+   "note": "same red plume (0x02001683): rising core puffs 0.7-1.5 m/s to 1.4 m; erosion removed, lifted",
+   "params": {
+    "erode": 0.0,
+    "gain": 1.3
+   }
+  },
+  "0x3200093F": {
+   "note": "Arena Three Statue: red team-colour motes rising slowly over 2 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000964": {
+   "note": "Infectious Rat / Blood Curse Rat breath (BreatheAcid/Flame/Frost, with a solid glob): faint (20%) red disease puffs blown out 2-5 m/s ahead of the rat, swelling 0.8->1.6 m over 1 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000983": {
+   "note": "script with no setup context: faint (20%) red wisps rising 0.2-0.35 m/s, 0.2->0.77 m over 1.7 s - red twin of the Sodden Ruschk chill aura; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000984": {
+   "note": "Shadow Kresovus (with red star): faint red wisps rising off the body, 0.44->1.3 m over 1.7 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x320009A6": {
+   "note": "static 0x020017df (script with a flame, red + purple halos, CallPES 2 s): red puffs flung out horizontally ~1-4 m/s and drifting up, shrinking 2.2->0.1 m over 1.3 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A31": {
+   "note": "static 0x02001b7e big red fire column: 19 huge overlapping puffs swelling 3.9->8.3 m over 4 s; erosion removed, soft 2.5 / near-fade 3 m for the 8 m sprites",
+   "params": {
+    "soft": 2.5,
+    "nearFade": 3.0,
+    "erode": 0.0
+   }
+  },
+  "0x32000A32": {
+   "note": "same red column: rising puffs launched 0.7-4 m/s, swelling 1.2->3.9 m over 2 s; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000A66": {
+   "note": "spell-projectile model 0x02001c20: thin red streak collapsing in 0.4 s; erosion removed, end fade 15%",
+   "params": {
+    "erode": 0.0,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320002A3": {
+   "note": "static 0x02000584 (with red energy tendril 0x320002D0; red twin of 0x320002A0): eight half-opaque red mist clouds drifting and swelling to 2.8 m over 3 s - red energy well; erosion removed (it halved this texture)",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x3200067F": {
+   "note": "Spirit of Aun Tanua launch: red spirit wisps left every 0.33 m of flight, rising under +0.4 m/s^2 and swelling 0.14->2.8 m over 2 s while fading - the spirit's trailing veil; erosion removed",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000424": {
+   "note": "blue light shaft: static 0x020006b3 and the colour-pillar pyre 0x02001872 (with red/green/purple shafts, warm hearth halo and flames): five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor",
+   "family": "beam"
+  },
+  "0x32000425": {
+   "note": "blue light shaft, static 0x020006b7: nine overlapping 5 m strips tipping at most ~9 deg per life, a steadier upright shaft; refiled beam, generated fades/soft kept",
+   "family": "beam"
+  },
+  "0x32000426": {
+   "note": "red light shaft: static 0x020006b6 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor",
+   "family": "beam"
+  },
+  "0x3200042A": {
+   "note": "red light shaft, static 0x020006ba: nine overlapping 5 m strips tipping at most ~9 deg per life, a steadier upright shaft; refiled beam, generated fades/soft kept",
+   "family": "beam"
+  },
+  "0x32000427": {
+   "note": "green light shaft: static 0x020006b4 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor",
+   "family": "beam"
+  },
+  "0x3200042C": {
+   "note": "green light shaft, static 0x020006b8: nine overlapping 5 m strips tipping at most ~9 deg per life, a steadier upright shaft; refiled beam, generated fades/soft kept",
+   "family": "beam"
+  },
+  "0x32000428": {
+   "note": "purple light shaft: static 0x020006b5 and the colour-pillar pyre 0x02001872: five staggered 5 m-tall strips using the bottom half of the glow (bright at the base, fading upward), growing 1->1.6x while tipping up to ~85 deg on a random horizontal axis over their 1 s life - rays fanning out from the base; refiled beam - the staggered overlap makes the generated 15%/35% fades safe, soft 2.5 m where the shaft meets the floor",
+   "family": "beam"
+  },
+  "0x3200042B": {
+   "note": "purple light shaft, static 0x020006b9: nine overlapping 5 m strips tipping at most ~9 deg per life, a steadier upright shaft; refiled beam, generated fades/soft kept",
+   "family": "beam"
+  },
+  "0x320008B4": {
+   "note": "spell-projectile models 0x020015e9 / 0x0200160c / 0x02001618 (Scale + sound launch scripts): golden streak - 4.8x1.7 m quads collapsing to a bright streak in 0.4 s; erosion eased 0.345->0.1 (bright gold keeps a wispy edge without eating the core), end fade 15%",
+   "params": {
+    "erode": 0.1,
+    "fadeOut": 0.15
+   }
+  },
+  "0x320008B9": {
+   "note": "spell-projectile model 0x020015f7: smaller golden streak (1.5x start) collapsing in 0.4 s; erosion 0.1, end fade 15%",
+   "params": {
+    "erode": 0.1,
+    "fadeOut": 0.15
+   }
+  }
+ }
+}

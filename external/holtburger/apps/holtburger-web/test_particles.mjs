@@ -128,6 +128,9 @@ const composite =
   "\n// === particle_emitter.js ===\n" + stripped[3] +
   "\n// === sky_glow.js stub (tests/sky_glow.test.mjs covers the real one) ===\nfunction applySkyGlowMaterial() { return false; }\n" +
   "\n// === particles_over_clouds.js stub (tests/particles_over_clouds.test.mjs covers the real one) ===\nfunction registerLateFxSource() { return () => {}; }\n" +
+  // 2026-10-09 `?particleFx`: stubbed OFF so this suite keeps pinning the stock
+  // bucket path; test_particle_fx.mjs covers the real particle_fx.js.
+  "\n// === particle_fx.js stub (test_particle_fx.mjs covers the real one) ===\nfunction particleFxEnabled() { return false; } function particleFxFrame() {} function particleFxRowFor() { return 0; } function applyParticleFxMaterial() { return false; } function particleFxAge() { return 0; } function particleFxPacked() { return 0; } function particleFxSeed() { return 0; }\n" +
   "\n// === additive_fog.js ===\n" + stripped[5] +
   "\n// === particle_manager.js ===\n" + stripped[4] +
   "\n; return { Particle, ParticleType, ParticleEmitter, ParticleEmitterInfo, EmitterType, ParticleManager, setCurrentTime, setRng, currentTime, rng, normalizeCheckSmall, setTranslucency, localToGlobalVec, setParticleInstancingFlag, _growBucket, _resetInitialParticlesRetailForTests };";

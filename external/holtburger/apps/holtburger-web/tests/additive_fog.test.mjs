@@ -272,6 +272,11 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   const { setCurrentTime } = await import("../scene3d/particles/time_rng.js");
   let t = 1000;
   setCurrentTime(() => t);
+  // 2026-10-09 `?particleFx` (DEFAULT ON) puts its own hook + key on every
+  // bucket. This block pins the FOG contract on the stock bucket, so it runs
+  // with the upgrade off; the block after it proves the two compose.
+  const FX = await import("../scene3d/particles/particle_fx.js");
+  FX.setParticleFxFlag(false);
   const PM = await import("../scene3d/particles/particle_manager.js");
   const { ParticleManager } = PM;
   const cam = new THREE.PerspectiveCamera(60, 1.6, 0.1, 10000);
@@ -374,6 +379,34 @@ console.log("-- F5 real ParticleManager ----------------------------------------
   check("live -> retail: everything unfogged again (incl. the =off-born emitter)", d3.unfogged === d3.materials && d3.materials === d0.materials + 4,
     JSON.stringify(d3));
   check("alpha slots never touched by any switch", slots(idAlpha).every((m) => m.fog === true));
+
+  // ---- `?particleFx` on: the fog modes compose with the FX hook -------------
+  FX.setParticleFxFlag(true);
+  const g3 = new THREE.Group();
+  const anchor3 = new THREE.Object3D(); anchor3.position.set(0, 0, -10);
+  g3.add(anchor3);
+  const mgr3 = mk(true, g3);
+  await mgr3.addEmitter({ emitterInfo: info(GFX_ADD), parent: anchor3 });
+  await mgr3.addEmitter({ emitterInfo: info(GFX_ALPHA), parent: anchor3 });
+  for (let i = 0; i < 4; i += 1) { t += 0.016; mgr3.tick(); }
+  const fxAdd = g3.children.find((o) => o.isInstancedMesh && o.name === `particle-inst-0x${GFX_ADD.toString(16)}`);
+  const fxAlpha = g3.children.find((o) => o.isInstancedMesh && o.name === `particle-inst-0x${GFX_ALPHA.toString(16)}-a`);
+  check("fx: additive bucket unfogged (retail) AND upgraded",
+    fxAdd?.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.FX_KEY_ADDITIVE);
+  check("fx: alpha bucket keeps fog AND is upgraded",
+    fxAlpha?.material.fog === true && fxAlpha.material.customProgramCacheKey() === FX.FX_KEY_ALPHA);
+  window.__additiveFogBlack("fade");
+  check("fx + fade: key keeps the FX program in front of the fade key",
+    fxAdd.material.customProgramCacheKey() === `${FX.FX_KEY_ADDITIVE}|${F.ADDITIVE_FOG_FADE_KEY}`, fxAdd.material.customProgramCacheKey());
+  const sh = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader,
+    uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.basic.uniforms) };
+  fxAdd.material.onBeforeCompile(sh);
+  check("fx + fade: one compile applies BOTH patches",
+    sh.fragmentShader.includes("fxC *= vColor.r") && sh.fragmentShader.includes(F.ADDITIVE_FOG_FADE_LINE));
+  window.__additiveFogBlack("retail");
+  check("fx + retail again: FX hook and key restored, unfogged",
+    fxAdd.material.fog === false && fxAdd.material.customProgramCacheKey() === FX.FX_KEY_ADDITIVE);
+  FX.setParticleFxFlag(null);
 
   setCurrentTime(null);
   window.liveScene3d = prevLive;

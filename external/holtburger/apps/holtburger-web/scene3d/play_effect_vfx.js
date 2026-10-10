@@ -119,6 +119,15 @@ import { decodeSplatterId } from "./splatter_decode.js";
 import { noteSplatterHit } from "./kill_impulse.js";
 // 2026-10-07 `?particlesOverClouds` — dependency-free registry (no three).
 import { registerLateFxSource } from "./particles_over_clouds.js";
+// 2026-10-09 `?burstFx` (DEFAULT ON) — per-family energy-form upgrade of the
+// placeholder bursts below (sphere shell / ring filament / crystal cube).
+import {
+  applyBurstFxMaterial,
+  burstFxEnabled,
+  burstFxFrame,
+  setBurstAge,
+  setBurstLook,
+} from "./play_effect_burst_fx.js";
 
 /** `?ragdoll` (DEFAULT ON, `=off` escape) — hoisted; the URL cannot change. */
 const _RAGDOLL_ON_FOR_KILL_DIR = (() => {
@@ -485,6 +494,66 @@ const _DIRTY_FIGHTING_IDS = new Set([
   PLAY_SCRIPT.DirtyFightingDefenseDebuff, PLAY_SCRIPT.DirtyFightingDamageOverTime,
 ]);
 
+/**
+ * `?burstFx` look for a PlayScript's placeholder burst (play_effect_burst_fx.js
+ * BURST_LOOKS key). Mirrors the family arms of `_runPlaceholderDispatch`, so
+ * every family the dispatch draws has its own look; anything unmapped takes
+ * "default". Pure.
+ */
+function _burstLookFor(scriptId) {
+  const P = PLAY_SCRIPT;
+  switch (scriptId) {
+    case P.Launch: return "launch";
+    case P.Explode: return "explode";
+    case P.Fizzle: return "fizzle";
+    case P.ProjectileCollision: return "projectileCollision";
+    case P.Hide: case P.UnHide: case P.Hidden: return "hide";
+    case P.PortalEntry: case P.PortalExit: return "portal";
+    case P.PortalStorm: return "portalStorm";
+    case P.LayingofHands: return "layingOfHands";
+    case P.Create: return "create";
+    case P.LevelUp: return "levelUp";
+    case P.BunnySmite: return "bunnySmite";
+    case P.BaelZharonSmite: return "baelZharonSmite";
+    case P.BlackMadness: return "blackMadness";
+    case P.BreatheFlame: return "breatheFlame";
+    case P.BreatheFrost: return "breatheFrost";
+    case P.BreatheAcid: return "breatheAcid";
+    case P.BreatheLightning: return "breatheLightning";
+    case P.SpecialStateBlack: return "specialStateBlack";
+    default: break;
+  }
+  if (_SPLATTER_IDS.has(scriptId)) return "splatter";
+  if (_SPARK_IDS.has(scriptId)) return "spark";
+  if (_HEALTH_UP_IDS.has(scriptId)) return "healthUp";
+  if (_HEALTH_DOWN_IDS.has(scriptId)) return "healthDown";
+  if (_SHIELD_IDS.has(scriptId)) return "shield";
+  if (_DEATH_IDS.has(scriptId)) return "death";
+  if (_ATTRIB_UP_IDS.has(scriptId)) return "attribUp";
+  if (_ATTRIB_DOWN_IDS.has(scriptId)) return "attribDown";
+  if (_SKILL_UP_IDS.has(scriptId)) return "skillUp";
+  if (_SKILL_DOWN_IDS.has(scriptId)) return "skillDown";
+  if (_ENCHANT_UP_IDS.has(scriptId)) return "enchantUp";
+  if (_ENCHANT_DOWN_IDS.has(scriptId)) return "enchantDown";
+  if (_CAMPING_IDS.has(scriptId)) return "camping";
+  if (_PORTAL_FAMILY_IDS.has(scriptId)) return "portal";
+  if (_BREATHE_IDS.has(scriptId)) return "breatheFlame";
+  if (_SPECIAL_STATE_NUMERIC_IDS.has(scriptId) || _SPECIAL_STATE_COLOR_IDS.has(scriptId)) return "specialState";
+  if (_REGEN_UP_IDS.has(scriptId)) return "regenUp";
+  if (_REGEN_DOWN_IDS.has(scriptId)) return "regenDown";
+  if (_VITAE_VISION_TRANS_UP_IDS.has(scriptId)) return "vitaeUp";
+  if (_VITAE_VISION_TRANS_DOWN_IDS.has(scriptId)) return "vitaeDown";
+  if (_SWAP_HEALTH_IDS.has(scriptId)) return "swapHealth";
+  if (_DISPEL_IDS.has(scriptId)) return "dispel";
+  if (_RESTRICTION_IDS.has(scriptId)) return "restriction";
+  if (_AUGMENTATION_IDS.has(scriptId)) return "augmentation";
+  if (_AETHERIA_IDS.has(scriptId)) return "aetheria";
+  if (_WEDDING_IDS.has(scriptId)) return "wedding";
+  if (_DIRTY_FIGHTING_IDS.has(scriptId)) return "dirtyFighting";
+  return "default";
+}
+
+
 // Active burst registry — drives both per-frame tween updates and
 // the cleanup on completion. Each entry holds the mesh + start time
 // + scale-from/to + parent group reference so we can detach + dispose
@@ -598,6 +667,14 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
     mesh.scale.setScalar(scaleFrom);
   }
   mesh.renderOrder = 950;
+  // `?burstFx`: patch once per pooled material (constant per shape → one
+  // program per shape), then set this burst's look + seed (uniforms only).
+  if (burstFxEnabled()) {
+    applyBurstFxMaterial(mesh.material, shape, (x, y, z, w) => new THREE.Vector4(x, y, z, w));
+    _burstSeedN = (_burstSeedN + 1) | 0;
+    setBurstLook(mesh.material, _currentBurstLook, (_burstSeedN * 0.6180339887) % 1);
+    setBurstAge(mesh.material, 0);
+  }
   // Tag the shape so _releaseBurstMesh can return it to the right pool
   // without re-deriving it from geometry identity.
   mesh.userData.__rp6Shape = shape;
@@ -649,6 +726,10 @@ const _MAX_ACTIVE_BURSTS = 64;
 // Reset to false at the top of every dispatch; the spawn happens
 // synchronously inside the same switch, so there's no interleaving.
 let _currentBurstCritical = false;
+// `?burstFx`: the look (play_effect_burst_fx.js BURST_LOOKS key) for the burst
+// the current synchronous dispatch spawns — set beside `_currentBurstCritical`.
+let _currentBurstLook = "default";
+let _burstSeedN = 0;
 
 // Gameplay-critical PlayScript IDs whose placeholder burst must NEVER
 // be FIFO-evicted under the concurrent cap (RP6 guardrail): death/
@@ -691,6 +772,7 @@ function _tickAllBursts() {
   _rafId = 0;
   if (_activeBursts.size === 0) return;
   const now = performance.now();
+  burstFxFrame(now);
   // Iterate snapshot — _disposeBurst() mutates the map. `Array.from`
   // is cheap at the size we expect (<50 bursts in any realistic
   // combat scenario).
@@ -712,6 +794,8 @@ function _tickAllBursts() {
     // Opacity fades linearly from full-on to zero so the tail is
     // smooth even after the scale ease saturates.
     burst.material.opacity = (1 - t) * burst.opacityFrom;
+    // `?burstFx`: the shader's life clock (tint ramp); no-op on unpatched materials.
+    setBurstAge(burst.material, t);
     // Phase 37 — Shield rings spin a full 360° over the burst lifetime
     // for visual interest beyond pulse+fade. `rotateRadians` is set at
     // spawn (Math.PI * 2 for one rotation, 0 for static bursts). Axis
@@ -1402,6 +1486,7 @@ function _spawnDirectionalSplatter(targetGuid, scriptId) {
   );
 
   const color = crit ? _SPLATTER_CRIT_COLOR : _SPLATTER_COLOR;
+  _currentBurstLook = crit ? "splatterCrit" : "splatter";
   _spawnBurst(
     parent, s.pos, tune.scaleFrom, tune.scaleTo, color, tune.durationMs,
     {
@@ -3581,6 +3666,7 @@ function _runPlaceholderDispatch(targetGuid, scriptId) {
   // for the whole synchronous dispatch below (the spawn helpers read
   // it); the spawn is synchronous so there's no interleaving risk.
   _currentBurstCritical = _isCriticalPlayScript(scriptId);
+  _currentBurstLook = _burstLookFor(scriptId);
 
   switch (scriptId) {
     case PLAY_SCRIPT.Launch: {
@@ -4678,6 +4764,9 @@ const _COVERAGE_UNMAPPED_BY_RETAIL = Object.freeze([
   // WeddingSteele (player-marriage-band cue; no retail script):
   PLAY_SCRIPT.WeddingSteele,
 ]);
+
+/** Test seam: the `?burstFx` look a PlayScript id maps to. */
+export function burstLookForPlayScript(scriptId) { return _burstLookFor(scriptId >>> 0); }
 
 export const VFX_COVERAGE = Object.freeze({
   shipped: _COVERAGE_SHIPPED_SET,

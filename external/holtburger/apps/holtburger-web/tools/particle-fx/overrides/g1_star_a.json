@@ -1,0 +1,2332 @@
+{
+ "group": "g1_star_a",
+ "familyNotes": {
+  "0x080002FA": "Big soft red 4-point cross flare, no white centre: Regen/Health/Enchant red (health) sparkles + crystal auras/splatter. Keep additive colour-rich, moderate core; debuff variants sink to deep red.",
+  "0x080002F0": "White 4-point star with a hot white blob and long thin arms (lum 1.0): VisionUp/TransUp/VitaeUp/Enchant white, the universal 'spell lands' puff, glints. Already full-bright: gain ~1.4-1.55, core <=0.8.",
+  "0x080002F4": "Big soft deep-blue cross flare: Regen/Health/Enchant blue (mana) sparkles, Lag Beast. Blue has low luminance so higher gain is safe; debuffs deepen to navy.",
+  "0x080002FC": "Big soft gold-yellow cross flare: Regen/Health/Enchant yellow (stamina). Bright texture; moderate core.",
+  "0x08000322": "Big soft magenta-violet cross flare: EnchantUp/DownPurple + violet crystal-fragment auras.",
+  "0x080002B2": "Compact cyan core with 8 rays: SkillUp/DownBlue, ShieldBlue, lightning-bolt spark shedding.",
+  "0x08000C3E": "Yellow 4-point cross with thin long arms: yellow Missile bolt, Rabbit/Present projectile, WeddingBliss.",
+  "0x0800030E": "Compact violet core with 8 rays: SkillPurple, ShieldPurple, Galvanic summon flash.",
+  "0x080002FF": "Compact green core with 8 rays: SkillGreen, ShieldGreen.",
+  "0x08000309": "Compact orange core with 8 rays: SkillOrange, ShieldOrange.",
+  "0x08000304": "Compact red core with 8 rays: SkillRed (also BlackMadness), ShieldRed.",
+  "0x080002E7": "Compact pale-yellow core with 8 rays: SkillUp/DownYellow (+Void), ShieldYellow.",
+  "0x0800031D": "Big soft orange cross flare: EnchantOrange + Lag Beast.",
+  "0x080008CD": "Cyan 4-point cross: item-vanish/Hide puff and several unreferenced trails/swarms.",
+  "0x0800031A": "Big soft green cross flare: EnchantGreen.",
+  "0x08000C36": "Violet 4-point cross with thin arms: violet Missile bolt, WeddingBliss.",
+  "0x080006DB": "Red 4-point cross with thin arms: red Missile / Health Ring Bolt, WeddingBliss.",
+  "0x08000315": "Compact yellow-white core with 8 rays: lightning impact/breath sparks - give electric crackle flicker.",
+  "0x080009B8": "Pale blue-white compact 8-ray star: Force Bolt trail and lightning-weapon crackle sparks.",
+  "0x08000AA7": "Blue 4-point cross with thin arms: blue Missile bolt; tiny motes on a static landmark.",
+  "0x08000459": "64 px blue 8-point flare with white centre (1.45 m quad): steady/pulsing gem glows. Never put per-particle time effects on the 1-frame-respawn steady flares.",
+  "0x08000CB3": "Green 4-point cross with thin arms: green Missile bolt.",
+  "0x08000CB5": "Dim grey 4-point cross (lum 0.29): grey-silver Missile bolt; generator gain lifts it to soft silver.",
+  "0x08000D51": "Orange 4-point cross with thin arms: orange Missile bolt (Rolling Death).",
+  "0x08000303": "Compact grey-white 8-ray star: ShieldUp/DownGrey.",
+  "0x080005BD": "64 px violet 8-point flare: steady/blinking gem glows on statics.",
+  "0x08000420": "64 px red 8-point flare: steady/blinking gem glows (Slayer Stones, Spectral Skull)."
+ },
+ "emitters": {
+  "0x3200005D": {
+   "note": "RegenDownRed (health-regen debuff) low-intensity tier, 8 motes: red cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200005E": {
+   "note": "RegenDownRed (health-regen debuff) mid-intensity tier, 20 motes: red cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200005F": {
+   "note": "RegenDownRed (health-regen debuff) high-intensity tier, 50 motes: red cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, reined in for the 50-mote cloud, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.68,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000060": {
+   "note": "RegenUpRed (health-regen buff) low-intensity tier, 12 motes: red cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000061": {
+   "note": "RegenUpRed (health-regen buff) mid-intensity tier, 30 motes: red cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000062": {
+   "note": "RegenUpRed (health-regen buff) high-intensity tier, 50 motes: red cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core (eased for the 50-mote cloud), sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.7,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000097": {
+   "note": "HealthDownRed (health drain/harm hit) low-intensity tier, 15 stars (this low tier is also the DirtyFightingDamageOverTime bleed tick): red cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core softened so the colour reads, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x32000098": {
+   "note": "HealthDownRed (health drain/harm hit) mid-intensity tier, 50 stars: red cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.7,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.571
+   }
+  },
+  "0x32000099": {
+   "note": "HealthDownRed (health drain/harm hit) high-intensity tier, 100 stars: red cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.502
+   }
+  },
+  "0x3200009A": {
+   "note": "HealthUpRed (health heal/boost) low-intensity tier, 15 stars: red cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x3200009B": {
+   "note": "HealthUpRed (health heal/boost) mid-intensity tier, 50 stars: red cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased for the 50-star swarm",
+   "params": {
+    "core": 0.72,
+    "twinkle": 0.3,
+    "gain": 1.864
+   }
+  },
+  "0x3200009C": {
+   "note": "HealthUpRed (health heal/boost) high-intensity tier, 100 stars: red cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased and gain trimmed because 100 stars cross the centre together",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "gain": 1.746
+   }
+  },
+  "0x320000EF": {
+   "note": "EnchantDownRed (curse) low-intensity tier, 13 stars: red cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000F0": {
+   "note": "EnchantDownRed (curse) mid-intensity tier, 30 stars: red cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000F1": {
+   "note": "EnchantDownRed (curse) high-intensity tier, 60 stars: red cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.593,
+     0.617
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.474
+   }
+  },
+  "0x320000F2": {
+   "note": "EnchantUpRed (buff) low-intensity tier, 13 stars: red cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000F3": {
+   "note": "EnchantUpRed (buff) mid-intensity tier, 30 stars: red cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.826
+   }
+  },
+  "0x320000F4": {
+   "note": "EnchantUpRed (buff) high-intensity tier, 60 stars: red cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.749
+   }
+  },
+  "0x32000446": {
+   "note": "Radiant Blood / Eldrytch Web Crystal Array, Creeping Blight Banner, Obsidian Sentient Fragment ambient crystal aura (clockwise half, ~30 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.624
+   }
+  },
+  "0x32000447": {
+   "note": "Radiant Blood / Eldrytch Web Crystal Array, Creeping Blight Banner, Obsidian Sentient Fragment ambient crystal aura (counter-clockwise half, ~30 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.624
+   }
+  },
+  "0x32000449": {
+   "note": "Splatter on blood/dark crystals (Bloodstone Shard, Crystal of the Dark Isle, Blight Banner...), 5-chip size step: tiny red star chips (4-7 cm) spray 0.5 m/s, drop and shrink in 0.6 s when the crystal is struck; stays a crisp sparkle (star, not blood), core eased slightly",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200044A": {
+   "note": "Splatter on blood/dark crystals (Bloodstone Shard, Crystal of the Dark Isle, Blight Banner...), 10-chip size step: tiny red star chips (4-7 cm) spray 0.5 m/s, drop and shrink in 0.6 s when the crystal is struck; stays a crisp sparkle (star, not blood), core eased slightly",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200044B": {
+   "note": "Splatter on blood/dark crystals (Bloodstone Shard, Crystal of the Dark Isle, Blight Banner...), 15-chip size step: tiny red star chips (4-7 cm) spray 0.5 m/s, drop and shrink in 0.6 s when the crystal is struck; stays a crisp sparkle (star, not blood), core eased slightly",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200044C": {
+   "note": "Splatter on blood/dark crystals (Bloodstone Shard, Crystal of the Dark Isle, Blight Banner...), 20-chip size step: tiny red star chips (4-7 cm) spray 0.5 m/s, drop and shrink in 0.6 s when the crystal is struck; stays a crisp sparkle (star, not blood), core eased slightly",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200044D": {
+   "note": "Splatter on blood/dark crystals (Bloodstone Shard, Crystal of the Dark Isle, Blight Banner...), 25-chip size step: tiny red star chips (4-7 cm) spray 0.5 m/s, drop and shrink in 0.6 s when the crystal is struck; stays a crisp sparkle (star, not blood), core eased slightly",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000459": {
+   "note": "Splatter on Blazing Crystal / Caulnalain & Prototype Bloodstone Fragments, 25-chip size step: red star chips spray 0.5 m/s and GROW to 2.5x (~0.5 m) while fading in 0.6 s, a red sparkle puff; gain/core lowered as the swelling chips overlap, softer vs the crystal",
+   "params": {
+    "gain": 1.45,
+    "core": 0.5,
+    "soft": 0.1
+   }
+  },
+  "0x3200045A": {
+   "note": "Splatter on Blazing Crystal / Caulnalain & Prototype Bloodstone Fragments, 5-chip size step: red star chips spray 0.5 m/s and GROW to 2.5x (~0.5 m) while fading in 0.6 s, a red sparkle puff; gain/core lowered as the swelling chips overlap, softer vs the crystal",
+   "params": {
+    "gain": 1.7,
+    "core": 0.8,
+    "soft": 0.1
+   }
+  },
+  "0x3200045B": {
+   "note": "Splatter on Blazing Crystal / Caulnalain & Prototype Bloodstone Fragments, 10-chip size step: red star chips spray 0.5 m/s and GROW to 2.5x (~0.5 m) while fading in 0.6 s, a red sparkle puff; gain/core lowered as the swelling chips overlap, softer vs the crystal",
+   "params": {
+    "gain": 1.6,
+    "core": 0.7,
+    "soft": 0.1
+   }
+  },
+  "0x3200045C": {
+   "note": "Splatter on Blazing Crystal / Caulnalain & Prototype Bloodstone Fragments, 15-chip size step: red star chips spray 0.5 m/s and GROW to 2.5x (~0.5 m) while fading in 0.6 s, a red sparkle puff; gain/core lowered as the swelling chips overlap, softer vs the crystal",
+   "params": {
+    "gain": 1.55,
+    "core": 0.6,
+    "soft": 0.1
+   }
+  },
+  "0x3200045D": {
+   "note": "Splatter on Blazing Crystal / Caulnalain & Prototype Bloodstone Fragments, 20-chip size step: red star chips spray 0.5 m/s and GROW to 2.5x (~0.5 m) while fading in 0.6 s, a red sparkle puff; gain/core lowered as the swelling chips overlap, softer vs the crystal",
+   "params": {
+    "gain": 1.5,
+    "core": 0.55,
+    "soft": 0.1
+   }
+  },
+  "0x32000464": {
+   "note": "static crystal setup 0x02000713 ambient crystal aura (clockwise half, ~6 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.628
+   }
+  },
+  "0x32000465": {
+   "note": "static crystal setup 0x02000713 ambient crystal aura (counter-clockwise half, ~6 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.628
+   }
+  },
+  "0x32000467": {
+   "note": "Crystal Spur ambient crystal aura (clockwise half, ~9 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.627
+   }
+  },
+  "0x32000468": {
+   "note": "Crystal Spur ambient crystal aura (counter-clockwise half, ~9 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.627
+   }
+  },
+  "0x3200046A": {
+   "note": "Blazing Crystal / Dual Fragment / Crystal Moiety ambient crystal aura (clockwise half, ~12 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.627
+   }
+  },
+  "0x3200046B": {
+   "note": "Blazing Crystal / Dual Fragment / Crystal Moiety ambient crystal aura (counter-clockwise half, ~12 live): red cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.627
+   }
+  },
+  "0x320000D2": {
+   "note": "VisionUpWhite low-intensity tier, 8 stars: white-hot 4-point stars fly out in a flat horizontal ring (C has no z) and shrink in 0.75 s; gain lowered because the white sprite is already full-bright, core eased, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.75
+   }
+  },
+  "0x320000D3": {
+   "note": "VisionUpWhite mid-intensity tier, 25 stars: white-hot 4-point stars fly out in a flat horizontal ring (C has no z) and shrink in 0.75 s; gain lowered because the white sprite is already full-bright, core eased, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.7
+   }
+  },
+  "0x320000D4": {
+   "note": "VisionUpWhite high-intensity tier, 50 stars: white-hot 4-point stars fly out in a flat horizontal ring (C has no z) and shrink in 0.75 s; gain lowered because the white sprite is already full-bright, core eased for the 50-star ring, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.6
+   }
+  },
+  "0x320000FE": {
+   "note": "TransUpWhite low tier, 10 stars: white stars burst out ~4 m/s spherically while GROWING 0.1->1x over 1.5 s; gain lowered on the full-bright white sprite, core eased, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.75
+   }
+  },
+  "0x320000FF": {
+   "note": "TransUpWhite mid tier, 25 stars: white stars burst out spherically while growing 0.1->1x over 1.5 s; gain/core eased so the growing cloud stays crisp",
+   "params": {
+    "gain": 1.5,
+    "core": 0.65
+   }
+  },
+  "0x32000100": {
+   "note": "TransUpWhite high tier, 60 stars growing to 2x (0.6 m) as they fly out: the densest white burst, gain/core cut so overlapping big stars bloom gently instead of whiting out; softer vs ground",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5,
+    "soft": 0.08
+   }
+  },
+  "0x32000104": {
+   "note": "VitaeUpWhite low tier, 20 stars: white stars rise in a 0.75 m helix over 3.5 s (vitae restored); gain lowered on the full-bright sprite, core eased, slow roll + glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.7
+   }
+  },
+  "0x32000105": {
+   "note": "VitaeUpWhite mid tier, 60 stars: white stars rise in a 0.75 m helix over 2.5 s, only shrinking to half size; gain/core eased for the denser column",
+   "params": {
+    "gain": 1.5,
+    "core": 0.65
+   }
+  },
+  "0x32000106": {
+   "note": "VitaeUpWhite high tier, 100 stars: wide 1 m rising white helix over 2.5 s; gain/core trimmed for the 100-star column",
+   "params": {
+    "gain": 1.45,
+    "core": 0.55
+   }
+  },
+  "0x32000107": {
+   "note": "Fizzle (failed cast): white stars sink slowly (0.5 m/s) in a lazy 0.5 m orbit for 4 s and die still 50% opaque; kept dull and desaturated, soft sputtering flicker instead of sparkle, longer fade-out so they gutter out rather than pop, greys out with age",
+   "params": {
+    "core": 0.4,
+    "twinkle": 0.1,
+    "flicker": 0.15,
+    "flickerHz": 7.0,
+    "fadeOut": 0.12,
+    "tint1": [
+     0.85,
+     0.85,
+     0.88
+    ]
+   }
+  },
+  "0x32000187": {
+   "note": "Rabbit/Arcane Death/Present projectile impact, low tier: 15 white stars burst ~1.5 m/s and fall under gravity in 1 s (pairs with yellow 0x3200018A); gain lowered on the white sprite, core eased, glints",
+   "params": {
+    "gain": 1.5,
+    "core": 0.8
+   }
+  },
+  "0x32000188": {
+   "note": "Same projectile impact, mid tier: 30 white stars burst and fall in 1 s (pairs with yellow 0x3200018B); gain/core eased for the denser burst",
+   "params": {
+    "gain": 1.48,
+    "core": 0.72
+   }
+  },
+  "0x32000189": {
+   "note": "Same projectile impact, high tier: 30 white stars (up to 30 alive) burst and fall in 1 s; gain/core eased",
+   "params": {
+    "gain": 1.48,
+    "core": 0.72
+   }
+  },
+  "0x320001A2": {
+   "note": "Rabbit/Arcane Death/Present flight trail, low tier: white stars dropped every 1 m from projectile parts 1 and 3 (two emitters each), spreading ~1 m/s and shrinking in 0.5 s; overlapping trails => gain/core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.7
+   }
+  },
+  "0x320001A3": {
+   "note": "Same flight trail, mid tier: a white star every 0.5 m from parts 1 and 3 (x2), 0.5 s life; gain/core eased for the doubled density",
+   "params": {
+    "gain": 1.45,
+    "core": 0.65
+   }
+  },
+  "0x320001A4": {
+   "note": "Same flight trail, high tier: a 1.3x white star every 0.5 m from parts 1 and 3 (x2); gain/core eased",
+   "params": {
+    "gain": 1.42,
+    "core": 0.6
+   }
+  },
+  "0x320001E4": {
+   "note": "White star-bolt (spell table 0x34000014) impact, low tier: 13 small white stars burst ~1.5 m/s and fall in 1.5 s; gain lowered on the white sprite, core eased",
+   "params": {
+    "gain": 1.55,
+    "core": 0.8
+   }
+  },
+  "0x320001E6": {
+   "note": "White star-bolt (table 0x34000014) impact, high tier: 50 white stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core cut so the big dense burst blooms without whiting out",
+   "params": {
+    "gain": 1.45,
+    "core": 0.6
+   }
+  },
+  "0x320001EF": {
+   "note": "White star-bolt (table 0x34000014) flight trail: a star per metre, ~1 m/s spread, 1.5 s life, and the Launch script stacks 2/5/10 copies by intensity; gain/core cut hard so the stacked wake sparkles not smears",
+   "params": {
+    "gain": 1.4,
+    "core": 0.55
+   }
+  },
+  "0x32000209": {
+   "note": "Unreferenced white star burst (no script uses it; twin of the 0x320001E6 impact at 1.5x start size): 50 stars burst and fall in 1.5 s; gain/core eased like the impact",
+   "params": {
+    "gain": 1.45,
+    "core": 0.65
+   }
+  },
+  "0x32000226": {
+   "note": "Universal white 'spell lands' puff (fired at the object root alongside every EnchantUp/Down etc. colour swirl, ~1800 script uses): 30 white stars burst 2 m/s spherically and shrink in 1 s; gain lowered so the white puff accents rather than swamps the coloured swirl, crisp glints",
+   "params": {
+    "gain": 1.5,
+    "core": 0.7,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000283": {
+   "note": "Sanguinary Aegis shield aura: white sparkles orbit the shield at constant 50% opacity and size for 4 s each; 0.25 s fade-in / 0.4 s fade-out replace the retail pop on/off, gentle glitter twinkle (~4 Hz), gain/core lowered for a persistent item aura",
+   "params": {
+    "gain": 1.5,
+    "core": 0.6,
+    "fadeIn": 0.06,
+    "fadeOut": 0.1,
+    "flickerHz": 6.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200047B": {
+   "note": "EnchantDownWhite (curse) low-intensity tier, 13 stars: white-hot cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; white sprite is already full-bright so gain is lowered, core softened, glints, colour sinks to slate-grey as they fall",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "tint1": [
+     0.85,
+     0.87,
+     0.94
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.4
+   }
+  },
+  "0x3200047C": {
+   "note": "EnchantDownWhite (curse) mid-intensity tier, 30 stars: white-hot cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; white sprite is already full-bright so gain is lowered, core softened, glints, colour sinks to slate-grey as they fall",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "tint1": [
+     0.85,
+     0.87,
+     0.94
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.4
+   }
+  },
+  "0x3200047D": {
+   "note": "EnchantDownWhite (curse) high-intensity tier, 60 stars: white-hot cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; white sprite is already full-bright so gain is lowered, core softened and gain trimmed for the stacked 60-star column, glints, colour sinks to slate-grey as they fall",
+   "params": {
+    "core": 0.5,
+    "twinkle": 0.3,
+    "tint1": [
+     0.85,
+     0.87,
+     0.94
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.32
+   }
+  },
+  "0x3200047E": {
+   "note": "EnchantUpWhite (buff) low-intensity tier, 13 stars: white cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, gain lowered on the already-white sprite, core eased, slow roll kept",
+   "params": {
+    "core": 0.7,
+    "twinkle": 0.3,
+    "gain": 1.55
+   }
+  },
+  "0x3200047F": {
+   "note": "EnchantUpWhite (buff) mid-intensity tier, 30 stars: white cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, gain lowered on the already-white sprite, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.62,
+    "twinkle": 0.3,
+    "gain": 1.5
+   }
+  },
+  "0x32000480": {
+   "note": "EnchantUpWhite (buff) high-intensity tier, 60 stars: white cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, gain lowered on the already-white sprite, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.55,
+    "twinkle": 0.3,
+    "gain": 1.45
+   }
+  },
+  "0x32000485": {
+   "note": "Splatter on Bronze Statues (Drudge, Banderling, Grievver), 5-chip size step: white star glints (6-11 cm) spark off the struck metal at 0.5 m/s, drop and shrink in 0.6 s; gain lowered on the full-bright white sprite, core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x32000486": {
+   "note": "Splatter on Bronze Statues (Drudge, Banderling, Grievver), 10-chip size step: white star glints (6-11 cm) spark off the struck metal at 0.5 m/s, drop and shrink in 0.6 s; gain lowered on the full-bright white sprite, core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x32000487": {
+   "note": "Splatter on Bronze Statues (Drudge, Banderling, Grievver), 15-chip size step: white star glints (6-11 cm) spark off the struck metal at 0.5 m/s, drop and shrink in 0.6 s; gain lowered on the full-bright white sprite, core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x32000488": {
+   "note": "Splatter on Bronze Statues (Drudge, Banderling, Grievver), 20-chip size step: white star glints (6-11 cm) spark off the struck metal at 0.5 m/s, drop and shrink in 0.6 s; gain lowered on the full-bright white sprite, core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x32000489": {
+   "note": "Splatter on Bronze Statues (Drudge, Banderling, Grievver), 25-chip size step: white star glints (6-11 cm) spark off the struck metal at 0.5 m/s, drop and shrink in 0.6 s; gain lowered on the full-bright white sprite, core eased",
+   "params": {
+    "gain": 1.5,
+    "core": 0.75
+   }
+  },
+  "0x3200048C": {
+   "note": "Frost/stone glints on Ice & Obsidian Golems (also House Golem, Treasure, Little Pine Tree): white stars pop up at random spots within 1.2 m, grow 0.1->1x in 0.5 s and end 50% opaque; fade-out kept to hide the pop, fade-in dropped (it already grows from 10%), sparkly glint twinkle, gain eased on the white sprite",
+   "params": {
+    "gain": 1.5,
+    "core": 0.8,
+    "fadeIn": 0.0,
+    "flickerHz": 8.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x3200056D": {
+   "note": "Same glint sparkle on static setup 0x020009aa, clustered within 0.3 m (tighter, more overlap): stars grow 0.1->1x in 0.5 s; fade-out hides the 50%-opaque end, no fade-in, glints, gain trimmed for the cluster",
+   "params": {
+    "gain": 1.45,
+    "core": 0.75,
+    "fadeIn": 0.0,
+    "flickerHz": 8.0,
+    "twinkle": 0.35
+   }
+  },
+  "0x32000056": {
+   "note": "RegenDownBlue (mana-regen debuff) low-intensity tier, 8 motes: blue cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000057": {
+   "note": "RegenDownBlue (mana-regen debuff) mid-intensity tier, 20 motes: blue cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000058": {
+   "note": "RegenDownBlue (mana-regen debuff) high-intensity tier, 50 motes: blue cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, reined in for the 50-mote cloud, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.68,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000059": {
+   "note": "RegenUpBlue (mana-regen buff) low-intensity tier, 12 motes: blue cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x3200005A": {
+   "note": "RegenUpBlue (mana-regen buff) mid-intensity tier, 30 motes: blue cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x3200005B": {
+   "note": "RegenUpBlue (mana-regen buff) high-intensity tier, 50 motes: blue cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core (eased for the 50-mote cloud), sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.7,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000093": {
+   "note": "HealthDownBlue (mana drain/harm hit) mid-intensity tier, 50 stars: blue cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.7,
+    "twinkle": 0.25,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.655
+   }
+  },
+  "0x32000094": {
+   "note": "HealthDownBlue (mana drain/harm hit) high-intensity tier, 100 stars: blue cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.25,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.583
+   }
+  },
+  "0x32000095": {
+   "note": "HealthUpBlue (mana heal/boost) mid-intensity tier, 50 stars: blue cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased for the 50-star swarm",
+   "params": {
+    "core": 0.72,
+    "twinkle": 0.3,
+    "gain": 1.983
+   }
+  },
+  "0x32000096": {
+   "note": "HealthUpBlue (mana heal/boost) high-intensity tier, 100 stars: blue cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased and gain trimmed because 100 stars cross the centre together",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "gain": 1.858
+   }
+  },
+  "0x320000A1": {
+   "note": "HealthDownBlue (mana drain/harm hit) low-intensity tier, 15 stars: blue cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core softened so the colour reads, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x320000A2": {
+   "note": "HealthUpBlue (mana heal/boost) low-intensity tier, 15 stars: blue cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000D7": {
+   "note": "EnchantDownBlue (curse) low-intensity tier, 13 stars: blue cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000D8": {
+   "note": "EnchantDownBlue (curse) mid-intensity tier, 30 stars: blue cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000D9": {
+   "note": "EnchantDownBlue (curse) high-intensity tier, 60 stars: blue cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.53,
+     0.731,
+     0.9
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.554
+   }
+  },
+  "0x320000DA": {
+   "note": "EnchantUpBlue (buff) low-intensity tier, 13 stars: blue cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000DB": {
+   "note": "EnchantUpBlue (buff) mid-intensity tier, 30 stars: blue cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.944
+   }
+  },
+  "0x320000DC": {
+   "note": "EnchantUpBlue (buff) high-intensity tier, 60 stars: blue cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.861
+   }
+  },
+  "0x32000440": {
+   "note": "Lag Beast aura, blue half (with orange 0x3200043F): blue cross-stars born tiny swirl chaotically and grow to 0.6 m while fading over 1.5 s; core eased, glitter twinkle, soft",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.1,
+    "gain": 1.866
+   }
+  },
+  "0x32000063": {
+   "note": "RegenDownYellow (stamina-regen debuff) low-intensity tier, 8 motes: yellow cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000064": {
+   "note": "RegenDownYellow (stamina-regen debuff) mid-intensity tier, 20 motes: yellow cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.8,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000065": {
+   "note": "RegenDownYellow (stamina-regen debuff) high-intensity tier, 50 motes: yellow cross-stars drift slowly (2 rad/s) round a 1 m ring at waist height for 5 s, shrinking out; 0.2 s fade-in instead of popping onto the ring, softer white core, reined in for the 50-mote cloud, slow 4-5 Hz glints, colour sinks deeper/darker as each star dies",
+   "params": {
+    "fadeIn": 0.04,
+    "core": 0.68,
+    "twinkle": 0.3,
+    "flickerHz": 7.0,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000066": {
+   "note": "RegenUpYellow (stamina-regen buff) low-intensity tier, 12 motes: yellow cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000067": {
+   "note": "RegenUpYellow (stamina-regen buff) mid-intensity tier, 30 motes: yellow cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core, sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.85,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000068": {
+   "note": "RegenUpYellow (stamina-regen buff) high-intensity tier, 50 motes: yellow cross-stars whirl briskly (5.5 rad/s) round a 1 m waist ring for 3 s, shrinking; 0.15 s fade-in, bright glinting core (eased for the 50-mote cloud), sparkle twinkle kept bright for the buff",
+   "params": {
+    "fadeIn": 0.05,
+    "core": 0.7,
+    "flickerHz": 8.0
+   }
+  },
+  "0x3200009D": {
+   "note": "HealthDownYellow (stamina drain/harm hit) mid-intensity tier, 50 stars: yellow cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.7,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.486
+   }
+  },
+  "0x3200009E": {
+   "note": "HealthDownYellow (stamina drain/harm hit) high-intensity tier, 100 stars: yellow cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core trimmed so the dense burst does not white out, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.2,
+    "gain": 1.422
+   }
+  },
+  "0x3200009F": {
+   "note": "HealthUpYellow (stamina heal/boost) mid-intensity tier, 50 stars: yellow cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased for the 50-star swarm",
+   "params": {
+    "core": 0.72,
+    "twinkle": 0.3,
+    "gain": 1.746
+   }
+  },
+  "0x320000A0": {
+   "note": "HealthUpYellow (stamina heal/boost) high-intensity tier, 100 stars: yellow cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased and gain trimmed because 100 stars cross the centre together",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "gain": 1.635
+   }
+  },
+  "0x320000A3": {
+   "note": "HealthDownYellow (stamina drain/harm hit) low-intensity tier, 15 stars: yellow cross-stars blast radially out of the target at ~5 m/s and shrink away in 1 s; instant hit kept, core softened so the colour reads, short glints, hue deepens/darkens as they fly off",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x320000A4": {
+   "note": "HealthUpYellow (stamina heal/boost) low-intensity tier, 15 stars: yellow cross-stars converge and swing through the target (implode) in 1 s; bright healing glints, core eased",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000F5": {
+   "note": "EnchantDownYellow (curse) low-intensity tier, 13 stars: yellow cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000F6": {
+   "note": "EnchantDownYellow (curse) mid-intensity tier, 30 stars: yellow cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000F7": {
+   "note": "EnchantDownYellow (curse) high-intensity tier, 60 stars: yellow cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.857,
+     0.638
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.395
+   }
+  },
+  "0x320000F8": {
+   "note": "EnchantUpYellow (buff) low-intensity tier, 13 stars: yellow cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000F9": {
+   "note": "EnchantUpYellow (buff) mid-intensity tier, 30 stars: yellow cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.711
+   }
+  },
+  "0x320000FA": {
+   "note": "EnchantUpYellow (buff) high-intensity tier, 60 stars: yellow cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.638
+   }
+  },
+  "0x320000E9": {
+   "note": "EnchantDownPurple (curse) low-intensity tier, 13 stars: purple cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.664,
+     0.892
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000EA": {
+   "note": "EnchantDownPurple (curse) mid-intensity tier, 30 stars: purple cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.664,
+     0.892
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000EB": {
+   "note": "EnchantDownPurple (curse) high-intensity tier, 60 stars: purple cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.664,
+     0.892
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.457
+   }
+  },
+  "0x320000EC": {
+   "note": "EnchantUpPurple (buff) low-intensity tier, 13 stars: purple cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000ED": {
+   "note": "EnchantUpPurple (buff) mid-intensity tier, 30 stars: purple cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.802
+   }
+  },
+  "0x320000EE": {
+   "note": "EnchantUpPurple (buff) high-intensity tier, 60 stars: purple cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.725
+   }
+  },
+  "0x3200051C": {
+   "note": "Caulnalain Satellite Fragment / Fragment / Prism Shard ambient crystal aura (clockwise half, ~9 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.606
+   }
+  },
+  "0x3200051D": {
+   "note": "Broken Fragment / Fenmalain & Crystal Array Satellite Fragments ambient crystal aura (clockwise half, ~6 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.606
+   }
+  },
+  "0x3200051E": {
+   "note": "Crystal of the Dark Isle / Fallen Crystal Shard / Crystal Array ambient crystal aura (clockwise half, ~30 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.602
+   }
+  },
+  "0x3200051F": {
+   "note": "Dual Fragment / Sparkling Dual Fragment ambient crystal aura (clockwise half, ~12 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.605
+   }
+  },
+  "0x32000520": {
+   "note": "Caulnalain Satellite Fragment / Fragment / Prism Shard ambient crystal aura (counter-clockwise half, ~9 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.606
+   }
+  },
+  "0x32000521": {
+   "note": "Broken Fragment / Fenmalain & Crystal Array Satellite Fragments ambient crystal aura (counter-clockwise half, ~6 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.606
+   }
+  },
+  "0x32000522": {
+   "note": "Crystal of the Dark Isle / Fallen Crystal Shard / Crystal Array ambient crystal aura (counter-clockwise half, ~30 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.602
+   }
+  },
+  "0x32000526": {
+   "note": "Dual Fragment / Sparkling Dual Fragment ambient crystal aura (counter-clockwise half, ~12 live): violet cross-stars born tiny rise 0.5-0.75 m/s in a loose swirl and grow to 0.6 m as they fade over 1.5 s; persistent so gain/core lowered, slow 4 Hz glitter twinkle, softer where they cut the crystal mesh",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.12,
+    "gain": 1.605
+   }
+  },
+  "0x32000069": {
+   "note": "SkillDownBlue (skill curse) low-intensity tier, 10 stars: blue compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.587,
+     0.797,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200006A": {
+   "note": "SkillDownBlue (skill curse) mid-intensity tier, 50 stars: blue compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.587,
+     0.797,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200006B": {
+   "note": "SkillDownBlue (skill curse) high-intensity tier, 100 stars: blue compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.587,
+     0.797,
+     0.9
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.413
+   }
+  },
+  "0x3200006C": {
+   "note": "SkillUpBlue (skill buff) low-intensity tier, 10 stars: blue compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200006D": {
+   "note": "SkillUpBlue (skill buff) mid-intensity tier, 50 stars: blue compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200006E": {
+   "note": "SkillUpBlue (skill buff) high-intensity tier, 100 stars: blue compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.656
+   }
+  },
+  "0x3200012E": {
+   "note": "Lightning Bolt / Electric Discharge spark shedding (per-metre trail on the bolt and its Launch, also Galvanic Knight/Elemental Create/Destroy): cyan 8-ray sparks every 7 cm spray out fast and arc down under gravity over 4 s; electric crackle flicker (16 Hz) + glints, core eased for the dense shed",
+   "params": {
+    "flicker": 0.25,
+    "flickerHz": 16.0,
+    "twinkle": 0.25,
+    "core": 0.7
+   }
+  },
+  "0x32000290": {
+   "note": "Static magic object 0x02001743 (script fires it twice): cyan 8-ray sparkles released ~0.1 m off-centre drift slowly down under weak gravity, shrinking in 1 s, for 10 s; gentle glitter twinkle, core eased",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.35,
+    "flickerHz": 6.0
+   }
+  },
+  "0x32000291": {
+   "note": "Unreferenced cyan implode (no script uses it): stars swing ~1 m in and out through the centre over 1 s; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x3200036E": {
+   "note": "ShieldDownBlue (armour/protection curse): a 1.5 s spray of big blue 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.587,
+     0.797,
+     0.9
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x32000377": {
+   "note": "ShieldUpBlue (armour/protection buff): blue 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320004C7": {
+   "note": "Lightning Bolt Launch spark spurt: up to 5 cyan sparks per 3 cm of travel, 0.5 s life, spraying outward; fast electric crackle flicker, core eased",
+   "params": {
+    "flicker": 0.3,
+    "flickerHz": 16.0,
+    "twinkle": 0.25,
+    "core": 0.75
+   }
+  },
+  "0x3200018A": {
+   "note": "Rabbit/Arcane Death/Present impact, low tier, yellow half: 15 yellow cross-stars burst and fall in 1 s with the white 0x32000187; core eased, glints",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x3200018B": {
+   "note": "Same impact, mid tier, yellow half: 30 yellow cross-stars burst and fall (with white 0x32000188); core eased, gain trimmed slightly for density",
+   "params": {
+    "core": 0.72,
+    "gain": 1.593
+   }
+  },
+  "0x3200018C": {
+   "note": "Same impact, high tier, yellow half: 30 yellow cross-stars burst and fall; core eased, gain trimmed",
+   "params": {
+    "core": 0.72,
+    "gain": 1.593
+   }
+  },
+  "0x320001A5": {
+   "note": "Rabbit/Arcane Death/Present flight trail, low tier, yellow centre ribbon (part 2, x2): a star per metre, 0.5 s life; gain/core eased for the stacked trail",
+   "params": {
+    "gain": 1.5,
+    "core": 0.7
+   }
+  },
+  "0x320001A6": {
+   "note": "Same yellow centre trail, mid tier: a star every 0.5 m (x2); gain/core eased",
+   "params": {
+    "gain": 1.45,
+    "core": 0.65
+   }
+  },
+  "0x320001A7": {
+   "note": "Same yellow centre trail, high tier: a 1.3x star every 0.5 m (x2); gain/core eased",
+   "params": {
+    "gain": 1.42,
+    "core": 0.6
+   }
+  },
+  "0x320001C0": {
+   "note": "Yellow Missile star-bolt impact, low tier: 13 small yellow cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001C2": {
+   "note": "Yellow Missile star-bolt impact, high tier: 50 yellow cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.534
+   }
+  },
+  "0x320001E9": {
+   "note": "Yellow Missile star-bolt flight trail: a yellow star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.459
+   }
+  },
+  "0x32000394": {
+   "note": "WeddingBliss fireworks, yellow stream: big yellow cross-stars launched skyward from the couple for 10 s, growing 0.9->2.9 m over 5 s under light gravity (12 m-high bursts come from other emitters); festive strong twinkle, gain/core moderated so huge stacked stars bloom without blowing out, wider near-camera fade at launch",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.4,
+    "nearFade": 1.2,
+    "gain": 1.492
+   }
+  },
+  "0x3200007B": {
+   "note": "SkillDownPurple (skill curse) low-intensity tier, 10 stars: purple compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.811,
+     0.587,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200007C": {
+   "note": "SkillDownPurple (skill curse) mid-intensity tier, 50 stars: purple compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.811,
+     0.587,
+     0.9
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x3200007D": {
+   "note": "SkillDownPurple (skill curse) high-intensity tier, 100 stars: purple compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.811,
+     0.587,
+     0.9
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.474
+   }
+  },
+  "0x3200007E": {
+   "note": "SkillUpPurple (skill buff) low-intensity tier, 10 stars: purple compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200007F": {
+   "note": "SkillUpPurple (skill buff) mid-intensity tier, 50 stars: purple compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000080": {
+   "note": "SkillUpPurple (skill buff) high-intensity tier, 100 stars: purple compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.741
+   }
+  },
+  "0x32000372": {
+   "note": "ShieldDownPurple (armour/protection curse): a 1.5 s spray of big purple 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.811,
+     0.587,
+     0.9
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x3200037B": {
+   "note": "ShieldUpPurple (armour/protection buff): purple 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000477": {
+   "note": "Galvanic Knight / Elemental / Theral summon Create & Destroy flash: 50 violet 8-ray stars starting 5x size (1.4 m) burst ~1.5 m/s, fall and shrink in 1.5 s (with cyan sparks 0x3200012E); gain/core trimmed for the big overlapping stars, softer vs ground",
+   "params": {
+    "gain": 1.6,
+    "core": 0.6,
+    "soft": 0.25
+   }
+  },
+  "0x3200006F": {
+   "note": "SkillDownGreen (skill curse) low-intensity tier, 10 stars: green compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.661,
+     0.9,
+     0.587
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000070": {
+   "note": "SkillDownGreen (skill curse) mid-intensity tier, 50 stars: green compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.661,
+     0.9,
+     0.587
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000071": {
+   "note": "SkillDownGreen (skill curse) high-intensity tier, 100 stars: green compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.661,
+     0.9,
+     0.587
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.388
+   }
+  },
+  "0x32000072": {
+   "note": "SkillUpGreen (skill buff) low-intensity tier, 10 stars: green compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000073": {
+   "note": "SkillUpGreen (skill buff) mid-intensity tier, 50 stars: green compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000074": {
+   "note": "SkillUpGreen (skill buff) high-intensity tier, 100 stars: green compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.621
+   }
+  },
+  "0x3200036F": {
+   "note": "ShieldDownGreen (armour/protection curse): a 1.5 s spray of big green 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.661,
+     0.9,
+     0.587
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x32000378": {
+   "note": "ShieldUpGreen (armour/protection buff): green 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000075": {
+   "note": "SkillDownOrange (skill curse) low-intensity tier, 10 stars: orange compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.784,
+     0.587
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000076": {
+   "note": "SkillDownOrange (skill curse) mid-intensity tier, 50 stars: orange compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.784,
+     0.587
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000077": {
+   "note": "SkillDownOrange (skill curse) high-intensity tier, 100 stars: orange compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.784,
+     0.587
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.402
+   }
+  },
+  "0x32000078": {
+   "note": "SkillUpOrange (skill buff) low-intensity tier, 10 stars: orange compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000079": {
+   "note": "SkillUpOrange (skill buff) mid-intensity tier, 50 stars: orange compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200007A": {
+   "note": "SkillUpOrange (skill buff) high-intensity tier, 100 stars: orange compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.641
+   }
+  },
+  "0x32000371": {
+   "note": "ShieldDownOrange (armour/protection curse): a 1.5 s spray of big orange 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.784,
+     0.587
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x3200037A": {
+   "note": "ShieldUpOrange (armour/protection buff): orange 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000081": {
+   "note": "SkillDownRed (skill curse) low-intensity tier, 10 stars: red compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.587,
+     0.615
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000082": {
+   "note": "SkillDownRed (skill curse) mid-intensity tier, 50 stars (this mid tier is also played by BlackMadness, spawned 3 m overhead): red compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.587,
+     0.615
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000083": {
+   "note": "SkillDownRed (skill curse) high-intensity tier, 100 stars: red compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.587,
+     0.615
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.473
+   }
+  },
+  "0x32000084": {
+   "note": "SkillUpRed (skill buff) low-intensity tier, 10 stars: red compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000085": {
+   "note": "SkillUpRed (skill buff) mid-intensity tier, 50 stars: red compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x32000086": {
+   "note": "SkillUpRed (skill buff) high-intensity tier, 100 stars: red compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.741
+   }
+  },
+  "0x32000373": {
+   "note": "ShieldDownRed (armour/protection curse): a 1.5 s spray of big red 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.9,
+     0.587,
+     0.615
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x3200037C": {
+   "note": "ShieldUpRed (armour/protection buff): red 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000087": {
+   "note": "SkillDownYellow/SkillDownVoid (skill curse) low-intensity tier, 10 stars: yellow compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.882,
+     0.9,
+     0.691
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000088": {
+   "note": "SkillDownYellow/SkillDownVoid (skill curse) mid-intensity tier, 50 stars: yellow compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.882,
+     0.9,
+     0.691
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x32000089": {
+   "note": "SkillDownYellow/SkillDownVoid (skill curse) high-intensity tier, 100 stars: yellow compact 8-ray sparkles sink in a wide 1 m helix whirling 6-12 rad/s, shrinking to nothing over 2-2.5 s; core softened and gain trimmed for the 100-star double-size cloud, glints, hue deepens/darkens as they sink",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.882,
+     0.9,
+     0.691
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.39
+   }
+  },
+  "0x3200008A": {
+   "note": "SkillUpYellow (skill buff) low-intensity tier, 10 stars: yellow compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200008B": {
+   "note": "SkillUpYellow (skill buff) mid-intensity tier, 50 stars: yellow compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x3200008C": {
+   "note": "SkillUpYellow (skill buff) high-intensity tier, 100 stars: yellow compact 8-ray sparkles rise in a wide 1 m helix whirling 6-12 rad/s, shrinking over 2-2.5 s; bright glinting buff, core eased and gain trimmed for the 100-star double-size cloud",
+   "params": {
+    "core": 0.65,
+    "gain": 1.625
+   }
+  },
+  "0x32000375": {
+   "note": "ShieldDownYellow (armour/protection curse): a 1.5 s spray of big yellow 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.882,
+     0.9,
+     0.691
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x3200037E": {
+   "note": "ShieldUpYellow (armour/protection buff): yellow 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000E3": {
+   "note": "EnchantDownOrange (curse) low-intensity tier, 13 stars: orange cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.737,
+     0.597
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000E4": {
+   "note": "EnchantDownOrange (curse) mid-intensity tier, 30 stars: orange cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.737,
+     0.597
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000E5": {
+   "note": "EnchantDownOrange (curse) high-intensity tier, 60 stars: orange cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.9,
+     0.737,
+     0.597
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.429
+   }
+  },
+  "0x320000E6": {
+   "note": "EnchantUpOrange (buff) low-intensity tier, 13 stars: orange cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000E7": {
+   "note": "EnchantUpOrange (buff) mid-intensity tier, 30 stars: orange cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.761
+   }
+  },
+  "0x320000E8": {
+   "note": "EnchantUpOrange (buff) high-intensity tier, 60 stars: orange cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.686
+   }
+  },
+  "0x3200043F": {
+   "note": "Lag Beast aura, orange half (with blue 0x32000440): orange cross-stars born tiny swirl chaotically round the beast (0.5-2 m amplitude) and grow to 0.6 m while fading over 1.5 s; gain/core eased for a persistent aura, glitter twinkle, soft",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.35,
+    "flickerHz": 6.0,
+    "soft": 0.1,
+    "gain": 1.638
+   }
+  },
+  "0x32000109": {
+   "note": "Unreferenced cyan 4-point star trail (no script uses it; record 1 of 4 identical copies 0x32000109/206/207/20A): a 9 cm star left in place every 5 cm of travel (max 40), shrinking over 2 s; heavy overlap at 5 cm spacing so gain/core cut to keep a sparkling line, glints",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000127": {
+   "note": "Unreferenced cyan tight swarm (no script uses it): 10 stars whirl in a 0.2 m knot, growing 0.1->0.8x over 2 s; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x32000128": {
+   "note": "Unreferenced cyan tight swarm, 1 s variant: 10 stars whirl in a 0.2 m knot, growing; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x32000200": {
+   "note": "Item vanish / creature Hide puff (DisappearDestroy on 7000+ items; Hide on Void Knight, Margul, Mukkir): two emitters of 30 cyan cross-stars burst ~0.5 m/s and fall while the object fades out over 1 s; gain/sat restored (generator dimmed it for 'Void' in a weenie name), core eased, glints",
+   "params": {
+    "gain": 1.6,
+    "sat": 1.08,
+    "core": 0.8,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000206": {
+   "note": "Unreferenced cyan 4-point star trail (no script uses it; record 2 of 4 identical copies 0x32000109/206/207/20A): a 9 cm star left in place every 5 cm of travel (max 40), shrinking over 2 s; heavy overlap at 5 cm spacing so gain/core cut to keep a sparkling line, glints",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000207": {
+   "note": "Unreferenced cyan 4-point star trail (no script uses it; record 3 of 4 identical copies 0x32000109/206/207/20A): a 9 cm star left in place every 5 cm of travel (max 40), shrinking over 2 s; heavy overlap at 5 cm spacing so gain/core cut to keep a sparkling line, glints",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5,
+    "twinkle": 0.3
+   }
+  },
+  "0x3200020A": {
+   "note": "Unreferenced cyan 4-point star trail (no script uses it; record 4 of 4 identical copies 0x32000109/206/207/20A): a 9 cm star left in place every 5 cm of travel (max 40), shrinking over 2 s; heavy overlap at 5 cm spacing so gain/core cut to keep a sparkling line, glints",
+   "params": {
+    "gain": 1.4,
+    "core": 0.5,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000DD": {
+   "note": "EnchantDownGreen (curse) low-intensity tier, 13 stars: green cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.697,
+     0.9,
+     0.625
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000DE": {
+   "note": "EnchantDownGreen (curse) mid-intensity tier, 30 stars: green cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "tint1": [
+     0.697,
+     0.9,
+     0.625
+    ],
+    "tintCurve": 1.3
+   }
+  },
+  "0x320000DF": {
+   "note": "EnchantDownGreen (curse) high-intensity tier, 60 stars: green cross-stars spiral DOWN a tight 0.2 m helix, sinking 1.5 m/s over 1.5 s; core softened and gain trimmed for the stacked 60-star column, glints, colour sinks deeper/darker as they fall",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.3,
+    "tint1": [
+     0.697,
+     0.9,
+     0.625
+    ],
+    "tintCurve": 1.3,
+    "gain": 1.397
+   }
+  },
+  "0x320000E0": {
+   "note": "EnchantUpGreen (buff) low-intensity tier, 13 stars: green cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased, slow roll kept",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x320000E1": {
+   "note": "EnchantUpGreen (buff) mid-intensity tier, 30 stars: green cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.75,
+    "twinkle": 0.3,
+    "gain": 1.714
+   }
+  },
+  "0x320000E2": {
+   "note": "EnchantUpGreen (buff) high-intensity tier, 60 stars: green cross-stars spiral UP a tight 0.2 m helix rising 1.5 m/s over 1.5 s; bright glinting buff column, core eased so the stacked column does not white out, slow roll kept",
+   "params": {
+    "core": 0.65,
+    "twinkle": 0.3,
+    "gain": 1.641
+   }
+  },
+  "0x32000117": {
+   "note": "Unreferenced violet tight swarm, 1 s (no script uses it): 10 stars whirl in a 0.2 m knot, growing 0.1->0.8x; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x32000118": {
+   "note": "Unreferenced violet tight swarm, 2 s variant: 10 stars whirl in a 0.2 m knot, growing; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x320001D2": {
+   "note": "Violet Missile star-bolt (also Rolling Death) impact, low tier: 13 small violet cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001D4": {
+   "note": "Violet Missile star-bolt (also Rolling Death) impact, high tier: 50 violet cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.704
+   }
+  },
+  "0x320001EC": {
+   "note": "Violet Missile star-bolt (also Rolling Death) flight trail: a violet star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.623
+   }
+  },
+  "0x32000392": {
+   "note": "WeddingBliss fireworks, violet stream: big violet cross-stars launched skyward from the couple for 10 s, growing 0.9->2.9 m over 5 s under light gravity (12 m-high bursts come from other emitters); festive strong twinkle, gain/core moderated so huge stacked stars bloom without blowing out, wider near-camera fade at launch",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.4,
+    "nearFade": 1.2,
+    "gain": 1.66
+   }
+  },
+  "0x3200010D": {
+   "note": "Unreferenced red tight swarm, 1 s (no script uses it): 10 stars whirl in a 0.2 m knot, growing 0.1->0.8x; core eased",
+   "params": {
+    "core": 0.8
+   }
+  },
+  "0x320001B4": {
+   "note": "Red Missile star-bolt (Health Ring Bolt / table 0x340000d0) impact, low tier: 13 small red cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001B6": {
+   "note": "Red Missile star-bolt (Health Ring Bolt / table 0x340000d0) impact, high tier: 50 red cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.684
+   }
+  },
+  "0x320001E7": {
+   "note": "Red Missile star-bolt (Health Ring Bolt / table 0x340000d0) flight trail: a red star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.604
+   }
+  },
+  "0x32000393": {
+   "note": "WeddingBliss fireworks, red stream: big red cross-stars launched skyward from the couple for 10 s, growing 0.9->2.9 m over 5 s under light gravity (12 m-high bursts come from other emitters); festive strong twinkle, gain/core moderated so huge stacked stars bloom without blowing out, wider near-camera fade at launch",
+   "params": {
+    "core": 0.6,
+    "twinkle": 0.4,
+    "nearFade": 1.2,
+    "gain": 1.641
+   }
+  },
+  "0x3200016E": {
+   "note": "Lightning Bolt / Electric Discharge impact, low tier: 13 yellow-white 8-ray sparks burst ~1.5 m/s and fall in 1.5 s; electric crackle flicker added, core eased",
+   "params": {
+    "flicker": 0.2,
+    "flickerHz": 15.0,
+    "core": 0.85
+   }
+  },
+  "0x3200016F": {
+   "note": "Lightning Bolt impact, mid tier: 30 sparks starting 3x size (0.8 m) burst and shrink in 1.5 s; crackle flicker, core/gain trimmed for the big overlapping flashes, softer vs ground",
+   "params": {
+    "flicker": 0.2,
+    "flickerHz": 15.0,
+    "core": 0.7,
+    "soft": 0.15,
+    "gain": 1.576
+   }
+  },
+  "0x32000170": {
+   "note": "Lightning Bolt impact, high tier: 50 sparks starting 5x size (1.4 m) burst and shrink in 1.5 s, the big electric flash; crackle flicker, gain/core cut so 50 huge additive stars do not white out, soft vs ground",
+   "params": {
+    "flicker": 0.2,
+    "flickerHz": 14.0,
+    "core": 0.55,
+    "gain": 1.5,
+    "soft": 0.25
+   }
+  },
+  "0x32000208": {
+   "note": "Unreferenced yellow-white spark burst (no script uses it; lightning-impact shape at 1x): 50 sparks burst and fall in 1.5 s; crackle flicker, core eased",
+   "params": {
+    "flicker": 0.2,
+    "flickerHz": 15.0,
+    "core": 0.75,
+    "gain": 1.586
+   }
+  },
+  "0x32000299": {
+   "note": "BreatheLightning spark spray (Grievver statue + lightning-breath creatures): tiny 5 cm yellow sparks sprayed out ~2 m/s from the mouth and falling hard over 0.5 s; strong 18 Hz crackle flicker, full core kept so the tiny sparks read",
+   "params": {
+    "flicker": 0.35,
+    "flickerHz": 18.0,
+    "twinkle": 0.25
+   }
+  },
+  "0x320001A8": {
+   "note": "Force Bolt flight trail (Launch hangs it on all 4 projectile parts): pale blue-white 8-ray stars left every 0.2 m hang in place and shrink/fade over 2 s; gain/core eased for 4 parallel trails, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.75,
+    "twinkle": 0.3,
+    "flickerHz": 8.0
+   }
+  },
+  "0x320001A9": {
+   "note": "Force Bolt flight trail, denser variant: a pale blue-white star left hanging every 0.1 m, shrinking/fading over 2 s; gain/core eased for the tighter overlap, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.75,
+    "twinkle": 0.3,
+    "flickerHz": 8.0
+   }
+  },
+  "0x320001AA": {
+   "note": "Force Bolt flight trail, still variant: pale stars every 0.25 m left in place, 1.5 s life; gain/core eased, glints",
+   "params": {
+    "gain": 1.55,
+    "core": 0.75,
+    "twinkle": 0.3,
+    "flickerHz": 8.0
+   }
+  },
+  "0x32000279": {
+   "note": "Persistent electric crackle on Lightning weapons (Lightning Hammer/Axe/Katar/Quarrel/Arrow..., also Flaming Club BreatheLightning): a tiny 5 cm pale-blue spark every 0.1 s drips off the blade and falls 0.5 m in 0.5 s; strong 18 Hz crackle flicker, glints",
+   "params": {
+    "flicker": 0.4,
+    "flickerHz": 18.0,
+    "twinkle": 0.2
+   }
+  },
+  "0x320001CC": {
+   "note": "Blue Missile star-bolt (also Rolling Death) impact, low tier: 13 small blue cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001CE": {
+   "note": "Blue Missile star-bolt (also Rolling Death) impact, high tier: 50 blue cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.655
+   }
+  },
+  "0x320001EB": {
+   "note": "Blue Missile star-bolt (also Rolling Death) flight trail: a blue star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.576
+   }
+  },
+  "0x320003E6": {
+   "note": "Static landmark 0x02000642, 8.5 m up: tiny 6 cm blue motes flutter in a wide 1-2.6 m cloud while rising 0.6 m/s, 2 s life, persistent (firefly-like dust); stronger glitter twinkle so the tiny motes read at height, full core kept",
+   "params": {
+    "twinkle": 0.4,
+    "flickerHz": 6.0
+   }
+  },
+  "0x3200058F": {
+   "note": "Steady blue gem flare on Blight Lictor's Head, Avoren's Skull, Lever, Snowmaker: one 1.45 m 8-point star at 50% re-spawned every 0.03 s with a 0.03 s life = a constant glow; ALL per-particle time effects zeroed (fades/twinkle/spin would strobe at ~34 Hz on 1-frame particles), modest steady bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.55,
+    "core": 0.75
+   }
+  },
+  "0x32000595": {
+   "note": "Pulsating blue gem (Beacon Gem, Spectral Heart): 8-point star spawns big (2.6 m) at 50% and shrinks to a point over 1 s, two overlapping = a heartbeat pulse; 0.1 s swell-in instead of a hard pop, slight spin as it collapses, light glints, soft vs the gem",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.15,
+    "twinkle": 0.12,
+    "spin": 0.15,
+    "gain": 1.6,
+    "core": 0.8,
+    "soft": 0.35
+   }
+  },
+  "0x32000596": {
+   "note": "Pulsating blue gem (Pulsating Spirit-trap Gem): star spawns 2 m at 50% and shrinks to a point over 1 s; 0.1 s swell-in, slight collapsing spin, light glints, soft",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.15,
+    "twinkle": 0.12,
+    "spin": 0.15,
+    "gain": 1.6,
+    "core": 0.8,
+    "soft": 0.3
+   }
+  },
+  "0x32000597": {
+   "note": "Pulsating blue gem, small (Summoning Stone, Mu-miyah Device, statics 0x020009c3/c6): star spawns 1.45 m at 50% and shrinks over 1 s; 0.1 s swell-in, slight collapsing spin, light glints",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.15,
+    "twinkle": 0.12,
+    "spin": 0.15,
+    "gain": 1.6,
+    "core": 0.8,
+    "soft": 0.22
+   }
+  },
+  "0x320001C6": {
+   "note": "Green Missile star-bolt (also Rolling Death) impact, low tier: 13 small green cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001C8": {
+   "note": "Green Missile star-bolt (also Rolling Death) impact, high tier: 50 green cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.555
+   }
+  },
+  "0x320001EA": {
+   "note": "Green Missile star-bolt (also Rolling Death) flight trail: a green star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.479
+   }
+  },
+  "0x320001D8": {
+   "note": "Grey-silver Missile star-bolt impact, low tier: 13 small grey-silver cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001DA": {
+   "note": "Grey-silver Missile star-bolt impact, high tier: 50 grey-silver cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.84
+   }
+  },
+  "0x320001ED": {
+   "note": "Grey-silver Missile star-bolt flight trail: a grey-silver star per metre, ~1 m/s spread, 1.5 s life, Launch stacks 2-3/5/10 copies by intensity; gain/core cut so the stacked wake stays a sparkle trail",
+   "params": {
+    "core": 0.55,
+    "gain": 1.754
+   }
+  },
+  "0x320001BA": {
+   "note": "Orange Missile star-bolt (also Rolling Death) impact, low tier: 13 small orange cross-stars burst ~1.5 m/s and fall in 1.5 s; core eased a touch, glints",
+   "params": {
+    "core": 0.85
+   }
+  },
+  "0x320001BC": {
+   "note": "Orange Missile star-bolt (also Rolling Death) impact, high tier: 50 orange cross-stars starting 2x size burst and fall, shrinking in 1.5 s; gain/core trimmed for the big dense burst",
+   "params": {
+    "core": 0.65,
+    "gain": 1.566
+   }
+  },
+  "0x32000370": {
+   "note": "ShieldDownGrey (armour/protection curse): a 1.5 s spray of big grey 8-ray sparkles bursting out at ~4 m/s and lifting, each living 0.5 s; instant pop kept, core softened, short glints, hue sinks darker as they die",
+   "params": {
+    "core": 0.8,
+    "twinkle": 0.25,
+    "tint1": [
+     0.85,
+     0.87,
+     0.94
+    ],
+    "tintCurve": 1.2
+   }
+  },
+  "0x32000379": {
+   "note": "ShieldUpGrey (armour/protection buff): grey 8-ray sparkles start ~1-2 m out and swing in through the target (implode) for 0.75 s over a 1.5 s cast; bright protective glints, core eased slightly",
+   "params": {
+    "core": 0.85,
+    "twinkle": 0.3
+   }
+  },
+  "0x32000590": {
+   "note": "Steady violet gem flare on static setups 0x020009bd/0x02000a39/0x02000a3a: constant 1.45 m 8-point star at 50% (1-frame respawn); fades/twinkle/spin zeroed to avoid strobing, modest steady bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.55,
+    "core": 0.75
+   }
+  },
+  "0x32000593": {
+   "note": "Blinking violet gem beacon (static setup 0x020009c0): a 1.45 m 8-point star appears at 50% and fades out over 1 s, two staggered flares per second; 0.1 s swell-in replaces the hard blink-on, twinkle almost off so the beat stays clean, soft vs the gem",
+   "params": {
+    "fadeIn": 0.1,
+    "twinkle": 0.1,
+    "gain": 1.6,
+    "core": 0.8,
+    "soft": 0.3
+   }
+  },
+  "0x32000591": {
+   "note": "Steady red gem flare on A'nekshay/Mukkir Slayer Stones, Spectral Skull: constant 1.45 m 8-point star at 50% (1-frame respawn); fades/twinkle/spin zeroed to avoid strobing, modest steady bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "twinkle": 0.0,
+    "spin": 0.0,
+    "gain": 1.55,
+    "core": 0.75
+   }
+  },
+  "0x32000594": {
+   "note": "Blinking red gem beacon (static setup 0x020009bf): 1.45 m 8-point star appears at 50% and fades out over 1.2 s, re-firing; 0.1 s swell-in, twinkle almost off, soft vs the gem",
+   "params": {
+    "fadeIn": 0.1,
+    "twinkle": 0.1,
+    "gain": 1.6,
+    "core": 0.8,
+    "soft": 0.3
+   }
+  }
+ }
+}

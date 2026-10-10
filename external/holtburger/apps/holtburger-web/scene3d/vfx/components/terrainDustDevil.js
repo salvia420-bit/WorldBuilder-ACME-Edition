@@ -183,12 +183,15 @@ export const terrainDustDevil = {
   // Composed: the family master AND the per-effect flag (plan §2.4 firewall).
   enabled() { return terrainSandEnabled() && terrainSandDevilsEnabled(); },
   gateFn: dustDevilGate,
-  spriteName: "smokePuff",
+  spriteName: "softGlowDot",
   reads: ["geometry", "weather", "clock"],
   writes: ["emitter"],
   defaults: {
     synthId: 0xF0E00010,
-    hwGfxObjId: PARTICLE_SPRITES.smokePuff,   // alpha dust puff (NOT additive)
+    // 2026-10-10: was smokePuff — its DAT texture 0x08000326 is pure black, so
+    // the column drew as dark discs. softGlowDot is tinted warm sand and dimmed
+    // at night by its `?particleFx` profile.
+    hwGfxObjId: PARTICLE_SPRITES.softGlowDot,
     basePeriodSec: 0.28,           // dense-ish: a devil is a visible column
     maxParticles: 40,
     initialParticles: 12,

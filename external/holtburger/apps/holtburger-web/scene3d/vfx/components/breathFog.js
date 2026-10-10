@@ -71,7 +71,11 @@ export const breathFog = {
     // terrainSwampAmbient.js:140 states the invariant this violated ("a distinct
     // emitter id (two ambient sources must not collide)").
     synthId: 0xF0E00004,
-    hwGfxObjId: PARTICLE_SPRITES.smokePuff,   // alpha puff (breath MUST be non-additive)
+    // 2026-10-10: was smokePuff, whose DAT texture 0x08000326 is PURE BLACK
+    // (rgb 0, alpha ≤ 0.62) — the "frosty puff" drew as a dark smudge at the
+    // mouth. softGlowDot (same 0.294 m quad, soft radial) is desaturated to a
+    // frosty white by its `?particleFx` profile and dims at night (`lit`).
+    hwGfxObjId: PARTICLE_SPRITES.softGlowDot,
     particleType: PT_LOCAL_VELOCITY,
     basePeriodSec: 1.3,                 // a slow exhale cadence (~0.8/sec at g=1)
     maxParticles: 5,                    // tiny — a couple of puffs at a time

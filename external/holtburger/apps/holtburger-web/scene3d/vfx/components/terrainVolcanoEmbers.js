@@ -159,6 +159,9 @@ export const terrainVolcanoEmbers = {
     smokeStartScale: 0.4,
     smokeFinalScale: 2.2,
     smokeScaleRand: 0.08,
+    // `?particleFx`: ground vents get their own rows (hotter, bigger, ashier).
+    fxProfileEmber: "terrain.volcanoEmbers.ember",
+    fxProfileSmoke: "terrain.volcanoEmbers.smoke",
     // Host-side only (never reaches an emitterInfo): the height above the
     // sampled ground the vent's parent frame sits at.
     footLiftM: 0.15,

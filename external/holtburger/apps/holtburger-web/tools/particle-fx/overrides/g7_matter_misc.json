@@ -1,0 +1,2308 @@
+{
+ "group": "g7_matter_misc",
+ "familyNotes": {
+  "0x08000312": "Pale-blue 6-fold snowflake cutout (clip): Frost Bolt launch/impact, BreatheFrost cones, frost-weapon drips and glints, snowfalls. Snow tumbles; spell/weapon frost gets icy glint twinkle and lower light response so it reads at night; natural snowfall stays lit 0.7.",
+  "0x080002F8": "Red shaded ball on a triangle quad with offset UVs (never spun): this is the standard creature BLOOD droplet (SplatterLow/Med/High), Smite gore, Well of Blood, blood spit. Refiled blood: instant hit, darkens in flight, lit 0.6. Exception: Mad Cow eye/snout points stay solid_ball glowing (unlit, brighter).",
+  "0x080009FA": "Soft white additive puff: spirit/frost body auras (Asheron's Servant, Luminary, Glacial Knights), a fog whirl, white poofs, faint blade wisps. Wispy dissolve kept, low light response (they glow).",
+  "0x08000C51": "Tan/ochre ball (triangle, offset UVs): non-bleeding hit splatter (undead bone dust, mud, doors/walls, golems) -> debris chips; also Mystical Mug ale and a bile spew -> liquid.",
+  "0x08000313": "Green acid blob cluster (clip): Acid Stream impacts, BreatheAcid cones, acid-weapon drips, muck. Acid stays vivid (sat 1.1, lit 0.5); weapon drips that start half-transparent get a short fade-in.",
+  "0x08000C66": "Green ball (triangle): Olthoi green ichor splatter -> blood family; Mad Cow green drool -> liquid; Mad Cow green eyes stay glowing solid_ball (unlit).",
+  "0x080007B5": "Green goo/vapour swirl (alpha, edge too high to spin): faint 20-35% opacity acid and thorn-bolt launch trails and orbiting toxic clouds -> refiled gas_alpha: wisps away, soft, no pop at the end.",
+  "0x080001EE": "Additive cyan bubble cluster: fountain jets/side spouts (Spectral Fountain, Freezing Pool, 4-spout fountain). Water glint twinkle; softness cut to ~0.1 m so drops near the basin are not eaten.",
+  "0x080005BC": "Grey shaded ball (triangle): dark ichor splatter (Void Knights, Margul, Mukkir, constructs) -> blood family, slightly darker; also grey spheres spiralling in the arcane star-vortex scenery (kept).",
+  "0x08001689": "Red blood-drop cluster (clip): Health-damage bolt (Harm / Health Ring Bolt) launch trails and impacts. Blood darkening, instant impacts, lit 0.6.",
+  "0x0800005D": "White-blue cloud cutout (clip, 32 px): falling drips/drizzle, driving rain, Winter Orb flecks. Erosion is meaningless on a hard clip sprite (removed); Winter Orb flecks refiled snow with glints.",
+  "0x08000609": "Blue water-streak sheet (alpha): big waterfall/fountain spout sheets 2-13 m. Generated shimmer/soft/near-fade kept.",
+  "0x08000C6F": "Blue ball (triangle): Remoran/Grievver blue blood splatter -> blood family.",
+  "0x08000D18": "Cyan ball (triangle): Niffis/Sleech/Water Golem watery splatter -> blood family with a cool neutral darkening.",
+  "0x08000C64": "Orange ball (triangle): Tusker/Gromnie/Zefir/Lithos orange blood splatter -> blood family.",
+  "0x08000C77": "White irregular splat (clip, triangle): ectoplasm / snow-chunk splatter for spirits, banners, totems, snowmen. Kept splash; erosion off, tiny soft/near fade.",
+  "0x08000C5C": "Magenta ball (triangle): Drudge/Moar/Mosswart/Aun purple blood splatter -> blood family.",
+  "0x08000C73": "Straw/splinter bundle (clip): Scarecrow hit splatter. Crisp debris as generated; full-coverage clip so no spin.",
+  "0x08001924": "Autumn leaf cluster (clip, 128 px): leaf whirls and Thorn Bolt trail leaves. Tumble kept, gentler fade-in.",
+  "0x08000071": "Big white cloud cutout (clip): 10 m fog banks on old static scenery. Refiled smoke_light (only filed sky for the long life): lit, big soft and near fade, fade-in where retail pops in at 25-50%.",
+  "0x08000D16": "Additive blue bubble cluster: Water Golem / Aqueous Knight body auras, Coral Shield. As generated.",
+  "0x08000B84": "Gold veined teardrop = a LEAF, not a crystal shard: autumn leaf gust scenery. Refiled leaves (lit 0.85, fades); no spin (shape reaches the quad edge; retail already rolls the puffs in 3D).",
+  "0x08000AAC": "Red blood-drop cluster (clip): Weeping weapons, Sword of Lost Hope, Bloodstone drips. Fade-in (retail starts 50% opaque), darkening.",
+  "0x080005CE": "Grey additive streak texture: waterfall mist curtain and spray streaks. Dense stacks reined in, large soft/near fade.",
+  "0x08000126": "Brown dust cloud (alpha): rising dust wisps and drifting dust haze. Fade-in added (retail pops in at 30%).",
+  "0x08000016": "Bee/wasp sprite (palettised; catalog could not decode it but it draws): midden bees and carrion flies -> refiled insect.",
+  "0x0800001A": "Brown veined teardrop = oak LEAF: Oak Golem shed leaves, leaf gust -> refiled leaves.",
+  "0x08000473": "Pale bubble cluster (clip alpha): bubbling pool and fountain-base foam. As generated (glint twinkle, soft).",
+  "0x080000EC": "Bone texture on 3D long-bone meshes: skeleton burst -> refiled debris, lit (retail lit non-luminous meshes).",
+  "0x08000B86": "Red veined teardrop = autumn LEAF (leaf gust) -> refiled leaves.",
+  "0x08000B87": "Purple orb disc (clip): Experiment Orb glow layers; single particle respawned every second, so fades zeroed.",
+  "0x0800000D": "Orange butterfly wing texture on a 6-vert two-wing mesh: LayingofHands butterflies -> refiled insect.",
+  "0x080000F5": "Bone-joint texture on 3D knuckle meshes: skeleton burst -> refiled debris.",
+  "0x080012DB": "Untextured translucent solid on a 2 km box: one-frame storm lightning sky flash; neutral.",
+  "0x08000D7D": "Dark grey soot blob (clip+translucent): a dark puff burst -> smoke_dark; Black Ball in a Stein dark drips -> liquid.",
+  "0x080011FF": "Dark-red blood-bubble cluster (alpha): Blood Golem / Bloodstone body auras; gain lifted slightly so the very dark texture reads.",
+  "0x08001254": "Yellow-orange wasp sprite: wasp swarm scenery. Insect, never spun, as generated.",
+  "0x08001255": "Pale grey fly sprite: fly swarm scenery. Insect, as generated.",
+  "0x08001253": "Blue-winged insect sprite: Aggressive Swarm creature. Insect, as generated.",
+  "0x08001252": "Dark grey fly sprite: fly swarm scenery. Insect, as generated.",
+  "0x08001259": "Green fly sprite: Carcass / Putrid Swarm creature. Insect, as generated.",
+  "0x08001258": "Red wasp sprite: swarm scenery. Insect, as generated.",
+  "0x08001257": "Purple insect sprite: swarm scenery. Insect, as generated.",
+  "0x08001256": "Golden wasp sprite: swarm scenery. Insect, as generated.",
+  "0x080013B6": "Orange-brown ball (triangle): Syrup Elemental / Pancake Golem syrup ooze and drips -> refiled liquid.",
+  "0x080016B2": "Purple nebula texture on a 72-vert sphere: Void creature body shells (1 h life, so filed sky) -> refiled vortex_dark with a slow pulse only.",
+  "0x08001930": "Green leaf cluster (clip): green leaf whirl. Tumble kept, gentler fade-in.",
+  "0x08000022": "Green veined teardrop = LEAF: leaves drifting down from a tree -> refiled leaves.",
+  "0x0800006C": "Untextured additive solid on a 2 km box: storm lightning sky flash; neutral.",
+  "0x0800003F": "Blue additive nebula: 1.9 km backdrop sheets; neutral (sky-scale).",
+  "0x08000040": "Green additive nebula: 1.9 km backdrop sheets; neutral.",
+  "0x08000041": "Orange-red additive nebula: 2.2 km backdrop sheets; neutral.",
+  "0x08000C3B": "Developer face photo (additive): CampingMastery easter-egg emote; left as authored.",
+  "0x08000C3D": "Developer face photo (additive): CampingIneptitude easter-egg emote; left as authored.",
+  "0x08001332": "Red additive light beam: an 82 m sky-scale beam; neutral.",
+  "0x080000F0": "Skull texture on a 3D skull mesh: skeleton burst -> refiled debris.",
+  "0x08000C39": "Ribcage texture on a 3D ribcage mesh: skeleton burst -> refiled debris.",
+  "0x080000E9": "Pelvis-bone texture on a 3D mesh: skeleton burst variant -> refiled debris.",
+  "0x08000B82": "Orange veined teardrop = autumn LEAF (leaf gust) -> refiled leaves.",
+  "0x08000030": "Orange-yellow concentric sun disc (clip): random-sized sun discs in the arcane star-vortex scenery; near fade only.",
+  "0x08000DCF": "Cratered moon picture: Exploration Marker orrery; left as authored.",
+  "0x08000DD0": "Glittering planet picture: Exploration Marker orrery; left as authored.",
+  "0x08001526": "Magenta speckle additive nebula: 1.9 km backdrop sheets; neutral.",
+  "0x08000717": "Purple demon face texture on a mesh: nightmare apparitions; left as authored.",
+  "0x0800059E": "Parrot-like bird head texture on a mesh: nightmare apparitions -> misc, left as authored.",
+  "0x080005EE": "Dark red-eyed shadow beast texture on a mesh: nightmare apparitions; left as authored.",
+  "0x0800021D": "Banded wooden keg texture/mesh: poltergeist object whirl -> misc, lit, fades.",
+  "0x080001BA": "Blue gold-banded book cover mesh: poltergeist whirl -> misc, lit, fades.",
+  "0x08000130": "Wooden plank mesh: poltergeist whirl -> misc, lit, fades.",
+  "0x080001C2": "Silver metal pot mesh: poltergeist whirl -> misc, lit, fades.",
+  "0x080003EB": "Grey stone tablet mesh: poltergeist whirl -> misc, lit, fades.",
+  "0x0800019C": "Ghoul face texture on a mask mesh: haunting jump-scare -> misc, left as authored.",
+  "0x08000236": "Dark-red streaked sheet (clip+translucent): haunting jump-scare burst -> blood_mist, soft/near fade.",
+  "0x08000FFB": "Creature portrait (Olthoi-like) on a picture mesh: vision/bestiary panel -> misc, as authored.",
+  "0x08000FFC": "Creature portrait (mossy shell creature): picture panel -> misc, as authored.",
+  "0x08000FFD": "Creature portrait (armoured shell creature): picture panel -> misc, as authored.",
+  "0x08000FFE": "Creature portrait (shadow/void creature): picture panel -> misc, as authored.",
+  "0x08000FFF": "Creature portrait (pale bald humanoid): picture panel -> misc, as authored.",
+  "0x08001000": "Creature portrait (brute): picture panel -> misc, as authored.",
+  "0x08000FF9": "Creature portrait (armoured reptilian): picture panel -> misc, as authored.",
+  "0x08000FFA": "Creature portrait (standing armoured figure): picture panel -> misc, as authored.",
+  "0x0800086A": "Pumpkin texture on a 3D pumpkin mesh: Festival Lights -> misc, lit 0.6, fade-out.",
+  "0x08000859": "Bone-joint texture on a skull/bone mesh: Festival Lights -> misc, lit 0.6, fade-out.",
+  "0x080012E1": "Black spiky darkness sheet: 2.2 km backdrop void cloud; neutral.",
+  "0x08001302": "Blue swirl ring on a 2 km mesh: sky vortex; neutral.",
+  "0x08001303": "Red glowing eyes on black (clip): Dread Figment floating eyes; fade-in + slow pulse, unlit.",
+  "0x08001308": "640x480 winged-demon picture: one-frame dread vision sky flash; neutral.",
+  "0x08000B43": "Snowflake sigil (green key = transparent): Orb of Eternal Frost, continuously respawned; misc, neutral.",
+  "0x080013D0": "Purple-black nebula ring on a 2 km mesh: sky vortex; neutral.",
+  "0x08000314": "Yellow 8-point star (clip alpha): Gearknight boss rising forge sparks -> refiled star (alpha spark): brighter, twinkle, unlit.",
+  "0x08000011": "Rock/dirt texture on a chunk mesh: earth eruption chunks -> refiled debris, lit.",
+  "0x08001468": "Untextured translucent solid (Harmonic Transference Field shell); neutral.",
+  "0x0800148C": "Untextured solid thin bar (sweeping line); neutral.",
+  "0x08001544": "White light-bar cylinder texture: PK Arena Bonus Generator; left as authored.",
+  "0x08001652": "Dark-red mist puff (alpha): blood-mist field scenery; softer fade-in, stronger dissolve, slow roll.",
+  "0x08001925": "Single orange autumn leaf (clip): leaf whirl; tumble, gentler fade-in.",
+  "0x0800192F": "Single green leaf (clip): green leaf whirl; tumble, gentler fade-in.",
+  "0x08001934": "Rune-carved wood texture on the Wooden Top mesh (the toy itself, spinning); lit only."
+ },
+ "emitters": {
+  "0x3200014A": {
+   "note": "Frost Bolt impact (lowest tier): 13 snowflakes thrown out at 2-5 m/s, falling and shrinking 1.0->0.1 over 1.5 s; instant hit (no fade-in), icy glint twinkle, tumbling; lit 0.4 so the spell frost still reads at night",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0,
+    "fadeIn": 0.0
+   }
+  },
+  "0x3200014B": {
+   "note": "Frost Bolt impact (mid tier): 30-flake snow burst, falls and shrinks over 1.5 s; instant hit, icy glint twinkle, tumbling flakes, lit 0.4",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0,
+    "fadeIn": 0.0
+   }
+  },
+  "0x3200014C": {
+   "note": "Frost Bolt impact (top tier): 50-flake snow burst, falls and shrinks over 1.5 s; instant hit, icy glint twinkle, tumbling flakes, lit 0.4",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0,
+    "fadeIn": 0.0
+   }
+  },
+  "0x3200017A": {
+   "note": "Frost Bolt Launch trail (tier 1, 0.2 m flakes): per-metre flakes kicked back off the bolt and sagging under gravity, 1 s; quick fade-in, glint twinkle, slow tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x3200017B": {
+   "note": "Frost Bolt Launch trail (tier 2, 1.5x flakes): per-metre flakes shed behind the bolt, 1 s; quick fade-in, glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x3200017C": {
+   "note": "Frost Bolt Launch trail (tier 3, 2x flakes; also reused by static frost prop 0x02001601 with grey mist): per-metre flakes shed behind the bolt; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x3200019F": {
+   "note": "Frost Bolt Launch trail orbiters (tier 1): flakes swirling around the bolt's path (Swarm), 1 s; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320001A0": {
+   "note": "Frost Bolt Launch trail orbiters (tier 2, 1.5x): flakes swirling round the bolt path, 1.2 s; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320001A1": {
+   "note": "Frost Bolt Launch trail orbiters (tier 3, 2x): flakes swirling round the bolt path, 2 s; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320001F2": {
+   "note": "BreatheFrost cone (shared by ~27 breathers: grievver/gromnie statues, carenzi, chickens...): 20 flakes blown forward 1.5-4.5 m/s, growing 0.1->1.5 in 1 s with grey breath mist 0x3200029B; faint glint, tumble, lit 0.45",
+   "params": {
+    "lit": 0.45,
+    "twinkle": 0.1,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320001FC": {
+   "note": "Red Bull of Sanamar BreatheFrost: flake cone blown forward/down (reversed model axis), 0.1->1.5 growth in 1 s with breath mist; faint glint, tumble",
+   "params": {
+    "lit": 0.45,
+    "twinkle": 0.1,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000272": {
+   "note": "Frost weapon drip (Frost axes/arrows/quarrels, ~111 setups; also Flaming Club BreatheFrost): frost crystals falling off the blade under gravity, 1.5->0.3 shrink, retail fades 75%->0; added glint twinkle, slow tumble, lit 0.45",
+   "params": {
+    "lit": 0.45,
+    "twinkle": 0.2,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000444": {
+   "note": "Rolling Death frost trail: big 0.7 m flakes dropped per metre as it rolls, shrinking 3.7->0.1 and falling (paired with a white glow); tumble kept, lit 0.6",
+   "params": {
+    "lit": 0.6
+   }
+  },
+  "0x320004C5": {
+   "note": "Frost Bolt Launch (alt 13 s script) swirling flake orbiters along the path; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320004C6": {
+   "note": "Frost Bolt Launch (alt 13 s script) flakes kicked back off the bolt; glint twinkle, tumble",
+   "params": {
+    "lit": 0.4,
+    "twinkle": 0.15,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000723": {
+   "note": "Frozen Fury / Fine Spine Axe / Crossbow of the Fallen frost glints: tiny 2 cm flakes hanging around the weapon, random 0-80% fade; sparkle twinkle, lit 0.35 so they glint at night",
+   "params": {
+    "lit": 0.35,
+    "twinkle": 0.25,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000739": {
+   "note": "Crescent Moons frost glints: tiny parent-local flakes growing 0.1->0.5 beside the weapon, 1 s; sparkle twinkle, lit 0.35",
+   "params": {
+    "lit": 0.35,
+    "twinkle": 0.25,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320007AC": {
+   "note": "Hammer of Frore swing trail: tiny frost motes left per metre, drifting up 5 cm/s and shrinking to nothing over 2 s; sparkle twinkle, tumble, lit 0.35",
+   "params": {
+    "lit": 0.35,
+    "twinkle": 0.2,
+    "flickerHz": 7.0
+   }
+  },
+  "0x320008EE": {
+   "note": "Snow eruption (script 0x33001076 with sounds, no weenie): 550 flakes shot 4.5-9 m up, slowing and growing 0.5->2 over 2.5 s at full opacity; fade-out 0.25 s hides the pop, tumbling, natural lit 0.7",
+   "params": {
+    "fadeOut": 0.1
+   }
+  },
+  "0x320008F2": {
+   "note": "Snowfall after the eruption (same script, t=5 s): 800 flakes drifting down 1-3 m/s over an 8 m radius for 5 s; fade-in/out so flakes no longer pop at full opacity, tumbling, lit 0.7",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.12
+   }
+  },
+  "0x32000972": {
+   "note": "Pillar of Frost / Frost Energy snowfall: persistent flakes drifting down over a 6 m radius around the pillar, 5 s life at full opacity; fade-in/out removes pops, tumbling, lit 0.7",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.12
+   }
+  },
+  "0x32000A47": {
+   "note": "Olthoi Hive Warrior / Paradox-touched Olthoi BreatheFrost: flake cone blown forward and curling up (B=+y), growing 0.1->1.5 in 1 s; faint glint, tumble",
+   "params": {
+    "lit": 0.45,
+    "twinkle": 0.1,
+    "flickerHz": 7.0
+   }
+  },
+  "0x32000237": {
+   "note": "Red blood splatter, lightest hit (5 droplets; SplatterLow*/Med*/High* on most fleshy creatures - humans, tuskers, chickens, eaters...): drops spray 0.6-1.6 m/s, fall and shrink in 0.6 s; refiled blood, instant hit, darkens as it flies, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000238": {
+   "note": "Red blood splatter, light hit (10 droplets; SplatterLow*/Med*/High* on most fleshy creatures - humans, tuskers, chickens, eaters...): drops spray 0.6-1.6 m/s, fall and shrink in 0.6 s; refiled blood, instant hit, darkens as it flies, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000239": {
+   "note": "Red blood splatter, medium hit (15 droplets; SplatterLow*/Med*/High* on most fleshy creatures - humans, tuskers, chickens, eaters...): drops spray 0.6-1.6 m/s, fall and shrink in 0.6 s; refiled blood, instant hit, darkens as it flies, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200023A": {
+   "note": "Red blood splatter, heavy hit (20 droplets; SplatterLow*/Med*/High* on most fleshy creatures - humans, tuskers, chickens, eaters...): drops spray 0.6-1.6 m/s, fall and shrink in 0.6 s; refiled blood, instant hit, darkens as it flies, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200023B": {
+   "note": "Red blood splatter, heaviest hit (25 droplets; SplatterLow*/Med*/High* on most fleshy creatures - humans, tuskers, chickens, eaters...): drops spray 0.6-1.6 m/s, fall and shrink in 0.6 s; refiled blood, instant hit, darkens as it flies, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000553": {
+   "note": "Bael'Zharon Smite gore burst: 50 large red drops blown out 2-5 m/s from the smitten target (with black void flash); refiled blood, instant, darkening, lit 0.6, soft 4 cm",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.1,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6,
+    "soft": 0.04,
+    "nearFade": 0.15
+   },
+   "family": "blood"
+  },
+  "0x32000554": {
+   "note": "Gore burst variant of the Smite (no script ref; 50 big red drops at 1-3 m/s): refiled blood, instant, darkening, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.1,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6,
+    "soft": 0.04,
+    "nearFade": 0.15
+   },
+   "family": "blood"
+  },
+  "0x32000767": {
+   "note": "Tome of Blood and Bone / Apparition of the Book of Eibhil (and static 0x02000fab): small blood droplets slowly rising off the book with red halos, retail fades 60%->0 over 1.9 s; refiled blood, soft fade-in, lit 0.4 (eerie)",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.08,
+    "fadeIn": 0.1,
+    "lit": 0.4
+   },
+   "family": "blood"
+  },
+  "0x320007D0": {
+   "note": "Well of Blood bubbling: persistent 0.2 m blood drops bursting up 1-2 m/s and splashing back (two hooks at 0.6/1.1 m); refiled blood, darkening as they fall, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.8,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.03,
+    "soft": 0.05,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x320007D2": {
+   "note": "Well of Blood spout: drops jetting 3 m/s up and arcing back, growing 0.1->0.7, retail opacity RISES to full then pops; refiled blood, 0.2 fade-out hides the pop, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.8,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.02,
+    "fadeOut": 0.2,
+    "soft": 0.04,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000833": {
+   "note": "Very Mad Cow mouth froth: red drool dripping 0.5-1.5 m/s from under the head (part 18), opacity rising to full; refiled blood, keeps fade-in/out so drips don't pop, lit 0.6",
+   "params": {
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000834": {
+   "note": "Very Mad Cow glowing red eye (right, head part 18): stacked near-still red orb respawning every 0.14 s at 70-90% opacity; brighter, unlit so the mad eye glows at night",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x32000835": {
+   "note": "Very Mad Cow glowing red eye (left): stacked near-still red orb; brighter, unlit glow",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x32000836": {
+   "note": "Very Mad Cow glowing red snout point (front of head): stacked near-still red orb; brighter, unlit glow",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x320008AE": {
+   "note": "Mukkir Aspect of Grael 'BreatheAcid' blood spit: 20 red drops sprayed forward 2-5 m/s and curling, growing 0.2->1 in 1 s, with mist; refiled blood, darkening, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.02,
+    "fadeOut": 0.04,
+    "lit": 0.6,
+    "soft": 0.04,
+    "nearFade": 0.15
+   },
+   "family": "blood"
+  },
+  "0x32000963": {
+   "note": "Infectious / Blood Curse Rat breath (all four Breathe* map to this): 20 red drops spat forward and curling back, growing 0.1->1 in 1 s with red mist; refiled blood, darkening, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.08,
+    "tint1": [
+     0.78,
+     0.72,
+     0.72
+    ],
+    "fadeIn": 0.02,
+    "fadeOut": 0.04,
+    "lit": 0.6,
+    "soft": 0.04,
+    "nearFade": 0.15
+   },
+   "family": "blood"
+  },
+  "0x32000584": {
+   "note": "Asheron's Servant / Emissary / Sanctum Guardian Spirit, Algid & Glacial Knights, Luminary Guards body aura: white spirit wisp born below the hook, rising 6-12 cm/s and swelling 0.1->0.7 in 1 s; edge dissolve kept, lit 0.2 so the holy/frost mist still glows at night",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000585": {
+   "note": "Same spirit body aura: parent-local wisp riding the limb, 0.1->0.7 over 2 s, rising; dissolves, lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000586": {
+   "note": "Same spirit body aura: larger wisp above the hook, 0.2->1.0 (0.66 m) in 1.5 s, rising; dissolves, lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000587": {
+   "note": "Same spirit body aura (Servant + Luminary only): parent-local large wisp 0.2->1.0 over 2 s; dissolves, lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000588": {
+   "note": "Same spirit body aura: still parent-local core puff blooming 0.1->0.4 at the hook in 1 s - the glow under the rising wisps; lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000589": {
+   "note": "Same spirit body aura: dense small wisps (5 live) rising 7-14 cm/s, 0.1->0.45 in 1 s; dissolves, lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x3200058A": {
+   "note": "Same spirit body aura: parent-local small wisps (6 live) 0.1->0.45 over 1.5 s; dissolves, lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x3200058B": {
+   "note": "Same spirit body aura: quick small lick shooting up 0.2-0.36 m/s from below the hook, 0.1->0.3 in 1 s; lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x3200058C": {
+   "note": "Same spirit body aura (3 hooks per script): parent-local quick lick up 0.2-0.36 m/s, 0.1->0.3; lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x3200058D": {
+   "note": "Same spirit body aura: quick lick from the hook centre, 0.1->0.4 in 1 s at 0.2-0.36 m/s; lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x3200058E": {
+   "note": "Same spirit body aura: parent-local quick lick from the hook centre, 0.1->0.4; lit 0.2",
+   "params": {
+    "lit": 0.2
+   }
+  },
+  "0x32000614": {
+   "note": "Static mist whirl (0x02000b23): 36 white puffs orbiting a wide ring, shrinking 3.3 m->0.55 m over 6 s - a ghostly fog vortex; as generated (slow roll, dissolve, soft 1.2 m, near fade 2.3 m)"
+  },
+  "0x320006F7": {
+   "note": "Poof on Destroy / DisappearDestroy / Explode / ProjectileCollision (table 0x340000a2 - spirit/banner/totem objects): 25 white puffs blasted out 4-11 m/s for 0.3 s; fade-in cut to 0.03 so the poof hits instantly",
+   "params": {
+    "fadeIn": 0.03
+   }
+  },
+  "0x32000929": {
+   "note": "Greatsword of Flame and Light: faint white wisps rising 0.45 m/s off the blade (10->25% opacity), shrinking 0.9->0.2 with the lightning arcs; rounded pop-out, dissolve, lit 0.15 (holy light)",
+   "params": {
+    "lit": 0.15
+   }
+  },
+  "0x3200024B": {
+   "note": "Tan chip/dust splatter, lightest hit (5 bits; undead - liches, revenants - mud golems, pumpkin lord, doors/walls, penguins): bone-dust/wood-chip clumps spray and fall in 0.6 s; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200024C": {
+   "note": "Tan chip/dust splatter, light hit (10 bits; undead - liches, revenants - mud golems, pumpkin lord, doors/walls, penguins): bone-dust/wood-chip clumps spray and fall in 0.6 s; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200024D": {
+   "note": "Tan chip/dust splatter, medium hit (15 bits; undead - liches, revenants - mud golems, pumpkin lord, doors/walls, penguins): bone-dust/wood-chip clumps spray and fall in 0.6 s; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200024E": {
+   "note": "Tan chip/dust splatter, heavy hit (20 bits; undead - liches, revenants - mud golems, pumpkin lord, doors/walls, penguins): bone-dust/wood-chip clumps spray and fall in 0.6 s; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200024F": {
+   "note": "Tan chip/dust splatter, heaviest hit (25 bits; undead - liches, revenants - mud golems, pumpkin lord, doors/walls, penguins): bone-dust/wood-chip clumps spray and fall in 0.6 s; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000548": {
+   "note": "Tan chip splatter for big bodies, lightest hit (5 bits, spawned on a 0.4 m shell; Eyestalk of T'thuun, Forge Golem, Sath'tik Tendril...): stone/metal chips spray and fall; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000549": {
+   "note": "Tan chip splatter for big bodies, light hit (10 bits, spawned on a 0.4 m shell; Eyestalk of T'thuun, Forge Golem, Sath'tik Tendril...): stone/metal chips spray and fall; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200054A": {
+   "note": "Tan chip splatter for big bodies, medium hit (15 bits, spawned on a 0.4 m shell; Eyestalk of T'thuun, Forge Golem, Sath'tik Tendril...): stone/metal chips spray and fall; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200054B": {
+   "note": "Tan chip splatter for big bodies, heavy hit (20 bits, spawned on a 0.4 m shell; Eyestalk of T'thuun, Forge Golem, Sath'tik Tendril...): stone/metal chips spray and fall; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200054C": {
+   "note": "Tan chip splatter for big bodies, heaviest hit (25 bits, spawned on a 0.4 m shell; Eyestalk of T'thuun, Forge Golem, Sath'tik Tendril...): stone/metal chips spray and fall; refiled debris, crisp, instant, lit 0.85",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x320007E5": {
+   "note": "Unattributed spew (head part 8, with green gas 0x0800007E): tan bile/mud blobs sprayed 0.6-1.8 m/s for 0.5 s, swelling 0.1->4.1 (to 1.3 m); refiled liquid, soft 0.15 m, lit 0.7",
+   "params": {
+    "sat": 1.05,
+    "soft": 0.15,
+    "nearFade": 0.4,
+    "lit": 0.7
+   },
+   "family": "liquid"
+  },
+  "0x320008DE": {
+   "note": "Mystical Mug ale froth: tan droplets bubbling 0.6-1 m up from the mug rim and falling back, persistent; refiled liquid, lit 0.7",
+   "params": {
+    "sat": 1.05,
+    "fadeIn": 0.02,
+    "lit": 0.7
+   },
+   "family": "liquid"
+  },
+  "0x320008DF": {
+   "note": "Mystical Mug ale surface: one still 0.95 m tan blob at 1.25 m respawned every 10 s; refiled liquid, fades kept at 0 (single respawning particle would blink), lit 0.7, tiny soft edge",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "soft": 0.05,
+    "lit": 0.7
+   },
+   "family": "liquid"
+  },
+  "0x32000162": {
+   "note": "Acid Stream impact (lowest tier; also Thorn-bolt table 0x340000d6): 13 green acid drops splashed out 2-5 m/s, falling and shrinking in 1.5 s; instant, richer green, lit 0.5 so the acid stays vivid at night",
+   "params": {
+    "sat": 1.1,
+    "fadeIn": 0.0,
+    "lit": 0.5
+   }
+  },
+  "0x32000163": {
+   "note": "Acid Stream impact (mid tier): 30-drop acid splash; instant, richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "fadeIn": 0.0,
+    "lit": 0.5
+   }
+  },
+  "0x32000164": {
+   "note": "Acid Stream impact (top tier) - also Infectious/Blood Curse Rat Create/Destroy poof: 50-drop acid splash; instant, richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "fadeIn": 0.0,
+    "lit": 0.5
+   }
+  },
+  "0x320001F3": {
+   "note": "BreatheAcid cone (shared by ~25 breathers: statues, carenzi, chickens...): 20 acid drops spat forward and curling back, growing 0.1->1 in 1 s with green gas 0x32000298; richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "lit": 0.5
+   }
+  },
+  "0x320001FB": {
+   "note": "Red Bull of Sanamar BreatheAcid: acid drops spat along the reversed model axis, growing 0.1->1 with green gas; richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "lit": 0.5
+   }
+  },
+  "0x32000275": {
+   "note": "Acid weapon drip (Acid axes/quarrels/ono, ~113 setups; Flaming Club BreatheAcid): green drops falling off the blade, retail starts 50% opaque - fade-in hides the pop; lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "fadeIn": 0.06,
+    "lit": 0.5
+   }
+  },
+  "0x3200073B": {
+   "note": "Muck Ball (and static muck 0x02000f05, with bees): slime drops dribbling off under gravity, retail starts 40% opaque; fade-in, natural lit 0.7",
+   "params": {
+    "fadeIn": 0.05
+   }
+  },
+  "0x32000749": {
+   "note": "Acid Olthoi Axe / Olthoi Acid Katar drip: green drops falling off the blade from 50% opacity; fade-in, richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "fadeIn": 0.06,
+    "lit": 0.5
+   }
+  },
+  "0x3200075C": {
+   "note": "Olthoi Lacerator / Hive Piercer BreatheAcid: acid drops sprayed forward-down 0-2.4 m/s, growing 0.1->1 with green gas; richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "lit": 0.5
+   }
+  },
+  "0x3200076A": {
+   "note": "Olthoi Hive Warrior / Paradox Olthoi BreatheAcid: acid drops spat forward and curling, growing 0.1->1 in 1 s; richer green, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "lit": 0.5
+   }
+  },
+  "0x3200080B": {
+   "note": "Unattributed acid spew (with green gas 0x3200081D): drops swelling 0.1->3.4 (to 0.67 m) as they fly 0-3 m/s; richer green, soft 6 cm, lit 0.5",
+   "params": {
+    "sat": 1.1,
+    "soft": 0.06,
+    "lit": 0.5
+   }
+  },
+  "0x320002A8": {
+   "note": "Olthoi green ichor splatter, light hit (10 drops; queens, warriors, larvae, rippers...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x320002A9": {
+   "note": "Olthoi green ichor splatter, medium hit (15 drops; queens, warriors, larvae, rippers...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x320002AA": {
+   "note": "Olthoi green ichor splatter, heavy hit (20 drops; queens, warriors, larvae, rippers...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x320002AB": {
+   "note": "Olthoi green ichor splatter, heaviest hit (25 drops; queens, warriors, larvae, rippers...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x320002B4": {
+   "note": "Olthoi green ichor splatter, lightest hit (5 drops; queens, warriors, larvae, rippers...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000716": {
+   "note": "Mad Cow mouth slobber: green drool dripping from under the head (part 18), opacity rising to full; refiled liquid, fade-in/out kept so drips don't pop, lit 0.6",
+   "params": {
+    "lit": 0.6
+   },
+   "family": "liquid"
+  },
+  "0x32000717": {
+   "note": "Mad Cow glowing green eye (right, head part 18): stacked near-still green orb respawning every 0.14 s; brighter, unlit so it glows at night",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x32000718": {
+   "note": "Mad Cow glowing green eye (left): stacked near-still green orb; brighter, unlit glow",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x32000719": {
+   "note": "Mad Cow glowing green snout point (front of head): stacked green orb; brighter, unlit glow",
+   "params": {
+    "gain": 1.15,
+    "lit": 0.0
+   }
+  },
+  "0x32000663": {
+   "note": "Toxic storm cloud (static 0x02000bce/0x02001c1b, with green nebula + purple lightning): 36 green goo-swirl clouds orbiting slowly, shrinking 2.9 m->0.15 m over 15 s while fading in to 25%; refiled gas_alpha, dissolves, 1.8 s fade-out instead of popping at 25%, soft 0.7 m, lit 0.6",
+   "params": {
+    "fadeOut": 0.12,
+    "erode": 0.2,
+    "soft": 0.7,
+    "nearFade": 1.5,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A58": {
+   "note": "Green swamp miasma (static 0x02001c1a/0x02001c1b, with green halo): parent-local goo-swirl clouds orbiting, 3.6 m->0.15 m over 15 s fading in to 35%; refiled gas_alpha, dissolves, 1.8 s fade-out, soft 0.9 m, lit 0.6",
+   "params": {
+    "fadeOut": 0.12,
+    "erode": 0.2,
+    "soft": 0.9,
+    "nearFade": 1.9,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A5B": {
+   "note": "Acid Stream Launch trail (tier 1, table 0x340000d4): faint 25%-opaque green vapour blobs shed per metre, sagging and shrinking over 1.5 s; refiled gas_alpha, short fade-in, wisps away, soft 0.3 m, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.3,
+    "nearFade": 0.6,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A5C": {
+   "note": "Acid Stream Launch trail (tier 2): faint green vapour blobs per metre (1.0 start scale); refiled gas_alpha, fade-in, wisps away, soft 0.4 m, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.4,
+    "nearFade": 0.8,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A5D": {
+   "note": "Acid Stream Launch trail (tier 3): faint green vapour blobs per metre (1.2 start scale); refiled gas_alpha, fade-in, wisps away, soft 0.5 m, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.5,
+    "nearFade": 1.0,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A61": {
+   "note": "Thorn Bolt Launch trail (tier 1, table 0x340000d6, with autumn leaves): faint 20%-opaque green sap vapour per metre; refiled gas_alpha, fade-in, wisps away, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.12,
+    "nearFade": 0.3,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A62": {
+   "note": "Thorn Bolt Launch trail (tier 2): faint green sap vapour per metre; refiled gas_alpha, fade-in, wisps away, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.2,
+    "nearFade": 0.45,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000A63": {
+   "note": "Thorn Bolt Launch trail (tier 3): faint green sap vapour per metre; refiled gas_alpha, fade-in, wisps away, lit 0.6",
+   "params": {
+    "fadeIn": 0.05,
+    "erode": 0.18,
+    "soft": 0.3,
+    "nearFade": 0.6,
+    "lit": 0.6
+   },
+   "family": "gas_alpha"
+  },
+  "0x32000227": {
+   "note": "Spectral Fountain / crystal formations / static fountains central jet: bubbly water shot 3 m/s up and falling back, opacity rising to full then popping; water glint twinkle, 0.12 fade-out, soft 0.12 m (was 0.4 - ate the drops near the basin)",
+   "params": {
+    "fadeOut": 0.12,
+    "soft": 0.12
+   }
+  },
+  "0x3200076B": {
+   "note": "Freezing Pool / Freezing Elemental Pool jet (with blue nebula): bubbly water jetting 3 m/s and falling back; glint twinkle, 0.12 fade-out, soft 0.1 m",
+   "params": {
+    "fadeOut": 0.12,
+    "soft": 0.1
+   }
+  },
+  "0x320007AA": {
+   "note": "Small bubbler (static 0x02001027, with sparkles): bubbly water popping up 1.4 m/s and falling in 0.7 s; glint twinkle, rounded pop-out, soft 0.1 m",
+   "params": {
+    "soft": 0.1
+   }
+  },
+  "0x32000818": {
+   "note": "Four-spout fountain (static 0x0200123a), +y spout: bubbly water arcing sideways 0.4-1 m/s and falling, full opacity; glint twinkle, fade-out hides the pop",
+   "params": {
+    "soft": 0.06
+   }
+  },
+  "0x32000819": {
+   "note": "Four-spout fountain (static 0x0200123a), -y spout arc; glint twinkle, fade-out hides the pop",
+   "params": {
+    "soft": 0.06
+   }
+  },
+  "0x3200081A": {
+   "note": "Four-spout fountain (static 0x0200123a), -x spout arc; glint twinkle, fade-out hides the pop",
+   "params": {
+    "soft": 0.06
+   }
+  },
+  "0x3200081B": {
+   "note": "Four-spout fountain (static 0x0200123a), +x spout arc; glint twinkle, fade-out hides the pop",
+   "params": {
+    "soft": 0.06
+   }
+  },
+  "0x32000241": {
+   "note": "Dark grey ichor splatter, lightest hit (5 drops; Void Knights, Black Ferah, Margul, Mukkir, Griffons...): black-grey drops spray and fall in 0.6 s; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000242": {
+   "note": "Dark grey ichor splatter, light hit (10 drops; Void Knights, Black Ferah, Margul, Mukkir, Griffons...): black-grey drops spray and fall in 0.6 s; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000243": {
+   "note": "Dark grey ichor splatter, medium hit (15 drops; Void Knights, Black Ferah, Margul, Mukkir, Griffons...): black-grey drops spray and fall in 0.6 s; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000244": {
+   "note": "Dark grey ichor splatter, heavy hit (20 drops; Void Knights, Black Ferah, Margul, Mukkir, Griffons...): black-grey drops spray and fall in 0.6 s; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000245": {
+   "note": "Dark grey ichor splatter, heaviest hit (25 drops; Void Knights, Black Ferah, Margul, Mukkir, Griffons...): black-grey drops spray and fall in 0.6 s; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200059A": {
+   "note": "Arcane star-vortex scenery (0x020009d0/0x02000f11, with blue/red/magenta stars and sun discs): 50 grey spheres spiralling up and inward, shrinking 2 m->3 cm while fading in to 75%; as generated (soft, slight light response)"
+  },
+  "0x320005D7": {
+   "note": "Grey oil/sawdust splatter, lightest hit (5 bits; Shopkeeper, Gear Hunter, Marionettes - constructs): grey bits spray and fall; refiled blood, instant, lit 0.6",
+   "params": {
+    "gain": 0.9,
+    "sat": 1.0,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000A00": {
+   "note": "Health-damage bolt impact (lowest tier; Explode tables 0x340000cf/0x340000d0 - Harm/Health Ring Bolt): 13 blood drops splashed out 2-5 m/s, falling and shrinking in 1.5 s; instant hit, darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "lit": 0.6
+   }
+  },
+  "0x32000A01": {
+   "note": "Health-damage bolt impact (mid tier): 30-drop blood splash; instant, darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "lit": 0.6
+   }
+  },
+  "0x32000A02": {
+   "note": "Health-damage bolt impact (top tier): 50-drop blood splash; instant, darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "lit": 0.6
+   }
+  },
+  "0x32000A03": {
+   "note": "Health bolt Launch trail (tier 1, table 0x340000cf): blood drops shed per metre, thrown back and falling, full opacity for 1.5 s; 0.23 fade-out hides the pop, darkening, lit 0.6",
+   "params": {
+    "lit": 0.6
+   }
+  },
+  "0x32000A04": {
+   "note": "Health bolt Launch trail (tier 2): larger drops 1.5->0.5 per metre at full opacity; 0.23 fade-out, darkening, lit 0.6",
+   "params": {
+    "lit": 0.6
+   }
+  },
+  "0x32000A05": {
+   "note": "Health bolt Launch trail (tier 3): big drops 3->0.1 per metre, retail fades out; darkening, lit 0.6",
+   "params": {
+    "lit": 0.6
+   }
+  },
+  "0x32000A06": {
+   "note": "Health Ring Bolt / Missile Launch trail (table 0x340000d0, with red star sparkles): blood drops per metre, falling gently, retail fades; darkening, lit 0.6",
+   "params": {
+    "lit": 0.6
+   }
+  },
+  "0x32000142": {
+   "note": "Cave drips / drizzle (static 0x02000407): sparse white drops falling 6 m/s from a 1-12 m disc for 3.3 s; erosion off (hard clip sprite), soft 0.1 m, lit 0.6",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000143": {
+   "note": "Cave drips / drizzle (static 0x02000406): sparse white drops falling 4 m/s from a 1.7-12 m disc for 5 s; erosion off, lit 0.6",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000451": {
+   "note": "Driving rain (static 0x02000703): ~100 live drops slanting down 15 m/s over a 30 m radius, 1.4 s; erosion off, 0.25 fade-out near the ground, lit 0.6",
+   "params": {
+    "erode": 0.0
+   }
+  },
+  "0x32000850": {
+   "note": "Winter Orb snow-globe flakes (outer ring): tiny 2 cm white flecks swirling round the orb, 3 s at full opacity; refiled snow, glint twinkle, fades, no soft (too small), lit 0.5",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.0,
+    "nearFade": 0.1,
+    "lit": 0.5,
+    "twinkle": 0.15,
+    "flickerHz": 6.0,
+    "fadeIn": 0.03,
+    "fadeOut": 0.1
+   },
+   "family": "snow"
+  },
+  "0x32000853": {
+   "note": "Winter Orb snow-globe flakes (inner, rising): 1.5 cm flecks orbiting the orb; refiled snow, glint twinkle, fades, lit 0.5",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.0,
+    "nearFade": 0.1,
+    "lit": 0.5,
+    "twinkle": 0.15,
+    "flickerHz": 6.0,
+    "fadeIn": 0.03,
+    "fadeOut": 0.1
+   },
+   "family": "snow"
+  },
+  "0x32000854": {
+   "note": "Winter Orb snow-globe flakes (inner, sinking): 1.5 cm flecks orbiting the orb; refiled snow, glint twinkle, fades, lit 0.5",
+   "params": {
+    "erode": 0.0,
+    "soft": 0.0,
+    "nearFade": 0.1,
+    "lit": 0.5,
+    "twinkle": 0.15,
+    "flickerHz": 6.0,
+    "fadeIn": 0.03,
+    "fadeOut": 0.1
+   },
+   "family": "snow"
+  },
+  "0x32000031": {
+   "note": "Waterfall spout (static 0x020003e4): 13 m blue water sheets thrown 8.5 m/s out and dropping under 15 m/s^2, 2.2 s; gentle shimmer, soft 1.5 m, near fade 2 m, lit 0.55 (as generated)"
+  },
+  "0x320004A2": {
+   "note": "Waterfall spout (static 0x02000859, paired with spray streaks 0x320004A3): 11 m sheets thrown 11 m/s out, 6->9 growth, 3 s; shimmer, soft 1.5 m, lit 0.55 (as generated)"
+  },
+  "0x320004A4": {
+   "note": "Waterfall spout (static 0x0200085a): 11 m sheets thrown 11 m/s and dropping hard, 1.8 s; shimmer, soft 1.5 m, lit 0.55 (as generated)"
+  },
+  "0x3200063A": {
+   "note": "Fountain spout arc (static 0x02000b4d, paired with foam bubbles 0x32000639): 2->6 m water sheets thrown 8 m/s sideways, 1 s; shimmer, soft, lit 0.55 (as generated)"
+  },
+  "0x3200063B": {
+   "note": "Waterfall spout (static 0x02000b4e): 9 m sheets thrown 8.5 m/s, 4->9 growth, 2.2 s; shimmer, soft 1.5 m, lit 0.55 (as generated)"
+  },
+  "0x32000246": {
+   "note": "Blue blood splatter, lightest hit (5 drops; Remoran, Grievvers, Ruschk Totem Guardian...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000247": {
+   "note": "Blue blood splatter, light hit (10 drops; Remoran, Grievvers, Ruschk Totem Guardian...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000248": {
+   "note": "Blue blood splatter, medium hit (15 drops; Remoran, Grievvers, Ruschk Totem Guardian...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000249": {
+   "note": "Blue blood splatter, heavy hit (20 drops; Remoran, Grievvers, Ruschk Totem Guardian...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200024A": {
+   "note": "Blue blood splatter, heaviest hit (25 drops; Remoran, Grievvers, Ruschk Totem Guardian...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.82,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000250": {
+   "note": "Cyan watery splatter, lightest hit (5 drops; Niffis, Sleech, Water Golems): water drops spray and fall in 0.6 s; refiled blood (liquid splatter), instant, lit 0.6",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tint1": [
+     0.85,
+     0.88,
+     0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000251": {
+   "note": "Cyan watery splatter, light hit (10 drops; Niffis, Sleech, Water Golems): water drops spray and fall in 0.6 s; refiled blood (liquid splatter), instant, lit 0.6",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tint1": [
+     0.85,
+     0.88,
+     0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000252": {
+   "note": "Cyan watery splatter, medium hit (15 drops; Niffis, Sleech, Water Golems): water drops spray and fall in 0.6 s; refiled blood (liquid splatter), instant, lit 0.6",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tint1": [
+     0.85,
+     0.88,
+     0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000253": {
+   "note": "Cyan watery splatter, heavy hit (20 drops; Niffis, Sleech, Water Golems): water drops spray and fall in 0.6 s; refiled blood (liquid splatter), instant, lit 0.6",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tint1": [
+     0.85,
+     0.88,
+     0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000254": {
+   "note": "Cyan watery splatter, heaviest hit (25 drops; Niffis, Sleech, Water Golems): water drops spray and fall in 0.6 s; refiled blood (liquid splatter), instant, lit 0.6",
+   "params": {
+    "gain": 1.0,
+    "sat": 1.0,
+    "tint1": [
+     0.85,
+     0.88,
+     0.9
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200025A": {
+   "note": "Orange blood splatter, lightest hit (5 drops; Tuskers, Gromnies, Zefirs, Lithos/Tiatus raiders...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.78,
+     0.76
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200025B": {
+   "note": "Orange blood splatter, light hit (10 drops; Tuskers, Gromnies, Zefirs, Lithos/Tiatus raiders...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.78,
+     0.76
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200025C": {
+   "note": "Orange blood splatter, medium hit (15 drops; Tuskers, Gromnies, Zefirs, Lithos/Tiatus raiders...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.78,
+     0.76
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200025D": {
+   "note": "Orange blood splatter, heavy hit (20 drops; Tuskers, Gromnies, Zefirs, Lithos/Tiatus raiders...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.78,
+     0.76
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200025E": {
+   "note": "Orange blood splatter, heaviest hit (25 drops; Tuskers, Gromnies, Zefirs, Lithos/Tiatus raiders...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.78,
+     0.76
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x32000264": {
+   "note": "White ectoplasm/snow-chunk splatter, heaviest hit (25 bits; spirits, Book of Eibhil, banners, totems, snowmen): white splats spray and fall in 0.6 s; instant, erosion off (hard clip sprite), small soft/near fade, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "erode": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000265": {
+   "note": "White ectoplasm/snow-chunk splatter, lightest hit (5 bits; spirits, Book of Eibhil, banners, totems, snowmen) (also Summoning Stone Launch): white splats spray and fall in 0.6 s; instant, erosion off (hard clip sprite), small soft/near fade, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "erode": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000266": {
+   "note": "White ectoplasm/snow-chunk splatter, light hit (10 bits; spirits, Book of Eibhil, banners, totems, snowmen): white splats spray and fall in 0.6 s; instant, erosion off (hard clip sprite), small soft/near fade, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "erode": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000267": {
+   "note": "White ectoplasm/snow-chunk splatter, medium hit (15 bits; spirits, Book of Eibhil, banners, totems, snowmen): white splats spray and fall in 0.6 s; instant, erosion off (hard clip sprite), small soft/near fade, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "erode": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000268": {
+   "note": "White ectoplasm/snow-chunk splatter, heavy hit (20 bits; spirits, Book of Eibhil, banners, totems, snowmen): white splats spray and fall in 0.6 s; instant, erosion off (hard clip sprite), small soft/near fade, lit 0.6",
+   "params": {
+    "fadeIn": 0.0,
+    "erode": 0.0,
+    "soft": 0.03,
+    "nearFade": 0.1
+   }
+  },
+  "0x32000269": {
+   "note": "Purple blood splatter, lightest hit (5 drops; Drudges, Moars, Mosswarts, Aun...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.8,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200026A": {
+   "note": "Purple blood splatter, light hit (10 drops; Drudges, Moars, Mosswarts, Aun...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.8,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200026B": {
+   "note": "Purple blood splatter, medium hit (15 drops; Drudges, Moars, Mosswarts, Aun...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.8,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200026C": {
+   "note": "Purple blood splatter, heavy hit (20 drops; Drudges, Moars, Mosswarts, Aun...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.8,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200026D": {
+   "note": "Purple blood splatter, heaviest hit (25 drops; Drudges, Moars, Mosswarts, Aun...): drops spray and fall in 0.6 s; refiled blood, instant, darkens, lit 0.6",
+   "params": {
+    "gain": 0.95,
+    "sat": 1.05,
+    "tint1": [
+     0.82,
+     0.8,
+     0.82
+    ],
+    "fadeIn": 0.0,
+    "fadeOut": 0.06,
+    "lit": 0.6
+   },
+   "family": "blood"
+  },
+  "0x3200053C": {
+   "note": "Scarecrow straw splatter, lightest hit (5 straw tufts; Vicious/Villainous/Vile Scarecrow): splinter bundles spray and fall in 0.6 s; crisp debris as generated (no spin - straw reaches the quad corners), lit 0.85"
+  },
+  "0x3200053D": {
+   "note": "Scarecrow straw splatter, light hit (10 straw tufts; Vicious/Villainous/Vile Scarecrow): splinter bundles spray and fall in 0.6 s; crisp debris as generated (no spin - straw reaches the quad corners), lit 0.85"
+  },
+  "0x3200053E": {
+   "note": "Scarecrow straw splatter, medium hit (15 straw tufts; Vicious/Villainous/Vile Scarecrow): splinter bundles spray and fall in 0.6 s; crisp debris as generated (no spin - straw reaches the quad corners), lit 0.85"
+  },
+  "0x3200053F": {
+   "note": "Scarecrow straw splatter, heavy hit (20 straw tufts; Vicious/Villainous/Vile Scarecrow): splinter bundles spray and fall in 0.6 s; crisp debris as generated (no spin - straw reaches the quad corners), lit 0.85"
+  },
+  "0x32000540": {
+   "note": "Scarecrow straw splatter, heaviest hit (25 straw tufts; Vicious/Villainous/Vile Scarecrow): splinter bundles spray and fall in 0.6 s; crisp debris as generated (no spin - straw reaches the quad corners), lit 0.85"
+  },
+  "0x32000A52": {
+   "note": "Autumn leaf whirl (static 0x02001c25/26, with warm red glows): 50 orange-red leaf clusters (0.44 m) orbiting the spot for 5 s; tumble kept, softer 0.25 s fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000A53": {
+   "note": "Autumn leaf whirl, inner ring: 20 smaller orange leaf clusters (0.3 m) orbiting tighter, 4 s; tumble, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000A5E": {
+   "note": "Thorn Bolt Launch trail (tier 1, table 0x340000d6): autumn leaves shed per metre, thrown back and falling, from 50% opacity fading out over 1 s; fade-in hides the pop, tumble, lit 0.85",
+   "params": {
+    "fadeIn": 0.08
+   }
+  },
+  "0x32000A5F": {
+   "note": "Thorn Bolt Launch trail (tier 2): 2x autumn leaves shed per metre; fade-in, tumble, lit 0.85",
+   "params": {
+    "fadeIn": 0.08
+   }
+  },
+  "0x32000A60": {
+   "note": "Thorn Bolt Launch trail (tier 3): 3x autumn leaves shed per metre; fade-in, tumble, lit 0.85",
+   "params": {
+    "fadeIn": 0.08
+   }
+  },
+  "0x32000139": {
+   "note": "Fog bank (static 0x02000400): one still 10 m white cloud at 20% opacity fading out over its 999 s life (generator called it sky only for the long life); refiled smoke_light, lit 0.6 so it isn't glowing white at night, soft 2 m, near fade 3 m",
+   "params": {
+    "lit": 0.6,
+    "soft": 2.0,
+    "nearFade": 3.0
+   },
+   "family": "smoke_light"
+  },
+  "0x3200013E": {
+   "note": "Rolling fog clouds (static 0x02000403): 2-3 drifting 10-11 m white clouds born at 25% opacity, fading out over ~6 s; refiled smoke_light, fade-in removes the 25% pop-in, erosion off (hard clip sprite), soft 2 m, near fade 3 m, lit 0.6",
+   "params": {
+    "fadeIn": 0.15,
+    "erode": 0.0,
+    "soft": 2.0,
+    "nearFade": 3.0,
+    "lit": 0.6
+   },
+   "family": "smoke_light"
+  },
+  "0x32000140": {
+   "note": "Rolling fog clouds (static 0x020003fe): drifting 10-11 m white clouds born at 50% opacity; refiled smoke_light, 0.2 fade-in removes the pop-in, erosion off, soft 2 m, near fade 3 m, lit 0.6",
+   "params": {
+    "fadeIn": 0.2,
+    "erode": 0.0,
+    "soft": 2.0,
+    "nearFade": 3.0,
+    "lit": 0.6
+   },
+   "family": "smoke_light"
+  },
+  "0x3200048E": {
+   "note": "Water Golem / Aqueous Knight / Water Guardian limb aura (9 hooks): blue bubble clusters 0.1->0.6 orbiting and sinking around each limb, 1 s; water glint twinkle, soft, lit 0.55 (as generated)"
+  },
+  "0x3200048F": {
+   "note": "Water Golem / Water Elemental body aura: large bubble cluster 0.1->1.5 (1.7 m) orbiting the torso, 2 s; glint twinkle, soft 0.4 m, lit 0.55 (as generated)"
+  },
+  "0x32000971": {
+   "note": "Coral Shield: small blue bubbles shimmering on a 0.2 m ring over the shield face, 0.25->0.1 in 1 s; glint twinkle, lit 0.55 (as generated)"
+  },
+  "0x32000578": {
+   "note": "Autumn leaf gust (static 0x020009b2, with sound): gold leaves swirling in a loose orbit for 3 s (generator called this teardrop a crystal shard - it is a veined leaf); refiled leaves, fade-in/out, lit 0.85, no spin (shape reaches the quad edge)",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x3200057E": {
+   "note": "Autumn leaf gust (0x020009b2): gold leaves blown out and tumbling end over end (retail 3D roll) for 5 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x32000581": {
+   "note": "Autumn leaf gust (0x020009b2): gold leaves blown out and rolling for 4 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x320005A8": {
+   "note": "Sword of Lost Hope / Mukkir Aspect of Grael / Bloodstone fragments drip: blood drops falling off, 1->0.1 shrink, retail starts 50% opaque - fade-in hides the pop; darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.06,
+    "lit": 0.6
+   }
+  },
+  "0x32000743": {
+   "note": "Weeping weapons (Atlatl/Axe/Bow/Dagger/Claw/Mace... 16 setups, with red halo): tiny blood tears dripping off the weapon from 50% opacity; fade-in, darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.06,
+    "lit": 0.6
+   }
+  },
+  "0x320008CD": {
+   "note": "Bloodstone Wands / Bloodstone Shards drip (with red halos): slow small blood drops 0.3->0.06 falling from 50% opacity; fade-in, darkening, lit 0.6",
+   "params": {
+    "fadeIn": 0.06,
+    "lit": 0.6
+   }
+  },
+  "0x3200000C": {
+   "note": "Waterfall mist curtain (static 0x020003c5): 16 huge additive mist streak sheets (6->20 m) drifting slowly down off a 2-4 m vertical disc, heavy overlap; gain 0.85 so the stack doesn't haze white, soft 2 m, near fade 3 m (camera inside the mist)",
+   "params": {
+    "gain": 0.85,
+    "soft": 2.0,
+    "nearFade": 3.0
+   }
+  },
+  "0x320004A3": {
+   "note": "Waterfall spray streaks (static 0x02000859 with sheet 0x320004A2): additive streaks thrown 10 m/s and falling, fading in to 60% then popping at the pool; 0.15 fade-out hides the pop, near fade 2.5 m",
+   "params": {
+    "fadeOut": 0.15,
+    "nearFade": 2.5
+   }
+  },
+  "0x3200021C": {
+   "note": "Brown dust/smoke wisps (static 0x02000469): persistent puffs rising 0.5-1 m/s, swelling 0.2->0.8, retail starts 30% opaque - fade-in hides the pop; dissolve, slow roll, lit 0.85",
+   "params": {
+    "fadeIn": 0.15
+   }
+  },
+  "0x3200021D": {
+   "note": "Brown dust haze (static 0x0200046a/0x0200046b): slow 1.2 m dust billows drifting sideways over 5 s from 30% opacity; fade-in, dissolve, slow roll, soft 0.74 m, lit 0.85",
+   "params": {
+    "fadeIn": 0.15
+   }
+  },
+  "0x32000478": {
+   "note": "Bees/flies buzzing over muck and middens (Muck Ball + 11 static setups): 8 cm bee sprites (palettised texture the catalog missed - it does draw) orbiting 5 s; refiled insect, short fades, unspun, lit 0.8",
+   "params": {
+    "fadeIn": 0.02,
+    "fadeOut": 0.05,
+    "nearFade": 0.1,
+    "lit": 0.8
+   },
+   "family": "insect"
+  },
+  "0x32000811": {
+   "note": "Carrion flies round Withered Drudge/Raider/Banderling/Tumerok undead (and static 0x020012b1): bee sprites orbiting 5 s; refiled insect, short fades, unspun, lit 0.8",
+   "params": {
+    "fadeIn": 0.02,
+    "fadeOut": 0.05,
+    "nearFade": 0.1,
+    "lit": 0.8
+   },
+   "family": "insect"
+  },
+  "0x32000479": {
+   "note": "Mighty Oak / Sparring / Blighted Oak Golem: brown oak leaves shed per metre as it walks, drifting off and fading over 1 s; refiled leaves, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x3200056E": {
+   "note": "Autumn leaf gust (0x020009b2): brown leaves swirling in the orbit for 3 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x320004B2": {
+   "note": "Bubbling hot pool (static 0x0200086b, with grey steam): pale bubble clusters churning and spinning in place, 0.1->0.8 over 1.5 s; glint twinkle, soft, lit 0.55 (as generated)"
+  },
+  "0x32000639": {
+   "note": "Fountain base foam (static 0x02000b4d, under spout 0x3200063A): 1.5->2.9 m bubble foam churning, 1.5 s; glint twinkle, soft 0.33 m, lit 0.55 (as generated)"
+  },
+  "0x32000555": {
+   "note": "Skeleton burst (static 0x02001743, script also fires skull t1 and ribcage t2 after sparks + spirit wisp): 3 long-bone meshes flung 2.4-6.4 m/s and falling, full opacity for 0.6 s; refiled debris, fade-out softens the pop, lit 0.85 (retail lit these non-luminous bones)",
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000559": {
+   "note": "Skeleton-burst bone variant (thinner 10-vert long bone, no script ref): flung 2.4-6.4 m/s and falling for 0.6 s; refiled debris, fade-out, lit 0.85",
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200057F": {
+   "note": "Autumn leaf gust (0x020009b2): red leaves blown out and rolling for 4 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x32000580": {
+   "note": "Autumn leaf gust (0x020009b2): red leaves blown out and tumbling end over end for 5 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x320005C8": {
+   "note": "Tusker/Olthoi Experiment Orb & logs: outer 0.7->0.8 m purple orb glow at 25% opacity, one parent-local particle respawned every 1 s; fades zeroed (generated fades would blink it every second)",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x320005C9": {
+   "note": "Experiment Orb inner core: 0.3 m purple orb at 75% opacity, respawned every 1 s; fades zeroed so it stays steady",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0
+   }
+  },
+  "0x3200061A": {
+   "note": "LayingofHands butterflies (player/creature emote): 50 orange two-wing butterfly meshes fluttering up and around for ~7 s, shrinking 0.4->0.1; refiled insect, fade-in/out instead of full-opacity pops, lit 0.8",
+   "params": {
+    "fadeIn": 0.03,
+    "fadeOut": 0.06,
+    "nearFade": 0.15,
+    "lit": 0.8
+   },
+   "family": "insect"
+  },
+  "0x32000638": {
+   "note": "LayingofHands butterflies, large: 50 butterflies growing 0.3->2 (to 0.9 m) as they flutter up and around for ~5 s; refiled insect, fade-in/out, near fade 0.4 m, lit 0.8",
+   "params": {
+    "fadeIn": 0.03,
+    "fadeOut": 0.06,
+    "nearFade": 0.4,
+    "lit": 0.8
+   },
+   "family": "insect"
+  },
+  "0x320007C7": {
+   "note": "Skeleton burst (script 0x33000e1b): 50 knuckle/joint bone meshes blown out 1.8-4.8 m/s and falling, retail fades out over 0.6 s; refiled debris, lit 0.85",
+   "params": {
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x320007C8": {
+   "note": "Skeleton burst (script 0x33000e1b): 50 more joint bones at 1.2-3.2 m/s, retail fade-out; refiled debris, lit 0.85",
+   "params": {
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x320007CC": {
+   "note": "Storm lightning sky flash (static 0x020010b4): 2 km translucent solid box for one frame with thunder; left neutral"
+  },
+  "0x320007CE": {
+   "note": "Storm lightning sky flash (static 0x020010b6): 2 km translucent solid box for one frame with thunder; left neutral"
+  },
+  "0x3200080C": {
+   "note": "Unattributed soot puff (with grey smoke 0x3200080D): 40 dark clouds bursting slowly, swelling 0.1->2.3 (to 1 m) from 40% opacity in ~0.4 s; refiled smoke_dark, soft 0.3 m, near fade 0.6 m, lit 0.85",
+   "params": {
+    "soft": 0.3,
+    "nearFade": 0.6,
+    "lit": 0.85
+   },
+   "family": "smoke_dark"
+  },
+  "0x32000857": {
+   "note": "Black Ball in a Stein: dark liquid droplets slopping over the rim and falling for 0.25 s (with magenta glow); refiled liquid, fade-out 0.3 instead of a full-opacity pop, lit 0.7",
+   "params": {
+    "fadeOut": 0.3,
+    "lit": 0.7
+   },
+   "family": "liquid"
+  },
+  "0x3200082F": {
+   "note": "Blood Golem / Hot Soup Elemental / Bloodstone body aura: big dark-red blood-bubble clusters (to 2.2 m) orbiting and sinking 0.4 m/s around the body; gain lifted 0.92->1.05 so the very dark texture reads as glossy red, darkens with age, lit 0.75",
+   "params": {
+    "gain": 1.05
+   }
+  },
+  "0x32000830": {
+   "note": "Blood Golem / Hot Soup Elemental limb aura (9 hooks): blood-bubble clusters 0.1->0.6 orbiting the limbs, 1 s; gain 1.05, darkens, lit 0.75",
+   "params": {
+    "gain": 1.05
+   }
+  },
+  "0x32000837": {
+   "note": "Wasp swarm (static 0x02001497) outer ring: yellow-orange wasps orbiting, 5 s at full opacity; short fade-in/out, never spun (orientation matters), lit 0.8 (as generated)"
+  },
+  "0x32000838": {
+   "note": "Wasp swarm (static 0x02001497) inner ring: wasps circling tighter and faster; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000839": {
+   "note": "Pale fly swarm (static 0x02001498) outer ring: grey-white flies orbiting 5 s; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000846": {
+   "note": "Pale fly swarm (static 0x02001498) inner ring: flies circling tighter and faster; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083A": {
+   "note": "Aggressive Swarm creature, outer ring: blue-winged insects orbiting the swarm body; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083B": {
+   "note": "Aggressive Swarm creature, inner ring: blue insects circling tight and fast; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083C": {
+   "note": "Dark fly swarm (static 0x0200149a) outer ring: black-grey flies orbiting 5 s; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083D": {
+   "note": "Dark fly swarm (static 0x0200149a) inner ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083E": {
+   "note": "Carcass Swarm / Putrid Swarm creature, outer ring: green carrion flies orbiting; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x3200083F": {
+   "note": "Carcass Swarm / Putrid Swarm creature, inner ring: green flies circling tight and fast; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000840": {
+   "note": "Red wasp swarm (static 0x0200149c) outer ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000841": {
+   "note": "Red wasp swarm (static 0x0200149c) inner ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000842": {
+   "note": "Purple insect swarm (static 0x0200149d) outer ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000843": {
+   "note": "Purple insect swarm (static 0x0200149d) inner ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000844": {
+   "note": "Golden wasp swarm (static 0x0200149e) outer ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000845": {
+   "note": "Golden wasp swarm (static 0x0200149e) inner ring; short fades, unspun, lit 0.8 (as generated)"
+  },
+  "0x32000927": {
+   "note": "Syrup Elemental / Pancake Golem body ooze (6 limb hooks): syrup blobs sliding down off the limbs, swelling 0.3->2 while fading to 30%; refiled liquid, rounded pop-out, soft 5 cm, lit 0.6",
+   "params": {
+    "sat": 1.05,
+    "fadeOut": 0.1,
+    "soft": 0.05,
+    "lit": 0.6
+   },
+   "family": "liquid"
+  },
+  "0x32000928": {
+   "note": "Syrup Elemental / Pancake Golem syrup drips: blobs falling from the body centre under gravity, opacity rising 50%->100% then popping; refiled liquid, 0.2 fade-out hides the pop, lit 0.6",
+   "params": {
+    "sat": 1.05,
+    "fadeOut": 0.2,
+    "soft": 0.05,
+    "lit": 0.6
+   },
+   "family": "liquid"
+  },
+  "0x32000A0B": {
+   "note": "Void creature body: a 1.7 m purple-nebula sphere shell rotating slowly at 30% opacity, lives 1 h (generator filed it sky only for the life); refiled vortex_dark, slow 0.5 Hz breathing pulse, nothing UV-based (sphere mesh)",
+   "params": {
+    "pulse": 0.06,
+    "pulseHz": 0.5
+   },
+   "family": "vortex_dark"
+  },
+  "0x32000A0E": {
+   "note": "Void creature body: second purple-nebula sphere shell counter-rotating inside the first, 30% opacity; refiled vortex_dark, desynced 0.5 Hz breathing pulse",
+   "params": {
+    "pulse": 0.06,
+    "pulseHz": 0.5
+   },
+   "family": "vortex_dark"
+  },
+  "0x32000A72": {
+   "note": "Green leaf whirl (static 0x02001c18/19, with green glows): 50 green leaf clusters (0.44 m) orbiting for 5 s; tumble, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000A73": {
+   "note": "Green leaf whirl, inner ring: 20 smaller green leaf clusters orbiting tighter, 4 s; tumble, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x320002A5": {
+   "note": "Falling tree leaves (static 0x020004be): green leaves drifting down 1 m/s from 2-6 m around the canopy, 10 s, one every 4 s; refiled leaves, fade-in/out so they don't pop at full opacity, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.06,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x320002C2": {
+   "note": "Storm lightning sky flash (static 0x0200058b / 0x02000ba6 / 0x020010b4 / 0x020010b6 via CallPES, thunder sounds at 0.5-20 s): a 2 km additive solid box lit for one frame; left neutral - any fade would erase the 1-frame flash"
+  },
+  "0x32000455": {
+   "note": "Backdrop nebula (static 0x02000714): three 1.9 km blue nebula sheets hung 450-700 m out, 20% opacity, ~55 min life; sky-scale scenery - left neutral (gaseous sheets stay subtle)"
+  },
+  "0x32000456": {
+   "note": "Backdrop nebula (static 0x02000714): 1.9 km green nebula sheets 450-700 m out, 20% opacity; left neutral"
+  },
+  "0x32000457": {
+   "note": "Backdrop nebula (static 0x02000714 / 0x020015a1): 2.2 km orange-red nebula sheets 450-700 m out, 20% opacity; left neutral"
+  },
+  "0x320004BD": {
+   "note": "CampingMastery emote easter egg: additive photo of a developer's face swirling up around the player, 0.1->3 growth in 1.5 s; picture sprite, left as authored"
+  },
+  "0x320004BE": {
+   "note": "CampingIneptitude emote easter egg: additive photo of a (grinning) developer's face swirling up, 0.1->3 in 1.5 s; picture sprite, left as authored"
+  },
+  "0x32000513": {
+   "note": "Giant red light beam (static 0x020008e7): an 82 m additive red beam sheet streaking away at speed, 5 s, re-emitted; sky-scale - left neutral"
+  },
+  "0x32000556": {
+   "note": "Skeleton burst: the skull mesh popping off and falling (one, 0.6 s); refiled debris, fade-out softens the pop, lit 0.85",
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000557": {
+   "note": "Skeleton burst: the ribcage mesh flung out and falling (one, t=2 s); refiled debris, fade-out, lit 0.85",
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000558": {
+   "note": "Skeleton-burst pelvis mesh (no script ref): flung out and falling for 0.6 s; refiled debris, fade-out, lit 0.85",
+   "params": {
+    "fadeOut": 0.15,
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x32000572": {
+   "note": "Autumn leaf gust (0x020009b2): orange leaves swirling in the orbit for 3 s; refiled leaves, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.04,
+    "fadeOut": 0.08,
+    "nearFade": 0.15,
+    "lit": 0.85
+   },
+   "family": "leaves"
+  },
+  "0x3200059F": {
+   "note": "Arcane star-vortex scenery (0x020009d0/0x02000f11): up to 12 still sun discs at 1 m with random opacity, swelling to random large sizes over ~7 s; near fade 1 m for the big ones",
+   "params": {
+    "nearFade": 1.0
+   }
+  },
+  "0x320005B8": {
+   "note": "Exploration Marker orrery: a tiny 8 cm cratered moon orbiting the marker, one particle per 12.6 s; left as authored (single respawning particle - fades would blink)"
+  },
+  "0x320005B9": {
+   "note": "Exploration Marker orrery: a tiny 6 cm glittering planet orbiting wider; left as authored"
+  },
+  "0x320005BF": {
+   "note": "Backdrop nebula (static 0x020009f4): 1.9 km magenta speckle nebula sheets 450-700 m out, 10% opacity; left neutral"
+  },
+  "0x32000615": {
+   "note": "Nightmare apparitions (static 0x02000b24): purple demon-face meshes flashing within 8 m, 1->2 growth, 40%->0 opacity; left as authored"
+  },
+  "0x32000616": {
+   "note": "Nightmare apparitions (static 0x02000b24, with demon face and shadow beast): a parrot-like bird-head mesh flickering in and out within 8 m for ~0.5 s at 40%->0 opacity; refiled misc, left as authored",
+   "family": "misc"
+  },
+  "0x32000617": {
+   "note": "Nightmare apparitions (static 0x02000b24): a dark red-eyed shadow-beast mesh swelling 1->5 (to 4 m) for ~0.5 s at 40%->0; left as authored"
+  },
+  "0x320006ED": {
+   "note": "Poltergeist whirl (static 0x02000e19): banded wooden keg meshes orbiting and tumbling up 0.15-0.6 m/s for 6 s; refiled misc (it draws - palettised texture), fade-in/out instead of popping, lit 0.85",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08,
+    "lit": 0.85
+   },
+   "family": "misc"
+  },
+  "0x320006EE": {
+   "note": "Poltergeist whirl: blue gold-banded book meshes circling and tumbling for ~6 s; refiled misc, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08,
+    "lit": 0.85
+   },
+   "family": "misc"
+  },
+  "0x320006EF": {
+   "note": "Poltergeist whirl: 1.1 m wooden plank/board mesh circling the other way and tumbling, 6.5 s; refiled misc, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08,
+    "lit": 0.85
+   },
+   "family": "misc"
+  },
+  "0x320006F0": {
+   "note": "Poltergeist whirl: silver metal pot/tankard meshes circling and tumbling, 4 s; refiled misc, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08,
+    "lit": 0.85
+   },
+   "family": "misc"
+  },
+  "0x320006F1": {
+   "note": "Poltergeist whirl: thin grey stone tablet meshes circling and tumbling, 6 s; refiled misc, fade-in/out, lit 0.85",
+   "params": {
+    "fadeIn": 0.06,
+    "fadeOut": 0.08,
+    "lit": 0.85
+   },
+   "family": "misc"
+  },
+  "0x320006F2": {
+   "note": "Haunting jump-scare (static 0x02000e1a, with sound, repeats every 60 s): a ghoul-face mesh appears and grows 2->3 while fading out over 2 s; refiled misc, left as authored (spectral, unlit)",
+   "family": "misc"
+  },
+  "0x320006F3": {
+   "note": "Haunting jump-scare companion burst: 12 dark-red streaked spectral sheets bursting out and swelling to 2.6 m in 0.8 s; refiled blood_mist, soft 0.3 m and near fade so the big quads don't slice walls/camera, unlit",
+   "params": {
+    "soft": 0.3,
+    "nearFade": 0.8
+   },
+   "family": "blood_mist"
+  },
+  "0x320007B5": {
+   "note": "Creature portrait panel (Olthoi-like creature; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007B6": {
+   "note": "Creature portrait panel (mossy shell creature; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007B7": {
+   "note": "Creature portrait panel (armoured shell creature; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007B8": {
+   "note": "Creature portrait panel (black shadow/void creature; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007B9": {
+   "note": "Creature portrait panel (pale bald humanoid; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007BA": {
+   "note": "Creature portrait panel (lugian/ogre-like brute; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007BB": {
+   "note": "Creature portrait panel (armoured reptilian; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x320007BC": {
+   "note": "Creature portrait panel (standing armoured figure; no script ref): a 1.4x2.9 m picture mesh shown once, fading from 50% to nothing over 5 s - a vision/bestiary display; refiled misc (palettised texture draws), left as authored",
+   "family": "misc"
+  },
+  "0x3200084D": {
+   "note": "Festival Lights (Halloween): a pumpkin mesh appears every ~5 s somewhere within 2 m, growing from nothing to 0.34 m over 3 s at 65-90% opacity, then popped; refiled misc, 0.6 s fade-out replaces the pop, lit 0.6",
+   "params": {
+    "fadeOut": 0.2,
+    "lit": 0.6
+   },
+   "family": "misc"
+  },
+  "0x3200084E": {
+   "note": "Festival Lights (Halloween): a bone/skull mesh appears every ~5 s, growing 0.2->1.4 over 3 s at 50-70% opacity; refiled misc, fade-out replaces the pop, lit 0.6",
+   "params": {
+    "fadeOut": 0.2,
+    "lit": 0.6
+   },
+   "family": "misc"
+  },
+  "0x3200087F": {
+   "note": "Backdrop void cloud (static 0x020015a1, with orange nebula): 2.2 km black spiky darkness sheets 450-700 m out at 80% opacity; left neutral"
+  },
+  "0x3200088A": {
+   "note": "Sky vortex (static 0x020015db): a 2 km blue swirling ring mesh rotating slowly overhead, effectively permanent at 40-50%; left neutral"
+  },
+  "0x32000892": {
+   "note": "Dread Figment: up to 20 pairs of glowing red eyes floating in the dark within 12 m, 8 s each, retail fade-out; 0.8 s fade-in so eyes open instead of popping, slow 0.6 Hz menace pulse, kept unlit",
+   "params": {
+    "fadeIn": 0.1,
+    "pulse": 0.08,
+    "pulseHz": 0.6
+   }
+  },
+  "0x3200089A": {
+   "note": "Dread vision sky flash (static 0x020015b4, with sound): a 400 m picture of a winged demon flashed for one frame; left neutral"
+  },
+  "0x320008F3": {
+   "note": "Orb of Eternal Frost: a 0.2 m snowflake sigil held in the orb, re-spawned every 0.03 s (continuous); refiled misc (palettised texture draws), left as authored - any fade or flicker would strobe",
+   "family": "misc"
+  },
+  "0x32000923": {
+   "note": "Sky vortex (static 0x020016b4-0x020016bc): a 2 km purple-black nebula ring mesh, 60 s, 20->50% opacity; left neutral"
+  },
+  "0x32000937": {
+   "note": "Gearknight bosses (Bronze Gauntlet Knight-Commander, Copper Cog Craftsmaster, Silver Scope Spymaster, Iron Blade Overseer, Atamarr) forge aura: yellow star sparks shooting up 2.5 m/s from a 1.5 m disc with red/orange/yellow glows, shrinking 0.5->0.2 in 1 s; refiled star (alpha spark), brighter, spark twinkle, unlit",
+   "params": {
+    "gain": 1.2,
+    "twinkle": 0.25,
+    "flickerHz": 8.0,
+    "lit": 0.0,
+    "fadeIn": 0.04
+   },
+   "family": "star"
+  },
+  "0x3200097D": {
+   "note": "Unattributed earth eruption (with gold sparkle field at 0.5 s, fires twice): rock-chunk meshes flung 2-5 m/s, growing 0.2->1 m and fading over 1.5 s; refiled debris, lit 0.85",
+   "params": {
+    "lit": 0.85
+   },
+   "family": "debris"
+  },
+  "0x3200099B": {
+   "note": "Harmonic Transference Field: a 5 m untextured translucent field shell (solid colour, 60% clear) pulsing 1.2->1.5 and fading over 2 s, 3 overlapping; no texture so left neutral"
+  },
+  "0x320009AE": {
+   "note": "Static sweep line (0x02001810-12): a thin 15 m untextured solid bar rotating slowly and fading 30%->0 over ~3 s; no texture, left neutral"
+  },
+  "0x320009C1": {
+   "note": "PK Arena Bonus Generator: rising, slowly turning cylinders of white light bars expanding 0.6->1.1 and fading 40%->0 over 6 s; picture mesh, left as authored"
+  },
+  "0x320009E1": {
+   "note": "Blood-mist field (static 0x02001a1c, 10 hooks): dark-red mist puffs rising 0.25-0.5 m/s from a 1-2 m ring, swelling 0.2->1 over 2 s; softer fade-in, stronger wisp dissolve, slow roll, soft 0.35 m, lit 0.7",
+   "params": {
+    "fadeIn": 0.12,
+    "erode": 0.22,
+    "spin": 0.1
+   }
+  },
+  "0x32000A54": {
+   "note": "Autumn leaf whirl, single orange leaves (0.24 m) orbiting among the clusters, 4 s; tumble, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000A71": {
+   "note": "Green leaf whirl, single green leaves (0.24 m) orbiting among the clusters, 4 s; tumble, fade-in, lit 0.85",
+   "params": {
+    "fadeIn": 0.05,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000A79": {
+   "note": "Wooden Top toy: the rune-carved spinning-top mesh itself, whirling about its axis (one particle respawned each second); no fades (would blink), lit 0.85 so the wooden toy takes scene light like retail",
+   "params": {
+    "lit": 0.85
+   }
+  }
+ }
+}

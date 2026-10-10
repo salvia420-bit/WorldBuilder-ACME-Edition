@@ -1,0 +1,216 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>particle fx preview</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+<style>html,body{margin:0;background:#000}</style>
+</head>
+<body>
+<script type="module">
+// Offline particle preview (driven by tools/particle-fx/preview.cjs). Renders
+// ONE emitter per cell with the real ParticleManager + `?particleFx` shader +
+// the DAT sprite texture, through the client's post chain: HDR half-float
+// buffer → late particle draw with the soft-depth hook → pmndrs Bloom
+// (0.55 / 1.1 / 0.1, mip blur) → Neutral tone mapping at exposure 5. Not the
+// game world: a calibrated backdrop (sky, stone wall, ground) at the same
+// display-referred levels the world is calibrated to.
+import * as THREE from "three";
+import { EffectComposer, RenderPass, EffectPass, BloomEffect, ToneMappingEffect, ToneMappingMode, Pass } from "postprocessing";
+
+const _q = new URLSearchParams(location.search);
+const W = Math.max(320, Math.min(1920, +(_q.get("w") || 800)));
+const H = Math.max(240, Math.min(1440, +(_q.get("h") || 600)));
+const fx = await import("/scene3d/particles/particle_fx.js");
+const PM = await import("/scene3d/particles/particle_manager.js");
+const TR = await import("/scene3d/particles/time_rng.js");
+const poc = await import("/scene3d/particles_over_clouds.js");
+const bx = await import("/scene3d/play_effect_burst_fx.js");
+
+const canvas = document.createElement("canvas");
+canvas.width = W; canvas.height = H;
+document.body.appendChild(canvas);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H, false);
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.toneMappingExposure = 5;
+const errors = [];
+renderer.debug.onShaderError = (gl, program, vs, fs) => errors.push(`${gl.getProgramInfoLog(program)} ${gl.getShaderInfoLog(vs)} ${gl.getShaderInfoLog(fs)}`);
+
+const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 4000);
+cam.up.set(0, 0, 1);
+
+// ---- backdrop (display-referred colours → raw HDR = linear / exposure) ----
+const s2l = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+const raw = (r, g, b) => new THREE.Color(s2l(r) / 5, s2l(g) / 5, s2l(b) / 5);
+const BG = {
+  day: { sky: raw(0.55, 0.70, 0.90), ground: raw(0.30, 0.36, 0.22), wall: raw(0.44, 0.41, 0.37) },
+  night: { sky: raw(0.025, 0.035, 0.075), ground: raw(0.03, 0.035, 0.04), wall: raw(0.05, 0.05, 0.055) },
+};
+const bgScene = new THREE.Scene();
+const groundMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const wallMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), groundMat);
+bgScene.add(ground);
+const wall = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), wallMat);
+wall.rotation.x = Math.PI / 2; // plane in X–Z
+bgScene.add(wall);
+
+// ---- composer ----
+const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
+const depthTex = new THREE.DepthTexture(W, H);
+depthTex.format = THREE.DepthFormat; depthTex.type = THREE.UnsignedIntType;
+composer.inputBuffer.depthTexture = depthTex;
+composer.outputBuffer.depthTexture = depthTex;
+const particleScene = new THREE.Scene();
+particleScene.matrixWorldAutoUpdate = true;
+class LateParticles extends Pass {
+  constructor() { super("LateParticles", particleScene, cam); this.needsSwap = false; }
+  render(r, inputBuffer) {
+    poc.runLateFxBefore(r, inputBuffer.depthTexture, cam, W, H);
+    const prev = r.autoClear;
+    r.autoClear = false;
+    r.setRenderTarget(inputBuffer);
+    r.render(particleScene, cam);
+    r.autoClear = prev;
+    poc.runLateFxAfter();
+  }
+}
+composer.addPass(new RenderPass(bgScene, cam));
+composer.addPass(new LateParticles());
+const bloom = new BloomEffect({ intensity: 0.55, luminanceThreshold: 1.1, luminanceSmoothing: 0.1, mipmapBlur: true, radius: 0.85 });
+bloom.luminancePass.resolution.scale = 0.5;
+composer.addPass(new EffectPass(cam, bloom, new ToneMappingEffect({ mode: ToneMappingMode.NEUTRAL })));
+composer.setSize(W, H);
+
+// ---- textures + geometry ----
+const texCache = new Map();
+const loader = new THREE.TextureLoader();
+function texFor(sid) {
+  if (texCache.has(sid)) return texCache.get(sid);
+  const p = new Promise((res) => loader.load(`/work/thumbs/${sid}.png`, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; res(t); }, undefined, () => res(null)));
+  texCache.set(sid, p);
+  return p;
+}
+function quadFor(size, uvb) {
+  // Particle GfxObj quads are authored in the local X–Z plane (normal −Y).
+  const sx = Math.max(size[0], size[1], 0.02), sz = Math.max(size[2], 0.02);
+  const g = new THREE.BufferGeometry();
+  const hx = sx / 2, hz = sz / 2;
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([
+    -hx, 0, -hz, hx, 0, -hz, hx, 0, hz, -hx, 0, -hz, hx, 0, hz, -hx, 0, hz]), 3));
+  const [u0, v0, u1, v1] = uvb || [0, 0, 1, 1];
+  g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array([u0, v1, u1, v1, u1, v0, u0, v1, u1, v0, u0, v0]), 2));
+  g.computeVertexNormals();
+  return g;
+}
+
+function setBackdrop(bg, extent) {
+  const b = BG[bg] || BG.day;
+  bgScene.background = b.sky;
+  groundMat.color.copy(b.ground);
+  wallMat.color.copy(b.wall);
+  const d = Math.max(3, extent * 1.6 + 1.5);
+  wall.scale.set(60 + extent * 6, 1, 30 + extent * 4);
+  wall.position.set(-(30 + extent * 3), d, 10 + extent * 2);
+}
+
+function lightFor(bg) {
+  fx.setParticleFxEnvironment(bg === "night" ? 1 : 0, false);
+  const l = fx.particleFxLightFor(bg === "night" ? 1 : 0, false);
+  fx.FX_UNIFORMS.uFxLight.value.set(l[0], l[1], l[2]);
+}
+
+function snap() { return canvas.toDataURL("image/jpeg", 0.9); }
+
+// seeded rng so FX-off and FX-on cells simulate the same particles
+function lcg(seed) { let s = seed >>> 0 || 1; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+
+window.__renderEmitter = async (c) => {
+  const tex = await texFor(c.surface);
+  const group = new THREE.Group();
+  particleScene.add(group);
+  const geom = quadFor(c.gfxSize, c.uvBounds);
+  const mgr = new PM.ParticleManager({
+    scene: group, instancing: true,
+    geometryFactory: () => geom,
+    materialFactory: () => {
+      const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+      if (c.additive) m.blending = THREE.AdditiveBlending;
+      m.userData = { __cacheOwned: true, surfaceTypeFlags: c.surfaceType >>> 0 };
+      return m;
+    },
+  });
+  setBackdrop(c.bg, c.extent);
+  cam.position.set(c.cam[0], c.cam[1], c.cam[2]);
+  cam.lookAt(c.look[0], c.look[1], c.look[2]);
+  cam.updateMatrixWorld(true);
+  window.liveScene3d = { cameraSwitcher: { activeCamera: cam }, camera: cam, quality: { preset: "high" } };
+  fx.setParticleFxLive(!!c.fx);
+  fx.setParticleAddCalK(c.addK == null ? null : c.addK);
+  TR.setRng(lcg(c.seed));
+  let t = 1000;
+  TR.setCurrentTime(() => t);
+  const parent = { position: new THREE.Vector3(0, 0, c.anchorZ), quaternion: new THREE.Quaternion() };
+  await mgr.addEmitter({ emitterInfo: { ...c.info, billboard: true }, parent });
+  const dt = 1 / 30;
+  const steps = Math.max(1, Math.round(c.simSec / dt));
+  for (let i = 0; i < steps; i++) {
+    t += dt;
+    if (c.moveSpeed) parent.position.x = c.moveStart + c.moveSpeed * (t - 1000);
+    mgr.tick();
+  }
+  fx.particleFxFrame(t * 1000);
+  lightFor(c.bg);
+  composer.render(0.016);
+  const img = snap();
+  // teardown
+  for (const id of [...mgr.particleTable.keys()]) mgr.destroyParticleEmitter(id);
+  group.traverse((o) => { if (o.isInstancedMesh) { try { o.material.dispose(); } catch (_) {} try { o.dispose(); } catch (_) {} } });
+  particleScene.remove(group);
+  geom.dispose();
+  TR.setCurrentTime(null);
+  return { img, live: mgr.getNumEmitters() };
+};
+
+const burstGeom = [new THREE.SphereGeometry(1.0, 32, 24), new THREE.TorusGeometry(0.5, 0.05, 16, 48), new THREE.BoxGeometry(1, 1, 1)];
+window.__renderBurst = async (c) => {
+  const group = new THREE.Group();
+  particleScene.add(group);
+  setBackdrop(c.bg, 1.5);
+  cam.position.set(0, -4.2, 1.6); cam.lookAt(0, 0, 1.0); cam.updateMatrixWorld(true);
+  const m = new THREE.MeshBasicMaterial({ color: c.color, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false,
+    side: c.shape === 1 ? THREE.DoubleSide : THREE.FrontSide });
+  if (c.fx) {
+    bx.applyBurstFxMaterial(m, c.shape, (x, y, z, w) => new THREE.Vector4(x, y, z, w));
+    bx.setBurstLook(m, c.look, 0.37);
+    bx.setBurstAge(m, c.age);
+    bx.burstFxFrame(4321);
+  }
+  m.opacity = (1 - c.age);
+  const mesh = new THREE.Mesh(burstGeom[c.shape], m);
+  mesh.position.set(0, 0, 1.0);
+  mesh.scale.setScalar(c.scale);
+  if (c.shape === 1) mesh.rotation.x = Math.PI / 2 - 0.35;
+  if (c.shape === 2) mesh.rotation.set(0.5, 0.3, Math.PI * 0.5 * c.age);
+  group.add(mesh);
+  fx.setParticleFxLive(true);
+  lightFor(c.bg);
+  composer.render(0.016);
+  const img = snap();
+  particleScene.remove(group);
+  m.dispose();
+  return { img };
+};
+
+window.__errors = () => errors.slice();
+window.__ready = true;
+</script>
+</body>
+</html>

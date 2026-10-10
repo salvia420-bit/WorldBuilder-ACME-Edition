@@ -1,0 +1,255 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>particle fx gpu smoke</title>
+<script type="importmap">
+{ "imports": { "three": "/node_modules/three/build/three.module.js" } }
+</script>
+</head>
+<body>
+<script type="module">
+// `?particleFx` GPU smoke (driven by test_particle_fx_gpu.cjs). A 64×64 WebGL2
+// canvas — no game world. Compiles the two FX programs and the soft-depth copy
+// with the renderer configured like the client (logarithmicDepthBuffer), then:
+//   A. neutral row 0 on the FX additive bucket == the stock additive bucket
+//   B. neutral row 0 on the FX alpha bucket    == the stock alpha bucket
+//   C. a real upgraded row changes pixels and produces no NaN/Inf
+//   D. the soft-depth copy decodes log depth back to linear view depth
+//   E. soft fade: a particle just in front of a wall fades, one far in front does not
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0 };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  window.location.search; // particle_fx reads location.search (default ON)
+  const fx = await import("/scene3d/particles/particle_fx.js");
+  const pm = await import("/scene3d/particles/particle_manager.js");
+  const prof = await import("/scene3d/particles/particle_fx_profiles.js");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 64; canvas.height = 64;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    R.errors.push(`shader error: ${gl.getProgramInfoLog(program)} | VS: ${gl.getShaderInfoLog(vs)} | FS: ${gl.getShaderInfoLog(fs)}`);
+  };
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+  R.logDepth = renderer.capabilities.logarithmicDepthBuffer === true;
+
+  // 8×8 gradient sprite: varying rgb + a radial alpha (exercises sat/core/erode paths).
+  const N = 8, px = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4, dx = x - 3.5, dy = y - 3.5, r = Math.sqrt(dx * dx + dy * dy) / 5;
+    px[i] = 255 * x / 7; px[i + 1] = 255 * y / 7; px[i + 2] = 180; px[i + 3] = Math.max(0, 255 * (1 - r));
+  }
+  const tex = new THREE.DataTexture(px, N, N);
+  tex.needsUpdate = true;
+
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+  cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+  const quad = new THREE.PlaneGeometry(2, 2);
+  const instGeom = quad.clone();
+  instGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(instGeom.attributes.position.count * 3).fill(1), 3));
+
+  const rt = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType, depthBuffer: true });
+  const read = () => { const b = new Float32Array(64 * 64 * 4); renderer.readRenderTargetPixels(rt, 0, 0, 64, 64, b); return b; };
+
+  function bucketMat(additive) {
+    const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    if (additive) {
+      m.blending = THREE.AdditiveBlending; m.depthWrite = false; m.opacity = 1; m.vertexColors = true;
+    } else {
+      pm._configureAlphaBucketMaterial(m);
+    }
+    m.forceSinglePass = true;
+    return m;
+  }
+  function draw(mat, rgb, z = 0) {
+    const scene = new THREE.Scene();
+    const im = new THREE.InstancedMesh(instGeom, mat, 1);
+    im.setMatrixAt(0, new THREE.Matrix4().makeTranslation(0, 0, z));
+    im.setColorAt(0, new THREE.Color());
+    im.instanceColor.array.set(rgb);
+    im.instanceColor.needsUpdate = true;
+    im.frustumCulled = false;
+    scene.add(im);
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(null);
+    return read();
+  }
+  const maxDiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+  const allFinite = (a) => a.every(Number.isFinite);
+  const sum = (a) => a.reduce((s, x) => s + x, 0);
+
+  fx.particleFxFrame(1234.5);
+  const op = 0.7, age = 0.3, seed = 0.5;
+
+  // A. additive neutral identity
+  const stockA = draw(bucketMat(true), [op, op, op]);
+  const fxMatA = bucketMat(true); fx.applyParticleFxMaterial(fxMatA, { additive: true });
+  const fxA = draw(fxMatA, [op, age, 0 + seed]);
+  check("A. FX additive, neutral row == stock additive", maxDiff(stockA, fxA) < 2e-3, `maxDiff ${maxDiff(stockA, fxA).toExponential(2)}, stock sum ${sum(stockA).toFixed(2)}`);
+  check("A. stock additive drew something (precondition)", sum(stockA) > 10);
+
+  // B. alpha neutral identity
+  const stockB = draw(bucketMat(false), [op, op, op]);
+  const fxMatB = bucketMat(false); fx.applyParticleFxMaterial(fxMatB, { additive: false });
+  const fxB = draw(fxMatB, [op, age, 0 + seed]);
+  check("B. FX alpha, neutral row == stock alpha", maxDiff(stockB, fxB) < 2e-3, `maxDiff ${maxDiff(stockB, fxB).toExponential(2)}, stock sum ${sum(stockB).toFixed(2)}`);
+
+  // C. real rows: every family's first emitter row compiles/draws finite and changes pixels
+  const cat = await (await fetch("/data/particle-fx-catalog.json")).json();
+  const famRow = new Map();
+  for (const [did, e] of Object.entries(cat.emitters)) {
+    const row = prof.FX_DID_ROWS.get(parseInt(did, 16) >>> 0);
+    if (row > 0 && !famRow.has(e.family)) famRow.set(e.family, { row, did, add: !["smoke_dark","smoke_light","gas_alpha","dust","dark_burst","star_dark","vortex_dark","ring_line","snow","bubbles","liquid","blood","blood_mist","splash","water_sheet","debris","leaves","insect","solid_ball","solid_shard","solid_disc"].includes(e.family) });
+  }
+  let finite = true, changed = 0, tried = 0;
+  const unchanged = [];
+  // Two states per family: mid-life by day, and end-of-life at night (lit /
+  // fadeOut / erode only show there). Stock references at the same opacity.
+  const stockEndA = draw(bucketMat(true), [op, op, op]);
+  const stockEndB = draw(bucketMat(false), [op, op, op]);
+  for (const [fam, { row, add }] of famRow) {
+    const m = bucketMat(add); fx.applyParticleFxMaterial(m, { additive: add });
+    fx.FX_UNIFORMS.uFxLight.value.set(1, 1, 1);
+    const mid = draw(m, [op, age, row + seed]);
+    fx.FX_UNIFORMS.uFxLight.value.set(0.30, 0.34, 0.45);
+    const end = draw(m, [op, 0.97, row + seed]);
+    fx.FX_UNIFORMS.uFxLight.value.set(1, 1, 1);
+    tried++;
+    if (!allFinite(mid) || !allFinite(end)) { finite = false; R.errors.push(`non-finite output for family ${fam} row ${row}`); }
+    if (maxDiff(add ? stockA : stockB, mid) > 1e-3 || maxDiff(add ? stockEndA : stockEndB, end) > 1e-3) changed++;
+    else unchanged.push(fam);
+  }
+  check("C. every family's upgraded row draws finite pixels", finite, `${tried} families`);
+  // A family may legitimately not change these two frames only if its row holds
+  // nothing but timing/edge terms (fadeIn/fadeOut/soft/nearFade).
+  const visualOnly = (row) => {
+    const r = prof.FX_PROFILE_ROWS[row];
+    const neutral = [1, 0, 1, null, 1, 1, 1, null, 1, 1, 1, null, 0, 0, null, 0, 0, 0, null, null, 0, 0, null, null];
+    return r.some((v, i) => neutral[i] !== null && Math.abs(v - neutral[i]) > 1e-6);
+  };
+  const wrong = unchanged.filter((f) => visualOnly(famRow.get(f).row));
+  check("C. every upgraded family changes the picture (mid-life by day or end-of-life at night), except fade/edge-only rows",
+    wrong.length === 0, `${changed}/${tried} changed${unchanged.length ? "; unchanged (fade/edge-only rows): " + unchanged.join(",") : ""}${wrong.length ? "; WRONG: " + wrong.join(",") : ""}`);
+  for (const n of Object.keys(prof.FX_NAMED_ROWS)) {
+    const row = prof.FX_NAMED_ROWS[n];
+    const add = !/smoke|Leaves|breath|Devils|Midges|bubble/i.test(n);
+    const m = bucketMat(add); fx.applyParticleFxMaterial(m, { additive: add });
+    const out = draw(m, [op, age, row + seed]);
+    if (!allFinite(out)) { finite = false; R.errors.push(`non-finite for ${n}`); }
+  }
+  check("C. every synthesized profile draws finite pixels", finite);
+  R.programs = renderer.info.programs ? renderer.info.programs.length : -1;
+  const fxPrograms = (renderer.info.programs || []).filter((p) => /hbParticleFx/.test(p.cacheKey || ""));
+  check("C. exactly two FX programs (additive + alpha) for all those rows", fxPrograms.length === 2, `${fxPrograms.length} FX programs of ${R.programs}`);
+
+  // D. soft-depth copy decodes log depth
+  const depthTex = new THREE.DepthTexture(64, 64);
+  const dRT = new THREE.WebGLRenderTarget(64, 64, { depthBuffer: true, depthTexture: depthTex });
+  const wallZ = -7; // wall 10 m from the camera at z=3
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshBasicMaterial({ color: 0x404040 }));
+  wall.position.set(0, 0, wallZ);
+  const ws = new THREE.Scene(); ws.add(wall);
+  renderer.setRenderTarget(dRT); renderer.clear(); renderer.render(ws, cam); renderer.setRenderTarget(null);
+  const copied = fx.particleFxBeforeLate(renderer, depthTex, cam);
+  const softRT = fx.FX_UNIFORMS.uFxSceneW.value;
+  check("D. soft-depth copy ran", copied === true && fx.FX_UNIFORMS.uFxSoftOn.value === 1);
+  // read the copied linear depth (half float RED) through a float RT blit
+  const probeRT = new THREE.WebGLRenderTarget(64, 64, { type: THREE.FloatType });
+  const pmat = new THREE.ShaderMaterial({ uniforms: { t: { value: softRT } }, vertexShader: "varying vec2 u; void main(){ u = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+    fragmentShader: "uniform sampler2D t; varying vec2 u; void main(){ gl_FragColor = vec4(texture2D(t, u).r, 0.0, 0.0, 1.0); }", depthTest: false });
+  const ps = new THREE.Scene(); const pq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), pmat); pq.frustumCulled = false; ps.add(pq);
+  renderer.setRenderTarget(probeRT); renderer.render(ps, cam); renderer.setRenderTarget(null);
+  const pb = new Float32Array(4); renderer.readRenderTargetPixels(probeRT, 32, 32, 1, 1, pb);
+  check("D. decoded scene depth ≈ 10 m (log depth → linear w)", Math.abs(pb[0] - 10) < 0.15, `w = ${pb[0].toFixed(3)}`);
+
+  // E. soft fade against that wall: same FX row, particle 0.1 m vs 5 m in front of the wall
+  const softRow = (() => { for (const [did, e] of Object.entries(cat.emitters)) { const r = prof.FX_DID_ROWS.get(parseInt(did, 16) >>> 0); if ((e.params.soft || 0) >= 0.5 && r > 0 && !(e.params.nearFade > 2)) return { r, soft: e.params.soft, fam: e.family }; } return null; })();
+  if (softRow) {
+    const add = !["smoke_dark","smoke_light","gas_alpha","dust","dark_burst","splash","water_sheet","blood_mist"].includes(softRow.fam);
+    const energy = (a) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += a[i] + a[i + 1] + a[i + 2] + a[i + 3]; return s; };
+    const once = (z, softOn) => {
+      fx.FX_UNIFORMS.uFxSoftOn.value = softOn ? 1 : 0;
+      const m = bucketMat(add); fx.applyParticleFxMaterial(m, { additive: add });
+      return energy(draw(m, [op, 0.5, softRow.r + seed], z));
+    };
+    const nearOn = once(wallZ + 0.1, true), nearOff = once(wallZ + 0.1, false);
+    const farOn = once(wallZ + 5, true), farOff = once(wallZ + 5, false);
+    fx.FX_UNIFORMS.uFxSoftOn.value = 1;
+    check("E. soft particles: a quad 0.1 m in front of the wall fades out",
+      nearOff > 0 && nearOn < nearOff * 0.4, `soft ${softRow.soft} m (${softRow.fam}); energy ${nearOn.toFixed(2)} (soft) vs ${nearOff.toFixed(2)} (no soft)`);
+    check("E. soft particles: a quad 5 m in front of the wall is untouched",
+      farOff > 0 && Math.abs(farOn - farOff) <= farOff * 0.02, `${farOn.toFixed(2)} vs ${farOff.toFixed(2)}`);
+  } else {
+    check("E. a soft row exists", false);
+  }
+  fx.particleFxAfterLate();
+  check("E. soft term off after the late pass", fx.FX_UNIFORMS.uFxSoftOn.value === 0);
+  // G. display calibration at the client's exposure 5: alpha ×1/5, additive ×K/5
+  renderer.toneMappingExposure = 5;
+  fx.setParticleAddCalK(2);
+  fx.particleFxBeforeLate(renderer, null, cam);
+  const rgbSum = (a) => { let s2 = 0; for (let i = 0; i < a.length; i += 4) s2 += a[i] + a[i + 1] + a[i + 2]; return s2; };
+  const calB = draw(fxMatB, [op, age, 0 + seed]);
+  const calA = draw(fxMatA, [op, age, 0 + seed]);
+  const rB = rgbSum(calB) / rgbSum(stockB), rA = rgbSum(calA) / rgbSum(stockA);
+  check("G. alpha sprites at exposure 5 draw ×0.2 (retail LDR after the ×5)", Math.abs(rB - 0.2) < 0.01, `ratio ${rB.toFixed(4)}`);
+  check("G. additive sprites at exposure 5, K 2 draw ×0.4", Math.abs(rA - 0.4) < 0.01, `ratio ${rA.toFixed(4)}`);
+  fx.setParticleFxLive(false);
+  const liftA = draw(fxMatA, [op, age, 0 + seed]);
+  check("G. live A/B off lifts both calibrations (stock pixels)", maxDiff(liftA, stockA) < 2e-3);
+  fx.setParticleFxLive(true);
+  fx.setParticleAddCalK(null);
+  fx.FX_UNIFORMS.uFxAlphaCal.value = 1; fx.FX_UNIFORMS.uFxAddCal.value = 1;
+  renderer.toneMappingExposure = 1;
+
+  // F. placeholder burst shapes (`?burstFx`): three programs, every look finite + visible
+  const bx = await import("/scene3d/play_effect_burst_fx.js");
+  const shapes = [new THREE.SphereGeometry(1.0, 16, 12), new THREE.TorusGeometry(0.5, 0.05, 12, 24), new THREE.BoxGeometry(1, 1, 1)];
+  let bxFinite = true, bxDrawn = 0, bxTried = 0;
+  for (let si = 0; si < 3; si++) {
+    for (const look of Object.keys(bx.BURST_LOOKS)) {
+      const m = new THREE.MeshBasicMaterial({ color: 0x66aaff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: si === 1 ? THREE.DoubleSide : THREE.FrontSide });
+      bx.applyBurstFxMaterial(m, si, (x, y, z, w) => new THREE.Vector4(x, y, z, w));
+      bx.setBurstLook(m, look, 0.37);
+      bx.setBurstAge(m, 0.4);
+      m.opacity = 0.6;
+      bx.burstFxFrame(5000);
+      const mesh = new THREE.Mesh(shapes[si], m);
+      mesh.rotation.set(0.6, 0.4, 0);
+      const sc = new THREE.Scene(); sc.add(mesh);
+      renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(sc, cam); renderer.setRenderTarget(null);
+      const out = read();
+      bxTried++;
+      if (!allFinite(out)) { bxFinite = false; R.errors.push(`burst ${look} shape ${si} non-finite`); }
+      if (sum(out) > 1) bxDrawn++;
+      // not disposed: renderer.info.programs only lists programs still in use
+    }
+  }
+  check("F. every burst look on every shape draws finite pixels", bxFinite, `${bxTried} draws`);
+  check("F. every burst look on every shape is visible", bxDrawn === bxTried, `${bxDrawn}/${bxTried}`);
+  const bxPrograms = (renderer.info.programs || []).filter((p) => /hbBurstFx1/.test(p.cacheKey || ""));
+  // Three shape programs; the ring is transparent + DoubleSide, so three's own
+  // back-then-front double submit compiles it twice (pre-existing, not the patch).
+  const shapeKeys = new Set(bxPrograms.map((p) => (p.cacheKey.match(/hbBurstFx1\|(\d)/) || [])[1]));
+  check("F. one burst program per shape (+ three's DoubleSide back pass for the ring), shared by every look",
+    shapeKeys.has("0") && shapeKeys.has("1") && shapeKeys.has("2") && bxPrograms.length <= 4, `${bxPrograms.length} programs for ${bxTried} look×shape draws`);
+
+  check("no GL errors", gl.getError() === 0);
+  R.ok = R.errors.length === 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

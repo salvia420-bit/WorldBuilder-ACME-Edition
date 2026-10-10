@@ -1,0 +1,2166 @@
+{
+ "group": "g4_swirl_ring_rune",
+ "familyNotes": {
+  "0x08000310": "Yellow swirl stripes — Blade Protection/Vulnerability column walls and the Force Bolt cone body; already the brightest shield texture, keep gain ~1.",
+  "0x080002F6": "Blue swirl stripes — Cold Protection/Vulnerability column walls; dim texture, can take gain ~1.15-1.3.",
+  "0x08000306": "Red swirl stripes — Fire Protection/Vulnerability column walls; gain ~1.1-1.25.",
+  "0x0800030D": "Purple swirl stripes — Lightning Protection/Vulnerability column walls; dimmest shield texture, gain ~1.25-1.4.",
+  "0x08000308": "Orange swirl stripes — Piercing Protection/Vulnerability column walls; bright, gain ~1.0-1.1.",
+  "0x080002FE": "Green swirl stripes — Acid Protection/Vulnerability column walls; gain ~1.05-1.1.",
+  "0x08000301": "Grey/black opaque stripes, ALPHA — Armor/Bludgeoning Protection (Imperil/Bludgeon Vuln) column; non-glowing stone-skin look, gain stays near 1.",
+  "0x08000D81": "White/silver swirl — Whirling Blade projectile body; peaks at 1.0, bloom comes free, keep gain low.",
+  "0x0800192C": "Grey wind swirl — faint sand-whirl body; moving air, partially lit.",
+  "0x08000498": "Purple spiral vortex (bright heart) — Surface Portal main swirl, gem swirls, marionette motes; portal layers already roll in retail, no shader spin.",
+  "0x080004B9": "Violet clip-map spiral — Surface Portal rim layer + marionette motes; rim pops at full opacity, needs fadeOut.",
+  "0x08000969": "Blue spiral vortex — blue portal main swirl, K'nath lair, Tormented Marionette.",
+  "0x0800096A": "Blue-violet clip-map spiral — blue portal rim layer.",
+  "0x0800047F": "Red spiral vortex — red portal main swirl, Rynthid torment aura, Mysterious Portal sputters.",
+  "0x08000480": "Red clip-map spiral — red portal rim layer.",
+  "0x08000158": "Yellow spiral vortex — yellow portal main swirl; ~2x brighter than purple, gain ~1.",
+  "0x08000159": "Yellow clip-map spiral — yellow portal rim; very bright.",
+  "0x08000164": "Green spiral vortex — green portal main swirl.",
+  "0x08000165": "Green clip-map spiral — green portal rim.",
+  "0x0800015A": "Orange spiral vortex — orange portal main swirl.",
+  "0x0800015B": "Orange clip-map spiral — orange portal rim.",
+  "0x0800096B": "Silver spiral vortex — white portal main swirl.",
+  "0x0800096C": "Pure-white clip-map spiral — white portal rim; mean 0.71, gain below 1 to avoid blow-out.",
+  "0x08000587": "Very dim olive swirl, 6 m horizontal quads — giant ground eddies/whirlwind and Shadow Vortex/Eddy; dust haze, partly lit, soft must stay tiny.",
+  "0x080012FA": "Black alpha swirl cut-out — shadow portals, shadow auras, destroyed-portal funnel; only fades/soft/spin matter.",
+  "0x08001304": "Red swirl RING (hollow) — energy-cage rings, shadow-rift ring, Mysterious Portal disc, red shock rings; retail spins them.",
+  "0x08001901": "Red swirl with a demon face and glowing eyes — Mysterious Portal apparition; a picture (misc), never spun.",
+  "0x08000318": "Purple soft donut ring (32 px) — PortalStorm / Create implosion / destroyed-portal ring swarms; radial, spin harmless.",
+  "0x080005D0": "White ring outline, alpha clip-map — Force Bolt launch/impact rings, Shock Wave and Tusker Fist trails; spell energy, unlit.",
+  "0x08001326": "Blue soft ring (energy at the edge) — ring-missile trail.",
+  "0x080016B1": "Purple swirl ring (hollow) — Void ring tunnel.",
+  "0x08000038": "Sparse tan sand specks, alpha — dust devils, dust golem / Bak'tshay sand auras; matter (lit), barely twinkles.",
+  "0x080000AC": "Sparse grey specks, alpha — ash/dust eruptions and dust haze; matter.",
+  "0x08000D82": "Green sparkle field, additive — acid stream spray, acid pool droplets, green spores; wet glints.",
+  "0x08000D85": "White sparkle field, additive — Frost Bolt launch glitter; icy glints, cool tint.",
+  "0x080010C7": "Blue blotchy cloud, alpha — Mana Cloud trail; a gas puff (gas_alpha), not specks.",
+  "0x080010C9": "White blotchy cloud, alpha — White Spore Cloud trail; gas_alpha.",
+  "0x080010C8": "Red blotchy cloud, alpha — red spore/gas cloud trail; gas_alpha.",
+  "0x0800143E": "Sparse white specks, alpha — Snownado snow flurry; lit, no bloom.",
+  "0x080012CE": "Blue rune glyph with star flare — Princely Runed weapons; steady 50 ms re-spawn emitters must not fade or pulse.",
+  "0x080012CF": "Red rune glyph with flare — Red Rune Silveran weapons.",
+  "0x080012DD": "Purple rune glyph with flare — Royal Runed weapons.",
+  "0x080012DE": "Green rune glyph with flare — green-rune weapons.",
+  "0x080012DF": "Orange rune glyph with flare — orange-rune weapons.",
+  "0x080015A2": "Orange-red Aetheria sigil — Affliction surge.",
+  "0x080015A3": "Green-cyan Aetheria sigil — Destruction surge.",
+  "0x080015A4": "Orange-red Aetheria sigil — Festering surge.",
+  "0x080015A5": "Green-cyan Aetheria sigil — Protection surge.",
+  "0x080015A6": "Green-cyan Aetheria sigil — Regeneration surge.",
+  "0x08001785": "Dirty Fighting attack-debuff icon (sword + red arrow).",
+  "0x08001786": "Dirty Fighting defense-debuff icon (shield + red arrow).",
+  "0x08001787": "Dirty Fighting heal-debuff icon (cross + red arrow)."
+ },
+ "emitters": {
+  "0x320002E8": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002EA": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002EC": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002EE": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F4": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F5": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F6": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F7": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000331": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000333": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000337": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000339": {
+   "note": "ShieldDownYellow (Blade Vulnerability (slashing) curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.88 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.88,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035B": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035C": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035D": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035E": {
+   "note": "ShieldUpYellow (Blade Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: yellow additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the yellow hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320004C4": {
+   "note": "Force Bolt Launch wake (caster side, LocalVel cones streaming forward at 6 m/s, 0.5 s): yellow swirl cones shrink and solidify behind the departing bolt — gain 1.2 / core 0.3, fadeOut 0.2 hides the opaque end, no pulse on a half-second particle",
+   "params": {
+    "gain": 1.2,
+    "core": 0.3,
+    "fadeOut": 0.2,
+    "pulse": 0.0
+   }
+  },
+  "0x320004D0": {
+   "note": "Force Bolt (piercing war bolt) projectile body, default script of setup 0x02000887: per-metre stack of yellow swirl cones shrinking 3->0.1x onto the bolt head while turning opaque — gain 1.2 / core 0.35 for a glowing corkscrew head (stack already blooms), fadeOut 0.2 rounds the opaque death pop, pulse removed (0.4 s life)",
+   "params": {
+    "gain": 1.2,
+    "core": 0.35,
+    "fadeOut": 0.2,
+    "pulse": 0.0
+   }
+  },
+  "0x320002C5": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002C6": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002C7": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002C8": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002D7": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002D8": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002D9": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DA": {
+   "note": "ShieldUpBlue (Cold Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 1.0 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DB": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DC": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DD": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DE": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000305": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000308": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200030A": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000322": {
+   "note": "ShieldDownBlue (Cold Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: blue additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the blue hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002DF": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E1": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E3": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E5": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E7": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200031F": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000320": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000321": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200032F": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000330": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000335": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000336": {
+   "note": "ShieldDownRed (Fire Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035F": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000360": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000361": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000362": {
+   "note": "ShieldUpRed (Fire Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: red additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the red hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E0": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E2": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E4": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002E6": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000311": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000312": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000319": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200031A": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000332": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000334": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000338": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200033A": {
+   "note": "ShieldDownPurple (Lightning Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 0.95 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.95,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000348": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000349": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200034A": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200034E": {
+   "note": "ShieldUpPurple (Lightning Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: purple additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the purple hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F0": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F1": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F2": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F3": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000304": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000306": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000307": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000309": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200033F": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000340": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000341": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000342": {
+   "note": "ShieldDownOrange (Piercing Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.85 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.85,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000357": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000358": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000359": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200035A": {
+   "note": "ShieldUpOrange (Piercing Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: orange additive swirl walls stack ~6 deep, so gain 0.92 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the orange hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 0.92,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002F9": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x320002FA": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000302": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000303": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200030C": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200030E": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000310": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000314": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000324": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000325": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200032C": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x3200032D": {
+   "note": "ShieldDownGreen (Acid Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.05 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.06 fade-in (softens the full-size pop-in), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.05,
+    "fadeIn": 0.06,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000343": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000344": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000345": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000346": {
+   "note": "ShieldUpGreen (Acid Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: green additive swirl walls stack ~6 deep, so gain 1.15 (matched on the peak colour channel; generated ~1.2-1.45 bleached the column white) keeps the green hue through tone mapping; core 0.1 hot streaks, 0.04 fade-in (column is born tiny), soft 0.15 (was 0.56 — would dim the wall hugging the body)",
+   "params": {
+    "gain": 1.15,
+    "fadeIn": 0.04,
+    "soft": 0.15,
+    "core": 0.1
+   }
+  },
+  "0x32000315": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x32000316": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x32000317": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x32000318": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x3200031B": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x3400001b set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x3200031C": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x3400001b set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x3200031D": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x3400001b set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x3200031E": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x3400001b set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x3200033B": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x3200033C": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x3200033D": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x3200033E": {
+   "note": "ShieldDownGrey (Imperil + Bludgeoning Vulnerability curse; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that collapses 1.5->0.1x onto the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.0,
+    "fadeIn": 0.06,
+    "soft": 0.15
+   }
+  },
+  "0x32000350": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x34000066 set) — curved wall segment 1/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x32000351": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x34000066 set) — curved wall segment 2/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x32000355": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x34000066 set) — curved wall segment 3/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x32000356": {
+   "note": "ShieldUpGrey (Armor + Bludgeoning Protection buff; table 0x34000066 set) — curved wall segment 4/4 of the spinning enchantment column that grows 0.1->1.5x out from the target over 2 s while fading out: grey/black striped ALPHA column (stone-skin look): gain kept under the bloom knee so it never glows, quick fade-in, soft 0.15 so the wall is not eaten where it wraps the body",
+   "params": {
+    "gain": 1.1,
+    "fadeIn": 0.04,
+    "soft": 0.15
+   }
+  },
+  "0x3200012B": {
+   "note": "Unreferenced purple ring swarm (no script uses it; same motion as PortalStorm 0x32000380): 40-50 rings orbit 0.6 m at 4 rad/s drifting down, shrinking and fading in — kept the generated glow (gain 1.55, core 0.4), ring-symmetric spin harmless"
+  },
+  "0x3200012C": {
+   "note": "Unreferenced purple ring swarm, rising twin of 0x3200012B (same as PortalStorm 0x3200037F motion): orbiting rings shrink as they brighten — generated glow kept"
+  },
+  "0x320001FF": {
+   "note": "PlayScript Create (98 script tables) — the purple 'materialize' implosion when a creature/object spawns: rings start 1.5 m out and converge on the centre in 1 s, brightening — gain 1.6 / core 0.45 for a brighter convergence flash, fadeOut 0.25 softens the pop at the centre, pulse removed (1 s life)",
+   "params": {
+    "gain": 1.6,
+    "core": 0.45,
+    "pulse": 0.0
+   }
+  },
+  "0x3200037F": {
+   "note": "PlayScript PortalStorm (portal-storm teleport around the player), rising ring layer: 1.2 m purple rings orbit 0.6 m, shrinking to sparks as they fade in — generated glow + slow spin kept"
+  },
+  "0x32000380": {
+   "note": "PlayScript PortalStorm, sinking ring layer (twin of 0x3200037F): purple rings orbit the player and spiral down while shrinking — generated glow kept"
+  },
+  "0x32000381": {
+   "note": "PlayScript PortalStorm, inner fast ring layer (2 s, 0.6 m rings rising): smaller purple rings whirl tight around the player — generated glow kept"
+  },
+  "0x32000382": {
+   "note": "PlayScript PortalStorm, inner fast ring layer sinking (twin of 0x32000381): small purple rings whirl down around the player — generated glow kept"
+  },
+  "0x3200065A": {
+   "note": "Unreferenced slow purple aura (no script uses it): 40 rings born tiny and opaque, swelling to 2 m over 12 s while fading and drifting up — big late rings overlap additively, so gain trimmed to 1.35; slow spin kept",
+   "params": {
+    "gain": 1.35
+   }
+  },
+  "0x320009D9": {
+   "note": "Destroyed Portal (39 town portals) / Mysterious Portal: purple portal-storm rings sinking around the broken portal (continuous, 4 s) — generated glow + slow spin kept"
+  },
+  "0x320009DA": {
+   "note": "Destroyed Portal / Mysterious Portal: rising ring layer twin of 0x320009D9 — purple remnant rings whirl up around the broken portal; generated glow kept"
+  },
+  "0x320002CD": {
+   "note": "Surface Portal / town & dungeon portals (setup 0x020001b3, ~390 weenies) + Empyrean doors — purple portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.22 / core 0.3 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.22,
+    "core": 0.3
+   }
+  },
+  "0x3200049D": {
+   "note": "Beyond the Mines of Despair / Return to Dereth portals (0x020007de, 0x02000c49) — purple portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.22 / core 0.3 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.22,
+    "core": 0.3
+   }
+  },
+  "0x3200052F": {
+   "note": "Portal gems / mana shards (setup 0x02000921: Redspire Portal Gem, Essence of Selflessness, Brilliant Shard +110; Nexus-keyed Mana Shard; Empyrean Portalspace Stabilizer): a 1.2 m purple swirl converging on the item — Still particle with no retail rotation, so a gentle spin 0.35 makes the 6 layers swirl instead of zooming; gain 1.3 / core 0.4",
+   "params": {
+    "spin": 0.35,
+    "gain": 1.3,
+    "core": 0.4
+   }
+  },
+  "0x320005D0": {
+   "note": "Marionette decoration (static setup 0x02000a03), purple swirl motes fluttering at head/chest part 13: small swirls shrink 0.7->0.15 m on a tiny swarm orbit — no retail rotation so the generated spin 0.6 makes each mote a turning mini-vortex; generated glow kept"
+  },
+  "0x320005D1": {
+   "note": "Marionette decoration (0x02000a03), purple horizontal swirl discs descending from above the head (1.9 m -> 0.15 m, puppeteer vortex): ParabolicLVGA has no retail rotation, spin trimmed 0.6->0.45 so 8 random-direction layers churn without frenzy",
+   "params": {
+    "spin": 0.45
+   }
+  },
+  "0x320005D2": {
+   "note": "Marionette decoration (0x02000a03), tiny purple swirl motes on both hands (parts 1/2) — the 'puppet string' sparks; generated spin/glow kept"
+  },
+  "0x320008F9": {
+   "note": "Portal to Bur (setup 0x0200167e) — purple portal main swirl (vertical, oversized 10 m disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.2 / core 0.3 keeps a glowing heart without whiting the arms; soft 0.5 so a portal near a wall is not dimmed; extra-large disc gets soft 0.5",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.5,
+    "gain": 1.2,
+    "core": 0.3
+   }
+  },
+  "0x3200090D": {
+   "note": "Statue/pillar portals (setup 0x02001699 Northern/Southern Catacombs Exit, Freebooter/Moarsman transport statues, Hosh Fortress spirit) — purple rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.25 / core 0.3; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.25,
+    "core": 0.3
+   }
+  },
+  "0x320009D7": {
+   "note": "Destroyed Portal (39 broken town portals) sputter: every 3.3 s one purple swirl gulps from 7 m to the centre in 0.5 s — spin 0 (retail roll), pulse removed (meaningless on 0.5 s), unstable flicker 0.15 @ 11 Hz sells the broken portal, gain 1.4 / core 0.5",
+   "params": {
+    "spin": 0.0,
+    "pulse": 0.0,
+    "flicker": 0.15,
+    "flickerHz": 11.0,
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320009DB": {
+   "note": "Destroyed Portal / Mysterious Portal sputter: every 5 s one purple swirl gulps from 7 m to the centre in 0.5 s — spin 0 (retail roll), pulse removed (meaningless on 0.5 s), unstable flicker 0.15 @ 11 Hz sells the broken portal, gain 1.4 / core 0.5",
+   "params": {
+    "spin": 0.0,
+    "pulse": 0.0,
+    "flicker": 0.15,
+    "flickerHz": 11.0,
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x320003B5": {
+   "note": "Blue portals (setup 0x020005d2: Unfinished Temple, Mysterious Tunnels, Banderling Hovel +47) — blue portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.28 / core 0.32 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.28,
+    "core": 0.32
+   }
+  },
+  "0x32000696": {
+   "note": "Blue portal variant (0x02000c16/c17 Corrupted Energy, c4a Entrance to Portal Space) — blue portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.28 / core 0.32 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.28,
+    "core": 0.32
+   }
+  },
+  "0x32000735": {
+   "note": "Two-tone Portal (0x02000ef6 Portal/Surface/Exit): small blue swirl GROWING 0.7->1.2 m at 30%->10% opacity, a soft blue bloom at the heart — spin 0 (retail roll), gain 1.4 / core 0.4 lifts the faint layer, fadeIn 0.1 removes the 30% pop-in",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.4,
+    "core": 0.4,
+    "fadeIn": 0.1,
+    "fadeOut": 0.06
+   }
+  },
+  "0x32000744": {
+   "note": "Two-tone Portal 0x02000f2e: horizontal twin of 0x32000735 — faint growing blue heart swirl; spin 0, gain 1.4 / core 0.4, fadeIn 0.1",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.4,
+    "core": 0.4,
+    "fadeIn": 0.1,
+    "fadeOut": 0.06
+   }
+  },
+  "0x3200081F": {
+   "note": "K'nath Lair Portal (0x02001338), vertical half of a crossed pair: small 1.45 m blue swirl shrinking to the centre — retail roll kept (spin 0), gain 1.3 / core 0.35, generated soft 0.24 kept",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.3,
+    "core": 0.35
+   }
+  },
+  "0x32000820": {
+   "note": "K'nath Lair Portal, horizontal half of the crossed pair (with 0x3200081F makes a 3-D swirl ball): retail roll kept (spin 0), gain 1.3 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.3,
+    "core": 0.35
+   }
+  },
+  "0x32000914": {
+   "note": "Pillar portal 0x02001945 (Deeper into the Oubliette, Mhoire Castle tower portals +8) — blue rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.31 / core 0.32; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.31,
+    "core": 0.32
+   }
+  },
+  "0x32000A14": {
+   "note": "Tormented Marionette (0x02001a8d), horizontal swirl discs (blue spiral 0x08000969, ends at 90%) descending from above the head (puppeteer vortex): ParabolicLVGA has no retail rotation, spin trimmed 0.6->0.45 so the layers churn without frenzy",
+   "params": {
+    "spin": 0.45
+   }
+  },
+  "0x32000A15": {
+   "note": "Tormented Marionette (creature 0x02001a8d), blue spiral 0x08000969 motes at head/chest part 13, fading in to opaque: shrinking mini-vortices on a tiny orbit — no retail rotation, generated spin 0.6 + glow kept"
+  },
+  "0x32000A16": {
+   "note": "Tormented Marionette (0x02001a8d), tiny blue spiral 0x08000969 (pop to opaque) sparks on both hands (parts 1/2) — the puppet-string glints; generated spin/glow kept"
+  },
+  "0x32000156": {
+   "note": "Force Bolt / Thorn Bolt impact (PlayScript Explode, low-power variant, 10 particles): tiny white ring sparks burst out and fall under -2 m/s² while fading — spell energy, so lit 0 (was 0.3), gain 1.05 crisp white; retail fade kept",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x32000157": {
+   "note": "Force Bolt / Thorn Bolt impact (PlayScript Explode, mid-power variant, 30 particles): tiny white ring sparks burst out and fall under -2 m/s² while fading — spell energy, so lit 0 (was 0.3), gain 1.05 crisp white; retail fade kept",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x32000158": {
+   "note": "Force Bolt / Thorn Bolt impact (PlayScript Explode, high-power variant, 50 particles): tiny white ring sparks burst out and fall under -2 m/s² while fading — spell energy, so lit 0 (was 0.3), gain 1.05 crisp white; retail fade kept",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x3200017E": {
+   "note": "Force Bolt cast Launch ring (scripts 0x33000121-123 with 4 star flares): one 1.25 m white ring outline left at the launch point, shrinking 1->0.1x and fading over 0.3 s — magic muzzle ring so lit 0 (was 0.3), gain 1.05",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x3200017F": {
+   "note": "Force Bolt cast Launch ring (scripts 0x33000121-123 with 4 star flares): one 1.25 m white ring outline left at the launch point, shrinking 1->0.1x and fading over 0.6 s — magic muzzle ring so lit 0 (was 0.3), gain 1.05",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x32000180": {
+   "note": "Force Bolt cast Launch ring (scripts 0x33000121-123 with 4 star flares): one 1.25 m white ring outline left at the launch point, shrinking 1->0.1x and fading over 1.0 s — magic muzzle ring so lit 0 (was 0.3), gain 1.05",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x320004D1": {
+   "note": "Shock Wave (bludgeoning war bolt) projectile body, setup 0x02000885: per-metre trail of white rings shrinking 3->0.1x while solidifying behind the bolt — the visible bolt itself, so lit 0 (was 0.3), gain 1.08; fadeOut 0.25 keeps the opaque end from popping",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.08
+   }
+  },
+  "0x3200071B": {
+   "note": "Tusker Fist projectile (setup 0x02000eae): white ring outlines thrown backward at 6 m/s, shrinking 3.8->0.3x as they solidify — projectile energy, lit 0 (was 0.3), gain 1.05; generated fadeOut 0.25 hides the opaque death",
+   "params": {
+    "lit": 0.0,
+    "gain": 1.05
+   }
+  },
+  "0x320003B4": {
+   "note": "Red portals (setup 0x020005d5: Plated Rifts, Forgotten Tunnels, Hoshino Tower +260; Caul asylum portals) — red portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.22 / core 0.3 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.22,
+    "core": 0.3
+   }
+  },
+  "0x32000699": {
+   "note": "Red portal variant (0x02000c1d/c1e Vault of Eternal Slumber, c4d Temple Exit) — red portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.22 / core 0.3 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.22,
+    "core": 0.3
+   }
+  },
+  "0x32000734": {
+   "note": "Two-tone Portal 0x02000ef6: 5.8 m red outer swirl at only 5%->0% opacity (a faint red haze behind the blue heart) — spin 0 (was 1.17, fought the retail roll), gain 1.6 / core 0.5 so the haze is just perceptible",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.6,
+    "core": 0.5
+   }
+  },
+  "0x32000745": {
+   "note": "Two-tone Portal 0x02000f2e: faint red outer haze swirl (twin of 0x32000734) — spin 0, gain 1.6 / core 0.5",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.6,
+    "core": 0.5
+   }
+  },
+  "0x3200090A": {
+   "note": "Pillar portal 0x02001698 (Blessed Cave, Entrance to the pyramid, Private Chambers +10) — red rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.25 / core 0.3; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.25,
+    "core": 0.3
+   }
+  },
+  "0x32000A44": {
+   "note": "Rynthid / Aspect of Avarice, Rage, Torment (0x02001bcd/bd6/bd7/bd8) torment aura: a horizontal red swirl at the waist expanding 0.15->2.6 m and fading (part of a big lightning+fire composite) — spin 0 (retail roll), gain 1.3 / core 0.4",
+   "params": {
+    "spin": 0.0,
+    "gain": 1.3,
+    "core": 0.4
+   }
+  },
+  "0x32000A4D": {
+   "note": "Mysterious Portal (0x02001be3) sputter: every 3.3 s one red swirl gulps from 7 m to the centre in 0.5 s — spin 0 (retail roll), pulse removed (meaningless on 0.5 s), unstable flicker 0.15 @ 11 Hz sells the broken portal, gain 1.4 / core 0.5",
+   "params": {
+    "spin": 0.0,
+    "pulse": 0.0,
+    "flicker": 0.15,
+    "flickerHz": 11.0,
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x32000A4E": {
+   "note": "Mysterious Portal (0x02001be3), second offset sputter: every 5 s one red swirl gulps from 7 m to the centre in 0.5 s — spin 0 (retail roll), pulse removed (meaningless on 0.5 s), unstable flicker 0.15 @ 11 Hz sells the broken portal, gain 1.4 / core 0.5",
+   "params": {
+    "spin": 0.0,
+    "pulse": 0.0,
+    "flicker": 0.15,
+    "flickerHz": 11.0,
+    "gain": 1.4,
+    "core": 0.5
+   }
+  },
+  "0x32000490": {
+   "note": "Giant ground eddy swirl (0x020007ea): very dim olive horizontal swirl expanding 12->54 m and turning at 0.6 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000491": {
+   "note": "Giant ground eddy swirl (0x020007ec): very dim olive horizontal swirl expanding 12->42 m and turning at 1.0 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000492": {
+   "note": "Giant ground eddy swirl (0x020007e9 / whirlwind 0x020012d3): very dim olive horizontal swirl expanding 12->36 m and turning at 1.4 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000493": {
+   "note": "Giant ground eddy swirl (0x020007e8): very dim olive horizontal swirl expanding 6->30 m and turning at 1.8 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000494": {
+   "note": "Giant ground eddy swirl (0x020007eb, Shadow Vortex, Shadow Eddy): very dim olive horizontal swirl expanding 0.6->24 m and turning at 2.0 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.05 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.05
+   }
+  },
+  "0x32000495": {
+   "note": "Giant ground eddy swirl (0x020007ed): very dim olive horizontal swirl expanding 15->60 m and turning at 0.2 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000537": {
+   "note": "Giant ground eddy swirl (whirlwind structure 0x020012d3): very dim olive horizontal swirl expanding 6->30 m and turning at 1.8 rad/s, one per second, fading out — spin 0 (was 0.93 on top of the retail turn), soft 0.15 (a quad lying on the ground would vanish with soft 1.0), lit 0.35 so the dust haze does not glow at night, fadeIn 0.12 removes the periodic pop-in",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.15,
+    "lit": 0.35,
+    "fadeIn": 0.12
+   }
+  },
+  "0x32000877": {
+   "note": "Shadow portal (statics 0x02001582 / 0x020018c2 with red rim 0x3200069E): black alpha swirl, 12 horizontal layers shrinking into the hole — retail roll kept (spin 0), soft 0.4",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4
+   }
+  },
+  "0x32000882": {
+   "note": "Shadow Vortex (0x020015a5): vertical black swirl disc sucking inward — spin 0 (retail roll), soft 0.4",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4
+   }
+  },
+  "0x3200089B": {
+   "note": "Shadow rift static (0x020015b9): huge black swirl 13->1.45 m collapsing inside the spinning red ring 0x32000893 — spin 0, soft 0.6",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.6
+   }
+  },
+  "0x320008C8": {
+   "note": "Count Dardante (0x020015ff) shadow aura: black swirl growing 0.15->2.6 m at the body and fading — spin 0 (retail roll); fades/soft as generated",
+   "params": {
+    "spin": 0.0
+   }
+  },
+  "0x32000978": {
+   "note": "Shadow-touched Virindi (Paradox, Quidiox), Claude the Archmage, Quiddity Seeds: black shadow swirl expanding from the body and fading — spin 0 (retail roll)",
+   "params": {
+    "spin": 0.0
+   }
+  },
+  "0x3200097A": {
+   "note": "Virindi Protector / Claude the Dark Archmage (0x0200173c): larger black shadow swirl (to 3.6 m) — spin 0",
+   "params": {
+    "spin": 0.0
+   }
+  },
+  "0x320009C2": {
+   "note": "Destroyed Portals, The Shadows, Mysterious Portal (+ static 0x020018c0): black funnel swirl rising above the broken portal, shrinking as it climbs — spin 0 (retail roll), soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35
+   }
+  },
+  "0x320002B5": {
+   "note": "Dust-devil sand whirl (statics 0x0200058e / 0x02001542, repeats every 35 s): 60 sand-speck sprites rise in a widening orbit, growing 0.15->6.7 m and fading — this is sand, not sparkle: gain 1.0 (alpha), twinkle 0.1 grit glints, lit 0.8, fadeIn 0.05, nearFade 2.2 for the big sheets",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.1,
+    "lit": 0.8,
+    "fadeIn": 0.05,
+    "nearFade": 2.2
+   }
+  },
+  "0x3200097E": {
+   "note": "Sand-in-the-face burst (script 0x33001179 at head height with 0x3200097D; no weenie found): 40 shrinking sand-speck puffs fly out over 1 s — gain 1.0, twinkle 0.1, lit 0.8 (dust)",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.1,
+    "lit": 0.8
+   }
+  },
+  "0x32000A1F": {
+   "note": "Dust Golem / Dust Guardian / Burning Sands Golem aura: continuous sand whirl orbiting and rising around the golem, widening to 6.7 m — gain 1.0, twinkle 0.08, lit 0.85, nearFade 2.2",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.08,
+    "lit": 0.85,
+    "nearFade": 2.2
+   }
+  },
+  "0x32000A20": {
+   "note": "Bak'tshay / Hatshepsut / Popkin sand aura, outer layer: 60 fully-opaque 1.45 m sand-speck sheets orbit the creature (follows it) — retail pops each in/out at full opacity every ~67 ms, so fadeIn 0.1 / fadeOut 0.15; gain 1.0, twinkle 0.08, lit 0.85",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.08,
+    "lit": 0.85,
+    "fadeIn": 0.1,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000A21": {
+   "note": "Bak'tshay / Hatshepsut sand aura, inner 40%-opacity layer (0.87 m, tighter orbit): fadeIn 0.1 / fadeOut 0.15 against the constant-opacity pops, gain 1.0, twinkle 0.08, lit 0.85",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.08,
+    "lit": 0.85,
+    "fadeIn": 0.1,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000A67": {
+   "note": "Sand-whirl effect (setup 0x02001c21 with the 0x32000A68 wind swirl): 30 sand-speck sheets spiral up and widen in 2 s — gain 1.0, twinkle 0.1, lit 0.8",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.1,
+    "lit": 0.8
+   }
+  },
+  "0x320003BA": {
+   "note": "Blue portals (setup 0x020005d2) — blue-violet portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.3 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.3,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200069B": {
+   "note": "Blue portal variant (Corrupted Energy, Entrance to Portal Space) — blue-violet portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.3 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.3,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000736": {
+   "note": "Two-tone Portals (0x02000ef6/f2e): blue-violet rim swirl 1.0->1.45 m fading in to fully opaque — spin 0 (retail global roll), fadeOut 0.22 hides the opaque death pop, gain 1.3 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "fadeOut": 0.22,
+    "gain": 1.3,
+    "core": 0.35
+   }
+  },
+  "0x32000A17": {
+   "note": "Tormented Marionette (0x02001a8d), horizontal swirl discs (blue-violet clip spiral 0x0800096A, ends fully opaque) descending from above the head (puppeteer vortex): ParabolicLVGA has no retail rotation, spin trimmed 0.6->0.45 so the layers churn without frenzy",
+   "params": {
+    "spin": 0.45
+   }
+  },
+  "0x32000A18": {
+   "note": "Tormented Marionette (creature 0x02001a8d), blue-violet clip spiral 0x0800096A motes at head/chest part 13, fading in only to 25%: shrinking mini-vortices on a tiny orbit — no retail rotation, generated spin 0.6 + glow kept"
+  },
+  "0x32000A19": {
+   "note": "Tormented Marionette (0x02001a8d), tiny blue-violet clip spiral 0x0800096A (25% end) sparks on both hands (parts 1/2) — the puppet-string glints; generated spin/glow kept"
+  },
+  "0x32000893": {
+   "note": "Shadow rift static (0x020015b9): a 10 m red swirl ring spinning fast (1-3 rad/s) horizontally around the black vortex 0x3200089B — spin 0 (retail spins it), soft 0.6 for the huge quad, gain 1.3",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.6,
+    "gain": 1.3
+   }
+  },
+  "0x32000919": {
+   "note": "Unreferenced red shock ring (script 0x33001107, no user found): 2-6 horizontal red rings flash out 1.5->14.5 m in 0.5 s while spinning — spin 0 (retail spins), fadeIn 0.03 so the burst hits instantly, soft 0.5 for the ground-hugging ring",
+   "params": {
+    "spin": 0.0,
+    "fadeIn": 0.03,
+    "soft": 0.5
+   }
+  },
+  "0x3200091B": {
+   "note": "Unreferenced red ring burst (script 0x33001109): 8-10 red rings tumble on three axes while expanding 0.7->14 m and rising — retail already tumbles them so spin 0, soft 0.5",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.5
+   }
+  },
+  "0x32000955": {
+   "note": "Energy Cage (0x020016f2): red swirl rings rise from the floor, widen 0.9->2.9 m and spin 2-4 rad/s — the containment field. spin 0 (retail spins), fadeIn 0.08 (born at 70% opacity), pulse 0.08 @ 1.2 Hz for a humming field",
+   "params": {
+    "spin": 0.0,
+    "fadeIn": 0.08,
+    "pulse": 0.08,
+    "pulseHz": 1.2
+   }
+  },
+  "0x32000986": {
+   "note": "Virindi Cage / Wall (0x020016f3): larger containment rings rising 1.7->5.8 m wide, spinning — spin 0, fadeIn 0.08, pulse 0.08 @ 1.2 Hz, soft 0.6 on the big quads",
+   "params": {
+    "spin": 0.0,
+    "fadeIn": 0.08,
+    "pulse": 0.08,
+    "pulseHz": 1.2,
+    "soft": 0.6
+   }
+  },
+  "0x32000A4F": {
+   "note": "Mysterious Portal (0x02001be3) main disc drawn with the red swirl-ring texture: vertical, 12 layers shrinking to the centre — spin 0 (retail roll), soft 0.4, gain 1.3 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.3,
+    "core": 0.35
+   }
+  },
+  "0x320002D6": {
+   "note": "Surface Portal (setup 0x020001b3) — purple portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.28 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.28,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200049E": {
+   "note": "Beyond the Mines of Despair / Return to Dereth portals — purple portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.28 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.28,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x320005D3": {
+   "note": "Marionette decoration (static setup 0x02000a03), violet swirl motes fluttering at head/chest part 13: small swirls shrink 0.7->0.15 m on a tiny swarm orbit — no retail rotation so the generated spin 0.6 makes each mote a turning mini-vortex; generated glow kept"
+  },
+  "0x320005D4": {
+   "note": "Marionette decoration (0x02000a03), violet horizontal swirl discs descending from above the head (1.9 m -> 0.15 m, puppeteer vortex): ParabolicLVGA has no retail rotation, spin trimmed 0.6->0.45 so 8 random-direction layers churn without frenzy",
+   "params": {
+    "spin": 0.45
+   }
+  },
+  "0x320005D5": {
+   "note": "Marionette decoration (0x02000a03), tiny violet swirl motes on both hands (parts 1/2) — the 'puppet string' sparks; generated spin/glow kept"
+  },
+  "0x3200085E": {
+   "note": "Princely Runed Flamberge: blue rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 2.2 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x3200085F": {
+   "note": "Princely Runed weapons (Slashing Baton, Knuckles, Arbalest, War Bow…): the steady large blue rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000861": {
+   "note": "Princely Runed Bastone/Partizan/Corsesca: blue rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 3.0 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x32000862": {
+   "note": "Princely Runed Mazule/Poniard/Dolabra: blue rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 1.4 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x32000863": {
+   "note": "Princely Runed weapon statics: the steady small blue rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000867": {
+   "note": "Royal Runed weapons (Dart Flinger…) + statics: the steady large purple rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000868": {
+   "note": "Royal Runed weapon statics: the steady small purple rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000873": {
+   "note": "Royal Runed Dolabra/Poniard/Mazule: purple rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 1.4 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x32000874": {
+   "note": "Royal Runed Partizan/Bastone: purple rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 3.0 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x32000875": {
+   "note": "Royal Runed Flamberge: purple rune glyphs lift off the weapon one per second, fluttering up 0.3 m/s and fading over 2.2 s — the generated profile already fits: short fade-in (retail pops in opaque), breathing pulse, gain/core that just bloom the flare; never spun"
+  },
+  "0x320003B1": {
+   "note": "Yellow portals (setup 0x020005d6: Ancient Empyrean Grotto, Tusker Habitat, Black Dominion +95) — yellow portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.0 / core 0.18 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed; yellow texture is ~2x brighter than purple, hence gain 1.0",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.0,
+    "core": 0.18
+   }
+  },
+  "0x3200050C": {
+   "note": "Yellow portal variant (Aerlinthe Reservoir portals 0x020008c5, statics 0x02000bf3/c4f) — yellow portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.0 / core 0.18 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed; bright texture, gain 1.0",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.0,
+    "core": 0.18
+   }
+  },
+  "0x3200090F": {
+   "note": "Pillar portal 0x0200169f (Northern Catacombs, Swamp Cavern) — yellow rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.03 / core 0.18; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.03,
+    "core": 0.18
+   }
+  },
+  "0x320003B2": {
+   "note": "Green portals (setup 0x020005d3: South Direlands, Disaster Maze, Upper Empyrean Mausoleum +124) — green portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.06 / core 0.22 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.06,
+    "core": 0.22
+   }
+  },
+  "0x32000697": {
+   "note": "Green portal variant (statics 0x02000c18/c19/c4b) — green portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.06 / core 0.22 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.06,
+    "core": 0.22
+   }
+  },
+  "0x32000808": {
+   "note": "Pillar portal 0x0200169d / Xi Ru's Chapel exit (0x02001206) — green rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.09 / core 0.22; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.09,
+    "core": 0.22
+   }
+  },
+  "0x320003B3": {
+   "note": "Orange portals (setup 0x020005d4: Curator of Torment's Study, Strange Swamp Temple +63; Aerbax's Holding) — orange portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.12 / core 0.26 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.12,
+    "core": 0.26
+   }
+  },
+  "0x32000698": {
+   "note": "Orange portal variant (statics 0x02000c1b/c1c/c4c) — orange portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.12 / core 0.26 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.12,
+    "core": 0.26
+   }
+  },
+  "0x32000915": {
+   "note": "Pillar portal 0x0200169e (Eastern Catacombs) — orange rising funnel swirl (horizontal quads 2.9 m -> 0.15 m, climbing 0.6 m while fading in): retail roll kept, shader spin removed; gain 1.15 / core 0.26; soft 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.35,
+    "gain": 1.15,
+    "core": 0.26
+   }
+  },
+  "0x320003B9": {
+   "note": "Red portals (setup 0x020005d5 / 0x02001029) — red portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.26 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.26,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200069E": {
+   "note": "Red portal variant (Vault of Eternal Slumber, Temple Exit) + shadow portal 0x020018c2 — red portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.26 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.26,
+    "core": 0.35,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000737": {
+   "note": "Two-tone Portals (0x02000ef6/f2e): red rim swirl partner of 0x32000736 — spin 0, fadeOut 0.22, gain 1.26 / core 0.35",
+   "params": {
+    "spin": 0.0,
+    "fadeOut": 0.22,
+    "gain": 1.26,
+    "core": 0.35
+   }
+  },
+  "0x320004C0": {
+   "note": "Acid Stream Launch: green acid droplet glitter bursting outward along the cast path, swelling to 4 m and fading — twinkle trimmed 0.28->0.18 (droplet glints, not stars); generated glow kept",
+   "params": {
+    "twinkle": 0.18
+   }
+  },
+  "0x32000770": {
+   "note": "Acid Pool / Acidic Elemental Pool: green acid droplets spat 1.5 m up and falling back, opaque at death — generated fadeOut 0.21 removes the pop, twinkle 0.2 wet glints",
+   "params": {
+    "twinkle": 0.2
+   }
+  },
+  "0x320007ED": {
+   "note": "Green Spore Cloud Launch trail: green spore glitter clouds shrinking behind the projectile — gain 1.2, twinkle 0.15",
+   "params": {
+    "gain": 1.2,
+    "twinkle": 0.15
+   }
+  },
+  "0x320003B6": {
+   "note": "Yellow portals (setup 0x020005d6) — yellow portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.0 / core 0.18; bright yellow texture so no extra gain",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.0,
+    "core": 0.18,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200050D": {
+   "note": "Yellow portal variant (Aerlinthe Reservoir portals) — yellow portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.0 / core 0.18",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.0,
+    "core": 0.18,
+    "fadeOut": 0.2
+   }
+  },
+  "0x320003B7": {
+   "note": "Green portals (setup 0x020005d3) — green portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.06 / core 0.22",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.06,
+    "core": 0.22,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200069C": {
+   "note": "Green portal variant (statics 0x02000c18/c19/c4b) — green portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.06 / core 0.22",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.06,
+    "core": 0.22,
+    "fadeOut": 0.2
+   }
+  },
+  "0x320003B8": {
+   "note": "Orange portals (setup 0x020005d4 / 0x0200102a) — orange portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.15 / core 0.28",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.15,
+    "core": 0.28,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200069D": {
+   "note": "Orange portal variant (statics 0x02000c1b/c1c/c4c) — orange portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 1.15 / core 0.28",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.15,
+    "core": 0.28,
+    "fadeOut": 0.2
+   }
+  },
+  "0x32000437": {
+   "note": "White portals (setup 0x020006f4: Test Portal, Ithaenc Quiddity Seed +29) — white/silver portal main swirl (vertical disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.05 / core 0.2 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed; silver texture, gain 1.05",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.05,
+    "core": 0.2
+   }
+  },
+  "0x3200069A": {
+   "note": "White portal variant (statics 0x02000c1f/c20/c4e) — white/silver portal main swirl (horizontal-quad disc, 12 layers born 7 m wide shrinking to the centre while fading in to 60%): retail already rolls every layer one way, so the random-direction shader spin is removed (it fought the swirl); gain 1.05 / core 0.2 keeps a glowing heart without whiting the arms; soft 0.4 so a portal near a wall is not dimmed",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 1.05,
+    "core": 0.2
+   }
+  },
+  "0x32000438": {
+   "note": "White portals (setup 0x020006f4) — white portal rim layer (vertical, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 0.92 / core 0.1; pure-white rim (mean 0.71) stacks to blow-out, so gain is BELOW 1 (0.92) with a token core",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 0.92,
+    "core": 0.1,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200069F": {
+   "note": "White portal variant (statics 0x02000c1f/c20/c4e) — white portal rim layer (horizontal-quad, 4 layers 4.3->1.45 m fading IN to fully opaque): retail roll kept, shader spin removed; fadeOut 0.2 hides the full-opacity death pop every 0.5 s; gain 0.92 / core 0.1; gain 0.92 — white rim already blooms",
+   "params": {
+    "spin": 0.0,
+    "soft": 0.4,
+    "gain": 0.92,
+    "core": 0.1,
+    "fadeOut": 0.2
+   }
+  },
+  "0x3200061E": {
+   "note": "Grey ash/dust eruption (statics 0x02000ac4 / 0x02000b3a, re-fired by CallPES): grey speck clouds shoot up at 4 m/s, spread to 7 m and drift downwind while fading — matter: gain 1.0, twinkle 0.05, lit 0.8",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.05,
+    "lit": 0.8
+   }
+  },
+  "0x32000750": {
+   "note": "Grey dust haze in an unreferenced gas/acid splash script (0x33000db2 with gas, liquid blobs, magic mist): 3 big grey speck sheets rise slowly at 50%->0% — gain 1.0, twinkle 0.05, lit 0.7, fadeIn 0.1 removes the 4 m pop-in",
+   "params": {
+    "gain": 1.0,
+    "twinkle": 0.05,
+    "lit": 0.7,
+    "fadeIn": 0.1
+   }
+  },
+  "0x32000860": {
+   "note": "Red Rune Silveran weapons (Dagger, Sword, Axe, Spear, Mace…): the steady large red rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000866": {
+   "note": "Red Rune Silveran weapons: the steady small red rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x32000869": {
+   "note": "green-rune weapon statics (0x0200154e…): the steady large green rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x3200086B": {
+   "note": "green-rune weapon statics: the steady small green rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x3200086A": {
+   "note": "orange-rune weapon statics (0x0200154d…): the steady large orange rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x3200086C": {
+   "note": "orange-rune weapon statics: the steady small orange rune glyph with star flare on the blade — retail re-spawns a 50 ms particle every ~30 ms, so the generated fadeIn/fadeOut (0.24/0.40 of 50 ms) and per-particle pulse (new random phase every respawn) would STROBE at ~20 Hz: fades and pulse zeroed; generated gain/core kept so the flare's hot point just reaches bloom",
+   "params": {
+    "fadeIn": 0.0,
+    "fadeOut": 0.0,
+    "pulse": 0.0
+   }
+  },
+  "0x320004C1": {
+   "note": "Frost Bolt Launch: white frost-crystal glitter bursting along the cast path — twinkle 0.35 icy glints, cool blue-white tint (texture is neutral white)",
+   "params": {
+    "twinkle": 0.35,
+    "tint0": [
+     0.92,
+     0.98,
+     1.1
+    ],
+    "tint1": [
+     0.9,
+     0.97,
+     1.12
+    ]
+   }
+  },
+  "0x320004CF": {
+   "note": "Whirling Blade (slashing war bolt) projectile body, setup 0x02000886: white/silver swirl cones converge on the spinning blade — texture already peaks at 1.0, so gain trimmed 1.24->1.1 (core 0.25) to bloom as steel glint not a white blob; faint cool steel tint; no pulse",
+   "params": {
+    "gain": 1.1,
+    "core": 0.25,
+    "pulse": 0.0,
+    "tint0": [
+     0.95,
+     0.98,
+     1.04
+    ],
+    "tint1": [
+     0.95,
+     0.98,
+     1.04
+    ]
+   }
+  },
+  "0x320007EE": {
+   "note": "Mana Cloud (and Hollow/Coral Hollow) Launch trail: blue blotchy gas puffs shrinking behind the projectile — re-filed gas_alpha (a cloud, not a sparkle field): twinkle off, erode 0.25 so it wisps away, lit 0.4 (magical mana)",
+   "params": {
+    "twinkle": 0.0,
+    "erode": 0.25,
+    "lit": 0.4,
+    "gain": 1.0,
+    "spin": 0.1
+   },
+   "family": "gas_alpha"
+  },
+  "0x320007EF": {
+   "note": "White Spore Cloud Launch trail: white spore puffs shrinking behind the projectile — re-filed gas_alpha: twinkle off, erode 0.25, lit 0.75 (spores are matter), gain 1.0 so white never blooms",
+   "params": {
+    "twinkle": 0.0,
+    "erode": 0.25,
+    "lit": 0.75,
+    "gain": 1.0,
+    "spin": 0.1
+   },
+   "family": "gas_alpha"
+  },
+  "0x320007F0": {
+   "note": "Red spore/gas cloud Launch trail (script table 0x340000b0): red blotchy puffs shrinking behind the projectile — re-filed gas_alpha: twinkle off, erode 0.25, lit 0.6",
+   "params": {
+    "twinkle": 0.0,
+    "erode": 0.25,
+    "lit": 0.6,
+    "gain": 1.0,
+    "spin": 0.1
+   },
+   "family": "gas_alpha"
+  },
+  "0x320008BB": {
+   "note": "Blue ring missile trail (projectile-like static setup 0x020015fa): per-metre blue soft rings shrinking 0.8->0.16 m as they solidify behind the missile — generated glow and fadeOut 0.25 kept, pulse removed (0.4 s life)",
+   "params": {
+    "pulse": 0.0
+   }
+  },
+  "0x3200098E": {
+   "note": "Snownado (0x02001768): white snow specks spiral up and widen to 3.6 m around the snow tornado — alpha white at gain 1.3 would bloom, so gain 1.0; lit 0.7 (snow), twinkle 0.15 ice glints",
+   "params": {
+    "gain": 1.0,
+    "lit": 0.7,
+    "twinkle": 0.15
+   }
+  },
+  "0x320009D1": {
+   "note": "PlayScript AetheriaSurgeDestruction: three green-cyan Aetheria sigils orbit the player at 0.5 m for the surge (opaque all life, 12.6 s) — generated profile kept: fadeIn/fadeOut stop the pop in/out, surge pulse breathes, gain/core put the glyph at the bloom knee"
+  },
+  "0x320009D2": {
+   "note": "PlayScript AetheriaSurgeProtection: three green-cyan Aetheria sigils orbit the player at 0.5 m for the surge (opaque all life, 12.6 s) — generated profile kept: fadeIn/fadeOut stop the pop in/out, surge pulse breathes, gain/core put the glyph at the bloom knee"
+  },
+  "0x320009D3": {
+   "note": "PlayScript AetheriaSurgeRegeneration: three green-cyan Aetheria sigils orbit the player at 0.5 m for the surge (opaque all life, 12.6 s) — generated profile kept: fadeIn/fadeOut stop the pop in/out, surge pulse breathes, gain/core put the glyph at the bloom knee"
+  },
+  "0x320009D4": {
+   "note": "PlayScript AetheriaSurgeAffliction: three orange-red Aetheria sigils orbit the player at 0.5 m for the surge (opaque all life, 12.6 s) — generated profile kept: fadeIn/fadeOut stop the pop in/out, surge pulse breathes, gain/core put the glyph at the bloom knee"
+  },
+  "0x320009D5": {
+   "note": "PlayScript AetheriaSurgeFestering: three orange-red Aetheria sigils orbit the player at 0.5 m for the surge (opaque all life, 12.6 s) — generated profile kept: fadeIn/fadeOut stop the pop in/out, surge pulse breathes, gain/core put the glyph at the bloom knee"
+  },
+  "0x32000A0A": {
+   "note": "Void (0x02001a7f): a tunnel of 21 purple swirl rings (2.2->2.9 m) streaming backward — a receding void rift; born at 80% opacity, so fadeIn raised 0.02->0.1 and fadeOut 0.15 at the 20% end; generated gain kept (rings stack head-on)",
+   "params": {
+    "fadeIn": 0.1,
+    "fadeOut": 0.15
+   }
+  },
+  "0x32000A28": {
+   "note": "PlayScript DirtyFightingAttackDebuff: one orange-red Attack (sword + down arrow) debuff icon orbits the victim for ~19 s — upright icon never spun; slower, ominous pulse 0.08 @ 1 Hz (was 0.1 @ 1.5); generated glow kept",
+   "params": {
+    "pulse": 0.08,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000A29": {
+   "note": "PlayScript DirtyFightingDefenseDebuff: one orange-red Defense (shield + down arrow) debuff icon orbits the victim for ~19 s — upright icon never spun; slower, ominous pulse 0.08 @ 1 Hz (was 0.1 @ 1.5); generated glow kept",
+   "params": {
+    "pulse": 0.08,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000A2A": {
+   "note": "PlayScript DirtyFightingHealDebuff: one orange-red Heal (cross + down arrow) debuff icon orbits the victim for ~19 s — upright icon never spun; slower, ominous pulse 0.08 @ 1 Hz (was 0.1 @ 1.5); generated glow kept",
+   "params": {
+    "pulse": 0.08,
+    "pulseHz": 1.0
+   }
+  },
+  "0x32000A4C": {
+   "note": "Mysterious Portal (0x02001be3) apparition: every 5 s a red swirl with a demon (Rynthid-like) face and glowing eyes flashes 5.6->2.8 m for 0.8 s — re-filed misc (picture sprite, not a dark alpha vortex): no spin (a face must stay upright), lit 0 (additive), no pulse; core 0.35 lights the eyes/orb, fadeIn 0.18 lets the face materialise",
+   "params": {
+    "spin": 0.0,
+    "lit": 0.0,
+    "pulse": 0.0,
+    "gain": 1.15,
+    "core": 0.35,
+    "sat": 1.05,
+    "fadeIn": 0.18,
+    "soft": 0.5
+   },
+   "family": "misc"
+  },
+  "0x32000A68": {
+   "note": "Sand-whirl effect body (setup 0x02001c21, script 0x3300137f with the 0x32000A67 sand specks): faint grey wind swirl cones (retail max 10% opacity) — it is moving air/dust, not light: gain 1.1, core 0, lit 0.5 so it does not glow at night, no pulse",
+   "params": {
+    "gain": 1.1,
+    "core": 0.0,
+    "lit": 0.5,
+    "pulse": 0.0
+   }
+  }
+ }
+}
