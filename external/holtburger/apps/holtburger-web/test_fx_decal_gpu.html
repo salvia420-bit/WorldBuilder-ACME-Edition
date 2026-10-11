@@ -1,0 +1,307 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fx decal gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Ground-mark GPU smoke (driven by test_fx_decal_gpu.cjs) for `?fxDecalSmooth` (2026-10-11).
+// Owner: the war-spell scorch had "a squarish pixelated effect on the ground". 256x256 WebGL2
+// canvas, logarithmic depth like the client, a flat ground in an EffectComposer, no game world.
+// Every check renders through the smooth box shader (the default) AND the 2026-10-10 one
+// (`?fxDecalSmooth=off`), so the probe also proves it can see the defect it guards:
+//   C. both box shader pairs compile (MUL + ADD), no GL error
+//   E. embers (and frost glints, acid blisters) are round and soft: no hard pixel steps, no
+//      square blobs. Legacy: the square ember tiles are found.
+//   P. far from the origin (Holtburg-like, x and z past 32 768 m) and close: no 2x2 holes in the
+//      char. Legacy: holes where one pixel of ground is under fp32's 3.9 mm.
+//   L. far from the origin at play distance: the mark lands where it was spawned (world-space
+//      centroid of the darkening), nothing outside its radius changes, the ADD buffer is finite.
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], info: [], programs: 0 };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+const info = (s) => R.info.push(s);
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const PP = await import("postprocessing");
+  const dec = await import("/scene3d/vfx/fx_decals.js");
+  const { FxDecalEffect } = await import("/scene3d/vfx/fx_decal_effect.js");
+
+  const S = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = S; canvas.height = S;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    R.errors.push(`shader error: ${gl.getProgramInfoLog(program)} | VS: ${gl.getShaderInfoLog(vs)} | FS: ${gl.getShaderInfoLog(fs)}`);
+  };
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+  R.logDepth = renderer.capabilities.logarithmicDepthBuffer === true;
+
+  // A half-float target read as floats (RGBA / FLOAT is always readable from a float colour buffer).
+  const readF = (rt) => {
+    const b = new Float32Array(rt.width * rt.height * 4);
+    renderer.setRenderTarget(rt);
+    gl.readPixels(0, 0, rt.width, rt.height, gl.RGBA, gl.FLOAT, b);
+    renderer.setRenderTarget(null);
+    return b;
+  };
+  const lumOf = (b) => { const o = new Float32Array(S * S); for (let i = 0; i < S * S; i++) o[i] = b[i * 4] + b[i * 4 + 1] + b[i * 4 + 2]; return o; };
+  const ground = (x, y, z) => {
+    const s = new THREE.Scene();
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshBasicMaterial({ color: 0xb0b0b0 }));
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(x, y, z);
+    s.add(m);
+    s.updateMatrixWorld(true);
+    return s;
+  };
+  // One composer per rig, like the client's: half-float buffers + the depth texture the marks sample.
+  const rig = (scene, cam, smooth) => {
+    const composer = new PP.EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, depthBuffer: true });
+    composer.setSize(S, S);
+    const fx = new FxDecalEffect({ camera: cam, depthSource: () => composer.depthTexture, smooth });
+    composer.addPass(new PP.RenderPass(scene, cam));
+    composer.addPass(new PP.EffectPass(cam, fx));
+    return {
+      fx,
+      frame() {
+        composer.render(0.016);
+        renderer.setRenderTarget(null);
+        const b = new Uint8Array(S * S * 4);
+        gl.readPixels(0, 0, S, S, gl.RGBA, gl.UNSIGNED_BYTE, b);
+        return b;
+      },
+      dispose() { composer.dispose(); },
+    };
+  };
+  // Each pixel's ray against the ground plane y = gy, in float64: world xz (or null).
+  const groundHits = (cam, gy) => {
+    const out = new Array(S * S).fill(null);
+    const v = new THREE.Vector3();
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      v.set(((x + 0.5) / S) * 2 - 1, ((y + 0.5) / S) * 2 - 1, 0.5).unproject(cam).sub(cam.position);
+      if (v.y >= -1e-9) continue;
+      const t = (gy - cam.position.y) / v.y;
+      out[y * S + x] = [cam.position.x + v.x * t, cam.position.z + v.z * t];
+    }
+    return out;
+  };
+  // The unit-disc radius of every pixel's ground point (yaw-0 mark at cx, cz of radius rad).
+  const discR = (hits, cx, cz, rad) => hits.map((h) => (h ? Math.hypot(h[0] - cx, h[1] - cz) / rad : Infinity));
+  const spawn = (o, seed) => { const d = dec.spawnFxDecal({ yaw: 0, lifeMs: 600000, ...o }); if (d) d.seed = seed; return d; };
+
+  // Hard steps: a neighbour-to-neighbour jump over 70 % of the local (5x5) maximum, where that
+  // maximum is over 2 % of the window's. A square tile's edge jumps ~100 %; a round dot of radius
+  // >= 4 px tops out near 45 %. Blobs: connected pixels over 10 % of the window max, each blob's
+  // region over half its own peak against its bounding box (an axis-aligned tile ~100 %, a disc
+  // ~79 %); blobs cut by the window are skipped. Non-finite pixels are counted, then read as 0.
+  const shape = (lum0, mask) => {
+    let nonFinite = 0;
+    const lum = lum0.map((v, i) => { if (Number.isFinite(v)) return v; if (mask[i]) nonFinite++; return 0; });
+    let gmax = 0;
+    for (let i = 0; i < lum.length; i++) if (mask[i]) gmax = Math.max(gmax, lum[i]);
+    let hard = 0, maxRatio = 0;
+    const finite = nonFinite === 0;
+    for (let y = 2; y < S - 2; y++) for (let x = 2; x < S - 2; x++) {
+      const i = y * S + x;
+      if (!mask[i] || !mask[i + 1] || !mask[i + S]) continue;
+      let m5 = 0;
+      for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) m5 = Math.max(m5, lum[i + j * S + k]);
+      if (!(m5 > 0.02 * gmax)) continue;
+      const r = Math.max(Math.abs(lum[i + 1] - lum[i]), Math.abs(lum[i + S] - lum[i])) / m5;
+      maxRatio = Math.max(maxRatio, r);
+      if (r > 0.7) hard++;
+    }
+    const seen = new Uint8Array(S * S);
+    let blobs = 0, maxFill = 0;
+    for (let s0 = 0; s0 < S * S; s0++) {
+      if (seen[s0] || !mask[s0] || !(lum[s0] > 0.1 * gmax)) continue;
+      const stack = [s0], pix = [];
+      seen[s0] = 1;
+      let peak = 0, cut = false;
+      while (stack.length) {
+        const p = stack.pop();
+        pix.push(p); peak = Math.max(peak, lum[p]);
+        const px = p % S, py = (p / S) | 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const qx = px + dx, qy = py + dy;
+          if (qx < 0 || qy < 0 || qx >= S || qy >= S) { cut = true; continue; }
+          const q = qy * S + qx;
+          if (!(lum[q] > 0.1 * gmax)) continue;
+          if (!mask[q]) { cut = true; continue; }   // the blob runs out of the window
+          if (!seen[q]) { seen[q] = 1; stack.push(q); }
+        }
+      }
+      if (cut) continue;
+      let x0 = S, x1 = -1, y0 = S, y1 = -1, area = 0;
+      for (const p of pix) {
+        if (lum[p] < 0.5 * peak) continue;
+        const px = p % S, py = (p / S) | 0;
+        area++; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      }
+      if (area < 24) continue;
+      blobs++;
+      maxFill = Math.max(maxFill, area / ((x1 - x0 + 1) * (y1 - y0 + 1)));
+    }
+    return { gmax, hard, maxRatio, blobs, maxFill, finite, nonFinite };
+  };
+  const fmt = (m) => `hard ${m.hard}, max step ${m.maxRatio.toFixed(2)}, blobs ${m.blobs}, max fill ${m.maxFill.toFixed(2)}` +
+    (m.nonFinite ? `, ${m.nonFinite} non-finite px` : "");
+
+  // ---- E. shapes (at the origin: precision plays no part) -------------------------------------
+  {
+    const RAD = 1.8;
+    const scene = ground(0, 0, 0);
+    // top-down over the mark, the view inside r < 0.42 of the disc (the char core, clear of the rim):
+    // 4.2 mm a pixel, so an ember cell is ~48 px and a dot 10-17 px of radius
+    const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 5000);
+    cam.up.set(0, 0, -1);
+    cam.position.set(0, 0.927, 0); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+    const rq = discR(groundHits(cam, 0), 0, 0, RAD);
+    const core = rq.map((r) => r < 0.42);
+    const annulus = rq.map((r) => r > 0.1 && r < 0.42);
+    const seeds = [0.11, 0.23, 0.37, 0.52, 0.68, 0.83];
+    const run = (smooth, kind, mask) => {
+      const g = rig(scene, cam, smooth);
+      const tot = { hard: 0, maxRatio: 0, blobs: 0, maxFill: 0, finite: true, nonFinite: 0, sum: 0 };
+      for (const seed of seeds) {
+        dec._resetFxDecalsForTest();
+        spawn({ position: { x: 0, y: 0, z: 0 }, kind, radius: RAD, nowMs: performance.now() - 3000 }, seed);
+        g.frame();
+        const m = shape(lumOf(readF(g.fx.addTarget)), mask);
+        tot.hard += m.hard; tot.blobs += m.blobs; tot.finite = tot.finite && m.finite; tot.sum += m.gmax;
+        tot.nonFinite += m.nonFinite;
+        tot.maxRatio = Math.max(tot.maxRatio, m.maxRatio); tot.maxFill = Math.max(tot.maxFill, m.maxFill);
+      }
+      g.dispose();
+      dec._resetFxDecalsForTest();
+      return tot;
+    };
+    const sm = run(true, "scorch", core), lg = run(false, "scorch", core);
+    check("E. embers are round soft specks: no hard pixel steps, no square blobs (6 seeds)",
+      sm.finite && sm.blobs >= 4 && sm.hard === 0 && sm.maxFill < 0.94, fmt(sm));
+    // The 2026-10-10 rim is exp(-pow(negative, 2.0)): undefined in GLSL. A GPU that answers NaN
+    // there blanks the whole char core, and its tiles cannot be measured at all.
+    if (lg.nonFinite > 0) info(`E. 2026-10-10 shader: ${lg.nonFinite} non-finite emission px in the char core on this GPU (pow of a negative base); its tiles cannot be measured`);
+    else check("E. probe sensitivity: the 2026-10-10 shader's ember tiles ARE found (hard edges, square blobs)",
+      lg.hard > 100 && lg.maxFill >= 0.97, fmt(lg));
+    const fr = run(true, "frost", annulus), ac = run(true, "acid", annulus);
+    check("E. frost glints and acid blisters: finite, present, no hard pixel steps",
+      fr.finite && ac.finite && fr.sum > 0 && ac.sum > 0 && fr.hard === 0 && ac.hard === 0,
+      `frost: ${fmt(fr)} | acid: ${fmt(ac)}`);
+  }
+
+  // ---- P. precision far from the origin -------------------------------------------------------
+  // Holtburg-like ground: |x| and |z| past 32 768 m, where fp32 steps by 3.9 mm.
+  const X0 = 32900.137, Y0 = 50, Z0 = -34600.291;
+  const holtGround = ground(X0, Y0, Z0);
+  const holes = (cam, smooth) => {
+    const rq = discR(groundHits(cam, Y0), X0, Z0, 1.8);
+    const g = rig(holtGround, cam, smooth);
+    dec._resetFxDecalsForTest();
+    spawn({ position: { x: X0, y: Y0, z: Z0 }, kind: "scorch", radius: 1.8, nowMs: performance.now() - 20000 }, 0.37);
+    g.frame();
+    const mul = readF(g.fx.mulTarget);
+    g.dispose();
+    dec._resetFxDecalsForTest();
+    let n = 0, hole = 0, marked = 0, finite = true;
+    for (let i = 0; i < S * S; i++) {
+      if (!(rq[i] < 0.42)) continue;   // the char core: fully darkened by design
+      n++;
+      const m = mul[i * 4];
+      if (!Number.isFinite(m)) finite = false;
+      if (m > 0.9) hole++;
+      if (m < 0.6) marked++;
+    }
+    return { n, hole, marked, finite, holeF: n ? hole / n : 1, markedF: n ? marked / n : 0 };
+  };
+  const pf = (h) => `${h.hole}/${h.n} holes (${(100 * h.holeF).toFixed(1)} %), ${(100 * h.markedF).toFixed(1)} % charred`;
+  {
+    // close: 0.6 m over the mark, looking straight down, 0.8 mm of ground a pixel
+    const cam = new THREE.PerspectiveCamera(20, 1, 0.1, 5000);
+    cam.up.set(0, 0, -1);
+    cam.position.set(X0, Y0 + 0.6, Z0); cam.lookAt(X0, Y0, Z0); cam.updateMatrixWorld(true);
+    const sm = holes(cam, true), lg = holes(cam, false);
+    check("P. close over Holtburg-like ground: the char has no holes", sm.finite && sm.n > 1000 && sm.hole === 0 && sm.markedF > 0.95, pf(sm));
+    check("P. probe sensitivity: the 2026-10-10 shader drops 2x2 quads there", lg.holeF > 0.05, pf(lg));
+  }
+  {
+    // play distance: the mark 3.5 m from a camera 1.75 m up, looking 30 degrees down, one pixel the
+    // angle of a 1440p screen's at 60 degrees (~2.8 mm of ground)
+    const fov = (2 * Math.atan(Math.tan(Math.PI / 6) * S / 1440) * 180) / Math.PI;
+    const cam = new THREE.PerspectiveCamera(fov, 1, 0.1, 5000);
+    cam.position.set(X0, Y0 + 1.75, Z0 + 1.75 * Math.sqrt(3)); cam.lookAt(X0, Y0, Z0); cam.updateMatrixWorld(true);
+    const sm = holes(cam, true), lg = holes(cam, false);
+    check("P. a mark 3.5 m away at a 1440p pixel, Holtburg-like ground: no holes", sm.finite && sm.n > 1000 && sm.hole === 0 && sm.markedF > 0.95, pf(sm));
+    info(`P. same view, 2026-10-10 shader: ${pf(lg)}`);
+  }
+
+  // ---- L. placement at play distance, far from the origin ---------------------------------------
+  {
+    const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 5000);
+    cam.position.set(X0, Y0 + 4.243, Z0 + 4.243); cam.lookAt(X0, Y0, Z0); cam.updateMatrixWorld(true);
+    const hits = groundHits(cam, Y0);
+    const MX = X0 + 0.4, MZ = Z0 - 0.3, MR = 1.5;
+    for (const smooth of [true, false]) {
+      const tag = smooth ? "smooth" : "2026-10-10";
+      const g = rig(holtGround, cam, smooth);
+      dec._resetFxDecalsForTest();
+      const base = g.frame();
+      spawn({ position: { x: MX, y: Y0, z: MZ }, kind: "scorch", radius: MR, nowMs: performance.now() - 20000 }, 0.52);
+      const out = g.frame();
+      let sw = 0, sx = 0, sz = 0, outside = 0, outsideBad = 0, inner = 0, innerDark = 0;
+      for (let i = 0; i < S * S; i++) {
+        const h = hits[i];
+        if (!h) continue;
+        const b = base[i * 4] + base[i * 4 + 1] + base[i * 4 + 2], o = out[i * 4] + out[i * 4 + 1] + out[i * 4 + 2];
+        const dk = (b - o) / 765;
+        const rr = Math.hypot(h[0] - MX, h[1] - MZ);
+        if (rr > MR + 0.05) { outside++; if (Math.abs(dk) > 0.02) outsideBad++; continue; }
+        if (rr < 0.3) { inner++; if (o < b * 0.8) innerDark++; }
+        if (dk > 0.05) { sw += dk; sx += dk * (h[0] - MX); sz += dk * (h[1] - MZ); }
+      }
+      // the ragged edge moves the centroid a little; a wrong transform moves it by metres
+      const off = sw > 0 ? Math.hypot(sx / sw, sz / sw) : Infinity;
+      const ok = sw > 0 && off < 0.25 && outside > 1000 && outsideBad === 0 && inner > 50 && innerDark === inner;
+      const detail = `centroid ${off.toFixed(3)} m off, outside ${outsideBad}/${outside} changed, centre ${innerDark}/${inner} darkened`;
+      if (smooth) check("L. 6 m away over Holtburg-like ground: the char lands on its centre, nothing outside its radius changes", ok, detail);
+      else info(`L. ${tag} shader, same view: ${detail}`);
+      // the ADD buffer of a fresh scorch (rim + embers live) must be finite
+      dec._resetFxDecalsForTest();
+      spawn({ position: { x: MX, y: Y0, z: MZ }, kind: "scorch", radius: MR, nowMs: performance.now() - 300 }, 0.52);
+      g.frame();
+      const add = readF(g.fx.addTarget);
+      let nonFinite = 0, lit = 0;
+      for (let i = 0; i < S * S * 4; i += 4) {
+        if (!Number.isFinite(add[i]) || !Number.isFinite(add[i + 1]) || !Number.isFinite(add[i + 2])) nonFinite++;
+        else if (add[i] + add[i + 1] + add[i + 2] > 1e-3) lit++;
+      }
+      if (smooth) check("L. a fresh scorch's emission (rim + embers) is finite everywhere and lit", nonFinite === 0 && lit > 200, `${nonFinite} non-finite, ${lit} lit`);
+      else info(`L. ${tag} shader, fresh scorch emission: ${nonFinite} non-finite px (pow of a negative base), ${lit} lit`);
+      g.dispose();
+      dec._resetFxDecalsForTest();
+    }
+  }
+
+  // ---- C. compile -------------------------------------------------------------------------------
+  R.programs = renderer.info.programs ? renderer.info.programs.length : -1;
+  check("C. both box shader pairs compiled (no shader error) and no GL error", R.errors.length === 0 && gl.getError() === 0);
+  R.ok = R.errors.length === 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

@@ -381,7 +381,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.runAll",
     status: "current",
     reads: "function",
-    evidence: "scene3d/diag.js:654",
+    evidence: "scene3d/diag.js:660",
     availability: "in-world",
     opaque: true,
     note: "Oracle-diff family (PASS|DRIFT|NO-ORACLE|INFRA + missingSurfaces "

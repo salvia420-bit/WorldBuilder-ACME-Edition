@@ -75,6 +75,45 @@ pub fn remote_motion_sticky_target(data: &MovementTypeData, rust_moveto_sticks: 
     }
 }
 
+/// NPC-facing fix (2026-10-11) — the facing a TurnTo directive ENDS at, for
+/// the lanes that set it instead of turning: the heading set below (the local
+/// player's entity record; a remote under `?remoteSpine=off`) and the wasm
+/// KIND_TURN heading-ease. It is retail's turn node (`MoveToManager::
+/// TurnToHeading` / `TurnToObject_Internal`, acclient.c:345954 / :345911):
+/// TurnToHeading → the absolute wire heading; TurnToObject → the bearing to
+/// the target plus the wire offset, or, for a target the client does not
+/// know, the heading the message packs (`unpack_movement` case 8,
+/// :339604-339605). Wire headings are the compass in DEGREES
+/// ([`Quaternion::from_wire_heading`]); the inline version this replaces fed
+/// them to `Quaternion::from_heading` as pose RADIANS, and gave up on a
+/// target in another landblock. `None` for any other movement, a non-finite
+/// heading, or a mover/target with no pose.
+pub fn turn_directive_facing(
+    state: &WorldState,
+    guid: Guid,
+    data: &MovementTypeData,
+) -> Option<Quaternion> {
+    let finite_or_zero = |deg: f32| if deg.is_finite() { deg } else { 0.0 };
+    match data {
+        MovementTypeData::TurnToHeading(turn) => {
+            let heading = turn.params.desired_heading;
+            heading.is_finite().then(|| Quaternion::from_wire_heading(heading))
+        }
+        MovementTypeData::TurnToObject(turn) if state.entities.get(turn.target).is_some() => {
+            let from = state.runtime_pose_for_guid(guid)?;
+            let to = state.runtime_pose_for_guid(turn.target)?;
+            let heading_deg =
+                from.heading_to(&to).to_degrees() + finite_or_zero(turn.params.desired_heading);
+            Some(Quaternion::from_heading(heading_deg.to_radians()))
+        }
+        MovementTypeData::TurnToObject(turn) => {
+            let heading = turn.desired_heading;
+            heading.is_finite().then(|| Quaternion::from_wire_heading(heading))
+        }
+        _ => None,
+    }
+}
+
 fn update_entity_motion_snapshot(
     state: &mut WorldState,
     guid: Guid,
@@ -155,49 +194,21 @@ pub(crate) fn handle_message(
                 state.update_health_fraction(guid, 0.0, events);
             }
 
-            let mut target_info = None;
-            if let MovementTypeData::TurnToObject(turn) = &data.data
-                && turn.desired_heading.abs() <= 1e-6
-                && let Some(target) = state.entities.get(turn.target)
-            {
-                target_info = Some((target.position.landblock_id, target.position.coords));
+            if state.entities.get(guid).is_none() {
+                return false;
             }
-
-            let current_position = match state.entities.get(guid) {
-                Some(entity) => entity.position,
-                None => return false,
-            };
-
-            let maybe_rotation = match &data.data {
-                MovementTypeData::TurnToHeading(turn)
-                    if turn.params.desired_heading.is_finite() =>
-                {
-                    Some(Quaternion::from_heading(turn.params.desired_heading))
-                }
-                MovementTypeData::TurnToObject(turn) => {
-                    if turn.desired_heading.is_finite() && turn.desired_heading.abs() > 1e-6 {
-                        Some(Quaternion::from_heading(turn.desired_heading))
-                    } else if let Some((target_lb, target_coords)) = target_info {
-                        if target_lb == current_position.landblock_id {
-                            Some(Quaternion::from_heading(
-                                current_position.coords.heading_to(&target_coords),
-                            ))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
 
             // MoveTo refactor phase B: under the spine a remote TurnTo is a
             // TURN — the object's own MoveToManager turns it by its TurnRight
             // motion (`unpack_movement` cases 8/9 only arm the MoveTo,
             // acclient.c:339590-339615) — not a heading snap.
             let mover_turns = guid != state.player.guid && state.scene.remote_spine_active();
-            if let Some(rotation) = maybe_rotation.filter(|_| !mover_turns) {
+            let maybe_rotation = if mover_turns {
+                None
+            } else {
+                turn_directive_facing(state, guid, &data.data)
+            };
+            if let Some(rotation) = maybe_rotation {
                 state.set_entity_rotation(guid, rotation, events)
             } else {
                 false
@@ -258,42 +269,10 @@ pub(crate) fn handle_message(
                 state.update_health_fraction(guid, 0.0, events);
             }
 
-            let mut target_info = None;
-            if let MovementTypeData::TurnToObject(turn) = &data.movement.data
-                && turn.desired_heading.abs() <= 1e-6
-                && let Some(target) = state.entities.get(turn.target)
-            {
-                target_info = Some((target.position.landblock_id, target.position.coords));
-            }
-
-            if let Some(entity) = state.entities.get(guid) {
-                let current_position = entity.position;
-                let maybe_rotation = match &data.movement.data {
-                    MovementTypeData::TurnToHeading(turn)
-                        if turn.params.desired_heading.is_finite() =>
-                    {
-                        Some(Quaternion::from_heading(turn.params.desired_heading))
-                    }
-                    MovementTypeData::TurnToObject(turn) => {
-                        if turn.desired_heading.is_finite() && turn.desired_heading.abs() > 1e-6 {
-                            Some(Quaternion::from_heading(turn.desired_heading))
-                        } else if let Some((target_lb, target_coords)) = target_info {
-                            if target_lb == current_position.landblock_id {
-                                Some(Quaternion::from_heading(
-                                    current_position.coords.heading_to(&target_coords),
-                                ))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
+            if state.entities.get(guid).is_some() {
                 let mover_turns = guid != state.player.guid && state.scene.remote_spine_active();
-                if let Some(rotation) = maybe_rotation.filter(|_| !mover_turns)
+                if !mover_turns
+                    && let Some(rotation) = turn_directive_facing(state, guid, &data.movement.data)
                     && state.set_entity_rotation(guid, rotation, events)
                 {
                     handled = true;
@@ -628,5 +607,69 @@ mod tests {
         assert_eq!(remote_motion_sticky_target(&swing, false), 0x8000_0042);
         let plain = MovementTypeData::Invalid(MovementInvalid::default());
         assert_eq!(remote_motion_sticky_target(&plain, true), 0, "no sticky_object: unstick");
+    }
+
+    /// NPC-facing fix (2026-10-11): `turn_directive_facing`, the facing a
+    /// TurnTo sets on the lanes that do not turn. A wire heading is the
+    /// compass in DEGREES (90 = east; the inline version read it as pose
+    /// radians), a TurnToObject faces its target across a landblock edge (the
+    /// inline version gave up there), and an unknown target falls back to the
+    /// packed heading (`unpack_movement` case 8, acclient.c:339604-339605).
+    #[test]
+    fn turn_directive_facing_reads_the_wire_compass() {
+        use holtburger_common::Vector3;
+        use holtburger_protocol::messages::movement::messages::motion::{
+            TurnToHeading, TurnToObject, TurnToParameters,
+        };
+        let at = |landblock: u32, x: f32, y: f32| {
+            WorldPosition {
+                landblock_id: holtburger_common::Guid(landblock),
+                coords: Vector3::new(x, y, 0.0),
+                rotation: Quaternion::identity(),
+            }
+            .normalize_outdoor_cell()
+        };
+        let faces = |q: Option<Quaternion>| {
+            q.expect("a facing").rotate_vector(Vector3::new(0.0, 1.0, 0.0))
+        };
+        let params = |desired_heading: f32| TurnToParameters {
+            movement_parameters: 0x0001_EE0F,
+            speed: 1.0,
+            desired_heading,
+        };
+        let mut state = WorldState::synthetic();
+        let npc = holtburger_common::Guid(0x8000_0042);
+        let target = holtburger_common::Guid(0x8000_0077);
+        // The NPC 2 m short of landblock 0x0102's east edge, facing north; the
+        // target 3 m past the edge in 0x0202 — due east of it.
+        state
+            .entities
+            .insert(Entity::new(npc, "Vendor".to_string(), at(0x0102_0000, 190.0, 96.0)));
+        state
+            .entities
+            .insert(Entity::new(target, "Player".to_string(), at(0x0202_0000, 3.0, 96.0)));
+
+        let heading = MovementTypeData::TurnToHeading(TurnToHeading { params: params(90.0) });
+        let f = faces(turn_directive_facing(&state, npc, &heading));
+        assert!((f.x - 1.0).abs() < 1e-5 && f.y.abs() < 1e-5, "wire 90 faces east: {f:?}");
+
+        let to_target = MovementTypeData::TurnToObject(TurnToObject {
+            target,
+            desired_heading: 0.0,
+            params: params(0.0),
+        });
+        let f = faces(turn_directive_facing(&state, npc, &to_target));
+        assert!((f.x - 1.0).abs() < 1e-4 && f.y.abs() < 1e-3, "faces the target: {f:?}");
+
+        let unknown = MovementTypeData::TurnToObject(TurnToObject {
+            target: holtburger_common::Guid(0x8000_9999),
+            desired_heading: 270.0,
+            params: params(0.0),
+        });
+        let f = faces(turn_directive_facing(&state, npc, &unknown));
+        assert!((f.x + 1.0).abs() < 1e-5 && f.y.abs() < 1e-5, "packed wire 270 faces west: {f:?}");
+
+        let invalid = MovementTypeData::Invalid(Default::default());
+        assert!(turn_directive_facing(&state, npc, &invalid).is_none(), "not a turn");
     }
 }

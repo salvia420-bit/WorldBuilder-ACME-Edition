@@ -133,6 +133,9 @@ export const ENTITIES_JS_TOPLEVEL_STUBS = Object.freeze({
   readSelectionIndicatorMode: '() => "brackets"',
   limbDamageEnabled: "() => false",
   ragdollEnabled: "() => false",
+  // 2026-10-11: `RAGDOLL_REST_ON = ragdollRestEnabled()` (the corpse reveal's
+  // poll). The reader answers true with no window (default ON).
+  ragdollRestEnabled: "() => true",
   readRigModuleFlag: "() => false",
   remoteMoveToPhaseEnabled: genuineRemoteMoveToPhase("remoteMoveToPhaseEnabled"),
   planRemoteMoveToPhase: genuineRemoteMoveToPhase("planRemoteMoveToPhase"),

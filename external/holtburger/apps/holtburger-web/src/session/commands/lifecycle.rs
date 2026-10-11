@@ -19,6 +19,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_spine_on,
         remote_sweep_on,
         target_voyeur_on,
+        remote_moveto_begin_on,
         cast_takes_control_on,
         remote_sticky_on,
         combat_radii_on,
@@ -161,6 +162,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // MoveTo refactor phase G: MoveTos track their target
                 // through the TargetManager voyeur (?targetVoyeur, default ON).
                 new_world.scene.set_target_voyeur_enabled(target_voyeur_on);
+                // NPC-facing fix: a remote MoveTo / TurnTo begins inside the
+                // unpack that arms it (?remoteMoveToBegin, default ON).
+                new_world.scene.set_remote_moveto_begin_enabled(remote_moveto_begin_on);
                 // Cast-movement fix 3: every non-autonomous self motion
                 // hands control to the server (?castTakesControl, default
                 // ON since the 2026-10-11 decision; `=off` escapes).

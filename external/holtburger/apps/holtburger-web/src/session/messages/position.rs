@@ -1231,36 +1231,40 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 physics_translucency: 0.0,
                 is_autonomous: data.is_autonomous,
             });
-            // F3-3 (bughunt 2026-06-09) — TurnTo execution. Both
-            // TurnToHeading and TurnToObject carry an ABSOLUTE
-            // target `desired_heading` (ACE pre-computes the
-            // toward-target heading), so emit a KIND_TURN with the
-            // heading as an AC z-up quaternion + the turn speed.
-            // The JS heading-ease then slerps the rig to face it —
-            // previously this envelope was decoded then dropped and
-            // NPCs never turned to face the player. The KIND_MOTION
-            // above (motion_command 0 for TurnTo) still carries the
-            // stance; this is an additional event.
+            // F3-3 (bughunt 2026-06-09) — TurnTo execution: emit a
+            // KIND_TURN with the facing the turn ends at as an AC z-up
+            // quaternion + the turn speed. The JS heading-ease then slerps
+            // the rig to face it — previously this envelope was decoded
+            // then dropped and NPCs never turned to face the player. The
+            // KIND_MOTION above (motion_command 0 for TurnTo) still carries
+            // the stance; this is an additional event.
             // MoveTo refactor phase B: a remote the per-object spine runs
             // TURNS by its own MoveToManager (the scene exports the turning
-            // heading as managed rows), so no JS ease target is sent — the
-            // wire heading here is in degrees (ACE `Frame.get_heading`) and
-            // this emit reads it as radians (investigation D-7).
-            let spine_turns_remote = world.borrow().as_ref().is_some_and(|w| {
-                data.guid != w.player.guid && w.scene.remote_spine_active()
-            });
-            let turn_directive: Option<(f32, f32)> = match &data.data {
-                _ if spine_turns_remote => None,
-                MovementTypeData::TurnToHeading(t) => {
-                    Some((t.params.desired_heading, t.params.speed))
-                }
-                MovementTypeData::TurnToObject(t) => {
-                    Some((t.desired_heading, t.params.speed))
-                }
-                _ => None,
-            };
-            if let Some((heading, turn_speed)) = turn_directive {
-                let half = heading * 0.5;
+            // heading as managed rows), so no JS ease target is sent.
+            // NPC-facing fix (2026-10-11, investigation D-7): the facing is
+            // `turn_directive_facing` — retail's turn node. This emit used
+            // to send the wire `desired_heading` as a yaw in RADIANS, but it
+            // is the compass in DEGREES, and ACE's TurnToObject packs 0
+            // there (it never pre-computes the bearing), so a TurnToObject
+            // eased every rig toward one fixed direction.
+            let turn_directive: Option<(holtburger_common::Quaternion, f32)> =
+                world.borrow().as_ref().and_then(|w| {
+                    if data.guid != w.player.guid && w.scene.remote_spine_active() {
+                        return None;
+                    }
+                    let turn_speed = match &data.data {
+                        MovementTypeData::TurnToHeading(t) => t.params.speed,
+                        MovementTypeData::TurnToObject(t) => t.params.speed,
+                        _ => return None,
+                    };
+                    let facing = holtburger_world::handlers::movement::turn_directive_facing(
+                        w,
+                        data.guid,
+                        &data.data,
+                    )?;
+                    Some((facing, turn_speed))
+                });
+            if let Some((facing, turn_speed)) = turn_directive {
                 entity_updates.borrow_mut().push(EntityUpdate {
                     kind: ENTITY_UPDATE_KIND_TURN,
                     guid: u32::from(data.guid),
@@ -1269,10 +1273,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
-                    qw: half.cos(),
-                    qx: 0.0,
-                    qy: 0.0,
-                    qz: half.sin(),
+                    qw: facing.w,
+                    qx: facing.x,
+                    qy: facing.y,
+                    qz: facing.z,
                     wcid: 0,
                     item_type: 0,
                     name: String::new(),

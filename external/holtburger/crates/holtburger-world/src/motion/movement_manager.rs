@@ -1404,8 +1404,8 @@ mod tests {
     #[test]
     fn do_motion_failure_cancels_moveto_with_error() {
         let mut manager = MovementManager::default();
-        // TurnToHeading 180° with the default pose at heading 90
-        // (identity quat = north) → the first driven frame's
+        // TurnToHeading to wire 90° (east, pose 180) with the default pose
+        // at pose heading 90 (north) → the first driven frame's
         // BeginTurnToHeading emits a TurnRight _DoMotion (diff 90°).
         let turn = envelope(
             MovementType::TurnToHeading,
@@ -1415,7 +1415,7 @@ mod tests {
                 params: TurnToParameters {
                     movement_parameters: 0,
                     speed: 1.0,
-                    desired_heading: 180.0,
+                    desired_heading: 90.0,
                 },
             }),
         );

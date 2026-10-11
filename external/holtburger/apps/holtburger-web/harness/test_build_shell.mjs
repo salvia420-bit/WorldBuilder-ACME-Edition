@@ -328,7 +328,10 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // (entities.js / loop.js), weapon_class.js, weapon_fx_glsl.js,
   // components/weaponFlex.js, components/weaponAura.js (generator --check: up
   // to date, 388 modules) → 372.
-  const NON_APP_PRELOADS = 372;
+  // 2026-10-11 (owner bug batch): + scene3d/always_daylight.js (index.html) and
+  // scene3d/diag/slow_run.js (diag.js) (generator --check: up to date, 390
+  // modules) → 374.
+  const NON_APP_PRELOADS = 374;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

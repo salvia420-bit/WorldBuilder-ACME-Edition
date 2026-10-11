@@ -62,6 +62,24 @@ export function ragdollEnabled() {
   }
 }
 
+/**
+ * `?ragdollRest` (DEFAULT ON, `=off`/`0`/`false` escape; 2026-10-11) — the sim
+ * ends when it stops doing VISIBLE work: the rest test ignores parts that
+ * never draw and accepts in-place micro-jitter, contact stiction and the calm
+ * damping arrive once the joints have given, and the hard stop is 6 s (was
+ * 14 s); entities.js also polls the corpse reveal at 100 ms under it. Off =
+ * the pre-2026-10-11 settle model, bit for bit. No window (bare node) → on.
+ */
+export function ragdollRestEnabled() {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = (new URLSearchParams(window.location.search).get("ragdollRest") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_e) {
+    return true;
+  }
+}
+
 /* ── tunables (exported for the 1070 retune session) ─────────────────── */
 export const RAGDOLL_GRAVITY = 9.8; // m/s^2, model-space −Z
 export const RAGDOLL_DAMPING = 0.985; // per-step velocity retention
@@ -72,11 +90,51 @@ export const RAGDOLL_IMPULSE = 2.2; // m/s baseline topple push
 export const RAGDOLL_IMPULSE_CRIT = 4.2; // m/s crit-death push
 export const RAGDOLL_SETTLE_EPS = 0.0012; // max node move (m/step) counted as rest
 export const RAGDOLL_SETTLE_FRAMES = 24; // consecutive rest steps before freeze
-export const RAGDOLL_MAX_TIME = 14; // s hard stop (a sim can never run forever)
 export const RAGDOLL_CALM_DAMPING = 0.9; // damping a long-lived sim decays to
-export const RAGDOLL_CALM_START = 5.0; // s before the extra damping ramps in
-export const RAGDOLL_CALM_SPAN = 4.0; // s over which it ramps
 export const RAGDOLL_ITERATIONS_RIGID = 5; // relaxation passes while the braces hold
+
+/* rest model (`?ragdollRest`, 2026-10-11 — "the corpse takes too long, the
+ * ragdoll isn't doing anything useful", shreths especially).
+ *
+ * The legacy freeze needed EVERY node to move < RAGDOLL_SETTLE_EPS per step for
+ * 24 consecutive steps. Three things kept a long rig failing it while it did
+ * nothing worth watching:
+ *   1. invisible nodes. A Setup's locator parts are verlet nodes too — the
+ *      shreth (0x020005A7 / 0x020005C4, 25 parts) carries ten GfxObj
+ *      0x010001EC leaves (surface 0x08000015, translucency 1) at the feet,
+ *      elbows, knees, neck and head, on chains up to 5 links deep (root →
+ *      chest → shoulder → forearm → foot → locator); one of them was the
+ *      late-failing node in most seeded deaths.
+ *   2. floor creep. Flat on the ground, the frustrated bend links slide the
+ *      body sideways ~1 mm per step for seconds (see the stiction pass).
+ *   3. bounded in-place jitter, which fails a per-step speed test forever.
+ * Now:
+ *   - only DRAWN nodes (startRagdoll's part mask) are tested;
+ *   - a sim is also at rest once every drawn node stayed inside a box of
+ *     RAGDOLL_REST_EPS_FRAC × body height (clamped) for RAGDOLL_REST_WINDOW —
+ *     amplitude, not speed, is what reads as motion on screen;
+ *   - the per-step test is a speed held for a time (frame-rate independent);
+ *   - contact stiction ramps in once the joints have finished giving
+ *     (calmStart ≥ RAGDOLL_CALM_START), the extra damping RAGDOLL_CALM_DELAY
+ *     later, per unit of time — the topple/crumple before calmStart is
+ *     bit-identical to the legacy sim;
+ *   - the hard stop is 6 s.
+ * tests/ragdoll_rest.test.mjs holds the shreth numbers. */
+export const RAGDOLL_MAX_TIME = 6; // s hard stop (a sim can never run forever)
+export const RAGDOLL_CALM_START = 2.4; // s — earliest the calm phase begins …
+export const RAGDOLL_CALM_AFTER_GIVE = 0.6; // … and never before the last joint gave + this
+export const RAGDOLL_STICTION_SPEED = 0.18; // m/s — slower contact slides stop …
+export const RAGDOLL_STICTION_SPAN = 1.5; // … threshold ramps 0 → full over this (s)
+export const RAGDOLL_CALM_DELAY = 1.0; // s after calmStart the extra damping begins
+export const RAGDOLL_CALM_SPAN = 2.0; // s over which it ramps to RAGDOLL_CALM_DAMPING
+export const RAGDOLL_REST_WINDOW = 0.4; // s every drawn node must stay inside its box
+export const RAGDOLL_REST_EPS_FRAC = 0.006; // box size × body height …
+export const RAGDOLL_REST_EPS_MIN = 0.006; // … clamped (m, model space)
+export const RAGDOLL_REST_EPS_MAX = 0.03;
+/* `?ragdollRest=off` — the pre-2026-10-11 schedule */
+export const RAGDOLL_MAX_TIME_LEGACY = 14;
+export const RAGDOLL_CALM_START_LEGACY = 5.0;
+export const RAGDOLL_CALM_SPAN_LEGACY = 4.0;
 
 /* structural resistance ("jenga") */
 export const RAGDOLL_BRACE_STIFF = 1.0; // rigidity strut stiffness at full gain
@@ -316,6 +374,11 @@ export function buildBoneChildren(parentIndex, positions) {
  *   toppleScale / twistScale / dirJitter
  *             per-death style knobs (kill_impulse.js FALL_STYLES) — scale the
  *             seeded angular rate, the vertical twist, and the direction fan.
+ *   drawn     per-node 0/1 — does the part ever put a pixel on screen
+ *             (startRagdoll's `drawnPartMask`); null ⇒ every node is drawn.
+ *             Only the rest test reads it; every node is still simulated.
+ *   rest      the 2026-10-11 rest model (default `?ragdollRest`, on in node);
+ *             false ⇒ the legacy settle schedule exactly.
  */
 export function initSim(
   parentIndex,
@@ -330,6 +393,8 @@ export function initSim(
     toppleScale = 1,
     twistScale = 1,
     dirJitter = null,
+    drawn = null,
+    rest = ragdollRestEnabled(),
   } = {},
 ) {
   const n = parentIndex.length;
@@ -457,6 +522,24 @@ export function initSim(
   const support = new Float64Array(n);
   support.fill(floorZ);
 
+  /* rest model: which nodes count, how big a box, when the calm comes ---- */
+  const restModel = rest !== false;
+  const vis = new Uint8Array(n);
+  let visCount = 0;
+  for (let i = 0; i < n; i++) {
+    vis[i] = restModel && drawn && drawn.length === n ? (drawn[i] ? 1 : 0) : 1;
+    visCount += vis[i];
+  }
+  if (visCount === 0) {
+    // nothing drawn is no reason to never rest — fall back to every node
+    vis.fill(1);
+    visCount = n;
+  }
+  const restEps = Math.min(
+    RAGDOLL_REST_EPS_MAX,
+    Math.max(RAGDOLL_REST_EPS_MIN, RAGDOLL_REST_EPS_FRAC * height),
+  );
+
   return {
     n,
     pos,
@@ -471,7 +554,26 @@ export function initSim(
     bounce: RAGDOLL_BOUNCE_MAX * rand() * rand(), // skewed low: most deaths thud
     t: 0,
     settled: 0,
+    settledT: 0, // s the rest model's step test has held
     done: false,
+    // rest model (2026-10-11, `?ragdollRest`). The calm phase (stiction, then
+    // the extra damping) waits for the last joint to give, so the topple /
+    // crumple itself is never touched.
+    restModel,
+    vis,
+    visCount,
+    restEps,
+    restAnchor: new Float64Array(n * 3),
+    restT0: -1, // sim time the current rest window opened (−1 = none)
+    restedBy: null, // "window" | "steps" | "cap" — telemetry
+    // calmStart: stiction ramps in (rest model) / the damping ramps in (legacy);
+    // dampStart: the rest model's damping, RAGDOLL_CALM_DELAY later.
+    calmStart: restModel ? Math.max(RAGDOLL_CALM_START, braceEndT + RAGDOLL_CALM_AFTER_GIVE) : RAGDOLL_CALM_START_LEGACY,
+    dampStart: restModel
+      ? Math.max(RAGDOLL_CALM_START, braceEndT + RAGDOLL_CALM_AFTER_GIVE) + RAGDOLL_CALM_DELAY
+      : RAGDOLL_CALM_START_LEGACY,
+    calmSpan: restModel ? RAGDOLL_CALM_SPAN : RAGDOLL_CALM_SPAN_LEGACY,
+    maxTime: restModel ? RAGDOLL_MAX_TIME : RAGDOLL_MAX_TIME_LEGACY,
     // energy governor (see RAGDOLL_MAX_SPEED block). `push` accumulates the
     // floor projection depth per node per step so the contact pass can undo the
     // velocity it would otherwise inject; `eCap` is the ratcheting mechanical-
@@ -648,8 +750,19 @@ export function stepSim(sim, dt) {
   const g = RAGDOLL_GRAVITY * dt * dt;
 
   let damp = RAGDOLL_DAMPING;
-  if (t > RAGDOLL_CALM_START) {
-    const f = Math.min(1, (t - RAGDOLL_CALM_START) / RAGDOLL_CALM_SPAN);
+  let stictionF = 0;
+  if (sim.restModel) {
+    if (t > sim.calmStart) stictionF = Math.min(1, (t - sim.calmStart) / RAGDOLL_STICTION_SPAN);
+    if (t > sim.dampStart) {
+      // The calm is an EXTRA factor on the base damping, applied per unit of
+      // TIME (pow dt·60) — at 60 Hz it is the legacy 0.985 → 0.9 ramp. A per-
+      // STEP 0.9 is ~2.4× as viscous at 144 Hz: a body still propped up when
+      // it arrived folded in slow motion into the hard stop.
+      const f = Math.min(1, (t - sim.dampStart) / sim.calmSpan);
+      damp = RAGDOLL_DAMPING * Math.pow(1 + (RAGDOLL_CALM_DAMPING / RAGDOLL_DAMPING - 1) * f, dt * 60);
+    }
+  } else if (t > sim.calmStart) {
+    const f = Math.min(1, (t - sim.calmStart) / sim.calmSpan);
     damp = RAGDOLL_DAMPING + (RAGDOLL_CALM_DAMPING - RAGDOLL_DAMPING) * f;
   }
 
@@ -743,8 +856,38 @@ export function stepSim(sim, dt) {
     }
   }
 
+  /* calm-phase stiction (rest model) --------------------------------------
+   * Once a body lies flat, its bend links (3-D rest lengths) cannot all hold
+   * in the floor plane; the floor clamps every vertical correction but none
+   * of the horizontal ones, so each relaxation slides the frustrated network
+   * a millimetre or so sideways — a creep that damping cannot stop because it
+   * is re-made every step, not carried as velocity. Headless 25-part shreth:
+   * every node at z = RAGDOLL_NODE_RADIUS from ~2 s, the forelegs still
+   * creeping 0.5-1.4 mm/step at 5 s. Static friction is the physical answer:
+   * a node touching its support whose tangential step is below the threshold
+   * stays where it began the step. The threshold ramps in from `calmStart`
+   * (after the last joint gave), so the topple and crumple never see it. */
+  if (stictionF > 0) {
+    const lim = RAGDOLL_STICTION_SPEED * dt * stictionF;
+    const lim2 = lim * lim;
+    for (let i = 0; i < n; i++) {
+      const ix = i * 3;
+      if (push[i] <= 0 && pos[ix + 2] > support[i] + RAGDOLL_NODE_RADIUS + 1e-6) continue;
+      const hx = pos[ix] - prev[ix];
+      const hy = pos[ix + 1] - prev[ix + 1];
+      if (hx * hx + hy * hy < lim2) {
+        pos[ix] = prev[ix];
+        pos[ix + 1] = prev[ix + 1];
+      }
+    }
+  }
+
   /* NaN scrub + settle metric ------------------------------------------- */
+  // `maxMove` (returned) is every node; the freeze counter reads the DRAWN
+  // nodes only (`vis` is all-ones without the rest model).
+  const vis = sim.vis;
   let maxMove = 0;
+  let maxDrawnMove = 0;
   for (let i = 0; i < n; i++) {
     const ix = i * 3;
     for (let k = 0; k < 3; k++) {
@@ -756,8 +899,10 @@ export function stepSim(sim, dt) {
     const mz = pos[ix + 2] - prev[ix + 2];
     const m = mx * mx + my * my + mz * mz;
     if (m > maxMove) maxMove = m;
+    if (vis[i] && m > maxDrawnMove) maxDrawnMove = m;
   }
   maxMove = Math.sqrt(maxMove);
+  maxDrawnMove = Math.sqrt(maxDrawnMove);
 
   /* contact: ground friction + (randomized) bounce ---------------------- */
   // Nodes that were PUSHED out of the floor are handled even if a later
@@ -872,12 +1017,57 @@ export function stepSim(sim, dt) {
   }
 
   /* freeze — never mid-topple: the braces must have finished giving ----- */
-  if (maxMove < RAGDOLL_SETTLE_EPS && t > sim.braceEndT) {
-    if (++sim.settled >= RAGDOLL_SETTLE_FRAMES) sim.done = true;
+  // The rest model reads the step test as a SPEED held for a TIME (the legacy
+  // eps/frames are 60 Hz numbers: at 144 Hz they accepted 17 cm/s as rest, at
+  // 30 Hz they needed 0.8 s); `?ragdollRest=off` keeps the per-frame form.
+  const stepEps = sim.restModel ? RAGDOLL_SETTLE_EPS * dt * 60 : RAGDOLL_SETTLE_EPS;
+  if (maxDrawnMove < stepEps && t > sim.braceEndT) {
+    sim.settled++;
+    sim.settledT += dt;
+    const held = sim.restModel
+      ? sim.settledT >= RAGDOLL_SETTLE_FRAMES / 60 - 1e-9
+      : sim.settled >= RAGDOLL_SETTLE_FRAMES;
+    if (held) {
+      sim.done = true;
+      sim.restedBy = "steps";
+    }
   } else {
     sim.settled = 0;
+    sim.settledT = 0;
   }
-  if (t >= RAGDOLL_MAX_TIME) sim.done = true;
+  // Rest window (rest model): every drawn node stayed inside a box of
+  // `restEps` around where it stood when the window opened. Any excursion
+  // re-opens the window at the current pose, so a slide or a slow fold keeps
+  // it running while bounded in-place jitter does not.
+  if (sim.restModel && !sim.done && t > sim.braceEndT) {
+    const anchor = sim.restAnchor;
+    let open = sim.restT0 < 0;
+    if (!open) {
+      const e2 = sim.restEps * sim.restEps;
+      for (let i = 0; i < n; i++) {
+        if (!vis[i]) continue;
+        const ix = i * 3;
+        const dx = pos[ix] - anchor[ix];
+        const dy = pos[ix + 1] - anchor[ix + 1];
+        const dz = pos[ix + 2] - anchor[ix + 2];
+        if (dx * dx + dy * dy + dz * dz > e2) {
+          open = true;
+          break;
+        }
+      }
+    }
+    if (open) {
+      anchor.set(pos);
+      sim.restT0 = t;
+    } else if (t - sim.restT0 >= RAGDOLL_REST_WINDOW) {
+      sim.done = true;
+      sim.restedBy = "window";
+    }
+  }
+  if (!sim.done && t >= sim.maxTime) {
+    sim.done = true;
+    sim.restedBy = "cap";
+  }
   return maxMove;
 }
 
@@ -974,6 +1164,39 @@ function loadEnvModule() {
   return _envPromise;
 }
 
+/**
+ * Which rig parts can put a pixel on screen: 1 when the part Group holds a
+ * mesh that is not `visible = false` (directly or under a visible child group
+ * — a held item rides its hand part). setup_rig.js builds a surface that
+ * renders nothing (`materialRendersNothing`: authored translucency 1, e.g.
+ * 0x08000015 — the shreth's ten 0x010001EC locator parts) as a hidden mesh, so
+ * those parts read 0. The rig's own part Group visibility is NOT consulted:
+ * a part hidden for distance (`?partDegrade`) can come back on screen.
+ * Pure (plain-object duck typing; node-tested).
+ */
+export function drawnPartMask(parts) {
+  const n = parts?.length || 0;
+  const mask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const kids = parts[i]?.children;
+    if (!Array.isArray(kids)) {
+      mask[i] = 1; // unknown shape — count it (the pre-mask behaviour)
+      continue;
+    }
+    const stack = kids.slice();
+    for (let guard = 0; stack.length && guard < 256; guard++) {
+      const o = stack.pop();
+      if (!o || o.visible === false) continue;
+      if (o.isMesh) {
+        mask[i] = 1;
+        break;
+      }
+      if (Array.isArray(o.children)) for (const c of o.children) stack.push(c);
+    }
+  }
+  return mask;
+}
+
 /* ── runtime (browser only from here down) ───────────────────────────── */
 
 function readRoot(sim, root) {
@@ -1046,11 +1269,12 @@ export function settledFootprint(sim) {
 }
 
 /* Freeze-transition tally (2026-10-07, read by __diag.ragdoll.stats): how
- * many sims came to rest through the settle metric vs the RAGDOLL_MAX_TIME
- * hard stop, split by whether bodies were stacked under them — plus the sims
- * the corpse handoff took over while they were STILL MOVING (finishReveal
- * gives up waiting after ~4 s, so a jiggling sim usually ends there, not on
- * the hard stop). hardStop + cutoff is the live jiggle counter. */
+ * many sims came to rest through the settle metric vs the hard stop
+ * (`sim.maxTime`: 6 s, 14 s under `?ragdollRest=off`), split by whether bodies
+ * were stacked under them — plus the sims the corpse handoff took over while
+ * they were STILL MOVING (finishReveal stops waiting 4 s past the authored
+ * clock). hardStop + cutoff is the live jiggle counter; `byWindow` /
+ * `bySteps` say which rest test froze the settled ones (2026-10-11). */
 const _settleStats = {
   settled: 0,
   hardStop: 0,
@@ -1058,12 +1282,14 @@ const _settleStats = {
   stackedSettled: 0,
   stackedHardStop: 0,
   stackedCutoff: 0,
+  byWindow: 0,
+  bySteps: 0,
   sumT: 0,
   worstT: 0,
 };
 
 function _noteFreeze(sim) {
-  const hard = !(sim.t < RAGDOLL_MAX_TIME);
+  const hard = !(sim.t < sim.maxTime);
   const stacked = !!(sim.env && sim.env.bodyCount > 0);
   if (hard) {
     _settleStats.hardStop++;
@@ -1071,6 +1297,8 @@ function _noteFreeze(sim) {
   } else {
     _settleStats.settled++;
     if (stacked) _settleStats.stackedSettled++;
+    if (sim.restedBy === "window") _settleStats.byWindow++;
+    else if (sim.restedBy === "steps") _settleStats.bySteps++;
   }
   _settleStats.sumT += sim.t;
   if (sim.t > _settleStats.worstT) _settleStats.worstT = sim.t;
@@ -1153,6 +1381,9 @@ export async function startRagdoll(inst, opts = {}) {
     toppleScale: opts.toppleScale,
     twistScale: opts.twistScale,
     dirJitter: opts.dirJitter,
+    // rest model: invisible locator parts are simulated but never hold the
+    // freeze back (see the RAGDOLL_REST_* block)
+    drawn: drawnPartMask(inst.parts),
   });
   readRoot(sim, inst.root);
   const boneChild = buildBoneChildren(parentIndex, positions);
@@ -1483,6 +1714,18 @@ export function attachRagdoll(diag) {
         maxRise: +(s.maxRise || 0).toFixed(3),
         settled: s.settled,
         done: s.done,
+        // rest model (2026-10-11, `?ragdollRest`): drawn nodes / all nodes,
+        // the rest box, the calm onset, the hard stop, and what froze it
+        rest: {
+          model: s.restModel,
+          drawn: s.visCount,
+          eps: +s.restEps.toFixed(4),
+          windowOpenS: s.restT0 < 0 ? null : +s.restT0.toFixed(3),
+          calmStart: +s.calmStart.toFixed(3),
+          dampStart: +s.dampStart.toFixed(3),
+          maxTime: s.maxTime,
+          by: s.restedBy,
+        },
         // 2026-10-07 stacking: bodies under this sim, how many are tracked
         // live (?ragdollStackLive), and whether it is the tracked model.
         stack: s.env
@@ -1495,10 +1738,11 @@ export function attachRagdoll(diag) {
       };
     },
     /**
-     * Tally since load: settle-metric rests vs 14 s hard stops vs sims the
-     * corpse handoff took over while still moving, split by "landed on other
+     * Tally since load: settle-metric rests vs hard stops vs sims the corpse
+     * handoff took over while still moving, split by "landed on other
      * bodies". A jiggling ragdoll never rests, so in pack fights
-     * `stackedHardStop` and `stackedCutoff` should stay ~0.
+     * `stackedHardStop` and `stackedCutoff` should stay ~0. `byWindow` /
+     * `bySteps`: which rest test froze the settled ones (`?ragdollRest`).
      */
     stats() {
       const st = _settleStats;
@@ -1510,6 +1754,8 @@ export function attachRagdoll(diag) {
         stackedSettled: st.stackedSettled,
         stackedHardStop: st.stackedHardStop,
         stackedCutoff: st.stackedCutoff,
+        byWindow: st.byWindow,
+        bySteps: st.bySteps,
         meanS: n ? +(st.sumT / n).toFixed(2) : null,
         worstS: +st.worstT.toFixed(2),
       };

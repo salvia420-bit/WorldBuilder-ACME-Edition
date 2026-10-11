@@ -166,6 +166,9 @@ const TIER4 = [
   { flag: "ragdollEnergy", file: "tests/ragdoll_energy.test.mjs" },
   // 2026-10-07 — ragdoll landing on a corpse must settle (jiggle report).
   { flag: "ragdollStackLive", file: "tests/ragdoll_stack.test.mjs" },
+  // 2026-10-11 — a ragdoll rests when its DRAWN parts stop moving (shreth
+  // placeholder parts, floor creep), frame-rate-independent, 6 s hard stop.
+  { flag: "ragdollRest", file: "tests/ragdoll_rest.test.mjs" },
   { flag: "killImpulse", file: "tests/kill_impulse.test.mjs" },
   { flag: "gfxRelief", file: "tests/gfx_relief.test.mjs" },
   { flag: "combatInstallGiveup", file: "tests/combat_install_giveup.test.mjs" },
@@ -727,6 +730,15 @@ const TIER5 = [
   // 2026-10-08 — R-misc round 2 daytime-1: the moon/star date follows the
   // server-synced sky clock (`?skyServerClock`).
   { tier: 5, flag: "skyServerClock", file: "tests/sky_game_date.test.mjs" },
+  // 2026-10-11 — "Always daylight outdoors" (CharacterOption 0x05) pins the
+  // sky clock to Midsong (retail LScape::SetDay / GetLighting(0.5)).
+  { tier: 5, flag: "alwaysDaylight", file: "tests/always_daylight.test.mjs" },
+  // 2026-10-11 — moons: Alb'arel's clouds fill the disc (no fold-back), banded
+  // brush streaks, sphere lighting with real phases (`?moonFx`, `?moonPhase`).
+  { tier: 5, flag: "moonFx", file: "tests/ac_moons_fx.test.mjs" },
+  // 2026-10-11 — the always-on slow-run detector (`__diag.slowRun`): a held run
+  // that stays >10 % under its expected rate names the stage that lost it.
+  { tier: 5, flag: "slowRunDiag", file: "tests/slow_run_diag.test.mjs" },
   // 2026-10-08 — A1-held round 2: held-item attachment parity on a real
   // EntityManager (wire spawn decides the parent, PickupEvent leave-world,
   // per-child attach generation, no mount without a holding location).
@@ -744,6 +756,9 @@ const TIER5 = [
   // death-held rig, the local-player corpse-claim exclusion, the death-hold
   // test the local revive reads, and the unopened-corpse cycle.
   { tier: 5, flag: "deathSelectRelease", file: "tests/death_selection.test.mjs" },
+  // 2026-10-11 — the corpse is lootable while the ragdoll still falls: the
+  // claimed rig picks/selects as its corpse (`?handoffLoot`).
+  { tier: 5, flag: "handoffLoot", file: "tests/corpse_handoff_loot.test.mjs" },
   // 2026-10-08 — A3-radar-audio round 2 audio-2: sounds on a wielded item play
   // at the hand's world position (real EntityManager + attachChildToParent).
   { tier: 5, flag: "attachedSoundPos", file: "tests/audio_attached_emitter.test.mjs" },

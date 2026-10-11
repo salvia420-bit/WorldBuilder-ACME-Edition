@@ -69,8 +69,9 @@ impl Vector3 {
         if self.is_finite() { *self } else { Self::zero() }
     }
 
-    /// Calculates the AC heading (radians) required to face from this position to a target.
-    /// AC heading convention: 0 is West, 90 is North, 180 is East, 270 is South.
+    /// Calculates the POSE heading (radians) required to face from this position to a target.
+    /// Pose heading convention: 0 is West, 90 is North, 180 is East, 270 is South. This is
+    /// NOT the wire/retail heading (compass, 0 = North) — see [`pose_heading_deg_from_wire`].
     pub fn heading_to(&self, target: &Vector3) -> f32 {
         let diff = *target - *self;
         if diff.length_squared() < 1e-6 {
@@ -131,6 +132,38 @@ impl std::ops::Div<f32> for Vector3 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// NPC-facing fix (2026-10-11) — the ONE wire ↔ pose heading boundary.
+//
+// Our pose heading ([`Quaternion::to_heading`], [`Vector3::heading_to`]) is
+// 0 = West, 90 = North, 180 = East. Every heading the server SENDS is the
+// retail compass instead: 0 = North, 90 = East — retail `Frame::set_heading`
+// faces `(sin h, cos h)` (acclient.c:357692) and `Frame::get_heading` /
+// `Position::heading` invert it (:357410 / :467051 — the decompiled x87
+// `atan2` lists its operands in the other order; ACE's port reads
+// `Atan2(dir.Y, dir.X)`); ACE `AFrame.get_heading`/`set_heading` and
+// `Position.heading` are the same. Both turn clockwise from above, so
+// pose = wire + 90° and only ABSOLUTE wire headings (a TurnToHeading, a
+// MoveToPosition's final heading, the heading a TurnToObject packs for an
+// unknown target) need converting; an offset (the object forms'
+// `desired_heading`) does not.
+// ---------------------------------------------------------------------------
+
+/// Pose heading minus wire heading, in degrees (see the block comment above).
+pub const POSE_MINUS_WIRE_HEADING_DEG: f32 = 90.0;
+
+/// An absolute WIRE heading (degrees, compass) as a POSE heading in degrees,
+/// `[0, 360)`.
+pub fn pose_heading_deg_from_wire(wire_deg: f32) -> f32 {
+    (wire_deg + POSE_MINUS_WIRE_HEADING_DEG).rem_euclid(360.0)
+}
+
+/// A POSE heading (degrees) as the absolute WIRE heading (degrees, compass),
+/// `[0, 360)` — the inverse of [`pose_heading_deg_from_wire`].
+pub fn wire_heading_deg_from_pose(pose_deg: f32) -> f32 {
+    (pose_deg - POSE_MINUS_WIRE_HEADING_DEG).rem_euclid(360.0)
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite, PartialEq, Default)]
 #[br(little)]
 #[bw(little)]
@@ -151,8 +184,10 @@ impl Quaternion {
         }
     }
 
-    /// Converts a quaternion to a heading (yaw) in radians.
-    /// AC heading matches the official client: 0 at West, 90 at North, 180 at East, 270 at South.
+    /// Converts a quaternion to a POSE heading (yaw) in radians: 0 at West, 90 at North,
+    /// 180 at East, 270 at South (clockwise from above). The wire and the retail client use
+    /// the compass instead (0 = North, 90 = East); pose = wire + 90° — convert an absolute
+    /// wire heading with [`pose_heading_deg_from_wire`] / [`Quaternion::from_wire_heading`].
     pub fn to_heading(&self) -> f32 {
         // M21 = 2wz, M22 = 1 - 2z^2 (for yaw-only quat)
         let sin_theta = 2.0 * self.w * self.z;
@@ -162,7 +197,7 @@ impl Quaternion {
         // With this 450 offset:
         // Identity Quat (theta=0) results in Heading 90 (North).
         // 90 deg CCW Rot (theta=90) results in Heading 0 (West).
-        // This matches the official AC client convention where 0 is West.
+        // (Retail's own `Frame::get_heading` puts North at 0, acclient.c:357410.)
         let rad = f32::atan2(sin_theta, cos_theta);
         let mut deg = 450.0 - rad.to_degrees();
 
@@ -174,6 +209,8 @@ impl Quaternion {
         deg.to_radians()
     }
 
+    /// The level facing of a POSE heading in RADIANS (the [`Self::to_heading`] convention).
+    /// A wire heading is degrees on the compass — use [`Self::from_wire_heading`].
     pub fn from_heading(heading_rad: f32) -> Self {
         let heading_deg = heading_rad.to_degrees();
 
@@ -197,6 +234,13 @@ impl Quaternion {
             y: 0.0,
             z,
         }
+    }
+
+    /// The level facing of an absolute WIRE heading in DEGREES — retail
+    /// `Frame::set_heading` (acclient.c:357692: the facing is `(sin h, cos h)`,
+    /// so 0 = North, 90 = East) and ACE `AFrame.set_heading`.
+    pub fn from_wire_heading(wire_deg: f32) -> Self {
+        Self::from_heading(pose_heading_deg_from_wire(wire_deg).to_radians())
     }
 
     /// Rotate a vector by this quaternion. Standard `v' = q * v * q^-1`
@@ -873,6 +917,41 @@ mod tests {
         // South
         let q_s = Quaternion::from_heading(270.0f32.to_radians());
         assert!((q_s.to_heading().to_degrees() - 270.0).abs() < 1e-4);
+    }
+
+    /// NPC-facing fix (2026-10-11): a wire heading is the compass — retail
+    /// `Frame::set_heading` faces `(sin h, cos h)` (acclient.c:357692) — and
+    /// the pose heading of that facing is wire + 90°.
+    #[test]
+    fn wire_heading_is_the_compass() {
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let forward = Vector3::new(0.0, 1.0, 0.0);
+        for (wire, facing) in [
+            (0.0f32, Vector3::new(0.0, 1.0, 0.0)),
+            (90.0, Vector3::new(1.0, 0.0, 0.0)),
+            (180.0, Vector3::new(0.0, -1.0, 0.0)),
+            (270.0, Vector3::new(-1.0, 0.0, 0.0)),
+            (45.0, Vector3::new(half, half, 0.0)),
+        ] {
+            let faced = Quaternion::from_wire_heading(wire).rotate_vector(forward);
+            assert!((faced - facing).length() < 1e-5, "wire {wire}: faces {faced:?}");
+            let r = wire.to_radians();
+            assert!((faced.x - r.sin()).abs() < 1e-5 && (faced.y - r.cos()).abs() < 1e-5);
+
+            let pose = pose_heading_deg_from_wire(wire);
+            let bearing = Vector3::zero().heading_to(&facing).to_degrees();
+            let off = ((bearing - pose) + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(off.abs() < 1e-3, "wire {wire}: pose {pose}, bearing {bearing}");
+            let q_pose = Quaternion::from_wire_heading(wire).to_heading().to_degrees();
+            let off = ((q_pose - pose) + 540.0).rem_euclid(360.0) - 180.0;
+            assert!(off.abs() < 1e-3, "wire {wire}: to_heading {q_pose}, pose {pose}");
+            assert!((wire_heading_deg_from_pose(pose) - wire).abs() < 1e-3);
+        }
+        // Wire North is the identity facing; out-of-range input wraps.
+        let north = Quaternion::from_wire_heading(0.0);
+        assert!((north.w.abs() - 1.0).abs() < 1e-6 && north.z.abs() < 1e-6);
+        assert!((pose_heading_deg_from_wire(-90.0) - 0.0).abs() < 1e-4);
+        assert!((pose_heading_deg_from_wire(450.0) - 180.0).abs() < 1e-4);
     }
 
     #[test]

@@ -19,7 +19,14 @@
 //! Our poses carry radians — the conversion happens at ONE boundary
 //! (the `self_heading_deg` / `heading_deg_between` helpers below);
 //! [`MoveToDriveOutput::set_heading`] is returned in RADIANS for the
-//! shim's snap path.
+//! shim's snap path. Node headings are POSE degrees
+//! (`Quaternion::to_heading`: 0 = West, 90 = North), not retail's compass
+//! (0 = North, 90 = East); the math above only ever compares or offsets
+//! them, so a turn runs the same in either. The one ABSOLUTE retail heading the
+//! driver reads — [`MovementParameters::desired_heading`] of a TurnToHeading
+//! or a MoveToPosition's final turn, verbatim off the wire — enters the node
+//! list through `node_heading_from_retail` (NPC-facing fix 2026-10-11:
+//! it used to be taken as a pose heading, so every such turn ended 90° off).
 
 use super::motion_interp::{
     MOTION_RUN_FORWARD, MOTION_TURN_LEFT, MOTION_TURN_RIGHT, MOTION_WALK_BACKWARDS,
@@ -171,7 +178,8 @@ pub enum MoveToDirective {
 /// The pending-action node list payloads — retail node types 9
 /// (TurnToHeading, `AddTurnToHeadingNode` acclient.c:345096-345118)
 /// and 7 (MoveToPosition, `AddMoveToPositionNode` :345120-345141).
-/// Headings are DEGREES (retail wire/math domain).
+/// Headings are POSE DEGREES (`Quaternion::to_heading` = retail + 90°; see
+/// the module doc and `node_heading_from_retail`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveToNode {
     TurnToHeading(f32),
@@ -239,8 +247,8 @@ pub enum MoveToSteer {
         /// velocity and omega (ACE charge = 1.5).
         speed: f32,
     },
-    /// Turn command active: face `heading_deg` (degrees, retail node
-    /// domain). `hold_key` is the directive's `hold_key_to_apply`, which
+    /// Turn command active: face `heading_deg` (the node's POSE degrees,
+    /// `Quaternion::to_heading`). `hold_key` is the directive's `hold_key_to_apply`, which
     /// `BeginTurnToHeading` hands to the TurnRight `_DoMotion`
     /// (acclient.c:345456); 0 = HoldKey_Invalid (every server TurnTo — the
     /// wire never carries one), resolved by the consumer to the mover's
@@ -333,6 +341,16 @@ fn self_heading_deg(pos: &WorldPosition) -> f32 {
 /// `Position::heading(from, to)` in DEGREES — retail heading-to-target.
 fn heading_deg_between(from: &WorldPosition, to: &WorldPosition) -> f32 {
     from.heading_to(to).to_degrees()
+}
+
+/// An ABSOLUTE retail heading — [`MovementParameters::desired_heading`] as
+/// a TurnToHeading (acclient.c:345954-346016, incl. the case-8 unknown-target
+/// fallback) or a MoveToPosition's UseFinalHeading turn (:345835-345836)
+/// stores it, the wire's compass — as a node heading in the pose degrees the
+/// two helpers above read. Offsets (the object forms' `desired_heading`) do
+/// not come through here: both conventions turn clockwise.
+fn node_heading_from_retail(retail_deg: f32) -> f32 {
+    holtburger_common::math::pose_heading_deg_from_wire(retail_deg)
 }
 
 /// The retail epsilon-fold + positive wrap applied to a raw heading
@@ -870,7 +888,7 @@ impl MoveToManager {
         }
         if self.movement_params.use_final_heading() {
             let heading = if absolute_final {
-                self.movement_params.desired_heading
+                node_heading_from_retail(self.movement_params.desired_heading)
             } else {
                 let mut h = heading_to_target + self.movement_params.desired_heading;
                 if h >= 360.0 {
@@ -1223,7 +1241,7 @@ impl MoveToManager {
                         out.stop_completely = true;
                         self.pending_entry_stop = false;
                     }
-                    let heading = self.movement_params.desired_heading;
+                    let heading = node_heading_from_retail(self.movement_params.desired_heading);
                     self.pending_nodes
                         .push_back(MoveToNode::TurnToHeading(heading));
                     self.initialized = true;
@@ -1431,7 +1449,9 @@ mod tests {
         assert!(!manager.movement_params.sticky());
 
         // UseFinalHeading 0x40 → trailing heading node (absolute for
-        // the position form, :345835-345836).
+        // the position form, :345835-345836). The retail heading is the
+        // compass: 45 = north-east, pose 135 (NPC-facing fix 2026-10-11 —
+        // this used to assert the node at pose 45, i.e. north-WEST).
         let mut params = MovementParameters::default();
         params.bitfield |= 0x40;
         params.desired_heading = 45.0;
@@ -1441,7 +1461,7 @@ mod tests {
         assert_eq!(manager.pending_nodes.len(), 3);
         assert!(matches!(
             manager.pending_nodes.back(),
-            Some(MoveToNode::TurnToHeading(h)) if (h - 45.0).abs() < 1e-4
+            Some(MoveToNode::TurnToHeading(h)) if (h - 135.0).abs() < 1e-4
         ));
 
         // MoveToObject defers until a target pose resolves.
@@ -1876,7 +1896,9 @@ mod tests {
 
     /// TurnToHeading entry → single node + run through the snap; the
     /// hold-key force-run rides `get_command`'s 0x10 path on walk
-    /// directives (`run` in the steer).
+    /// directives (`run` in the steer). The heading is retail's compass
+    /// (NPC-facing fix 2026-10-11): wire 90 = EAST = pose 180, so a body
+    /// facing north turns right and snaps on east.
     #[test]
     fn turn_to_heading_directive_runs_to_snap() {
         let now = Instant::now();
@@ -1885,12 +1907,12 @@ mod tests {
         let mut manager = MoveToManager::default();
         manager.turn_to_heading(params);
 
-        let out = manager.use_time(&view(pose(0.0, 0.0, 0.0), None, now));
+        let out = manager.use_time(&view(pose(0.0, 0.0, 90.0), None, now));
         assert_eq!(out.do_motions.len(), 1);
         assert_eq!(out.do_motions[0].0, MOTION_TURN_RIGHT);
 
-        let out = manager.use_time(&view(pose(0.0, 0.0, 91.0), None, now));
-        assert!((out.set_heading.expect("snap") - 90.0f32.to_radians()).abs() < 1e-3);
+        let out = manager.use_time(&view(pose(0.0, 0.0, 181.0), None, now));
+        assert!((out.set_heading.expect("snap") - 180.0f32.to_radians()).abs() < 1e-3);
         assert_eq!(out.completion, Some(0));
         assert!(!manager.is_active());
 
@@ -1945,7 +1967,8 @@ mod quantum_turn_tests {
             let omega_deg_per_sec = 1.5_f32.to_degrees();
             let mut manager = MoveToManager::default();
             let mut params = MovementParameters::default();
-            params.desired_heading = 90.0;
+            // Wire 0 = north = pose 90 (the node), from pose 0 (west).
+            params.desired_heading = 0.0;
             manager.turn_to_heading(params);
 
             let mut heading = 0.0_f32;

@@ -888,6 +888,21 @@ fn parse_ap_retail_gate_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "apRetailGate=off")
 }
 
+/// SLOW-RUN (2026-10-11): parse `?apPlaneResend=off` (or `&…`). DEFAULT-ON
+/// off-escape shape. When on, an AutonomousPosition also goes out INSIDE the
+/// 1 s window when the contact plane changes (retail `ShouldSendPositionEvent`,
+/// acclient.c:718131 — one per terrain triangle), so ACE's echo re-arms the
+/// local leash (`ConstrainTo`, :145209) before a fast runner's travel budget
+/// reaches the slowdown band (`ConstraintManager::adjust_offset`, :389478).
+/// A 100 ms floor bounds a jittery plane. Native carrier:
+/// `USE_AP_CONTACT_PLANE_RESEND` (movement/system.rs, OFF — carrier split).
+/// Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_ap_plane_resend_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "apPlaneResend=off")
+}
+
 /// death-1 (R2 2026-10-08): parse `?deadInputGate=off` (or `&…`). DEFAULT-ON
 /// off-escape shape (`off`/`0`/`false`). When on, retail
 /// `CommandInterpreter::PlayerIsDead` (acclient.c:717695-717705) gates input:
@@ -972,6 +987,23 @@ fn parse_landing_bounce_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "landingBounce=off")
 }
 
+/// BOUNCE-ALONG-SLOPE (2026-10-11): parse `?bounceAlongSlope=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. Owner: running on hilly terrain "the
+/// character can kind of go in the air just a little tiny bit". When on, a
+/// `?landingBounce` lift-off relaunches a moving lander ALONG the plane it
+/// landed on (plus the bounce's normal speed) instead of retail's horizontal
+/// `get_leave_ground_velocity` (acclient.c:343806), the landing that ends a
+/// bounce never lifts off again, and a settle-band landing bounces off the
+/// terrain normal — no ski-jump off a descent, no chain of hops down a hill.
+/// `=off`: the retail-literal horizontal relaunch. Native carrier:
+/// `USE_BOUNCE_ALONG_SLOPE` (stays `false` natively — carrier split, like
+/// `USE_LANDING_BOUNCE`). Needs a wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_bounce_along_slope_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "bounceAlongSlope=off")
+}
+
 /// COMBAT-RADII (2026-07-28): parse `?combatRadii=off` (or
 /// `&combatRadii=off`). DEFAULT-ON off-escape shape: returns `true`
 /// UNLESS `combatRadii=off` is present.
@@ -1049,6 +1081,20 @@ fn parse_cast_move_flag(search: &str) -> bool {
 fn parse_cast_hold_reclaim_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "castHoldReclaim=off")
+}
+
+/// SLOW-RUN (2026-10-11): parse `?castLockRevive=off` (or `&…`). DEFAULT-ON
+/// off-escape shape. When on, the `?castHoldReclaim` lock gets its window
+/// end: once the cast window closes (UseDone / chain end) with control the
+/// player's, a held W/S the lock left dead is re-applied, as retail's
+/// post-cast reclaim would (`ApplyCurrentMovement`, acclient.c:717027). `=off`
+/// keeps it dead until the next fresh press. Native carrier:
+/// `USE_CAST_LOCK_REVIVE` (movement/system.rs, OFF — carrier split). Needs a
+/// wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cast_lock_revive_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "castLockRevive=off")
 }
 
 /// (2026-10-07): parse `?castMoveLock=on`. DEFAULT-OFF since 2026-10-10 (user
@@ -1606,6 +1652,17 @@ fn parse_remote_spine_flag(search: &str) -> bool {
 fn parse_target_voyeur_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "targetVoyeur=off")
+}
+
+/// NPC-facing fix (2026-10-11): `?remoteMoveToBegin=off` — a remote's
+/// MoveTo / TurnTo begins at the next slice's MoveToManager step (the
+/// pre-fix spine) instead of inside the unpack that armed it, as retail's
+/// does (`SpatialScene::set_remote_moveto_begin_enabled`). DEFAULT-ON; needs
+/// the spine (`?remoteSpine`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_moveto_begin_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteMoveToBegin=off")
 }
 
 /// MoveTo refactor phase C (2026-10-10): `?remoteSweep=off` keeps the
@@ -2327,6 +2384,28 @@ pub fn leash_echo_diag() -> String {
 #[wasm_bindgen(js_name = arrivalPlacementDiag)]
 pub fn arrival_placement_diag() -> u32 {
     holtburger_core::arrival_placement_diag::read_packed()
+}
+
+/// SLOW-RUN (2026-10-11) — the slow-run detector's incident ring as JSON
+/// (`{"count":N,"incidents":[…]}`, oldest first; see
+/// `holtburger_core::slow_run_diag`). Read on demand by
+/// `__diag.slowRun` (scene3d/diag/slow_run.js). Additive, diagnostics-only
+/// (rides v7, no manifest bump — the movementPendingMotionsDiag precedent).
+#[wasm_bindgen(js_name = slowRunDiag)]
+pub fn slow_run_diag() -> String {
+    holtburger_core::slow_run_diag::read_json()
+}
+
+/// SLOW-RUN — incidents recorded since load (or the last clear).
+#[wasm_bindgen(js_name = slowRunDiagCount)]
+pub fn slow_run_diag_count() -> u32 {
+    holtburger_core::slow_run_diag::count()
+}
+
+/// SLOW-RUN — forget every recorded incident.
+#[wasm_bindgen(js_name = slowRunDiagClear)]
+pub fn slow_run_diag_clear() {
+    holtburger_core::slow_run_diag::clear()
 }
 
 /// AC's stateless 32-bit packet header checksum, exposed for callers
@@ -34395,6 +34474,21 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
     }
 
+    /// SLOW-RUN (2026-10-11): `?apPlaneResend` and `?castLockRevive` are both
+    /// DEFAULT-ON (`=off` disables).
+    #[test]
+    fn slow_run_fix_flag_shapes() {
+        use super::{parse_ap_plane_resend_flag, parse_cast_lock_revive_flag};
+        assert!(parse_ap_plane_resend_flag(""));
+        assert!(parse_ap_plane_resend_flag("?apPlaneResend=on"));
+        assert!(!parse_ap_plane_resend_flag("?apPlaneResend=off"));
+        assert!(!parse_ap_plane_resend_flag("?nosw=1&apPlaneResend=off"));
+        assert!(parse_cast_lock_revive_flag(""));
+        assert!(parse_cast_lock_revive_flag("?castLockRevive=on"));
+        assert!(!parse_cast_lock_revive_flag("?castLockRevive=off"));
+        assert!(!parse_cast_lock_revive_flag("?nosw=1&castLockRevive=off"));
+    }
+
     /// Cast-movement fixes 2/3 (2026-10-11): `?retailMoveToCancel` and
     /// `?castTakesControl` are both DEFAULT-ON (`=off` disables).
     #[test]
@@ -34416,6 +34510,17 @@ mod wire_state_packs_routing_tests {
         assert!(parse_target_voyeur_flag(""));
         assert!(!parse_target_voyeur_flag("?targetVoyeur=off"));
         assert!(!parse_target_voyeur_flag("?nosw=1&targetVoyeur=off"));
+    }
+
+    /// NPC-facing fix (2026-10-11): `?remoteMoveToBegin` parse shape —
+    /// DEFAULT-ON.
+    #[test]
+    fn remote_moveto_begin_flag_defaults_on_unless_off() {
+        use super::parse_remote_moveto_begin_flag;
+        assert!(parse_remote_moveto_begin_flag(""));
+        assert!(parse_remote_moveto_begin_flag("?remoteMoveToBegin=on"));
+        assert!(!parse_remote_moveto_begin_flag("?remoteMoveToBegin=off"));
+        assert!(!parse_remote_moveto_begin_flag("?nosw=1&remoteMoveToBegin=off"));
     }
 
     /// MoveTo refactor phase D: `?localMoveToMotion` parse shape — DEFAULT-ON.
@@ -34667,6 +34772,18 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_landing_bounce_flag("?landingBounce=off"));
         assert!(!parse_landing_bounce_flag("?nosw=1&landingBounce=off"));
         assert!(parse_landing_bounce_flag("?jumpLaunchCap=off"));
+    }
+
+    /// BOUNCE-ALONG-SLOPE (2026-10-11): `?bounceAlongSlope` parse shape —
+    /// DEFAULT-ON; only an explicit `=off` disables it.
+    #[test]
+    fn bounce_along_slope_flag_defaults_on_unless_off() {
+        use super::parse_bounce_along_slope_flag;
+        assert!(parse_bounce_along_slope_flag(""));
+        assert!(parse_bounce_along_slope_flag("?bounceAlongSlope=on"));
+        assert!(!parse_bounce_along_slope_flag("?bounceAlongSlope=off"));
+        assert!(!parse_bounce_along_slope_flag("?nosw=1&bounceAlongSlope=off"));
+        assert!(parse_bounce_along_slope_flag("?landingBounce=off"));
     }
 
     /// COMBAT-RADII (2026-07-28): `?combatRadii` parse shape —
@@ -47458,6 +47575,11 @@ async fn recv_loop(
     movement.set_jump_launch_cap(parse_jump_launch_cap_flag(&flag_search()));
     movement.set_jump_load_gate(parse_jump_load_gate_flag(&flag_search()));
     movement.set_retail_position_event_gate(parse_ap_retail_gate_flag(&flag_search()));
+    // SLOW-RUN (2026-10-11): `?apPlaneResend=off` — drop retail's in-window
+    // contact-plane AutonomousPosition re-send (default ON: ACE's echo re-arms
+    // the local leash at every terrain-triangle change); see
+    // `parse_ap_plane_resend_flag`.
+    movement.set_ap_contact_plane_resend(parse_ap_plane_resend_flag(&flag_search()));
     // outbound-5 remainder (2026-10-08 follow-ups): `?rawDefaultOmission=off`
     // — see `parse_raw_default_omission_flag`.
     movement.set_retail_raw_default_omission(parse_raw_default_omission_flag(&flag_search()));
@@ -47486,6 +47608,11 @@ async fn recv_loop(
     // dead again (default ON: retail's elastic bounce + lift-off quantum);
     // see `parse_landing_bounce_flag`.
     movement.set_landing_bounce(parse_landing_bounce_flag(&flag_search()));
+    // BOUNCE-ALONG-SLOPE (2026-10-11): `?bounceAlongSlope=off` — a landing
+    // bounce relaunches horizontally again and can chain down a hill (default
+    // ON: it follows the ground and never chains); see
+    // `parse_bounce_along_slope_flag`.
+    movement.set_bounce_along_slope(parse_bounce_along_slope_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see
@@ -47495,6 +47622,10 @@ async fn recv_loop(
     // dead across a whole cast (default ON since 2026-10-07; `=off`
     // escape). See `parse_cast_hold_reclaim_flag`.
     movement.set_cast_hold_reclaim(parse_cast_hold_reclaim_flag(&flag_search()));
+    // SLOW-RUN (2026-10-11): `?castLockRevive=off` — a held W/S the cast lock
+    // left dead stays dead after the cast until a fresh press (default ON:
+    // re-applied when the window closes); see `parse_cast_lock_revive_flag`.
+    movement.set_cast_lock_revive(parse_cast_lock_revive_flag(&flag_search()));
     // (2026-10-07): `?castMoveLock=on` — a fresh W/S press during one of our
     // casts is held back until the server's UseDone (default OFF since
     // 2026-10-10: W goes through mid-cast, for fastcasting); see
@@ -47793,6 +47924,7 @@ async fn recv_loop(
     let remote_spine_on: bool = parse_remote_spine_flag(&flag_search());
     let remote_sweep_on: bool = parse_remote_sweep_flag(&flag_search());
     let target_voyeur_on: bool = parse_target_voyeur_flag(&flag_search());
+    let remote_moveto_begin_on: bool = parse_remote_moveto_begin_flag(&flag_search());
     let cast_takes_control_on: bool = parse_cast_takes_control_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
@@ -47991,6 +48123,7 @@ async fn recv_loop(
             remote_spine_on,
             remote_sweep_on,
             target_voyeur_on,
+            remote_moveto_begin_on,
             cast_takes_control_on,
             remote_sticky_on,
             combat_radii_on,

@@ -475,7 +475,28 @@ const USE_RETAIL_POSITION_EVENT_GATE: bool = true;
 /// on real terrain show the per-tick plane is recomputed deterministically
 /// (a plane that jitters tick-to-tick would turn this into an AP per tick).
 /// Unit-tested through [`MovementSystem::ap_contact_plane_resend_runtime`].
+///
+/// SLOW-RUN (2026-10-11) — the BROWSER carrier `?apPlaneResend` is DEFAULT ON
+/// (`=off` escape); this native const stays off (carrier split, the
+/// `USE_SLIDE_CAST` precedent). Every AutonomousPosition comes back from ACE as
+/// a self UpdatePosition, and that echo is the only thing that re-arms the
+/// local leash (`SmartBox::HandleReceivedPosition` → `ConstrainTo`,
+/// acclient.c:145209-145214). Between echoes `ConstraintManager::adjust_offset`
+/// (:389478) scales the run once the travel since the last echo passes 10 m
+/// outdoors / 5 m indoors (`GetStartConstraintDistance`, :315885). That is the
+/// retail "lag slowdown". Without this in-window trigger our echoes come only
+/// every second or on a cell change, so a fast runner crosses into that band
+/// before every echo, and after every hop or jump (no APs while airborne). A
+/// retail client re-sends at each terrain-triangle change. The jitter risk
+/// above is bounded by [`AP_PLANE_RESEND_MIN_GAP`].
 const USE_AP_CONTACT_PLANE_RESEND: bool = false;
+
+/// SLOW-RUN (2026-10-11) — OURS, not retail: the shortest gap between an
+/// AutonomousPosition and an IN-window re-send while [`USE_AP_CONTACT_PLANE_RESEND`]
+/// is on. Retail never needed it (its plane is the polygon's own); this bounds a
+/// plane that jitters tick-to-tick to 10 APs/s instead of one per frame. A real
+/// triangle change is 8-17 m of running apart, so this never delays one.
+const AP_PLANE_RESEND_MIN_GAP: Duration = Duration::from_millis(100);
 
 /// Track B1 — bounded age after which a server-controlled projection
 /// (installed by a MoveToObject during a cast) is abandoned if the
@@ -648,6 +669,56 @@ const PLAYER_DEFAULT_ELASTICITY: f32 = 0.05;
 /// `CPhysicsObj::set_elasticity` ceiling (acclient.c:317061-317083: `< 0` →
 /// 0, `> 0.1` → 0.1); ACE `PhysicsGlobals.MaxElasticity`.
 const PLAYER_MAX_ELASTICITY: f32 = 0.1;
+
+/// BOUNCE-ALONG-SLOPE (2026-10-11) — `?bounceAlongSlope`. Owner: "when
+/// running around outside on somewhat hilly terrain, downhill or maybe if it
+/// hits a little bump, the character can kind of go in the air just a little
+/// tiny bit … it can happen often".
+///
+/// The retail-literal lift-off quantum ([`USE_LANDING_BOUNCE`]) relaunches a
+/// MOVING lander with `get_leave_ground_velocity` (acclient.c:343806): the
+/// motion state's HORIZONTAL velocity, z = the spent jump v_z (0). On a
+/// descent that throws the body off the slope like a ski jump (a 15° hill at
+/// 12 m/s: 40 frames and 2.2 m of drop clear of the ground), and that flight
+/// lands into the slope at `s·sin θ` along its normal — ≥ 5 m/s, another
+/// bounce, on any hill steeper than asin(5/s) (24.6° at 12 m/s, 16° at
+/// 18 m/s): the runner hops all the way down (`terrain_hop_tests`). The owner
+/// asked for the bounce as a jump/fall landing, not as a chain.
+///
+/// ON (the browser carrier `?bounceAlongSlope`, DEFAULT ON, `=off` escape):
+/// - the moving lander's relaunch keeps to the ground it landed on: the state
+///   velocity is laid on the landing plane the way `CTransition::adjust_offset`
+///   lays a grounded step on it ([`velocity_along_plane`]), plus the bounce's
+///   normal speed — a hop of millimetres that comes straight back down;
+/// - the landing that ends a bounce lift-off never lifts off again
+///   (`PlayerState::bounce_relaunched`): the bounce is spent;
+/// - a landing the settle band grounds with no contact plane bounces off the
+///   terrain normal under the feet — retail's collision normal there is the
+///   terrain plane it touches (`OBJECTINFO::validate_walkable`,
+///   acclient.c:314242) — not a level (0,0,1), which overstated a slope
+///   landing's impact.
+/// A standing lander's hop and every rise are unchanged; a running flat
+/// landing keeps its bounce speed (a ~6 mm hop of a few frames instead of one).
+/// OFF: the retail-literal horizontal relaunch. Carrier split, like
+/// [`USE_LANDING_BOUNCE`]: this native const stays `false` (the native suite
+/// keeps the retail-literal baseline); the browser installs it through
+/// [`MovementSystem::set_bounce_along_slope`].
+const USE_BOUNCE_ALONG_SLOPE: bool = false;
+
+/// BOUNCE-ALONG-SLOPE — lay a velocity on a contact plane the way
+/// `CTransition::adjust_offset` lays a grounded step on it
+/// (acclient.c:311941-311954): one pressing into the plane is projected onto
+/// it, one leaving it is snapped onto it (horizontal kept, z on the plane).
+pub(crate) fn velocity_along_plane(v: Vector3, n: Vector3) -> Vector3 {
+    let into = v.dot(&n);
+    if into <= 0.0 {
+        v - n * into
+    } else if n.z.abs() > 1e-4 {
+        Vector3::new(v.x, v.y, -(n.x * v.x + n.y * v.y) / n.z)
+    } else {
+        v
+    }
+}
 
 /// LANDING-BOUNCE — the elasticity a body carries: the wire PhysicsDesc
 /// value through retail's `set_elasticity` clamp (acclient.c:317061-317083),
@@ -1412,6 +1483,24 @@ const USE_SLIDE_CAST: bool = true;
 /// `false` / `?castHoldReclaim=off`: the per-windup forward revival.
 const USE_CAST_HOLD_RECLAIM: bool = true;
 
+/// SLOW-RUN (2026-10-11) — `?castLockRevive`: the window END of
+/// [`USE_CAST_HOLD_RECLAIM`]. The lock's own design revives a held W "later (a
+/// fresh forward edge or window end)", but only the fresh edge was ever
+/// built. With `?castTakesControl` the cast's last echo (FinishCast's Ready,
+/// before the UseDone) takes control, the `use_time` reclaim runs under the
+/// lock and keeps the held W dead, and nothing re-applies it after the
+/// UseDone: the player holds W and does not run, or (W + strafe) only
+/// strafes, until the next fresh press. Retail has no lock, so its post-cast
+/// reclaim re-applies the held W (`ApplyCurrentMovement`, acclient.c:717027).
+/// ON: the first tick after the lock scope closes, with control the
+/// player's, re-applies the current movement
+/// (`CommandInterpreter::revive_forward_after_cast_lock`).
+///
+/// ONE feature, TWO carriers: this const (native, OFF — carrier split, so the
+/// native cast suite keeps its baseline) + the browser's `?castLockRevive`
+/// (DEFAULT ON, `=off` escape; [`MovementSystem::cast_lock_revive_runtime`]).
+const USE_CAST_LOCK_REVIVE: bool = false;
+
 /// (2026-10-07) — `?castMoveLock`: while one of OUR cast requests is
 /// outstanding (CastTargetedSpell / CastUntargetedSpell sent → the server's
 /// UseDone), a FRESH forward / backward key press is held back and replayed
@@ -2147,6 +2236,22 @@ pub(crate) struct MovementSystem {
     ground_loss_logs: std::cell::Cell<u32>,
     /// Bug 19: lines left for the `[jump-pack]` diagnostic.
     jump_pack_logs: std::cell::Cell<u32>,
+    /// SLOW-RUN (2026-10-11) — the always-on slow-run detector
+    /// ([`crate::slow_run_diag`]), fed once per manual slice
+    /// ([`Self::observe_slow_run_slice`]). Diagnostics only.
+    slow_run: crate::slow_run_diag::SlowRunMonitor,
+    /// SLOW-RUN — when our last AutonomousPosition went out (the
+    /// `?apPlaneResend` floor and the detector's AP age).
+    last_autonomous_position_sent_at: Option<Instant>,
+    /// SLOW-RUN — when our last MoveToState went out.
+    last_move_to_state_sent_at: Option<Instant>,
+    /// SLOW-RUN — when the last accepted self UpdatePosition arrived (the
+    /// echo that re-arms the retail leash, acclient.c:145209).
+    last_self_position_echo_at: Option<Instant>,
+    /// SLOW-RUN — when the last non-autonomous self UpdateMotion arrived, and
+    /// its RunForward rate (`NaN` when it carried none).
+    last_server_motion_at: Option<Instant>,
+    last_server_motion_rate: f32,
     /// Phase 3 Phase D (2026-06-28) — runtime carrier of the
     /// `?faithfulOutdoor=off` URL flag. `None` = use the
     /// [`USE_FAITHFUL_OUTDOOR`] const default (ON); `Some(false)` forces the
@@ -2238,6 +2343,11 @@ pub(crate) struct MovementSystem {
     /// const (OFF — carrier split). Combined by
     /// [`Self::landing_bounce_enabled`]. Default `None`.
     landing_bounce_runtime: Option<bool>,
+    /// BOUNCE-ALONG-SLOPE (2026-10-11) — runtime carrier of
+    /// `?bounceAlongSlope` (browser DEFAULT ON). `None` = the
+    /// [`USE_BOUNCE_ALONG_SLOPE`] native const (OFF — carrier split). Combined
+    /// by [`Self::bounce_along_slope_enabled`].
+    bounce_along_slope_runtime: Option<bool>,
     /// F2 (2026-07-27) — the install-time speed resolution for the
     /// SERVER-commanded MoveTo currently on the driver (see
     /// [`ServerMoveToDrive`]). Cleared with the pursuit (arrival,
@@ -2256,6 +2366,10 @@ pub(crate) struct MovementSystem {
     /// `Some(true)` holds the forward slot dead across a whole cast chain.
     /// Combined by [`Self::cast_hold_reclaim_enabled`]. Default `None`.
     cast_hold_reclaim_runtime: Option<bool>,
+    /// SLOW-RUN (2026-10-11) — runtime carrier of `?castLockRevive` (browser
+    /// DEFAULT ON). `None` = the [`USE_CAST_LOCK_REVIVE`] native const (OFF).
+    /// Combined by [`Self::cast_lock_revive_enabled`].
+    cast_lock_revive_runtime: Option<bool>,
     /// WS04 — set by the JS cast chain via [`Self::note_local_cast_window`];
     /// `true` from windup start to chain completion/fizzle/cancel. Read by
     /// the interpreter seam [`SystemInterpreterSeams::local_cast_forward_lock_active`].
@@ -2736,6 +2850,34 @@ fn direction_for_heading_rad(heading_rad: f32) -> Vector3 {
     Vector3::new(-math_rad.sin(), math_rad.cos(), 0.0)
 }
 
+/// SLOW-RUN — the planar (x, y) length of a velocity or offset.
+fn planar_speed(v: Vector3) -> f32 {
+    (v.x * v.x + v.y * v.y).sqrt()
+}
+
+/// SLOW-RUN — a drive's axes as −1/0/+1 (forward, side, turn) plus the run
+/// gait, for the detector's context snapshot.
+fn slow_run_axes(state: MotionState) -> (i8, i8, i8, bool) {
+    (
+        match state.forward {
+            Some(ForwardLocomotion::Forward) => 1,
+            Some(ForwardLocomotion::Backstep) => -1,
+            None => 0,
+        },
+        match state.sidestep {
+            Some(SidestepLocomotion::StrafeRight) => 1,
+            Some(SidestepLocomotion::StrafeLeft) => -1,
+            None => 0,
+        },
+        match state.turning {
+            Some(Turn::Right) => 1,
+            Some(Turn::Left) => -1,
+            None => 0,
+        },
+        state.gait == crate::client::movement_types::Gait::Run,
+    )
+}
+
 impl MovementSystem {
     pub(crate) fn new() -> Self {
         Self {
@@ -2768,6 +2910,12 @@ impl MovementSystem {
             ground_keep_logs: std::cell::Cell::new(0),
             ground_loss_logs: std::cell::Cell::new(0),
             jump_pack_logs: std::cell::Cell::new(0),
+            slow_run: crate::slow_run_diag::SlowRunMonitor::new(),
+            last_autonomous_position_sent_at: None,
+            last_move_to_state_sent_at: None,
+            last_self_position_echo_at: None,
+            last_server_motion_at: None,
+            last_server_motion_rate: f32::NAN,
             faithful_outdoor_runtime: None,
             local_moveto_motion_runtime: None,
             retail_moveto_cancel_runtime: None,
@@ -2788,9 +2936,11 @@ impl MovementSystem {
             sticky_idle_step_runtime: None,
             sticky_idle_transition_runtime: None,
             landing_bounce_runtime: None,
+            bounce_along_slope_runtime: None,
             server_moveto_drive: None,
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
+            cast_lock_revive_runtime: None,
             local_cast_window_active: false,
             cast_requests_pending: 0,
             cast_requests_since: None,
@@ -2994,6 +3144,12 @@ impl MovementSystem {
         self.ap_contact_plane_resend_runtime = Some(on);
     }
 
+    /// SLOW-RUN (2026-10-11) — install the `?apPlaneResend` runtime carrier
+    /// (browser DEFAULT ON, `=off` escape; see [`USE_AP_CONTACT_PLANE_RESEND`]).
+    pub(crate) fn set_ap_contact_plane_resend(&mut self, on: bool) {
+        self.ap_contact_plane_resend_runtime = Some(on);
+    }
+
     /// [`USE_AP_CONTACT_PLANE_RESEND`] effective predicate. Only meaningful
     /// under [`Self::retail_position_event_gate_enabled`].
     fn ap_contact_plane_resend_enabled(&self) -> bool {
@@ -3056,6 +3212,20 @@ impl MovementSystem {
         self.landing_bounce_runtime.unwrap_or(USE_LANDING_BOUNCE)
     }
 
+    /// BOUNCE-ALONG-SLOPE (2026-10-11) — install the `?bounceAlongSlope`
+    /// runtime carrier (see [`USE_BOUNCE_ALONG_SLOPE`]; the browser passes ON
+    /// unless `=off`).
+    pub(crate) fn set_bounce_along_slope(&mut self, on: bool) {
+        self.bounce_along_slope_runtime = Some(on);
+    }
+
+    /// [`USE_BOUNCE_ALONG_SLOPE`] effective predicate (meaningful only while
+    /// [`Self::landing_bounce_enabled`]).
+    pub(crate) fn bounce_along_slope_enabled(&self) -> bool {
+        self.bounce_along_slope_runtime
+            .unwrap_or(USE_BOUNCE_ALONG_SLOPE)
+    }
+
     /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
     /// [`USE_CAST_MOVE`]).
     pub(crate) fn set_cast_move(&mut self, on: bool) {
@@ -3110,6 +3280,17 @@ impl MovementSystem {
     /// [`USE_CAST_HOLD_RECLAIM`] effective predicate.
     pub(crate) fn cast_hold_reclaim_enabled(&self) -> bool {
         self.cast_hold_reclaim_runtime.unwrap_or(USE_CAST_HOLD_RECLAIM)
+    }
+
+    /// SLOW-RUN — install the `?castLockRevive` runtime carrier (see
+    /// [`USE_CAST_LOCK_REVIVE`]).
+    pub(crate) fn set_cast_lock_revive(&mut self, on: bool) {
+        self.cast_lock_revive_runtime = Some(on);
+    }
+
+    /// [`USE_CAST_LOCK_REVIVE`] effective predicate.
+    pub(crate) fn cast_lock_revive_enabled(&self) -> bool {
+        self.cast_lock_revive_runtime.unwrap_or(USE_CAST_LOCK_REVIVE)
     }
 
     /// WS04 — the JS cast chain stamps its local cast window here (true at
@@ -3619,6 +3800,7 @@ impl MovementSystem {
         let dead = self.local_player_dead_gated(world);
         interp.controlled_by_server =
             (interp.honor_autonomy_latch && world.scene.local_server_controlled()) || dead;
+        let cast_lock_revive = self.cast_lock_revive_enabled();
         let base = self.interp_base_drive(&interp);
         let mut seams = SystemInterpreterSeams {
             system: self,
@@ -3628,6 +3810,11 @@ impl MovementSystem {
             dispatched: false,
         };
         interp.use_time(&mut seams);
+        // SLOW-RUN (`?castLockRevive`): once the cast lock's scope closes, a
+        // held W/S the lock left dead is re-applied (see the const).
+        if cast_lock_revive {
+            interp.revive_forward_after_cast_lock(&mut seams);
+        }
         let dispatched = seams.dispatched;
         let drive = seams.drive;
         if dispatched {
@@ -4460,6 +4647,7 @@ impl MovementSystem {
     /// Called after every successful MoveToState send; a no-op under
     /// `?apRetailGate=off`.
     fn note_movement_event_sent(&mut self, now: Instant, world: &WorldState) {
+        self.last_move_to_state_sent_at = Some(now);
         if self.retail_position_event_gate_enabled() {
             self.refresh_autonomous_position_heartbeat_schedule(now, world);
         }
@@ -5314,10 +5502,15 @@ impl MovementSystem {
                         }
                         PendingPursuitCommand::TurnToHeading { heading_rad } => {
                             let mut params = MovementParameters::default();
-                            // RADIANS (pose domain) → the retail
-                            // degrees domain, [0, 360).
+                            // POSE radians → the retail heading
+                            // MovementParameters carry (the compass, as the
+                            // wire's; NPC-facing fix 2026-10-11 — the driver
+                            // converts it back at its node boundary, so this
+                            // turn is unchanged), [0, 360).
                             params.desired_heading =
-                                heading_rad.to_degrees().rem_euclid(360.0);
+                                holtburger_common::math::wire_heading_deg_from_pose(
+                                    heading_rad.to_degrees(),
+                                );
                             MovementStruct::TurnToHeading { params }
                         }
                         PendingPursuitCommand::MoveToPosition {
@@ -8232,6 +8425,24 @@ impl MovementSystem {
             return false;
         };
         let dt_s = dt.as_secs_f32();
+        // SLOW-RUN detector: the HELD keys (the interpreter's CommandList
+        // heads, auto-run overlaid), taken before the interpreted-state swap
+        // below. A jump or a standing-long-jump charge is not a run.
+        let held = {
+            let held = self.last_manual_drive.unwrap_or(state);
+            let auto_run = self.auto_run
+                || self
+                    .command_interpreter
+                    .as_ref()
+                    .is_some_and(|interp| interp.auto_run);
+            if auto_run {
+                Self::overlay_auto_run(held)
+            } else {
+                held
+            }
+        };
+        let slow_run_eligible =
+            !world.player.is_airborne && !world.player.standing_long_jump_charge;
 
         // USE_CAST_MOVE — the retail autonomy dispatch
         // (`CMotionInterp::apply_current_movement`, acclient.c:344305):
@@ -8259,6 +8470,13 @@ impl MovementSystem {
         };
 
         let target_velocity = interpreted_velocity_for_state(heading, state, &capabilities);
+        // SLOW-RUN detector: what the held keys produce at this slice's run
+        // rate (re-derived only when the drive differs from them).
+        let expected_mps = planar_speed(if held == state {
+            target_velocity
+        } else {
+            interpreted_velocity_for_state(heading, held, &capabilities)
+        });
         // G-7 / F1-6 — StandingLongJump root (turning stays allowed via
         // omega in the tail).
         let target_velocity = if world.player.standing_long_jump_charge {
@@ -8295,6 +8513,8 @@ impl MovementSystem {
             smoothed_planar.y * dt_s,
             target_velocity.z * dt_s,
         );
+        // A sticky idle slice shares the tail; drop any offset it noted.
+        let _ = self.slow_run.take_leash_offset();
         self.finish_manual_slice_via_transition(
             world,
             pose,
@@ -8304,7 +8524,186 @@ impl MovementSystem {
             &capabilities,
             dt_s,
         );
+        self.observe_slow_run_slice(
+            world,
+            pose,
+            &capabilities,
+            dt_s,
+            slow_run_eligible,
+            expected_mps,
+            planar_speed(raw_delta),
+            held,
+            state,
+        );
         true
+    }
+
+    /// SLOW-RUN (2026-10-11) — feed one manual slice to the always-on
+    /// slow-run detector ([`crate::slow_run_diag`]). `intended_planar_m` is the
+    /// slice's own planar offset (before the PositionManager chain); the chain
+    /// offset comes from the transition tail, the realized one from the pose.
+    /// Diagnostics only: reads state, decides nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn observe_slow_run_slice(
+        &self,
+        world: &WorldState,
+        begin: holtburger_common::position::WorldPosition,
+        capabilities: &holtburger_world::SelfMovementCapabilities,
+        dt_s: f32,
+        eligible_at_entry: bool,
+        expected_mps: f32,
+        intended_planar_m: f32,
+        held: MotionState,
+        drive: MotionState,
+    ) {
+        let leash_planar_m = self
+            .slow_run
+            .take_leash_offset()
+            .unwrap_or(intended_planar_m);
+        let realized_planar_m = world.local_player_runtime_pose().map_or(0.0, |after| {
+            let a = begin.global_coords();
+            let b = after.global_coords();
+            planar_speed(Vector3::new(b.x - a.x, b.y - a.y, 0.0))
+        });
+        let grounded = eligible_at_entry && !world.player.is_airborne;
+        let locomotion_held = held.forward.is_some() || held.sidestep.is_some();
+        let rate_ratio = if grounded && locomotion_held && self.slow_run.rate_probe_due() {
+            use holtburger_world::context::WorldContextExt;
+            match world.player_composed_run_rate() {
+                Some(composed) if composed > 1e-3 => capabilities.run_rate_scalar / composed,
+                _ => 1.0,
+            }
+        } else {
+            f32::NAN
+        };
+        let inv_dt = 1.0 / dt_s.max(1e-4);
+        let slice = crate::slow_run_diag::SlowRunSlice {
+            dt: dt_s,
+            locomotion_held,
+            grounded,
+            expected_mps,
+            intended_mps: intended_planar_m * inv_dt,
+            leash_mps: leash_planar_m * inv_dt,
+            realized_mps: realized_planar_m * inv_dt,
+            rate_ratio,
+        };
+        let _ = self.slow_run.observe(slice, || {
+            self.slow_run_context(world, capabilities, held, drive)
+        });
+    }
+
+    /// SLOW-RUN — the drive-arm twin of [`Self::observe_slow_run_slice`]
+    /// (`ClientSimulationSystem::advance_local_player_via_transition`). A
+    /// local drive moves the body while keys may still be held: a server
+    /// MoveTo/TurnTo that a held key no longer cancels (`?retailMoveToCancel`),
+    /// the projection lane, an autonomous steer. It is measured against the
+    /// held keys the same way. The drive axes read idle; `moveToActive` /
+    /// `projectionActive` say which drive it was.
+    pub(crate) fn observe_slow_run_drive_slice(
+        &self,
+        world: &WorldState,
+        begin: holtburger_common::position::WorldPosition,
+        dt_s: f32,
+        intended_planar_m: f32,
+    ) {
+        let Ok(capabilities) = world.resolve_self_movement_capabilities() else {
+            return;
+        };
+        let auto_run = self.auto_run
+            || self
+                .command_interpreter
+                .as_ref()
+                .is_some_and(|interp| interp.auto_run);
+        let mut held = self.last_manual_drive.unwrap_or_default();
+        if auto_run {
+            held = Self::overlay_auto_run(held);
+        }
+        let expected_mps = planar_speed(interpreted_velocity_for_state(
+            begin.rotation.to_heading(),
+            held,
+            &capabilities,
+        ));
+        let _ = self.slow_run.take_leash_offset();
+        self.observe_slow_run_slice(
+            world,
+            begin,
+            &capabilities,
+            dt_s,
+            !world.player.is_airborne,
+            expected_mps,
+            intended_planar_m,
+            held,
+            MotionState::default(),
+        );
+    }
+
+    /// SLOW-RUN — every cause candidate, snapshotted once per incident.
+    fn slow_run_context(
+        &self,
+        world: &WorldState,
+        capabilities: &holtburger_world::SelfMovementCapabilities,
+        held: MotionState,
+        drive: MotionState,
+    ) -> crate::slow_run_diag::SlowRunContext {
+        use holtburger_world::context::WorldContextExt;
+        let now = Instant::now();
+        let age = |at: Option<Instant>| {
+            at.map_or(f32::NAN, |t| now.saturating_duration_since(t).as_secs_f32())
+        };
+        let guid = world.player.guid;
+        let (leash_armed, leash_budget_m, interpolating, sticky_active) = world
+            .scene
+            .body(SpatialBodyId::LocalPlayer(guid))
+            .map_or((false, 0.0, false, false), |body| {
+                let manager = &body.position_manager;
+                (
+                    manager.constraint.is_constrained(),
+                    manager.constraint.constraint_pos_offset(),
+                    manager.is_interpolating(),
+                    manager.sticky.is_active(),
+                )
+            });
+        let (held_forward, held_side, held_turn, held_run) = slow_run_axes(held);
+        let (drive_forward, drive_side, drive_turn, drive_run) = slow_run_axes(drive);
+        crate::slow_run_diag::SlowRunContext {
+            server_controlled: world.scene.local_server_controlled(),
+            latch_autonomous: self.last_move_was_autonomous,
+            interpreted_drive: self.interpreted_movement_active(),
+            pending_motions: self.local_registry_pending_motions(guid) as u32,
+            moveto_active: self.moveto_is_active(guid),
+            projection_active: self.server_controlled_projection.is_some(),
+            interpolating,
+            sticky_active,
+            cast_lock_active: self.cast_hold_reclaim_enabled()
+                && (self.local_cast_window_active || self.cast_request_in_flight()),
+            forward_killed_by_cast_lock: self
+                .command_interpreter
+                .as_ref()
+                .is_some_and(|interp| interp.forward_killed_by_cast_lock),
+            leash_armed,
+            leash_budget_m,
+            indoor: world
+                .local_player_runtime_pose()
+                .is_some_and(|pose| pose.is_indoors()),
+            echo_age_s: age(self.last_self_position_echo_at),
+            ap_age_s: age(self.last_autonomous_position_sent_at),
+            move_to_state_age_s: age(self.last_move_to_state_sent_at),
+            server_motion_age_s: age(self.last_server_motion_at),
+            server_motion_rate: self.last_server_motion_rate,
+            position_event_ready: self.position_event_ready(world),
+            heartbeats_sent: self.heartbeats_sent,
+            capability_rate: capabilities.run_rate_scalar,
+            server_run_rate: world.player.server_run_rate.unwrap_or(f32::NAN),
+            composed_run_rate: world.player_composed_run_rate().unwrap_or(f32::NAN),
+            held_forward,
+            held_side,
+            held_turn,
+            held_run,
+            drive_forward,
+            drive_side,
+            drive_turn,
+            drive_run,
+        }
     }
 
     /// A6-T1/T2 — the pipeline call + write-back tail shared by the
@@ -8447,6 +8846,14 @@ impl MovementSystem {
             // planar locomotion). The mover is rising, so neither descending
             // flag holds (no settle-land snap).
             let bn = bounce.normal * bounce.normal_speed();
+            // BOUNCE-ALONG-SLOPE (`?bounceAlongSlope`): the quantum's own
+            // locomotion step is laid on the plane it bounced off, as a
+            // grounded step is — so on a descent the body clears the hill by
+            // the bounce alone, not by the hill falling away under a level step.
+            if self.bounce_along_slope_enabled() {
+                let laid = velocity_along_plane(raw_delta, bounce.normal);
+                raw_delta = laid;
+            }
             raw_delta.x += bn.x * dt_s;
             raw_delta.y += bn.y * dt_s;
             descending = false;
@@ -8496,6 +8903,8 @@ impl MovementSystem {
             Some(out) => out.offset,
             None => world.constrain_local_manual_delta(intended_offset),
         };
+        // SLOW-RUN detector: the slice's offset after interp / sticky / leash.
+        self.slow_run.note_leash_offset(planar_speed(leash_delta));
         let (object, mut gates) = Self::transition_profile(world);
         // (2026-06-30) — apply the `?roofGrounding=off` runtime carrier over the
         // const default baked by `transition_profile` (mirrors faithful_stepup).
@@ -8881,10 +9290,27 @@ impl MovementSystem {
                 );
                 // Grounded via terrain snap may carry no explicit plane;
                 // flat normal makes the projection a no-op (pure decay).
+                // BOUNCE-ALONG-SLOPE: the settle band grounds a hovering body
+                // without a plane; retail's collision normal for that landing
+                // is the terrain plane it touches (acclient.c:314242), so take
+                // the terrain normal under the feet, not a level one.
+                let along_slope =
+                    self.landing_bounce_enabled() && self.bounce_along_slope_enabled();
                 let normal = outcome
                     .contact_plane
                     .map(|(plane, _)| plane.normal)
+                    .or_else(|| {
+                        if along_slope && !pose.is_indoors() {
+                            let g = pose.global_coords();
+                            world.terrain_normal_at(g.x, g.y)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+                // BOUNCE-ALONG-SLOPE: this landing ends a bounce lift-off — the
+                // bounce is spent and never relaunches again (no hop chain).
+                let spent = along_slope && world.player.bounce_relaunched;
                 let bounce_on =
                     self.landing_bounce_enabled() && outcome.frames_stationary_fall <= 1;
                 if bounce_on {
@@ -8905,7 +9331,7 @@ impl MovementSystem {
                         velocity: v,
                         normal,
                     };
-                    if b.normal_speed() >= LANDING_BOUNCE_LIFTOFF_MIN {
+                    if b.normal_speed() >= LANDING_BOUNCE_LIFTOFF_MIN && !spent {
                         bounce = Some(b);
                     }
                 }
@@ -8982,7 +9408,21 @@ impl MovementSystem {
                         > 0.0;
                 if !moving {
                     world.player.vertical_velocity = b.velocity.z;
+                } else if self.bounce_along_slope_enabled() {
+                    // BOUNCE-ALONG-SLOPE (`?bounceAlongSlope`): the stamped
+                    // horizontal launch, laid on the plane the body bounced off
+                    // (as a grounded step would be) plus the bounce's normal
+                    // speed — on a descent the body follows the hill a few mm
+                    // clear of it instead of flying off it.
+                    let planar = world.player.current_planar_velocity;
+                    let v = velocity_along_plane(Vector3::new(planar.x, planar.y, 0.0), b.normal)
+                        + b.normal * b.normal_speed();
+                    world.player.current_planar_velocity.x = v.x;
+                    world.player.current_planar_velocity.y = v.y;
+                    world.player.vertical_velocity = v.z;
                 }
+                // The landing that ends this hop is the end of the bounce.
+                world.player.bounce_relaunched = self.bounce_along_slope_enabled();
             }
         }
         // USE_SLIDE_FRAME_FRICTION (DEFAULT OFF — deviation escape hatch):
@@ -9279,6 +9719,29 @@ impl MovementSystem {
         self.active_drive = Some(ActiveDriveState::manual(state, None));
     }
 
+    /// SLOW-RUN test seam: the detector's last incident and count.
+    #[cfg(test)]
+    pub(crate) fn slow_run_incidents_for_test(
+        &self,
+    ) -> (u32, Option<crate::slow_run_diag::SlowRunIncident>) {
+        (
+            self.slow_run.incidents_recorded(),
+            self.slow_run.last_incident(),
+        )
+    }
+
+    /// SLOW-RUN test seam: is the installed manual drive moving forward?
+    #[cfg(test)]
+    pub(crate) fn manual_drive_forward_for_test(&self) -> Option<ForwardLocomotion> {
+        match self.active_drive {
+            Some(ActiveDriveState {
+                intent: ActiveDriveIntent::Manual(state),
+                ..
+            }) => state.forward,
+            _ => None,
+        }
+    }
+
     /// G-7 / F1-6 — the UN-rooted interpreted-intent planar velocity for
     /// the currently held manual drive state. Used by the Jump arm at a
     /// standing-long-jump release: while the charge roots the integrator
@@ -9477,12 +9940,29 @@ impl MovementSystem {
                     // the emit gate (handlers/player.rs, accepted &&
                     // !is_autonomous) makes this a LOWER-only write.
                     self.note_server_authored_motion(data.is_autonomous);
+                    // SLOW-RUN detector context: when, and at what run rate
+                    // (ACE's `HandleRunRateUpdate` re-sends the player's own
+                    // run non-autonomously, Player.cs:975).
+                    self.last_server_motion_at = Some(Instant::now());
+                    self.last_server_motion_rate = match &data.data {
+                        holtburger_protocol::messages::movement::MovementTypeData::Invalid(
+                            invalid,
+                        ) if invalid.state.forward_command
+                            == Some(InterpretedMotionCommand::RUN_FORWARD) =>
+                        {
+                            invalid.state.forward_speed.unwrap_or(1.0)
+                        }
+                        _ => f32::NAN,
+                    };
                 }
                 WorldEvent::SelfUpdatePosition {
                     force_position_sequence,
                     ..
                 } => {
                     self.record_force_position_sequence(*force_position_sequence);
+                    // SLOW-RUN detector context: the echo that re-arms the
+                    // local leash (acclient.c:145209).
+                    self.last_self_position_echo_at = Some(Instant::now());
                 }
                 WorldEvent::SelfAutonomousPosition {
                     teleport_sequence,
@@ -10351,6 +10831,18 @@ impl MovementSystem {
 
         let contact_plane = world.player.last_contact_plane.map(|(plane, _)| plane);
 
+        // SLOW-RUN (`?apPlaneResend`): the in-window re-send floor — see
+        // [`AP_PLANE_RESEND_MIN_GAP`]. Polling continues; the next tick past
+        // the floor sends if the plane (or cell) still differs.
+        if !past_window
+            && self.ap_contact_plane_resend_enabled()
+            && self
+                .last_autonomous_position_sent_at
+                .is_some_and(|at| now.saturating_duration_since(at) < AP_PLANE_RESEND_MIN_GAP)
+        {
+            return Ok(false);
+        }
+
         // Physics deep-dive 2026-06-01 (gap 4) + D1-POLL: window-split
         // position-change gate (retail `ShouldSendPositionEvent`). Skip the
         // send when nothing meaningful changed for this window branch so we
@@ -10366,6 +10858,7 @@ impl MovementSystem {
             .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
         self.heartbeats_sent = self.heartbeats_sent.wrapping_add(1);
+        self.last_autonomous_position_sent_at = Some(now);
         self.note_autonomous_position_sent(&pulse, contact_plane);
         // Reset the 1s window from this send (retail last_sent_position_time):
         // the next interval is in-window (contact-plane only) before the
@@ -10401,6 +10894,7 @@ impl MovementSystem {
         session
             .send_action(GameAction::AutonomousPosition(Box::new(pulse.clone())))
             .await?;
+        self.last_autonomous_position_sent_at = Some(now);
         self.note_autonomous_position_sent(
             &pulse,
             world.player.last_contact_plane.map(|(plane, _)| plane),

@@ -51,6 +51,8 @@ import { attachGeometry as _attachGeometry } from "./diag/geometry.js";
 import { attachCollision as _attachCollision } from "./diag/collision.js";
 // NETSYNC (2026-10-07): remote-entity movement sync + remote cast gestures.
 import { attachRemoteSync as _attachRemoteSync } from "./diag/remote_sync.js";
+// SLOW-RUN (2026-10-11): the wasm slow-run detector's incident ring.
+import { attachSlowRun as _attachSlowRun } from "./diag/slow_run.js";
 // Phase 2 limbs (2026-08-02): the surface ships inside the module that owns
 // the state (scene3d/limbs.js) rather than a ./diag/ shim, but wires in
 // through the same `attach<Name>(diag)` contract as everything above.
@@ -641,6 +643,7 @@ export function installDiag() {
     ["geometry",   _attachGeometry],
     ["collision",  _attachCollision],
     ["remoteSync", _attachRemoteSync],
+    ["slowRun",    _attachSlowRun],
     ["limbs",      _attachLimbs],
     ["ragdoll",    _attachRagdoll],
     ["killImpulse", _attachKillImpulse],

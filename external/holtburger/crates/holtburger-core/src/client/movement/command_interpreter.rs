@@ -499,6 +499,13 @@ pub(crate) struct CommandInterpreter {
     /// head. Never persists past the scoped reclaim (reset immediately
     /// after).
     pub(crate) forward_reclaim_locked: bool,
+    /// SLOW-RUN (2026-10-11, `?castLockRevive`) — holtburger extension, NOT
+    /// retail state: a reclaim under [`Self::forward_reclaim_locked`] held a
+    /// HELD W/S (or auto-run) dead, and nothing has re-applied the forward
+    /// axis since. [`Self::revive_forward_after_cast_lock`] re-applies it once
+    /// the cast window closes. Cleared by any unlocked forward re-apply and by
+    /// a forward-axis key edge.
+    pub(crate) forward_killed_by_cast_lock: bool,
 }
 
 /// Step-5 renderer/effect stream entries (PLAN rows 12-13).
@@ -569,6 +576,7 @@ impl CommandInterpreter {
             slidecast_persist: true,
             effects: Vec::new(),
             forward_reclaim_locked: false,
+            forward_killed_by_cast_lock: false,
         }
     }
 
@@ -867,6 +875,40 @@ impl CommandInterpreter {
         }
     }
 
+    /// SLOW-RUN (2026-10-11, `?castLockRevive`) — the window-end half of the
+    /// `?castHoldReclaim` lock (a holtburger extension, like the lock). A
+    /// reclaim inside a cast window keeps a held W/S dead
+    /// ([`Self::forward_reclaim_locked`]). When that reclaim was the cast's
+    /// last control change (ACE's FinishCast Ready echo lands before the
+    /// UseDone), nothing re-applied the forward axis once the window closed,
+    /// so the held key stayed dead until the next fresh press: a W+strafe
+    /// runner kept only the strafe, "slower until I stop and restart". Retail
+    /// has no lock; its post-gesture reclaim re-applies the held W
+    /// (`ApplyCurrentMovement`, acclient.c:717027). Once the lock scope has
+    /// closed and the player holds control, this re-applies the current
+    /// movement the same way. While the server still holds control, the next
+    /// (unlocked) `use_time` reclaim revives instead. Returns whether it
+    /// re-applied.
+    pub(crate) fn revive_forward_after_cast_lock(
+        &mut self,
+        seams: &mut dyn InterpreterSeams,
+    ) -> bool {
+        if !self.forward_killed_by_cast_lock
+            || self.controlled_by_server
+            || seams.local_cast_forward_lock_active()
+        {
+            return false;
+        }
+        self.forward_killed_by_cast_lock = false;
+        if !(self.player_present && self.enabled)
+            || (!self.auto_run && self.substate_list.get_head().is_none())
+        {
+            return false;
+        }
+        self.apply_current_movement(seams);
+        true
+    }
+
     /// `ShouldSendPositionEvent` — acclient.c:718108. IsActive &&
     /// autonomy==2 && smartbox && player, then the windowed cell/frame vs
     /// cell/plane comparison against `last_sent_*`.
@@ -1084,12 +1126,17 @@ impl CommandInterpreter {
             return;
         }
         // ── forward axis ──
+        // SLOW-RUN (`?castLockRevive`): every unlocked arm below re-decides
+        // the forward slot, so a pending window-end revival is moot.
+        self.forward_killed_by_cast_lock = self.forward_reclaim_locked
+            && (self.auto_run || self.substate_list.get_head().is_some());
         if self.forward_reclaim_locked {
             // WS04 (?castHoldReclaim): the cast chain owns the forward slot
             // at zero locomotion — keep it dead (Ready), do NOT replay the
             // held substate head (nor the auto_run re-issue). The substate
             // head stays in the list for later revival (a fresh forward edge
-            // or window end). Turn/sidestep below re-apply normally. This
+            // or window end — [`Self::revive_forward_after_cast_lock`]).
+            // Turn/sidestep below re-apply normally. This
             // Ready emit is byte-identical to the `!transient_state` fallback
             // just below (`apply_axis(MOTION_READY) → drive.forward = None`).
             self.move_player(seams, MOTION_READY, 1, 1.0, 0, 0);
@@ -1252,6 +1299,11 @@ impl CommandInterpreter {
             && seams.local_cast_forward_lock_active();
         self.take_control_from_server(seams, false);
         self.forward_reclaim_locked = false;
+        // SLOW-RUN (`?castLockRevive`): a forward-axis edge decides the
+        // forward slot itself; no window-end revival is owed after it.
+        if which_list(command) == Some(ListKind::Substate) {
+            self.forward_killed_by_cast_lock = false;
+        }
 
         // :717299 — HoldRun / HoldSidestep modifier writes; a movement event
         // fires only if not already standing still (physics minterp — P03

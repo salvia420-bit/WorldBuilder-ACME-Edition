@@ -62,6 +62,9 @@ pub(crate) struct LoopFlags {
     pub(crate) remote_sweep_on: bool,
     /// MoveTo refactor phase G: `?targetVoyeur` (TargetManager voyeur).
     pub(crate) target_voyeur_on: bool,
+    /// NPC-facing fix (2026-10-11): `?remoteMoveToBegin` (a remote MoveTo /
+    /// TurnTo begins inside the unpack that arms it).
+    pub(crate) remote_moveto_begin_on: bool,
     /// Cast-movement fix 3: `?castTakesControl` (cast gestures take control).
     pub(crate) cast_takes_control_on: bool,
     pub(crate) remote_sticky_on: bool,

@@ -1,0 +1,381 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>moon fx gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Moon FX GPU smoke (driven by test_moon_fx_gpu.cjs; the runner loads this page
+// with ?nightRamp=off so the sun pitches below reach the moons verbatim). One
+// 160x160 WebGL2 canvas, the two real moon PNGs, no game world. Both moons are
+// built twice — ?moonFx on (MOON_FX_FRAG) and off (the pre-FX MOON_FRAG) — on
+// a camera at the origin with the orbits frozen (_speedMul 0: Alb'arel due
+// north at alt 16.5 deg, Rez'arel at az 120 deg, alt -6.3 deg), and lit through
+// the real tick() from a fake SkyState:
+//   C. every program compiles + links (no shader error), also under a
+//      tone-mapped renderer prefix; FX Alb'arel + Rez'arel share one program
+//   L. =off still draws the legacy moon (disc inside, transparent outside)
+//   F. full phase at night: the disc centre is lit, beyond the halo is
+//      untouched background, a halo ring sits just outside the lit limb
+//   N. sun behind the moon at night: an opaque DARK disc (hides the sky)
+//   Q. sun east-and-below: the east (screen-right) half is the lit one
+//   D. sun behind the moon by DAY: the unlit disc lets the sky through
+//   K. the bug: Alb'arel's clouds fill the disc INTERIOR, all four quadrants
+//   R. Rez'arel: lit / dark / quarter the same way, and no clouds
+//   P. uPhase 0 (the escape knob) brings back the painted lighting
+//   B. libration moves the surface, not the disc
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0, notes: {} };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const MOONS = await import("/scene3d/ac_moons.js");
+  const { ACMoons } = MOONS;
+
+  const W = 160, H = 160;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, logarithmicDepthBuffer: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (g, program, vs, fs) => {
+    R.errors.push(`shader error: ${g.getProgramInfoLog(program)} | VS: ${g.getShaderInfoLog(vs)} | FS: ${g.getShaderInfoLog(fs)}`);
+  };
+  // The client renders the sky pass into the composer's HDR target with
+  // NoToneMapping on the renderer (the composer tone-maps later).
+  renderer.toneMapping = THREE.NoToneMapping;
+  // Linear framebuffer: clear colours and shader output share one scale.
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(21.3, W / H, 1, 5000);
+  camera.position.set(0, 0, 0);
+
+  // Fake liveScene3d: tick() reads the camera + the SkyState from here.
+  window.liveScene3d = { cameraSwitcher: { activeCamera: camera }, skyLightingController: { _lastState: null } };
+
+  async function build(fx) {
+    const m = new ACMoons({ fx });
+    await m.load();
+    m._speedMul = 0; // orbits frozen at their t=0 spots
+    scene.add(m.albMesh, m.rezMesh);
+    return m;
+  }
+  const fxM = await build(true);
+  const legM = await build(false);
+  const T0 = fxM._startMs + 30000; // uTime 30 s
+
+  const BG = [0.02, 0.03, 0.06];
+  const DAYSKY = [0.25, 0.42, 0.75];
+  // Alb'arel sits at az 0 / alt 0.6*sin(0.5): the sun opposite it is due south,
+  // the same angle below the horizon. Rez'arel sits at az 2.1 rad / alt
+  // 0.7*sin(3.3) (just below the horizon): its opposite sun is just above it.
+  const DEG = 180 / Math.PI;
+  const ALT_A = 0.6 * Math.sin(0.5) * DEG;
+  const AZ_R = 2.1 * DEG;
+  const ALT_R = 0.7 * Math.sin(3.3) * DEG;
+
+  function setVisible(only) {
+    for (const mm of [fxM, legM]) for (const mesh of [mm.albMesh, mm.rezMesh]) mesh.visible = mesh === only;
+  }
+  /** Tick, frame the target, render; returns { buf, cx, cy, rPx }. */
+  // brightness 2 = the client's night uBrightness (the moons' shipped base).
+  function shot(mm, which, sky, { clear = BG, brightness = 2.0, setup } = {}) {
+    window.liveScene3d.skyLightingController._lastState = sky;
+    mm.tick(T0);
+    const mesh = which === "alb" ? mm.albMesh : mm.rezMesh;
+    for (const m2 of [mm.albMesh, mm.rezMesh]) m2.material.uniforms.uBrightness.value = brightness;
+    if (setup) setup(mesh.material.uniforms, mm);
+    setVisible(mesh);
+    camera.lookAt(mesh.position);
+    camera.updateMatrixWorld(true);
+    renderer.setClearColor(new THREE.Color().setRGB(clear[0], clear[1], clear[2], THREE.LinearSRGBColorSpace), 1);
+    renderer.render(scene, camera);
+    const buf = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    // Disc centre + radius on screen: the disc is 0.46 of the LEGACY quad.
+    const angR = which === "alb" ? 0.115 : 0.0736;
+    const discWorld = 0.46 * 2 * 2000 * angR;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(mesh.quaternion);
+    const c = mesh.position.clone().project(camera);
+    const e = mesh.position.clone().addScaledVector(right, discWorld).project(camera);
+    return { buf, cx: (c.x * 0.5 + 0.5) * W, cy: (c.y * 0.5 + 0.5) * H, rPx: (e.x - c.x) * 0.5 * W };
+  }
+  const pix = (s, x, y) => {
+    const xi = Math.max(0, Math.min(W - 1, Math.round(x)));
+    const yi = Math.max(0, Math.min(H - 1, Math.round(y)));
+    const i = (yi * W + xi) * 4;
+    return [s.buf[i], s.buf[i + 1], s.buf[i + 2]];
+  };
+  /** 3x3 mean at disc coordinates (dx, dy) in disc radii (+y = up). Sums
+   *  the integer bytes and divides once, so a flat patch averages exactly to
+   *  its own value (accumulating p/9 nine times drifts by ~1e-15). */
+  const at = (s, dx, dy) => {
+    const acc = [0, 0, 0];
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      const p = pix(s, s.cx + dx * s.rPx + i, s.cy + dy * s.rPx + j);
+      acc[0] += p[0]; acc[1] += p[1]; acc[2] += p[2];
+    }
+    return [acc[0] / 9, acc[1] / 9, acc[2] / 9];
+  };
+  const lum = (p) => 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+  const fmt = (p) => `(${p.map((v) => v.toFixed(0)).join(",")})`;
+  const dist = (a, b) => Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));
+  /** Mean luminance over disc pixels with r < rIn and x on one side. */
+  function halfLum(s, side, rIn = 0.85) {
+    let sum = 0, n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = (x - s.cx) / s.rPx, dy = (y - s.cy) / s.rPx;
+      if (dx * dx + dy * dy > rIn * rIn) continue;
+      if (side === "left" ? dx > -0.15 : dx < 0.15) continue;
+      sum += lum(pix(s, x, y)); n++;
+    }
+    return n ? sum / n : 0;
+  }
+  const bg8 = (s) => pix(s, 1, 1); // a corner: always background
+  /** Every canvas pixel at r >= rMin (disc radii) against a reference — the
+   *  background colour (an [r,g,b]) or another shot (same pixel). Integer
+   *  bytes, no averaging. Clean = no pixel off by 2+ levels and at most 0.5%
+   *  off by 1 (headroom for a stray dither LSB, nothing more): any real bleed
+   *  (a halo that does not fade out, a missing discard, a 1-level wash) moves
+   *  a contiguous region and fails. */
+  function cleanBeyond(s, rMin, ref) {
+    let n = 0, off1 = 0, max = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = (x - s.cx) / s.rPx, dy = (y - s.cy) / s.rPx;
+      if (dx * dx + dy * dy < rMin * rMin) continue;
+      const p = pix(s, x, y);
+      const q = Array.isArray(ref) ? ref : pix(ref, x, y);
+      const d = Math.max(Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1]), Math.abs(p[2] - q[2]));
+      n++;
+      if (d >= 1) off1++;
+      if (d > max) max = d;
+    }
+    return { n, off1, max, ok: n > 0 && max <= 1 && off1 <= 0.005 * n,
+      text: `${n} px at r>=${rMin}: ${off1} off by >=1, max ${max}` };
+  }
+  /** Mean luminance (and blue/red ratio) of the disc pixels with r < rIn —
+   *  a region mean, not one texel: the framebuffer is linear 8-bit and a
+   *  single sample is at the mercy of the painted texture under it. */
+  function interior(s, rIn = 0.6) {
+    let sum = 0, rr = 0, bb = 0, n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = (x - s.cx) / s.rPx, dy = (y - s.cy) / s.rPx;
+      if (dx * dx + dy * dy > rIn * rIn) continue;
+      const p = pix(s, x, y);
+      sum += lum(p); rr += p[0]; bb += p[2]; n++;
+    }
+    return { lum: n ? sum / n : 0, blueRed: rr > 0 ? bb / rr : 0 };
+  }
+
+  // ---- C: compile -----------------------------------------------------------------
+  const SKY_FULL = { dirHeading: 180, dirPitch: -ALT_A };
+  const legA = shot(legM, "alb", SKY_FULL);
+  const legR = shot(legM, "rez", { dirHeading: AZ_R + 180, dirPitch: -ALT_R });
+  const fullA = shot(fxM, "alb", SKY_FULL);
+  const SKY_REZ_FULL = { dirHeading: AZ_R + 180, dirPitch: -ALT_R };
+  const fullR = shot(fxM, "rez", SKY_REZ_FULL);
+  check("C. legacy + FX moon programs compile and link (no shader error)", R.errors.length === 0, R.errors.join(" / "));
+  const progOf = (mesh) => renderer.properties.get(mesh.material).currentProgram;
+  check("C. FX Alb'arel and FX Rez'arel share ONE program; legacy is another",
+    progOf(fxM.albMesh) && progOf(fxM.albMesh) === progOf(fxM.rezMesh) && progOf(legM.albMesh) !== progOf(fxM.albMesh),
+    `programs ${renderer.info.programs.length}`);
+  check("C. the FX material really is MOON_FX_FRAG, legacy MOON_FRAG",
+    fxM.albMesh.material.fragmentShader === MOONS.MOON_FX_FRAG && legM.albMesh.material.fragmentShader === MOONS.MOON_FRAG);
+
+  // ---- L: legacy ------------------------------------------------------------------
+  {
+    const c = at(legA, 0, 0), bg = bg8(legA);
+    // The legacy quad ends at r = 0.5 / 0.46 = 1.087 disc radii; 1.11 = +1 px.
+    const out = cleanBeyond(legA, 1.11, bg);
+    check("L. =off: the legacy Alb'arel disc draws; everything past its quad stays background",
+      dist(c, bg) > 20 && out.ok, `centre ${fmt(c)} bg ${fmt(bg)}; ${out.text}`);
+    R.notes.legacyRezCentre = fmt(at(legR, 0, 0));
+  }
+
+  // ---- F: full phase at night ----------------------------------------------------
+  const fullCentre = at(fullA, 0, 0);
+  const fullIn = interior(fullA).lum;
+  const fullBg = bg8(fullA);
+  {
+    R.notes.fullCentre = `${fmt(fullCentre)}; interior mean ${fullIn.toFixed(1)}`;
+    check("F. full phase, night: the disc interior is lit (non-empty)", fullIn > 20 && dist(fullCentre, fullBg) > 6, R.notes.fullCentre);
+    // The FX shader discards past rMax = 0.5 * 1.3 / 0.46 = 1.413 disc radii
+    // (its halo has already faded to 0 by then); 1.45 = rMax + ~1.6 px.
+    const RCLEAN = 1.45;
+    const out = cleanBeyond(fullA, RCLEAN, fullBg);
+    check("F. beyond the halo the background is untouched (per-pixel scan)", out.ok, out.text);
+    // Probe self-test: the same scan on a copy with a faint ring painted just
+    // past RCLEAN (+2 levels) and on a copy with a 1-level wash must FAIL.
+    const ring = { ...fullA, buf: fullA.buf.slice() };
+    const wash = { ...fullA, buf: fullA.buf.slice() };
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const r = Math.hypot((x - fullA.cx) / fullA.rPx, (y - fullA.cy) / fullA.rPx);
+      const i = (y * W + x) * 4;
+      if (r >= RCLEAN && r < RCLEAN + 0.08) ring.buf[i + 1] += 2;
+      if (r >= RCLEAN) wash.buf[i + 2] += 1;
+    }
+    const caughtRing = !cleanBeyond(ring, RCLEAN, fullBg).ok;
+    const caughtWash = !cleanBeyond(wash, RCLEAN, fullBg).ok;
+    check("F. (probe self-test) a 2-level ring or a 1-level wash past the halo would FAIL the scan",
+      caughtRing && caughtWash, `ring caught ${caughtRing}, wash caught ${caughtWash}`);
+  }
+  {
+    // Halo: the same quarter-lit frame (lit limb = screen right) with the halo
+    // knob at 3 and at 0; the ring band just outside the disc must light up,
+    // more on the lit limb than on the dark one.
+    const SKY_Q = { dirHeading: 90, dirPitch: -ALT_A };
+    const hOn = shot(fxM, "alb", SKY_Q, { setup: (u) => { u.uHalo.value = 3; } });
+    const hOff = shot(fxM, "alb", SKY_Q, { setup: (u) => { u.uHalo.value = 0; } });
+    fxM.albMesh.material.uniforms.uHalo.value = 1;
+    const band = (side) => {
+      let sum = 0, n = 0, mx = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const dx = (x - hOn.cx) / hOn.rPx, dy = (y - hOn.cy) / hOn.rPx;
+        const r = Math.hypot(dx, dy);
+        if (r < 1.03 || r > 1.15 || (side === "right" ? dx < 0.5 : dx > -0.5)) continue;
+        const d = lum(pix(hOn, x, y)) - lum(pix(hOff, x, y));
+        sum += d; n++; mx = Math.max(mx, d);
+      }
+      return { mean: n ? sum / n : 0, max: mx, n };
+    };
+    const rb = band("right"), lb = band("left");
+    R.notes.halo = `lit limb mean +${rb.mean.toFixed(1)} max +${rb.max.toFixed(1)} (n ${rb.n}); dark limb mean +${lb.mean.toFixed(1)}`;
+    check("F. a halo ring sits just outside the lit limb (r 1.03..1.15 brighter with the halo on)", rb.mean >= 4 && rb.max >= 8, R.notes.halo);
+    check("F. ...strongest on the LIT limb", rb.mean > 1.5 * lb.mean, R.notes.halo);
+  }
+
+  // ---- N: sun behind the moon, night ------------------------------------------------
+  const SKY_NEW_NIGHT = { dirHeading: 0, dirPitch: -12 }; // 28.5 deg below the moon, behind it
+  const newA = shot(fxM, "alb", SKY_NEW_NIGHT);
+  {
+    const c = at(newA, 0, 0);
+    const inN = interior(newA).lum;
+    R.notes.newNightCentre = `${fmt(c)}; interior mean ${inN.toFixed(1)}`;
+    check("N. sun behind the moon at night: the disc is DARK (< 25% of full)", inN < 0.25 * fullIn, `${inN.toFixed(1)} vs full ${fullIn.toFixed(1)}`);
+    check("N. ...and OPAQUE: the dark disc hides the sky behind it", dist(c, bg8(newA)) >= 3, `${fmt(c)} vs bg ${fmt(bg8(newA))}`);
+  }
+
+  // ---- Q: quarter ----------------------------------------------------------------------
+  const SKY_EAST_LOW = { dirHeading: 90, dirPitch: -ALT_A };
+  const qA = shot(fxM, "alb", SKY_EAST_LOW);
+  {
+    const l = halfLum(qA, "left"), r = halfLum(qA, "right");
+    R.notes.quarterAlb = `left ${l.toFixed(1)} right ${r.toFixed(1)}`;
+    check("Q. sun east-and-below: the east (screen-right) half is lit, the west half is not", r > 2 * l && r > 15, R.notes.quarterAlb);
+  }
+
+  // ---- D: day, sun behind the moon -------------------------------------------------
+  const SKY_NEW_DAY = { dirHeading: 0, dirPitch: ALT_A }; // the sun ON the moon, sun up
+  {
+    const d = shot(fxM, "alb", SKY_NEW_DAY, { clear: DAYSKY });
+    const c = at(d, 0, 0), bg = bg8(d);
+    R.notes.dayNewCentre = `${fmt(c)} sky ${fmt(bg)}`;
+    check("D. by day the unlit disc lets the sky through (centre within 30% of the sky colour)",
+      Math.abs(lum(c) - lum(bg)) < 0.3 * lum(bg) && lum(c) < lum(bg), R.notes.dayNewCentre);
+    check("D. uNight is 0 by day, 1 at night", fxM.albMesh.material.uniforms.uNight.value === 0 && (shot(fxM, "alb", SKY_NEW_NIGHT), fxM.albMesh.material.uniforms.uNight.value === 1));
+  }
+
+  // ---- K: the clouds fill the interior -----------------------------------------------
+  {
+    const noClouds = shot(fxM, "alb", SKY_FULL, { setup: (u) => { u.uCloudIntensity.value = 0; } });
+    const withClouds = shot(fxM, "alb", SKY_FULL, { setup: (u) => { u.uCloudIntensity.value = 5; } });
+    const quad = { tl: [0, 0], tr: [0, 0], bl: [0, 0], br: [0, 0] };
+    let changed = 0, n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = (x - withClouds.cx) / withClouds.rPx, dy = (y - withClouds.cy) / withClouds.rPx;
+      if (dx * dx + dy * dy > 0.6 * 0.6) continue; // the INTERIOR the old shader left hollow
+      const ch = dist(pix(withClouds, x, y), pix(noClouds, x, y)) >= 6;
+      const q = (dy >= 0 ? "t" : "b") + (dx < 0 ? "l" : "r");
+      quad[q][0] += ch ? 1 : 0; quad[q][1] += 1;
+      changed += ch ? 1 : 0; n++;
+    }
+    const frac = changed / n;
+    const qf = Object.fromEntries(Object.entries(quad).map(([k, [a, b]]) => [k, +(a / b).toFixed(2)]));
+    R.notes.cloudInterior = `${(frac * 100).toFixed(1)}% of r<0.6 changed; per quadrant ${JSON.stringify(qf)}`;
+    check("★ K. the clouds fill the disc interior (>= 35% of r < 0.6 changed by the cloud layer)", frac >= 0.35, R.notes.cloudInterior);
+    check("★ K. ...in every quadrant (not the old top-left lobe; >= 15% each)", Object.values(qf).every((v) => v >= 0.15), JSON.stringify(qf));
+  }
+
+  // ---- R: Rez'arel --------------------------------------------------------------------
+  // Rez'arel's frozen spot is 6.3 deg BELOW the horizon, where the horizon
+  // extinction (H, below) rightly turns it dark red — so R runs with it off.
+  const noHorizon = (u) => { u.uHorizon.value = 0; };
+  {
+    const fR0 = shot(fxM, "rez", SKY_REZ_FULL, { setup: noHorizon });
+    const inF = interior(fR0).lum;
+    check("R. Rez'arel full phase: the disc interior is lit", inF > 30, `interior mean ${inF.toFixed(1)}`);
+    // A sun 24 deg beyond Rez'arel, at night.
+    const nR = shot(fxM, "rez", { dirHeading: 120, dirPitch: -30 }, { setup: noHorizon });
+    const inB = interior(nR).lum;
+    R.notes.rezBehind = `interior mean ${inB.toFixed(1)} vs full ${inF.toFixed(1)}`;
+    check("R. sun behind Rez'arel: the disc is dark", inB < 0.3 * inF, R.notes.rezBehind);
+    // ---- H: the horizon -------------------------------------------------------------
+    const h1 = interior(fullR);                 // uHorizon 1 (shipped)
+    const h0 = interior(fR0);
+    fxM.rezMesh.material.uniforms.uHorizon.value = 1;
+    R.notes.horizon = `below the horizon: lum ${h1.lum.toFixed(1)} vs ${h0.lum.toFixed(1)} without; blue/red ${h1.blueRed.toFixed(3)} vs ${h0.blueRed.toFixed(3)}`;
+    check("H. at the horizon the disc dims (> 40%) and reddens (blue/red halves)", h1.lum < 0.6 * h0.lum && h1.blueRed < 0.5 * h0.blueRed, R.notes.horizon);
+    const u = fxM.rezMesh.material.uniforms;
+    check("R. Rez'arel stays cloudless (uHasClouds 0, no cloud uniforms driven)", u.uHasClouds.value === 0 && fxM.albMesh.material.uniforms.uHasClouds.value === 1);
+  }
+
+  // ---- P: the phase escape knob ----------------------------------------------------
+  {
+    const p0 = shot(fxM, "alb", SKY_NEW_NIGHT, { setup: (u) => { u.uPhase.value = 0; } });
+    const inP = interior(p0).lum;
+    R.notes.phase0 = `interior mean ${inP.toFixed(1)} vs full ${fullIn.toFixed(1)}`;
+    check("P. uPhase 0 brings back the painted lighting (the dark-phase disc is lit again)", inP > 0.6 * fullIn, R.notes.phase0);
+    fxM.albMesh.material.uniforms.uPhase.value = 1;
+  }
+
+  // ---- B: libration ------------------------------------------------------------------
+  {
+    const still = shot(fxM, "alb", SKY_FULL, { setup: (u) => { MOONS.moonLibrationMatrix(0, 0, u.uLib.value); } });
+    const turned = shot(fxM, "alb", SKY_FULL, { setup: (u) => { MOONS.moonLibrationMatrix(0.17, 0.05, u.uLib.value); } });
+    let sum = 0, n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const dx = (x - still.cx) / still.rPx, dy = (y - still.cy) / still.rPx;
+      if (dx * dx + dy * dy > 0.8 * 0.8) continue;
+      sum += dist(pix(still, x, y), pix(turned, x, y)); n++;
+    }
+    R.notes.libration = `mean interior diff ${(sum / n).toFixed(2)}`;
+    check("B. a 10 deg libration moves the surface (interior changes)", sum / n > 2, R.notes.libration);
+    const edge = cleanBeyond(turned, 1.45, still);
+    check("B. ...but not the disc: beyond the halo nothing changes (per-pixel scan)", edge.ok, edge.text);
+  }
+
+  // ---- C again: under a tone-mapped prefix (TONE_MAPPING + saturate macro) --------------
+  {
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 5;
+    for (const mm of [fxM, legM]) for (const mesh of [mm.albMesh, mm.rezMesh]) mesh.material.needsUpdate = true;
+    shot(fxM, "alb", SKY_FULL);
+    shot(fxM, "rez", SKY_REZ_FULL);
+    shot(legM, "alb", SKY_FULL);
+    check("C. the programs also compile under a tone-mapped renderer prefix", R.errors.length === 0, R.errors.join(" / "));
+    renderer.toneMapping = THREE.NoToneMapping;
+  }
+
+  const glErr = gl.getError();
+  check("C. no GL error at the end", glErr === gl.NO_ERROR, `0x${glErr.toString(16)}`);
+  R.programs = renderer.info.programs.length;
+  R.ok = R.errors.length === 0 && R.checks.length > 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

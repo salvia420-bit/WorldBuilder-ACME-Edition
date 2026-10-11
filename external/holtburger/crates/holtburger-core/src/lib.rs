@@ -2,6 +2,7 @@ pub mod arrival_placement_diag;
 pub mod character_gen;
 pub mod client;
 pub mod errors;
+pub mod slow_run_diag;
 pub mod soul_emote_motion;
 
 pub use character_gen::{

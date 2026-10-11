@@ -78,6 +78,11 @@ pub struct MovementParameters {
     /// Wire/raw `HoldKey` value: `0` Invalid, `1` None, `2` Run.
     pub hold_key_to_apply: u32,
     pub context_id: u32,
+    /// Retail's heading, DEGREES: the compass (0 = North, 90 = East) — the
+    /// wire value verbatim, NOT a pose heading. Absolute for TurnToHeading and
+    /// a MoveToPosition's final turn, an offset for the object forms; the
+    /// MoveToManager converts the absolute ones at its node boundary
+    /// (`holtburger_common::math::pose_heading_deg_from_wire`).
     pub desired_heading: f32,
     pub distance_to_object: f32,
     pub min_distance: f32,

@@ -406,8 +406,8 @@ async function run() {
     FX_DECAL_GLSL.composite.includes("outputColor = vec4(inputColor.rgb * m + a, inputColor.a);") &&
     de.mulMaterial.blendSrc === THREE.DstColorFactor && de.mulMaterial.blendDst === THREE.ZeroFactor &&
     de.mulMaterial.side === THREE.BackSide && de.addMaterial.blendDst === THREE.OneFactor);
-  check("8. box fragment: depth → world position, up-facing only, inside the box, fogged",
-    FX_DECAL_GLSL.fragment.includes("vec3 wp = ( uDecalCamWorld * vec4( vp, 1.0 ) ).xyz;") &&
+  check("8. box fragment: depth → eye-relative world offset, up-facing only, inside the box, fogged",
+    FX_DECAL_GLSL.fragment.includes("vec3 rel = uDecalCamRot * c0 - vD0.xyz;") &&
     FX_DECAL_GLSL.fragment.includes("smoothstep( 0.45, 0.8, abs( n.y ) / nl )") &&
     FX_DECAL_GLSL.fragment.includes("if ( abs( ly ) > 1.0 || dot( q, q ) > 1.0 ) discard;") && FX_DECAL_GLSL.fragment.includes("fogF"));
   t2f.setFxTier2Flag("fxDecals", false);
@@ -432,6 +432,144 @@ async function run() {
   lights._resetFxLightsForTest();
   distort._resetFxDistortForTest();
   dec._resetFxDecalsForTest();
+
+  // ---- 8b. smooth marks (?fxDecalSmooth, 2026-10-11) -------------------------------------------------
+  // Owner: the war-spell scorch had "a squarish pixelated effect on the ground". The GPU half of this
+  // (round embers, no 2x2 holes far from the origin) is test_fx_decal_gpu.cjs.
+  {
+    const fxm = await import("./scene3d/vfx/fx_decal_effect.js");
+    const S = fxm.fxDecalSmoothEnabled;
+    check("8b. ?fxDecalSmooth: on by default; off / 0 / false / no build the 2026-10-10 shader; on / garbage stay on",
+      S("") === true && S("?fxDecalSmooth=off") === false && S("?fxDecalSmooth=0") === false &&
+      S("?fxDecalSmooth=FALSE") === false && S("?fxDecalSmooth=no") === false && S("?fxDecalSmooth=on") === true &&
+      S("?fxDecalSmooth=maybe") === true && S("?fxDecals=off") === true);
+    const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
+    const L = fxm.FX_DECAL_GLSL_LEGACY;
+    check("8b. =off is the 2026-10-10 box shader byte for byte (pinned hashes)",
+      fnv(L.vertex) === "32caf9ce" && L.vertex.length === 599 && fnv(L.fragment) === "c1aca30d" && L.fragment.length === 4921 &&
+      L.composite === fxm.FX_DECAL_GLSL.composite, `${fnv(L.vertex)} ${fnv(L.fragment)}`);
+    const smE0 = new fxm.FxDecalEffect({ camera: mcam, smooth: true });
+    const lgE0 = new fxm.FxDecalEffect({ camera: mcam, smooth: false });
+    check("8b. the effect builds the pair its flag picks (both passes)",
+      smE0.smooth === true && smE0.mulMaterial.fragmentShader === fxm.FX_DECAL_GLSL.fragment &&
+      smE0.addMaterial.vertexShader === fxm.FX_DECAL_GLSL.vertex && lgE0.smooth === false &&
+      lgE0.mulMaterial.fragmentShader === L.fragment && lgE0.addMaterial.vertexShader === L.vertex &&
+      new fxm.FxDecalEffect({ camera: mcam }).smooth === true);
+    smE0.dispose(); lgE0.dispose();
+    const F = fxm.FX_DECAL_GLSL.fragment, V = fxm.FX_DECAL_GLSL.vertex;
+    const dots = [...F.matchAll(/hbDecalDot\( [^,]+, ([0-9.]+), ([0-9.]+), /g)].map((m) => [+m[1], +m[2]]);
+    check("8b. no square tiles: embers / glints / blisters are round dots (each rad <= 0.5 keeps the dot inside its cell); no pow(value noise) peaks",
+      !F.includes("floor( q * 9.0 )") && !F.includes("step( 0.86") && !/pow\( hbDecalNoise/.test(F) && dots.length === 3 &&
+      dots.every(([den, rad]) => den > 0 && den < 1 && rad > 0 && rad <= 0.5) && F.includes("float t = max( 0.0, 1.0 - x * x );"),
+      JSON.stringify(dots));
+    check("8b. each dot grid is told its own pixel size; a sub-pixel dot widens to 1.2 px (area-compensated) only as far as its cell walls",
+      F.includes("hbDecalDot( q * 9.0 + seed * 31.0, 0.2, 0.36, 1.0, pxq * 9.0 )") &&
+      F.includes("hbDecalDot( q * 14.0 + seed * 7.0, 0.22, 0.24, 1.0, pxq * 14.0 )") &&
+      F.includes("vec2 bp = q * 8.0 + seed * 5.0;") && F.includes("hbDecalDot( bp, 0.3, 0.32, 0.35 + 0.65 * ph, pxq * 8.0 )") &&
+      F.includes("float re = min( max( rs, 1.2 * pxc ), min( min( o.x, o.y ), min( 1.0 - o.x, 1.0 - o.y ) ) );") &&
+      F.includes("* ( rs * rs ) / ( re * re )"));
+    check("8b. no 2x2-quad math: the normal is per pixel from four texelFetch neighbours, each axis on the smaller depth step",
+      !/\b(dFdx|dFdy|fwidth)\b/.test(F) && F.includes("min( p + ivec2( 1, 0 ), lim )") && F.includes("max( p - ivec2( 1, 0 ), ivec2( 0 ) )") &&
+      F.includes("min( p + ivec2( 0, 1 ), lim )") && F.includes("max( p - ivec2( 0, 1 ), ivec2( 0 ) )") &&
+      F.includes("abs( xr.z ) < abs( xl.z )") && F.includes("abs( yu.z ) < abs( yd.z )") && F.includes("vec3 n = uDecalCamRot * cross( ex, ey );"));
+    check("8b. camera-relative: no absolute world coordinate in either stage; the box is placed by the view ROTATION",
+      !F.includes("uDecalCamWorld") && F.includes("vec3 rel = uDecalCamRot * c0 - vD0.xyz;") &&
+      V.includes("gl_Position = projectionMatrix * vec4( uDecalViewRot * rp, 1.0 );") && !/viewMatrix/.test(V));
+    check("8b. the rim squares its offset (pow of a negative base is undefined in GLSL); the fbm turns its lattice per octave; the ring fades before its wall",
+      !/pow\( \( r -/.test(F) && F.includes("float rim = exp( -rd * rd ) * exp( -age / 1.4 );") &&
+      F.includes("p = mat2( 1.62, 1.22, -1.22, 1.62 ) * p + 17.1;") && F.includes("* ( 1.0 - smoothstep( 0.9, 1.0, r ) );"));
+    const bal = (s, a, b) => { let d = 0; for (const ch of s) { if (ch === a) d++; else if (ch === b && --d < 0) return false; } return d === 0; };
+    check("8b. the smooth GLSL is balanced ( ) { } in both stages", bal(F, "(", ")") && bal(F, "{", "}") && bal(V, "(", ")") && bal(V, "{", "}"));
+
+    // update() with a stub renderer, far from the origin: the instance centre goes in EYE-RELATIVE
+    // (float64 subtraction on the CPU), and the view rotation it is placed with reproduces three's
+    // own view transform of that centre.
+    dec._resetFxDecalsForTest();
+    const HX = 32900.25, HY = 50.5, HZ = -34600.75;   // Holtburg-like: |x| and |z| both past 32 768 m
+    const hcam = new THREE.PerspectiveCamera(60, 1, 0.1, 5000);
+    hcam.position.set(HX + 3.5, HY + 2.25, HZ + 4); hcam.lookAt(HX, HY, HZ); hcam.updateMatrixWorld(true);
+    dec.spawnFxDecal({ position: { x: HX, y: HY, z: HZ }, kind: "scorch" });
+    const calls = [];
+    const stub = {
+      capabilities: { logarithmicDepthBuffer: true }, toneMappingExposure: 1, autoClear: true,
+      getRenderTarget: () => null, setRenderTarget: () => {}, getClearColor: (c) => c, getClearAlpha: () => 1,
+      setClearColor: () => {}, clear: () => {}, render: (sc, c) => calls.push(c),
+    };
+    const smE = new fxm.FxDecalEffect({ camera: hcam, depthSource: () => ({}), smooth: true });
+    const lgE = new fxm.FxDecalEffect({ camera: hcam, depthSource: () => ({}), smooth: false });
+    smE.update(stub, null, 0.016);
+    lgE.update(stub, null, 0.016);
+    const s0 = smE.boxGeometry.attributes.aD0.array, l0 = lgE.boxGeometry.attributes.aD0.array;
+    check("8b. smooth: the centre goes in eye-relative (exact), the legacy pair keeps it absolute",
+      smE.stats.drawn === 1 && s0[0] === -3.5 && s0[1] === -2.25 && s0[2] === -4 && l0[0] === HX && l0[1] === HY && l0[2] === HZ &&
+      calls.length === 4 && calls.every((c) => c === hcam), `[${s0[0]}, ${s0[1]}, ${s0[2]}]`);
+    const U = smE.boxUniforms;
+    const Rm = U.uDecalCamRot.value, Vm = U.uDecalViewRot.value;
+    const RV = Rm.clone().multiply(Vm).elements;
+    const orth = RV.every((v, i) => Math.abs(v - ([0, 4, 8].includes(i) ? 1 : 0)) < 1e-12);
+    const viewOfCentre = new THREE.Vector3(HX, HY, HZ).applyMatrix4(hcam.matrixWorldInverse);
+    const viaRot = new THREE.Vector3(s0[0], s0[1], s0[2]).applyMatrix3(Vm);
+    const look = new THREE.Vector3(0, 0, -1).applyMatrix3(Rm);
+    const toMark = new THREE.Vector3(-3.5, -2.25, -4).normalize();
+    check("8b. the view rotation is the camera's (orthonormal, transposed), and places the centre where three's view matrix does",
+      orth && viaRot.distanceTo(viewOfCentre) < 1e-6 && look.distanceTo(toMark) < 1e-9,
+      `|Δ| ${viaRot.distanceTo(viewOfCentre).toExponential(2)}`);
+    smE.dispose(); lgE.dispose();
+    dec._resetFxDecalsForTest();
+
+    // The root cause, as numbers: an fp32 model of the fragment's position rebuild over a flat
+    // ground (log depth stored as fp32, every op rounded with Math.fround). Legacy = absolute world
+    // position (uDecalCamWorld * vp) and the quad-derivative normal; smooth = eye-relative
+    // (rotation * vp) and the neighbour-texel normal. A quad whose up-facing weight drops under
+    // 0.5 is a 2x2 hole in the mark.
+    const f = Math.fround;
+    const holes = ({ eyeAbs, height, pitchDeg, fovDeg, N = 96, far = 5000 }) => {
+      const p = (pitchDeg * Math.PI) / 180, t = Math.tan((fovDeg * Math.PI) / 360);
+      const right = [1, 0, 0], up = [0, Math.cos(p), -Math.sin(p)], fwd = [0, -Math.sin(p), -Math.cos(p)];
+      const eye = [eyeAbs[0], eyeAbs[1] + height, eyeAbs[2]];
+      const logFar = f(Math.log2(far + 1));
+      const D = new Float32Array(N * N);
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const nx = ((x + 0.5) / N) * 2 - 1, ny = ((y + 0.5) / N) * 2 - 1;
+        const dy = nx * t * right[1] + ny * t * up[1] + fwd[1];
+        D[y * N + x] = dy < -1e-9 ? f(Math.log2(1 + (eyeAbs[1] - eye[1]) / dy) / Math.log2(far + 1)) : 1;
+      }
+      const vp = (x, y) => {
+        const w = f(f(Math.pow(2, f(D[y * N + x] * logFar))) - 1);
+        const nx = f(f(f(x + 0.5) / N) * 2 - 1), ny = f(f(f(y + 0.5) / N) * 2 - 1);
+        return [f(f(nx * w) * f(t)), f(f(ny * w) * f(t)), f(-w)];
+      };
+      const M = [0, 1, 2].map((i) => [right[i], up[i], -fwd[i], eye[i]].map(f));
+      const absW = (v) => M.map((r) => f(f(f(f(r[0] * v[0]) + f(r[1] * v[1])) + f(r[2] * v[2])) + r[3]));
+      const rot = (v) => M.map((r) => f(f(f(r[0] * v[0]) + f(r[1] * v[1])) + f(r[2] * v[2])));
+      const sub = (a, b) => a.map((v, i) => f(v - b[i]));
+      const cross = (a, b) => [f(f(a[1] * b[2]) - f(a[2] * b[1])), f(f(a[2] * b[0]) - f(a[0] * b[2])), f(f(a[0] * b[1]) - f(a[1] * b[0]))];
+      const upF = (n) => { const l = Math.hypot(...n); if (!(l > 1e-12)) return 0; const k = Math.min(1, Math.max(0, (Math.abs(n[1]) / l - 0.45) / 0.35)); return k * k * (3 - 2 * k); };
+      let legacy = 0, smooth = 0, quads = 0;
+      for (let y = 2; y < N - 3; y += 2) for (let x = 2; x < N - 3; x += 2) {
+        quads++;
+        const a = absW(vp(x, y));
+        if (upF(cross(sub(absW(vp(x + 1, y)), a), sub(absW(vp(x, y + 1)), a))) < 0.5) legacy++;
+        const c = vp(x, y);
+        if (upF(rot(cross(sub(vp(x + 1, y), c), sub(vp(x, y + 1), c)))) < 0.5) smooth++;
+      }
+      return { legacy: legacy / quads, smooth: smooth / quads };
+    };
+    // a mark 3.5 m from the camera (the camera 1.75 m up, looking 30 degrees down): one pixel of a
+    // 1080p / 1440p / 4K screen (60 degree fov) is ~3.7 / 2.8 / 1.9 mm of ground there
+    const fovAt = (rows) => (2 * Math.atan(Math.tan(Math.PI / 6) * 96 / rows) * 180) / Math.PI;
+    const holt = [32900.137, 50, -34600.291];
+    const o1440 = holes({ eyeAbs: [0.137, 50, -0.291], height: 1.75, pitchDeg: 30, fovDeg: fovAt(1440) });
+    const h1080 = holes({ eyeAbs: holt, height: 1.75, pitchDeg: 30, fovDeg: fovAt(1080) });
+    const h1440 = holes({ eyeAbs: holt, height: 1.75, pitchDeg: 30, fovDeg: fovAt(1440) });
+    const h2160 = holes({ eyeAbs: holt, height: 1.75, pitchDeg: 30, fovDeg: fovAt(2160) });
+    const pct = (v) => `${(v * 100).toFixed(1)} %`;
+    check("8b. fp32 model: near the origin neither rebuild loses a quad",
+      o1440.legacy === 0 && o1440.smooth === 0, `legacy ${pct(o1440.legacy)} smooth ${pct(o1440.smooth)}`);
+    check("8b. fp32 model at Holtburg (x, z > 32 768 m): the absolute rebuild drops whole 2x2 quads, the eye-relative one none",
+      h1440.legacy > 0.1 && h2160.legacy > h1440.legacy && h1080.smooth === 0 && h1440.smooth === 0 && h2160.smooth === 0,
+      `legacy 1080p ${pct(h1080.legacy)} / 1440p ${pct(h1440.legacy)} / 4K ${pct(h2160.legacy)}; smooth ${pct(h1080.smooth)} / ${pct(h1440.smooth)} / ${pct(h2160.smooth)}`);
+  }
 
   // ---- 9. fields ------------------------------------------------------------------------------------
   const fields = await import("./scene3d/vfx/fx_fields.js");

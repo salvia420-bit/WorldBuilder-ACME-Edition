@@ -391,6 +391,16 @@ impl MovementSystemHandle {
         self.inner.set_retail_position_event_gate(on);
     }
 
+    /// SLOW-RUN (2026-10-11): install the `?apPlaneResend` runtime carrier
+    /// (the browser passes ON unless `=off` — retail's in-window
+    /// contact-plane AutonomousPosition re-send, acclient.c:718131, so ACE's
+    /// echo re-arms the local leash at every terrain-triangle change; the
+    /// native const stays OFF). Forwards to
+    /// `MovementSystem::set_ap_contact_plane_resend`.
+    pub fn set_ap_contact_plane_resend(&mut self, on: bool) {
+        self.inner.set_ap_contact_plane_resend(on);
+    }
+
     /// outbound-5 remainder (2026-10-08 follow-ups): install the
     /// `?rawDefaultOmission=off` runtime carrier (default-ON — every outbound
     /// MoveToState omits the ACE-neutral retail defaults: a None current
@@ -450,6 +460,15 @@ impl MovementSystemHandle {
         self.inner.set_landing_bounce(on);
     }
 
+    /// BOUNCE-ALONG-SLOPE (2026-10-11): install the `?bounceAlongSlope`
+    /// runtime carrier (ON unless `=off` — a landing bounce relaunches along
+    /// the ground it landed on and never chains; `=off` = the retail-literal
+    /// horizontal relaunch). Forwards to
+    /// `MovementSystem::set_bounce_along_slope`.
+    pub fn set_bounce_along_slope(&mut self, on: bool) {
+        self.inner.set_bounce_along_slope(on);
+    }
+
     /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
     /// retail cast-movement arbitration — a server-played cast gesture
     /// suppresses held locomotion until an input edge / gesture end; `=off`
@@ -464,6 +483,14 @@ impl MovementSystemHandle {
     /// windup-node). Forwards to `MovementSystem::set_cast_hold_reclaim`.
     pub fn set_cast_hold_reclaim(&mut self, on: bool) {
         self.inner.set_cast_hold_reclaim(on);
+    }
+
+    /// SLOW-RUN (2026-10-11): install the `?castLockRevive` runtime carrier
+    /// (the browser passes ON unless `=off` — once the `?castHoldReclaim`
+    /// window closes, a held W/S the lock left dead is re-applied; the native
+    /// const stays OFF). Forwards to `MovementSystem::set_cast_lock_revive`.
+    pub fn set_cast_lock_revive(&mut self, on: bool) {
+        self.inner.set_cast_lock_revive(on);
     }
 
     /// WS04 — the JS cast chain stamps the local cast window (true at windup

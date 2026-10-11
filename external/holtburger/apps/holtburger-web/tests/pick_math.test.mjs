@@ -53,11 +53,14 @@ test("picking.js: the sphere pass runs only after the polygon hits found nothing
   const pick = src.slice(src.indexOf("  function pickEntityAt(clientX, clientY) {"));
   const body = pick.slice(0, pick.indexOf("\n  }\n"));
   const loop = body.indexOf("for (const hit of hits)");
-  const fb = body.indexOf("pickBySphere(em, guidByRoot, localGuid)");
+  const fb = body.indexOf("pickBySphere(em, guidByRoot, localGuid, instByRoot)");
   assert.ok(loop > 0 && fb > loop, "fallback after the polygon loop");
-  assert.match(body, /return PICK_SPHERE_FALLBACK \? pickBySphere\(em, guidByRoot, localGuid\) : null;/);
+  assert.match(body, /return PICK_SPHERE_FALLBACK \? pickBySphere\(em, guidByRoot, localGuid, instByRoot\) : null;/);
   // Rig-part meshes only, drawn, never the local player's own held items.
   const sphere = src.slice(src.indexOf("  function pickBySphere("));
+  // handoff-1 (2026-10-11): the parts are the DRAWN rig's (a death-held rig
+  // standing in for its hidden corpse reports the corpse guid).
+  assert.match(sphere, /const inst = instByRoot\?\.get\(root\) \?\? em\.entityMap\.get\(g\);/);
   assert.match(sphere, /const parts = inst\?\.parts;/);
   assert.match(sphere, /if \(!m\.isMesh \|\| m\.visible === false \|\| !m\.geometry\) continue;/);
   assert.match(sphere, /\(inst\._attachedParentGuid >>> 0\) === localGuid\) continue;/);

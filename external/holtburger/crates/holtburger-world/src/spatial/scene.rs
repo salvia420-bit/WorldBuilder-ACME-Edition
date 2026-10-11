@@ -356,6 +356,22 @@ const REMOTE_UNKNOWN_FLOOR_M: f32 = 0.3;
 /// plus this setter at the login/lifecycle world construction.
 const USE_REMOTE_MOVETO_FACING: bool = true;
 
+/// NPC-facing fix (2026-10-11) — native baseline for
+/// [`SpatialScene::set_remote_moveto_begin_enabled`] (`?remoteMoveToBegin`,
+/// `=off` escape). Retail begins a MoveTo / TurnTo inside the
+/// `unpack_movement` that arms it: `MoveToManager::TurnToHeading` /
+/// `MoveToPosition` run `BeginNextNode` at once (acclient.c:345954,
+/// :345790), and a targeted form gets its target's first answer
+/// synchronously (`TargetManager::SetTarget` → `AddVoyeur` →
+/// `SendVoyeurUpdate`, :328574 / :328300 / :328092 → `TurnToObject_Internal`
+/// / `MoveToObject_Internal` → `BeginNextNode`), so a turn's TurnRight is on
+/// the interp before the frame moves the object. The spine stepped the mover
+/// only after the next slice's move, so every remote turn ran a slice late —
+/// and ACE times an NPC's next emote to the table turn rate
+/// (`Creature.GetRotateDelay`, Creature_Navigation.cs), whose motion's unpack
+/// cancels the turn (`cancel_moveto`, :339518) a slice short of the player.
+const USE_REMOTE_MOVETO_BEGIN: bool = true;
+
 /// R3 moveto-2 (2026-10-08) — how far past a MoveTo turn node the remote D5
 /// turn carries the body (rad, ≈0.057°). Retail turns the TurnRight/TurnLeft
 /// motion with no stop at the node and completes the node on OVERSHOOT
@@ -1638,6 +1654,12 @@ pub struct SpatialScene {
     /// (`motion::target_voyeur`: a predicted position, at most every 0.5 s,
     /// only past 0.5 m) instead of the target's live pose every slice.
     target_voyeur_enabled: bool,
+    /// NPC-facing fix (2026-10-11) — `?remoteMoveToBegin` (default
+    /// [`USE_REMOTE_MOVETO_BEGIN`]). ON (with the spine): a remote's MoveTo /
+    /// TurnTo begins inside the unpack that arms it
+    /// ([`Self::begin_remote_moveto`]), as retail's does. OFF: its first node
+    /// begins at the next slice's MoveToManager step, a slice late.
+    remote_moveto_begin_enabled: bool,
     /// landdefs-terrain-1 (2026-10-08 follow-ups) — `?openSeaWall` (DEFAULT
     /// ON). ON: an entirely-water landblock (all 81 vertices water —
     /// `CLandBlockStruct::CalcWater`, acclient.c:354566) is a wall for
@@ -1877,6 +1899,7 @@ impl SpatialScene {
             remote_spine_enabled: false,
             remote_sweep_enabled: false,
             target_voyeur_enabled: false,
+            remote_moveto_begin_enabled: USE_REMOTE_MOVETO_BEGIN,
             remote_movers: HashMap::new(),
             open_sea_wall_enabled: true,
             local_sticky_target: None,
@@ -2174,6 +2197,12 @@ impl SpatialScene {
         self.target_voyeur_enabled = enabled;
     }
 
+    /// NPC-facing fix (2026-10-11) — install `?remoteMoveToBegin` (see the
+    /// field doc; default [`USE_REMOTE_MOVETO_BEGIN`]).
+    pub fn set_remote_moveto_begin_enabled(&mut self, enabled: bool) {
+        self.remote_moveto_begin_enabled = enabled;
+    }
+
     /// True when MoveTos track their target through the voyeur.
     pub fn target_voyeur_enabled(&self) -> bool {
         self.target_voyeur_enabled
@@ -2242,7 +2271,55 @@ impl SpatialScene {
             body.my_run_rate = run_rate;
             body.remote_moving_to = moving_to;
         }
+        // NPC-facing fix (2026-10-11): retail begins the directive inside
+        // this unpack (`?remoteMoveToBegin`, see `USE_REMOTE_MOVETO_BEGIN`).
+        if moving_to && self.remote_moveto_begin_enabled {
+            self.begin_remote_moveto(guid, Instant::now());
+        }
         effects
+    }
+
+    /// NPC-facing fix (2026-10-11) — `?remoteMoveToBegin`: a remote's freshly
+    /// armed MoveTo / TurnTo begins in the unpack that armed it, as retail's
+    /// does (see [`USE_REMOTE_MOVETO_BEGIN`]). The deferred entry build and
+    /// `BeginNextNode` run now, against the body's pose and the target's live
+    /// pose — the first answer retail's TargetManager sends is that pose too
+    /// (`AddVoyeur` → `SendVoyeurUpdate` with `m_position`,
+    /// acclient.c:328300 / :328092). A turn node's TurnRight is then on the
+    /// interp before the next slice's root motion, so the slice that follows
+    /// already turns the body. Nothing time-driven runs here: the completion
+    /// pump and the voyeur's cadence stay on the slice
+    /// ([`Self::step_remote_movers`]). A body the scene does not hold or that
+    /// is off the ground, or a target it cannot resolve (the slice cancels
+    /// 0x37), leave the begin to the slice as before.
+    fn begin_remote_moveto(&mut self, guid: Guid, now: Instant) {
+        let Some((pose, on_contact, interpolating)) = self.remote_moveto_view(guid) else {
+            return;
+        };
+        let target = self
+            .remote_movers
+            .get(&guid)
+            .and_then(|mover| mover.movement.moveto_directive_target());
+        let target_pose = target.and_then(|t| self.resolve_remote_sticky_target_pose(t));
+        if target.is_some() && target_pose.is_none() {
+            return;
+        }
+        let Some(mover) = self.remote_movers.get_mut(&guid) else {
+            return;
+        };
+        let view = MoveToView {
+            on_walkable_contact: on_contact,
+            self_pos: pose,
+            self_radius: mover.radius,
+            self_height: mover.height,
+            target_pos: target_pose,
+            motions_pending: mover.movement.moveto_motions_pending(),
+            is_interpolating: interpolating,
+            now,
+        };
+        let mut effects = MotionSideEffects::default();
+        let out = mover.movement.use_time_moveto(&view, &mut effects);
+        self.apply_remote_moveto_step(guid, Some(out));
     }
 
     /// MoveTo refactor phase B — a remote object's movement manager.
@@ -6422,26 +6499,44 @@ impl SpatialScene {
             if !moving_to {
                 mover.voyeur = None;
             }
-            let node_motion = mover.movement.moveto_node_motion();
-            let node_speed = mover
-                .movement
-                .motion_interp_ref()
-                .map_or(1.0, |interp| node_phase_speed(&interp.interpreted_state, node_motion));
-            let holder_radius = mover.radius;
-            if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
-                body.remote_moving_to = moving_to;
-                if let Some(heading) = out.as_ref().and_then(|out| out.set_heading) {
-                    body.pose.rotation = holtburger_common::Quaternion::from_heading(heading);
-                    let pose = body.pose;
-                    self.remote_sticky_stepped.insert(guid);
-                    self.remote_stepped_poses.insert(guid, pose);
-                }
-            }
-            if let Some((target, target_radius, _height)) = out.and_then(|out| out.stick_to) {
-                self.stick_remote_entity_to(guid, target, holder_radius, target_radius);
-            }
-            self.note_remote_moveto_motion_speed(guid, node_motion, node_speed);
+            self.apply_remote_moveto_step(guid, out);
         }
+    }
+
+    /// The world-facing tail of one remote MoveToManager step — the slice's
+    /// ([`Self::step_remote_movers`]) and the unpack's
+    /// ([`Self::begin_remote_moveto`]): the body's `IsMovingTo()` latch, the
+    /// `HandleTurnToHeading` arrival snap (`set_heading`, acclient.c:345744),
+    /// the sticky-bit arrival stick (:345553-345566) and the node motion's
+    /// phase edge.
+    fn apply_remote_moveto_step(
+        &mut self,
+        guid: Guid,
+        out: Option<crate::motion::move_to::MoveToDriveOutput>,
+    ) {
+        let Some(mover) = self.remote_movers.get(&guid) else {
+            return;
+        };
+        let moving_to = mover.movement.is_moveto_active();
+        let node_motion = mover.movement.moveto_node_motion();
+        let node_speed = mover
+            .movement
+            .motion_interp_ref()
+            .map_or(1.0, |interp| node_phase_speed(&interp.interpreted_state, node_motion));
+        let holder_radius = mover.radius;
+        if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
+            body.remote_moving_to = moving_to;
+            if let Some(heading) = out.as_ref().and_then(|out| out.set_heading) {
+                body.pose.rotation = holtburger_common::Quaternion::from_heading(heading);
+                let pose = body.pose;
+                self.remote_sticky_stepped.insert(guid);
+                self.remote_stepped_poses.insert(guid, pose);
+            }
+        }
+        if let Some((target, target_radius, _height)) = out.and_then(|out| out.stick_to) {
+            self.stick_remote_entity_to(guid, target, holder_radius, target_radius);
+        }
+        self.note_remote_moveto_motion_speed(guid, node_motion, node_speed);
     }
 
     /// The remote step body: legacy lanes when `spine` is `None`; with the

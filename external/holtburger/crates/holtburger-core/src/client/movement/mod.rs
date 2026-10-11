@@ -23,6 +23,14 @@ mod velocity_identity_tests;
 mod landing_bounce_tests;
 #[cfg(test)]
 mod sticky_transition_tests;
+// SLOW-RUN (2026-10-11): the held-run latches a fresh press clears — server
+// run echoes, the starved leash, `?apPlaneResend`, `?castLockRevive`.
+#[cfg(test)]
+mod slow_run_tests;
+// TERRAIN-HOP (2026-10-11): a runner stays on walkable terrain (no lift-off,
+// no landing, no bounce) over crests, dips and bumps.
+#[cfg(test)]
+mod terrain_hop_tests;
 mod stall_recovery;
 mod system;
 

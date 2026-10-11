@@ -249,6 +249,73 @@ mod tests {
         assert_eq!(interp.interpreted_state.forward_speed, 1.5);
     }
 
+    /// NPC-facing fix (2026-10-11), end to end through the world handler: ACE's
+    /// `Creature.Rotate` broadcast — an UpdateMotion TurnToObject at the LOCAL
+    /// player — finds the player as a known target (its own entity), turns the
+    /// NPC by its own motion toward the player's runtime body, and the NPC
+    /// ends facing the player. The fixture NPC faces west (pose 0); the player
+    /// stands due south of it.
+    #[test]
+    fn rotate_at_the_local_player_ends_facing_the_player() {
+        use crate::spatial::SpatialBody;
+        use holtburger_protocol::messages::movement::messages::motion::{
+            TurnToObject, TurnToParameters,
+        };
+        const PLAYER: Guid = Guid(0x5000_0001);
+        let mut state = world_with_remote(true);
+        let player = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(50.0, 44.0, 0.0),
+            rotation: Quaternion::identity(),
+        }
+        .normalize_outdoor_cell();
+        state.seed_local_player_entity(PLAYER, "Player", player);
+        let _ = state.scene.register_body(SpatialBody::new(
+            SpatialBodyId::LocalPlayer(PLAYER),
+            player,
+            web_time::Instant::now(),
+        ));
+        let rotate = GameMessage::UpdateMotion(Box::new(MovementEventData {
+            guid: REMOTE,
+            object_instance_sequence: 0,
+            movement_sequence: 1,
+            server_control_sequence: 0,
+            is_autonomous: false,
+            movement_type: MovementType::TurnToObject,
+            motion_flags: 0,
+            current_style: 0x3D,
+            data: MovementTypeData::TurnToObject(TurnToObject {
+                target: PLAYER,
+                desired_heading: 0.0,
+                params: TurnToParameters {
+                    movement_parameters: 0x0001_EE0F,
+                    speed: 1.0,
+                    desired_heading: 0.0,
+                },
+            }),
+        }));
+        let _ = state.handle_message(&rotate);
+        let mover = state.scene.remote_mover(REMOTE).expect("the NPC's own mover");
+        assert_eq!(
+            mover.movement.moveto_directive_target(),
+            Some(PLAYER),
+            "the player is a known target: a TurnToObject, not the heading fallback"
+        );
+        let t0 = web_time::Instant::now();
+        for i in 0..90 {
+            let now = t0 + std::time::Duration::from_secs_f32(i as f32 / 30.0);
+            state.step_remote_objects(1.0 / 30.0, now, None);
+            if !state.scene.remote_mover(REMOTE).unwrap().movement.is_moveto_active() {
+                break;
+            }
+        }
+        assert!(!state.scene.remote_mover(REMOTE).unwrap().movement.is_moveto_active());
+        let body = state.scene.body(SpatialBodyId::Entity(REMOTE)).expect("NPC body");
+        let heading = body.pose.rotation.to_heading().to_degrees();
+        let error = ((heading - 270.0) + 540.0).rem_euclid(360.0) - 180.0;
+        assert!(error.abs() < 0.01, "faces the player due south (pose 270), got {heading}°");
+    }
+
     /// The per-slice world step prunes movers whose object left the world.
     #[test]
     fn step_remote_objects_prunes_departed_movers() {

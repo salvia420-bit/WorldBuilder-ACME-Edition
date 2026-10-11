@@ -12,7 +12,7 @@ use holtburger_common::{Guid, Quaternion, Vector3};
 use holtburger_dat::file_type::MotionKinematics;
 use holtburger_protocol::messages::movement::messages::motion::{
     MoveToObject, MoveToParameters, MoveToPosition, MovementInvalid, Origin, TurnToHeading,
-    TurnToParameters,
+    TurnToObject, TurnToParameters,
 };
 use holtburger_protocol::messages::movement::{InterpretedMotionState, MovementStateFlags};
 use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTypeData};
@@ -186,6 +186,39 @@ fn turn_to_heading(heading_deg: f32) -> MovementEventData {
     )
 }
 
+/// The local player in the NPC-facing tests.
+const PLAYER: Guid = Guid(0x5000_0001);
+
+/// ACE's `Creature.Rotate` broadcast (`Creature_Navigation.cs` `TurnToObject`
+/// → `Motion(wo, target, TurnToObject)`): case 8 at `target`; `packed` is the
+/// TurnToObject's own heading (ACE: always 0) and the TurnToParameters come
+/// from ACE's `MoveToParameters` defaults (speed 1, offset 0).
+fn turn_to_object(target: Guid, packed: f32) -> MovementEventData {
+    envelope(
+        MovementType::TurnToObject,
+        0,
+        MovementTypeData::TurnToObject(TurnToObject {
+            target,
+            desired_heading: packed,
+            params: TurnToParameters {
+                movement_parameters: DEFAULT_BITS,
+                speed: 1.0,
+                desired_heading: 0.0,
+            },
+        }),
+    )
+}
+
+/// The local player's body — where the spine resolves a target that is the
+/// local player (`resolve_remote_sticky_target_pose`).
+fn seed_local_player(scene: &mut SpatialScene, pose: WorldPosition) {
+    let _ = scene.register_body(SpatialBody::new(
+        SpatialBodyId::LocalPlayer(PLAYER),
+        pose,
+        Instant::now(),
+    ));
+}
+
 fn apply(scene: &mut SpatialScene, data: &MovementEventData, target_exists: bool) {
     let _ = scene.apply_remote_movement(
         MOVER,
@@ -317,13 +350,17 @@ fn spine_moveto_position_turns_runs_and_arrives() {
 }
 
 /// A TurnToHeading turns the body by its motion (no wire snap) and lands
-/// exactly on the heading through the arrival snap.
+/// exactly on the heading through the arrival snap. The wire heading is
+/// retail's compass (NPC-facing fix 2026-10-11): wire 90 is EAST, pose 180
+/// (`at`'s headings are pose degrees: 90 = north). This used to send wire 180
+/// and expect pose 180, i.e. it read the wire as pose and the body ended
+/// facing east for an ACE "face south" — the 90° NPC error.
 #[test]
 fn spine_turn_to_heading_turns_then_lands_on_the_heading() {
     let kinematics = player_kinematics();
     let start = at(50.0, 50.0, 90.0);
     let mut scene = spine_scene(start);
-    apply(&mut scene, &turn_to_heading(180.0), false);
+    apply(&mut scene, &turn_to_heading(90.0), false);
     let t0 = Instant::now();
     run(&mut scene, &kinematics, t0, 0, 3);
     let early = heading_deg(&pose(&scene, MOVER));
@@ -338,6 +375,189 @@ fn spine_turn_to_heading_turns_then_lands_on_the_heading() {
     let end = heading_deg(&pose(&scene, MOVER));
     assert!(heading_error(end, 180.0) < 0.01, "snapped onto the heading: {end}°");
     assert!(planar_distance(&pose(&scene, MOVER), &start) < 1e-4);
+}
+
+/// NPC-facing fix (2026-10-11): ACE's `Creature.Rotate` — a TurnToObject at
+/// the LOCAL player, packed heading 0 — turns an NPC facing north toward the
+/// player wherever the player stands, by its own TurnRight / TurnLeft
+/// (the short way, `BeginTurnToHeading` acclient.c:345456), and the arrival
+/// snap lands it on the bearing; a player across the landblock edge included
+/// (the bearing is taken in global coordinates).
+#[test]
+fn spine_npc_turns_to_face_the_local_player() {
+    const TURN_RIGHT: u32 = 0x6500_000D;
+    const TURN_LEFT: u32 = 0x6500_000E;
+    let kinematics = player_kinematics();
+    let npc = at(180.0, 96.0, 90.0);
+    // 18 m east and 14 m north of the NPC, in landblock 0x0202.
+    let across_edge = WorldPosition {
+        landblock_id: Guid(0x0202_0000),
+        coords: Vector3::new(6.0, 110.0, TERRAIN_Z),
+        rotation: Quaternion::identity(),
+    }
+    .normalize_outdoor_cell();
+    // Pose degrees (90 = north); the edge case's compass bearing is
+    // atan2(18, 14) = 52.1°. Due south is 180° either way: either turn.
+    let across_bearing = 90.0 + 18.0f32.atan2(14.0).to_degrees();
+    for (label, player, bearing, first_motion) in [
+        ("east", at(186.0, 96.0, 0.0), 180.0f32, Some(TURN_RIGHT)),
+        ("south", at(180.0, 90.0, 0.0), 270.0, None),
+        ("west", at(174.0, 96.0, 0.0), 0.0, Some(TURN_LEFT)),
+        ("north-east", at(186.0, 102.0, 0.0), 135.0, Some(TURN_RIGHT)),
+        ("across the landblock edge", across_edge, across_bearing, Some(TURN_RIGHT)),
+    ] {
+        let mut scene = spine_scene(npc);
+        seed_local_player(&mut scene, player);
+        apply(&mut scene, &turn_to_object(PLAYER, 0.0), true);
+        assert_eq!(
+            scene.remote_mover(MOVER).unwrap().movement.moveto_directive_target(),
+            Some(PLAYER),
+            "{label}: a TurnToObject at the player"
+        );
+        let t0 = Instant::now();
+        let mut motions = Vec::new();
+        let mut done = false;
+        for i in 0..90 {
+            motions.extend(scene.take_remote_moveto_phase_changes());
+            run(&mut scene, &kinematics, t0, i, 1);
+            if !scene.remote_mover(MOVER).unwrap().movement.is_moveto_active() {
+                done = true;
+                break;
+            }
+        }
+        assert!(done, "{label}: the turn completed within 3 s");
+        let end = heading_deg(&pose(&scene, MOVER));
+        assert!(
+            heading_error(end, bearing) < 0.01,
+            "{label}: faces the player at {bearing}°, got {end}°"
+        );
+        let first = motions.iter().find(|(guid, _)| *guid == MOVER).map(|(_, m)| *m);
+        match first_motion {
+            Some(expected) => {
+                assert_eq!(first, Some(expected), "{label}: turns the short way: {motions:X?}")
+            }
+            None => assert!(
+                matches!(first, Some(TURN_RIGHT | TURN_LEFT)),
+                "{label}: turns: {motions:X?}"
+            ),
+        }
+        assert!(planar_distance(&pose(&scene, MOVER), &npc) < 1e-4, "{label}: turns in place");
+    }
+}
+
+/// NPC-facing fix (2026-10-11): ACE waits `Creature.GetRotateDelay(angle)` —
+/// the angle over the motion table's TurnRight |omega| (`GetTurnSpeed`,
+/// Creature_Navigation.cs) — after a `Rotate`, then sends the emote's next
+/// motion, whose unpack cancels any MoveTo (`cancel_moveto`,
+/// acclient.c:339518). The turn has to be done by then. Messages land between
+/// slices, so that motion is handled before the first slice at or past the
+/// delay. With `?remoteMoveToBegin` the turn begins in its own unpack (retail)
+/// and is done in time; the pre-fix next-slice begin (`=off`) is cut short.
+#[test]
+fn spine_npc_turn_finishes_inside_ace_rotate_delay() {
+    let kinematics = player_kinematics();
+    // ACE `MotionTable.GetTurnSpeed`: the table's TurnRight |omega.z|.
+    let turn_speed = 1.5f32;
+    let npc = at(180.0, 96.0, 90.0);
+    for (player, begin_at_unpack) in [
+        (at(186.0, 96.0, 0.0), true),
+        (at(180.0, 90.0, 0.0), true),
+        (at(174.0, 102.0, 0.0), true),
+        (at(186.0, 96.0, 0.0), false),
+        (at(180.0, 90.0, 0.0), false),
+    ] {
+        let mut scene = spine_scene(npc);
+        scene.set_remote_moveto_begin_enabled(begin_at_unpack);
+        seed_local_player(&mut scene, player);
+        let bearing = npc.heading_to(&player).to_degrees().rem_euclid(360.0);
+        let delay = heading_error(bearing, 90.0).to_radians() / turn_speed;
+        let slices = (delay / SLICE).ceil() as usize;
+        apply(&mut scene, &turn_to_object(PLAYER, 0.0), true);
+        run(&mut scene, &kinematics, Instant::now(), 0, slices);
+        let unfinished = scene.remote_mover(MOVER).unwrap().movement.is_moveto_active();
+        // The emote's next motion arrives; its unpack cancels the MoveTo.
+        apply(&mut scene, &interpreted(None, None), false);
+        let end = heading_deg(&pose(&scene, MOVER));
+        let error = heading_error(end, bearing);
+        if begin_at_unpack {
+            assert!(
+                !unfinished && error < 0.01,
+                "bearing {bearing}°: done inside {delay} s ({slices} slices), got {end}°"
+            );
+        } else {
+            assert!(
+                unfinished && error > 0.5,
+                "bearing {bearing}°: the next-slice begin is cut short, got {end}°"
+            );
+        }
+    }
+}
+
+/// NPC-facing fix (2026-10-11): a TurnToObject whose target the client does
+/// not know turns to the heading the message packs (`unpack_movement` case 8,
+/// acclient.c:339604-339605) — the compass: wire 90 is east, pose 180.
+#[test]
+fn spine_turn_to_unknown_object_faces_the_packed_heading() {
+    let kinematics = player_kinematics();
+    let npc = at(180.0, 96.0, 90.0);
+    let mut scene = spine_scene(npc);
+    apply(&mut scene, &turn_to_object(Guid(0x8000_9999), 90.0), false);
+    assert_eq!(
+        scene.remote_mover(MOVER).unwrap().movement.moveto_directive_target(),
+        None,
+        "the TurnToHeading fallback"
+    );
+    let t0 = Instant::now();
+    for i in 0..60 {
+        run(&mut scene, &kinematics, t0, i, 1);
+        if !scene.remote_mover(MOVER).unwrap().movement.is_moveto_active() {
+            break;
+        }
+    }
+    assert!(!scene.remote_mover(MOVER).unwrap().movement.is_moveto_active(), "the turn completed");
+    let end = heading_deg(&pose(&scene, MOVER));
+    assert!(heading_error(end, 180.0) < 0.01, "faces east: {end}°");
+}
+
+/// NPC-facing fix (2026-10-11): ACE's `MoveTo(Position)` — an NPC or monster
+/// going home, a vendor's reset (`Creature.GetMoveToPosition`) — sets
+/// UseFinalHeading with the home frame's `get_heading()`, the compass. The
+/// mover walks there and then turns to that heading: wire 180 = south, pose
+/// 270 (`MoveToPosition`'s absolute final node, acclient.c:345835-345836). It
+/// used to end facing east, 90° off its spawn facing.
+#[test]
+fn spine_moveto_position_ends_on_the_wire_final_heading() {
+    let kinematics = player_kinematics();
+    let start = at(50.0, 50.0, 90.0);
+    let home = at(60.0, 50.0, 0.0);
+    let mut scene = spine_scene(start);
+    let mut params = moveto_params(DEFAULT_BITS | 0x40);
+    params.desired_heading = 180.0;
+    let go_home = envelope(
+        MovementType::MoveToPosition,
+        0,
+        MovementTypeData::MoveToPosition(MoveToPosition {
+            origin: Origin {
+                cell_id: home.landblock_id,
+                position: home.coords,
+            },
+            params,
+            run_rate: 1.0,
+        }),
+    );
+    apply(&mut scene, &go_home, false);
+    let t0 = Instant::now();
+    for i in 0..300 {
+        run(&mut scene, &kinematics, t0, i, 1);
+        if !scene.remote_mover(MOVER).unwrap().movement.is_moveto_active() {
+            break;
+        }
+    }
+    assert!(!scene.remote_mover(MOVER).unwrap().movement.is_moveto_active(), "arrived");
+    let end_pose = pose(&scene, MOVER);
+    assert!(planar_distance(&end_pose, &home) < 1.5, "walked home: {:?}", end_pose.coords);
+    let end = heading_deg(&end_pose);
+    assert!(heading_error(end, 270.0) < 0.01, "faces the home heading (south): {end}°");
 }
 
 /// A sticky-bit MoveToObject chases the target's live body and sticks to it

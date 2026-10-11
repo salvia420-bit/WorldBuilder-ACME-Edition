@@ -97,3 +97,62 @@ export function isCorpseHandoffCandidate(s) {
   if (!s.hasDeathAt || s.claimed || s.isLocal) return false;
   return !!s.inWindow && s.d2 < s.maxD2;
 }
+
+// ── Round 3 (2026-10-11): the corpse is lootable from the moment it exists ──
+// Owner report: "the ragdoll takes too long … the user is waiting to loot the
+// corpse" (shreths). Between the claim and the reveal the lootable corpse is
+// HIDDEN (`_hiddenForHandoff`, so the ragdoll's final pose can land on it) and
+// the body on screen is the dying creature's rig, whose guid the server has
+// already deleted (or is about to). Retail has no such split — the corpse is
+// the object you see — so for picking and selection the claimed rig stands in
+// for its corpse (`?handoffLoot`, EntityManager `pickGuidFor` /
+// `_selectionStateVisible`).
+
+/**
+ * handoff-1 — the guid a pick on a rig reports. A rig a corpse has claimed is
+ * the on-screen body of that corpse: the claim guid while the corpse is mapped
+ * (its own hidden rig has nothing drawn to hit), else nothing. A rig whose
+ * server delete already landed and that no corpse claimed (`_removePending`)
+ * is a deleted object, not pickable either: retail takes an object out of the
+ * world at its delete — `ACCWeenieObject::Remove` (acclient.c:438580) moves it
+ * to position state 3 (`beingRemoved`, :438596) and drops it as the selection
+ * (death-3) — so nothing of it is left to click. Anything else is itself.
+ * @param {{guid:number, claimGuid:number, claimMapped:boolean, removePending:boolean}} s
+ * @returns {number} the guid to report; 0 = not pickable
+ */
+export function handoffPickGuid(s) {
+  const claim = (s.claimGuid >>> 0) || 0;
+  if (claim) return s.claimMapped ? claim : 0;
+  if (s.removePending) return 0;
+  return (s.guid >>> 0) || 0;
+}
+
+/**
+ * handoff-2 — is a corpse that is hidden for the handoff DRAWN for selection
+ * (the SelectNext "drawn" gate, target_cycle.js `cycleCandidateOk`, and the
+ * range-exit `inView`)? Yes while the rig that claimed it (`proxyClaimGuid` is
+ * that rig's `_corpseHandoffGuid`) is state-visible: the corpse is on screen,
+ * in the claimed rig's parts.
+ * @param {{guid:number, hiddenForHandoff:boolean, proxyClaimGuid:number, proxyVisible:boolean}} s
+ */
+export function handoffDrawnViaProxy(s) {
+  const g = (s.guid >>> 0) || 0;
+  if (!g || !s.hiddenForHandoff) return false;
+  return ((s.proxyClaimGuid >>> 0) || 0) === g && !!s.proxyVisible;
+}
+
+/** finishReveal poll period, and the longest it waits past the authored clock
+ *  (was 8 polls × 500 ms: up to half a second between "at rest" and reveal;
+ *  `?ragdollRest=off` keeps that). */
+export const DEATH_REVEAL_POLL_MS = 100;
+export const DEATH_REVEAL_MAX_WAIT_MS = 4000;
+
+/**
+ * handoff-3 — at each finishReveal poll: "wait" while the claimed rig's ragdoll
+ * may still move (live, or still arming), bounded by DEATH_REVEAL_MAX_WAIT_MS
+ * — a rig out of tick range never steps its sim — else "reveal".
+ * @param {{ragdollLive:boolean, waitedMs:number}} s
+ */
+export function revealVerdict(s) {
+  return s.ragdollLive && s.waitedMs < DEATH_REVEAL_MAX_WAIT_MS ? "wait" : "reveal";
+}

@@ -405,6 +405,15 @@ impl ClientSimulationSystem {
                     events: Vec::new(),
                 },
             ));
+            // SLOW-RUN detector: a drive can carry a held run too (a server
+            // MoveTo that a held key no longer cancels).
+            let delta = control.desired_world_delta;
+            movement.observe_slow_run_drive_slice(
+                world,
+                pose,
+                slice_dt.as_secs_f32(),
+                (delta.x * delta.x + delta.y * delta.y).sqrt(),
+            );
             return true;
         }
 
@@ -673,7 +682,7 @@ impl ClientSimulationSystem {
                 target_pose.rotation = if mto.params.desired_heading.abs() <= 1e-6 {
                     Quaternion::from_heading(target_pose.coords.heading_to(&mto.origin.position))
                 } else {
-                    Quaternion::from_heading(mto.params.desired_heading)
+                    Quaternion::from_wire_heading(mto.params.desired_heading)
                 };
 
                 // F1 (COL-21) — `get_command`'s hold-key rule measures to
@@ -895,12 +904,16 @@ impl ClientSimulationSystem {
                         arrival_dist,
                     );
 
+                    // NPC-facing fix (2026-10-11): a wire heading is the
+                    // compass in DEGREES (`from_wire_heading`) — these snaps
+                    // fed it to `from_heading` as pose radians.
                     if mto.params.desired_heading.abs() <= 1e-6 {
                         next_pos.rotation = Quaternion::from_heading(
                             next_pos.coords.heading_to(&mto.origin.position),
                         );
                     } else {
-                        next_pos.rotation = Quaternion::from_heading(mto.params.desired_heading);
+                        next_pos.rotation =
+                            Quaternion::from_wire_heading(mto.params.desired_heading);
                     }
                 } else {
                     next_pos.coords = mto.origin.position;
@@ -912,7 +925,7 @@ impl ClientSimulationSystem {
                 next_pos.coords = mtp.origin.position;
 
                 if mtp.params.desired_heading.abs() > 1e-6 {
-                    next_pos.rotation = Quaternion::from_heading(mtp.params.desired_heading);
+                    next_pos.rotation = Quaternion::from_wire_heading(mtp.params.desired_heading);
                 } else {
                     next_pos.rotation = Quaternion::from_heading(
                         current_pos.coords.heading_to(&mtp.origin.position),
@@ -920,11 +933,11 @@ impl ClientSimulationSystem {
                 }
             }
             MovementTypeData::TurnToHeading(tth) => {
-                next_pos.rotation = Quaternion::from_heading(tth.params.desired_heading);
+                next_pos.rotation = Quaternion::from_wire_heading(tth.params.desired_heading);
             }
             MovementTypeData::TurnToObject(tto) => {
                 if tto.desired_heading.abs() > 1e-6 {
-                    next_pos.rotation = Quaternion::from_heading(tto.desired_heading);
+                    next_pos.rotation = Quaternion::from_wire_heading(tto.desired_heading);
                 } else if let Some(target) = world.get_visible_entity(tto.target)
                     && target.position.landblock_id == next_pos.landblock_id
                 {

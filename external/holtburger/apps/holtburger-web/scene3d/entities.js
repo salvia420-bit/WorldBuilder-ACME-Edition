@@ -1285,8 +1285,17 @@ import {
   readAttackMeta,
 } from "./target_cycle.js";
 // A2-death (2026-10-08 round 2): the selection / corpse-claim rules around the
-// death hold (pure; scene3d/death_hold.js).
-import { shouldReselectAfterRemoval, isCorpseHandoffCandidate } from "./death_hold.js";
+// death hold (pure; scene3d/death_hold.js). Round 3 (2026-10-11): the pending
+// corpse handoff is pickable / selectable as the corpse (`?handoffLoot`), and
+// the reveal polls at 100 ms (`?ragdollRest`).
+import {
+  shouldReselectAfterRemoval,
+  isCorpseHandoffCandidate,
+  handoffPickGuid,
+  handoffDrawnViaProxy,
+  revealVerdict,
+  DEATH_REVEAL_POLL_MS,
+} from "./death_hold.js";
 // P6/R-6 (net-fixwave 2026-07-10) — entity program warm: per-spawn rig
 // compileAsync (Step E) + the one-shot archetype-matrix warm armed on the
 // local player's commit. See bake_prewarm.js for flags + rationale.
@@ -1436,6 +1445,7 @@ import {
 // check and the tick gate below is a hoisted-boolean + null read.
 import {
   ragdollEnabled,
+  ragdollRestEnabled,
   startRagdoll,
   applyRagdoll,
   applyFrozenPose,
@@ -1451,6 +1461,9 @@ import { killOptsFor, noteProjectileImpact } from "./kill_impulse.js";
 // gate is a bare boolean read — same shape as WIREFRAME_MODE / SPAWN_TRACE.
 const LIMB_DAMAGE_ON = limbDamageEnabled();
 const RAGDOLL_ON = ragdollEnabled();
+// `?ragdollRest` (2026-10-11) also owns the corpse reveal's timing (handoff-3
+// in `_tryCorpseDeathHandoff`): =off restores the 8 × 500 ms poll.
+const RAGDOLL_REST_ON = ragdollRestEnabled();
 const RIG_MODULE_ON = readRigModuleFlag();
 // FCULL (2026-06-08) — distance horizon for the per-frame entity RENDER
 // cull. Only the constant is imported; the cull pass is driven from loop.js
@@ -3821,8 +3834,12 @@ export class EntityManager {
     this._selectionRangeExitOn = !_selFlagOff(_selQ?.get("selectionRangeExit"));
     this._attackWielderOn = !_selFlagOff(_selQ?.get("attackWielder"));
     this._deathSelectReleaseOn = !_selFlagOff(_selQ?.get("deathSelectRelease"));
+    this._handoffLootOn = !_selFlagOff(_selQ?.get("handoffLoot"));
     // ^ death-3 (round 2): drop the selection at a dying creature's server
-    // delete, not when its death-held rig is finally removed.
+    // delete, not when its death-held rig is finally removed. handoff-1/2
+    // (2026-10-11): while a corpse is hidden for the death handoff, the rig
+    // that claimed it picks and selects AS the corpse, and a deleted unclaimed
+    // rig is not pickable (`pickGuidFor`, `_selectionStateVisible`).
     // death-5 (round 2): retail ACCWeenieObject::m_openedCorpses — corpses this
     // client opened (SetCorpseOpened on ContainerOpened), pruned at their
     // server delete (SetCorpseDeleted, `noteWireRemove`).
@@ -8860,6 +8877,55 @@ export class EntityManager {
   }
 
   /**
+   * handoff-1 (2026-10-11, `?handoffLoot`) — the guid a pick on `inst`'s rig
+   * reports (picking.js `pickEntityAt`, so the hover tooltip, click-select,
+   * double-click Use and the give drop all agree). A dying rig a corpse has
+   * claimed is that corpse on screen until the reveal; a deleted, unclaimed
+   * rig is not pickable (death_hold.js `handoffPickGuid`). 0 = skip the rig.
+   * @param {object} inst
+   * @param {number} guid — the rig's own entityMap key
+   * @returns {number}
+   */
+  pickGuidFor(inst, guid) {
+    const g = (guid >>> 0) || 0;
+    if (this._handoffLootOn === false || !inst) return g;
+    const claim = (inst._corpseHandoffGuid >>> 0) || 0;
+    return handoffPickGuid({
+      guid: g,
+      claimGuid: claim,
+      claimMapped: claim !== 0 && this.entityMap.has(claim),
+      removePending: !!inst._removePending,
+    });
+  }
+
+  /**
+   * handoff-2 — the rig drawing a corpse that is hidden for the death handoff
+   * (the creature that claimed it), or null: `inst` is not such a corpse, the
+   * claim moved on, or `?handoffLoot=off`.
+   */
+  _handoffProxyOf(inst) {
+    if (this._handoffLootOn === false || !inst?._hiddenForHandoff) return null;
+    const proxy = this.entityMap.get((inst._handoffFromGuid >>> 0) || 0);
+    if (!proxy?.root) return null;
+    return handoffDrawnViaProxy({
+      guid: inst.guid,
+      hiddenForHandoff: true,
+      proxyClaimGuid: proxy._corpseHandoffGuid,
+      proxyVisible: proxy._stateVisible !== false,
+    }) ? proxy : null;
+  }
+
+  /**
+   * The SelectNext "drawn" test (`cycleCandidateOk` ctx.stateVisible): the
+   * state visibility, or — handoff-2 — a hidden-for-handoff corpse whose
+   * claimed rig is drawing it.
+   */
+  _selectionStateVisible(inst) {
+    if (inst._stateVisible !== false) return true;
+    return this._handoffProxyOf(inst) !== null;
+  }
+
+  /**
    * Gather the live candidate list for a selection type: every entity in
    * `entityMap` that passes the type filter, is not mid-death
    * (`_deadFrozen`, set by the collapse handoff), and has a world position
@@ -8877,7 +8943,9 @@ export class EntityManager {
    *
    * Round 2 (2026-10-08): a rig that outlives its server delete
    * (`_removePending`, or claimed by a corpse) is out too (death-3), and
-   * UNOPENED_CORPSE reads the opened-corpse ledger (death-5).
+   * UNOPENED_CORPSE reads the opened-corpse ledger (death-5). Round 3
+   * (2026-10-11): the corpse that claimed such a rig is IN while hidden for
+   * the handoff — the claimed rig draws it (handoff-2).
    *
    * @param {string} type — a SELECTION_TYPE value
    * @param {{x:number,y:number,z:number,cellId?:number}} pose — player world pose
@@ -8921,7 +8989,9 @@ export class EntityManager {
         attackMeta: () => readAttackMeta(sh, g, inst.meta),
         isFellow: !!fellows?.has(g),
         showable: () => this._radarShowable(sh, g, inst.meta),
-        stateVisible: inst._stateVisible !== false,
+        // handoff-2: a corpse hidden for the death handoff is drawn by the rig
+        // that claimed it — Closest / Next Unopened Corpse find it at once.
+        stateVisible: this._selectionStateVisible(inst),
         attached: inst._attachedParentGuid != null,
         dist2d: Math.hypot(p.x - pose.x, p.y - pose.y),
         range,
@@ -9326,7 +9396,8 @@ export class EntityManager {
     if (selectionRangeExit({
       xyDist: Math.hypot(p.x - pose.x, p.y - pose.y),
       range: this._radarRange(pose),
-      inView: inst.root.visible === true,
+      // handoff-2: a hidden-for-handoff corpse is on screen in its claimed rig
+      inView: inst.root.visible === true || this._handoffProxyOf(inst)?.root?.visible === true,
       exempt: owned,
     })) {
       this._commitSelection(0); // not willingly lost → auto-target may follow
@@ -12860,6 +12931,11 @@ export class EntityManager {
     best._corpseHandoffGuid = corpseInst.guid >>> 0; // _armRemove yields to us
     _setEntityStateVisible(corpseInst, false);
     corpseInst._hiddenForHandoff = true;
+    // handoff-2 (2026-10-11): the reverse link. Until the reveal, the claimed
+    // rig IS this corpse on screen — picks and selection resolve to the corpse
+    // through it (`pickGuidFor` / `_handoffProxyOf`, `?handoffLoot`), so the
+    // corpse is lootable the moment it exists, not when the ragdoll rests.
+    corpseInst._handoffFromGuid = best.guid >>> 0;
     if (RAGDOLL_ON) {
       // eslint-disable-next-line no-console
       console.info(`[handoff] corpse 0x${(corpseInst.guid >>> 0).toString(16)} ↔ creature 0x${(best.guid >>> 0).toString(16)} (d=${Math.sqrt(bestD2).toFixed(1)}m)`);
@@ -12879,20 +12955,35 @@ export class EntityManager {
     // to settle: revealing on the authored-collapse clock froze a MID-FALL
     // pose — or none at all — which read as "the old corpse animation came
     // back" (2026-08-02 field report).
-    const finishReveal = (settleRetries) => {
+    // handoff-3 (2026-10-11, `?ragdollRest`): the wait polls every
+    // DEATH_REVEAL_POLL_MS (was 8 × 500 ms, so a sim that rested just after a
+    // poll stayed hidden up to half a second longer) for at most
+    // DEATH_REVEAL_MAX_WAIT_MS past the authored clock, and also covers a
+    // ragdoll still ARMING (its cold limb registry fetch) — revealing then
+    // showed the authored pose.
+    let waitFrom = null;
+    let legacyPolls = 8;
+    const finishReveal = () => {
       try {
         const corpse = this.entityMap.get(corpseGuid);
         const creature = this.entityMap.get(creatureGuid);
-        if (
-          RAGDOLL_ON && settleRetries > 0 &&
-          creature?._ragdoll && !creature._ragdoll.sim?.done
-        ) {
-          setTimeout(() => finishReveal(settleRetries - 1), 500);
+        const tNow = _entityNowMs();
+        if (waitFrom === null) waitFrom = tNow;
+        if (RAGDOLL_REST_ON) {
+          const ragdollLive = RAGDOLL_ON && !!creature &&
+            ((!!creature._ragdoll && !creature._ragdoll.sim?.done) || !!creature._ragdollArming);
+          if (revealVerdict({ ragdollLive, waitedMs: tNow - waitFrom }) === "wait") {
+            setTimeout(finishReveal, DEATH_REVEAL_POLL_MS);
+            return;
+          }
+        } else if (RAGDOLL_ON && legacyPolls > 0 && creature?._ragdoll && !creature._ragdoll.sim?.done) {
+          legacyPolls--; // `?ragdollRest=off`: the pre-2026-10-11 8 × 500 ms poll
+          setTimeout(finishReveal, 500);
           return;
         }
         if (RAGDOLL_ON) {
           // eslint-disable-next-line no-console
-          console.info(`[handoff] reveal 0x${corpseGuid.toString(16)}: creature=${creature ? "present" : "GONE"} ragdoll=${creature?._ragdoll ? (creature._ragdoll.sim?.done ? "settled" : "live") : "none"} retries-left=${settleRetries}`);
+          console.info(`[handoff] reveal 0x${corpseGuid.toString(16)}: creature=${creature ? "present" : "GONE"} ragdoll=${creature?._ragdoll ? (creature._ragdoll.sim?.done ? "settled" : "live") : "none"} waited=${Math.round(tNow - waitFrom)}ms`);
         }
         if (RAGDOLL_ON && creature?._ragdoll && corpse) {
           transferRagdollPose(creature, corpse);
@@ -12911,13 +13002,14 @@ export class EntityManager {
           _setEntityStateVisible(corpse, true);
           corpse._hiddenForHandoff = false;
         }
+        if (corpse) corpse._handoffFromGuid = 0; // its own rig picks it now
         // Remove the collapsed creature now that the corpse has taken over. The
         // creature's own KIND_REMOVE deferral yielded to us (_corpseHandoffGuid);
         // remove() no-ops if it already went.
         this.remove(creatureGuid);
       } catch (_) { /* handoff must never throw into a timer */ }
     };
-    setTimeout(() => finishReveal(8), remaining);
+    setTimeout(finishReveal, remaining);
   }
 
   /**

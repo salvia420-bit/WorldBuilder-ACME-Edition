@@ -1662,6 +1662,12 @@ pub struct PlayerState {
     /// and Q1 (the next grounded slice consumes it). Cleared by
     /// [`Self::land`] (teleports route through it) and [`Self::begin_jump`].
     pub landing_bounce: Option<LandingBounce>,
+    /// BOUNCE-ALONG-SLOPE (2026-10-11, `?bounceAlongSlope`) — the current
+    /// airborne phase began as a landing-bounce lift-off. Its landing is the
+    /// end of that bounce, so it never lifts off again (no chain of hops down
+    /// a slope). Set by the lift-off quantum; read by the landing BEFORE
+    /// [`Self::land`], which clears it, as does [`Self::begin_jump`].
+    pub bounce_relaunched: bool,
     /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
     /// The local player's `AllowEdgeSlide` physics flag — retail's
     /// `ObjectInfoState.EdgeSlide` (acclient `OBJECT_INFO_STATE`
@@ -2008,6 +2014,7 @@ impl PlayerState {
             standing_long_jump_charge: false,
             vertical_velocity: 0.0,
             landing_bounce: None,
+            bounce_relaunched: false,
             // Physics deep-dive 2026-06-01 (gap 3 follow-up) — default
             // to the retail player value (EdgeSlide set) until the local
             // player's physics state hydrates the real flag.
@@ -2206,6 +2213,7 @@ impl PlayerState {
         // the pending lift-off (retail `jump` → `LeaveGround` with the jump
         // v_z, acclient.c:343806).
         self.landing_bounce = None;
+        self.bounce_relaunched = false;
         // F1-6 — the charge (if any) is consumed by this dispatch; the
         // caller decides the launch planar velocity AFTER calling
         // begin_jump (holtburger-core `execute_jump_release`: retail
@@ -2273,6 +2281,7 @@ impl PlayerState {
         // lift-off; the integrator's landing tail stores a fresh one AFTER
         // this call when the bounce survives.
         self.landing_bounce = None;
+        self.bounce_relaunched = false;
         self.airborne_secs = 0.0;
         // F1-6 / G-7 — touchdown (or teleport, which routes through land)
         // drops any held standing-long-jump charge, per the field doc.

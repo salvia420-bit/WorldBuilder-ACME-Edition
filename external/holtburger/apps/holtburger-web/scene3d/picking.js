@@ -944,12 +944,22 @@ export function setupClickPicking({
     // Parallel guid lookup so the hit-to-guid resolution below stays O(1).
     // Excludes the local player so you can't pick yourself.
     const guidByRoot = new Map();
+    // The rig each root belongs to (the sphere pass reads ITS parts) — not
+    // always the reported guid's own entity, see handoff-1 below.
+    const instByRoot = new Map();
     for (const [guid, inst] of em.entityMap) {
       const g = guid >>> 0;
       if (g === localGuid) continue;
       if (!inst || !inst.root) continue;
       if (inst.root.visible === false) continue; // PICK-VIS: hidden ⇒ unpickable
-      guidByRoot.set(inst.root, g);
+      // handoff-1 (2026-10-11, `?handoffLoot`): a dying rig a corpse has
+      // claimed reports the CORPSE — hidden until the ragdoll rests, lootable
+      // from the moment it exists — and a deleted, unclaimed rig reports
+      // nothing, so a click passes through it (entities.js `pickGuidFor`).
+      const pg = typeof em.pickGuidFor === "function" ? em.pickGuidFor(inst, g) : g;
+      if (!pg) continue;
+      guidByRoot.set(inst.root, pg);
+      instByRoot.set(inst.root, inst);
     }
 
     // `recursive=true` is fine here: the flat list is small (≤ ~200
@@ -980,7 +990,7 @@ export function setupClickPicking({
     }
     // selection-5: no polygon hit → the nearest drawing-sphere hit, as
     // retail's GetMouseSelectionObjectID falls back to (pick_math.js).
-    return PICK_SPHERE_FALLBACK ? pickBySphere(em, guidByRoot, localGuid) : null;
+    return PICK_SPHERE_FALLBACK ? pickBySphere(em, guidByRoot, localGuid, instByRoot) : null;
   }
 
   // selection-5 scratch. The sphere pass runs on every hover miss
@@ -1004,10 +1014,12 @@ export function setupClickPicking({
   // particles or sprites. A wielded item is its own entity, so its sphere
   // picks the item. The local player's own held items stay unpickable, like
   // its rig.
-  function pickBySphere(em, guidByRoot, localGuid) {
+  function pickBySphere(em, guidByRoot, localGuid, instByRoot) {
     let n = 0;
     for (const [root, g] of guidByRoot) {
-      const inst = em.entityMap.get(g);
+      // handoff-1: the spheres are the DRAWN rig's (a claimed dying rig's),
+      // the guid the one it stands in for (its corpse).
+      const inst = instByRoot?.get(root) ?? em.entityMap.get(g);
       const parts = inst?.parts;
       if (!Array.isArray(parts) || parts.length === 0) continue;
       if (inst._attachedParentGuid != null && (inst._attachedParentGuid >>> 0) === localGuid) continue;
