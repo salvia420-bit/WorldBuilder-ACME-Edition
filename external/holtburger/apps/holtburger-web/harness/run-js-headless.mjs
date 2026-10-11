@@ -812,6 +812,10 @@ const TIER5 = [
   { tier: 5, flag: "farBakeSharedTextures", file: "tests/far_bake_shared_textures.test.mjs" },
   // 2026-10-11 — a T9 LOD respawn uses the tick's band and is no deselect (1070: attacks cancelled).
   { tier: 5, flag: "lodRespawnSelection", file: "tests/lod_respawn_selection.test.mjs" },
+  // 2026-10-11 — spine rows carry their rotation (1070: a vendor turned 102 degrees in one frame).
+  { tier: 5, flag: "remoteSpineHeading", file: "tests/remote_spine_heading.test.mjs" },
+  // 2026-10-11 — the "Disable most weather effects" / "Disable distance fog" options did nothing.
+  { tier: 5, flag: "visualOptions", file: "tests/visual_options.test.mjs" },
   { tier: 5, flag: "envcellStaticsOverlap", file: "tests/envcell_statics_overlap.test.mjs" },
   { tier: 5, flag: "entityParticleLayer", file: "tests/entity_particle_layer.test.mjs" },
   // 2026-10-09 cold-load structural pass (ultracode brief): A0/A1-lite interior record fetch,

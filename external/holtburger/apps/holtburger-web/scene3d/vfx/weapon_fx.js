@@ -92,6 +92,33 @@ function _strParam(name) {
 
 let _auraGain = _numParam("weaponAuraGain", 1, 0, 4);
 let _flexGain = _numParam("weaponFlexGain", 1, 0, 4);
+// `?weaponFlexLoco` (DEFAULT ON, `=off` escape; 2026-10-11, measured on the 1070): the run
+// cycle's arm swing drives the pole springs near their 2-3 Hz natural frequency, so a held spear
+// bent 4.8 deg on average (6.8 max) while running where the design sways ~0.5 deg. Full gain
+// is kept for the whip after a swing (FLEX_SWING_FULL_MS, then a FLEX_SWING_EASE_MS ramp);
+// otherwise the bend is scaled by the locomotion gain (`?weaponFlexLocoGain`, default 0.12).
+const FLEX_LOCO_ON = !/^(off|0|false|no)$/i.test(String(_strParam("weaponFlexLoco") ?? "").trim());
+let _flexLocoGain = _numParam("weaponFlexLocoGain", 0.12, 0, 1);
+export const FLEX_SWING_FULL_MS = 1600;
+export const FLEX_SWING_EASE_MS = 500;
+/** The flex gain multiplier `sinceSwingMs` after the wielder's last swing (pure). */
+export function flexLocoScale(sinceSwingMs, locoGain = _flexLocoGain, on = FLEX_LOCO_ON) {
+  if (!on) return 1;
+  const t = +sinceSwingMs;
+  if (!(t >= 0) || t <= FLEX_SWING_FULL_MS) return Number.isFinite(t) && t >= 0 ? 1 : locoGain;
+  const k = Math.min(1, (t - FLEX_SWING_FULL_MS) / FLEX_SWING_EASE_MS);
+  return 1 + (locoGain - 1) * k;
+}
+/** Time constant of the applied scale (s). The spring keeps integrating at full strength and only
+ * its output is scaled, so a swing started at a run must not jump 0.12 → 1 in one frame (the
+ * run's ~5 deg lag would pop into view): it reaches ~95 % in 0.2 s, before the whip. */
+export const FLEX_SCALE_TAU_S = 0.06;
+/** One frame of the applied scale chasing `target` (pure; a NaN `cur` starts at the target). */
+export function approachFlexScale(cur, target, dt, tau = FLEX_SCALE_TAU_S) {
+  if (!Number.isFinite(cur)) return target;
+  if (!(dt > 0)) return cur;
+  return cur + (target - cur) * (1 - Math.exp(-dt / tau));
+}
 let _shineGain = _numParam("weaponShineGain", 1, 0, 4);
 // `?weaponAuraForce=fire|frost|lightning|acid|nether|magic|poison|health|mana|stamina`
 // shows that glow on EVERY weapon-ish item (eye-test aid; live: __weaponFx.force()).
@@ -248,6 +275,7 @@ export function weaponFxBegin({ inst, guid, name, uiEffects, archetype, partGrou
     rng: makeRng(g ^ 0xa5a5a5a5),
     nextShineMs: now + 2500 + 6000 * ((seed01(g ^ 0x51ed) || 0.5)),
     swingMs: -1e9,
+    flexScale: NaN,   // `?weaponFlexLoco` applied scale (approachFlexScale)
     lastSwing: 0,
     bendDegPos: 0,
     bendDegNeg: 0,
@@ -509,19 +537,19 @@ function _relaxBend(st) {
   st.bendDegNeg = 0;
 }
 
-function _flexEnd(spring, params, tipW, len, dt, outVec) {
+function _flexEnd(spring, params, tipW, len, dt, outVec, scale = 1) {
   _arr3a[0] = tipW.x; _arr3a[1] = tipW.y; _arr3a[2] = tipW.z;
   stepSpring(spring, _arr3a, dt, params, _lag);
   const inv = 1 / Math.max(len, 1e-6);
   _arr3b[0] = (tipW.x - _piv.x) * inv; _arr3b[1] = (tipW.y - _piv.y) * inv; _arr3b[2] = (tipW.z - _piv.z) * inv;
-  bendVector(_lag, _arr3b, len, params, _flexGain, _rv);
+  bendVector(_lag, _arr3b, len, params, _flexGain * scale, _rv);
   // world rotation vector → the part's object space
   _bend.set(_rv[0], _rv[1], _rv[2]).applyQuaternion(_qInv);
   outVec.copy(_bend);
   return Math.hypot(_rv[0], _rv[1], _rv[2]) * 57.29578;
 }
 
-function _simulateFlex(st, part, dt, camPos) {
+function _simulateFlex(st, part, dt, camPos, scale = 1) {
   const u = st.u;
   part.updateWorldMatrix(true, false);
   const mw = part.matrixWorld;
@@ -534,9 +562,9 @@ function _simulateFlex(st, part, dt, camPos) {
   _qInv.copy(_q).invert();
   const lenP = _tipP.distanceTo(_piv);
   const lenN = _tipN.distanceTo(_piv);
-  st.bendDegPos = _flexEnd(st.springPos, st.paramsPos, _tipP, lenP, dt, u.uWfxBendPos.value);
+  st.bendDegPos = _flexEnd(st.springPos, st.paramsPos, _tipP, lenP, dt, u.uWfxBendPos.value, scale);
   if (L.y > 0.15) {
-    st.bendDegNeg = _flexEnd(st.springNeg, st.paramsNeg, _tipN, lenN, dt, u.uWfxBendNeg.value);
+    st.bendDegNeg = _flexEnd(st.springNeg, st.paramsNeg, _tipN, lenN, dt, u.uWfxBendNeg.value, scale);
   } else if (u.uWfxBendNeg.value.lengthSq() !== 0) {
     u.uWfxBendNeg.value.set(0, 0, 0);
     st.bendDegNeg = 0;
@@ -567,7 +595,8 @@ function _tickOne(st, scene3d, now, dt, tVfx, camPos) {
 
   // flex (held poles only)
   if (st.flexClass && held && visible && part && st.u.uWfxFrame.value > 0.5 && dt > 0) {
-    _simulateFlex(st, part, dt, camPos);
+    st.flexScale = approachFlexScale(st.flexScale, flexLocoScale(st.swingMs > 0 ? now - st.swingMs : Infinity), dt);
+    _simulateFlex(st, part, dt, camPos, st.flexScale);
   } else if (st.flexClass) {
     _relaxBend(st);
   }
@@ -708,6 +737,8 @@ if (typeof window !== "undefined") {
     set auraGain(v) { if (Number.isFinite(+v)) _auraGain = Math.max(0, +v); },
     get flexGain() { return _flexGain; },
     set flexGain(v) { if (Number.isFinite(+v)) _flexGain = Math.max(0, +v); },
+    get flexLocoGain() { return _flexLocoGain; },
+    set flexLocoGain(v) { if (Number.isFinite(+v)) _flexLocoGain = Math.min(1, Math.max(0, +v)); },
     get shineGain() { return _shineGain; },
     set shineGain(v) { if (Number.isFinite(+v)) _shineGain = Math.max(0, +v); },
   };

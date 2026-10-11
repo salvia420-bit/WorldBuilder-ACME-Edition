@@ -29,9 +29,15 @@ been eye-tested. Section 9 is the batched 1070 queue.
   - Turning the option off clears the pin once with NaN. A `?skytime` pin or accel cycle takes priority.
 - **Deliberate difference from retail.** Retail left the sky dome on the real clock. Our atmosphere ties the sky to its
   sun, so the sky turns to day as well.
-- **Not done.** "Disable distance fog" (0x30, retail `LScape::m_fFogEnabled`) and "Disable most weather effects"
-  (0x04, retail `SmartBox::EnableWeather`) are not read by the renderer either. They are the same kind of gap and
-  are left as a follow-up.
+- **Done in a follow-up (same day).** "Disable distance fog" (0x30, retail `LScape::m_fFogEnabled`) and "Disable
+  most weather effects" (0x04, retail `SmartBox::EnableWeather`) were not read by the renderer either. Both now are,
+  through `scene3d/visual_options.js` (`?distanceFogOption` / `?weatherOption`, `=off` makes the checkbox inert):
+  - Fog off pushes the linear distance fog's band out of reach and skips the AdminEnvirons override fog, as retail's
+    `LScape::UseTime` does. The aerial perspective and clouds are not distance fog and stay.
+  - Weather off drops the SkyObjects retail never creates with the option on (properties 0x04: the streaks and the
+    rain/snow models) before the storm scan, and forces the storm flag off. No storm clouds, rain sheen, wind gusts
+    or storm particles; the cloud bands stay.
+  - Test: `tests/visual_options.test.mjs`. Not eye-tested (§9 item 8).
 - **Test.** `tests/always_daylight.test.mjs`.
 
 ## 2. Death ragdoll → lootable corpse
@@ -253,3 +259,10 @@ Every heavy job was run capped and one at a time, after the agents finished.
    - A standing full jump on flat ground still gets the small bounce.
    - `?bounceAlongSlope=off` brings the descent ski-jump back. If the owner still sees hops while NOT jumping, note
      the spot: a landblock seam, a steep patch, or next to a rock or tree.
+
+8. **Weather and fog options** (follow-up). Options → Character → Visual.
+   - "Disable distance fog": within a second the horizon haze band is gone and the far terrain is crisp (the
+     streaming edge may show, as retail's did). Untick it and the haze is back within a second.
+   - "Disable most weather effects" during a storm DayGroup: the storm clouds, rain sheen and storm particles stop;
+     the ordinary cloud bands stay. `window.__visualOptions.read()` shows `{weatherOff, fogOff}`.
+   - Compare `?distanceFogOption=off` / `?weatherOption=off` (the checkboxes do nothing, as before).

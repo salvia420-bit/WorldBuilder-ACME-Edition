@@ -3707,7 +3707,8 @@ function _tier2CueOpts(targetGuid, placement, look) {
   } catch (_) { /* no terrain answer: keep the root height */ }
   _cueGround.set(x, y, z);
   placement.parent.localToWorld(_cueGround);
-  return { decalWorld: _cueGround, element: projectile ? fxProjectileElement(targetGuid) : null };
+  // the element even when the projectile rig is already gone (fx_ribbons keeps it a few seconds)
+  return { decalWorld: _cueGround, element: fxProjectileElement(targetGuid) };
 }
 
 /**

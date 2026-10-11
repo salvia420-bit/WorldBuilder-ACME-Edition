@@ -316,6 +316,29 @@ async function run() {
   check("7. the impact stops it growing; it fades and retires", alive === 1 && rib.fxRibbonStats().live === 0 && ribMesh.visible === false);
   check("7. fxProjectileElement reads a live projectile's element (for its impact mark)",
     (() => { window.liveScene3d = { entityManager: { entityMap } }; const el = rib.fxProjectileElement(bolt.guid); return el && el.decal === "scorch"; })());
+  // ?fxImpactElement (2026-10-11): ACE's impact Explode lands on the projectile's guid after its
+  // rig is gone, so the element is remembered from the last frame in flight (5140 here)
+  check("7. the bolt's element outlives its rig for the impact mark, for FX_ELEMENT_KEEP_MS",
+    (() => {
+      entityMap.delete(bolt.guid);
+      const kept = rib.fxProjectileElement(bolt.guid, 5140 + 1000);
+      const edge = rib.fxProjectileElement(bolt.guid, 5140 + rib.FX_ELEMENT_KEEP_MS);
+      const gone = rib.fxProjectileElement(bolt.guid, 5140 + rib.FX_ELEMENT_KEEP_MS + 1);
+      entityMap.set(bolt.guid, bolt);
+      return kept && kept.element === "fire" && kept.decal === "scorch" && edge === kept && gone === null &&
+        rib.fxProjectileElement(0x80000999, 5200) === null;
+    })());
+  check("7. a frost bolt's impact keeps frost (its own mark), not the last fire bolt's",
+    (() => {
+      const fb = { guid: 0x80000002, _isProjectile: true, _ballistic: true, root: new THREE.Group() };
+      world.add(fb.root); names.set(fb.guid, "Frost Bolt"); entityMap.set(fb.guid, fb);
+      rib.tickFxRibbons(s3d, 7000);
+      entityMap.delete(fb.guid); world.remove(fb.root);
+      const el = rib.fxProjectileElement(fb.guid, 7500);
+      return el && el.element === "frost" && el.decal === "frost";
+    })());
+  check("7. a test reset forgets the remembered elements",
+    (() => { rib._resetFxRibbonsForTest(); return rib.fxProjectileElement(0x80000002, 7500) === null; })());
   // swing trails
   rib._resetFxRibbonsForTest();
   const wielder = { guid: 0x50000001, root: new THREE.Group() };
@@ -728,7 +751,7 @@ async function run() {
   const pev = src("./scene3d/play_effect_vfx.js");
   check("11. the PlayEffect cue places its mark (ground / ahead) and fires the showcase cue",
     pev.includes("fireFxCue(look, _cueWorld, opts);") && pev.includes("fireFxShowcaseCue(look, _cueWorld);") &&
-    pev.includes("element: projectile ? fxProjectileElement(targetGuid) : null"));
+    pev.includes("element: fxProjectileElement(targetGuid) }"));
 
   console.log(`\n[test_particle_fx_tier2] ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

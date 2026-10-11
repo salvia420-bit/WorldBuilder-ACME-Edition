@@ -6505,9 +6505,12 @@ export class EntityManager {
       const pp = this._localPlayerWorldPose();
       if (pp) this._applyCreatureSeparation(inst, pp);
     }
-    // A2-P3 R2 — sticky heading (only sticky-flagged rows carry a quat;
-    // loop.js drainRemotePoses omits it otherwise).
-    if (qw !== undefined && Number.isFinite(+qw)) {
+    // A2-P3 R2 — sticky heading. loop.js drainRemotePoses passes the quat on
+    // sticky-flagged rows and, under `?remoteSpineHeading` (2026-10-11), on
+    // every spine row; it omits it otherwise. A zero-length quat is never a
+    // heading — keep the current one rather than collapse the rig.
+    const qn2 = (+qw) * (+qw) + (+qx) * (+qx) + (+qy) * (+qy) + (+qz) * (+qz);
+    if (qw !== undefined && Number.isFinite(qn2) && qn2 > 1e-6) {
       const tq = acQuatToThree(+qw, +qx, +qy, +qz);
       inst.root.quaternion.copy(tq);
       let tgtQ = inst._serverTargetQuat;

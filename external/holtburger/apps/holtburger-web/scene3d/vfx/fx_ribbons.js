@@ -209,6 +209,27 @@ const _ribbons = new Map();       // key → Ribbon
 const _free = [];
 const _stats = { bolts: 0, swings: 0, live: 0, drawn: 0, created: 0, retired: 0 };
 
+// `?fxImpactElement` (DEFAULT ON, `=off` escape; 2026-10-11): the element of every bolt seen
+// in flight, kept for FX_ELEMENT_KEEP_MS after it. ACE plays the impact Explode on the
+// PROJECTILE's guid, and by the time the cue lands that rig is usually gone (or no longer
+// flagged), so fxProjectileElement found nothing and every war bolt left the same orange
+// scorch on the 1070 — the element-aware marks of tier 2 never fired.
+const FX_IMPACT_ELEMENT_ON = (() => {
+  try {
+    const v = new URLSearchParams(globalThis.window?.location?.search || "").get("fxImpactElement");
+    return !/^(off|0|false|no)$/i.test(String(v ?? "").trim());
+  } catch (_) { return true; }
+})();
+export const FX_ELEMENT_KEEP_MS = 5000;
+const _seenElement = new Map();   // projectile guid → { element, ms }
+function _noteElement(guid, element, nowMs) {
+  if (!FX_IMPACT_ELEMENT_ON || !element || !(guid >>> 0)) return;
+  _seenElement.set(guid >>> 0, { element, ms: nowMs });
+  if (_seenElement.size > 64) {
+    for (const [g, e] of _seenElement) { if (nowMs - e.ms > FX_ELEMENT_KEEP_MS) _seenElement.delete(g); }
+  }
+}
+
 function _acquire(key, look, mode, now) {
   let r = _ribbons.get(key);
   if (r) return r;
@@ -543,6 +564,9 @@ function _sampleBolt(inst, now, tSec) {
   const key = inst;
   let r = _ribbons.get(key);
   const flying = inst._ballistic === true && inst._stateVisible !== false && !inst._projectileImpacted;
+  // the element outlives the rig, for its impact mark (`?fxImpactElement`); noted every
+  // frame in flight so a long flight (or a full ribbon pool) cannot lose it
+  if (flying) _noteElement(inst.guid, fxEntityElement(inst), now);
   if (!r) {
     if (!flying) return;
     const look = fxEntityElement(inst);
@@ -655,11 +679,16 @@ export function fxNoteSwing(inst, nowMs) {
 }
 
 /** The element of a live (or just-impacted) projectile, for the impact cue. */
-export function fxProjectileElement(guid) {
+export function fxProjectileElement(guid, nowMs) {
   try {
     const inst = globalThis.window?.liveScene3d?.entityManager?.entityMap?.get(guid >>> 0);
     if (inst && inst._isProjectile) return fxEntityElement(inst);
   } catch (_) { /* unknown */ }
+  if (FX_IMPACT_ELEMENT_ON) {
+    const e = _seenElement.get(guid >>> 0);
+    const now = Number.isFinite(nowMs) ? nowMs : (typeof performance !== "undefined" ? performance.now() : Date.now());
+    if (e && now - e.ms <= FX_ELEMENT_KEEP_MS) return e.element;
+  }
   return null;
 }
 
@@ -672,6 +701,7 @@ export function fxRibbonStats() {
 export function _resetFxRibbonsForTest() {
   for (const [k, r] of _ribbons) _retire(k, r);
   for (const k of Object.keys(_stats)) _stats[k] = 0;
+  _seenElement.clear();
   if (_mesh) { _mesh.visible = false; _geom.setDrawRange(0, 0); }
 }
 

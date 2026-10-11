@@ -33,7 +33,8 @@ import { MaterialCache, VFX_GLOBALS } from "./scene3d/materials.js";
 import {
   weaponFxPlanFor, weaponGeometryOf, weaponFxBegin, weaponFxMaterial, weaponFxCommit,
   weaponFxForget, weaponFxOwnedMaterial, tickWeaponFx, weaponFxStats, weaponFxList,
-  weaponFxForce, _resetWeaponFxForTest,
+  weaponFxForce, _resetWeaponFxForTest, flexLocoScale, FLEX_SWING_FULL_MS, FLEX_SWING_EASE_MS,
+  approachFlexScale, FLEX_SCALE_TAU_S,
 } from "./scene3d/vfx/weapon_fx.js";
 import { fxSwingLook, FX_SWING_STEEL, FX_SWING_MAGIC } from "./scene3d/vfx/fx_ribbons.js";
 import { _resetVfxFlags, swingTrailsMode, weaponFxEnabled, vfxEffectEnabled } from "./scene3d/vfx_flags.js";
@@ -434,6 +435,39 @@ console.log("fx_ribbons — swing trail looks");
   ok("?swingTrails=off: nothing", fxSwingLook({ guid: 2 }) === null);
   delete globalThis.window;
   _resetVfxFlags();
+}
+
+// ===========================================================================
+// `?weaponFlexLoco` (2026-10-11, 1070): the run cycle rang a held spear 4.8 deg on average
+// (6.8 max) against the designed ~0.5 deg sway. Full gain only for the whip after a swing.
+console.log("weapon_fx — pole bend outside a swing (?weaponFlexLoco)");
+{
+  const g = 0.12;
+  ok("a swing keeps full gain through FLEX_SWING_FULL_MS",
+    flexLocoScale(0, g, true) === 1 && flexLocoScale(FLEX_SWING_FULL_MS / 2, g, true) === 1 &&
+    flexLocoScale(FLEX_SWING_FULL_MS, g, true) === 1);
+  ok("then it eases down to the locomotion gain over FLEX_SWING_EASE_MS",
+    near(flexLocoScale(FLEX_SWING_FULL_MS + FLEX_SWING_EASE_MS / 2, g, true), 1 + (g - 1) * 0.5) &&
+    near(flexLocoScale(FLEX_SWING_FULL_MS + FLEX_SWING_EASE_MS, g, true), g) &&
+    near(flexLocoScale(FLEX_SWING_FULL_MS + 10 * FLEX_SWING_EASE_MS, g, true), g));
+  ok("never swung (Infinity) or a bad clock (NaN / negative) ⇒ the locomotion gain",
+    near(flexLocoScale(Infinity, g, true), g) && near(flexLocoScale(NaN, g, true), g) && near(flexLocoScale(-5, g, true), g));
+  ok("?weaponFlexLoco=off ⇒ full gain always", flexLocoScale(Infinity, g, false) === 1 && flexLocoScale(9999, g, false) === 1);
+  const wsrc = fs.readFileSync(new URL("./scene3d/vfx/weapon_fx.js", import.meta.url), "utf8");
+  ok("the tick scales the bend by the time since the wielder's last swing (never-swung ⇒ Infinity), smoothed",
+    wsrc.includes("st.flexScale = approachFlexScale(st.flexScale, flexLocoScale(st.swingMs > 0 ? now - st.swingMs : Infinity), dt);") &&
+    wsrc.includes("_simulateFlex(st, part, dt, camPos, st.flexScale);") &&
+    wsrc.includes("bendVector(_lag, _arr3b, len, params, _flexGain * scale, _rv);"));
+  // a swing started at a run: the scale must not jump 0.12 → 1 in one frame (the run's lag would pop)
+  let sc = approachFlexScale(NaN, g, 1 / 60);
+  const first = near(sc, g);
+  sc = approachFlexScale(sc, 1, 1 / 60);
+  const oneFrame = sc;
+  for (let i = 1; i < 12; i++) sc = approachFlexScale(sc, 1, 1 / 60);   // 0.2 s
+  ok("the applied scale starts at its target, then chases it: no one-frame pop, ~95 % within 0.2 s",
+    first && oneFrame > g && oneFrame < 0.4 && sc > 0.95 && sc < 1 &&
+    approachFlexScale(0.5, 1, 0) === 0.5 && FLEX_SCALE_TAU_S > 0,
+    `oneFrame=${oneFrame.toFixed(3)} at0.2s=${sc.toFixed(3)}`);
 }
 
 console.log(`\nweapon fx: ${pass} passed, ${fail} failed`);

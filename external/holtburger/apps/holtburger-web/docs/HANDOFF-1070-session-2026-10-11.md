@@ -60,13 +60,13 @@ in motion is ~16 fps even with every new FX off: the cost there is clouds / gras
 
 ## 4. Open findings (not fixed)
 
-1. **Spear bend while running** is ~10× the design: mean 4.8°, max 6.8° at 17.5 m/s (the run animation's arm swing
+1. **Spear bend while running** (fix in §6, `?weaponFlexLoco`; re-measure on the 1070) is ~10× the design: mean 4.8°, max 6.8° at 17.5 m/s (the run animation's arm swing
    drives the spring; design said ~0.5° at a run). Tune `__weaponFx.flexGain` or high-pass the hand motion.
 2. **Flaming weapons leave a metres-long trail of big fire puffs** when running fast (same with `__particleFx(false)`;
    the emitter is world-space). Retail-like physics, but loud at god-mode speeds; consider a held-weapon emission cap.
-3. **Every war bolt leaves the same orange shell + tan ring** (ACE only sends Explode; known). The ring reads as sand,
+3. **Every war bolt leaves the same orange shell + tan ring** (element marks fixed in §6, `?fxImpactElement`) (ACE only sends Explode; known). The ring reads as sand,
    not char, in daylight.
-4. **The vendor turn snaps** (one-frame 102° jump at ~0.7 s, then a 6° correction) instead of turning at the table rate.
+4. **The vendor turn snaps** (fix in §6, `?remoteSpineHeading`; verify with a per-frame trace) (one-frame 102° jump at ~0.7 s, then a 6° correction) instead of turning at the table rate.
 5. **A teleport tunnel stuck in state 4 "cells-ready" for 4+ min** after a 3 m `@teleloc` in a `?remoteSpine=off`
    session: `__portalSpace.clock` stayed 0 (the tick never advanced), uses were dropped. Not reproduced with defaults.
 6. Two `@create`d shreths at `0xA9B40029 [127 7 95.06]` never reached the client (no ObjectCreate in the wasm).
@@ -79,10 +79,48 @@ in motion is ~16 fps even with every new FX off: the cost there is clouds / gras
 
 ## 5. Not reached this session
 
-P2 at ultra (portal set piece, ambient fields, dungeon / volcano / snow / forest), the cold-load SSD measurement
-(`academy.mjs --workerspy` ×3, `townnet.mjs`, `wizwarm.mjs` — log in "Eyetest Halvar" first), the OpenAC items that
+P2 at ultra (portal set piece, ambient fields, dungeon / volcano / snow / forest), the OpenAC items that
 block code (streaming-teleport-1, camera-1/6, held-1, daytime-2, charopt-5, createobj-2/3/4), the 10-06 flip checks
 (`partDegrade`, `cellStaticMerge`, `particleSharedAlpha`, `lightLoops` 3-rep), and the second ultra-all bench rep.
 
 Presence: the watcher reported PRESENT at 18:18 and 18:37 while the owner says nobody was there (idle resets with no
 browser of theirs). This session ran its watcher log-only after the owner's word.
+
+## 6. After the commit (`9665230d`): cold-load on the SSD copy, three fixes
+
+The session kept going after the push. It measured the cold loads on the 1070, then stopped before applying the three
+fixes it had prepared. A follow-up session on the laptop applied, tested and committed them. **None of the three has
+been checked on the 1070 yet.**
+
+**Cold load against the SSD-served data** (the 10-09 USB-disk runs, §4.31 of `HANDOFF-charselect-coldload-2026-10-09.md`,
+are the comparison). The owner was using the PC during these runs, so the timings are noisy (n = 3). Run JSONs and logs:
+`/mnt/wbterminal1/tmp/claude-scratch/1070-1011/runs/coldload/`.
+
+| Academy, after in-world (`academy.mjs --workerspy`) | ssd1 | ssd2 | ssd3 | 10-09 USB (f4s / f5s / f6s) |
+|---|---|---|---|---|
+| walls (568 cells attached) | 9.9 s | 7.5 s | 22.1 s | 8.6 / 7.9 / 8.2 s |
+| furnished (559 statics attached) | 27.4 s | 15.2 s | 26.7 s | 22.5 / 23.6 / 21.8 s |
+| statics after the walls | +17.5 s | +7.7 s | +4.6 s | ~+14 s |
+| textures done (run clock) | 32.4 s | 26.7 s | 33.8 s | — |
+
+Only ssd2 shows the gain the SSD copy was meant to bring (furnished 15.2 s). ssd1 is slower than on the USB disk, and
+ssd3 is an outlier in its walls (portal tunnel ready at 29.1 s). Treat the SSD effect as **not yet shown**; re-run when
+the 1070 is idle.
+
+- **Town Network** (`townnet.mjs tnssd1`, from Holtburg): walls 4.6 s after the teleport, first cells 7.4 s, nothing
+  pending 8.6 s (10-09 final build: walls 4.0 / 5.0 s). HD textures 67 MB in the walls window, 197 MB over the run;
+  the slowest in-view texture took 9.1 s.
+- **Warm-up wizard** (`wizwarm.mjs wiz60ssd`, Create Character open 60 s): Enter → in-world and cells in 1.9 s (10-09: 2.1 s).
+
+**The three fixes** (each switches off with `=off`; rows in `docs/url-flags.md`):
+
+| Finding | Cause | Fix | Test |
+|---|---|---|---|
+| §4 item 4, vendor turn snaps | Under the spine (`?remoteSpine`) every `pollRemotePoses` row is the Rust body, rotation included, and Phase B stopped the JS heading ease for spine remotes. `drainRemotePoses` still dropped the rotation on non-sticky rows, so nothing drew a TurnTo | `?remoteSpineHeading`: spine rows pass their quaternion to `applyManagedPose`, which now ignores a zero-length one instead of collapsing the rig | `tests/remote_spine_heading.test.mjs` (in the gate) |
+| §4 item 1, spear over-bend at a run | The run cycle's arm swing drives the pole springs near their 2–3 Hz natural frequency | `?weaponFlexLoco`: full gain for 1.6 s after a swing, then a 0.5 s ramp down to `?weaponFlexLocoGain` (0.12), followed with a 60 ms time constant so a swing started at a run does not pop. Expected run sway is ~0.6° | `test_weapon_fx.mjs` (+6) |
+| §4 item 3, one mark for every element | ACE plays the impact Explode on the projectile's guid, after its rig is gone, so `fxProjectileElement` found nothing and the `element` decal kind never fired | `?fxImpactElement`: the bolt sampler remembers each projectile's element for 5 s after its last frame in flight; `_tier2CueOpts` asks for it whether or not the rig is still a live projectile | `test_particle_fx_tier2.mjs` (+3) |
+
+**1070 checks still owed for these:** a per-frame trace of the vendor turn (`@telepoi` a town vendor, Use, watch the
+heading); spear bend at a run (`__weaponFx` bend readout, expect ≈0.5–0.8° mean); a frost, acid and lightning bolt at a
+target on open ground (frost and acid should leave their own marks; lightning should scorch in its own colour).
+

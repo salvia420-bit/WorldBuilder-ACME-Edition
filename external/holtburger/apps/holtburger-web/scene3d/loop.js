@@ -139,6 +139,8 @@ setCullers({
 });
 import { weatherForState } from "./daygroup_weather.js";
 import { updateFromDayGroup as wxUpdateFromDayGroup } from "./weather_state.js";
+// "Disable most weather effects" / "Disable distance fog" (CharacterOptions 0x04 / 0x30).
+import { readVisualOptions, dropWeatherSkyObjects, disableFogBand } from "./visual_options.js";
 
 // VFX material-oscillator registry (Visual-Behavior Suite, Phase 1 — spec §7).
 // The SINGLE per-frame VFX tick: drives VFX_GLOBALS.uTime (the master clock) plus
@@ -679,6 +681,23 @@ function sweepGhostRigs(scene3d, sessionHandle) {
   }
 }
 
+// 2026-10-11 (1070) — `?remoteSpineHeading` (DEFAULT ON, `=off` escape). Under the per-object spine
+// (86c4d11e, `?remoteSpine`, default on) every row is the body the Rust MovementManager moved by its
+// own interpreted motion, rotation included, and Phase B skipped the JS K=14 heading ease for spine
+// remotes ("a remote TurnTo is a turn, not a heading snap"). With the row's rotation dropped below,
+// nothing drew that turn: the heading changed only at the server's final UpdatePosition, so a
+// vendor turned 102 degrees in one frame. Apply the row's rotation while the spine is on.
+const REMOTE_SPINE_HEADING_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return false;
+    const q = new URLSearchParams(window.location.search);
+    return q.get("remoteSpine")?.toLowerCase() !== "off"
+      && q.get("remoteSpineHeading")?.toLowerCase() !== "off";
+  } catch (_) {
+    return false;
+  }
+})();
+
 function drainRemotePoses(scene3d, sessionHandle) {
   if (!REMOTE_INTERP_ON) return;
   // typeof-guard (F18-2 soft-degrade): a stale pkg without the export keeps
@@ -731,6 +750,12 @@ function drainRemotePoses(scene3d, sessionHandle) {
         // × the remoteInterp composite × USE_STICKY_MANAGER × fresh
         // pkg), so the glue path self-restores in every degrade case.
         if (typeof em.setStickyTarget === "function") em.setStickyTarget(g, 0);
+        em.applyManagedPose(
+          g, wx, wy, wz,
+          poses[base + 3], poses[base + 4], poses[base + 5], poses[base + 6]
+        );
+      } else if (REMOTE_SPINE_HEADING_ON) {
+        // The spine's body rotation (see REMOTE_SPINE_HEADING_ON).
         em.applyManagedPose(
           g, wx, wy, wz,
           poses[base + 3], poses[base + 4], poses[base + 5], poses[base + 6]
@@ -1476,11 +1501,18 @@ function tickWeatherState(scene3d, sessionHandle) {
       skyObjects = null;
     }
   }
+  // "Disable most weather effects" (2026-10-11): retail never creates a
+  // weather SkyObject (properties 0x04) with the option on, so nothing
+  // below sees one — and no storm, since an empty snapshot would fall back
+  // to the per-DayGroup table (scene3d/visual_options.js).
+  const weatherOff = readVisualOptions(handle, performance.now()).weatherOff;
+  if (weatherOff) skyObjects = dropWeatherSkyObjects(skyObjects);
 
   // W4 — profile (T/Td/P heuristic) + is_storm derived from real weather
   // SkyObjects when the snapshot array is available.
   try {
-    const profile = weatherForState(state, state.dayGroupIndex, skyObjects);
+    let profile = weatherForState(state, state.dayGroupIndex, skyObjects);
+    if (weatherOff && profile?.is_storm) profile = { ...profile, is_storm: false };
     wxUpdateFromDayGroup(profile);
 
     // W5 indoor flag — reuse the skyDome's freshly-read indoor state when
@@ -1917,6 +1949,16 @@ function applyFogRadiance(fog, sky, authoredHex, tint) {
 function tickDistanceFogColor(scene3d) {
   const scene = scene3d?.scene;
   if (!scene) return;
+  // "Disable distance fog" (2026-10-11): retail skips the world fog AND the
+  // AdminEnvirons override inside it (`LScape::UseTime`, acclient.c:307297).
+  // The band is pushed out of reach rather than `scene.fog` removed (a
+  // program-key change). The per-frame band below rewrites it once the
+  // option goes off again.
+  if (readVisualOptions(null, performance.now()).fogOff) {
+    if (scene.fog && scene.fog.__environCreated) scene.fog = null;
+    disableFogBand(scene.fog);
+    return;
+  }
   // AdminEnvirons (0xEA60) fog override — server-pushed RedFog/BlueFog/etc.
   // (acclient.c:396344-416). Set by index.html's kind-60 handler; takes
   // precedence over the region/sky fog until a Clear (0x00) nulls it. `rgb`
