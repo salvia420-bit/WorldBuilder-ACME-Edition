@@ -37,7 +37,9 @@ test("the wasm arm gates on the remote MoveTo pump and uses the gated value twic
   const rs = src("../src/session/messages/position.rs");
   assert.match(
     rs,
-    /let rust_moveto_sticks = remote_sticky_on\s*&& world\s*\.borrow\(\)\s*\.as_ref\(\)\s*\.is_some_and\(\|w\| w\.scene\.remote_moveto_active\(\)\);/,
+    // MoveTo refactor phase B: the per-object spine's movers stick on
+    // arrival too (`remote_moveto_sticks_on_arrival` = D5 pump || spine).
+    /let rust_moveto_sticks = remote_sticky_on\s*&& world\s*\.borrow\(\)\s*\.as_ref\(\)\s*\.is_some_and\(\|w\| w\.scene\.remote_moveto_sticks_on_arrival\(\)\);/,
   );
   assert.match(
     rs,
@@ -62,4 +64,19 @@ test("the remote pump still sticks on a sticky-bit arrival", () => {
     sys.slice(i, i + 9000),
     /if let Some\(\(target, radius, _height\)\) = out\.stick_to \{[\s\S]*?\.stick_remote_entity_to\(guid, target, self_radius, target_radius\);/,
   );
+});
+
+// MoveTo refactor phase B (2026-10-10): under the per-object spine the
+// remote's own MoveToManager runs in the world scene and its sticky-bit
+// arrival sticks there (`step_remote_movers`).
+test("the spine's movers stick on a sticky-bit arrival", () => {
+  const scene = src("../../../crates/holtburger-world/src/spatial/scene.rs");
+  const i = scene.indexOf("fn step_remote_movers(");
+  assert.ok(i > 0, "spine mover step present");
+  assert.match(
+    scene.slice(i, i + 6000),
+    /if let Some\(\(target, target_radius, _height\)\) = out\.and_then\(\|out\| out\.stick_to\) \{\s*self\.stick_remote_entity_to\(guid, target, holder_radius, target_radius\);/,
+  );
+  const sticks = scene.indexOf("pub fn remote_moveto_sticks_on_arrival(");
+  assert.match(scene.slice(sticks, sticks + 200), /self\.remote_moveto_active\(\) \|\| self\.remote_spine_active\(\)/);
 });

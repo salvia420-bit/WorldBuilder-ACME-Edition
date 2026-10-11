@@ -49,7 +49,7 @@ use holtburger_protocol::messages::{MovementEventData, MovementType, MovementTyp
 /// stage1, UpdateMotion never reaches `holtburger_world::handlers` and
 /// D3 is inert by construction. Flip + wasm rebuild + 1070 eye-test
 /// before defaulting on (see url-flags.md §6).
-pub(crate) const USE_UNPACK_MOVEMENT_SEMANTICS: bool = true;
+pub const USE_UNPACK_MOVEMENT_SEMANTICS: bool = true;
 
 /// `WeenieError.ActionCancelled = 0x36` — what `CPhysicsObj::
 /// cancel_moveto` reports into `MoveToManager::CancelMoveTo` (ACE
@@ -59,14 +59,14 @@ const WEENIE_ERROR_ACTION_CANCELLED: u32 = 0x36;
 /// `GeneralMovementFailure = 0x47` (71) — the facade's default arm
 /// (acclient.c:339213; WeenieError.cs:171).
 #[allow(dead_code)] // staged: input-lane callers (the typed enums make it unreachable today)
-pub(crate) const WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE: u32 = 71;
+pub const WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE: u32 = 71;
 
 /// Retail `MovementStruct` — the full 9-type union the facade
 /// dispatches (types 1-5 → motion interpreter, 6-9 → MoveToManager,
 /// acclient.c:339175-339218).
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // staged: input-lane callers arrive with the Stage-3 driver / A14-I2
-pub(crate) enum MovementStruct {
+pub enum MovementStruct {
     /// Types 1-5 (`CMotionInterp::PerformMovement` subset).
     Motion(MotionMovementStruct),
     /// Type 6. `object_radius`/`object_height` are the caller-resolved
@@ -103,7 +103,7 @@ pub(crate) enum MovementStruct {
 /// DIAGNOSTIC ONLY — the server is authoritative; a lattice rejection
 /// here never blocks the wire state.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct UnpackEffects {
+pub struct UnpackEffects {
     /// Always true (preamble, acclient.c:339518).
     pub cancel_moveto: bool,
     /// Always true (preamble, acclient.c:339519).
@@ -127,8 +127,8 @@ pub(crate) struct UnpackEffects {
 /// with Stage 3") — the local player's `MovementSystem`-level instance
 /// (A4-Q1) stays the rig-lane pump; this one is the lattice's
 /// completion spine for the registry entry.
-#[derive(Debug, Default)]
-pub(crate) struct MovementManager {
+#[derive(Debug, Clone, Default)]
+pub struct MovementManager {
     motion_interp: Option<MotionInterp>,
     move_to: Option<MoveToManager>,
     motion_table_manager: MotionTableManager,
@@ -158,7 +158,7 @@ impl MovementManager {
     /// acclient.c:344411). Idempotent — safe to call per-unpack at the
     /// registry's `entry().or_default()` site.
     #[allow(dead_code)] // staged: local-player registry entry (system.rs SelfServerControlledMotion lane)
-    pub(crate) fn set_player_controlled(&mut self, player_controlled: bool) {
+    pub fn set_player_controlled(&mut self, player_controlled: bool) {
         self.player_controlled = player_controlled;
         if let Some(interp) = self.motion_interp.as_mut() {
             interp.player_controlled = player_controlled;
@@ -171,7 +171,7 @@ impl MovementManager {
     /// `MovementManager.cs:33-56`). The `InitializeMotionTables` analog
     /// is the A4-Q1 `initialize_state` Ready seed (DESIGN.md:101-102;
     /// num_anims 0 = no table resolved at this layer).
-    fn minterp(&mut self) -> &mut MotionInterp {
+    pub fn minterp(&mut self) -> &mut MotionInterp {
         if self.motion_interp.is_none() {
             let mut interp = MotionInterp::default();
             interp.player_controlled = self.player_controlled;
@@ -184,7 +184,7 @@ impl MovementManager {
 
     /// Lazy `MakeMoveToManager` (acclient.c:339203-339211; ACE
     /// `MovementManager.cs:111-115`).
-    fn moveto(&mut self) -> &mut MoveToManager {
+    pub fn moveto(&mut self) -> &mut MoveToManager {
         self.move_to.get_or_insert_with(MoveToManager::default)
     }
 
@@ -194,7 +194,7 @@ impl MovementManager {
     /// `enter_default_state`), then hand back its interpreted state.
     /// Retail returns a bare pointer; we return `&mut`. (P13)
     #[allow(dead_code)] // staged: Stage-3 driver / server UpdateMotion inq lane
-    pub(crate) fn inq_interpreted_motion_state(&mut self) -> &mut InterpretedState {
+    pub fn inq_interpreted_motion_state(&mut self) -> &mut InterpretedState {
         &mut self.minterp().interpreted_state
     }
 
@@ -204,7 +204,7 @@ impl MovementManager {
     /// `SendMovementEvent` builds its pack from
     /// `CPhysicsObj::InqRawMotionState(player)`, SC-17/M1.)
     #[allow(dead_code)] // staged: M1 converter feed (Step 4 dark lane)
-    pub(crate) fn inq_raw_motion_state(&mut self) -> &mut RawState {
+    pub fn inq_raw_motion_state(&mut self) -> &mut RawState {
         &mut self.minterp().raw_state
     }
 
@@ -216,7 +216,7 @@ impl MovementManager {
     /// `handle_exit_world`; the entity-lifecycle enter path calls it.
     /// (P13 OQ-9)
     #[allow(dead_code)] // staged: entity enter-world lifecycle fan-out
-    pub(crate) fn handle_enter_world(&mut self) {
+    pub fn handle_enter_world(&mut self) {
         // Intentionally empty (retired spell-selection notice only).
     }
 
@@ -226,7 +226,7 @@ impl MovementManager {
     /// as the documented error constant
     /// ([`WEENIE_ERROR_GENERAL_MOVEMENT_FAILURE`]).
     #[allow(dead_code)] // staged: input-lane callers (Stage-3 driver / A14-I2)
-    pub(crate) fn perform_movement(
+    pub fn perform_movement(
         &mut self,
         mvs: &MovementStruct,
         on_walkable_contact: bool,
@@ -395,7 +395,7 @@ impl MovementManager {
     /// applied through the lattice synchronously (retail inline
     /// `_StopMotion`, acclient.c:345148-345164). No-op (default
     /// output) when no movement is active.
-    pub(crate) fn cancel_moveto_with_effects(
+    pub fn cancel_moveto_with_effects(
         &mut self,
         error: u32,
         on_walkable_contact: bool,
@@ -416,7 +416,7 @@ impl MovementManager {
     /// (retail :345417-345418). The returned output carries the
     /// world-facing edges (steer/snap/stop/stick/completion) for the
     /// `MovementSystem` shim.
-    pub(crate) fn use_time_moveto(
+    pub fn use_time_moveto(
         &mut self,
         view: &MoveToView,
         effects: &mut MotionSideEffects,
@@ -462,31 +462,31 @@ impl MovementManager {
 
     /// S10 A.3 passthrough — retail `is_moving_to`
     /// (acclient.c:344895-344898).
-    pub(crate) fn is_moveto_active(&self) -> bool {
+    pub fn is_moveto_active(&self) -> bool {
         self.move_to.as_ref().is_some_and(|m| m.is_active())
     }
 
     /// R3 moveto-4 passthrough — the motion the active MoveTo node holds
     /// (`MoveToManager::node_motion`; `0` = none / no manager).
-    pub(crate) fn moveto_node_motion(&self) -> u32 {
+    pub fn moveto_node_motion(&self) -> u32 {
         self.move_to.as_ref().map_or(0, |m| m.node_motion())
     }
 
     /// S10 A.4 passthrough — read-clear completion latch.
-    pub(crate) fn take_moveto_completion(&mut self) -> Option<u32> {
+    pub fn take_moveto_completion(&mut self) -> Option<u32> {
         self.move_to.as_mut().and_then(|m| m.take_completion())
     }
 
     /// Shim input: the targeted directive's guid (per-tick target
     /// refresh, the `HandleUpdateTarget` cadence).
-    pub(crate) fn moveto_directive_target(&self) -> Option<Guid> {
+    pub fn moveto_directive_target(&self) -> Option<Guid> {
         self.move_to.as_ref().and_then(|m| m.directive_target())
     }
 
     /// Shim input: the lattice's `motions_pending` for the view
     /// (acclient.c:343728). Also the cmdInterp `player_motions_pending`
     /// seam's queue term (post-flip wave).
-    pub(crate) fn moveto_motions_pending(&self) -> bool {
+    pub fn moveto_motions_pending(&self) -> bool {
         self.motion_interp
             .as_ref()
             .is_some_and(|interp| interp.motions_pending())
@@ -498,7 +498,7 @@ impl MovementManager {
     /// the retail enqueue + completion-clock drain against real ACE
     /// wire data (cast stomp → count rises → drains by the authored
     /// budget).
-    pub(crate) fn pending_motions_len(&self) -> usize {
+    pub fn pending_motions_len(&self) -> usize {
         self.motion_interp
             .as_ref()
             .map_or(0, |interp| interp.pending_motions.len())
@@ -535,7 +535,7 @@ impl MovementManager {
     /// queue is harmless (the acclient.c:329884 head-null guard inside
     /// `MotionTableManager::animation_done`). Returns the OR-ed
     /// unstick-hook requests (see [`Self::drain_completions`] / OQ-3).
-    pub(crate) fn animation_done(&mut self, success: bool) -> bool {
+    pub fn animation_done(&mut self, success: bool) -> bool {
         self.motion_table_manager.animation_done(success);
         self.drain_completions()
     }
@@ -550,7 +550,7 @@ impl MovementManager {
     /// (`motion_table_manager.rs` module doc) needs a tick-driven poll
     /// to stamp and expire deadlines. Returns the OR-ed unstick-hook
     /// requests (dropped for remotes by the caller, spec §7 OQ-3).
-    pub(crate) fn pump_completions(&mut self, now: web_time::Instant) -> bool {
+    pub fn pump_completions(&mut self, now: web_time::Instant) -> bool {
         self.motion_table_manager.use_time(Some(now));
         self.drain_completions()
     }
@@ -561,7 +561,7 @@ impl MovementManager {
     /// `apply_interpreted_movement` re-issue + the action replay) can
     /// enqueue — a cast-gesture stomp now lands a 1-anim node on
     /// `pending_motions` exactly like retail.
-    pub(crate) fn move_to_interpreted_state(
+    pub fn move_to_interpreted_state(
         &mut self,
         state: &InterpretedState,
         server_actions: &[super::raw_state::RawAction],
@@ -595,7 +595,7 @@ impl MovementManager {
     /// signed unit form (`SideStepRight`/`TurnRight` with negative =
     /// left) — the same normal form `interpreted_drive_state` reads
     /// back.
-    pub(crate) fn persist_held_manual_axes(
+    pub fn persist_held_manual_axes(
         &mut self,
         data: &MovementEventData,
         sidestep_speed: Option<f32>,
@@ -622,14 +622,14 @@ impl MovementManager {
 
     /// `MovementManager::EnterDefaultState` (acclient.c:339250-339268).
     #[allow(dead_code)] // staged: facade fan-out consumer is the Stage-3 driver / entity lifecycle
-    pub(crate) fn enter_default_state(&mut self) {
+    pub fn enter_default_state(&mut self) {
         self.minterp().enter_default_state();
     }
 
     /// `MotionDone` → minterp only (acclient.c:339349-339355). Returns
     /// the unstick-hook request.
     #[allow(dead_code)] // staged: A4 per-entity completion pump (Stage-3 follow-on)
-    pub(crate) fn motion_done(&mut self, success: bool) -> bool {
+    pub fn motion_done(&mut self, success: bool) -> bool {
         self.motion_interp
             .as_mut()
             .map(|interp| interp.motion_done(success))
@@ -639,7 +639,7 @@ impl MovementManager {
     /// `HitGround` → BOTH children (acclient.c:339369-339382; ACE
     /// `MovementManager.cs:66-73`).
     #[allow(dead_code)] // staged: Stage-3 driver / tick-spine fan-out
-    pub(crate) fn hit_ground(
+    pub fn hit_ground(
         &mut self,
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
@@ -658,7 +658,7 @@ impl MovementManager {
     /// `MovementManager.cs:103-109` confirms minterp-only with the
     /// moveto half retired).
     #[allow(dead_code)] // staged: Stage-3 driver / tick-spine fan-out
-    pub(crate) fn leave_ground(&mut self) {
+    pub fn leave_ground(&mut self) {
         if let Some(interp) = self.motion_interp.as_mut() {
             interp.leave_ground();
         }
@@ -668,7 +668,7 @@ impl MovementManager {
     /// garbled-thunk note as `leave_ground` — ACE
     /// `MovementManager.cs:158-164`).
     #[allow(dead_code)] // staged: A3-D2 exhaustion lane per-entity follow-on
-    pub(crate) fn report_exhaustion(
+    pub fn report_exhaustion(
         &mut self,
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
@@ -681,7 +681,7 @@ impl MovementManager {
     /// `HandleUpdateTarget` → MoveToManager only
     /// (acclient.c:339631-339639).
     #[allow(dead_code)] // staged: A2-P3 target-update plumbing (W5)
-    pub(crate) fn handle_update_target(&mut self, target: Guid, origin: Origin) {
+    pub fn handle_update_target(&mut self, target: Guid, origin: Origin) {
         if let Some(moveto) = self.move_to.as_mut() {
             moveto.handle_update_target(target, origin);
         }
@@ -704,7 +704,7 @@ impl MovementManager {
     /// trigger DROPS it: retail's `teleport_hook` calls
     /// `PositionManager::UnStick` itself (acclient.c:322250-322252),
     /// so a teleport unsticks by construction.
-    pub(crate) fn handle_exit_world(&mut self) -> bool {
+    pub fn handle_exit_world(&mut self) -> bool {
         self.motion_table_manager.handle_exit_world();
         let mut unstick = self.drain_completions();
         unstick |= self
@@ -718,14 +718,14 @@ impl MovementManager {
     /// Recorded sticky target (A2-P3 owner input — F3-4's JS pin is NOT
     /// moved by D3).
     #[allow(dead_code)] // staged: A2-P3 sticky owner (W5)
-    pub(crate) fn sticky_target(&self) -> Option<Guid> {
+    pub fn sticky_target(&self) -> Option<Guid> {
         self.sticky_target
     }
 
     /// The consumed case-0 `standing_longjump` bit (jump-gate input,
     /// D3-4 follow-on wiring).
     #[allow(dead_code)] // staged: jump-gate follow-on wiring (D3-4)
-    pub(crate) fn standing_longjump(&self) -> bool {
+    pub fn standing_longjump(&self) -> bool {
         self.motion_interp
             .as_ref()
             .map(|interp| interp.standing_longjump)
@@ -736,12 +736,12 @@ impl MovementManager {
     /// dispatch reads `interpreted_state` from here while the autonomy
     /// latch is low (retail `apply_interpreted_movement`,
     /// acclient.c:344147). Also a test/diagnostic view.
-    pub(crate) fn motion_interp_ref(&self) -> Option<&MotionInterp> {
+    pub fn motion_interp_ref(&self) -> Option<&MotionInterp> {
         self.motion_interp.as_ref()
     }
 
     #[cfg(test)]
-    pub(crate) fn move_to_ref(&self) -> Option<&MoveToManager> {
+    pub fn move_to_ref(&self) -> Option<&MoveToManager> {
         self.move_to.as_ref()
     }
 
@@ -776,7 +776,7 @@ impl MovementManager {
     /// substate/action classes but no `0x80` style arm (spec OPEN
     /// QUESTION 3, settled here in code); an unknown style id skips the
     /// style step fail-soft.
-    pub(crate) fn apply_unpacked_movement(
+    pub fn apply_unpacked_movement(
         &mut self,
         data: &MovementEventData,
         target_exists: bool,
@@ -911,11 +911,11 @@ impl MovementManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::movement::interp_state::{
+    use crate::motion::interp_state::{
         InterpretedForwardCommand, MOTION_NONCOMBAT_STYLE,
     };
-    use crate::client::movement::motion_interp::{MOTION_READY, PendingMotion};
-    use crate::client::movement::move_to::MoveToDirective;
+    use crate::motion::motion_interp::{MOTION_READY, PendingMotion};
+    use crate::motion::move_to::MoveToDirective;
     use holtburger_protocol::messages::movement::messages::motion::{
         MoveToObject, MoveToParameters, MoveToPosition, MovementInvalid, TurnToHeading,
         TurnToObject, TurnToParameters,
@@ -1536,7 +1536,7 @@ mod tests {
     /// AnimationDone would have fired.
     #[test]
     fn cast_release_substate_stomp_pends_until_shim_deadline() {
-        use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+        use crate::motion::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
         use std::time::Duration;
         use web_time::Instant;
 
@@ -1610,7 +1610,7 @@ mod tests {
     /// port leaked every wire action into the FIFO forever).
     #[test]
     fn fasttick_windup_action_list_enqueues_serial_completion_nodes() {
-        use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+        use crate::motion::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
         use std::time::Duration;
         use web_time::Instant;
 
@@ -1689,334 +1689,4 @@ mod tests {
         );
     }
 
-    /// OpenAC comparison 2026-10-04 (remote motion D5): the remote MoveTo
-    /// pump (`system::drive_remote_movetos`) steps a REMOTE manager's
-    /// directive against its scene body — retail runs
-    /// `MoveToManager::UseTime` (acclient.c:346018) for every object — and
-    /// hands the steer to the body: `IsMovingTo()` for keep-heading and a
-    /// heading toward the destination (BeginTurnToHeading :345456 first,
-    /// then the walk). Before this nothing stepped remote directives (the
-    /// registry only pumped completions). Lifecycle cases ported from
-    /// OpenAC `MoveToManagerLifecycleTests` (arm → steer → idle clears).
-    #[test]
-    fn remote_moveto_pump_steers_the_remote_body() {
-        use holtburger_common::position::WorldPosition;
-        use holtburger_common::{Quaternion, Vector3};
-        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx, SpatialBodyId};
-
-        let guid = Guid(0x8000_0042);
-        let mut world = holtburger_world::WorldState::synthetic();
-        world.scene.set_remote_interp_enabled(true);
-        let start = WorldPosition {
-            landblock_id: Guid(0x0102_0011),
-            coords: Vector3::new(50.0, 50.0, 0.0),
-            rotation: Quaternion::from_heading(0.0),
-        };
-        world.scene.reconcile_authoritative_body_with_remote(
-            SpatialBodyId::Entity(guid),
-            start,
-            Vector3::zero(),
-            Vector3::zero(),
-            AuthoritativeBodySync::Snapshot,
-            web_time::Instant::now(),
-            Some(RemoteCorrectionCtx {
-                contact: Some(true),
-                player_pose: Some(start),
-            }),
-        );
-
-        let mut manager = MovementManager::default();
-        let _ = manager.minterp();
-        // 20 m due east (AC heading 180°) in the same landblock.
-        manager.moveto().move_to_position(
-            Origin {
-                cell_id: Guid(0x0102_0011),
-                position: Vector3::new(70.0, 50.0, 0.0),
-            },
-            MovementParameters::default(),
-        );
-        assert!(manager.is_moveto_active());
-        let mut managers = std::collections::HashMap::new();
-        managers.insert(guid, manager);
-
-        crate::client::movement::system::drive_remote_movetos(
-            &mut managers,
-            &mut world,
-            web_time::Instant::now(),
-        );
-        let body = world.scene.body(SpatialBodyId::Entity(guid)).unwrap();
-        assert!(body.remote_moving_to, "IsMovingTo() feeds keep_heading");
-        let drive = body.remote_moveto.expect("the directive steers the body");
-        let east = 180.0_f32.to_radians();
-        assert!((drive.heading_rad - east).abs() < 0.05, "turns toward the destination: {}", drive.heading_rad);
-
-        // The scene realizes the steer: the body turns toward east.
-        let before = body.pose.rotation.to_heading();
-        world.scene.step_remote_position_managers(0.1);
-        let after = world
-            .scene
-            .body(SpatialBodyId::Entity(guid))
-            .unwrap()
-            .pose
-            .rotation
-            .to_heading();
-        assert!((after - east).abs() < (before - east).abs(), "turned toward east: {before} -> {after}");
-
-        // Escape hatch: the pump does nothing with the switch off.
-        world.scene.set_remote_moveto(guid, false, None, None);
-        world.scene.set_remote_moveto_enabled(false);
-        crate::client::movement::system::drive_remote_movetos(
-            &mut managers,
-            &mut world,
-            web_time::Instant::now(),
-        );
-        assert!(world.scene.body(SpatialBodyId::Entity(guid)).unwrap().remote_moveto.is_none());
-    }
-
-    /// R3 moveto-1/2 test rig: a synthetic world with the remote driver on
-    /// and a remote body seeded at `start`.
-    fn remote_moveto_world(
-        guid: Guid,
-        start: holtburger_common::position::WorldPosition,
-    ) -> holtburger_world::WorldState {
-        use holtburger_common::Vector3;
-        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx, SpatialBodyId};
-        let mut world = holtburger_world::WorldState::synthetic();
-        world.scene.set_remote_interp_enabled(true);
-        world.scene.reconcile_authoritative_body_with_remote(
-            SpatialBodyId::Entity(guid),
-            start,
-            Vector3::zero(),
-            Vector3::zero(),
-            AuthoritativeBodySync::Snapshot,
-            web_time::Instant::now(),
-            Some(RemoteCorrectionCtx {
-                contact: Some(true),
-                player_pose: Some(start),
-            }),
-        );
-        world
-    }
-
-    /// R3 moveto-2 (2026-10-08): the remote pump + scene complete a
-    /// TurnToHeading node in BOTH directions. The scene turns the motion
-    /// past the node; the pump sees the strict `heading_greater` overshoot
-    /// (HandleTurnToHeading acclient.c:345712), snaps the heading to the
-    /// node (`set_heading`) and begins the walk in the same tick. Before,
-    /// the scene clamped exactly onto the node and the f32 heading round
-    /// trip could leave it a hair short forever — no walk, frozen facing.
-    #[test]
-    fn remote_turn_node_completes_then_walks() {
-        use holtburger_common::position::WorldPosition;
-        use holtburger_common::{Quaternion, Vector3};
-        use holtburger_world::spatial::SpatialBodyId;
-
-        // Facing north (AC 90°): a destination due east is a TurnRight node
-        // (180°), due west a TurnLeft node (0°).
-        for (dest_x, node_deg) in [(70.0f32, 180.0f32), (30.0, 0.0)] {
-            let guid = Guid(0x8000_0042);
-            let start = WorldPosition {
-                landblock_id: Guid(0x0102_0011),
-                coords: Vector3::new(50.0, 50.0, 0.0),
-                rotation: Quaternion::from_heading(90f32.to_radians()),
-            };
-            let mut world = remote_moveto_world(guid, start);
-            let mut manager = MovementManager::default();
-            let _ = manager.minterp();
-            manager.moveto().move_to_position(
-                Origin {
-                    cell_id: Guid(0x0102_0011),
-                    position: Vector3::new(dest_x, 50.0, 0.0),
-                },
-                MovementParameters::default(),
-            );
-            let mut managers = std::collections::HashMap::new();
-            managers.insert(guid, manager);
-
-            let t0 = web_time::Instant::now();
-            let mut walked = false;
-            let mut saw_turn = false;
-            for i in 0..90 {
-                let now = t0 + std::time::Duration::from_secs_f32(i as f32 / 30.0);
-                crate::client::movement::system::drive_remote_movetos(&mut managers, &mut world, now);
-                let body = world.scene.body(SpatialBodyId::Entity(guid)).unwrap();
-                let drive = body.remote_moveto.expect("the directive steers the body");
-                if drive.forward.is_some() {
-                    let heading = body.pose.rotation.to_heading().to_degrees();
-                    let mut err = (heading - node_deg).rem_euclid(360.0);
-                    if err > 180.0 {
-                        err -= 360.0;
-                    }
-                    assert!(err.abs() < 0.01, "snapped onto the node: {heading}° vs {node_deg}°");
-                    walked = true;
-                    break;
-                }
-                let expected_sign = if node_deg == 180.0 { 1.0 } else { -1.0 };
-                assert_eq!(drive.turn, Some(expected_sign), "the node's turn command rides the drive");
-                saw_turn = true;
-                world.scene.step_remote_position_managers(1.0 / 30.0);
-            }
-            assert!(saw_turn, "dest {dest_x}: a turn node ran first");
-            assert!(walked, "dest {dest_x}: the turn node completed and the walk began");
-        }
-    }
-
-    /// R3 moveto-4 (2026-10-08 follow-ups): the remote pump records the
-    /// NODE motion as phase edges for the remote rig's animation (retail
-    /// `_DoMotion` acclient.c:344753 plays the node on the mover's interp):
-    /// the walk/run node's motion once when it begins, nothing while it
-    /// holds, and `0` (→ Ready) on arrival (`BeginNextNode`,
-    /// :345521-345545).
-    #[test]
-    fn remote_moveto_phase_edges_follow_the_node() {
-        use holtburger_common::position::WorldPosition;
-        use holtburger_common::{Quaternion, Vector3};
-        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx};
-
-        let guid = Guid(0x8000_0042);
-        let target = Guid(0x8000_0077);
-        let at = |x: f32| WorldPosition {
-            landblock_id: Guid(0x0102_0011),
-            coords: Vector3::new(x, 50.0, 0.0),
-            rotation: Quaternion::from_heading(std::f32::consts::PI), // east
-        };
-        let mut world = remote_moveto_world(guid, at(50.0));
-        world.entities.insert(holtburger_world::entity::Entity::new(
-            target,
-            "Target".to_string(),
-            at(60.0),
-        ));
-        let mut manager = MovementManager::default();
-        let _ = manager.minterp();
-        manager.moveto().move_to_object(
-            target,
-            Origin::default(),
-            0.0,
-            0.0,
-            MovementParameters::default(),
-        );
-        let mut managers = std::collections::HashMap::new();
-        managers.insert(guid, manager);
-
-        let t0 = web_time::Instant::now();
-        crate::client::movement::system::drive_remote_movetos(&mut managers, &mut world, t0);
-        let edges = world.scene.take_remote_moveto_phase_changes();
-        assert_eq!(edges.len(), 1, "the walk node begins at once: {edges:?}");
-        assert_eq!(edges[0].0, guid);
-        assert!(
-            edges[0].1 == crate::client::movement::motion_interp::MOTION_WALK_FORWARD
-                || edges[0].1 == crate::client::movement::motion_interp::MOTION_RUN_FORWARD,
-            "a walk/run node: 0x{:08X}",
-            edges[0].1
-        );
-        assert_eq!(world.scene.remote_moveto_motion(guid), edges[0].1);
-
-        crate::client::movement::system::drive_remote_movetos(
-            &mut managers,
-            &mut world,
-            t0 + std::time::Duration::from_millis(50),
-        );
-        assert!(
-            world.scene.take_remote_moveto_phase_changes().is_empty(),
-            "an unchanged node records nothing"
-        );
-
-        world.scene.reconcile_authoritative_body_with_remote(
-            holtburger_world::spatial::SpatialBodyId::Entity(guid),
-            at(59.7),
-            Vector3::zero(),
-            Vector3::zero(),
-            AuthoritativeBodySync::Reset,
-            web_time::Instant::now(),
-            Some(RemoteCorrectionCtx {
-                contact: Some(true),
-                player_pose: Some(at(59.7)),
-            }),
-        );
-        crate::client::movement::system::drive_remote_movetos(
-            &mut managers,
-            &mut world,
-            t0 + std::time::Duration::from_millis(100),
-        );
-        assert!(!managers[&guid].is_moveto_active(), "arrived");
-        assert_eq!(
-            world.scene.take_remote_moveto_phase_changes(),
-            vec![(guid, 0)],
-            "arrival → no node motion (Ready)"
-        );
-    }
-
-    /// R3 moveto-1 (2026-10-08): retail sticks a MoveToObject's mover only
-    /// on ARRIVAL (`BeginNextNode`'s sticky-bit `PositionManager::StickTo`,
-    /// acclient.c:345521-345566) — `unpack_movement` case 6 only arms the
-    /// MoveTo (:339492). The remote pump installs the sticky lane exactly
-    /// then: nothing while the chase is out of range, the target once it
-    /// arrives. (The wasm arm no longer sticks at arm time — pinned by
-    /// `holtburger_world::handlers::movement::remote_motion_sticky_target`.)
-    #[test]
-    fn remote_sticky_moveto_sticks_only_on_arrival() {
-        use holtburger_common::position::WorldPosition;
-        use holtburger_common::{Quaternion, Vector3};
-        use holtburger_world::spatial::{AuthoritativeBodySync, RemoteCorrectionCtx, SpatialBodyId};
-
-        let guid = Guid(0x8000_0042);
-        let target = Guid(0x8000_0077);
-        let at = |x: f32| WorldPosition {
-            landblock_id: Guid(0x0102_0011),
-            coords: Vector3::new(x, 50.0, 0.0),
-            rotation: Quaternion::from_heading(std::f32::consts::PI), // east
-        };
-        let mut world = remote_moveto_world(guid, at(50.0));
-        world.scene.set_remote_sticky_enabled(true);
-        world.entities.insert(holtburger_world::entity::Entity::new(
-            target,
-            "Target".to_string(),
-            at(60.0),
-        ));
-        let mut params = MovementParameters::default();
-        params.bitfield |= 0x80; // Sticky — ACE sets it on every chase
-        let mut manager = MovementManager::default();
-        let _ = manager.minterp();
-        manager
-            .moveto()
-            .move_to_object(target, Origin::default(), 0.0, 0.0, params);
-        let mut managers = std::collections::HashMap::new();
-        managers.insert(guid, manager);
-
-        let t0 = web_time::Instant::now();
-        crate::client::movement::system::drive_remote_movetos(&mut managers, &mut world, t0);
-        let drive = world
-            .scene
-            .body(SpatialBodyId::Entity(guid))
-            .unwrap()
-            .remote_moveto
-            .expect("chasing");
-        assert!(drive.forward.is_some(), "facing the target: the walk begins at once");
-        assert_eq!(world.scene.remote_sticky_target(guid), None, "no stick while chasing");
-
-        // The mover reaches the target (a hard set 0.3 m short) → arrival.
-        world.scene.reconcile_authoritative_body_with_remote(
-            SpatialBodyId::Entity(guid),
-            at(59.7),
-            Vector3::zero(),
-            Vector3::zero(),
-            AuthoritativeBodySync::Reset,
-            web_time::Instant::now(),
-            Some(RemoteCorrectionCtx {
-                contact: Some(true),
-                player_pose: Some(at(59.7)),
-            }),
-        );
-        crate::client::movement::system::drive_remote_movetos(
-            &mut managers,
-            &mut world,
-            t0 + std::time::Duration::from_millis(100),
-        );
-        assert!(!managers[&guid].is_moveto_active(), "arrived");
-        assert_eq!(
-            world.scene.remote_sticky_target(guid),
-            Some(target),
-            "the sticky-bit arrival sticks the mover to its target"
-        );
-    }
 }

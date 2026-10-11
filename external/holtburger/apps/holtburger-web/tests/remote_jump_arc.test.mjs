@@ -55,7 +55,10 @@ test("the scene flies the arc in step_remote_position_managers (one body)", () =
   const scene = src("../../../crates/holtburger-world/src/spatial/scene.rs");
   assert.match(scene, /const REMOTE_ARC_GRAVITY: f32 = -9\.8;/);
   assert.match(scene, /const REMOTE_ARC_MAX_VELOCITY: f32 = 50\.0;/);
-  const step = scene.slice(scene.indexOf("pub fn step_remote_position_managers("));
+  // MoveTo refactor phase B (2026-10-10): `step_remote_position_managers`
+  // delegates to `step_remote_inner`, the one body the spine shares.
+  assert.match(scene, /pub fn step_remote_position_managers\(&mut self, quantum: f32\) \{\s*self\.step_remote_inner\(quantum, None\);/);
+  const step = scene.slice(scene.indexOf("fn step_remote_inner("));
   assert.match(step.slice(0, 16000), /step_remote_arc\(self, &arc, body\.pose, body\.remote_velocity, quantum\)/);
   assert.match(step.slice(0, 16000), /if body\.remote_arc\.is_some\(\) \|\| body\.pose\.is_indoors\(\)/, "no root motion while airborne");
   // Wave 3: retail landing bounce + friction slide constants.

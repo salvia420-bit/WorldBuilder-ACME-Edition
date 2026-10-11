@@ -279,59 +279,69 @@ impl EntityMotionSnapshot {
     }
 
     pub fn from_object_description(data: &ObjectDescriptionData) -> Option<Self> {
-        let movement_data = data.movement_data.as_deref()?;
-        let mut offset = 0;
-        let movement_type_raw = u8::unpack(movement_data, &mut offset)?;
-        let movement_type = MovementType::from_repr(movement_type_raw)?;
-        let motion_flags = u8::unpack(movement_data, &mut offset)?;
-        let current_style = u16::unpack(movement_data, &mut offset)?;
-
-        let payload = match movement_type {
-            MovementType::MoveToObject => {
-                MovementTypeData::MoveToObject(MoveToObject::unpack(movement_data, &mut offset)?)
-            }
-            MovementType::MoveToPosition => MovementTypeData::MoveToPosition(
-                MoveToPosition::unpack(movement_data, &mut offset)?,
-            ),
-            MovementType::TurnToObject => {
-                MovementTypeData::TurnToObject(TurnToObject::unpack(movement_data, &mut offset)?)
-            }
-            MovementType::TurnToHeading => {
-                MovementTypeData::TurnToHeading(TurnToHeading::unpack(movement_data, &mut offset)?)
-            }
-            // Only MovementType::Invalid (0) carries an InterpretedMotionState body;
-            // unpack_ext would over-read >=4 bytes for the stop/raw types (1-5),
-            // which use the same `Invalid` data variant but an empty MovementInvalid
-            // (consumes nothing). Mirrors the A5 fix in movement/messages/motion.rs.
-            MovementType::Invalid => MovementTypeData::Invalid(
-                MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
-            ),
-            MovementType::RawCommand
-            | MovementType::InterpretedCommand
-            | MovementType::StopRawCommand
-            | MovementType::StopInterpretedCommand
-            | MovementType::StopCompletely => {
-                MovementTypeData::Invalid(MovementInvalid::default())
-            }
-        };
-
-        Self::from_movement_event(&MovementEventData {
-            guid: data.public_weenie_desc.guid,
-            object_instance_sequence: data.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX],
-            movement_sequence: 0,
-            server_control_sequence: data.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX],
-            is_autonomous: data.autonomous_movement.unwrap_or(false),
-            movement_type,
-            motion_flags,
-            current_style,
-            data: payload,
-        })
+        Self::from_movement_event(&movement_event_from_object_description(data)?)
     }
 
     pub fn indicates_death_motion(self) -> bool {
         self.motion_command()
             .is_some_and(InterpretedMotionCommand::is_dead)
     }
+}
+
+/// The movement buffer an ObjectCreate carries (PhysicsDesc MOVEMENT,
+/// retail `PhysicsDesc::movement_buffer`), decoded as the movement message
+/// it is — so a creature created mid-run starts on its own movement manager
+/// already running (`CPhysicsObj::unpack_movement` on the created object).
+pub fn movement_event_from_object_description(
+    data: &ObjectDescriptionData,
+) -> Option<MovementEventData> {
+    let movement_data = data.movement_data.as_deref()?;
+    let mut offset = 0;
+    let movement_type_raw = u8::unpack(movement_data, &mut offset)?;
+    let movement_type = MovementType::from_repr(movement_type_raw)?;
+    let motion_flags = u8::unpack(movement_data, &mut offset)?;
+    let current_style = u16::unpack(movement_data, &mut offset)?;
+
+    let payload = match movement_type {
+        MovementType::MoveToObject => {
+            MovementTypeData::MoveToObject(MoveToObject::unpack(movement_data, &mut offset)?)
+        }
+        MovementType::MoveToPosition => MovementTypeData::MoveToPosition(
+            MoveToPosition::unpack(movement_data, &mut offset)?,
+        ),
+        MovementType::TurnToObject => {
+            MovementTypeData::TurnToObject(TurnToObject::unpack(movement_data, &mut offset)?)
+        }
+        MovementType::TurnToHeading => {
+            MovementTypeData::TurnToHeading(TurnToHeading::unpack(movement_data, &mut offset)?)
+        }
+        // Only MovementType::Invalid (0) carries an InterpretedMotionState body;
+        // unpack_ext would over-read >=4 bytes for the stop/raw types (1-5),
+        // which use the same `Invalid` data variant but an empty MovementInvalid
+        // (consumes nothing). Mirrors the A5 fix in movement/messages/motion.rs.
+        MovementType::Invalid => MovementTypeData::Invalid(
+            MovementInvalid::unpack_ext(movement_data, &mut offset, motion_flags)?,
+        ),
+        MovementType::RawCommand
+        | MovementType::InterpretedCommand
+        | MovementType::StopRawCommand
+        | MovementType::StopInterpretedCommand
+        | MovementType::StopCompletely => {
+            MovementTypeData::Invalid(MovementInvalid::default())
+        }
+    };
+
+    Some(MovementEventData {
+        guid: data.public_weenie_desc.guid,
+        object_instance_sequence: data.sequences[OBJECT_INSTANCE_SEQUENCE_INDEX],
+        movement_sequence: 0,
+        server_control_sequence: data.sequences[OBJECT_SERVER_CONTROL_SEQUENCE_INDEX],
+        is_autonomous: data.autonomous_movement.unwrap_or(false),
+        movement_type,
+        motion_flags,
+        current_style,
+        data: payload,
+    })
 }
 
 #[cfg(test)]

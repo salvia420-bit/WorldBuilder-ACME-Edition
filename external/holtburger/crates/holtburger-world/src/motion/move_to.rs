@@ -50,12 +50,12 @@ use web_time::Instant;
 /// (b) the JS KIND_TURN ease already skips the local guid
 /// (`!isLocalPlayerGuid(turnGuid)`, loop.js:2195/:2563). Remote
 /// entities never enter the shim (F3-2/A2 territory).
-pub(crate) const USE_MOVETO_DRIVER: bool = true;
+pub const USE_MOVETO_DRIVER: bool = true;
 
 /// The retail "already at target distance" walk band (degrees domain
 /// epsilon shared with the heading math — `0.00019999999`,
 /// acclient.c:344740 et al.) re-exported for the driver tests.
-pub(crate) const MOVETO_EPSILON: f32 = HEADING_EPSILON_DEG;
+pub const MOVETO_EPSILON: f32 = HEADING_EPSILON_DEG;
 
 // ---------------------------------------------------------------------------
 // P12 (movement-port wave 1, 2026-07-03): the moveto WeenieError family,
@@ -66,31 +66,31 @@ pub(crate) const MOVETO_EPSILON: f32 = HEADING_EPSILON_DEG;
 // ---------------------------------------------------------------------------
 /// Arrival / normal completion (`CleanUpAndCallWeenie(v2, 0)`,
 /// acclient.c:346093; BeginNextNode empty-queue path).
-pub(crate) const WE_SUCCESS: u32 = 0x00;
+pub const WE_SUCCESS: u32 = 0x00;
 /// `NoPhysicsObject` — `_StopMotion` null-physics arm (acclient.c:344827) and
 /// every `CancelMoveTo(this, 8u)` guard (:345606,:345949,:346114).
-pub(crate) const WE_NO_PHYSICS_OBJECT: u32 = 0x08;
+pub const WE_NO_PHYSICS_OBJECT: u32 = 0x08;
 /// `NoMotionInterpreter` — `_StopMotion` null-minterp arm (acclient.c:344822).
 #[allow(dead_code)] // the port's lattice is always present; documented for the contract
-pub(crate) const WE_NO_MOTION_INTERPRETER: u32 = 0x0B;
+pub const WE_NO_MOTION_INTERPRETER: u32 = 0x0B;
 /// `ActionCancelled` — the pre-empt every new command issues
 /// (`PerformMovement` → `CancelMoveTo(this, 0x36u)`, acclient.c:346125).
-pub(crate) const WE_ACTION_CANCELLED: u32 = 0x36;
+pub const WE_ACTION_CANCELLED: u32 = 0x36;
 /// `ObjectGone` — target update arrived with `status != 1` while the moveto
 /// was already `initialized` (acclient.c:346086).
 #[allow(dead_code)] // staged: the persistent target-update lane (view refresh today)
-pub(crate) const WE_OBJECT_GONE: u32 = 0x37;
+pub const WE_OBJECT_GONE: u32 = 0x37;
 /// `NoObject` — target update `status != 1` before initialize / not-self
 /// (acclient.c:346108).
 #[allow(dead_code)] // staged: the persistent target-update lane (view refresh today)
-pub(crate) const WE_NO_OBJECT: u32 = 0x38;
+pub const WE_NO_OBJECT: u32 = 0x38;
 /// `YouChargedTooFar` — start→now displacement exceeded `fail_distance`
 /// (`HandleMoveToPosition` LABEL_24, acclient.c:345691-345692).
-pub(crate) const WE_YOU_CHARGED_TOO_FAR: u32 = 0x3D;
+pub const WE_YOU_CHARGED_TOO_FAR: u32 = 0x3D;
 /// `ITeleported` — `CPhysicsObj::teleport_hook` runs
 /// `MovementManager::CancelMoveTo(0x3C)` (acclient.c:322237-322248) when the
 /// local player teleports (streaming-teleport-2, `?teleportHook`).
-pub(crate) const WE_I_TELEPORTED: u32 = 0x3C;
+pub const WE_I_TELEPORTED: u32 = 0x3C;
 
 /// `Position::cylinder_distance(r1, h1, p1, r2, h2, p2)`
 /// (acclient.c:467221-467266; ACE `Position.CylinderDistance`): the
@@ -98,7 +98,7 @@ pub(crate) const WE_I_TELEPORTED: u32 = 0x3C;
 /// — exactly F6-5's semantics. 3D center offset minus summed radii
 /// for the lateral term; the vertical term measures the gap between
 /// the cylinders' z-extents (`<= 0` = overlapping vertically).
-pub(crate) fn cylinder_distance(
+pub fn cylinder_distance(
     r1: f32,
     h1: f32,
     p1: &WorldPosition,
@@ -134,7 +134,7 @@ pub(crate) fn cylinder_distance(
 /// ROADMAP §2 A2/A3 seam).
 // (`Origin` is not `Copy` — protocol struct — so this is Clone-only.)
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum MoveToDirective {
+pub enum MoveToDirective {
     /// Case 6 with a resolvable target (`CPhysicsObj::MoveToObject`,
     /// acclient.c:319767-319825). `object_radius`/`object_height` are
     /// the CALLER-resolved target physics dims (retail reads
@@ -173,7 +173,7 @@ pub(crate) enum MoveToDirective {
 /// and 7 (MoveToPosition, `AddMoveToPositionNode` :345120-345141).
 /// Headings are DEGREES (retail wire/math domain).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum MoveToNode {
+pub enum MoveToNode {
     TurnToHeading(f32),
     MoveToPosition,
 }
@@ -182,7 +182,7 @@ pub(crate) enum MoveToNode {
 /// pure-return pattern — mirror of `UnpackEffects`,
 /// movement_manager.rs). Built by the `MovementSystem` shim each tick.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct MoveToView {
+pub struct MoveToView {
     /// Retail `transient_state & 1` gate (acclient.c:346024). Spec §7
     /// Q3 fallback: sourced from `!world.player.is_airborne` — the
     /// same bit the wire `last_contact` byte reads (system.rs
@@ -214,7 +214,7 @@ pub(crate) struct MoveToView {
 /// so the driver re-supplies every frame; retail instead latches the
 /// interpreted motion in the minterp).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum MoveToSteer {
+pub enum MoveToSteer {
     /// Walk command active: unit-forward toward `target` (negated
     /// when `away` — the get_command away arm walks forward facing
     /// away, acclient.c:346224-346239).
@@ -282,7 +282,7 @@ fn steer_speed(speed: f32) -> f32 {
 /// (HandleMoveToPosition :345620-345651 then :345663-345686 →
 /// BeginNextNode), and an `Option` would drop one.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct MoveToDriveOutput {
+pub struct MoveToDriveOutput {
     /// `_DoMotion` requests (walk/turn commands + fresh params,
     /// CancelMoveTo bit stripped, acclient.c:345412-345414).
     pub do_motions: Vec<(u32, MovementParameters)>,
@@ -350,7 +350,7 @@ fn fold_heading_delta(mut delta: f32) -> f32 {
 /// `MoveToManager` — directive slot + node walk + per-frame driver
 /// state (`InitializeLocalVariables`, acclient.c:344913-344959).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MoveToManager {
+pub struct MoveToManager {
     /// The active directive (retail `movement_type` + sought-target
     /// fields). `is_active` ⇔ `Some` (retail `is_moving_to` =
     /// `movement_type != 0`, acclient.c:344895-344898).
@@ -487,42 +487,42 @@ impl MoveToManager {
     //      move_to_nodes.rs extension impl) --------------------------------
 
     /// (P10) raw handle store for [`Self::set_physics_object`].
-    pub(crate) fn set_physics_obj_handle(&mut self, g: Option<Guid>) {
+    pub fn set_physics_obj_handle(&mut self, g: Option<Guid>) {
         self.physics_obj = g;
     }
 
     /// (P10) raw handle store for [`Self::set_weenie_object`].
-    pub(crate) fn set_weenie_obj_handle(&mut self, g: Option<Guid>) {
+    pub fn set_weenie_obj_handle(&mut self, g: Option<Guid>) {
         self.weenie_obj = g;
     }
 
     /// (P10) identity of the wired physics object (retail @+340).
     #[allow(dead_code)] // staged: top-level self-check / unstick consumers
-    pub(crate) fn physics_object(&self) -> Option<Guid> {
+    pub fn physics_object(&self) -> Option<Guid> {
         self.physics_obj
     }
 
     /// (P10) identity of the wired weenie object (retail @+344).
     #[allow(dead_code)] // staged: ReportExhaustion/weenie-notify seam
-    pub(crate) fn weenie_object(&self) -> Option<Guid> {
+    pub fn weenie_object(&self) -> Option<Guid> {
         self.weenie_obj
     }
 
     /// (P10) `InitializeLocalVariables`/`Destroy` bridge for the
     /// extension impl (the body is private to this file).
-    pub(crate) fn reset_driver_state_public(&mut self) {
+    pub fn reset_driver_state_public(&mut self) {
         self.reset_driver_state();
     }
 
     /// (P10) node-append primitive — `DLListBase::InsertAfter(tail)` ⇒
     /// `push_back` (acclient.c:345096/:345120 tail-append).
-    pub(crate) fn push_node(&mut self, n: MoveToNode) {
+    pub fn push_node(&mut self, n: MoveToNode) {
         self.pending_nodes.push_back(n);
     }
 
     /// (P10) test view of the pending node queue.
     #[cfg(test)]
-    pub(crate) fn pending_nodes_snapshot(&self) -> Vec<MoveToNode> {
+    pub fn pending_nodes_snapshot(&self) -> Vec<MoveToNode> {
         self.pending_nodes.iter().copied().collect()
     }
 
@@ -547,7 +547,7 @@ impl MoveToManager {
     /// signature: the two f32 dims are caller-resolved (0.0/0.0 when
     /// unresolvable — the retail CPartArray-null fallback,
     /// acclient.c:319810-319815). `params.rs` stays untouched.
-    pub(crate) fn move_to_object(
+    pub fn move_to_object(
         &mut self,
         target: Guid,
         origin: Origin,
@@ -574,7 +574,7 @@ impl MoveToManager {
     /// builds the node list at entry from the live pose; ours defers
     /// the build to the first driven frame (no pose at entry — the
     /// same deliberate deferral as the OQ8 starting-position stamp).
-    pub(crate) fn move_to_position(&mut self, origin: Origin, params: MovementParameters) {
+    pub fn move_to_position(&mut self, origin: Origin, params: MovementParameters) {
         self.reset_driver_state();
         let mut stored = params;
         stored.bitfield &= !0x80;
@@ -588,7 +588,7 @@ impl MoveToManager {
     /// entry StopCompletely only under the params bit 0x10000
     /// (:345248); defers to the first resolved target pose
     /// (`TurnToObject_Internal`, :345911-345951).
-    pub(crate) fn turn_to_object(&mut self, target: Guid, params: MovementParameters) {
+    pub fn turn_to_object(&mut self, target: Guid, params: MovementParameters) {
         self.reset_driver_state();
         self.movement_params = params;
         self.pending_entry_stop = params.stop_completely();
@@ -606,7 +606,7 @@ impl MoveToManager {
     // already flows server-ward via MoveToState 0xF61C +
     // AutonomousPosition 0xF753 only. Reopen only if upstream ACE adds
     // the handler.
-    pub(crate) fn turn_to_heading(&mut self, params: MovementParameters) {
+    pub fn turn_to_heading(&mut self, params: MovementParameters) {
         self.reset_driver_state();
         let mut stored = params;
         stored.bitfield &= !0x80;
@@ -622,7 +622,7 @@ impl MoveToManager {
     /// stop-effects struct so callers apply them synchronously,
     /// matching retail's inline `_StopMotion`), and latches the
     /// completion = `Some(error)` (S10 contract).
-    pub(crate) fn cancel_moveto(&mut self, error: u32) -> MoveToDriveOutput {
+    pub fn cancel_moveto(&mut self, error: u32) -> MoveToDriveOutput {
         let mut out = MoveToDriveOutput::default();
         if self.directive.is_none() {
             return out;
@@ -670,7 +670,7 @@ impl MoveToManager {
 
     /// S10 contract: retail `is_moving_to` = `movement_type != 0`
     /// (acclient.c:344895-344898) — ours: directive slot occupied.
-    pub(crate) fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         self.directive.is_some()
     }
 
@@ -687,7 +687,7 @@ impl MoveToManager {
     /// is back at Ready. The aux turn of `HandleMoveToPosition`
     /// (:345620-345651) is a turn MODIFIER on the walk/run cycle, not a
     /// phase, so it never shows here.
-    pub(crate) fn node_motion(&self) -> u32 {
+    pub fn node_motion(&self) -> u32 {
         if self.directive.is_none() {
             return 0;
         }
@@ -707,7 +707,7 @@ impl MoveToManager {
     }
 
     /// S10 contract: read-clear completion latch (see the field doc).
-    pub(crate) fn take_completion(&mut self) -> Option<u32> {
+    pub fn take_completion(&mut self) -> Option<u32> {
         self.completion.take()
     }
 
@@ -715,7 +715,7 @@ impl MoveToManager {
     /// touchdown (`BeginNextNode` iff `movement_type`,
     /// acclient.c:345570-345574); the marker is consumed by the next
     /// driven frame.
-    pub(crate) fn hit_ground(&mut self) {
+    pub fn hit_ground(&mut self) {
         if self.directive.is_some() {
             self.pending_hit_ground_rebegin = true;
         }
@@ -727,18 +727,18 @@ impl MoveToManager {
     /// (the same cadence), with the type-6 progress-stamp reset
     /// applied change-gated inside [`Self::use_time`].
     #[allow(dead_code)] // staged: A2-P3 target-update plumbing (W5)
-    pub(crate) fn handle_update_target(&mut self, target: Guid, origin: Origin) {
+    pub fn handle_update_target(&mut self, target: Guid, origin: Origin) {
         self.last_target_update = Some((target, origin));
     }
 
     /// Active directive view (tests + S10's typed-entry diagnostics).
     #[allow(dead_code)] // runtime readers go through directive_target/is_active
-    pub(crate) fn directive(&self) -> Option<&MoveToDirective> {
+    pub fn directive(&self) -> Option<&MoveToDirective> {
         self.directive.as_ref()
     }
 
     /// The targeted directive's guid (shim target-refresh input).
-    pub(crate) fn directive_target(&self) -> Option<Guid> {
+    pub fn directive_target(&self) -> Option<Guid> {
         match self.directive.as_ref()? {
             MoveToDirective::MoveToObject { target, .. }
             | MoveToDirective::TurnToObject { target, .. } => Some(*target),
@@ -748,19 +748,19 @@ impl MoveToManager {
 
     /// Diagnostics: last recorded cancel error.
     #[allow(dead_code)] // diagnostics (tests today)
-    pub(crate) fn last_cancel_error(&self) -> Option<u32> {
+    pub fn last_cancel_error(&self) -> Option<u32> {
         self.last_cancel_error
     }
 
     /// Whether a `HitGround` re-begin is owed (driver input).
     #[allow(dead_code)] // diagnostics (tests today)
-    pub(crate) fn pending_hit_ground_rebegin(&self) -> bool {
+    pub fn pending_hit_ground_rebegin(&self) -> bool {
         self.pending_hit_ground_rebegin
     }
 
     /// A2-P3 anchor view.
     #[allow(dead_code)] // staged: A2-P3 target-update consumer (W5)
-    pub(crate) fn last_target_update(&self) -> Option<&(Guid, Origin)> {
+    pub fn last_target_update(&self) -> Option<&(Guid, Origin)> {
         self.last_target_update.as_ref()
     }
 
@@ -1159,7 +1159,7 @@ impl MoveToManager {
     /// Gates: walkable contact (:346024), then either the deferred
     /// entry build (the `initialized` / `HandleUpdateTarget` analog,
     /// :346030 + :345859/:345911) or the head-node Handle* dispatch.
-    pub(crate) fn use_time(&mut self, view: &MoveToView) -> MoveToDriveOutput {
+    pub fn use_time(&mut self, view: &MoveToView) -> MoveToDriveOutput {
         let mut out = MoveToDriveOutput::default();
         if self.directive.is_none() {
             out.completion = self.completion;

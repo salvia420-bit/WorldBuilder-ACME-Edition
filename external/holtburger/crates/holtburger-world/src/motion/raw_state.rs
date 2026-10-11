@@ -14,7 +14,7 @@
 //! `adjust_motion` + `apply_run_to_command` server-side (see the
 //! "sending it doubles up" note at `common.rs:627-633`).
 
-use crate::client::movement_types::{
+use crate::motion::movement_types::{
     ForwardLocomotion, Gait, MotionState, SidestepLocomotion, Turn,
 };
 
@@ -25,7 +25,7 @@ use crate::client::movement_types::{
 /// decomp `~/ac-headers/acclient.c:343795-343799`). Core-local mirror;
 /// the protocol `HoldKey` enum stays the wire codec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum HoldKey {
+pub enum HoldKey {
     /// Defer to the state-level `current_holdkey`.
     #[default]
     Invalid,
@@ -38,7 +38,7 @@ pub(crate) enum HoldKey {
 impl HoldKey {
     /// Resolve an axis-level hold key against the state-level one,
     /// exactly as `adjust_motion` does (`MotionInterp.cs:421-422`).
-    pub(crate) fn resolve(self, current: HoldKey) -> HoldKey {
+    pub fn resolve(self, current: HoldKey) -> HoldKey {
         match self {
             HoldKey::Invalid => current,
             other => other,
@@ -52,7 +52,7 @@ impl HoldKey {
 /// (`RunForward` is constructed by the stage-3 server `UpdateMotion`
 /// lane — keyboard input only produces the Walk commands.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RawForwardCommand {
+pub enum RawForwardCommand {
     WalkForward,
     WalkBackwards,
     #[allow(dead_code)]
@@ -69,14 +69,14 @@ pub(crate) enum RawForwardCommand {
 
 /// Sidestep-axis raw command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RawSidestepCommand {
+pub enum RawSidestepCommand {
     SideStepLeft,
     SideStepRight,
 }
 
 /// Turn-axis raw command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RawTurnCommand {
+pub enum RawTurnCommand {
     TurnLeft,
     TurnRight,
 }
@@ -85,7 +85,7 @@ pub(crate) enum RawTurnCommand {
 /// server action stamp + an autonomous bit
 /// (`acclient.c:332852-332921`; ACE `RawMotionState.AddAction`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct RawAction {
+pub struct RawAction {
     /// Full 32-bit motion command id (one-shot actions, 0x10000000 class).
     pub action: u32,
     pub speed: f32,
@@ -104,7 +104,7 @@ pub(crate) struct RawAction {
 /// hold_key)`, plus the state-level `current_holdkey` the per-axis
 /// `Invalid` defers to.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RawState {
+pub struct RawState {
     pub current_holdkey: HoldKey,
     pub forward_command: Option<RawForwardCommand>,
     pub forward_speed: f32,
@@ -145,7 +145,7 @@ impl RawState {
     /// speeds stay 1.0 (the unit input), `Gait::Run` is the held Run
     /// key, and the per-axis hold keys stay `Invalid` so they defer to
     /// `current_holdkey` exactly as retail keyboard input does.
-    pub(crate) fn from_motion_state(state: MotionState) -> Self {
+    pub fn from_motion_state(state: MotionState) -> Self {
         let mut raw = RawState::default();
         raw.current_holdkey = match state.gait {
             Gait::Run => HoldKey::Run,
@@ -176,7 +176,7 @@ impl RawState {
 
     /// `RawMotionState::ApplyMotion` forward arm (`acclient.c:332852`).
     #[allow(dead_code)]
-    pub(crate) fn apply_forward(
+    pub fn apply_forward(
         &mut self,
         command: RawForwardCommand,
         speed: f32,
@@ -189,7 +189,7 @@ impl RawState {
 
     /// `RawMotionState::RemoveMotion` forward arm — reset to defaults.
     #[allow(dead_code)]
-    pub(crate) fn remove_forward(&mut self) {
+    pub fn remove_forward(&mut self) {
         self.forward_command = None;
         self.forward_speed = 1.0;
         self.forward_holdkey = HoldKey::Invalid;
@@ -197,7 +197,7 @@ impl RawState {
 
     /// `ApplyMotion` sidestep arm.
     #[allow(dead_code)]
-    pub(crate) fn apply_sidestep(
+    pub fn apply_sidestep(
         &mut self,
         command: RawSidestepCommand,
         speed: f32,
@@ -210,7 +210,7 @@ impl RawState {
 
     /// `RemoveMotion` sidestep arm.
     #[allow(dead_code)]
-    pub(crate) fn remove_sidestep(&mut self) {
+    pub fn remove_sidestep(&mut self) {
         self.sidestep_command = None;
         self.sidestep_speed = 1.0;
         self.sidestep_holdkey = HoldKey::Invalid;
@@ -218,7 +218,7 @@ impl RawState {
 
     /// `ApplyMotion` turn arm.
     #[allow(dead_code)]
-    pub(crate) fn apply_turn(&mut self, command: RawTurnCommand, speed: f32, holdkey: HoldKey) {
+    pub fn apply_turn(&mut self, command: RawTurnCommand, speed: f32, holdkey: HoldKey) {
         self.turn_command = Some(command);
         self.turn_speed = speed;
         self.turn_holdkey = holdkey;
@@ -226,7 +226,7 @@ impl RawState {
 
     /// `RemoveMotion` turn arm.
     #[allow(dead_code)]
-    pub(crate) fn remove_turn(&mut self) {
+    pub fn remove_turn(&mut self) {
         self.turn_command = None;
         self.turn_speed = 1.0;
         self.turn_holdkey = HoldKey::Invalid;
@@ -244,7 +244,7 @@ impl RawState {
     /// the style arm is interp-side only (`InterpretedState.
     /// current_style` is the single style owner here); the action arm
     /// appends a stamped [`RawAction`].
-    pub(crate) fn apply_motion_u32(
+    pub fn apply_motion_u32(
         &mut self,
         motion: u32,
         params: &super::params::MovementParameters,
@@ -314,7 +314,7 @@ impl RawState {
     /// ModifyRawState bit of `StopMotion`, `acclient.c:344133-344135`):
     /// turn/sidestep clear their slots; a forward locomotion command
     /// clears the forward slot when it matches.
-    pub(crate) fn remove_motion_u32(&mut self, motion: u32) {
+    pub fn remove_motion_u32(&mut self, motion: u32) {
         const TURN_RIGHT: u32 = 0x6500_000D;
         const TURN_LEFT: u32 = 0x6500_000E;
         const SIDESTEP_RIGHT: u32 = 0x6500_000F;
@@ -349,7 +349,7 @@ impl RawState {
     /// (`acclient.c:332616-332639`; ACE `RawMotionState.cs:90-98`).
     /// Fired by the A3-D2 completion pop (`CMotionInterp::MotionDone`,
     /// `acclient.c:343661`).
-    pub(crate) fn remove_action(&mut self) -> u32 {
+    pub fn remove_action(&mut self) -> u32 {
         if self.actions.is_empty() {
             return 0;
         }

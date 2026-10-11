@@ -115,6 +115,12 @@ pub struct WeenieTraits {
 pub struct SetupCollisionShapes {
     pub cylspheres: Vec<SetupCylSphere>,
     pub spheres: Vec<Sphere>,
+    /// MoveTo refactor phase C (2026-10-10): the Setup's
+    /// `(step_up_height, step_down_height)` (`CSetup::step_up_height` /
+    /// `step_down_height`, what `CPhysicsObj::GetStepUpHeight` /
+    /// `GetStepDownHeight` scale — `OBJECTINFO::init` acclient.c:314118) —
+    /// a remote mover's own transition profile. `None` = not recorded.
+    pub step_heights: Option<(f32, f32)>,
 }
 
 /// An object's physics BSP as the transition resolver consumes it: one
@@ -994,6 +1000,7 @@ mod tests {
                     height: 2.0,
                 }],
                 spheres: Vec::new(),
+                step_heights: None,
             }),
         };
         let s = obj.shadow_spheres();

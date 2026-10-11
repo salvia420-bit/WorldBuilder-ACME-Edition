@@ -713,6 +713,18 @@ fn parse_fu3_diag_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "fu3Diag=on")
 }
 
+/// MoveTo refactor phase D (2026-10-10): parse `?localMoveToMotion=off`.
+/// DEFAULT-ON: the local player's MoveTo moves the body by the motion its
+/// MoveToManager put on the local interp (table speed × `params.speed` × run
+/// rate, along the facing, with retail's aux turns); `=off` restores the
+/// steer bearing × gait speed. Native carrier: `USE_LOCAL_MOVETO_MOTION`
+/// (movement/system.rs).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_local_moveto_motion_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "localMoveToMotion=off")
+}
+
 /// Phase 3 Phase D (2026-06-28): parse `?faithfulOutdoor=off` (or
 /// `&faithfulOutdoor=off`). DEFAULT-ON, off-escape shape (mirrors
 /// `parse_unified_tick_flag`): returns `true` UNLESS `faithfulOutdoor=off` is
@@ -1499,6 +1511,38 @@ fn parse_remote_turn_flag(search: &str) -> bool {
 fn parse_remote_moveto_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     !trimmed.split('&').any(|kv| kv == "remoteMoveTo=off")
+}
+
+/// MoveTo refactor phase B (2026-10-10): `?remoteSpine=off` takes remote
+/// objects off their own per-object movement managers (the world scene's
+/// movers: root motion from their motion tables, their own MoveToManager)
+/// and restores the legacy split — holtburger-core's registry +
+/// `drive_remote_movetos` steering the D5 drive. DEFAULT-ON; rides the
+/// effective `remoteInterp` composite.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_spine_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteSpine=off")
+}
+
+/// MoveTo refactor phase G (2026-10-10): `?targetVoyeur=off` — a MoveTo
+/// steers at its target's live pose every slice (the pre-G behaviour)
+/// instead of what the target REPORTS through retail's TargetManager voyeur
+/// (`holtburger_world::motion::target_voyeur`). DEFAULT-ON.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_target_voyeur_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "targetVoyeur=off")
+}
+
+/// MoveTo refactor phase C (2026-10-10): `?remoteSweep=off` keeps the
+/// spine's remote moves on the floor sample (no walls, no objects, outdoors
+/// only) instead of the retail transition (`holtburger_world::spatial::
+/// remote_transition`). DEFAULT-ON; needs the spine (`?remoteSpine`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_remote_sweep_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "remoteSweep=off")
 }
 
 fn parse_remote_interp_flag(search: &str) -> bool {
@@ -18749,6 +18793,8 @@ fn record_setup_shapes_pending(setup_id: u32, setup: &holtburger_dat::file_type:
             })
             .collect(),
         spheres: setup.spheres.clone(),
+        // MoveTo refactor phase C: a remote mover's own step-up/down.
+        step_heights: Some((setup.step_up, setup.step_down)),
     };
     SETUP_SHAPES_PENDING.with(|cell| cell.borrow_mut().push((setup_id, shapes)));
 }
@@ -34276,6 +34322,47 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
     }
 
+    /// MoveTo refactor phase G: `?targetVoyeur` parse shape — DEFAULT-ON.
+    #[test]
+    fn target_voyeur_flag_defaults_on_unless_off() {
+        use super::parse_target_voyeur_flag;
+        assert!(parse_target_voyeur_flag(""));
+        assert!(!parse_target_voyeur_flag("?targetVoyeur=off"));
+        assert!(!parse_target_voyeur_flag("?nosw=1&targetVoyeur=off"));
+    }
+
+    /// MoveTo refactor phase D: `?localMoveToMotion` parse shape — DEFAULT-ON.
+    #[test]
+    fn local_moveto_motion_flag_defaults_on_unless_off() {
+        use super::parse_local_moveto_motion_flag;
+        assert!(parse_local_moveto_motion_flag(""));
+        assert!(!parse_local_moveto_motion_flag("?localMoveToMotion=off"));
+        assert!(!parse_local_moveto_motion_flag("?nosw=1&localMoveToMotion=off"));
+    }
+
+    /// MoveTo refactor phase C: `?remoteSweep` parse shape — DEFAULT-ON;
+    /// only an explicit `=off` disables.
+    #[test]
+    fn remote_sweep_flag_defaults_on_unless_off() {
+        use super::parse_remote_sweep_flag;
+        assert!(parse_remote_sweep_flag(""));
+        assert!(parse_remote_sweep_flag("?remoteSpine=off"));
+        assert!(!parse_remote_sweep_flag("?remoteSweep=off"));
+        assert!(!parse_remote_sweep_flag("?nosw=1&remoteSweep=off"));
+    }
+
+    /// MoveTo refactor phase B: `?remoteSpine` parse shape — DEFAULT-ON;
+    /// only an explicit `=off` disables.
+    #[test]
+    fn remote_spine_flag_defaults_on_unless_off() {
+        use super::parse_remote_spine_flag;
+        assert!(parse_remote_spine_flag(""));
+        assert!(parse_remote_spine_flag("?remoteSpine=on"));
+        assert!(parse_remote_spine_flag("?remoteSpineDiag=off"));
+        assert!(!parse_remote_spine_flag("?remoteSpine=off"));
+        assert!(!parse_remote_spine_flag("?nosw=1&remoteSpine=off"));
+    }
+
     /// NETSYNC-3 (2026-10-07): `?remoteTurn` parse shape — DEFAULT-ON;
     /// only an explicit `=off` disables.
     #[test]
@@ -47228,6 +47315,10 @@ async fn recv_loop(
     // driver's OUTDOOR terrain path back to the approximate heightfield (default
     // ON); see `parse_faithful_outdoor_flag`.
     movement.set_faithful_outdoor(parse_faithful_outdoor_flag(&flag_search()));
+    // MoveTo refactor phase D (2026-10-10): `?localMoveToMotion=off` — the
+    // local MoveTo's body back on the steer bearing (default ON: it moves by
+    // its own interpreted motion); see `parse_local_moveto_motion_flag`.
+    movement.set_local_moveto_motion(parse_local_moveto_motion_flag(&flag_search()));
     // Phase 3 Phase E1 / WS-D (2026-06-29): `?stepUp=off` — roll walkable
     // step-up / slope & ledge climbing back to the pre-E1 stop-at-base behavior
     // (default ON); see `parse_faithful_stepup_flag`.
@@ -47577,6 +47668,9 @@ async fn recv_loop(
     let remote_moveto_on: bool = parse_remote_moveto_flag(&flag_search());
     let remote_motion_keep_on: bool = parse_remote_motion_keep_flag(&flag_search());
     let remote_turn_on: bool = parse_remote_turn_flag(&flag_search());
+    let remote_spine_on: bool = parse_remote_spine_flag(&flag_search());
+    let remote_sweep_on: bool = parse_remote_sweep_flag(&flag_search());
+    let target_voyeur_on: bool = parse_target_voyeur_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -47771,6 +47865,9 @@ async fn recv_loop(
             remote_moveto_on,
             remote_motion_keep_on,
             remote_turn_on,
+            remote_spine_on,
+            remote_sweep_on,
+            target_voyeur_on,
             remote_sticky_on,
             combat_radii_on,
             server_run_rate_on,

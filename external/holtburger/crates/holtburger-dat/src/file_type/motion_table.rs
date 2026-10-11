@@ -1548,4 +1548,112 @@ mod tests {
             "expected ~300 tables authoring a TurnRight omega, saw {tables_with_turn}"
         );
     }
+
+    /// MoveTo refactor (2026-10-10) census — what the locomotion cycles of
+    /// the retail tables author, so the per-object root motion
+    /// (`holtburger_world::motion::root_motion`) knows which data it reads.
+    /// Prints the player table's cycles per stance and counts, over every
+    /// table, how WalkForward / RunForward / SideStepRight / TurnRight carry
+    /// velocity and omega. Run with
+    /// `cargo test -p holtburger-dat --lib locomotion_cycle_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn locomotion_cycle_census() {
+        use crate::DatDatabase;
+        let Some(path) = retail_portal_dat_path() else {
+            eprintln!("[census] SKIP — no client_portal.dat");
+            return;
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+        let read = |id: u32| {
+            let bytes = dat.get_file(id).ok()?;
+            MotionTable::read(&mut Cursor::new(bytes)).ok()
+        };
+        const SIDESTEP_RIGHT: u32 = 0x6500_000F;
+        const WALK_BACKWARDS: u32 = 0x4500_0006;
+        const READY: u32 = 0x4100_0003;
+        let human = read(0x0900_0001).expect("player table");
+        println!("[census] 0x09000001 default_style=0x{:08X}", human.default_style);
+        for stance in [0x8000_003Du32, 0x8000_003C, 0x8000_0049, 0x8000_003E, 0x8000_003F] {
+            for (name, cmd) in [
+                ("Ready", READY),
+                ("WalkForward", MotionTable::WALK_FORWARD_COMMAND),
+                ("WalkBackwards", WALK_BACKWARDS),
+                ("RunForward", MotionTable::RUN_FORWARD_COMMAND),
+                ("SideStepRight", SIDESTEP_RIGHT),
+                ("TurnRight", MotionTable::TURN_RIGHT_COMMAND),
+            ] {
+                let cyc = human.motion_data_for_cycle(stance, cmd);
+                let modi = human.modifiers.get(&cycle_key(stance, cmd)).or_else(|| human.modifiers.get(&cycle_key(0, cmd)));
+                println!(
+                    "[census]   stance 0x{stance:08X} {name:<13} cycle v={:?} w={:?} anims={} | modifier v={:?} w={:?}",
+                    cyc.and_then(|m| m.velocity),
+                    cyc.and_then(|m| m.omega),
+                    cyc.map(|m| m.anims.len()).unwrap_or(0),
+                    modi.and_then(|m| m.velocity),
+                    modi.and_then(|m| m.omega),
+                );
+            }
+        }
+        let mut ids: Vec<u32> = dat
+            .files
+            .keys()
+            .copied()
+            .filter(|id| (0x0900_0000..=0x0900_FFFF).contains(id))
+            .collect();
+        ids.sort_unstable();
+        let mut tables = 0usize;
+        let mut walk_v = std::collections::BTreeMap::<String, usize>::new();
+        let mut run_v = std::collections::BTreeMap::<String, usize>::new();
+        let mut side_v = std::collections::BTreeMap::<String, usize>::new();
+        let mut walk_missing = 0usize;
+        let mut run_missing = 0usize;
+        let mut walk_no_velocity = 0usize;
+        let mut run_no_velocity = 0usize;
+        let mut side_cycle = 0usize;
+        let mut side_modifier = 0usize;
+        for id in ids {
+            let Some(mt) = read(id) else { continue };
+            tables += 1;
+            let style = mt.default_style;
+            match mt.motion_data_for_cycle(style, MotionTable::WALK_FORWARD_COMMAND) {
+                None => walk_missing += 1,
+                Some(m) => match m.velocity {
+                    None => walk_no_velocity += 1,
+                    Some(v) => *walk_v.entry(format!("({:.3},{:.3},{:.3})", v.x, v.y, v.z)).or_default() += 1,
+                },
+            }
+            match mt.motion_data_for_cycle(style, MotionTable::RUN_FORWARD_COMMAND) {
+                None => run_missing += 1,
+                Some(m) => match m.velocity {
+                    None => run_no_velocity += 1,
+                    Some(v) => *run_v.entry(format!("({:.3},{:.3},{:.3})", v.x, v.y, v.z)).or_default() += 1,
+                },
+            }
+            if let Some(m) = mt.motion_data_for_cycle(style, SIDESTEP_RIGHT) {
+                side_cycle += 1;
+                if let Some(v) = m.velocity {
+                    *side_v.entry(format!("({:.3},{:.3},{:.3})", v.x, v.y, v.z)).or_default() += 1;
+                }
+            }
+            if mt.modifiers.contains_key(&cycle_key(style, SIDESTEP_RIGHT))
+                || mt.modifiers.contains_key(&cycle_key(0, SIDESTEP_RIGHT))
+            {
+                side_modifier += 1;
+            }
+        }
+        println!("[census] tables={tables}");
+        println!("[census] WalkForward (default style): missing={walk_missing} no_velocity={walk_no_velocity}");
+        for (v, n) in walk_v.iter().rev().take(25) {
+            println!("[census]   walk v={v} x{n}");
+        }
+        println!("[census] RunForward (default style): missing={run_missing} no_velocity={run_no_velocity}");
+        for (v, n) in run_v.iter().rev().take(25) {
+            println!("[census]   run v={v} x{n}");
+        }
+        println!("[census] SideStepRight: cycle in {side_cycle} tables, modifier in {side_modifier}");
+        for (v, n) in side_v.iter().take(15) {
+            println!("[census]   side v={v} x{n}");
+        }
+    }
 }

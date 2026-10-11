@@ -16,6 +16,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_moveto_on,
         remote_motion_keep_on,
         remote_turn_on,
+        remote_spine_on,
+        remote_sweep_on,
+        target_voyeur_on,
         remote_sticky_on,
         combat_radii_on,
         server_run_rate_on,
@@ -148,6 +151,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // NETSYNC-3: remote bodies turn by their
                 // interpreted turn axis (?remoteTurn, default ON).
                 new_world.scene.set_remote_turn_enabled(remote_turn_on);
+                // MoveTo refactor phase B: remote objects on their own
+                // movement managers (?remoteSpine, default ON).
+                new_world.scene.set_remote_spine_enabled(remote_spine_on);
+                // MoveTo refactor phase C: their moves through the
+                // transition (?remoteSweep, default ON).
+                new_world.scene.set_remote_sweep_enabled(remote_sweep_on);
+                // MoveTo refactor phase G: MoveTos track their target
+                // through the TargetManager voyeur (?targetVoyeur, default ON).
+                new_world.scene.set_target_voyeur_enabled(target_voyeur_on);
                 // COMBAT-RADII (2026-07-28): size-aware
                 // standoffs (?combatRadii, default ON).
                 new_world.set_combat_radii_enabled(combat_radii_on);

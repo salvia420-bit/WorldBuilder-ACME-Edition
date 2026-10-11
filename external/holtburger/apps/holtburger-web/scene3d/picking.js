@@ -78,18 +78,6 @@ const MISSILE_FACE_TARGET = (() => {
 // Cap the turn-to-face pre-step so a bad bearing can't stall the shot.
 const FACE_TURN_TIMEOUT_MS = 800;
 
-// Sticky-melee re-engage threshold: the StickyManager follows a moving target
-// on its own, so the JS watch only re-engages if the mob is past this range
-// (a sticky timeout on a stationary target that then moved). The original
-// 2.5 m — NOT re-tuned. Inside ACE's melee reach (MeleeDistance 0.6 /
-// StickyDistance 4.0, Player_Melee.cs:166-174).
-const MELEE_RANGE_M = 2.5;
-// Stay-on-target sampling cadence + hysteresis (2 consecutive out-of-range
-// samples before re-engaging, so ACE's own in-range auto-repeat isn't fought
-// at the boundary).
-const STICKY_WATCH_INTERVAL_MS = 250;
-const STICKY_WATCH_OUT_SAMPLES = 2;
-
 // F8-5 — turn the local caster to face the target before a spell cast
 // (ACE Rotate() before the windup), so the bolt doesn't launch sideways/
 // backwards out of a frozen, wrong-facing caster. While a manual movement
@@ -571,71 +559,21 @@ export function setupClickPicking({
   // alternation path at `CombatManeuverTable.cs:90-102`.
   let prevMeleeMotion = 0;
 
-  // ─── "Sticky melee" — the LOCAL StickyManager (retail StickTo) ──────────
-  // Melee combat IS the StickyManager. A melee attack engages it on the target
-  // (`stickToEntity` → `stick_local_player_to`, retail
-  // `PositionManager::StickTo` → `StickyManager`, acclient.c:388519); the
-  // per-frame `step_local_sticky` (system.rs) then runs the player UP to the
-  // target (closing the 0.30 edge gap) AND holds + re-faces it every frame —
-  // approach + stick as ONE thing, coordinate-correct (target + self both
-  // landblock-local → `global_coords()` consistent). The client just engages
-  // the stick and sends the attack once; ACE auto-repeats the swing when in
-  // range. Needs the target resident in the spatial scene (worldLifecycle
-  // default-on). No client MoveToManager / setMovementInput run-up.
-  let stickyWatch = null; // { guid, range, engage, outCount, timer }
+  // ─── Melee approach: the SERVER's charge (MoveTo refactor 2026-10-10) ────
+  // Retail `ClientCombatSystem::ExecuteAttack` only sends
+  // Event_TargetedMeleeAttack; ACE answers an out-of-reach attack with its
+  // own charge MoveTo (MoveToObject, sticky bit, speed 1.5 — Player_Melee.cs),
+  // which the local MoveToManager runs on the player's own motion and which
+  // sticks on arrival (`drive_local_moveto` → `stick_local_player_to`,
+  // retail BeginNextNode → PositionManager::StickTo). The former client-side
+  // run-up (`stickToEntity` + a 250 ms re-engage watch) ran the player on the
+  // StickyManager in parallel with that charge; it is gone.
 
-  function cancelStickyWatch() {
-    if (!stickyWatch) return;
-    clearInterval(stickyWatch.timer);
-    stickyWatch = null;
-  }
-
-  // Release the sticky melee + abort the missile/magic optimistic turn (retail
-  // CancelMoveTo on fresh input / world action, acclient.c:339240). Does NOT
-  // end the sticky watch — combat-abort paths call cancelStickyWatch.
+  // Release a sticky hold + abort the missile/magic optimistic turn (retail
+  // CancelMoveTo on fresh input / world action, acclient.c:339240).
   function cancelClientMove() {
     try { sessionHandle.stopStick?.(); } catch {}
     try { sessionHandle.cancelPursuit?.(); } catch {}
-  }
-
-  // Engage the StickyManager on `guid` — the whole run-up + stick. Idempotent
-  // (re-engaging just refreshes the target). No-op when the export is missing.
-  function stickToTarget(guid) {
-    if (typeof sessionHandle.stickToEntity !== "function") return;
-    try { sessionHandle.stickToEntity(guid >>> 0); } catch (e) {
-      console.warn(`[picking] stickToEntity failed: ${e?.message ?? e}`);
-    }
-  }
-
-  // Stay-on-target net: re-engage the stick if the mob is beyond `range` (e.g.
-  // the sticky's 1 s timeout fired on a stationary target that then moved — the
-  // StickyManager follows a moving target on its own while engaged). Ends on
-  // stance exit, deselect, or target death.
-  function armStickyWatch(guid, range, engage) {
-    cancelStickyWatch();
-    const g = guid >>> 0;
-    const w = { guid: g, range, engage, outCount: 0, timer: 0 };
-    w.timer = setInterval(() => {
-      if (stickyWatch !== w) { clearInterval(w.timer); return; }
-      const inCombat = !!(isInMeleeStance?.() || isInRangedStance?.());
-      const selected = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
-      const alive = !!liveScene3d.entityManager?.entityMap?.has?.(g);
-      if (!inCombat || selected !== g || !alive) { cancelStickyWatch(); return; }
-      const targetAc = entityAcPosition(liveScene3d.entityManager, g);
-      const pose = playerWorldPose(sessionHandle);
-      if (!targetAc || !pose) return;
-      if (horizontalDistance(targetAc, pose) > w.range) {
-        if (++w.outCount >= STICKY_WATCH_OUT_SAMPLES) {
-          w.outCount = 0;
-          try { w.engage(); } catch (e) {
-            console.warn(`[picking] sticky re-engage failed: ${e?.message ?? e}`);
-          }
-        }
-      } else {
-        w.outCount = 0;
-      }
-    }, STICKY_WATCH_INTERVAL_MS);
-    stickyWatch = w;
   }
 
   // (2026-07-02) — corpse detection for the combat-stance loot carve-out:
@@ -1891,13 +1829,10 @@ export function setupClickPicking({
           }
         }
       }, { swingDurationMs });
-      // "Sticky melee": engage the StickyManager (it runs the player UP to the
-      // target + sticks, per-frame) and send the attack once — ACE auto-repeats
-      // the swing when in range. The watch re-engages if the mob kites past
-      // range after a sticky timeout.
-      stickToTarget(targetGuid);
+      // Send the attack once: ACE charges an out-of-reach target with its own
+      // MoveTo (see the melee-approach note above) and auto-repeats the swing
+      // in reach.
       fire();
-      armStickyWatch(targetGuid, MELEE_RANGE_M, () => stickToTarget(targetGuid));
       return;
     }
     console.log(`[fire-attack] not in melee/missile stance — currentStanceLow=0x${(window.__getCurrentStanceLow?.() ?? 0).toString(16)}`);
@@ -1949,11 +1884,10 @@ export function setupClickPicking({
     // (chat input, login fields).
     const tag = ev.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
-    // Raw movement input cancels the in-flight run-up/turn AND the
-    // stay-on-target watch (retail: raw input cancels MoveTo,
-    // acclient.c:339240-339246) — the player takes over the drive.
+    // Raw movement input cancels the in-flight turn / sticky hold (retail:
+    // raw input cancels MoveTo, acclient.c:339240-339246) — the player
+    // takes over the drive.
     cancelClientMove();
-    cancelStickyWatch();
     // F6-4 — moving stops the server-side attack loop (retail). ACE
     // defaults AutoRepeatAttacks ON, so a single attack otherwise keeps
     // the player swinging — a fleeing player would be sticky-rotated and
@@ -2007,9 +1941,8 @@ export function setupClickPicking({
   if (bus && typeof bus.on === "function") {
     onSelectionCleared = (ev) => {
       if (((ev?.guid >>> 0) || 0) !== 0) return; // only on clear
-      // Deselect cancels the in-flight run-up/turn and the stay-on-target watch.
+      // Deselect cancels the in-flight turn / sticky hold.
       cancelClientMove();
-      cancelStickyWatch();
       if (!(isInMeleeStance?.() || isInRangedStance?.())) return;
       if (typeof sessionHandle.cancelAttack !== "function") return;
       const nowMs = (typeof performance !== "undefined" && performance.now)
@@ -2023,9 +1956,8 @@ export function setupClickPicking({
 
   return {
     destroy() {
-      // Cancel any in-flight run-up/turn and the stay-on-target watch on teardown.
+      // Cancel any in-flight turn / sticky hold on teardown.
       cancelClientMove();
-      cancelStickyWatch();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMoveUseTarget);
       canvas.removeEventListener("dragover", onCanvasDragOver);

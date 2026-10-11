@@ -6519,7 +6519,7 @@ export class EntityManager {
    * rule (a newer server motion owns the clip) is
    * `planRemoteMoveToPhase` in scene3d/remote_moveto_phase.js.
    */
-  applyRemoteMoveToPhase(guid, motion) {
+  applyRemoteMoveToPhase(guid, motion, speed) {
     if (!REMOTE_MOVETO_PHASE_ON) return;
     const g = guid >>> 0;
     if (this._isLocalPlayerGuid(g)) return;
@@ -6536,6 +6536,11 @@ export class EntityManager {
     inst._moveToPhaseLive = true;
     inst._moveToPhase = plan.phase;
     inst._moveToPhaseSeq = plan.seq;
+    // MoveTo refactor phase E (2026-10-10): the node's own speed (retail
+    // `change_cycle_speed` — a charge's run plays at 1.5 × the run rate,
+    // in step with its body); absent / invalid → 1.0 as before.
+    const sp = +speed;
+    inst._moveToPhaseSpeed = Number.isFinite(sp) && sp > 0 ? sp : 1.0;
     if (!plan.play) return;
     // A dying / dead rig keeps its death pose (setMotion's CQ-06 guard lets
     // Ready / Walk / Run through as a revival).
@@ -6564,8 +6569,8 @@ export class EntityManager {
     if (cmd) this._playRemoteMoveToPhase(inst, g, cmd);
   }
 
-  /** R3 moveto-4 — play a node motion (stance 0 = keep the rig's stance;
-   *  speed 1.0 like the MoveTo hint it replaces). */
+  /** R3 moveto-4 — play a node motion (stance 0 = keep the rig's stance)
+   *  at the node's speed (MoveTo refactor phase E; 1.0 when unknown). */
   _playRemoteMoveToPhase(inst, g, cmd) {
     // The node IS the phase: drop a COL-20 gate a MoveTo hint armed before
     // this rig's first edge (its tick release would start the queued run on
@@ -6573,7 +6578,11 @@ export class EntityManager {
     // walk / run played here.
     inst._turnGateCmd = 0;
     inst._motionFromMoveTo = false;
-    this.setMotion(g, cmd >>> 0, 0, 1.0);
+    // The speed belongs to the live node: a Ready stop or a hint re-play of
+    // another motion plays at 1.0.
+    const live = ((inst._moveToPhase ?? 0) >>> 0) === (cmd >>> 0);
+    const speed = live ? (inst._moveToPhaseSpeed ?? 1.0) : 1.0;
+    this.setMotion(g, cmd >>> 0, 0, speed);
   }
 
   setPose(guid, x, y, z, qw, qx, qy, qz) {
@@ -10504,8 +10513,16 @@ export class EntityManager {
 
   _unifiedLocoGaitScale(inst, base) {
     let scale;
+    // MoveTo refactor phase D (2026-10-10): a WALK cycle plays at its
+    // `forward_speed` on every rig, players included — COL-10 reverted, the
+    // walking body moves at the table's walk speed × forward_speed (retail
+    // root motion), so retail's `change_cycle_speed` cadence keeps the feet
+    // planted. The velScale path divided the 3.12 m/s `get_state_velocity`
+    // constant by the table's 2.6017 and played the walk at 1.199×.
+    // `?creatureGait=off` restores it.
+    const walkCycle = ((inst?._forwardCommand >>> 0) === 0x45000005);
     const serverMover = CREATURE_GAIT_RETAIL_ON
-      && (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000;
+      && (walkCycle || (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000);
     if (base > 0 && !serverMover) {
       let actual = this._resolveStateGroundSpeed(inst);
       const fromGetter = Number.isFinite(actual) && actual > 0;

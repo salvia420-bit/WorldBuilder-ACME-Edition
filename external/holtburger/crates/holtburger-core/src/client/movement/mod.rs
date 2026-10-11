@@ -1,19 +1,22 @@
 mod command_interpreter;
+// MoveTo refactor phase A (2026-10-10): the per-object movement stack lives
+// in `holtburger_world::motion`; re-exported under the old module names so
+// the `super::motion_interp::…`-style paths in this crate keep resolving.
+pub(crate) use holtburger_world::motion::{
+    interp_state, motion_interp, motion_table_manager, move_to, movement_manager, params,
+    raw_state,
+};
 mod command_stacks;
 mod common;
 mod handle;
-mod interp_state;
 mod jump_charge;
 mod list_engine;
-mod motion_interp;
-mod motion_table_manager;
-mod move_to;
-mod move_to_nodes;
-mod movement_manager;
-mod params;
-mod raw_state;
+#[cfg(test)]
+mod remote_moveto_tests;
 #[cfg(test)]
 mod retail_behavior_tests;
+#[cfg(test)]
+mod velocity_identity_tests;
 mod stall_recovery;
 mod system;
 

@@ -33,6 +33,9 @@ pub(crate) fn handle_message(
 
             let guid = entity.guid;
             let upsert_kind = state.upsert_entity_from_create(entity, events);
+            // MoveTo refactor phase B: the create's movement buffer onto the
+            // object's own movement manager (spine only).
+            state.seed_remote_movement_from_create(data);
             if state
                 .entities
                 .get(guid)

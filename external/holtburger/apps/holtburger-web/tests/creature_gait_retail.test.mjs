@@ -85,13 +85,23 @@ test("a walking Black Rabbit (server mover) plays its walk at framerate x speed"
   }
 });
 
-test("a player rig keeps the velScale path (moved by player physics at 3.12 / 4.0 m/s)", async () => {
+// MoveTo refactor phase D (2026-10-10): COL-10 reverted — a walking player
+// body moves at the table walk (2.602 m/s × forward_speed), so the walk cycle
+// plays at framerate × speed on player rigs too (backstep reversed at 0.65).
+// The RUN cycle keeps the velScale path.
+test("a player rig walks at framerate x speed; its run keeps the velScale path", async () => {
   const em = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, wasmExports);
   try {
     const inst = await spawn(em, 0x50000002, HUMAN_MT);
     await em.setMotion(inst.guid, WALK, 0x3d, 1.0);
     const g = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][WALK]);
-    assert.ok(Math.abs(g - 3.12 / 2.602) < 1e-6, `player walk gait x${g.toFixed(3)} unchanged`);
+    assert.ok(Math.abs(g - 1.0) < 1e-9, `player walk gait x${g.toFixed(3)} (retail x1.000)`);
+    await em.setMotion(inst.guid, 0x45000006, 0x3d, 1.0);
+    const back = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][WALK]);
+    assert.ok(Math.abs(back + 0.65) < 1e-6, `backstep plays the walk reversed at 0.65: x${back.toFixed(3)}`);
+    await em.setMotion(inst.guid, RUN, 0x3d, 1.0);
+    const run = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][RUN]);
+    assert.ok(Math.abs(run - 1.0) < 1e-6, `player run gait x${run.toFixed(3)} (velScale 4.0/4.0)`);
   } finally {
     em.dispose();
   }

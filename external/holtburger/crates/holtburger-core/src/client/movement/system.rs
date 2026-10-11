@@ -882,6 +882,22 @@ const USE_FAITHFUL_TRANSITION: bool = true;
 /// for the Phase D A/B rollback.
 const USE_FAITHFUL_OUTDOOR: bool = true;
 
+/// MoveTo refactor phase D (2026-10-10) — the LOCAL player's MoveTo moves
+/// the body by its own motion. Retail's MoveToManager only `_DoMotion`s
+/// (acclient.c:344753): the RunForward / WalkForward / WalkBackwards node
+/// and the 20° aux turns land on the player's interp, and the body travels
+/// by that motion — along its facing, at the table speed × `params.speed` ×
+/// run rate (`apply_run_to_command`, :343439). ON: the local MoveTo's body
+/// drive is the registry interp's interpreted state through
+/// `MotionInterp::ground_velocity` (the manual lane's own speed source)
+/// plus its turn axis ([`MovementSystem::local_moveto_motion_control`]); the
+/// wire sends and the rig hints still ride the steer's autonomous intent,
+/// unchanged. Fixes investigation D-1 (an ACE charge's `speed 1.5` and the
+/// envelope run rate were dropped on the web) and D-3 (the walk followed
+/// the direct bearing, not the facing). `false` / `?localMoveToMotion=off`:
+/// the steer's unit bearing × the gait speed, as before.
+const USE_LOCAL_MOVETO_MOTION: bool = true;
+
 /// Phase 3 Phase E1 / WS-D (2026-06-29) — faithful walkable STEP-UP / slope &
 /// ledge climbing. When on, a grounded CONTACT mover that walks into a walkable
 /// up-slope / ramp / stair / ledge CLIMBS it (the decomp `CSphere::step_sphere_up`
@@ -1983,6 +1999,12 @@ pub(crate) struct MovementSystem {
     /// forces it on. Combined by [`Self::faithful_outdoor_enabled`]. Default
     /// `None`.
     faithful_outdoor_runtime: Option<bool>,
+    /// MoveTo refactor phase D — `?localMoveToMotion=off` runtime carrier
+    /// over [`USE_LOCAL_MOVETO_MOTION`]. `None` = the const.
+    local_moveto_motion_runtime: Option<bool>,
+    /// MoveTo refactor phase G — the local MoveTo's TargetManager voyeur
+    /// (`holtburger_world::motion::target_voyeur`, `?targetVoyeur`).
+    local_voyeur: Option<holtburger_world::motion::target_voyeur::TargetVoyeur>,
     /// Phase 3 Phase E1 / WS-D (2026-06-29) — runtime carrier of the
     /// `?stepUp=off` URL flag. `None` = use the [`USE_FAITHFUL_STEPUP`] const
     /// default (ON); `Some(false)` forces the pre-E1 stop-at-base behavior
@@ -2579,6 +2601,8 @@ impl MovementSystem {
             ground_loss_logs: std::cell::Cell::new(0),
             jump_pack_logs: std::cell::Cell::new(0),
             faithful_outdoor_runtime: None,
+            local_moveto_motion_runtime: None,
+            local_voyeur: None,
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
             building_overlap_runtime: None,
@@ -2660,6 +2684,18 @@ impl MovementSystem {
     /// [`Self::faithful_outdoor_enabled`].
     pub(crate) fn set_faithful_outdoor(&mut self, on: bool) {
         self.faithful_outdoor_runtime = Some(on);
+    }
+
+    /// MoveTo refactor phase D — install `?localMoveToMotion` (see
+    /// [`USE_LOCAL_MOVETO_MOTION`]).
+    pub(crate) fn set_local_moveto_motion(&mut self, on: bool) {
+        self.local_moveto_motion_runtime = Some(on);
+    }
+
+    /// [`USE_LOCAL_MOVETO_MOTION`] effective predicate.
+    pub(crate) fn local_moveto_motion_enabled(&self) -> bool {
+        self.local_moveto_motion_runtime
+            .unwrap_or(USE_LOCAL_MOVETO_MOTION)
     }
 
     /// Phase 3 Phase E1 / WS-D (2026-06-29) — install the `?stepUp=off` runtime
@@ -5217,17 +5253,29 @@ impl MovementSystem {
         if guid == Guid::NULL {
             return false;
         }
+        // MoveTo refactor phase D: retail has ONE interp per object, so a
+        // node's HoldKey_Invalid resolves against the player's real hold key
+        // (`adjust_motion`, acclient.c:343795-343799 — Run unless Shift is
+        // held); the registry interp the MoveTo drives the body with gets it.
+        let hold_key = (self.local_moveto_motion_enabled() && !self.local_pursuit_engaged).then(|| {
+            match self.current_hold_gait() {
+                crate::client::movement_types::Gait::Run => super::raw_state::HoldKey::Run,
+                crate::client::movement_types::Gait::Walk => super::raw_state::HoldKey::NoKey,
+            }
+        });
         let manual_cancel = std::mem::take(&mut self.manual_moveto_cancel_pending);
         let Some(manager) = self.movement_managers.get_mut(&guid) else {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
             self.server_moveto_drive = None;
+            self.local_voyeur = None;
             return false;
         };
         if !manager.is_moveto_active() {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
             self.server_moveto_drive = None;
+            self.local_voyeur = None;
             return false;
         }
         let on_contact = !world.player.is_airborne;
@@ -5246,6 +5294,7 @@ impl MovementSystem {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
             self.server_moveto_drive = None;
+            self.local_voyeur = None;
             return false;
         }
 
@@ -5256,17 +5305,39 @@ impl MovementSystem {
         // Per-tick target refresh — the HandleUpdateTarget cadence;
         // a despawned target cancels 0x37 (acclient.c:346086) and owes
         // the stop edge.
+        let mut live_target_pos = None;
         let target_pos = match manager.moveto_directive_target() {
             Some(target) => match world.entities.get(target) {
+                Some(entity) if world.scene.target_voyeur_enabled() => {
+                    // MoveTo refactor phase G: the target's client-side body
+                    // (what retail's TargetManager reads) through the voyeur
+                    // — a predicted report at most every 0.5 s, only past
+                    // 0.5 m (`motion::target_voyeur`).
+                    let live = world.scene.remote_target_pose(target).unwrap_or(entity.position);
+                    live_target_pos = Some(live);
+                    let velocity = world.scene.realized_velocity(target);
+                    let voyeur = self.local_voyeur.get_or_insert_with(|| {
+                        holtburger_world::motion::target_voyeur::TargetVoyeur::new(target)
+                    });
+                    if voyeur.target() != target {
+                        *voyeur = holtburger_world::motion::target_voyeur::TargetVoyeur::new(target);
+                    }
+                    let _ = voyeur.poll(now, live, velocity);
+                    voyeur.reported()
+                }
                 Some(entity) => Some(entity.position),
                 None => {
+                    self.local_voyeur = None;
                     let out = manager.cancel_moveto_with_effects(0x37, on_contact, &mut effects);
                     // A14-I2 (S10 A.3) — target loss ends the pursuit:
                     // restore a held manual drive, else owe the stop.
                     return self.finish_pursuit_with_manual_restore(out.stop_completely);
                 }
             },
-            None => None,
+            None => {
+                self.local_voyeur = None;
+                None
+            }
         };
 
         let view = MoveToView {
@@ -5296,7 +5367,16 @@ impl MovementSystem {
             is_interpolating: world.scene.local_player_is_interpolating(),
             now,
         };
+        if let Some(hold_key) = hold_key {
+            manager.minterp().raw_state.current_holdkey = hold_key;
+        }
         let out = manager.use_time_moveto(&view, &mut effects);
+        // MoveTo refactor phase G: `HandleMoveToPosition`'s tail — lead the
+        // target by the player's time to get there (acclient.c:345695-345707).
+        if let (Some(voyeur), Some(live)) = (self.local_voyeur.as_mut(), live_target_pos) {
+            let own_speed = world.scene.realized_velocity(guid).length();
+            voyeur.tune_quantum(self_pos.distance_to(&live), own_speed);
+        }
         // A14-I2 — directive ended THIS frame (arrival Some(0) or a
         // driver-side failure latch): the restore arbitration below
         // keys off this, NOT off `out.completion` (which mirrors a
@@ -5485,6 +5565,76 @@ impl MovementSystem {
         (1 << 31) | forward | (turn << 16) | (run << 24)
     }
 
+    /// MoveTo refactor phase D — the LOCAL MoveTo's body drive for one
+    /// slice ([`USE_LOCAL_MOVETO_MOTION`]): the registry interp's interpreted
+    /// state as body motion, as retail moves any object by its motion. The
+    /// travel is `MotionInterp::ground_velocity` with the player's table
+    /// bases (the manual lane's own source: RunForward at 4.0 × its speed —
+    /// `params.speed` × the run rate, folded in by `apply_run_to_command` at
+    /// the node's `_DoMotion` — WalkForward at the table walk, WalkBackwards
+    /// at −0.65 of it) along the body's facing; the turn is the TurnRight
+    /// omega × the interp's turn speed (a turn node or an aux turn, the run
+    /// hold key's ×1.5 included). `None` when off, no MoveTo is active, or
+    /// the capabilities are unresolved (the steer lane then drives).
+    pub(crate) fn local_moveto_motion_control(
+        &self,
+        world: &WorldState,
+        dt: Duration,
+        body_id: SpatialBodyId,
+        target_hint: Option<holtburger_common::position::WorldPosition>,
+    ) -> Option<LocalDriveControl> {
+        // A client-side pursuit (the S10 input lane — the bot's) keeps the
+        // steer lane; retail has no client MoveTo to model it on. While the
+        // bot-only stall recovery is perturbing a wedged walk
+        // (`stall_recovery.rs`) its off-axis steer drives, as before.
+        if !self.local_moveto_motion_enabled()
+            || self.local_pursuit_engaged
+            || self.moveto_stall.is_recovering()
+        {
+            return None;
+        }
+        let manager = self.movement_managers.get(&world.player.guid)?;
+        if !manager.is_moveto_active() {
+            return None;
+        }
+        let interp = manager.motion_interp_ref()?;
+        let capabilities = world.resolve_self_movement_capabilities().ok()?;
+        let pose = world.local_player_runtime_pose()?;
+        let dt_s = dt.as_secs_f32();
+        let heading = pose.rotation.to_heading();
+        let body = interp.ground_velocity(
+            capabilities.base_walk_forward_speed(),
+            capabilities.base_run_forward_speed(),
+        );
+        let velocity = crate::client::movement_types::planar_velocity_for_heading(heading, body.y)
+            + crate::client::movement_types::planar_velocity_for_heading(
+                heading + std::f32::consts::FRAC_PI_2,
+                body.x,
+            );
+        let state = &interp.interpreted_state;
+        // TurnRight turns clockwise (heading increasing); TurnLeft rides
+        // as TurnRight with a negative speed (`adjust_motion`).
+        let turn_rate = if state.turn {
+            capabilities.base_turn_right_speed_rad_per_sec() * state.turn_speed
+        } else {
+            0.0
+        };
+        let desired_heading = normalize_heading(heading + turn_rate * dt_s);
+        let running = matches!(state.forward_command, Some(InterpretedForwardCommand::RunForward));
+        Some(LocalDriveControl {
+            body_id,
+            desired_world_delta: velocity * dt_s,
+            desired_heading: Some(desired_heading),
+            // The motion's own turn rate: the consumer steps exactly
+            // `rate × dt` toward `desired_heading`, i.e. lands on it.
+            turn_omega_rad_s: (turn_rate != 0.0).then_some(turn_rate.abs()),
+            // The steer's target pose (the indoor projection's landblock).
+            target_hint,
+            gait: if running { LocalDriveGait::Run } else { LocalDriveGait::Walk },
+            force_grounded: false,
+        })
+    }
+
     pub(crate) fn current_local_drive_control(
         &self,
         world: &WorldState,
@@ -5556,6 +5706,12 @@ impl MovementSystem {
             ActiveDriveIntent::Manual(_) => return None,
         };
 
+        // MoveTo refactor phase D: an active MoveTo moves the body by the
+        // motion it put on the local interp ([`USE_LOCAL_MOVETO_MOTION`]).
+        if let Some(control) = self.local_moveto_motion_control(world, dt, body_id, intent.target_hint) {
+            return Some(control);
+        }
+
         // The steer arms (`drive_local_moveto`) store a UNIT direction —
         // "realized speed is the lane's policy" (spec §7 Q4). This seam is
         // that policy: scale by the authored MotionTable gait speed × dt
@@ -5569,12 +5725,9 @@ impl MovementSystem {
         let capabilities = world.resolve_self_movement_capabilities().ok()?;
         let speed_mps = match intent.gait {
             crate::client::movement_types::Gait::Run => capabilities.resolved_manual_run_speed(),
-            // COL-10 (2026-07-27): walk realizes retail's `WalkAnimSpeed`
-            // (`acclient.c:343561`), the same source the manual lane's
-            // `interpreted_velocity_for_state` now uses — NOT the authored
-            // DAT walk-cycle base (2.6017 m/s), which under-ran retail and
-            // ACE by 1.199x.
-            crate::client::movement_types::Gait::Walk => super::motion_interp::WALK_ANIM_SPEED,
+            // MoveTo refactor phase D: COL-10 reverted — the table's walk
+            // base, as the manual lane's `interpreted_velocity_for_state`.
+            crate::client::movement_types::Gait::Walk => capabilities.base_walk_forward_speed(),
         };
         // F2 ([`ServerMoveToDrive`]) — a SERVER-commanded MoveTo on the
         // driver overrides the RUN arm with the wire `my_run_rate`
@@ -7532,6 +7685,29 @@ impl MovementSystem {
     /// (the flag owner); the pure pipeline in
     /// [`holtburger_world::spatial::transition`] receives their values
     /// so its behavior mirrors the legacy chain gate-for-gate.
+    /// MoveTo refactor phase C (2026-10-10) — the transition the REMOTE
+    /// movers sweep with (`holtburger_world::spatial::remote_transition`):
+    /// the local player's gates with every runtime carrier applied, and the
+    /// same driver toggles. Retail runs one `CPhysicsObj::transition` for
+    /// every mover (acclient.c:320061).
+    pub(crate) fn remote_transition_config(
+        &self,
+        world: &WorldState,
+    ) -> holtburger_world::spatial::remote_transition::RemoteTransitionConfig {
+        let (_object, mut gates) = Self::transition_profile(world);
+        gates.outdoor_static_grounding = self.outdoor_static_grounding_enabled();
+        gates.retail_ground = self.retail_ground_enabled();
+        gates.world_frame_terrain_plane = self.terrain_plane_frame_enabled();
+        gates.airborne_check_contact = self.airborne_check_contact_enabled();
+        gates.walkable_landing_ground = self.walkable_landing_ground_enabled();
+        holtburger_world::spatial::remote_transition::RemoteTransitionConfig {
+            gates,
+            faithful: self.faithful_transition_enabled(),
+            faithful_outdoor: self.faithful_outdoor_enabled(),
+            faithful_stepup: self.faithful_stepup_enabled(),
+        }
+    }
+
     pub(crate) fn transition_profile(
         world: &WorldState,
     ) -> (

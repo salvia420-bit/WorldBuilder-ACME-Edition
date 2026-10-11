@@ -56,6 +56,12 @@ pub(crate) struct LoopFlags {
     pub(crate) remote_moveto_on: bool,
     pub(crate) remote_motion_keep_on: bool,
     pub(crate) remote_turn_on: bool,
+    /// MoveTo refactor phase B: `?remoteSpine` (per-object movement managers).
+    pub(crate) remote_spine_on: bool,
+    /// MoveTo refactor phase C: `?remoteSweep` (remote moves through the transition).
+    pub(crate) remote_sweep_on: bool,
+    /// MoveTo refactor phase G: `?targetVoyeur` (TargetManager voyeur).
+    pub(crate) target_voyeur_on: bool,
     pub(crate) remote_sticky_on: bool,
     pub(crate) combat_radii_on: bool,
     pub(crate) server_run_rate_on: bool,

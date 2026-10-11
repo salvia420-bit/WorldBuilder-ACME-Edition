@@ -196,6 +196,9 @@ impl ClientSimulationSystem {
             slices
         };
 
+        // MoveTo refactor phase C: remote movers sweep with the local
+        // player's transition settings (one pipeline for every mover).
+        let remote_sweep = Some(movement.remote_transition_config(world));
         let mut events = Vec::new();
         for slice in slices {
             let slice_dt = Duration::from_secs_f32(slice);
@@ -227,7 +230,11 @@ impl ClientSimulationSystem {
             // solve request was built this slice (no tracked local
             // bodies) — remote corrections are independent of the local
             // solver's input set.
-            world.scene.step_remote_position_managers(slice);
+            // MoveTo refactor phase B (2026-10-10): under the per-object
+            // spine (`?remoteSpine`, default on with `?remoteInterp`) every
+            // remote object also moves by its OWN motion and runs its own
+            // MovementManager::UseTime here (`WorldState::step_remote_objects`).
+            world.step_remote_objects(slice, now, remote_sweep);
         }
         events
     }

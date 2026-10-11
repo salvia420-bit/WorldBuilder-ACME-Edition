@@ -105,7 +105,7 @@ function makeManager({ on = true } = {}) {
   const end = ENT.indexOf("  setPose(guid, x, y, z, qw, qx, qy, qz) {", start);
   assert.ok(start > 0 && end > start, "noteRemoteMoveToHint … setPose block not found in entities.js");
   const body = ENT.slice(start, end);
-  for (const fn of ["applyRemoteMoveToPhase(guid, motion) {", "reapplyRemoteMoveToPhase(guid, hintCmd) {", "_playRemoteMoveToPhase(inst, g, cmd) {"]) {
+  for (const fn of ["applyRemoteMoveToPhase(guid, motion, speed) {", "reapplyRemoteMoveToPhase(guid, hintCmd) {", "_playRemoteMoveToPhase(inst, g, cmd) {"]) {
     assert.ok(body.includes(fn), `${fn} must sit between noteRemoteMoveToHint and setPose`);
   }
   const Cls = new Function(
@@ -150,6 +150,24 @@ test("a chase plays the node: turn in place → run → Ready on arrival", () =>
   assert.equal(em.played.at(-1).gateArmable, false, "the phase play never arms the COL-20 gate");
   em.applyRemoteMoveToPhase(MOB, 0);
   assert.equal(last(em), MOTION_READY, "arrival → Ready");
+});
+
+// MoveTo refactor phase E (2026-10-10): the edge carries the node's own speed
+// (the mover's interpreted speed: a charge's params.speed 1.5 × run rate 1.8
+// = 2.7), so the clip keeps step with the body; the Ready stop plays at 1.0.
+test("the node plays at its own speed; Ready at 1.0", () => {
+  const em = makeManager();
+  em.entityMap.set(MOB, {});
+  em.applyRemoteMoveToPhase(MOB, MOTION_TURN_RIGHT, 2.25);
+  assert.equal(em.played.at(-1).speed, 2.25, "a run-held turn node at 1.5 × 1.5");
+  em.applyRemoteMoveToPhase(MOB, MOTION_RUN_FORWARD, 2.7);
+  assert.equal(em.played.at(-1).speed, 2.7);
+  em.applyRemoteMoveToPhase(MOB, 0, 1.0);
+  assert.equal(last(em), MOTION_READY);
+  assert.equal(em.played.at(-1).speed, 1.0);
+  // A stale pkg sends no speed: 1.0.
+  em.applyRemoteMoveToPhase(MOB, MOTION_WALK_FORWARD);
+  assert.equal(em.played.at(-1).speed, 1.0);
 });
 
 test("once the channel spoke, MoveTo hints no longer arm the COL-20 gate", () => {
@@ -212,14 +230,14 @@ test("plumbing: wasm kind 67 → client_events.js → applyRemoteMoveToPhase; lo
   assert.equal(ClientEventKind.REMOTE_MOVETO_PHASE, 67);
   assert.match(src("src/lib.rs"), /const CLIENT_EVENT_KIND_REMOTE_MOVETO_PHASE: u32 = 67;/);
   const mv = src("src/session/commands/movement.rs");
-  const i = mv.indexOf("take_remote_moveto_phase_changes()");
+  const i = mv.indexOf("take_remote_moveto_phase_changes_with_speed()");
   assert.ok(i > 0, "TickMovement drains the scene's phase edges");
   assert.match(mv.slice(i, i + 500), /kind: CLIENT_EVENT_KIND_REMOTE_MOVETO_PHASE/);
   assert.ok(mv.indexOf("take_remote_airborne_changes()") < i, "drained next to the D7 airborne edges");
   const ce = src("app/client_events.js");
   const j = ce.indexOf("evt.kind === ClientEventKind.REMOTE_MOVETO_PHASE");
   assert.ok(j > 0, "client_events.js has the arm");
-  assert.match(ce.slice(j, j + 900), /em\.applyRemoteMoveToPhase\(evt\.u32Payload >>> 0, evt\.u32Payload2 >>> 0\)/);
+  assert.match(ce.slice(j, j + 1400), /em\.applyRemoteMoveToPhase\(evt\.u32Payload >>> 0, evt\.u32Payload2 >>> 0, evt\.f32Payload\)/);
   const loop = src("scene3d/loop.js");
   const arm = loop.indexOf("function _armMotion(");
   const body = loop.slice(arm, arm + 7000);

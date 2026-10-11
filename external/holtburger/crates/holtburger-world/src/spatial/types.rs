@@ -322,6 +322,14 @@ pub struct SpatialBody {
     /// [`crate::spatial::SpatialScene::note_remote_moveto_motion`], which
     /// records every change as a phase edge for the remote rig's animation.
     pub remote_moveto_motion: u32,
+    /// MoveTo refactor phase E: the speed of [`Self::remote_moveto_motion`]'s
+    /// last edge (the node's interpreted speed).
+    pub remote_moveto_speed: f32,
+    /// MoveTo refactor phase G: retail `CPhysicsObj::cached_velocity` for a
+    /// remote body — its realized offset over the last physics slice ÷ the
+    /// quantum (`UpdateObjectInternal`, acclient.c:322815), the velocity a
+    /// TargetManager leads it by. Written by the spine step.
+    pub cached_velocity: Vector3,
     /// NETSYNC-3 (2026-10-07): the z omega (rad/s about +z) of this remote
     /// body's motion-table TurnRight cycle at its current stance —
     /// `MotionData.omega.z`, resolved by the world state from the entity's
@@ -329,6 +337,15 @@ pub struct SpatialBody {
     /// unresolved; [`SpatialBody::state_omega_z`] then uses the player-table
     /// value [`RETAIL_HUMAN_TURN_RIGHT_OMEGA_Z`].
     pub remote_turn_omega_z: Option<f32>,
+    /// MoveTo refactor phase C (2026-10-10): a remote mover's contact plane
+    /// (+ its cell id) carried across its transitions — retail
+    /// `CPhysicsObj::contact_plane`, which `get_object_info` seeds every
+    /// transition with (`init_contact_plane`, acclient.c:319085-319099) and
+    /// `SetPositionInternal` stores back (:322538-322590).
+    pub remote_contact_plane: Option<(holtburger_common::Plane, u32)>,
+    /// Phase C: the last wall normal a remote mover's transition surfaced
+    /// (the cliff-slide `N_last` the next transition reads).
+    pub remote_wall_normal: Option<Vector3>,
 }
 
 /// NETSYNC-3 (2026-10-07): `MotionData.omega.z` of the TurnRight (0x6500000D)
@@ -411,7 +428,11 @@ impl SpatialBody {
             remote_moving_to: false,
             remote_moveto: None,
             remote_moveto_motion: 0,
+            remote_moveto_speed: 0.0,
+            cached_velocity: Vector3::zero(),
             remote_turn_omega_z: None,
+            remote_contact_plane: None,
+            remote_wall_normal: None,
         }
     }
 
@@ -433,7 +454,11 @@ impl SpatialBody {
             remote_moving_to: false,
             remote_moveto: None,
             remote_moveto_motion: 0,
+            remote_moveto_speed: 0.0,
+            cached_velocity: Vector3::zero(),
             remote_turn_omega_z: None,
+            remote_contact_plane: None,
+            remote_wall_normal: None,
         }
     }
 

@@ -278,6 +278,21 @@ impl MovementSystemHandle {
         self.inner.set_faithful_outdoor(on);
     }
 
+    /// MoveTo refactor phase D (2026-10-10): install the
+    /// `?localMoveToMotion=off` runtime carrier (default ON: the local
+    /// player's MoveTo moves the body by its own interpreted motion).
+    /// Forwards to `MovementSystem::set_local_moveto_motion`.
+    pub fn set_local_moveto_motion(&mut self, on: bool) {
+        self.inner.set_local_moveto_motion(on);
+    }
+
+    /// MoveTo refactor phase F: the effective `?localMoveToMotion` switch —
+    /// the wasm UpdateMotion arm reads it to stick a local charge on
+    /// ARRIVAL (the MoveTo's own stick) instead of at arm time.
+    pub fn local_moveto_motion_enabled(&self) -> bool {
+        self.inner.local_moveto_motion_enabled()
+    }
+
     /// Phase 3 Phase E1 / WS-D (2026-06-29): install the `?stepUp=off` runtime
     /// carrier (default-ON walkable step-up / slope & ledge climbing; `=off`
     /// rolls climbing back to the pre-E1 stop-at-base behavior). Read only when

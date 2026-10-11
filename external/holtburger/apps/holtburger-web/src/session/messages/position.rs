@@ -1057,11 +1057,13 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // source stays. The LOCAL branch below keeps
             // `sticky_target` (player charges; the local
             // driver also sticks on arrival — follow-up).
+            // MoveTo refactor phase B: the per-object spine's MoveTo
+            // sticks on arrival too (`remote_moveto_sticks_on_arrival`).
             let rust_moveto_sticks = remote_sticky_on
                 && world
                     .borrow()
                     .as_ref()
-                    .is_some_and(|w| w.scene.remote_moveto_active());
+                    .is_some_and(|w| w.scene.remote_moveto_sticks_on_arrival());
             let remote_sticky_target: u32 =
                 holtburger_world::handlers::movement::remote_motion_sticky_target(
                     &data.data,
@@ -1089,14 +1091,26 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // (acclient.c:319755) via
             // `combat_sticky_radius`; `?combatRadii=off`
             // restores the 0.0 CPartArray-null fallback.
+            // MoveTo refactor phase F (2026-10-10): with the local MoveTo
+            // moving the body by its own motion (`?localMoveToMotion`), the
+            // LOCAL player follows the remote rule — retail
+            // `unpack_movement` sticks only a case-0 `sticky_object`; ACE's
+            // sticky-bit charge sticks on ARRIVAL (`drive_local_moveto` →
+            // `stick_local_player_to`, BeginNextNode :345521). Sticking at
+            // arm time ran the StickyManager's pull alongside the charge.
+            let local_sticky_target: u32 = if movement.local_moveto_motion_enabled() {
+                holtburger_world::handlers::movement::remote_motion_sticky_target(&data.data, true)
+            } else {
+                sticky_target
+            };
             if holtburger_world::spatial::USE_STICKY_MANAGER
                 && let Some(w) = world.borrow_mut().as_mut()
                 && w.player.guid != holtburger_common::Guid::NULL
                 && data.guid == w.player.guid
             {
-                if sticky_target != 0 {
+                if local_sticky_target != 0 {
                     let target =
-                        holtburger_common::Guid(sticky_target);
+                        holtburger_common::Guid(local_sticky_target);
                     let target_radius =
                         w.combat_sticky_radius(target);
                     w.scene.stick_local_player_to(
@@ -1227,7 +1241,16 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // NPCs never turned to face the player. The KIND_MOTION
             // above (motion_command 0 for TurnTo) still carries the
             // stance; this is an additional event.
+            // MoveTo refactor phase B: a remote the per-object spine runs
+            // TURNS by its own MoveToManager (the scene exports the turning
+            // heading as managed rows), so no JS ease target is sent — the
+            // wire heading here is in degrees (ACE `Frame.get_heading`) and
+            // this emit reads it as radians (investigation D-7).
+            let spine_turns_remote = world.borrow().as_ref().is_some_and(|w| {
+                data.guid != w.player.guid && w.scene.remote_spine_active()
+            });
             let turn_directive: Option<(f32, f32)> = match &data.data {
+                _ if spine_turns_remote => None,
                 MovementTypeData::TurnToHeading(t) => {
                     Some((t.params.desired_heading, t.params.speed))
                 }

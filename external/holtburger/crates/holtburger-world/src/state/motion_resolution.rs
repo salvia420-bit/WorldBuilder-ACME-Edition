@@ -239,6 +239,14 @@ impl WorldState {
             .or_else(|| lookup(default_style))
     }
 
+    /// `guid`'s motion table: its MotionTable property, else its setup's
+    /// default table (retail `CPhysicsObj::SetMotionTableID` /
+    /// `CSetup::default_mtable_id`).
+    pub fn motion_table_id_for_guid(&self, guid: Guid) -> Option<u32> {
+        self.motion_table_source_for_guid(guid)
+            .map(motion_table_id_for_source)
+    }
+
     fn motion_table_source_for_guid(&self, guid: Guid) -> Option<PlayerMotionTableSource> {
         let entity = self.entities.get(guid)?;
 

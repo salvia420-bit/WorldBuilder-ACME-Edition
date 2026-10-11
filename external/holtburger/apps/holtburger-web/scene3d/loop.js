@@ -3965,9 +3965,11 @@ function _armTurn(scene3d, em, upd) {
       const intentHeld =
         !!mi && ((mi.forward | 0) !== 0 || (mi.strafe | 0) !== 0 || (mi.turn | 0) !== 0);
       loseControlToServer(heading, intentHeld, () => {
-        // Retail: SetAutoRun(0, apply_movement=0) + ClearAllCommands()
-        // (:716840-:716845). Our analogue — flush the wasm drive once and
-        // force the camera dispatcher to re-fire on the next real key edge.
+        // Retail: SetAutoRun(0, apply_movement=0) + FinishJump()
+        // (:716840-:716845; investigation D-9 — NOT ClearAllCommands, so
+        // retail keeps held keys). Our analogue still flushes the wasm drive
+        // once and forces the camera dispatcher to re-fire on the next real
+        // key edge — a documented deviation, live only under `?serverTurn=on`.
         try { sh?.setMovementInput?.(0, 0, 0, false); } catch (_) {}
         if (cs) { cs.lastInputSig = null; }
       });

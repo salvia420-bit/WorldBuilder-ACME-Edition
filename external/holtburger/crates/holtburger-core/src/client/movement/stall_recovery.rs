@@ -184,9 +184,10 @@ impl MoveToStallRecovery {
         }
     }
 
-    /// Test/diagnostic accessor — is an attempt currently steering
-    /// off-bearing?
-    #[cfg(test)]
+    /// Is an attempt currently steering off-bearing? MoveTo refactor
+    /// phase D: the local MoveTo's interp-motion drive yields to the
+    /// perturbed steer while this is true
+    /// (`MovementSystem::local_moveto_motion_control`).
     pub(crate) fn is_recovering(&self) -> bool {
         self.attempt.is_some()
     }

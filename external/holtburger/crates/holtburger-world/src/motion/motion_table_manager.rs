@@ -87,24 +87,24 @@ use web_time::Instant;
 /// Retail MotionCommand class bits (`CommandMask`, ACE
 /// `ACE.Entity/Enum/CommandMasks.cs:6-17`; same masks tested inline by
 /// retail at `acclient.c:330099`, `:330122`, `:329891`).
-pub(crate) const COMMAND_MASK_STYLE: u32 = 0x8000_0000;
-pub(crate) const COMMAND_MASK_SUBSTATE: u32 = 0x4000_0000;
-pub(crate) const COMMAND_MASK_MODIFIER: u32 = 0x2000_0000;
-pub(crate) const COMMAND_MASK_ACTION: u32 = 0x1000_0000;
+pub const COMMAND_MASK_STYLE: u32 = 0x8000_0000;
+pub const COMMAND_MASK_SUBSTATE: u32 = 0x4000_0000;
+pub const COMMAND_MASK_MODIFIER: u32 = 0x2000_0000;
+pub const COMMAND_MASK_ACTION: u32 = 0x1000_0000;
 
 /// `Motion_Ready` (`0x41000003` = 1090519043) — the completion node
 /// retail queues for every Stop/StopCompletely and for the default
 /// state (`acclient.c:330235-330245`, `:330172-330200`; ACE
 /// `MotionTableManager.cs:134-140`, `MotionCommand.Ready`). Same value
 /// as `holtburger-world` `player/types.rs` `READY`.
-pub(crate) const MOTION_READY: u32 = 0x4100_0003;
+pub const MOTION_READY: u32 = 0x4100_0003;
 
 /// One pending-animation queue node — retail `MotionTableManager::
 /// AnimNode` (`acclient.h:31097-31104`; allocated 0x10 bytes with
 /// `{motion, num_anims}` at `node[1]`, `acclient.c:330155-330161`).
 /// ACE `Physics/Animation/AnimNode.cs`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct AnimNode {
+pub struct AnimNode {
     pub motion: u32,
     pub num_anims: u32,
     /// Completion-clock shim (module doc): the authored-length budget a
@@ -120,7 +120,7 @@ pub(crate) struct AnimNode {
 }
 
 impl AnimNode {
-    pub(crate) fn new(motion: u32, num_anims: u32) -> Self {
+    pub fn new(motion: u32, num_anims: u32) -> Self {
         Self::new_with_len(motion, num_anims, None)
     }
 
@@ -131,7 +131,7 @@ impl AnimNode {
     /// (table not ingested yet, motion with no from-Ready link, missing
     /// Animation record). Loop-class motions never get a clock at all
     /// (`num_anims == 0` — the structural exemption).
-    pub(crate) fn new_with_len(motion: u32, num_anims: u32, authored_secs: Option<f32>) -> Self {
+    pub fn new_with_len(motion: u32, num_anims: u32, authored_secs: Option<f32>) -> Self {
         Self {
             motion,
             num_anims,
@@ -152,7 +152,7 @@ impl AnimNode {
 /// [`set_authored_motion_lengths`]) so gestures/emotes complete at their
 /// authored time instead of a flat 2.0 s (the "S-walk reverts to idle at
 /// ~2 s / moonwalk-slide during casts" clip-drain class).
-pub(crate) const RENDERER_DONE_FALLBACK_SECS: f32 = 2.0;
+pub const RENDERER_DONE_FALLBACK_SECS: f32 = 2.0;
 
 thread_local! {
     /// P13/P16-H2 (2026-07-04) — authored one-shot lengths for the LOCAL
@@ -176,7 +176,7 @@ thread_local! {
 
 /// Replace the authored-length table (wasm ingest; re-ingest on mtable
 /// change replaces wholesale so stale entries can't linger).
-pub(crate) fn set_authored_motion_lengths(entries: &[(u32, u32, f32)]) {
+pub fn set_authored_motion_lengths(entries: &[(u32, u32, f32)]) {
     AUTHORED_MOTION_LENGTHS.with(|m| {
         let mut m = m.borrow_mut();
         m.clear();
@@ -195,7 +195,7 @@ pub(crate) fn set_authored_motion_lengths(entries: &[(u32, u32, f32)]) {
 /// base / |speed|. Clamped to a sane band so a degenerate wire speed
 /// can neither wedge the queue (30 s cap) nor complete instantly
 /// (50 ms floor).
-pub(crate) fn authored_len_for(stance: u32, motion: u32, speed: f32) -> Option<f32> {
+pub fn authored_len_for(stance: u32, motion: u32, speed: f32) -> Option<f32> {
     let base = AUTHORED_MOTION_LENGTHS
         .with(|m| m.borrow().get(&((stance & 0xFFFF) as u16, motion)).copied())?;
     let divisor = if speed.is_finite() && speed.abs() > 1.0e-3 {
@@ -210,7 +210,7 @@ pub(crate) fn authored_len_for(stance: u32, motion: u32, speed: f32) -> Option<f
 /// `CPhysicsObj`/`CSequence`; headless Rust emits them for the owner to
 /// route (DESIGN.md STAGE 2 AMENDMENT fan-out diagram).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MotionTableEvent {
+pub enum MotionTableEvent {
     /// `CPhysicsObj::MotionDone(motion, success)`
     /// (`acclient.c:329894`, `:329978`; fan-out `:317097` →
     /// `MovementManager::MotionDone` `:339349`). Consumer: A3-D2's
@@ -238,7 +238,7 @@ pub(crate) enum MotionTableEvent {
 /// `MotionModifierStack`, `holtburger-world` `state/self_movement.rs:137-216`
 /// — DESIGN.md §1: don't duplicate).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MotionState {
+pub struct MotionState {
     // STAGED (Stage-2 selection port `motion_sequence.rs` reads these —
     // `CMotionTable::GetObjectSequence` style/substate resolution,
     // `acclient.c:337641`): written here for struct fidelity, consumed
@@ -275,14 +275,14 @@ impl MotionState {
     // STAGED: the in-tree caller is the Stage-2 selection port
     // (`GetObjectSequence`); seeded from tests only in Q1.
     #[allow(dead_code)]
-    pub(crate) fn add_action(&mut self, action: u32, speed_mod: f32) {
+    pub fn add_action(&mut self, action: u32, speed_mod: f32) {
         self.actions.push_back((action, speed_mod));
     }
 
     /// `MotionState::remove_action_head` — pop the head action,
     /// returning its motion id (0 when empty)
     /// (`acclient.c:341420-341440`; ACE `MotionState.cs:70-74`).
-    pub(crate) fn remove_action_head(&mut self) -> u32 {
+    pub fn remove_action_head(&mut self) -> u32 {
         self.actions.pop_front().map(|(motion, _)| motion).unwrap_or(0)
     }
 }
@@ -290,10 +290,10 @@ impl MotionState {
 /// The faithful `MotionTableManager` queue port (A4-Q1). Per-entity in
 /// Stage 3 (DESIGN.md STAGE 3 AMENDMENT: per-entity instances, no
 /// globals); the local player's instance lives on `MovementSystem`.
-#[derive(Debug, Default)]
-pub(crate) struct MotionTableManager {
+#[derive(Debug, Clone, Default)]
+pub struct MotionTableManager {
     /// `MotionTableManager::state` (`acclient.h:31100`).
-    pub(crate) state: MotionState,
+    pub state: MotionState,
     /// `MotionTableManager::animation_counter` (`acclient.h:31102`) —
     /// how many renderer `AnimationDone` signals have arrived and not
     /// yet been consumed by a queue pop.
@@ -307,7 +307,7 @@ pub(crate) struct MotionTableManager {
 }
 
 impl MotionTableManager {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -315,21 +315,21 @@ impl MotionTableManager {
     /// `MotionDone` into `motion_interp.motion_done`; until it lands the
     /// `movement/system.rs` pump drains-and-drops (flag default-off, so
     /// nothing enqueues either).
-    pub(crate) fn drain_events(&mut self) -> Vec<MotionTableEvent> {
+    pub fn drain_events(&mut self) -> Vec<MotionTableEvent> {
         std::mem::take(&mut self.events)
     }
 
     /// `MotionTableManager::add_to_queue(motion, num_anims, seq)` —
     /// append an [`AnimNode`] then coalesce
     /// (`acclient.c:330149-330169`; ACE `MotionTableManager.cs:163-167`).
-    pub(crate) fn add_to_queue(&mut self, motion: u32, num_anims: u32) {
+    pub fn add_to_queue(&mut self, motion: u32, num_anims: u32) {
         self.add_to_queue_with_len(motion, num_anims, None);
     }
 
     /// P13/P16-H2 — [`Self::add_to_queue`] carrying the authored clip
     /// length the completion-clock shim should use instead of the flat
     /// [`RENDERER_DONE_FALLBACK_SECS`] (see [`AnimNode::new_with_len`]).
-    pub(crate) fn add_to_queue_with_len(
+    pub fn add_to_queue_with_len(
         &mut self,
         motion: u32,
         num_anims: u32,
@@ -350,7 +350,7 @@ impl MotionTableManager {
     // STAGED: caller is A3-D2's PerformMovement dispatch
     // (`acclient.c:344670-344720`); exercised from tests in Q1.
     #[allow(dead_code)]
-    pub(crate) fn queue_object_motion(&mut self, motion: u32, num_anims: u32) {
+    pub fn queue_object_motion(&mut self, motion: u32, num_anims: u32) {
         self.add_to_queue(motion, num_anims);
     }
 
@@ -358,7 +358,7 @@ impl MotionTableManager {
     /// completion budget resolved at the enqueue site
     /// (`do_interpreted_motion` passes the interp's `current_style` +
     /// the live `params.speed` through [`authored_len_for`]).
-    pub(crate) fn queue_object_motion_with_len(
+    pub fn queue_object_motion_with_len(
         &mut self,
         motion: u32,
         num_anims: u32,
@@ -373,7 +373,7 @@ impl MotionTableManager {
     /// `MotionTableManager.cs:130-135`).
     // STAGED: see `queue_object_motion`.
     #[allow(dead_code)]
-    pub(crate) fn queue_object_motion_stop(&mut self, num_anims: u32) {
+    pub fn queue_object_motion_stop(&mut self, num_anims: u32) {
         self.add_to_queue(MOTION_READY, num_anims);
     }
 
@@ -382,7 +382,7 @@ impl MotionTableManager {
     /// `MotionTableManager.cs:137-140`).
     // STAGED: see `queue_object_motion`.
     #[allow(dead_code)]
-    pub(crate) fn queue_stop_completely(&mut self, num_anims: u32) {
+    pub fn queue_stop_completely(&mut self, num_anims: u32) {
         self.add_to_queue(MOTION_READY, num_anims);
     }
 
@@ -396,7 +396,7 @@ impl MotionTableManager {
     // STAGED: caller is A3-D2's `enter_default_state`
     // (`acclient.c:344560-344598`, DESIGN.md amendment Ready-seed).
     #[allow(dead_code)]
-    pub(crate) fn initialize_state(&mut self, default_state_num_anims: u32) {
+    pub fn initialize_state(&mut self, default_state_num_anims: u32) {
         self.add_to_queue(MOTION_READY, default_state_num_anims);
     }
 
@@ -497,7 +497,7 @@ impl MotionTableManager {
     /// `CPhysicsObj::Hook_AnimDone` (`:317087`) →
     /// `CPartArray::AnimationDone` (`:325080`) → here. A4-Q2 wires the
     /// `notifyAnimationDone` export to this.
-    pub(crate) fn animation_done(&mut self, success: bool) {
+    pub fn animation_done(&mut self, success: bool) {
         if self.pending_animations.is_empty() {
             // Retail no-ops (counter NOT incremented) when nothing is
             // pending (`acclient.c:329884` head-null guard).
@@ -542,7 +542,7 @@ impl MotionTableManager {
     /// notify's `+1` then `-num_anims` nets 0 for a satisfied head).
     /// `now = None` keeps the pure retail zero-anim poll (the
     /// non-tick pump sites — same-call drainage of instant motions).
-    pub(crate) fn check_for_completed_motions(&mut self, now: Option<Instant>) {
+    pub fn check_for_completed_motions(&mut self, now: Option<Instant>) {
         loop {
             let Some(head) = self.pending_animations.front().copied() else {
                 break;
@@ -595,7 +595,7 @@ impl MotionTableManager {
     /// `CPartArray::HandleMovement` (`acclient.c:322882` →
     /// `:325106-325112`). Pass `now` from tick-driven pumps to run the
     /// completion-clock shim; `None` from same-call drain sites.
-    pub(crate) fn use_time(&mut self, now: Option<Instant>) {
+    pub fn use_time(&mut self, now: Option<Instant>) {
         self.check_for_completed_motions(now);
     }
 
@@ -607,7 +607,7 @@ impl MotionTableManager {
     /// (retail trigger: `CPhysicsObj::exit_world` →
     /// `CPartArray::HandleExitWorld`, acclient.c:322215-322217 →
     /// :325128-325136).
-    pub(crate) fn handle_exit_world(&mut self) {
+    pub fn handle_exit_world(&mut self) {
         while !self.pending_animations.is_empty() {
             self.animation_done(false);
         }
@@ -623,7 +623,7 @@ impl MotionTableManager {
     // renderer-side by the A4-Q3 JS overlay cancellation
     // (entities.js `_cancelOneShotOverlays`).
     #[allow(dead_code)]
-    pub(crate) fn handle_enter_world(&mut self) {
+    pub fn handle_enter_world(&mut self) {
         self.events.push(MotionTableEvent::RemoveAllLinkAnimations);
         while !self.pending_animations.is_empty() {
             self.animation_done(false);

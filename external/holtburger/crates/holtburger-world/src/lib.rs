@@ -23,6 +23,7 @@ mod identify;
 pub mod inspect;
 pub mod leash_echo_diag;
 pub mod magic;
+pub mod motion;
 pub mod player;
 pub mod sky;
 pub mod pose_snap_diag;

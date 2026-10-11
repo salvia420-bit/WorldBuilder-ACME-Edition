@@ -75,33 +75,6 @@ pub fn remote_motion_sticky_target(data: &MovementTypeData, rust_moveto_sticks: 
     }
 }
 
-/// A3-D3 (2026-06-12): emit the UNCONDITIONAL per-message
-/// [`WorldEvent::EntityMovementEvent`] for a REMOTE entity — retail's
-/// `unpack_movement` preamble is per-unpack, not change-gated
-/// (acclient.c:339518-339519). Skips the local player: that lane is the
-/// gate-bearing `SelfServerControlledMotion` (handlers/player.rs:96-107;
-/// see the event's doc). `target_exists` + the case-6 target dims
-/// resolve against `state.entities` here, where the world is visible
-/// ([`resolve_movement_target`]).
-fn emit_entity_movement_event(
-    state: &WorldState,
-    guid: Guid,
-    data: &MovementEventData,
-    events: &mut Vec<WorldEvent>,
-) {
-    if guid == state.player.guid {
-        return;
-    }
-    let (target_exists, object_radius, object_height) = resolve_movement_target(state, data);
-    events.push(WorldEvent::EntityMovementEvent {
-        guid,
-        data: Box::new(data.clone()),
-        target_exists,
-        object_radius,
-        object_height,
-    });
-}
-
 fn update_entity_motion_snapshot(
     state: &mut WorldState,
     guid: Guid,
@@ -171,7 +144,9 @@ pub(crate) fn handle_message(
                 return false;
             }
             // A3-D3: per-message, before any change gate / early return.
-            emit_entity_movement_event(state, guid, data, events);
+            // MoveTo refactor phase B: onto the object's own movement
+            // manager under the spine (`route_remote_movement`).
+            state.route_remote_movement(guid, data, events);
             let snapshot = EntityMotionSnapshot::from_movement_event(data);
 
             update_entity_motion_snapshot(state, guid, snapshot, events);
@@ -217,7 +192,12 @@ pub(crate) fn handle_message(
                 _ => None,
             };
 
-            if let Some(rotation) = maybe_rotation {
+            // MoveTo refactor phase B: under the spine a remote TurnTo is a
+            // TURN — the object's own MoveToManager turns it by its TurnRight
+            // motion (`unpack_movement` cases 8/9 only arm the MoveTo,
+            // acclient.c:339590-339615) — not a heading snap.
+            let mover_turns = guid != state.player.guid && state.scene.remote_spine_active();
+            if let Some(rotation) = maybe_rotation.filter(|_| !mover_turns) {
                 state.set_entity_rotation(guid, rotation, events)
             } else {
                 false
@@ -270,7 +250,7 @@ pub(crate) fn handle_message(
 
             // --- Movement half (mirrors GameMessage::UpdateMotion) ---
             // A3-D3: per-message, before any change gate.
-            emit_entity_movement_event(state, guid, &data.movement, events);
+            state.route_remote_movement(guid, &data.movement, events);
             let snapshot = EntityMotionSnapshot::from_movement_event(&data.movement);
             update_entity_motion_snapshot(state, guid, snapshot, events);
 
@@ -312,7 +292,8 @@ pub(crate) fn handle_message(
                     _ => None,
                 };
 
-                if let Some(rotation) = maybe_rotation
+                let mover_turns = guid != state.player.guid && state.scene.remote_spine_active();
+                if let Some(rotation) = maybe_rotation.filter(|_| !mover_turns)
                     && state.set_entity_rotation(guid, rotation, events)
                 {
                     handled = true;

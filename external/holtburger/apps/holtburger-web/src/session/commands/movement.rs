@@ -513,10 +513,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // via process_hooks, acclient.c:320035).
             // Empty-queue notifies no-op on both routes
             // (acclient.c:329884 head-null guard).
-            if let Some(w) = world.borrow().as_ref()
+            if let Some(w) = world.borrow_mut().as_mut()
                 && *entity_seeded
             {
                 let is_local = w.player.guid.0 == guid;
+                // MoveTo refactor phase B: a remote object's completion
+                // lands on its OWN movement manager when the spine runs it
+                // (the registry half below is then a map miss).
+                if !is_local {
+                    let _ = w
+                        .scene
+                        .remote_mover_animation_done(holtburger_common::Guid(guid), success);
+                }
                 movement.notify_animation_done_for(
                     holtburger_common::Guid(guid),
                     is_local,
@@ -1751,13 +1759,18 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         // (`MoveToManager::_DoMotion`, acclient.c:344753).
                         // JS `applyRemoteMoveToPhase` plays them
                         // (`?remoteMoveToPhase=off` ignores them).
-                        for (guid, motion) in w.scene.take_remote_moveto_phase_changes() {
+                        // MoveTo refactor phase E: `f32_payload` = the
+                        // speed the rig plays the node at (its interpreted
+                        // speed — a charge's 1.5 × the run rate).
+                        for (guid, motion, speed) in
+                            w.scene.take_remote_moveto_phase_changes_with_speed()
+                        {
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_REMOTE_MOVETO_PHASE,
                                 string_payload: None,
                                 u32_payload: Some(u32::from(guid)),
                                 u32_payload_2: Some(motion),
-                                f32_payload: None,
+                                f32_payload: Some(speed),
                             });
                         }
                     }

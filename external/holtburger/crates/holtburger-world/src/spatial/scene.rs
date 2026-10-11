@@ -7,6 +7,15 @@ use super::{
     physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
+use crate::motion::motion_interp::MotionSideEffects;
+use crate::motion::move_to::MoveToView;
+use crate::motion::movement_manager::UnpackEffects;
+use crate::motion::remote_mover::RemoteMover;
+use crate::motion::target_voyeur::TargetVoyeur;
+use crate::motion::root_motion::{MotionTableRef, RootMotion, root_motion};
+use super::remote_transition::{RemoteMovePlan, ResolvedRemoteMove};
+use holtburger_dat::file_type::MotionKinematics;
+use holtburger_protocol::messages::MovementEventData;
 use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
 use holtburger_common::{Aabb, Frustum, Guid, Triangle, Vector3};
 use holtburger_dat::file_type::SkyDesc;
@@ -436,6 +445,35 @@ pub(crate) fn remote_moveto_turn_delta(
 /// motion (our D1 root motion); the physics velocity is left to the caller
 /// (a landing keeps the bounced velocity and slides it out under friction,
 /// a hard set zeroes it).
+/// MoveTo refactor phase E (2026-10-10) — the speed the rig plays a MoveTo
+/// node's motion at, read off the mover's interp after the node's
+/// `_DoMotion` (`adjust_motion` already folded in `params.speed`, the run
+/// rate and the run hold key's turn ×1.5). WalkBackwards rides the interp as
+/// WalkForward × −0.65; the rig re-applies that rewrite itself, so its speed
+/// is handed back un-scaled.
+fn node_phase_speed(state: &crate::motion::interp_state::InterpretedState, motion: u32) -> f32 {
+    use crate::motion::motion_interp::{
+        BACKWARDS_FACTOR, MOTION_RUN_FORWARD, MOTION_TURN_LEFT, MOTION_TURN_RIGHT,
+        MOTION_WALK_BACKWARDS, MOTION_WALK_FORWARD,
+    };
+    let speed = match motion {
+        MOTION_RUN_FORWARD | MOTION_WALK_FORWARD => state.forward_speed.abs(),
+        MOTION_WALK_BACKWARDS => state.forward_speed.abs() / BACKWARDS_FACTOR,
+        MOTION_TURN_RIGHT | MOTION_TURN_LEFT => state.turn_speed.abs(),
+        _ => 1.0,
+    };
+    if speed.is_finite() && speed > 0.0 { speed } else { 1.0 }
+}
+
+/// MoveTo refactor phase B/C (2026-10-10) — the per-object spine's inputs to
+/// one remote step: each mover's root motion this instant and the moves the
+/// transition resolved (`spatial::remote_transition`).
+#[derive(Clone, Copy)]
+struct SpineStep<'a> {
+    roots: &'a HashMap<Guid, RootMotion>,
+    resolved: &'a HashMap<Guid, ResolvedRemoteMove>,
+}
+
 fn end_remote_arc(body: &mut SpatialBody, guid: Guid, changes: &mut Vec<(Guid, bool)>) {
     if body.remote_arc.take().is_some() {
         changes.push((guid, false));
@@ -1567,7 +1605,39 @@ pub struct SpatialScene {
     /// remote MoveTo phase event. Retail's remote animation follows the
     /// node by construction (`MoveToManager::_DoMotion` acclient.c:344753 →
     /// `CMotionInterp::DoInterpretedMotion`).
-    remote_moveto_phase_changes: Vec<(Guid, u32)>,
+    /// `(guid, motion, speed)` — the speed rides with the motion since the
+    /// MoveTo refactor (phase E, 2026-10-10): the node's own `setMotion`
+    /// speed (see [`Self::note_remote_moveto_motion_speed`]).
+    remote_moveto_phase_changes: Vec<(Guid, u32, f32)>,
+    /// MoveTo refactor phase B (2026-10-10) — `?remoteSpine` (wasm installs
+    /// `true` unless `=off`; struct default `false`, like
+    /// [`Self::remote_interp_enabled`]). ON: every remote object owns a
+    /// retail `MovementManager` ([`Self::remote_movers`]); the wire's
+    /// `unpack_movement` runs on it (`WorldState` movement handler), the body
+    /// moves by that manager's own interpreted motion through its motion
+    /// table ([`root_motion`]), and its MoveToManager steps after the move
+    /// (`MovementManager::UseTime`, acclient.c:322879). This replaces core's
+    /// `drive_remote_movetos` steer ([`SpatialBody::remote_moveto`]), the D1
+    /// constant-speed walk from the wire snapshot and the NETSYNC-3 turn rate
+    /// with one motion source. OFF: those legacy lanes, unchanged.
+    remote_spine_enabled: bool,
+    /// MoveTo refactor phase B — one retail `MovementManager` per remote
+    /// object (`CPhysicsObj::movement_manager`, acclient.h:30943), keyed by
+    /// guid so a directive survives the body being (re)registered. Pruned by
+    /// [`Self::prune_remote_movers`].
+    remote_movers: HashMap<Guid, RemoteMover>,
+    /// MoveTo refactor phase C (2026-10-10) — `?remoteSweep` (wasm installs
+    /// `true` unless `=off`; struct default `false`). ON (with the spine):
+    /// a remote moved by its own motion goes through the retail transition
+    /// (`spatial::remote_transition`) — walls, objects, step-up/down, and
+    /// indoors — instead of the floor sample.
+    remote_sweep_enabled: bool,
+    /// MoveTo refactor phase G (2026-10-10) — `?targetVoyeur` (wasm installs
+    /// `true` unless `=off`; struct default `false`). ON: a MoveTo steers at
+    /// what its target REPORTS through retail's TargetManager voyeur
+    /// (`motion::target_voyeur`: a predicted position, at most every 0.5 s,
+    /// only past 0.5 m) instead of the target's live pose every slice.
+    target_voyeur_enabled: bool,
     /// landdefs-terrain-1 (2026-10-08 follow-ups) — `?openSeaWall` (DEFAULT
     /// ON). ON: an entirely-water landblock (all 81 vertices water —
     /// `CLandBlockStruct::CalcWater`, acclient.c:354566) is a wall for
@@ -1779,6 +1849,10 @@ impl SpatialScene {
             remote_turn_enabled: true,
             remote_airborne_changes: Vec::new(),
             remote_moveto_phase_changes: Vec::new(),
+            remote_spine_enabled: false,
+            remote_sweep_enabled: false,
+            target_voyeur_enabled: false,
+            remote_movers: HashMap::new(),
             open_sea_wall_enabled: true,
             local_sticky_target: None,
             remote_sticky_enabled: false,
@@ -2050,6 +2124,133 @@ impl SpatialScene {
         self.remote_moveto_enabled = enabled;
     }
 
+    /// MoveTo refactor phase B — install `?remoteSpine` (see the field doc).
+    pub fn set_remote_spine_enabled(&mut self, enabled: bool) {
+        self.remote_spine_enabled = enabled;
+        if !enabled {
+            self.remote_movers.clear();
+        }
+    }
+
+    /// MoveTo refactor phase G — install `?targetVoyeur` (see the field doc).
+    pub fn set_target_voyeur_enabled(&mut self, enabled: bool) {
+        self.target_voyeur_enabled = enabled;
+    }
+
+    /// True when MoveTos track their target through the voyeur.
+    pub fn target_voyeur_enabled(&self) -> bool {
+        self.target_voyeur_enabled
+    }
+
+    /// MoveTo refactor phase G — retail `CPhysicsObj::get_velocity` for any
+    /// body: a remote's realized `cached_velocity` (the spine step), the
+    /// local player's solved velocity; zero for an unknown guid.
+    pub fn realized_velocity(&self, guid: Guid) -> Vector3 {
+        if let Some(body) = self.body_store.body(SpatialBodyId::Entity(guid)) {
+            return body.cached_velocity;
+        }
+        if let Some(body) = self.body_store.body(SpatialBodyId::LocalPlayer(guid)) {
+            return body.velocity;
+        }
+        Vector3::zero()
+    }
+
+    /// MoveTo refactor phase C — install `?remoteSweep` (see the field doc).
+    pub fn set_remote_sweep_enabled(&mut self, enabled: bool) {
+        self.remote_sweep_enabled = enabled;
+    }
+
+    /// True when the spine's remote moves go through the transition.
+    pub fn remote_sweep_active(&self) -> bool {
+        self.remote_sweep_enabled && self.remote_spine_active()
+    }
+
+    /// True when remote objects run on their own movement managers (the
+    /// switch AND the remote body driver that steps them).
+    pub fn remote_spine_active(&self) -> bool {
+        self.remote_spine_enabled && self.remote_interp_enabled
+    }
+
+    /// MoveTo refactor phase B — `MovementManager::unpack_movement` for a
+    /// REMOTE object on its own manager (created on first use). `dims` are
+    /// the object's own CPartArray radius/height; `motion_table_id` its
+    /// table. Returns the unpack effects (the case-0 sticky guid) for the
+    /// caller, which owns the radius lookups an install needs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_remote_movement(
+        &mut self,
+        guid: Guid,
+        data: &MovementEventData,
+        target_exists: bool,
+        object_radius: f32,
+        object_height: f32,
+        motion_table_id: Option<u32>,
+        dims: (f32, f32),
+    ) -> UnpackEffects {
+        let mover = self.remote_movers.entry(guid).or_default();
+        mover.motion_table_id = motion_table_id;
+        mover.radius = dims.0;
+        mover.height = dims.1;
+        let effects =
+            mover
+                .movement
+                .apply_unpacked_movement(data, target_exists, object_radius, object_height);
+        let run_rate = mover
+            .movement
+            .motion_interp_ref()
+            .map(|interp| interp.my_run_rate)
+            .unwrap_or(1.0);
+        let moving_to = mover.movement.is_moveto_active();
+        if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
+            body.my_run_rate = run_rate;
+            body.remote_moving_to = moving_to;
+        }
+        effects
+    }
+
+    /// MoveTo refactor phase B — a remote object's movement manager.
+    pub fn remote_mover(&self, guid: Guid) -> Option<&RemoteMover> {
+        self.remote_movers.get(&guid)
+    }
+
+    /// MoveTo refactor phase B — the renderer's `AnimationDone` for a remote
+    /// object, on that object's OWN `MotionTableManager` (retail
+    /// `AnimDoneHook::Execute` → `CPhysicsObj::Hook_AnimDone` →
+    /// `CPartArray::AnimationDone`, acclient.c:342336 → :317087 → :325080).
+    /// `false` = the object has no mover (the caller's legacy route).
+    /// Unstick requests are dropped, as the registry route did (spec §7 OQ-3).
+    pub fn remote_mover_animation_done(&mut self, guid: Guid, success: bool) -> bool {
+        let Some(mover) = self.remote_movers.get_mut(&guid) else {
+            return false;
+        };
+        let _ = mover.movement.animation_done(success);
+        true
+    }
+
+    /// MoveTo refactor phase B — `MovementManager::HandleExitWorld` for a
+    /// remote object (acclient.c:322215-322220, :339411-339417).
+    pub fn remote_mover_exit_world(&mut self, guid: Guid) -> bool {
+        let Some(mover) = self.remote_movers.get_mut(&guid) else {
+            return false;
+        };
+        let _ = mover.movement.handle_exit_world();
+        true
+    }
+
+    /// The remote sticky source decision (`remote_motion_sticky_target`):
+    /// a client-side MoveTo — the D5 pump or the spine — sticks a
+    /// sticky-bit MoveToObject on arrival.
+    pub fn remote_moveto_sticks_on_arrival(&self) -> bool {
+        self.remote_moveto_active() || self.remote_spine_active()
+    }
+
+    /// MoveTo refactor phase B — drop the movement managers of objects the
+    /// world no longer holds (retail destroys the object with its managers,
+    /// `CObjectMaint::UseTime` acclient.c:310246-310278).
+    pub fn prune_remote_movers(&mut self, keep: impl Fn(Guid) -> bool) {
+        self.remote_movers.retain(|guid, _| keep(*guid));
+    }
+
     /// R3 moveto-3 escape (`false` = the pre-R3 bearing steer: walk along
     /// the direct bearing, turn continuously toward it, no interp gate).
     /// Default [`USE_REMOTE_MOVETO_FACING`]; no URL flag plumbed yet.
@@ -2121,6 +2322,15 @@ impl SpatialScene {
     /// MoveToManager node now holds, `0` = none). See
     /// [`Self::note_remote_moveto_motion`].
     pub fn take_remote_moveto_phase_changes(&mut self) -> Vec<(Guid, u32)> {
+        std::mem::take(&mut self.remote_moveto_phase_changes)
+            .into_iter()
+            .map(|(guid, motion, _speed)| (guid, motion))
+            .collect()
+    }
+
+    /// MoveTo refactor phase E — the phase edges with the speed the rig
+    /// plays each node motion at (the wasm drain's form).
+    pub fn take_remote_moveto_phase_changes_with_speed(&mut self) -> Vec<(Guid, u32, f32)> {
         std::mem::take(&mut self.remote_moveto_phase_changes)
     }
 
@@ -5909,6 +6119,298 @@ impl SpatialScene {
     /// [`Self::take_remote_stepped_poses`] ledger for the JS export.
     /// Flag off (default) = zero work, byte-identical.
     pub fn step_remote_position_managers(&mut self, quantum: f32) {
+        self.step_remote_inner(quantum, None);
+    }
+
+    /// MoveTo refactor phase B (2026-10-10) — the per-slice remote step
+    /// with the per-object movement spine. `kinematics` is the MOTK asset
+    /// the movers' root motion reads ([`root_motion`]); `now` is the MoveTo
+    /// progress clock. With the spine inactive (`?remoteSpine=off`) this is
+    /// exactly [`Self::step_remote_position_managers`].
+    ///
+    /// Spine order, per retail `UpdateObjectInternal`
+    /// (acclient.c:322719-322891): every body moves by its object's own
+    /// motion (root motion → PositionManager → the floor), THEN
+    /// `MovementManager::UseTime` runs ([`Self::step_remote_movers`]) — the
+    /// MoveTo `_DoMotion`s it issues are next slice's motion.
+    pub fn step_remote_objects(
+        &mut self,
+        quantum: f32,
+        kinematics: Option<&MotionKinematics>,
+        now: Instant,
+    ) {
+        if !self.remote_spine_active() {
+            self.step_remote_inner(quantum, None);
+            return;
+        }
+        let roots = self.remote_root_motions(kinematics);
+        self.step_remote_spine(quantum, &roots, &HashMap::new(), now);
+    }
+
+    /// MoveTo refactor phase C — the spine step with this slice's
+    /// transition-resolved moves (`WorldState::step_remote_objects`): a
+    /// resolved body takes the swept pose instead of the floor sample.
+    pub(crate) fn step_remote_spine(
+        &mut self,
+        quantum: f32,
+        roots: &HashMap<Guid, RootMotion>,
+        resolved: &HashMap<Guid, ResolvedRemoteMove>,
+        now: Instant,
+    ) {
+        let before: HashMap<Guid, Vector3> = self
+            .body_store
+            .bodies
+            .values()
+            .filter_map(|body| match body.id {
+                SpatialBodyId::Entity(guid) => Some((guid, body.pose.global_coords())),
+                _ => None,
+            })
+            .collect();
+        self.step_remote_inner(quantum, Some(SpineStep { roots, resolved }));
+        // Phase G: `cached_velocity` = the realized offset ÷ quantum
+        // (`UpdateObjectInternal`, acclient.c:322815).
+        if quantum > 0.0 {
+            for body in self.body_store.bodies.values_mut() {
+                if let SpatialBodyId::Entity(guid) = body.id
+                    && let Some(&from) = before.get(&guid)
+                {
+                    let delta = body.pose.global_coords() - from;
+                    body.cached_velocity = delta * (1.0 / quantum);
+                }
+            }
+        }
+        self.step_remote_movers(now);
+    }
+
+    /// The remote walk gate shared by the floor-sampled move and the
+    /// transition planner: the body's own motion moves it unless an
+    /// interpolation node owns this slice (`adjust_offset` replaces the
+    /// offset on contact, acclient.c:389178), it is out of contact, or the
+    /// sticky lane holds it.
+    fn remote_walk_gate(&self, body: &SpatialBody, guid: Guid) -> bool {
+        self.remote_root_motion_enabled
+            && !body.position_manager.queue_active()
+            && body.last_wire_contact.unwrap_or(true)
+            && !self.remote_sticky_targets.contains_key(&guid)
+    }
+
+    /// MoveTo refactor phase C — plan this slice's remote moves for the
+    /// transition (`spatial::remote_transition`): every remote within
+    /// `radius` of the local player that its OWN motion (`roots`) or a
+    /// landing slide moves, indoors included. Same walk gate and slide as the
+    /// floor-sampled move, so the two never disagree on who moves.
+    pub(crate) fn plan_remote_moves(
+        &self,
+        quantum: f32,
+        roots: &HashMap<Guid, RootMotion>,
+        radius: f32,
+    ) -> Vec<RemoteMovePlan> {
+        let Some(player) = self
+            .body_store
+            .bodies
+            .values()
+            .find(|body| matches!(body.id, SpatialBodyId::LocalPlayer(_)))
+            .map(|body| body.pose.global_coords())
+        else {
+            return Vec::new();
+        };
+        let up = Vector3::new(0.0, 0.0, 1.0);
+        self.body_store
+            .bodies
+            .values()
+            .filter_map(|body| {
+                let SpatialBodyId::Entity(guid) = body.id else {
+                    return None;
+                };
+                if body.remote_arc.is_some() {
+                    return None;
+                }
+                let here = body.pose.global_coords();
+                let (dx, dy) = (here.x - player.x, here.y - player.y);
+                if dx * dx + dy * dy > radius * radius {
+                    return None;
+                }
+                let walk_v = if self.remote_walk_gate(body, guid) {
+                    let v = roots.get(&guid).map_or_else(Vector3::zero, |m| m.velocity);
+                    if v.x != 0.0 || v.y != 0.0 {
+                        body.pose.rotation.rotate_vector(v)
+                    } else {
+                        Vector3::zero()
+                    }
+                } else {
+                    Vector3::zero()
+                };
+                let sliding = self.remote_jump_arc_enabled && body.remote_velocity != Vector3::zero();
+                if walk_v == Vector3::zero() && !sliding {
+                    return None;
+                }
+                let (slide_offset, slide_v) = if sliding {
+                    let n = body
+                        .remote_contact_plane
+                        .map(|(plane, _)| plane.normal)
+                        .filter(|n| n.z > 0.0)
+                        .unwrap_or(up);
+                    retail_physics_slice(body.remote_velocity, Some(n), quantum)
+                } else {
+                    (Vector3::zero(), Vector3::zero())
+                };
+                let mut end = body.pose;
+                end.coords = end.coords
+                    + Vector3::new(
+                        walk_v.x * quantum + slide_offset.x,
+                        walk_v.y * quantum + slide_offset.y,
+                        0.0,
+                    );
+                Some(RemoteMovePlan {
+                    guid,
+                    begin: body.pose,
+                    end,
+                    walk_v,
+                    slide_v: Vector3::new(slide_v.x, slide_v.y, 0.0),
+                    contact_plane: body.remote_contact_plane,
+                    wall_normal: body.remote_wall_normal,
+                })
+            })
+            .collect()
+    }
+
+    /// MoveTo refactor phase B — each remote mover's body motion this
+    /// instant: its interpreted state through its motion table
+    /// ([`root_motion`]). Movers at rest are left out.
+    pub(crate) fn remote_root_motions(
+        &self,
+        kinematics: Option<&MotionKinematics>,
+    ) -> HashMap<Guid, RootMotion> {
+        self.remote_movers
+            .iter()
+            .filter_map(|(guid, mover)| {
+                let interp = mover.movement.motion_interp_ref()?;
+                let table = match (kinematics, mover.motion_table_id) {
+                    (Some(kinematics), Some(motion_table_id)) => Some(MotionTableRef {
+                        kinematics,
+                        motion_table_id,
+                    }),
+                    _ => None,
+                };
+                let motion = root_motion(&interp.interpreted_state, table);
+                (!motion.is_still()).then_some((*guid, motion))
+            })
+            .collect()
+    }
+
+    /// MoveTo refactor phase B — `MovementManager::UseTime` for every
+    /// remote object after its body moved this slice (retail runs it after
+    /// the transition, acclient.c:322879): the per-object completion pump
+    /// (`CPartArray::HandleMovement` → `MotionTableManager::UseTime`,
+    /// :325106-325112) and the MoveToManager step (:346018). The
+    /// `_DoMotion`s the step issues land on the same interp the next
+    /// slice's root motion reads, so a MoveTo moves the body exactly the way
+    /// any other motion does: a TurnRight node turns it at its table's turn
+    /// rate until `HandleTurnToHeading` sees the overshoot (:345712), a
+    /// RunForward node runs it along its facing, the 20° aux turns steer it
+    /// (:345577-345651). The heading snap and the sticky-bit arrival stick
+    /// are applied here; a target that left the world cancels 0x37
+    /// (:346086).
+    fn step_remote_movers(&mut self, now: Instant) {
+        let guids: Vec<Guid> = self.remote_movers.keys().copied().collect();
+        for guid in guids {
+            let Some((pose, on_contact, interpolating)) = self.remote_moveto_view(guid) else {
+                continue;
+            };
+            let target = self
+                .remote_movers
+                .get(&guid)
+                .and_then(|mover| mover.movement.moveto_directive_target());
+            let live_target_pose = target.and_then(|t| self.resolve_remote_sticky_target_pose(t));
+            let target_velocity = target.map_or_else(Vector3::zero, |t| self.realized_velocity(t));
+            let own_speed = self
+                .body_store
+                .body(SpatialBodyId::Entity(guid))
+                .map_or(0.0, |body| body.cached_velocity.length());
+            let voyeur_enabled = self.target_voyeur_enabled;
+            let Some(mover) = self.remote_movers.get_mut(&guid) else {
+                continue;
+            };
+            // Phase G: the MoveTo steers at what the target REPORTS
+            // (`motion::target_voyeur`), not its live pose.
+            let target_pose = match (voyeur_enabled, target, live_target_pose) {
+                (true, Some(target), Some(live)) => {
+                    let voyeur = mover
+                        .voyeur
+                        .get_or_insert_with(|| TargetVoyeur::new(target));
+                    if voyeur.target() != target {
+                        *voyeur = TargetVoyeur::new(target);
+                    }
+                    let _ = voyeur.poll(now, live, target_velocity);
+                    voyeur.reported()
+                }
+                _ => {
+                    mover.voyeur = None;
+                    live_target_pose
+                }
+            };
+            // Remote unstick requests stay dropped (spec §7 OQ-3, as the
+            // registry pump did).
+            let _ = mover.movement.pump_completions(now);
+            let mut effects = MotionSideEffects::default();
+            let out = if !mover.movement.is_moveto_active() {
+                None
+            } else if target.is_some() && live_target_pose.is_none() {
+                let _ = mover
+                    .movement
+                    .cancel_moveto_with_effects(0x37, on_contact, &mut effects);
+                None
+            } else {
+                let view = MoveToView {
+                    on_walkable_contact: on_contact,
+                    self_pos: pose,
+                    self_radius: mover.radius,
+                    self_height: mover.height,
+                    target_pos: target_pose,
+                    motions_pending: mover.movement.moveto_motions_pending(),
+                    is_interpolating: interpolating,
+                    now,
+                };
+                Some(mover.movement.use_time_moveto(&view, &mut effects))
+            };
+            let moving_to = mover.movement.is_moveto_active();
+            // Phase G: `HandleMoveToPosition`'s tail — lead the target by
+            // this mover's time to get there (acclient.c:345695-345707).
+            match (&mut mover.voyeur, live_target_pose) {
+                (Some(voyeur), Some(live)) if moving_to => {
+                    voyeur.tune_quantum(pose.distance_to(&live), own_speed);
+                }
+                _ => {}
+            }
+            if !moving_to {
+                mover.voyeur = None;
+            }
+            let node_motion = mover.movement.moveto_node_motion();
+            let node_speed = mover
+                .movement
+                .motion_interp_ref()
+                .map_or(1.0, |interp| node_phase_speed(&interp.interpreted_state, node_motion));
+            let holder_radius = mover.radius;
+            if let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) {
+                body.remote_moving_to = moving_to;
+                if let Some(heading) = out.as_ref().and_then(|out| out.set_heading) {
+                    body.pose.rotation = holtburger_common::Quaternion::from_heading(heading);
+                    let pose = body.pose;
+                    self.remote_sticky_stepped.insert(guid);
+                    self.remote_stepped_poses.insert(guid, pose);
+                }
+            }
+            if let Some((target, target_radius, _height)) = out.and_then(|out| out.stick_to) {
+                self.stick_remote_entity_to(guid, target, holder_radius, target_radius);
+            }
+            self.note_remote_moveto_motion_speed(guid, node_motion, node_speed);
+        }
+    }
+
+    /// The remote step body: legacy lanes when `spine` is `None`; with the
+    /// spine, the movers' root motion replaces the D1 walk, the NETSYNC-3
+    /// turn and the D5 steer (see [`Self::step_remote_objects`]).
+    fn step_remote_inner(&mut self, quantum: f32, spine: Option<SpineStep<'_>>) {
         if !self.remote_interp_enabled {
             return;
         }
@@ -5972,16 +6474,19 @@ impl SpatialScene {
                 let SpatialBodyId::Entity(guid) = body.id else {
                     return None;
                 };
+                // MoveTo refactor phase C: a move the transition resolved
+                // (`WorldState::step_remote_objects`) — walls, objects,
+                // step-up/down, indoors — replaces the floor sample.
+                if let Some(r) = spine.and_then(|s| s.resolved.get(&guid)) {
+                    return Some((guid, (r.pose, r.velocity, r.leave_ground)));
+                }
                 // D7: retail zeroes root motion off walkable ground
                 // (UpdatePositionInternal acclient.c:320014-320025); the arc
                 // below moves an airborne body.
                 if body.remote_arc.is_some() || body.pose.is_indoors() {
                     return None;
                 }
-                let walk = self.remote_root_motion_enabled
-                    && !body.position_manager.queue_active()
-                    && body.last_wire_contact.unwrap_or(true)
-                    && !self.remote_sticky_targets.contains_key(&guid);
+                let walk = self.remote_walk_gate(body, guid);
                 // D5: an active remote MoveTo steer supplies the motion the
                 // retail MoveToManager `_DoMotion`s (RunForward / WalkForward
                 // × movement_params.speed — `remote_moveto_forward_speed`; a
@@ -5989,7 +6494,24 @@ impl SpatialScene {
                 // body's OWN facing, as the motion moves it (the legacy
                 // bearing steer walked the direct bearing and slid sideways).
                 let drive = if self.remote_moveto_enabled { body.remote_moveto } else { None };
-                let walk_v = match drive {
+                // MoveTo refactor phase B: under the spine the walk is the
+                // object's OWN motion — its interpreted state through its
+                // motion table (a MoveTo's RunForward included), along its
+                // facing, as `CSequence::apply_physics` moves it
+                // (acclient.c:339860).
+                let spine_v = spine.map(|spine| {
+                    let v_local = if walk {
+                        spine.roots.get(&guid).map_or_else(Vector3::zero, |motion| motion.velocity)
+                    } else {
+                        Vector3::zero()
+                    };
+                    if v_local.x != 0.0 || v_local.y != 0.0 {
+                        body.pose.rotation.rotate_vector(v_local)
+                    } else {
+                        Vector3::zero()
+                    }
+                });
+                let walk_v = if let Some(v) = spine_v { v } else { match drive {
                     Some(d) if walk && d.forward.is_some() => {
                         let y = remote_moveto_forward_speed(&d, d.forward == Some(true), body.my_run_rate);
                         if self.remote_moveto_facing_enabled {
@@ -6008,7 +6530,7 @@ impl SpatialScene {
                             Vector3::zero()
                         }
                     }
-                };
+                } };
                 let sliding = self.remote_jump_arc_enabled && body.remote_velocity != Vector3::zero();
                 if walk_v == Vector3::zero() && !sliding {
                     return None;
@@ -6099,7 +6621,14 @@ impl SpatialScene {
             if let Some(&(next, v, leave_ground)) = ground_moves.get(&guid) {
                 body.pose = next;
                 body.remote_velocity = v;
+                // Phase C: the transition's contact plane / wall normal carry
+                // to the mover's next transition (retail `contact_plane`).
+                if let Some(r) = spine.and_then(|s| s.resolved.get(&guid)) {
+                    body.remote_contact_plane = r.contact_plane;
+                    body.remote_wall_normal = r.wall_normal;
+                }
                 if leave_ground {
+                    body.remote_contact_plane = None;
                     body.remote_arc = Some(super::RemoteArc {
                         takeoff_z: next.coords.z,
                         unsampled_floor: None,
@@ -6157,14 +6686,22 @@ impl SpatialScene {
             // row exports heading-owned (the sticky-row channel) so JS
             // applies the turned quaternion instead of easing to the stale
             // wire heading.
-            if self.remote_turn_enabled
+            if (spine.is_some() || self.remote_turn_enabled)
                 && body.remote_moveto.is_none()
                 && !self.remote_sticky_targets.contains_key(&guid)
             {
                 let interp_owns = body.position_manager.queue_active()
                     && body.remote_arc.is_none()
                     && body.last_wire_contact.unwrap_or(true);
-                let omega_z = body.state_omega_z();
+                // MoveTo refactor phase B: under the spine the turn rate is
+                // the object's own motion — its table's TurnRight omega ×
+                // the interp's turn speed, a MoveTo turn node or aux turn
+                // included (it turns PAST a node like retail's motion, so
+                // `HandleTurnToHeading`'s strict overshoot test completes it).
+                let omega_z = match spine {
+                    Some(spine) => spine.roots.get(&guid).map_or(0.0, |motion| motion.omega_z),
+                    None => body.state_omega_z(),
+                };
                 if !interp_owns && omega_z.is_finite() && omega_z != 0.0 {
                     let half = 0.5 * omega_z * quantum;
                     let spin = holtburger_common::Quaternion {
@@ -6318,9 +6855,9 @@ impl SpatialScene {
             // quaternion, not its wire-heading ease). The old continuous
             // turn flagged them as a side effect.
             if stepped
-                && self.remote_moveto_enabled
-                && body.remote_moveto.is_some()
                 && body.remote_arc.is_none()
+                && ((self.remote_moveto_enabled && body.remote_moveto.is_some())
+                    || (spine.is_some() && body.remote_moving_to))
             {
                 self.remote_sticky_stepped.insert(guid);
             }
@@ -6507,14 +7044,28 @@ impl SpatialScene {
     /// unchanged motion records nothing, so a steady chase costs nothing;
     /// a guid with no body is ignored.
     pub fn note_remote_moveto_motion(&mut self, guid: Guid, motion: u32) {
+        self.note_remote_moveto_motion_speed(guid, motion, 1.0);
+    }
+
+    /// MoveTo refactor phase E (2026-10-10) — [`Self::note_remote_moveto_motion`]
+    /// with the speed the rig plays the node motion at: retail plays the
+    /// node on the mover's own interp at its interpreted speed
+    /// (`change_cycle_speed` — framerate × speed, acclient.c:340968), so a
+    /// charge (`params.speed 1.5` × the run rate) runs its cycle that much
+    /// faster. A change of either records an edge.
+    pub fn note_remote_moveto_motion_speed(&mut self, guid: Guid, motion: u32, speed: f32) {
         let Some(body) = self.body_store.body_mut(SpatialBodyId::Entity(guid)) else {
             return;
         };
-        if body.remote_moveto_motion == motion {
+        let speed = if speed.is_finite() && speed > 0.0 { speed } else { 1.0 };
+        if body.remote_moveto_motion == motion
+            && (motion == 0 || (body.remote_moveto_speed - speed).abs() < 1e-3)
+        {
             return;
         }
         body.remote_moveto_motion = motion;
-        self.remote_moveto_phase_changes.push((guid, motion));
+        body.remote_moveto_speed = speed;
+        self.remote_moveto_phase_changes.push((guid, motion, speed));
     }
 
     /// R3 moveto-4 — the remote body's current MoveTo node motion (diag/tests).
@@ -6916,6 +7467,7 @@ impl SpatialScene {
         let remote_stepped_poses = std::mem::take(&mut self.remote_stepped_poses);
         let remote_airborne_changes = std::mem::take(&mut self.remote_airborne_changes);
         let remote_moveto_phase_changes = std::mem::take(&mut self.remote_moveto_phase_changes);
+        let remote_movers = std::mem::take(&mut self.remote_movers);
         let remote_sticky_targets = std::mem::take(&mut self.remote_sticky_targets);
         let remote_sticky_stepped = std::mem::take(&mut self.remote_sticky_stepped);
         let sky_desc = self.sky_desc.take();
@@ -6926,6 +7478,7 @@ impl SpatialScene {
         self.remote_stepped_poses = remote_stepped_poses;
         self.remote_airborne_changes = remote_airborne_changes;
         self.remote_moveto_phase_changes = remote_moveto_phase_changes;
+        self.remote_movers = remote_movers;
         self.remote_sticky_targets = remote_sticky_targets;
         self.remote_sticky_stepped = remote_sticky_stepped;
         self.sky_desc = sky_desc;

@@ -7042,15 +7042,12 @@ async fn moveto_driver_walks_then_arrives_with_single_stop_edge() {
         .current_local_drive_control(&world, Duration::from_millis(16))
         .expect("walk steering must ride the autonomous drive lane");
     assert_eq!(drive.body_id, SpatialBodyId::LocalPlayer(guid));
-    // Forward toward the target, scaled by the walk gait speed × dt —
-    // the seam's per-slice pre-scaling. COL-10 (2026-07-27): the
-    // autonomous MoveTo Walk lane realizes retail's `WalkAnimSpeed`
-    // (3.1199999 m/s, `acclient.c:343561`), NOT the fixture's authored
-    // base walk (1.0 m/s from
-    // `seed_self_movement_capabilities_override`) this used to pin —
-    // see the Walk arm of the autonomous speed resolve in `system.rs`.
-    let expected_x = super::super::motion_interp::WALK_ANIM_SPEED
-        * Duration::from_millis(16).as_secs_f32();
+    // Forward toward the target (the body faces it), scaled by the walk
+    // speed × dt — the seam's per-slice pre-scaling. MoveTo refactor phase
+    // D: the body moves by the WalkForward node on the local interp at the
+    // table's walk base (the fixture's 1.0 m/s from
+    // `seed_self_movement_capabilities_override`; COL-10 reverted).
+    let expected_x = 1.0 * Duration::from_millis(16).as_secs_f32();
     assert!(
         (drive.desired_world_delta.x - expected_x).abs() < 1e-4
             && drive.desired_world_delta.y.abs() < 1e-4,
@@ -11906,4 +11903,157 @@ fn teleport_hook_clears_the_interpreter_autorun() {
         !movement.command_interpreter.as_ref().expect("interpreter kept").auto_run,
         "interpreter autorun cleared"
     );
+}
+
+// =====================================================================
+// MoveTo refactor phase D (2026-10-10) — the LOCAL MoveTo moves the body
+// by its own interpreted motion (USE_LOCAL_MOVETO_MOTION).
+// =====================================================================
+
+/// A wire MoveToObject for the local player with a chosen `speed` and
+/// envelope `run_rate` (an ACE melee charge is speed 1.5).
+fn local_charge_event(
+    guid: Guid,
+    target: Guid,
+    target_pos: WorldPosition,
+    speed: f32,
+    run_rate: f32,
+) -> holtburger_protocol::messages::MovementEventData {
+    use holtburger_protocol::messages::MovementTypeData;
+    let mut data = moveto_object_event_for(guid, target, target_pos);
+    if let MovementTypeData::MoveToObject(moveto) = &mut data.data {
+        moveto.params.speed = speed;
+        moveto.run_rate = run_rate;
+    }
+    data
+}
+
+/// The local player at (50, 50) facing `heading_deg` (AC: 90 north, 180
+/// east), a target `distance` m due east, the capabilities fixture (walk
+/// 2.6, run 4.0, turn 1.5) and the MoveTo installed through the registry.
+fn local_moveto_rig(
+    heading_deg: f32,
+    distance: f32,
+    speed: f32,
+    run_rate: f32,
+) -> (WorldState, MovementSystem, Guid) {
+    use holtburger_world::WorldEvent;
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0123);
+    let target_guid = Guid(0x8000_0042);
+    let position = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::from_heading(heading_deg.to_radians()),
+    };
+    let target_pos = WorldPosition {
+        landblock_id: Guid(0x1234_0019),
+        coords: Vector3::new(50.0 + distance, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    world.player.guid = guid;
+    seed_local_player(&mut world, guid, position);
+    seed_self_movement_capabilities_override(&mut world, 1.0, 2.6, 4.0, 1.5);
+    world
+        .entities
+        .insert(Entity::new(target_guid, "Drudge".to_string(), target_pos));
+    let mut movement = MovementSystem::new();
+    movement.apply_movement_world_events_ungated(&[WorldEvent::SelfServerControlledMotion {
+        data: Box::new(local_charge_event(guid, target_guid, target_pos, speed, run_rate)),
+        target_exists: true,
+        object_radius: 0.5,
+        object_height: 1.8,
+    }]);
+    assert!(movement.moveto_is_active(guid));
+    (world, movement, guid)
+}
+
+/// D-1: an ACE melee charge (`speed 1.5`, envelope run rate 2.0) runs the
+/// body at the table run × 1.5 × 2.0 — `apply_run_to_command` folds both
+/// into the RunForward node's speed — not at the plain manual run speed.
+#[tokio::test]
+async fn local_charge_runs_at_params_speed_times_run_rate() {
+    let (mut world, mut movement, _guid) = local_moveto_rig(180.0, 30.0, 1.5, 2.0);
+    let _ = movement.drive_local_moveto(Instant::now(), &mut world);
+    let dt = Duration::from_millis(100);
+    let drive = movement
+        .current_local_drive_control(&world, dt)
+        .expect("the MoveTo drives the body");
+    let speed = drive.desired_world_delta.length() / dt.as_secs_f32();
+    assert!((speed - 4.0 * 1.5 * 2.0).abs() < 1e-3, "charge speed {speed} m/s");
+    assert!(drive.desired_world_delta.x > 0.0, "toward the target (east)");
+    assert_eq!(drive.gait, LocalDriveGait::Run);
+}
+
+/// D-3: inside the 20° aux band the body travels along its FACING (retail
+/// moves it by its RunForward motion), not along the direct bearing; the
+/// legacy steer (`?localMoveToMotion=off`) walks the bearing.
+#[tokio::test]
+async fn local_moveto_travels_along_the_facing_not_the_bearing() {
+    // Facing the target 30 m due east: the turn node pops, the run begins.
+    let (mut world, mut movement, _guid) = local_moveto_rig(180.0, 30.0, 1.0, 1.0);
+    let now = Instant::now();
+    let _ = movement.drive_local_moveto(now, &mut world);
+    // The target sidesteps ~9.5° north of the facing — inside the 20° aux
+    // deadband (`HandleMoveToPosition`, acclient.c:345620-345651): no turn.
+    world.entities.get_mut(Guid(0x8000_0042)).unwrap().position.coords = Vector3::new(80.0, 55.0, 0.0);
+    let _ = movement.drive_local_moveto(now + Duration::from_millis(100), &mut world);
+    let dt = Duration::from_millis(100);
+    let drive = movement.current_local_drive_control(&world, dt).unwrap();
+    let travel = Vector3::zero().heading_to(&drive.desired_world_delta).to_degrees();
+    assert!((travel - 180.0).abs() < 0.1, "along the facing: {travel}°");
+    assert!(drive.desired_heading.is_some_and(|h| (h.to_degrees() - 180.0).abs() < 0.1), "no aux turn");
+
+    movement.set_local_moveto_motion(false);
+    let legacy = movement.current_local_drive_control(&world, dt).unwrap();
+    let bearing = Vector3::zero().heading_to(&legacy.desired_world_delta).to_degrees();
+    let expected = (180.0 - (5.0f32 / 30.0).atan().to_degrees()).rem_euclid(360.0);
+    assert!((bearing - expected).abs() < 0.2, "legacy steer walks the bearing: {bearing}° vs {expected}°");
+}
+
+/// A turn node turns the body at the table TurnRight rate × the node's
+/// speed (the run hold key's ×1.5 included) and does not travel.
+#[tokio::test]
+async fn local_moveto_turn_node_turns_at_the_table_rate() {
+    // Facing north (90°), target due east: a TurnRight node first.
+    let (mut world, mut movement, _guid) = local_moveto_rig(90.0, 30.0, 1.0, 1.0);
+    let _ = movement.drive_local_moveto(Instant::now(), &mut world);
+    let dt = Duration::from_millis(100);
+    let drive = movement.current_local_drive_control(&world, dt).unwrap();
+    assert!(drive.desired_world_delta.length() < 1e-6, "a turn in place");
+    let turned = drive.desired_heading.unwrap() - 90f32.to_radians();
+    assert!(turned > 0.0, "clockwise toward east");
+    let rate = turned / dt.as_secs_f32();
+    assert!(
+        (rate - 1.5).abs() < 1e-3 || (rate - 1.5 * 1.5).abs() < 1e-3,
+        "the table rate (× the run hold key): {rate} rad/s"
+    );
+}
+
+/// MoveTo refactor phase G: with `?targetVoyeur` the local MoveTo steers at
+/// what its target reports (the first answer at once, then only past 0.5 m
+/// at the 0.5 s cadence), and the registration ends with the MoveTo.
+#[tokio::test]
+async fn local_moveto_tracks_the_target_through_the_voyeur() {
+    let (mut world, mut movement, guid) = local_moveto_rig(180.0, 30.0, 1.0, 1.0);
+    world.scene.set_target_voyeur_enabled(true);
+    let target = Guid(0x8000_0042);
+    let t0 = Instant::now();
+    let _ = movement.drive_local_moveto(t0, &mut world);
+    let reported = |m: &MovementSystem| m.local_voyeur.as_ref().and_then(|v| v.reported()).map(|p| p.coords);
+    assert_eq!(reported(&movement), Some(Vector3::new(80.0, 50.0, 0.0)));
+    // 0.3 m: inside the radius.
+    world.entities.get_mut(target).unwrap().position.coords.y += 0.3;
+    let _ = movement.drive_local_moveto(t0 + Duration::from_millis(600), &mut world);
+    assert_eq!(reported(&movement), Some(Vector3::new(80.0, 50.0, 0.0)));
+    // 0.9 m total, 0.6 s after the last pass: reported.
+    world.entities.get_mut(target).unwrap().position.coords.y += 0.6;
+    let _ = movement.drive_local_moveto(t0 + Duration::from_millis(1200), &mut world);
+    let now = reported(&movement).unwrap();
+    assert!((now.y - 50.9).abs() < 1e-4, "{now:?}");
+    // The MoveTo ends (manual cancel) → the registration is dropped.
+    movement.manual_moveto_cancel_pending = true;
+    let _ = movement.drive_local_moveto(t0 + Duration::from_millis(1300), &mut world);
+    assert!(movement.local_voyeur.is_none());
+    assert!(!movement.moveto_is_active(guid));
 }

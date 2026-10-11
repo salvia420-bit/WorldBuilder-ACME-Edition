@@ -3,6 +3,7 @@ pub mod fellowship;
 pub mod liveness;
 pub mod motion_resolution;
 pub mod mutations;
+pub mod remote_movement;
 pub mod self_movement;
 #[cfg(test)]
 pub mod tests;

@@ -25,6 +25,9 @@ pub mod scenery;
 /// (retail `CObjCell::find_obj_collisions` → `CPhysicsObj::FindObjCollisions`),
 /// behind the default-off `?objCollideInTransition` switch.
 pub mod obj_collision;
+/// MoveTo refactor phase C (2026-10-10) — remote movers through the
+/// retail transition.
+pub mod remote_transition;
 /// Housing barriers in the faithful transition (retail
 /// `CObjCell::check_entry_restrictions`), behind `?houseBarriers` (default
 /// ON, `=off` escape).
@@ -80,6 +83,10 @@ pub(crate) use physics::project_pose_by_velocity_with_collision;
 
 #[cfg(test)]
 mod tests;
+
+/// MoveTo refactor phase B (2026-10-10) — the per-object movement spine.
+#[cfg(test)]
+mod remote_spine_tests;
 
 /// Offline repro + diagnosis of the Holtburg grocer EnvCell-seam
 /// movement-refusal bug (Environment 840, cells 0xA9B4016A..0xA9B4016E),

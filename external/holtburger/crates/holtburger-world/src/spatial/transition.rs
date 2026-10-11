@@ -565,6 +565,7 @@ pub(crate) fn obj_collider_for_entity(
                     height: PLAYER_SETUP_HEIGHT,
                 }],
                 spheres: Vec::new(),
+                step_heights: None,
             })
         }
     };
@@ -2165,6 +2166,7 @@ mod tests {
                     height: 2.0,
                 }],
                 spheres: Vec::new(),
+                step_heights: None,
             },
         );
         let mut near = entity_at(0x8000_0002, pose_at(51.0, 50.0, 10.0));

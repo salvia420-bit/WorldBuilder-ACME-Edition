@@ -49,9 +49,9 @@ use holtburger_common::Guid;
 /// Retail `MovementType` node-tag values (ACE MovementType.cs:16-18).
 /// The `pending_actions` list only ever carries these two.
 #[allow(dead_code)] // documentation constants (the enum payload IS the tag)
-pub(crate) const NODE_TYPE_MOVE_TO_POSITION: u32 = 7;
+pub const NODE_TYPE_MOVE_TO_POSITION: u32 = 7;
 #[allow(dead_code)]
-pub(crate) const NODE_TYPE_TURN_TO_HEADING: u32 = 9;
+pub const NODE_TYPE_TURN_TO_HEADING: u32 = 9;
 
 impl MoveToManager {
     // ---- construction (ctor / Create) ----------------------------------
@@ -66,7 +66,7 @@ impl MoveToManager {
     /// seams → `None`, locals → the `InitializeLocalVariables` seeds).
     /// Retail-name alias so call sites read like the decomp.
     #[allow(dead_code)] // staged: lifecycle callers arrive with the P13 teardown wiring
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -78,7 +78,7 @@ impl MoveToManager {
     /// seam handles. `0x160`=352-byte alloc is the concrete struct size
     /// (UDT 0x000165e3) — not modeled (Rust owns layout).
     #[allow(dead_code)] // staged: lifecycle callers arrive with the P13 teardown wiring
-    pub(crate) fn create(physics_obj: Option<Guid>, weenie_obj: Option<Guid>) -> Self {
+    pub fn create(physics_obj: Option<Guid>, weenie_obj: Option<Guid>) -> Self {
         let mut m = Self::new();
         m.set_physics_object(physics_obj);
         m.set_weenie_object(weenie_obj);
@@ -92,7 +92,7 @@ impl MoveToManager {
     /// per-tick pose/radius/height keep flowing through
     /// [`super::move_to::MoveToView`] (single physics source; no
     /// double-read).
-    pub(crate) fn set_physics_object(&mut self, physics_obj: Option<Guid>) {
+    pub fn set_physics_object(&mut self, physics_obj: Option<Guid>) {
         self.set_physics_obj_handle(physics_obj);
     }
 
@@ -100,7 +100,7 @@ impl MoveToManager {
     /// `this->weenie_obj = wobj`. Identity handle for the P12
     /// weenie-notify / `ReportExhaustion` seam; completion itself rides
     /// the latch.
-    pub(crate) fn set_weenie_object(&mut self, weenie_obj: Option<Guid>) {
+    pub fn set_weenie_object(&mut self, weenie_obj: Option<Guid>) {
         self.set_weenie_obj_handle(weenie_obj);
     }
 
@@ -114,7 +114,7 @@ impl MoveToManager {
     /// read. Seam handles are preserved (retail leaves them; only the
     /// ctor nulls them).
     #[allow(dead_code)] // reset_driver_state is the live callee; this is the retail-named seam
-    pub(crate) fn initialize_local_variables(&mut self) {
+    pub fn initialize_local_variables(&mut self) {
         self.reset_driver_state_public();
     }
 
@@ -128,7 +128,7 @@ impl MoveToManager {
     /// `Destroy` PRESERVES physics_obj/weenie_obj across the reset
     /// (InitLocals doesn't touch them) — so does this.
     #[allow(dead_code)] // staged: retail-dtor call sites (MakeMoveToManager replace path)
-    pub(crate) fn destroy(&mut self) {
+    pub fn destroy(&mut self) {
         // reset_driver_state already clears pending_nodes + reseeds locals.
         self.reset_driver_state_public();
     }
@@ -139,7 +139,7 @@ impl MoveToManager {
     /// `new` a type-7 node (no heading) and `InsertAfter(tail)`.
     /// ⇒ `pending_nodes.push_back(MoveToNode::MoveToPosition)`.
     #[allow(dead_code)] // staged: retail-named delegate for the build_* push sites
-    pub(crate) fn add_move_to_position_node(&mut self) {
+    pub fn add_move_to_position_node(&mut self) {
         self.push_node(MoveToNode::MoveToPosition);
     }
 
@@ -148,7 +148,7 @@ impl MoveToManager {
     /// (DEGREES, retail node domain), `InsertAfter(tail)`.
     /// ⇒ `pending_nodes.push_back(MoveToNode::TurnToHeading(heading))`.
     #[allow(dead_code)] // staged: retail-named delegate for the build_* push sites
-    pub(crate) fn add_turn_to_heading_node(&mut self, heading_deg: f32) {
+    pub fn add_turn_to_heading_node(&mut self, heading_deg: f32) {
         self.push_node(MoveToNode::TurnToHeading(heading_deg));
     }
 }
@@ -156,7 +156,7 @@ impl MoveToManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::movement::move_to::{MoveToManager, MoveToNode};
+    use crate::motion::move_to::{MoveToManager, MoveToNode};
 
     /// ctor/`new`/`create` seed identity: fresh manager is inactive with
     /// empty node queue; `create` records both seam handles; `new`==default.

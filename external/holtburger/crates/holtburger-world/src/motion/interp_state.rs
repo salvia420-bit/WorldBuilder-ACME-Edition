@@ -22,13 +22,13 @@ use std::collections::VecDeque;
 /// `acclient.c:344639`; ACE `MotionCommand.NonCombat`) — the
 /// `InterpretedMotionState.current_style` default and the style the
 /// `DoMotion` lattice's combat-restriction gate keys off (A3-D3).
-pub(crate) const MOTION_NONCOMBAT_STYLE: u32 = 0x8000_003D;
+pub const MOTION_NONCOMBAT_STYLE: u32 = 0x8000_003D;
 
 /// Forward command after `adjust_motion` — `WalkBackwards` never survives
 /// interpretation (it is rewritten to `WalkForward` with a negated speed,
 /// `acclient.c:343764-343767` / `MotionInterp.cs:404-406`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InterpretedForwardCommand {
+pub enum InterpretedForwardCommand {
     WalkForward,
     RunForward,
     /// FU6 (row 11) — retail stores ANY 0x40000000-class substate in
@@ -41,13 +41,13 @@ pub(crate) enum InterpretedForwardCommand {
 
 /// One pending interpreted one-shot action `(motion id, speed)` — the
 /// FIFO `PerformMovement` (stage 2) drains into the rig.
-pub(crate) type PendingAction = (u32, f32);
+pub type PendingAction = (u32, f32);
 
 /// Runtime `InterpretedMotionState`. `sidestep` / `turn` are presence
 /// flags for the normalized `SideStepRight` / `TurnRight` commands; the
 /// signed speeds carry the direction (see module doc).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct InterpretedState {
+pub struct InterpretedState {
     /// Full 32-bit current style dword (`InterpretedMotionState.
     /// current_style`, default NonCombat `0x8000003D` —
     /// `acclient.c:344639`; ACE `InterpretedMotionState.cs:131`). Read by
@@ -93,7 +93,7 @@ impl InterpretedState {
     /// half of `move_to_interpreted_state` (`acclient.c:344372-344398`);
     /// actions are replayed separately under the stamp gate.
     #[allow(dead_code)]
-    pub(crate) fn copy_movement_from(&mut self, other: &InterpretedState) {
+    pub fn copy_movement_from(&mut self, other: &InterpretedState) {
         // ACE `copy_movement_from` copies CurrentStyle along with the
         // movement axes (`InterpretedMotionState.cs:61-69`).
         self.current_style = other.current_style;
@@ -108,7 +108,7 @@ impl InterpretedState {
     /// `InterpretedMotionState::ApplyMotion` action arm — queue a
     /// one-shot action for the (stage 2) sequence consumer.
     #[allow(dead_code)]
-    pub(crate) fn apply_action(&mut self, action: u32, speed: f32) {
+    pub fn apply_action(&mut self, action: u32, speed: f32) {
         self.actions.push_back((action, speed));
     }
 
@@ -118,14 +118,14 @@ impl InterpretedState {
     /// `InterpretedMotionState.cs:80-87`). Fired by the A3-D2
     /// completion pop (`CMotionInterp::MotionDone`,
     /// `acclient.c:343660`).
-    pub(crate) fn remove_action(&mut self) -> u32 {
+    pub fn remove_action(&mut self) -> u32 {
         self.actions.pop_front().map(|(action, _)| action).unwrap_or(0)
     }
 
     /// `InterpretedMotionState::GetNumActions`
     /// (`acclient.c:332815-332825`).
     #[allow(dead_code)] // staged: the D3 DoMotion validation lattice reads it
-    pub(crate) fn num_actions(&self) -> usize {
+    pub fn num_actions(&self) -> usize {
         self.actions.len()
     }
 
@@ -136,7 +136,7 @@ impl InterpretedState {
     /// the cap lands here so the FIFO is bounded the moment anything
     /// enqueues through it.
     #[allow(dead_code)] // staged: D3 DoMotion lattice is the in-tree caller
-    pub(crate) fn apply_action_capped(&mut self, action: u32, speed: f32) -> Result<(), u32> {
+    pub fn apply_action_capped(&mut self, action: u32, speed: f32) -> Result<(), u32> {
         if self.actions.len() >= 6 {
             return Err(69);
         }
@@ -148,7 +148,7 @@ impl InterpretedState {
     /// `StopCompletely` (`acclient.c:343597-343638`). The action FIFO is
     /// NOT cleared (retail lets queued one-shots complete).
     #[allow(dead_code)]
-    pub(crate) fn stop_movement(&mut self) {
+    pub fn stop_movement(&mut self) {
         let actions = std::mem::take(&mut self.actions);
         *self = InterpretedState {
             actions,
@@ -178,7 +178,7 @@ impl InterpretedState {
     /// enforced by the `DoMotion` lattice BEFORE dispatch,
     /// `acclient.c:344651-344653`, so this arm appends uncapped exactly
     /// as retail's).
-    pub(crate) fn apply_motion(&mut self, motion: u32, speed: f32) {
+    pub fn apply_motion(&mut self, motion: u32, speed: f32) {
         const TURN_RIGHT: u32 = 0x6500_000D;
         const SIDESTEP_RIGHT: u32 = 0x6500_000F;
         const WALK_FORWARD: u32 = 0x4500_0005;
@@ -235,7 +235,7 @@ impl InterpretedState {
     /// (here: any substate removal returns the forward slot to "no
     /// locomotion" Ready form when the held command matches); a style
     /// removal matching `current_style` resets to NonCombat.
-    pub(crate) fn remove_motion(&mut self, motion: u32) {
+    pub fn remove_motion(&mut self, motion: u32) {
         const TURN_RIGHT: u32 = 0x6500_000D;
         const SIDESTEP_RIGHT: u32 = 0x6500_000F;
         const WALK_FORWARD: u32 = 0x4500_0005;

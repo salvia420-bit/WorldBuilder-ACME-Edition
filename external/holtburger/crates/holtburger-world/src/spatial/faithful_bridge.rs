@@ -4005,6 +4005,7 @@ mod drift {
                         center: v(0.0, 0.0, 0.5),
                         radius: 0.5,
                     }],
+                    step_heights: None,
                 }),
             }
         }
@@ -4314,6 +4315,7 @@ mod drift {
                         height,
                     }],
                     spheres: Vec::new(),
+                    step_heights: None,
                 }),
             }
         }

@@ -1,9 +1,7 @@
-// COL-10 (2026-07-27): the walk body speed IS retail's `WalkAnimSpeed`
-// (`acclient.c:343561`) — see `forward_axis_speed`.
 // MOVE-F6 (2026-08-11): `RunAnimSpeed` is BOTH the run body speed
 // (`:343565`) and the multiplier in retail's state-velocity ceiling
 // (`:343586`) — see `state_velocity_speed_cap`.
-use super::motion_interp::{RUN_ANIM_SPEED, WALK_ANIM_SPEED};
+use super::motion_interp::RUN_ANIM_SPEED;
 use crate::client::movement_types::{
     ForwardLocomotion, Gait, MotionState, MotionStyle, MovementPacketMetadata, SidestepLocomotion,
     Turn, planar_velocity_for_heading,
@@ -999,15 +997,11 @@ const BACKWARDS_FACTOR: f32 = 0.649_999_98;
 /// We derive the magnitude from the walk-forward base so backstep stays
 /// consistent with however the walk-forward base is sourced.
 ///
-/// COL-10 (2026-07-27) — walk-forward magnitude resolved. The walk base is
-/// retail's `WalkAnimSpeed` constant [`WALK_ANIM_SPEED`] (3.1199999 m/s),
-/// NOT the authored DAT walk-cycle base (2.6017 m/s) this used to read off
-/// `capabilities.base_walk_forward_speed()`. Retail's `get_state_velocity`
-/// moves a `WalkForward` body at `3.1199999 * forward_speed`
-/// (`~/ac-headers/acclient.c:343561`) and ACE's server model matches, so
-/// the DAT-sourced base under-ran both by 1.199x. Backstep therefore lands
-/// on the retail `3.1199999 * 0.65 ≈ 2.028` m/s. RUN is unchanged — the
-/// authored run cycle base IS 4.000, the same number retail hardcodes.
+/// MoveTo refactor phase D (2026-10-10) — COL-10 reverted: the walk base
+/// is the motion table's authored walk cycle base
+/// (`capabilities.base_walk_forward_speed()`, 2.6017 m/s for the player
+/// table), as retail moves the body by its animation sequence; backstep is
+/// that × `BackwardsFactor` (≈ 1.69 m/s). See `motion_interp::WALK_ANIM_SPEED`.
 ///
 /// Sidestep additionally clamps at ±3.0 m/s per retail
 /// (`acclient.c:343474-343480` + `MotionInterp.cs:550-560`).
@@ -1015,11 +1009,13 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
     match (state.gait, state.forward) {
         (_, None) => 0.0,
         (Gait::Run, Some(ForwardLocomotion::Forward)) => capabilities.resolved_manual_run_speed(),
-        (Gait::Walk, Some(ForwardLocomotion::Forward)) => WALK_ANIM_SPEED,
+        (Gait::Walk, Some(ForwardLocomotion::Forward)) => capabilities.base_walk_forward_speed(),
         (Gait::Run, Some(ForwardLocomotion::Backstep)) => {
-            WALK_ANIM_SPEED * BACKWARDS_FACTOR * capabilities.run_rate_scalar
+            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR * capabilities.run_rate_scalar
         }
-        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => WALK_ANIM_SPEED * BACKWARDS_FACTOR,
+        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => {
+            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR
+        }
     }
 }
 
@@ -1363,16 +1359,15 @@ mod tests {
         // returns (-cos*speed, sin*speed, 0) so heading=0 gives -X).
         let velocity = local_velocity_for_state(0.0, state, &capabilities);
 
-        // Forward at heading 0 contributes (-WALK_ANIM_SPEED, 0, 0). COL-10
-        // (2026-07-27): the walk magnitude is retail's `WalkAnimSpeed`
-        // constant, no longer the fixture's `base_walk_forward_velocity`
-        // (1.0 m/s) — see `forward_axis_speed`.
+        // Forward at heading 0 contributes (-1.0, 0.0, 0.0) (walk speed = 1.0
+        // m/s by test capabilities `base_walk_forward_velocity`; COL-10
+        // reverted 2026-10-10 — the walk base is the table's).
         // StrafeRight at heading 0 contributes (0.0, walk_strafe, 0.0) where
         // walk_strafe = SIDESTEP_ANIM_SPEED × SIDESTEP_ADJUST_FACTOR = 1.56
         // m/s (F1-2 retail magnitude — fixed, not derived from the walk base).
         // Both axes non-zero.
         let walk_strafe = SIDESTEP_ANIM_SPEED * SIDESTEP_ADJUST_FACTOR;
-        assert!((velocity.x - (-WALK_ANIM_SPEED)).abs() < 1e-5);
+        assert!((velocity.x - (-1.0)).abs() < 1e-5);
         assert!((velocity.y - walk_strafe).abs() < 1e-5);
         assert!(velocity.z.abs() < 1e-5);
     }

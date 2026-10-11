@@ -31,11 +31,15 @@
 //      if (autonomy_level) {
 //        controlled_by_server = 1;
 //        SetAutoRun(0, /*apply_movement=*/0);   // vfptr[17], :718254
-//        ClearAllCommands();                    // vfptr[6],  :716848
+//        FinishJump();                          // `vfptr[6].OnLoseFocus` = vtable +80
 //      }
-//    Nothing else — no physics touch, no packet. A pure local latch + input
-//    queue flush. (`controlled_by_server` is `acclient.h:35344`, and the
-//    constructor at :717757 starts it at **1**.)
+//    Nothing else — no physics touch, no packet. (MoveTo refactor
+//    2026-10-10, investigation D-9: this comment used to name the +80 slot
+//    `ClearAllCommands()`; the PDB puts `ClearAllCommands` at +40 and
+//    `FinishJump` at +80. The command lists are NOT cleared — held keys
+//    survive and the reclaim re-applies them, so a `clearDrive` callback
+//    must not drop them.) (`controlled_by_server` is `acclient.h:35344`,
+//    and the constructor at :717757 starts it at **1**.)
 //
 // 4. Reclaim. Three triggers, all funnelling into
 //    `CommandInterpreter::TakeControlFromServer` (:716934), which requires
@@ -201,7 +205,8 @@ export function serverTurnOwnsFacing() {
 
 /**
  * Retail `CommandInterpreter::LoseControlToServer` (acclient.c:716832).
- * `clearDrive` is the caller's `SetAutoRun(0,0)` + `ClearAllCommands()` pair.
+ * `clearDrive` is the caller's `SetAutoRun(0,0)` + `FinishJump()` analogue
+ * (D-9: retail does NOT clear the command lists — see the header note).
  *
  * @param {number|null} targetHeading — radians; the heading the server turn is
  *   driving to (used by the settle probe). null = unknown (cap-only).

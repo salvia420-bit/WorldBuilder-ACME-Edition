@@ -1926,7 +1926,9 @@ export function dispatchClientEvent(evt, D) {
     // (`?remoteMoveToPhase=off` ignores it there).
     const em = window.liveScene3d?.entityManager;
     if (em && typeof em.applyRemoteMoveToPhase === "function") {
-      em.applyRemoteMoveToPhase(evt.u32Payload >>> 0, evt.u32Payload2 >>> 0);
+      // MoveTo refactor phase E: f32Payload = the node's speed (a stale
+      // pkg sends none → 1.0).
+      em.applyRemoteMoveToPhase(evt.u32Payload >>> 0, evt.u32Payload2 >>> 0, evt.f32Payload);
     }
   } else if (evt.kind === ClientEventKind.SOUND_TRIGGERED) {
     // Task F (ambient-sounds-chain 2026-05-12):

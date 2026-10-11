@@ -32,9 +32,9 @@ use super::params::MovementParameters;
 use super::raw_state::{
     HoldKey, RawAction, RawForwardCommand, RawSidestepCommand, RawState, RawTurnCommand,
 };
-use crate::client::movement_types::{MotionState, planar_velocity_for_heading};
+use crate::motion::movement_types::{MotionState, planar_velocity_for_heading};
 use holtburger_common::Vector3;
-use holtburger_world::SelfMovementCapabilities;
+use crate::SelfMovementCapabilities;
 use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
 
@@ -42,12 +42,12 @@ use std::f32::consts::FRAC_PI_2;
 /// (`acclient.c:344056-344060` `StopInterpretedMotion`;
 /// `enter_default_state` seed `:344577-344582`; ACE
 /// `MotionCommand.Ready`).
-pub(crate) const MOTION_READY: u32 = 0x4100_0003;
+pub const MOTION_READY: u32 = 0x4100_0003;
 
 /// One-shot action bit — motions with `0x10000000` set are queued actions
 /// whose completion fires the unstick + RemoveAction chain
 /// (`acclient.c:343656-343661`; ACE `CommandMask.Action`).
-pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
+pub const MOTION_ACTION_BIT: u32 = 0x1000_0000;
 
 /// A4 (2026-06-12, W3+ SA4F) — the renderer-realization-truth
 /// `num_anims` classifier for the lattice enqueue sites
@@ -90,7 +90,7 @@ pub(crate) const MOTION_ACTION_BIT: u32 = 0x1000_0000;
 /// `0x1000006F..` and were already 1). Held substates (Ready/Crouch/
 /// Sitting `0x41…`), Dead, and Falling stay 0 (cycle/terminal
 /// realizations — no completion clip).
-pub(crate) fn renderer_num_anims(motion: u32) -> u32 {
+pub fn renderer_num_anims(motion: u32) -> u32 {
     if motion & MOTION_ACTION_BIT != 0 {
         return 1;
     }
@@ -106,18 +106,18 @@ pub(crate) fn renderer_num_anims(motion: u32) -> u32 {
 // A3-D3 (2026-06-12) — motion-id literals the DoMotion lattice tests
 // (decompile literals at `acclient.c:344639-344653` / `:343990` /
 // `:343764-343784`; ACE `MotionCommand`).
-pub(crate) const MOTION_DEAD: u32 = 0x4000_0011; // 1073741841
-pub(crate) const MOTION_FALLING: u32 = 0x4000_0015; // 1073741845
-pub(crate) const MOTION_CROUCH: u32 = 0x4100_0012; // 1090519058
-pub(crate) const MOTION_SITTING: u32 = 0x4100_0013; // 1090519059
-pub(crate) const MOTION_SLEEPING: u32 = 0x4100_0014; // 1090519060
-pub(crate) const MOTION_WALK_FORWARD: u32 = 0x4500_0005; // 1157627909
-pub(crate) const MOTION_WALK_BACKWARDS: u32 = 0x4500_0006; // 1157627910
-pub(crate) const MOTION_RUN_FORWARD: u32 = 0x4400_0007; // 1140850695
-pub(crate) const MOTION_TURN_RIGHT: u32 = 0x6500_000D; // 1694498829
-pub(crate) const MOTION_TURN_LEFT: u32 = 0x6500_000E; // 1694498830
-pub(crate) const MOTION_SIDESTEP_RIGHT: u32 = 0x6500_000F; // 1694498831
-pub(crate) const MOTION_SIDESTEP_LEFT: u32 = 0x6500_0010; // 1694498832
+pub const MOTION_DEAD: u32 = 0x4000_0011; // 1073741841
+pub const MOTION_FALLING: u32 = 0x4000_0015; // 1073741845
+pub const MOTION_CROUCH: u32 = 0x4100_0012; // 1090519058
+pub const MOTION_SITTING: u32 = 0x4100_0013; // 1090519059
+pub const MOTION_SLEEPING: u32 = 0x4100_0014; // 1090519060
+pub const MOTION_WALK_FORWARD: u32 = 0x4500_0005; // 1157627909
+pub const MOTION_WALK_BACKWARDS: u32 = 0x4500_0006; // 1157627910
+pub const MOTION_RUN_FORWARD: u32 = 0x4400_0007; // 1140850695
+pub const MOTION_TURN_RIGHT: u32 = 0x6500_000D; // 1694498829
+pub const MOTION_TURN_LEFT: u32 = 0x6500_000E; // 1694498830
+pub const MOTION_SIDESTEP_RIGHT: u32 = 0x6500_000F; // 1694498831
+pub const MOTION_SIDESTEP_LEFT: u32 = 0x6500_0010; // 1694498832
 // P01/P02/P09 (movement-port wave 1, 2026-07-03) — the interpreter-lane
 // additions, consolidated HERE per the wave-1 integration checklist
 // (QUALITY-integration.md §3.2: one consts module; ADJ-1 name order
@@ -127,23 +127,23 @@ pub(crate) const MOTION_SIDESTEP_LEFT: u32 = 0x6500_0010; // 1694498832
 /// path is CommenceJump/DoJump, not the lists — acclient.c:717512), and
 /// `HandleKeyboardCommand`'s terminal send is gated `cmd != Jump`
 /// (:717320, ADJ-3).
-pub(crate) const MOTION_JUMP: u32 = 0x2500_003B; // 620757051
+pub const MOTION_JUMP: u32 = 0x2500_003B; // 620757051
 /// `MotionCommand.HoldRun` (0x85000001) — the run modifier command
 /// (P09 OnAction case 9 → SetHoldRun; ACE MotionCommand.cs:8).
 #[allow(dead_code)] // staged: P09 on_action fold (step 3/4)
-pub(crate) const MOTION_HOLD_RUN: u32 = 0x8500_0001;
+pub const MOTION_HOLD_RUN: u32 = 0x8500_0001;
 /// `MotionCommand.HoldSidestep` (0x85000002) — the strafe modifier
 /// command (ACE MotionCommand.cs:9).
 #[allow(dead_code)] // staged: P09 on_action fold (step 3/4)
-pub(crate) const MOTION_HOLD_SIDESTEP: u32 = 0x8500_0002;
+pub const MOTION_HOLD_SIDESTEP: u32 = 0x8500_0002;
 /// `MotionCommand.AutoRun` (0x090000C7 = 150995143, acclient.c
 /// HandleKeyboardCommand autorun arm :717258) — ADJ-16: P14's
 /// `0x09000047` was a typo; this is the verified literal.
 #[allow(dead_code)] // staged: P03/P09 on_action fold (step 3/4)
-pub(crate) const MOTION_AUTORUN_TOGGLE: u32 = 0x0900_00C7;
+pub const MOTION_AUTORUN_TOGGLE: u32 = 0x0900_00C7;
 /// `CommandMask.ChatEmote` (`motion & 0x2000000` →
 /// `CantChatEmoteInCombat`, acclient.c:344648).
-pub(crate) const COMMAND_MASK_CHAT_EMOTE: u32 = 0x0200_0000;
+pub const COMMAND_MASK_CHAT_EMOTE: u32 = 0x0200_0000;
 
 /// Physics-side effects the DoMotion lattice would perform inline on a
 /// `CPhysicsObj` — returned instead, because our physics owner is the
@@ -151,7 +151,7 @@ pub(crate) const COMMAND_MASK_CHAT_EMOTE: u32 = 0x0200_0000;
 /// The caller (`MovementManager::apply_unpacked_movement` /
 /// future input lanes) applies them in its own domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct MotionSideEffects {
+pub struct MotionSideEffects {
     /// `CPhysicsObj::cancel_moveto` requested (CancelMoveTo bit,
     /// acclient.c:344633-344634).
     pub cancel_moveto: bool,
@@ -167,7 +167,7 @@ pub(crate) struct MotionSideEffects {
 /// (`movement_manager::MovementStruct`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)] // staged: input-lane constructors arrive with the Stage-3 driver / A14-I2
-pub(crate) enum MotionMovementStruct {
+pub enum MotionMovementStruct {
     /// type 1 → `DoMotion`.
     RawCommand { motion: u32, params: MovementParameters },
     /// type 2 → `DoInterpretedMotion`.
@@ -186,46 +186,45 @@ pub(crate) enum MotionMovementStruct {
 /// On-ground translation uses the AUTHORED run cycle base instead
 /// (4.000 for the player MotionTable — same number, different source).
 #[allow(dead_code)] // staged: consumed by get_state_velocity (airborne lane)
-pub(crate) const RUN_ANIM_SPEED: f32 = 4.0;
+pub const RUN_ANIM_SPEED: f32 = 4.0;
 
 /// `MotionInterp.WalkAnimSpeed` (`MotionInterp.cs:32`) — precision is
 /// load-bearing: `3.1199999`, NOT `3.12`.
 ///
-/// COL-10 (2026-07-27): this is THE walk body speed on the ground too,
-/// not just the airborne closed form. Retail `get_state_velocity`
-/// (`~/ac-headers/acclient.c:343561`) computes a `WalkForward` body
-/// velocity of `3.1199999 * forward_speed` and ACE's server-side model is
-/// the same, so the whole walk family (walk forward, backstep via
-/// `BACKWARDS_FACTOR`, and the sidestep adjust ratio) derives from this
-/// constant. The player MotionTable's authored walk cycle base (2.6017
-/// m/s) is now used ONLY as the animation's authored speed — the
-/// `cycleBaseSpeed` denominator of the JS `cycleTimeScale`, which
-/// consequently plays the walk clip at 3.1199999/2.6017 ≈ 1.199x so the
-/// feet track the (now faster) travel. See `VERIFICATION-LOG.md §COL-10`.
-pub(crate) const WALK_ANIM_SPEED: f32 = 3.1199999;
+/// MoveTo refactor phase D (2026-10-10) — COL-10 reverted: this constant
+/// is NOT the walking body's speed. Retail moves every body by its
+/// animation sequence (`CSequence::apply_physics`, acclient.c:339860), i.e.
+/// at the motion table's authored cycle speed × `forward_speed` (2.6017 m/s
+/// for the player table); `get_state_velocity` (:343561), where this
+/// constant lives, feeds the leave-ground velocity
+/// (`get_leave_ground_velocity`, :343821) and the closed-form airborne
+/// lanes. The 2026-08-11 retail oracle capture walks ~2.55 m/s, not 3.12.
+/// It stays the fallback walk speed for an object whose table is unknown
+/// (`root_motion`).
+pub const WALK_ANIM_SPEED: f32 = 3.1199999;
 
 /// `MotionInterp.SidestepAnimSpeed` (`MotionInterp.cs:30`) — m/s per
 /// unit of interpreted sidestep speed.
-pub(crate) const SIDESTEP_ANIM_SPEED: f32 = 1.25;
+pub const SIDESTEP_ANIM_SPEED: f32 = 1.25;
 
 /// `MotionInterp.SidestepFactor` (`MotionInterp.cs:31`): `adjust_motion`
 /// scales the sidestep speed by `SidestepFactor × (WalkAnimSpeed /
 /// SidestepAnimSpeed)` = `0.5 × (3.1199999 / 1.25)` ≈ 1.248
 /// (`MotionInterp.cs:417-418`; `acclient.c:343781-343784`).
-pub(crate) const SIDESTEP_FACTOR: f32 = 0.5;
+pub const SIDESTEP_FACTOR: f32 = 0.5;
 
 /// `MotionInterp.BackwardsFactor` (`MotionInterp.cs:26`) —
 /// `WalkBackwards` → `WalkForward` with `speed *= -0.649_999_98`.
-pub(crate) const BACKWARDS_FACTOR: f32 = 0.649_999_98;
+pub const BACKWARDS_FACTOR: f32 = 0.649_999_98;
 
 /// `MotionInterp.RunTurnFactor` (`MotionInterp.cs:29`) — Run hold key
 /// multiplies the turn speed by a FIXED 1.5 (not the run rate).
-pub(crate) const RUN_TURN_FACTOR: f32 = 1.5;
+pub const RUN_TURN_FACTOR: f32 = 1.5;
 
 /// `MotionInterp.MaxSidestepAnimRate` (`MotionInterp.cs:27`) — the
 /// run-scaled sidestep ANIM RATE clamps at ±3.0
 /// (`MotionInterp.cs:550-560`; `acclient.c:343474-343480`).
-pub(crate) const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
+pub const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
 
 /// 15-bit server-action-stamp compare (retail packs the stamp + the
 /// autonomous bit into 16 bits; the stamp itself is 15-bit —
@@ -236,7 +235,7 @@ pub(crate) const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
 /// wins), mirroring `is_newer_u16`'s `0x8000` edge
 /// (`holtburger-common/src/sequence.rs`).
 #[allow(dead_code)] // staged: lib consumer is the stage-3 server UpdateMotion lane
-pub(crate) fn is_newer_action_stamp(new: u16, old: u16) -> bool {
+pub fn is_newer_action_stamp(new: u16, old: u16) -> bool {
     let new = new & 0x7FFF;
     let old = old & 0x7FFF;
     let diff = new.wrapping_sub(old) & 0x7FFF;
@@ -253,7 +252,7 @@ pub(crate) fn is_newer_action_stamp(new: u16, old: u16) -> bool {
 /// queue decides what completion DOES to movement state
 /// (`DESIGN.md` "STAGE 2 AMENDMENT" seam contract).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PendingMotion {
+pub struct PendingMotion {
     pub context_id: u32,
     pub motion: u32,
     /// Error code `jump_is_allowed` returns while this node is the queue
@@ -296,7 +295,7 @@ pub(crate) struct PendingMotion {
 /// gate through this one predicate, `AI_TelegraphCast` over-applies to
 /// charging — harmless (it is a monster-only motion the local player
 /// never enters) but recorded here rather than rediscovered later.
-pub(crate) fn motion_allows_jump(substate: u32) -> u32 {
+pub fn motion_allows_jump(substate: u32) -> u32 {
     let blocks = if substate > 0x4000_0018 {
         substate <= 0x4100_0014
             && (substate >= 0x4100_0012 || (0x4000_001E..=0x4000_0039).contains(&substate))
@@ -407,7 +406,7 @@ fn apply_run_to_turn(speed: f32) -> f32 {
 /// falls back to `my_run_rate` (initial 1.0) exactly as retail does —
 /// NEVER a Quickness synthesis, NEVER a 4.5 cap (DESIGN.md §2 defect 1).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MotionInterp {
+pub struct MotionInterp {
     pub raw_state: RawState,
     pub interpreted_state: InterpretedState,
     /// Last known run rate — retail's `InqRunRate`-failure fallback
@@ -481,7 +480,7 @@ impl MotionInterp {
     /// (run_rate × 4); when the INTERPRETED forward command is
     /// RunForward (a server-driven run), the base is replaced by
     /// `forward_speed / current_speed_factor` × 4.0 instead.
-    pub(crate) fn adjusted_max_speed(&self, full_base: f32) -> f32 {
+    pub fn adjusted_max_speed(&self, full_base: f32) -> f32 {
         if matches!(
             self.interpreted_state.forward_command,
             Some(InterpretedForwardCommand::RunForward)
@@ -499,7 +498,7 @@ impl MotionInterp {
     /// resolved hold key is Run; then refresh `my_run_rate` when the
     /// interpretation resolved `RunForward`
     /// (`apply_interpreted_movement`, `acclient.c:344162-344163`).
-    pub(crate) fn apply_raw_movement(&mut self, inq_run_rate: Option<f32>) {
+    pub fn apply_raw_movement(&mut self, inq_run_rate: Option<f32>) {
         let run_rate = self.run_rate(inq_run_rate);
         let raw = &self.raw_state;
         let mut interpreted = InterpretedState {
@@ -557,7 +556,7 @@ impl MotionInterp {
     /// (`acclient.c:343806-344489`); on-ground translation uses
     /// [`Self::ground_velocity`] (authored cycle bases).
     #[allow(dead_code)] // staged: stage-2/3 lane (DESIGN.md §3)
-    pub(crate) fn get_state_velocity(&self, inq_run_rate: Option<f32>) -> Vector3 {
+    pub fn get_state_velocity(&self, inq_run_rate: Option<f32>) -> Vector3 {
         let state = &self.interpreted_state;
         let mut velocity = Vector3::zero();
         if state.sidestep {
@@ -591,21 +590,14 @@ impl MotionInterp {
     /// `acclient.c:339860-339890`). Run uses the authored run base
     /// (4.000), which coincides with retail's `RunAnimSpeed`.
     ///
-    /// COL-10 (2026-07-27): the WALK base is NO LONGER the authored walk
-    /// cycle base. Retail's `get_state_velocity` moves a `WalkForward`
-    /// body at the `WalkAnimSpeed` constant `3.1199999 * forward_speed`
-    /// (`acclient.c:343561`; ACE `MotionInterp.cs:684-685` identically),
-    /// while the player MotionTable's walk cycle only authors 2.6017 m/s.
-    /// The sole production caller
-    /// ([`interpreted_velocity_for_state`]) now passes
-    /// [`WALK_ANIM_SPEED`]; this function stays pure in its inputs so the
-    /// unit tests can still pin the authored-base arithmetic.
+    /// MoveTo refactor phase D (2026-10-10): the WALK base is the authored
+    /// walk cycle base again (COL-10 reverted, see [`WALK_ANIM_SPEED`]).
     /// Sidestep has no authored straight-line cycle base in our
     /// profile; retail's `SidestepAnimSpeed` (1.25 m/s per anim-rate
     /// unit) is the conversion both retail and ACE use. NO magnitude
     /// clamp here — `add_motion` composition is unclamped (the legacy
     /// diagonal-composition behaviour, `common.rs:699-705`).
-    pub(crate) fn ground_velocity(&self, walk_base_speed: f32, run_base_speed: f32) -> Vector3 {
+    pub fn ground_velocity(&self, walk_base_speed: f32, run_base_speed: f32) -> Vector3 {
         let state = &self.interpreted_state;
         let mut velocity = Vector3::zero();
         if state.sidestep {
@@ -630,7 +622,7 @@ impl MotionInterp {
     /// its LOCAL raw state (server-supplied movement is ignored); a
     /// server-controlled object keeps the interpreted state as received.
     #[allow(dead_code)] // staged: stage-2/3 lane (DESIGN.md §3)
-    pub(crate) fn apply_current_movement(
+    pub fn apply_current_movement(
         &mut self,
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
@@ -661,7 +653,7 @@ impl MotionInterp {
     /// substate arm) and leaked FIFO entries (nothing ever popped them:
     /// the pop is `motion_done`'s `remove_action`, which only fires for
     /// queue nodes this path never enqueued).
-    pub(crate) fn move_to_interpreted_state(
+    pub fn move_to_interpreted_state(
         &mut self,
         state: &InterpretedState,
         server_actions: &[RawAction],
@@ -792,7 +784,7 @@ impl MotionInterp {
     ///   `:344203-344210`); the cell-null `RemoveLinkAnimations` tail
     ///   (`:344212-344217`) is renderer-side and cell always exists for
     ///   us — skipped.
-    pub(crate) fn apply_interpreted_movement(
+    pub fn apply_interpreted_movement(
         &mut self,
         cancel_moveto: bool,
         disallow_jump: bool,
@@ -899,7 +891,7 @@ impl MotionInterp {
     /// clear the raw locomotion axes to defaults and stop the
     /// interpreted movement (queued one-shot actions complete).
     #[allow(dead_code)] // staged: stage-2/3 lane (DESIGN.md §3)
-    pub(crate) fn stop_completely(&mut self) {
+    pub fn stop_completely(&mut self) {
         self.raw_state.remove_forward();
         self.raw_state.remove_sidestep();
         self.raw_state.remove_turn();
@@ -910,7 +902,7 @@ impl MotionInterp {
     /// (`acclient.c:344492-344523` / `MotionInterp.cs:274-299`): flip the
     /// state-level hold key and re-interpret the held raw state.
     #[allow(dead_code)] // staged: stage-2/3 lane (DESIGN.md §3)
-    pub(crate) fn set_hold_run(&mut self, run: bool, inq_run_rate: Option<f32>) {
+    pub fn set_hold_run(&mut self, run: bool, inq_run_rate: Option<f32>) {
         let key = if run { HoldKey::Run } else { HoldKey::NoKey };
         if self.raw_state.current_holdkey == key {
             return;
@@ -931,7 +923,7 @@ impl MotionInterp {
     /// `CMotionInterp::add_to_queue(context_id, motion, jump_error_code)`
     /// — append a completion node (`acclient.c:343406-343437`; ACE
     /// `MotionInterp.cs:390`).
-    pub(crate) fn add_to_queue(&mut self, context_id: u32, motion: u32, jump_error_code: u32) {
+    pub fn add_to_queue(&mut self, context_id: u32, motion: u32, jump_error_code: u32) {
         self.pending_motions.push_back(PendingMotion {
             context_id,
             motion,
@@ -946,7 +938,7 @@ impl MotionInterp {
     /// CURRENT interpreted forward command when the motion is not a
     /// one-shot action.
     #[allow(dead_code)] // staged: stage-2 ?interpRig= rig lane (DESIGN.md STAGE 2 AMENDMENT)
-    pub(crate) fn enqueue_accepted_motion(&mut self, context_id: u32, motion: u32, charging: bool) {
+    pub fn enqueue_accepted_motion(&mut self, context_id: u32, motion: u32, charging: bool) {
         let jump_error = if charging {
             72
         } else {
@@ -964,7 +956,7 @@ impl MotionInterp {
     /// (`0x41000003`) node rides the same queue
     /// (`acclient.c:344056-344060`).
     #[allow(dead_code)] // staged: stage-2 ?interpRig= rig lane (DESIGN.md STAGE 2 AMENDMENT)
-    pub(crate) fn enqueue_stop(&mut self, context_id: u32) {
+    pub fn enqueue_stop(&mut self, context_id: u32) {
         self.add_to_queue(context_id, MOTION_READY, 0);
     }
 
@@ -993,7 +985,7 @@ impl MotionInterp {
     /// STAGE 2 AMENDMENT exposes the hook, never the stick state).
     /// `success` is accepted for the A4 event seam but, exactly as
     /// retail's body, does not branch (`:343646-343676` never reads it).
-    pub(crate) fn motion_done(&mut self, _success: bool) -> bool {
+    pub fn motion_done(&mut self, _success: bool) -> bool {
         let Some(head) = self.pending_motions.front() else {
             return false;
         };
@@ -1008,7 +1000,7 @@ impl MotionInterp {
 
     /// `CMotionInterp::motions_pending` (`acclient.c:343728-343732`).
     #[allow(dead_code)] // staged: stage-2/3 consumers (DESIGN.md STAGE 2 AMENDMENT)
-    pub(crate) fn motions_pending(&self) -> bool {
+    pub fn motions_pending(&self) -> bool {
         !self.pending_motions.is_empty()
     }
 
@@ -1017,7 +1009,7 @@ impl MotionInterp {
     /// (`acclient.c:343946-343948`; ACE `MotionInterp.cs:753-754`).
     /// `0` = no pending node blocks jumping. Consumed by
     /// `MovementSystem::execute_jump_release` (A14-I4, W3+ S11).
-    pub(crate) fn pending_jump_error(&self) -> u32 {
+    pub fn pending_jump_error(&self) -> u32 {
         self.pending_motions
             .front()
             .map(|node| node.jump_error_code)
@@ -1030,7 +1022,7 @@ impl MotionInterp {
     /// teleport/portal (A4-Q3 wires the JS trigger). Returns `true` when
     /// any drained action requires the unstick hook.
     #[allow(dead_code)] // staged: A4-Q3 portal/teleport trigger (DESIGN.md STAGE 2 AMENDMENT)
-    pub(crate) fn handle_exit_world(&mut self) -> bool {
+    pub fn handle_exit_world(&mut self) -> bool {
         let mut unstick = false;
         while !self.pending_motions.is_empty() {
             unstick |= self.motion_done(false);
@@ -1047,7 +1039,7 @@ impl MotionInterp {
     /// `InitializeMotionTables` + `initted` + `LeaveGround` are
     /// physics/renderer-side (`CPhysicsObj`) and stay with their owners
     /// (DESIGN.md STAGE 2 AMENDMENT / LeaveGround fan-out section).
-    pub(crate) fn enter_default_state(&mut self) {
+    pub fn enter_default_state(&mut self) {
         self.raw_state = RawState::default();
         self.interpreted_state = InterpretedState::default();
         self.add_to_queue(0, MOTION_READY, 0);
@@ -1070,7 +1062,7 @@ impl MotionInterp {
     /// lane (no port yet — `move_to_interpreted_state` is its entry) and
     /// the MoveToManager fan-out lands with Stage 3.
     #[allow(dead_code)] // staged: stamina 0-crossing event source is the stage-3 vitals lane
-    pub(crate) fn report_exhaustion(
+    pub fn report_exhaustion(
         &mut self,
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
@@ -1093,7 +1085,7 @@ impl MotionInterp {
 
     /// `CMotionInterp::InqStyle` — the interpreted state's full 32-bit
     /// current style (`acclient.c:339541`; ACE `MotionInterp.cs:187-190`).
-    pub(crate) fn inq_style(&self) -> u32 {
+    pub fn inq_style(&self) -> u32 {
         self.interpreted_state.current_style
     }
 
@@ -1105,7 +1097,7 @@ impl MotionInterp {
     /// fold into `on_walkable_contact` (server-controlled remotes pass
     /// `true`: the server is authoritative — see
     /// `apply_unpacked_movement`).
-    pub(crate) fn contact_allows_move(motion: u32, on_walkable_contact: bool) -> bool {
+    pub fn contact_allows_move(motion: u32, on_walkable_contact: bool) -> bool {
         matches!(
             motion,
             MOTION_TURN_RIGHT | MOTION_TURN_LEFT | MOTION_DEAD | MOTION_FALLING
@@ -1128,7 +1120,7 @@ impl MotionInterp {
     /// `HoldKey.None` arm; an `Invalid` key — the params default — is a
     /// no-op). The retail `cancel_moveto` ride-along is a physics side
     /// effect already carried by the caller's CancelMoveTo bit.
-    pub(crate) fn set_hold_key_from_params(&mut self, raw_key: u32, inq_run_rate: Option<f32>) {
+    pub fn set_hold_key_from_params(&mut self, raw_key: u32, inq_run_rate: Option<f32>) {
         let key = Self::hold_key_from_raw(raw_key);
         if key == self.raw_state.current_holdkey {
             return;
@@ -1146,7 +1138,7 @@ impl MotionInterp {
     /// SideStepRight negated then scaled; RunForward passes through
     /// untouched (no hold-key application); then the resolved Run hold
     /// key applies [`Self::apply_run_to_command_u32`].
-    pub(crate) fn adjust_motion_command(
+    pub fn adjust_motion_command(
         &mut self,
         motion: &mut u32,
         speed: &mut f32,
@@ -1216,7 +1208,7 @@ impl MotionInterp {
     /// 72 under DisableJumpDuringLink, else the motion's own
     /// `motion_allows_jump`, non-actions falling back to the interpreted
     /// forward command's (`:343996-344005`).
-    pub(crate) fn do_interpreted_motion(
+    pub fn do_interpreted_motion(
         &mut self,
         motion: u32,
         params: &MovementParameters,
@@ -1293,7 +1285,7 @@ impl MotionInterp {
     /// bit + `GetNumActions() >= 6` → 69; then `DoInterpretedMotion`
     /// with the ADJUSTED motion/speed; on success the ModifyRawState
     /// bit applies the ORIGINAL motion to the raw state.
-    pub(crate) fn do_motion(
+    pub fn do_motion(
         &mut self,
         motion: u32,
         params: &MovementParameters,
@@ -1354,7 +1346,7 @@ impl MotionInterp {
     /// a completable clip (retail Ready node `acclient.c:330233-330245`;
     /// classification rationale at [`renderer_num_anims`]), so it
     /// completes through the per-frame poll.
-    pub(crate) fn stop_interpreted_motion(
+    pub fn stop_interpreted_motion(
         &mut self,
         motion: u32,
         params: &MovementParameters,
@@ -1387,7 +1379,7 @@ impl MotionInterp {
     /// `StopInterpretedMotion` with the adjusted motion; on success the
     /// ModifyRawState bit removes the ORIGINAL motion from the raw
     /// state (`RawMotionState::RemoveMotion`, `:344133-344135`).
-    pub(crate) fn stop_motion(
+    pub fn stop_motion(
         &mut self,
         motion: u32,
         params: &MovementParameters,
@@ -1428,7 +1420,7 @@ impl MotionInterp {
     /// [`MotionMovementStruct`]; the facade
     /// (`movement_manager::MovementManager::perform_movement`) owns the
     /// type 6-9 routing and the residual 71.
-    pub(crate) fn perform_movement(
+    pub fn perform_movement(
         &mut self,
         mvs: &MotionMovementStruct,
         on_walkable_contact: bool,
@@ -1487,7 +1479,7 @@ impl MotionInterp {
     /// with the charge owner here). The launch-velocity stamp is the
     /// D3-5 `USE_LEAVE_GROUND_VELOCITY` slice in `movement/system.rs`;
     /// RemoveLinkAnimations is renderer-side (A4/A5).
-    pub(crate) fn leave_ground(&mut self) {
+    pub fn leave_ground(&mut self) {
         self.standing_longjump = false;
     }
 
@@ -1496,7 +1488,7 @@ impl MotionInterp {
     /// (autonomous arm only — the server-controlled arm is the wire's
     /// own next UpdateMotion).
     #[allow(dead_code)] // staged: facade fan-out consumer is the Stage-3 driver / A1 tick spine
-    pub(crate) fn hit_ground(
+    pub fn hit_ground(
         &mut self,
         last_move_was_autonomous: bool,
         inq_run_rate: Option<f32>,
@@ -1535,13 +1527,13 @@ const JUMP_EXTENT_EPSILON: f32 = 0.000_199_999_99;
 /// rust `MotionInterp` does not store `jump_extent` (it lives in
 /// `world.player` / the charge clock). holtburger's local-player
 /// realization of the query is
-/// `holtburger_world::player::PlayerState::compute_jump_velocity_z`
+/// `crate::player::PlayerState::compute_jump_velocity_z`
 /// (burden × skill), already called from
 /// `MovementSystem::execute_jump_release` with an extent pre-clamped to
 /// `[MIN_JUMP_EXTENT, 1.0]` by `power()` — so on that path the
 /// clamp/floor here are no-ops (P13 OQ-2).
 #[allow(dead_code)] // staged: registry/remote jump lane (local path pre-clamps upstream)
-pub(crate) fn jump_v_z<F: FnOnce(f32) -> Option<f32>>(
+pub fn jump_v_z<F: FnOnce(f32) -> Option<f32>>(
     jump_extent: f32,
     inq_jump_velocity: Option<F>,
 ) -> f32 {
@@ -1560,7 +1552,7 @@ pub(crate) fn jump_v_z<F: FnOnce(f32) -> Option<f32>>(
 /// the caller (physics/weenie do not live in `MotionInterp` in this
 /// port). Plain data for testability, per house convention.
 #[allow(dead_code)] // staged: consolidated per-entity jump gate (ADJ-10 single-owner refactor)
-pub(crate) struct JumpAllowEnv {
+pub struct JumpAllowEnv {
     /// `has_weenie && !weenie.is_creature()` (vfptr[11], acclient.c:343937)
     /// — a non-creature/weenie-less object bypasses the air-gate.
     pub weenie_noncreature: bool,
@@ -1595,7 +1587,7 @@ impl MotionInterp {
     /// `capabilities.resolved_manual_run_speed()` then fed to
     /// `adjusted_max_speed`; this is the per-entity method.
     #[allow(dead_code)] // staged: per-entity registry speed queries
-    pub(crate) fn max_speed(&self, inq_run_rate: Option<f32>) -> f32 {
+    pub fn max_speed(&self, inq_run_rate: Option<f32>) -> f32 {
         self.run_rate(inq_run_rate) * RUN_ANIM_SPEED
     }
 
@@ -1607,7 +1599,7 @@ impl MotionInterp {
     /// acclient.c:343720-343722) — the same bool the crate already
     /// threads through the lattice.
     #[allow(dead_code)] // staged: interpreter seam `minterp_is_standing_still` (Step 3)
-    pub(crate) fn is_standing_still(&self, on_walkable_contact: bool) -> bool {
+    pub fn is_standing_still(&self, on_walkable_contact: bool) -> bool {
         on_walkable_contact
             && self.interpreted_state.forward_command.is_none()
             && !self.interpreted_state.sidestep
@@ -1633,7 +1625,7 @@ impl MotionInterp {
     /// spec §6 Q1 as BURDEN). The press-time twin (`charge_jump`'s same
     /// 73 check, acclient.c:343845-343855) runs in
     /// `JumpChargeClock::commence`.
-    pub(crate) fn jump_charge_is_allowed(&self, can_jump: bool, forward_substate: u32) -> u32 {
+    pub fn jump_charge_is_allowed(&self, can_jump: bool, forward_substate: u32) -> u32 {
         if !can_jump {
             return WEENIE_ERROR_CANT_JUMP_LOADED_DOWN; // 73
         }
@@ -1667,7 +1659,7 @@ impl MotionInterp {
     /// calls THIS method — one owner for the release gate (the previous
     /// inline chain produced identical codes and is deleted); the
     /// `p13_tail_tests` pins hold both call shapes.
-    pub(crate) fn jump_is_allowed(&self, extent: f32, env: &JumpAllowEnv) -> u32 {
+    pub fn jump_is_allowed(&self, extent: f32, env: &JumpAllowEnv) -> u32 {
         // `extent` flows into the weenie seams (`can_jump`,
         // `jump_stamina_ok`) which the caller has already resolved for
         // this extent; kept in the signature to mirror retail + document
@@ -1710,9 +1702,9 @@ impl MotionInterp {
 /// "no locomotion" (`None`); a non-normalized SideStepLeft / TurnLeft is
 /// folded into the signed speed defensively. Wire action commands expand
 /// through the shared low16 expander
-/// (`holtburger_world::player::expand_motion_command_low16`); misses are
+/// (`crate::player::expand_motion_command_low16`); misses are
 /// skipped fail-soft (same policy as `EntityMotionSnapshot`).
-pub(crate) fn interpreted_state_from_wire(
+pub fn interpreted_state_from_wire(
     wire: &holtburger_protocol::messages::movement::InterpretedMotionState,
 ) -> (InterpretedState, Vec<RawAction>) {
     let mut state = InterpretedState::default();
@@ -1733,7 +1725,7 @@ pub(crate) fn interpreted_state_from_wire(
         // (zero locomotion; the REAL id feeds motion_allows_jump);
         // Ready canonicalizes to the empty slot; action-class ids
         // (windups 0x1000006F+) never belong in the slot — None.
-        Some(low16) => match holtburger_world::player::expand_motion_command_low16(low16) {
+        Some(low16) => match crate::player::expand_motion_command_low16(low16) {
             // Pure-0x40-prefix substates (gestures/poses: MagicBlast
             // 0x4000002B, Crouch 0x40000018, …) occupy the slot.
             // Ready (0x41…) canonicalizes to the empty slot; locomotion
@@ -1777,7 +1769,7 @@ pub(crate) fn interpreted_state_from_wire(
         .iter()
         .filter_map(|item| {
             let full =
-                holtburger_world::player::expand_motion_command_low16(item.command.raw())?;
+                crate::player::expand_motion_command_low16(item.command.raw())?;
             Some(RawAction {
                 action: full,
                 speed: item.speed,
@@ -1807,7 +1799,7 @@ pub(crate) fn interpreted_state_from_wire(
 /// `local_velocity_for_state` — the constants encode the same retail
 /// chain; the swap is behaviour-preserving where the legacy path was
 /// right, and replaces four disagreeing speed sources with this one.
-pub(crate) fn interpreted_velocity_for_state(
+pub fn interpreted_velocity_for_state(
     heading: f32,
     state: MotionState,
     capabilities: &SelfMovementCapabilities,
@@ -1817,19 +1809,16 @@ pub(crate) fn interpreted_velocity_for_state(
         ..MotionInterp::default()
     };
     interp.apply_raw_movement(Some(capabilities.run_rate_scalar));
-    // COL-10 (2026-07-27) — the WALK base is retail's `WalkAnimSpeed`
-    // constant, NOT the authored DAT walk-cycle base. `get_state_velocity`
-    // (`~/ac-headers/acclient.c:343561`) moves a `WalkForward` body at
-    // `3.1199999 * forward_speed`; ACE uses the same model
-    // (`MotionInterp.cs:684-685`). The player MotionTable's WalkForward
-    // cycle only derives 2.6017 m/s, so sourcing the body speed from the
-    // DAT walked 1.199x SLOWER than both retail and the server while the
-    // rig's `cycleTimeScale` (actual `stateGroundSpeed` 3.1199999 ÷
-    // authored `cycleBaseSpeed` 2.6017) already played the clip at the
-    // retail rate — the foot-slide. RUN is unchanged: its authored cycle
-    // base IS 4.000, identical to retail's `RunAnimSpeed`, so the DAT
-    // source stays correct there (OQ-3 measured 7.785 vs 7.787 expected).
-    let body = interp.ground_velocity(WALK_ANIM_SPEED, capabilities.base_run_forward_speed());
+    // MoveTo refactor phase D (2026-10-10) — COL-10 reverted: the walk body
+    // speed is the motion table's authored walk cycle base (2.6017 m/s for
+    // the player table), as retail moves it by its animation sequence
+    // (`CSequence::apply_physics`, acclient.c:339860) — the retail oracle
+    // capture walks ~2.55 m/s. The rig plays the walk clip at
+    // `forward_speed` (retail `change_cycle_speed`), so the feet track it.
+    let body = interp.ground_velocity(
+        capabilities.base_walk_forward_speed(),
+        capabilities.base_run_forward_speed(),
+    );
     planar_velocity_for_heading(heading, body.y)
         + planar_velocity_for_heading(heading + FRAC_PI_2, body.x)
 }
@@ -1847,7 +1836,7 @@ pub(crate) fn interpreted_velocity_for_state(
 /// only. Replaces the unclamped planar-store freeze for walk-off-ledge
 /// departures (survey A3 §3 row 6: diagonal run+strafe launched ~5.7 m/s
 /// vs retail's `4.0 × rate` cap).
-pub(crate) fn leave_ground_velocity_for_state(
+pub fn leave_ground_velocity_for_state(
     heading: f32,
     state: MotionState,
     capabilities: &SelfMovementCapabilities,
@@ -1870,11 +1859,8 @@ pub(crate) fn leave_ground_velocity_for_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::movement_types::Gait;
     use holtburger_protocol::messages::movement::MotionStance;
-    use holtburger_world::{
-        PlayerMotionTableSource, SelfMovementCapabilities, SelfMovementKinematics,
-    };
+    use crate::{PlayerMotionTableSource, SelfMovementCapabilities, SelfMovementKinematics};
 
     /// Capabilities with the AUTHORED player MotionTable cycle bases —
     /// run 4.000 / walk 2.602 m/s, the documented test fixtures
@@ -2048,7 +2034,7 @@ mod tests {
     /// run-rate INPUT, not the chain.
     #[test]
     fn velocity_contract_run_skill_100_gives_7_67_ground_speed() {
-        let run_rate = holtburger_world::context::run_rate_from_skill_and_burden(100.0, 0.0);
+        let run_rate = crate::context::run_rate_from_skill_and_burden(100.0, 0.0);
         assert!((run_rate - 1.9166666).abs() < 1e-5);
 
         let capabilities = authored_capabilities(run_rate);
@@ -2080,72 +2066,19 @@ mod tests {
         );
     }
 
-    /// COL-10 (2026-07-27, decision recorded in `VERIFICATION-LOG.md
-    /// §COL-10): walk ground speed is retail's `WalkAnimSpeed` constant —
-    /// `3.1199999` m/s (`~/ac-headers/acclient.c:343561`, ACE
-    /// `MotionInterp.cs:684-685`) — and is INDEPENDENT of the authored
-    /// walk cycle base carried by the capabilities (2.602 here). The
-    /// authored base survives only as the animation's `cycleBaseSpeed`.
-    /// This test previously pinned the opposite (2.602 from the DAT).
+    /// MoveTo refactor phase D (2026-10-10) — COL-10 reverted: walk ground
+    /// speed is the AUTHORED walk cycle base (2.602 here, the player table's
+    /// MOTK value), not the 3.1199999 `WalkAnimSpeed` constant — retail
+    /// moves the body by its animation sequence.
     #[test]
-    fn velocity_contract_walk_uses_retail_walk_anim_speed() {
+    fn velocity_contract_walk_uses_authored_2_602_base() {
         let capabilities = authored_capabilities(1.9166666);
         let v = interpreted_velocity_for_state(
             0.0,
             MotionState::builder().walk().forward().build(),
             &capabilities,
         );
-        assert!(
-            (v.length() - WALK_ANIM_SPEED).abs() < 1e-5,
-            "walk must realize WalkAnimSpeed {WALK_ANIM_SPEED}, got {}",
-            v.length()
-        );
-    }
-
-    /// IDENTITY (DESIGN.md §1.4): for every (gait, locomotion, run_rate)
-    /// cell the interpreted-pipeline ground velocity equals the legacy
-    /// `local_velocity_for_state` within 1e-5 — the swap is
-    /// behaviour-preserving where the legacy path was right. This also
-    /// pins the double-application risk (the interpreted forward speed is
-    /// ALREADY run-rate-multiplied; multiplying again in the integrator
-    /// would be the classic 1.9× bug in the other direction).
-    #[test]
-    fn identity_interpreted_matches_legacy_local_velocity_for_state() {
-        let states = [
-            MotionState::builder().forward().build(),
-            MotionState::builder().backstep().build(),
-            MotionState::builder().strafe_left().build(),
-            MotionState::builder().strafe_right().build(),
-            MotionState::builder().forward().strafe_right().build(),
-            MotionState::builder().backstep().strafe_left().build(),
-        ];
-        let headings = [0.0_f32, 1.0, 2.5, -2.0];
-        for run_rate in [1.0_f32, 1.9166666, 2.65, 4.5] {
-            let capabilities = authored_capabilities(run_rate);
-            for base in states {
-                for gait in [Gait::Walk, Gait::Run] {
-                    let state = MotionState { gait, ..base };
-                    for heading in headings {
-                        let legacy = super::super::common::local_velocity_for_state(
-                            heading,
-                            state,
-                            &capabilities,
-                        );
-                        let interpreted =
-                            interpreted_velocity_for_state(heading, state, &capabilities);
-                        let dx = (legacy.x - interpreted.x).abs();
-                        let dy = (legacy.y - interpreted.y).abs();
-                        let dz = (legacy.z - interpreted.z).abs();
-                        assert!(
-                            dx < 1e-5 && dy < 1e-5 && dz < 1e-5,
-                            "identity broke at gait={gait:?} state={state:?} \
-                             run_rate={run_rate} heading={heading}: \
-                             legacy={legacy:?} interpreted={interpreted:?}"
-                        );
-                    }
-                }
-            }
-        }
+        assert!((v.length() - 2.602).abs() < 1e-5, "got {}", v.length());
     }
 
     // -----------------------------------------------------------------
@@ -3034,7 +2967,7 @@ mod tests {
     /// acclient.c:329960-330020).
     #[test]
     fn renderer_num_anims_classifies_enqueue_sites() {
-        use crate::client::movement::motion_table_manager::MotionTableEvent;
+        use crate::motion::motion_table_manager::MotionTableEvent;
         const ACTION_X: u32 = 0x1000_0062;
 
         assert_eq!(renderer_num_anims(ACTION_X), 1, "action class");
@@ -3094,75 +3027,6 @@ mod tests {
         assert_eq!(
             mtm.drain_events(),
             vec![MotionTableEvent::MotionDone { motion: MOTION_READY, success: true }]
-        );
-    }
-
-    /// **O6 (parity ledger) — strafe-diagonal closed form.**
-    ///
-    /// The third parity report measured retail 8.468 m/s vs holtburger
-    /// 8.362 m/s for the run+strafe diagonal (the only FAIL), alongside
-    /// run-forward retail 7.895 vs holtburger 7.884. This test pins what
-    /// OUR OWN constants predict for that same cell, through BOTH live
-    /// velocity producers, so a future session can tell "the formula is
-    /// wrong" apart from "the formula never ran".
-    ///
-    /// Chain (`acclient.c:343746-343803` adjust, `:343439-343483` run
-    /// scaling, `:343539-343594` state velocity):
-    ///   forward = run_base(4.0) x run_rate
-    ///   sidestep = 1.25 x min(1.248 x run_rate, 3.0)
-    ///   diagonal = hypot(forward, sidestep)   [UNCAPPED on the ground]
-    #[test]
-    fn o6_strafe_diagonal_closed_form_matches_retail_capture() {
-        // Solve the capture's run_rate from the run-forward realization.
-        let run_rate = 7.884_f32 / 4.0; // = 1.971
-        let capabilities = authored_capabilities(run_rate);
-
-        let forward_only = interpreted_velocity_for_state(
-            0.0,
-            MotionState::builder().run().forward().build(),
-            &capabilities,
-        );
-        let diagonal = interpreted_velocity_for_state(
-            0.0,
-            MotionState::builder().run().forward().strafe_right().build(),
-            &capabilities,
-        );
-        let legacy_diagonal = crate::client::movement::common::local_velocity_for_state(
-            0.0,
-            MotionState::builder().run().forward().strafe_right().build(),
-            &capabilities,
-        );
-
-        // The two producers must agree (the stage-1 identity contract).
-        assert!(
-            (diagonal.length() - legacy_diagonal.length()).abs() < 1e-4,
-            "interpreted {} vs legacy {}",
-            diagonal.length(),
-            legacy_diagonal.length()
-        );
-
-        // Forward reproduces the capture exactly, by construction.
-        assert!((forward_only.length() - 7.884).abs() < 1e-3);
-
-        // The closed form predicts ~8.462 for that same run_rate.
-        let expected = ((4.0_f32 * run_rate).powi(2)
-            + (SIDESTEP_ANIM_SPEED
-                * (SIDESTEP_FACTOR * (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED) * run_rate)
-                    .min(MAX_SIDESTEP_ANIM_RATE))
-            .powi(2))
-        .sqrt();
-        assert!(
-            (diagonal.length() - expected).abs() < 1e-3,
-            "diagonal {} != closed form {}",
-            diagonal.length(),
-            expected
-        );
-
-        // And that closed form is within tolerance of RETAIL's 8.468 —
-        // i.e. the FORMULA is not the O6 defect.
-        assert!(
-            (expected - 8.468).abs() < 0.05,
-            "closed form {expected} should track retail 8.468"
         );
     }
 
@@ -3243,7 +3107,7 @@ mod forward_slot_tests {
     }
 
     fn motion_allows_jump_id(id: u32) -> bool {
-        holtburger_world::player::motion_allows_jump(id)
+        crate::player::motion_allows_jump(id)
     }
 }
 

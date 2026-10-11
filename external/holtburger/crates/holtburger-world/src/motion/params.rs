@@ -20,14 +20,14 @@ use holtburger_protocol::messages::movement::messages::motion::{
 /// A3-D3 driver (2026-06-12) — the retail heading epsilon every
 /// degrees-domain comparison in the MoveTo math uses
 /// (`0.00019999999`, acclient.c:344740/:345402/:345487 et al.).
-pub(crate) const HEADING_EPSILON_DEG: f32 = 0.000_199_999_99;
+pub const HEADING_EPSILON_DEG: f32 = 0.000_199_999_99;
 
 /// `heading_diff(x, y, motion)` (acclient.c:344738-344752) — DEGREES
 /// domain. The signed delta `x − y` folded to `[0, 360)` measured in
 /// the direction of `motion`: TurnRight (`0x6500000D`) leaves the
 /// positive wrap as-is; any other motion (TurnLeft) mirrors it to
 /// `360 − diff`. Sub-epsilon deltas collapse to `0.0`.
-pub(crate) fn heading_diff(x: f32, y: f32, motion: u32) -> f32 {
+pub fn heading_diff(x: f32, y: f32, motion: u32) -> f32 {
     let mut result = x - y;
     if result.abs() < HEADING_EPSILON_DEG {
         result = 0.0;
@@ -46,7 +46,7 @@ pub(crate) fn heading_diff(x: f32, y: f32, motion: u32) -> f32 {
 /// within 180° apart it is a plain `x > y`; wrapped further apart the
 /// sense inverts. TurnRight returns the "greater" sense; TurnLeft
 /// (any non-TurnRight motion) returns the complement.
-pub(crate) fn heading_greater(x: f32, y: f32, motion: u32) -> bool {
+pub fn heading_greater(x: f32, y: f32, motion: u32) -> bool {
     let le = if (x - y).abs() <= 180.0 {
         x <= y
     } else {
@@ -64,7 +64,7 @@ pub(crate) fn heading_greater(x: f32, y: f32, motion: u32) -> bool {
 /// (`0x1E000`). NOTE: ACE's ctor (`MovementParameters.cs:52-71`)
 /// additionally sets CanCharge (`0x10`) — a known ACE-vs-decomp delta;
 /// the retail literal wins. None of our consumers read bit 4.
-pub(crate) const DEFAULT_MOVEMENT_BITFIELD: u32 = 0x0001_EE0F;
+pub const DEFAULT_MOVEMENT_BITFIELD: u32 = 0x0001_EE0F;
 
 /// Runtime `MovementParameters` (`acclient.c:339441-339489`; ACE
 /// `MovementParameters.cs`). Field defaults per the retail ctor:
@@ -72,7 +72,7 @@ pub(crate) const DEFAULT_MOVEMENT_BITFIELD: u32 = 0x0001_EE0F;
 /// (`0x7F7FFFFF`), `speed = 1.0`, `walk_run_threshhold = 15.0`
 /// (`0x41700000`), everything else zero.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct MovementParameters {
+pub struct MovementParameters {
     pub bitfield: u32,
     pub speed: f32,
     /// Wire/raw `HoldKey` value: `0` Invalid, `1` None, `2` Run.
@@ -112,38 +112,38 @@ impl MovementParameters {
     // Autonomous `0x1000` (ACE MovementParamFlags).
 
     /// Bit 15 — `CancelMoveTo`.
-    pub(crate) fn cancel_moveto(&self) -> bool {
+    pub fn cancel_moveto(&self) -> bool {
         self.bitfield & 0x8000 != 0
     }
 
     /// Bit 11 — `SetHoldKey`.
-    pub(crate) fn set_hold_key(&self) -> bool {
+    pub fn set_hold_key(&self) -> bool {
         self.bitfield & 0x0800 != 0
     }
 
     /// Bit 13 — `ModifyRawState`.
-    pub(crate) fn modify_raw_state(&self) -> bool {
+    pub fn modify_raw_state(&self) -> bool {
         self.bitfield & 0x2000 != 0
     }
 
     /// Bit 14 — `ModifyInterpretedState`.
-    pub(crate) fn modify_interpreted_state(&self) -> bool {
+    pub fn modify_interpreted_state(&self) -> bool {
         self.bitfield & 0x4000 != 0
     }
 
     /// Bit 17 — `DisableJumpDuringLink` (jump-charge window).
-    pub(crate) fn disable_jump_during_link(&self) -> bool {
+    pub fn disable_jump_during_link(&self) -> bool {
         self.bitfield & 0x2_0000 != 0
     }
 
     /// Bit 7 — `Sticky`.
     #[allow(dead_code)] // staged: A2-P3 sticky owner (W5)
-    pub(crate) fn sticky(&self) -> bool {
+    pub fn sticky(&self) -> bool {
         self.bitfield & 0x80 != 0
     }
 
     /// Bit 12 — `Autonomous` (rides into the raw action stamp).
-    pub(crate) fn autonomous(&self) -> bool {
+    pub fn autonomous(&self) -> bool {
         self.bitfield & 0x1000 != 0
     }
 
@@ -156,34 +156,34 @@ impl MovementParameters {
     // (`*((BYTE*)&params+2) & 1`, :345966/:345248).
 
     /// Bit 9 — `MoveTowards` (0x200).
-    pub(crate) fn move_towards(&self) -> bool {
+    pub fn move_towards(&self) -> bool {
         self.bitfield & 0x200 != 0
     }
 
     /// Bit 8 — `MoveAway` (0x100).
-    pub(crate) fn move_away(&self) -> bool {
+    pub fn move_away(&self) -> bool {
         self.bitfield & 0x100 != 0
     }
 
     /// Bit 10 — `UseSpheres` (0x400): cylinder distance metric.
-    pub(crate) fn use_spheres(&self) -> bool {
+    pub fn use_spheres(&self) -> bool {
         self.bitfield & 0x400 != 0
     }
 
     /// Bit 6 — `UseFinalHeading` (0x40): trailing turn node.
-    pub(crate) fn use_final_heading(&self) -> bool {
+    pub fn use_final_heading(&self) -> bool {
         self.bitfield & 0x40 != 0
     }
 
     /// Bit 16 — `StopCompletely` (0x10000): TurnTo* entry stop.
-    pub(crate) fn stop_completely(&self) -> bool {
+    pub fn stop_completely(&self) -> bool {
         self.bitfield & 0x1_0000 != 0
     }
 
     /// (P07/SC-11) write half of [`Self::stop_completely`] — retail
     /// `CommandInterpreter::TurnToHeading` clears the bit via
     /// `bitfield &= 0xFFFEFFFF` (acclient.c:718090).
-    pub(crate) fn set_stop_completely(&mut self, v: bool) {
+    pub fn set_stop_completely(&mut self, v: bool) {
         if v {
             self.bitfield |= 0x1_0000;
         } else {
@@ -217,7 +217,7 @@ impl MovementParameters {
     /// with (no CanWalk `0x1`, or the distance excess beyond
     /// `distance_to_object` crosses `walk_run_threshhold`); else
     /// None (`1`).
-    pub(crate) fn get_command(
+    pub fn get_command(
         &self,
         curr_distance: f32,
         _curr_heading: f32,
@@ -266,7 +266,7 @@ impl MovementParameters {
     /// WalkForward (`0x45000005`) → 180° iff moving away;
     /// WalkBackwards (`0x45000006`) → 180° iff NOT moving away;
     /// anything else → 0°.
-    pub(crate) fn get_desired_heading(command: u32, moving_away: bool) -> f32 {
+    pub fn get_desired_heading(command: u32, moving_away: bool) -> f32 {
         match command {
             MOTION_RUN_FORWARD | MOTION_WALK_FORWARD => {
                 if moving_away {
@@ -291,7 +291,7 @@ impl MovementParameters {
     /// `movement_parameters: u32` feeds [`Self::bitfield`] verbatim
     /// (`MovementParameters::UnPackNet`, acclient.c unpack_movement
     /// cases 6/7).
-    pub(crate) fn from_wire_moveto(wire: &MoveToParameters) -> Self {
+    pub fn from_wire_moveto(wire: &MoveToParameters) -> Self {
         Self {
             bitfield: wire.movement_parameters,
             speed: wire.speed,
@@ -306,7 +306,7 @@ impl MovementParameters {
 
     /// Hydrate from the wire `TurnTo*` parameter block
     /// (`TurnToParameters`, cases 8/9).
-    pub(crate) fn from_wire_turnto(wire: &TurnToParameters) -> Self {
+    pub fn from_wire_turnto(wire: &TurnToParameters) -> Self {
         Self {
             bitfield: wire.movement_parameters,
             speed: wire.speed,
