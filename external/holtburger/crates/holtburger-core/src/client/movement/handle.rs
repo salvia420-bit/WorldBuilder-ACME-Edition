@@ -286,6 +286,14 @@ impl MovementSystemHandle {
         self.inner.set_local_moveto_motion(on);
     }
 
+    /// Cast-movement fix 2 (2026-10-11): install the `?retailMoveToCancel=off`
+    /// runtime carrier (default ON: only a fresh key press cancels the local
+    /// player's server MoveTo/TurnTo; a held key no longer does). Forwards to
+    /// `MovementSystem::set_retail_moveto_cancel`.
+    pub fn set_retail_moveto_cancel(&mut self, on: bool) {
+        self.inner.set_retail_moveto_cancel(on);
+    }
+
     /// MoveTo refactor phase F: the effective `?localMoveToMotion` switch —
     /// the wasm UpdateMotion arm reads it to stick a local charge on
     /// ARRIVAL (the MoveTo's own stick) instead of at arm time.

@@ -76,3 +76,36 @@ New tests: `spatial::remote_spine_tests` (11), `spatial::remote_transition::test
 - Native CLI: the spine, sweep and voyeur are off. Phase D (local MoveTo motion, walk speed) applies natively too.
 - The stall recovery (bot-only) still perturbs only the old steer; under the new lane it takes over only while an
   attempt is active.
+
+## 5. Cast-movement fixes (2026-10-11)
+
+These followed the owner's report that A/D strafing during casts was broken and their paste of the PvP "rookie cast"
+technique. All three shipped default-on. The owner then reported "regressions to the movement system", and fix 3 went
+back to opt-in the same day.
+
+| Fix | Flag | Default | What it does |
+|---|---|---|---|
+| 1 | `?slideCast=off` | on | A strafe or turn held into a cast rides through ACE's windup echoes. ACE's `Motion(wo, gesture)` carries only the gesture, and retail's server echoed the caster's own axes. |
+| 2 | `?retailMoveToCancel=off` | on | Only a fresh key press cancels a server MoveTo/TurnTo; a held key does not. A held strafe pauses for the turn-to-target, the caster faces the target, then the strafe comes back. Side effect: holding W while using a door, NPC or corpse, or while attacking, no longer cancels the approach. ACE's charge runs you there. |
+| 3 | `?castTakesControl=on` | **off** | Any non-autonomous self motion hands control to the server, as retail's dispatcher does. A key release mid-cast is deferred. |
+
+**Why fix 3 is off.** Retail's reclaim at the end of a gesture needs a held key (`CommandInterpreter::UseTime`,
+acclient.c:717595). Take the sequence: hold strafe, cast, release the strafe mid-cast. The release was deferred, and
+with no key held there was no reclaim, so the body kept the fix-1 strafe until the next key press. A differential
+harness (pre-refactor 4ab7d2de vs this tree, 33 ms frames through the real tick spine) measured it: still sliding
+3.3 s after the release. It is pinned by `released_strafe_or_turn_stops_at_once_mid_cast`. With fix 3 off:
+
+- releases apply at once;
+- A/D swaps mid-cast follow the keys (`strafe_swap_mid_cast_follows_the_keys`);
+- the forward tap still moves the caster a little.
+
+The one thing lost is the "base cast" turn-tap lunge, where the press re-applies a held forward
+(`rookie_slide_turn_tap_lunges_until_the_next_echo`, now opted in).
+
+**Possible follow-up (not built).** A softer fix 3: a General echo takes control, a press re-applies every held key (the
+lunge), but a release applies at once (no deferral). That restores the lunge without the stuck slide. It is not
+retail's release path, so it needs an eye test.
+
+Pre-existing, the same in 4ab7d2de: a stance change while running stops the run until W is pressed again. In the
+harness, W held for 4 s after the stance message did not resume the run. A held strafe does continue, through fix 1.
+With fix 3 on, the run continued (its reclaim with W held), and the softer fix 3 above would keep that.

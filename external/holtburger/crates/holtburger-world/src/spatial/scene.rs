@@ -1711,6 +1711,26 @@ pub struct SpatialScene {
     /// acclient.c:145213). The mirror stays load-bearing for FU-A/FU-C
     /// and, until the gate flips, for the legacy pull arm.
     local_server_controlled: bool,
+    /// Cast-movement fix 3 (2026-10-11) — `?castTakesControl=on` (OPT-IN: the
+    /// wasm installs `true` only with `=on`; struct default `false`). Shipped
+    /// default-on first and flipped off the same day: the release deferral
+    /// below kept a `?slideCast` strafe going after its key was let go, until
+    /// the next key press. ON: EVERY accepted
+    /// non-autonomous motion message for the local player hands control to
+    /// the server, as retail does — `CPhysics::SetObjectMovement` returns 1
+    /// for any applied non-autonomous movement on the player
+    /// (acclient.c:311149-311193) and the dispatcher then runs
+    /// `CommandInterpreter::LoseControlToServer` (:392779-392781,
+    /// :392827-392828), cast gestures and other General (`Invalid`)
+    /// envelopes included. While the server holds control a key RELEASE is
+    /// only recorded (`HandleKeyboardCommand` :717284) and a PRESS takes it
+    /// back (`TakeControlFromServer` :716934), so a release mid-cast is
+    /// deferred — the X + Up toggle of the PvP "return slide". The
+    /// gesture's end reclaims only while some key is still held
+    /// (`CommandInterpreter::UseTime` :717595); with none held, the body
+    /// keeps the last server state until the next press. OFF: only
+    /// MoveTo/TurnTo directives take control (the FU5 shape).
+    general_motion_takes_control: bool,
     /// Bug-A leash echo gate (2026-07-03): when `true`, the local
     /// leash arm's InterpolateTo pull gates on
     /// [`Self::local_use_position_from_server`] (the retail predicate,
@@ -1860,6 +1880,7 @@ impl SpatialScene {
             remote_sticky_stepped: HashSet::new(),
             local_retail_leash: false,
             local_server_controlled: false,
+            general_motion_takes_control: false,
             leash_echo_gate: USE_LEASH_ECHO_GATE,
             local_use_position_from_server: false,
             combat_radii_enabled: false,
@@ -1911,6 +1932,17 @@ impl SpatialScene {
     /// the routine-arm echo-pull gate; that is `UsePositionFromServer`).
     pub fn local_server_controlled(&self) -> bool {
         self.local_server_controlled
+    }
+
+    /// Cast-movement fix 3 — install `?castTakesControl` (see the field doc).
+    pub fn set_general_motion_takes_control(&mut self, enabled: bool) {
+        self.general_motion_takes_control = enabled;
+    }
+
+    /// True when every non-autonomous self motion hands control to the
+    /// server (see the field doc).
+    pub fn general_motion_takes_control(&self) -> bool {
+        self.general_motion_takes_control
     }
 
     /// Bug-A leash echo gate switch (see the field doc). Wasm caller

@@ -898,6 +898,20 @@ const USE_FAITHFUL_OUTDOOR: bool = true;
 /// the steer's unit bearing × the gait speed, as before.
 const USE_LOCAL_MOVETO_MOTION: bool = true;
 
+/// Cast-movement fix 2 (2026-10-11) — only a FRESH input edge cancels the
+/// local player's server MoveTo/TurnTo, as in retail: raw input cancels a
+/// MoveTo through the `CancelMoveTo` bit of the `DoMotion` a key PRESS issues
+/// (`CMotionInterp::DoMotion` acclient.c:344600, `SBYTE1(bitfield) < 0`), and
+/// a press while the server holds control runs `TakeControlFromServer` →
+/// `StopCompletely` (:716934). A key that is merely HELD issues nothing, so
+/// ACE's turn-to-target before a cast (`TurnToObject` with StopCompletely,
+/// :345242) pauses a held strafe, turns the caster, and the held keys come
+/// back when the turn ends (the `UseTime` reclaim, :717595). ON: the M4.5
+/// "held non-idle manual drive wins" arm is dropped; the fresh-edge cancel
+/// stays. `false` / `?retailMoveToCancel=off`: a held key cancels at once
+/// (the pre-2026-10-11 M4.5 shape — the caster never turned to the target).
+const USE_RETAIL_MOVETO_CANCEL: bool = true;
+
 /// Phase 3 Phase E1 / WS-D (2026-06-29) — faithful walkable STEP-UP / slope &
 /// ledge climbing. When on, a grounded CONTACT mover that walks into a walkable
 /// up-slope / ramp / stair / ledge CLIMBS it (the decomp `CSphere::step_sphere_up`
@@ -1191,11 +1205,10 @@ const USE_CAST_MOVE: bool = true;
 /// interpreted sidestep/turn, so a HELD strafe dies at every echo and
 /// the retail strafecast ("locked into strafing, dancing left-right
 /// while the cast plays") is impossible — the community's "slidecasting
-/// is completely fixable that ACE refuses to". Retail servers never
-/// re-stomped the caster mid-cast: the gesture animation was
-/// client-authored (the "invisible animation break" — a local cut the
-/// server can't detect — only works if the server isn't re-asserting
-/// the gesture), so held sidestep/turn simply kept flowing.
+/// is completely fixable that ACE refuses to". (This note used to say
+/// retail servers never re-stomped the caster because the gesture was
+/// client-authored; the decomp says otherwise — see the 2026-10-11
+/// paragraph below: the gesture is server-sent in retail too.)
 ///
 /// ON: after a General (case-0) stomp for the LOCAL player, the
 /// currently-held manual sidestep/turn are re-applied onto the
@@ -1210,17 +1223,26 @@ const USE_CAST_MOVE: bool = true;
 /// `?slideCast` URL flag ([`MovementSystem::slide_cast_runtime`]).
 /// Effective predicate: [`MovementSystem::slide_cast_enabled`].
 ///
-/// ADJ-8 (2026-07-04) — DEFAULT FLIPPED to `false` (the authentic
-/// burst) per the user's ruling, verbatim: "slideCast=off feels more
-/// authentic however there are some catches". Landed only after bug A
-/// (the leash echo gate) was confirmed dead on the 1070 — the work
-/// order's ordering constraint.
+/// ADJ-8 (2026-07-04) flipped the default to `false` (the burst) per the
+/// user's ruling "slideCast=off feels more authentic however there are
+/// some catches", on the client-authored-gesture premise.
 ///
-/// `false` (DEFAULT): the bare stomp (strafe dies per echo,
-/// tap-to-revive only — the authentic vanilla-ACE burst feel).
-/// `true` / `?slideCast=on`: held strafe/turn ride through
-/// cast-gesture stomps (the modern opt-in).
-const USE_SLIDE_CAST: bool = false;
+/// Cast-movement fix 1 (2026-10-11) — DEFAULT FLIPPED BACK to `true` (user
+/// ruling on the PvP "rookie cast": "yes for all three"). The decomp shows
+/// the premise above was wrong: retail's cast gesture is SERVER-sent too
+/// (`ClientMagicSystem::CastSpell` only sends `Event_CastTargetedSpell` /
+/// `Event_CastUntargetedSpell`), and `move_to_interpreted_state` copies the
+/// message's forward/sidestep/turn wholesale (acclient.c:344372). Retail
+/// strafe-casting worked, so retail's echoes must have carried the caster's
+/// own sidestep/turn (inferred — the retail server is not in the decomp);
+/// ACE's carry none. Re-applying the held axes onto each
+/// echo is therefore the retail-parity shape, and the slide techniques (hold
+/// strafe + turn + back + forward, tap a key) depend on it.
+///
+/// `true` (DEFAULT): held strafe/turn ride through cast-gesture stomps.
+/// `false` / `?slideCast=off`: the bare stomp (strafe dies per echo,
+/// tap-to-revive only — the ADJ-8 burst feel).
+const USE_SLIDE_CAST: bool = true;
 
 /// (2026-07-12, WS04 S3a) — `?castHoldReclaim`: while a KNOWN local cast
 /// chain is in flight, the FU-A `use_time` reclaim keeps the FORWARD slot
@@ -2002,6 +2024,9 @@ pub(crate) struct MovementSystem {
     /// MoveTo refactor phase D — `?localMoveToMotion=off` runtime carrier
     /// over [`USE_LOCAL_MOVETO_MOTION`]. `None` = the const.
     local_moveto_motion_runtime: Option<bool>,
+    /// Cast-movement fix 2 — `?retailMoveToCancel=off` runtime carrier over
+    /// [`USE_RETAIL_MOVETO_CANCEL`]. `None` = the const.
+    retail_moveto_cancel_runtime: Option<bool>,
     /// MoveTo refactor phase G — the local MoveTo's TargetManager voyeur
     /// (`holtburger_world::motion::target_voyeur`, `?targetVoyeur`).
     local_voyeur: Option<holtburger_world::motion::target_voyeur::TargetVoyeur>,
@@ -2602,6 +2627,7 @@ impl MovementSystem {
             jump_pack_logs: std::cell::Cell::new(0),
             faithful_outdoor_runtime: None,
             local_moveto_motion_runtime: None,
+            retail_moveto_cancel_runtime: None,
             local_voyeur: None,
             faithful_stepup_runtime: None,
             outdoor_static_grounding_runtime: None,
@@ -2696,6 +2722,18 @@ impl MovementSystem {
     pub(crate) fn local_moveto_motion_enabled(&self) -> bool {
         self.local_moveto_motion_runtime
             .unwrap_or(USE_LOCAL_MOVETO_MOTION)
+    }
+
+    /// Cast-movement fix 2 — install `?retailMoveToCancel` (see
+    /// [`USE_RETAIL_MOVETO_CANCEL`]).
+    pub(crate) fn set_retail_moveto_cancel(&mut self, on: bool) {
+        self.retail_moveto_cancel_runtime = Some(on);
+    }
+
+    /// [`USE_RETAIL_MOVETO_CANCEL`] effective predicate.
+    pub(crate) fn retail_moveto_cancel_enabled(&self) -> bool {
+        self.retail_moveto_cancel_runtime
+            .unwrap_or(USE_RETAIL_MOVETO_CANCEL)
     }
 
     /// Phase 3 Phase E1 / WS-D (2026-06-29) — install the `?stepUp=off` runtime
@@ -4344,7 +4382,10 @@ impl MovementSystem {
                 // active MoveTo (retail apply_raw_movement →
                 // cancel_moveto(0x36), acclient.c:317421-317427 →
                 // :339240-339246). Flag-consumed by the gated shim.
-                if USE_MOVETO_DRIVER && non_idle {
+                // Cast-movement fix 2: only an input EDGE cancels (a held
+                // key re-sent unchanged issues no DoMotion in retail).
+                let edge = prev_raw != Some(state);
+                if USE_MOVETO_DRIVER && non_idle && (edge || !self.retail_moveto_cancel_enabled()) {
                     self.manual_moveto_cancel_pending = true;
                 }
                 // A14-I2 — while an S10 pursuit steers, an IDLE manual
@@ -5264,6 +5305,8 @@ impl MovementSystem {
             }
         });
         let manual_cancel = std::mem::take(&mut self.manual_moveto_cancel_pending);
+        // Cast-movement fix 2 — read before the manager borrow below.
+        let retail_moveto_cancel = self.retail_moveto_cancel_enabled();
         let Some(manager) = self.movement_managers.get_mut(&guid) else {
             self.local_pursuit_engaged = false;
             self.moveto_stall = MoveToStallRecovery::default();
@@ -5282,13 +5325,17 @@ impl MovementSystem {
         let mut effects = MotionSideEffects::default();
 
         // M4.5 manual-cancel parity: a non-idle ManualSet ingested this
-        // tick, OR a held non-idle manual drive, wins over the driver —
-        // the manual lane owns the wire; no stop edge here.
-        let manual_active = matches!(
-            self.active_drive.map(|active| active.intent),
-            Some(ActiveDriveIntent::Manual(state))
-                if !(state.is_locomotion_idle() && state.turning.is_none())
-        );
+        // tick wins over the driver — the manual lane owns the wire; no
+        // stop edge here. A HELD non-idle manual drive also won before
+        // cast-movement fix 2; retail cancels only on a fresh press
+        // ([`USE_RETAIL_MOVETO_CANCEL`]), so with the fix a held key lets
+        // the server's MoveTo/TurnTo run and comes back when it ends.
+        let manual_active = !retail_moveto_cancel
+            && matches!(
+                self.active_drive.map(|active| active.intent),
+                Some(ActiveDriveIntent::Manual(state))
+                    if !(state.is_locomotion_idle() && state.turning.is_none())
+            );
         if manual_cancel || manual_active {
             let _ = manager.cancel_moveto_with_effects(WE_ACTION_CANCELLED, on_contact, &mut effects);
             self.local_pursuit_engaged = false;

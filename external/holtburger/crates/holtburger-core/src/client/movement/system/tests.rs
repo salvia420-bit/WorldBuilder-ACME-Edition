@@ -12057,3 +12057,417 @@ async fn local_moveto_tracks_the_target_through_the_voyeur() {
     assert!(movement.local_voyeur.is_none());
     assert!(!movement.moveto_is_active(guid));
 }
+
+// ── Cast-movement fixes (2026-10-11) — the PvP slide techniques, scripted ──
+//
+// Key actions as the retail CommandInterpreter receives them
+// (`on_action`'s dense map): 0x29 forward, 0x2A back, 0x2C/0x2D strafe
+// right/left, 0x2E turn right. ACE's messages for the caster go through the
+// REAL world handler (`handlers/player.rs`) and the production event
+// consumers, so `?castTakesControl` (opt-in) is exercised where it lives.
+
+const SLIDE_KEY_FORWARD: u32 = 0x29;
+const SLIDE_KEY_BACK: u32 = 0x2A;
+const SLIDE_KEY_STRAFE_RIGHT: u32 = 0x2C;
+const SLIDE_KEY_STRAFE_LEFT: u32 = 0x2D;
+const SLIDE_KEY_TURN_RIGHT: u32 = 0x2E;
+
+#[derive(Clone, Copy)]
+enum SlideStep {
+    Down(u32),
+    Up(u32),
+    /// Our CastTargetedSpell went out (`note_cast_request_sent`).
+    CastRequest,
+    /// ACE's cast-gesture echo for the caster: a non-autonomous General
+    /// with the gesture in the forward slot and EMPTY sidestep/turn.
+    CastEcho,
+    /// ACE's turn-to-target before a cast (`TurnToObject`, params
+    /// 0x1EE0F — StopCompletely 0x10000 included).
+    TurnToTarget,
+}
+
+struct SlideRun {
+    poses: Vec<WorldPosition>,
+    controlled: Vec<bool>,
+    moving_to: Vec<bool>,
+}
+
+impl SlideRun {
+    /// Planar displacement over frame `i` (pose[i] − pose[i−1]).
+    fn step(&self, i: usize) -> Vector3 {
+        let a = self.poses[i - 1].global_coords();
+        let b = self.poses[i].global_coords();
+        Vector3::new(b.x - a.x, b.y - a.y, 0.0)
+    }
+
+    fn heading_deg(&self, i: usize) -> f32 {
+        self.poses[i].rotation.to_heading().to_degrees().rem_euclid(360.0)
+    }
+}
+
+const SLIDE_PLAYER: Guid = Guid(0x5000_0123);
+const SLIDE_TARGET: Guid = Guid(0x8000_0042);
+
+fn slide_turn_to_target_message(seq: u16) -> holtburger_protocol::messages::MovementEventData {
+    use holtburger_protocol::messages::{
+        MovementEventData, MovementType, MovementTypeData, TurnToObject, TurnToParameters,
+    };
+    MovementEventData {
+        guid: SLIDE_PLAYER,
+        object_instance_sequence: 0,
+        movement_sequence: seq,
+        server_control_sequence: seq,
+        is_autonomous: false,
+        movement_type: MovementType::TurnToObject,
+        motion_flags: 0,
+        current_style: MotionStance::Magic.interpreted(),
+        data: MovementTypeData::TurnToObject(TurnToObject {
+            target: SLIDE_TARGET,
+            desired_heading: 0.0,
+            params: TurnToParameters {
+                movement_parameters: 0x0001_EE0F,
+                speed: 1.0,
+                desired_heading: 0.0,
+            },
+        }),
+    }
+}
+
+/// Runs `script` (frame → step) for `frames` 33 ms frames through the real
+/// frame path; the player starts at (100, 100) facing north (AC 90°), the
+/// target 20 m due east. `configure` adjusts the systems before frame 0
+/// (the escape switches; `?castTakesControl=on` is
+/// `world.scene.set_general_motion_takes_control(true)`).
+async fn run_slide(
+    script: &[(usize, SlideStep)],
+    frames: usize,
+    configure: impl FnOnce(&mut MovementSystem, &mut WorldState),
+) -> SlideRun {
+    use crate::client::tick_spine::TickSpineHandle;
+    use holtburger_protocol::messages::GameMessage;
+    let mut world = WorldState::synthetic();
+    let start = WorldPosition {
+        landblock_id: Guid(0xA9B4_0001),
+        coords: Vector3::new(100.0, 100.0, 0.0),
+        rotation: Quaternion::from_heading(90f32.to_radians()),
+    };
+    seed_local_player(&mut world, SLIDE_PLAYER, start);
+    let _ = world.set_player_position(start);
+    world.player.guid = SLIDE_PLAYER;
+    seed_self_movement_capabilities_override(&mut world, 1.0, 2.6, 4.0, 1.5);
+    world.entities.insert(Entity::new(
+        SLIDE_TARGET,
+        "Drudge".to_string(),
+        WorldPosition {
+            landblock_id: Guid(0xA9B4_0001),
+            coords: Vector3::new(120.0, 100.0, 0.0),
+            rotation: Quaternion::identity(),
+        },
+    ));
+    let mut handle = crate::client::movement::MovementSystemHandle::new();
+    configure(handle.inner_mut(), &mut world);
+    let mut spine = TickSpineHandle::new();
+    let mut session = Session::new_test();
+    let t0 = Instant::now();
+    let dt = Duration::from_millis(33);
+    let mut seq: u16 = 1;
+    let mut run = SlideRun {
+        poses: Vec::new(),
+        controlled: Vec::new(),
+        moving_to: Vec::new(),
+    };
+    for frame in 0..frames {
+        let now = t0 + dt * (frame as u32);
+        for &(at, step) in script {
+            if at != frame {
+                continue;
+            }
+            match step {
+                SlideStep::Down(action) => handle.inner_mut().enqueue_key_action(action, true),
+                SlideStep::Up(action) => handle.inner_mut().enqueue_key_action(action, false),
+                SlideStep::CastRequest => handle.inner_mut().note_cast_request_sent(now),
+                SlideStep::CastEcho | SlideStep::TurnToTarget => {
+                    seq += 1;
+                    let data = if matches!(step, SlideStep::CastEcho) {
+                        let mut data = cast_gesture_event_for(SLIDE_PLAYER);
+                        data.object_instance_sequence = 0;
+                        data.movement_sequence = seq;
+                        data.server_control_sequence = seq;
+                        data
+                    } else {
+                        slide_turn_to_target_message(seq)
+                    };
+                    let events = world.handle_message(&GameMessage::UpdateMotion(Box::new(data)));
+                    handle.apply_self_movement_world_events(&events);
+                    handle.apply_movement_world_events(&events);
+                }
+            }
+        }
+        spine
+            .tick_frame(now, &mut world, &mut handle, &mut session)
+            .await
+            .expect("tick");
+        run.poses.push(world.local_player_runtime_pose().expect("pose"));
+        run.controlled.push(world.scene.local_server_controlled());
+        run.moving_to.push(handle.inner_mut().moveto_is_active(SLIDE_PLAYER));
+    }
+    run
+}
+
+/// Cast-movement fix 1 (`?slideCast`, default ON) — the "base cast" of the
+/// PvP slide: hold strafe right + turn right + back + forward, cast. Every
+/// windup echo arrives with empty sidestep/turn; the held strafe and turn
+/// ride through them (retail's echoes carried the caster's own axes), so
+/// the caster keeps sliding — at strafe speed, the forward slot dead under
+/// the gesture. `=off` restores the per-echo stop.
+#[tokio::test]
+async fn slide_cast_held_strafe_and_turn_ride_through_the_cast_echoes() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_RIGHT)),
+        (1, SlideStep::Down(SLIDE_KEY_TURN_RIGHT)),
+        (2, SlideStep::Down(SLIDE_KEY_BACK)),
+        (3, SlideStep::Down(SLIDE_KEY_FORWARD)),
+        (6, SlideStep::CastRequest),
+        (8, SlideStep::CastEcho),
+        (23, SlideStep::CastEcho),
+    ];
+    let run = run_slide(&script, 35, |_, _| {}).await;
+    for i in 9..35 {
+        let d = run.step(i).length();
+        assert!(
+            (0.03..0.08).contains(&d),
+            "frame {i}: the held strafe keeps sliding through the echoes at strafe speed (moved {d:.4} m)"
+        );
+    }
+    assert!(
+        run.heading_deg(34) > run.heading_deg(9) + 20.0,
+        "the held turn keeps turning: {} → {}",
+        run.heading_deg(9),
+        run.heading_deg(34)
+    );
+
+    let off = run_slide(&script, 35, |movement, _| movement.set_slide_cast(false)).await;
+    for i in 10..20 {
+        assert!(off.step(i).length() < 1e-4, "?slideCast=off: frame {i} stopped by the echo");
+    }
+}
+
+/// Cast-movement fix 2 (`?retailMoveToCancel`, default ON) — a HELD strafe
+/// no longer cancels ACE's turn-to-target: the turn's StopCompletely pauses
+/// the strafe, the caster turns to face the target, and the held strafe
+/// comes back on its own when the turn ends (the reclaim), as in retail.
+/// `=off`: the held key cancels the turn at once and the caster never
+/// faces the target.
+#[tokio::test]
+async fn held_strafe_lets_the_server_turn_finish_then_comes_back() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_RIGHT)),
+        (10, SlideStep::TurnToTarget),
+    ];
+    let run = run_slide(&script, 70, |_, _| {}).await;
+    assert!(run.step(5).length() > 0.03, "strafing before the turn");
+    assert!(run.moving_to[11], "the held strafe does not cancel the server's turn");
+    let turn_end = (11..70)
+        .find(|&i| !run.moving_to[i])
+        .expect("the turn completes");
+    let heading = run.heading_deg(turn_end);
+    assert!((heading - 180.0).abs() < 2.0, "faces the target (east): {heading}°");
+    for i in 12..turn_end {
+        assert!(run.step(i).length() < 0.005, "frame {i}: the turn's StopCompletely pauses the strafe");
+    }
+    assert!(
+        (turn_end..70).any(|i| run.step(i).length() > 0.03),
+        "the held strafe comes back after the turn without a new press"
+    );
+
+    let off = run_slide(&script, 70, |movement, _| movement.set_retail_moveto_cancel(false)).await;
+    assert!(!off.moving_to[11], "?retailMoveToCancel=off: the held key cancels the turn");
+    assert!((off.heading_deg(69) - 90.0).abs() < 1.0, "…and the caster never turns");
+}
+
+/// Cast-movement fix 3 (`?castTakesControl=on`, OPT-IN) — the "return
+/// slide": hold strafe left + back + forward, cast, tap forward. The cast
+/// echo hands control to the server, so releasing forward is only recorded
+/// (no backstep) and the press takes control back and drives forward
+/// again. Default (off): the release applies at once — the caster
+/// backsteps until the press.
+#[tokio::test]
+async fn cast_echo_takes_control_and_defers_a_key_release() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_LEFT)),
+        (1, SlideStep::Down(SLIDE_KEY_BACK)),
+        (2, SlideStep::Down(SLIDE_KEY_FORWARD)),
+        (6, SlideStep::CastRequest),
+        (8, SlideStep::CastEcho),
+        (14, SlideStep::Up(SLIDE_KEY_FORWARD)),
+        (20, SlideStep::Down(SLIDE_KEY_FORWARD)),
+    ];
+    let run = run_slide(&script, 30, |_, world| {
+        world.scene.set_general_motion_takes_control(true)
+    })
+    .await;
+    assert!(run.controlled[8], "the cast echo hands control to the server");
+    for i in 15..20 {
+        assert!(
+            run.step(i).y > -1e-4,
+            "frame {i}: the release mid-cast is deferred — no backstep (dy {:.4})",
+            run.step(i).y
+        );
+    }
+    assert!(
+        (21..26).any(|i| run.step(i).y > 0.05),
+        "the press takes control back and drives forward again"
+    );
+
+    let off = run_slide(&script, 30, |_, _| {}).await;
+    assert!(!off.controlled[8], "default: a General does not take control");
+    assert!(
+        (15..20).any(|i| off.step(i).y < -0.02),
+        "default: the release applies at once — a backstep"
+    );
+}
+
+/// The forward axis during a cast, as PvP players use it: a HELD W is dead
+/// under the cast gesture (the gesture owns the forward slot and a held key
+/// issues nothing), a TAP — release, then press — takes control back and
+/// runs the caster forward a little, until the next windup echo kills it
+/// again (retail `TakeControlFromServer` → `ApplyCurrentMovement`,
+/// acclient.c:716934; the next echo's `LoseControlToServer`).
+#[tokio::test]
+async fn held_forward_is_dead_mid_cast_and_a_tap_moves_a_little() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_FORWARD)),
+        (4, SlideStep::CastRequest),
+        (6, SlideStep::CastEcho),
+        (14, SlideStep::Up(SLIDE_KEY_FORWARD)),
+        (16, SlideStep::Down(SLIDE_KEY_FORWARD)),
+        (24, SlideStep::CastEcho),
+    ];
+    let run = run_slide(&script, 40, |_, _| {}).await;
+    assert!(run.step(3).y > 0.1, "running before the cast");
+    for i in 7..16 {
+        assert!(run.step(i).length() < 1e-4, "frame {i}: held W is dead under the gesture");
+    }
+    assert!(
+        (17..24).all(|i| run.step(i).y > 0.1),
+        "the tap runs the caster forward until the next echo"
+    );
+    for i in 25..40 {
+        assert!(run.step(i).length() < 1e-4, "frame {i}: the next echo kills it again (W still held)");
+    }
+}
+
+/// The PvP "base cast" tap, under `?castTakesControl=on` (opt-in): hold
+/// strafe right + turn right + back + forward, cast, then tap the turn key.
+/// The release mid-cast is deferred (the turn keeps turning), the press
+/// takes control back — reviving the held forward too, so the caster lunges
+/// forward-right — until the next windup echo leaves the strafe + turn
+/// slide again. By default the tap only re-applies the turn (no lunge).
+#[tokio::test]
+async fn rookie_slide_turn_tap_lunges_until_the_next_echo() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_RIGHT)),
+        (1, SlideStep::Down(SLIDE_KEY_TURN_RIGHT)),
+        (2, SlideStep::Down(SLIDE_KEY_BACK)),
+        (3, SlideStep::Down(SLIDE_KEY_FORWARD)),
+        (6, SlideStep::CastRequest),
+        (8, SlideStep::CastEcho),
+        (12, SlideStep::Up(SLIDE_KEY_TURN_RIGHT)),
+        (14, SlideStep::Down(SLIDE_KEY_TURN_RIGHT)),
+        (23, SlideStep::CastEcho),
+    ];
+    let run = run_slide(&script, 35, |_, world| {
+        world.scene.set_general_motion_takes_control(true)
+    })
+    .await;
+    let slide = |i: usize| run.step(i).length();
+    for i in 9..14 {
+        assert!((0.03..0.08).contains(&slide(i)), "frame {i}: strafe + turn slide ({:.4} m)", slide(i));
+        assert!(
+            run.heading_deg(i) > run.heading_deg(i - 1) + 1.0,
+            "frame {i}: the turn keeps going through the deferred release"
+        );
+    }
+    assert!(
+        (15..23).all(|i| slide(i) > 0.09),
+        "the press revives the held forward: a lunge until the next echo"
+    );
+    for i in 24..35 {
+        assert!((0.03..0.08).contains(&slide(i)), "frame {i}: back to the slide after the echo ({:.4} m)", slide(i));
+    }
+}
+
+/// Regression guard (2026-10-11, the owner's "regressions to the movement
+/// system"): with the defaults, a strafe or turn held into a cast rides
+/// through the echo (`?slideCast`) and STOPS the moment its key is let go —
+/// mid-cast, and still stopped after the gesture's completion clock. With
+/// `?castTakesControl` default-on the release was deferred to a reclaim
+/// that needs a held key, so the caster slid until the next key press.
+#[tokio::test]
+async fn released_strafe_or_turn_stops_at_once_mid_cast() {
+    use crate::client::movement::motion_table_manager::RENDERER_DONE_FALLBACK_SECS;
+    // Past the completion clock: the gesture (frame 10) has long drained.
+    let frames = 12 + (RENDERER_DONE_FALLBACK_SECS / 0.033).ceil() as usize + 20;
+    let strafe = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_LEFT)),
+        (8, SlideStep::CastRequest),
+        (10, SlideStep::CastEcho),
+        (25, SlideStep::Up(SLIDE_KEY_STRAFE_LEFT)),
+    ];
+    let run = run_slide(&strafe, frames, |_, _| {}).await;
+    for i in 11..25 {
+        assert!(run.step(i).length() > 0.03, "frame {i}: the held strafe rides through the echo");
+    }
+    assert!(!run.controlled[20], "a cast echo does not take control by default");
+    for i in 27..frames {
+        assert!(
+            run.step(i).length() < 1e-4,
+            "frame {i}: released mid-cast — the strafe stops and stays stopped ({:.4} m)",
+            run.step(i).length()
+        );
+    }
+
+    let turn = [
+        (0, SlideStep::Down(SLIDE_KEY_TURN_RIGHT)),
+        (8, SlideStep::CastRequest),
+        (10, SlideStep::CastEcho),
+        (20, SlideStep::Up(SLIDE_KEY_TURN_RIGHT)),
+    ];
+    let run = run_slide(&turn, frames, |_, _| {}).await;
+    assert!(run.heading_deg(19) > run.heading_deg(11) + 10.0, "the held turn rides through the echo");
+    let settled = run.heading_deg(22);
+    for i in 22..frames {
+        assert!(
+            (run.heading_deg(i) - settled).abs() < 0.01,
+            "frame {i}: released mid-cast — the turn stops ({settled} → {})",
+            run.heading_deg(i)
+        );
+    }
+}
+
+/// A/D during a cast with the defaults: the strafe held into the cast
+/// slides, swapping to the other key mid-cast strafes the other way, the
+/// next windup echo keeps that one going, and its release stops the caster.
+#[tokio::test]
+async fn strafe_swap_mid_cast_follows_the_keys() {
+    let script = [
+        (0, SlideStep::Down(SLIDE_KEY_STRAFE_LEFT)),
+        (8, SlideStep::CastRequest),
+        (10, SlideStep::CastEcho),
+        (20, SlideStep::Up(SLIDE_KEY_STRAFE_LEFT)),
+        (22, SlideStep::Down(SLIDE_KEY_STRAFE_RIGHT)),
+        (30, SlideStep::CastEcho),
+        (40, SlideStep::Up(SLIDE_KEY_STRAFE_RIGHT)),
+    ];
+    let run = run_slide(&script, 55, |_, _| {}).await;
+    // Facing north (AC 90°): strafe left is −x, strafe right is +x.
+    for i in 11..20 {
+        assert!(run.step(i).x < -0.03, "frame {i}: sliding left through the echo");
+    }
+    for i in 24..40 {
+        assert!(run.step(i).x > 0.03, "frame {i}: sliding right, through the second echo");
+    }
+    for i in 42..55 {
+        assert!(run.step(i).length() < 1e-4, "frame {i}: released — stopped");
+    }
+}

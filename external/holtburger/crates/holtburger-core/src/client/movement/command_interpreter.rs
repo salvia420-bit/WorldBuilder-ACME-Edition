@@ -477,13 +477,12 @@ pub(crate) struct CommandInterpreter {
     /// drives; the leash still returns on any edge, system-side).
     pub(crate) honor_autonomy_latch: bool,
     /// `?slideCast` alias: the SetObjectMovement General stomp keeps
-    /// the held sidestep/turn axes flowing (ADJ-8: deliberately
-    /// smoother-than-retail). `false` = the authentic burst — all axes
-    /// die with the stomp; revival is FU-A reclaim-driven. Consulted by
-    /// the system's stomp arm when `?cmdInterp=on`; the legacy
-    /// `USE_SLIDE_CAST` carrier stays the flag-off predicate. The
-    /// eventual default is an ADJ-8 A/B decision — do not delete the
-    /// modern arm pre-measurement.
+    /// the held sidestep/turn axes flowing — the retail-parity shape since
+    /// cast-movement fix 1 (2026-10-11: retail's echoes must have carried
+    /// the caster's axes — inferred, see `USE_SLIDE_CAST`), default ON. `false` = the ADJ-8
+    /// burst — all axes die with the stomp; revival is FU-A reclaim-driven.
+    /// Consulted by the system's stomp arm when `?cmdInterp=on`; the legacy
+    /// `USE_SLIDE_CAST` carrier stays the flag-off predicate.
     pub(crate) slidecast_persist: bool,
     /// Step-5 effect stream (PLAN rows 12-13) — holtburger extension,
     /// NOT retail state: the dispatch moments the renderer reacts to,

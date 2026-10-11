@@ -1024,24 +1024,49 @@ fn parse_cast_move_lock_flag(search: &str) -> bool {
     trimmed.split('&').any(|kv| kv == "castMoveLock=on")
 }
 
-/// (2026-07-03): parse `?slideCast`. ADJ-8 (2026-07-04): DEFAULT
-/// FLIPPED OFF — the authentic burst is the default; `=on` is the
-/// modern opt-in. User ruling, verbatim: "slideCast=off feels more
-/// authentic however there are some catches". Flipped only after the
-/// bug-A leash echo gate was 1070-confirmed (the ordering the work
-/// order demanded). When ON, the local player's HELD sidestep/turn
-/// survive ACE's non-autonomous General cast-gesture stomps (each
-/// windup/cast echo arrives with empty axes and would otherwise kill a
-/// held strafe) — the retail strafecast / slidecast dance vs vanilla
-/// ACE. Forward is never persisted (held W stays dead until a fresh
-/// forward edge — the `?castMove` core). Default (OFF) = the bare
-/// stomp (tap-to-revive only). Native carrier: `USE_SLIDE_CAST`
-/// (movement/system.rs, flipped in the same commit). Needs a wasm
-/// rebuild; NO manifest bump.
+/// Cast-movement fix 2 (2026-10-11): parse `?retailMoveToCancel`. DEFAULT-ON:
+/// only a fresh key press cancels the local player's server MoveTo/TurnTo
+/// (retail `DoMotion`'s CancelMoveTo bit / `TakeControlFromServer`); a key
+/// that is merely held lets ACE's turn-to-target run and comes back after it.
+/// `=off` restores the M4.5 "held key cancels" shape. Native carrier:
+/// `USE_RETAIL_MOVETO_CANCEL` (movement/system.rs).
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_retail_moveto_cancel_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "retailMoveToCancel=off")
+}
+
+/// Cast-movement fix 3 (2026-10-11): parse `?castTakesControl`. OPT-IN
+/// (`=on`) since the same day: every accepted non-autonomous motion for the
+/// local player — cast gestures included — hands control to the server, as
+/// retail's dispatcher does (`SetObjectMovement` → `LoseControlToServer`,
+/// acclient.c:392779), so a key release mid-cast waits for the reclaim.
+/// Shipped default-on first; the release deferral kept a `?slideCast`
+/// strafe going after its key was let go, until the next key press
+/// (retail's reclaim at the gesture's end needs a held key, acclient.c
+/// :717595) — the owner's "regressions to the movement system". The
+/// default is the FU5 shape: only MoveTo/TurnTo directives take control.
+/// Scene switch `SpatialScene::set_general_motion_takes_control`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_cast_takes_control_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    trimmed.split('&').any(|kv| kv == "castTakesControl=on")
+}
+
+/// (2026-07-03): parse `?slideCast`. Cast-movement fix 1 (2026-10-11):
+/// DEFAULT-ON again (`=off` is the escape to the ADJ-8 burst), user ruling
+/// "yes for all three" on the PvP slide techniques. When ON, the local
+/// player's HELD sidestep/turn survive ACE's non-autonomous General
+/// cast-gesture stomps (each windup/cast echo arrives with empty axes and
+/// would otherwise kill a held strafe) — the retail shape: retail's echoes
+/// must have carried the caster's axes (inferred; `USE_SLIDE_CAST` has the
+/// decomp trail). Forward is never persisted (held W stays dead until a fresh
+/// press — the `?castMove` core). Native carrier: `USE_SLIDE_CAST`
+/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_slide_cast_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "slideCast=on")
+    !trimmed.split('&').any(|kv| kv == "slideCast=off")
 }
 
 /// Movement-port wave 1 (2026-07-03): parse `?cmdInterp=off` (or
@@ -34322,6 +34347,20 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
     }
 
+    /// Cast-movement fixes 2/3 (2026-10-11): `?retailMoveToCancel` is
+    /// DEFAULT-ON (`=off` disables); `?castTakesControl` is OPT-IN (`=on`).
+    #[test]
+    fn cast_movement_fix_flag_shapes() {
+        use super::{parse_cast_takes_control_flag, parse_retail_moveto_cancel_flag};
+        assert!(parse_retail_moveto_cancel_flag(""));
+        assert!(!parse_retail_moveto_cancel_flag("?retailMoveToCancel=off"));
+        assert!(!parse_retail_moveto_cancel_flag("?nosw=1&retailMoveToCancel=off"));
+        assert!(!parse_cast_takes_control_flag(""));
+        assert!(!parse_cast_takes_control_flag("?castTakesControl=off"));
+        assert!(parse_cast_takes_control_flag("?castTakesControl=on"));
+        assert!(parse_cast_takes_control_flag("?nosw=1&castTakesControl=on"));
+    }
+
     /// MoveTo refactor phase G: `?targetVoyeur` parse shape — DEFAULT-ON.
     #[test]
     fn target_voyeur_flag_defaults_on_unless_off() {
@@ -34458,8 +34497,9 @@ mod wire_state_packs_routing_tests {
         assert!(parse_cast_move_flag("?castMove=on"));
         assert!(!parse_cast_move_flag("?castMove=off"));
         assert!(!parse_cast_move_flag("?nosw=1&castMove=off"));
-        // ADJ-8 (2026-07-04): slideCast default OFF; `=on` opts in.
-        assert!(!parse_slide_cast_flag(""));
+        // Cast-movement fix 1 (2026-10-11): slideCast default ON; `=off`
+        // is the escape.
+        assert!(parse_slide_cast_flag(""));
         assert!(parse_slide_cast_flag("?slideCast=on"));
         assert!(!parse_slide_cast_flag("?slideCast=off"));
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
@@ -47383,10 +47423,13 @@ async fn recv_loop(
     // `parse_cast_move_lock_flag`.
     movement.set_cast_move_lock(parse_cast_move_lock_flag(&flag_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
-    // ACE's General cast-gesture stomps. ADJ-8 (2026-07-04): default
-    // OFF (authentic burst, user ruling); `=on` is the modern opt-in;
-    // see `parse_slide_cast_flag`.
+    // ACE's General cast-gesture stomps. Cast-movement fix 1 (2026-10-11):
+    // default ON again (`=off` = the ADJ-8 burst); see `parse_slide_cast_flag`.
     movement.set_slide_cast(parse_slide_cast_flag(&flag_search()));
+    // Cast-movement fix 2 (2026-10-11): `?retailMoveToCancel=off` — a HELD
+    // key cancels the server's MoveTo/TurnTo again (default ON: only a fresh
+    // press does, as retail); see `parse_retail_moveto_cancel_flag`.
+    movement.set_retail_moveto_cancel(parse_retail_moveto_cancel_flag(&flag_search()));
     // Movement-port wave 1 step 4 (2026-07-03): `?cmdInterp` — the
     // retail CommandInterpreter input lane (DEFAULT ON since step 5,
     // 2026-07-03; `=off` restores the legacy lane); see `parse_cmd_interp_flag`.
@@ -47671,6 +47714,7 @@ async fn recv_loop(
     let remote_spine_on: bool = parse_remote_spine_flag(&flag_search());
     let remote_sweep_on: bool = parse_remote_sweep_flag(&flag_search());
     let target_voyeur_on: bool = parse_target_voyeur_flag(&flag_search());
+    let cast_takes_control_on: bool = parse_cast_takes_control_flag(&flag_search());
     let sticky_retail_requested: bool = parse_sticky_retail_flag(&flag_search());
     let remote_sticky_on: bool = sticky_retail_requested
         && remote_interp_on
@@ -47868,6 +47912,7 @@ async fn recv_loop(
             remote_spine_on,
             remote_sweep_on,
             target_voyeur_on,
+            cast_takes_control_on,
             remote_sticky_on,
             combat_radii_on,
             server_run_rate_on,

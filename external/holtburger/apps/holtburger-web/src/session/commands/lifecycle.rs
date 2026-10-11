@@ -19,6 +19,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
         remote_spine_on,
         remote_sweep_on,
         target_voyeur_on,
+        cast_takes_control_on,
         remote_sticky_on,
         combat_radii_on,
         server_run_rate_on,
@@ -160,6 +161,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 // MoveTo refactor phase G: MoveTos track their target
                 // through the TargetManager voyeur (?targetVoyeur, default ON).
                 new_world.scene.set_target_voyeur_enabled(target_voyeur_on);
+                // Cast-movement fix 3: every non-autonomous self motion
+                // hands control to the server (?castTakesControl=on, opt-in).
+                new_world
+                    .scene
+                    .set_general_motion_takes_control(cast_takes_control_on);
                 // COMBAT-RADII (2026-07-28): size-aware
                 // standoffs (?combatRadii, default ON).
                 new_world.set_combat_radii_enabled(combat_radii_on);

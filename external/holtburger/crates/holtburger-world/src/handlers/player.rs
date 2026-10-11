@@ -273,13 +273,19 @@ pub(crate) fn handle_message(
                     // FU5 (row 64) — retail `LoseControlToServer`
                     // (acclient.c:716832-716845): a server MoveTo/TurnTo
                     // DIRECTIVE for the local player takes control (feeds
-                    // the scene's InterpolateTo gate, :145215). General
-                    // (`Invalid`) envelopes — gestures/poses — only lower
-                    // the autonomy latch, never the control flag.
-                    if !matches!(
+                    // the scene's InterpolateTo gate, :145215). Cast-movement
+                    // fix 3 (2026-10-11, `?castTakesControl`): so does every
+                    // other accepted non-autonomous motion — General
+                    // (`Invalid`) envelopes, cast gestures included — as
+                    // retail's dispatcher runs LoseControlToServer whenever
+                    // SetObjectMovement applied a non-autonomous movement to
+                    // the player (acclient.c:311149-311193, :392779-392833).
+                    // With the switch off, Generals only lower the latch.
+                    let general = matches!(
                         data.data,
                         holtburger_protocol::messages::movement::MovementTypeData::Invalid(_)
-                    ) {
+                    );
+                    if !general || state.scene.general_motion_takes_control() {
                         state.scene.set_local_server_controlled(true);
                     }
                     // A3-D3 driver (M4.3): real target_exists + case-6
