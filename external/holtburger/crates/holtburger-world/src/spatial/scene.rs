@@ -1730,6 +1730,11 @@ pub struct SpatialScene {
     /// (`CommandInterpreter::UseTime` :717595); with none held, the body
     /// keeps the last server state until the next press. OFF: only
     /// MoveTo/TurnTo directives take control (the FU5 shape).
+    ///
+    /// Defaults `false` here (native); the browser installs
+    /// `?castTakesControl`, DEFAULT-ON since the 2026-10-11 cast-movement
+    /// decision, paired with `?slideCast` OFF (carrier split, as
+    /// `local_retail_leash`).
     general_motion_takes_control: bool,
     /// Bug-A leash echo gate (2026-07-03): when `true`, the local
     /// leash arm's InterpolateTo pull gates on

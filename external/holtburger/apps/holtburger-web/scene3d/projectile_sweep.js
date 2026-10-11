@@ -89,7 +89,9 @@ export function projectileSweepCells(renderSet, ownCellId) {
  * @param {object} sh session handle (wasm `SessionHandle` or a mock)
  * @param {{x:number,y:number,z:number}} p0
  * @param {{x:number,y:number,z:number}} p1
- * @param {{radius?:number, cells?:Uint32Array|null, entities?:boolean, launchWindow?:boolean}} [opts]
+ * @param {{radius?:number, cells?:Uint32Array|null, entities?:boolean, launchWindow?:boolean, out?:object}} [opts]
+ *   `out` (optional) receives `{ layer }` — the sweep export that produced
+ *   the stopping hit — for the stop-cause diagnostic.
  * @returns {number|null} the earliest stopping `t` in [0, 1], or null
  */
 export function sweepProjectileSegment(sh, p0, p1, opts = {}) {
@@ -100,6 +102,7 @@ export function sweepProjectileSegment(sh, p0, p1, opts = {}) {
   if (!(len > 1e-6)) return null;
   const launch = !!opts.launchWindow;
   let best = null;
+  let bestLayer = null;
   const sweep = (name, last) => {
     const fn = sh[name];
     if (typeof fn !== "function") return;
@@ -110,7 +113,10 @@ export function sweepProjectileSegment(sh, p0, p1, opts = {}) {
       // Copy before free (wasm-bindgen `CollisionHit` box).
       const t = +hit.t;
       const nd = ((+hit.normalX || 0) * dx + (+hit.normalY || 0) * dy + (+hit.normalZ || 0) * dz) / len;
-      if (projectileHitStops(t, nd, launch) && (best == null || t < best)) best = Math.min(t, 1);
+      if (projectileHitStops(t, nd, launch) && (best == null || t < best)) {
+        best = Math.min(t, 1);
+        bestLayer = name;
+      }
     } catch (_) {
       /* stale pkg / borrow conflict → no hit from this layer */
     } finally {
@@ -129,6 +135,7 @@ export function sweepProjectileSegment(sh, p0, p1, opts = {}) {
     sweep("sweepSphereAgainstCellStatics", cells);
   }
   if (opts.entities !== false) sweep("sweepSphereAgainstEntities", len + ENTITY_RANGE_MARGIN_M);
+  if (best != null && opts.out && typeof opts.out === "object") opts.out.layer = bestLayer;
   return best;
 }
 

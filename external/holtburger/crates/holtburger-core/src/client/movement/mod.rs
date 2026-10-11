@@ -17,6 +17,12 @@ mod remote_moveto_tests;
 mod retail_behavior_tests;
 #[cfg(test)]
 mod velocity_identity_tests;
+// LANDING-BOUNCE / STICKY-TRANSITION (2026-10-11): the retail landing bounce
+// and the transition-backed idle sticky slice.
+#[cfg(test)]
+mod landing_bounce_tests;
+#[cfg(test)]
+mod sticky_transition_tests;
 mod stall_recovery;
 mod system;
 

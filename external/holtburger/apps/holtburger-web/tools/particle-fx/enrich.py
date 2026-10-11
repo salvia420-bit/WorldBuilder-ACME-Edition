@@ -24,6 +24,14 @@ tables = {int(k, 16): {int(kk): vv for kk, vv in v.items()} for k, v in json.loa
 setups = {int(k, 16): v for k, v in json.load(open(os.path.join(WORK, "setups_fx.json"))).items()}
 
 setup_w = defaultdict(list); table_w = defaultdict(list); script_w = defaultdict(list)
+# Portal parity (2026-10-11): how many Portal weenies (WeenieType 7) wear each
+# setup. The "portal" context tag (gen_profiles.CTX_RULES) used to come only
+# from the first three weenie NAMES matching /portal/i — a coin-flip: the red
+# and orange portals (0x020005D5 / 0x020005D4) are named after their dungeons
+# ("Plated Rifts", "Curator of Torment's Study") and lost the portal breathing,
+# the x1.25 swirl distortion and the x1.3 light the purple / yellow / green
+# swirls got, as did the pillar portals and the Mines of Despair swirl.
+setup_portal_n = defaultdict(int)
 for fn in os.listdir(LSD):
     if not fn.endswith(".json"):
         continue
@@ -35,11 +43,18 @@ for fn in os.listdir(LSD):
     dids = {s["key"]: s["value"] for s in d.get("didStats") or []}
     if dids.get(1):
         setup_w[dids[1]].append(name)
+        if d.get("weenieType") == 7:
+            setup_portal_n[dids[1]] += 1
     if dids.get(22):
         table_w[dids[22]].append(name)
     for k in (30, 8019):
         if dids.get(k):
             script_w[dids[k]].append(name)
+
+# A setup is a portal setup when at least half of the weenies wearing it are
+# Portal weenies (a shared creature setup with one portal weenie — the Quiddity
+# Seed on 0x02001770 — must not mark that creature's effects as a portal's).
+setup_portal = {sid for sid, n in setup_portal_n.items() if 2 * n >= len(setup_w[sid])}
 
 def top(names, n=4):
     seen = []
@@ -59,7 +74,8 @@ for sid, s in setups.items():
     ds = s.get("defaultScript")
     if ds:
         wn = top(setup_w.get(sid, []), 3)
-        direct[ds].add(f"default script of setup {sid:#010x}" + (f" [{', '.join(wn)}]" if wn else " (static/scenery)"))
+        direct[ds].add(f"default script of setup {sid:#010x}" + (" (portal weenie)" if sid in setup_portal else "")
+                       + (f" [{', '.join(wn)}]" if wn else " (static/scenery)"))
 for s, names in script_w.items():
     direct[s].add(f"weenie default script [{', '.join(top(names, 3))}]")
 

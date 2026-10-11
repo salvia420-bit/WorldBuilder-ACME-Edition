@@ -578,6 +578,113 @@ const USE_SERVER_MOVETO_DRIVER: bool = true;
 /// reach.
 const USE_STICKY_IDLE_STEP: bool = true;
 
+/// STICKY-TRANSITION (2026-10-11) — `?stickyIdleTransition`. Owner: "with
+/// sticky melee i can get stuck in the air or get sucked into the ground".
+///
+/// The idle sticky step ([`MovementSystem::step_local_sticky_idle_slice`])
+/// moved the pose by the sticky pull and wrote it straight back —
+/// `stepped.coords.z = pose.coords.z`, no transition: no terrain following,
+/// no step-down, no wall or creature collision, no gravity. A standing
+/// attacker glued to a creature that walks downhill was dragged out over
+/// empty air at constant height (stuck in the air), one that walks uphill
+/// dragged him into the slope (sucked into the ground). It is the common
+/// melee case: a server MoveTo arrival clears the drive when no key is held
+/// and installs the sticky target, so every swing frame is a drive-less one.
+///
+/// Retail has no such shortcut. Sticky is one slot of the ONE per-object
+/// offset chain: `UpdatePositionInternal` (acclient.c:319989) takes the
+/// animation offset, `PositionManager::adjust_offset` lets
+/// `StickyManager::adjust_offset` replace its planar half with the pull
+/// (z zeroed, :388557; the chain call is :320030), `UpdatePhysicsInternal`
+/// then adds the physics velocity and gravity (:320034), and
+/// `UpdateObjectInternal` (:322719) validates the result through the
+/// transition (:322812) like any other move.
+///
+/// `true` (DEFAULT): a drive-less slice with a live sticky target runs the
+/// same transition pass the manual slice runs
+/// ([`MovementSystem::finish_manual_slice_via_transition`] with a zero
+/// intent; the composed `?retailLeash` chain applies the pull BEFORE the
+/// transition, gravity and landing included). Needs the chain
+/// (`SpatialScene::local_retail_leash`, browser default ON); without it the
+/// legacy unvalidated step runs. `false` / `?stickyIdleTransition=off`:
+/// the pre-2026-10-11 unvalidated step.
+const USE_STICKY_IDLE_TRANSITION: bool = true;
+
+/// LANDING-BOUNCE (2026-10-11) — `?landingBounce`. Owner: "when i fall
+/// after a jump i should be bouncing a bit".
+///
+/// Retail lands in two quanta (see `PlayerState::landing_bounce`): the
+/// landing quantum's `handle_all_collisions` (acclient.c:321808) reflects
+/// the velocity off the contact normal with the body's elasticity,
+/// `v -= (1 + e)(v·n)n` (:321872-321886) — the elastic bounce OpenAC ports in
+/// `PhysicsObjUpdate.HandleAllCollisions` — and when the bounce's normal part
+/// is at least 0.25 m/s the next quantum lifts the body off again
+/// (`calc_friction` early-out :316140, `check_contact` :316536,
+/// `LeaveGround` :344457). Our landing tail went straight to `land()`, so a
+/// hard landing stopped dead. With the player default elasticity 0.05
+/// (:40378) the lift-off needs an impact of 5 m/s (a ~1.3 m fall): a full
+/// jump lands at 7-10 m/s → a 0.35-0.5 m/s bounce — a standing lander hops
+/// ~1 cm for ~0.1 s, a moving one leaves the ground for a quantum (retail's
+/// `get_leave_ground_velocity` zeroes the bounce when the motion state has a
+/// velocity, :343806) — and the animation replays land → take-off → land
+/// (`HitGround` / `LeaveGround`, :344429 / :344457).
+///
+/// Carrier split (the `USE_SLIDE_CAST` / `?retailLeash` precedent): this
+/// native const stays `false`, so the native suite keeps its landing
+/// baseline; the browser installs `?landingBounce` (DEFAULT ON, `=off`
+/// escape) through [`MovementSystem::set_landing_bounce`].
+const USE_LANDING_BOUNCE: bool = false;
+
+/// `calc_friction`'s normal-velocity cutoff (acclient.c:316114 sledding /
+/// :316140 walking): a velocity moving away from the contact plane at least
+/// this fast is left alone (no projection, no friction) — the smallest
+/// bounce that survives into the lift-off quantum.
+const LANDING_BOUNCE_LIFTOFF_MIN: f32 = 0.25;
+
+/// `DEFAULT_ELASTICITY` (acclient.c:40378), set by the `CPhysicsObj`
+/// constructor (:319546); ACE `PhysicsGlobals.DefaultElasticity`.
+const PLAYER_DEFAULT_ELASTICITY: f32 = 0.05;
+
+/// `CPhysicsObj::set_elasticity` ceiling (acclient.c:317061-317083: `< 0` →
+/// 0, `> 0.1` → 0.1); ACE `PhysicsGlobals.MaxElasticity`.
+const PLAYER_MAX_ELASTICITY: f32 = 0.1;
+
+/// LANDING-BOUNCE — the elasticity a body carries: the wire PhysicsDesc
+/// value through retail's `set_elasticity` clamp (acclient.c:317061-317083),
+/// else `DEFAULT_ELASTICITY`.
+pub(crate) fn retail_elasticity(wire: Option<f64>) -> f32 {
+    match wire {
+        Some(e) if e.is_finite() => (e as f32).clamp(0.0, PLAYER_MAX_ELASTICITY),
+        Some(_) => 0.0,
+        None => PLAYER_DEFAULT_ELASTICITY,
+    }
+}
+
+/// LANDING-BOUNCE — `handle_all_collisions`' elastic response
+/// (acclient.c:321872-321886): a velocity INTO the surface (`v·n < 0`) gets
+/// `v + n · (−(v·n)(1 + e))`; anything else is untouched.
+pub(crate) fn retail_landing_bounce(v: Vector3, n: Vector3, elasticity: f32) -> Vector3 {
+    let d = v.dot(&n);
+    if d < 0.0 {
+        let k = -(d * (elasticity + 1.0));
+        v + n * k
+    } else {
+        v
+    }
+}
+
+/// LANDING-BOUNCE — the local player's elasticity (its own entity's wire
+/// `PropertyFloat::Elasticity`, hydration.rs; ACE sends none for players).
+fn local_player_elasticity(world: &WorldState) -> f32 {
+    retail_elasticity(world.entities.get(world.player.guid).and_then(|entity| {
+        entity
+            .properties
+            .floats
+            .get(&holtburger_common::properties::PropertyFloat::Elasticity)
+            .copied()
+    }))
+}
+
 /// F2 (COL-21) — realized forward speed for a SERVER-commanded MoveTo
 /// running on the faithful driver, resolved once at install from the
 /// wire envelope.
@@ -1239,9 +1346,28 @@ const USE_CAST_MOVE: bool = true;
 /// echo is therefore the retail-parity shape, and the slide techniques (hold
 /// strafe + turn + back + forward, tap a key) depend on it.
 ///
-/// `true` (DEFAULT): held strafe/turn ride through cast-gesture stomps.
-/// `false` / `?slideCast=off`: the bare stomp (strafe dies per echo,
-/// tap-to-revive only — the ADJ-8 burst feel).
+/// Cast-movement decision (2026-10-11, later the same day) — the BROWSER
+/// default is OFF again (`?slideCast=on` opts in), paired with
+/// `?castTakesControl` default ON. The owner's account of retail ("when you
+/// hit w once, it kind of helps free up movement for the slide from side to
+/// side; twice … you start running forward") is retail's lock-and-revive:
+/// every applied self UpdateMotion runs `LoseControlToServer`
+/// (acclient.c:392828 → :716832), the held keys stay in the CommandLists
+/// paused, and a fresh press runs `TakeControlFromServer` →
+/// `ApplyCurrentMovement` (:716934), reviving the whole held pattern. This
+/// carrier keeps the held axes moving through the echo instead, so nothing
+/// locks; combined with the release deferral it was the stuck slide.
+/// Keys held from before the cast press are cleared by the cast's
+/// `MaybeStopCompletely` (:717557) in both shapes.
+///
+/// This native const stays `true` (carrier split, the `USE_RETAIL_QUANTUM`
+/// precedent): the native suite keeps its baseline, and the cast-movement
+/// harness (`run_slide`) installs the browser pair explicitly.
+///
+/// `true` (native DEFAULT): held strafe/turn ride through cast-gesture
+/// stomps. `false` (browser default) / `?slideCast=off`: the bare stomp
+/// (the slide locks per echo; a press revives it under
+/// `?castTakesControl`).
 const USE_SLIDE_CAST: bool = true;
 
 /// (2026-07-12, WS04 S3a) — `?castHoldReclaim`: while a KNOWN local cast
@@ -1276,6 +1402,13 @@ const USE_SLIDE_CAST: bool = true;
 /// (`Player.FastTick` = PK/PKLite) every revived metre counts against
 /// `Windup_MaxMove` 6 m and ends in "Your movement disrupted spell
 /// casting!" + fizzle (Player_Magic.cs DoCastSpell_Inner).
+/// Press path (2026-10-11): with `?castTakesControl` every cast echo hands
+/// control to the server, and retail's press reclaim (`TakeControlFromServer`
+/// → `ApplyCurrentMovement`, acclient.c:716934/:717027) replays a held W, so
+/// a turn/strafe/Shift tap mid-cast lunged forward. The same scoped lock now
+/// wraps that reclaim for a press OFF the forward axis
+/// (`command_interpreter.rs::handle_keyboard_command`); a W/S press itself is
+/// untouched.
 /// `false` / `?castHoldReclaim=off`: the per-windup forward revival.
 const USE_CAST_HOLD_RECLAIM: bool = true;
 
@@ -2095,6 +2228,16 @@ pub(crate) struct MovementSystem {
     /// [`USE_STICKY_IDLE_STEP`] const default (ON). Combined by
     /// [`Self::sticky_idle_step_enabled`]. Default `None`.
     sticky_idle_step_runtime: Option<bool>,
+    /// STICKY-TRANSITION (2026-10-11) — runtime carrier of the
+    /// `?stickyIdleTransition=off` URL flag. `None` = the
+    /// [`USE_STICKY_IDLE_TRANSITION`] const default (ON). Combined by
+    /// [`Self::sticky_idle_transition_enabled`]. Default `None`.
+    sticky_idle_transition_runtime: Option<bool>,
+    /// LANDING-BOUNCE (2026-10-11) — runtime carrier of `?landingBounce`
+    /// (browser DEFAULT ON). `None` = the [`USE_LANDING_BOUNCE`] native
+    /// const (OFF — carrier split). Combined by
+    /// [`Self::landing_bounce_enabled`]. Default `None`.
+    landing_bounce_runtime: Option<bool>,
     /// F2 (2026-07-27) — the install-time speed resolution for the
     /// SERVER-commanded MoveTo currently on the driver (see
     /// [`ServerMoveToDrive`]). Cleared with the pursuit (arrival,
@@ -2643,6 +2786,8 @@ impl MovementSystem {
             dead_input_gate_runtime: None,
             server_moveto_driver_runtime: None,
             sticky_idle_step_runtime: None,
+            sticky_idle_transition_runtime: None,
+            landing_bounce_runtime: None,
             server_moveto_drive: None,
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
@@ -2884,6 +3029,31 @@ impl MovementSystem {
     /// [`USE_STICKY_IDLE_STEP`] effective predicate.
     pub(crate) fn sticky_idle_step_enabled(&self) -> bool {
         self.sticky_idle_step_runtime.unwrap_or(USE_STICKY_IDLE_STEP)
+    }
+
+    /// STICKY-TRANSITION (2026-10-11) — install the
+    /// `?stickyIdleTransition=off` runtime carrier (see
+    /// [`USE_STICKY_IDLE_TRANSITION`]).
+    pub(crate) fn set_sticky_idle_transition(&mut self, on: bool) {
+        self.sticky_idle_transition_runtime = Some(on);
+    }
+
+    /// [`USE_STICKY_IDLE_TRANSITION`] effective predicate.
+    pub(crate) fn sticky_idle_transition_enabled(&self) -> bool {
+        self.sticky_idle_transition_runtime
+            .unwrap_or(USE_STICKY_IDLE_TRANSITION)
+    }
+
+    /// LANDING-BOUNCE (2026-10-11) — install the `?landingBounce` runtime
+    /// carrier (see [`USE_LANDING_BOUNCE`]; the browser passes ON unless
+    /// `=off`).
+    pub(crate) fn set_landing_bounce(&mut self, on: bool) {
+        self.landing_bounce_runtime = Some(on);
+    }
+
+    /// [`USE_LANDING_BOUNCE`] effective predicate.
+    pub(crate) fn landing_bounce_enabled(&self) -> bool {
+        self.landing_bounce_runtime.unwrap_or(USE_LANDING_BOUNCE)
     }
 
     /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
@@ -8185,6 +8355,15 @@ impl MovementSystem {
         }
 
         let was_airborne = world.player.is_airborne;
+        // LANDING-BOUNCE (`?landingBounce`) — retail's lift-off quantum (Q1):
+        // the elastic bounce the previous slice's landing left on this
+        // grounded body (see `PlayerState::landing_bounce`). Consumed here
+        // whether or not it lifts, so a stale bounce never outlives a slice.
+        let lift_off = world.player.landing_bounce.take().filter(|b| {
+            !was_airborne
+                && self.landing_bounce_enabled()
+                && b.normal_speed() >= LANDING_BOUNCE_LIFTOFF_MIN
+        });
         let mut raw_delta = raw_delta;
         let mut descending = true;
         // Non-rising at TRUE slice entry (before the gravity add below). Gates
@@ -8258,6 +8437,21 @@ impl MovementSystem {
             world.player.vertical_velocity = vz;
             descending = vz <= 0.0;
             d
+        } else if let Some(bounce) = lift_off {
+            // LANDING-BOUNCE Q1 — `UpdatePhysicsInternal` (acclient.c:317701)
+            // on the first walkable quantum: `calc_friction` returns early
+            // (normal part >= 0.25, :316140) and the body moves by its physics
+            // velocity on top of the animation offset. Only the bounce's
+            // NORMAL part is added: the tangential residual stays with the
+            // landing tail's friction model (the grounded direct-set owns
+            // planar locomotion). The mover is rising, so neither descending
+            // flag holds (no settle-land snap).
+            let bn = bounce.normal * bounce.normal_speed();
+            raw_delta.x += bn.x * dt_s;
+            raw_delta.y += bn.y * dt_s;
+            descending = false;
+            entry_descending = false;
+            raw_delta.z + bn.z * dt_s
         } else {
             raw_delta.z
         };
@@ -8325,7 +8519,12 @@ impl MovementSystem {
             begin: pose,
             end,
             object,
-            airborne: was_airborne,
+            // LANDING-BOUNCE Q1: the bouncing body enters WITHOUT the grounded
+            // latch — retail `get_object_info` → `check_contact` drops CONTACT
+            // for `v·N > 2e-4` (acclient.c:316536), so `transitional_insert`'s
+            // step-down (which needs CONTACT, ACE Transition.cs:843) never
+            // re-plants it.
+            airborne: was_airborne || lift_off.is_some(),
             descending,
             entry_descending,
             force_grounded: false,
@@ -8346,12 +8545,15 @@ impl MovementSystem {
             // USE_AIRBORNE_CHECK_CONTACT: the mover's PHYSICS velocity at slice
             // entry, for retail's exact `check_contact` dot (acclient.c:316536).
             // Read AFTER the airborne gravity/clamp block above, so it is the
-            // velocity the slice's offset was actually integrated from.
+            // velocity the slice's offset was actually integrated from. On a
+            // LANDING-BOUNCE Q1 slice it carries the bounce's normal part.
             physics_velocity: Vector3::new(
                 world.player.current_planar_velocity.x,
                 world.player.current_planar_velocity.y,
                 world.player.vertical_velocity,
-            ),
+            ) + lift_off
+                .map(|b| b.normal * b.normal_speed())
+                .unwrap_or_else(Vector3::zero),
         };
         let outcome = holtburger_world::spatial::transition::find_transitional_position_dispatch(
             &*world,
@@ -8656,19 +8858,39 @@ impl MovementSystem {
             // A persistent multi-slice residual channel (retail
             // set_velocity, F8) is not modeled yet; today the residual
             // lives from touchdown until the next grounded direct-set.
+            //
+            // LANDING-BOUNCE (2026-10-11, `?landingBounce`): BEFORE that
+            // friction, the landing quantum's own collision response —
+            // `CPhysicsObj::handle_all_collisions` (acclient.c:321808)
+            // reflects the velocity off the contact normal,
+            // `v -= (1 + elasticity)(v·n)n` for `v·n < 0` (:321872-321886),
+            // `apply_bounce` because the body was not on walkable before
+            // (:321830-321833), only while `frames_stationary_fall <= 1`
+            // (:321862). OpenAC: PhysicsObjUpdate.HandleAllCollisions. The
+            // friction below then sees the bounced velocity, exactly as
+            // retail's next quantum does: a normal part under 0.25 m/s is
+            // projected out (the old "stick"), one at or above it makes
+            // `calc_friction` return early (:316140) and the body lifts off
+            // on the next slice (`PlayerState::landing_bounce`).
+            let mut bounce = None;
             if gates.retail_ground {
                 let mut v = Vector3::new(
                     world.player.current_planar_velocity.x,
                     world.player.current_planar_velocity.y,
                     world.player.vertical_velocity,
                 );
-                let mag2 = v.dot(&v);
                 // Grounded via terrain snap may carry no explicit plane;
                 // flat normal makes the projection a no-op (pure decay).
                 let normal = outcome
                     .contact_plane
                     .map(|(plane, _)| plane.normal)
                     .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+                let bounce_on =
+                    self.landing_bounce_enabled() && outcome.frames_stationary_fall <= 1;
+                if bounce_on {
+                    v = retail_landing_bounce(v, normal, local_player_elasticity(world));
+                }
+                let mag2 = v.dot(&v);
                 let friction = if USE_RETAIL_GROUND_FRICTION {
                     PLAYER_GROUND_FRICTION_RETAIL
                 } else {
@@ -8678,11 +8900,24 @@ impl MovementSystem {
                 if mag2 - 0.25 * 0.25 < 0.0002 {
                     v = Vector3::zero();
                 }
+                if bounce_on {
+                    let b = holtburger_world::player::LandingBounce {
+                        velocity: v,
+                        normal,
+                    };
+                    if b.normal_speed() >= LANDING_BOUNCE_LIFTOFF_MIN {
+                        bounce = Some(b);
+                    }
+                }
                 world.player.current_planar_velocity.x = v.x;
                 world.player.current_planar_velocity.y = v.y;
                 world.player.vertical_velocity = v.z;
             }
             world.player.land();
+            // HitGround has run (land() = retail set_on_walkable(1) →
+            // `MovementManager::HitGround`, :318502 → :344429); the bounce
+            // waits for the lift-off quantum.
+            world.player.landing_bounce = bounce;
         }
         // Bug 17 (2026-10-07): an airborne mover pressed against a too-steep
         // face (a thatch roof, a cliff) loses the into-face part of its
@@ -8734,6 +8969,21 @@ impl MovementSystem {
             // `USE_LEAVE_GROUND_VELOCITY` ships `true`, so this is NOT a no-op
             // (`CMotionInterp::get_leave_ground_velocity`, acclient.c:343806).
             stamp_leave_ground_velocity(world, heading, state, capabilities);
+            // LANDING-BOUNCE Q1 tail — `get_leave_ground_velocity` takes the
+            // motion state's velocity with z = the pending jump v_z (0: the
+            // jump extent was consumed at launch) — a moving lander's bounce
+            // ends here, a hand's width up — but a body with NO state
+            // velocity keeps its physics velocity, bounce included
+            // (:343822-343840): the standing hop.
+            if let Some(b) = lift_off {
+                let moving =
+                    leave_ground_velocity_for_state(heading, state, capabilities, Vector3::zero())
+                        .length_squared()
+                        > 0.0;
+                if !moving {
+                    world.player.vertical_velocity = b.velocity.z;
+                }
+            }
         }
         // USE_SLIDE_FRAME_FRICTION (DEFAULT OFF — deviation escape hatch):
         // friction on a contact-but-NOT-grounded slide frame. Retail
@@ -8950,6 +9200,61 @@ impl MovementSystem {
             }
             LocalStickyStep::Inactive => false,
         }
+    }
+
+    /// STICKY-TRANSITION (2026-10-11, [`USE_STICKY_IDLE_TRANSITION`]) — the
+    /// drive-less slice with a live sticky target, run through the SAME
+    /// per-object pass a manual slice runs: a zero intent (an idle body has
+    /// no animation offset) into [`Self::finish_manual_slice_via_transition`],
+    /// whose composed `?retailLeash` chain applies the sticky pull BEFORE the
+    /// transition (acclient.c:319989-320032 → :388287-388304), keeps the
+    /// integrated gravity dz, and lets the transition follow the ground,
+    /// collide, land and leave the ground — retail's order. Replaces the
+    /// unvalidated [`Self::step_local_sticky_idle_slice`] (z held, no
+    /// collision: the hover / sink) whenever the chain is armed.
+    ///
+    /// Returns `true` when it claimed the slice: the local body is resolved
+    /// and the caller must keep it out of the legacy solve (the manual
+    /// slice's contract). `false` (no target, chain off, escape set) leaves
+    /// the slice to the legacy step.
+    pub(crate) fn step_local_sticky_idle_slice_via_transition(
+        &self,
+        world: &mut WorldState,
+        dt: Duration,
+    ) -> bool {
+        if !USE_STICKY_MANAGER
+            || !self.sticky_idle_step_enabled()
+            || !self.sticky_idle_transition_enabled()
+            || !world.scene.local_retail_leash()
+        {
+            return false;
+        }
+        if world.scene.local_sticky_target().is_none() {
+            return false;
+        }
+        let Some(pose) = world.local_player_runtime_pose() else {
+            return false;
+        };
+        let Ok(capabilities) = world.resolve_self_movement_capabilities() else {
+            return false;
+        };
+        let heading = pose.rotation.to_heading();
+        // Grounded: the direct-set of the zero intent clears the planar
+        // store, exactly as the manual grounded branch does for released
+        // keys (`advance_manual_slice_via_transition`).
+        if !world.player.is_airborne {
+            world.player.current_planar_velocity = Vector3::zero();
+        }
+        self.finish_manual_slice_via_transition(
+            world,
+            pose,
+            Vector3::zero(),
+            heading,
+            MotionState::default(),
+            &capabilities,
+            dt.as_secs_f32(),
+        );
+        true
     }
 
     /// A6-T2 test seam + spine helper — whether a Manual drive is the

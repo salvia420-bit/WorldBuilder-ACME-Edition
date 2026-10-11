@@ -53,7 +53,7 @@ _4-point star flare / sparkle_
 
 Behaviours: swarm 190, burst 139, standing 85, trail 27, fountain 24, implode 19, flash 14, plume 3
 
-Typical (median of non-neutral, count): gain 1.639 (499/501); core 0.8 (494/501); fadeIn 0.03 (465/501); fadeOut 0.03 (474/501); flicker 0.25 (35/501); twinkle 0.32 (474/501); spin 0.12 (468/501); soft 0.04 (500/501); nearFade 0.15 (501/501); pulse 0.06 (4/501)
+Typical (median of non-neutral, count): gain 1.639 (499/501); core 0.8 (494/501); fadeIn 0.03 (465/501); fadeOut 0.03 (474/501); flicker 0.25 (35/501); twinkle 0.32 (474/501); spin 0.12 (468/501); soft 0.04 (500/501); nearFade 0.15 (501/501); pulse 0.07 (9/501)
 
 Reviewed: 501/501
 
@@ -246,7 +246,7 @@ _swirling energy vortex ring_
 
 Behaviours: stream 39, standing 20, swarm 8, plume 6, flash 1, burst 1
 
-Typical (median of non-neutral, count): gain 1.3 (71/75); core 0.35 (75/75); fadeIn 0.1 (15/75); fadeOut 0.116 (75/75); flicker 0.15 (4/75); spin 0.6 (13/75); soft 0.4 (75/75); nearFade 1.8 (75/75); lit 0.35 (7/75); pulse 0.05 (70/75)
+Typical (median of non-neutral, count): gain 1.3 (71/75); core 0.35 (75/75); fadeIn 0.1 (15/75); fadeOut 0.116 (75/75); flicker 0.15 (4/75); spin 0.6 (13/75); soft 0.4 (75/75); nearFade 1.8 (75/75); lit 0.35 (7/75); pulse 0.07 (70/75)
 
 Reviewed: 75/75
 

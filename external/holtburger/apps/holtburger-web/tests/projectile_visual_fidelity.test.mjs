@@ -306,6 +306,13 @@ test("sweepProjectileSegment: both LBs on a crossing, earliest t, hits freed, st
   assert.ok(Math.abs(sweepCalls.find((c) => c.layer === "entities").last - 7) < 1e-9, "door scan = |d| + 5 m");
   assert.equal(freedHits - freed0, 2, "every hit box freed");
   assert.equal(sweepProjectileSegment(sh, a, b, { entities: false }), 0.8, "door layer skippable");
+  // Stop-cause diagnostic: `out.layer` names the export of the stopping hit.
+  const out = {};
+  sweepProjectileSegment(sh, a, b, { cells: null, out });
+  assert.equal(out.layer, "sweepSphereAgainstEntities", "earliest hit's layer reported");
+  const out2 = {};
+  sweepProjectileSegment(sh, a, b, { entities: false, out: out2 });
+  assert.equal(out2.layer, "sweepSphereAgainstBuildingMesh");
   assert.equal(sweepProjectileSegment({}, a, b), null, "no exports → no hit");
   assert.equal(sweepProjectileSegment(null, a, b), null);
   resetSweep();
@@ -324,6 +331,11 @@ test("env sweep: a bolt stops short of a building wall", async () => {
   assert.ok(Math.abs(inst.root.position.x - (LB_X0 + 11.85)) < 1e-6, `x ${inst.root.position.x - LB_X0}`);
   assert.equal(sweepCalls.find((c) => c.layer === "building").last, 0xa9b40000, "the bolt's landblock");
   assert.ok(freedHits > freed0, "hit box freed");
+  // Stop-cause diagnostic row: who stopped it and how far it flew.
+  const row = em._projectileStops?.at(-1);
+  assert.equal(row?.cause, "client-sweep:sweepSphereAgainstBuildingMesh");
+  assert.ok(Math.abs(row.clientM - 1.85) < 0.01, `client flight ${row?.clientM} m`);
+  assert.equal(row.serverM, null, "no server distance for a client stop");
   const xs = inst.root.position.x;
   await tickAfter(em, 20);
   assert.equal(inst.root.position.x, xs, "stays put");

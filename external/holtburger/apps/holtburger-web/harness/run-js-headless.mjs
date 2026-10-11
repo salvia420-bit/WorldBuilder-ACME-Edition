@@ -399,6 +399,12 @@ const TIER5 = [
   // trails, analytic sprites, ground marks, ambient fields, sub-pixel clamp,
   // showcase set pieces (scene3d/vfx/fx_tier2.js).
   { tier: 5, flag: "particleFxTier2", file: "test_particle_fx_tier2.mjs" },
+  // 2026-10-11 portal parity: every portal colour gets the purple portal's
+  // treatment (generator portal tag by weenie type + ?portalFxLum).
+  { tier: 5, flag: "portalFxLum", file: "test_portal_fx_parity.mjs" },
+  // 2026-10-11 a wielded weapon's FX light never lights its wielder
+  // (?heldFxLightSkip; retail weapons carry no light).
+  { tier: 5, flag: "heldFxLightSkip", file: "test_held_fx_light.mjs" },
   { tier: 5, flag: "burstFx", file: "test_play_effect_burst_fx.mjs" },
   { tier: 5, flag: "config_merge", file: "test_config_merge.mjs" },
   { tier: 5, flag: "decode_admission_flags", file: "test_decode_admission_flags.mjs" },

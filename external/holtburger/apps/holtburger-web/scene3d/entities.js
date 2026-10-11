@@ -3923,6 +3923,8 @@ export class EntityManager {
     try {
       if (typeof window !== "undefined") {
         window.__creatureSeparationStats = () => this.creatureSeparationStats();
+        // Projectile stop causes (see `_noteProjectileStop`).
+        window.__projectileStops = () => (this._projectileStops || []).slice();
       }
     } catch (_) { /* non-browser harness */ }
     // A2 Path A (2026-05-29) — remote-entity heading ease. Default-on (browser);
@@ -5450,6 +5452,11 @@ export class EntityManager {
         const lp = inst.root?.position;
         inst._ballisticLaunch = lp ? { x: lp.x, y: lp.y, z: lp.z } : null;
         inst._ballisticSteps = 0;
+        // Stop-cause diagnostic (`window.__projectileStops`): the flight
+        // clock anchor and launch speed, so a server impact's timing gives
+        // how far ACE's own bolt flew.
+        inst._ballisticLaunchMs = inst.lastVelMs;
+        inst._ballisticSpeed = Math.hypot(lvx, lvy, lvz);
       }
     }
     // Track B2 (motion-audit, 2026-06-09): replay any PlayEffects that raced
@@ -12110,7 +12117,17 @@ export class EntityManager {
     // pre-Destroy window. Gated on the projectile classification so a normal remote-entity
     // dead-reckon VectorUpdate is untouched. `?projectileImpactStop=off` restores the
     // (masked-by-NoDraw) legacy behavior byte-identically.
+    if (
+      inst._isProjectile && inst._projectileImpacted && !inst._serverImpactNoted &&
+      (+upd.vx || 0) === 0 && (+upd.vy || 0) === 0 && (+upd.vz || 0) === 0
+    ) {
+      // Stop-cause diagnostic: the server's impact for a bolt the CLIENT had
+      // already stopped (sweep / terrain) — its timing says how far ACE's
+      // own bolt flew.
+      this._noteProjectileStop(inst, "server-impact-after-client-stop");
+    }
     if (PROJECTILE_IMPACT_STOP_ON && inst._ballistic && this.isProjectile(upd.guid >>> 0)) {
+      inst._ballisticStopCause = "server-impact";
       this._stopBallisticProjectile(inst);
       // Record WHERE it hit and WHICH WAY it was going. Correlated to a victim
       // by proximity at death time (the impact carries no defender guid), so a
@@ -15659,7 +15676,10 @@ export class EntityManager {
         // integrate across it (acclient.c:323120-323159) — otherwise an alt-tab
         // would hurl the bolt forward. (Moot in practice: a projectile despawns
         // on impact within ~1 s, so it's long gone after any real stall.)
-        if (reachedStop) this._stopBallisticProjectile(inst);
+        if (reachedStop) {
+          inst._ballisticStopCause = "server-impact";
+          this._stopBallisticProjectile(inst);
+        }
         continue;
       }
       const pos = inst.root.position;
@@ -15717,11 +15737,15 @@ export class EntityManager {
         const gz = _terrainZAt(pos.x, pos.y);
         if (gz != null && pos.z < gz - PROJECTILE_TERRAIN_STOP_EPS) {
           pos.z = gz;
+          inst._ballisticStopCause = "client-terrain";
           this._stopBallisticProjectile(inst);
           continue;
         }
       }
-      if (reachedStop) this._stopBallisticProjectile(inst);
+      if (reachedStop) {
+        inst._ballisticStopCause = "server-impact";
+        this._stopBallisticProjectile(inst);
+      }
     }
   }
 
@@ -15743,16 +15767,19 @@ export class EntityManager {
       || Math.hypot(x0 - L.x, y0 - L.y, z0 - L.z) < 2 * PROJECTILE_SWEEP_RADIUS;
     const p0 = { x: x0, y: y0, z: z0 };
     const pos = inst.root.position;
+    const out = {};
     const t = sweepProjectileSegment(ctx.sh, p0, pos, {
       cells: projectileSweepCells(ctx.renderSet, inst._ballisticCellId ?? 0),
       entities: ctx.entities,
       launchWindow,
+      out,
     });
     if (t == null) return false;
     const stop = projectileStopPoint(p0, pos, t);
     pos.x = stop.x;
     pos.y = stop.y;
     pos.z = stop.z;
+    inst._ballisticStopCause = `client-sweep:${out.layer ?? "?"}`;
     return true;
   }
 
@@ -15803,6 +15830,8 @@ export class EntityManager {
    */
   _stopBallisticProjectile(inst) {
     if (!inst) return;
+    if (inst._ballistic) this._noteProjectileStop(inst, inst._ballisticStopCause || "unknown");
+    inst._ballisticStopCause = null;
     inst._ballistic = false;
     inst._ballisticGravity = false;
     inst._ballisticStopMs = null;
@@ -15814,6 +15843,53 @@ export class EntityManager {
       inst.lastVel.vz = 0;
     }
     this._setProjectileLightsOn(inst, false);
+  }
+
+  /**
+   * Stop-cause diagnostic (2026-10-11, "the spell explodes right in front of
+   * me"): one row per stopped bolt in `window.__projectileStops()` — who
+   * stopped it (`client-sweep:<layer>`, `client-terrain`, `server-impact`,
+   * `server-impact-after-client-stop`), how far the CLIENT bolt flew, and,
+   * for a server impact, how far ACE's own bolt flew (launch speed × the
+   * time from its ObjectCreate to its impact). A near-launch stop is also
+   * logged to the console: a client stop with a long server flight is our
+   * sweep/terrain false hit; a server flight near zero is ACE's own early
+   * collision (`IsProjectileVisible` / world-entry, WorldObject_Magic.cs).
+   */
+  _noteProjectileStop(inst, cause) {
+    try {
+      const now = typeof performance !== "undefined" ? performance.now() : 0;
+      const L = inst._ballisticLaunch;
+      const p = inst.root?.position;
+      const clientM = L && p ? Math.hypot(p.x - L.x, p.y - L.y, p.z - L.z) : null;
+      const server = cause.startsWith("server");
+      // An impact that raced the rig build was parked at its arrival time.
+      const endMs = server && Number.isFinite(inst._ballisticStopMs) ? inst._ballisticStopMs : now;
+      const flightMs = Number.isFinite(inst._ballisticLaunchMs) ? endMs - inst._ballisticLaunchMs : null;
+      const serverM =
+        server && flightMs != null && Number.isFinite(inst._ballisticSpeed)
+          ? (inst._ballisticSpeed * flightMs) / 1000
+          : null;
+      if (server) inst._serverImpactNoted = true;
+      const row = {
+        guid: inst.guid >>> 0,
+        cause,
+        clientM: clientM == null ? null : +clientM.toFixed(2),
+        serverM: serverM == null ? null : +serverM.toFixed(2),
+        flightMs: flightMs == null ? null : Math.round(flightMs),
+      };
+      const log = this._projectileStops || (this._projectileStops = []);
+      log.push(row);
+      if (log.length > 32) log.shift();
+      const near = server ? serverM != null && serverM < 3 : clientM != null && clientM < 5;
+      if (near) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[projectile] 0x${row.guid.toString(16)} stopped near launch: ${cause}` +
+            ` (client ${row.clientM ?? "?"} m, server ${row.serverM ?? "?"} m, ${row.flightMs ?? "?"} ms)`,
+        );
+      }
+    } catch (_) { /* diagnostic only */ }
   }
 
   /** PROJ-VIS: does this projectile's last PhysicsState carry LIGHTING_ON?

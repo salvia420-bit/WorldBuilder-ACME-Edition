@@ -283,7 +283,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                 // through the TargetManager voyeur (?targetVoyeur, default ON).
                 new_world.scene.set_target_voyeur_enabled(target_voyeur_on);
                 // Cast-movement fix 3: every non-autonomous self motion
-                // hands control to the server (?castTakesControl=on, opt-in).
+                // hands control to the server (?castTakesControl, default
+                // ON since the 2026-10-11 decision; `=off` escapes).
                 new_world
                     .scene
                     .set_general_motion_takes_control(cast_takes_control_on);

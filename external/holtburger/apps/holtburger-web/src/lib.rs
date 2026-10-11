@@ -933,6 +933,45 @@ fn parse_sticky_idle_step_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "stickyIdleStep=off")
 }
 
+/// STICKY-TRANSITION (2026-10-11): parse `?stickyIdleTransition=off` (or
+/// `&…`). DEFAULT-ON off-escape shape. Owner: "with sticky melee i can get
+/// stuck in the air or get sucked into the ground". When on, a drive-less
+/// slice with a live sticky target (every swing frame of a standing
+/// attacker after the server MoveTo arrival) runs the manual slice's full
+/// transition pass — the composed `?retailLeash` chain applies the pull
+/// BEFORE the transition, gravity stays integrated, and the transition
+/// follows the ground and collides, as retail's per-object pass does
+/// (`UpdatePositionInternal` acclient.c:319989 → `StickyManager::
+/// adjust_offset` :388519, z zeroed :388557 → `UpdatePhysicsInternal` →
+/// transition). `=off` restores the unvalidated idle step (pose moved by
+/// the pull, z held, no collision — the hover / sink). Native carrier:
+/// `USE_STICKY_IDLE_TRANSITION` (movement/system.rs). Needs a wasm
+/// rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_sticky_idle_transition_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "stickyIdleTransition=off")
+}
+
+/// LANDING-BOUNCE (2026-10-11): parse `?landingBounce=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. Owner: "when i fall after a jump i should be
+/// bouncing a bit". When on, the local landing runs retail's collision
+/// response — `handle_all_collisions` reflects the velocity off the contact
+/// normal with the elasticity (0.05 default), `v -= (1+e)(v·n)n`
+/// (acclient.c:321872-321886, OpenAC `PhysicsObjUpdate.HandleAllCollisions`)
+/// — and a bounce of at least 0.25 m/s along the normal lifts the body off on
+/// the next quantum (`calc_friction` :316140 / `check_contact` :316536 /
+/// `LeaveGround` :344457): a standing lander hops, a moving one leaves the
+/// ground for a quantum, and the animation replays land → take-off → land.
+/// `=off`: the landing stops dead (pre-2026-10-11). Native carrier:
+/// `USE_LANDING_BOUNCE` (stays `false` natively — carrier split). Needs a
+/// wasm rebuild; NO manifest bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_landing_bounce_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "landingBounce=off")
+}
+
 /// COMBAT-RADII (2026-07-28): parse `?combatRadii=off` (or
 /// `&combatRadii=off`). DEFAULT-ON off-escape shape: returns `true`
 /// UNLESS `combatRadii=off` is present.
@@ -1036,37 +1075,46 @@ fn parse_retail_moveto_cancel_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "retailMoveToCancel=off")
 }
 
-/// Cast-movement fix 3 (2026-10-11): parse `?castTakesControl`. OPT-IN
-/// (`=on`) since the same day: every accepted non-autonomous motion for the
-/// local player — cast gestures included — hands control to the server, as
-/// retail's dispatcher does (`SetObjectMovement` → `LoseControlToServer`,
-/// acclient.c:392779), so a key release mid-cast waits for the reclaim.
-/// Shipped default-on first; the release deferral kept a `?slideCast`
-/// strafe going after its key was let go, until the next key press
-/// (retail's reclaim at the gesture's end needs a held key, acclient.c
-/// :717595) — the owner's "regressions to the movement system". The
-/// default is the FU5 shape: only MoveTo/TurnTo directives take control.
-/// Scene switch `SpatialScene::set_general_motion_takes_control`.
+/// Cast-movement fix 3 (2026-10-11): parse `?castTakesControl`. DEFAULT-ON
+/// since the cast-movement decision of 2026-10-11 (`=off` is the escape):
+/// every accepted non-autonomous motion for the local player — cast
+/// gestures included — hands control to the server, as retail's dispatcher
+/// does (`SetObjectMovement` → `LoseControlToServer`, acclient.c:392779 /
+/// :392828). Held keys stay in the CommandLists but are paused; the first
+/// fresh press takes control back and re-applies every held key
+/// (`TakeControlFromServer` → `ApplyCurrentMovement`, :716934) — the PvP
+/// "tap W once and it frees up the slide" — and a release under control is
+/// only recorded (:717284). It shipped default-on first, went opt-in the
+/// same day because the deferred release kept a `?slideCast` strafe going
+/// (the strafe slideCast had injected into the server state), and came back
+/// on with `?slideCast` OFF, which removes that injected strafe: the echo
+/// itself stops the slide. Do not run both on. Carrier split: the browser
+/// rides this flag; the native scene field stays `false` (the precedent of
+/// `?retailLeash` / `?leashEchoGate`). Scene switch
+/// `SpatialScene::set_general_motion_takes_control`.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_cast_takes_control_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    trimmed.split('&').any(|kv| kv == "castTakesControl=on")
+    !trimmed.split('&').any(|kv| kv == "castTakesControl=off")
 }
 
-/// (2026-07-03): parse `?slideCast`. Cast-movement fix 1 (2026-10-11):
-/// DEFAULT-ON again (`=off` is the escape to the ADJ-8 burst), user ruling
-/// "yes for all three" on the PvP slide techniques. When ON, the local
-/// player's HELD sidestep/turn survive ACE's non-autonomous General
-/// cast-gesture stomps (each windup/cast echo arrives with empty axes and
-/// would otherwise kill a held strafe) — the retail shape: retail's echoes
-/// must have carried the caster's axes (inferred; `USE_SLIDE_CAST` has the
-/// decomp trail). Forward is never persisted (held W stays dead until a fresh
-/// press — the `?castMove` core). Native carrier: `USE_SLIDE_CAST`
-/// (movement/system.rs). Needs a wasm rebuild; NO manifest bump.
+/// (2026-07-03): parse `?slideCast`. OPT-IN (`=on`) since the cast-movement
+/// decision of 2026-10-11 (owner's account of retail: "when you hit w once,
+/// it kind of helps free up movement for the slide"). When ON, the local
+/// player's HELD sidestep/turn are re-applied onto every non-autonomous
+/// General cast-gesture stomp (ACE's echoes arrive with empty axes), so the
+/// slide never locks — non-retail: retail locks on the echo and a press
+/// revives (`?castTakesControl`). Forward is never persisted. Keys held from
+/// BEFORE the cast press are cleared by the cast's `MaybeStopCompletely`
+/// either way (acclient.c:717557), unless an echo still holds control.
+/// History: default-ON (07-03), OFF (ADJ-8, 07-04), ON (fix 1, 10-11), OFF
+/// (10-11 decision). Do not combine with `?castTakesControl` (the stuck
+/// slide). Native carrier: `USE_SLIDE_CAST` (movement/system.rs; stays
+/// `true` natively — carrier split). Needs a wasm rebuild; NO manifest bump.
 #[cfg(any(target_arch = "wasm32", test))]
 fn parse_slide_cast_flag(search: &str) -> bool {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
-    !trimmed.split('&').any(|kv| kv == "slideCast=off")
+    trimmed.split('&').any(|kv| kv == "slideCast=on")
 }
 
 /// Movement-port wave 1 (2026-07-03): parse `?cmdInterp=off` (or
@@ -34347,18 +34395,18 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_maint_prune_flag("?nosw=1&maintPrune=off"));
     }
 
-    /// Cast-movement fixes 2/3 (2026-10-11): `?retailMoveToCancel` is
-    /// DEFAULT-ON (`=off` disables); `?castTakesControl` is OPT-IN (`=on`).
+    /// Cast-movement fixes 2/3 (2026-10-11): `?retailMoveToCancel` and
+    /// `?castTakesControl` are both DEFAULT-ON (`=off` disables).
     #[test]
     fn cast_movement_fix_flag_shapes() {
         use super::{parse_cast_takes_control_flag, parse_retail_moveto_cancel_flag};
         assert!(parse_retail_moveto_cancel_flag(""));
         assert!(!parse_retail_moveto_cancel_flag("?retailMoveToCancel=off"));
         assert!(!parse_retail_moveto_cancel_flag("?nosw=1&retailMoveToCancel=off"));
-        assert!(!parse_cast_takes_control_flag(""));
-        assert!(!parse_cast_takes_control_flag("?castTakesControl=off"));
+        assert!(parse_cast_takes_control_flag(""));
         assert!(parse_cast_takes_control_flag("?castTakesControl=on"));
-        assert!(parse_cast_takes_control_flag("?nosw=1&castTakesControl=on"));
+        assert!(!parse_cast_takes_control_flag("?castTakesControl=off"));
+        assert!(!parse_cast_takes_control_flag("?nosw=1&castTakesControl=off"));
     }
 
     /// MoveTo refactor phase G: `?targetVoyeur` parse shape — DEFAULT-ON.
@@ -34485,6 +34533,7 @@ mod wire_state_packs_routing_tests {
 
     /// (2026-07-02): `?retailGround` / `?castMove` parse shapes — DEFAULT-ON;
     /// only an explicit `=off` disables (the movement-flag house shape).
+    /// `?slideCast` rides along here and is the exception: opt-in `=on`.
     #[test]
     fn retail_ground_and_cast_move_flags_default_on_unless_off() {
         use super::{parse_cast_move_flag, parse_retail_ground_flag, parse_slide_cast_flag};
@@ -34497,10 +34546,11 @@ mod wire_state_packs_routing_tests {
         assert!(parse_cast_move_flag("?castMove=on"));
         assert!(!parse_cast_move_flag("?castMove=off"));
         assert!(!parse_cast_move_flag("?nosw=1&castMove=off"));
-        // Cast-movement fix 1 (2026-10-11): slideCast default ON; `=off`
-        // is the escape.
-        assert!(parse_slide_cast_flag(""));
+        // Cast-movement decision (2026-10-11): slideCast is OPT-IN (`=on`);
+        // the default is the retail lock-and-revive (`?castTakesControl`).
+        assert!(!parse_slide_cast_flag(""));
         assert!(parse_slide_cast_flag("?slideCast=on"));
+        assert!(parse_slide_cast_flag("?castMove=on&slideCast=on"));
         assert!(!parse_slide_cast_flag("?slideCast=off"));
         assert!(!parse_slide_cast_flag("?castMove=off&slideCast=off"));
     }
@@ -34599,6 +34649,24 @@ mod wire_state_packs_routing_tests {
         assert!(parse_sticky_idle_step_flag("?stickyIdleStep=on"));
         assert!(!parse_sticky_idle_step_flag("?stickyIdleStep=off"));
         assert!(!parse_sticky_idle_step_flag("?stickyRetail=off&stickyIdleStep=off"));
+    }
+
+    /// STICKY-TRANSITION / LANDING-BOUNCE (2026-10-11): `?stickyIdleTransition`
+    /// and `?landingBounce` parse shapes — DEFAULT-ON; only an explicit `=off`
+    /// disables (the movement-flag house shape).
+    #[test]
+    fn sticky_idle_transition_and_landing_bounce_flags_default_on_unless_off() {
+        use super::{parse_landing_bounce_flag, parse_sticky_idle_transition_flag};
+        assert!(parse_sticky_idle_transition_flag(""));
+        assert!(parse_sticky_idle_transition_flag("?stickyIdleTransition=on"));
+        assert!(!parse_sticky_idle_transition_flag("?stickyIdleTransition=off"));
+        assert!(!parse_sticky_idle_transition_flag("?nosw=1&stickyIdleTransition=off"));
+        assert!(parse_sticky_idle_transition_flag("?stickyIdleStep=off"));
+        assert!(parse_landing_bounce_flag(""));
+        assert!(parse_landing_bounce_flag("?landingBounce=on"));
+        assert!(!parse_landing_bounce_flag("?landingBounce=off"));
+        assert!(!parse_landing_bounce_flag("?nosw=1&landingBounce=off"));
+        assert!(parse_landing_bounce_flag("?jumpLaunchCap=off"));
     }
 
     /// COMBAT-RADII (2026-07-28): `?combatRadii` parse shape —
@@ -47408,6 +47476,16 @@ async fn recv_loop(
     // drive-less frames, so a standing attacker's sticky pulls); see
     // `parse_sticky_idle_step_flag`.
     movement.set_sticky_idle_step(parse_sticky_idle_step_flag(&flag_search()));
+    // STICKY-TRANSITION (2026-10-11): `?stickyIdleTransition=off` — the
+    // drive-less sticky slice goes back to the unvalidated step (default ON:
+    // it runs the manual slice's transition pass, so a stuck attacker follows
+    // the ground instead of hovering / sinking); see
+    // `parse_sticky_idle_transition_flag`.
+    movement.set_sticky_idle_transition(parse_sticky_idle_transition_flag(&flag_search()));
+    // LANDING-BOUNCE (2026-10-11): `?landingBounce=off` — the landing stops
+    // dead again (default ON: retail's elastic bounce + lift-off quantum);
+    // see `parse_landing_bounce_flag`.
+    movement.set_landing_bounce(parse_landing_bounce_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see
@@ -47423,8 +47501,9 @@ async fn recv_loop(
     // `parse_cast_move_lock_flag`.
     movement.set_cast_move_lock(parse_cast_move_lock_flag(&flag_search()));
     // (2026-07-03): `?slideCast` — held-strafe/turn persistence through
-    // ACE's General cast-gesture stomps. Cast-movement fix 1 (2026-10-11):
-    // default ON again (`=off` = the ADJ-8 burst); see `parse_slide_cast_flag`.
+    // ACE's General cast-gesture stomps. OPT-IN (`=on`) since the 2026-10-11
+    // cast-movement decision: the default is retail's lock-and-revive
+    // (`?castTakesControl`); see `parse_slide_cast_flag`.
     movement.set_slide_cast(parse_slide_cast_flag(&flag_search()));
     // Cast-movement fix 2 (2026-10-11): `?retailMoveToCancel=off` — a HELD
     // key cancels the server's MoveTo/TurnTo again (default ON: only a fresh

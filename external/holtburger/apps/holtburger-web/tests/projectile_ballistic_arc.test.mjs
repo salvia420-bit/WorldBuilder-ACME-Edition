@@ -32,6 +32,7 @@ function methodSource(name) {
 const METHODS = [
   "_tickBallisticProjectiles",
   "_stopBallisticProjectile",
+  "_noteProjectileStop",
   "_setProjectileLightsOn",
   "_spinProjectile",
   "_alignToVelocity",

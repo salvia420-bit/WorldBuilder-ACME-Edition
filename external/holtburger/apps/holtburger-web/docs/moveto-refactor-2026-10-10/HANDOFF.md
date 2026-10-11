@@ -109,3 +109,51 @@ retail's release path, so it needs an eye test.
 Pre-existing, the same in 4ab7d2de: a stance change while running stops the run until W is pressed again. In the
 harness, W held for 4 s after the stance message did not resume the run. A held strafe does continue, through fix 1.
 With fix 3 on, the run continued (its reclaim with W held), and the softer fix 3 above would keep that.
+
+### 5a. Decision (2026-10-11, evening): retail lock-and-revive
+
+A code review found that fix 1 never reached production for a key held INTO a cast. Every cast and attack queues
+retail's `MaybeStopCompletely` before the request (`session/commands/combat.rs` → `enqueue_stop_then_action`), which
+clears the held-key lists unless the server holds control, and `?slideCast` re-applies only what is left in those lists.
+The fix-1/2/3 tests passed because the harness's `SlideStep::CastRequest` never queued that stop. It does now.
+
+The owner's account of retail settled the shape: "when you hit w once, it kind of helps free up movement for the slide
+from side to side … if you hit w twice, it frees up too much movement where you can kind of start to work your way out
+of the cast and start running forward". That is the decomp's lock-and-revive: every applied self UpdateMotion runs
+`LoseControlToServer` (acclient.c:392828 → :716832), the held keys stay in the CommandLists but are paused, and the
+next fresh press runs `TakeControlFromServer` → `ApplyCurrentMovement` (:716934), which re-applies every held key. The
+repo's own retail oracle pins already encode it (`retail_behavior_tests.rs` sequences A and B).
+
+| Flag | Was | Now (browser) |
+|---|---|---|
+| `?castTakesControl` | opt-in `=on` | **default ON**, `=off` escape |
+| `?slideCast` | default ON | **opt-in `=on`** |
+| `?retailMoveToCancel`, `?castHoldReclaim` | ON | unchanged |
+
+- The stuck slide that turned fix 3 off was the PAIR: the deferred release kept the strafe that `?slideCast` had
+  injected into the server state. With `?slideCast` off the echo itself stops the slide, and after a tap control is the
+  player's, so a release applies at once (`released_strafe_or_turn_stops_at_once_mid_cast`). Do not run both on.
+- Keys held from before the cast press are still cleared by it (retail); the base cast re-presses its keys each cast.
+  While an echo holds control the next cast's stop is skipped, so held keys carry into a chained cast.
+- With fix 3 on, the pre-existing stance-change stop above goes away (the reclaim with W held).
+- Carrier split: the native `USE_SLIDE_CAST` (true) and the scene's `general_motion_takes_control` (false) keep the old
+  pair for the native suite; `run_slide` installs the browser pair explicitly.
+- Tests (system/tests.rs): `cast_press_clears_keys_held_before_it`,
+  `held_keys_carry_into_a_cast_pressed_while_an_echo_holds_control`,
+  `slide_cast_opt_in_rides_keys_pressed_after_the_cast_through_the_echoes`,
+  `base_cast_echo_locks_and_a_tap_revives_the_slide`, and the reworked fix-2/3 tests.
+- Eye test still owed (1070, batched): the base cast with taps, one and two W taps mid-cast, and a strafe let go
+  mid-cast.
+
+### 5b. Follow-up (2026-10-11, night): forward "a little too easily"
+
+The owner found forward came too easily in the slide combos. With `?castTakesControl` on, every cast echo hands
+control to the server and ANY key press takes it back with retail's `ApplyCurrentMovement` (acclient.c:717027), which
+replays a held W, so each turn, strafe or Shift tap mid-cast lunged forward. `?castHoldReclaim` only scoped the
+automatic `use_time` reclaim. It now also scopes the press reclaim: during a known cast window a press off the forward
+axis revives the held strafe and turn and keeps a held W/S dead; a W/S press itself is untouched (one W tap moves you
+a little, two run you out of the cast). OpenAC (`PlayerMovementController.TakeControlFromServer`) re-applies held
+forward on every input edge, release included, so it is not stricter here; this is a holtburger extension for ACE's
+PK fizzle radius, under the existing flag (`=off` restores the retail lunge). Tests:
+`cast_hold_reclaim_turn_press_keeps_held_forward_dead`, `cast_hold_reclaim_forward_press_still_moves`,
+`base_cast_echo_locks_and_a_tap_revives_the_slide` (with a `castHoldReclaim=off` lunge arm).

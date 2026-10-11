@@ -142,7 +142,62 @@ export class FxLightSource {
 
 const _flashes = new Set();
 const _emitterLights = new Set();
-const _stats = { flashes: 0, flashesLive: 0, emitterLights: 0, registered: 0, suppressed: 0, ticks: 0 };
+const _stats = { flashes: 0, flashesLive: 0, emitterLights: 0, registered: 0, suppressed: 0, heldSkipped: 0, ticks: 0 };
+
+// HELD-WEAPON LIGHT (2026-10-11) — `?heldFxLightSkip` (DEFAULT ON, `=off`
+// escape). Owner: "light from weapons should not illuminate my armor, its too
+// much". A flaming / lightning / frost weapon's default_script spawns its
+// particle emitters ON the blade (Flaming Dagger setup 0x02000504 → script
+// 0x3300033F → 2x flame 0x3200026E, tier-1 light 17.4 / 4.2 m; Lightning Spear
+// 0x0200054D → 0x330003BF → crackle 0x32000395, light 32.2 / 5.0 m), so the FX
+// light sat a hand's width from the wielder's armour and lit it hardest of
+// anything in the scene. Retail weapons carry NO light: those Setups have no
+// LightInfo (lights {} in the DAT), particles never light anything, and the
+// only light adders are the cells' LIGHTOBJs built from Setup LightInfo
+// (CObjCell::add_static/dynamic_to_global_lights, acclient.c:346859 / :346881 →
+// Render::add_static_light / add_dynamic_light :380618-:380644, filled by
+// CPartArray::InitLights :326321 from `setup->num_lights`) plus the viewer
+// light (:144021-:144031). ON: an emitter light whose emitter rides a HELD
+// item (its rig root carries the EQUIP-3 mount brand
+// `userData.__attachedChildOf`, entities.js attachChildToParent) is
+// suppressed — the weapon still glows (its particles, the glow pass, the
+// `?weaponAura` emissive), it just does not light its wielder. A dropped
+// weapon keeps its light (no wielder to wash out).
+let _heldSkipOn = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("heldFxLightSkip")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+/** Test seam: force `?heldFxLightSkip` (null re-reads the URL). */
+export function _setHeldFxLightSkipForTest(on) {
+  if (on == null) {
+    try {
+      _heldSkipOn = new URLSearchParams(globalThis.location?.search || "").get("heldFxLightSkip")?.toLowerCase() !== "off";
+    } catch (_) {
+      _heldSkipOn = true;
+    }
+  } else {
+    _heldSkipOn = !!on;
+  }
+}
+export function heldFxLightSkipEnabled() { return _heldSkipOn; }
+
+/**
+ * True when a particle emitter rides a held (wielded) item: its parent chain
+ * (the entity rig root, entities.js passes `parent: inst.root` / `rig`) reaches
+ * a node carrying the EQUIP-3 mount brand. Bounded walk; never throws.
+ */
+export function fxEmitterOnHeldItem(emitter) {
+  let o = emitter ? emitter.parent : null;
+  for (let depth = 0; depth < 8 && o; depth++) {
+    const ud = o.userData;
+    if (ud && ud.__attachedChildOf != null) return true;
+    o = o.parent;
+  }
+  return false;
+}
 
 const FLASH_MAX = 10;
 const REGISTER_RADIUS = 48;
@@ -350,8 +405,18 @@ function _dedupeAndRegister(scene3d, ref) {
   const st2 = DEDUPE_STATIC_M * DEDUPE_STATIC_M;
   const fx2 = DEDUPE_FX_M * DEDUPE_FX_M;
   let suppressed = 0;
+  let heldSkipped = 0;
   for (const s of sorted) {
     if (!s.resolvePosition(s.position)) { s.suppressed = true; s.registered = false; continue; }
+    // `?heldFxLightSkip`: a wielded weapon lights nothing (retail weapons carry
+    // no light) — and it must not suppress a neighbour either, so it is never
+    // `kept`.
+    if (_heldSkipOn && fxEmitterOnHeldItem(s.emitter)) {
+      s.suppressed = true;
+      s.registered = false;
+      heldSkipped++;
+      continue;
+    }
     let sup = false;
     for (let i = 0; i < n && !sup; i++) {
       const dx = _staticPos[i * 3] - s.position.x, dy = _staticPos[i * 3 + 1] - s.position.y, dz = _staticPos[i * 3 + 2] - s.position.z;
@@ -373,6 +438,7 @@ function _dedupeAndRegister(scene3d, ref) {
     }
   }
   _stats.suppressed = suppressed;
+  _stats.heldSkipped = heldSkipped;
 }
 
 /**

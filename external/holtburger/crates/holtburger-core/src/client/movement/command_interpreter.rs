@@ -491,12 +491,13 @@ pub(crate) struct CommandInterpreter {
     /// P15 dual-run pins are unaffected (they compare dispatch
     /// outcomes, not this ledger).
     pub(crate) effects: Vec<InterpEffect>,
-    /// WS04 (`?castHoldReclaim`) — set true ONLY around the `use_time` FU-A
-    /// reclaim while the cast forward lock is active; read by
-    /// [`Self::apply_current_movement`]'s forward axis to hold Ready instead
-    /// of replaying the held substate head. Never persists past the scoped
-    /// reclaim (reset immediately after). Default false ⇒ off ⇒
-    /// byte-identical to today.
+    /// WS04 (`?castHoldReclaim`) — set true ONLY around a reclaim while the
+    /// cast forward lock is active: the `use_time` FU-A reclaim, and (since
+    /// 2026-10-11) the `handle_keyboard_command` reclaim of a press that is
+    /// not on the forward axis. Read by [`Self::apply_current_movement`]'s
+    /// forward axis to hold Ready instead of replaying the held substate
+    /// head. Never persists past the scoped reclaim (reset immediately
+    /// after).
     pub(crate) forward_reclaim_locked: bool,
 }
 
@@ -1234,7 +1235,23 @@ impl CommandInterpreter {
 
         // :717298 — THE STRAFECAST LATCH (FU-A): any processed press (or any
         // release we didn't nuke) seizes control from the server.
+        //
+        // `?castHoldReclaim`, press path (2026-10-11, after the
+        // cast-movement decision): during a known cast window a press of any
+        // key OFF the forward axis (turn, strafe, HoldRun) revives the held
+        // turn/sidestep but keeps the held forward/back substate dead (Ready)
+        // — the same scoped lock the `use_time` reclaim takes. Retail replays
+        // the substate head here as well (`ApplyCurrentMovement` :717027), so
+        // a turn tap with W held lunged forward; with ACE's general echoes
+        // taking control (`?castTakesControl`) every tap did, each lunge
+        // counting toward ACE's 6 m `Windup_MaxMove` fizzle — the owner's
+        // "able to go forward a little too easily". A forward/back press is
+        // untouched: W itself still moves you (fastcast).
+        self.forward_reclaim_locked = self.controlled_by_server
+            && which_list(command) != Some(ListKind::Substate)
+            && seams.local_cast_forward_lock_active();
         self.take_control_from_server(seams, false);
+        self.forward_reclaim_locked = false;
 
         // :717299 — HoldRun / HoldSidestep modifier writes; a movement event
         // fires only if not already standing still (physics minterp — P03
@@ -2909,6 +2926,75 @@ mod tests {
                 matches!(op, Op::DoMotion { cmd, .. } if *cmd == MOTION_WALK_FORWARD)
             }),
             "flag-off: held-W revives via use_time exactly as today"
+        );
+    }
+
+    /// The four-key base cast held (strafe right, turn right, back, forward —
+    /// forward pressed last), then the server takes control (a cast echo).
+    fn four_key_hold_under_control() -> (CommandInterpreter, Mock) {
+        let mut m = Mock::default();
+        let mut it = in_world();
+        it.controlled_by_server = false;
+        for cmd in [
+            MOTION_SIDESTEP_RIGHT,
+            MOTION_TURN_RIGHT,
+            super::super::motion_interp::MOTION_WALK_BACKWARDS,
+            MOTION_WALK_FORWARD,
+        ] {
+            it.handle_keyboard_command(&mut m, &mut key_cmd(cmd, true));
+        }
+        it.controlled_by_server = true;
+        m.log.clear();
+        (it, m)
+    }
+
+    fn dispatched_presses(m: &Mock) -> Vec<u32> {
+        m.log
+            .iter()
+            .filter_map(|op| match op {
+                Op::DoMotion { cmd, .. } => Some(*cmd),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `?castHoldReclaim`, press path (2026-10-11): under the cast lock a
+    /// turn press takes control back and revives the held strafe and turn,
+    /// but the held forward/back stays dead (Ready) — no lunge per tap.
+    #[test]
+    fn cast_hold_reclaim_turn_press_keeps_held_forward_dead() {
+        let (mut it, mut m) = four_key_hold_under_control();
+        m.cast_forward_lock = true;
+        it.handle_keyboard_command(&mut m, &mut key_cmd(MOTION_TURN_RIGHT, true));
+        assert!(!it.controlled_by_server, "control reclaimed");
+        let presses = dispatched_presses(&m);
+        assert!(!presses.contains(&MOTION_WALK_FORWARD), "held W stays dead: {presses:x?}");
+        assert!(
+            !presses.contains(&super::super::motion_interp::MOTION_WALK_BACKWARDS),
+            "held back stays dead too: {presses:x?}"
+        );
+        assert!(presses.contains(&MOTION_READY), "forward axis held at Ready");
+        assert!(presses.contains(&MOTION_TURN_RIGHT), "turn revived");
+        assert!(presses.contains(&MOTION_SIDESTEP_RIGHT), "strafe revived");
+        assert!(!it.forward_reclaim_locked, "the lock is scoped to the reclaim");
+        assert_eq!(
+            it.substate_list.get_head().map(|e| e.command),
+            Some(MOTION_WALK_FORWARD),
+            "the held W stays in its list for a later forward press"
+        );
+    }
+
+    /// `?castHoldReclaim`, press path: a FORWARD press under the cast lock is
+    /// not held back — W itself still moves the caster (the fastcast tap).
+    #[test]
+    fn cast_hold_reclaim_forward_press_still_moves() {
+        let (mut it, mut m) = four_key_hold_under_control();
+        m.cast_forward_lock = true;
+        it.handle_keyboard_command(&mut m, &mut key_cmd(MOTION_WALK_FORWARD, true));
+        assert!(!it.controlled_by_server, "control reclaimed");
+        assert!(
+            dispatched_presses(&m).contains(&MOTION_WALK_FORWARD),
+            "a W press drives forward under the lock"
         );
     }
 }

@@ -432,6 +432,24 @@ impl MovementSystemHandle {
         self.inner.set_sticky_idle_step(on);
     }
 
+    /// STICKY-TRANSITION (2026-10-11): install the
+    /// `?stickyIdleTransition=off` runtime carrier (default-ON — a drive-less
+    /// sticky slice runs the manual slice's transition pass, so a stuck
+    /// attacker follows the ground and collides instead of hovering or
+    /// sinking; `=off` restores the unvalidated idle step). Forwards to
+    /// `MovementSystem::set_sticky_idle_transition`.
+    pub fn set_sticky_idle_transition(&mut self, on: bool) {
+        self.inner.set_sticky_idle_transition(on);
+    }
+
+    /// LANDING-BOUNCE (2026-10-11): install the `?landingBounce` runtime
+    /// carrier (the browser passes ON unless `=off` — retail's elastic landing
+    /// bounce + lift-off quantum; the native const stays OFF). Forwards to
+    /// `MovementSystem::set_landing_bounce`.
+    pub fn set_landing_bounce(&mut self, on: bool) {
+        self.inner.set_landing_bounce(on);
+    }
+
     /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
     /// retail cast-movement arbitration — a server-played cast gesture
     /// suppresses held locomotion until an input edge / gesture end; `=off`

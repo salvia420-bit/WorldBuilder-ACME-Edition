@@ -48,6 +48,10 @@ does on screen, safe ranges, output schema).
   hue-deepening afterglow), UV layout (spin only on full-UV 4-vertex quads).
 - **Context** (PlayScript names, weenie names) adds signature tweaks: portal
   breathing, lifestone pulse, hearth flicker, water spray, buff/debuff, fizzle.
+  The `portal` tag also comes from the weenie TYPE (2026-10-11): a setup at
+  least half of whose weenies are Portal weenies (WeenieType 7) is a portal
+  setup, so red / orange / pillar portals named after their dungeons get the
+  same breathing, swirl distortion and light as the purple ones (`enrich.py`).
 - **Review**: eight family reviewers read every emitter's data + context +
   texture, wrote a note per emitter and corrected params (`overrides/g*.json`);
   a consistency critic aligned multi-part effects (`overrides/zz_consistency.json`).

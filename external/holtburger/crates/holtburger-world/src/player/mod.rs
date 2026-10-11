@@ -6,7 +6,7 @@ pub mod stats_calc;
 pub mod types;
 
 pub use types::{
-    MotionCommandCode, PlayerState, SkillBase, StatAugInputs, VitalBase,
+    LandingBounce, MotionCommandCode, PlayerState, SkillBase, StatAugInputs, VitalBase,
     expand_motion_command_low16, is_action_motion_command, motion_allows_jump,
 };
 

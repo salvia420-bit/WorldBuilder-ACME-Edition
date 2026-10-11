@@ -452,6 +452,41 @@ impl ClientSimulationSystem {
         // still while swinging is the case the glue exists for. Returns
         // `false` either way so the legacy solve still runs its normal
         // gravity/contact pass — from the sticky-updated pose.
+        //
+        // STICKY-TRANSITION (2026-10-11, `?stickyIdleTransition`): with the
+        // composed `?retailLeash` chain armed, the sticky slice instead runs
+        // the manual slice's full transition pass (the pull before the
+        // transition, gravity, ground following, collision, landing) — the
+        // unvalidated step held z and collided with nothing, which left a
+        // stuck attacker hovering over a downhill target or sunk into an
+        // uphill one. That pass resolves the local body, so it is fed
+        // through `apply_solve_batch` exactly like the manual arm above and
+        // kept out of the legacy solve.
+        if movement.step_local_sticky_idle_slice_via_transition(world, slice_dt) {
+            if let Some(pose) = world.local_player_runtime_pose() {
+                let planar = world.player.current_planar_velocity;
+                let solved = SolvedBodyKinematics {
+                    body_id,
+                    pose,
+                    velocity: Vector3::new(planar.x, planar.y, world.player.vertical_velocity),
+                    omega: Vector3::zero(),
+                    contact: if world.player.is_airborne {
+                        ContactState::Airborne
+                    } else {
+                        ContactState::Grounded
+                    },
+                    projection_state: None,
+                };
+                events.extend(self.apply_solve_batch(
+                    world,
+                    SpatialSolveBatch {
+                        solved: vec![solved],
+                        events: Vec::new(),
+                    },
+                ));
+            }
+            return true;
+        }
         movement.step_local_sticky_idle_slice(world, slice_dt);
 
         false

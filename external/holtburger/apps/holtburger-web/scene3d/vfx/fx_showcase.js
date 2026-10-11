@@ -30,6 +30,24 @@
 //
 // ONE draw for every disc, shaft, column and flare (an instanced billboard, the
 // kind is per instance), one program, plus the flare's glow variant. No light.
+//
+// PORTAL PARITY (2026-10-11, `?portalFxLum`, DEFAULT ON, `=off` escape). Owner:
+// "yellow, green, white etc portals don't have the 3dness ... that the purple
+// portals have". The retail data is symmetric — Setups 0x020001B3 (purple) and
+// 0x020005D2-D6 / 0x020006F4 differ only in light colour + default_script, the
+// swirl emitters 0x320002CD vs 0x320003B1-B5 / 0x32000437 only in GfxObj and
+// surface (the same swirl art recoloured). The set piece was not: the disc and
+// the ground ring are ADDITIVE at the swirl light colour normalised to max
+// channel 1, so their luminance follows the hue — purple 0.29, red 0.34, blue
+// 0.21, but yellow 0.83, green 0.78, white 0.95 (Rec.709 on the tier-1 light
+// colours). On exactly the colours the owner named the disc fogged the swirl's
+// dark gaps ~3x harder than on purple, and the depth went with them; the fixed
+// violet base of the nebula (`deep`) greyed them further. ON: a portal's disc +
+// ring intensity is scaled so its luminance matches purple's (never brightened,
+// so purple / blue / red keep today's look), and the nebula base keeps the
+// portal's own hue. The tagging half of the same defect (red / orange / pillar
+// swirls lost portal breathing, ×1.25 swirl distortion, ×1.3 light) is fixed in
+// the generator: tools/particle-fx/enrich.py tags by Portal weenie type.
 
 import * as THREE from "three";
 import { fxTier2Enabled } from "./fx_tier2.js";
@@ -49,6 +67,45 @@ const RANGE_M = 60;
 const PORTAL_VIOLET = [0.75, 0.5, 1.0];
 const LIFESTONE_BLUE = [0.55, 0.78, 1.0];
 const LEVELUP_GOLD = [1.0, 0.86, 0.48];
+
+// `?portalFxLum` (see the PORTAL PARITY note above). Read once at module load;
+// `_setPortalFxLumForTest` is the seam.
+let _portalFxLumOn = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search || "").get("portalFxLum")?.toLowerCase() !== "off";
+  } catch (_) {
+    return true;
+  }
+})();
+/** Test seam: force `?portalFxLum` (null re-reads the URL). */
+export function _setPortalFxLumForTest(on) {
+  if (on == null) {
+    try {
+      _portalFxLumOn = new URLSearchParams(globalThis.location?.search || "").get("portalFxLum")?.toLowerCase() !== "off";
+    } catch (_) {
+      _portalFxLumOn = true;
+    }
+  } else {
+    _portalFxLumOn = !!on;
+  }
+}
+export function portalFxLumEnabled() { return _portalFxLumOn; }
+
+/** The purple swirl's tier-1 light colour (0x320002CD, data/particle-fx-tier1.json). */
+export const PORTAL_REF_COLOR = Object.freeze([0.8335, 0.0611, 1.0]);
+/** Rec.709 relative luminance of a linear rgb triple. */
+export function portalColorLuminance(c) {
+  return 0.2126 * (+c[0] || 0) + 0.7152 * (+c[1] || 0) + 0.0722 * (+c[2] || 0);
+}
+export const PORTAL_REF_LUM = portalColorLuminance(PORTAL_REF_COLOR);
+/**
+ * Pure: the set-piece intensity scale for a portal colour (max channel 1) — its
+ * luminance brought down to the purple portal's, never up.
+ */
+export function portalLumScale(color) {
+  const l = portalColorLuminance(color || PORTAL_REF_COLOR);
+  return l > PORTAL_REF_LUM ? PORTAL_REF_LUM / l : 1;
+}
 
 // ---------------------------------------------------------------------------
 // Shader (one program; the glow variant draws only the flares)
@@ -118,6 +175,7 @@ const FRAG = /* glsl */`
 #include <logdepthbuf_pars_fragment>
 uniform float uShowTime;
 uniform float uShowCal;
+uniform float uShowDeepHue;   // 1: the nebula base keeps the portal's hue (?portalFxLum); 0: the fixed violet base
 varying vec2 vUv;
 varying vec4 vCol;
 varying vec4 vInfo;
@@ -163,7 +221,7 @@ void main() {
 		vec2 pp = vec2( cos( sw ), sin( sw ) ) * r * 2.5;
 		float n = hbShowFbm( pp + vec2( t * 0.05, -t * 0.03 ) );
 		float mask = 1.0 - smoothstep( 0.55, 1.0, r );
-		vec3 deep = vCol.rgb * 0.12 + vec3( 0.02, 0.0, 0.05 );
+		vec3 deep = vCol.rgb * ( 0.12 + 0.04 * uShowDeepHue ) + vec3( 0.02, 0.0, 0.05 ) * ( 1.0 - uShowDeepHue );
 		c = mix( deep, vCol.rgb, smoothstep( 0.35, 0.85, n ) ) * mask * 0.55;
 		vec2 cell = floor( pp * 6.0 + 50.0 );
 		float st = step( 0.965, hbShowHash( cell + seed * 17.0 ) );
@@ -205,7 +263,10 @@ void main() {
 /** Shader sources (tests). */
 export const FX_SHOWCASE_GLSL = Object.freeze({ vertex: VERT, fragment: FRAG });
 
-const _uniforms = { uShowTime: { value: 0 }, uShowCal: { value: 1 }, uShowFlareInScene: { value: 1 } };
+const _uniforms = {
+  uShowTime: { value: 0 }, uShowCal: { value: 1 }, uShowFlareInScene: { value: 1 },
+  uShowDeepHue: { value: _portalFxLumOn ? 1 : 0 },
+};
 // Plain {x, y} vec2 values (three's uniform setter reads .x / .y): no
 // THREE.Vector2 at module load — play_effect_vfx.js suites run this module on
 // a minimal three stub.
@@ -351,16 +412,20 @@ function _scan(em, now) {
       p.ground.copy(_root);
       if (kind === "portal") {
         const sw = fxDistortSwirlNear(_root, 6, _swirl);
+        let light = null;
         if (sw) {
           p.centre.set(sw.x, sw.y, sw.z);
           p.radius = Math.min(3.5, Math.max(0.8, sw.radius * 0.95));
-          const light = sw.emitter && sw.emitter._fxLight ? sw.emitter._fxLight : fxEmitterLightNear(p.centre, 3);
-          if (light) p.color = _colorOf(light, PORTAL_VIOLET);
+          light = sw.emitter && sw.emitter._fxLight ? sw.emitter._fxLight : fxEmitterLightNear(p.centre, 3);
         } else {
           p.centre.copy(_root); p.centre.y += 1.6;
-          const light = fxEmitterLightNear(p.centre, 3);
-          if (light) p.color = _colorOf(light, PORTAL_VIOLET);
+          light = fxEmitterLightNear(p.centre, 3);
         }
+        if (light) p.color = _colorOf(light, PORTAL_VIOLET);
+        // `?portalFxLum`: the disc + ring at purple's luminance in the portal's
+        // own colour. Only for a colour read off the swirl's light: the
+        // fallback violet (tier-1 off) is the same on every portal already.
+        p.k = _portalFxLumOn && light ? portalLumScale(p.color) : 1;
       } else {
         p.centre.copy(_root);
         const light = fxEmitterLightNear(_root.clone().setY(_root.y + 1.5), 3);
@@ -368,13 +433,15 @@ function _scan(em, now) {
       }
       // the ground ring (a persistent mark): re-placed when it moved, recoloured
       const ringR = kind === "portal" ? p.radius * 1.05 : 1.6;
+      const ringI = kind === "portal" ? 0.9 * (p.k ?? 1) : 0.75;
       if (!p.ring || p.ring.released || Math.hypot(p.ring.x - p.ground.x, p.ring.z - p.ground.z) > 0.3) {
         if (p.ring) releaseFxDecal(p.ring);
         p.ring = addFxDecal({ position: p.ground, kind: "ring", radius: ringR, height: 1.6, color: p.color,
-          intensity: kind === "portal" ? 0.9 : 0.75 });
+          intensity: ringI });
       } else {
         p.ring.color[0] = p.color[0]; p.ring.color[1] = p.color[1]; p.ring.color[2] = p.color[2];
         p.ring.radius = ringR;
+        p.ring.intensity = ringI;
       }
     }
   }
@@ -459,7 +526,7 @@ export function tickFxShowcase(scene3d, nowMs) {
     const fadeIn = Math.min(1, age / 0.6);
     if (p.kind === "portal") {
       _stats.portals++;
-      put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.disc, p.radius * 0.85, 0, fadeIn, p.seed, p.color, 0.9, age, 1);
+      put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.disc, p.radius * 0.85, 0, fadeIn, p.seed, p.color, 0.9 * (p.k ?? 1), age, 1);
     } else {
       _stats.lifestones++;
       put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.shaft, 1.1, 9.0, fadeIn, p.seed, p.color, 0.8, age, 1);
@@ -487,6 +554,7 @@ export function tickFxShowcase(scene3d, nowMs) {
   _geom.instanceCount = n;
   mesh.visible = n > 0;
   _uniforms.uShowTime.value = (now / 1000) % 1024;
+  _uniforms.uShowDeepHue.value = _portalFxLumOn ? 1 : 0;
   // the flare goes to the glow buffer when a glow pass is actually running
   // (`?fxGlow` on AND the composer built it: `window.__fxGlow`), else into the scene
   _uniforms.uShowFlareInScene.value = fxTier1Enabled("fxGlow") && globalThis.window?.__fxGlow?.effect ? 0 : 1;

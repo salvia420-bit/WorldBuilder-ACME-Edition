@@ -1460,6 +1460,28 @@ pub fn character_option_mask(option: CharacterOption) -> CharacterOptionMask {
     }
 }
 
+/// LANDING-BOUNCE (2026-10-11) — the post-`handle_all_collisions` physics
+/// velocity of a hard landing (acclient.c:321872-321886) and the contact
+/// normal it bounced off, pending the retail lift-off quantum (see
+/// [`PlayerState::landing_bounce`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandingBounce {
+    /// The reflected velocity `v - (1 + elasticity)(v·n)n` (m/s, world).
+    pub velocity: Vector3,
+    /// The landing contact-plane normal (unit, world; `(0,0,1)` when the
+    /// transition grounded without a plane).
+    pub normal: Vector3,
+}
+
+impl LandingBounce {
+    /// The bounce's speed along the contact normal (`velocity · normal`).
+    pub fn normal_speed(&self) -> f32 {
+        self.velocity.x * self.normal.x
+            + self.velocity.y * self.normal.y
+            + self.velocity.z * self.normal.z
+    }
+}
+
 /// Session-local player model and derived player-facing state.
 ///
 /// `PlayerState` owns player-specific data such as attributes, vitals, spells, inventory, and
@@ -1621,6 +1643,25 @@ pub struct PlayerState {
     /// kinematic — `v = sqrt(h * 19.6)` → `g = 9.8 m/s²`). Reset to
     /// 0.0 on landing or teleport.
     pub vertical_velocity: f32,
+    /// LANDING-BOUNCE (2026-10-11, `?landingBounce`) — the elastic bounce a
+    /// hard landing left on the body, pending the retail lift-off quantum.
+    ///
+    /// Retail lands in two quanta. Q0 (the landing): `SetPositionInternal`
+    /// sets ON_WALKABLE (→ `HitGround`, the landing link) and THEN
+    /// `handle_all_collisions` reflects the velocity off the contact normal,
+    /// `v -= (1 + elasticity)(v·n)n` (acclient.c:321872-321886;
+    /// `apply_bounce` because the body was not on walkable before,
+    /// :321830-321833). Q1: `calc_friction` leaves a velocity whose normal
+    /// part is ≥ 0.25 m/s alone (:316140), `check_contact` drops CONTACT for a
+    /// body moving away from its plane (`v·N > 2e-4`, :316536), so no step-down
+    /// re-plants it and the body leaves the ground → `LeaveGround`
+    /// (:344457-344487) re-launches it with `get_leave_ground_velocity`
+    /// (:343806): the motion state's velocity (z = the pending jump v_z, 0
+    /// here), or — standing still — the physics velocity itself, bounce and
+    /// all. `Some` between Q0 (the landing slice stores it after [`Self::land`])
+    /// and Q1 (the next grounded slice consumes it). Cleared by
+    /// [`Self::land`] (teleports route through it) and [`Self::begin_jump`].
+    pub landing_bounce: Option<LandingBounce>,
     /// Physics deep-dive 2026-06-01 (gap 3 follow-up: edge_slide).
     /// The local player's `AllowEdgeSlide` physics flag — retail's
     /// `ObjectInfoState.EdgeSlide` (acclient `OBJECT_INFO_STATE`
@@ -1966,6 +2007,7 @@ impl PlayerState {
             // F1-6 — no jump charge held at spawn.
             standing_long_jump_charge: false,
             vertical_velocity: 0.0,
+            landing_bounce: None,
             // Physics deep-dive 2026-06-01 (gap 3 follow-up) — default
             // to the retail player value (EdgeSlide set) until the local
             // player's physics state hydrates the real flag.
@@ -2160,6 +2202,10 @@ impl PlayerState {
             return;
         }
         self.is_airborne = true;
+        // LANDING-BOUNCE — a jump launched on the bounce quantum replaces
+        // the pending lift-off (retail `jump` → `LeaveGround` with the jump
+        // v_z, acclient.c:343806).
+        self.landing_bounce = None;
         // F1-6 — the charge (if any) is consumed by this dispatch; the
         // caller decides the launch planar velocity AFTER calling
         // begin_jump (holtburger-core `execute_jump_release`: retail
@@ -2223,6 +2269,10 @@ impl PlayerState {
         self.is_airborne = false;
         self.is_jumping = false;
         self.vertical_velocity = 0.0;
+        // LANDING-BOUNCE — a landing (or teleport) starts with no pending
+        // lift-off; the integrator's landing tail stores a fresh one AFTER
+        // this call when the bounce survives.
+        self.landing_bounce = None;
         self.airborne_secs = 0.0;
         // F1-6 / G-7 — touchdown (or teleport, which routes through land)
         // drops any held standing-long-jump charge, per the field doc.
