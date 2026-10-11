@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>far bake shared textures gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Far-terrain bake rig vs the terrain BC7 ladder's in-place swap (2026-10-11), driven by
+// test_far_bake_shared_textures_gpu.cjs. On the 1070 the t128 -> t1024 promotion logged
+// `glCompressedTexSubImage3D: One or more subregion dimensions are outside of the image` and
+// `Texture level does not exist`: the bake rig's `ShaderMaterial.clone()` had cloned the atlas
+// into a second Texture on the same Source, which kept the old immutable storage alive through
+// the swap's dispose(). This page reproduces the mechanism with real three r184 + WebGL2:
+//   A. a plain clone that has drawn: the swap's upload raises a GL error and the live material
+//      still samples the OLD texels (the defect, so the probe can see it)
+//   B. shareLiveTextureUniforms (scene3d/far_terrain.js) on the clone: the swap re-allocates,
+//      no GL error, the live material AND the bake clone sample the NEW texels
+// Array textures: the compressed BPTC array when the context offers it (what the client ships),
+// else an RGBA8 DataArrayTexture (three gates texStorage3D on the same `allocateMemory`).
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], info: [], programs: 0 };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+const info = (s) => R.info.push(s);
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+try {
+  const { shareLiveTextureUniforms } = await import("/scene3d/far_terrain.js");
+  const S = 16;
+  const canvas = document.createElement("canvas");
+  canvas.width = S; canvas.height = S;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+  renderer.debug.checkShaderErrors = true;
+  const gl = renderer.getContext();
+  const bptc = !!gl.getExtension("EXT_texture_compression_bptc");
+  info(`array kind: ${bptc ? "CompressedArrayTexture (BPTC)" : "DataArrayTexture (RGBA8)"}`);
+
+  // One BC7 block per 4x4 texel tile, mode 6 (opaque solid colour, both endpoints equal).
+  // Bit layout (LSB first): mode 6 = 0b1000000 (7 bits), R0 R1 G0 G1 B0 B1 A0 A1 (7 bits each),
+  // P0 P1 (1 bit each), 63 index bits (all zero) -> every texel = endpoint 0.
+  function bc7Solid(r, g, b) {
+    const out = new Uint8Array(16);
+    let bit = 0;
+    const put = (v, n) => { for (let i = 0; i < n; i++, bit++) if ((v >> i) & 1) out[bit >> 3] |= 1 << (bit & 7); };
+    put(1 << 6, 7);
+    for (const c of [r, g, b, 255]) { const v = c >> 1; put(v, 7); put(v, 7); }
+    put(1, 1); put(1, 1); // p-bits: the low bit of every channel
+    return out;
+  }
+  function makeArray(size, depth, rgb) {
+    if (bptc) {
+      const blocks = (size / 4) * (size / 4) * depth;
+      const data = new Uint8Array(blocks * 16);
+      const blk = bc7Solid(...rgb);
+      for (let i = 0; i < blocks; i++) data.set(blk, i * 16);
+      const t = new THREE.CompressedArrayTexture([{ data, width: size, height: size }], size, size, depth, THREE.RGBA_BPTC_Format);
+      t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false;
+      t.needsUpdate = true;
+      return t;
+    }
+    const data = new Uint8Array(size * size * depth * 4);
+    for (let i = 0; i < size * size * depth; i++) data.set([...rgb, 255], i * 4);
+    const t = new THREE.DataArrayTexture(data, size, size, depth);
+    t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  }
+  // The in-place swap terrain_bc7.js `_swapArrayInPlace` performs.
+  function swapInPlace(t, size, depth, rgb) {
+    const fresh = makeArray(size, depth, rgb);
+    t.dispose();
+    if (bptc) t.mipmaps = fresh.mipmaps;
+    t.image = bptc ? { width: size, height: size, depth } : fresh.image;
+    t.needsUpdate = true;
+  }
+  const mat = (tex) => new THREE.ShaderMaterial({
+    uniforms: { uAtlas: { value: tex } },
+    glslVersion: THREE.GLSL3,
+    vertexShader: "void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }",
+    fragmentShader: "precision highp sampler2DArray; uniform sampler2DArray uAtlas; out vec4 o; void main() { o = texture(uAtlas, vec3(0.5, 0.5, 1.0)); }",
+  });
+  const cam = new THREE.Camera();
+  const draw = (m) => {
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m));
+    while (gl.getError() !== gl.NO_ERROR) { /* drain */ }
+    renderer.render(scene, cam);
+    const errs = [];
+    for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) errs.push("0x" + e.toString(16));
+    const px = new Uint8Array(4);
+    gl.readPixels(S >> 1, S >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return { errs, px: [...px] };
+  };
+  const RED = [255, 0, 0], GREEN = [0, 255, 0];
+  const isGreen = (p) => p[1] > 200 && p[0] < 60;
+  const isRed = (p) => p[0] > 200 && p[1] < 60;
+  const warn = console.warn;
+
+  // A — the defect: a plain clone that has drawn keeps the old storage alive.
+  {
+    const tex = makeArray(4, 2, RED);
+    const live = mat(tex);
+    console.warn = () => {}; const bake = live.clone(); console.warn = warn;
+    const a0 = draw(live), a1 = draw(bake);
+    check("A. both draw the old texels before the swap", isRed(a0.px) && isRed(a1.px), `live ${a0.px} bake ${a1.px}`);
+    swapInPlace(tex, 8, 2, GREEN);
+    const a2 = draw(live);
+    info(`A. plain clone: after the in-place swap the live material reads ${a2.px} with GL errors [${a2.errs}]`);
+    check("A. (defect seen) the swap fails while a plain clone holds the old storage", a2.errs.length > 0 && !isGreen(a2.px), `errors [${a2.errs}] px ${a2.px}`);
+  }
+  // B — the fix: the clone shares the live texture objects.
+  {
+    const tex = makeArray(4, 2, RED);
+    const live = mat(tex);
+    console.warn = () => {}; const bake = live.clone(); console.warn = warn;
+    const n = shareLiveTextureUniforms(bake, live);
+    check("B. shareLiveTextureUniforms re-points the atlas", n === 1 && bake.uniforms.uAtlas.value === tex, `n ${n}`);
+    const b0 = draw(live), b1 = draw(bake);
+    check("B. both draw the old texels before the swap", isRed(b0.px) && isRed(b1.px), `live ${b0.px} bake ${b1.px}`);
+    swapInPlace(tex, 8, 2, GREEN);
+    const b2 = draw(live), b3 = draw(bake);
+    check("B. after the swap the live material reads the new texels, no GL error", b2.errs.length === 0 && isGreen(b2.px), `errors [${b2.errs}] px ${b2.px}`);
+    check("B. the bake clone follows the swap", b3.errs.length === 0 && isGreen(b3.px), `errors [${b3.errs}] px ${b3.px}`);
+  }
+  R.programs = renderer.info.programs?.length ?? 0;
+  R.ok = R.errors.length === 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && (e.stack || e.message) || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

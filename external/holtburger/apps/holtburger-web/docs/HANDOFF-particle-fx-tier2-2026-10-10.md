@@ -307,6 +307,13 @@ one program, plus the flare's glow variant. A 2 Hz scan finds the pieces:
 - **Lifestone** (0x4000): a vertical light shaft. It turns round the vertical
   to face the camera, its noise mask scrolls up and glitter rises in it. Plus
   a ground ring, in the lifestone's FX light colour (default pale blue).
+  **Superseded 2026-10-11** (owner, on the 1070: the shaft is "undesirable,
+  instead add more of a glowing emanance and make the crystal look more
+  lifelike"): `?lifestoneFx` (default on) replaces the shaft and the ring with
+  the crystal's own materials, an aura (kind 4 in this billboard), a light
+  carrier and, at high / ultra, the crystal in the glow buffer —
+  `scene3d/vfx/lifestone_fx.js`, `test_lifestone_fx.mjs`. `=off` keeps the
+  shaft + ring described here.
 - **Level-up** (the cue): a gold light column that rises (its top grows in
   over 0.45 s), holds and fades over ~3 s, plus a short lens flare on the core
   (hot core, anamorphic streak, ghost ring). The flare goes into the glow
@@ -399,7 +406,8 @@ Run one A/B per page load with `?fxMotion=off`, `?fxShapes=off`, etc.
    - a faint nebula with a few stars shows inside, at the swirl's centre and
      size.
 4. **Lifestone:** a pale blue column of light with glitter rising in it, and a
-   ring on the ground.
+   ring on the ground. (Superseded 2026-10-11 by `?lifestoneFx`: no column, no
+   ring — a glowing crystal, an aura and a light pool; `=off` for this look.)
 5. **Level-up:** a gold column rises out of the player and a short flare
    flashes on the core.
 6. **Distant glints:** steady at distance, no popping (`?fxClamp=off` to

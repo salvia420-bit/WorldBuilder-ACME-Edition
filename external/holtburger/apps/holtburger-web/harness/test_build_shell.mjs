@@ -331,7 +331,10 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-11 (owner bug batch): + scene3d/always_daylight.js (index.html) and
   // scene3d/diag/slow_run.js (diag.js) (generator --check: up to date, 390
   // modules) → 374.
-  const NON_APP_PRELOADS = 374;
+  // 2026-10-11 (lifestone glow, `?lifestoneFx`): + scene3d/vfx/lifestone_fx.js
+  // (imported by fx_showcase.js; generator --check: up to date, 391 modules)
+  // → 375.
+  const NON_APP_PRELOADS = 375;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

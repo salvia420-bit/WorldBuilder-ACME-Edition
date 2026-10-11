@@ -1,0 +1,294 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>lifestone fx gpu smoke</title>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "postprocessing": "/node_modules/postprocessing/build/index.js"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// The lifestone's glow — GPU smoke (driven by test_lifestone_fx_gpu.cjs). One
+// 96 x 128 WebGL2 canvas, logarithmic depth, the composer's display transform
+// (Neutral at exposure 5), a crystal shaped to GfxObj 0x01000CFA's bounds at
+// Setup 0x020002EE's crystal placement (0, 0, 2), no game world:
+//   C. the crystal's owned variant compiles (also with the CSM patch on it)
+//   I. level 0 draws the retail surface, pixel for pixel
+//   L. level 1: different, finite, still BLUE (not whitened); the inner light moves
+//   P. a second lifestone adds no program
+//   A. the showcase program (the aura kind) compiles and adds light round the
+//      crystal, and nothing where the aura is not
+//   G. the crystal's glow-buffer material compiles
+import * as THREE from "three";
+
+const R = { ok: false, errors: [], checks: [], programs: 0, notes: {} };
+const check = (name, ok, detail) => R.checks.push({ name, ok: !!ok, detail: detail ?? "" });
+window.addEventListener("error", (e) => R.errors.push(String(e.message || e)));
+const until = async (fn, ms = 20000) => {
+  const t0 = performance.now();
+  while (!fn()) {
+    if (performance.now() - t0 > ms) return false;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return true;
+};
+try {
+  const mats = await import("/scene3d/materials.js");
+  const ls = await import("/scene3d/vfx/lifestone_fx.js");
+  const show = await import("/scene3d/vfx/fx_showcase.js");
+  const poc = await import("/scene3d/particles_over_clouds.js");
+  const t1f = await import("/scene3d/vfx/fx_tier1.js");
+  await ls._lifestoneFxModulesForTest();
+
+  const W = 96, H = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  renderer.debug.checkShaderErrors = true;
+  renderer.debug.onShaderError = (g, program, vs, fs) => {
+    R.errors.push(`shader error: ${g.getProgramInfoLog(program)} | VS: ${g.getShaderInfoLog(vs)} | FS: ${g.getShaderInfoLog(fs)}`);
+  };
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 5; // the composer's calibrated default
+  const gl = renderer.getContext();
+  R.webgl2 = renderer.capabilities.isWebGL2 !== false;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0, 0, 0);
+  const sun = new THREE.DirectionalLight(0xffffff, 0.35);
+  sun.position.set(3, -1, 2);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.12));
+  // AC frame: Z up
+  const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 60);
+  camera.up.set(0, 0, 1);
+  camera.position.set(6.0, 0, 2.1);
+  camera.lookAt(0, 0, 2.1);
+  camera.layers.enable(1);   // the showcase billboard draws on the entities' layer 1
+  camera.updateMatrixWorld(true);
+
+  // a 4 x 4 blue "geode" (the crystal texture's mean sRGB ~ (65, 109, 213), some bright texels)
+  const texels = [];
+  for (let i = 0; i < 16; i++) texels.push(...(i % 5 === 0 ? [140, 180, 245, 255] : [65, 109, 213, 255]));
+  const tex = new THREE.DataTexture(new Uint8Array(texels), 4, 4);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  // what the cache builds for surface 0x080011DE (Translucent 0.25, luminosity 0.75)
+  const crystalBase = (ud = {}) => {
+    const m = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveIntensity: 0.75, emissiveMap: tex,
+      roughness: 0.9, metalness: 0, transparent: true, opacity: 0.75, depthWrite: false, side: THREE.DoubleSide });
+    m.forceSinglePass = true;
+    m.userData = { __cacheOwned: true, ...ud };
+    return m;
+  };
+  const crystalGeometry = () => {
+    const g = new THREE.OctahedronGeometry(1, 0);
+    g.scale(0.65, 0.89, 1.48);
+    g.translate(-0.1, -0.02, 0.13);
+    return g;
+  };
+  let guidSeq = 0x70000200;
+  const makeStone = (y, base) => {
+    const root = new THREE.Group();
+    root.position.set(0, y, 0);
+    const part = new THREE.Group();
+    part.position.set(0, 0, 2);
+    const crystal = new THREE.Mesh(crystalGeometry(), base);
+    crystal.userData = { surfaceDid: 0x080011de };
+    part.add(crystal);
+    root.add(part);
+    root.updateMatrixWorld(true);
+    return { guid: ++guidSeq, root, parts: [part], meta: { objDescFlags: 0x4000 }, crystal, base };
+  };
+  // a minimal cache: makeOwnedVariant only reads wireframeMode + csmState
+  const mc = { wireframeMode: false, csmState: null, materials: new Map(), frontSideMaterials: new Map(), fallbackMaterial: null };
+  mc.makeOwnedVariant = mats.MaterialCache.prototype.makeOwnedVariant.bind(mc);
+  const s3d = { renderer, camera, scene, entityManager: { materialCache: mc, entityMap: new Map() } };
+  const setTime = (t) => { mats.VFX_GLOBALS.uTime.value = t; };
+
+  function shot(objects) {
+    for (const o of objects) scene.add(o);
+    renderer.render(scene, camera);
+    const b = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, b);
+    for (const o of objects) scene.remove(o);
+    return b;
+  }
+  const rowOfZ = (z) => {
+    const v = new THREE.Vector3(0, 0, z).project(camera);
+    return Math.round((v.y * 0.5 + 0.5) * H);
+  };
+  function stats(b, z0, z1, colFrom = 0, colTo = W) {
+    const r0 = Math.max(0, Math.min(rowOfZ(z0), rowOfZ(z1))), r1 = Math.min(H, Math.max(rowOfZ(z0), rowOfZ(z1)));
+    let n = 0, R0 = 0, G0 = 0, B0 = 0, white = 0, lumSum = 0, all = 0;
+    for (let r = r0; r < r1; r++) {
+      for (let c = colFrom; c < colTo; c++) {
+        const i = (r * W + c) * 4;
+        const rr = b[i], gg = b[i + 1], bb = b[i + 2];
+        all++;
+        lumSum += 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+        if (rr + gg + bb <= 12) continue; // background
+        n++; R0 += rr; G0 += gg; B0 += bb;
+        if (Math.min(rr, gg, bb) > 235) white++;
+      }
+    }
+    if (!n) return { n: 0, r: 0, g: 0, b: 0, white: 0, lum: 0, meanLum: all ? lumSum / all : 0 };
+    return { n, r: R0 / n, g: G0 / n, b: B0 / n, white: white / n, lum: 0.2126 * R0 / n + 0.7152 * G0 / n + 0.0722 * B0 / n,
+      meanLum: lumSum / all };
+  }
+  const fmt = (s) => `n=${s.n} rgb=(${s.r.toFixed(0)},${s.g.toFixed(0)},${s.b.toFixed(0)}) white=${(s.white * 100).toFixed(1)}%`;
+  const maxDiff = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+
+  setTime(10.0);
+  // ---- reference: the retail crystal ---------------------------------------------------
+  const stone = makeStone(0, crystalBase());
+  const ref = shot([stone.root]);
+  const refC = stats(ref, 1.2, 3.1);
+  R.notes.ref = fmt(refC);
+  check("R. the retail crystal renders (a translucent blue body)", refC.n > 200 && refC.b > refC.r, fmt(refC));
+
+  // ---- C: the owned variant, warmed off-frame, then swapped ----------------------------
+  ls.lifestoneFxSync(stone, s3d, 0, [0.55, 0.78, 1.0], false);
+  const swapped = await until(() => !!(stone.crystal.material && stone.crystal.material.userData && stone.crystal.material.userData.__lsCrystal));
+  const st = ls.lifestoneFxStateOf(stone);
+  check("C. the crystal wears its owned variant after the warm", swapped && !!st && stone.crystal.material !== stone.base);
+  st.u.uLsLevel.value = 0;
+  const inert = shot([stone.root]);
+  check("C. the crystal program compiles (no shader error)", R.errors.length === 0, R.errors.join(" / "));
+  check("★ I. level 0 draws the retail surface (max diff <= 2)", maxDiff(inert, ref) <= 2, `maxDiff ${maxDiff(inert, ref)}`);
+
+  // ---- L: the full look ----------------------------------------------------------------
+  st.u.uLsLevel.value = 1;
+  st.u.uLsBreath.value = 1;
+  const lit = shot([stone.root]);
+  const litC = stats(lit, 1.2, 3.1);
+  R.notes.lit = fmt(litC);
+  check("L. level 1 changes the crystal", maxDiff(lit, ref) > 8, `maxDiff ${maxDiff(lit, ref)}`);
+  // (a facet that happens to face a glint light flashes white: up to ~1 / 8 of an
+  // octahedron's pixels; a whitened crystal would be most of them)
+  check("★ L. it stays BLUE (b > r + 25, b >= g) and is not whitened (< 30 % white pixels)",
+    litC.n > 200 && litC.b > litC.r + 25 && litC.b >= litC.g && litC.white < 0.3, fmt(litC) + " vs ref " + fmt(refC));
+  setTime(13.7);
+  const lit2 = shot([stone.root]);
+  check("L. the inner light moves with time", maxDiff(lit2, lit) > 3, `maxDiff ${maxDiff(lit2, lit)}`);
+  setTime(10.0);
+  check("L. drawing at level 1 raises no error", R.errors.length === 0, R.errors.join(" / "));
+
+  // ---- P: a second lifestone, no new program --------------------------------------------
+  let stone2 = null, stone3 = null;
+  {
+    const before = renderer.info.programs.length;
+    stone2 = makeStone(0.0, crystalBase());
+    ls.lifestoneFxSync(stone2, s3d, 0, [0.55, 0.78, 1.0], false);
+    const ok2 = await until(() => !!(stone2.crystal.material && stone2.crystal.material.userData && stone2.crystal.material.userData.__lsCrystal));
+    const st2 = ls.lifestoneFxStateOf(stone2);
+    st2.u.uLsLevel.value = 1;
+    stone.root.position.y = -0.9; stone.root.updateMatrixWorld(true);
+    stone2.root.position.y = 0.9; stone2.root.updateMatrixWorld(true);
+    shot([stone.root, stone2.root]);
+    const after = renderer.info.programs.length;
+    check("★ P. a second lifestone (own material, own uniforms) adds no program", ok2 && stone2.crystal.material !== stone.crystal.material && after === before,
+      `${before} → ${after}`);
+    stone.root.position.y = 0; stone.root.updateMatrixWorld(true);
+  }
+
+  // ---- C: with the CSM patch on the variant ---------------------------------------------
+  {
+    const m4 = () => ({ value: new THREE.Matrix4() });
+    const depthRt = () => {
+      const rt = new THREE.WebGLRenderTarget(4, 4, { depthTexture: new THREE.DepthTexture(4, 4) });
+      rt.depthTexture.compareFunction = THREE.LessEqualCompare;
+      renderer.setRenderTarget(rt); renderer.clear(); renderer.setRenderTarget(null);
+      return { value: rt.depthTexture };
+    };
+    const csmState = { uniforms: {
+      uCsmShadowMap0: depthRt(), uCsmShadowMap1: depthRt(), uCsmShadowMap2: depthRt(),
+      uCsmMatrix0: m4(), uCsmMatrix1: m4(), uCsmMatrix2: m4(),
+      uCsmSplits: { value: new THREE.Vector2(10, 40) }, uCsmFar: { value: 120 }, uCsmBlend: { value: 0.1 },
+    } };
+    const mcCsm = Object.assign({}, mc, { csmState });
+    mcCsm.makeOwnedVariant = mats.MaterialCache.prototype.makeOwnedVariant.bind(mcCsm);
+    const s3dCsm = { renderer, camera, scene, entityManager: { materialCache: mcCsm, entityMap: new Map() } };
+    stone3 = makeStone(0, crystalBase({ csmEnabled: true }));
+    ls.lifestoneFxSync(stone3, s3dCsm, 0, [0.55, 0.78, 1.0], false);
+    const ok3 = await until(() => !!(stone3.crystal.material && stone3.crystal.material.userData && stone3.crystal.material.userData.__lsCrystal));
+    ls.lifestoneFxStateOf(stone3).u.uLsLevel.value = 1;
+    const s = stats(shot([stone3.root]), 1.2, 3.1);
+    check("C. CSM + the crystal compile together", ok3 && R.errors.length === 0 && stone3.crystal.material.userData.csmEnabled === true && s.n > 200,
+      R.errors.join(" / ") || fmt(s));
+  }
+
+  // ---- A: the aura (fx_showcase kind 4) --------------------------------------------------
+  {
+    // only the first stone takes part: the other two leave at once (a disposed
+    // entity is dropped on the next tick, so it draws no aura)
+    stone2._disposed = true;
+    stone3._disposed = true;
+    const s3dShow = { renderer, camera, scene, entityManager: { materialCache: mc, entityMap: new Map([[stone.guid, stone]]) },
+      skyLightingController: { _lastState: { dirPitch: 0.9 } } };   // midnight: the aura at full strength
+    scene.add(stone.root);
+    for (let t = 1000; t <= 4000; t += 600) show.tickFxShowcase(s3dShow, t);
+    const sMesh = scene.children.find((o) => o.userData && o.userData.isFxShowcase);
+    const auraCount = show.fxShowcaseStats().auras;
+    renderer.render(scene, camera);
+    const withAura = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, withAura);
+    check("A. the showcase program with the aura kind compiles", !!sMesh && auraCount === 1 && R.errors.length === 0, R.errors.join(" / "));
+    sMesh.visible = false;
+    renderer.render(scene, camera);
+    const noAura = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, noAura);
+    sMesh.visible = true;
+    scene.remove(stone.root);
+    // beside the crystal (outside its silhouette), at its mid-height: the halo
+    const side = (b) => (stats(b, 1.6, 2.6, 4, 22).meanLum + stats(b, 1.6, 2.6, W - 22, W - 4).meanLum) / 2;
+    const top = (b) => stats(b, 4.65, 4.85).meanLum;
+    R.notes.aura = `side ${side(noAura).toFixed(2)} → ${side(withAura).toFixed(2)}, top ${top(noAura).toFixed(2)} → ${top(withAura).toFixed(2)}`;
+    check("★ A. the aura adds light beside the crystal", side(withAura) > side(noAura) + 1.0, R.notes.aura);
+    check("A. …and nothing above its reach (the top rows)", Math.abs(top(withAura) - top(noAura)) <= 1.0, R.notes.aura);
+    check("A. additive only: no pixel darker than without it", (() => {
+      for (let i = 0; i < withAura.length; i += 4) {
+        if (withAura[i] + 1 < noAura[i] || withAura[i + 1] + 1 < noAura[i + 1] || withAura[i + 2] + 1 < noAura[i + 2]) return false;
+      }
+      return true;
+    })());
+  }
+
+  // ---- G: the crystal's glow-buffer material ---------------------------------------------
+  {
+    t1f.setFxTier1Flag("fxGlow", true);
+    window.__fxGlow = { effect: {} };
+    const gx = [];
+    for (const src of poc.fxGlowExtraSources()) {
+      src.collect(gx);
+      if (src.setFrame) src.setFrame({ depthTexture: null, width: W, height: H, camera, isLog: true, scale: 1 });
+    }
+    const mine = gx.filter((e) => e.material && e.material.name === "lifestone-crystal-glow");
+    const e = mine[0];
+    if (e) {
+      const twin = new THREE.Mesh(e.object.geometry, e.material);
+      twin.matrixAutoUpdate = false;
+      twin.matrixWorld.copy(e.object.matrixWorld);
+      shot([twin]);
+    }
+    check("G. the crystal's glow material compiles", !!e && R.errors.length === 0, R.errors.join(" / ") || `entries ${mine.length}`);
+    t1f.setFxTier1Flag("fxGlow", null);
+    delete window.__fxGlow;
+  }
+
+  R.programs = renderer.info.programs.length;
+  R.ok = R.errors.length === 0 && R.checks.length > 0 && R.checks.every((c) => c.ok);
+} catch (e) {
+  R.errors.push(String(e && e.stack || e));
+}
+window.__result = R;
+</script>
+</body>
+</html>

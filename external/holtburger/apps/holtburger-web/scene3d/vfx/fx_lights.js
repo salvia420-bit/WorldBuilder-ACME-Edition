@@ -250,15 +250,18 @@ export function fxFlashEnvelope(t, attackMs, holdMs, decayMs) {
 /**
  * Tier 2 (vfx/fx_showcase.js): the strongest live EMITTER light within
  * `maxDist` m of a THREE-world point — a portal's or lifestone's own glow
- * colour. Positions are resolved on demand. Null when none.
+ * colour. Positions are resolved on demand. Null when none. `skip` (optional)
+ * leaves sources out — vfx/lifestone_fx.js skips its own light carriers, so a
+ * lifestone's REAL emitter light is told apart from the one it added.
  */
-export function fxEmitterLightNear(pos, maxDist = 4) {
+export function fxEmitterLightNear(pos, maxDist = 4, skip = null) {
   if (!pos) return null;
   let best = null;
   let bestScore = -Infinity;
   const md2 = maxDist * maxDist;
   for (const s of _emitterLights) {
     if (s.released || typeof s.resolvePosition !== "function") continue;
+    if (skip && skip(s)) continue;
     if (!s.resolvePosition(_nearTmp)) continue;
     const d2 = _nearTmp.distanceToSquared(pos);
     if (d2 > md2) continue;

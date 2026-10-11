@@ -4317,7 +4317,17 @@ export class EntityManager {
             // A12 (S14): memo hit (spawns.js wave pre-warm) resolves
             // synchronously; a miss falls back to the per-entity wasm
             // call and back-fills the memo for wave-mates.
-            let substitute = lodPrewarmGet(setupId, distance);
+            // A T9 LOD respawn carries the band the tick measured at the
+            // EXACT distance. The memo is keyed by 25 m bucket, so near a
+            // band edge it can hold the other band: the respawn then rebuilt
+            // the old band, the tick disagreed again, and the entity was
+            // remove()+spawn()ed twice a second forever (1070, 2026-10-11:
+            // a "Pumpkin Buffer" 11.5 m away, 20 respawns / 10 s).
+            let substitute = Number.isFinite(meta._lodForcedSub)
+              ? (meta._lodForcedSub >>> 0)
+              : lodPrewarmGet(setupId, distance);
+            // one-shot: a later re-create from this meta measures afresh
+            try { delete meta._lodForcedSub; } catch (_) { /* frozen meta */ }
             if (substitute === undefined) {
               substitute = (await lodFetch(setupId, distance)) >>> 0;
               lodPrewarmSet(setupId, distance, substitute);
@@ -13059,6 +13069,8 @@ export class EntityManager {
         window.__pluginClient?.events?.emit?.("selectionChanged", {
           guid: 0,
           prevGuid: g,
+          // same-guid T9 LOD respawn: re-selected right after (not a deselect)
+          lodRespawn: (this._lodRespawnGuid >>> 0) === g,
         });
       } catch (_) { /* never block despawn on a subscriber fault */ }
     }
@@ -15673,7 +15685,7 @@ export class EntityManager {
           sub = sub >>> 0;
           if (this.entityMap.get(g) !== inst) return; // despawned meanwhile
           if (sub !== ((inst._lodSub ?? 0) >>> 0)) {
-            this._respawnForLod(inst, g).catch(() => {});
+            this._respawnForLod(inst, g, sub).catch(() => {});
           } else {
             inst._lodRespawning = false;
           }
@@ -15693,10 +15705,14 @@ export class EntityManager {
    * next UpdateMotion re-syncs regardless). Never throws out of the tick path.
    * @private
    */
-  async _respawnForLod(inst, g) {
+  async _respawnForLod(inst, g, sub) {
     try {
       const oldMeta = inst.meta || {};
       const newMeta = { ...oldMeta };
+      // The band the tick just measured; the spawn uses it instead of the
+      // 25 m-bucket memo (see the spawn-time LOD pick).
+      if (Number.isFinite(sub)) newMeta._lodForcedSub = sub >>> 0;
+      else delete newMeta._lodForcedSub;
       const root = inst.root;
       if (root?.position) {
         const lbId = (oldMeta.landblockId ?? 0) >>> 0;
@@ -15720,7 +15736,11 @@ export class EntityManager {
         window.__diag?.lod?.onDynamicSwap?.({ guid: g, motion: newMeta.motionCommand });
       } catch (_) {}
       newMeta._internalRespawn = true; // held-2 (see applyAppearance)
-      this.remove(g);
+      // A LOD swap is not a server delete: the selection release below tells
+      // its subscribers so (picking.js must not read it as a deselect and send
+      // CancelAttack — 1070, 2026-10-11).
+      this._lodRespawnGuid = g;
+      try { this.remove(g); } finally { this._lodRespawnGuid = 0; }
       await this.spawn(newMeta);
     } catch (_) {
       // Dynamic LOD must never break the tick / entity state.

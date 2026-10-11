@@ -109,7 +109,7 @@ const stripped = src
   .replace(/^\s*export\s+function\s+/gm, "function ")
   .replace(/^\s*export\s+const\s+/gm, "const ");
 const factory = new Function(
-  "THREE", "window",
+  "THREE", "window", "TERRAIN_FX_LIGHT_UNIFORMS",
   stripped +
     "\n; return { tryAbsorbTerrainLbIntoBatch, evictTerrainBatchForLb, parkTerrainBatchForLb," +
     " unparkTerrainBatchForLb, tickTerrainBatchOptimize, terrainBatchEnabled," +
@@ -324,6 +324,42 @@ console.log("\n-- anchor drift disables batching rather than mis-rendering --");
   const r = M.tryAbsorbTerrainLbIntoBatch(scene, lbMesh(40, 4, true), OPTS, drifted);
   check("absorb refused when the gouraud anchor is missing", r === false);
   check("no batch state was created", M.__state() === null);
+}
+
+// ---------------------------------------------------------------------------
+// 7. `?terrainLights` (2026-10-11): the FX light feed reaches the batch. The loop
+//    rewrites three shared typed arrays in place every frame; terrain.js binds the
+//    uniform objects by identity. The batch used to value-copy them (`.slice()`),
+//    freezing the creation-time snapshot: no torch pool ever reached the batched
+//    terrain on the 1070. The batch must hold the SAME uniform objects.
+// ---------------------------------------------------------------------------
+console.log("\n-- the FX light feed is shared by identity, not copied --");
+{
+  const SHARED = {
+    uFxLightPos: { value: new Float32Array(32) },
+    uFxLightCol: { value: new Float32Array(32) },
+    uFxLightGain: { value: new Float32Array([0.18, 0.6]) },
+  };
+  const M = factory(THREE, undefined, SHARED);
+  const scene = freshScene();
+  const m = lbMesh(50, 5, true);
+  Object.assign(m.material.uniforms, SHARED);
+  const ok = M.tryAbsorbTerrainLbIntoBatch(scene, m, OPTS, EXTRAS);
+  const st = M.__state();
+  check("absorb succeeds with the FX light uniforms present", ok === true);
+  const u = st ? st.material.uniforms : {};
+  check("uFxLightPos / uFxLightCol / uFxLightGain are the shared objects",
+    u.uFxLightPos === SHARED.uFxLightPos && u.uFxLightCol === SHARED.uFxLightCol && u.uFxLightGain === SHARED.uFxLightGain);
+  SHARED.uFxLightGain.value[0] = 0.75; SHARED.uFxLightPos.value[3] = 3.9;
+  check("a later in-place feed write is what the batch reads",
+    u.uFxLightGain && u.uFxLightGain.value[0] === 0.75 && u.uFxLightPos.value[3] === Math.fround(3.9));
+  check("other uniforms are still value copies (uSunDir)", u.uSunDir && u.uSunDir.value !== m.material.uniforms.uSunDir.value);
+  // Without the shared set (stripped import, as before), nothing breaks and values copy.
+  const M2 = factory(THREE, undefined);
+  const scene2 = freshScene();
+  const m2 = lbMesh(51, 5, true);
+  Object.assign(m2.material.uniforms, { uFxLightPos: { value: new Float32Array(32) } });
+  check("absent shared set → still absorbs (value copy)", M2.tryAbsorbTerrainLbIntoBatch(scene2, m2, OPTS, EXTRAS) === true);
 }
 
 console.log("\n=========================");

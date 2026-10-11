@@ -1952,7 +1952,16 @@ export function setupClickPicking({
   const bus = (typeof window !== "undefined") ? window.__pluginClient?.events : null;
   if (bus && typeof bus.on === "function") {
     onSelectionCleared = (ev) => {
-      if (((ev?.guid >>> 0) || 0) !== 0) return; // only on clear
+      // The bus delivers a CustomEvent: the payload is `ev.detail` (as
+      // target-bar.js reads it). Reading `ev.guid` saw undefined on EVERY
+      // event, so every selection change counted as a clear and, in a combat
+      // stance, sent CancelAttack — with the client run-up gone (86c4d11e) a
+      // charge then ended in "Action cancelled!" (1070, 2026-10-11).
+      const d = ev?.detail ?? ev ?? {};
+      if (((d.guid >>> 0) || 0) !== 0) return; // only on clear
+      // A same-guid T9 LOD respawn clears and re-selects the target: not a
+      // deselect, so it cancels neither the move nor the attack.
+      if (d.lodRespawn) return;
       // Deselect cancels the in-flight turn / sticky hold.
       cancelClientMove();
       if (!(isInMeleeStance?.() || isInRangedStance?.())) return;

@@ -83,6 +83,7 @@
 
 import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
+import { TERRAIN_FX_LIGHT_UNIFORMS } from "./vfx/fx_lights.js";
 
 // ---------------------------------------------------------------------------
 // Flag
@@ -443,6 +444,16 @@ function _buildBatchMaterial(srcMaterial, glsl, state, opts, extras) {
   const uniforms = {};
   for (const [name, u] of Object.entries(srcMaterial.uniforms || {})) {
     uniforms[name] = { value: _cloneUniformValue(u ? u.value : null) };
+  }
+  // `?terrainLights` (vfx/fx_lights.js): the FX light feed is three typed arrays the loop
+  // rewrites IN PLACE every frame and terrain.js binds BY IDENTITY on every terrain material.
+  // The value copy above froze them at their creation-time snapshot (no lights, the gain of
+  // that moment), so the batch — the terrain that actually draws — never took a torch pool
+  // (1070, 2026-10-11). Share the uniform objects themselves.
+  // (`typeof`: test_terrain_batch.mjs evaluates this file with its imports stripped.)
+  const fxShared = typeof TERRAIN_FX_LIGHT_UNIFORMS === "object" ? TERRAIN_FX_LIGHT_UNIFORMS : null;
+  for (const [name, u] of Object.entries(fxShared || {})) {
+    if (srcMaterial.uniforms && srcMaterial.uniforms[name] === u) uniforms[name] = u;
   }
   const mergeOn = !!(state.mergeArray && opts.texMergeEnabled && opts.texMergeAlphaArray);
   uniforms.uVertexTypes = { value: state.vtArray };

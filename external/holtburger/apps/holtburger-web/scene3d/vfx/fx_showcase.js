@@ -8,10 +8,18 @@
 //              (`?fxDecals`) and here a faint "portal-space" disc — a swirling
 //              nebula with a few stars on a camera-facing disc at the swirl's
 //              centre, in the portal's own colour.
-//   LIFESTONE  (LIFESTONE flag) shipped: its breathing light and glow; here: a
-//              vertical light shaft (an additive column facing the camera round
-//              the vertical, its noise mask scrolling up, glitter rising in it)
-//              and a ground ring.
+//   LIFESTONE  (LIFESTONE flag) `?lifestoneFx` (2026-10-11, DEFAULT ON — see
+//              vfx/lifestone_fx.js): the crystal's own materials (inner light,
+//              rim, facet glints, breathing), an AURA here (kind 4: a soft halo
+//              round the crystal, wisps drifting outward, motes leaving it), a
+//              light carrier that paints the claws and the ground, and the
+//              crystal in the glow buffer at high / ultra. No shaft, no ring.
+//              `?lifestoneFx=off` = the 2026-10-10 look: a vertical light shaft
+//              (an additive column facing the camera round the vertical, its
+//              noise mask scrolling up, glitter rising in it) and a ground ring.
+//              (Retail's Holtburg stone — Setup 0x020002EE — has no emitters and
+//              no light: the "breathing light" this line used to promise only
+//              exists on the 9 "new" stones, Setup 0x02000EAD.)
 //   LEVEL-UP   (the levelUp PlayEffect cue) shipped: the flash, the ring, the
 //              glitter; here: a column of light rising out of the player and a
 //              short lens flare on the core — drawn into the glow buffer when
@@ -28,8 +36,9 @@
 // the swirl's FX light (vfx/fx_lights.js); without them (tier-1 switches off)
 // a 1.6 m-high centre, a 1.5 m radius and portal violet.
 //
-// ONE draw for every disc, shaft, column and flare (an instanced billboard, the
-// kind is per instance), one program, plus the flare's glow variant. No light.
+// ONE draw for every disc, shaft, column, flare and aura (an instanced
+// billboard, the kind is per instance), one program, plus the flare's glow
+// variant. No light here (the lifestone's carrier lives in lifestone_fx.js).
 //
 // PORTAL PARITY (2026-10-11, `?portalFxLum`, DEFAULT ON, `=off` escape). Owner:
 // "yellow, green, white etc portals don't have the 3dness ... that the purple
@@ -56,13 +65,27 @@ import { addFxDecal, releaseFxDecal } from "./fx_decals.js";
 import { fxDistortSwirlNear } from "./fx_distort.js";
 import { fxEmitterLightNear } from "./fx_lights.js";
 import { registerLateFxSource, registerFxGlowExtras } from "../particles_over_clouds.js";
+import {
+  lifestoneFxEnabled,
+  lifestoneFxSync,
+  lifestoneFxRelease,
+  lifestoneFxReleaseAll,
+  lifestoneFxTick,
+  lifestoneFxAuras,
+  isLifestoneLightCarrier,
+  _resetLifestoneFxForTest,
+} from "./lifestone_fx.js";
 
 export const ODF_LIFESTONE = 0x00004000;
 export const ODF_PORTAL = 0x00040000;
 export const FX_SHOWCASE_MAX = 16;
-export const FX_SHOWCASE_KIND = Object.freeze({ disc: 1, shaft: 2, flare: 3 });
+export const FX_SHOWCASE_KIND = Object.freeze({ disc: 1, shaft: 2, flare: 3, aura: 4 });
 const SCAN_MS = 500;
 const RANGE_M = 60;
+// `?lifestoneFx`: a lifestone already in the set leaves it only past this
+// (its crystal materials, aura and light fade out and back in, never flicker
+// at the edge of the scan range).
+const LIFESTONE_KEEP_M = RANGE_M + 8;
 
 const PORTAL_VIOLET = [0.75, 0.5, 1.0];
 const LIFESTONE_BLUE = [0.55, 0.78, 1.0];
@@ -115,24 +138,30 @@ const VERT = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
 attribute vec4 aS0;   // centre (THREE world), kind
-attribute vec4 aS1;   // radius / width, height, fade, seed
+attribute vec4 aS1;   // radius / width, height, fade, seed (aura: x / y radius, fade, seed)
 attribute vec4 aS2;   // colour rgb, intensity
-attribute vec4 aS3;   // age (s), grow (0..1), 0, 0
+attribute vec4 aS3;   // age (s), grow (0..1), 0, 0 (aura: age, the crystal's edge in aura units, breath, soft share)
 uniform float uShowFlareInScene;
 varying vec2 vUv;
 varying vec4 vCol;
 varying vec4 vInfo;    // kind, seed, age, fade
+varying vec4 vAux;     // aura: radii (m), the crystal's edge (aura units), breath
+varying float vSoft;   // aura: the soft halo's share (day / night, glow pass)
 varying float vDepth;
 void main() {
 	vec3 C = aS0.xyz;
 	float kind = aS0.w;
 	vInfo = vec4( kind, aS1.w, aS3.x, aS1.z );
 	vCol = aS2;
+	vAux = vec4( aS1.xy, aS3.yz );
+	vSoft = aS3.w;
 	vec4 mv;
+	// the glow variant draws only the flares; the scene draws the rest (and the
+	// flares too when no glow pass is running)
 	#ifdef HB_SHOWCASE_GLOW
-	bool keep = kind > 2.5;
+	bool keep = kind > 2.5 && kind < 3.5;
 	#else
-	bool keep = kind < 2.5 || uShowFlareInScene > 0.5;
+	bool keep = kind < 2.5 || kind > 3.5 || uShowFlareInScene > 0.5;
 	#endif
 	if ( !keep || aS1.z <= 0.0 ) {
 		vUv = vec2( 0.0 ); vDepth = 0.0;
@@ -155,7 +184,7 @@ void main() {
 		vec3 P = C + side * position.x * aS1.x + up * ( position.y + 0.5 ) * h;
 		mv = viewMatrix * vec4( P, 1.0 );
 		vUv = vec2( position.x * 2.0, position.y + 0.5 );
-	} else {
+	} else if ( kind < 3.5 ) {
 		// lens flare: camera-facing, a constant size on screen, a wide quad for
 		// the streak, pulled a little toward the camera
 		mv = viewMatrix * vec4( C, 1.0 );
@@ -163,6 +192,16 @@ void main() {
 		mv.xy += position.xy * vec2( 6.0, 1.5 ) * s;
 		mv.z += min( 0.6, -mv.z * 0.2 );
 		vUv = position.xy * vec2( 6.0, 1.5 ) * 2.0;
+	} else {
+		// lifestone aura: camera-facing round the crystal, pulled up to 1 m toward
+		// the camera (its size on screen kept) so neither the claws nor the crystal
+		// cut it with a hard edge
+		mv = viewMatrix * vec4( C, 1.0 );
+		float dz = max( -mv.z, 0.05 );
+		float pull = min( 1.0, dz * 0.4 );
+		mv.xy += position.xy * 2.0 * aS1.xy * ( ( dz - pull ) / dz );
+		mv.z += pull;
+		vUv = position.xy * 2.0;
 	}
 	vDepth = -mv.z;
 	gl_Position = projectionMatrix * mv;
@@ -176,9 +215,12 @@ const FRAG = /* glsl */`
 uniform float uShowTime;
 uniform float uShowCal;
 uniform float uShowDeepHue;   // 1: the nebula base keeps the portal's hue (?portalFxLum); 0: the fixed violet base
+uniform float uShowMotes;     // the lifestone aura's motes (live: __lifestoneFx.tune.motes)
 varying vec2 vUv;
 varying vec4 vCol;
 varying vec4 vInfo;
+varying vec4 vAux;
+varying float vSoft;
 varying float vDepth;
 #ifdef HB_SHOWCASE_GLOW
 uniform highp sampler2D uGlowDepth;
@@ -235,13 +277,45 @@ void main() {
 		vec2 cell = floor( vec2( u * 7.0, v * 34.0 - t * 2.2 ) + seed * 23.0 );
 		float gl = step( 0.93, hbShowHash( cell ) ) * pow( 0.5 + 0.5 * sin( t * 6.0 + hbShowHash( cell + 3.0 ) * 40.0 ), 4.0 );
 		c = vCol.rgb * ( prof * ( 0.45 + 0.55 * n ) + gl * prof * 2.5 );
-	} else {
-		// lens flare: a hot core, an anamorphic streak, a faint ghost ring
+	} else if ( kind < 3.5 ) {
+		// lens flare: a hot core, an anamorphic streak, a faint ghost ring (the
+		// ring's offset is squared by hand: pow() of a negative base is undefined)
 		vec2 q = vUv;
 		float core = exp( -dot( q, q ) * 6.0 );
 		float streak = exp( -abs( q.y ) * 10.0 ) * max( 1.0 - abs( q.x ) / 12.0, 0.0 );
-		float ring = exp( -pow( ( length( q ) - 1.6 ) / 0.12, 2.0 ) ) * 0.25;
+		float k = ( length( q ) - 1.6 ) / 0.12;
+		float ring = exp( -k * k ) * 0.25;
 		c = vCol.rgb * ( core * 2.0 + streak * 0.9 + ring ) + vec3( core * 0.6 );
+	} else {
+		// lifestone aura (vfx/lifestone_fx.js): a soft halo round the crystal's
+		// extent, breathing, its wisps drifting outward; motes leaving the crystal
+		vec2 q = vUv;
+		if ( q.y < 0.0 ) q.y *= 1.3;   // tighter below: it never reaches the ground
+		float r = length( q );
+		if ( r >= 1.0 ) discard;
+		float ce = vAux.z;
+		float inner = mix( 0.15, 1.0, smoothstep( 0.0, ce, r ) );
+		float o = max( r - ce, 0.0 ) / max( 1.0 - ce, 0.05 );
+		float halo = inner * exp( -o * o * 4.0 ) * ( 1.0 - smoothstep( 0.82, 1.0, r ) );
+		vec2 dir = q / max( r, 1e-3 );
+		float wisp = hbShowFbm( dir * 2.3 + vec2( r * 2.6 - t * 0.22, seed * 7.0 ) );
+		halo *= 0.6 + 0.8 * wisp;
+		// motes, in metres: soft specks drifting out of the crystal, each on its own clock
+		vec2 qm = vUv * vAux.xy;
+		float motes = 0.0;
+		for ( int i = 0; i < 10; i++ ) {
+			float fi = float( i );
+			float h1 = hbShowHash( vec2( fi * 3.1 + 1.0, seed * 37.0 + 2.0 ) );
+			float h2 = hbShowHash( vec2( fi * 1.7 + 5.0, seed * 19.0 + 9.0 ) );
+			float ph = fract( t * ( 0.07 + 0.06 * h2 ) + h1 );
+			float ang = 6.2831853 * h1 + 0.8 * sin( t * 0.23 + fi * 1.3 );
+			vec2 mp = vec2( cos( ang ), sin( ang ) ) * vAux.xy * mix( ce * 0.85, 1.0, ph ) + vec2( 0.0, ph * 0.35 );
+			vec2 dq = ( qm - mp ) / 0.045;
+			float life = sin( 3.1415926 * ph );
+			motes += exp( -dot( dq, dq ) ) * life * life * ( 0.6 + 0.4 * sin( t * 5.0 + fi * 2.7 ) );
+		}
+		motes *= uShowMotes;
+		c = vCol.rgb * ( halo * 0.05 * vSoft * vAux.w + motes * 0.32 ) + vec3( motes * 0.08 );
 	}
 	c *= vCol.a * vInfo.w;
 	#ifdef HB_SHOWCASE_GLOW
@@ -266,6 +340,7 @@ export const FX_SHOWCASE_GLSL = Object.freeze({ vertex: VERT, fragment: FRAG });
 const _uniforms = {
   uShowTime: { value: 0 }, uShowCal: { value: 1 }, uShowFlareInScene: { value: 1 },
   uShowDeepHue: { value: _portalFxLumOn ? 1 : 0 },
+  uShowMotes: { value: 1 },
 };
 // Plain {x, y} vec2 values (three's uniform setter reads .x / .y): no
 // THREE.Vector2 at module load — play_effect_vfx.js suites run this module on
@@ -360,10 +435,12 @@ registerFxGlowExtras({
 const _pieces = new Map();
 /** transient level-up columns + flares: { t0, pos, color } */
 const _bursts = [];
+/** this frame's lifestone auras (lifestone_fx.lifestoneFxAuras) */
+const _auraList = [];
 let _flares = 0;
 let _lastScan = -Infinity;
 let _gain = 1;   // `window.__fxShowcase.gain` (live tuning)
-const _stats = { portals: 0, lifestones: 0, bursts: 0, drawn: 0, scans: 0 };
+const _stats = { portals: 0, lifestones: 0, auras: 0, bursts: 0, drawn: 0, scans: 0 };
 
 const _cam = new THREE.Vector3();
 const _root = new THREE.Vector3();
@@ -389,10 +466,11 @@ function _colorOf(src, fallback) {
   return fallback.slice();
 }
 
-function _scan(em, now) {
+function _scan(scene3d, now) {
   _stats.scans++;
   const seen = new Set();
-  const map = em?.entityMap;
+  const map = scene3d?.entityManager?.entityMap;
+  const lifestoneOn = lifestoneFxEnabled();
   if (map) {
     for (const inst of map.values()) {
       if (!inst || !inst.root || inst._disposed) continue;
@@ -400,7 +478,8 @@ function _scan(em, now) {
       const kind = (odf & ODF_PORTAL) ? "portal" : ((odf & ODF_LIFESTONE) ? "lifestone" : null);
       if (!kind) continue;
       try { inst.root.updateWorldMatrix(true, false); _root.setFromMatrixPosition(inst.root.matrixWorld); } catch (_) { continue; }
-      if (_root.distanceTo(_cam) > RANGE_M) continue;
+      const had = kind === "lifestone" && lifestoneOn && _pieces.has(inst);
+      if (_root.distanceTo(_cam) > (had ? LIFESTONE_KEEP_M : RANGE_M)) continue;
       seen.add(inst);
       let p = _pieces.get(inst);
       if (!p) {
@@ -428,8 +507,16 @@ function _scan(em, now) {
         p.k = _portalFxLumOn && light ? portalLumScale(p.color) : 1;
       } else {
         p.centre.copy(_root);
-        const light = fxEmitterLightNear(_root.clone().setY(_root.y + 1.5), 3);
+        // the stone's OWN emitter light (the 9 "new" stones, Setup 0x02000EAD,
+        // carry one); the carrier lifestone_fx adds is not that
+        const light = fxEmitterLightNear(_root.clone().setY(_root.y + 1.5), 3, isLifestoneLightCarrier);
         if (light) p.color = _colorOf(light, LIFESTONE_BLUE);
+        // `?lifestoneFx`: the crystal, aura and light (vfx/lifestone_fx.js); no ring
+        if (lifestoneOn) {
+          lifestoneFxSync(inst, scene3d, now, p.color, !!light);
+          if (p.ring) { releaseFxDecal(p.ring); p.ring = null; }
+          continue;
+        }
       }
       // the ground ring (a persistent mark): re-placed when it moved, recoloured
       const ringR = kind === "portal" ? p.radius * 1.05 : 1.6;
@@ -448,6 +535,7 @@ function _scan(em, now) {
   for (const [inst, p] of _pieces) {
     if (!seen.has(inst)) {
       if (p.ring) releaseFxDecal(p.ring);
+      if (p.kind === "lifestone") lifestoneFxRelease(inst);   // fades out, then reverts the crystal
       _pieces.delete(inst);
     }
   }
@@ -488,20 +576,29 @@ export function tickFxShowcase(scene3d, nowMs) {
   if (!on) {
     if (_pieces.size) { for (const p of _pieces.values()) if (p.ring) releaseFxDecal(p.ring); _pieces.clear(); }
     _bursts.length = 0;
+    lifestoneFxReleaseAll();   // the crystals back to retail, the lights freed
     if (_mesh) _mesh.visible = false;
     return 0;
   }
+  const lifestoneOn = lifestoneFxEnabled();
+  if (!lifestoneOn) lifestoneFxReleaseAll();
   const cam = scene3d?.cameraSwitcher?.activeCamera || scene3d?.camera || null;
   if (cam) { try { cam.getWorldPosition(_cam); } catch (_) { /* keep the last */ } }
   if (now - _lastScan >= SCAN_MS || now < _lastScan) {
     _lastScan = now;
-    _scan(scene3d?.entityManager, now);
+    _scan(scene3d, now);
   }
+  // `?lifestoneFx`: levels, breath, the crystals' uniforms, the light — every frame
+  const lsLive = lifestoneOn ? lifestoneFxTick(scene3d, now) : 0;
+  if (lsLive) lifestoneFxAuras(_auraList);
+  else _auraList.length = 0;
+  const auras = _auraList;
   for (let i = _bursts.length - 1; i >= 0; i--) if (now - _bursts[i].t0 > 3200) _bursts.splice(i, 1);
   _stats.portals = 0;
   _stats.lifestones = 0;
+  _stats.auras = 0;
   _stats.bursts = _bursts.length;
-  if (_pieces.size === 0 && _bursts.length === 0) {
+  if (_pieces.size === 0 && _bursts.length === 0 && auras.length === 0) {
     if (_mesh) _mesh.visible = false;
     _stats.drawn = 0;
     _flares = 0;
@@ -512,13 +609,13 @@ export function tickFxShowcase(scene3d, nowMs) {
   if (host && mesh.parent !== host) { try { host.add(mesh); } catch (_) { /* detached */ } }
   const A0 = _geom.attributes.aS0.array, A1 = _geom.attributes.aS1.array, A2 = _geom.attributes.aS2.array, A3 = _geom.attributes.aS3.array;
   let n = 0;
-  const put = (x, y, z, kind, r, h, fade, seed, col, inten, age, grow) => {
+  const put = (x, y, z, kind, r, h, fade, seed, col, inten, age, grow, a3z = 0, a3w = 0) => {
     if (n >= FX_SHOWCASE_MAX) return;
     const o = n * 4;
     A0[o] = x; A0[o + 1] = y; A0[o + 2] = z; A0[o + 3] = kind;
     A1[o] = r; A1[o + 1] = h; A1[o + 2] = fade; A1[o + 3] = seed;
     A2[o] = col[0]; A2[o + 1] = col[1]; A2[o + 2] = col[2]; A2[o + 3] = inten;
-    A3[o] = age; A3[o + 1] = grow; A3[o + 2] = 0; A3[o + 3] = 0;
+    A3[o] = age; A3[o + 1] = grow; A3[o + 2] = a3z; A3[o + 3] = a3w;
     n++;
   };
   for (const p of _pieces.values()) {
@@ -529,9 +626,18 @@ export function tickFxShowcase(scene3d, nowMs) {
       put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.disc, p.radius * 0.85, 0, fadeIn, p.seed, p.color, 0.9 * (p.k ?? 1), age, 1);
     } else {
       _stats.lifestones++;
-      put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.shaft, 1.1, 9.0, fadeIn, p.seed, p.color, 0.8, age, 1);
+      // `?lifestoneFx=off`: the 2026-10-10 light shaft (the new look draws an aura below)
+      if (!lifestoneOn) put(p.centre.x, p.centre.y, p.centre.z, FX_SHOWCASE_KIND.shaft, 1.1, 9.0, fadeIn, p.seed, p.color, 0.8, age, 1);
     }
   }
+  // the lifestone auras: from lifestone_fx's states, so one fades out with its
+  // crystal after it left the scan. aS1 = radii, fade (the level), seed;
+  // aS3 = age, the crystal's edge (aura units), breath, the soft halo's share.
+  for (const a of auras) {
+    _stats.auras++;
+    put(a.x, a.y, a.z, FX_SHOWCASE_KIND.aura, a.rx, a.ry, a.level, a.seed, a.color, 1, 0, a.ce, a.breath, a.soft);
+  }
+  if (auras.length) _uniforms.uShowMotes.value = auras[0].motes;
   let flares = 0;
   for (const b of _bursts) {
     const age = (now - b.t0) / 1000;
@@ -576,8 +682,10 @@ export function _resetFxShowcaseForTest() {
   for (const p of _pieces.values()) if (p.ring) releaseFxDecal(p.ring);
   _pieces.clear();
   _bursts.length = 0;
+  _auraList.length = 0;
   _flares = 0;
   _lastScan = -Infinity;
+  _resetLifestoneFxForTest();
   if (_mesh) _mesh.visible = false;
 }
 

@@ -83,8 +83,10 @@ void mainUv(inout vec2 uv) {
       disp = (rd - d) / max(a.z, 1e-4) * 0.22 - d / max(a.z, 1e-4) * 0.05 * (1.0 - r);
     } else if (kind < 3.5) {
       // ring: an expanding shockwave band, fading as it grows
+      // squared by hand: pow() of a negative base (inside the ring) is undefined in GLSL
       float ph = clamp(b.z, 0.0, 1.0);
-      float band = exp(-pow((r - ph) / 0.12, 2.0)) * (1.0 - ph);
+      float k = (r - ph) / 0.12;
+      float band = exp(-k * k) * (1.0 - ph);
       disp = (length(d) > 1e-5 ? normalize(d) : vec2(0.0)) * band * 0.09;
     } else {
       // ripple: soft concentric rings drifting outward

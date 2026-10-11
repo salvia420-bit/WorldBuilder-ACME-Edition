@@ -19,8 +19,10 @@
 //               is drawn at 1.5 px with its opacity cut by the area ratio, so
 //               distant glints shimmer steadily instead of popping
 //   fxShowcase  composed set pieces: the portal (rim, ground ring, portal-space
-//               disc), the lifestone (light shaft, rising glitter, ground ring),
-//               the level-up (light column, lens flare) — vfx/fx_showcase.js
+//               disc), the lifestone (2026-10-11 `?lifestoneFx`: crystal
+//               materials, an aura, a light carrier — vfx/lifestone_fx.js; the
+//               2026-10-10 light shaft + ground ring under `=off`), the level-up
+//               (light column, lens flare) — vfx/fx_showcase.js
 //   fxFields    ambient GPU fields round the camera: fireflies, dungeon dust
 //               motes, leaves and pollen, snow, volcanic ash and embers
 //               (vfx/fx_fields.js). Gated through the TERRAIN-VFX ladder like

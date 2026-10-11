@@ -655,6 +655,34 @@ function gridNormals(heights) {
  * rotation. So the bake rig carries the same matrix, and the ortho camera lives
  * inside it in AC coordinates.
  */
+/**
+ * Point every texture uniform of `clone` back at the texture OBJECT `src`
+ * holds. three r184's `ShaderMaterial.clone()` runs `cloneUniforms`, which
+ * gives each texture uniform a NEW Texture on the SAME Source (and nulls
+ * render-target textures). Once the clone draws, it holds its own reference on
+ * the shared WebGLTexture. When the terrain BC7 ladder then swaps its atlas in
+ * place (terrain_bc7.js `_swapArrayInPlace`: dispose + re-spec at the new
+ * tier), the WebGLTexture survives the dispose, three skips the re-allocation
+ * and uploads the new tier's mips into the old immutable storage. On the 1070
+ * (2026-10-11) that read as `glCompressedTexSubImage3D: One or more subregion
+ * dimensions are outside of the image` / `Texture level does not exist`, and
+ * the promotion never landed. Sharing the live objects keeps one Texture per
+ * Source and lets the bake follow every swap. Render-target textures are left
+ * as cloneUniforms left them (null): the bake has always run without them.
+ * Returns the number re-pointed.
+ */
+export function shareLiveTextureUniforms(clone, src) {
+  let n = 0;
+  const cu = clone?.uniforms, su = src?.uniforms;
+  if (!cu || !su) return n;
+  for (const k of Object.keys(cu)) {
+    const live = su[k]?.value;
+    if (!live || !live.isTexture || live.isRenderTargetTexture) continue;
+    if (cu[k] && cu[k].value !== live) { cu[k].value = live; n++; }
+  }
+  return n;
+}
+
 function ensureBakeRig(scene3d) {
   const st = _state;
   if (st.bake) return st.bake;
@@ -665,8 +693,12 @@ function ensureBakeRig(scene3d) {
 
   const mat = src.clone();
   mat.name = "far-terrain-bake";
-  // Albedo only. `clone()` deep-copies the uniform objects (textures stay by
-  // reference), so writing these cannot disturb the live near-ring material.
+  // `clone()` deep-copies the uniform objects, so writing the values below
+  // cannot disturb the live near-ring material. It does NOT keep textures by
+  // reference, though: three r184's cloneUniforms clones every texture uniform.
+  // Re-point them at the live objects (see shareLiveTextureUniforms).
+  shareLiveTextureUniforms(mat, src);
+  // Albedo only.
   mat.uniforms.uBakeAlbedo.value = 1.0;
   // The retail Gouraud term multiplies the albedo and TRACKS THE SUN, so it
   // must not be frozen into the composite. The far shader re-applies it live.

@@ -91,7 +91,8 @@ await check("G: a left-world child (held-4) is never re-mounted by the ledger", 
 await check("H: the two internal respawn sites tag `_internalRespawn` before spawn()", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../scene3d/entities.js", import.meta.url), "utf8");
-  const tagged = src.match(/newMeta\._internalRespawn = true;[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*this\.remove\(g\);\s*\n\s*await this\.spawn\(newMeta\);/g) || [];
+  // (2026-10-11: the LOD site marks the guid around its remove() — tests/lod_respawn_selection.test.mjs)
+  const tagged = src.match(/newMeta\._internalRespawn = true;[^\n]*\n(?:\s*\/\/[^\n]*\n)*(?:\s*this\._lodRespawnGuid = g;\s*\n)?\s*(?:this\.remove\(g\);|try \{ this\.remove\(g\); \} finally \{ this\._lodRespawnGuid = 0; \})\s*\n\s*await this\.spawn\(newMeta\);/g) || [];
   assert.equal(tagged.length, 2);
 });
 

@@ -28,8 +28,10 @@
 //      composite), cues leave the right mark, `?fxDecals=off` spawns none
 //   9. fields: densities per environment, coverage from codes, the provider
 //      builds seven fields under worldRoot, late-pass + glow-extra sources
-//  10. showcase: a portal gets a disc + ring, a lifestone a shaft + ring, the
-//      level-up a column + flare (to the glow buffer when `?fxGlow`)
+//  10. showcase: a portal gets a disc + ring, the level-up a column + flare (to
+//      the glow buffer when `?fxGlow`); a lifestone an aura and NO shaft / ring
+//      by default (`?lifestoneFx`, 2026-10-11 — test_lifestone_fx.mjs has the
+//      rest), the 2026-10-10 shaft + ring under `?lifestoneFx=off`
 //  11. wiring: pipeline lists, loop ticks, index init, entities swing note
 //
 // Run from apps/holtburger-web/:  node test_particle_fx_tier2.mjs
@@ -627,8 +629,12 @@ async function run() {
 
   // ---- 10. showcase ---------------------------------------------------------------------------------
   const show = await import("./scene3d/vfx/fx_showcase.js");
+  const lsfx = await import("./scene3d/vfx/lifestone_fx.js");
   show._resetFxShowcaseForTest();
   dec._resetFxDecalsForTest();
+  // The 2026-10-10 contract first, under the `?lifestoneFx=off` escape (the
+  // lifestone's shaft + ring); the default look is checked after it.
+  lsfx._setLifestoneFxForTest(false);
   const sScene = new THREE.Scene();
   const portal = { guid: 0x70000001, root: new THREE.Group(), meta: { objDescFlags: show.ODF_PORTAL } };
   const stone = { guid: 0x70000002, root: new THREE.Group(), meta: { objDescFlags: show.ODF_LIFESTONE } };
@@ -646,11 +652,11 @@ async function run() {
   const ss = show.fxShowcaseStats();
   const sMesh = sScene.children.find((o) => o.userData?.isFxShowcase);
   const SA0 = sMesh?.geometry.attributes.aS0.array;
-  check("10. a portal gets its portal-space disc, a lifestone its shaft — one instanced draw",
+  check("10. ?lifestoneFx=off: a portal gets its portal-space disc, a lifestone its shaft — one instanced draw",
     nS === 2 && ss.portals === 1 && ss.lifestones === 1 && !!sMesh && SA0[3] === show.FX_SHOWCASE_KIND.disc &&
     SA0[7] === show.FX_SHOWCASE_KIND.shaft && Math.abs(SA0[1] - 1.6) < 1e-6);
   const rings = dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 20000);
-  check("10. both stand in a persistent light ring on the ground", rings.length === 2 && rings.every((d) => d.persistent && d.kindName === "ring"));
+  check("10. ?lifestoneFx=off: both stand in a persistent light ring on the ground", rings.length === 2 && rings.every((d) => d.persistent && d.kindName === "ring"));
   check("10. the level-up raises a column and flares", show.fireFxShowcaseCue("levelUp", { x: 0, y: 0, z: 0 }, 21000) === true &&
     show.fireFxShowcaseCue("explode", { x: 0, y: 0, z: 0 }, 21000) === false);
   show.tickFxShowcase(s3dS, 21150);
@@ -677,6 +683,31 @@ async function run() {
   check("10. ?fxShowcase=off: nothing drawn, rings released",
     sMesh.visible === false && dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 23000).length === 0);
   t2f.setFxTier2Flag("fxShowcase", null);
+  show._resetFxShowcaseForTest();
+  dec._resetFxDecalsForTest();
+
+  // The default look (`?lifestoneFx` absent): the lifestone's shaft and ring are
+  // gone; it gets an aura (kind 4) once its level ramps in; the portal and the
+  // level-up are unchanged.
+  lsfx._setLifestoneFxForTest(null);
+  s3dS.entityManager.entityMap.set(portal.guid, portal);
+  check("10. ?lifestoneFx defaults ON", lsfx.lifestoneFxEnabled() === true);
+  show.tickFxShowcase(s3dS, 30000);
+  show.tickFxShowcase(s3dS, 30700);
+  const kinds = () => { const a = sMesh.geometry.attributes.aS0.array; const k = []; for (let i = 0; i < sMesh.geometry.instanceCount; i++) k.push(a[i * 4 + 3]); return k; };
+  const k0 = kinds();
+  const ssD = show.fxShowcaseStats();
+  check("10. default: the portal keeps its disc, the lifestone gets an aura and NO shaft — one draw",
+    ssD.portals === 1 && ssD.lifestones === 1 && ssD.auras === 1 && k0.length === 2 &&
+    k0.includes(show.FX_SHOWCASE_KIND.disc) && k0.includes(show.FX_SHOWCASE_KIND.aura) && !k0.includes(show.FX_SHOWCASE_KIND.shaft), JSON.stringify(k0));
+  const ringsD = dec.collectFxDecals({ x: 0, y: 0, z: 0 }, [], 30700);
+  check("10. default: only the portal stands in a ring (the lifestone's light paints the ground instead)",
+    ringsD.length === 1 && ringsD[0].kindName === "ring" && Math.abs(ringsD[0].x - 5) < 1e-6);
+  show.fireFxShowcaseCue("levelUp", { x: 0, y: 0, z: 0 }, 30800);
+  show.tickFxShowcase(s3dS, 30900);
+  const k1 = kinds();
+  check("10. default: the level-up still raises its column (the shaft kind) and flares",
+    k1.filter((k) => k === show.FX_SHOWCASE_KIND.shaft).length === 1 && k1.includes(show.FX_SHOWCASE_KIND.flare));
   show._resetFxShowcaseForTest();
   dec._resetFxDecalsForTest();
 
