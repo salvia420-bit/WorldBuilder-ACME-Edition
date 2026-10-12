@@ -12,12 +12,26 @@ every byte counted by a laptop-side relay.
    `ssh young@100.127.215.75 'schtasks /create /tn hbidle /tr "wscript.exe D:\Temp\hbbench\idlewatch.vbs" /sc once /st 00:00 /it /f & schtasks /run /tn hbidle'`
    It writes `<unix-ts> <idle-s> <pid>` to `D:\Temp\hbbench\idle.txt` every 5 s, and exits after 16 h
    or when `D:\Temp\hbbench\idlewatch.stop` exists. It reads no window titles.
-3. Run `watch1070.sh` under the Claude Code Monitor tool (30 min cap: re-arm on expiry). It polls every
+3. Run `watch1070.sh` DETACHED so a tool timeout can't end the protection mid-test (2026-10-12: the
+   Monitor tool's 30 min cap killed a foreground watcher while a live smoke was running):
+   `setsid nohup env WATCH1070_MAX_S=43200 ./watch1070.sh >> $DIR/watch1070.events 2>&1 < /dev/null &`
+   then tail the events under the Monitor tool (`tail -n0 -F $DIR/watch1070.events`, re-arm on expiry).
+   A flock keeps it to one watcher; `WATCH1070_MAX_S` bounds its lifetime. It polls every
    15 s and prints one line per state change: AWAY / PRESENT (any keyboard/mouse input since the last
    poll or < 180 s ago, or a desktop browser window of theirs — they use Chrome) / GPU-BUSY (other
    processes' 3D engine ≥ 35 % twice — a gamepad player) / WATCHER-STALE / UNREACHABLE. On PRESENT or
    GPU-BUSY it kills ONLY the `D:\Temp\hbbench\` test Chrome. After PRESENT, AWAY needs 15 min with no
    input and no browser of theirs.
+   2026-10-12 additions: while PRESENT/GPU-BUSY it re-kills our test Chrome on every poll if it comes
+   back; a stale heartbeat (idlewatch's 16 h cap) re-runs `hbidle` by itself unless
+   `D:\Temp\hbbench\idlewatch.stop` exists (= stopped on purpose); every poll rewrites
+   `watch1070.poll` (`<epoch> <state> <hbwho line>`).
+4. Gate every launch. Laptop: `./gate1070.sh` exits 0 only if the watcher polled < 60 s ago AND said
+   AWAY (`sess.mjs` calls it before starting Chrome). Box: `../box/hbgate.ps1` runs first inside
+   `hbprobe-launch.bat` / `hbbench-launch.bat` and refuses (no Chrome) on input in the last 15 min, a
+   browser of theirs, their GPU load ≥ 35 % or a stale heartbeat — so the drivers that never ask the
+   laptop gate (academy/coldboot/hbprobe/hbsess/hbbench/flag-bench) are covered too. Decisions land in
+   `D:\Temp\hbbench\gate.log`.
 
 ## Tunnel and paths
 

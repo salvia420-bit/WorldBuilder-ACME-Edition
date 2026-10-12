@@ -14,6 +14,10 @@ const ssh = (c) => execFileSync("ssh", ["-o", "BatchMode=yes", BOX, c], { encodi
 function aceTail(n = 262144) { const s = statSync(ACE_LOG).size, fd = openSync(ACE_LOG, "r"); const b = Buffer.alloc(Math.min(n, s)); readSync(fd, b, 0, b.length, s - b.length); closeSync(fd); return b.toString("utf8"); }
 async function waitFree(maxMs = 150000) { const end = Date.now() + maxMs; while (Date.now() < end) { const ev = aceTail().split("\n").filter((l) => /\[(LOGIN|LOGOUT)\] Account tailnet1 /.test(l)); const last = ev[ev.length - 1]; if (!last || /\[LOGOUT\]/.test(last)) return true; await sleep(2000); } return false; }
 try { ssh("powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\hbbench-kill.ps1"); } catch (_) {}
+// Owner rule (2026-10-12): never start test Chrome while a person is on the 1070. gate1070.sh needs
+// watch1070.sh running; the box's own hbgate.ps1 (inside hbprobe-launch.bat) is the second check.
+try { execFileSync(new URL("./gate1070.sh", import.meta.url).pathname, { stdio: "inherit" }); }
+catch (_) { console.log("1070 in use or watcher not running — not launching"); process.exit(3); }
 console.log("account free:", await waitFree());
 ssh(`echo hbb-sess-${Date.now()}> D:\\Temp\\hbbench\\profile.txt`);
 ssh(`echo ${opt("--window", "1280,720")}> D:\\Temp\\hbbench\\winsize.txt`);

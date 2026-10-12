@@ -1,5 +1,8 @@
 @echo off
 rem hbprobe launcher (INTERACTIVE session via schtasks /it). Fresh profile + window size from files.
+rem 2026-10-12: refuse to start Chrome while a person is using the box (hbgate.ps1 -> gate.log).
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\hbbench\hbgate.ps1
+if errorlevel 1 exit /b 1
 set /p PROF=<D:\Temp\hbbench\profile.txt
 if not exist D:\Temp\hbbench\logs mkdir D:\Temp\hbbench\logs
 set WS=1280,720
