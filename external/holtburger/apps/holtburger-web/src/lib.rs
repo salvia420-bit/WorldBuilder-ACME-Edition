@@ -1004,6 +1004,19 @@ fn parse_bounce_along_slope_flag(search: &str) -> bool {
     !trimmed.split('&').any(|kv| kv == "bounceAlongSlope=off")
 }
 
+/// CLAMP-ALONG-GROUND (2026-10-11): parse `?clampAlongGround=off` (or `&…`).
+/// DEFAULT-ON off-escape shape. When on, the post-transition scenery / entity
+/// XY clamp carries a grounded body's z along the settled contact plane, so a
+/// runner held back by a trunk on a slope keeps its feet on the ground (it
+/// floated up to 0.18 m / sank 0.23 m). `=off`: the XY-only clamp. Native
+/// carrier: `USE_CLAMP_ALONG_GROUND` (ON). Needs a wasm rebuild; NO manifest
+/// bump.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_clamp_along_ground_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| kv == "clampAlongGround=off")
+}
+
 /// COMBAT-RADII (2026-07-28): parse `?combatRadii=off` (or
 /// `&combatRadii=off`). DEFAULT-ON off-escape shape: returns `true`
 /// UNLESS `combatRadii=off` is present.
@@ -34784,6 +34797,11 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_bounce_along_slope_flag("?bounceAlongSlope=off"));
         assert!(!parse_bounce_along_slope_flag("?nosw=1&bounceAlongSlope=off"));
         assert!(parse_bounce_along_slope_flag("?landingBounce=off"));
+        use super::parse_clamp_along_ground_flag;
+        assert!(parse_clamp_along_ground_flag(""));
+        assert!(parse_clamp_along_ground_flag("?clampAlongGround=on"));
+        assert!(!parse_clamp_along_ground_flag("?clampAlongGround=off"));
+        assert!(!parse_clamp_along_ground_flag("?nosw=1&clampAlongGround=off"));
     }
 
     /// COMBAT-RADII (2026-07-28): `?combatRadii` parse shape —
@@ -47613,6 +47631,7 @@ async fn recv_loop(
     // ON: it follows the ground and never chains); see
     // `parse_bounce_along_slope_flag`.
     movement.set_bounce_along_slope(parse_bounce_along_slope_flag(&flag_search()));
+    movement.set_clamp_along_ground(parse_clamp_along_ground_flag(&flag_search()));
     // (2026-07-02): `?castMove=off` — disable the retail cast-movement
     // arbitration (default ON: a server-played cast gesture suppresses held
     // locomotion until an input edge / gesture end); see

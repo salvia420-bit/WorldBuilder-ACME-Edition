@@ -221,6 +221,10 @@ const FX_IMPACT_ELEMENT_ON = (() => {
   } catch (_) { return true; }
 })();
 export const FX_ELEMENT_KEEP_MS = 5000;
+/** `?fxImpactElement` (read once): impact marks take the bolt's element (vfx/fx_cues.js `byElement`). */
+export function fxImpactElementEnabled() {
+  return FX_IMPACT_ELEMENT_ON;
+}
 const _seenElement = new Map();   // projectile guid → { element, ms }
 function _noteElement(guid, element, nowMs) {
   if (!FX_IMPACT_ELEMENT_ON || !element || !(guid >>> 0)) return;

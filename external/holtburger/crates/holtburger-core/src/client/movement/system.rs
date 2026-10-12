@@ -1784,6 +1784,20 @@ const USE_STATIC_BSP: bool = true;
 /// pushout for the already-overlapping case.
 const USE_SCENERY_COLLISION: bool = true;
 
+/// CLAMP-ALONG-GROUND (2026-10-11) — `?clampAlongGround` (browser DEFAULT
+/// ON, `=off` escape; native const ON). The post-transition scenery clamp
+/// above (and the FU-3 entity clamp) correct the realized step in XY only and
+/// leave z where the transition put it. On a slope that leaves a runner
+/// pulled back by a trunk floating (uphill) or sunk (downhill) by
+/// step × tanθ, every frame it pushes on the trunk:
+/// `terrain_hop_runner_meeting_a_trunk_on_a_slope_stays_grounded` measured
+/// feet +0.18 m above / −0.23 m below a 22–30° slope (owner: "the character
+/// can kind of go in the air just a little tiny bit"). Retail collides
+/// scenery INSIDE the transition, so its body always ends on the contact
+/// plane. When on, a grounded slice's XY correction moves z along the
+/// settled contact plane (`TransitionOutcome::contact_plane`).
+const USE_CLAMP_ALONG_GROUND: bool = true;
+
 /// Terrain→EnvCell entry (2026-06-02): when ON (DEFAULT), the manual-
 /// drive integrator flips the local player indoors the tick its capsule
 /// enters a loaded EnvCell, instead of waiting for the server's
@@ -2348,6 +2362,10 @@ pub(crate) struct MovementSystem {
     /// [`USE_BOUNCE_ALONG_SLOPE`] native const (OFF — carrier split). Combined
     /// by [`Self::bounce_along_slope_enabled`].
     bounce_along_slope_runtime: Option<bool>,
+    /// `?clampAlongGround` (browser DEFAULT ON). `None` = the
+    /// [`USE_CLAMP_ALONG_GROUND`] const; read by
+    /// [`Self::clamp_along_ground_enabled`].
+    clamp_along_ground_runtime: Option<bool>,
     /// F2 (2026-07-27) — the install-time speed resolution for the
     /// SERVER-commanded MoveTo currently on the driver (see
     /// [`ServerMoveToDrive`]). Cleared with the pursuit (arrival,
@@ -2937,6 +2955,7 @@ impl MovementSystem {
             sticky_idle_transition_runtime: None,
             landing_bounce_runtime: None,
             bounce_along_slope_runtime: None,
+            clamp_along_ground_runtime: None,
             server_moveto_drive: None,
             cast_move_runtime: None,
             cast_hold_reclaim_runtime: None,
@@ -3224,6 +3243,18 @@ impl MovementSystem {
     pub(crate) fn bounce_along_slope_enabled(&self) -> bool {
         self.bounce_along_slope_runtime
             .unwrap_or(USE_BOUNCE_ALONG_SLOPE)
+    }
+
+    /// CLAMP-ALONG-GROUND (2026-10-11) — install the `?clampAlongGround`
+    /// runtime carrier (see [`USE_CLAMP_ALONG_GROUND`]; the browser passes ON
+    /// unless `=off`).
+    pub(crate) fn set_clamp_along_ground(&mut self, on: bool) {
+        self.clamp_along_ground_runtime = Some(on);
+    }
+
+    /// [`USE_CLAMP_ALONG_GROUND`] effective predicate.
+    pub(crate) fn clamp_along_ground_enabled(&self) -> bool {
+        self.clamp_along_ground_runtime.unwrap_or(USE_CLAMP_ALONG_GROUND)
     }
 
     /// (2026-07-02) — install the `?castMove=off` runtime carrier (see
@@ -9178,6 +9209,25 @@ impl MovementSystem {
             {
                 pose.coords.x += disp.x;
                 pose.coords.y += disp.y;
+            }
+        }
+        // CLAMP-ALONG-GROUND (`?clampAlongGround`): the two XY-only
+        // corrections above (FU-3 entities, scenery) moved a grounded body
+        // off the plane the transition settled it on. Carry z along that
+        // plane for the total correction, so a runner held back by a trunk
+        // on a slope keeps its feet on the ground instead of floating or
+        // sinking by step × tanθ. Grounding state below still reads
+        // `outcome`, as before.
+        if self.clamp_along_ground_enabled()
+            && outcome.grounded
+            && let Some((plane, _)) = outcome.contact_plane.as_ref()
+        {
+            let realized = outcome.pose.global_coords();
+            let corrected = pose.global_coords();
+            let (cx, cy) = (corrected.x - realized.x, corrected.y - realized.y);
+            let n = plane.normal;
+            if (cx != 0.0 || cy != 0.0) && n.z > 0.1 {
+                pose.coords.z -= (n.x * cx + n.y * cy) / n.z;
             }
         }
         // Bug 17 (2026-10-07): retail and OpenAC update the mover's contact

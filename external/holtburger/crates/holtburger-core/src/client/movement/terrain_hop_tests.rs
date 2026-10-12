@@ -771,3 +771,123 @@ fn terrain_hop_landing_bounce_follows_the_slope() {
         failures.join("\n")
     );
 }
+
+// ─── A runner meeting a tree trunk on a slope ───────────────────────────────
+//
+// The handoff lead (owner-bugs 2026-10-11 §6 "Open"): the post-transition
+// scenery clamp (system.rs, `USE_SCENERY_COLLISION`, live) corrects the
+// realized step in XY only and leaves z where the transition put it, so on a
+// slope a runner pulled back by a trunk is left floating (uphill) or sunk
+// (downhill) by step × tanθ for a frame — a candidate for the non-jumping hop.
+
+/// Plant one cylinder trunk (radius `r`, the `one_tree` shape of the world
+/// crate's scenery tests) at the landblock-local `local`, its foot below the
+/// terrain there.
+fn plant_trunk(world: &mut WorldState, lb_high: u32, local: (f32, f32), r: f32) {
+    use holtburger_common::Aabb;
+    use holtburger_world::spatial::scenery::{SceneryColliderBatch, WorldCylSphere};
+    let ox = ((lb_high >> 24) & 0xFF) as f32 * 192.0;
+    let oy = ((lb_high >> 16) & 0xFF) as f32 * 192.0;
+    let (cx, cy) = (ox + local.0, oy + local.1);
+    let ground = world.terrain_height_at(cx, cy).expect("trunk on the course");
+    let mut b = SceneryColliderBatch::new();
+    b.push_cylinder(
+        0x0200_02D3,
+        Aabb::new(
+            Vector3::new(cx - 7.0, cy - 7.0, ground - 3.0),
+            Vector3::new(cx + 7.0, cy + 7.0, ground + 24.0),
+        ),
+        WorldCylSphere { low_pt: Vector3::new(cx, cy, ground - 3.0), radius: r, height: 27.0 },
+        1.0,
+    );
+    world.scene.insert_scenery_colliders(lb_high, b);
+}
+
+/// Run `seconds` of held forward run into/past a trunk at `trunk`.
+fn run_into_trunk(
+    heights: [f32; 81],
+    lb_high: u32,
+    start: (f32, f32),
+    trunk: (f32, f32),
+    pace: Pace,
+    seconds: f32,
+    guid: Guid,
+    along_ground: bool,
+) -> Report {
+    let (mut world, mut movement) = grounded_runner(heights, lb_high, start, EAST, pace.run_rate, guid);
+    // `?clampAlongGround` (browser DEFAULT ON; native const ON).
+    movement.set_clamp_along_ground(along_ground);
+    plant_trunk(&mut world, lb_high, trunk, 1.5);
+    let frames = (seconds / pace.frame_dt).ceil() as usize;
+    let dt = Duration::from_secs_f32(pace.frame_dt);
+    let mut report = Report { frames, max_gap: f32::MIN, min_gap: f32::MAX, ..Report::default() };
+    let hits0 = world.scene.scenery_narrow_phase_hits();
+    for frame in 0..frames {
+        step_and_record(&mut world, &movement, dt, frame, &mut report);
+    }
+    report.bounces = (world.scene.scenery_narrow_phase_hits() - hits0) as usize; // reused: trunk contacts
+    report
+}
+
+#[test]
+fn terrain_hop_runner_meeting_a_trunk_on_a_slope_stays_grounded() {
+    // 22° and 30° climbs / descents along +X (per 24 m cell: 9.7 m, 13.9 m).
+    let up22 = x_profile([40.0, 40.0, 49.7, 59.4, 69.1, 78.8, 88.5, 98.2, 98.2]);
+    let dn22 = x_profile([98.2, 98.2, 88.5, 78.8, 69.1, 59.4, 49.7, 40.0, 40.0]);
+    let up30 = x_profile([30.0, 30.0, 43.9, 57.8, 71.7, 85.6, 99.5, 113.4, 113.4]);
+    let dn30 = x_profile([113.4, 113.4, 99.5, 85.6, 71.7, 57.8, 43.9, 30.0, 30.0]);
+    // The runner starts on the flat first cell at y = 96 and runs east; the
+    // trunk stands mid-slope at x = 84, head-on (y = 96) or off the line by
+    // less than trunk + body radius (1.5 + 0.48), so the body slides round it.
+    let trunks = [("head-on", (84.0, 96.0)), ("brush", (84.0, 96.0 + 1.5)), ("brush-far", (84.0, 96.0 + 1.85))];
+    let mut failures = Vec::new();
+    let mut n = 0u32;
+    for (slope, heights) in [("up22", up22), ("down22", dn22), ("up30", up30), ("down30", dn30)] {
+        for (tname, trunk) in trunks {
+            for lb_high in BOTH_LBS {
+                for pace in PACES {
+                    n += 1;
+                    let r = run_into_trunk(heights, *lb_high, (12.0, 96.0), trunk, pace, 9.0, Guid(0x5000_0F00 + n), true);
+                    let line = format!(
+                        "[terrain-hop trunk] {slope} {tname} lb={:04X} v={:.0}m/s dt={:.1}ms \
+                         trunk_hits={} lift_offs={} airborne_frames={} gap=[{:+.4},{:+.4}]",
+                        lb_high >> 16,
+                        RUN_BASE * pace.run_rate,
+                        pace.frame_dt * 1000.0,
+                        r.bounces,
+                        r.lift_offs,
+                        r.airborne_frames,
+                        r.min_gap,
+                        r.max_gap,
+                    );
+                    eprintln!("{line}");
+                    let grounded = r.lift_offs == 0 && r.airborne_frames == 0;
+                    let planted = r.max_gap <= REST_GAP + 0.02 && r.min_gap >= REST_GAP - 0.02;
+                    if !(grounded && planted) {
+                        failures.push(format!("{line}\n      {}", r.events.join("\n      ")));
+                    }
+                }
+            }
+        }
+    }
+    // `?clampAlongGround=off`: the XY-only clamp leaves the feet off the plane.
+    let pace = PACES[0];
+    let up = run_into_trunk(up22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF0), false);
+    let dn = run_into_trunk(dn22, HOLTBURG_LB, (12.0, 96.0), (84.0, 96.0), pace, 9.0, Guid(0x5000_0FF1), false);
+    eprintln!(
+        "[terrain-hop trunk] =off up22 head-on gap=[{:+.4},{:+.4}]  down22 head-on gap=[{:+.4},{:+.4}]",
+        up.min_gap, up.max_gap, dn.min_gap, dn.max_gap
+    );
+    assert!(
+        up.max_gap > REST_GAP + 0.05 && dn.min_gap < REST_GAP - 0.05,
+        "=off must still show the XY-only clamp's float / sink (up max {:+.4}, down min {:+.4})",
+        up.max_gap,
+        dn.min_gap
+    );
+    assert!(
+        failures.is_empty(),
+        "a runner meeting a trunk on a slope left (or floated off / sank into) the ground in {} of {n} runs:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

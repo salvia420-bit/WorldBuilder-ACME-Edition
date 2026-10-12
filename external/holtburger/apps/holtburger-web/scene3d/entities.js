@@ -6506,7 +6506,7 @@ export class EntityManager {
       if (pp) this._applyCreatureSeparation(inst, pp);
     }
     // A2-P3 R2 — sticky heading. loop.js drainRemotePoses passes the quat on
-    // sticky-flagged rows and, under `?remoteSpineHeading` (2026-10-11), on
+    // sticky-flagged rows and, under `?remoteSpineHeading=on` (opt-in), on
     // every spine row; it omits it otherwise. A zero-length quat is never a
     // heading — keep the current one rather than collapse the rig.
     const qn2 = (+qw) * (+qw) + (+qx) * (+qx) + (+qy) * (+qy) + (+qz) * (+qz);

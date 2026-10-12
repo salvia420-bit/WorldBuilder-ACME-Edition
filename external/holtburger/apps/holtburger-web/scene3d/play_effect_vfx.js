@@ -123,7 +123,7 @@ import { registerLateFxSource } from "./particles_over_clouds.js";
 // ones throw a shockwave) — scene3d/vfx/fx_cues.js.
 import { fireFxCue, fxCueDecalAhead, FX_CUES } from "./vfx/fx_cues.js";
 // Tier 2 (2026-10-10): the projectile's element picks an impact's ground mark.
-import { fxProjectileElement } from "./vfx/fx_ribbons.js";
+import { fxProjectileElement, fxImpactElementEnabled } from "./vfx/fx_ribbons.js";
 // Tier 2: the level-up's light column and lens flare.
 import { fireFxShowcaseCue } from "./vfx/fx_showcase.js";
 // 2026-10-09 `?burstFx` (DEFAULT ON) — per-family energy-form upgrade of the
@@ -3708,7 +3708,7 @@ function _tier2CueOpts(targetGuid, placement, look) {
   _cueGround.set(x, y, z);
   placement.parent.localToWorld(_cueGround);
   // the element even when the projectile rig is already gone (fx_ribbons keeps it a few seconds)
-  return { decalWorld: _cueGround, element: fxProjectileElement(targetGuid) };
+  return { decalWorld: _cueGround, element: fxProjectileElement(targetGuid), elementMarks: fxImpactElementEnabled() };
 }
 
 /**

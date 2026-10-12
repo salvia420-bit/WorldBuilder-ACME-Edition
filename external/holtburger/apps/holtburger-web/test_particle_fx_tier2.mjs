@@ -451,6 +451,18 @@ async function run() {
     { decalWorld: { x: 1, y: 0, z: 0 }, element: rib.FX_ELEMENTS.force });
   check("8. an impact takes its projectile's element: frost rimes, force leaves nothing",
     frostHit.decal?.kindName === "frost" && forceHit.decal === null);
+  // ?fxImpactElement (2026-10-11, 1070): ACE plays Explode for a war bolt's impact, and the Explode
+  // mark was a fixed orange scorch whatever the bolt — the element is honoured only with elementMarks
+  const ex = (el, marks = true) => cues.fireFxCue("explode", { x: 0, y: 0, z: 0 },
+    { decalWorld: { x: 2, y: 0, z: 0 }, element: el, elementMarks: marks }).decal;
+  const exFrost = ex(rib.FX_ELEMENTS.frost), exAcid = ex(rib.FX_ELEMENTS.acid), exBolt = ex(rib.FX_ELEMENTS.lightning);
+  check("8. a bolt's Explode takes its element: frost rimes, acid etches, lightning scorches in its own colour, force leaves none",
+    exFrost?.kindName === "frost" && exAcid?.kindName === "acid" && exBolt?.kindName === "scorch" &&
+    exBolt.color[2] === rib.FX_ELEMENTS.lightning.color[2] && ex(rib.FX_ELEMENTS.force) === null);
+  const exOff = ex(rib.FX_ELEMENTS.frost, false), exUnknown = ex(null);
+  check("8. without elementMarks (?fxImpactElement=off) or an element, the Explode mark is the orange scorch",
+    exOff?.kindName === "scorch" && exOff.color[0] === cues.FX_CUES.explode.color[0] &&
+    exUnknown?.kindName === "scorch" && exUnknown.color[1] === cues.FX_CUES.explode.color[1]);
   check("8. the breaths mark ahead of the breather", cues.fxCueDecalAhead("breatheAcid") > 0 && cues.fxCueDecalAhead("explode") === 0 &&
     cues.fireFxCue("breatheAcid", { x: 0, y: 0, z: 0 }, { decalWorld: { x: 3, y: 0, z: 0 } }).decal?.kindName === "acid");
   check("8. a cue without a mark position leaves none (tier-1 call shape)", cues.fireFxCue("explode", { x: 0, y: 0, z: 0 }).decal === null);
@@ -751,7 +763,7 @@ async function run() {
   const pev = src("./scene3d/play_effect_vfx.js");
   check("11. the PlayEffect cue places its mark (ground / ahead) and fires the showcase cue",
     pev.includes("fireFxCue(look, _cueWorld, opts);") && pev.includes("fireFxShowcaseCue(look, _cueWorld);") &&
-    pev.includes("element: fxProjectileElement(targetGuid) }"));
+    pev.includes("element: fxProjectileElement(targetGuid), elementMarks: fxImpactElementEnabled() }"));
 
   console.log(`\n[test_particle_fx_tier2] ${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

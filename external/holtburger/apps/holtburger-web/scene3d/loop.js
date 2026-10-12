@@ -681,18 +681,20 @@ function sweepGhostRigs(scene3d, sessionHandle) {
   }
 }
 
-// 2026-10-11 (1070) — `?remoteSpineHeading` (DEFAULT ON, `=off` escape). Under the per-object spine
-// (86c4d11e, `?remoteSpine`, default on) every row is the body the Rust MovementManager moved by its
-// own interpreted motion, rotation included, and Phase B skipped the JS K=14 heading ease for spine
-// remotes ("a remote TurnTo is a turn, not a heading snap"). With the row's rotation dropped below,
-// nothing drew that turn: the heading changed only at the server's final UpdatePosition, so a
-// vendor turned 102 degrees in one frame. Apply the row's rotation while the spine is on.
+// 2026-10-11 (1070) — `?remoteSpineHeading=on` (OPT-IN; default OFF since the 10-12 1070 check).
+// Under the per-object spine (86c4d11e, `?remoteSpine`, default on) every row is the body the Rust
+// MovementManager moved by its own interpreted motion, rotation included. Applying the row's rotation
+// draws a TurnTo as a turn, but the Rust body's heading is not kept in step with the server's
+// UpdatePosition heading at rest, and every row also overwrites the JS heading target: on the 1070 a
+// grocer's first row snapped it ~96 degrees to its stale Rust heading, and it ended 87 degrees away
+// from the player (default: 0 degrees off from all four sides). Kept as an opt-in until the Rust
+// remote mover adopts the server's heading.
 const REMOTE_SPINE_HEADING_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return false;
     const q = new URLSearchParams(window.location.search);
     return q.get("remoteSpine")?.toLowerCase() !== "off"
-      && q.get("remoteSpineHeading")?.toLowerCase() !== "off";
+      && q.get("remoteSpineHeading")?.toLowerCase() === "on";
   } catch (_) {
     return false;
   }

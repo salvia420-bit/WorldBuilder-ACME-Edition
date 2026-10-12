@@ -60,13 +60,13 @@ in motion is ~16 fps even with every new FX off: the cost there is clouds / gras
 
 ## 4. Open findings (not fixed)
 
-1. **Spear bend while running** (fix in §6, `?weaponFlexLoco`; re-measure on the 1070) is ~10× the design: mean 4.8°, max 6.8° at 17.5 m/s (the run animation's arm swing
+1. **Spear bend while running** (fixed in §6, `?weaponFlexLoco`; 1070 2026-10-12: mean 0.81°) was ~10× the design: mean 4.8°, max 6.8° at 17.5 m/s (the run animation's arm swing
    drives the spring; design said ~0.5° at a run). Tune `__weaponFx.flexGain` or high-pass the hand motion.
 2. **Flaming weapons leave a metres-long trail of big fire puffs** when running fast (same with `__particleFx(false)`;
    the emitter is world-space). Retail-like physics, but loud at god-mode speeds; consider a held-weapon emission cap.
-3. **Every war bolt leaves the same orange shell + tan ring** (element marks fixed in §6, `?fxImpactElement`) (ACE only sends Explode; known). The ring reads as sand,
+3. **Every war bolt leaves the same orange shell + tan ring** (element marks fixed in §6, `?fxImpactElement`; 1070-verified) (ACE only sends Explode; known). The ring reads as sand,
    not char, in daylight.
-4. **The vendor turn snaps** (fix in §6, `?remoteSpineHeading`; verify with a per-frame trace) (one-frame 102° jump at ~0.7 s, then a 6° correction) instead of turning at the table rate.
+4. **The vendor turn snaps** (STILL OPEN: the §6 attempt, `?remoteSpineHeading`, made it worse on the 1070 and is opt-in) (one-frame 102° jump at ~0.7 s, then a 6° correction) instead of turning at the table rate.
 5. **A teleport tunnel stuck in state 4 "cells-ready" for 4+ min** after a 3 m `@teleloc` in a `?remoteSpine=off`
    session: `__portalSpace.clock` stayed 0 (the tick never advanced), uses were dropped. Not reproduced with defaults.
 6. Two `@create`d shreths at `0xA9B40029 [127 7 95.06]` never reached the client (no ObjectCreate in the wasm).
@@ -89,8 +89,7 @@ browser of theirs). This session ran its watcher log-only after the owner's word
 ## 6. After the commit (`9665230d`): cold-load on the SSD copy, three fixes
 
 The session kept going after the push. It measured the cold loads on the 1070, then stopped before applying the three
-fixes it had prepared. A follow-up session on the laptop applied, tested and committed them. **None of the three has
-been checked on the 1070 yet.**
+fixes it had prepared. A follow-up session on the laptop applied, tested and committed them. They were then checked on the 1070 (2026-10-12, table below): two are fixed, and the vendor-turn one made things worse and is now opt-in.
 
 **Cold load against the SSD-served data** (the 10-09 USB-disk runs, §4.31 of `HANDOFF-charselect-coldload-2026-10-09.md`,
 are the comparison). The owner was using the PC during these runs, so the timings are noisy (n = 3). Run JSONs and logs:
@@ -112,15 +111,16 @@ the 1070 is idle.
   the slowest in-view texture took 9.1 s.
 - **Warm-up wizard** (`wizwarm.mjs wiz60ssd`, Create Character open 60 s): Enter → in-world and cells in 1.9 s (10-09: 2.1 s).
 
-**The three fixes** (each switches off with `=off`; rows in `docs/url-flags.md`):
+**The three fixes, and what the 1070 showed** (2026-10-12, off-screen and muted, `watch1070.sh` AWAY throughout; rows in
+`docs/url-flags.md`):
 
-| Finding | Cause | Fix | Test |
+| Finding | Cause | Change | 1070 result |
 |---|---|---|---|
-| §4 item 4, vendor turn snaps | Under the spine (`?remoteSpine`) every `pollRemotePoses` row is the Rust body, rotation included, and Phase B stopped the JS heading ease for spine remotes. `drainRemotePoses` still dropped the rotation on non-sticky rows, so nothing drew a TurnTo | `?remoteSpineHeading`: spine rows pass their quaternion to `applyManagedPose`, which now ignores a zero-length one instead of collapsing the rig | `tests/remote_spine_heading.test.mjs` (in the gate) |
-| §4 item 1, spear over-bend at a run | The run cycle's arm swing drives the pole springs near their 2–3 Hz natural frequency | `?weaponFlexLoco`: full gain for 1.6 s after a swing, then a 0.5 s ramp down to `?weaponFlexLocoGain` (0.12), followed with a 60 ms time constant so a swing started at a run does not pop. Expected run sway is ~0.6° | `test_weapon_fx.mjs` (+6) |
-| §4 item 3, one mark for every element | ACE plays the impact Explode on the projectile's guid, after its rig is gone, so `fxProjectileElement` found nothing and the `element` decal kind never fired | `?fxImpactElement`: the bolt sampler remembers each projectile's element for 5 s after its last frame in flight; `_tier2CueOpts` asks for it whether or not the rig is still a live projectile | `test_particle_fx_tier2.mjs` (+3) |
+| §4 item 1, spear over-bend at a run | The run cycle's arm swing drives the pole springs near their 2–3 Hz natural frequency | `?weaponFlexLoco` (default on): full gain for 1.6 s after a swing, then a 0.5 s ramp down to `?weaponFlexLocoGain` (0.12), followed with a 60 ms time constant so a swing started at a run does not pop. Test: `test_weapon_fx.mjs` (+6) | **Fixed.** Flaming Spear at a 17.5 m/s forward run: mean 0.81°, max 1.38° (was 4.82° / 6.84°); backward 0.39° (was 1.29°) |
+| §4 item 3, one mark for every element | ACE plays **Explode** for a war bolt's impact, and the Explode cue's mark was a fixed orange scorch. (The session's own diagnosis, a failed element lookup, was only half of it: the lookup now works, but Explode never asked for the element.) | `?fxImpactElement` (default on): the bolt sampler remembers each projectile's element for 5 s, and the Explode mark is `byElement` (`vfx/fx_cues.js`). Tests: `test_particle_fx_tier2.mjs` (+5) | **Fixed.** Flame → fire scorch, frost → frost, acid → acid, lightning → a pale-blue scorch (before: four identical orange scorches) |
+| §4 item 4, vendor turn snaps | Spine rows carry the Rust body's rotation but `drainRemotePoses` drops it on non-sticky rows | `?remoteSpineHeading`, now **opt-in (`=on`)**. Test: `tests/remote_spine_heading.test.mjs` | **Made it worse; default off.** The Rust body's heading is stale at rest (not synced to the server's UpdatePosition heading) and each row overwrote the JS heading target: the grocer's first row snapped ~96° and it ended 87° away from the player. Default: 0° off from all four sides, smooth in two uses, snaps (178°, 90°) in two. Real fix: the Rust `RemoteMover` adopting the server's heading at rest (url-flags §0) |
 
-**1070 checks still owed for these:** a per-frame trace of the vendor turn (`@telepoi` a town vendor, Use, watch the
-heading); spear bend at a run (`__weaponFx` bend readout, expect ≈0.5–0.8° mean); a frost, acid and lightning bolt at a
-target on open ground (frost and acid should leave their own marks; lightning should scorch in its own colour).
+Also checked on the 1070: "Disable distance fog" and "Disable most weather effects" (owner-bugs handoff): during a storm
+DayGroup, both on → fog band 10,000 km, storm off; both off → fog 1012–1550 m, storm on (options restored). Console:
+0 errors, 0 exceptions over the session.
 

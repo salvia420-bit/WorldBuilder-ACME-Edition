@@ -31,8 +31,10 @@ const C = (r, g, b, I, range, attack, hold, decay, extra = {}) =>
 export const FX_CUES = Object.freeze({
   // cast / projectile
   launch: C(0.45, 0.75, 1.0, 30, 6, 30, 40, 300),
+  // `byElement`: ACE plays Explode (not ProjectileCollision) for a war bolt's impact, so with the
+  // bolt's element known (`opts.elementMarks`, `?fxImpactElement`) the mark is that element's.
   explode: C(1.0, 0.55, 0.2, 60, 9, 20, 60, 550, { flicker: 0.2, flickerHz: 18, shock: { radius: 3.5, strength: 0.75, ms: 600 },
-    decal: { kind: "scorch", radius: 1.8 } }),
+    decal: { kind: "scorch", radius: 1.8, byElement: true } }),
   projectileCollision: C(1.0, 0.6, 0.3, 45, 7, 20, 40, 450, { shock: { radius: 2.5, strength: 0.55, ms: 500 },
     decal: { kind: "element", radius: 1.3 } }),
   fizzle: C(0.7, 0.7, 0.75, 8, 3, 20, 20, 300),
@@ -96,7 +98,7 @@ const CUE_HEIGHT_M = 1.0;
  * Returns what fired (diagnostics / tests). Never throws.
  * @param {string} look burst look name (play_effect_vfx.js `_burstLookFor`)
  * @param {{x:number,y:number,z:number}} rootWorld
- * @param {{decalWorld?: {x:number,y:number,z:number}, element?: {decal: string|null, color: number[]}|null}} [opts]
+ * @param {{decalWorld?: {x:number,y:number,z:number}, element?: {decal: string|null, color: number[]}|null, elementMarks?: boolean}} [opts]
  */
 export function fireFxCue(look, rootWorld, opts = null) {
   const cue = FX_CUES[look];
@@ -125,6 +127,12 @@ export function fireFxCue(look, rootWorld, opts = null) {
         const el = opts.element || null;
         kind = el && el.decal ? el.decal : null;
         color = el && kind === "scorch" ? el.color : undefined;
+      } else if (cue.decal.byElement && opts.elementMarks && opts.element) {
+        // a bolt's Explode marks the ground with ITS element: frost rimes, acid etches, fire /
+        // lightning / nether scorch in their own colour; force, blade and magic leave no mark
+        const el = opts.element;
+        kind = el.decal || null;
+        color = kind === "scorch" ? el.color : undefined;
       }
       if (kind) decal = spawnFxDecal({ position: opts.decalWorld, kind, radius: cue.decal.radius, color });
     } catch (_) { decal = null; }

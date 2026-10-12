@@ -1,12 +1,14 @@
-// tests/remote_spine_heading.test.mjs — `?remoteSpineHeading` (2026-10-11, found on the 1070).
+// tests/remote_spine_heading.test.mjs — `?remoteSpineHeading=on` (2026-10-11, found on the 1070;
+// OPT-IN since the 10-12 1070 check: the Rust body's heading is stale at rest, so a vendor ended 87
+// degrees off — see scene3d/loop.js REMOTE_SPINE_HEADING_ON).
 //
 // Under the per-object spine (`?remoteSpine`, 86c4d11e) every pollRemotePoses row is the body the
 // Rust MovementManager moved by its own interpreted motion, rotation included, and Phase B stopped
 // the JS K=14 heading ease for spine remotes. drainRemotePoses still dropped the row's rotation on
 // non-sticky rows, so nothing drew a TurnTo: a vendor turned 102 degrees in one frame at the
 // server's final UpdatePosition.
-//   S1  a non-sticky spine row hands its quaternion to applyManagedPose
-//   S2  `?remoteSpineHeading=off` and `?remoteSpine=off` restore the position-only row
+//   S1  with `?remoteSpineHeading=on`, a non-sticky spine row hands its quaternion to applyManagedPose
+//   S2  by default (and with `?remoteSpine=off`) the row is position-only
 //   S3  a sticky row still clears the glue and carries its quaternion either way
 //   S4  applyManagedPose (the REAL EntityManager) turns the rig to the row's heading, and keeps the
 //       current heading for a zero-length or absent quaternion instead of collapsing the rig
@@ -59,8 +61,8 @@ function drainOnce(drain, sticky) {
   return { calls, glue };
 }
 
-test("S1: a non-sticky spine row carries its rotation (default)", () => {
-  const { calls, glue } = drainOnce(loadDrain(""), false);
+test("S1: with ?remoteSpineHeading=on a non-sticky spine row carries its rotation", () => {
+  const { calls, glue } = drainOnce(loadDrain("?remoteSpineHeading=on"), false);
   assert.equal(calls.length, 1);
   const [g, x, y, z, qw, qx, qy, qz] = calls[0];
   assert.equal(g, 0x80001234);
@@ -71,8 +73,8 @@ test("S1: a non-sticky spine row carries its rotation (default)", () => {
   assert.equal(glue.length, 0, "a non-sticky row never touches the glue");
 });
 
-test("S2: ?remoteSpineHeading=off / ?remoteSpine=off restore the position-only row", () => {
-  for (const search of ["?remoteSpineHeading=off", "?remoteSpine=off", "?remoteSpine=OFF&remoteSpineHeading=on"]) {
+test("S2: by default (and with ?remoteSpine=off) the row is position-only", () => {
+  for (const search of ["", "?remoteSpineHeading=off", "?remoteSpine=off", "?remoteSpine=OFF&remoteSpineHeading=on"]) {
     const { calls } = drainOnce(loadDrain(search), false);
     assert.equal(calls.length, 1, search);
     assert.equal(calls[0].length, 4, `${search}: guid + position only`);
@@ -80,7 +82,7 @@ test("S2: ?remoteSpineHeading=off / ?remoteSpine=off restore the position-only r
 });
 
 test("S3: a sticky row clears the glue and carries its rotation with the flag on or off", () => {
-  for (const search of ["", "?remoteSpineHeading=off"]) {
+  for (const search of ["", "?remoteSpineHeading=on"]) {
     const { calls, glue } = drainOnce(loadDrain(search), true);
     assert.deepEqual(glue, [[0x80001234, 0]], search);
     assert.equal(calls[0].length, 8, search);

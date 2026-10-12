@@ -469,6 +469,12 @@ impl MovementSystemHandle {
         self.inner.set_bounce_along_slope(on);
     }
 
+    /// CLAMP-ALONG-GROUND (2026-10-11) — the `?clampAlongGround` carrier; see
+    /// `MovementSystem::set_clamp_along_ground`.
+    pub fn set_clamp_along_ground(&mut self, on: bool) {
+        self.inner.set_clamp_along_ground(on);
+    }
+
     /// (2026-07-02): install the `?castMove=off` runtime carrier (default-ON
     /// retail cast-movement arbitration — a server-played cast gesture
     /// suppresses held locomotion until an input edge / gesture end; `=off`

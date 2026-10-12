@@ -37,7 +37,8 @@ been eye-tested. Section 9 is the batched 1070 queue.
   - Weather off drops the SkyObjects retail never creates with the option on (properties 0x04: the streaks and the
     rain/snow models) before the storm scan, and forces the storm flag off. No storm clouds, rain sheen, wind gusts
     or storm particles; the cloud bands stay.
-  - Test: `tests/visual_options.test.mjs`. Not eye-tested (§9 item 8).
+  - Test: `tests/visual_options.test.mjs`. Checked on the 1070 (2026-10-12) during a storm DayGroup: both on → fog band
+    10,000 km and storm off; both off → fog 1012–1550 m and storm back. Still worth an owner look (§9 item 8).
 - **Test.** `tests/always_daylight.test.mjs`.
 
 ## 2. Death ragdoll → lootable corpse
@@ -153,9 +154,13 @@ been eye-tested. Section 9 is the batched 1070 queue.
   `bounce_along_slope_flag_defaults_on_unless_off`.
 - **Open.** The trigger for a non-jumping runner's first airborne moment is not found. Untested leads:
   - landblock seams;
-  - unwalkable patches inside a hillside;
-  - the post-transition scenery/entity XY collision correction, which leaves z alone, so on a slope the body floats
-    or sinks by step × tanθ for one frame. Moving z along the contact plane is the likely fix.
+  - unwalkable patches inside a hillside.
+- **Follow-up (same day): the scenery/entity XY correction lead, tested and fixed.** A runner held back by a 1.5 m
+  trunk on a 22–30° slope never went airborne (0 lift-offs in 156 runs), but its feet floated up to 0.18 m above the
+  slope going uphill and sank 0.23 m into it going downhill, every frame it pushed on the trunk. That reads as "a
+  little tiny bit in the air" without an airborne frame, which is why the hop diagnostics never saw it.
+  `?clampAlongGround` (default on, `=off` escape) carries z along the settled contact plane after the XY
+  correction: feet within 3.3–6.8 mm in every run. Test: `terrain_hop_runner_meeting_a_trunk_on_a_slope_stays_grounded`.
 
 ## 7. Sporadic slowdown
 
@@ -211,7 +216,9 @@ Every heavy job was run capped and one at a time, after the agents finished.
   - `test_diag_schema`'s `__diag.runAll` evidence line moved from 654 to 660.
 
   Targeted reruns pass. `tests/corpse_handoff_loot.test.mjs` failed once during a rerun while the release wasm was
-  building and passed in the next 6 runs; watch it.
+  building and passed in the next 6 runs; watch it. **Fixed 2026-10-12:** not load, a float flake in the test's fake
+  clock (it started at the fractional real `performance.now()`, so 400 × 10 ms summed to 3999.9999… against the
+  4000 ms reveal bound). It now starts on a whole millisecond: 0 failures in 30 runs (was 1–3 in 8).
 - **GPU smokes** (`capped-build node …`, one SwiftShader tab):
   - `test_fx_decal_gpu.cjs`: 9/9.
   - `test_particle_fx_tier2_gpu.cjs`: 30/30.
@@ -259,6 +266,8 @@ Every heavy job was run capped and one at a time, after the agents finished.
    - A standing full jump on flat ground still gets the small bounce.
    - `?bounceAlongSlope=off` brings the descent ski-jump back. If the owner still sees hops while NOT jumping, note
      the spot: a landblock seam, a steep patch, or next to a rock or tree.
+   - Run up and down a 20–30° hill straight into a tree and keep W held, then brush past trees and rocks on the slope:
+     the feet stay on the ground (`?clampAlongGround=off` hovers uphill and sinks downhill).
 
 8. **Weather and fog options** (follow-up). Options → Character → Visual.
    - "Disable distance fog": within a second the horizon haze band is gone and the far terrain is crisp (the

@@ -266,7 +266,10 @@ test("handoff-2: the stand-in hidden (cloaked / NoDraw) → the corpse is not dr
 /** Run `fn(advance)` with mocked timers; advance(ms) moves both clocks. */
 function withClock(fn) {
   const realNow = performance.now.bind(performance);
-  let fake = realNow();
+  // A whole millisecond: from a fractional real start, 400 slices of 10 ms summed to
+  // 3999.9999… against the 4000 ms bound, so the reveal slipped a poll past the
+  // test's window in ~1 of 4 runs (2026-10-12; gate flake noted 2026-10-11).
+  let fake = Math.floor(realNow());
   const desc = Object.getOwnPropertyDescriptor(performance, "now");
   Object.defineProperty(performance, "now", { value: () => fake, configurable: true, writable: true });
   mock.timers.enable({ apis: ["setTimeout"] });
